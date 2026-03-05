@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3]
+
+### Fixed
+- Cargo Deny: added MPL-2.0 to allowed licenses for `serialport` dependency
+- Ethernet transport: added missing `TransportPort` trait import in test module
+
 ## [0.1.0]
 
 Initial release of the Rusty BACnet protocol stack implementing ASHRAE 135-2020.
