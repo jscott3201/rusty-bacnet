@@ -1,0 +1,16 @@
+[package]
+name = "bacnet-services"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "BACnet service request/response encode/decode per ASHRAE 135-2020"
+keywords = ["bacnet", "building-automation", "ashrae", "services", "protocol"]
+categories = ["network-programming"]
+
+[dependencies]
+bacnet-types = { workspace = true }
+bacnet-encoding = { workspace = true }
+bytes = { workspace = true }
+tracing = { workspace = true }

@@ -1,0 +1,45 @@
+# Rust
+/target
+**/*.rs.bk
+*.rlib
+*.rmeta
+
+# Python
+*.pyo
+*.pyc
+__pycache__/
+.venv/
+venv/
+*.egg-info/
+*.egg
+dist/
+*.whl
+*.so
+*.dylib
+*.dll
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# AI assistants
+.claude/
+CLAUDE.md
+.copilot/
+.github/copilot-*
+.cursor/
+.aider*
+.codeium/
+
+# Proprietary spec
+_spec/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

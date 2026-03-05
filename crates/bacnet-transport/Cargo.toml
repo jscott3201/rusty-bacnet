@@ -1,0 +1,31 @@
+[package]
+name = "bacnet-transport"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "BACnet transport layer: BIP, IPv6, BACnet/SC, MS/TP, BBMD, Ethernet"
+keywords = ["bacnet", "building-automation", "transport", "bip", "mstp"]
+categories = ["network-programming"]
+
+[dependencies]
+bacnet-types.workspace = true
+bacnet-encoding.workspace = true
+bytes.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["net", "rt", "sync", "macros", "time"] }
+socket2 = { workspace = true, features = ["all"] }
+tokio-tungstenite = { workspace = true, optional = true }
+tokio-rustls = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+tokio-serial = { version = "5", optional = true }
+libc = { workspace = true }
+
+[features]
+default = []
+ipv6 = []
+sc-tls = ["tokio-tungstenite", "tokio-rustls", "rustls", "futures-util"]
+serial = ["tokio-serial", "tokio/io-util"]
+ethernet = []

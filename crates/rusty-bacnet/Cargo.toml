@@ -1,0 +1,26 @@
+[package]
+name = "rusty-bacnet"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Python bindings for rusty-bacnet via PyO3"
+publish = false
+
+[lib]
+name = "rusty_bacnet"
+crate-type = ["cdylib"]
+
+[dependencies]
+bacnet-types.workspace = true
+bacnet-encoding.workspace = true
+bacnet-client.workspace = true
+bacnet-server.workspace = true
+bacnet-transport = { workspace = true, features = ["sc-tls", "ipv6"] }
+bacnet-objects.workspace = true
+bacnet-services.workspace = true
+pyo3.workspace = true
+pyo3-async-runtimes.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
+bytes.workspace = true
+tokio-rustls.workspace = true
+rustls-native-certs.workspace = true

@@ -1,0 +1,15 @@
+[package]
+name = "bacnet-encoding"
+description = "BACnet ASN.1/BER encoding, APDU and NPDU codecs per ASHRAE 135-2020"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["bacnet", "asn1", "encoding", "apdu", "npdu"]
+categories = ["network-programming", "encoding"]
+
+[dependencies]
+bacnet-types = { workspace = true }
+bytes = { workspace = true }
+tracing = { workspace = true }

@@ -1,0 +1,19 @@
+[package]
+name = "bacnet-types"
+description = "BACnet protocol types, enums, and primitives per ASHRAE 135-2020"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["bacnet", "building-automation", "ashrae", "protocol", "types"]
+categories = ["network-programming", "no-std"]
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+bitflags = { workspace = true }
+smallvec = { workspace = true }
+thiserror = { workspace = true }

@@ -1,0 +1,209 @@
+# BACnet stress test topology.
+#
+# 5 networks:
+#   bacnet-a    172.20.0.0/24   BIP subnet A
+#   bacnet-b    172.20.1.0/24   BIP subnet B
+#   bacnet-ipv6 fd00:bacnet::/64  BIP6 subnet
+#   bacnet-sc   172.20.3.0/24   SC hub + devices
+#   foreign     172.20.4.0/24   Foreign device subnet
+#
+# Usage:
+#   docker compose build
+#   docker compose up -d
+#   docker compose exec orchestrator stress-orchestrator
+#   docker compose down
+
+services:
+
+  # ── BIP Subnet A ─────────────────────────────────────────────────────────
+  server-a:
+    build:
+      context: ../..
+      dockerfile: examples/docker/Dockerfile
+    command:
+      - bacnet-device
+      - --transport=bip
+      - --interface=172.20.0.10
+      - --port=47808
+      - --broadcast=172.20.0.255
+      - --device-instance=1000
+      - --objects=1000
+    networks:
+      bacnet-a:
+        ipv4_address: 172.20.0.10
+
+  bbmd-a:
+    build:
+      context: ../..
+      dockerfile: examples/docker/Dockerfile
+    command:
+      - bacnet-bbmd
+      - --interface=172.20.0.2
+      - --port=47808
+      - --broadcast=172.20.0.255
+      - --bdt=172.20.1.2:47808
+      - --device-instance=9000
+    networks:
+      bacnet-a:
+        ipv4_address: 172.20.0.2
+
+  # ── BIP Subnet B ─────────────────────────────────────────────────────────
+  server-b:
+    build:
+      context: ../..
+      dockerfile: examples/docker/Dockerfile
+    command:
+      - bacnet-device
+      - --transport=bip
+      - --interface=172.20.1.10
+      - --port=47808
+      - --broadcast=172.20.1.255
+      - --device-instance=2000
+      - --objects=1000
+    networks:
+      bacnet-b:
+        ipv4_address: 172.20.1.10
+
+  bbmd-b:
+    build:
+      context: ../..
+      dockerfile: examples/docker/Dockerfile
+    command:
+      - bacnet-bbmd
+      - --interface=172.20.1.2
+      - --port=47808
+      - --broadcast=172.20.1.255
+      - --bdt=172.20.0.2:47808
+      - --device-instance=9001
+    networks:
+      bacnet-b:
+        ipv4_address: 172.20.1.2
+
+  # ── Router (spans subnets A, B, and IPv6) ────────────────────────────────
+  router:
+    build:
+      context: ../..
+      dockerfile: examples/docker/Dockerfile
+    command:
+      - bacnet-router
+      - --ports=bip:172.20.0.1:47808:172.20.0.255:1,bip:172.20.1.1:47808:172.20.1.255:2
+    networks:
+      bacnet-a:
+        ipv4_address: 172.20.0.1
+      bacnet-b:
+        ipv4_address: 172.20.1.1
+
+  # ── BACnet/SC ────────────────────────────────────────────────────────────
+  sc-hub:
+    build:
+      context: ../..
+      dockerfile: examples/docker/Dockerfile
+    command:
+      - bacnet-sc-hub
+      - --listen=0.0.0.0:47809
+      - --self-signed
+    networks:
+      bacnet-sc:
+        ipv4_address: 172.20.3.2
+
+  sc-server:
+    build:
+      context: ../..
+      dockerfile: examples/docker/Dockerfile
+    command:
+      - bacnet-device
+      - --transport=sc
+      - --sc-hub=wss://172.20.3.2:47809
+      - --device-instance=5000
+      - --objects=500
+      - --sc-no-verify
+    networks:
+      bacnet-sc:
+        ipv4_address: 172.20.3.10
+    depends_on:
+      - sc-hub
+
+  # ── Foreign device subnet ────────────────────────────────────────────────
+  foreign-client:
+    build:
+      context: ../..
+      dockerfile: examples/docker/Dockerfile
+    command:
+      - bacnet-device
+      - --transport=bip
+      - --interface=172.20.4.10
+      - --port=47808
+      - --broadcast=172.20.4.255
+      - --device-instance=7000
+      - --objects=10
+      - --foreign-bbmd=172.20.0.2:47808
+      - --foreign-ttl=300
+    networks:
+      foreign:
+        ipv4_address: 172.20.4.10
+      bacnet-a:
+        ipv4_address: 172.20.0.20
+
+  # ── Orchestrator (connected to all networks) ─────────────────────────────
+  orchestrator:
+    build:
+      context: ../..
+      dockerfile: examples/docker/Dockerfile
+    command:
+      - stress-orchestrator
+      - --wait-for-ready=10
+    networks:
+      bacnet-a:
+        ipv4_address: 172.20.0.100
+      bacnet-b:
+        ipv4_address: 172.20.1.100
+      bacnet-sc:
+        ipv4_address: 172.20.3.100
+      foreign:
+        ipv4_address: 172.20.4.100
+    depends_on:
+      - server-a
+      - server-b
+      - bbmd-a
+      - bbmd-b
+      - router
+      - sc-hub
+      - sc-server
+      - foreign-client
+
+# ── Networks ─────────────────────────────────────────────────────────────────
+networks:
+  bacnet-a:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+          gateway: 172.20.0.254
+
+  bacnet-b:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.1.0/24
+          gateway: 172.20.1.254
+
+  bacnet-ipv6:
+    driver: bridge
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: fd00:bacnet::/64
+
+  bacnet-sc:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.3.0/24
+          gateway: 172.20.3.254
+
+  foreign:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.4.0/24
+          gateway: 172.20.4.254

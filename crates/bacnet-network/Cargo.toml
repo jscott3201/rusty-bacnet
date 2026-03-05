@@ -1,0 +1,18 @@
+[package]
+name = "bacnet-network"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "BACnet network layer: routing, router tables, priority channels"
+keywords = ["bacnet", "building-automation", "network", "routing"]
+categories = ["network-programming"]
+
+[dependencies]
+bacnet-types.workspace = true
+bacnet-encoding.workspace = true
+bacnet-transport.workspace = true
+bytes.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }

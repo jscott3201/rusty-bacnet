@@ -1,0 +1,20 @@
+[project]
+name = "bacnet-python-benchmarks"
+version = "0.1.0"
+description = "Mixed-mode Python/Rust BACnet benchmarks"
+requires-python = ">=3.13"
+dependencies = [
+    "pytest>=8.0",
+    "pytest-benchmark>=5.1",
+    "pytest-asyncio>=0.25",
+    "psutil>=6.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+benchmark_disable = true
+benchmark_warmup = true
+benchmark_min_rounds = 10
+
+[tool.maturin]
+manifest-path = "../../crates/rusty-bacnet/Cargo.toml"

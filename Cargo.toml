@@ -1,0 +1,66 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/bacnet-types",
+    "crates/bacnet-encoding",
+    "crates/bacnet-services",
+    "crates/bacnet-transport",
+    "crates/bacnet-network",
+    "crates/bacnet-client",
+    "crates/bacnet-objects",
+    "crates/bacnet-server",
+    "crates/rusty-bacnet",
+    "benchmarks",
+]
+# rusty-bacnet is a cdylib — `cargo test` can't link it without Python.
+# Use `cargo check -p rusty-bacnet --tests` to verify it compiles.
+default-members = [
+    "crates/bacnet-types",
+    "crates/bacnet-encoding",
+    "crates/bacnet-services",
+    "crates/bacnet-transport",
+    "crates/bacnet-network",
+    "crates/bacnet-client",
+    "crates/bacnet-objects",
+    "crates/bacnet-server",
+    "benchmarks",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.93"
+license = "MIT"
+authors = ["Justin Scott <jscott3201@gmail.com>"]
+repository = "https://github.com/jscott3201/rusty-bacnet"
+homepage = "https://github.com/jscott3201/rusty-bacnet"
+keywords = ["bacnet", "building-automation", "ashrae", "iot", "protocol"]
+categories = ["network-programming", "embedded"]
+
+[workspace.dependencies]
+bacnet-types = { path = "crates/bacnet-types" }
+bacnet-encoding = { path = "crates/bacnet-encoding" }
+bacnet-services = { path = "crates/bacnet-services" }
+bacnet-transport = { path = "crates/bacnet-transport" }
+bacnet-network = { path = "crates/bacnet-network" }
+bacnet-client = { path = "crates/bacnet-client" }
+bacnet-objects = { path = "crates/bacnet-objects" }
+bacnet-server = { path = "crates/bacnet-server" }
+thiserror = "2"
+bitflags = "2"
+bytes = "1"
+tracing = "0.1"
+tokio = "1"
+socket2 = "0.6"
+pyo3 = { version = "0.28", features = ["extension-module"] }
+pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
+tokio-rustls = "0.26"
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "logging", "std"] }
+rustls-native-certs = "0.8"
+futures-util = "0.3"
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
+smallvec = "1"
+criterion = { version = "0.5", features = ["async_tokio"] }
+sysinfo = "0.38"
+libc = "0.2"

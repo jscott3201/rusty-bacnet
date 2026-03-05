@@ -1,0 +1,33 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "rusty-bacnet"
+dynamic = ["version"]
+description = "Python bindings for the Rusty BACnet protocol stack (ASHRAE 135-2020)"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "Justin Scott", email = "jscott3201@gmail.com"}]
+keywords = ["bacnet", "building-automation", "ashrae", "iot", "protocol"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: System :: Networking",
+    "Topic :: Home Automation",
+]
+
+[project.urls]
+Homepage = "https://github.com/jscott3201/rusty-bacnet"
+Repository = "https://github.com/jscott3201/rusty-bacnet"
+Documentation = "https://github.com/jscott3201/rusty-bacnet/blob/main/docs/python-api.md"
+Changelog = "https://github.com/jscott3201/rusty-bacnet/blob/main/CHANGELOG.md"
+"Bug Tracker" = "https://github.com/jscott3201/rusty-bacnet/issues"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]

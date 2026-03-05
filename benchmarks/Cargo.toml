@@ -1,0 +1,92 @@
+[package]
+name = "bacnet-benchmarks"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+bacnet-types = { path = "../crates/bacnet-types" }
+bacnet-encoding = { path = "../crates/bacnet-encoding" }
+bacnet-services = { path = "../crates/bacnet-services" }
+bacnet-transport = { path = "../crates/bacnet-transport", features = ["sc-tls"] }
+bacnet-network = { path = "../crates/bacnet-network" }
+bacnet-client = { path = "../crates/bacnet-client", features = ["sc-tls"] }
+bacnet-objects = { path = "../crates/bacnet-objects" }
+bacnet-server = { path = "../crates/bacnet-server", features = ["sc-tls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time", "signal"] }
+criterion = { version = "0.5", features = ["async_tokio"] }
+bytes = "1"
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
+tokio-rustls = "0.26"
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "logging", "std", "tls12"] }
+sysinfo = "0.38"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hdrhistogram = "7"
+console-subscriber = { version = "0.5", optional = true }
+rand = "0.9"
+tracing-subscriber = "0.3"
+
+[features]
+console = ["console-subscriber"]
+
+[[bin]]
+name = "stress-test"
+path = "src/bin/stress_test.rs"
+
+[[bin]]
+name = "bacnet-device"
+path = "src/bin/bacnet_device.rs"
+
+[[bin]]
+name = "bacnet-router"
+path = "src/bin/bacnet_router.rs"
+
+[[bin]]
+name = "bacnet-bbmd"
+path = "src/bin/bacnet_bbmd.rs"
+
+[[bin]]
+name = "bacnet-sc-hub"
+path = "src/bin/bacnet_sc_hub.rs"
+
+[[bin]]
+name = "stress-orchestrator"
+path = "src/bin/stress_orchestrator.rs"
+
+[[bench]]
+name = "encoding"
+harness = false
+
+[[bench]]
+name = "bip_latency"
+harness = false
+
+[[bench]]
+name = "bip_throughput"
+harness = false
+
+[[bench]]
+name = "bip6_latency"
+harness = false
+
+[[bench]]
+name = "bip6_throughput"
+harness = false
+
+[[bench]]
+name = "sc_latency"
+harness = false
+
+[[bench]]
+name = "sc_throughput"
+harness = false
+
+[[bench]]
+name = "sc_mtls_latency"
+harness = false
+
+[[bench]]
+name = "sc_mtls_throughput"
+harness = false
