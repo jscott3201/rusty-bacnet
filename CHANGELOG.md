@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5]
+
+### Fixed
+- CI: fixed circular dev-dependency publish ordering (bacnet-server ↔ bacnet-client)
+- CI: fixed aarch64 Linux wheel builds (install cmake/perl for aws-lc-sys cross-compilation)
+
 ## [0.1.4]
 
 ### Fixed
