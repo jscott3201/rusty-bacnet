@@ -45,7 +45,19 @@ jobs:
           toolchain: "1.93"
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --exclude rusty-bacnet --all-targets
+      - run: cargo clippy --workspace --exclude rusty-bacnet --exclude bacnet-wasm --all-targets
+
+  wasm-check:
+    name: WASM Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.93"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p bacnet-wasm --target wasm32-unknown-unknown
 
   test:
     name: Test (${{ matrix.os }})
@@ -71,7 +83,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.os }}
-      - run: cargo test --workspace --exclude rusty-bacnet ${{ matrix.features }}
+      - run: cargo test --workspace --exclude rusty-bacnet --exclude bacnet-wasm ${{ matrix.features }}
 
   deny:
     name: Cargo Deny
@@ -87,7 +99,7 @@ jobs:
   validate:
     name: Validate Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [fmt, clippy, test, deny]
+    needs: [fmt, clippy, test, deny, wasm-check]
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -238,6 +250,38 @@ jobs:
           name: wheels-sdist
           path: dist
 
+  build-wasm:
+    name: Build WASM
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.93"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build (bundler target)
+        run: wasm-pack build crates/bacnet-wasm --target bundler --out-dir ../../dist/wasm-npm
+
+      - name: Build (web target)
+        run: wasm-pack build crates/bacnet-wasm --target web --out-dir ../../dist/wasm-web
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-npm
+          path: dist/wasm-npm
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-web
+          path: dist/wasm-web
+
   publish-pypi:
     name: Publish to PyPI
     if: startsWith(github.ref, 'refs/tags/v')
@@ -253,10 +297,34 @@ jobs:
 
       - uses: pypa/gh-action-pypi-publish@release/v1
 
+  publish-npm:
+    name: Publish to npm
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-wasm]
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-npm
+          path: dist/wasm-npm
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Upgrade npm for trusted publishing
+        run: npm install -g npm@latest
+
+      - name: Publish to npm
+        run: cd dist/wasm-npm && npm publish --provenance --access public
+        continue-on-error: true  # First publish must be manual; OIDC trusted publishing requires package to exist on npmjs.com first
+
   github-release:
     name: GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [publish-crates, publish-pypi]
+    needs: [publish-crates, publish-pypi, publish-npm]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
