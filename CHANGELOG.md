@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0]
+
+### Changed
+- Moved client ↔ server integration tests into `bacnet-integration-tests` crate, breaking the circular dev-dependency that prevented publishing to crates.io
+
+### Fixed
+- CI: added QEMU emulation for aarch64 Linux wheel builds (fixes aws-lc-sys cross-compilation failure)
+- CI: disabled sccache for emulated aarch64 builds
+- CI: simplified crates.io publish ordering (server before client, no retry hack)
+
 ## [0.1.5]
 
 ### Fixed

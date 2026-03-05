@@ -162,22 +162,14 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - run: sleep 30
 
-      # bacnet-server and bacnet-client have circular dev-dependencies.
-      # Publish server first, then client, then retry server if needed.
-      - name: Publish bacnet-server (first attempt)
-        run: cargo publish -p bacnet-server --no-verify || echo "::warning::bacnet-server publish deferred (circular dev-dep)"
+      - name: Publish bacnet-server
+        run: cargo publish -p bacnet-server --no-verify
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - run: sleep 30
 
       - name: Publish bacnet-client
         run: cargo publish -p bacnet-client --no-verify
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-      - run: sleep 30
-
-      - name: Publish bacnet-server (retry if first attempt was deferred)
-        run: cargo publish -p bacnet-server --no-verify || echo "::notice::bacnet-server already published"
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
@@ -207,13 +199,21 @@ jobs:
         with:
           python-version: "3.13"
 
+      # QEMU is required for aarch64 Linux wheels so the manylinux container
+      # runs natively under emulation (avoids cross-compilation of aws-lc-sys).
+      - name: Set up QEMU
+        if: matrix.target == 'aarch64' && runner.os == 'Linux'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           args: --release --out dist -m crates/rusty-bacnet/Cargo.toml -i 3.11 3.12 3.13
           manylinux: auto
-          sccache: true
+          sccache: ${{ matrix.target != 'aarch64' || runner.os != 'Linux' }}
           before-script-linux: |
             if command -v yum &> /dev/null; then
               yum install -y perl-IPC-Cmd cmake3 || true

@@ -1,0 +1,19 @@
+[package]
+name = "bacnet-integration-tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dev-dependencies]
+bacnet-types.workspace = true
+bacnet-encoding.workspace = true
+bacnet-services.workspace = true
+bacnet-transport.workspace = true
+bacnet-network.workspace = true
+bacnet-objects.workspace = true
+bacnet-client.workspace = true
+bacnet-server.workspace = true
+bytes.workspace = true
+tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync", "macros", "time", "test-util"] }

@@ -9,6 +9,7 @@ members = [
     "crates/bacnet-client",
     "crates/bacnet-objects",
     "crates/bacnet-server",
+    "crates/bacnet-integration-tests",
     "crates/rusty-bacnet",
     "benchmarks",
 ]
@@ -23,11 +24,12 @@ default-members = [
     "crates/bacnet-client",
     "crates/bacnet-objects",
     "crates/bacnet-server",
+    "crates/bacnet-integration-tests",
     "benchmarks",
 ]
 
 [workspace.package]
-version = "0.1.5"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.93"
 license = "MIT"
@@ -38,14 +40,14 @@ keywords = ["bacnet", "building-automation", "ashrae", "iot", "protocol"]
 categories = ["network-programming", "embedded"]
 
 [workspace.dependencies]
-bacnet-types = { version = "0.1.5", path = "crates/bacnet-types" }
-bacnet-encoding = { version = "0.1.5", path = "crates/bacnet-encoding" }
-bacnet-services = { version = "0.1.5", path = "crates/bacnet-services" }
-bacnet-transport = { version = "0.1.5", path = "crates/bacnet-transport" }
-bacnet-network = { version = "0.1.5", path = "crates/bacnet-network" }
-bacnet-client = { version = "0.1.5", path = "crates/bacnet-client" }
-bacnet-objects = { version = "0.1.5", path = "crates/bacnet-objects" }
-bacnet-server = { version = "0.1.5", path = "crates/bacnet-server" }
+bacnet-types = { version = "0.2.0", path = "crates/bacnet-types" }
+bacnet-encoding = { version = "0.2.0", path = "crates/bacnet-encoding" }
+bacnet-services = { version = "0.2.0", path = "crates/bacnet-services" }
+bacnet-transport = { version = "0.2.0", path = "crates/bacnet-transport" }
+bacnet-network = { version = "0.2.0", path = "crates/bacnet-network" }
+bacnet-client = { version = "0.2.0", path = "crates/bacnet-client" }
+bacnet-objects = { version = "0.2.0", path = "crates/bacnet-objects" }
+bacnet-server = { version = "0.2.0", path = "crates/bacnet-server" }
 thiserror = "2"
 bitflags = "2"
 bytes = "1"
