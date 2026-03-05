@@ -184,7 +184,7 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64
-          - os: ubuntu-latest
+          - os: ubuntu-24.04-arm
             target: aarch64
           - os: macos-latest
             target: x86_64
@@ -199,21 +199,13 @@ jobs:
         with:
           python-version: "3.13"
 
-      # QEMU is required for aarch64 Linux wheels so the manylinux container
-      # runs natively under emulation (avoids cross-compilation of aws-lc-sys).
-      - name: Set up QEMU
-        if: matrix.target == 'aarch64' && runner.os == 'Linux'
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           args: --release --out dist -m crates/rusty-bacnet/Cargo.toml -i 3.11 3.12 3.13
           manylinux: auto
-          sccache: ${{ matrix.target != 'aarch64' || runner.os != 'Linux' }}
+          sccache: true
           before-script-linux: |
             if command -v yum &> /dev/null; then
               yum install -y perl-IPC-Cmd cmake3 || true
