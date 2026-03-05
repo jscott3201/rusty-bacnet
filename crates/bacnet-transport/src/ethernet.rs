@@ -623,6 +623,7 @@ pub use transport::EthernetTransport;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::port::TransportPort;
 
     #[test]
     fn encode_decode_round_trip() {
