@@ -111,7 +111,7 @@ Add the dependency (GitHub Packages):
 dependencyResolutionManagement {
     repositories {
         maven {
-            url = uri("https://maven.pkg.github.com/nicegates/rusty-bacnet")
+            url = uri("https://maven.pkg.github.com/jscott3201/rusty-bacnet")
             credentials {
                 username = providers.gradleProperty("gpr.user").orNull ?: System.getenv("GITHUB_ACTOR")
                 password = providers.gradleProperty("gpr.key").orNull ?: System.getenv("GITHUB_TOKEN")
@@ -122,7 +122,7 @@ dependencyResolutionManagement {
 
 // build.gradle.kts
 dependencies {
-    implementation("io.github.nicegates:bacnet-java:0.6.0")
+    implementation("io.github.jscott3201:bacnet-java:0.6.1")
 }
 ```
 
@@ -161,11 +161,11 @@ fun main() = runBlocking {
 ## Quick Start (JavaScript/WASM)
 
 ```bash
-npm install @nicegates/bacnet-wasm
+npm install @jscott3201/bacnet-wasm
 ```
 
 ```javascript
-import init, { BACnetScClient } from '@nicegates/bacnet-wasm';
+import init, { BACnetScClient } from '@jscott3201/bacnet-wasm';
 
 await init();
 
@@ -291,6 +291,13 @@ bacnet bdt 192.168.1.1           # Read broadcast distribution table
 bacnet fdt 192.168.1.1           # Read foreign device table
 bacnet register 192.168.1.1 --ttl 300
 
+# Packet capture and analysis (requires pcap feature)
+bacnet capture                              # live capture, summary mode
+bacnet capture --device eth0 --decode       # full protocol decode
+bacnet capture --save traffic.pcap --quiet  # headless recording
+bacnet capture --read traffic.pcap          # offline analysis
+bacnet capture --filter "host 10.0.0.1"    # additional BPF filter
+
 # Device management
 bacnet time-sync 192.168.1.100 --utc
 bacnet create-object 192.168.1.100 av:100
@@ -311,6 +318,8 @@ bacnet --sc --sc-url wss://hub:443 --sc-cert cert.pem --sc-key key.pem read 00:0
 bacnet --json discover           # JSON output (default when piped)
 bacnet -vvv read 192.168.1.100 ai:1 pv  # Debug logging
 ```
+
+See [CLI Reference](docs/CLI.md) for full documentation, including all commands, shorthand notation, and pre-built binary downloads.
 
 ## Workspace Structure
 
@@ -421,6 +430,7 @@ Minimum Rust version: 1.93
 
 ## Documentation
 
+- [CLI Reference](docs/CLI.md)
 - [Rust API Reference](docs/rust-api.md)
 - [Python API Reference](docs/python-api.md)
 - [Benchmark Results](Benchmarks.md)

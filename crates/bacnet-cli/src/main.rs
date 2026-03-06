@@ -13,6 +13,8 @@ use bacnet_transport::port::TransportPort;
 use clap::{Parser, Subcommand};
 
 mod commands;
+#[allow(dead_code)] // Public API consumed by capture command handler (Task 4).
+mod decode;
 mod output;
 mod parse;
 mod resolve;
@@ -308,6 +310,34 @@ enum Command {
         #[arg(long)]
         utc: bool,
     },
+
+    /// Capture and decode BACnet packets.
+    Capture {
+        /// Read from a pcap file instead of live capture.
+        #[arg(long)]
+        read: Option<PathBuf>,
+        /// Save captured packets to a pcap file.
+        #[arg(long)]
+        save: Option<PathBuf>,
+        /// Suppress decoded output (use with --save).
+        #[arg(long)]
+        quiet: bool,
+        /// Full protocol decode (BVLC/NPDU/APDU/service details).
+        #[arg(long)]
+        decode: bool,
+        /// Network interface name for live capture (e.g., en0, eth0).
+        #[arg(long)]
+        device: Option<String>,
+        /// Additional BPF filter expression (appended to "udp port 47808").
+        #[arg(long)]
+        filter: Option<String>,
+        /// Stop after capturing N packets.
+        #[arg(long)]
+        count: Option<u64>,
+        /// Maximum bytes to capture per packet.
+        #[arg(long, default_value_t = 65535)]
+        snaplen: u32,
+    },
 }
 
 fn setup_tracing(verbosity: u8) {
@@ -589,6 +619,9 @@ async fn execute_command<T: TransportPort + 'static>(
             commands::device::delete_object_cmd(client, &mac, object_type, instance, format)
                 .await?;
         }
+        Command::Capture { .. } => {
+            return Err("capture command should be handled before client setup".into());
+        }
         Command::TimeSync { target, utc } => {
             let mac = resolve_target_mac(client, target).await?;
             let now = std::time::SystemTime::now()
@@ -726,6 +759,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ipv6_interface,
         device_instance: cli.device_instance,
     };
+
+    // Handle capture command separately — no BACnet client needed
+    if let Some(Command::Capture {
+        ref read,
+        ref save,
+        quiet,
+        decode,
+        ref device,
+        ref filter,
+        count,
+        snaplen,
+    }) = cli.command
+    {
+        #[cfg(feature = "pcap")]
+        {
+            let opts = commands::capture::CaptureOpts {
+                read: read.clone(),
+                save: save.clone(),
+                quiet,
+                decode,
+                device: device.clone(),
+                interface_ip: cli.interface,
+                filter: filter.clone(),
+                count,
+                snaplen,
+                format,
+            };
+            return commands::capture::run_capture(opts);
+        }
+        #[cfg(not(feature = "pcap"))]
+        {
+            let _ = (read, save, quiet, decode, device, filter, count, snaplen);
+            eprintln!("Error: Packet capture requires the 'pcap' feature. Rebuild with:\n  cargo install bacnet-cli --features pcap");
+            std::process::exit(1);
+        }
+    }
 
     if args.sc {
         #[cfg(feature = "sc-tls")]

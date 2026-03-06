@@ -36,6 +36,11 @@ rustls = { workspace = true, optional = true }
 rustls-native-certs = { workspace = true, optional = true }
 rustls-pki-types = { version = "1", optional = true }
 
+# Pcap optional deps
+pcap = { version = "2", optional = true }
+ctrlc = { version = "3", optional = true }
+libc = { version = "0.2", optional = true }
+
 [features]
 default = []
 sc-tls = [
@@ -46,3 +51,4 @@ sc-tls = [
     "rustls-native-certs",
     "rustls-pki-types",
 ]
+pcap = ["dep:pcap", "dep:ctrlc", "dep:libc"]

@@ -1,3 +1,5 @@
+#[cfg(feature = "pcap")]
+pub mod capture;
 pub mod device;
 pub mod discover;
 pub mod file;

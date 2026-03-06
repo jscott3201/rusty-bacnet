@@ -5,7 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.1]
+
+### Added
+- **`bacnet capture` command** for live packet capture and offline pcap file analysis
+- BACnet frame decoder (BVLC/NPDU/APDU) with summary and full decode modes (`--decode`)
+- `--save` / `--read` flags for pcap file I/O, `--quiet` for headless recording
+- `--filter` flag for additional BPF filter expressions (appended to default BACnet filter)
+- `pcap` feature flag on `bacnet-cli` (off by default, requires libpcap)
+- Pre-built CLI binaries for Linux (amd64/arm64, with pcap), macOS (amd64/arm64), Windows (amd64)
+- CLI reference documentation (`docs/CLI.md`)
+
+### Fixed
+- Replaced stale `nicegates` org references with `jscott3201` across README, Java packaging, and npm config
 
 ## [0.6.0]
 
@@ -25,7 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.5.5]
 
 ### Fixed
-- Java/Kotlin Gradle publish URL pointed to wrong GitHub org (`nicegates` → `jscott3201`)
+- Java/Kotlin Gradle publish URL pointed to wrong GitHub org
 
 ## [0.5.4]
 
@@ -73,7 +85,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 36 unit tests covering all bindings
 - **Java/Kotlin distribution:** multi-platform JAR with JNA native libraries
   - Platforms: Linux x86_64/aarch64, macOS x86_64/aarch64, Windows x86_64
-  - Published to GitHub Packages as `io.github.nicegates:bacnet-java`
+  - Published to GitHub Packages as `io.github.jscott3201:bacnet-java`
   - Kotlin suspend functions for async operations via kotlinx-coroutines
   - Gradle build with `build-local.sh` for development workflow
 - CI: Java native library builds across 5 platform matrix
