@@ -64,6 +64,64 @@ pub async fn discover<T: TransportPort + 'static>(
     Ok(())
 }
 
+/// Send a directed (unicast) WhoIs to a specific device and display responses.
+pub async fn discover_directed<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    target_mac: &[u8],
+    low: Option<u32>,
+    high: Option<u32>,
+    wait_secs: u64,
+    format: OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let before: HashSet<u32> = client
+        .discovered_devices()
+        .await
+        .iter()
+        .map(|d| d.object_identifier.instance_number())
+        .collect();
+
+    client.who_is_directed(target_mac, low, high).await?;
+    tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
+
+    let devices = client.discovered_devices().await;
+    let infos: Vec<DeviceInfo> = devices
+        .iter()
+        .filter(|d| !before.contains(&d.object_identifier.instance_number()))
+        .map(device_info)
+        .collect();
+    output::print_devices(&infos, format);
+    Ok(())
+}
+
+/// Send a WhoIs broadcast targeting a specific remote network.
+pub async fn discover_network<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    dnet: u16,
+    low: Option<u32>,
+    high: Option<u32>,
+    wait_secs: u64,
+    format: OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let before: HashSet<u32> = client
+        .discovered_devices()
+        .await
+        .iter()
+        .map(|d| d.object_identifier.instance_number())
+        .collect();
+
+    client.who_is_network(dnet, low, high).await?;
+    tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
+
+    let devices = client.discovered_devices().await;
+    let infos: Vec<DeviceInfo> = devices
+        .iter()
+        .filter(|d| !before.contains(&d.object_identifier.instance_number()))
+        .map(device_info)
+        .collect();
+    output::print_devices(&infos, format);
+    Ok(())
+}
+
 /// Send a WhoHas-by-name broadcast and display discovered devices.
 pub async fn find_by_name<T: TransportPort + 'static>(
     client: &BACnetClient<T>,

@@ -1307,6 +1307,67 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await
     }
 
+    /// Send a directed (unicast) WhoIs to a specific device.
+    pub async fn who_is_directed(
+        &self,
+        destination_mac: &[u8],
+        low_limit: Option<u32>,
+        high_limit: Option<u32>,
+    ) -> Result<(), Error> {
+        use bacnet_services::who_is::WhoIsRequest;
+
+        let request = WhoIsRequest {
+            low_limit,
+            high_limit,
+        };
+        let mut buf = BytesMut::new();
+        request.encode(&mut buf);
+
+        let pdu = Apdu::UnconfirmedRequest(bacnet_encoding::apdu::UnconfirmedRequest {
+            service_choice: UnconfirmedServiceChoice::WHO_IS,
+            service_request: Bytes::copy_from_slice(&buf),
+        });
+
+        let mut apdu_buf = BytesMut::with_capacity(2 + buf.len());
+        encode_apdu(&mut apdu_buf, &pdu);
+
+        self.network
+            .send_apdu(&apdu_buf, destination_mac, false, NetworkPriority::NORMAL)
+            .await
+    }
+
+    /// Send a WhoIs broadcast to a specific remote network.
+    ///
+    /// Unlike `who_is()` which broadcasts globally (DNET=0xFFFF), this
+    /// targets a single network number so only devices on that network respond.
+    pub async fn who_is_network(
+        &self,
+        dest_network: u16,
+        low_limit: Option<u32>,
+        high_limit: Option<u32>,
+    ) -> Result<(), Error> {
+        use bacnet_services::who_is::WhoIsRequest;
+
+        let request = WhoIsRequest {
+            low_limit,
+            high_limit,
+        };
+        let mut buf = BytesMut::new();
+        request.encode(&mut buf);
+
+        let pdu = Apdu::UnconfirmedRequest(bacnet_encoding::apdu::UnconfirmedRequest {
+            service_choice: UnconfirmedServiceChoice::WHO_IS,
+            service_request: Bytes::copy_from_slice(&buf),
+        });
+
+        let mut apdu_buf = BytesMut::with_capacity(2 + buf.len());
+        encode_apdu(&mut apdu_buf, &pdu);
+
+        self.network
+            .broadcast_to_network(&apdu_buf, dest_network, false, NetworkPriority::NORMAL)
+            .await
+    }
+
     /// Send a WhoHas broadcast to find an object by identifier or name.
     pub async fn who_has(
         &self,

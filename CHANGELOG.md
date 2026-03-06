@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2]
+
+### Added
+- **CLI `discover` options** for cross-subnet and directed device discovery:
+  - `--target <addr>` — send directed (unicast) WhoIs to a specific device or router
+  - `--bbmd <addr>` — register as foreign device with a BBMD before discovering (with `--ttl`)
+  - `--dnet <network>` — target a specific remote network number through a router
+- `BACnetClient::who_is_directed()` — unicast WhoIs to a specific MAC address
+- `BACnetClient::who_is_network()` — WhoIs broadcast to a specific remote network
+- `NetworkLayer::broadcast_to_network()` — broadcast APDU to a specific DNET (not global 0xFFFF)
+- Shell `discover` command supports `--target` and `--dnet` flags
+
+### Fixed
+- Interactive shell backspace not visually deleting characters (set `Behavior::PreferTerm` in rustyline)
+
 ## [0.6.1]
 
 ### Added
