@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3]
+
+### Fixed
+- Clippy `io_other_error` lint in ethernet transport (Rust 1.93)
+- Clippy `inherent_to_string` lint in WASM bindings — use `Display` trait instead
+
+### Changed
+- Added CHANGELOG entries for patch releases to unblock CI release pipeline
+
+## [0.5.2]
+
+### Fixed
+- Clippy `io_other_error`: use `std::io::Error::other()` in ethernet transport
+
+## [0.5.1]
+
+### Added
+- **Kotlin examples:** 4 examples (BIP client/server, COV subscriptions, device management, IPv6)
+- **JMH benchmarks:** full Kotlin/JVM benchmark suite (BIP ops, concurrency, JNA overhead, object creation)
+- Benchmarks.md: added Kotlin/JVM benchmark results section
+
+### Fixed
+- Clippy `inherent_to_string` in `bacnet-wasm` — implemented `Display` for `JsObjectIdentifier`
+- UniFFI `async_runtime = "tokio"` on all async impl blocks (fixes "no reactor running" in JMH)
+- Stale benchmarks crate version (0.4.0 → 0.5.x)
+
+### Changed
+- Updated CLAUDE.md with Java/Kotlin build commands, UniFFI conventions, workspace layout
+
 ## [0.5.0]
 
 ### Added
