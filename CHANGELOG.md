@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.4]
+
+### Fixed
+- WASM npm package missing `repository` field — npm provenance verification requires it
+
 ## [0.5.3]
 
 ### Fixed

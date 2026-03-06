@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 description = "BACnet/SC thin client for JavaScript/TypeScript via WebAssembly"
+repository = "https://github.com/jscott3201/rusty-bacnet"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
