@@ -465,10 +465,9 @@ mod transport {
             let local_mac = self.local_mac;
 
             let async_fd = AsyncFd::new(Arc::clone(&owned_fd)).map_err(|e| {
-                Error::Transport(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("AsyncFd creation failed: {e}"),
-                ))
+                Error::Transport(std::io::Error::other(format!(
+                    "AsyncFd creation failed: {e}"
+                )))
             })?;
 
             let recv_task = tokio::spawn(async move {

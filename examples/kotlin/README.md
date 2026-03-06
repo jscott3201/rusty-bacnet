@@ -11,7 +11,7 @@ cd ../../java
 ./build-local.sh --release
 ```
 
-The JAR will be at `java/build/libs/rusty-bacnet-0.5.1.jar`.
+The JAR will be at `java/build/libs/rusty-bacnet-0.5.2.jar`.
 
 ## Examples
 
@@ -31,7 +31,7 @@ These examples use the Kotlin scripting approach. Ensure JDK 21+ and `kotlinc` a
 # Add example as a mainClass in java/build.gradle.kts
 
 # Option 2: Compile and run directly
-JAR=../../java/build/libs/rusty-bacnet-0.5.1.jar
+JAR=../../java/build/libs/rusty-bacnet-0.5.2.jar
 kotlinc -cp "$JAR" BipClientServer.kt -include-runtime -d example.jar
 java -cp "example.jar:$JAR" BipClientServerKt
 
