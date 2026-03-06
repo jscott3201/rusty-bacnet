@@ -424,7 +424,9 @@ async fn execute_command<T: TransportPort + 'static>(
             ..
         } => {
             if bbmd.is_some() {
-                return Err("--bbmd requires BACnet/IP transport (do not use --sc or --ipv6)".into());
+                return Err(
+                    "--bbmd requires BACnet/IP transport (do not use --sc or --ipv6)".into(),
+                );
             }
             let (low, high) = parse_discover_range(range.as_deref())?;
             if let Some(target_str) = target {
