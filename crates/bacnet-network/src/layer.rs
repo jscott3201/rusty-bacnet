@@ -189,6 +189,36 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         self.transport.send_broadcast(&buf).await
     }
 
+    /// Broadcast an APDU to a specific remote network via routers.
+    ///
+    /// Like `broadcast_global_apdu()` but targets a single network number
+    /// instead of all networks (DNET=0xFFFF).
+    pub async fn broadcast_to_network(
+        &self,
+        apdu: &[u8],
+        dest_network: u16,
+        expecting_reply: bool,
+        priority: NetworkPriority,
+    ) -> Result<(), Error> {
+        let npdu = Npdu {
+            is_network_message: false,
+            expecting_reply,
+            priority,
+            destination: Some(NpduAddress {
+                network: dest_network,
+                mac_address: MacAddr::new(),
+            }),
+            source: None,
+            hop_count: 255,
+            payload: Bytes::copy_from_slice(apdu),
+            ..Npdu::default()
+        };
+
+        let mut buf = BytesMut::with_capacity(8 + apdu.len());
+        encode_npdu(&mut buf, &npdu)?;
+        self.transport.send_broadcast(&buf).await
+    }
+
     /// Send an APDU to a remote device through a local router.
     ///
     /// The NPDU is sent via unicast to `router_mac` (the next-hop router on

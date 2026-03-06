@@ -99,6 +99,18 @@ enum Command {
         /// Seconds to wait for responses.
         #[arg(long, default_value_t = 3)]
         wait: u64,
+        /// Send directed WhoIs to a specific address instead of broadcasting.
+        #[arg(long)]
+        target: Option<String>,
+        /// Register as foreign device with a BBMD before discovering.
+        #[arg(long)]
+        bbmd: Option<String>,
+        /// TTL in seconds for BBMD foreign device registration.
+        #[arg(long, default_value_t = 300)]
+        ttl: u16,
+        /// Target a specific remote network number.
+        #[arg(long)]
+        dnet: Option<u16>,
     },
 
     /// Find objects by name (WhoHas).
@@ -403,26 +415,35 @@ async fn execute_command<T: TransportPort + 'static>(
 ) -> Result<(), Box<dyn std::error::Error>> {
     match cmd {
         Command::Shell => unreachable!(),
-        Command::Discover { range, wait } => {
-            let (low, high) = if let Some(r) = range {
-                if let Some((lo, hi)) = r.split_once('-') {
-                    let low = lo
-                        .parse::<u32>()
-                        .map_err(|_| format!("invalid range low: '{lo}'"))?;
-                    let high = hi
-                        .parse::<u32>()
-                        .map_err(|_| format!("invalid range high: '{hi}'"))?;
-                    if low > high {
-                        return Err(format!("invalid range: low ({low}) > high ({high})").into());
-                    }
-                    (Some(low), Some(high))
-                } else {
-                    return Err(format!("invalid range format: '{r}', expected 'low-high'").into());
-                }
+        Command::Discover {
+            range,
+            wait,
+            target,
+            bbmd,
+            dnet,
+            ..
+        } => {
+            if bbmd.is_some() {
+                return Err(
+                    "--bbmd requires BACnet/IP transport (do not use --sc or --ipv6)".into(),
+                );
+            }
+            let (low, high) = parse_discover_range(range.as_deref())?;
+            if let Some(target_str) = target {
+                let mac = resolve::parse_target(target_str)
+                    .and_then(|t| match t {
+                        resolve::Target::Mac(m) => Ok(m),
+                        _ => Err("--target requires an IP address, not a device instance".into()),
+                    })
+                    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+                commands::discover::discover_directed(client, &mac, low, high, *wait, format)
+                    .await?;
+            } else if let Some(network) = dnet {
+                commands::discover::discover_network(client, *network, low, high, *wait, format)
+                    .await?;
             } else {
-                (None, None)
-            };
-            commands::discover::discover(client, low, high, *wait, format).await?;
+                commands::discover::discover(client, low, high, *wait, format).await?;
+            }
         }
         Command::Find { name, wait } => match name {
             Some(n) => {
@@ -684,6 +705,30 @@ async fn execute_command<T: TransportPort + 'static>(
     Ok(())
 }
 
+/// Parse a discover range string like "1000-2000" into (low, high).
+fn parse_discover_range(
+    range: Option<&str>,
+) -> Result<(Option<u32>, Option<u32>), Box<dyn std::error::Error>> {
+    if let Some(r) = range {
+        if let Some((lo, hi)) = r.split_once('-') {
+            let low = lo
+                .parse::<u32>()
+                .map_err(|_| format!("invalid range low: '{lo}'"))?;
+            let high = hi
+                .parse::<u32>()
+                .map_err(|_| format!("invalid range high: '{hi}'"))?;
+            if low > high {
+                return Err(format!("invalid range: low ({low}) > high ({high})").into());
+            }
+            Ok((Some(low), Some(high)))
+        } else {
+            Err(format!("invalid range format: '{r}', expected 'low-high'").into())
+        }
+    } else {
+        Ok((None, None))
+    }
+}
+
 /// Try to execute a BIP-specific BBMD management command.
 /// Returns `Ok(true)` if handled, `Ok(false)` if not a BIP-specific command.
 async fn execute_bip_command(
@@ -692,6 +737,41 @@ async fn execute_bip_command(
     format: OutputFormat,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     match cmd {
+        Command::Discover {
+            range,
+            wait,
+            target,
+            bbmd: Some(bbmd_addr),
+            ttl,
+            dnet,
+        } => {
+            let bbmd_mac = resolve::parse_target(bbmd_addr)
+                .and_then(|t| match t {
+                    resolve::Target::Mac(m) => Ok(m),
+                    _ => Err("--bbmd requires an IP address, not a device instance".into()),
+                })
+                .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+            let result = client.register_foreign_device_bvlc(&bbmd_mac, *ttl).await?;
+            eprintln!("Registered as foreign device with BBMD: {result:?}");
+            // Brief pause to allow registration to propagate.
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            let (low, high) = parse_discover_range(range.as_deref())?;
+            if let Some(target_str) = target {
+                let mac = resolve::parse_target(target_str)
+                    .and_then(|t| match t {
+                        resolve::Target::Mac(m) => Ok(m),
+                        _ => Err("--target requires an IP address, not a device instance".into()),
+                    })
+                    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+                commands::discover::discover_directed(client, &mac, low, high, *wait, format)
+                    .await?;
+            } else if let Some(network) = dnet {
+                commands::discover::discover_network(client, *network, low, high, *wait, format)
+                    .await?;
+            } else {
+                commands::discover::discover(client, low, high, *wait, format).await?;
+            }
+        }
         Command::Bdt { target } => {
             let mac = resolve_target_mac(client, target).await?;
             commands::router::bdt_cmd(client, &mac, format).await?;

@@ -195,6 +195,8 @@ fn print_help() {
         "\
 Commands:
   discover [low-high] [--wait N]     Discover devices (WhoIs broadcast)
+    [--target ADDR]                   Send directed WhoIs to a specific address
+    [--dnet N]                        Target a specific remote network number
   find <name> [--wait N]             Find objects by name (WhoHas)
   read <target> <object> <property>  Read a property (e.g., read 192.168.1.10 ai:1 pv)
   readm <target> <specs...>          Read multiple properties (RPM)
@@ -229,6 +231,7 @@ pub async fn run_shell<T: TransportPort + 'static>(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::builder()
         .completion_type(CompletionType::List)
+        .behavior(rustyline::Behavior::PreferTerm)
         .build();
     let helper = ShellHelper::new();
     let mut rl = Editor::with_config(config)?;
@@ -338,59 +341,114 @@ async fn handle_discover<T: TransportPort + 'static>(
     let mut low = None;
     let mut high = None;
     let mut wait_secs = 3;
+    let mut target: Option<String> = None;
+    let mut dnet: Option<u16> = None;
 
     let mut i = 0;
     while i < args.len() {
-        if args[i] == "--wait" {
-            if i + 1 < args.len() {
-                match args[i + 1].parse::<u64>() {
-                    Ok(w) => wait_secs = w,
-                    Err(_) => {
-                        output::print_error("--wait requires a numeric value");
-                        return;
+        match args[i].as_str() {
+            "--wait" => {
+                if i + 1 < args.len() {
+                    match args[i + 1].parse::<u64>() {
+                        Ok(w) => wait_secs = w,
+                        Err(_) => {
+                            output::print_error("--wait requires a numeric value");
+                            return;
+                        }
                     }
+                    i += 2;
+                    continue;
+                } else {
+                    output::print_error("--wait requires a value");
+                    return;
                 }
-                i += 2;
-                continue;
-            } else {
-                output::print_error("--wait requires a value");
+            }
+            "--target" => {
+                if i + 1 < args.len() {
+                    target = Some(args[i + 1].clone());
+                    i += 2;
+                    continue;
+                } else {
+                    output::print_error("--target requires an address");
+                    return;
+                }
+            }
+            "--dnet" => {
+                if i + 1 < args.len() {
+                    match args[i + 1].parse::<u16>() {
+                        Ok(n) => dnet = Some(n),
+                        Err(_) => {
+                            output::print_error("--dnet requires a network number");
+                            return;
+                        }
+                    }
+                    i += 2;
+                    continue;
+                } else {
+                    output::print_error("--dnet requires a value");
+                    return;
+                }
+            }
+            s if s.starts_with("--") => {
+                output::print_error(&format!("unknown option: '{s}'"));
                 return;
             }
-        }
-        if args[i].starts_with("--") {
-            output::print_error(&format!("unknown option: '{}'", args[i]));
-            return;
-        }
-        // Try parsing as range "low-high".
-        if let Some((lo, hi)) = args[i].split_once('-') {
-            match (lo.parse::<u32>(), hi.parse::<u32>()) {
-                (Ok(l), Ok(h)) => {
-                    if l > h {
-                        output::print_error(&format!("invalid range: low ({l}) > high ({h})"));
-                        return;
+            _ => {
+                // Try parsing as range "low-high".
+                if let Some((lo, hi)) = args[i].split_once('-') {
+                    match (lo.parse::<u32>(), hi.parse::<u32>()) {
+                        (Ok(l), Ok(h)) => {
+                            if l > h {
+                                output::print_error(&format!(
+                                    "invalid range: low ({l}) > high ({h})"
+                                ));
+                                return;
+                            }
+                            low = Some(l);
+                            high = Some(h);
+                        }
+                        _ => {
+                            output::print_error(&format!(
+                                "invalid range: '{}', expected 'low-high'",
+                                args[i]
+                            ));
+                            return;
+                        }
                     }
-                    low = Some(l);
-                    high = Some(h);
-                }
-                _ => {
+                } else {
                     output::print_error(&format!(
-                        "invalid range: '{}', expected 'low-high'",
+                        "unexpected argument: '{}'. Use 'discover [low-high] [--wait N] [--target ADDR] [--dnet N]'",
                         args[i]
                     ));
                     return;
                 }
             }
-        } else {
-            output::print_error(&format!(
-                "unexpected argument: '{}'. Use 'discover [low-high] [--wait N]'",
-                args[i]
-            ));
-            return;
         }
         i += 1;
     }
 
-    if let Err(e) = commands::discover::discover(client, low, high, wait_secs, format).await {
+    let result = if let Some(target_str) = &target {
+        match resolve::parse_target(target_str) {
+            Ok(resolve::Target::Mac(mac)) => {
+                commands::discover::discover_directed(client, &mac, low, high, wait_secs, format)
+                    .await
+            }
+            Ok(_) => {
+                output::print_error("--target requires an IP address, not a device instance");
+                return;
+            }
+            Err(e) => {
+                output::print_error(&e);
+                return;
+            }
+        }
+    } else if let Some(network) = dnet {
+        commands::discover::discover_network(client, network, low, high, wait_secs, format).await
+    } else {
+        commands::discover::discover(client, low, high, wait_secs, format).await
+    };
+
+    if let Err(e) = result {
         output::print_error(&e.to_string());
     }
 }
