@@ -1,6 +1,6 @@
 # Rusty BACnet
 
-A complete BACnet protocol stack (ASHRAE 135-2020) written in Rust, with first-class Python bindings via PyO3.
+A complete BACnet protocol stack (ASHRAE 135-2020) written in Rust, with first-class Python, Kotlin/Java, and WASM/JavaScript bindings.
 
 [![CI](https://github.com/jscott3201/rusty-bacnet/actions/workflows/ci.yml/badge.svg)](https://github.com/jscott3201/rusty-bacnet/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -11,7 +11,9 @@ A complete BACnet protocol stack (ASHRAE 135-2020) written in Rust, with first-c
 - **5 transports** — BACnet/IP (UDP), BACnet/IPv6 (multicast), BACnet/SC (WebSocket+TLS with hub), MS/TP (serial), Ethernet (BPF)
 - **62 object types** — All standard BACnet objects including Analog/Binary/MultiState I/O, Device, Schedule, Calendar, Trend Log, Notification Class, Loop, Access Control, Lighting, Life Safety, Elevator, and more
 - **Python bindings** — async client, server, and SC hub with full API parity via PyO3
-- **1682 tests**, 0 clippy warnings, CI on Linux/macOS/Windows
+- **Kotlin/Java bindings** — async client and server via UniFFI, distributed as multi-platform JAR
+- **WASM/JavaScript** — BACnet/SC thin client for browsers via wasm-bindgen
+- **1718 tests**, 0 clippy warnings, CI on Linux/macOS/Windows
 
 ## Quick Start (Python)
 
@@ -63,9 +65,9 @@ asyncio.run(main())
 
 ```toml
 [dependencies]
-bacnet-client = "0.1"
-bacnet-types = "0.1"
-bacnet-encoding = "0.1"
+bacnet-client = "0.5"
+bacnet-types = "0.5"
+bacnet-encoding = "0.5"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -97,6 +99,87 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+```
+
+## Quick Start (Kotlin)
+
+Add the dependency (GitHub Packages):
+
+```kotlin
+// settings.gradle.kts
+dependencyResolutionManagement {
+    repositories {
+        maven {
+            url = uri("https://maven.pkg.github.com/nicegates/rusty-bacnet")
+            credentials {
+                username = providers.gradleProperty("gpr.user").orNull ?: System.getenv("GITHUB_ACTOR")
+                password = providers.gradleProperty("gpr.key").orNull ?: System.getenv("GITHUB_TOKEN")
+            }
+        }
+    }
+}
+
+// build.gradle.kts
+dependencies {
+    implementation("io.github.nicegates:bacnet-java:0.5.0")
+}
+```
+
+```kotlin
+import uniffi.bacnet_java.*
+import kotlinx.coroutines.runBlocking
+
+fun main() = runBlocking {
+    val client = BacnetClient(
+        transportType = "bip",
+        address = "0.0.0.0:47808",
+        broadcastAddress = "192.168.1.255:47808",
+    )
+    client.start()
+
+    // Read a property
+    val value = client.readProperty(
+        address = "192.168.1.100:47808",
+        objectType = 0u,      // analog-input
+        objectInstance = 1u,
+        propertyId = 85u,      // present-value
+        arrayIndex = null,
+    )
+    println("Value: $value")
+
+    // Discover devices
+    client.whoIs(lowLimit = null, highLimit = null)
+    kotlinx.coroutines.delay(2000)
+    val devices = client.discoveredDevices()
+    devices.forEach { println("Device ${it.deviceInstance} at ${it.address}") }
+
+    client.stop()
+}
+```
+
+## Quick Start (JavaScript/WASM)
+
+```bash
+npm install @nicegates/bacnet-wasm
+```
+
+```javascript
+import init, { BACnetScClient } from '@nicegates/bacnet-wasm';
+
+await init();
+
+const client = new BACnetScClient("wss://sc-hub.example.com:443");
+await client.connect(new Uint8Array([0, 1, 2, 3, 4, 5]));  // VMAC
+
+const value = await client.readProperty(
+  new Uint8Array([0, 0, 0, 0, 0, 1]),  // target VMAC
+  0,   // analog-input
+  1,   // instance
+  85,  // present-value
+);
+console.log('Value:', value);
+
+client.disconnect();
 ```
 
 ## Running a Server (Python)
@@ -191,6 +274,9 @@ crates/
   bacnet-objects/     BACnetObject trait, ObjectDatabase, 62 object types
   bacnet-server/      Async server (RP/WP/RPM/WPM/COV/Events/DCC)
   rusty-bacnet/       Python bindings via PyO3 (client, server, hub)
+  bacnet-java/        Kotlin/Java bindings via UniFFI (client, server)
+  bacnet-wasm/        WASM/JavaScript BACnet/SC thin client
+java/                 Gradle build for multi-platform JAR
 benchmarks/           Criterion benchmarks (9 suites) + Python mixed-mode
 examples/             Rust, Python, and Docker examples
 docs/                 API documentation
@@ -257,17 +343,23 @@ The `rusty-bacnet` crate provides full Python API parity:
 ## Development
 
 ```bash
-# Run tests (1682 tests)
-cargo test --workspace --exclude rusty-bacnet
+# Run tests (1718 tests)
+cargo test --workspace --exclude rusty-bacnet --exclude bacnet-wasm
 
 # Check formatting
 cargo fmt --all --check
 
 # Lint (0 warnings required)
-RUSTFLAGS="-Dwarnings" cargo clippy --workspace --exclude rusty-bacnet --all-targets
+RUSTFLAGS="-Dwarnings" cargo clippy --workspace --exclude rusty-bacnet --exclude bacnet-wasm --all-targets
 
 # Check Python bindings compile
 cargo check -p rusty-bacnet --tests
+
+# Check WASM bindings compile
+cargo check -p bacnet-wasm --target wasm32-unknown-unknown
+
+# Build Java/Kotlin JAR (local platform only)
+cd java && ./build-local.sh --release
 
 # License/advisory checks
 cargo deny check

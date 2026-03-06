@@ -1,0 +1,10 @@
+[package]
+name = "uniffi-bindgen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+uniffi = { version = "0.31", features = ["cli"] }

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0]
+
+### Added
+- **Java/Kotlin bindings:** new `bacnet-java` crate via UniFFI 0.31
+  - `BacnetClient` with 23 async methods (ReadProperty, WriteProperty, RPM, WPM, COV, WhoIs, IAm, etc.)
+  - `BacnetServer` with 60+ object type builders (all ASHRAE 135-2020 standard object types)
+  - `CovNotificationStream` async iterator for real-time COV notifications
+  - Transport factory supporting BIP/IPv4, BIP6/IPv6, and MS/TP configurations
+  - Error mapping from internal BACnet errors to typed Kotlin exceptions
+  - 36 unit tests covering all bindings
+- **Java/Kotlin distribution:** multi-platform JAR with JNA native libraries
+  - Platforms: Linux x86_64/aarch64, macOS x86_64/aarch64, Windows x86_64
+  - Published to GitHub Packages as `io.github.nicegates:bacnet-java`
+  - Kotlin suspend functions for async operations via kotlinx-coroutines
+  - Gradle build with `build-local.sh` for development workflow
+- CI: Java native library builds across 5 platform matrix
+- CI: Automated JAR packaging and GitHub Packages publishing on release tags
+- CI: JAR attached to GitHub Releases
+
 ## [0.4.0]
 
 ### Added

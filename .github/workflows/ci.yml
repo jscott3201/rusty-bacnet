@@ -319,21 +319,156 @@ jobs:
 
       - name: Publish to npm
         run: cd dist/wasm-npm && npm publish --provenance --access public
-        continue-on-error: true  # First publish must be manual; OIDC trusted publishing requires package to exist on npmjs.com first
 
   github-release:
     name: GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [publish-crates, publish-pypi, publish-npm]
+    needs: [publish-crates, publish-pypi, publish-npm, publish-java]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: java-jar
+          path: dist/java
+
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          files: dist/java/*.jar
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ===========================================================================
+  # Tier 2b — Java/Kotlin release
+  # ===========================================================================
+
+  build-java-native:
+    name: Java Native (${{ matrix.os }} ${{ matrix.target }})
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            jna_dir: linux-x86-64
+            lib_name: libbacnet_java.so
+            features: "--features bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-transport/ethernet"
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            jna_dir: linux-aarch64
+            lib_name: libbacnet_java.so
+            features: "--features bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-transport/ethernet"
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            jna_dir: darwin-x86-64
+            lib_name: libbacnet_java.dylib
+            features: "--features bacnet-transport/ipv6,bacnet-transport/sc-tls"
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            jna_dir: darwin-aarch64
+            lib_name: libbacnet_java.dylib
+            features: "--features bacnet-transport/ipv6,bacnet-transport/sc-tls"
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            jna_dir: win32-x86-64
+            lib_name: bacnet_java.dll
+            features: "--features bacnet-transport/ipv6,bacnet-transport/sc-tls"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.93"
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: java-${{ matrix.target }}
+
+      - name: Install Linux aarch64 dependencies
+        if: matrix.target == 'aarch64-unknown-linux-gnu' && runner.arch != 'ARM64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build native library
+        run: cargo build -p bacnet-java --release --target ${{ matrix.target }} ${{ matrix.features }}
+
+      - name: Upload native library
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-native-${{ matrix.jna_dir }}
+          path: target/${{ matrix.target }}/release/${{ matrix.lib_name }}
+
+  publish-java:
+    name: Publish Java/Kotlin JAR
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-java-native]
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.93"
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Download all native libraries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: java-native-*
+          path: native-libs
+
+      - name: Build Linux x86_64 cdylib for binding generation
+        run: cargo build -p bacnet-java --release
+
+      - name: Build uniffi-bindgen
+        run: cargo build -p uniffi-bindgen
+
+      - name: Generate Kotlin bindings
+        run: |
+          cargo run -p uniffi-bindgen -- generate \
+            --library target/release/libbacnet_java.so \
+            --language kotlin \
+            --no-format \
+            --out-dir java/src/main/kotlin
+
+      - name: Assemble native libraries into JNA layout
+        run: |
+          for dir in native-libs/java-native-*/; do
+            JNA_DIR=$(basename "$dir" | sed 's/java-native-//')
+            mkdir -p "java/src/main/resources/$JNA_DIR"
+            cp "$dir"/* "java/src/main/resources/$JNA_DIR/"
+          done
+          find java/src/main/resources -type f | sort
+
+      - name: Build JAR
+        working-directory: java
+        run: ./gradlew build
+
+      - name: Publish to GitHub Packages
+        working-directory: java
+        run: ./gradlew publish
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-jar
+          path: java/build/libs/*.jar
 
   # ===========================================================================
   # Docker Hub (placeholder for 1.0)
