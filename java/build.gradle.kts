@@ -50,7 +50,7 @@ publishing {
             pom {
                 name.set("BACnet Java/Kotlin Bindings")
                 description.set("Kotlin bindings for the rusty-bacnet BACnet protocol stack")
-                url.set("https://github.com/nicegates/rusty-bacnet")
+                url.set("https://github.com/jscott3201/rusty-bacnet")
                 licenses {
                     license {
                         name.set("MIT")
@@ -63,7 +63,7 @@ publishing {
     repositories {
         maven {
             name = "GitHubPackages"
-            url = uri("https://maven.pkg.github.com/nicegates/rusty-bacnet")
+            url = uri("https://maven.pkg.github.com/jscott3201/rusty-bacnet")
             credentials {
                 username = System.getenv("GITHUB_ACTOR")
                 password = System.getenv("GITHUB_TOKEN")

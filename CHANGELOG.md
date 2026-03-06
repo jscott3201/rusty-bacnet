@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.5]
+
+### Fixed
+- Java/Kotlin Gradle publish URL pointed to wrong GitHub org (`nicegates` → `jscott3201`)
+
 ## [0.5.4]
 
 ### Fixed

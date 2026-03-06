@@ -121,7 +121,7 @@ dependencyResolutionManagement {
 
 // build.gradle.kts
 dependencies {
-    implementation("io.github.nicegates:bacnet-java:0.5.4")
+    implementation("io.github.nicegates:bacnet-java:0.5.5")
 }
 ```
 
