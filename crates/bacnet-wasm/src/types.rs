@@ -1,3 +1,5 @@
+use std::fmt;
+
 use wasm_bindgen::prelude::*;
 
 use bacnet_types::enums::ObjectType;
@@ -6,6 +8,12 @@ use bacnet_types::primitives::ObjectIdentifier;
 /// JS-facing wrapper around `ObjectIdentifier`.
 #[wasm_bindgen]
 pub struct JsObjectIdentifier(ObjectIdentifier);
+
+impl fmt::Display for JsObjectIdentifier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 #[wasm_bindgen]
 impl JsObjectIdentifier {
@@ -27,8 +35,8 @@ impl JsObjectIdentifier {
     }
 
     #[wasm_bindgen(js_name = toString)]
-    pub fn to_string(&self) -> String {
-        format!("{}", self.0)
+    pub fn display(&self) -> String {
+        self.to_string()
     }
 }
 
