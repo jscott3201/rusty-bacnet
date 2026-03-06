@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0]
+
+### Added
+- **BBMD client API** (Annex J): `read_bdt()`, `write_bdt()`, `read_fdt()`, `delete_fdt_entry()`, `register_foreign_device()` on `BipTransport` with oneshot channel response correlation
+- **BACnet/IPv6 CLI support** (Annex U): `--ipv6`, `--ipv6-interface`, `--device-instance` flags; `Bip6ClientBuilder` and `bip6_builder()` on `BACnetClient`
+- IPv6 bracket-notation target parsing (`[::1]:47808`, `[fe80::1]`) in CLI
+- `FdtEntryWire` struct and `decode_fdt()` / `encode_bdt_entries()` helpers in `bacnet-transport`
+- `BACnetClient<BipTransport>` delegate methods for BBMD management
+- CLI `bdt`, `fdt`, `register`, `unregister` commands now fully functional (were stubs)
+- Table and JSON output for BDT/FDT query results via `comfy-table`
+
+### Changed
+- BBMD management commands restricted to BIP transport (clear error on SC/IPv6)
+- BIP transport dispatch in CLI separated into `execute_bip_command()` for type-safe BIP-only operations
+
 ## [0.5.5]
 
 ### Fixed

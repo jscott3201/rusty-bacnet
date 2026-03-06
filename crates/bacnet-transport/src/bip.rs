@@ -6,10 +6,11 @@
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::BytesMut;
 use tokio::net::UdpSocket;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
@@ -17,9 +18,10 @@ use bacnet_types::enums::{BvlcFunction, BvlcResultCode};
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 
-use crate::bbmd::{BbmdState, BdtEntry};
+use crate::bbmd::{self, BbmdState, BdtEntry, FdtEntryWire};
 use crate::bvll::{
-    decode_bip_mac, decode_bvll, encode_bip_mac, encode_bvll, encode_bvll_forwarded,
+    self, decode_bip_mac, decode_bvll, encode_bip_mac, encode_bvll, encode_bvll_forwarded,
+    BvllMessage,
 };
 use crate::port::{ReceivedNpdu, TransportPort};
 
@@ -51,6 +53,8 @@ pub struct BipTransport {
     foreign_device: Option<ForeignDeviceConfig>,
     /// Re-registration timer task.
     registration_task: Option<JoinHandle<()>>,
+    /// Shared oneshot channel for routing BVLC management responses back to the caller.
+    bvlc_response_tx: Arc<Mutex<Option<oneshot::Sender<BvllMessage>>>>,
 }
 
 impl BipTransport {
@@ -70,6 +74,7 @@ impl BipTransport {
             bbmd: None,
             foreign_device: None,
             registration_task: None,
+            bvlc_response_tx: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -97,6 +102,159 @@ impl BipTransport {
     /// Get the BBMD state (if BBMD mode is enabled).
     pub fn bbmd_state(&self) -> Option<&Arc<Mutex<BbmdState>>> {
         self.bbmd.as_ref()
+    }
+
+    /// Timeout for BVLC management response waiting.
+    const BVLC_RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
+
+    /// Get the socket, returning an error if not started.
+    fn require_socket(&self) -> Result<&Arc<UdpSocket>, Error> {
+        self.socket.as_ref().ok_or_else(|| {
+            Error::Transport(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "Transport not started",
+            ))
+        })
+    }
+
+    /// Send a raw BVLC management request and await the response.
+    async fn bvlc_request(
+        &self,
+        target: &[u8],
+        function: BvlcFunction,
+        payload: &[u8],
+    ) -> Result<BvllMessage, Error> {
+        let socket = self.require_socket()?;
+        let (ip, port) = decode_bip_mac(target)?;
+        let dest = SocketAddrV4::new(Ipv4Addr::from(ip), port);
+
+        // Create the oneshot channel and install the sender.
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut slot = self.bvlc_response_tx.lock().await;
+            *slot = Some(tx);
+        }
+
+        // Send the request.
+        let mut buf = BytesMut::with_capacity(4 + payload.len());
+        encode_bvll(&mut buf, function, payload);
+        socket.send_to(&buf, dest).await.map_err(Error::Transport)?;
+
+        // Await the response with a timeout.
+        match tokio::time::timeout(Self::BVLC_RESPONSE_TIMEOUT, rx).await {
+            Ok(Ok(msg)) => Ok(msg),
+            Ok(Err(_)) => Err(Error::Encoding("BVLC response channel dropped".to_string())),
+            Err(_) => {
+                // Timeout — clean up the pending sender.
+                let mut slot = self.bvlc_response_tx.lock().await;
+                *slot = None;
+                Err(Error::Timeout(Self::BVLC_RESPONSE_TIMEOUT))
+            }
+        }
+    }
+
+    /// Send Read-Broadcast-Distribution-Table and return the response entries.
+    pub async fn read_bdt(&self, target: &[u8]) -> Result<Vec<BdtEntry>, Error> {
+        let msg = self
+            .bvlc_request(target, BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE, &[])
+            .await?;
+        if msg.function == BvlcFunction::BVLC_RESULT {
+            let code = if msg.payload.len() >= 2 {
+                BvlcResultCode::from_raw(u16::from_be_bytes([msg.payload[0], msg.payload[1]]))
+            } else {
+                BvlcResultCode::READ_BROADCAST_DISTRIBUTION_TABLE_NAK
+            };
+            return Err(Error::Encoding(format!("BVLC-Result: {code:?}")));
+        }
+        BbmdState::decode_bdt(&msg.payload)
+    }
+
+    /// Send Write-Broadcast-Distribution-Table and return the result code.
+    pub async fn write_bdt(
+        &self,
+        target: &[u8],
+        entries: &[BdtEntry],
+    ) -> Result<BvlcResultCode, Error> {
+        let mut payload = BytesMut::with_capacity(entries.len() * bbmd::BDT_ENTRY_SIZE);
+        bbmd::encode_bdt_entries(entries, &mut payload);
+        let msg = self
+            .bvlc_request(
+                target,
+                BvlcFunction::WRITE_BROADCAST_DISTRIBUTION_TABLE,
+                &payload,
+            )
+            .await?;
+        if msg.payload.len() >= 2 {
+            Ok(BvlcResultCode::from_raw(u16::from_be_bytes([
+                msg.payload[0],
+                msg.payload[1],
+            ])))
+        } else {
+            Err(Error::Encoding("BVLC-Result too short".to_string()))
+        }
+    }
+
+    /// Send Read-Foreign-Device-Table and return the response entries.
+    pub async fn read_fdt(&self, target: &[u8]) -> Result<Vec<FdtEntryWire>, Error> {
+        let msg = self
+            .bvlc_request(target, BvlcFunction::READ_FOREIGN_DEVICE_TABLE, &[])
+            .await?;
+        if msg.function == BvlcFunction::BVLC_RESULT {
+            let code = if msg.payload.len() >= 2 {
+                BvlcResultCode::from_raw(u16::from_be_bytes([msg.payload[0], msg.payload[1]]))
+            } else {
+                BvlcResultCode::READ_FOREIGN_DEVICE_TABLE_NAK
+            };
+            return Err(Error::Encoding(format!("BVLC-Result: {code:?}")));
+        }
+        bbmd::decode_fdt(&msg.payload)
+    }
+
+    /// Send Delete-Foreign-Device-Table-Entry and return the result code.
+    pub async fn delete_fdt_entry(
+        &self,
+        target: &[u8],
+        ip: [u8; 4],
+        port: u16,
+    ) -> Result<BvlcResultCode, Error> {
+        let mut payload = BytesMut::with_capacity(6);
+        payload.extend_from_slice(&ip);
+        payload.extend_from_slice(&port.to_be_bytes());
+        let msg = self
+            .bvlc_request(
+                target,
+                BvlcFunction::DELETE_FOREIGN_DEVICE_TABLE_ENTRY,
+                &payload,
+            )
+            .await?;
+        if msg.payload.len() >= 2 {
+            Ok(BvlcResultCode::from_raw(u16::from_be_bytes([
+                msg.payload[0],
+                msg.payload[1],
+            ])))
+        } else {
+            Err(Error::Encoding("BVLC-Result too short".to_string()))
+        }
+    }
+
+    /// Send Register-Foreign-Device to a BBMD and return the result code.
+    pub async fn register_foreign_device(
+        &self,
+        target: &[u8],
+        ttl: u16,
+    ) -> Result<BvlcResultCode, Error> {
+        let payload = ttl.to_be_bytes();
+        let msg = self
+            .bvlc_request(target, BvlcFunction::REGISTER_FOREIGN_DEVICE, &payload)
+            .await?;
+        if msg.payload.len() >= 2 {
+            Ok(BvlcResultCode::from_raw(u16::from_be_bytes([
+                msg.payload[0],
+                msg.payload[1],
+            ])))
+        } else {
+            Err(Error::Encoding("BVLC-Result too short".to_string()))
+        }
     }
 }
 
@@ -149,6 +307,7 @@ impl TransportPort for BipTransport {
         let bbmd_for_recv = self.bbmd.clone();
         let broadcast_addr = self.broadcast_address;
         let broadcast_port = self.port;
+        let bvlc_response_for_recv = self.bvlc_response_tx.clone();
 
         // Spawn the receive loop
         let recv_task = tokio::spawn(async move {
@@ -174,6 +333,7 @@ impl TransportPort for BipTransport {
                                     &bbmd_for_recv,
                                     broadcast_addr,
                                     broadcast_port,
+                                    &bvlc_response_for_recv,
                                 )
                                 .await;
                             }
@@ -304,7 +464,7 @@ async fn send_register_foreign_device(socket: &UdpSocket, bbmd_addr: SocketAddrV
 /// Handle a decoded BVLL message in the recv loop.
 #[allow(clippy::too_many_arguments)]
 async fn handle_bvll_message(
-    msg: &crate::bvll::BvllMessage,
+    msg: &bvll::BvllMessage,
     sender: ([u8; 4], u16),
     local_mac: [u8; 6],
     socket: &Arc<UdpSocket>,
@@ -312,6 +472,7 @@ async fn handle_bvll_message(
     bbmd: &Option<Arc<Mutex<BbmdState>>>,
     broadcast_addr: Ipv4Addr,
     broadcast_port: u16,
+    bvlc_response: &Arc<Mutex<Option<oneshot::Sender<BvllMessage>>>>,
 ) {
     match msg.function {
         f if f == BvlcFunction::ORIGINAL_UNICAST_NPDU => {
@@ -660,8 +821,14 @@ async fn handle_bvll_message(
         }
 
         f if f == BvlcFunction::BVLC_RESULT => {
-            // Response to a management request we sent (e.g., Register-Foreign-Device)
-            if msg.payload.len() >= 2 {
+            // Route to pending management request if there is one.
+            let sender_opt = {
+                let mut slot = bvlc_response.lock().await;
+                slot.take()
+            };
+            if let Some(response_tx) = sender_opt {
+                let _ = response_tx.send(msg.clone());
+            } else if msg.payload.len() >= 2 {
                 let code =
                     BvlcResultCode::from_raw(u16::from_be_bytes([msg.payload[0], msg.payload[1]]));
                 if code != BvlcResultCode::SUCCESSFUL_COMPLETION {
@@ -669,6 +836,32 @@ async fn handle_bvll_message(
                 } else {
                     debug!("Received BVLC-Result: successful");
                 }
+            }
+        }
+
+        f if f == BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE_ACK => {
+            // Route to pending management request.
+            let sender_opt = {
+                let mut slot = bvlc_response.lock().await;
+                slot.take()
+            };
+            if let Some(response_tx) = sender_opt {
+                let _ = response_tx.send(msg.clone());
+            } else {
+                debug!("Received Read-BDT-ACK with no pending request");
+            }
+        }
+
+        f if f == BvlcFunction::READ_FOREIGN_DEVICE_TABLE_ACK => {
+            // Route to pending management request.
+            let sender_opt = {
+                let mut slot = bvlc_response.lock().await;
+                slot.take()
+            };
+            if let Some(response_tx) = sender_opt {
+                let _ = response_tx.send(msg.clone());
+            } else {
+                debug!("Received Read-FDT-ACK with no pending request");
             }
         }
 
@@ -806,6 +999,123 @@ mod tests {
         }
 
         fd_transport.stop().await.unwrap();
+        bbmd_transport.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn read_bdt_from_bbmd() {
+        // Start a BBMD with a known BDT
+        let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+        let initial_bdt = vec![BdtEntry {
+            ip: [10, 0, 0, 1],
+            port: 0xBAC0,
+            broadcast_mask: [255, 255, 255, 0],
+        }];
+        bbmd_transport.enable_bbmd(initial_bdt.clone());
+        let _bbmd_rx = bbmd_transport.start().await.unwrap();
+        let bbmd_mac = bbmd_transport.local_mac().to_vec();
+
+        // Start a second transport (client) to query the BBMD
+        let mut client_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+        let _client_rx = client_transport.start().await.unwrap();
+
+        // Read the BDT
+        let bdt = client_transport.read_bdt(&bbmd_mac).await.unwrap();
+        assert_eq!(bdt.len(), 1);
+        assert_eq!(bdt[0].ip, [10, 0, 0, 1]);
+        assert_eq!(bdt[0].port, 0xBAC0);
+        assert_eq!(bdt[0].broadcast_mask, [255, 255, 255, 0]);
+
+        client_transport.stop().await.unwrap();
+        bbmd_transport.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn read_fdt_from_bbmd() {
+        // Start a BBMD
+        let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+        bbmd_transport.enable_bbmd(vec![]);
+        let _bbmd_rx = bbmd_transport.start().await.unwrap();
+        let bbmd_mac = bbmd_transport.local_mac().to_vec();
+        let (bbmd_ip, bbmd_port) = decode_bip_mac(&bbmd_mac).unwrap();
+
+        // Register a foreign device
+        let mut fd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+        fd_transport.register_as_foreign_device(ForeignDeviceConfig {
+            bbmd_ip: Ipv4Addr::from(bbmd_ip),
+            bbmd_port,
+            ttl: 120,
+        });
+        let _fd_rx = fd_transport.start().await.unwrap();
+        let fd_mac = fd_transport.local_mac().to_vec();
+        let (fd_ip, fd_port) = decode_bip_mac(&fd_mac).unwrap();
+
+        // Wait for registration to be processed
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Start a third transport to query the FDT
+        let mut query_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+        let _query_rx = query_transport.start().await.unwrap();
+
+        let fdt = query_transport.read_fdt(&bbmd_mac).await.unwrap();
+        assert_eq!(fdt.len(), 1);
+        assert_eq!(fdt[0].ip, fd_ip);
+        assert_eq!(fdt[0].port, fd_port);
+        assert_eq!(fdt[0].ttl, 120);
+        assert!(fdt[0].seconds_remaining <= 120);
+
+        query_transport.stop().await.unwrap();
+        fd_transport.stop().await.unwrap();
+        bbmd_transport.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn write_bdt_to_bbmd() {
+        let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+        bbmd_transport.enable_bbmd(vec![]);
+        let _bbmd_rx = bbmd_transport.start().await.unwrap();
+        let bbmd_mac = bbmd_transport.local_mac().to_vec();
+
+        let mut client_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+        let _client_rx = client_transport.start().await.unwrap();
+
+        let new_bdt = vec![BdtEntry {
+            ip: [192, 168, 1, 1],
+            port: 0xBAC0,
+            broadcast_mask: [255, 255, 255, 255],
+        }];
+        let result = client_transport
+            .write_bdt(&bbmd_mac, &new_bdt)
+            .await
+            .unwrap();
+        assert_eq!(result, BvlcResultCode::SUCCESSFUL_COMPLETION);
+
+        // Verify by reading back
+        let bdt = client_transport.read_bdt(&bbmd_mac).await.unwrap();
+        assert_eq!(bdt.len(), 1);
+        assert_eq!(bdt[0].ip, [192, 168, 1, 1]);
+
+        client_transport.stop().await.unwrap();
+        bbmd_transport.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn register_foreign_device_via_bvlc() {
+        let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+        bbmd_transport.enable_bbmd(vec![]);
+        let _bbmd_rx = bbmd_transport.start().await.unwrap();
+        let bbmd_mac = bbmd_transport.local_mac().to_vec();
+
+        let mut client_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+        let _client_rx = client_transport.start().await.unwrap();
+
+        let result = client_transport
+            .register_foreign_device(&bbmd_mac, 60)
+            .await
+            .unwrap();
+        assert_eq!(result, BvlcResultCode::SUCCESSFUL_COMPLETION);
+
+        client_transport.stop().await.unwrap();
         bbmd_transport.stop().await.unwrap();
     }
 

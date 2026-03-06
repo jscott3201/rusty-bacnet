@@ -49,6 +49,55 @@ impl FdtEntry {
     }
 }
 
+/// An FDT entry decoded from the wire (Read-FDT-ACK payload).
+///
+/// Unlike [`FdtEntry`], this does not contain an `Instant` field — it carries
+/// only the wire-format TTL and seconds-remaining values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FdtEntryWire {
+    pub ip: [u8; 4],
+    pub port: u16,
+    pub ttl: u16,
+    pub seconds_remaining: u16,
+}
+
+/// Encode a slice of BDT entries into wire format without needing a `BbmdState` instance.
+pub fn encode_bdt_entries(entries: &[BdtEntry], buf: &mut BytesMut) {
+    buf.reserve(entries.len() * BDT_ENTRY_SIZE);
+    for entry in entries {
+        buf.put_slice(&entry.ip);
+        buf.put_u16(entry.port);
+        buf.put_slice(&entry.broadcast_mask);
+    }
+}
+
+/// Decode FDT entries from a Read-FDT-ACK payload.
+///
+/// Wire format per entry: ip(4) + port(2) + ttl(2) + remaining(2) = 10 bytes.
+pub fn decode_fdt(data: &[u8]) -> Result<Vec<FdtEntryWire>, Error> {
+    if !data.len().is_multiple_of(FDT_ENTRY_SIZE) {
+        return Err(Error::decoding(
+            0,
+            format!(
+                "FDT data length {} not a multiple of {}",
+                data.len(),
+                FDT_ENTRY_SIZE
+            ),
+        ));
+    }
+    let count = data.len() / FDT_ENTRY_SIZE;
+    let mut entries = Vec::with_capacity(count);
+    for chunk in data.chunks_exact(FDT_ENTRY_SIZE) {
+        entries.push(FdtEntryWire {
+            ip: [chunk[0], chunk[1], chunk[2], chunk[3]],
+            port: u16::from_be_bytes([chunk[4], chunk[5]]),
+            ttl: u16::from_be_bytes([chunk[6], chunk[7]]),
+            seconds_remaining: u16::from_be_bytes([chunk[8], chunk[9]]),
+        });
+    }
+    Ok(entries)
+}
+
 /// BBMD state — BDT and FDT tables with forwarding logic.
 #[derive(Debug)]
 pub struct BbmdState {
@@ -556,6 +605,52 @@ mod tests {
         assert!(bbmd.is_management_allowed(&[10, 0, 0, 2]));
         assert!(!bbmd.is_management_allowed(&[10, 0, 0, 3]));
         assert!(!bbmd.is_management_allowed(&[192, 168, 1, 1]));
+    }
+
+    #[test]
+    fn fdt_decode_round_trip() {
+        let mut bbmd = make_bbmd();
+        bbmd.register_foreign_device([10, 0, 0, 5], 0xBAC0, 60);
+        let mut buf = BytesMut::new();
+        bbmd.encode_fdt(&mut buf);
+
+        let entries = decode_fdt(&buf).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].ip, [10, 0, 0, 5]);
+        assert_eq!(entries[0].port, 0xBAC0);
+        assert_eq!(entries[0].ttl, 60);
+        assert!(entries[0].seconds_remaining <= 60);
+    }
+
+    #[test]
+    fn fdt_decode_invalid_length() {
+        assert!(decode_fdt(&[0; 7]).is_err());
+    }
+
+    #[test]
+    fn encode_bdt_entries_matches_state() {
+        let entries = vec![
+            BdtEntry {
+                ip: [10, 0, 1, 1],
+                port: 0xBAC0,
+                broadcast_mask: [255, 255, 255, 0],
+            },
+            BdtEntry {
+                ip: [10, 0, 2, 1],
+                port: 0xBAC0,
+                broadcast_mask: [255, 255, 255, 0],
+            },
+        ];
+
+        let mut buf_state = BytesMut::new();
+        let mut bbmd = make_bbmd();
+        bbmd.set_bdt(entries.clone()).unwrap();
+        bbmd.encode_bdt(&mut buf_state);
+
+        let mut buf_fn = BytesMut::new();
+        encode_bdt_entries(&entries, &mut buf_fn);
+
+        assert_eq!(buf_state, buf_fn);
     }
 
     #[test]

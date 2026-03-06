@@ -4,7 +4,7 @@
 //! methods for sending confirmed and unconfirmed BACnet requests.
 
 use std::collections::HashMap;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -21,6 +21,7 @@ use bacnet_encoding::apdu::{
 use bacnet_network::layer::NetworkLayer;
 use bacnet_services::cov::COVNotificationRequest;
 use bacnet_transport::bip::BipTransport;
+use bacnet_transport::bip6::Bip6Transport;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ConfirmedServiceChoice, NetworkPriority, UnconfirmedServiceChoice};
 use bacnet_types::error::Error;
@@ -188,6 +189,112 @@ impl BACnetClient<BipTransport> {
     /// Create a BIP-specific builder (alias for backward compatibility).
     pub fn builder() -> BipClientBuilder {
         Self::bip_builder()
+    }
+
+    /// Read the Broadcast Distribution Table from a BBMD.
+    pub async fn read_bdt(
+        &self,
+        target: &[u8],
+    ) -> Result<Vec<bacnet_transport::bbmd::BdtEntry>, Error> {
+        self.network.transport().read_bdt(target).await
+    }
+
+    /// Write the Broadcast Distribution Table to a BBMD.
+    pub async fn write_bdt(
+        &self,
+        target: &[u8],
+        entries: &[bacnet_transport::bbmd::BdtEntry],
+    ) -> Result<bacnet_types::enums::BvlcResultCode, Error> {
+        self.network.transport().write_bdt(target, entries).await
+    }
+
+    /// Read the Foreign Device Table from a BBMD.
+    pub async fn read_fdt(
+        &self,
+        target: &[u8],
+    ) -> Result<Vec<bacnet_transport::bbmd::FdtEntryWire>, Error> {
+        self.network.transport().read_fdt(target).await
+    }
+
+    /// Delete a Foreign Device Table entry on a BBMD.
+    pub async fn delete_fdt_entry(
+        &self,
+        target: &[u8],
+        ip: [u8; 4],
+        port: u16,
+    ) -> Result<bacnet_types::enums::BvlcResultCode, Error> {
+        self.network
+            .transport()
+            .delete_fdt_entry(target, ip, port)
+            .await
+    }
+
+    /// Register as a foreign device with a BBMD and return the result code.
+    pub async fn register_foreign_device_bvlc(
+        &self,
+        target: &[u8],
+        ttl: u16,
+    ) -> Result<bacnet_types::enums::BvlcResultCode, Error> {
+        self.network
+            .transport()
+            .register_foreign_device(target, ttl)
+            .await
+    }
+}
+
+impl BACnetClient<Bip6Transport> {
+    /// Create a BIP6-specific builder for BACnet/IPv6 transport.
+    pub fn bip6_builder() -> Bip6ClientBuilder {
+        Bip6ClientBuilder {
+            config: ClientConfig::default(),
+            interface: Ipv6Addr::UNSPECIFIED,
+            device_instance: None,
+        }
+    }
+}
+
+/// BIP6-specific builder that constructs `Bip6Transport` from IPv6 interface/port/device-instance.
+pub struct Bip6ClientBuilder {
+    config: ClientConfig,
+    interface: Ipv6Addr,
+    device_instance: Option<u32>,
+}
+
+impl Bip6ClientBuilder {
+    /// Set the local IPv6 interface address.
+    pub fn interface(mut self, ip: Ipv6Addr) -> Self {
+        self.interface = ip;
+        self
+    }
+
+    /// Set the UDP port (0 for ephemeral).
+    pub fn port(mut self, port: u16) -> Self {
+        self.config.port = port;
+        self
+    }
+
+    /// Set the device instance for VMAC derivation (Annex U.5).
+    pub fn device_instance(mut self, instance: u32) -> Self {
+        self.device_instance = Some(instance);
+        self
+    }
+
+    /// Set APDU timeout in milliseconds.
+    pub fn apdu_timeout_ms(mut self, ms: u64) -> Self {
+        self.config.apdu_timeout_ms = ms;
+        self
+    }
+
+    /// Set the maximum APDU length this client accepts.
+    pub fn max_apdu_length(mut self, len: u16) -> Self {
+        self.config.max_apdu_length = len;
+        self
+    }
+
+    /// Build and start the client, constructing a Bip6Transport from the config.
+    pub async fn build(self) -> Result<BACnetClient<Bip6Transport>, Error> {
+        let transport = Bip6Transport::new(self.interface, self.config.port, self.device_instance);
+        BACnetClient::start(self.config, transport).await
     }
 }
 
@@ -1557,6 +1664,52 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await?;
 
         Ok(())
+    }
+
+    /// Send a TimeSynchronization request to a device (Clause 16.10.5).
+    ///
+    /// This is an unconfirmed service — no response is expected.
+    pub async fn time_synchronization(
+        &self,
+        destination_mac: &[u8],
+        date: bacnet_types::primitives::Date,
+        time: bacnet_types::primitives::Time,
+    ) -> Result<(), Error> {
+        use bacnet_services::device_mgmt::TimeSynchronizationRequest;
+
+        let request = TimeSynchronizationRequest { date, time };
+        let mut buf = BytesMut::new();
+        request.encode(&mut buf);
+
+        self.unconfirmed_request(
+            destination_mac,
+            UnconfirmedServiceChoice::TIME_SYNCHRONIZATION,
+            &buf,
+        )
+        .await
+    }
+
+    /// Send a UTCTimeSynchronization request to a device (Clause 16.10.6).
+    ///
+    /// This is an unconfirmed service — no response is expected.
+    pub async fn utc_time_synchronization(
+        &self,
+        destination_mac: &[u8],
+        date: bacnet_types::primitives::Date,
+        time: bacnet_types::primitives::Time,
+    ) -> Result<(), Error> {
+        use bacnet_services::device_mgmt::TimeSynchronizationRequest;
+
+        let request = TimeSynchronizationRequest { date, time };
+        let mut buf = BytesMut::new();
+        request.encode(&mut buf);
+
+        self.unconfirmed_request(
+            destination_mac,
+            UnconfirmedServiceChoice::UTC_TIME_SYNCHRONIZATION,
+            &buf,
+        )
+        .await
     }
 
     /// Get a receiver for incoming COV notifications.

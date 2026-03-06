@@ -1,0 +1,48 @@
+[package]
+name = "bacnet-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "BACnet command-line tool for device discovery, reading, and writing"
+keywords = ["bacnet", "building-automation", "cli", "hvac"]
+categories = ["command-line-utilities", "network-programming"]
+
+[[bin]]
+name = "bacnet"
+path = "src/main.rs"
+
+[dependencies]
+bacnet-types.workspace = true
+bacnet-encoding.workspace = true
+bacnet-services.workspace = true
+bacnet-transport.workspace = true
+bacnet-network.workspace = true
+bacnet-client.workspace = true
+bytes.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync", "macros", "time", "signal"] }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+comfy-table = "7"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rustyline = "15"
+
+# SC-TLS optional deps
+tokio-rustls = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
+rustls-native-certs = { workspace = true, optional = true }
+rustls-pki-types = { version = "1", optional = true }
+
+[features]
+default = []
+sc-tls = [
+    "bacnet-client/sc-tls",
+    "bacnet-transport/sc-tls",
+    "tokio-rustls",
+    "rustls",
+    "rustls-native-certs",
+    "rustls-pki-types",
+]
