@@ -473,7 +473,6 @@ mod tests {
 
     #[test]
     fn broadcast_to_network_rejects_dnet_ffff() {
-        use bacnet_encoding::npdu::Npdu;
         use bacnet_types::enums::NetworkPriority;
 
         let transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
@@ -489,6 +488,9 @@ mod tests {
         });
         assert!(result.is_err());
         let err_msg = format!("{}", result.unwrap_err());
-        assert!(err_msg.contains("0xFFFF"), "Error should mention 0xFFFF: {err_msg}");
+        assert!(
+            err_msg.contains("0xFFFF"),
+            "Error should mention 0xFFFF: {err_msg}"
+        );
     }
 }

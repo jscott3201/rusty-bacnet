@@ -4,6 +4,7 @@
 //! plus command history via rustyline.
 
 use bacnet_client::client::BACnetClient;
+use bacnet_transport::bip::BipTransport;
 use bacnet_transport::port::TransportPort;
 use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
@@ -12,7 +13,10 @@ use rustyline::hint::HistoryHinter;
 use rustyline::validate::Validator;
 use rustyline::{CompletionType, Config, Context, Editor, Helper};
 
+use owo_colors::OwoColorize;
+
 use crate::output::OutputFormat;
+use crate::session::Session;
 use crate::{commands, output, parse, resolve};
 
 /// All recognized shell commands.
@@ -29,15 +33,29 @@ const COMMANDS: &[&str] = &[
     "wp",
     "writem",
     "wpm",
+    "read-range",
+    "rr",
     "subscribe",
     "cov",
     "control",
     "dcc",
     "reinit",
     "alarms",
+    "ack-alarm",
+    "ack",
+    "time-sync",
+    "ts",
+    "create-object",
+    "delete-object",
     "devices",
+    "register",
+    "unregister",
+    "bdt",
+    "fdt",
     "file-read",
     "file-write",
+    "target",
+    "status",
     "help",
     "exit",
     "quit",
@@ -167,6 +185,144 @@ fn tokenize(line: &str) -> Vec<String> {
     tokens
 }
 
+/// Commands that take a target address as the first positional argument.
+const TARGET_COMMANDS: &[&str] = &[
+    "read",
+    "rp",
+    "readm",
+    "rpm",
+    "write",
+    "wp",
+    "writem",
+    "wpm",
+    "subscribe",
+    "cov",
+    "control",
+    "dcc",
+    "reinit",
+    "alarms",
+    "file-read",
+    "file-write",
+    "ack-alarm",
+    "ack",
+    "time-sync",
+    "ts",
+    "create-object",
+    "delete-object",
+    "read-range",
+    "rr",
+    "register",
+    "unregister",
+    "bdt",
+    "fdt",
+];
+
+/// If the first arg is not a valid target (e.g. it's an object specifier like "ai:1"),
+/// prepend the session's default target so the handler receives the expected arg order.
+fn maybe_prepend_default_target(args: &[String], session: &Session) -> Vec<String> {
+    if args.is_empty() {
+        // No args — supply default target as the only arg if set.
+        if let Some(ref display) = session.default_target_display {
+            return vec![display.clone()];
+        }
+        return vec![];
+    }
+    // If the first arg is NOT a valid target, prepend the default.
+    if resolve::parse_target(&args[0]).is_err() {
+        if let Some(ref display) = session.default_target_display {
+            let mut new_args = vec![display.clone()];
+            new_args.extend_from_slice(args);
+            return new_args;
+        }
+    }
+    args.to_vec()
+}
+
+/// Handle the `target` command: show, set, or clear the default target.
+fn handle_target(args: &[String], session: &mut Session) {
+    if args.is_empty() {
+        match &session.default_target_display {
+            Some(display) => println!("Default target: {}", display.cyan()),
+            None => println!(
+                "{}",
+                "No default target set. Use 'target <addr>' to set one.".dimmed()
+            ),
+        }
+        return;
+    }
+    if args[0] == "clear" {
+        session.clear_target();
+        println!("{}", "Default target cleared.".green());
+        return;
+    }
+    let target_str = &args[0];
+    match resolve::parse_target(target_str) {
+        Ok(_) => {
+            session.set_target(vec![], target_str.clone());
+            println!("Default target set to: {}", target_str.cyan());
+        }
+        Err(e) => {
+            output::print_error(&format!("invalid target: {e}"));
+        }
+    }
+}
+
+/// Handle the `status` command: show session and transport state.
+async fn handle_status<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    session: &Session,
+    transport_name: &str,
+) {
+    println!("{} {}", "Transport:".dimmed(), transport_name);
+
+    let mac = client.local_mac();
+    if mac.len() == 6 {
+        let ip = std::net::Ipv4Addr::new(mac[0], mac[1], mac[2], mac[3]);
+        let port = u16::from_be_bytes([mac[4], mac[5]]);
+        println!(
+            "{} {}",
+            "Local address:".dimmed(),
+            format!("{ip}:{port}").cyan()
+        );
+    } else if mac.len() == 18 {
+        let mut ip_bytes = [0u8; 16];
+        ip_bytes.copy_from_slice(&mac[..16]);
+        let ip = std::net::Ipv6Addr::from(ip_bytes);
+        let port = u16::from_be_bytes([mac[16], mac[17]]);
+        println!(
+            "{} {}",
+            "Local address:".dimmed(),
+            format!("[{ip}]:{port}").cyan()
+        );
+    } else {
+        println!("{} {mac:02x?}", "Local MAC:".dimmed());
+    }
+
+    match &session.default_target_display {
+        Some(display) => println!("{} {}", "Default target:".dimmed(), display.cyan()),
+        None => println!("{} {}", "Default target:".dimmed(), "(none)".dimmed()),
+    }
+
+    match &session.bbmd_registration {
+        Some(reg) => {
+            println!(
+                "{} {} {}",
+                "BBMD registered:".dimmed(),
+                reg.bbmd_display.cyan(),
+                format!("(TTL {}s, auto-renewing)", reg.ttl).dimmed()
+            );
+        }
+        None => println!("{} {}", "BBMD registered:".dimmed(), "(none)".dimmed()),
+    }
+
+    let devices = client.discovered_devices().await;
+    println!(
+        "{} {}",
+        "Discovered:".dimmed(),
+        format!("{} device(s)", devices.len()).green()
+    );
+}
+
 /// Resolve a target string to a MAC address, looking up device instances from
 /// the client's discovered device table.
 async fn resolve_target_mac<T: TransportPort + 'static>(
@@ -197,9 +353,11 @@ Commands:
   discover [low-high] [--wait N]     Discover devices (WhoIs broadcast)
     [--target ADDR]                   Send directed WhoIs to a specific address
     [--dnet N]                        Target a specific remote network number
+    [--bbmd ADDR] [--ttl N]           Register as foreign device before discover (BIP only)
   find <name> [--wait N]             Find objects by name (WhoHas)
   read <target> <object> <property>  Read a property (e.g., read 192.168.1.10 ai:1 pv)
   readm <target> <specs...>          Read multiple properties (RPM)
+  read-range <target> <object> [prop]  Read a range (e.g., rr 10.0.1.5 trend-log:1)
   write <target> <obj> <prop> <val>  Write a property (e.g., write 10.0.1.5 av:1 pv 72.5)
   writem <target> <obj> <prop=val,...>  Write multiple properties (WPM)
   file-read <target> <instance>         Read a file (AtomicReadFile)
@@ -208,27 +366,114 @@ Commands:
   control <target> <action>          Device communication control (enable/disable)
   reinit <target> <state>            Reinitialize device (coldstart/warmstart)
   alarms <target>                    Get event/alarm summary
+  ack-alarm <target> <obj> --state N Acknowledge an alarm
+  time-sync <target> [--utc]         Synchronize time with a device
+  create-object <target> <object>    Create an object on a remote device
+  delete-object <target> <object>    Delete an object on a remote device
   devices                            List cached discovered devices
+  register <bbmd> [--ttl N]          Register as foreign device with BBMD (BIP only)
+  unregister <bbmd>                  Unregister from BBMD (BIP only)
+  bdt <bbmd>                         Read BBMD broadcast distribution table (BIP only)
+  fdt <bbmd>                         Read BBMD foreign device table (BIP only)
+  target [<addr>|clear]              Show/set/clear default target
+  status                             Show session and transport state
   help                               Show this help message
   exit / quit                        Exit the shell
 
-Aliases: whois=discover, whohas=find, rp=read, rpm=readm, wp=write, wpm=writem, cov=subscribe, dcc=control
+Aliases: whois=discover, whohas=find, rp=read, rpm=readm, rr=read-range, wp=write, wpm=writem,
+         cov=subscribe, dcc=control, ack=ack-alarm, ts=time-sync
 
 Targets: IP address (192.168.1.10), IP:port (10.0.1.5:47809), or device instance (1234)
+         When a default target is set, commands that take a target can omit it.
 Objects: type:instance (ai:1, analog-input:1, binary-value:3)
 Properties: name or abbreviation (present-value, pv, object-name, on, ol[3])"
     );
 }
 
-/// Run the interactive BACnet shell.
-///
-/// Reads commands from the user, dispatches them to the appropriate command
-/// handler, and loops until the user types `exit`, `quit`, or presses Ctrl-D.
-pub async fn run_shell<T: TransportPort + 'static>(
-    mut client: BACnetClient<T>,
-    is_sc: bool,
+/// Dispatch a common (transport-agnostic) command.
+/// Returns `true` if the command was recognized and handled.
+async fn dispatch_common<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    cmd: &str,
+    args: &[String],
+    session: &mut Session,
     format: OutputFormat,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> bool {
+    // For commands that take a target, try to prepend the default target
+    // when the first arg doesn't look like a target address.
+    let resolved_args;
+    let effective_args = if TARGET_COMMANDS.contains(&cmd) {
+        resolved_args = maybe_prepend_default_target(args, session);
+        &resolved_args
+    } else {
+        args
+    };
+
+    match cmd {
+        "discover" | "whois" => {
+            handle_discover(client, args, format).await;
+        }
+        "find" | "whohas" => {
+            handle_find(client, args, format).await;
+        }
+        "read" | "rp" => {
+            handle_read(client, effective_args, format).await;
+        }
+        "readm" | "rpm" => {
+            handle_readm(client, effective_args, format).await;
+        }
+        "write" | "wp" => {
+            handle_write(client, effective_args, format).await;
+        }
+        "writem" | "wpm" => {
+            handle_writem(client, effective_args, format).await;
+        }
+        "subscribe" | "cov" => {
+            handle_subscribe(client, effective_args, format).await;
+        }
+        "control" | "dcc" => {
+            handle_control(client, effective_args, format).await;
+        }
+        "reinit" => {
+            handle_reinit(client, effective_args, format).await;
+        }
+        "alarms" => {
+            handle_alarms(client, effective_args, format).await;
+        }
+        "devices" => {
+            if let Err(e) = commands::router::devices_cmd(client, format).await {
+                output::print_error(&e.to_string());
+            }
+        }
+        "file-read" => {
+            handle_file_read(client, effective_args, format).await;
+        }
+        "file-write" => {
+            handle_file_write(client, effective_args, format).await;
+        }
+        "ack-alarm" | "ack" => {
+            handle_ack_alarm(client, effective_args, format).await;
+        }
+        "time-sync" | "ts" => {
+            handle_time_sync(client, effective_args, format).await;
+        }
+        "create-object" => {
+            handle_create_object(client, effective_args, format).await;
+        }
+        "delete-object" => {
+            handle_delete_object(client, effective_args, format).await;
+        }
+        "read-range" | "rr" => {
+            handle_read_range(client, effective_args, format).await;
+        }
+        _ => return false,
+    }
+    true
+}
+
+/// Set up the readline editor with history and tab completion.
+fn setup_readline(
+) -> Result<Editor<ShellHelper, rustyline::history::DefaultHistory>, Box<dyn std::error::Error>> {
     let config = Config::builder()
         .completion_type(CompletionType::List)
         .behavior(rustyline::Behavior::PreferTerm)
@@ -237,11 +482,28 @@ pub async fn run_shell<T: TransportPort + 'static>(
     let mut rl = Editor::with_config(config)?;
     rl.set_helper(Some(helper));
 
-    let history_path = std::env::var("HOME")
-        .map(|h| std::path::PathBuf::from(h).join(".bacnet_history"))
-        .unwrap_or_else(|_| std::path::PathBuf::from(".bacnet_history"));
+    let history_path = history_path();
     let _ = rl.load_history(&history_path);
+    Ok(rl)
+}
 
+fn history_path() -> std::path::PathBuf {
+    std::env::var("HOME")
+        .map(|h| std::path::PathBuf::from(h).join(".bacnet_history"))
+        .unwrap_or_else(|_| std::path::PathBuf::from(".bacnet_history"))
+}
+
+/// Run the interactive BACnet shell (non-BIP transports: SC, BIP6).
+///
+/// BBMD commands are not available. For BIP transport, use `run_bip_shell`.
+pub async fn run_shell<T: TransportPort + 'static>(
+    mut client: BACnetClient<T>,
+    is_sc: bool,
+    format: OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut rl = setup_readline()?;
+    let mut session = Session::new();
+    let transport_name = if is_sc { "BACnet/SC" } else { "BACnet/IP" };
     let prompt = if is_sc { "bacnet[sc]> " } else { "bacnet> " };
 
     println!(
@@ -265,62 +527,26 @@ pub async fn run_shell<T: TransportPort + 'static>(
                 match cmd.as_str() {
                     "exit" | "quit" => break,
                     "help" => print_help(),
-                    "discover" | "whois" => {
-                        handle_discover(&client, args, format).await;
+                    "target" => handle_target(args, &mut session),
+                    "status" => {
+                        handle_status(&client, &session, transport_name).await;
                     }
-                    "find" | "whohas" => {
-                        handle_find(&client, args, format).await;
-                    }
-                    "read" | "rp" => {
-                        handle_read(&client, args, format).await;
-                    }
-                    "readm" | "rpm" => {
-                        handle_readm(&client, args, format).await;
-                    }
-                    "write" | "wp" => {
-                        handle_write(&client, args, format).await;
-                    }
-                    "writem" | "wpm" => {
-                        handle_writem(&client, args, format).await;
-                    }
-                    "subscribe" | "cov" => {
-                        handle_subscribe(&client, args, format).await;
-                    }
-                    "control" | "dcc" => {
-                        handle_control(&client, args, format).await;
-                    }
-                    "reinit" => {
-                        handle_reinit(&client, args, format).await;
-                    }
-                    "alarms" => {
-                        handle_alarms(&client, args, format).await;
-                    }
-                    "devices" => {
-                        if let Err(e) = commands::router::devices_cmd(&client, format).await {
-                            output::print_error(&e.to_string());
-                        }
-                    }
-                    "file-read" => {
-                        handle_file_read(&client, args, format).await;
-                    }
-                    "file-write" => {
-                        handle_file_write(&client, args, format).await;
+                    "register" | "unregister" | "bdt" | "fdt" => {
+                        output::print_error(
+                            "BBMD commands are only available on BACnet/IP transport",
+                        );
                     }
                     _ => {
-                        output::print_error(&format!(
-                            "Unknown command: '{cmd}'. Type 'help' for available commands."
-                        ));
+                        if !dispatch_common(&client, &cmd, args, &mut session, format).await {
+                            output::print_error(&format!(
+                                "Unknown command: '{cmd}'. Type 'help' for available commands."
+                            ));
+                        }
                     }
                 }
             }
-            Err(ReadlineError::Interrupted) => {
-                // Ctrl-C: cancel current line, continue loop.
-                continue;
-            }
-            Err(ReadlineError::Eof) => {
-                // Ctrl-D: exit.
-                break;
-            }
+            Err(ReadlineError::Interrupted) => continue,
+            Err(ReadlineError::Eof) => break,
             Err(err) => {
                 output::print_error(&format!("readline error: {err}"));
                 break;
@@ -328,8 +554,96 @@ pub async fn run_shell<T: TransportPort + 'static>(
         }
     }
 
-    let _ = rl.save_history(&history_path);
+    let _ = rl.save_history(&history_path());
     client.stop().await?;
+    Ok(())
+}
+
+/// Run the interactive BACnet shell with BIP transport (supports BBMD commands).
+pub async fn run_bip_shell(
+    client: BACnetClient<BipTransport>,
+    format: OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut rl = setup_readline()?;
+    let mut session = Session::new();
+    let client = std::sync::Arc::new(client);
+
+    println!(
+        "BACnet CLI v{}. Type 'help' for commands, 'exit' to quit.",
+        env!("CARGO_PKG_VERSION")
+    );
+
+    loop {
+        match rl.readline("bacnet> ") {
+            Ok(line) => {
+                let line = line.trim().to_string();
+                if line.is_empty() {
+                    continue;
+                }
+                let _ = rl.add_history_entry(&line);
+
+                let tokens = tokenize(&line);
+                let cmd = tokens[0].to_ascii_lowercase();
+                let args = &tokens[1..];
+
+                match cmd.as_str() {
+                    "exit" | "quit" => break,
+                    "help" => print_help(),
+                    "target" => handle_target(args, &mut session),
+                    "status" => {
+                        handle_status(&*client, &session, "BACnet/IP").await;
+                    }
+                    "discover" | "whois" => {
+                        handle_bip_discover(&client, args, format).await;
+                    }
+                    "register" => {
+                        handle_bip_register(&client, args, &mut session, format).await;
+                    }
+                    "unregister" => {
+                        let effective = maybe_prepend_default_target(args, &session);
+                        handle_unregister(&client, &effective, format).await;
+                        // If we just unregistered from our tracked BBMD, cancel renewal.
+                        if !effective.is_empty() {
+                            if let Some(ref reg) = session.bbmd_registration {
+                                if reg.bbmd_display == effective[0] {
+                                    session.cancel_bbmd_renewal();
+                                }
+                            }
+                        }
+                    }
+                    "bdt" => {
+                        let effective = maybe_prepend_default_target(args, &session);
+                        handle_bdt(&client, &effective, format).await;
+                    }
+                    "fdt" => {
+                        let effective = maybe_prepend_default_target(args, &session);
+                        handle_fdt(&client, &effective, format).await;
+                    }
+                    _ => {
+                        if !dispatch_common(&*client, &cmd, args, &mut session, format).await {
+                            output::print_error(&format!(
+                                "Unknown command: '{cmd}'. Type 'help' for available commands."
+                            ));
+                        }
+                    }
+                }
+            }
+            Err(ReadlineError::Interrupted) => continue,
+            Err(ReadlineError::Eof) => break,
+            Err(err) => {
+                output::print_error(&format!("readline error: {err}"));
+                break;
+            }
+        }
+    }
+
+    let _ = rl.save_history(&history_path());
+    // Unwrap the Arc to call stop(). If there are outstanding references
+    // (shouldn't happen in normal flow), we just log and move on.
+    match std::sync::Arc::try_unwrap(client) {
+        Ok(mut c) => c.stop().await?,
+        Err(_) => eprintln!("Warning: could not stop client (outstanding references)"),
+    }
     Ok(())
 }
 
@@ -434,7 +748,9 @@ async fn handle_discover<T: TransportPort + 'static>(
                     .await
             }
             Ok(_) => {
-                output::print_error("--target requires an IP address, not a device instance or routed address");
+                output::print_error(
+                    "--target requires an IP address, not a device instance or routed address",
+                );
                 return;
             }
             Err(e) => {
@@ -1081,6 +1397,578 @@ async fn handle_writem<T: TransportPort + 'static>(
     }
 
     if let Err(e) = commands::write::write_property_multiple_cmd(client, &mac, specs, format).await
+    {
+        output::print_error(&e.to_string());
+    }
+}
+
+#[allow(dead_code)] // Superseded by handle_bip_register for session-aware registration.
+async fn handle_register(
+    client: &BACnetClient<BipTransport>,
+    args: &[String],
+    format: OutputFormat,
+) {
+    if args.is_empty() {
+        output::print_error("Usage: register <bbmd-address> [--ttl N]");
+        return;
+    }
+
+    let mac = match resolve_target_mac(client, &args[0]).await {
+        Ok(m) => m,
+        Err(e) => {
+            output::print_error(&e);
+            return;
+        }
+    };
+
+    let mut ttl: u16 = 300;
+    let mut i = 1;
+    while i < args.len() {
+        if args[i] == "--ttl" {
+            if i + 1 < args.len() {
+                match args[i + 1].parse::<u16>() {
+                    Ok(t) => ttl = t,
+                    Err(_) => {
+                        output::print_error("--ttl requires a numeric value");
+                        return;
+                    }
+                }
+                i += 2;
+                continue;
+            } else {
+                output::print_error("--ttl requires a value");
+                return;
+            }
+        }
+        i += 1;
+    }
+
+    if let Err(e) = commands::router::register_cmd(client, &mac, ttl, format).await {
+        output::print_error(&e.to_string());
+    }
+}
+
+/// Handle register in BIP shell with auto-renewal via session.
+async fn handle_bip_register(
+    client: &std::sync::Arc<BACnetClient<BipTransport>>,
+    args: &[String],
+    session: &mut Session,
+    format: OutputFormat,
+) {
+    if args.is_empty() {
+        output::print_error("Usage: register <bbmd-address> [--ttl N]");
+        return;
+    }
+
+    let mac = match resolve_target_mac(client, &args[0]).await {
+        Ok(m) => m,
+        Err(e) => {
+            output::print_error(&e);
+            return;
+        }
+    };
+
+    let mut ttl: u16 = 300;
+    let mut i = 1;
+    while i < args.len() {
+        if args[i] == "--ttl" {
+            if i + 1 < args.len() {
+                match args[i + 1].parse::<u16>() {
+                    Ok(t) => ttl = t,
+                    Err(_) => {
+                        output::print_error("--ttl requires a numeric value");
+                        return;
+                    }
+                }
+                i += 2;
+                continue;
+            } else {
+                output::print_error("--ttl requires a value");
+                return;
+            }
+        }
+        i += 1;
+    }
+
+    if let Err(e) = commands::router::register_cmd(client, &mac, ttl, format).await {
+        output::print_error(&e.to_string());
+        return;
+    }
+
+    // Set up auto-renewal in the session.
+    let bbmd_display = args[0].clone();
+    let renewal_mac = mac.clone();
+    let renewal_client = std::sync::Arc::clone(client);
+    session.set_bbmd_registration(mac, bbmd_display, ttl, move || {
+        let client = std::sync::Arc::clone(&renewal_client);
+        let mac = renewal_mac.clone();
+        Box::pin(async move {
+            client
+                .register_foreign_device_bvlc(&mac, ttl)
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        })
+    });
+}
+
+async fn handle_unregister(
+    client: &BACnetClient<BipTransport>,
+    args: &[String],
+    format: OutputFormat,
+) {
+    if args.is_empty() {
+        output::print_error("Usage: unregister <bbmd-address>");
+        return;
+    }
+
+    let mac = match resolve_target_mac(client, &args[0]).await {
+        Ok(m) => m,
+        Err(e) => {
+            output::print_error(&e);
+            return;
+        }
+    };
+
+    if let Err(e) = commands::router::unregister_cmd(client, &mac, format).await {
+        output::print_error(&e.to_string());
+    }
+}
+
+async fn handle_bdt(client: &BACnetClient<BipTransport>, args: &[String], format: OutputFormat) {
+    if args.is_empty() {
+        output::print_error("Usage: bdt <bbmd-address>");
+        return;
+    }
+
+    let mac = match resolve_target_mac(client, &args[0]).await {
+        Ok(m) => m,
+        Err(e) => {
+            output::print_error(&e);
+            return;
+        }
+    };
+
+    if let Err(e) = commands::router::bdt_cmd(client, &mac, format).await {
+        output::print_error(&e.to_string());
+    }
+}
+
+async fn handle_fdt(client: &BACnetClient<BipTransport>, args: &[String], format: OutputFormat) {
+    if args.is_empty() {
+        output::print_error("Usage: fdt <bbmd-address>");
+        return;
+    }
+
+    let mac = match resolve_target_mac(client, &args[0]).await {
+        Ok(m) => m,
+        Err(e) => {
+            output::print_error(&e);
+            return;
+        }
+    };
+
+    if let Err(e) = commands::router::fdt_cmd(client, &mac, format).await {
+        output::print_error(&e.to_string());
+    }
+}
+
+/// BIP-specific discover handler that supports --bbmd for foreign device registration.
+async fn handle_bip_discover(
+    client: &std::sync::Arc<BACnetClient<BipTransport>>,
+    args: &[String],
+    format: OutputFormat,
+) {
+    let mut low = None;
+    let mut high = None;
+    let mut wait_secs = 3;
+    let mut target: Option<String> = None;
+    let mut dnet: Option<u16> = None;
+    let mut bbmd: Option<String> = None;
+    let mut ttl: u16 = 300;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--wait" => {
+                if i + 1 < args.len() {
+                    match args[i + 1].parse::<u64>() {
+                        Ok(w) => wait_secs = w,
+                        Err(_) => {
+                            output::print_error("--wait requires a numeric value");
+                            return;
+                        }
+                    }
+                    i += 2;
+                    continue;
+                } else {
+                    output::print_error("--wait requires a value");
+                    return;
+                }
+            }
+            "--target" => {
+                if i + 1 < args.len() {
+                    target = Some(args[i + 1].clone());
+                    i += 2;
+                    continue;
+                } else {
+                    output::print_error("--target requires an address");
+                    return;
+                }
+            }
+            "--dnet" => {
+                if i + 1 < args.len() {
+                    match args[i + 1].parse::<u16>() {
+                        Ok(n) => dnet = Some(n),
+                        Err(_) => {
+                            output::print_error("--dnet requires a network number");
+                            return;
+                        }
+                    }
+                    i += 2;
+                    continue;
+                } else {
+                    output::print_error("--dnet requires a value");
+                    return;
+                }
+            }
+            "--bbmd" => {
+                if i + 1 < args.len() {
+                    bbmd = Some(args[i + 1].clone());
+                    i += 2;
+                    continue;
+                } else {
+                    output::print_error("--bbmd requires an address");
+                    return;
+                }
+            }
+            "--ttl" => {
+                if i + 1 < args.len() {
+                    match args[i + 1].parse::<u16>() {
+                        Ok(t) => ttl = t,
+                        Err(_) => {
+                            output::print_error("--ttl requires a numeric value");
+                            return;
+                        }
+                    }
+                    i += 2;
+                    continue;
+                } else {
+                    output::print_error("--ttl requires a value");
+                    return;
+                }
+            }
+            s if s.starts_with("--") => {
+                output::print_error(&format!("unknown option: '{s}'"));
+                return;
+            }
+            _ => {
+                if let Some((lo, hi)) = args[i].split_once('-') {
+                    match (lo.parse::<u32>(), hi.parse::<u32>()) {
+                        (Ok(l), Ok(h)) => {
+                            if l > h {
+                                output::print_error(&format!(
+                                    "invalid range: low ({l}) > high ({h})"
+                                ));
+                                return;
+                            }
+                            low = Some(l);
+                            high = Some(h);
+                        }
+                        _ => {
+                            output::print_error(&format!(
+                                "invalid range: '{}', expected 'low-high'",
+                                args[i]
+                            ));
+                            return;
+                        }
+                    }
+                } else {
+                    output::print_error(&format!(
+                        "unexpected argument: '{}'. Use 'discover [low-high] [--wait N] [--target ADDR] [--dnet N] [--bbmd ADDR] [--ttl N]'",
+                        args[i]
+                    ));
+                    return;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    if let Some(bbmd_addr) = &bbmd {
+        let bbmd_mac = match resolve::parse_target(bbmd_addr) {
+            Ok(resolve::Target::Mac(m)) => m,
+            Ok(_) => {
+                output::print_error("--bbmd requires an IP address, not a device instance");
+                return;
+            }
+            Err(e) => {
+                output::print_error(&e);
+                return;
+            }
+        };
+        match client.register_foreign_device_bvlc(&bbmd_mac, ttl).await {
+            Ok(result) => {
+                eprintln!(
+                    "{}",
+                    format!("Registered as foreign device with BBMD: {result:?}").green()
+                );
+            }
+            Err(e) => {
+                output::print_error(&format!("BBMD registration failed: {e}"));
+                return;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+
+    let result = if let Some(target_str) = &target {
+        match resolve::parse_target(target_str) {
+            Ok(resolve::Target::Mac(mac)) => {
+                commands::discover::discover_directed(client, &mac, low, high, wait_secs, format)
+                    .await
+            }
+            Ok(_) => {
+                output::print_error(
+                    "--target requires an IP address, not a device instance or routed address",
+                );
+                return;
+            }
+            Err(e) => {
+                output::print_error(&e);
+                return;
+            }
+        }
+    } else if let Some(network) = dnet {
+        commands::discover::discover_network(client, network, low, high, wait_secs, format).await
+    } else {
+        commands::discover::discover(client, low, high, wait_secs, format).await
+    };
+
+    if let Err(e) = result {
+        output::print_error(&e.to_string());
+    }
+}
+
+async fn handle_ack_alarm<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    args: &[String],
+    format: OutputFormat,
+) {
+    if args.len() < 2 {
+        output::print_error("Usage: ack-alarm <target> <object> --state N [--source S]");
+        return;
+    }
+
+    let mac = match resolve_target_mac(client, &args[0]).await {
+        Ok(m) => m,
+        Err(e) => {
+            output::print_error(&e);
+            return;
+        }
+    };
+
+    let (object_type, instance) = match parse::parse_object_specifier(&args[1]) {
+        Ok(v) => v,
+        Err(e) => {
+            output::print_error(&e);
+            return;
+        }
+    };
+
+    let mut state: Option<u32> = None;
+    let mut source = "bacnet-cli".to_string();
+
+    let mut i = 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--state" => {
+                if i + 1 < args.len() {
+                    match args[i + 1].parse::<u32>() {
+                        Ok(s) => state = Some(s),
+                        Err(_) => {
+                            output::print_error("--state requires a numeric value");
+                            return;
+                        }
+                    }
+                    i += 2;
+                    continue;
+                } else {
+                    output::print_error("--state requires a value");
+                    return;
+                }
+            }
+            "--source" => {
+                if i + 1 < args.len() {
+                    source = args[i + 1].clone();
+                    i += 2;
+                    continue;
+                } else {
+                    output::print_error("--source requires a value");
+                    return;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let state = match state {
+        Some(s) => s,
+        None => {
+            output::print_error("--state is required");
+            return;
+        }
+    };
+
+    if let Err(e) = commands::device::acknowledge_alarm_cmd(
+        client,
+        &mac,
+        object_type,
+        instance,
+        state,
+        &source,
+        format,
+    )
+    .await
+    {
+        output::print_error(&e.to_string());
+    }
+}
+
+async fn handle_time_sync<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    args: &[String],
+    format: OutputFormat,
+) {
+    if args.is_empty() {
+        output::print_error("Usage: time-sync <target> [--utc]");
+        return;
+    }
+
+    let mac = match resolve_target_mac(client, &args[0]).await {
+        Ok(m) => m,
+        Err(e) => {
+            output::print_error(&e);
+            return;
+        }
+    };
+
+    let utc = args[1..].iter().any(|a| a == "--utc");
+
+    if let Err(e) = commands::device::time_sync_cmd(client, &mac, utc, format).await {
+        output::print_error(&e.to_string());
+    }
+}
+
+async fn handle_create_object<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    args: &[String],
+    format: OutputFormat,
+) {
+    if args.len() < 2 {
+        output::print_error("Usage: create-object <target> <object>");
+        return;
+    }
+
+    let mac = match resolve_target_mac(client, &args[0]).await {
+        Ok(m) => m,
+        Err(e) => {
+            output::print_error(&e);
+            return;
+        }
+    };
+
+    let (object_type, instance) = match parse::parse_object_specifier(&args[1]) {
+        Ok(v) => v,
+        Err(e) => {
+            output::print_error(&e);
+            return;
+        }
+    };
+
+    if let Err(e) =
+        commands::device::create_object_cmd(client, &mac, object_type, instance, format).await
+    {
+        output::print_error(&e.to_string());
+    }
+}
+
+async fn handle_delete_object<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    args: &[String],
+    format: OutputFormat,
+) {
+    if args.len() < 2 {
+        output::print_error("Usage: delete-object <target> <object>");
+        return;
+    }
+
+    let mac = match resolve_target_mac(client, &args[0]).await {
+        Ok(m) => m,
+        Err(e) => {
+            output::print_error(&e);
+            return;
+        }
+    };
+
+    let (object_type, instance) = match parse::parse_object_specifier(&args[1]) {
+        Ok(v) => v,
+        Err(e) => {
+            output::print_error(&e);
+            return;
+        }
+    };
+
+    if let Err(e) =
+        commands::device::delete_object_cmd(client, &mac, object_type, instance, format).await
+    {
+        output::print_error(&e.to_string());
+    }
+}
+
+async fn handle_read_range<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    args: &[String],
+    format: OutputFormat,
+) {
+    if args.len() < 2 {
+        output::print_error("Usage: read-range <target> <object> [property]");
+        return;
+    }
+
+    let mac = match resolve_target_mac(client, &args[0]).await {
+        Ok(m) => m,
+        Err(e) => {
+            output::print_error(&e);
+            return;
+        }
+    };
+
+    let (object_type, instance) = match parse::parse_object_specifier(&args[1]) {
+        Ok(v) => v,
+        Err(e) => {
+            output::print_error(&e);
+            return;
+        }
+    };
+
+    let prop_str = if args.len() > 2 {
+        &args[2]
+    } else {
+        "log-buffer"
+    };
+    let (property, index) = match parse::parse_property(prop_str) {
+        Ok(v) => v,
+        Err(e) => {
+            output::print_error(&e);
+            return;
+        }
+    };
+
+    if let Err(e) =
+        commands::read::read_range_cmd(client, &mac, object_type, instance, property, index, format)
+            .await
     {
         output::print_error(&e.to_string());
     }

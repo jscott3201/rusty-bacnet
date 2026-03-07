@@ -1,38 +1,30 @@
 //! Discovery commands: WhoIs and WhoHas.
 
-use std::collections::HashSet;
-use std::net::Ipv4Addr;
-
 use bacnet_client::client::BACnetClient;
-use bacnet_client::discovery::DiscoveredDevice;
 use bacnet_services::who_has::WhoHasObject;
 use bacnet_transport::port::TransportPort;
 
-use crate::output::{self, DeviceInfo, OutputFormat};
+use crate::output::{self, device_info, DeviceInfo, OutputFormat};
 
-/// Format a BIP MAC address (6 bytes: 4 IP + 2 port) as `ip:port`.
-/// Falls back to hex display for non-BIP MACs.
-fn format_mac(mac: &[u8]) -> String {
-    if mac.len() == 6 {
-        let ip = Ipv4Addr::new(mac[0], mac[1], mac[2], mac[3]);
-        let port = u16::from_be_bytes([mac[4], mac[5]]);
-        format!("{ip}:{port}")
-    } else {
-        mac.iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<Vec<_>>()
-            .join(":")
-    }
-}
-
-fn device_info(d: &DiscoveredDevice) -> DeviceInfo {
-    DeviceInfo {
-        instance: d.object_identifier.instance_number(),
-        address: format_mac(d.mac_address.as_slice()),
-        vendor_id: d.vendor_id,
-        max_apdu: d.max_apdu_length,
-        segmentation: format!("{}", d.segmentation_supported),
-    }
+/// Collect device infos from the client's discovered device table,
+/// optionally filtering by instance range.
+async fn collect_devices<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    low: Option<u32>,
+    high: Option<u32>,
+) -> Vec<DeviceInfo> {
+    let devices = client.discovered_devices().await;
+    devices
+        .iter()
+        .filter(|d| {
+            let inst = d.object_identifier.instance_number();
+            match (low, high) {
+                (Some(lo), Some(hi)) => inst >= lo && inst <= hi,
+                _ => true,
+            }
+        })
+        .map(device_info)
+        .collect()
 }
 
 /// Send a WhoIs broadcast and display discovered devices after waiting.
@@ -43,24 +35,10 @@ pub async fn discover<T: TransportPort + 'static>(
     wait_secs: u64,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Snapshot existing devices before the scan.
-    let before: HashSet<u32> = client
-        .discovered_devices()
-        .await
-        .iter()
-        .map(|d| d.object_identifier.instance_number())
-        .collect();
-
     client.who_is(low, high).await?;
+    output::print_waiting(wait_secs);
     tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
-
-    let devices = client.discovered_devices().await;
-    let infos: Vec<DeviceInfo> = devices
-        .iter()
-        .filter(|d| !before.contains(&d.object_identifier.instance_number()))
-        .map(device_info)
-        .collect();
-    output::print_devices(&infos, format);
+    output::print_devices(&collect_devices(client, low, high).await, format);
     Ok(())
 }
 
@@ -73,23 +51,10 @@ pub async fn discover_directed<T: TransportPort + 'static>(
     wait_secs: u64,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let before: HashSet<u32> = client
-        .discovered_devices()
-        .await
-        .iter()
-        .map(|d| d.object_identifier.instance_number())
-        .collect();
-
     client.who_is_directed(target_mac, low, high).await?;
+    output::print_waiting(wait_secs);
     tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
-
-    let devices = client.discovered_devices().await;
-    let infos: Vec<DeviceInfo> = devices
-        .iter()
-        .filter(|d| !before.contains(&d.object_identifier.instance_number()))
-        .map(device_info)
-        .collect();
-    output::print_devices(&infos, format);
+    output::print_devices(&collect_devices(client, low, high).await, format);
     Ok(())
 }
 
@@ -102,23 +67,10 @@ pub async fn discover_network<T: TransportPort + 'static>(
     wait_secs: u64,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let before: HashSet<u32> = client
-        .discovered_devices()
-        .await
-        .iter()
-        .map(|d| d.object_identifier.instance_number())
-        .collect();
-
     client.who_is_network(dnet, low, high).await?;
+    output::print_waiting(wait_secs);
     tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
-
-    let devices = client.discovered_devices().await;
-    let infos: Vec<DeviceInfo> = devices
-        .iter()
-        .filter(|d| !before.contains(&d.object_identifier.instance_number()))
-        .map(device_info)
-        .collect();
-    output::print_devices(&infos, format);
+    output::print_devices(&collect_devices(client, low, high).await, format);
     Ok(())
 }
 

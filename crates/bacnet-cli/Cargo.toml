@@ -40,6 +40,7 @@ rustls-pki-types = { version = "1", optional = true }
 pcap = { version = "2", optional = true }
 ctrlc = { version = "3", optional = true }
 libc = { version = "0.2", optional = true }
+owo-colors = "4.3.0"
 
 [features]
 default = []
