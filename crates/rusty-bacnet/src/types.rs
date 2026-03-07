@@ -518,6 +518,16 @@ impl PyDiscoveredDevice {
         self.created.elapsed().as_secs_f64()
     }
 
+    #[getter]
+    fn source_network(&self) -> Option<u16> {
+        self.inner.source_network
+    }
+
+    #[getter]
+    fn source_address(&self) -> Option<Vec<u8>> {
+        self.inner.source_address.as_ref().map(|m| m.to_vec())
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "DiscoveredDevice({}, instance={}, vendor={})",

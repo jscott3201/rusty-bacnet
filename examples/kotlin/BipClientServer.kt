@@ -9,8 +9,8 @@
  *
  * Usage:
  *   // Add rusty-bacnet JAR to classpath, then:
- *   kotlinc -cp rusty-bacnet-0.6.3.jar BipClientServer.kt -include-runtime -d example.jar
- *   java -cp example.jar:rusty-bacnet-0.6.3.jar BipClientServerKt
+ *   kotlinc -cp rusty-bacnet-0.6.4.jar BipClientServer.kt -include-runtime -d example.jar
+ *   java -cp example.jar:rusty-bacnet-0.6.4.jar BipClientServerKt
  */
 
 import kotlinx.coroutines.delay

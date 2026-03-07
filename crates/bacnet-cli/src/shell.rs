@@ -338,10 +338,39 @@ async fn resolve_target_mac<T: TransportPort + 'static>(
                 n
             )),
         },
-        resolve::Target::Routed(dnet, instance) => Err(format!(
-            "Routed targets ({}:{}) not yet supported in shell mode",
-            dnet, instance
-        )),
+        resolve::Target::Routed(dnet, instance) => match client.get_device(instance).await {
+            Some(d) => {
+                if d.source_network == Some(dnet) {
+                    // Routed targets require DNET/DADR routing information, which is
+                    // not available through this MAC-only resolution helper. The shell
+                    // commands that use resolve_target_mac() call client.read_property()
+                    // with ConfirmedTarget::Local, so returning the router MAC here
+                    // would result in an unrouted request that the router will not
+                    // forward. Use the routed APIs (e.g. read_property_from_device)
+                    // instead of resolve_target_mac() for routed devices.
+                    Err(format!(
+                        "Device {} is behind router on DNET {}. Routed access is not supported via this command; use a routed API (e.g. 'read_property_from_device') instead.",
+                        instance, dnet
+                    ))
+                } else if d.source_network.is_none() {
+                    Err(format!(
+                        "Device {} is local (not behind a router on DNET {}). Use '{}' directly.",
+                        instance, dnet, instance
+                    ))
+                } else {
+                    Err(format!(
+                        "Device {} is on DNET {}, not DNET {}.",
+                        instance,
+                        d.source_network.unwrap(),
+                        dnet
+                    ))
+                }
+            }
+            None => Err(format!(
+                "Device {} not found. Run 'discover' first.",
+                instance
+            )),
+        },
     }
 }
 
@@ -638,6 +667,8 @@ pub async fn run_bip_shell(
     }
 
     let _ = rl.save_history(&history_path());
+    // Drop session first to release the Arc clone held by the BBMD renewal closure.
+    drop(session);
     // Unwrap the Arc to call stop(). If there are outstanding references
     // (shouldn't happen in normal flow), we just log and move on.
     match std::sync::Arc::try_unwrap(client) {
