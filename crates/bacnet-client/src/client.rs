@@ -1378,7 +1378,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Read a property from a device on a remote BACnet network via a router.
     ///
     /// Use this when you know the routing info explicitly (e.g., from CLI
-    /// flags). For discovered devices, `read_property()` auto-routes.
+    /// flags). For discovered devices, `read_property_from_device()` auto-routes.
     pub async fn read_property_routed(
         &self,
         router_mac: &[u8],
