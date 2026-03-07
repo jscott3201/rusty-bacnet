@@ -24,6 +24,10 @@ pub struct DiscoveredDevice {
     pub vendor_id: u16,
     /// When this entry was last updated.
     pub last_seen: Instant,
+    /// If this device is behind a router, the BACnet network number it resides on.
+    pub source_network: Option<u16>,
+    /// If this device is behind a router, its MAC address on the remote network.
+    pub source_address: Option<MacAddr>,
 }
 
 /// Thread-safe device discovery table.
@@ -108,6 +112,8 @@ mod tests {
             max_segments_accepted: None,
             vendor_id: 42,
             last_seen: Instant::now(),
+            source_network: None,
+            source_address: None,
         }
     }
 

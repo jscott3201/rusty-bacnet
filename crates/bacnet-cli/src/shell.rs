@@ -338,10 +338,31 @@ async fn resolve_target_mac<T: TransportPort + 'static>(
                 n
             )),
         },
-        resolve::Target::Routed(dnet, instance) => Err(format!(
-            "Routed targets ({}:{}) not yet supported in shell mode",
-            dnet, instance
-        )),
+        resolve::Target::Routed(dnet, instance) => match client.get_device(instance).await {
+            Some(d) => {
+                if d.source_network == Some(dnet) {
+                    // Return the router MAC — confirmed_request() auto-routes
+                    // via the device table's source_network/source_address.
+                    Ok(d.mac_address.to_vec())
+                } else if d.source_network.is_none() {
+                    Err(format!(
+                        "Device {} is local (not behind a router on DNET {}). Use '{}' directly.",
+                        instance, dnet, instance
+                    ))
+                } else {
+                    Err(format!(
+                        "Device {} is on DNET {}, not DNET {}.",
+                        instance,
+                        d.source_network.unwrap(),
+                        dnet
+                    ))
+                }
+            }
+            None => Err(format!(
+                "Device {} not found. Run 'discover' first.",
+                instance
+            )),
+        },
     }
 }
 
@@ -638,6 +659,8 @@ pub async fn run_bip_shell(
     }
 
     let _ = rl.save_history(&history_path());
+    // Drop session first to release the Arc clone held by the BBMD renewal closure.
+    drop(session);
     // Unwrap the Arc to call stop(). If there are outstanding references
     // (shouldn't happen in normal flow), we just log and move on.
     match std::sync::Arc::try_unwrap(client) {

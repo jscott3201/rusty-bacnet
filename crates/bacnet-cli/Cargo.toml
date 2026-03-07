@@ -41,6 +41,7 @@ pcap = { version = "2", optional = true }
 ctrlc = { version = "3", optional = true }
 libc = { version = "0.2", optional = true }
 owo-colors = "4.3.0"
+if-addrs = "0.15"
 
 [features]
 default = []

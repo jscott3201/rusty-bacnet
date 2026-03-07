@@ -252,6 +252,8 @@ impl BacnetClient {
                 segmentation: d.segmentation_supported.to_raw(),
                 vendor_id: d.vendor_id,
                 seconds_since_seen: d.last_seen.elapsed().as_secs_f64(),
+                source_network: d.source_network,
+                source_address: d.source_address.map(|m| m.to_vec()),
             })
             .collect())
     }
@@ -268,6 +270,8 @@ impl BacnetClient {
             segmentation: d.segmentation_supported.to_raw(),
             vendor_id: d.vendor_id,
             seconds_since_seen: d.last_seen.elapsed().as_secs_f64(),
+            source_network: d.source_network,
+            source_address: d.source_address.map(|m| m.to_vec()),
         }))
     }
 

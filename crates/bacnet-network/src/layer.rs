@@ -1,8 +1,9 @@
 //! NetworkLayer for local BACnet packet assembly and dispatch.
 //!
 //! The network layer wraps a transport and provides APDU-level send/receive
-//! by handling NPDU encoding/decoding. In this non-router implementation,
-//! only local (same-network) communication is supported.
+//! by handling NPDU encoding/decoding. This is a non-router implementation:
+//! it does not forward messages between networks, but it can address remote
+//! devices through local routers via NPDU destination fields (DNET/DADR).
 
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
 use bacnet_transport::port::TransportPort;
@@ -52,7 +53,9 @@ impl std::fmt::Debug for ReceivedApdu {
 /// Non-router BACnet network layer.
 ///
 /// Wraps a [`TransportPort`] and provides APDU-level send/receive by handling
-/// NPDU framing. Remote routing is not supported in this implementation.
+/// NPDU framing. This layer does not act as a router (it does not forward
+/// messages between networks), but it can send to remote devices through
+/// local routers using NPDU destination addressing.
 pub struct NetworkLayer<T: TransportPort> {
     transport: T,
     dispatch_task: Option<JoinHandle<()>>,

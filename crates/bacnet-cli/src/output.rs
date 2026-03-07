@@ -32,6 +32,12 @@ pub struct DeviceInfo {
     pub max_apdu: u32,
     /// Segmentation support description.
     pub segmentation: String,
+    /// Remote BACnet network number (if behind a router).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network: Option<u16>,
+    /// Device MAC on the remote network (if behind a router).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_mac: Option<String>,
 }
 
 /// Format a BIP MAC address (6 bytes: 4 IP + 2 port) as `ip:port`.
@@ -57,6 +63,8 @@ pub fn device_info(d: &DiscoveredDevice) -> DeviceInfo {
         vendor_id: d.vendor_id,
         max_apdu: d.max_apdu_length,
         segmentation: format!("{}", d.segmentation_supported),
+        network: d.source_network,
+        remote_mac: d.source_address.as_ref().map(|m| format_mac(m.as_slice())),
     }
 }
 
@@ -68,22 +76,48 @@ pub fn print_devices(devices: &[DeviceInfo], format: OutputFormat) {
                 println!("{}", "No devices found.".yellow());
                 return;
             }
+            let has_routing = devices.iter().any(|d| d.network.is_some());
             let mut table = comfy_table::Table::new();
-            table.set_header(vec![
-                "Instance",
-                "Address",
-                "Vendor",
-                "Max APDU",
-                "Segmentation",
-            ]);
-            for d in devices {
-                table.add_row(vec![
-                    d.instance.to_string(),
-                    d.address.clone(),
-                    d.vendor_id.to_string(),
-                    d.max_apdu.to_string(),
-                    d.segmentation.clone(),
+            if has_routing {
+                table.set_header(vec![
+                    "Instance",
+                    "Router",
+                    "DNET",
+                    "Remote MAC",
+                    "Vendor",
+                    "Max APDU",
+                    "Segmentation",
                 ]);
+                for d in devices {
+                    table.add_row(vec![
+                        d.instance.to_string(),
+                        d.address.clone(),
+                        d.network
+                            .map(|n| n.to_string())
+                            .unwrap_or_else(|| "-".into()),
+                        d.remote_mac.clone().unwrap_or_else(|| "-".into()),
+                        d.vendor_id.to_string(),
+                        d.max_apdu.to_string(),
+                        d.segmentation.clone(),
+                    ]);
+                }
+            } else {
+                table.set_header(vec![
+                    "Instance",
+                    "Address",
+                    "Vendor",
+                    "Max APDU",
+                    "Segmentation",
+                ]);
+                for d in devices {
+                    table.add_row(vec![
+                        d.instance.to_string(),
+                        d.address.clone(),
+                        d.vendor_id.to_string(),
+                        d.max_apdu.to_string(),
+                        d.segmentation.clone(),
+                    ]);
+                }
             }
             println!("{table}");
             println!("{}", format!("Found {} device(s)", devices.len()).green());
@@ -375,6 +409,8 @@ mod tests {
             vendor_id: 42,
             max_apdu: 1476,
             segmentation: "both".to_string(),
+            network: None,
+            remote_mac: None,
         };
         let json = serde_json::to_string(&info).unwrap();
         assert!(json.contains("1234"));
