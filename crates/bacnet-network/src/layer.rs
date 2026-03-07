@@ -200,6 +200,11 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         expecting_reply: bool,
         priority: NetworkPriority,
     ) -> Result<(), Error> {
+        if dest_network == 0xFFFF {
+            return Err(Error::Encoding(
+                "dest_network 0xFFFF is reserved for global broadcasts; use broadcast_global_apdu instead".into(),
+            ));
+        }
         let npdu = Npdu {
             is_network_message: false,
             expecting_reply,
@@ -433,5 +438,57 @@ mod tests {
         assert_eq!(dest.mac_address.as_slice(), &[1, 2, 3, 4, 5, 6]);
         assert_eq!(decoded.hop_count, 255);
         assert!(decoded.expecting_reply);
+    }
+
+    #[test]
+    fn broadcast_to_network_encodes_specific_dnet() {
+        use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+        use bacnet_types::enums::NetworkPriority;
+
+        // Verify the NPDU format that broadcast_to_network would produce:
+        // specific DNET with empty DADR (broadcast on that network)
+        let npdu = Npdu {
+            is_network_message: false,
+            expecting_reply: false,
+            priority: NetworkPriority::NORMAL,
+            destination: Some(NpduAddress {
+                network: 42,
+                mac_address: MacAddr::new(),
+            }),
+            source: None,
+            hop_count: 255,
+            payload: Bytes::from_static(&[0xCC]),
+            ..Npdu::default()
+        };
+
+        let mut buf = bytes::BytesMut::new();
+        encode_npdu(&mut buf, &npdu).unwrap();
+        let decoded = decode_npdu(Bytes::from(buf)).unwrap();
+        let dest = decoded.destination.unwrap();
+        assert_eq!(dest.network, 42);
+        assert!(dest.mac_address.is_empty()); // broadcast: no specific MAC
+        assert_eq!(decoded.hop_count, 255);
+        assert!(!decoded.expecting_reply);
+    }
+
+    #[test]
+    fn broadcast_to_network_rejects_dnet_ffff() {
+        use bacnet_encoding::npdu::Npdu;
+        use bacnet_types::enums::NetworkPriority;
+
+        let transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+        let net = NetworkLayer::new(transport);
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = rt.block_on(async {
+            net.broadcast_to_network(&[0xAA], 0xFFFF, false, NetworkPriority::NORMAL)
+                .await
+        });
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("0xFFFF"), "Error should mention 0xFFFF: {err_msg}");
     }
 }

@@ -1176,6 +1176,26 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await
     }
 
+    /// Broadcast an unconfirmed request to a specific remote network.
+    pub async fn broadcast_network_unconfirmed(
+        &self,
+        service_choice: UnconfirmedServiceChoice,
+        service_data: &[u8],
+        dest_network: u16,
+    ) -> Result<(), Error> {
+        let pdu = Apdu::UnconfirmedRequest(bacnet_encoding::apdu::UnconfirmedRequest {
+            service_choice,
+            service_request: Bytes::copy_from_slice(service_data),
+        });
+
+        let mut buf = BytesMut::with_capacity(2 + service_data.len());
+        encode_apdu(&mut buf, &pdu);
+
+        self.network
+            .broadcast_to_network(&buf, dest_network, false, NetworkPriority::NORMAL)
+            .await
+    }
+
     // -----------------------------------------------------------------------
     // High-level API
     // -----------------------------------------------------------------------
@@ -1323,16 +1343,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut buf = BytesMut::new();
         request.encode(&mut buf);
 
-        let pdu = Apdu::UnconfirmedRequest(bacnet_encoding::apdu::UnconfirmedRequest {
-            service_choice: UnconfirmedServiceChoice::WHO_IS,
-            service_request: Bytes::copy_from_slice(&buf),
-        });
-
-        let mut apdu_buf = BytesMut::with_capacity(2 + buf.len());
-        encode_apdu(&mut apdu_buf, &pdu);
-
-        self.network
-            .send_apdu(&apdu_buf, destination_mac, false, NetworkPriority::NORMAL)
+        self.unconfirmed_request(destination_mac, UnconfirmedServiceChoice::WHO_IS, &buf)
             .await
     }
 
@@ -1355,16 +1366,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut buf = BytesMut::new();
         request.encode(&mut buf);
 
-        let pdu = Apdu::UnconfirmedRequest(bacnet_encoding::apdu::UnconfirmedRequest {
-            service_choice: UnconfirmedServiceChoice::WHO_IS,
-            service_request: Bytes::copy_from_slice(&buf),
-        });
-
-        let mut apdu_buf = BytesMut::with_capacity(2 + buf.len());
-        encode_apdu(&mut apdu_buf, &pdu);
-
-        self.network
-            .broadcast_to_network(&apdu_buf, dest_network, false, NetworkPriority::NORMAL)
+        self.broadcast_network_unconfirmed(UnconfirmedServiceChoice::WHO_IS, &buf, dest_network)
             .await
     }
 

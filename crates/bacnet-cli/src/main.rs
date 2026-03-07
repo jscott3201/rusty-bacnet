@@ -100,7 +100,7 @@ enum Command {
         #[arg(long, default_value_t = 3)]
         wait: u64,
         /// Send directed WhoIs to a specific address instead of broadcasting.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "dnet")]
         target: Option<String>,
         /// Register as foreign device with a BBMD before discovering.
         #[arg(long)]
@@ -433,7 +433,7 @@ async fn execute_command<T: TransportPort + 'static>(
                 let mac = resolve::parse_target(target_str)
                     .and_then(|t| match t {
                         resolve::Target::Mac(m) => Ok(m),
-                        _ => Err("--target requires an IP address, not a device instance".into()),
+                        _ => Err("--target requires an IP address, not a device instance or routed address".into()),
                     })
                     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
                 commands::discover::discover_directed(client, &mac, low, high, *wait, format)
@@ -760,7 +760,7 @@ async fn execute_bip_command(
                 let mac = resolve::parse_target(target_str)
                     .and_then(|t| match t {
                         resolve::Target::Mac(m) => Ok(m),
-                        _ => Err("--target requires an IP address, not a device instance".into()),
+                        _ => Err("--target requires an IP address, not a device instance or routed address".into()),
                     })
                     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
                 commands::discover::discover_directed(client, &mac, low, high, *wait, format)

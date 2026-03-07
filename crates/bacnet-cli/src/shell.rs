@@ -434,7 +434,7 @@ async fn handle_discover<T: TransportPort + 'static>(
                     .await
             }
             Ok(_) => {
-                output::print_error("--target requires an IP address, not a device instance");
+                output::print_error("--target requires an IP address, not a device instance or routed address");
                 return;
             }
             Err(e) => {
