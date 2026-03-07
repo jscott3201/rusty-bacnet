@@ -18,6 +18,7 @@ mod decode;
 mod output;
 mod parse;
 mod resolve;
+mod session;
 mod shell;
 mod transport;
 
@@ -100,7 +101,7 @@ enum Command {
         #[arg(long, default_value_t = 3)]
         wait: u64,
         /// Send directed WhoIs to a specific address instead of broadcasting.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "dnet")]
         target: Option<String>,
         /// Register as foreign device with a BBMD before discovering.
         #[arg(long)]
@@ -433,7 +434,7 @@ async fn execute_command<T: TransportPort + 'static>(
                 let mac = resolve::parse_target(target_str)
                     .and_then(|t| match t {
                         resolve::Target::Mac(m) => Ok(m),
-                        _ => Err("--target requires an IP address, not a device instance".into()),
+                        _ => Err("--target requires an IP address, not a device instance or routed address".into()),
                     })
                     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
                 commands::discover::discover_directed(client, &mac, low, high, *wait, format)
@@ -645,61 +646,7 @@ async fn execute_command<T: TransportPort + 'static>(
         }
         Command::TimeSync { target, utc } => {
             let mac = resolve_target_mac(client, target).await?;
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_err(|e| format!("system time error: {e}"))?;
-            let secs = now.as_secs();
-
-            // Convert epoch seconds to date/time components.
-            // Days since 1970-01-01.
-            let days = secs / 86400;
-            let day_secs = (secs % 86400) as u32;
-
-            let hour = (day_secs / 3600) as u8;
-            let minute = ((day_secs % 3600) / 60) as u8;
-            let second = (day_secs % 60) as u8;
-            let hundredths = ((now.subsec_millis() / 10) % 100) as u8;
-
-            // Civil date from days since epoch (algorithm from Howard Hinnant).
-            let z = days as i64 + 719468;
-            let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
-            let doe = (z - era * 146097) as u64;
-            let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-            let y = yoe as i64 + era * 400;
-            let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-            let mp = (5 * doy + 2) / 153;
-            let d = (doy - (153 * mp + 2) / 5 + 1) as u8;
-            let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u8;
-            let y = if m <= 2 { y + 1 } else { y };
-
-            // Day of week: 1970-01-01 was Thursday (BACnet: 4).
-            let dow = ((days + 3) % 7 + 1) as u8; // 1=Monday..7=Sunday
-
-            let utc_date = bacnet_types::primitives::Date {
-                year: (y - 1900) as u8,
-                month: m,
-                day: d,
-                day_of_week: dow,
-            };
-            let utc_time = bacnet_types::primitives::Time {
-                hour,
-                minute,
-                second,
-                hundredths,
-            };
-
-            if *utc {
-                client
-                    .utc_time_synchronization(&mac, utc_date, utc_time)
-                    .await?;
-            } else {
-                // For local time sync we also use UTC since we don't have
-                // a timezone library. Document this limitation.
-                client
-                    .time_synchronization(&mac, utc_date, utc_time)
-                    .await?;
-            }
-            output::print_success("Time synchronized", format);
+            commands::device::time_sync_cmd(client, &mac, *utc, format).await?;
         }
     }
     Ok(())
@@ -760,7 +707,7 @@ async fn execute_bip_command(
                 let mac = resolve::parse_target(target_str)
                     .and_then(|t| match t {
                         resolve::Target::Mac(m) => Ok(m),
-                        _ => Err("--target requires an IP address, not a device instance".into()),
+                        _ => Err("--target requires an IP address, not a device instance or routed address".into()),
                     })
                     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
                 commands::discover::discover_directed(client, &mac, low, high, *wait, format)
@@ -894,7 +841,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut client = transport::build_bip_client(&args).await?;
         match &cli.command {
             None | Some(Command::Shell) => {
-                run(client, &cli, format, false).await?;
+                shell::run_bip_shell(client, format).await?;
             }
             Some(cmd) => {
                 if !execute_bip_command(&client, cmd, format).await? {

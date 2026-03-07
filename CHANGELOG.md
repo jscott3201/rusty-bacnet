@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3]
+
+### Added
+- **Interactive shell session state**: `target` command to set/show/clear default target address; `status` command shows transport, local address, BBMD registration, and discovered device count
+- **BBMD auto-renewal** in interactive shell: `register` stores registration and spawns background task to renew at 80% TTL; `unregister` cancels renewal; shown in `status` output
+- **Missing shell commands** now available interactively: `ack-alarm`/`ack`, `time-sync`/`ts`, `create-object`, `delete-object`, `read-range`/`rr`
+- **Shell `discover --bbmd`**: register as foreign device and discover in one step (BIP shell only)
+- **Colored terminal output** via `owo-colors`: green for success/values, red for errors, yellow for warnings, cyan for addresses, dimmed for metadata
+- Default target auto-prepend: commands like `read`, `write`, `subscribe` use the session default target when no target argument is given
+- Discovery progress feedback: "Waiting Ns for responses..." status line during WhoIs
+
+### Changed
+- Deduplicated `format_mac()` and `device_info()` into `output.rs` (removed from `discover.rs` and `router.rs`)
+- Removed dead code: `is_tty()`, `print_ok()`, `print_value()` from output module
+- BIP shell separated from generic shell for type-safe BBMD command dispatch
+
+### Fixed
+- Interactive `discover --target` returning "No devices found" on subsequent calls (removed stale HashSet filter)
+- Unused import `use bacnet_encoding::npdu::Npdu` in `bacnet-network/src/layer.rs`
+
 ## [0.6.2]
 
 ### Added

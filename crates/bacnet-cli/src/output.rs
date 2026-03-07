@@ -3,15 +3,12 @@
 //! Supports table (human-readable) and JSON output formats with automatic
 //! TTY detection.
 
-use bacnet_types::primitives::PropertyValue;
-use serde::Serialize;
-use std::io::IsTerminal;
+use std::net::Ipv4Addr;
 
-/// Check whether stdout is connected to a terminal.
-#[allow(dead_code)]
-pub fn is_tty() -> bool {
-    std::io::stdout().is_terminal()
-}
+use bacnet_client::discovery::DiscoveredDevice;
+use bacnet_types::primitives::PropertyValue;
+use owo_colors::OwoColorize;
+use serde::Serialize;
 
 /// Output format for CLI results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,12 +34,38 @@ pub struct DeviceInfo {
     pub segmentation: String,
 }
 
+/// Format a BIP MAC address (6 bytes: 4 IP + 2 port) as `ip:port`.
+/// Falls back to hex display for non-BIP MACs.
+pub fn format_mac(mac: &[u8]) -> String {
+    if mac.len() == 6 {
+        let ip = Ipv4Addr::new(mac[0], mac[1], mac[2], mac[3]);
+        let port = u16::from_be_bytes([mac[4], mac[5]]);
+        format!("{ip}:{port}")
+    } else {
+        mac.iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<_>>()
+            .join(":")
+    }
+}
+
+/// Convert a `DiscoveredDevice` into a `DeviceInfo` for display.
+pub fn device_info(d: &DiscoveredDevice) -> DeviceInfo {
+    DeviceInfo {
+        instance: d.object_identifier.instance_number(),
+        address: format_mac(d.mac_address.as_slice()),
+        vendor_id: d.vendor_id,
+        max_apdu: d.max_apdu_length,
+        segmentation: format!("{}", d.segmentation_supported),
+    }
+}
+
 /// Print a list of discovered devices.
 pub fn print_devices(devices: &[DeviceInfo], format: OutputFormat) {
     match format {
         OutputFormat::Table => {
             if devices.is_empty() {
-                println!("No devices found.");
+                println!("{}", "No devices found.".yellow());
                 return;
             }
             let mut table = comfy_table::Table::new();
@@ -63,6 +86,7 @@ pub fn print_devices(devices: &[DeviceInfo], format: OutputFormat) {
                 ]);
             }
             println!("{table}");
+            println!("{}", format!("Found {} device(s)", devices.len()).green());
         }
         OutputFormat::Json => {
             let json = serde_json::to_string_pretty(devices).expect("serialize devices");
@@ -167,7 +191,7 @@ pub fn print_read_result(
         OutputFormat::Table => {
             let mut table = comfy_table::Table::new();
             table.set_header(vec!["Object", "Property", "Value"]);
-            table.add_row(vec![object, &prop_display, value]);
+            table.add_row(vec![object, &prop_display, &format!("{}", value.green())]);
             println!("{table}");
         }
         OutputFormat::Json => {
@@ -197,7 +221,12 @@ pub fn print_rpm_table(entries: &[(String, String, Option<u32>, String)], format
                     Some(i) => format!("{prop}[{i}]"),
                     None => prop.clone(),
                 };
-                table.add_row(vec![obj.as_str(), &prop_display, val.as_str()]);
+                let colored_val = if val.starts_with("ERROR") {
+                    format!("{}", val.red())
+                } else {
+                    format!("{}", val.green())
+                };
+                table.add_row(vec![obj.as_str(), &prop_display, &colored_val]);
             }
             println!("{table}");
         }
@@ -224,33 +253,10 @@ pub fn print_rpm_table(entries: &[(String, String, Option<u32>, String)], format
     }
 }
 
-/// Print a single generic value.
-#[allow(dead_code)]
-pub fn print_value(value: &str, format: OutputFormat) {
-    match format {
-        OutputFormat::Table => {
-            println!("{value}");
-        }
-        OutputFormat::Json => {
-            let result = serde_json::json!({ "value": value });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&result).expect("serialize value")
-            );
-        }
-    }
-}
-
-/// Print a success message to stderr.
-#[allow(dead_code)]
-pub fn print_ok(msg: &str) {
-    eprintln!("OK: {msg}");
-}
-
 /// Print a success/status message.
 pub fn print_success(msg: &str, format: OutputFormat) {
     match format {
-        OutputFormat::Table => println!("{msg}"),
+        OutputFormat::Table => println!("{}", msg.green()),
         OutputFormat::Json => {
             let result = serde_json::json!({ "status": "ok", "message": msg });
             println!(
@@ -261,9 +267,14 @@ pub fn print_success(msg: &str, format: OutputFormat) {
     }
 }
 
+/// Print a waiting/progress message to stderr.
+pub fn print_waiting(secs: u64) {
+    eprintln!("{}", format!("Waiting {secs}s for responses...").dimmed());
+}
+
 /// Print an error message to stderr.
 pub fn print_error(msg: &str) {
-    eprintln!("ERROR: {msg}");
+    eprintln!("{} {}", "ERROR:".red().bold(), msg.red());
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
 //! Device management commands: DeviceCommunicationControl, ReinitializeDevice, GetEventInformation,
-//! AcknowledgeAlarm, CreateObject, DeleteObject.
+//! AcknowledgeAlarm, CreateObject, DeleteObject, TimeSync.
 
 use bacnet_client::client::BACnetClient;
 use bacnet_transport::port::TransportPort;
@@ -7,6 +7,67 @@ use bacnet_types::enums::{EnableDisable, ObjectType, ReinitializedState};
 use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::output::{self, OutputFormat};
+
+/// Synchronize time with a remote device.
+pub async fn time_sync_cmd<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    mac: &[u8],
+    utc: bool,
+    format: OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| format!("system time error: {e}"))?;
+    let secs = now.as_secs();
+
+    // Convert epoch seconds to date/time components.
+    // Days since 1970-01-01.
+    let days = secs / 86400;
+    let day_secs = (secs % 86400) as u32;
+
+    let hour = (day_secs / 3600) as u8;
+    let minute = ((day_secs % 3600) / 60) as u8;
+    let second = (day_secs % 60) as u8;
+    let hundredths = ((now.subsec_millis() / 10) % 100) as u8;
+
+    // Civil date from days since epoch (algorithm from Howard Hinnant).
+    let z = days as i64 + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u8;
+    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u8;
+    let y = if m <= 2 { y + 1 } else { y };
+
+    // Day of week: 1970-01-01 was Thursday (BACnet: 4).
+    let dow = ((days + 3) % 7 + 1) as u8; // 1=Monday..7=Sunday
+
+    let date = bacnet_types::primitives::Date {
+        year: (y - 1900) as u8,
+        month: m,
+        day: d,
+        day_of_week: dow,
+    };
+    let time = bacnet_types::primitives::Time {
+        hour,
+        minute,
+        second,
+        hundredths,
+    };
+
+    if utc {
+        client.utc_time_synchronization(mac, date, time).await?;
+    } else {
+        // For local time sync we also use UTC since we don't have
+        // a timezone library. Document this limitation.
+        client.time_synchronization(mac, date, time).await?;
+    }
+    output::print_success("Time synchronized", format);
+    Ok(())
+}
 
 /// Parse an action string into an `EnableDisable` value.
 fn parse_enable_disable(action: &str) -> Result<EnableDisable, String> {

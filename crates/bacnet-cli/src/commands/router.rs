@@ -3,11 +3,10 @@
 use std::net::Ipv4Addr;
 
 use bacnet_client::client::BACnetClient;
-use bacnet_client::discovery::DiscoveredDevice;
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::port::TransportPort;
 
-use crate::output::{self, DeviceInfo, OutputFormat};
+use crate::output::{self, device_info, DeviceInfo, OutputFormat};
 
 /// Display all cached discovered devices from the client's device table.
 pub async fn devices_cmd<T: TransportPort + 'static>(
@@ -18,29 +17,6 @@ pub async fn devices_cmd<T: TransportPort + 'static>(
     let infos: Vec<DeviceInfo> = devices.iter().map(device_info).collect();
     output::print_devices(&infos, format);
     Ok(())
-}
-
-fn device_info(d: &DiscoveredDevice) -> DeviceInfo {
-    DeviceInfo {
-        instance: d.object_identifier.instance_number(),
-        address: format_mac(d.mac_address.as_slice()),
-        vendor_id: d.vendor_id,
-        max_apdu: d.max_apdu_length,
-        segmentation: format!("{}", d.segmentation_supported),
-    }
-}
-
-fn format_mac(mac: &[u8]) -> String {
-    if mac.len() == 6 {
-        let ip = Ipv4Addr::new(mac[0], mac[1], mac[2], mac[3]);
-        let port = u16::from_be_bytes([mac[4], mac[5]]);
-        format!("{ip}:{port}")
-    } else {
-        mac.iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<Vec<_>>()
-            .join(":")
-    }
 }
 
 /// Send Who-Is-Router-To-Network.
