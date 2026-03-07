@@ -101,6 +101,10 @@ impl BipTransport {
     pub fn set_bbmd_management_acl(&mut self, acl: Vec<[u8; 4]>) {
         if let Some(config) = &mut self.bbmd_config {
             config.management_acl = acl;
+        } else {
+            // Log a warning if called before `enable_bbmd()` so misconfiguration
+            // does not fail silently.
+            warn!("set_bbmd_management_acl called before enable_bbmd(); ACL will be ignored");
         }
     }
 
