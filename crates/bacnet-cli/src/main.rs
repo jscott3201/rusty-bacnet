@@ -401,15 +401,13 @@ async fn resolve_target_mac<T: TransportPort + 'static>(
             )
             .into()),
         },
-        resolve::Target::Routed(dnet, instance) => match client.get_device(instance).await {
-            Some(d) if d.source_network == Some(dnet) => Ok(d.mac_address.to_vec()),
-            Some(d) => Err(format!(
-                "Device {} is on DNET {:?}, not DNET {}.",
-                instance, d.source_network, dnet
-            )
-            .into()),
-            None => Err(format!("Device {} not found. Run 'discover' first.", instance).into()),
-        },
+        resolve::Target::Routed(dnet, instance) => Err(format!(
+            "Routed target {}:{} is not supported by this command path. \
+             Use a direct MAC/IP target or run 'discover' and use the device instance \
+             without DNET.",
+            dnet, instance
+        )
+        .into()),
     }
 }
 
