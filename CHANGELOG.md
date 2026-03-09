@@ -5,12 +5,88 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.4]
+
+### Changed
+- **BIP transport refactor**: `RecvContext` struct replaces 9-parameter `handle_bvll_message` signature (removes `clippy::too_many_arguments`)
+- **Confirmed request refactor**: `ConfirmedTarget` enum deduplicates `confirmed_request` and `confirmed_request_routed` into shared `confirmed_request_inner`
+- **BBMD deferred initialization**: `enable_bbmd()` stores `BbmdConfig` instead of creating `BbmdState` with dummy address; real state created at `start()` with actual bound address
+- **Foreign device registration clarity**: `register_foreign_device` renamed to `register_foreign_device_bvlc` to distinguish BVLC-only post-start registration from pre-start `register_as_foreign_device` (which enables Distribute-Broadcast-To-Network)
+- Extracted `require_socket()` helper to deduplicate socket-not-started error in `send_unicast`/`send_broadcast`
+- Updated `NetworkLayer` doc comments to clarify non-router role with DNET/DADR addressing capability
+
+### Added
+- **BVLC concurrency guard**: `bvlc_request` rejects concurrent management requests (returns error instead of silently overwriting pending sender)
+- Documented Forwarded-NPDU source_mac asymmetry (BBMD mode vs foreign device mode) in BIP transport
+
+## [0.6.3]
+
+### Added
+- **Interactive shell session state**: `target` command to set/show/clear default target address; `status` command shows transport, local address, BBMD registration, and discovered device count
+- **BBMD auto-renewal** in interactive shell: `register` stores registration and spawns background task to renew at 80% TTL; `unregister` cancels renewal; shown in `status` output
+- **Missing shell commands** now available interactively: `ack-alarm`/`ack`, `time-sync`/`ts`, `create-object`, `delete-object`, `read-range`/`rr`
+- **Shell `discover --bbmd`**: register as foreign device and discover in one step (BIP shell only)
+- **Colored terminal output** via `owo-colors`: green for success/values, red for errors, yellow for warnings, cyan for addresses, dimmed for metadata
+- Default target auto-prepend: commands like `read`, `write`, `subscribe` use the session default target when no target argument is given
+- Discovery progress feedback: "Waiting Ns for responses..." status line during WhoIs
+
+### Changed
+- Deduplicated `format_mac()` and `device_info()` into `output.rs` (removed from `discover.rs` and `router.rs`)
+- Removed dead code: `is_tty()`, `print_ok()`, `print_value()` from output module
+- BIP shell separated from generic shell for type-safe BBMD command dispatch
+
+### Fixed
+- Interactive `discover --target` returning "No devices found" on subsequent calls (removed stale HashSet filter)
+- Unused import `use bacnet_encoding::npdu::Npdu` in `bacnet-network/src/layer.rs`
+
+## [0.6.2]
+
+### Added
+- **CLI `discover` options** for cross-subnet and directed device discovery:
+  - `--target <addr>` — send directed (unicast) WhoIs to a specific device or router
+  - `--bbmd <addr>` — register as foreign device with a BBMD before discovering (with `--ttl`)
+  - `--dnet <network>` — target a specific remote network number through a router
+- `BACnetClient::who_is_directed()` — unicast WhoIs to a specific MAC address
+- `BACnetClient::who_is_network()` — WhoIs broadcast to a specific remote network
+- `NetworkLayer::broadcast_to_network()` — broadcast APDU to a specific DNET (not global 0xFFFF)
+- Shell `discover` command supports `--target` and `--dnet` flags
+
+### Fixed
+- Interactive shell backspace not visually deleting characters (set `Behavior::PreferTerm` in rustyline)
+
+## [0.6.1]
+
+### Added
+- **`bacnet capture` command** for live packet capture and offline pcap file analysis
+- BACnet frame decoder (BVLC/NPDU/APDU) with summary and full decode modes (`--decode`)
+- `--save` / `--read` flags for pcap file I/O, `--quiet` for headless recording
+- `--filter` flag for additional BPF filter expressions (appended to default BACnet filter)
+- `pcap` feature flag on `bacnet-cli` (off by default, requires libpcap)
+- Pre-built CLI binaries for Linux (amd64/arm64, with pcap), macOS (amd64/arm64), Windows (amd64)
+- CLI reference documentation (`docs/CLI.md`)
+
+### Fixed
+- Replaced stale `nicegates` org references with `jscott3201` across README, Java packaging, and npm config
+
+## [0.6.0]
+
+### Added
+- **BBMD client API** (Annex J): `read_bdt()`, `write_bdt()`, `read_fdt()`, `delete_fdt_entry()`, `register_foreign_device()` on `BipTransport` with oneshot channel response correlation
+- **BACnet/IPv6 CLI support** (Annex U): `--ipv6`, `--ipv6-interface`, `--device-instance` flags; `Bip6ClientBuilder` and `bip6_builder()` on `BACnetClient`
+- IPv6 bracket-notation target parsing (`[::1]:47808`, `[fe80::1]`) in CLI
+- `FdtEntryWire` struct and `decode_fdt()` / `encode_bdt_entries()` helpers in `bacnet-transport`
+- `BACnetClient<BipTransport>` delegate methods for BBMD management
+- CLI `bdt`, `fdt`, `register`, `unregister` commands now fully functional (were stubs)
+- Table and JSON output for BDT/FDT query results via `comfy-table`
+
+### Changed
+- BBMD management commands restricted to BIP transport (clear error on SC/IPv6)
+- BIP transport dispatch in CLI separated into `execute_bip_command()` for type-safe BIP-only operations
 
 ## [0.5.5]
 
 ### Fixed
-- Java/Kotlin Gradle publish URL pointed to wrong GitHub org (`nicegates` → `jscott3201`)
+- Java/Kotlin Gradle publish URL pointed to wrong GitHub org
 
 ## [0.5.4]
 
@@ -58,7 +134,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 36 unit tests covering all bindings
 - **Java/Kotlin distribution:** multi-platform JAR with JNA native libraries
   - Platforms: Linux x86_64/aarch64, macOS x86_64/aarch64, Windows x86_64
-  - Published to GitHub Packages as `io.github.nicegates:bacnet-java`
+  - Published to GitHub Packages as `io.github.jscott3201:bacnet-java`
   - Kotlin suspend functions for async operations via kotlinx-coroutines
   - Gradle build with `build-local.sh` for development workflow
 - CI: Java native library builds across 5 platform matrix

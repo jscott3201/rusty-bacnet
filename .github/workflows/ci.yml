@@ -2,10 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     tags: ["v*"]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -323,7 +323,7 @@ jobs:
   github-release:
     name: GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [publish-crates, publish-pypi, publish-npm, publish-java]
+    needs: [publish-crates, publish-pypi, publish-npm, publish-java, build-cli-binaries]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -333,12 +333,86 @@ jobs:
           name: java-jar
           path: dist/java
 
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          path: dist/cli
+          merge-multiple: true
+
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: dist/java/*.jar
+          files: |
+            dist/java/*.jar
+            dist/cli/bacnet-*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ===========================================================================
+  # Tier 2c — CLI binary distribution
+  # ===========================================================================
+
+  build-cli-binaries:
+    name: CLI Binary (${{ matrix.target }})
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: bacnet-linux-amd64
+            features: "pcap,sc-tls"
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            binary: bacnet-linux-arm64
+            features: "pcap,sc-tls"
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            binary: bacnet-macos-amd64
+            features: "sc-tls"
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary: bacnet-macos-arm64
+            features: "sc-tls"
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: bacnet-windows-amd64.exe
+            features: "sc-tls"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.93"
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cli-${{ matrix.target }}
+
+      - name: Install libpcap (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+
+      - name: Build CLI
+        run: cargo build --release -p bacnet-cli --target ${{ matrix.target }} --features ${{ matrix.features }}
+
+      - name: Rename binary
+        shell: bash
+        run: |
+          src="target/${{ matrix.target }}/release/bacnet"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            src="${src}.exe"
+          fi
+          cp "$src" "${{ matrix.binary }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.target }}
+          path: ${{ matrix.binary }}
 
   # ===========================================================================
   # Tier 2b — Java/Kotlin release

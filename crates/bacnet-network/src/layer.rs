@@ -1,8 +1,9 @@
 //! NetworkLayer for local BACnet packet assembly and dispatch.
 //!
 //! The network layer wraps a transport and provides APDU-level send/receive
-//! by handling NPDU encoding/decoding. In this non-router implementation,
-//! only local (same-network) communication is supported.
+//! by handling NPDU encoding/decoding. This is a non-router implementation:
+//! it does not forward messages between networks, but it can address remote
+//! devices through local routers via NPDU destination fields (DNET/DADR).
 
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
 use bacnet_transport::port::TransportPort;
@@ -52,7 +53,9 @@ impl std::fmt::Debug for ReceivedApdu {
 /// Non-router BACnet network layer.
 ///
 /// Wraps a [`TransportPort`] and provides APDU-level send/receive by handling
-/// NPDU framing. Remote routing is not supported in this implementation.
+/// NPDU framing. This layer does not act as a router (it does not forward
+/// messages between networks), but it can send to remote devices through
+/// local routers using NPDU destination addressing.
 pub struct NetworkLayer<T: TransportPort> {
     transport: T,
     dispatch_task: Option<JoinHandle<()>>,
@@ -176,6 +179,41 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
             priority,
             destination: Some(NpduAddress {
                 network: 0xFFFF,
+                mac_address: MacAddr::new(),
+            }),
+            source: None,
+            hop_count: 255,
+            payload: Bytes::copy_from_slice(apdu),
+            ..Npdu::default()
+        };
+
+        let mut buf = BytesMut::with_capacity(8 + apdu.len());
+        encode_npdu(&mut buf, &npdu)?;
+        self.transport.send_broadcast(&buf).await
+    }
+
+    /// Broadcast an APDU to a specific remote network via routers.
+    ///
+    /// Like `broadcast_global_apdu()` but targets a single network number
+    /// instead of all networks (DNET=0xFFFF).
+    pub async fn broadcast_to_network(
+        &self,
+        apdu: &[u8],
+        dest_network: u16,
+        expecting_reply: bool,
+        priority: NetworkPriority,
+    ) -> Result<(), Error> {
+        if dest_network == 0xFFFF {
+            return Err(Error::Encoding(
+                "dest_network 0xFFFF is reserved for global broadcasts; use broadcast_global_apdu instead".into(),
+            ));
+        }
+        let npdu = Npdu {
+            is_network_message: false,
+            expecting_reply,
+            priority,
+            destination: Some(NpduAddress {
+                network: dest_network,
                 mac_address: MacAddr::new(),
             }),
             source: None,
@@ -403,5 +441,59 @@ mod tests {
         assert_eq!(dest.mac_address.as_slice(), &[1, 2, 3, 4, 5, 6]);
         assert_eq!(decoded.hop_count, 255);
         assert!(decoded.expecting_reply);
+    }
+
+    #[test]
+    fn broadcast_to_network_encodes_specific_dnet() {
+        use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+        use bacnet_types::enums::NetworkPriority;
+
+        // Verify the NPDU format that broadcast_to_network would produce:
+        // specific DNET with empty DADR (broadcast on that network)
+        let npdu = Npdu {
+            is_network_message: false,
+            expecting_reply: false,
+            priority: NetworkPriority::NORMAL,
+            destination: Some(NpduAddress {
+                network: 42,
+                mac_address: MacAddr::new(),
+            }),
+            source: None,
+            hop_count: 255,
+            payload: Bytes::from_static(&[0xCC]),
+            ..Npdu::default()
+        };
+
+        let mut buf = bytes::BytesMut::new();
+        encode_npdu(&mut buf, &npdu).unwrap();
+        let decoded = decode_npdu(Bytes::from(buf)).unwrap();
+        let dest = decoded.destination.unwrap();
+        assert_eq!(dest.network, 42);
+        assert!(dest.mac_address.is_empty()); // broadcast: no specific MAC
+        assert_eq!(decoded.hop_count, 255);
+        assert!(!decoded.expecting_reply);
+    }
+
+    #[test]
+    fn broadcast_to_network_rejects_dnet_ffff() {
+        use bacnet_types::enums::NetworkPriority;
+
+        let transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+        let net = NetworkLayer::new(transport);
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = rt.block_on(async {
+            net.broadcast_to_network(&[0xAA], 0xFFFF, false, NetworkPriority::NORMAL)
+                .await
+        });
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("0xFFFF"),
+            "Error should mention 0xFFFF: {err_msg}"
+        );
     }
 }

@@ -13,7 +13,8 @@ A complete BACnet protocol stack (ASHRAE 135-2020) written in Rust, with first-c
 - **Python bindings** — async client, server, and SC hub with full API parity via PyO3
 - **Kotlin/Java bindings** — async client and server via UniFFI, distributed as multi-platform JAR
 - **WASM/JavaScript** — BACnet/SC thin client for browsers via wasm-bindgen
-- **1718 tests**, 0 clippy warnings, CI on Linux/macOS/Windows
+- **CLI tool** — interactive shell and scripting for BACnet/IP, IPv6, and SC
+- **1778 tests**, 0 clippy warnings, CI on Linux/macOS/Windows
 
 ## Quick Start (Python)
 
@@ -65,9 +66,9 @@ asyncio.run(main())
 
 ```toml
 [dependencies]
-bacnet-client = "0.5"
-bacnet-types = "0.5"
-bacnet-encoding = "0.5"
+bacnet-client = "0.6"
+bacnet-types = "0.6"
+bacnet-encoding = "0.6"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -110,7 +111,7 @@ Add the dependency (GitHub Packages):
 dependencyResolutionManagement {
     repositories {
         maven {
-            url = uri("https://maven.pkg.github.com/nicegates/rusty-bacnet")
+            url = uri("https://maven.pkg.github.com/jscott3201/rusty-bacnet")
             credentials {
                 username = providers.gradleProperty("gpr.user").orNull ?: System.getenv("GITHUB_ACTOR")
                 password = providers.gradleProperty("gpr.key").orNull ?: System.getenv("GITHUB_TOKEN")
@@ -121,7 +122,7 @@ dependencyResolutionManagement {
 
 // build.gradle.kts
 dependencies {
-    implementation("io.github.nicegates:bacnet-java:0.5.5")
+    implementation("io.github.jscott3201:bacnet-java:0.6.4")
 }
 ```
 
@@ -160,11 +161,11 @@ fun main() = runBlocking {
 ## Quick Start (JavaScript/WASM)
 
 ```bash
-npm install @nicegates/bacnet-wasm
+npm install @jscott3201/bacnet-wasm
 ```
 
 ```javascript
-import init, { BACnetScClient } from '@nicegates/bacnet-wasm';
+import init, { BACnetScClient } from '@jscott3201/bacnet-wasm';
 
 await init();
 
@@ -261,6 +262,65 @@ async def main():
 asyncio.run(main())
 ```
 
+## CLI Tool
+
+The `bacnet-cli` crate provides an interactive shell and one-shot commands for BACnet diagnostics:
+
+```bash
+cargo install bacnet-cli
+
+# Interactive shell
+bacnet shell
+
+# Discover devices
+bacnet discover
+bacnet discover 1000-2000
+
+# Read/write properties (shorthand object and property names)
+bacnet read 192.168.1.100 ai:1 pv
+bacnet write 192.168.1.100 av:1 pv 72.5 --priority 8
+
+# Read multiple properties
+bacnet readm 192.168.1.100 ai:1 pv,object-name ao:1 pv
+
+# Subscribe to COV notifications
+bacnet subscribe 192.168.1.100 ai:1 --lifetime 300
+
+# BBMD management
+bacnet bdt 192.168.1.1           # Read broadcast distribution table
+bacnet fdt 192.168.1.1           # Read foreign device table
+bacnet register 192.168.1.1 --ttl 300
+
+# Packet capture and analysis (requires pcap feature)
+bacnet capture                              # live capture, summary mode
+bacnet capture --device eth0 --decode       # full protocol decode
+bacnet capture --save traffic.pcap --quiet  # headless recording
+bacnet capture --read traffic.pcap          # offline analysis
+bacnet capture --filter "host 10.0.0.1"    # additional BPF filter
+
+# Device management
+bacnet time-sync 192.168.1.100 --utc
+bacnet create-object 192.168.1.100 av:100
+bacnet delete-object 192.168.1.100 av:100
+
+# File transfer
+bacnet file-read 192.168.1.100 1 --count 4096 --output data.bin
+bacnet file-write 192.168.1.100 1 firmware.bin
+
+# BACnet/IPv6
+bacnet --ipv6 discover
+bacnet --ipv6 read [fe80::1]:47808 ai:1 pv
+
+# BACnet/SC
+bacnet --sc --sc-url wss://hub:443 --sc-cert cert.pem --sc-key key.pem read 00:01:02:03:04:05 ai:1 pv
+
+# Output formats
+bacnet --json discover           # JSON output (default when piped)
+bacnet -vvv read 192.168.1.100 ai:1 pv  # Debug logging
+```
+
+See [CLI Reference](docs/CLI.md) for full documentation, including all commands, shorthand notation, and pre-built binary downloads.
+
 ## Workspace Structure
 
 ```
@@ -276,6 +336,7 @@ crates/
   rusty-bacnet/       Python bindings via PyO3 (client, server, hub)
   bacnet-java/        Kotlin/Java bindings via UniFFI (client, server)
   bacnet-wasm/        WASM/JavaScript BACnet/SC thin client
+  bacnet-cli/         CLI tool with interactive shell
 java/                 Gradle build for multi-platform JAR
 benchmarks/           Criterion benchmarks (9 suites) + Python mixed-mode
 examples/             Rust, Python, and Docker examples
@@ -343,7 +404,7 @@ The `rusty-bacnet` crate provides full Python API parity:
 ## Development
 
 ```bash
-# Run tests (1718 tests)
+# Run tests (1778 tests)
 cargo test --workspace --exclude rusty-bacnet --exclude bacnet-wasm
 
 # Check formatting
@@ -369,6 +430,7 @@ Minimum Rust version: 1.93
 
 ## Documentation
 
+- [CLI Reference](docs/CLI.md)
 - [Rust API Reference](docs/rust-api.md)
 - [Python API Reference](docs/python-api.md)
 - [Benchmark Results](Benchmarks.md)

@@ -119,6 +119,10 @@ pub struct DiscoveredDevice {
     pub segmentation: u8,
     pub vendor_id: u16,
     pub seconds_since_seen: f64,
+    /// BACnet network number if the device is behind a router (None = local).
+    pub source_network: Option<u16>,
+    /// MAC address on the remote network if the device is behind a router.
+    pub source_address: Option<Vec<u8>>,
 }
 
 /// A COV (Change of Value) notification received from a BACnet device.
@@ -285,6 +289,8 @@ mod tests {
             segmentation: 0,
             vendor_id: 555,
             seconds_since_seen: 1.5,
+            source_network: None,
+            source_address: None,
         };
         assert_eq!(dev.instance, 100);
         assert_eq!(dev.vendor_id, 555);

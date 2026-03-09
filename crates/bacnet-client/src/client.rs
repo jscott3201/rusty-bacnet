@@ -4,7 +4,7 @@
 //! methods for sending confirmed and unconfirmed BACnet requests.
 
 use std::collections::HashMap;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -18,9 +18,11 @@ use bacnet_encoding::apdu::{
     self, encode_apdu, Apdu, ConfirmedRequest as ConfirmedRequestPdu, SegmentAck as SegmentAckPdu,
     SimpleAck,
 };
+use bacnet_encoding::npdu::NpduAddress;
 use bacnet_network::layer::NetworkLayer;
 use bacnet_services::cov::COVNotificationRequest;
 use bacnet_transport::bip::BipTransport;
+use bacnet_transport::bip6::Bip6Transport;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ConfirmedServiceChoice, NetworkPriority, UnconfirmedServiceChoice};
 use bacnet_types::error::Error;
@@ -189,6 +191,112 @@ impl BACnetClient<BipTransport> {
     pub fn builder() -> BipClientBuilder {
         Self::bip_builder()
     }
+
+    /// Read the Broadcast Distribution Table from a BBMD.
+    pub async fn read_bdt(
+        &self,
+        target: &[u8],
+    ) -> Result<Vec<bacnet_transport::bbmd::BdtEntry>, Error> {
+        self.network.transport().read_bdt(target).await
+    }
+
+    /// Write the Broadcast Distribution Table to a BBMD.
+    pub async fn write_bdt(
+        &self,
+        target: &[u8],
+        entries: &[bacnet_transport::bbmd::BdtEntry],
+    ) -> Result<bacnet_types::enums::BvlcResultCode, Error> {
+        self.network.transport().write_bdt(target, entries).await
+    }
+
+    /// Read the Foreign Device Table from a BBMD.
+    pub async fn read_fdt(
+        &self,
+        target: &[u8],
+    ) -> Result<Vec<bacnet_transport::bbmd::FdtEntryWire>, Error> {
+        self.network.transport().read_fdt(target).await
+    }
+
+    /// Delete a Foreign Device Table entry on a BBMD.
+    pub async fn delete_fdt_entry(
+        &self,
+        target: &[u8],
+        ip: [u8; 4],
+        port: u16,
+    ) -> Result<bacnet_types::enums::BvlcResultCode, Error> {
+        self.network
+            .transport()
+            .delete_fdt_entry(target, ip, port)
+            .await
+    }
+
+    /// Register as a foreign device with a BBMD and return the result code.
+    pub async fn register_foreign_device_bvlc(
+        &self,
+        target: &[u8],
+        ttl: u16,
+    ) -> Result<bacnet_types::enums::BvlcResultCode, Error> {
+        self.network
+            .transport()
+            .register_foreign_device_bvlc(target, ttl)
+            .await
+    }
+}
+
+impl BACnetClient<Bip6Transport> {
+    /// Create a BIP6-specific builder for BACnet/IPv6 transport.
+    pub fn bip6_builder() -> Bip6ClientBuilder {
+        Bip6ClientBuilder {
+            config: ClientConfig::default(),
+            interface: Ipv6Addr::UNSPECIFIED,
+            device_instance: None,
+        }
+    }
+}
+
+/// BIP6-specific builder that constructs `Bip6Transport` from IPv6 interface/port/device-instance.
+pub struct Bip6ClientBuilder {
+    config: ClientConfig,
+    interface: Ipv6Addr,
+    device_instance: Option<u32>,
+}
+
+impl Bip6ClientBuilder {
+    /// Set the local IPv6 interface address.
+    pub fn interface(mut self, ip: Ipv6Addr) -> Self {
+        self.interface = ip;
+        self
+    }
+
+    /// Set the UDP port (0 for ephemeral).
+    pub fn port(mut self, port: u16) -> Self {
+        self.config.port = port;
+        self
+    }
+
+    /// Set the device instance for VMAC derivation (Annex U.5).
+    pub fn device_instance(mut self, instance: u32) -> Self {
+        self.device_instance = Some(instance);
+        self
+    }
+
+    /// Set APDU timeout in milliseconds.
+    pub fn apdu_timeout_ms(mut self, ms: u64) -> Self {
+        self.config.apdu_timeout_ms = ms;
+        self
+    }
+
+    /// Set the maximum APDU length this client accepts.
+    pub fn max_apdu_length(mut self, len: u16) -> Self {
+        self.config.max_apdu_length = len;
+        self
+    }
+
+    /// Build and start the client, constructing a Bip6Transport from the config.
+    pub async fn build(self) -> Result<BACnetClient<Bip6Transport>, Error> {
+        let transport = Bip6Transport::new(self.interface, self.config.port, self.device_instance);
+        BACnetClient::start(self.config, transport).await
+    }
 }
 
 #[cfg(feature = "sc-tls")]
@@ -295,6 +403,29 @@ impl ScClientBuilder {
     }
 }
 
+/// Routing target for confirmed requests — either local or routed.
+enum ConfirmedTarget<'a> {
+    /// Direct unicast to a local device.
+    Local { mac: &'a [u8] },
+    /// Routed through a local router to a remote device.
+    Routed {
+        router_mac: &'a [u8],
+        dest_network: u16,
+        dest_mac: &'a [u8],
+    },
+}
+
+impl<'a> ConfirmedTarget<'a> {
+    /// The MAC used for TSM transaction matching (what transport-layer
+    /// responses will arrive from).
+    fn tsm_mac(&self) -> &[u8] {
+        match self {
+            Self::Local { mac } => mac,
+            Self::Routed { router_mac, .. } => router_mac,
+        }
+    }
+}
+
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Create a generic builder that accepts a pre-built transport.
     pub fn generic_builder() -> ClientBuilder<T> {
@@ -353,6 +484,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                             &mut seg_state,
                             &seg_ack_senders_dispatch,
                             &received.source_mac,
+                            &received.source_network,
                             decoded,
                         )
                         .await;
@@ -386,6 +518,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         seg_state: &mut HashMap<SegKey, SegmentedReceiveState>,
         seg_ack_senders: &Arc<Mutex<HashMap<SegKey, mpsc::Sender<SegmentAckPdu>>>>,
         source_mac: &[u8],
+        source_network: &Option<NpduAddress>,
         apdu: Apdu,
     ) {
         match apdu {
@@ -489,6 +622,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 vendor = i_am.vendor_id,
                                 "Received IAm"
                             );
+                            let (src_net, src_addr) = match source_network {
+                                Some(npdu_addr) if !npdu_addr.mac_address.is_empty() => {
+                                    (Some(npdu_addr.network), Some(npdu_addr.mac_address.clone()))
+                                }
+                                _ => (None, None),
+                            };
                             let device = DiscoveredDevice {
                                 object_identifier: i_am.object_identifier,
                                 mac_address: MacAddr::from_slice(source_mac),
@@ -497,6 +636,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 max_segments_accepted: None,
                                 vendor_id: i_am.vendor_id,
                                 last_seen: std::time::Instant::now(),
+                                source_network: src_net,
+                                source_address: src_addr,
                             };
                             device_table.lock().await.upsert(device);
                         }
@@ -688,37 +829,89 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         service_choice: ConfirmedServiceChoice,
         service_data: &[u8],
     ) -> Result<Bytes, Error> {
-        // Check if segmentation is needed.
-        // Non-segmented ConfirmedRequest overhead: 4 bytes (type+flags, max-seg/apdu, invoke, service).
-        let unsegmented_apdu_size = 4 + service_data.len();
-        let (remote_max_apdu, remote_max_segments) = {
-            let dt = self.device_table.lock().await;
-            let device = dt.get_by_mac(destination_mac);
-            let max_apdu = device
-                .map(|d| d.max_apdu_length as u16)
-                .unwrap_or(self.config.max_apdu_length);
-            let max_seg = device.and_then(|d| d.max_segments_accepted);
-            (max_apdu, max_seg)
-        };
-        if unsegmented_apdu_size > remote_max_apdu as usize {
-            return self
-                .segmented_confirmed_request(
-                    destination_mac,
-                    service_choice,
-                    service_data,
-                    remote_max_apdu,
-                    remote_max_segments,
-                )
-                .await;
+        self.confirmed_request_inner(
+            ConfirmedTarget::Local {
+                mac: destination_mac,
+            },
+            service_choice,
+            service_data,
+        )
+        .await
+    }
+
+    /// Send a confirmed request routed through a BACnet router.
+    ///
+    /// Use this when the target device is on a remote BACnet network (behind
+    /// a BBMD/Router). The NPDU is sent as a unicast to `router_mac` with
+    /// DNET/DADR set to `dest_network`/`dest_mac` so the router can forward
+    /// it to the correct subnet.
+    ///
+    /// `router_mac` is the transport-layer MAC of the router (e.g. the
+    /// BBMD's IP:port). `dest_network` and `dest_mac` are the BACnet
+    /// network number and MAC address of the final destination device.
+    pub async fn confirmed_request_routed(
+        &self,
+        router_mac: &[u8],
+        dest_network: u16,
+        dest_mac: &[u8],
+        service_choice: ConfirmedServiceChoice,
+        service_data: &[u8],
+    ) -> Result<Bytes, Error> {
+        self.confirmed_request_inner(
+            ConfirmedTarget::Routed {
+                router_mac,
+                dest_network,
+                dest_mac,
+            },
+            service_choice,
+            service_data,
+        )
+        .await
+    }
+
+    /// Shared implementation for [`confirmed_request`](Self::confirmed_request)
+    /// and [`confirmed_request_routed`](Self::confirmed_request_routed).
+    async fn confirmed_request_inner(
+        &self,
+        target: ConfirmedTarget<'_>,
+        service_choice: ConfirmedServiceChoice,
+        service_data: &[u8],
+    ) -> Result<Bytes, Error> {
+        let tsm_mac = target.tsm_mac();
+
+        // Check if segmentation is needed (only for local/direct requests).
+        if let ConfirmedTarget::Local { mac } = &target {
+            // Non-segmented ConfirmedRequest overhead: 4 bytes (type+flags, max-seg/apdu, invoke, service).
+            let unsegmented_apdu_size = 4 + service_data.len();
+            let (remote_max_apdu, remote_max_segments) = {
+                let dt = self.device_table.lock().await;
+                let device = dt.get_by_mac(mac);
+                let max_apdu = device
+                    .map(|d| d.max_apdu_length as u16)
+                    .unwrap_or(self.config.max_apdu_length);
+                let max_seg = device.and_then(|d| d.max_segments_accepted);
+                (max_apdu, max_seg)
+            };
+            if unsegmented_apdu_size > remote_max_apdu as usize {
+                return self
+                    .segmented_confirmed_request(
+                        mac,
+                        service_choice,
+                        service_data,
+                        remote_max_apdu,
+                        remote_max_segments,
+                    )
+                    .await;
+            }
         }
 
         // Allocate invoke ID and register transaction
         let (invoke_id, rx) = {
             let mut tsm = self.tsm.lock().await;
-            let invoke_id = tsm.allocate_invoke_id(destination_mac).ok_or_else(|| {
+            let invoke_id = tsm.allocate_invoke_id(tsm_mac).ok_or_else(|| {
                 Error::Encoding("all invoke IDs exhausted for destination".into())
             })?;
-            let rx = tsm.register_transaction(MacAddr::from_slice(destination_mac), invoke_id);
+            let rx = tsm.register_transaction(MacAddr::from_slice(tsm_mac), invoke_id);
             (invoke_id, rx)
         };
 
@@ -748,14 +941,33 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut rx = rx;
 
         loop {
-            if let Err(e) = self
-                .network
-                .send_apdu(&buf, destination_mac, true, NetworkPriority::NORMAL)
-                .await
-            {
+            let send_result = match &target {
+                ConfirmedTarget::Local { mac } => {
+                    self.network
+                        .send_apdu(&buf, mac, true, NetworkPriority::NORMAL)
+                        .await
+                }
+                ConfirmedTarget::Routed {
+                    router_mac,
+                    dest_network,
+                    dest_mac,
+                } => {
+                    self.network
+                        .send_apdu_routed(
+                            &buf,
+                            *dest_network,
+                            dest_mac,
+                            router_mac,
+                            true,
+                            NetworkPriority::NORMAL,
+                        )
+                        .await
+                }
+            };
+            if let Err(e) = send_result {
                 // Clean up the invoke ID on send failure to prevent pool exhaustion
                 let mut tsm = self.tsm.lock().await;
-                tsm.cancel_transaction(destination_mac, invoke_id);
+                tsm.cancel_transaction(tsm_mac, invoke_id);
                 return Err(e);
             }
 
@@ -779,7 +991,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     if attempts > max_retries {
                         // Final timeout — cancel TSM transaction and return error
                         let mut tsm = self.tsm.lock().await;
-                        tsm.cancel_transaction(destination_mac, invoke_id);
+                        tsm.cancel_transaction(tsm_mac, invoke_id);
                         return Err(Error::Timeout(timeout_duration));
                     }
                     debug!(
@@ -1069,6 +1281,26 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await
     }
 
+    /// Broadcast an unconfirmed request to a specific remote network.
+    pub async fn broadcast_network_unconfirmed(
+        &self,
+        service_choice: UnconfirmedServiceChoice,
+        service_data: &[u8],
+        dest_network: u16,
+    ) -> Result<(), Error> {
+        let pdu = Apdu::UnconfirmedRequest(bacnet_encoding::apdu::UnconfirmedRequest {
+            service_choice,
+            service_request: Bytes::copy_from_slice(service_data),
+        });
+
+        let mut buf = BytesMut::with_capacity(2 + service_data.len());
+        encode_apdu(&mut buf, &pdu);
+
+        self.network
+            .broadcast_to_network(&buf, dest_network, false, NetworkPriority::NORMAL)
+            .await
+    }
+
     // -----------------------------------------------------------------------
     // High-level API
     // -----------------------------------------------------------------------
@@ -1093,6 +1325,87 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
         let response_data = self
             .confirmed_request(destination_mac, ConfirmedServiceChoice::READ_PROPERTY, &buf)
+            .await?;
+
+        bacnet_services::read_property::ReadPropertyACK::decode(&response_data)
+    }
+
+    /// Read a property from a discovered device, auto-routing if needed.
+    ///
+    /// Looks up the device by instance number in the device table. If the
+    /// device has routing info (DNET/DADR), uses routed addressing through
+    /// the router. Otherwise, sends a direct unicast.
+    pub async fn read_property_from_device(
+        &self,
+        device_instance: u32,
+        object_identifier: bacnet_types::primitives::ObjectIdentifier,
+        property_identifier: bacnet_types::enums::PropertyIdentifier,
+        property_array_index: Option<u32>,
+    ) -> Result<bacnet_services::read_property::ReadPropertyACK, Error> {
+        let (mac, routing) = {
+            let dt = self.device_table.lock().await;
+            let device = dt.get(device_instance).ok_or_else(|| {
+                Error::Encoding(format!("device {device_instance} not in device table"))
+            })?;
+            let routing = match (&device.source_network, &device.source_address) {
+                (Some(snet), Some(sadr)) => Some((*snet, sadr.to_vec())),
+                _ => None,
+            };
+            (device.mac_address.to_vec(), routing)
+        };
+
+        if let Some((dnet, dadr)) = routing {
+            self.read_property_routed(
+                &mac,
+                dnet,
+                &dadr,
+                object_identifier,
+                property_identifier,
+                property_array_index,
+            )
+            .await
+        } else {
+            self.read_property(
+                &mac,
+                object_identifier,
+                property_identifier,
+                property_array_index,
+            )
+            .await
+        }
+    }
+
+    /// Read a property from a device on a remote BACnet network via a router.
+    ///
+    /// Use this when you know the routing info explicitly (e.g., from CLI
+    /// flags). For discovered devices, `read_property_from_device()` auto-routes.
+    pub async fn read_property_routed(
+        &self,
+        router_mac: &[u8],
+        dest_network: u16,
+        dest_mac: &[u8],
+        object_identifier: bacnet_types::primitives::ObjectIdentifier,
+        property_identifier: bacnet_types::enums::PropertyIdentifier,
+        property_array_index: Option<u32>,
+    ) -> Result<bacnet_services::read_property::ReadPropertyACK, Error> {
+        use bacnet_services::read_property::ReadPropertyRequest;
+
+        let request = ReadPropertyRequest {
+            object_identifier,
+            property_identifier,
+            property_array_index,
+        };
+        let mut buf = BytesMut::new();
+        request.encode(&mut buf);
+
+        let response_data = self
+            .confirmed_request_routed(
+                router_mac,
+                dest_network,
+                dest_mac,
+                ConfirmedServiceChoice::READ_PROPERTY,
+                &buf,
+            )
             .await?;
 
         bacnet_services::read_property::ReadPropertyACK::decode(&response_data)
@@ -1197,6 +1510,49 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         request.encode(&mut buf);
 
         self.broadcast_global_unconfirmed(UnconfirmedServiceChoice::WHO_IS, &buf)
+            .await
+    }
+
+    /// Send a directed (unicast) WhoIs to a specific device.
+    pub async fn who_is_directed(
+        &self,
+        destination_mac: &[u8],
+        low_limit: Option<u32>,
+        high_limit: Option<u32>,
+    ) -> Result<(), Error> {
+        use bacnet_services::who_is::WhoIsRequest;
+
+        let request = WhoIsRequest {
+            low_limit,
+            high_limit,
+        };
+        let mut buf = BytesMut::new();
+        request.encode(&mut buf);
+
+        self.unconfirmed_request(destination_mac, UnconfirmedServiceChoice::WHO_IS, &buf)
+            .await
+    }
+
+    /// Send a WhoIs broadcast to a specific remote network.
+    ///
+    /// Unlike `who_is()` which broadcasts globally (DNET=0xFFFF), this
+    /// targets a single network number so only devices on that network respond.
+    pub async fn who_is_network(
+        &self,
+        dest_network: u16,
+        low_limit: Option<u32>,
+        high_limit: Option<u32>,
+    ) -> Result<(), Error> {
+        use bacnet_services::who_is::WhoIsRequest;
+
+        let request = WhoIsRequest {
+            low_limit,
+            high_limit,
+        };
+        let mut buf = BytesMut::new();
+        request.encode(&mut buf);
+
+        self.broadcast_network_unconfirmed(UnconfirmedServiceChoice::WHO_IS, &buf, dest_network)
             .await
     }
 
@@ -1557,6 +1913,52 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await?;
 
         Ok(())
+    }
+
+    /// Send a TimeSynchronization request to a device (Clause 16.10.5).
+    ///
+    /// This is an unconfirmed service — no response is expected.
+    pub async fn time_synchronization(
+        &self,
+        destination_mac: &[u8],
+        date: bacnet_types::primitives::Date,
+        time: bacnet_types::primitives::Time,
+    ) -> Result<(), Error> {
+        use bacnet_services::device_mgmt::TimeSynchronizationRequest;
+
+        let request = TimeSynchronizationRequest { date, time };
+        let mut buf = BytesMut::new();
+        request.encode(&mut buf);
+
+        self.unconfirmed_request(
+            destination_mac,
+            UnconfirmedServiceChoice::TIME_SYNCHRONIZATION,
+            &buf,
+        )
+        .await
+    }
+
+    /// Send a UTCTimeSynchronization request to a device (Clause 16.10.6).
+    ///
+    /// This is an unconfirmed service — no response is expected.
+    pub async fn utc_time_synchronization(
+        &self,
+        destination_mac: &[u8],
+        date: bacnet_types::primitives::Date,
+        time: bacnet_types::primitives::Time,
+    ) -> Result<(), Error> {
+        use bacnet_services::device_mgmt::TimeSynchronizationRequest;
+
+        let request = TimeSynchronizationRequest { date, time };
+        let mut buf = BytesMut::new();
+        request.encode(&mut buf);
+
+        self.unconfirmed_request(
+            destination_mac,
+            UnconfirmedServiceChoice::UTC_TIME_SYNCHRONIZATION,
+            &buf,
+        )
+        .await
     }
 
     /// Get a receiver for incoming COV notifications.
