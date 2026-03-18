@@ -10,6 +10,8 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, Time};
 use bytes::BytesMut;
 
+use crate::common::MAX_DECODED_ITEMS;
+
 // ---------------------------------------------------------------------------
 // AcknowledgeAlarm (Clause 13.3)
 // ---------------------------------------------------------------------------
@@ -22,6 +24,8 @@ pub struct AcknowledgeAlarmRequest {
     pub event_state_acknowledged: u32,
     pub timestamp: BACnetTimeStamp,
     pub acknowledgment_source: String,
+    /// Time Of Acknowledgment (tag [5], mandatory per Table 13-9).
+    pub time_of_acknowledgment: BACnetTimeStamp,
 }
 
 impl AcknowledgeAlarmRequest {
@@ -36,6 +40,8 @@ impl AcknowledgeAlarmRequest {
         primitives::encode_timestamp(buf, 3, &self.timestamp);
         // [4] acknowledgmentSource
         primitives::encode_ctx_character_string(buf, 4, &self.acknowledgment_source)?;
+        // [5] timeOfAcknowledgment
+        primitives::encode_timestamp(buf, 5, &self.time_of_acknowledgment);
         Ok(())
     }
 
@@ -94,12 +100,18 @@ impl AcknowledgeAlarmRequest {
             }
         };
 
+        offset = _new_offset;
+
+        // [5] timeOfAcknowledgment (mandatory per Table 13-9)
+        let (time_of_acknowledgment, _new_offset) = primitives::decode_timestamp(data, offset, 5)?;
+
         Ok(Self {
             acknowledging_process_identifier,
             event_object_identifier,
             event_state_acknowledged,
             timestamp,
             acknowledgment_source,
+            time_of_acknowledgment,
         })
     }
 }
@@ -238,7 +250,15 @@ impl EventNotificationRequest {
         offset = end;
 
         // Skip [7] messageText if present — scan for [8]
+        let mut skip_count = 0u32;
         while offset < data.len() {
+            skip_count += 1;
+            if skip_count > MAX_DECODED_ITEMS as u32 {
+                return Err(Error::decoding(
+                    offset,
+                    "too many tags skipped looking for notification-parameters",
+                ));
+            }
             let (peek, peek_pos) = tags::decode_tag(data, offset)?;
             if peek.is_context(8) {
                 break;
@@ -2269,6 +2289,7 @@ mod tests {
             event_state_acknowledged: 3, // high-limit
             timestamp: BACnetTimeStamp::SequenceNumber(42),
             acknowledgment_source: "operator".into(),
+            time_of_acknowledgment: BACnetTimeStamp::SequenceNumber(0),
         };
         let mut buf = BytesMut::new();
         req.encode(&mut buf).unwrap();
@@ -2435,6 +2456,7 @@ mod tests {
             event_state_acknowledged: 3,
             timestamp: BACnetTimeStamp::SequenceNumber(42),
             acknowledgment_source: "operator".into(),
+            time_of_acknowledgment: BACnetTimeStamp::SequenceNumber(0),
         };
         let mut buf = BytesMut::new();
         req.encode(&mut buf).unwrap();
@@ -2449,6 +2471,7 @@ mod tests {
             event_state_acknowledged: 3,
             timestamp: BACnetTimeStamp::SequenceNumber(42),
             acknowledgment_source: "operator".into(),
+            time_of_acknowledgment: BACnetTimeStamp::SequenceNumber(0),
         };
         let mut buf = BytesMut::new();
         req.encode(&mut buf).unwrap();
@@ -2463,6 +2486,7 @@ mod tests {
             event_state_acknowledged: 3,
             timestamp: BACnetTimeStamp::SequenceNumber(42),
             acknowledgment_source: "operator".into(),
+            time_of_acknowledgment: BACnetTimeStamp::SequenceNumber(0),
         };
         let mut buf = BytesMut::new();
         req.encode(&mut buf).unwrap();

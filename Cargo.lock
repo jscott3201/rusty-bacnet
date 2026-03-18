@@ -264,7 +264,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-benchmarks"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "bacnet-client",
  "bacnet-encoding",
@@ -292,7 +292,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-cli"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "bacnet-client",
  "bacnet-encoding",
@@ -322,7 +322,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-client"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-network",
@@ -338,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-encoding"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "bacnet-types",
  "bytes",
@@ -347,7 +347,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-integration-tests"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "bacnet-client",
  "bacnet-encoding",
@@ -363,7 +363,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-java"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "bacnet-client",
  "bacnet-encoding",
@@ -382,7 +382,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-network"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-transport",
@@ -394,7 +394,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-objects"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-types",
@@ -404,7 +404,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-server"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-network",
@@ -420,7 +420,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-services"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-types",
@@ -430,7 +430,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-transport"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-types",
@@ -448,7 +448,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-types"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "bitflags 2.11.0",
  "smallvec",
@@ -457,7 +457,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-wasm"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-services",
@@ -2358,7 +2358,7 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "rusty-bacnet"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "bacnet-client",
  "bacnet-encoding",
@@ -3134,7 +3134,7 @@ dependencies = [
 
 [[package]]
 name = "uniffi-bindgen"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "uniffi",
 ]

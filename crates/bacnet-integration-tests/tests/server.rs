@@ -927,49 +927,34 @@ async fn server_handles_segmented_request() {
 // DeviceCommunicationControl enforcement tests (Clause 16.4.3)
 // ---------------------------------------------------------------------------
 
-/// DCC DISABLE causes the server to drop ReadProperty requests (timeout).
+/// DCC DISABLE (deprecated in 2020 spec) is rejected with SERVICE_REQUEST_DENIED.
 #[tokio::test]
-async fn dcc_disable_drops_read_property() {
+async fn dcc_disable_rejected_per_2020_spec() {
     use bacnet_types::enums::EnableDisable;
 
     let mut server = make_server().await;
     let mut client = make_client().await;
     let server_mac = server.local_mac().to_vec();
-    let ai_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
 
-    // Verify normal operation first
-    let ack = client
-        .read_property(&server_mac, ai_oid, PropertyIdentifier::PRESENT_VALUE, None)
-        .await;
-    assert!(
-        ack.is_ok(),
-        "ReadProperty should succeed before DCC DISABLE"
-    );
-
-    // Send DCC DISABLE
-    client
-        .device_communication_control(&server_mac, EnableDisable::DISABLE, None, None)
-        .await
-        .unwrap();
-
-    assert_eq!(server.comm_state(), 1);
-
-    // ReadProperty should now time out (server silently drops it)
+    // Clause 16.1.1.3.1: deprecated DISABLE shall be rejected
     let result = client
-        .read_property(&server_mac, ai_oid, PropertyIdentifier::PRESENT_VALUE, None)
+        .device_communication_control(&server_mac, EnableDisable::DISABLE, None, None)
         .await;
     assert!(
         result.is_err(),
-        "ReadProperty should fail (timeout) when DCC is DISABLE"
+        "DCC DISABLE should be rejected per 2020 spec"
     );
+
+    // Server should remain in ENABLE state
+    assert_eq!(server.comm_state(), 0);
 
     client.stop().await.unwrap();
     server.stop().await.unwrap();
 }
 
-/// DCC DISABLE still allows DCC re-enable.
+/// DCC DISABLE_INITIATION still allows DCC re-enable.
 #[tokio::test]
-async fn dcc_disable_allows_re_enable() {
+async fn dcc_disable_initiation_allows_re_enable() {
     use bacnet_types::enums::EnableDisable;
 
     let mut server = make_server().await;
@@ -977,21 +962,21 @@ async fn dcc_disable_allows_re_enable() {
     let server_mac = server.local_mac().to_vec();
     let ai_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
 
-    // DCC DISABLE
+    // DCC DISABLE_INITIATION
     client
-        .device_communication_control(&server_mac, EnableDisable::DISABLE, None, None)
+        .device_communication_control(&server_mac, EnableDisable::DISABLE_INITIATION, None, None)
         .await
         .unwrap();
-    assert_eq!(server.comm_state(), 1);
+    assert_eq!(server.comm_state(), 2);
 
-    // DCC ENABLE while disabled — should still work
+    // DCC ENABLE while disable-initiation — should still work
     client
         .device_communication_control(&server_mac, EnableDisable::ENABLE, None, None)
         .await
         .unwrap();
     assert_eq!(server.comm_state(), 0);
 
-    // ReadProperty should work again
+    // ReadProperty should work
     let ack = client
         .read_property(&server_mac, ai_oid, PropertyIdentifier::PRESENT_VALUE, None)
         .await;
@@ -1406,6 +1391,7 @@ async fn acknowledge_alarm_returns_simple_ack() {
         event_state_acknowledged: 3,
         timestamp: BACnetTimeStamp::SequenceNumber(42),
         acknowledgment_source: "operator".into(),
+        time_of_acknowledgment: BACnetTimeStamp::SequenceNumber(0),
     };
     let mut buf = bytes::BytesMut::new();
     request.encode(&mut buf).unwrap();

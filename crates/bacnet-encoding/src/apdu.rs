@@ -218,7 +218,8 @@ fn encode_confirmed_request(buf: &mut BytesMut, pdu: &ConfirmedRequest) {
 
     if pdu.segmented {
         buf.put_u8(pdu.sequence_number.unwrap_or(0));
-        buf.put_u8(pdu.proposed_window_size.unwrap_or(1));
+        // Clause 20.1.2.8: proposed-window-size shall be in range 1..127
+        buf.put_u8(pdu.proposed_window_size.unwrap_or(1).clamp(1, 127));
     }
 
     buf.put_u8(pdu.service_choice.to_raw());
@@ -251,7 +252,8 @@ fn encode_complex_ack(buf: &mut BytesMut, pdu: &ComplexAck) {
 
     if pdu.segmented {
         buf.put_u8(pdu.sequence_number.unwrap_or(0));
-        buf.put_u8(pdu.proposed_window_size.unwrap_or(1));
+        // Clause 20.1.5.5: proposed-window-size shall be in range 1..127
+        buf.put_u8(pdu.proposed_window_size.unwrap_or(1).clamp(1, 127));
     }
 
     buf.put_u8(pdu.service_choice.to_raw());
@@ -269,7 +271,8 @@ fn encode_segment_ack(buf: &mut BytesMut, pdu: &SegmentAck) {
     buf.put_u8(byte0);
     buf.put_u8(pdu.invoke_id);
     buf.put_u8(pdu.sequence_number);
-    buf.put_u8(pdu.actual_window_size);
+    // Clause 20.1.6.5: actual-window-size shall be in range 1..127
+    buf.put_u8(pdu.actual_window_size.clamp(1, 127));
 }
 
 fn encode_error(buf: &mut BytesMut, pdu: &ErrorPdu) {
@@ -491,7 +494,15 @@ fn decode_error(data: Bytes) -> Result<ErrorPdu, Error> {
     // Error class: application-tagged enumerated
     let mut offset = 3;
     let (tag, tag_end) = tags::decode_tag(&data, offset)?;
-    let class_end = tag_end + tag.length as usize;
+    if tag.class != tags::TagClass::Application || tag.number != tags::app_tag::ENUMERATED {
+        return Err(Error::decoding(
+            offset,
+            "ErrorPDU error class: expected application-tagged enumerated",
+        ));
+    }
+    let class_end = tag_end
+        .checked_add(tag.length as usize)
+        .ok_or_else(|| Error::decoding(tag_end, "ErrorPDU error class length overflow"))?;
     if class_end > data.len() {
         return Err(Error::decoding(
             tag_end,
@@ -503,7 +514,15 @@ fn decode_error(data: Bytes) -> Result<ErrorPdu, Error> {
 
     // Error code: application-tagged enumerated
     let (tag, tag_end) = tags::decode_tag(&data, offset)?;
-    let code_end = tag_end + tag.length as usize;
+    if tag.class != tags::TagClass::Application || tag.number != tags::app_tag::ENUMERATED {
+        return Err(Error::decoding(
+            offset,
+            "ErrorPDU error code: expected application-tagged enumerated",
+        ));
+    }
+    let code_end = tag_end
+        .checked_add(tag.length as usize)
+        .ok_or_else(|| Error::decoding(tag_end, "ErrorPDU error code length overflow"))?;
     if code_end > data.len() {
         return Err(Error::decoding(tag_end, "ErrorPDU truncated at error code"));
     }

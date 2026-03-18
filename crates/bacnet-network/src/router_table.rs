@@ -9,6 +9,17 @@ use std::time::{Duration, Instant};
 
 use bacnet_types::MacAddr;
 
+/// Reachability status per Clause 6.6.1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReachabilityStatus {
+    /// Route is available for traffic.
+    Reachable,
+    /// Route is temporarily unreachable due to congestion (Router-Busy).
+    Busy,
+    /// Route has permanently failed.
+    Unreachable,
+}
+
 /// A route entry in the router table.
 #[derive(Debug, Clone)]
 pub struct RouteEntry {
@@ -20,6 +31,8 @@ pub struct RouteEntry {
     pub next_hop_mac: MacAddr,
     /// When this learned route was last confirmed. `None` for direct routes.
     pub last_seen: Option<Instant>,
+    /// Reachability status per Clause 6.6.1.
+    pub reachability: ReachabilityStatus,
 }
 
 /// BACnet routing table.
@@ -40,7 +53,11 @@ impl RouterTable {
     }
 
     /// Add a directly-connected network on the given port.
+    /// Network 0 and 0xFFFF are reserved and will be silently ignored.
     pub fn add_direct(&mut self, network: u16, port_index: usize) {
+        if network == 0 || network == 0xFFFF {
+            return;
+        }
         self.routes.insert(
             network,
             RouteEntry {
@@ -48,12 +65,23 @@ impl RouterTable {
                 directly_connected: true,
                 next_hop_mac: MacAddr::new(),
                 last_seen: None,
+                reachability: ReachabilityStatus::Reachable,
             },
         );
     }
 
     /// Add a learned route (network reachable via a next-hop router on the given port).
+    /// Network 0 and 0xFFFF are reserved and will be silently ignored.
+    /// Does not overwrite direct routes.
     pub fn add_learned(&mut self, network: u16, port_index: usize, next_hop_mac: MacAddr) {
+        if network == 0 || network == 0xFFFF {
+            return;
+        }
+        if let Some(existing) = self.routes.get(&network) {
+            if existing.directly_connected {
+                return; // never overwrite direct routes
+            }
+        }
         self.routes.insert(
             network,
             RouteEntry {
@@ -61,6 +89,7 @@ impl RouterTable {
                 directly_connected: false,
                 next_hop_mac,
                 last_seen: Some(Instant::now()),
+                reachability: ReachabilityStatus::Reachable,
             },
         );
     }
@@ -102,6 +131,11 @@ impl RouterTable {
     /// Look up the route for a network number.
     pub fn lookup(&self, network: u16) -> Option<&RouteEntry> {
         self.routes.get(&network)
+    }
+
+    /// Lookup a mutable route entry by network number.
+    pub fn lookup_mut(&mut self, network: u16) -> Option<&mut RouteEntry> {
+        self.routes.get_mut(&network)
     }
 
     /// Remove a route.

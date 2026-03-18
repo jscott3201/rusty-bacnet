@@ -82,10 +82,10 @@ impl GetEnrollmentSummaryRequest {
 
         // [1] enrollmentFilter — skip if present
         if offset < data.len() {
-            let (tag, _) = tags::decode_tag(data, offset)?;
+            let (tag, tag_end) = tags::decode_tag(data, offset)?;
             if tag.is_opening_tag(1) {
                 // Skip over the entire constructed value
-                let (_, new_offset) = tags::extract_context_value(data, offset + 1, 1)?;
+                let (_, new_offset) = tags::extract_context_value(data, tag_end, 1)?;
                 offset = new_offset;
             }
         }

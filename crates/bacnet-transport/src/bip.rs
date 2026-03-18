@@ -321,9 +321,9 @@ impl TransportPort for BipTransport {
         // Create BBMD state from config (if BBMD mode was enabled)
         if let Some(config) = self.bbmd_config.take() {
             let mut state = BbmdState::new(local_ip.octets(), local_port);
-            state
-                .set_bdt(config.initial_bdt)
-                .expect("BDT size within limits");
+            if let Err(e) = state.set_bdt(config.initial_bdt) {
+                return Err(Error::Encoding(format!("BDT configuration error: {e}")));
+            }
             state.set_management_acl(config.management_acl);
             self.bbmd = Some(Arc::new(Mutex::new(state)));
         }
@@ -1104,7 +1104,8 @@ mod tests {
         assert_eq!(fdt[0].ip, fd_ip);
         assert_eq!(fdt[0].port, fd_port);
         assert_eq!(fdt[0].ttl, 120);
-        assert!(fdt[0].seconds_remaining <= 120);
+        // J.5.2.3: includes 30s grace period
+        assert!(fdt[0].seconds_remaining <= 150);
 
         query_transport.stop().await.unwrap();
         fd_transport.stop().await.unwrap();

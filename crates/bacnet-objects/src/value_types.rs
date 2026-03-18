@@ -162,6 +162,11 @@ macro_rules! define_value_object_commandable {
                     return result;
                 }
                 if let Some(result) =
+                    common::write_object_name(&mut self.name, property, &value)
+                {
+                    return result;
+                }
+                if let Some(result) =
                     common::write_description(&mut self.description, property, &value)
                 {
                     return result;
@@ -322,6 +327,9 @@ macro_rules! define_value_object_simple {
                 if let Some(result) =
                     common::write_out_of_service(&mut self.out_of_service, property, &value)
                 {
+                    return result;
+                }
+                if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
                     return result;
                 }
                 if let Some(result) =
@@ -1373,12 +1381,27 @@ mod tests {
     }
 
     #[test]
-    fn value_object_write_access_denied() {
+    fn value_object_write_object_name() {
+        // Clause 12.1.1.2: Object_Name shall be writable
         let mut obj = IntegerValueObject::new(1, "IV-1").unwrap();
         let result = obj.write_property(
             PropertyIdentifier::OBJECT_NAME,
             None,
             PropertyValue::CharacterString("new-name".into()),
+            None,
+        );
+        assert!(result.is_ok());
+        assert_eq!(obj.object_name(), "new-name");
+    }
+
+    #[test]
+    fn value_object_write_access_denied() {
+        // OBJECT_TYPE is never writable
+        let mut obj = IntegerValueObject::new(1, "IV-1").unwrap();
+        let result = obj.write_property(
+            PropertyIdentifier::OBJECT_TYPE,
+            None,
+            PropertyValue::Enumerated(0),
             None,
         );
         assert!(result.is_err());

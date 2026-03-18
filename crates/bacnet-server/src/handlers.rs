@@ -113,13 +113,25 @@ pub fn handle_read_property_multiple(
                         match object.read_property(prop_id, array_index) {
                             Ok(value) => {
                                 let mut value_buf = BytesMut::new();
-                                encode_property_value(&mut value_buf, &value)?;
-                                elements.push(ReadResultElement {
-                                    property_identifier: prop_id,
-                                    property_array_index: array_index,
-                                    property_value: Some(value_buf.to_vec()),
-                                    error: None,
-                                });
+                                match encode_property_value(&mut value_buf, &value) {
+                                    Ok(()) => {
+                                        elements.push(ReadResultElement {
+                                            property_identifier: prop_id,
+                                            property_array_index: array_index,
+                                            property_value: Some(value_buf.to_vec()),
+                                            error: None,
+                                        });
+                                    }
+                                    Err(_) => {
+                                        // Encoding failure → per-property error
+                                        elements.push(ReadResultElement {
+                                            property_identifier: prop_id,
+                                            property_array_index: array_index,
+                                            property_value: None,
+                                            error: Some((ErrorClass::PROPERTY, ErrorCode::OTHER)),
+                                        });
+                                    }
+                                }
                             }
                             Err(e) => {
                                 let (err_class, err_code) = match &e {
@@ -301,12 +313,21 @@ pub fn handle_subscribe_cov(
         return Ok(());
     }
 
-    // Verify the monitored object exists
-    if db.get(&request.monitored_object_identifier).is_none() {
-        return Err(Error::Protocol {
-            class: ErrorClass::OBJECT.to_raw() as u32,
-            code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
-        });
+    // Verify the monitored object exists and supports COV (Clause 13.14.1.3.1)
+    match db.get(&request.monitored_object_identifier) {
+        None => {
+            return Err(Error::Protocol {
+                class: ErrorClass::OBJECT.to_raw() as u32,
+                code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+            });
+        }
+        Some(obj) if !obj.supports_cov() => {
+            return Err(Error::Protocol {
+                class: ErrorClass::OBJECT.to_raw() as u32,
+                code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+            });
+        }
+        _ => {}
     }
 
     const MAX_COV_SUBSCRIPTIONS: usize = 1024;
@@ -317,9 +338,15 @@ pub fn handle_subscribe_cov(
         });
     }
 
-    let expires_at = request
-        .lifetime
-        .map(|secs| Instant::now() + Duration::from_secs(secs as u64));
+    // Clause 13.14.1.1.4: "A value of zero shall indicate an indefinite
+    // lifetime, without automatic cancellation."
+    let expires_at = request.lifetime.and_then(|secs| {
+        if secs == 0 {
+            None // indefinite
+        } else {
+            Some(Instant::now() + Duration::from_secs(secs as u64))
+        }
+    });
 
     table.subscribe(CovSubscription {
         subscriber_mac: MacAddr::from_slice(source_mac),
@@ -385,9 +412,14 @@ pub fn handle_subscribe_cov_property(
         });
     }
 
-    let expires_at = request
-        .lifetime
-        .map(|secs| Instant::now() + Duration::from_secs(secs as u64));
+    // Clause 13.14.1.1.4: lifetime=0 means indefinite
+    let expires_at = request.lifetime.and_then(|secs| {
+        if secs == 0 {
+            None
+        } else {
+            Some(Instant::now() + Duration::from_secs(secs as u64))
+        }
+    });
 
     table.subscribe(CovSubscription {
         subscriber_mac: MacAddr::from_slice(source_mac),
@@ -642,10 +674,15 @@ pub fn handle_device_communication_control(
 ) -> Result<(EnableDisable, Option<u16>), Error> {
     let request = DeviceCommunicationControlRequest::decode(service_data)?;
     validate_password(dcc_password, &request.password)?;
+    // Clause 16.1.1.3.1: deprecated DISABLE (value 1) shall be rejected
+    if request.enable_disable == EnableDisable::DISABLE {
+        return Err(Error::Protocol {
+            class: ErrorClass::SERVICES.to_raw() as u32,
+            code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
+        });
+    }
     let new_state = if request.enable_disable == EnableDisable::ENABLE {
         0u8
-    } else if request.enable_disable == EnableDisable::DISABLE {
-        1u8
     } else if request.enable_disable == EnableDisable::DISABLE_INITIATION {
         2u8
     } else {
@@ -763,15 +800,30 @@ pub fn handle_get_event_information(
                     })
                     .unwrap_or(0x07);
 
+                // Try to read EVENT_TIME_STAMPS from the object if available
+                let event_timestamps = object
+                    .read_property(PropertyIdentifier::EVENT_TIME_STAMPS, None)
+                    .ok()
+                    .and_then(|v| match v {
+                        PropertyValue::List(items) if items.len() == 3 => {
+                            // Each item should be a timestamp — extract sequence numbers
+                            // For now, fall back to defaults since full timestamp parsing
+                            // requires constructed type support
+                            None
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or([
+                        BACnetTimeStamp::SequenceNumber(0),
+                        BACnetTimeStamp::SequenceNumber(0),
+                        BACnetTimeStamp::SequenceNumber(0),
+                    ]);
+
                 summaries.push(EventSummary {
                     object_identifier: oid,
                     event_state: state,
                     acknowledged_transitions: acked,
-                    event_timestamps: [
-                        BACnetTimeStamp::SequenceNumber(0),
-                        BACnetTimeStamp::SequenceNumber(0),
-                        BACnetTimeStamp::SequenceNumber(0),
-                    ],
+                    event_timestamps,
                     notify_type,
                     event_enable,
                     event_priorities,
@@ -814,6 +866,215 @@ pub fn handle_acknowledge_alarm(db: &mut ObjectDatabase, service_data: &[u8]) ->
 
     object.acknowledge_alarm(transition_bit)?;
 
+    Ok(())
+}
+
+/// Handle a SubscribeCOVPropertyMultiple request (Clause 13.16).
+///
+/// Creates individual COV subscriptions for each property in each object
+/// referenced by the request.
+pub fn handle_subscribe_cov_property_multiple(
+    table: &mut CovSubscriptionTable,
+    db: &ObjectDatabase,
+    source_mac: &[u8],
+    service_data: &[u8],
+) -> Result<(), Error> {
+    use bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleRequest;
+
+    let request = SubscribeCOVPropertyMultipleRequest::decode(service_data)?;
+
+    let confirmed = request.issue_confirmed_notifications.unwrap_or(false);
+
+    for spec in &request.list_of_cov_subscription_specifications {
+        // Verify object exists and supports COV
+        match db.get(&spec.monitored_object_identifier) {
+            None => {
+                return Err(Error::Protocol {
+                    class: ErrorClass::OBJECT.to_raw() as u32,
+                    code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+                });
+            }
+            Some(obj) if !obj.supports_cov() => {
+                return Err(Error::Protocol {
+                    class: ErrorClass::OBJECT.to_raw() as u32,
+                    code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+                });
+            }
+            _ => {}
+        }
+
+        // Create a subscription for each property reference
+        for cov_ref in &spec.list_of_cov_references {
+            table.subscribe(CovSubscription {
+                subscriber_mac: MacAddr::from_slice(source_mac),
+                subscriber_process_identifier: request.subscriber_process_identifier,
+                monitored_object_identifier: spec.monitored_object_identifier,
+                issue_confirmed_notifications: confirmed,
+                expires_at: None, // SubscribeCOVPropertyMultiple has no lifetime
+                last_notified_value: None,
+                monitored_property: Some(cov_ref.monitored_property.property_identifier),
+                monitored_property_array_index: cov_ref.monitored_property.property_array_index,
+                cov_increment: cov_ref.cov_increment,
+            });
+        }
+    }
+
+    Ok(())
+}
+
+/// Handle a WriteGroup request (Clause 15.11).
+///
+/// WriteGroup is an unconfirmed service that writes values to Channel objects.
+/// Decodes the request and returns the parsed data for the server to apply.
+pub fn handle_write_group(
+    service_data: &[u8],
+) -> Result<bacnet_services::write_group::WriteGroupRequest, Error> {
+    bacnet_services::write_group::WriteGroupRequest::decode(service_data)
+}
+
+/// Handle a GetEnrollmentSummary request (Clause 13.11).
+///
+/// Decodes filtering parameters and iterates event-enrollment objects in the
+/// database, returning those that match the filter criteria.
+pub fn handle_get_enrollment_summary(
+    db: &ObjectDatabase,
+    service_data: &[u8],
+    buf: &mut BytesMut,
+) -> Result<(), Error> {
+    use bacnet_services::enrollment_summary::{
+        EnrollmentSummaryEntry, GetEnrollmentSummaryAck, GetEnrollmentSummaryRequest,
+    };
+
+    let request = GetEnrollmentSummaryRequest::decode(service_data)?;
+
+    let mut entries = Vec::new();
+    for (_oid, object) in db.iter_objects() {
+        let oid = object.object_identifier();
+
+        // Read event state
+        let event_state = object
+            .read_property(PropertyIdentifier::EVENT_STATE, None)
+            .ok()
+            .and_then(|v| match v {
+                PropertyValue::Enumerated(e) => Some(e),
+                _ => None,
+            })
+            .unwrap_or(0);
+
+        // Skip NORMAL objects unless the filter specifically asks for them
+        if let Some(filter_state) = request.event_state_filter {
+            if event_state != filter_state.to_raw() {
+                continue;
+            }
+        }
+
+        // Read notification class
+        let notification_class = object
+            .read_property(PropertyIdentifier::NOTIFICATION_CLASS, None)
+            .ok()
+            .and_then(|v| match v {
+                PropertyValue::Unsigned(n) => Some(n as u16),
+                _ => None,
+            })
+            .unwrap_or(0);
+
+        // Apply notification class filter
+        if let Some(nc_filter) = request.notification_class_filter {
+            if notification_class != nc_filter {
+                continue;
+            }
+        }
+
+        // Apply priority filter
+        if let Some(ref pf) = request.priority_filter {
+            // Use notification class priority (simplified — use 0 as default)
+            let priority = 0u8;
+            if priority < pf.min_priority || priority > pf.max_priority {
+                continue;
+            }
+        }
+
+        // Only include objects with event detection support
+        if event_state == 0 && request.event_state_filter.is_none() {
+            continue; // Skip NORMAL unless explicitly requested
+        }
+
+        entries.push(EnrollmentSummaryEntry {
+            object_identifier: oid,
+            event_type: bacnet_types::enums::EventType::CHANGE_OF_STATE,
+            event_state: bacnet_types::enums::EventState::from_raw(event_state),
+            priority: 0,
+            notification_class,
+        });
+    }
+
+    let ack = GetEnrollmentSummaryAck { entries };
+    ack.encode(buf);
+    Ok(())
+}
+
+/// Handle a ConfirmedTextMessage request (Clause 16.5).
+///
+/// Decodes and validates the request. Returns Ok(request) so the server
+/// can deliver the message to the application layer.
+pub fn handle_text_message(
+    service_data: &[u8],
+) -> Result<bacnet_services::text_message::TextMessageRequest, Error> {
+    bacnet_services::text_message::TextMessageRequest::decode(service_data)
+}
+
+/// Handle a LifeSafetyOperation request (Clause 13.13).
+///
+/// Decodes the request and returns Ok(()) for SimpleACK. The actual
+/// operation should be applied by the server dispatch to the appropriate
+/// life safety objects.
+pub fn handle_life_safety_operation(service_data: &[u8]) -> Result<(), Error> {
+    let _request = bacnet_services::life_safety::LifeSafetyOperationRequest::decode(service_data)?;
+    Ok(())
+}
+
+/// Handle a GetAlarmSummary request (Clause 13.10).
+///
+/// No request parameters. Iterates all objects in the database and returns
+/// those with event_state != NORMAL.
+pub fn handle_get_alarm_summary(db: &ObjectDatabase, buf: &mut BytesMut) -> Result<(), Error> {
+    use bacnet_services::alarm_summary::{AlarmSummaryEntry, GetAlarmSummaryAck};
+
+    let mut entries = Vec::new();
+    for (_oid, object) in db.iter_objects() {
+        let oid = object.object_identifier();
+        let event_state = object
+            .read_property(PropertyIdentifier::EVENT_STATE, None)
+            .ok()
+            .and_then(|v| match v {
+                PropertyValue::Enumerated(e) => Some(e),
+                _ => None,
+            })
+            .unwrap_or(0);
+
+        if event_state != 0 {
+            // NORMAL = 0, any other value is an alarm state
+            let acked = object
+                .read_property(PropertyIdentifier::ACKED_TRANSITIONS, None)
+                .ok()
+                .and_then(|v| match v {
+                    PropertyValue::BitString {
+                        unused_bits, data, ..
+                    } => Some((unused_bits, data)),
+                    _ => None,
+                })
+                .unwrap_or((5, vec![0xE0])); // all acknowledged by default
+
+            entries.push(AlarmSummaryEntry {
+                object_identifier: oid,
+                alarm_state: bacnet_types::enums::EventState::from_raw(event_state),
+                acknowledged_transitions: acked,
+            });
+        }
+    }
+
+    let ack = GetAlarmSummaryAck { entries };
+    ack.encode(buf);
     Ok(())
 }
 
@@ -862,17 +1123,18 @@ pub fn handle_read_range(
         }) => {
             let ref_idx = *reference_index as usize;
             let cnt = *count;
-            if cnt == 0 || total == 0 {
+            // Clause 15.8.1.1.4.1.1: If the index does not exist, no items match.
+            if cnt == 0 || total == 0 || ref_idx == 0 || ref_idx > total {
                 (Vec::new(), true, true)
             } else if cnt > 0 {
-                let start = ref_idx.min(total).saturating_sub(1);
+                let start = ref_idx - 1; // 1-based to 0-based
                 let end = (start + cnt as usize).min(total);
                 let first = start == 0;
                 let last = end >= total;
                 (items[start..end].to_vec(), first, last)
             } else {
                 let abs_count = cnt.unsigned_abs() as usize;
-                let end = ref_idx.min(total);
+                let end = ref_idx; // ref_idx is 1-based, used as exclusive end in 0-based
                 let start = end.saturating_sub(abs_count);
                 let first = start == 0;
                 let last = end >= total;
@@ -1851,7 +2113,7 @@ mod tests {
 
         let request = bacnet_services::device_mgmt::DeviceCommunicationControlRequest {
             time_duration: Some(60),
-            enable_disable: EnableDisable::DISABLE,
+            enable_disable: EnableDisable::DISABLE_INITIATION,
             password: None,
         };
         let mut buf = BytesMut::new();
@@ -1859,9 +2121,9 @@ mod tests {
 
         let (state, duration) =
             handle_device_communication_control(&buf, &comm_state, &None).unwrap();
-        assert_eq!(state, EnableDisable::DISABLE);
+        assert_eq!(state, EnableDisable::DISABLE_INITIATION);
         assert_eq!(duration, Some(60));
-        assert_eq!(comm_state.load(Ordering::Acquire), 1);
+        assert_eq!(comm_state.load(Ordering::Acquire), 2);
     }
 
     #[test]
@@ -2356,6 +2618,7 @@ mod tests {
             event_state_acknowledged: 3,
             timestamp: BACnetTimeStamp::SequenceNumber(42),
             acknowledgment_source: "operator".into(),
+            time_of_acknowledgment: BACnetTimeStamp::SequenceNumber(0),
         };
         let mut buf = BytesMut::new();
         request.encode(&mut buf).unwrap();
@@ -2374,6 +2637,7 @@ mod tests {
             event_state_acknowledged: 3,
             timestamp: BACnetTimeStamp::SequenceNumber(42),
             acknowledgment_source: "operator".into(),
+            time_of_acknowledgment: BACnetTimeStamp::SequenceNumber(0),
         };
         let mut buf = BytesMut::new();
         request.encode(&mut buf).unwrap();
@@ -2401,7 +2665,7 @@ mod tests {
         // Send DCC DISABLE with 1-minute duration
         let request = bacnet_services::device_mgmt::DeviceCommunicationControlRequest {
             time_duration: Some(1), // 1 minute
-            enable_disable: EnableDisable::DISABLE,
+            enable_disable: EnableDisable::DISABLE_INITIATION,
             password: None,
         };
         let mut buf = BytesMut::new();
@@ -2409,9 +2673,9 @@ mod tests {
 
         let (state, duration) =
             handle_device_communication_control(&buf, &comm_state, &None).unwrap();
-        assert_eq!(state, EnableDisable::DISABLE);
+        assert_eq!(state, EnableDisable::DISABLE_INITIATION);
         assert_eq!(duration, Some(1));
-        assert_eq!(comm_state.load(Ordering::Acquire), 1);
+        assert_eq!(comm_state.load(Ordering::Acquire), 2);
 
         // Simulate what the server dispatch does: spawn a timer task
         let comm_clone = Arc::clone(&comm_state);
@@ -2422,7 +2686,7 @@ mod tests {
         });
 
         // State should still be DISABLE before timer fires
-        assert_eq!(comm_state.load(Ordering::Acquire), 1);
+        assert_eq!(comm_state.load(Ordering::Acquire), 2);
 
         // Advance time past the 1-minute duration
         tokio::time::advance(std::time::Duration::from_secs(61)).await;
@@ -2443,13 +2707,13 @@ mod tests {
         // Send DCC DISABLE with 2-minute duration
         let request = bacnet_services::device_mgmt::DeviceCommunicationControlRequest {
             time_duration: Some(2),
-            enable_disable: EnableDisable::DISABLE,
+            enable_disable: EnableDisable::DISABLE_INITIATION,
             password: None,
         };
         let mut buf = BytesMut::new();
         request.encode(&mut buf).unwrap();
         let (_, duration) = handle_device_communication_control(&buf, &comm_state, &None).unwrap();
-        assert_eq!(comm_state.load(Ordering::Acquire), 1);
+        assert_eq!(comm_state.load(Ordering::Acquire), 2);
 
         // Spawn first timer
         let comm_clone = Arc::clone(&comm_state);
@@ -2495,15 +2759,15 @@ mod tests {
 
         let request = bacnet_services::device_mgmt::DeviceCommunicationControlRequest {
             time_duration: None,
-            enable_disable: EnableDisable::DISABLE,
+            enable_disable: EnableDisable::DISABLE_INITIATION,
             password: Some("secret".to_string()),
         };
         let mut buf = BytesMut::new();
         request.encode(&mut buf).unwrap();
 
         let (state, _) = handle_device_communication_control(&buf, &comm_state, &pw).unwrap();
-        assert_eq!(state, EnableDisable::DISABLE);
-        assert_eq!(comm_state.load(Ordering::Acquire), 1);
+        assert_eq!(state, EnableDisable::DISABLE_INITIATION);
+        assert_eq!(comm_state.load(Ordering::Acquire), 2);
     }
 
     #[test]
@@ -2513,7 +2777,7 @@ mod tests {
 
         let request = bacnet_services::device_mgmt::DeviceCommunicationControlRequest {
             time_duration: None,
-            enable_disable: EnableDisable::DISABLE,
+            enable_disable: EnableDisable::DISABLE_INITIATION,
             password: Some("wrong".to_string()),
         };
         let mut buf = BytesMut::new();
@@ -2538,7 +2802,7 @@ mod tests {
 
         let request = bacnet_services::device_mgmt::DeviceCommunicationControlRequest {
             time_duration: None,
-            enable_disable: EnableDisable::DISABLE,
+            enable_disable: EnableDisable::DISABLE_INITIATION,
             password: None,
         };
         let mut buf = BytesMut::new();
@@ -2561,15 +2825,15 @@ mod tests {
 
         let request = bacnet_services::device_mgmt::DeviceCommunicationControlRequest {
             time_duration: None,
-            enable_disable: EnableDisable::DISABLE,
+            enable_disable: EnableDisable::DISABLE_INITIATION,
             password: Some("anything".to_string()),
         };
         let mut buf = BytesMut::new();
         request.encode(&mut buf).unwrap();
 
         let (state, _) = handle_device_communication_control(&buf, &comm_state, &None).unwrap();
-        assert_eq!(state, EnableDisable::DISABLE);
-        assert_eq!(comm_state.load(Ordering::Acquire), 1);
+        assert_eq!(state, EnableDisable::DISABLE_INITIATION);
+        assert_eq!(comm_state.load(Ordering::Acquire), 2);
     }
 
     #[test]

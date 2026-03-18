@@ -80,6 +80,12 @@ impl WriteGroupRequest {
             return Err(Error::decoding(pos, "WriteGroup truncated at group-number"));
         }
         let group_number = primitives::decode_unsigned(&data[pos..end])? as u32;
+        // Clause 15.11.1.1.1: "Control group zero shall never be used and shall be reserved."
+        if group_number == 0 {
+            return Err(Error::Encoding(
+                "WriteGroup group number 0 is reserved (Clause 15.11.1.1.1)".into(),
+            ));
+        }
         offset = end;
 
         // [1] writePriority

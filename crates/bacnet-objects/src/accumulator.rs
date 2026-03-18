@@ -401,6 +401,10 @@ impl BACnetObject for PulseConverterObject {
         Cow::Borrowed(PROPS)
     }
 
+    fn supports_cov(&self) -> bool {
+        true
+    }
+
     fn cov_increment(&self) -> Option<f32> {
         Some(self.cov_increment)
     }

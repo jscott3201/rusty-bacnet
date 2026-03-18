@@ -69,14 +69,37 @@ impl WebSocketPort for TlsWebSocket {
     }
 
     async fn recv(&self) -> Result<Vec<u8>, Error> {
-        let mut read = self.read.lock().await;
         loop {
-            match read.next().await {
+            // Read one message under the read lock, then drop it before
+            // acquiring write (avoids read→write lock ordering deadlock).
+            let msg = {
+                let mut read = self.read.lock().await;
+                read.next().await
+            };
+            // read lock dropped here
+            match msg {
                 Some(Ok(Message::Binary(data))) => return Ok(data.to_vec()),
                 Some(Ok(Message::Close(_))) => {
                     return Err(Error::Encoding("WebSocket closed".into()));
                 }
-                Some(Ok(_)) => continue, // skip Text, Ping, Pong, Frame
+                Some(Ok(Message::Ping(_) | Message::Pong(_))) => {
+                    continue; // skip ping/pong, re-acquire read lock
+                }
+                Some(Ok(_)) => {
+                    // AB.7.5.3: non-binary data frames → close with 1003
+                    let mut w = self.write.lock().await;
+                    let _ = w
+                        .send(Message::Close(Some(
+                            tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                                code: tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Unsupported,
+                                reason: "BACnet/SC requires binary frames".into(),
+                            },
+                        )))
+                        .await;
+                    return Err(Error::Encoding(
+                        "non-binary WebSocket frame received (AB.7.5.3)".into(),
+                    ));
+                }
                 Some(Err(e)) => {
                     return Err(Error::Encoding(format!("WebSocket recv error: {e}")));
                 }

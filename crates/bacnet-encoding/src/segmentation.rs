@@ -110,7 +110,7 @@ impl SegmentReceiver {
                 "total_segments {total_segments} exceeds maximum BACnet value (256)"
             )));
         }
-        let mut result = Vec::new();
+        let mut result = Vec::with_capacity(total_segments * 480);
         for i in 0..total_segments {
             let seq = i as u8;
             match self.segments.get(&seq) {

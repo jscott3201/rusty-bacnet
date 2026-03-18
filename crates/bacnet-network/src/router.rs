@@ -68,6 +68,19 @@ impl BACnetRouter {
     ) -> Result<(Self, mpsc::Receiver<ReceivedApdu>), Error> {
         let mut table = RouterTable::new();
 
+        // Validate no duplicate network numbers
+        {
+            let mut seen = std::collections::HashSet::new();
+            for port in &ports {
+                if !seen.insert(port.network_number) {
+                    return Err(Error::Encoding(format!(
+                        "Duplicate network number {} in router ports",
+                        port.network_number
+                    )));
+                }
+            }
+        }
+
         // Register directly-connected networks
         for (idx, port) in ports.iter().enumerate() {
             table.add_direct(port.network_number, idx);
@@ -240,12 +253,12 @@ impl BACnetRouter {
                                         );
                                     }
                                 } else {
-                                    // Unknown network — Reject
+                                    // Unknown network — Reject (Clause 6.6.3.5)
                                     send_reject(
                                         &send_txs[port_idx],
                                         &received.source_mac,
                                         dest_net,
-                                        RejectMessageReason::OTHER,
+                                        RejectMessageReason::NOT_DIRECTLY_CONNECTED,
                                     );
                                 }
                             } else {
@@ -340,22 +353,33 @@ fn forward_unicast(
 
     let payload_len = npdu.payload.len();
     let source = build_source(&npdu, source_network, source_mac);
-    let dest_mac = if route.directly_connected {
-        npdu.destination
+    let dest_mac;
+    let forwarded_dest;
+    let forwarded_hop_count;
+
+    if route.directly_connected {
+        // Clause 6.5.4: When directly connected to DNET, strip DNET/DADR/Hop Count
+        // from the NPCI and send directly to the destination device (DA = DADR).
+        dest_mac = npdu
+            .destination
             .as_ref()
             .map(|d| d.mac_address.clone())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        forwarded_dest = None;
+        forwarded_hop_count = 0; // not used without destination
     } else {
-        route.next_hop_mac.clone()
+        dest_mac = route.next_hop_mac.clone();
+        forwarded_dest = npdu.destination;
+        forwarded_hop_count = npdu.hop_count - 1;
     };
 
     let forwarded = Npdu {
         is_network_message: false,
         expecting_reply: npdu.expecting_reply,
         priority: npdu.priority,
-        destination: npdu.destination,
+        destination: forwarded_dest,
         source: Some(source),
-        hop_count: npdu.hop_count - 1,
+        hop_count: forwarded_hop_count,
         message_type: None,
         vendor_id: None,
         payload: npdu.payload,
@@ -367,6 +391,13 @@ fn forward_unicast(
         return;
     }
 
+    if route.port_index >= send_txs.len() {
+        warn!(
+            port = route.port_index,
+            "Route references invalid port index"
+        );
+        return;
+    }
     if dest_mac.is_empty() {
         if let Err(e) =
             send_txs[route.port_index].try_send(SendRequest::Broadcast { npdu: buf.freeze() })
@@ -434,6 +465,8 @@ async fn handle_network_message(
     source_mac: &[u8],
     npdu: &Npdu,
 ) {
+    const MAX_LEARNED_ROUTES: usize = 256;
+
     let msg_type = match npdu.message_type {
         Some(t) => t,
         None => return,
@@ -454,7 +487,29 @@ async fn handle_network_message(
             // AND it's not on the requesting port (Clause 6.5.1).
             match table.lookup(net) {
                 Some(entry) if entry.port_index != port_idx => vec![net],
-                _ => return,
+                _ => {
+                    // Clause 6.6.3.2: If not in routing table, forward the
+                    // Who-Is-Router to all other ports to discover the path.
+                    drop(table);
+                    let forward = Npdu {
+                        is_network_message: true,
+                        message_type: Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw()),
+                        payload: npdu.payload.clone(),
+                        ..Npdu::default()
+                    };
+                    let mut fwd_buf = BytesMut::with_capacity(8);
+                    if let Ok(()) = encode_npdu(&mut fwd_buf, &forward) {
+                        let frozen = fwd_buf.freeze();
+                        for (i, tx) in send_txs.iter().enumerate() {
+                            if i != port_idx {
+                                let _ = tx.try_send(SendRequest::Broadcast {
+                                    npdu: frozen.clone(),
+                                });
+                            }
+                        }
+                    }
+                    return;
+                }
             }
         } else {
             table.networks_not_on_port(port_idx)
@@ -483,18 +538,17 @@ async fn handle_network_message(
             return;
         }
 
-        if let Err(e) = send_txs[port_idx].try_send(SendRequest::Unicast {
-            npdu: buf.freeze(),
-            mac: MacAddr::from_slice(source_mac),
-        }) {
+        // Clause 6.4.2: I-Am-Router-To-Network "shall always be transmitted
+        // with a broadcast MAC address."
+        if let Err(e) = send_txs[port_idx].try_send(SendRequest::Broadcast { npdu: buf.freeze() }) {
             warn!(%e, "Router dropped I-Am-Router response: output channel full");
         }
     } else if msg_type == NetworkMessageType::I_AM_ROUTER_TO_NETWORK.to_raw() {
-        const MAX_LEARNED_ROUTES: usize = 256;
         const LEARNED_ROUTE_MAX_AGE: Duration = Duration::from_secs(300);
 
         let data = &npdu.payload;
         let mut offset = 0;
+        let mut any_new = false;
         let mut table = table.lock().await;
 
         while offset + 2 <= data.len() {
@@ -512,11 +566,36 @@ async fn handle_network_message(
                 MacAddr::from_slice(source_mac),
                 LEARNED_ROUTE_MAX_AGE,
             ) {
+                any_new = true;
                 debug!(
                     network = net,
                     port = port_idx,
                     "Learned route from I-Am-Router-To-Network"
                 );
+            }
+        }
+        drop(table);
+
+        // Clause 6.6.3.3: re-broadcast I-Am-Router-To-Network out all ports
+        // except the one it was received on — but only if we actually learned
+        // new routes, to prevent broadcast loops between routers.
+        if any_new && !npdu.payload.is_empty() {
+            let rebroadcast = Npdu {
+                is_network_message: true,
+                message_type: Some(NetworkMessageType::I_AM_ROUTER_TO_NETWORK.to_raw()),
+                payload: npdu.payload.clone(),
+                ..Npdu::default()
+            };
+            let mut buf = BytesMut::with_capacity(4 + npdu.payload.len());
+            if let Ok(()) = encode_npdu(&mut buf, &rebroadcast) {
+                let frozen = buf.freeze();
+                for (i, tx) in send_txs.iter().enumerate() {
+                    if i != port_idx {
+                        let _ = tx.try_send(SendRequest::Broadcast {
+                            npdu: frozen.clone(),
+                        });
+                    }
+                }
             }
         }
     } else if msg_type == NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw() {
@@ -528,71 +607,147 @@ async fn handle_network_message(
                 reason = reason,
                 "Received Reject-Message-To-Network"
             );
-            let mut tbl = table.lock().await;
-            if let Some(entry) = tbl.lookup(rejected_net) {
-                if !entry.directly_connected {
-                    tbl.remove(rejected_net);
+            {
+                let mut tbl = table.lock().await;
+                if let Some(entry) = tbl.lookup(rejected_net) {
+                    if !entry.directly_connected {
+                        tbl.remove(rejected_net);
+                    }
+                }
+            }
+
+            // Clause 6.6.3.5: Relay the reject message to the originating node
+            // if SNET/SADR is present in the NPCI (identifies the original requester).
+            if let Some(ref source) = npdu.source {
+                let tbl = table.lock().await;
+                if let Some(route) = tbl.lookup(source.network) {
+                    let dest_port = route.port_index;
+                    let dest_mac = if route.directly_connected {
+                        source.mac_address.clone()
+                    } else {
+                        route.next_hop_mac.clone()
+                    };
+                    drop(tbl);
+
+                    // Forward the reject to the originating node
+                    let forwarded = Npdu {
+                        is_network_message: true,
+                        message_type: Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw()),
+                        destination: Some(NpduAddress {
+                            network: source.network,
+                            mac_address: source.mac_address.clone(),
+                        }),
+                        hop_count: 255,
+                        payload: npdu.payload.clone(),
+                        ..Npdu::default()
+                    };
+                    let mut buf = BytesMut::with_capacity(32);
+                    if let Ok(()) = encode_npdu(&mut buf, &forwarded) {
+                        if dest_mac.is_empty() {
+                            let _ = send_txs[dest_port]
+                                .try_send(SendRequest::Broadcast { npdu: buf.freeze() });
+                        } else {
+                            let _ = send_txs[dest_port].try_send(SendRequest::Unicast {
+                                npdu: buf.freeze(),
+                                mac: dest_mac,
+                            });
+                        }
+                    }
                 }
             }
         }
     } else if msg_type == NetworkMessageType::ROUTER_BUSY_TO_NETWORK.to_raw() {
+        // Clause 6.6.4: Mark networks as temporarily unreachable
         let data = &npdu.payload;
         let mut offset = 0;
+        let mut tbl = table.lock().await;
         while offset + 2 <= data.len() {
             let net = u16::from_be_bytes([data[offset], data[offset + 1]]);
             offset += 2;
-            debug!(network = net, "Router busy for network");
+            if let Some(entry) = tbl.lookup_mut(net) {
+                entry.reachability = crate::router_table::ReachabilityStatus::Busy;
+            }
+            debug!(network = net, "Router busy — marked network as congested");
         }
     } else if msg_type == NetworkMessageType::ROUTER_AVAILABLE_TO_NETWORK.to_raw() {
+        // Clause 6.6.4: Mark networks as reachable again
         let data = &npdu.payload;
         let mut offset = 0;
+        let mut tbl = table.lock().await;
         while offset + 2 <= data.len() {
             let net = u16::from_be_bytes([data[offset], data[offset + 1]]);
             offset += 2;
-            debug!(network = net, "Router available for network");
+            if let Some(entry) = tbl.lookup_mut(net) {
+                entry.reachability = crate::router_table::ReachabilityStatus::Reachable;
+            }
+            debug!(network = net, "Router available — cleared congestion");
         }
     } else if msg_type == NetworkMessageType::INITIALIZE_ROUTING_TABLE.to_raw() {
-        // Parse incoming routing table entries and add as learned routes.
-        // Format: 1 byte count + N * (2 bytes DNET + 1 byte port_id + 1 byte info_len + info)
-        {
-            let data = &npdu.payload;
-            if !data.is_empty() {
-                let count = data[0] as usize;
-                let mut offset = 1;
-                let mut tbl = table.lock().await;
-                for _ in 0..count {
-                    if offset + 4 > data.len() {
-                        break;
-                    }
-                    let net = u16::from_be_bytes([data[offset], data[offset + 1]]);
-                    // skip port_id (1 byte)
-                    let info_len = data[offset + 3] as usize;
-                    offset += 4 + info_len;
+        // Clause 6.4.7: Format: 1 byte count + N entries.
+        // If count=0, respond with full routing table WITHOUT updating.
+        // If count>0, update the table and respond with empty Ack.
+        let data = &npdu.payload;
+        let count = if data.is_empty() { 0 } else { data[0] as usize };
 
-                    if tbl.lookup(net).is_some() {
-                        continue; // don't overwrite existing routes
-                    }
-                    tbl.add_learned(net, port_idx, MacAddr::from_slice(source_mac));
-                    debug!(
-                        network = net,
-                        port = port_idx,
-                        "Learned route from Init-Routing-Table"
-                    );
+        let is_query = count == 0;
+
+        if !is_query {
+            // Update routing table from the entries
+            let mut offset = 1usize;
+            let mut tbl = table.lock().await;
+            for _ in 0..count {
+                if offset + 4 > data.len() {
+                    break;
                 }
+                let net = u16::from_be_bytes([data[offset], data[offset + 1]]);
+                // skip port_id (1 byte)
+                let info_len = data[offset + 3] as usize;
+                // Validate info_len doesn't exceed remaining data
+                if offset + 4 + info_len > data.len() {
+                    break;
+                }
+                offset += 4 + info_len;
+
+                // Skip reserved network numbers
+                if net == 0 || net == 0xFFFF {
+                    continue;
+                }
+                if tbl.lookup(net).is_some() {
+                    continue; // don't overwrite existing routes
+                }
+                // Enforce route cap (same as I-Am-Router handler)
+                if tbl.len() >= MAX_LEARNED_ROUTES {
+                    warn!("Init-Routing-Table: route cap reached, ignoring further entries");
+                    break;
+                }
+                tbl.add_learned(net, port_idx, MacAddr::from_slice(source_mac));
+                debug!(
+                    network = net,
+                    port = port_idx,
+                    "Learned route from Init-Routing-Table"
+                );
             }
         }
 
         // Reply with Init-Routing-Table-Ack
-        let tbl = table.lock().await;
         let mut payload = BytesMut::new();
-        let networks = tbl.networks();
-        payload.put_u8(networks.len().min(255) as u8);
-        for net in &networks {
-            if tbl.lookup(*net).is_some() {
-                payload.put_u16(*net);
-                payload.put_u8(0); // Port ID (simplified)
-                payload.put_u8(0); // Port info length
+        if is_query {
+            // Return complete routing table
+            let tbl = table.lock().await;
+            let networks = tbl.networks();
+            let count = networks.len().min(255);
+            payload.put_u8(count as u8);
+            // Only encode up to `count` entries to match the count byte
+            for net in networks.iter().take(count) {
+                if tbl.lookup(*net).is_some() {
+                    payload.put_u16(*net);
+                    payload.put_u8(0); // Port ID (simplified)
+                    payload.put_u8(0); // Port info length
+                }
             }
+        } else {
+            // After update, respond with empty Ack (count=0)
+            payload.put_u8(0);
         }
 
         let payload_len = payload.len();
@@ -668,6 +823,11 @@ async fn handle_network_message(
             }
         }
     } else if msg_type == NetworkMessageType::WHAT_IS_NETWORK_NUMBER.to_raw() {
+        // Clause 6.4.19: "Devices shall ignore What-Is-Network-Number messages
+        // that contain SNET/SADR or DNET/DADR information in the NPCI."
+        if npdu.source.is_some() || npdu.destination.is_some() {
+            return;
+        }
         let mut payload = BytesMut::with_capacity(3);
         payload.put_u16(port_network);
         payload.put_u8(1); // configured
@@ -864,6 +1024,7 @@ mod tests {
             directly_connected: true,
             next_hop_mac: MacAddr::new(),
             last_seen: None,
+            reachability: crate::router_table::ReachabilityStatus::Reachable,
         };
 
         let npdu = Npdu {
@@ -929,6 +1090,7 @@ mod tests {
             directly_connected: true,
             next_hop_mac: MacAddr::new(),
             last_seen: None,
+            reachability: crate::router_table::ReachabilityStatus::Reachable,
         };
 
         let npdu = Npdu {
@@ -952,11 +1114,14 @@ mod tests {
         match sent {
             SendRequest::Unicast { npdu: data, .. } => {
                 let decoded = decode_npdu(data.clone()).unwrap();
-                assert_eq!(decoded.hop_count, 9); // Decremented from 10 to 9
+                // Clause 6.5.4: directly connected → destination stripped
+                assert!(decoded.destination.is_none());
+                // Source should be added
+                assert!(decoded.source.is_some());
             }
             SendRequest::Broadcast { npdu: data } => {
                 let decoded = decode_npdu(data.clone()).unwrap();
-                assert_eq!(decoded.hop_count, 9);
+                assert!(decoded.destination.is_none());
             }
         }
     }
@@ -1223,6 +1388,7 @@ mod tests {
             directly_connected: true,
             next_hop_mac: MacAddr::new(),
             last_seen: None,
+            reachability: crate::router_table::ReachabilityStatus::Reachable,
         };
 
         let npdu = Npdu {
@@ -1246,11 +1412,13 @@ mod tests {
         match sent {
             SendRequest::Unicast { npdu: data, .. } => {
                 let decoded = decode_npdu(data.clone()).unwrap();
-                assert_eq!(decoded.hop_count, 0); // Decremented from 1 to 0
+                // Clause 6.5.4: directly connected → destination stripped
+                assert!(decoded.destination.is_none());
+                assert!(decoded.source.is_some());
             }
             SendRequest::Broadcast { npdu: data } => {
                 let decoded = decode_npdu(data.clone()).unwrap();
-                assert_eq!(decoded.hop_count, 0);
+                assert!(decoded.destination.is_none());
             }
         }
     }
@@ -1346,11 +1514,11 @@ mod tests {
 
         handle_network_message(&table, &send_txs, 0, 1000, &[0x0A], &npdu).await;
 
-        // Should respond with I-Am-Router containing only network 2000
+        // Clause 6.4.2: I-Am-Router-To-Network "shall always be transmitted
+        // with a broadcast MAC address."
         let sent = rx.try_recv().unwrap();
         match sent {
-            SendRequest::Unicast { npdu: data, mac } => {
-                assert_eq!(mac.as_slice(), &[0x0A]);
+            SendRequest::Broadcast { npdu: data } => {
                 let decoded = decode_npdu(data.clone()).unwrap();
                 assert!(decoded.is_network_message);
                 assert_eq!(
@@ -1362,7 +1530,7 @@ mod tests {
                 let net = u16::from_be_bytes([decoded.payload[0], decoded.payload[1]]);
                 assert_eq!(net, 2000);
             }
-            _ => panic!("Expected Unicast response for Who-Is-Router"),
+            _ => panic!("Expected Broadcast response for I-Am-Router per Clause 6.4.2"),
         }
     }
 

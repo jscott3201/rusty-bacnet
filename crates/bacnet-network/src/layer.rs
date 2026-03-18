@@ -91,6 +91,18 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
                             continue;
                         }
 
+                        // Clause 6.5.2.1: If DNET present and not 0xFFFF and
+                        // this is a non-routing node, discard the message.
+                        if let Some(ref dest) = npdu.destination {
+                            if dest.network != 0xFFFF {
+                                debug!(
+                                    dnet = dest.network,
+                                    "Discarding routed message (non-router, Clause 6.5.2.1)"
+                                );
+                                continue;
+                            }
+                        }
+
                         let source_network = npdu.source.clone();
 
                         let apdu = ReceivedApdu {

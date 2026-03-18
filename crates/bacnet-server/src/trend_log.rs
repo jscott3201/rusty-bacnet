@@ -16,12 +16,9 @@ use bacnet_types::constructed::{BACnetLogRecord, LogDatum};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
 
-/// Shared polling state kept across ticks.
-///
-/// We cannot store this in the `TrendLogObject` itself (it's behind `dyn
-/// BACnetObject`) so we keep it in a separate map keyed by OID.
-static LAST_LOG: std::sync::LazyLock<tokio::sync::Mutex<HashMap<ObjectIdentifier, Instant>>> =
-    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
+/// Shared polling state — tracks last log time per TrendLog object.
+/// Stored in the server struct (not a global static) for testability.
+pub type TrendLogState = Arc<tokio::sync::Mutex<HashMap<ObjectIdentifier, Instant>>>;
 
 /// Convert a `PropertyValue` to a `LogDatum`.
 fn property_value_to_log_datum(pv: &PropertyValue) -> LogDatum {
@@ -72,8 +69,8 @@ fn make_record(datum: LogDatum) -> BACnetLogRecord {
 /// For each TrendLog with `log_interval > 0` (polled mode), checks whether
 /// enough time has elapsed since the last log entry and, if so, reads the
 /// monitored property and adds a record.
-pub async fn poll_trend_logs(db: &Arc<RwLock<ObjectDatabase>>) {
-    let mut last_log = LAST_LOG.lock().await;
+pub async fn poll_trend_logs(db: &Arc<RwLock<ObjectDatabase>>, state: &TrendLogState) {
+    let mut last_log = state.lock().await;
     let now = Instant::now();
 
     // Acquire a read lock to collect what we need.

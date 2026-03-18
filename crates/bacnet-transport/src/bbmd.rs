@@ -42,10 +42,12 @@ impl FdtEntry {
         self.registered_at.elapsed() > Duration::from_secs(total)
     }
 
-    /// Seconds remaining of the TTL (wire-facing, per Clause J.5.2.3).
+    /// Seconds remaining including grace period (wire-facing, per Clause J.5.2.3).
+    /// "The time remaining includes the 30-second grace period."
     pub fn seconds_remaining(&self) -> u16 {
         let elapsed = self.registered_at.elapsed().as_secs();
-        (self.ttl as u64).saturating_sub(elapsed) as u16
+        let total = self.ttl as u64 + Self::GRACE_PERIOD;
+        total.saturating_sub(elapsed).min(u16::MAX as u64) as u16
     }
 }
 
@@ -580,13 +582,18 @@ mod tests {
     }
 
     #[test]
-    fn seconds_remaining_does_not_exceed_ttl() {
+    fn seconds_remaining_includes_grace_period() {
         let mut bbmd = make_bbmd();
         bbmd.register_foreign_device([10, 0, 0, 5], 0xBAC0, 60);
         let remaining = bbmd.fdt()[0].seconds_remaining();
+        // J.5.2.3: "The time remaining includes the 30-second grace period."
         assert!(
-            remaining <= 60,
-            "seconds_remaining ({remaining}) must not exceed TTL (60)"
+            remaining <= 90, // TTL(60) + grace(30)
+            "seconds_remaining ({remaining}) must not exceed TTL+grace (90)"
+        );
+        assert!(
+            remaining > 60,
+            "should include grace period (got {remaining})"
         );
     }
 
@@ -619,7 +626,8 @@ mod tests {
         assert_eq!(entries[0].ip, [10, 0, 0, 5]);
         assert_eq!(entries[0].port, 0xBAC0);
         assert_eq!(entries[0].ttl, 60);
-        assert!(entries[0].seconds_remaining <= 60);
+        // J.5.2.3: includes 30s grace period
+        assert!(entries[0].seconds_remaining <= 90);
     }
 
     #[test]

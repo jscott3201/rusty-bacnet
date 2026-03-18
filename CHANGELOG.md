@@ -5,6 +5,151 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0]
+
+### Spec Compliance (ASHRAE 135-2020)
+
+Comprehensive 7-area compliance review and 55+ fixes across the entire protocol stack.
+
+#### BACnet/SC (Annex AB)
+- **Fixed** control flag bit positions — was using bits 7-4 instead of spec's bits 3-0
+- **Fixed** ConnectRequest/ConnectAccept payload — added 16-byte Device UUID (now 26 bytes per AB.2.10.1)
+- **Fixed** removed VMACs from ConnectRequest, ConnectAccept, DisconnectRequest, DisconnectAck, HeartbeatRequest, HeartbeatAck (spec says 0-octets)
+- **Fixed** BVLC-Result NAK format — added result_code byte and error header marker (7+ bytes per AB.2.4.1)
+- **Fixed** hub relay — now rewrites Originating Virtual Address and strips Destination Virtual Address for unicast (AB.5.3.2/3)
+- **Fixed** header option encoding — proper Must Understand (bit 6) and Header Data Flag (bit 5) handling per AB.2.3
+- **Fixed** broadcast VMAC — removed all-zeros as broadcast (X'000000000000' is reserved/unknown per AB.1.5.2)
+- **Fixed** non-binary WebSocket frames — now closed with status 1003 per AB.7.5.3
+- **Fixed** reconnect minimum delay — 10s min, 600s max per AB.6.1
+
+#### BACnet/IPv6 (Annex U)
+- **Fixed** Bvlc6Function codes — 0x0B removed per Table U-1, 0x0C = Distribute-Broadcast-To-Network
+- **Fixed** Bvlc6ResultCode values — corrected from sequential 0x10 increments to spec values (0x0060, 0x0090, 0x00A0, 0x00C0)
+- **Fixed** Original-Unicast-NPDU — added 3-byte Destination-Virtual-Address (10-byte header per U.2.2.1)
+- **Fixed** Forwarded-NPDU — added 18-byte Original-Source-B/IPv6-Address (25-byte header per U.2.9.1)
+- **Fixed** FDT seconds_remaining — now includes 30-second grace period per J.5.2.3
+- Increased BIP6 recv buffer from 1536 to 2048 bytes
+
+#### Network Layer (Clause 6)
+- **Fixed** I-Am-Router-To-Network — now sent as broadcast per Clause 6.4.2 (was unicast)
+- **Fixed** router final-hop delivery — strips DNET/DADR/HopCount per Clause 6.5.4
+- **Fixed** SNET=0xFFFF rejected on decode per Clause 6.2.2.1
+- **Fixed** non-router now discards DNET-addressed messages per Clause 6.5.2.1
+- **Fixed** reject reason — uses NOT_DIRECTLY_CONNECTED (1) instead of OTHER (0) per Clause 6.6.3.5
+- **Fixed** What-Is-Network-Number ignores routed messages per Clause 6.4.19
+- **Added** I-Am-Router re-broadcast to other ports per Clause 6.6.3.3 (with loop prevention)
+- **Added** Who-Is-Router forwarding for unknown networks per Clause 6.6.3.2
+- **Added** SNET/DNET validation at encode time
+- **Added** reserved network numbers (0, 0xFFFF) rejected in routing table
+- **Added** reachability status (Reachable/Busy/Unreachable) to RouteEntry per Clause 6.6.1
+- **Added** Router-Busy/Router-Available messages update reachability status per Clause 6.6.4
+- **Added** Reject-Message-To-Network relay to originating node per Clause 6.6.3.5
+- **Added** Init-Routing-Table count=0 query returns full table without updating per Clause 6.4.7
+
+#### Object Model (Clause 12)
+- **Fixed** Property_List — excludes Object_Identifier, Object_Name, Object_Type, Property_List per Clause 12.1.1.4.1
+- **Fixed** StatusFlags — now dynamically computed from event_state, reliability, out_of_service
+- **Fixed** Object_Name — now writable on all object types per Clause 12.1.1.2
+- **Added** Device_Address_Binding to Device object (required per Table 12-13)
+- **Added** Max_Segments_Accepted to Device object (required when segmentation supported)
+- **Added** Current_Command_Priority to all commandable objects (AO, BO, MSO, AV, BV, MSV)
+- **Added** ChangeOfStateDetector for binary and multi-state objects (Clause 13.3.1)
+- **Added** CommandFailureDetector for commandable output objects (Clause 13.3.3)
+- **Added** Event_Time_Stamps and Event_Message_Texts to analog objects
+- **Added** Alarm_Values and Fault_Values to multi-state objects
+- **Added** ValueSourceTracking (Value_Source, Last_Command_Time) to commandable objects
+
+#### Services (Clauses 13-16)
+- **Fixed** SubscribeCOV lifetime=0 — now means indefinite per Clause 13.14.1.1.4 (was immediate expiry)
+- **Fixed** TextMessage messageClass — uses constructed encoding (opening/closing tag) per Clause 16.5
+- **Fixed** AcknowledgeAlarm — added time_of_acknowledgment parameter (tag [5]) per Table 13-9
+- **Fixed** DCC DISABLE (value 1) — rejected per 2020 spec Clause 16.1.1.3.1 (deprecated)
+- **Fixed** DCC password length — validated ≤ 20 characters per Clause 16.1.1.1.3
+- **Fixed** SubscribeCOV — verifies object supports COV per Clause 13.14.1.3.1
+- **Fixed** ReadRange count=0 — rejected per Clause 15.8.1.1.4.1.2
+- **Fixed** ReadRange ByPosition — returns empty result for out-of-range indices per Clause 15.8.1.1.4.1.1
+- **Fixed** WriteGroup — group_number=0 rejected per Clause 15.11.1.1.1
+- **Fixed** RPM — encode failure produces per-property error instead of aborting response
+- **Fixed** GetEventInformation — reads actual event timestamps when available
+- **Fixed** COV subscription key — includes monitored_property (per-property and whole-object subs coexist)
+
+#### MS/TP (Clause 9)
+- **Fixed** T_slot — fixed to 10ms per Clause 9.5.3 (was incorrectly computed from baud rate)
+- **Fixed** INITIALIZE state — NS=TS, PS=TS, TokenCount=N_poll per Clause 9.5.6.1
+- **Fixed** ReceivedToken — clears SoleMaster per Clause 9.5.6.2
+- **Added** PassToken state with retry/FindNewSuccessor per Clause 9.5.6.6
+- **Added** DONE_WITH_TOKEN proper logic (sole master, maintenance PFM, NextStationUnknown)
+- **Fixed** WaitForReply timeout — transitions to DoneWithToken per Clause 9.5.6.4
+- **Added** NO_TOKEN T_slot*TS priority arbitration per Clause 9.5.6.7
+- **Fixed** PollForMaster ReceivedReplyToPFM — sends Token to NS, enters PassToken per Clause 9.5.6.8
+- **Added** EventCount tracking per Clause 9.5.2
+- **Added** T_turnaround enforcement per Clause 9.5.5.1
+
+#### APDU Encoding (Clauses 5, 20)
+- **Fixed** window size — clamped to 1-127 on encode per Clauses 20.1.2.8, 20.1.5.5, 20.1.6.5
+- **Fixed** 256-segment edge case — now allows 256 segments (sequence 0-255) per Clause 20.1.2.7
+- **Fixed** character set names — IBM_MICROSOFT_DBCS (was JIS_X0201), JIS_X_0208 (was JIS_C6226) per Clause 20.2.9
+- **Added** separate APDU_Segment_Timeout field in TSM config per Clause 5.4.1
+
+### Code Review Fixes
+
+#### Critical
+- **Fixed** client segmented send panic — validates SegmentAck sequence_number bounds (was unchecked index)
+- **Fixed** silent u16 truncation in BVLL, BVLC6, and SC option encode functions (added overflow checks)
+- **Fixed** silent u32 truncation in primitives encode functions (octet_string, bit_string)
+- **Fixed** server dispatch `expect()` — replaced with graceful error handling (prevented server crash)
+
+#### Security
+- **Fixed** I-Am-Router broadcast loop — only re-broadcasts newly learned routes
+- **Fixed** Init-Routing-Table — enforces MAX_LEARNED_ROUTES cap, validates info_len bounds
+- **Fixed** routing table — rejects reserved network numbers (0, 0xFFFF), add_learned won't overwrite direct routes
+- **Added** SC Hub pre-handshake connection limit (512 max) to prevent DoS
+- **Added** SC Hub rejects reserved VMACs (unknown/broadcast) on ConnectRequest
+- **Fixed** BDT size validation — returns error instead of panicking
+
+#### Concurrency
+- **Fixed** TLS WebSocket lock ordering — drops read lock before acquiring write lock in recv()
+- **Fixed** SC Hub broadcast relay — sequential sends with per-client timeout (was unbounded task spawning)
+- **Fixed** COV polling — replaced 50ms polling loop with oneshot channels for instant delivery
+
+#### Correctness
+- **Fixed** COV subscription key — includes monitored_property (per-property subs no longer overwrite whole-object subs)
+- **Fixed** DeleteObject — now cleans up COV subscriptions for deleted objects
+- **Fixed** event notification invoke_id — uses ServerTsm allocation (was hardcoded 0)
+- **Fixed** day-of-week calculation — consistent 0=Monday convention across schedule.rs and server.rs
+- **Fixed** COV notification content — sends only monitored property for SubscribeCOVProperty subscriptions
+- **Added** route.port_index bounds check before indexing send_txs
+- **Added** duplicate port network number detection at router startup
+- **Added** checked_add in decode_error and decode_timestamp offset arithmetic
+- **Added** ObjectIdentifier debug_assert on encode for type/instance overflow
+- **Added** is_finite debug_assert in analog set_present_value
+- **Added** transition_bit mask (& 0x07) in acknowledge_alarm
+- **Added** messageText skip loop iteration limit
+
+### New Server Handlers
+
+- **Added** GetAlarmSummary handler — iterates objects, returns those with event_state != NORMAL
+- **Added** GetEnrollmentSummary handler — with filtering by acknowledgment, event state, priority, notification class
+- **Added** ConfirmedTextMessage handler
+- **Added** UnconfirmedTextMessage handler
+- **Added** LifeSafetyOperation handler
+- **Added** WriteGroup handler
+- **Added** SubscribeCOVPropertyMultiple handler — creates per-property COV subscriptions
+- **Wired** all new handlers into server dispatch (GetAlarmSummary, GetEnrollmentSummary, TextMessage, LifeSafetyOperation, SubscribeCOVPropertyMultiple, WriteGroup)
+
+### Python Bindings
+
+- **Added** `rusty_bacnet.pyi` type stub file — full type introspection for IDEs (VS Code, PyCharm)
+- **Added** `py.typed` marker (PEP 561) for mypy/pyright support
+- Type stubs cover: 10 enum classes, 4 core types, 3 exception classes, BACnetClient (35+ async methods), BACnetServer (50+ methods), ScHub
+
+### Other
+
+- Moved trend_log polling state out of global static into server struct
+- Cleaned up QUIC research branch and artifacts
+- LoopbackSerial now buffers excess bytes instead of silently truncating
+- Init-Routing-Table ACK only encodes up to count entries (prevents payload/count mismatch)
+
 ## [0.6.4]
 
 ### Changed

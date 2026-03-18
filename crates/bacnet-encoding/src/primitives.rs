@@ -150,11 +150,17 @@ pub fn decode_double(data: &[u8]) -> Result<f64, Error> {
 
 /// Character set identifiers per Clause 20.2.9.
 pub mod charset {
+    /// ISO 10646 (UTF-8) — X'00'
     pub const UTF8: u8 = 0;
-    pub const JIS_X0201: u8 = 1;
-    pub const JIS_C6226: u8 = 2;
+    /// IBM/Microsoft DBCS — X'01'
+    pub const IBM_MICROSOFT_DBCS: u8 = 1;
+    /// JIS X 0208 — X'02'
+    pub const JIS_X_0208: u8 = 2;
+    /// ISO 10646 (UCS-4) — X'03'
     pub const UCS4: u8 = 3;
+    /// ISO 10646 (UCS-2) — X'04'
     pub const UCS2: u8 = 4;
+    /// ISO 8859-1 — X'05'
     pub const ISO_8859_1: u8 = 5;
 }
 
@@ -221,7 +227,7 @@ pub fn decode_character_string(data: &[u8]) -> Result<String, Error> {
             // ISO-8859-1 maps 1:1 to Unicode code points 0-255
             Ok(payload.iter().map(|&b| b as char).collect())
         }
-        charset::JIS_X0201 | charset::JIS_C6226 | charset::UCS4 => Err(Error::Decoding {
+        charset::IBM_MICROSOFT_DBCS | charset::JIS_X_0208 | charset::UCS4 => Err(Error::Decoding {
             offset: 0,
             message: format!("unsupported charset: {charset_id}"),
         }),
@@ -310,12 +316,8 @@ pub fn encode_app_double(buf: &mut BytesMut, value: f64) {
 
 /// Encode an application-tagged OctetString.
 pub fn encode_app_octet_string(buf: &mut BytesMut, data: &[u8]) {
-    tags::encode_tag(
-        buf,
-        app_tag::OCTET_STRING,
-        TagClass::Application,
-        data.len() as u32,
-    );
+    let data_len = u32::try_from(data.len()).unwrap_or(u32::MAX);
+    tags::encode_tag(buf, app_tag::OCTET_STRING, TagClass::Application, data_len);
     buf.put_slice(data);
 }
 
@@ -329,7 +331,8 @@ pub fn encode_app_character_string(buf: &mut BytesMut, value: &str) -> Result<()
 
 /// Encode an application-tagged BitString.
 pub fn encode_app_bit_string(buf: &mut BytesMut, unused_bits: u8, data: &[u8]) {
-    let len = 1 + data.len() as u32;
+    let data_len = u32::try_from(data.len()).unwrap_or(u32::MAX);
+    let len = data_len.saturating_add(1);
     tags::encode_tag(buf, app_tag::BIT_STRING, TagClass::Application, len);
     encode_bit_string(buf, unused_bits, data);
 }
@@ -412,7 +415,8 @@ pub fn encode_ctx_object_id(buf: &mut BytesMut, tag: u8, oid: &ObjectIdentifier)
 
 /// Encode a context-tagged OctetString.
 pub fn encode_ctx_octet_string(buf: &mut BytesMut, tag: u8, data: &[u8]) {
-    tags::encode_tag(buf, tag, TagClass::Context, data.len() as u32);
+    let data_len = u32::try_from(data.len()).unwrap_or(u32::MAX);
+    tags::encode_tag(buf, tag, TagClass::Context, data_len);
     buf.put_slice(data);
 }
 
@@ -432,7 +436,8 @@ pub fn encode_ctx_date(buf: &mut BytesMut, tag: u8, date: &Date) {
 
 /// Encode a context-tagged BitString.
 pub fn encode_ctx_bit_string(buf: &mut BytesMut, tag: u8, unused_bits: u8, data: &[u8]) {
-    let len = 1 + data.len() as u32;
+    let data_len = u32::try_from(data.len()).unwrap_or(u32::MAX);
+    let len = data_len.saturating_add(1);
     tags::encode_tag(buf, tag, TagClass::Context, len);
     encode_bit_string(buf, unused_bits, data);
 }
@@ -590,7 +595,9 @@ pub fn decode_timestamp(
 
     let (ts, after_inner) = if inner_tag.is_context(0) {
         // Time choice (context tag 0, 4 bytes)
-        let end = inner_pos + inner_tag.length as usize;
+        let end = inner_pos
+            .checked_add(inner_tag.length as usize)
+            .ok_or_else(|| Error::decoding(inner_pos, "BACnetTimeStamp Time length overflow"))?;
         if end > data.len() {
             return Err(Error::decoding(inner_pos, "BACnetTimeStamp Time truncated"));
         }
@@ -598,7 +605,11 @@ pub fn decode_timestamp(
         (BACnetTimeStamp::Time(t), end)
     } else if inner_tag.is_context(1) {
         // SequenceNumber choice (context tag 1)
-        let end = inner_pos + inner_tag.length as usize;
+        let end = inner_pos
+            .checked_add(inner_tag.length as usize)
+            .ok_or_else(|| {
+                Error::decoding(inner_pos, "BACnetTimeStamp SequenceNumber length overflow")
+            })?;
         if end > data.len() {
             return Err(Error::decoding(
                 inner_pos,
@@ -609,7 +620,6 @@ pub fn decode_timestamp(
         (BACnetTimeStamp::SequenceNumber(n), end)
     } else if inner_tag.is_opening_tag(2) {
         // DateTime choice (opening tag 2, app-tagged Date + Time, closing tag 2)
-        // Decode application-tagged Date
         let (date_tag, date_pos) = tags::decode_tag(data, inner_pos)?;
         if date_tag.class != TagClass::Application || date_tag.number != app_tag::DATE {
             return Err(Error::decoding(
@@ -617,7 +627,11 @@ pub fn decode_timestamp(
                 "BACnetTimeStamp DateTime expected Date",
             ));
         }
-        let date_end = date_pos + date_tag.length as usize;
+        let date_end = date_pos
+            .checked_add(date_tag.length as usize)
+            .ok_or_else(|| {
+                Error::decoding(date_pos, "BACnetTimeStamp DateTime Date length overflow")
+            })?;
         if date_end > data.len() {
             return Err(Error::decoding(
                 date_pos,
@@ -626,7 +640,6 @@ pub fn decode_timestamp(
         }
         let date = Date::decode(&data[date_pos..date_end])?;
 
-        // Decode application-tagged Time
         let (time_tag, time_pos) = tags::decode_tag(data, date_end)?;
         if time_tag.class != TagClass::Application || time_tag.number != app_tag::TIME {
             return Err(Error::decoding(
@@ -634,7 +647,11 @@ pub fn decode_timestamp(
                 "BACnetTimeStamp DateTime expected Time",
             ));
         }
-        let time_end = time_pos + time_tag.length as usize;
+        let time_end = time_pos
+            .checked_add(time_tag.length as usize)
+            .ok_or_else(|| {
+                Error::decoding(time_pos, "BACnetTimeStamp DateTime Time length overflow")
+            })?;
         if time_end > data.len() {
             return Err(Error::decoding(
                 time_pos,
@@ -1109,7 +1126,11 @@ mod tests {
 
     #[test]
     fn unsupported_charset_errors() {
-        for &cs in &[charset::JIS_X0201, charset::JIS_C6226, charset::UCS4] {
+        for &cs in &[
+            charset::IBM_MICROSOFT_DBCS,
+            charset::JIS_X_0208,
+            charset::UCS4,
+        ] {
             let data = [cs, 0x41, 0x42];
             let result = decode_character_string(&data);
             assert!(result.is_err(), "charset {cs} should return an error");

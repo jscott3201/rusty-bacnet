@@ -53,6 +53,14 @@ pub trait BACnetObject: Send + Sync {
         Cow::Borrowed(&UNIVERSAL)
     }
 
+    /// Whether this object type supports COV notifications.
+    ///
+    /// Override to return `true` for object types that can generate COV
+    /// notifications (analog, binary, multi-state I/O/V). Default is `false`.
+    fn supports_cov(&self) -> bool {
+        false
+    }
+
     /// COV increment for this object (analog objects only).
     ///
     /// Returns `Some(increment)` for objects that use COV_Increment filtering

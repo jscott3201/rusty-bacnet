@@ -39,22 +39,37 @@ pub struct BvllMessage {
 }
 
 /// Encode a standard BVLL frame (all functions except Forwarded-NPDU).
+///
+/// Panics in debug builds if total frame exceeds u16::MAX. In release,
+/// the length field is capped at u16::MAX.
 pub fn encode_bvll(buf: &mut BytesMut, function: BvlcFunction, payload: &[u8]) {
     let total_length = BVLL_HEADER_LENGTH + payload.len();
+    debug_assert!(
+        total_length <= u16::MAX as usize,
+        "BVLL frame length {} exceeds u16::MAX",
+        total_length
+    );
+    let wire_length = (total_length as u64).min(u16::MAX as u64) as u16;
     buf.reserve(total_length);
     buf.put_u8(BVLC_TYPE_BACNET_IP);
     buf.put_u8(function.to_raw());
-    buf.put_u16(total_length as u16);
+    buf.put_u16(wire_length);
     buf.put_slice(payload);
 }
 
 /// Encode a Forwarded-NPDU BVLL frame with originating address.
 pub fn encode_bvll_forwarded(buf: &mut BytesMut, ip: [u8; 4], port: u16, npdu: &[u8]) {
     let total_length = BVLL_HEADER_LENGTH + FORWARDED_ADDR_LENGTH + npdu.len();
+    debug_assert!(
+        total_length <= u16::MAX as usize,
+        "BVLL forwarded frame length {} exceeds u16::MAX",
+        total_length
+    );
+    let wire_length = (total_length as u64).min(u16::MAX as u64) as u16;
     buf.reserve(total_length);
     buf.put_u8(BVLC_TYPE_BACNET_IP);
     buf.put_u8(BvlcFunction::FORWARDED_NPDU.to_raw());
-    buf.put_u16(total_length as u16);
+    buf.put_u16(wire_length);
     buf.put_slice(&ip);
     buf.put_u16(port);
     buf.put_slice(npdu);

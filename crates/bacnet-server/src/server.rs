@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use bytes::{Bytes, BytesMut};
-use tokio::sync::{mpsc, Mutex, RwLock, Semaphore};
+use tokio::sync::{mpsc, oneshot, Mutex, RwLock, Semaphore};
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tracing::{debug, warn};
@@ -78,8 +78,9 @@ pub enum CovAckResult {
 /// after each timeout to decide whether to resend.
 pub struct ServerTsm {
     next_invoke_id: u8,
-    /// Results written by the dispatch loop, read by retry tasks.
-    pending: HashMap<u8, CovAckResult>,
+    /// Oneshot senders keyed by invoke ID. When a result arrives from the
+    /// dispatch loop, we send it directly — no polling needed.
+    pending: HashMap<u8, oneshot::Sender<CovAckResult>>,
 }
 
 impl ServerTsm {
@@ -90,22 +91,22 @@ impl ServerTsm {
         }
     }
 
-    /// Allocate the next invoke ID.  The semaphore guarantees at most 255
-    /// concurrent callers, so wrapping is safe.
-    fn allocate(&mut self) -> u8 {
+    /// Allocate the next invoke ID and register a oneshot channel for the result.
+    /// Returns (invoke_id, receiver).
+    fn allocate(&mut self) -> (u8, oneshot::Receiver<CovAckResult>) {
         let id = self.next_invoke_id;
         self.next_invoke_id = self.next_invoke_id.wrapping_add(1);
-        id
+        let (tx, rx) = oneshot::channel();
+        self.pending.insert(id, tx);
+        (id, rx)
     }
 
     /// Record a result from the dispatch loop (SimpleAck, Error, etc.).
+    /// Sends immediately through the oneshot channel.
     fn record_result(&mut self, invoke_id: u8, result: CovAckResult) {
-        self.pending.insert(invoke_id, result);
-    }
-
-    /// Take the result for a given invoke ID (returns and removes it).
-    fn take_result(&mut self, invoke_id: u8) -> Option<CovAckResult> {
-        self.pending.remove(&invoke_id)
+        if let Some(tx) = self.pending.remove(&invoke_id) {
+            let _ = tx.send(result);
+        }
     }
 
     /// Remove a pending entry (cleanup on completion or exhaustion).
@@ -702,7 +703,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                                     Apdu::ConfirmedRequest(reassembled),
                                                     received
                                                         .take()
-                                                        .expect("received consumed twice"),
+                                                        .unwrap_or_else(|| {
+                                                        warn!("received consumed twice — using empty fallback");
+                                                        bacnet_network::layer::ReceivedApdu {
+                                                            apdu: bytes::Bytes::new(),
+                                                            source_mac: bacnet_types::MacAddr::new(),
+                                                            source_network: None,
+                                                            reply_tx: None,
+                                                        }
+                                                    }),
                                                 )
                                                 .await;
                                             }
@@ -738,7 +747,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 &config_dispatch,
                                 &source_mac,
                                 decoded,
-                                received.take().expect("received consumed twice"),
+                                received.take().unwrap_or_else(|| {
+                                    warn!("received consumed twice — using empty fallback");
+                                    bacnet_network::layer::ReceivedApdu {
+                                        apdu: bytes::Bytes::new(),
+                                        source_mac: bacnet_types::MacAddr::new(),
+                                        source_network: None,
+                                        reply_tx: None,
+                                    }
+                                }),
                             )
                             .await;
                         }
@@ -814,11 +831,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         // Trend log polling task: polls TrendLog objects whose log_interval > 0.
         let db_trend = Arc::clone(&db);
+        let trend_log_state: crate::trend_log::TrendLogState =
+            Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
         let trend_log_task = Some(tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(1));
             loop {
                 interval.tick().await;
-                crate::trend_log::poll_trend_logs(&db_trend).await;
+                crate::trend_log::poll_trend_logs(&db_trend, &trend_log_state).await;
             }
         }));
 
@@ -1143,12 +1162,25 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
             s if s == ConfirmedServiceChoice::DELETE_OBJECT => {
+                // Parse the OID before deletion so we can clean up COV subs
+                let deleted_oid =
+                    bacnet_services::object_mgmt::DeleteObjectRequest::decode(&req.service_request)
+                        .ok()
+                        .map(|r| r.object_identifier);
+
                 let result = {
                     let mut db = db.write().await;
                     handlers::handle_delete_object(&mut db, &req.service_request)
                 };
                 match result {
-                    Ok(()) => simple_ack(),
+                    Ok(()) => {
+                        // Clean up COV subscriptions for the deleted object
+                        if let Some(oid) = deleted_oid {
+                            let mut table = cov_table.write().await;
+                            table.remove_for_object(oid);
+                        }
+                        simple_ack()
+                    }
                     Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
                 }
             }
@@ -1250,6 +1282,47 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
                 }
             }
+            s if s == ConfirmedServiceChoice::GET_ALARM_SUMMARY => {
+                let mut buf = BytesMut::new();
+                let db = db.read().await;
+                match handlers::handle_get_alarm_summary(&db, &mut buf) {
+                    Ok(()) => complex_ack(buf),
+                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
+                }
+            }
+            s if s == ConfirmedServiceChoice::GET_ENROLLMENT_SUMMARY => {
+                let mut buf = BytesMut::new();
+                let db = db.read().await;
+                match handlers::handle_get_enrollment_summary(&db, &req.service_request, &mut buf) {
+                    Ok(()) => complex_ack(buf),
+                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
+                }
+            }
+            s if s == ConfirmedServiceChoice::CONFIRMED_TEXT_MESSAGE => {
+                match handlers::handle_text_message(&req.service_request) {
+                    Ok(_msg) => simple_ack(),
+                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
+                }
+            }
+            s if s == ConfirmedServiceChoice::LIFE_SAFETY_OPERATION => {
+                match handlers::handle_life_safety_operation(&req.service_request) {
+                    Ok(()) => simple_ack(),
+                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
+                }
+            }
+            s if s == ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE => {
+                let db = db.read().await;
+                let mut table = cov_table.write().await;
+                match handlers::handle_subscribe_cov_property_multiple(
+                    &mut table,
+                    &db,
+                    source_mac,
+                    &req.service_request,
+                ) {
+                    Ok(()) => simple_ack(),
+                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
+                }
+            }
             _ => {
                 debug!(
                     service = service_choice.to_raw(),
@@ -1309,7 +1382,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
                 // Fire post-write notifications even for segmented responses.
                 for oid in &written_oids {
-                    Self::fire_event_notifications(db, network, comm_state, oid).await;
+                    Self::fire_event_notifications(db, network, comm_state, server_tsm, oid).await;
                 }
                 for oid in &written_oids {
                     Self::fire_cov_notifications(
@@ -1373,7 +1446,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         // Evaluate intrinsic reporting and fire event notifications
         for oid in &written_oids {
-            Self::fire_event_notifications(db, network, comm_state, oid).await;
+            Self::fire_event_notifications(db, network, comm_state, server_tsm, oid).await;
         }
 
         // Fire COV notifications for any written objects
@@ -1696,6 +1769,36 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 };
                 callback(data);
             }
+        } else if req.service_choice == UnconfirmedServiceChoice::WRITE_GROUP {
+            match handlers::handle_write_group(&req.service_request) {
+                Ok(write_group) => {
+                    debug!(
+                        group = write_group.group_number,
+                        priority = write_group.write_priority,
+                        values = write_group.change_list.len(),
+                        "WriteGroup received"
+                    );
+                    // Channel object writes would be applied here when Channel
+                    // objects are implemented.
+                }
+                Err(e) => {
+                    debug!(error = %e, "WriteGroup decode failed");
+                }
+            }
+        } else if req.service_choice == UnconfirmedServiceChoice::UNCONFIRMED_TEXT_MESSAGE {
+            match handlers::handle_text_message(&req.service_request) {
+                Ok(msg) => {
+                    debug!(
+                        source = ?msg.source_device,
+                        priority = ?msg.message_priority,
+                        "UnconfirmedTextMessage: {}",
+                        msg.message
+                    );
+                }
+                Err(e) => {
+                    debug!(error = %e, "UnconfirmedTextMessage decode failed");
+                }
+            }
         } else {
             debug!(
                 service = req.service_choice.to_raw(),
@@ -1716,6 +1819,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         db: &Arc<RwLock<ObjectDatabase>>,
         network: &Arc<NetworkLayer<T>>,
         comm_state: &Arc<AtomicU8>,
+        server_tsm: &Arc<Mutex<ServerTsm>>,
         oid: &ObjectIdentifier,
     ) {
         if comm_state.load(Ordering::Acquire) >= 1 {
@@ -1727,8 +1831,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default();
         let total_secs = now.as_secs();
-        // Jan 1, 1970 = Thursday; 0=Sunday, 1=Monday, ..., 6=Saturday
-        let dow = ((total_secs / 86400 + 4) % 7) as u8;
+        // Jan 1, 1970 = Thursday; BACnet valid_days: bit 0=Monday..bit 6=Sunday.
+        // Offset 3: 0=Monday convention (Thursday = day 3).
+        let dow = ((total_secs / 86400 + 3) % 7) as u8;
         let today_bit = 1u8 << dow;
         let day_secs = (total_secs % 86400) as u32;
         let current_time = Time {
@@ -1855,7 +1960,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         segmented_response_accepted: false,
                         max_segments: None,
                         max_apdu_length: 1476,
-                        invoke_id: 0, // simplified: no TSM for event notifications yet
+                        invoke_id: server_tsm.lock().await.allocate().0,
                         sequence_number: None,
                         proposed_window_size: None,
                         service_choice: ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
@@ -2015,12 +2120,39 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 exp.saturating_duration_since(Instant::now()).as_secs() as u32
             });
 
+            // Per Clause 13.14.2: SubscribeCOVProperty sends only the
+            // monitored property, not the default present_value + status_flags.
+            let notification_values = if let Some(prop) = sub.monitored_property {
+                let db = db.read().await;
+                if let Some(object) = db.get(oid) {
+                    if let Ok(pv) = object.read_property(prop, sub.monitored_property_array_index) {
+                        let mut buf = BytesMut::new();
+                        if encode_property_value(&mut buf, &pv).is_ok() {
+                            vec![BACnetPropertyValue {
+                                property_identifier: prop,
+                                property_array_index: sub.monitored_property_array_index,
+                                value: buf.to_vec(),
+                                priority: None,
+                            }]
+                        } else {
+                            values.clone()
+                        }
+                    } else {
+                        values.clone()
+                    }
+                } else {
+                    values.clone()
+                }
+            } else {
+                values.clone()
+            };
+
             let notification = COVNotificationRequest {
                 subscriber_process_identifier: sub.subscriber_process_identifier,
                 initiating_device_identifier: device_oid,
                 monitored_object_identifier: *oid,
                 time_remaining,
-                list_of_values: values.clone(),
+                list_of_values: notification_values,
             };
 
             let mut service_buf = BytesMut::new();
@@ -2040,8 +2172,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     }
                 };
 
-                // Allocate invoke ID from the server TSM.
-                let id = {
+                // Allocate invoke ID and oneshot receiver from the server TSM.
+                let (id, result_rx) = {
                     let mut tsm = server_tsm.lock().await;
                     tsm.allocate()
                 };
@@ -2069,6 +2201,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         &sub.subscriber_mac,
                         sub.subscriber_process_identifier,
                         sub.monitored_object_identifier,
+                        sub.monitored_property,
                         pv,
                     );
                 }
@@ -2078,36 +2211,36 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let apdu_timeout = Duration::from_millis(config.cov_retry_timeout_ms);
                 let tsm = Arc::clone(server_tsm);
                 let apdu_retries = DEFAULT_APDU_RETRIES;
-                // The permit is moved into the spawned task; it is automatically
-                // released when the task completes (ACK, error, or max retries).
                 tokio::spawn(async move {
-                    let _permit = permit; // hold until task completes
+                    let _permit = permit;
+                    let mut pending_rx: Option<oneshot::Receiver<CovAckResult>> = Some(result_rx);
 
                     for attempt in 0..=apdu_retries {
-                        // Send (or resend) the ConfirmedCOVNotification.
                         if let Err(e) = network
                             .send_apdu(&buf, &mac, true, NetworkPriority::NORMAL)
                             .await
                         {
                             warn!(error = %e, attempt, "COV notification send failed");
-                            // Network-level failure: still retry after timeout
                         } else {
                             debug!(invoke_id = id, attempt, "Confirmed COV notification sent");
                         }
 
-                        // Wait up to apdu_timeout for the dispatch loop to
-                        // record a result, checking at short intervals.
-                        let poll_interval = Duration::from_millis(50);
-                        let result = tokio::time::timeout(apdu_timeout, async {
-                            loop {
-                                tokio::time::sleep(poll_interval).await;
-                                let mut tsm = tsm.lock().await;
-                                if let Some(r) = tsm.take_result(id) {
-                                    return r;
-                                }
-                            }
-                        })
-                        .await;
+                        // Wait for the result via oneshot channel (no polling).
+                        let rx = pending_rx
+                            .take()
+                            .expect("receiver always set for each attempt");
+                        let result = match tokio::time::timeout(apdu_timeout, rx).await {
+                            Ok(Ok(r)) => Ok(r),
+                            Ok(Err(_)) => Err(()), // channel closed
+                            Err(_) => Err(()),     // timeout
+                        };
+
+                        // For retries, register a new oneshot with the same invoke_id
+                        if result.is_err() && attempt < apdu_retries {
+                            let (tx, new_rx) = oneshot::channel();
+                            tsm.lock().await.pending.insert(id, tx);
+                            pending_rx = Some(new_rx);
+                        }
 
                         match result {
                             Ok(CovAckResult::Ack) => {
@@ -2160,6 +2293,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         &sub.subscriber_mac,
                         sub.subscriber_process_identifier,
                         sub.monitored_object_identifier,
+                        sub.monitored_property,
                         pv,
                     );
                 }
@@ -2213,68 +2347,67 @@ mod tests {
     #[test]
     fn server_tsm_allocate_increments() {
         let mut tsm = ServerTsm::new();
-        assert_eq!(tsm.allocate(), 0);
-        assert_eq!(tsm.allocate(), 1);
-        assert_eq!(tsm.allocate(), 2);
+        assert_eq!(tsm.allocate().0, 0);
+        assert_eq!(tsm.allocate().0, 1);
+        assert_eq!(tsm.allocate().0, 2);
     }
 
     #[test]
     fn server_tsm_allocate_wraps_at_255() {
         let mut tsm = ServerTsm::new();
         tsm.next_invoke_id = 255;
-        assert_eq!(tsm.allocate(), 255);
-        assert_eq!(tsm.allocate(), 0); // wraps
+        assert_eq!(tsm.allocate().0, 255);
+        assert_eq!(tsm.allocate().0, 0); // wraps
     }
 
     #[test]
     fn server_tsm_record_and_take_ack() {
         let mut tsm = ServerTsm::new();
-        tsm.record_result(42, CovAckResult::Ack);
-        assert_eq!(tsm.take_result(42), Some(CovAckResult::Ack));
-        // Second take returns None (already consumed)
-        assert_eq!(tsm.take_result(42), None);
+        let (_id, rx) = tsm.allocate();
+        tsm.record_result(_id, CovAckResult::Ack);
+        // Result should be delivered via the oneshot channel
+        assert_eq!(rx.blocking_recv(), Ok(CovAckResult::Ack));
     }
 
     #[test]
     fn server_tsm_record_and_take_error() {
         let mut tsm = ServerTsm::new();
-        tsm.record_result(7, CovAckResult::Error);
-        assert_eq!(tsm.take_result(7), Some(CovAckResult::Error));
+        let (id, rx) = tsm.allocate();
+        tsm.record_result(id, CovAckResult::Error);
+        // Oneshot delivers immediately
+        assert_eq!(rx.blocking_recv(), Ok(CovAckResult::Error));
     }
 
     #[test]
-    fn server_tsm_take_nonexistent_returns_none() {
+    fn server_tsm_record_nonexistent_is_noop() {
         let mut tsm = ServerTsm::new();
-        assert_eq!(tsm.take_result(99), None);
+        // Recording a result for an ID with no receiver is a no-op
+        tsm.record_result(99, CovAckResult::Ack);
+        assert!(tsm.pending.is_empty());
     }
 
     #[test]
     fn server_tsm_remove_cleans_up() {
         let mut tsm = ServerTsm::new();
-        tsm.record_result(10, CovAckResult::Ack);
-        tsm.remove(10);
-        assert_eq!(tsm.take_result(10), None);
+        let (id, _rx) = tsm.allocate();
+        tsm.remove(id);
+        assert!(!tsm.pending.contains_key(&id));
     }
 
     #[test]
     fn server_tsm_multiple_pending() {
         let mut tsm = ServerTsm::new();
-        tsm.record_result(1, CovAckResult::Ack);
-        tsm.record_result(2, CovAckResult::Error);
-        tsm.record_result(3, CovAckResult::Ack);
+        let (id1, rx1) = tsm.allocate();
+        let (id2, rx2) = tsm.allocate();
+        let (id3, rx3) = tsm.allocate();
 
-        assert_eq!(tsm.take_result(2), Some(CovAckResult::Error));
-        assert_eq!(tsm.take_result(1), Some(CovAckResult::Ack));
-        assert_eq!(tsm.take_result(3), Some(CovAckResult::Ack));
-    }
+        tsm.record_result(id2, CovAckResult::Error);
+        tsm.record_result(id1, CovAckResult::Ack);
+        tsm.record_result(id3, CovAckResult::Ack);
 
-    #[test]
-    fn server_tsm_overwrite_result() {
-        let mut tsm = ServerTsm::new();
-        tsm.record_result(5, CovAckResult::Ack);
-        // Overwrite with Error (e.g., duplicate response)
-        tsm.record_result(5, CovAckResult::Error);
-        assert_eq!(tsm.take_result(5), Some(CovAckResult::Error));
+        assert_eq!(rx2.blocking_recv(), Ok(CovAckResult::Error));
+        assert_eq!(rx1.blocking_recv(), Ok(CovAckResult::Ack));
+        assert_eq!(rx3.blocking_recv(), Ok(CovAckResult::Ack));
     }
 
     #[test]

@@ -1,5 +1,5 @@
 //! ConfirmedTextMessage / UnconfirmedTextMessage services
-//! per ASHRAE 135-2020 Clauses 15.20 and 16.10.7.
+//! per ASHRAE 135-2020 Clauses 16.5 and 16.6.
 
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
@@ -37,16 +37,18 @@ impl TextMessageRequest {
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         // [0] textMessageSourceDevice
         primitives::encode_ctx_object_id(buf, 0, &self.source_device);
-        // messageClass CHOICE (optional): [1] Unsigned or [2] CharacterString
+        // messageClass [1] CHOICE { numeric [0], character [1] } OPTIONAL
         if let Some(ref mc) = self.message_class {
+            tags::encode_opening_tag(buf, 1);
             match mc {
                 MessageClass::Numeric(n) => {
-                    primitives::encode_ctx_unsigned(buf, 1, *n as u64);
+                    primitives::encode_ctx_unsigned(buf, 0, *n as u64);
                 }
                 MessageClass::Text(s) => {
-                    primitives::encode_ctx_character_string(buf, 2, s)?;
+                    primitives::encode_ctx_character_string(buf, 1, s)?;
                 }
             }
+            tags::encode_closing_tag(buf, 1);
         }
         // [3] messagePriority
         primitives::encode_ctx_enumerated(buf, 3, self.message_priority.to_raw());
@@ -70,35 +72,29 @@ impl TextMessageRequest {
         let source_device = ObjectIdentifier::decode(&data[pos..end])?;
         offset = end;
 
-        // messageClass CHOICE (optional): [1] Unsigned or [2] CharacterString
+        // messageClass [1] CHOICE { numeric [0], character [1] } OPTIONAL
         let mut message_class = None;
         if offset < data.len() {
-            let (tag, pos) = tags::decode_tag(data, offset)?;
-            if tag.is_context(1) {
-                let end = pos + tag.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        pos,
-                        "TextMessage truncated at messageClass numeric",
-                    ));
+            let (tag, _) = tags::decode_tag(data, offset)?;
+            if tag.is_opening_tag(1) {
+                let (content, new_offset) = tags::extract_context_value(data, offset + 1, 1)?;
+                if !content.is_empty() {
+                    let (inner_tag, inner_pos) = tags::decode_tag(content, 0)?;
+                    let inner_end = inner_pos + inner_tag.length as usize;
+                    if inner_tag.is_context(0) {
+                        message_class = Some(MessageClass::Numeric(primitives::decode_unsigned(
+                            &content[inner_pos..inner_end],
+                        )?
+                            as u32));
+                    } else if inner_tag.is_context(1) {
+                        let s =
+                            primitives::decode_character_string(&content[inner_pos..inner_end])?;
+                        message_class = Some(MessageClass::Text(s));
+                    }
                 }
-                message_class = Some(MessageClass::Numeric(primitives::decode_unsigned(
-                    &data[pos..end],
-                )? as u32));
-                offset = end;
-            } else if tag.is_context(2) {
-                let end = pos + tag.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        pos,
-                        "TextMessage truncated at messageClass text",
-                    ));
-                }
-                let s = primitives::decode_character_string(&data[pos..end])?;
-                message_class = Some(MessageClass::Text(s));
-                offset = end;
+                offset = new_offset;
             }
-            // else: not tag 1 or 2 — no messageClass, don't advance offset
+            // else: not opening tag 1 — no messageClass, don't advance offset
         }
 
         // [3] messagePriority

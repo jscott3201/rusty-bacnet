@@ -13,6 +13,9 @@ use tokio::sync::oneshot;
 pub struct TsmConfig {
     /// APDU timeout in milliseconds (default 6000).
     pub apdu_timeout_ms: u64,
+    /// APDU segment timeout in milliseconds (default = apdu_timeout_ms).
+    /// Per Clause 5.4.1: T_seg for segment-level waits, T_wait_for_seg = 4 * T_seg.
+    pub apdu_segment_timeout_ms: u64,
     /// Number of APDU retries (default 3).
     pub apdu_retries: u8,
 }
@@ -21,6 +24,7 @@ impl Default for TsmConfig {
     fn default() -> Self {
         Self {
             apdu_timeout_ms: 6000,
+            apdu_segment_timeout_ms: 6000,
             apdu_retries: 3,
         }
     }
@@ -145,6 +149,13 @@ impl Tsm {
         invoke_id: u8,
     ) -> oneshot::Receiver<TsmResponse> {
         let (tx, rx) = oneshot::channel();
+        debug_assert!(
+            !self
+                .pending
+                .contains_key(&(destination_mac.clone(), invoke_id)),
+            "duplicate TSM registration for invoke_id {}",
+            invoke_id
+        );
         self.pending.insert((destination_mac, invoke_id), tx);
         rx
     }

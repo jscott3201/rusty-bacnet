@@ -180,6 +180,20 @@ impl ReadRangeRequest {
         }
         let _ = offset;
 
+        // Clause 15.8.1.1.4.1.2: "'Count' may not be zero."
+        if let Some(ref r) = range {
+            let count = match r {
+                RangeSpec::ByPosition { count, .. } => *count,
+                RangeSpec::BySequenceNumber { count, .. } => *count,
+                RangeSpec::ByTime { count, .. } => *count,
+            };
+            if count == 0 {
+                return Err(Error::Encoding(
+                    "ReadRange count may not be zero (Clause 15.8.1.1.4.1.2)".into(),
+                ));
+            }
+        }
+
         Ok(Self {
             object_identifier,
             property_identifier,

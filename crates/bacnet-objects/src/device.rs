@@ -168,6 +168,21 @@ impl DeviceObject {
             PropertyValue::CharacterString(String::new()),
         );
 
+        // Device_Address_Binding — required (R) per Table 12-13.
+        // Starts empty; populated as the device discovers other devices.
+        properties.insert(
+            PropertyIdentifier::DEVICE_ADDRESS_BINDING,
+            PropertyValue::List(Vec::new()),
+        );
+
+        // Max_Segments_Accepted — required when segmentation is supported (O^1).
+        if config.segmentation_supported != Segmentation::NONE {
+            properties.insert(
+                PropertyIdentifier::MAX_SEGMENTS_ACCEPTED,
+                PropertyValue::Unsigned(65), // default: more than 64 segments
+            );
+        }
+
         // Protocol_Object_Types_Supported: bitstring with one bit per
         // implemented object type.  Computed from the full set of types
         // that have concrete struct implementations in this crate.

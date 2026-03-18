@@ -60,12 +60,17 @@ impl DeviceCommunicationControlRequest {
             EnableDisable::from_raw(primitives::decode_unsigned(&data[pos..end])? as u32);
         offset = end;
 
-        // [2] password (optional)
+        // [2] password (optional) — Clause 16.1.1.1.3: max 20 characters
         let mut password = None;
         if offset < data.len() {
             let (opt_data, _new_offset) = tags::decode_optional_context(data, offset, 2)?;
             if let Some(content) = opt_data {
                 let s = primitives::decode_character_string(content)?;
+                if s.len() > 20 {
+                    return Err(Error::Encoding(
+                        "DCC password exceeds 20 characters (Clause 16.1.1.1.3)".into(),
+                    ));
+                }
                 password = Some(s);
             }
         }

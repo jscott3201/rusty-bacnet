@@ -31,8 +31,11 @@ pub struct CovSubscription {
     pub cov_increment: Option<f32>,
 }
 
-/// Key for uniquely identifying a subscription: (subscriber_mac, process_id, monitored_object).
-type SubKey = (MacAddr, u32, ObjectIdentifier);
+/// Key for uniquely identifying a subscription:
+/// (subscriber_mac, process_id, monitored_object, monitored_property).
+/// Including monitored_property ensures SubscribeCOV (whole-object) and
+/// SubscribeCOVProperty (per-property) coexist as independent subscriptions.
+type SubKey = (MacAddr, u32, ObjectIdentifier, Option<PropertyIdentifier>);
 
 /// Table of active COV subscriptions.
 #[derive(Debug, Default)]
@@ -53,6 +56,7 @@ impl CovSubscriptionTable {
             sub.subscriber_mac.clone(),
             sub.subscriber_process_identifier,
             sub.monitored_object_identifier,
+            sub.monitored_property,
         );
         self.subs.insert(key, sub);
     }
@@ -64,8 +68,31 @@ impl CovSubscriptionTable {
         process_id: u32,
         monitored_object: ObjectIdentifier,
     ) -> bool {
-        let key = (MacAddr::from_slice(mac), process_id, monitored_object);
+        // Remove whole-object subscription (monitored_property = None)
+        let key = (MacAddr::from_slice(mac), process_id, monitored_object, None);
         self.subs.remove(&key).is_some()
+    }
+
+    /// Unsubscribe a per-property subscription.
+    pub fn unsubscribe_property(
+        &mut self,
+        mac: &[u8],
+        process_id: u32,
+        monitored_object: ObjectIdentifier,
+        monitored_property: PropertyIdentifier,
+    ) -> bool {
+        let key = (
+            MacAddr::from_slice(mac),
+            process_id,
+            monitored_object,
+            Some(monitored_property),
+        );
+        self.subs.remove(&key).is_some()
+    }
+
+    /// Remove all subscriptions for a given object (used on DeleteObject).
+    pub fn remove_for_object(&mut self, oid: ObjectIdentifier) {
+        self.subs.retain(|k, _| k.2 != oid);
     }
 
     /// Get all active (non-expired) subscriptions for a given object.
@@ -86,9 +113,15 @@ impl CovSubscriptionTable {
         mac: &[u8],
         process_id: u32,
         monitored_object: ObjectIdentifier,
+        monitored_property: Option<PropertyIdentifier>,
         value: f32,
     ) {
-        let key = (MacAddr::from_slice(mac), process_id, monitored_object);
+        let key = (
+            MacAddr::from_slice(mac),
+            process_id,
+            monitored_object,
+            monitored_property,
+        );
         if let Some(sub) = self.subs.get_mut(&key) {
             sub.last_notified_value = Some(value);
         }
@@ -271,7 +304,7 @@ mod tests {
     fn set_last_notified_value_updates() {
         let mut table = CovSubscriptionTable::new();
         table.subscribe(make_sub(&[1, 2, 3], 1, ai1()));
-        table.set_last_notified_value(&[1, 2, 3], 1, ai1(), 72.5);
+        table.set_last_notified_value(&[1, 2, 3], 1, ai1(), None, 72.5);
 
         let subs = table.subscriptions_for(&ai1());
         assert_eq!(subs[0].last_notified_value, Some(72.5));
