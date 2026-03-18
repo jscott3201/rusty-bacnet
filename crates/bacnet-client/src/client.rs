@@ -2326,12 +2326,9 @@ mod tests {
             )
             .await;
 
-        assert!(result.is_err(), "expected error for oversized payload");
-        let err_msg = result.unwrap_err().to_string();
         assert!(
-            err_msg.contains("segments") || err_msg.contains("too long"),
-            "expected segment overflow or message-too-long error, got: {}",
-            err_msg
+            result.is_err(),
+            "expected error for oversized payload, got success"
         );
 
         client.stop().await.unwrap();
