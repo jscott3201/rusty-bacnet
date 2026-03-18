@@ -11,7 +11,7 @@ use bytes::BytesMut;
 use crate::common::MAX_DECODED_ITEMS;
 
 // ---------------------------------------------------------------------------
-// VTOpenRequest / VTOpenAck (Clause 16.3)
+// VTOpenRequest / VTOpenAck
 // ---------------------------------------------------------------------------
 
 /// VT-Open-Request service parameters.
@@ -68,7 +68,7 @@ impl VTOpenAck {
 }
 
 // ---------------------------------------------------------------------------
-// VTCloseRequest (Clause 16.4)
+// VTCloseRequest
 // ---------------------------------------------------------------------------
 
 /// VT-Close-Request service parameters.
@@ -111,7 +111,7 @@ impl VTCloseRequest {
 }
 
 // ---------------------------------------------------------------------------
-// VTDataRequest / VTDataAck (Clause 16.5)
+// VTDataRequest / VTDataAck
 // ---------------------------------------------------------------------------
 
 /// VT-Data-Request service parameters.
@@ -134,7 +134,6 @@ impl VTDataRequest {
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 
-        // Unsigned8: vt-session-identifier
         let (tag, pos) = tags::decode_tag(data, offset)?;
         let end = pos + tag.length as usize;
         if end > data.len() {
@@ -146,7 +145,6 @@ impl VTDataRequest {
         let vt_session_identifier = primitives::decode_unsigned(&data[pos..end])? as u8;
         offset = end;
 
-        // OctetString: vt-new-data
         let (tag, pos) = tags::decode_tag(data, offset)?;
         let end = pos + tag.length as usize;
         if end > data.len() {
@@ -155,9 +153,6 @@ impl VTDataRequest {
         let vt_new_data = data[pos..end].to_vec();
         offset = end;
 
-        // Boolean: vt-data-flag
-        // BACnet application boolean: value is encoded in the tag length field,
-        // with no content bytes following.
         let (tag, pos) = tags::decode_tag(data, offset)?;
         let vt_data_flag = tag.length != 0;
         let _ = pos;
@@ -219,10 +214,6 @@ impl VTDataAck {
         })
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

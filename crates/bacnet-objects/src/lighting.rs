@@ -129,6 +129,7 @@ impl BACnetObject for LightingOutputObject {
             p if p == PropertyIdentifier::RELINQUISH_DEFAULT => {
                 Ok(PropertyValue::Real(self.relinquish_default))
             }
+            p if p == PropertyIdentifier::DEFAULT_FADE_TIME => Ok(PropertyValue::Unsigned(0)),
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -241,6 +242,10 @@ impl BACnetObject for LightingOutputObject {
             PropertyIdentifier::RELINQUISH_DEFAULT,
         ];
         Cow::Borrowed(PROPS)
+    }
+
+    fn supports_cov(&self) -> bool {
+        true
     }
 }
 
@@ -427,6 +432,10 @@ impl BACnetObject for BinaryLightingOutputObject {
             PropertyIdentifier::RELINQUISH_DEFAULT,
         ];
         Cow::Borrowed(PROPS)
+    }
+
+    fn supports_cov(&self) -> bool {
+        true
     }
 }
 

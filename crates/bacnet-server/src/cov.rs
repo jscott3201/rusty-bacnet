@@ -68,7 +68,6 @@ impl CovSubscriptionTable {
         process_id: u32,
         monitored_object: ObjectIdentifier,
     ) -> bool {
-        // Remove whole-object subscription (monitored_property = None)
         let key = (MacAddr::from_slice(mac), process_id, monitored_object, None);
         self.subs.remove(&key).is_some()
     }
@@ -98,7 +97,6 @@ impl CovSubscriptionTable {
     /// Get all active (non-expired) subscriptions for a given object.
     pub fn subscriptions_for(&mut self, oid: &ObjectIdentifier) -> Vec<&CovSubscription> {
         let now = Instant::now();
-        // Purge expired before returning
         self.subs
             .retain(|_, sub| sub.expires_at.is_none_or(|exp| exp > now));
         self.subs

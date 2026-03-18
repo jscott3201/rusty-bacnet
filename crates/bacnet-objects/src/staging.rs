@@ -94,6 +94,15 @@ impl BACnetObject for StagingObject {
                     .collect();
                 Ok(PropertyValue::List(items))
             }
+            p if p == PropertyIdentifier::PRESENT_STAGE => {
+                Ok(PropertyValue::Unsigned(self.present_value))
+            }
+            p if p == PropertyIdentifier::STAGES => Ok(PropertyValue::List(
+                self.stage_names
+                    .iter()
+                    .map(|n| PropertyValue::CharacterString(n.clone()))
+                    .collect(),
+            )),
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -143,6 +152,10 @@ impl BACnetObject for StagingObject {
             PropertyIdentifier::RELIABILITY,
         ];
         Cow::Borrowed(PROPS)
+    }
+
+    fn supports_cov(&self) -> bool {
+        true
     }
 }
 

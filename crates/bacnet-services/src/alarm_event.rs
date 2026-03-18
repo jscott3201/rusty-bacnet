@@ -13,7 +13,7 @@ use bytes::BytesMut;
 use crate::common::MAX_DECODED_ITEMS;
 
 // ---------------------------------------------------------------------------
-// AcknowledgeAlarm (Clause 13.3)
+// AcknowledgeAlarm
 // ---------------------------------------------------------------------------
 
 /// AcknowledgeAlarm-Request service parameters.
@@ -24,7 +24,7 @@ pub struct AcknowledgeAlarmRequest {
     pub event_state_acknowledged: u32,
     pub timestamp: BACnetTimeStamp,
     pub acknowledgment_source: String,
-    /// Time Of Acknowledgment (tag [5], mandatory per Table 13-9).
+    /// Time of acknowledgment.
     pub time_of_acknowledgment: BACnetTimeStamp,
 }
 
@@ -88,7 +88,7 @@ impl AcknowledgeAlarmRequest {
         let (timestamp, new_offset) = primitives::decode_timestamp(data, offset, 3)?;
         offset = new_offset;
 
-        // [4] acknowledgmentSource (required per Clause 13.3)
+        // [4] acknowledgmentSource
         let (opt_data, _new_offset) = tags::decode_optional_context(data, offset, 4)?;
         let acknowledgment_source = match opt_data {
             Some(content) => primitives::decode_character_string(content)?,
@@ -102,7 +102,7 @@ impl AcknowledgeAlarmRequest {
 
         offset = _new_offset;
 
-        // [5] timeOfAcknowledgment (mandatory per Table 13-9)
+        // [5] timeOfAcknowledgment
         let (time_of_acknowledgment, _new_offset) = primitives::decode_timestamp(data, offset, 5)?;
 
         Ok(Self {
@@ -117,13 +117,10 @@ impl AcknowledgeAlarmRequest {
 }
 
 // ---------------------------------------------------------------------------
-// EventNotification (Clause 13.5 / 13.6)
+// EventNotification
 // ---------------------------------------------------------------------------
 
 /// ConfirmedEventNotification / UnconfirmedEventNotification request parameters.
-///
-/// Encodes all required fields per Clause 13.5/13.6. Event values (tag 12)
-/// are still omitted (simplified).
 #[derive(Debug, Clone)]
 pub struct EventNotificationRequest {
     /// Process identifier of the notification recipient.
@@ -249,7 +246,7 @@ impl EventNotificationRequest {
         let event_type = primitives::decode_unsigned(&data[pos..end])? as u32;
         offset = end;
 
-        // Skip [7] messageText if present — scan for [8]
+        // Skip [7] messageText if present
         let mut skip_count = 0u32;
         while offset < data.len() {
             skip_count += 1;
@@ -373,10 +370,10 @@ impl EventNotificationRequest {
 }
 
 // ---------------------------------------------------------------------------
-// NotificationParameters (Clause 13.5.1 — eventValues [12])
+// NotificationParameters
 // ---------------------------------------------------------------------------
 
-/// Notification parameter variants for eventValues (tag [12]).
+/// Notification parameter variants for eventValues.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NotificationParameters {
     /// [0] Change of bitstring.
@@ -1975,7 +1972,7 @@ fn decode_status_flags(data: &[u8]) -> u8 {
 }
 
 // ---------------------------------------------------------------------------
-// GetEventInformation (Clause 13.9)
+// GetEventInformation
 // ---------------------------------------------------------------------------
 
 /// GetEventInformation-Request — optional last_received_object_identifier.
@@ -2016,7 +2013,7 @@ pub struct GetEventInformationAck {
     pub more_events: bool,
 }
 
-/// Event summary for GetEventInformation-ACK per Clause 13.9.1.2.
+/// Event summary for GetEventInformation-ACK.
 #[derive(Debug, Clone)]
 pub struct EventSummary {
     pub object_identifier: ObjectIdentifier,
@@ -2208,7 +2205,7 @@ impl GetEventInformationAck {
                 notify_type,
                 event_enable,
                 event_priorities,
-                notification_class: 0, // not in wire format per Clause 13.9.1.2
+                notification_class: 0, // not present in the wire format
             });
         }
 

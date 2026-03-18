@@ -36,8 +36,13 @@ pub struct AccessDoorObject {
     door_alarm_state: u32, // DoorAlarmState enumeration
     door_members: Vec<ObjectIdentifier>,
     status_flags: StatusFlags,
+    /// Event_State: 0 = NORMAL.
+    event_state: u32,
     out_of_service: bool,
     reliability: u32,
+    /// 16-level priority array for commandable Present_Value.
+    priority_array: [Option<u32>; 16],
+    relinquish_default: u32,
 }
 
 impl AccessDoorObject {
@@ -55,8 +60,11 @@ impl AccessDoorObject {
             door_alarm_state: 0,
             door_members: Vec::new(),
             status_flags: StatusFlags::empty(),
+            event_state: 0, // NORMAL
             out_of_service: false,
             reliability: 0,
+            priority_array: Default::default(),
+            relinquish_default: 0, // closed
         })
     }
 }
@@ -103,6 +111,15 @@ impl BACnetObject for AccessDoorObject {
                     .map(|oid| PropertyValue::ObjectIdentifier(*oid))
                     .collect(),
             )),
+            p if p == PropertyIdentifier::EVENT_STATE => {
+                Ok(PropertyValue::Enumerated(self.event_state))
+            }
+            p if p == PropertyIdentifier::PRIORITY_ARRAY => {
+                common::read_priority_array!(self, array_index, PropertyValue::Enumerated)
+            }
+            p if p == PropertyIdentifier::RELINQUISH_DEFAULT => {
+                Ok(PropertyValue::Enumerated(self.relinquish_default))
+            }
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -112,7 +129,7 @@ impl BACnetObject for AccessDoorObject {
         property: PropertyIdentifier,
         _array_index: Option<u32>,
         value: PropertyValue,
-        _priority: Option<u8>,
+        priority: Option<u8>,
     ) -> Result<(), Error> {
         if let Some(result) =
             common::write_out_of_service(&mut self.out_of_service, property, &value)
@@ -124,15 +141,31 @@ impl BACnetObject for AccessDoorObject {
         }
         match property {
             p if p == PropertyIdentifier::PRESENT_VALUE => {
-                if !self.out_of_service {
-                    return Err(common::write_access_denied_error());
-                }
-                if let PropertyValue::Enumerated(v) = value {
-                    self.present_value = v;
-                    Ok(())
+                let slot = priority.unwrap_or(16).clamp(1, 16) as usize - 1;
+                if let PropertyValue::Null = value {
+                    // Relinquish command at this priority
+                    self.priority_array[slot] = None;
+                } else if let PropertyValue::Enumerated(v) = value {
+                    self.priority_array[slot] = Some(v);
+                } else if self.out_of_service {
+                    // When OOS, accept direct writes without priority
+                    if let PropertyValue::Enumerated(v) = value {
+                        self.present_value = v;
+                        return Ok(());
+                    }
+                    return Err(common::invalid_data_type_error());
                 } else {
-                    Err(common::invalid_data_type_error())
+                    return Err(common::invalid_data_type_error());
                 }
+                // Recalculate PV from priority array
+                self.present_value = self
+                    .priority_array
+                    .iter()
+                    .flatten()
+                    .next()
+                    .copied()
+                    .unwrap_or(self.relinquish_default);
+                Ok(())
             }
             _ => Err(common::write_access_denied_error()),
         }
@@ -155,6 +188,10 @@ impl BACnetObject for AccessDoorObject {
             PropertyIdentifier::RELIABILITY,
         ];
         Cow::Borrowed(PROPS)
+    }
+
+    fn supports_cov(&self) -> bool {
+        true
     }
 }
 
@@ -1060,16 +1097,34 @@ mod tests {
     }
 
     #[test]
-    fn access_door_write_present_value_not_out_of_service() {
+    fn access_door_write_present_value_commandable() {
         let mut door = AccessDoorObject::new(1, "DOOR-1").unwrap();
-        // Writing present value when not out-of-service should fail
+        // AccessDoor is commandable — writing PV with priority should succeed
         let result = door.write_property(
             PropertyIdentifier::PRESENT_VALUE,
             None,
-            PropertyValue::Enumerated(1),
-            None,
+            PropertyValue::Enumerated(1), // opened
+            Some(16),
         );
-        assert!(result.is_err());
+        assert!(result.is_ok());
+        // Verify PV changed
+        let pv = door
+            .read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap();
+        assert_eq!(pv, PropertyValue::Enumerated(1));
+        // Relinquish — write NULL
+        let result = door.write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Null,
+            Some(16),
+        );
+        assert!(result.is_ok());
+        // PV should revert to relinquish default (0 = closed)
+        let pv = door
+            .read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap();
+        assert_eq!(pv, PropertyValue::Enumerated(0));
     }
 
     #[test]

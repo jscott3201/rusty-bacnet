@@ -8,7 +8,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
 // ---------------------------------------------------------------------------
-// LifeSafetyOperationRequest (Clause 15.2.7)
+// LifeSafetyOperationRequest
 // ---------------------------------------------------------------------------
 
 /// LifeSafetyOperation-Request service parameters.

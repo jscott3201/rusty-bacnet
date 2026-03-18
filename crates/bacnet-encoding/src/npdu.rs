@@ -76,10 +76,8 @@ impl Default for Npdu {
 
 /// Encode an NPDU to wire format.
 pub fn encode_npdu(buf: &mut BytesMut, npdu: &Npdu) -> Result<(), Error> {
-    // Version
     buf.put_u8(BACNET_PROTOCOL_VERSION);
 
-    // Control octet
     let mut control: u8 = npdu.priority.to_raw() & 0x03;
     if npdu.is_network_message {
         control |= 0x80;
@@ -95,9 +93,7 @@ pub fn encode_npdu(buf: &mut BytesMut, npdu: &Npdu) -> Result<(), Error> {
     }
     buf.put_u8(control);
 
-    // Destination (if present): DNET(2) + DLEN(1) + DADR(DLEN)
     if let Some(dest) = &npdu.destination {
-        // Clause 6.2.2.1: DNET valid range 1..65535
         if dest.network == 0 {
             return Err(Error::Encoding("NPDU DNET must not be 0".into()));
         }
@@ -111,9 +107,7 @@ pub fn encode_npdu(buf: &mut BytesMut, npdu: &Npdu) -> Result<(), Error> {
         buf.put_slice(&dest.mac_address);
     }
 
-    // Source (if present): SNET(2) + SLEN(1) + SADR(SLEN)
     if let Some(src) = &npdu.source {
-        // Clause 6.2.2.1: SNET valid range 1..65534
         if src.network == 0 || src.network == 0xFFFF {
             return Err(Error::Encoding(format!(
                 "NPDU SNET must be 1..65534, got {}",
@@ -133,16 +127,13 @@ pub fn encode_npdu(buf: &mut BytesMut, npdu: &Npdu) -> Result<(), Error> {
         buf.put_slice(&src.mac_address);
     }
 
-    // Hop count (only when destination present)
     if npdu.destination.is_some() {
         buf.put_u8(npdu.hop_count);
     }
 
-    // Network message type or APDU payload
     if npdu.is_network_message {
         if let Some(msg_type) = npdu.message_type {
             buf.put_u8(msg_type);
-            // Proprietary messages (0x80+) include a vendor ID
             if msg_type >= 0x80 {
                 buf.put_u16(npdu.vendor_id.unwrap_or(0));
             }
@@ -183,7 +174,6 @@ pub fn decode_npdu(data: Bytes) -> Result<Npdu, Error> {
     let priority = NetworkPriority::from_raw(control & 0x03);
 
     if control & 0x50 != 0 {
-        // Bits 4 (0x10) and 6 (0x40) are reserved per Clause 6.2.2
         tracing::warn!(
             control_byte = control,
             "NPDU control byte has reserved bits set (bits 4 or 6)"
@@ -195,7 +185,6 @@ pub fn decode_npdu(data: Bytes) -> Result<Npdu, Error> {
     let mut source = None;
     let mut hop_count: u8 = 255;
 
-    // Destination
     if has_destination {
         if offset + 3 > data.len() {
             return Err(Error::decoding(
@@ -230,7 +219,6 @@ pub fn decode_npdu(data: Bytes) -> Result<Npdu, Error> {
         });
     }
 
-    // Source
     if has_source {
         if offset + 3 > data.len() {
             return Err(Error::decoding(offset, "NPDU too short for source fields"));
@@ -240,13 +228,8 @@ pub fn decode_npdu(data: Bytes) -> Result<Npdu, Error> {
         let slen = data[offset] as usize;
         offset += 1;
 
-        // SLEN=0 is invalid for source addresses per Clause 6.2.2
-        // (source cannot be indeterminate — unlike DLEN=0 which means broadcast)
         if slen == 0 {
-            return Err(Error::decoding(
-                offset - 1,
-                "NPDU source SLEN=0 is invalid (Clause 6.2.2)",
-            ));
+            return Err(Error::decoding(offset - 1, "NPDU source SLEN=0 is invalid"));
         }
 
         if slen > 0 && offset + slen > data.len() {
@@ -263,7 +246,6 @@ pub fn decode_npdu(data: Bytes) -> Result<Npdu, Error> {
             mac_address: sadr,
         });
 
-        // Clause 6.2.2.1: SNET valid range is 1..65534 (0xFFFF is global broadcast)
         if snet == 0 {
             return Err(Error::decoding(
                 offset - slen - 3, // point back to SNET field
@@ -273,12 +255,11 @@ pub fn decode_npdu(data: Bytes) -> Result<Npdu, Error> {
         if snet == 0xFFFF {
             return Err(Error::decoding(
                 offset - slen - 3,
-                "NPDU source network 0xFFFF is invalid (Clause 6.2.2.1)",
+                "NPDU source network 0xFFFF is invalid",
             ));
         }
     }
 
-    // Hop count (only when destination present)
     if has_destination {
         if offset >= data.len() {
             return Err(Error::decoding(offset, "NPDU too short for hop count"));
@@ -287,7 +268,6 @@ pub fn decode_npdu(data: Bytes) -> Result<Npdu, Error> {
         offset += 1;
     }
 
-    // Network message type or remaining APDU
     let mut message_type = None;
     let mut vendor_id = None;
 
@@ -302,7 +282,6 @@ pub fn decode_npdu(data: Bytes) -> Result<Npdu, Error> {
         offset += 1;
         message_type = Some(msg_type);
 
-        // Proprietary messages (0x80+) include a vendor ID
         if msg_type >= 0x80 {
             if offset + 2 > data.len() {
                 return Err(Error::decoding(
@@ -742,7 +721,6 @@ mod tests {
         // Reserved bits set in control byte should NOT cause decode failure
         // (warning only). Construct wire bytes manually with reserved bit 6 set.
         let mut data = vec![0x01, 0x40]; // version=1, control with reserved bit 6
-                                         // Since no dest/source flags, just add payload
         data.extend_from_slice(&[0x10, 0x08]);
 
         // Should decode successfully (warning only, not error)

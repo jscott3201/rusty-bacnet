@@ -26,6 +26,8 @@ pub struct LoadControlObject {
     shed_duration: u64,
     start_time: (Date, Time),
     status_flags: StatusFlags,
+    /// Event_State: 0 = NORMAL.
+    event_state: u32,
     out_of_service: bool,
     reliability: u32,
 }
@@ -58,6 +60,7 @@ impl LoadControlObject {
                 },
             ),
             status_flags: StatusFlags::empty(),
+            event_state: 0, // NORMAL
             out_of_service: false,
             reliability: 0,
         })
@@ -127,6 +130,9 @@ impl BACnetObject for LoadControlObject {
                 PropertyValue::Date(self.start_time.0),
                 PropertyValue::Time(self.start_time.1),
             ])),
+            p if p == PropertyIdentifier::EVENT_STATE => {
+                Ok(PropertyValue::Enumerated(self.event_state))
+            }
             _ => Err(common::unknown_property_error()),
         }
     }

@@ -29,11 +29,11 @@ pub struct MultiStateInputObject {
     /// Reliability: 0 = NO_FAULT_DETECTED.
     reliability: u32,
     state_text: Vec<String>,
-    /// Alarm_Values — state values that trigger OFFNORMAL (Clause 12.18).
+    /// Alarm_Values — state values that trigger OFFNORMAL.
     alarm_values: Vec<u32>,
-    /// Fault_Values — state values that indicate a fault (Clause 12.18).
+    /// Fault_Values — state values that indicate a fault.
     fault_values: Vec<u32>,
-    /// CHANGE_OF_STATE event detector (Clause 13.3.1).
+    /// CHANGE_OF_STATE event detector.
     event_detector: ChangeOfStateDetector,
 }
 
@@ -147,6 +147,17 @@ impl BACnetObject for MultiStateInputObject {
                     .map(|v| PropertyValue::Unsigned(*v as u64))
                     .collect(),
             )),
+            p if p == PropertyIdentifier::EVENT_ENABLE => Ok(PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![self.event_detector.event_enable << 5],
+            }),
+            p if p == PropertyIdentifier::ACKED_TRANSITIONS => Ok(PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![self.event_detector.acked_transitions << 5],
+            }),
+            p if p == PropertyIdentifier::NOTIFICATION_CLASS => Ok(PropertyValue::Unsigned(
+                self.event_detector.notification_class as u64,
+            )),
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -241,7 +252,7 @@ pub struct MultiStateOutputObject {
     state_text: Vec<String>,
     alarm_values: Vec<u32>,
     fault_values: Vec<u32>,
-    /// CHANGE_OF_STATE event detector (Clause 13.3.1).
+    /// CHANGE_OF_STATE event detector.
     event_detector: ChangeOfStateDetector,
 }
 
@@ -357,6 +368,17 @@ impl BACnetObject for MultiStateOutputObject {
                     .map(|v| PropertyValue::Unsigned(*v as u64))
                     .collect(),
             )),
+            p if p == PropertyIdentifier::EVENT_ENABLE => Ok(PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![self.event_detector.event_enable << 5],
+            }),
+            p if p == PropertyIdentifier::ACKED_TRANSITIONS => Ok(PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![self.event_detector.acked_transitions << 5],
+            }),
+            p if p == PropertyIdentifier::NOTIFICATION_CLASS => Ok(PropertyValue::Unsigned(
+                self.event_detector.notification_class as u64,
+            )),
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -469,7 +491,7 @@ pub struct MultiStateValueObject {
     state_text: Vec<String>,
     alarm_values: Vec<u32>,
     fault_values: Vec<u32>,
-    /// CHANGE_OF_STATE event detector (Clause 13.3.1).
+    /// CHANGE_OF_STATE event detector.
     event_detector: ChangeOfStateDetector,
 }
 
@@ -584,6 +606,17 @@ impl BACnetObject for MultiStateValueObject {
                     .iter()
                     .map(|v| PropertyValue::Unsigned(*v as u64))
                     .collect(),
+            )),
+            p if p == PropertyIdentifier::EVENT_ENABLE => Ok(PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![self.event_detector.event_enable << 5],
+            }),
+            p if p == PropertyIdentifier::ACKED_TRANSITIONS => Ok(PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![self.event_detector.acked_transitions << 5],
+            }),
+            p if p == PropertyIdentifier::NOTIFICATION_CLASS => Ok(PropertyValue::Unsigned(
+                self.event_detector.notification_class as u64,
             )),
             _ => Err(common::unknown_property_error()),
         }
@@ -988,7 +1021,7 @@ mod tests {
         assert_eq!(val, PropertyValue::Enumerated(0)); // NO_FAULT_DETECTED
     }
 
-    // --- MultiStateValue direct PRIORITY_ARRAY writes (Clause 15.9.1.1.3) ---
+    // --- MultiStateValue direct PRIORITY_ARRAY writes ---
 
     #[test]
     fn msv_direct_priority_array_write_value() {
@@ -1103,7 +1136,7 @@ mod tests {
         .unwrap();
     }
 
-    // --- Direct PRIORITY_ARRAY writes (Clause 15.9.1.1.3) ---
+    // --- Direct PRIORITY_ARRAY writes ---
 
     #[test]
     fn mso_direct_priority_array_write_value() {

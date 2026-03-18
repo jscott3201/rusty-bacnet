@@ -209,6 +209,10 @@ impl BACnetObject for AccumulatorObject {
         ];
         Cow::Borrowed(PROPS)
     }
+
+    fn supports_cov(&self) -> bool {
+        true
+    }
 }
 
 // ---------------------------------------------------------------------------

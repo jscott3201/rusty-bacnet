@@ -34,10 +34,9 @@ impl EventStateChange {
 
     /// Derive the event transition category from the state change.
     ///
-    /// Per Clause 13.2.5:
-    /// - `to == NORMAL` → `ToNormal`
-    /// - `to == FAULT` → `ToFault`
-    /// - Everything else (OFFNORMAL, HIGH_LIMIT, LOW_LIMIT) → `ToOffnormal`
+    /// - `to == NORMAL` -> `ToNormal`
+    /// - `to == FAULT` -> `ToFault`
+    /// - Everything else (OFFNORMAL, HIGH_LIMIT, LOW_LIMIT) -> `ToOffnormal`
     pub fn transition(&self) -> EventTransition {
         if self.to == EventState::NORMAL {
             EventTransition::ToNormal
@@ -73,7 +72,7 @@ impl EventTransition {
     }
 }
 
-/// Which limits are enabled (Clause 12.1.14).
+/// Which limits are enabled.
 ///
 /// Encoded as a BACnet BIT STRING: bit 0 = low_limit_enable, bit 1 = high_limit_enable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,7 +115,7 @@ impl LimitEnable {
 
 /// OUT_OF_RANGE event detector for analog objects.
 ///
-/// Implements the event state machine per Clause 13.3.2:
+/// Implements the OUT_OF_RANGE event state machine:
 /// - NORMAL → HIGH_LIMIT when `present_value > high_limit` (if high_limit enabled)
 /// - NORMAL → LOW_LIMIT when `present_value < low_limit` (if low_limit enabled)
 /// - HIGH_LIMIT → NORMAL when `present_value < high_limit - deadband`
@@ -157,7 +156,7 @@ impl Default for OutOfRangeDetector {
 }
 
 impl OutOfRangeDetector {
-    /// Event_Enable bit masks per Clause 13.1.4.
+    /// Event_Enable bit masks.
     const TO_OFFNORMAL: u8 = 0x01;
     const TO_FAULT: u8 = 0x02;
     const TO_NORMAL: u8 = 0x04;
@@ -165,7 +164,7 @@ impl OutOfRangeDetector {
     /// Evaluate the present value against configured limits.
     ///
     /// Returns `Some(EventStateChange)` if the event state changed **and**
-    /// the corresponding `event_enable` bit is set (Clause 13.1.4).
+    /// the corresponding `event_enable` bit is set.
     /// Internal state always updates regardless of event_enable.
     ///
     /// Note: This implementation uses instant transitions (ignores time_delay).
@@ -178,7 +177,7 @@ impl OutOfRangeDetector {
             };
             self.event_state = new_state;
 
-            // Check event_enable bitmask per Clause 13.1.4
+            // Check event_enable bitmask
             let enabled = match new_state {
                 s if s == EventState::NORMAL => self.event_enable & Self::TO_NORMAL != 0,
                 s if s == EventState::HIGH_LIMIT || s == EventState::LOW_LIMIT => {
@@ -240,12 +239,12 @@ impl OutOfRangeDetector {
 }
 
 // ---------------------------------------------------------------------------
-// CHANGE_OF_STATE event detector (Clause 13.3.1)
+// CHANGE_OF_STATE event detector
 // ---------------------------------------------------------------------------
 
 /// CHANGE_OF_STATE event detector for binary and multi-state objects.
 ///
-/// Per Clause 13.3.1: transitions to OFFNORMAL when the monitored value
+/// Transitions to OFFNORMAL when the monitored value
 /// matches any value in the `alarm_values` list. Returns to NORMAL when
 /// the value no longer matches any alarm value.
 #[derive(Debug, Clone)]
@@ -317,7 +316,7 @@ impl ChangeOfStateDetector {
 
 /// COMMAND_FAILURE event detector for commandable output objects (BO, MSO).
 ///
-/// Per Clause 13.3.3: transitions to OFFNORMAL when present_value differs
+/// Transitions to OFFNORMAL when present_value differs
 /// from feedback_value. Returns to NORMAL when they match.
 #[derive(Debug, Clone)]
 pub struct CommandFailureDetector {

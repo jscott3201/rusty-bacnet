@@ -19,7 +19,7 @@ pub enum TagClass {
     Context = 1,
 }
 
-/// Application tag numbers per Clause 20.2.1.4.
+/// Application tag numbers.
 pub mod app_tag {
     pub const NULL: u8 = 0;
     pub const BOOLEAN: u8 = 1;
@@ -55,8 +55,8 @@ pub struct Tag {
 impl Tag {
     /// Check if this is an application boolean tag with value true.
     ///
-    /// Per Clause 20.2.3, application-tagged booleans encode the value
-    /// in the tag's L/V/T field with no content octets.
+    /// Application-tagged booleans encode the value in the tag's L/V/T
+    /// field with no content octets.
     pub fn is_boolean_true(&self) -> bool {
         self.class == TagClass::Application && self.number == app_tag::BOOLEAN && self.length != 0
     }
@@ -92,16 +92,14 @@ pub fn encode_tag(buf: &mut BytesMut, tag_number: u8, class: TagClass, length: u
     let cls_bit = (class as u8) << 3;
 
     if tag_number <= 14 && length <= 4 {
-        // Fast path: single byte (covers ~95% of cases)
         buf.put_u8((tag_number << 4) | cls_bit | (length as u8));
         return;
     }
 
-    // Build initial octet
     let tag_nibble = if tag_number <= 14 {
         tag_number << 4
     } else {
-        0xF0 // Extended tag number marker
+        0xF0
     };
 
     if length <= 4 {
@@ -112,7 +110,6 @@ pub fn encode_tag(buf: &mut BytesMut, tag_number: u8, class: TagClass, length: u
         return;
     }
 
-    // Extended length (L/V/T = 5)
     buf.put_u8(tag_nibble | cls_bit | 5);
     if tag_number > 14 {
         buf.put_u8(tag_number);
@@ -174,7 +171,6 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
     let initial = data[offset];
     let mut pos = offset + 1;
 
-    // Extract fields from initial octet
     let mut tag_number = (initial >> 4) & 0x0F;
     let class = if (initial >> 3) & 0x01 == 1 {
         TagClass::Context
@@ -183,18 +179,14 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
     };
     let lvt = initial & 0x07;
 
-    // Extended tag number (tag nibble = 0x0F)
     if tag_number == 0x0F {
         if pos >= data.len() {
             return Err(Error::decoding(pos, "truncated extended tag number"));
         }
         tag_number = data[pos];
-        // Note: for extended tags, tag_number is u8 (0-254).
-        // We store as u8 which is fine.
         pos += 1;
     }
 
-    // Opening/closing tags (context class only)
     if class == TagClass::Context {
         if lvt == 6 {
             return Ok((
@@ -222,11 +214,9 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
         }
     }
 
-    // Data length
     let length = if lvt < 5 {
         lvt as u32
     } else {
-        // Extended length
         if pos >= data.len() {
             return Err(Error::decoding(pos, "truncated extended length"));
         }
@@ -255,7 +245,6 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
         }
     };
 
-    // Sanity check against malformed packets
     if length > MAX_TAG_LENGTH {
         return Err(Error::decoding(
             offset,
@@ -320,26 +309,22 @@ pub fn extract_context_value(
                 return Ok((&data[value_start..value_end], new_pos));
             }
             pos = new_pos;
+        } else if tag.class == TagClass::Application && tag.number == app_tag::BOOLEAN {
+            pos = new_pos;
         } else {
-            // Skip past tag content
-            if tag.class == TagClass::Application && tag.number == app_tag::BOOLEAN {
-                // Application boolean: value is in LVT, no content octets
-                pos = new_pos;
-            } else {
-                let content_end = new_pos
-                    .checked_add(tag.length as usize)
-                    .ok_or_else(|| Error::decoding(new_pos, "tag length overflow"))?;
-                if content_end > data.len() {
-                    return Err(Error::decoding(
-                        new_pos,
-                        format!(
-                            "tag data overflows buffer: need {} bytes at offset {new_pos}",
-                            tag.length
-                        ),
-                    ));
-                }
-                pos = content_end;
+            let content_end = new_pos
+                .checked_add(tag.length as usize)
+                .ok_or_else(|| Error::decoding(new_pos, "tag length overflow"))?;
+            if content_end > data.len() {
+                return Err(Error::decoding(
+                    new_pos,
+                    format!(
+                        "tag data overflows buffer: need {} bytes at offset {new_pos}",
+                        tag.length
+                    ),
+                ));
             }
+            pos = content_end;
         }
     }
 

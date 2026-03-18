@@ -40,7 +40,7 @@ type Clients = Arc<Mutex<HashMap<Vmac, Arc<Mutex<WsSink>>>>>;
 /// messages between connected nodes.
 pub struct ScHub {
     hub_vmac: Vmac,
-    /// Device UUID (16 bytes, RFC 4122) per AB.1.5.3.
+    /// Device UUID (16 bytes, RFC 4122).
     #[allow(dead_code)]
     hub_uuid: [u8; 16],
     listener_task: Option<JoinHandle<()>>,
@@ -172,9 +172,7 @@ async fn accept_loop(
                 }
             };
 
-            // WebSocket upgrade — negotiate the BACnet/SC subprotocol
-            // per ASHRAE 135-2020 Annex AB and RFC 6455: only echo the
-            // subprotocol if the client offered it.
+            // WebSocket upgrade — echo the BACnet/SC subprotocol only if the client offered it.
             let ws_stream = match tokio_tungstenite::accept_hdr_async(
                 tls_stream,
                 |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
@@ -238,8 +236,7 @@ async fn handle_client(
             }
             Ok(Message::Ping(_) | Message::Pong(_)) => continue,
             Ok(_) => {
-                // AB.7.5.3: non-binary data frames → close with 1003
-                warn!("Hub: non-binary frame from {peer_addr}, closing (AB.7.5.3)");
+                warn!("Hub: non-binary frame from {peer_addr}, closing with 1003");
                 let mut w = write.lock().await;
                 let _ = w
                     .send(Message::Close(Some(
@@ -266,10 +263,7 @@ async fn handle_client(
         };
 
         match sc_msg.function {
-            // --- Connection handshake ---
             ScFunction::ConnectRequest => {
-                // Per Annex AB.7.1 the ConnectRequest payload is:
-                // VMAC(6) + Max-BVLC-Length(2,BE) + Max-NPDU-Length(2,BE) = 10 bytes.
                 let vmac = if sc_msg.payload.len() >= 6 {
                     let mut v = [0u8; 6];
                     v.copy_from_slice(&sc_msg.payload[0..6]);
@@ -293,8 +287,6 @@ async fn handle_client(
                     if map.contains_key(&vmac) {
                         warn!("Hub: VMAC collision for {vmac:02x?} from {peer_addr}");
                         drop(map); // release lock before sending
-                                   // AB.2.4.1 NAK payload: function(1) + result_code(1) +
-                                   // error_header_marker(1) + error_class(2) + error_code(2) = 7 bytes
                         let error_result = ScMessage {
                             function: ScFunction::Result,
                             message_id: sc_msg.message_id,
@@ -348,8 +340,6 @@ async fn handle_client(
                 }
                 client_vmac = Some(vmac);
 
-                // AB.2.11.1: VMAC(6) + Device_UUID(16) + Max-BVLC-Length(2) + Max-NPDU-Length(2) = 26
-                // No Originating/Destination Virtual Address per AB.2.11.1
                 let mut accept_payload = Vec::with_capacity(26);
                 accept_payload.extend_from_slice(&hub_vmac);
                 accept_payload.extend_from_slice(&hub_uuid);
@@ -374,9 +364,7 @@ async fn handle_client(
                 }
             }
 
-            // --- Heartbeat ---
             ScFunction::HeartbeatRequest => {
-                // AB.2.15.1: No VMACs on HeartbeatAck
                 let ack = ScMessage {
                     function: ScFunction::HeartbeatAck,
                     message_id: sc_msg.message_id,
@@ -396,10 +384,8 @@ async fn handle_client(
                 }
             }
 
-            // --- Disconnect ---
             ScFunction::DisconnectRequest => {
                 debug!("Hub: DisconnectRequest from {peer_addr}");
-                // AB.2.13.1: No VMACs on Disconnect-ACK
                 let ack = ScMessage {
                     function: ScFunction::DisconnectAck,
                     message_id: sc_msg.message_id,
@@ -417,7 +403,6 @@ async fn handle_client(
                 break;
             }
 
-            // --- NPDU relay ---
             ScFunction::EncapsulatedNpdu => {
                 let Some(registered_vmac) = client_vmac else {
                     warn!("received EncapsulatedNpdu before ConnectRequest — dropping");
@@ -435,9 +420,7 @@ async fn handle_client(
 
                 let dest = sc_msg.destination_vmac.unwrap_or(BROADCAST_VMAC);
 
-                // AB.5.3.2/3: Hub must add Originating Virtual Address.
-                // For unicast: remove Destination Virtual Address.
-                // For broadcast: keep Destination Virtual Address.
+                // Hub adds Originating Virtual Address; strips Destination for unicast.
                 let relay_msg = if is_broadcast_vmac(&dest) {
                     ScMessage {
                         originating_vmac: Some(sender_vmac),
@@ -494,7 +477,6 @@ async fn handle_client(
         }
     }
 
-    // Cleanup: remove client from map.
     if let Some(vmac) = client_vmac {
         let mut map = clients.lock().await;
         map.remove(&vmac);

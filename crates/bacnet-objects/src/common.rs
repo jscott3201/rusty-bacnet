@@ -18,16 +18,14 @@ pub(crate) fn protocol_error(
 
 /// Read the PROPERTY_LIST property for any object that implements property_list().
 /// Handles array_index variants: None = full list, Some(0) = length, Some(n) = nth element.
-///
-/// Per Clause 12.1.1.4.1, Object_Name, Object_Type, Object_Identifier, and
-/// Property_List itself are NOT included in the returned list.
+/// Object_Name, Object_Type, Object_Identifier, and Property_List itself are excluded.
 pub fn read_property_list_property(
     props: &[bacnet_types::enums::PropertyIdentifier],
     array_index: Option<u32>,
 ) -> Result<bacnet_types::primitives::PropertyValue, bacnet_types::error::Error> {
     use bacnet_types::enums::PropertyIdentifier;
 
-    // Clause 12.1.1.4.1: filter out the four excluded properties
+    // Filter out the four excluded properties
     let filtered: Vec<_> = props
         .iter()
         .copied()
@@ -84,11 +82,7 @@ macro_rules! read_common_properties {
                 bacnet_types::primitives::PropertyValue::CharacterString($self.description.clone()),
             )),
             p if p == bacnet_types::enums::PropertyIdentifier::STATUS_FLAGS => {
-                // Compute StatusFlags dynamically per Clause 12:
-                //   Bit 0 (IN_ALARM): from status_flags field (set by event detection)
-                //   Bit 1 (FAULT): reliability != NO_FAULT_DETECTED (0)
-                //   Bit 2 (OVERRIDDEN): false (no local override mechanism)
-                //   Bit 3 (OUT_OF_SERVICE): from out_of_service field
+                // Compute StatusFlags dynamically from reliability and out_of_service
                 let mut flags = $self.status_flags;
                 if $self.reliability != 0 {
                     flags |= bacnet_types::primitives::StatusFlags::FAULT;
@@ -276,7 +270,7 @@ pub(crate) fn recalculate_from_priority_array<T: Copy>(
         .unwrap_or(relinquish_default)
 }
 
-/// Value source tracking for commandable objects (Clause 19.5).
+/// Value source tracking for commandable objects.
 ///
 /// Stores the source that last wrote to each priority array slot.
 #[derive(Debug, Clone)]
@@ -313,7 +307,6 @@ impl Default for ValueSourceTracking {
 ///
 /// Returns the 1-based index of the active priority array slot, or
 /// Null if the relinquish default is in use.
-/// Per Clause 19.2.1, required for AO, BO, MSO.
 pub(crate) fn current_command_priority<T>(
     priority_array: &[Option<T>; 16],
 ) -> bacnet_types::primitives::PropertyValue {
@@ -491,8 +484,6 @@ macro_rules! write_event_properties {
             p if p == bacnet_types::enums::PropertyIdentifier::EVENT_ENABLE => {
                 if let bacnet_types::primitives::PropertyValue::BitString { data, .. } = &$value {
                     if let Some(&byte) = data.first() {
-                        // BACnet bitstring: 3 bits used (5 unused), MSB-first
-                        // Bit 0 = TO_OFFNORMAL, Bit 1 = TO_FAULT, Bit 2 = TO_NORMAL
                         $self.event_detector.event_enable = byte >> 5;
                         Some(Ok(()))
                     } else {
@@ -537,7 +528,7 @@ macro_rules! write_event_properties {
                 }
             }
             p if p == bacnet_types::enums::PropertyIdentifier::ACKED_TRANSITIONS => {
-                // Read-only: modified only by AcknowledgeAlarm service (Clause 12.13.9)
+                // Read-only: modified only by AcknowledgeAlarm service
                 Some(Err($crate::common::write_access_denied_error()))
             }
             _ => None,
@@ -606,7 +597,7 @@ macro_rules! write_priority_array {
 }
 pub(crate) use write_priority_array;
 
-/// Handle direct writes to PRIORITY_ARRAY[index] per Clause 15.9.1.1.3.
+/// Handle direct writes to PRIORITY_ARRAY[index].
 ///
 /// If `property` is PRIORITY_ARRAY and `array_index` is Some(1..=16),
 /// writes to that priority slot. Null relinquishes; otherwise `$extract`

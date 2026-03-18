@@ -161,7 +161,7 @@ struct SegmentedReceiveState {
     last_activity: Instant,
 }
 
-/// Timeout for idle segmented reassembly sessions (Clause 9.1.6).
+/// Timeout for idle segmented reassembly sessions.
 const SEG_RECEIVER_TIMEOUT: Duration = Duration::from_secs(4);
 
 /// Key for tracking in-progress segmented receives: (source_mac, invoke_id).
@@ -187,7 +187,6 @@ impl BACnetClient<BipTransport> {
         }
     }
 
-    /// Create a BIP-specific builder (alias for backward compatibility).
     pub fn builder() -> BipClientBuilder {
         Self::bip_builder()
     }
@@ -403,11 +402,11 @@ impl ScClientBuilder {
     }
 }
 
-/// Routing target for confirmed requests — either local or routed.
+/// Routing target for confirmed requests.
 enum ConfirmedTarget<'a> {
-    /// Direct unicast to a local device.
-    Local { mac: &'a [u8] },
-    /// Routed through a local router to a remote device.
+    Local {
+        mac: &'a [u8],
+    },
     Routed {
         router_mac: &'a [u8],
         dest_network: u16,
@@ -416,8 +415,7 @@ enum ConfirmedTarget<'a> {
 }
 
 impl<'a> ConfirmedTarget<'a> {
-    /// The MAC used for TSM transaction matching (what transport-layer
-    /// responses will arrive from).
+    /// The MAC used for TSM transaction matching.
     fn tsm_mac(&self) -> &[u8] {
         match self {
             Self::Local { mac } => mac,
@@ -437,7 +435,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
     /// Start the client: bind transport, start network layer, spawn dispatch.
     pub async fn start(mut config: ClientConfig, transport: T) -> Result<Self, Error> {
-        // Clamp max_apdu_length to the transport's physical limit.
         let transport_max = transport.max_apdu_length();
         config.max_apdu_length = config.max_apdu_length.min(transport_max);
 
@@ -463,13 +460,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             Arc::new(Mutex::new(HashMap::new()));
         let seg_ack_senders_dispatch = Arc::clone(&seg_ack_senders);
 
-        // Spawn APDU dispatch task
         let dispatch_task = tokio::spawn(async move {
-            // Segmented receive state is task-local — no external sharing needed.
             let mut seg_state: HashMap<SegKey, SegmentedReceiveState> = HashMap::new();
 
             while let Some(received) = apdu_rx.recv().await {
-                // Reap timed-out segmented reassembly sessions (Clause 9.1.6).
                 let now = Instant::now();
                 seg_state.retain(|_key, state| {
                     now.duration_since(state.last_activity) < SEG_RECEIVER_TIMEOUT
@@ -509,7 +503,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         })
     }
 
-    /// Dispatch a received APDU to the appropriate TSM handler.
+    /// Dispatch a received APDU to the appropriate handler.
     #[allow(clippy::too_many_arguments)]
     async fn dispatch_apdu(
         tsm: &Arc<Mutex<Tsm>>,
@@ -579,7 +573,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 );
             }
             Apdu::ConfirmedRequest(req) => {
-                // Handle ConfirmedCOVNotification from a server
                 if req.service_choice == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION {
                     match COVNotificationRequest::decode(&req.service_request) {
                         Ok(notification) => {
@@ -589,7 +582,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                             );
                             let _ = cov_tx.send(notification);
 
-                            // Send SimpleAck back
                             let ack = Apdu::SimpleAck(SimpleAck {
                                 invoke_id: req.invoke_id,
                                 service_choice: req.service_choice,
@@ -669,7 +661,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 }
             }
             Apdu::SegmentAck(sa) => {
-                // Forward to the segmented send in progress for this transaction.
                 let key = (MacAddr::from_slice(source_mac), sa.invoke_id);
                 let senders = seg_ack_senders.lock().await;
                 if let Some(tx) = senders.get(&key) {
@@ -684,8 +675,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
     }
 
-    /// Handle a segmented ComplexAck: accumulate segments, send SegmentAck,
-    /// reassemble and complete TSM transaction when all segments received.
+    /// Handle a segmented ComplexAck: accumulate segments, send SegmentAcks,
+    /// and reassemble when all segments are received.
     async fn handle_segmented_complex_ack(
         tsm: &Arc<Mutex<Tsm>>,
         network: &Arc<NetworkLayer<T>>,
@@ -703,7 +694,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             "Received segmented ComplexAck"
         );
 
-        // Cap concurrent segmented sessions to prevent resource exhaustion
         const MAX_CONCURRENT_SEG_SESSIONS: usize = 64;
         if !seg_state.contains_key(&key) && seg_state.len() >= MAX_CONCURRENT_SEG_SESSIONS {
             warn!(
@@ -714,7 +704,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             return;
         }
 
-        // Get or create the receive state for this transaction
         let state = seg_state
             .entry(key.clone())
             .or_insert_with(|| SegmentedReceiveState {
@@ -723,12 +712,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 last_activity: Instant::now(),
             });
 
-        // Update activity timestamp for this session.
         state.last_activity = Instant::now();
 
-        // Gap detection: if the sequence number doesn't match expected, send
-        // a negative SegmentAck requesting retransmission from the last
-        // contiguous sequence number.
         if seq != state.expected_next_seq {
             warn!(
                 invoke_id = ack.invoke_id,
@@ -754,14 +739,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             return;
         }
 
-        // Store this segment and advance expected sequence
         if let Err(e) = state.receiver.receive(seq, ack.service_ack) {
             warn!(error = %e, "Rejecting oversized segment");
             return;
         }
         state.expected_next_seq = seq.wrapping_add(1);
 
-        // Send SegmentAck to acknowledge receipt
         let seg_ack = Apdu::SegmentAck(SegmentAckPdu {
             negative_ack: false,
             sent_by_server: false,
@@ -778,9 +761,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             warn!(error = %e, "Failed to send SegmentAck");
         }
 
-        // If this is the last segment, reassemble and complete the transaction.
-        // Gap detection: reassemble() validates that segments 0..total are all
-        // present; any missing sequence number produces an Err.
         if !ack.more_follows {
             let state = seg_state.remove(&key).unwrap();
             let total = state.receiver.received_count();
@@ -813,17 +793,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         &self.local_mac
     }
 
-    // -----------------------------------------------------------------------
-    // Low-level API
-    // -----------------------------------------------------------------------
-
     /// Send a confirmed request and wait for the response.
     ///
-    /// Returns the service response data (empty `Vec` for SimpleAck).
-    /// Returns an error on timeout, protocol error, reject, or abort.
-    ///
-    /// Automatically uses segmented transfer when the payload exceeds the
-    /// remote device's max APDU length.
+    /// Returns the service response data (empty for SimpleAck). Automatically
+    /// uses segmented transfer when the payload exceeds the remote device's
+    /// max APDU length.
     pub async fn confirmed_request(
         &self,
         destination_mac: &[u8],
@@ -842,14 +816,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
     /// Send a confirmed request routed through a BACnet router.
     ///
-    /// Use this when the target device is on a remote BACnet network (behind
-    /// a BBMD/Router). The NPDU is sent as a unicast to `router_mac` with
-    /// DNET/DADR set to `dest_network`/`dest_mac` so the router can forward
-    /// it to the correct subnet.
-    ///
-    /// `router_mac` is the transport-layer MAC of the router (e.g. the
-    /// BBMD's IP:port). `dest_network` and `dest_mac` are the BACnet
-    /// network number and MAC address of the final destination device.
+    /// The NPDU is sent as a unicast to `router_mac` with DNET/DADR set so
+    /// the router forwards it to `dest_network`/`dest_mac`.
     pub async fn confirmed_request_routed(
         &self,
         router_mac: &[u8],
@@ -870,8 +838,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         .await
     }
 
-    /// Shared implementation for [`confirmed_request`](Self::confirmed_request)
-    /// and [`confirmed_request_routed`](Self::confirmed_request_routed).
     async fn confirmed_request_inner(
         &self,
         target: ConfirmedTarget<'_>,
@@ -880,9 +846,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ) -> Result<Bytes, Error> {
         let tsm_mac = target.tsm_mac();
 
-        // Check if segmentation is needed (only for local/direct requests).
         if let ConfirmedTarget::Local { mac } = &target {
-            // Non-segmented ConfirmedRequest overhead: 4 bytes (type+flags, max-seg/apdu, invoke, service).
             let unsegmented_apdu_size = 4 + service_data.len();
             let (remote_max_apdu, remote_max_segments) = {
                 let dt = self.device_table.lock().await;
@@ -906,7 +870,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             }
         }
 
-        // Allocate invoke ID and register transaction
         let (invoke_id, rx) = {
             let mut tsm = self.tsm.lock().await;
             let invoke_id = tsm.allocate_invoke_id(tsm_mac).ok_or_else(|| {
@@ -916,7 +879,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             (invoke_id, rx)
         };
 
-        // Build ConfirmedRequest APDU
         let pdu = Apdu::ConfirmedRequest(ConfirmedRequestPdu {
             segmented: false,
             more_follows: false,
@@ -933,9 +895,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut buf = BytesMut::with_capacity(6 + service_data.len());
         encode_apdu(&mut buf, &pdu);
 
-        // Retry loop per Clause 5.4.2: retransmit on timeout up to apdu_retries times.
-        // The invoke_id stays the same across retries. The TSM transaction is NOT
-        // cancelled between retries — only on final timeout or non-timeout error.
         let timeout_duration = Duration::from_millis(self.config.apdu_timeout_ms);
         let max_retries = self.config.apdu_retries;
         let mut attempts: u8 = 0;
@@ -966,7 +925,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 }
             };
             if let Err(e) = send_result {
-                // Clean up the invoke ID on send failure to prevent pool exhaustion
                 let mut tsm = self.tsm.lock().await;
                 tsm.cancel_transaction(tsm_mac, invoke_id);
                 return Err(e);
@@ -974,7 +932,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
             match timeout(timeout_duration, &mut rx).await {
                 Ok(Ok(response)) => {
-                    // Response received — convert TsmResponse to Result
                     return match response {
                         TsmResponse::SimpleAck => Ok(Bytes::new()),
                         TsmResponse::ComplexAck { service_data } => Ok(service_data),
@@ -984,13 +941,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     };
                 }
                 Ok(Err(_)) => {
-                    // Channel closed — TSM transaction was cancelled externally
                     return Err(Error::Encoding("TSM response channel closed".into()));
                 }
                 Err(_timeout) => {
                     attempts += 1;
                     if attempts > max_retries {
-                        // Final timeout — cancel TSM transaction and return error
                         let mut tsm = self.tsm.lock().await;
                         tsm.cancel_transaction(tsm_mac, invoke_id);
                         return Err(Error::Timeout(timeout_duration));
@@ -1006,10 +961,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
     }
 
-    /// Send a confirmed request using segmented transfer.
-    ///
-    /// Splits the service data into segments, sends them with windowed flow
-    /// control (SegmentAck from server), then waits for the final response.
+    /// Send a confirmed request using segmented transfer with windowed flow control.
     async fn segmented_confirmed_request(
         &self,
         destination_mac: &[u8],
@@ -1022,7 +974,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let segments = split_payload(service_data, max_seg_size);
         let total_segments = segments.len();
 
-        // Clause 20.1.2.7: sequence numbers 0-255, so max 256 segments
         if total_segments > 256 {
             return Err(Error::Segmentation(format!(
                 "payload requires {} segments, maximum is 256",
@@ -1046,7 +997,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             "Starting segmented confirmed request"
         );
 
-        // Allocate invoke ID and register TSM transaction (for final response).
         let (invoke_id, rx) = {
             let mut tsm = self.tsm.lock().await;
             let invoke_id = tsm.allocate_invoke_id(destination_mac).ok_or_else(|| {
@@ -1056,7 +1006,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             (invoke_id, rx)
         };
 
-        // Register a channel for receiving SegmentAck PDUs during the send.
         let (seg_ack_tx, mut seg_ack_rx) = mpsc::channel(16);
         {
             let key = (MacAddr::from_slice(destination_mac), invoke_id);
@@ -1070,7 +1019,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut neg_ack_retries: u32 = 0;
         const MAX_NEG_ACK_RETRIES: u32 = 10;
 
-        // Send segments in windows, waiting for SegmentAck after each window.
         let result = async {
             while next_seq < total_segments {
                 let window_end = (next_seq + window_size).min(total_segments);
@@ -1104,7 +1052,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     debug!(seq, is_last, "Sent segment");
                 }
 
-                // Wait for SegmentAck with retry logic matching the unsegmented path.
                 let ack = {
                     let mut ack_retries: u8 = 0;
                     loop {
@@ -1122,7 +1069,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                     attempt = ack_retries,
                                     "Retransmitting segmented request window"
                                 );
-                                // Retransmit the current window.
                                 for (seq, segment_data) in segments[next_seq..window_end]
                                     .iter()
                                     .enumerate()
@@ -1170,10 +1116,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     "Received SegmentAck"
                 );
 
-                // Update window size from server's response.
                 window_size = ack.actual_window_size.max(1) as usize;
 
-                // Validate sequence_number is within our segment range
                 let ack_seq = ack.sequence_number as usize;
                 if ack_seq >= total_segments {
                     return Err(Error::Segmentation(format!(
@@ -1189,16 +1133,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                             "too many negative SegmentAck retransmissions".into(),
                         ));
                     }
-                    // Server is requesting retransmission from this sequence.
                     next_seq = ack_seq;
                 } else {
                     neg_ack_retries = 0;
-                    // Advance past the acknowledged segment.
                     next_seq = ack_seq + 1;
                 }
             }
 
-            // All segments sent and acknowledged. Wait for final response via TSM.
             timeout(timeout_duration, rx)
                 .await
                 .map_err(|_| Error::Timeout(timeout_duration))?
@@ -1206,13 +1147,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
         .await;
 
-        // Clean up seg_ack channel regardless of outcome.
         {
             let key = (MacAddr::from_slice(destination_mac), invoke_id);
             self.seg_ack_senders.lock().await.remove(&key);
         }
 
-        // On error, cancel the TSM transaction.
         let response = match result {
             Ok(response) => response,
             Err(e) => {
@@ -1271,9 +1210,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 
     /// Broadcast an unconfirmed request globally (DNET=0xFFFF).
-    ///
-    /// Unlike `broadcast_unconfirmed()` which only reaches the local subnet,
-    /// this sends a global broadcast that routers will forward to all networks.
     pub async fn broadcast_global_unconfirmed(
         &self,
         service_choice: UnconfirmedServiceChoice,
@@ -1312,10 +1248,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await
     }
 
-    // -----------------------------------------------------------------------
-    // High-level API
-    // -----------------------------------------------------------------------
-
     /// Read a property from a remote device.
     pub async fn read_property(
         &self,
@@ -1342,10 +1274,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 
     /// Read a property from a discovered device, auto-routing if needed.
-    ///
-    /// Looks up the device by instance number in the device table. If the
-    /// device has routing info (DNET/DADR), uses routed addressing through
-    /// the router. Otherwise, sends a direct unicast.
     pub async fn read_property_from_device(
         &self,
         device_instance: u32,
@@ -1387,9 +1315,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 
     /// Read a property from a device on a remote BACnet network via a router.
-    ///
-    /// Use this when you know the routing info explicitly (e.g., from CLI
-    /// flags). For discovered devices, `read_property_from_device()` auto-routes.
     pub async fn read_property_routed(
         &self,
         router_mac: &[u8],
@@ -1545,9 +1470,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 
     /// Send a WhoIs broadcast to a specific remote network.
-    ///
-    /// Unlike `who_is()` which broadcasts globally (DNET=0xFFFF), this
-    /// targets a single network number so only devices on that network respond.
     pub async fn who_is_network(
         &self,
         dest_network: u16,
@@ -1927,9 +1849,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         Ok(())
     }
 
-    /// Send a TimeSynchronization request to a device (Clause 16.10.5).
-    ///
-    /// This is an unconfirmed service — no response is expected.
+    /// Send a TimeSynchronization request (unconfirmed, no response expected).
     pub async fn time_synchronization(
         &self,
         destination_mac: &[u8],
@@ -1950,9 +1870,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         .await
     }
 
-    /// Send a UTCTimeSynchronization request to a device (Clause 16.10.6).
-    ///
-    /// This is an unconfirmed service — no response is expected.
+    /// Send a UTCTimeSynchronization request (unconfirmed, no response expected).
     pub async fn utc_time_synchronization(
         &self,
         destination_mac: &[u8],
@@ -1973,19 +1891,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         .await
     }
 
-    /// Get a receiver for incoming COV notifications.
-    ///
-    /// Can be called multiple times — each call returns a new independent
-    /// receiver that gets all notifications from that point forward.
+    /// Get a receiver for incoming COV notifications. Each call returns a new
+    /// independent receiver.
     pub fn cov_notifications(&self) -> broadcast::Receiver<COVNotificationRequest> {
         self.cov_tx.subscribe()
     }
 
-    // -----------------------------------------------------------------------
-    // Device discovery
-    // -----------------------------------------------------------------------
-
-    /// Get a snapshot of all discovered devices (from IAm responses).
+    /// Get a snapshot of all discovered devices.
     pub async fn discovered_devices(&self) -> Vec<DiscoveredDevice> {
         self.device_table.lock().await.all()
     }
@@ -2006,7 +1918,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             task.abort();
             let _ = task.await;
         }
-        // Network/transport cleanup happens when the Arc is dropped.
         Ok(())
     }
 }
@@ -2018,7 +1929,6 @@ mod tests {
     use std::net::Ipv4Addr;
     use tokio::time::Duration;
 
-    /// Helper: build a client on loopback with ephemeral port and short timeout.
     async fn make_client() -> BACnetClient<BipTransport> {
         BACnetClient::builder()
             .interface(Ipv4Addr::LOCALHOST)
@@ -2040,13 +1950,11 @@ mod tests {
     async fn confirmed_request_simple_ack() {
         let mut client_a = make_client().await;
 
-        // Create a second network layer to act as "server B"
         let transport_b = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
         let mut net_b = NetworkLayer::new(transport_b);
         let mut rx_b = net_b.start().await.unwrap();
         let b_mac = net_b.local_mac().to_vec();
 
-        // Spawn a task that receives the request and sends back SimpleAck
         let b_handle = tokio::spawn(async move {
             let received = timeout(Duration::from_secs(2), rx_b.recv())
                 .await
@@ -2079,7 +1987,7 @@ mod tests {
 
         assert!(result.is_ok());
         let response = result.unwrap();
-        assert!(response.is_empty()); // SimpleAck has no service data
+        assert!(response.is_empty());
 
         b_handle.await.unwrap();
         client_a.stop().await.unwrap();
@@ -2135,7 +2043,6 @@ mod tests {
     #[tokio::test]
     async fn confirmed_request_timeout() {
         let mut client = make_client().await;
-        // Send to a non-existent address — should timeout
         let fake_mac = vec![10, 99, 99, 99, 0xBA, 0xC0];
         let result = client
             .confirmed_request(&fake_mac, ConfirmedServiceChoice::READ_PROPERTY, &[0x01])
@@ -2153,10 +2060,7 @@ mod tests {
         let mut rx_b = net_b.start().await.unwrap();
         let b_mac = net_b.local_mac().to_vec();
 
-        // Server B: receive request, respond with 3-segment ComplexAck.
-        // Wait for SegmentAck after each segment before sending the next.
         let b_handle = tokio::spawn(async move {
-            // Receive the ConfirmedRequest
             let received = timeout(Duration::from_secs(2), rx_b.recv())
                 .await
                 .unwrap()
@@ -2194,7 +2098,6 @@ mod tests {
                     .await
                     .unwrap();
 
-                // Wait for SegmentAck from client
                 let seg_ack_msg = timeout(Duration::from_secs(2), rx_b.recv())
                     .await
                     .unwrap()
@@ -2211,7 +2114,6 @@ mod tests {
             net_b.stop().await.unwrap();
         });
 
-        // Client sends a request and should receive the reassembled response
         let result = client
             .confirmed_request(&b_mac, ConfirmedServiceChoice::READ_PROPERTY, &[0x01])
             .await;
@@ -2228,8 +2130,6 @@ mod tests {
 
     #[tokio::test]
     async fn segmented_confirmed_request_sends_segments() {
-        // Client with max_apdu_length=50 → max segment payload = 44 bytes.
-        // Any service_data > 46 bytes will trigger segmentation.
         let mut client = BACnetClient::builder()
             .interface(Ipv4Addr::LOCALHOST)
             .port(0)
@@ -2244,7 +2144,6 @@ mod tests {
         let mut rx_b = net_b.start().await.unwrap();
         let b_mac = net_b.local_mac().to_vec();
 
-        // 100 bytes of service data → ceil(100/44) = 3 segments (44 + 44 + 12)
         let service_data: Vec<u8> = (0u8..100).collect();
         let expected_data = service_data.clone();
 
@@ -2267,7 +2166,6 @@ mod tests {
                     let seq = req.sequence_number.unwrap();
                     all_service_data.extend_from_slice(&req.service_request);
 
-                    // Send SegmentAck
                     let seg_ack = Apdu::SegmentAck(SegmentAckPdu {
                         negative_ack: false,
                         sent_by_server: true,
@@ -2290,7 +2188,6 @@ mod tests {
                 }
             }
 
-            // All segments received — send SimpleAck
             let ack = Apdu::SimpleAck(SimpleAck {
                 invoke_id,
                 service_choice: ConfirmedServiceChoice::WRITE_PROPERTY,
@@ -2315,9 +2212,8 @@ mod tests {
             .await;
 
         assert!(result.is_ok());
-        assert!(result.unwrap().is_empty()); // SimpleAck has no service data
+        assert!(result.unwrap().is_empty());
 
-        // Verify server received all service data correctly
         let received_data = b_handle.await.unwrap();
         assert_eq!(received_data, expected_data);
 
@@ -2340,7 +2236,6 @@ mod tests {
         let mut rx_b = net_b.start().await.unwrap();
         let b_mac = net_b.local_mac().to_vec();
 
-        // 60 bytes → 2 segments (44 + 16)
         let service_data: Vec<u8> = (0u8..60).collect();
 
         let b_handle = tokio::spawn(async move {
@@ -2379,7 +2274,6 @@ mod tests {
                 }
             }
 
-            // Send ComplexAck response
             let ack = Apdu::ComplexAck(ComplexAck {
                 segmented: false,
                 more_follows: false,
@@ -2412,7 +2306,6 @@ mod tests {
 
     #[tokio::test]
     async fn segment_overflow_guard() {
-        // Create a client with small max_apdu_length so segments are tiny.
         let mut client = BACnetClient::builder()
             .interface(Ipv4Addr::LOCALHOST)
             .port(0)
@@ -2422,13 +2315,7 @@ mod tests {
             .await
             .unwrap();
 
-        // With max_apdu=50, each segment carries 50-6=44 bytes.
-        // Clause 20.1.2.7: max 256 segments (seq 0-255). Need > 256 segments to trigger error.
-        // 257 * 44 = 11,308 bytes → exactly 257 segments, exceeding the 256 limit.
         let huge_payload = vec![0u8; 257 * 44];
-
-        // Use a fake destination MAC not in the device table — the client
-        // will fall back to its own max_apdu_length (50), triggering segmentation.
         let fake_mac = vec![10, 99, 99, 99, 0xBA, 0xC0];
 
         let result = client
@@ -2441,8 +2328,6 @@ mod tests {
 
         assert!(result.is_err(), "expected error for oversized payload");
         let err_msg = result.unwrap_err().to_string();
-        // Should get a segmentation overflow error. On some platforms a
-        // transport error may arrive first if the UDP send is attempted.
         assert!(
             err_msg.contains("segments") || err_msg.contains("too long"),
             "expected segment overflow or message-too-long error, got: {}",

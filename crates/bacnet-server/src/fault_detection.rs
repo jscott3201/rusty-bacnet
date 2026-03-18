@@ -1,4 +1,4 @@
-//! Fault detection / reliability evaluation per ASHRAE 135-2020 Clause 12.
+//! Fault detection / reliability evaluation.
 //!
 //! The [`FaultDetector`] periodically evaluates each object's reliability,
 //! checking for OVER_RANGE, UNDER_RANGE (analog objects), and optionally
@@ -59,7 +59,6 @@ impl FaultDetector {
             ObjectType::ANALOG_VALUE,
         ];
 
-        // Collect OIDs and their range-check results first (immutable borrow).
         let mut updates: Vec<(ObjectIdentifier, u32, u32)> = Vec::new();
 
         for &obj_type in &analog_types {
@@ -113,7 +112,6 @@ impl FaultDetector {
                             Reliability::NO_FAULT_DETECTED.to_raw()
                         }
                     } else {
-                        // No min/max limits configured — keep current reliability unchanged.
                         continue;
                     };
 
@@ -124,7 +122,6 @@ impl FaultDetector {
             }
         }
 
-        // Apply updates (mutable borrow).
         let mut changes = Vec::new();
         for (oid, old_rel, new_rel) in updates {
             if let Some(obj) = db.get_mut(&oid) {

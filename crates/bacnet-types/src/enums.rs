@@ -149,6 +149,10 @@ bacnet_enum! {
     const AUDIT_REPORTER = 61;
     /// New in 135-2020.
     const AUDIT_LOG = 62;
+    /// New in 135-2020.
+    const COLOR = 63;
+    /// New in 135-2020.
+    const COLOR_TEMPERATURE = 64;
 }
 
 // ===========================================================================
@@ -680,6 +684,12 @@ bacnet_enum! {
     const SEND_NOW = 505;
     const FLOOR_NUMBER = 506;
     const DEVICE_UUID = 507;
+    /// New in 135-2020 Addendum bj (Color objects).
+    const COLOR_COMMAND = 508;
+    /// New in 135-2020 Addendum bj (Color Temperature objects).
+    const DEFAULT_COLOR_TEMPERATURE = 509;
+    /// New in 135-2020 Addendum bj (Color objects).
+    const DEFAULT_COLOR = 510;
 }
 
 // ===========================================================================
@@ -1068,7 +1078,6 @@ bacnet_enum! {
     const FORWARDED_NPDU = 0x08;
     const REGISTER_FOREIGN_DEVICE = 0x09;
     const DELETE_FOREIGN_DEVICE_TABLE_ENTRY = 0x0A;
-    // 0x0B is removed per Table U-1
     const DISTRIBUTE_BROADCAST_TO_NETWORK = 0x0C;
 }
 

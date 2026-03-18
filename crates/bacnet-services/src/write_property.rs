@@ -8,7 +8,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
 // ---------------------------------------------------------------------------
-// WritePropertyRequest (Clause 15.9.1.1)
+// WritePropertyRequest
 // ---------------------------------------------------------------------------
 
 /// WriteProperty-Request service parameters.
@@ -73,7 +73,7 @@ impl WritePropertyRequest {
         let property_identifier = PropertyIdentifier::from_raw(prop_raw);
         offset = end;
 
-        // [2] propertyArrayIndex (optional) — peek for context tag 2
+        // [2] propertyArrayIndex (optional)
         let mut property_array_index = None;
         let (tag, tag_end) = tags::decode_tag(data, offset)?;
         if tag.class == TagClass::Context && tag.number == 2 && !tag.is_opening && !tag.is_closing {

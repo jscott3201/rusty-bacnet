@@ -9,10 +9,10 @@ use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
 // ---------------------------------------------------------------------------
-// MessageClass choice
+// MessageClass
 // ---------------------------------------------------------------------------
 
-/// The messageClass CHOICE: numeric ([1] Unsigned) or text ([2] CharacterString).
+/// The messageClass CHOICE: numeric or text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MessageClass {
     Numeric(u32),
@@ -20,7 +20,7 @@ pub enum MessageClass {
 }
 
 // ---------------------------------------------------------------------------
-// TextMessageRequest (Clause 15.20.1 / 16.10.7)
+// TextMessageRequest
 // ---------------------------------------------------------------------------
 
 /// Request parameters shared by ConfirmedTextMessage and
@@ -94,7 +94,6 @@ impl TextMessageRequest {
                 }
                 offset = new_offset;
             }
-            // else: not opening tag 1 — no messageClass, don't advance offset
         }
 
         // [3] messagePriority

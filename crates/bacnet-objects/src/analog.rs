@@ -31,9 +31,9 @@ pub struct AnalogInputObject {
     event_detector: OutOfRangeDetector,
     /// Reliability: 0 = NO_FAULT_DETECTED.
     reliability: u32,
-    /// Optional minimum present value for fault detection (Clause 12).
+    /// Optional minimum present value for fault detection.
     min_pres_value: Option<f32>,
-    /// Optional maximum present value for fault detection (Clause 12).
+    /// Optional maximum present value for fault detection.
     max_pres_value: Option<f32>,
     /// Event_Time_Stamps[3]: to-offnormal, to-fault, to-normal.
     event_time_stamps: [BACnetTimeStamp; 3],
@@ -255,7 +255,7 @@ pub struct AnalogOutputObject {
     max_pres_value: Option<f32>,
     event_time_stamps: [BACnetTimeStamp; 3],
     event_message_texts: [String; 3],
-    /// Value source tracking (Clause 19.5).
+    /// Value source tracking.
     value_source: common::ValueSourceTracking,
 }
 
@@ -1315,7 +1315,7 @@ mod tests {
         }
     }
 
-    // --- Direct PRIORITY_ARRAY writes (Clause 15.9.1.1.3) ---
+    // --- Direct PRIORITY_ARRAY writes ---
 
     #[test]
     fn ao_direct_priority_array_write_value() {
@@ -1962,8 +1962,8 @@ mod tests {
     #[test]
     fn ai_property_list_index_zero_returns_count() {
         let ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
-        // Clause 12.1.1.4.1: Property_List excludes OBJECT_IDENTIFIER,
-        // OBJECT_NAME, OBJECT_TYPE, and PROPERTY_LIST itself.
+        // Property_List excludes OBJECT_IDENTIFIER, OBJECT_NAME,
+        // OBJECT_TYPE, and PROPERTY_LIST itself.
         let filtered_count = ai
             .property_list()
             .iter()

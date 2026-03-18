@@ -12,7 +12,7 @@
 use bacnet_types::error::Error;
 use bytes::{BufMut, Bytes, BytesMut};
 
-/// BACnet/SC BVLC function codes (Annex AB.2).
+/// BACnet/SC BVLC function codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ScFunction {
@@ -86,7 +86,7 @@ impl ScFunction {
     }
 }
 
-/// BVLC-SC control flags (Annex AB.2.2).
+/// BVLC-SC control flags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ScControl {
     /// Originating Virtual Address present.
@@ -100,8 +100,7 @@ pub struct ScControl {
 }
 
 impl ScControl {
-    /// Encode control flags to a byte per ASHRAE 135-2020 Annex AB.2.2.
-    /// Bits 7-4 are reserved (zero); bits 3-0 carry the flags.
+    /// Encode control flags to a byte. Bits 7-4 are reserved (zero); bits 3-0 carry the flags.
     pub fn to_byte(self) -> u8 {
         let mut b = 0u8;
         if self.has_originating_vmac {
@@ -119,7 +118,7 @@ impl ScControl {
         b
     }
 
-    /// Decode control flags from a byte per ASHRAE 135-2020 Annex AB.2.2.
+    /// Decode control flags from a byte.
     pub fn from_byte(b: u8) -> Self {
         Self {
             has_originating_vmac: b & 0x08 != 0, // bit 3
@@ -130,29 +129,21 @@ impl ScControl {
     }
 }
 
-/// Virtual MAC address (6 bytes, per Annex AB).
+/// Virtual MAC address (6 bytes).
 pub type Vmac = [u8; 6];
 
-/// Broadcast VMAC (all 0xFF) per AB.1.5.2.
+/// Broadcast VMAC (all 0xFF).
 pub const BROADCAST_VMAC: Vmac = [0xFF; 6];
 
-/// Unknown/uninitialized VMAC (all 0x00) per AB.1.5.2.
-/// "The reserved EUI-48 value X'000000000000' is not used by this data link
-/// and can be used internally to indicate that a VMAC is unknown or uninitialized."
+/// Unknown/uninitialized VMAC (all 0x00).
 pub const UNKNOWN_VMAC: Vmac = [0x00; 6];
 
-/// Check if a VMAC is the broadcast address (all 0xFF per AB.1.5.2).
+/// Check if a VMAC is the broadcast address (all 0xFF).
 pub fn is_broadcast_vmac(vmac: &Vmac) -> bool {
     *vmac == BROADCAST_VMAC
 }
 
-/// A single BACnet/SC header option (Annex AB.2.3).
-///
-/// Header Marker byte layout:
-///   Bit 7: More Options (1 = another option follows)
-///   Bit 6: Must Understand (1 = recipient must understand or reject)
-///   Bit 5: Header Data Flag (1 = Header Length + Header Data follow)
-///   Bits 4..0: Header Option Type (1..31)
+/// A single BACnet/SC header option.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScOption {
     /// Option type (bits 4..0, values 1..31).
@@ -170,9 +161,9 @@ pub struct ScMessage {
     pub message_id: u16,
     pub originating_vmac: Option<Vmac>,
     pub destination_vmac: Option<Vmac>,
-    /// Destination options (TLV-encoded, Annex AB.2.3).
+    /// Destination options (TLV-encoded).
     pub dest_options: Vec<ScOption>,
-    /// Data options (TLV-encoded, Annex AB.2.3).
+    /// Data options (TLV-encoded).
     pub data_options: Vec<ScOption>,
     /// Payload data (NPDU for EncapsulatedNpdu, function-specific otherwise).
     pub payload: Bytes,
@@ -217,11 +208,7 @@ pub fn encode_sc_message(buf: &mut BytesMut, msg: &ScMessage) {
     buf.put_slice(&msg.payload);
 }
 
-/// Encode SC header options per Annex AB.2.3.
-///
-/// Header Marker: bit 7 = More Options, bit 6 = Must Understand,
-/// bit 5 = Header Data Flag, bits 4..0 = type.
-/// Header Length (2 octets) + Header Data only present when Header Data Flag = 1.
+/// Encode SC header options.
 fn encode_sc_options(buf: &mut BytesMut, options: &[ScOption]) {
     for (i, opt) in options.iter().enumerate() {
         let more_follows = i + 1 < options.len();
@@ -313,11 +300,7 @@ pub fn decode_sc_message(data: &[u8]) -> Result<ScMessage, Error> {
     })
 }
 
-/// Decode SC header options per Annex AB.2.3.
-///
-/// Header Marker: bit 7 = More Options, bit 6 = Must Understand,
-/// bit 5 = Header Data Flag, bits 4..0 = type.
-/// Header Length (2 octets) + Header Data only present when Header Data Flag = 1.
+/// Decode SC header options.
 fn decode_sc_options(data: &[u8], offset: &mut usize) -> Result<Vec<ScOption>, Error> {
     const MAX_SC_OPTIONS: usize = 64;
     let mut options = Vec::new();
@@ -387,7 +370,7 @@ mod tests {
             has_data_options: false,
         };
         let b = ctrl.to_byte();
-        assert_eq!(b, 0x0A); // 0x08 | 0x02 (bits 3 + 1 per AB.2.2)
+        assert_eq!(b, 0x0A);
         let decoded = ScControl::from_byte(b);
         assert_eq!(decoded, ctrl);
     }
@@ -400,7 +383,7 @@ mod tests {
             has_dest_options: true,
             has_data_options: true,
         };
-        assert_eq!(ctrl.to_byte(), 0x0F); // bits 3-0 all set per AB.2.2
+        assert_eq!(ctrl.to_byte(), 0x0F);
         assert_eq!(ScControl::from_byte(0x0F), ctrl);
     }
 
@@ -571,8 +554,7 @@ mod tests {
 
     #[test]
     fn wire_format_check_both_vmacs() {
-        // Both VMACs present — per ASHRAE 135-2020 Annex AB.2.2 the control
-        // byte uses bits 3 (originating) and 2 (destination), so both set = 0x0C.
+        // Both VMACs present: bits 3 (originating) + 2 (destination) = 0x0C.
         let orig = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06];
         let dest = [0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F];
         let msg = ScMessage {
@@ -589,7 +571,7 @@ mod tests {
         encode_sc_message(&mut buf, &msg);
 
         assert_eq!(buf[0], 0x01); // EncapsulatedNpdu
-        assert_eq!(buf[1], 0x0C); // bits 3+2 set = both VMACs present (AB.2.2)
+        assert_eq!(buf[1], 0x0C);
         assert_eq!(buf[2], 0x00); // msg_id high
         assert_eq!(buf[3], 0x01); // msg_id low
         assert_eq!(&buf[4..10], &orig);

@@ -58,7 +58,6 @@ pub enum Bvlc6Function {
     RegisterForeignDevice,
     /// Delete-Foreign-Device-Table-Entry (0x0A).
     DeleteForeignDeviceEntry,
-    // 0x0B is removed per Table U-1
     /// Distribute-Broadcast-To-Network (0x0C).
     DistributeBroadcastToNetwork,
     /// Unrecognized function code.
@@ -80,7 +79,6 @@ impl Bvlc6Function {
             0x08 => Self::ForwardedNpdu,
             0x09 => Self::RegisterForeignDevice,
             0x0A => Self::DeleteForeignDeviceEntry,
-            // 0x0B removed per Table U-1
             0x0C => Self::DistributeBroadcastToNetwork,
             other => Self::Unknown(other),
         }
@@ -111,17 +109,15 @@ impl Bvlc6Function {
 pub struct Bvlc6Frame {
     /// BVLC-IPv6 function code.
     pub function: Bvlc6Function,
-    /// Source virtual MAC address (3 bytes per Annex U.2).
+    /// Source virtual MAC address (3 bytes).
     pub source_vmac: Bip6Vmac,
-    /// Destination virtual MAC address (3 bytes, present in unicast only per U.2.2.1).
+    /// Destination virtual MAC address (3 bytes, present in unicast only).
     pub destination_vmac: Option<Bip6Vmac>,
     /// Payload after the BVLC-IPv6 header (typically NPDU bytes).
     pub payload: Bytes,
 }
 
 /// Encode a BVLC-IPv6 frame into a buffer.
-///
-/// Wire format: type(1) + function(1) + length(2) + source-vmac(3) + payload.
 pub fn encode_bvlc6(
     buf: &mut BytesMut,
     function: Bvlc6Function,
@@ -178,7 +174,6 @@ pub fn decode_bvlc6(data: &[u8]) -> Result<Bvlc6Frame, Error> {
     let mut source_vmac = [0u8; 3];
     source_vmac.copy_from_slice(&data[4..7]);
 
-    // U.2.2.1: Original-Unicast-NPDU has Destination-Virtual-Address at bytes [7..10]
     let (destination_vmac, payload_start) = if function == Bvlc6Function::OriginalUnicast {
         if length < BVLC6_UNICAST_HEADER_LENGTH {
             return Err(Error::decoding(
@@ -204,9 +199,6 @@ pub fn decode_bvlc6(data: &[u8]) -> Result<Bvlc6Frame, Error> {
 }
 
 /// Encode a BVLC-IPv6 Original-Unicast-NPDU frame.
-///
-/// U.2.2.1: Type(1) + Function(1) + Length(2) + Source-Virtual-Address(3)
-///          + Destination-Virtual-Address(3) + NPDU.
 pub fn encode_bvlc6_original_unicast(
     buf: &mut BytesMut,
     source_vmac: &Bip6Vmac,
@@ -233,7 +225,7 @@ pub fn encode_bvlc6_original_broadcast(buf: &mut BytesMut, source_vmac: &Bip6Vma
     encode_bvlc6(buf, Bvlc6Function::OriginalBroadcast, source_vmac, npdu);
 }
 
-/// Encode a BVLC-IPv6 Virtual-Address-Resolution frame (Annex U.5).
+/// Encode a BVLC-IPv6 Virtual-Address-Resolution frame.
 ///
 /// The payload is the queried VMAC (3 bytes). The source VMAC in the header
 /// is set to the querying node's own VMAC.
@@ -248,7 +240,7 @@ pub fn encode_virtual_address_resolution(source_vmac: &Bip6Vmac) -> BytesMut {
     buf
 }
 
-/// Encode a BVLC-IPv6 Virtual-Address-Resolution-Ack frame (Annex U.5).
+/// Encode a BVLC-IPv6 Virtual-Address-Resolution-Ack frame.
 ///
 /// Sent in response to a VirtualAddressResolution when the queried VMAC
 /// matches our own. The payload is our VMAC (3 bytes).
@@ -265,14 +257,12 @@ pub fn encode_virtual_address_resolution_ack(source_vmac: &Bip6Vmac) -> BytesMut
 
 /// Extract the NPDU from a ForwardedNpdu payload.
 ///
-/// U.2.9.1: ForwardedNpdu payload (after the 7-byte BVLC header):
+/// ForwardedNpdu payload layout:
 ///   Original-Source-Virtual-Address(3) + Original-Source-B/IPv6-Address(18) + NPDU.
-/// The 18-byte B/IPv6 address is: IPv6(16) + port(2).
 /// Returns the originating VMAC, originating B/IPv6 address, and NPDU bytes.
 pub fn decode_forwarded_npdu_payload(
     payload: &[u8],
 ) -> Result<(Bip6Vmac, SocketAddrV6, &[u8]), Error> {
-    // Need at least vmac(3) + ipv6_addr(16) + port(2) = 21 bytes
     if payload.len() < 21 {
         return Err(Error::decoding(
             0,
@@ -500,7 +490,6 @@ impl TransportPort for Bip6Transport {
         };
         self.local_mac = encode_bip6_mac(local_ip, local_port);
 
-        // Derive VMAC: prefer device instance (Annex U.5), fall back to address XOR-fold.
         self.source_vmac = if let Some(id) = self.device_instance {
             derive_vmac_from_device_instance(id)
         } else {
@@ -508,8 +497,6 @@ impl TransportPort for Bip6Transport {
             derive_vmac_from_addr(&local_v6)
         };
 
-        // Resolve interface index for multicast. Loopback uses 0 (OS default).
-        // For non-loopback addresses, try to find the interface index.
         let if_index = if local_ip.is_loopback() {
             0u32
         } else {
@@ -531,10 +518,7 @@ impl TransportPort for Bip6Transport {
         let socket = Arc::new(socket);
         self.socket = Some(Arc::clone(&socket));
 
-        // --- VMAC collision detection and resolution per Annex U.5 ---
-        // Send VirtualAddressResolution to link-local multicast, then wait
-        // briefly for any VirtualAddressResolutionAck indicating a collision.
-        // On collision, generate a new random VMAC and retry up to MAX_VMAC_RETRIES times.
+        // VMAC collision detection and resolution
         {
             let multicast_dest =
                 SocketAddrV6::new(BACNET_IPV6_MULTICAST_LINK_LOCAL, self.port, 0, if_index);
@@ -583,7 +567,7 @@ impl TransportPort for Bip6Transport {
                         new_vmac = ?self.source_vmac,
                         attempt = attempt + 1,
                         max_retries = MAX_VMAC_RETRIES,
-                        "BIP6 VMAC collision detected, re-deriving new VMAC (Annex U.5)"
+                        "BIP6 VMAC collision detected, re-deriving new VMAC"
                     );
                 } else {
                     warn!(
@@ -627,10 +611,6 @@ impl TransportPort for Bip6Transport {
                                         .await;
                                 }
 
-                                // --- ForwardedNpdu: extract NPDU from payload ---
-                                // Payload format: originating-VMAC(3) + NPDU bytes.
-                                // Use the originating VMAC as source_mac (not the
-                                // UDP sender, which is the forwarding BBMD).
                                 Bvlc6Function::ForwardedNpdu => {
                                     match decode_forwarded_npdu_payload(&frame.payload) {
                                         Ok((originating_vmac, _source_addr, npdu_bytes)) => {
@@ -659,8 +639,6 @@ impl TransportPort for Bip6Transport {
                                     }
                                 }
 
-                                // --- VirtualAddressResolution: respond if queried
-                                //     VMAC matches ours ---
                                 Bvlc6Function::VirtualAddressResolution => {
                                     if frame.payload.len() >= 3 {
                                         let query_vmac: Bip6Vmac =
@@ -678,7 +656,6 @@ impl TransportPort for Bip6Transport {
                                     }
                                 }
 
-                                // --- VirtualAddressResolutionAck: collision detection ---
                                 Bvlc6Function::VirtualAddressResolutionAck => {
                                     if frame.payload.len() >= 3 {
                                         let their_vmac: Bip6Vmac =
@@ -740,7 +717,6 @@ impl TransportPort for Bip6Transport {
         let mut buf = BytesMut::with_capacity(BVLC6_UNICAST_HEADER_LENGTH + npdu.len());
         let source_vmac = self.source_vmac;
         // Derive dest VMAC from lower 3 bytes of dest IPv6 address.
-        // A full implementation would use a VMAC table (U.5).
         let dest_vmac: Bip6Vmac = [ip.octets()[13], ip.octets()[14], ip.octets()[15]];
         encode_bvlc6_original_unicast(&mut buf, &source_vmac, &dest_vmac, npdu);
 
@@ -787,7 +763,6 @@ mod tests {
         assert_eq!(buf[0], BVLC6_TYPE);
         assert_eq!(buf[1], Bvlc6Function::OriginalUnicast.to_byte());
         let len = u16::from_be_bytes([buf[2], buf[3]]);
-        // U.2.2.1: 4 + src_vmac(3) + dst_vmac(3) + npdu
         assert_eq!(len as usize, BVLC6_UNICAST_HEADER_LENGTH + npdu.len());
         assert_eq!(&buf[4..7], &src_vmac);
         assert_eq!(&buf[7..10], &dst_vmac);
@@ -941,7 +916,6 @@ mod tests {
 
     #[test]
     fn decode_forwarded_npdu_extracts_npdu() {
-        // U.2.9.1: ForwardedNpdu payload: vmac(3) + B/IPv6-address(18) + NPDU
         let originating_vmac: Bip6Vmac = [0xDE, 0xAD, 0x01];
         let source_ip = Ipv6Addr::LOCALHOST;
         let source_port: u16 = 47808;
@@ -960,7 +934,6 @@ mod tests {
 
     #[test]
     fn decode_forwarded_npdu_rejects_short_payload() {
-        // Need at least 21 bytes (vmac=3 + ipv6=16 + port=2)
         assert!(decode_forwarded_npdu_payload(&[0x01; 20]).is_err());
         assert!(decode_forwarded_npdu_payload(&[]).is_err());
     }
@@ -984,7 +957,6 @@ mod tests {
         let source_ip = Ipv6Addr::LOCALHOST;
         let npdu = vec![0x01, 0x00, 0xDE, 0xAD];
 
-        // U.2.9.1: ForwardedNpdu payload: vmac(3) + B/IPv6-addr(18) + NPDU
         let mut forwarded_payload = originating_vmac.to_vec();
         forwarded_payload.extend_from_slice(&source_ip.octets());
         forwarded_payload.extend_from_slice(&47808u16.to_be_bytes());
@@ -1020,7 +992,6 @@ mod tests {
         let originating_vmac: Bip6Vmac = [0xAA, 0xAA, 0xAA];
         let test_npdu = vec![0x01, 0x00, 0xCA, 0xFE];
 
-        // U.2.9.1: vmac(3) + B/IPv6-addr(18) + NPDU
         let mut forwarded_payload = originating_vmac.to_vec();
         forwarded_payload.extend_from_slice(&Ipv6Addr::LOCALHOST.octets());
         forwarded_payload.extend_from_slice(&47808u16.to_be_bytes());
@@ -1113,7 +1084,6 @@ mod tests {
             (0x08, "FORWARDED_NPDU"),
             (0x09, "REGISTER_FOREIGN_DEVICE"),
             (0x0A, "DELETE_FOREIGN_DEVICE_TABLE_ENTRY"),
-            // 0x0B removed per Table U-1
             (0x0C, "DISTRIBUTE_BROADCAST_TO_NETWORK"),
         ];
 

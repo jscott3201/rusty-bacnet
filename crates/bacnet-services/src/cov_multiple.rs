@@ -11,7 +11,7 @@ use bytes::BytesMut;
 use crate::common::{PropertyReference, MAX_DECODED_ITEMS};
 
 // ---------------------------------------------------------------------------
-// SubscribeCOVPropertyMultipleRequest (Clause 13.14.3)
+// SubscribeCOVPropertyMultipleRequest
 // ---------------------------------------------------------------------------
 
 /// A single COV reference within a subscription specification.
@@ -185,7 +185,6 @@ impl SubscribeCOVPropertyMultipleRequest {
                 }
                 let (prop_ref, new_off) = PropertyReference::decode(data, tag_end)?;
                 offset = new_off;
-                // closing tag 0
                 let (_tag, tag_end) = tags::decode_tag(data, offset)?;
                 offset = tag_end;
 
@@ -233,8 +232,7 @@ impl SubscribeCOVPropertyMultipleRequest {
 }
 
 // ---------------------------------------------------------------------------
-// COVNotificationMultipleRequest (Confirmed service 31, Unconfirmed 11)
-// Clause 13.15
+// COVNotificationMultipleRequest
 // ---------------------------------------------------------------------------
 
 /// A single value entry in a COV notification list.
@@ -482,10 +480,6 @@ impl COVNotificationMultipleRequest {
         })
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

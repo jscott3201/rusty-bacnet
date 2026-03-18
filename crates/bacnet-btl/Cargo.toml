@@ -1,0 +1,58 @@
+[package]
+name = "bacnet-btl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "BTL (BACnet Testing Laboratories) compliance test harness"
+keywords = ["bacnet", "testing", "btl", "compliance", "certification"]
+categories = ["command-line-utilities", "network-programming"]
+
+[[bin]]
+name = "bacnet-test"
+path = "src/main.rs"
+
+[dependencies]
+bacnet-types.workspace = true
+bacnet-encoding.workspace = true
+bacnet-services.workspace = true
+bacnet-transport.workspace = true
+bacnet-network.workspace = true
+bacnet-client.workspace = true
+bacnet-objects.workspace = true
+bacnet-server.workspace = true
+bytes.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync", "macros", "time", "signal", "process", "io-util"] }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rustyline = "15"
+owo-colors = "4"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+[dependencies.pcap]
+version = "2"
+optional = true
+
+[dependencies.tokio-rustls]
+version = "0.26"
+optional = true
+
+[dependencies.rcgen]
+version = "0.13"
+optional = true
+
+[dependencies.rand]
+version = "0.9"
+optional = true
+
+[features]
+default = []
+pcap = ["dep:pcap"]
+sc-tls = ["bacnet-client/sc-tls", "bacnet-transport/sc-tls", "bacnet-server/sc-tls", "dep:tokio-rustls", "dep:rcgen", "dep:rand"]
+serial = ["bacnet-transport/serial"]
+ethernet = ["bacnet-transport/ethernet"]

@@ -215,7 +215,6 @@ impl Time {
 // ---------------------------------------------------------------------------
 
 /// BACnet timestamp -- a CHOICE of Time, sequence number, or DateTime.
-/// Per Clause 20.2.1.5 (ASHRAE 135-2020).
 #[derive(Debug, Clone, PartialEq)]
 pub enum BACnetTimeStamp {
     /// Context tag 0: Time
@@ -306,7 +305,6 @@ macro_rules! alloc_or_std_format {
     ($($arg:tt)*) => { alloc::format!($($arg)*) }
 }
 
-// Make macro usable within this module before its definition point
 use alloc_or_std_format;
 
 // ---------------------------------------------------------------------------

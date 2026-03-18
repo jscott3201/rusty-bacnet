@@ -41,7 +41,7 @@ pub trait BACnetObject: Send + Sync {
 
     /// List the REQUIRED properties for this object type.
     ///
-    /// Default returns the four universal required properties per Clause 12.11.
+    /// Default returns the four universal required properties.
     /// Object implementations may override to include type-specific required properties.
     fn required_properties(&self) -> Cow<'static, [PropertyIdentifier]> {
         static UNIVERSAL: [PropertyIdentifier; 4] = [
@@ -80,7 +80,7 @@ pub trait BACnetObject: Send + Sync {
         None
     }
 
-    /// Evaluate this object's schedule for the given time (Clause 12.24).
+    /// Evaluate this object's schedule for the given time.
     ///
     /// Returns `Some((new_value, refs))` if the present value changed, where `refs`
     /// is the list of (object_identifier, property_identifier) pairs to write to.

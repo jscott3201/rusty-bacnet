@@ -8,7 +8,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
 // ---------------------------------------------------------------------------
-// ReadPropertyRequest (Clause 15.5.1.1)
+// ReadPropertyRequest
 // ---------------------------------------------------------------------------
 
 /// ReadProperty-Request service parameters.
@@ -89,7 +89,7 @@ impl ReadPropertyRequest {
 }
 
 // ---------------------------------------------------------------------------
-// ReadPropertyACK (Clause 15.5.1.2)
+// ReadPropertyACK
 // ---------------------------------------------------------------------------
 
 /// ReadProperty-ACK service parameters.
@@ -165,7 +165,6 @@ impl ReadPropertyACK {
             }
             property_array_index = Some(primitives::decode_unsigned(&data[tag_end..end])? as u32);
             offset = end;
-            // Read opening tag 3
             let (tag, tag_end) = tags::decode_tag(data, offset)?;
             if !tag.is_opening_tag(3) {
                 return Err(Error::decoding(
@@ -182,7 +181,6 @@ impl ReadPropertyACK {
             });
         }
 
-        // tag should be opening tag 3
         if !tag.is_opening_tag(3) {
             return Err(Error::decoding(
                 offset,
@@ -199,10 +197,6 @@ impl ReadPropertyACK {
         })
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

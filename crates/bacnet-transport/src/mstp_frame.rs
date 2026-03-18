@@ -18,21 +18,21 @@ pub const PREAMBLE: [u8; 2] = [0x55, 0xFF];
 /// Header length after preamble: frame_type(1) + dest(1) + src(1) + length(2) + header_crc(1).
 pub const HEADER_LENGTH: usize = 6;
 
-/// Maximum NPDU data length per MS/TP extended frame (Clause 9.2).
+/// Maximum NPDU data length per MS/TP extended frame.
 /// Standard frames are limited to MAX_STANDARD_MPDU_DATA (501 bytes).
 pub const MAX_MPDU_DATA: usize = 1497;
 
-/// Maximum NPDU data length per standard MS/TP frame (Clause 9.1).
+/// Maximum NPDU data length per standard MS/TP frame.
 /// Legacy devices only support this smaller limit.
 pub const MAX_STANDARD_MPDU_DATA: usize = 501;
 
 /// Broadcast MAC address.
 pub const BROADCAST_MAC: u8 = 0xFF;
 
-/// Maximum master station address (Clause 9).
+/// Maximum master station address.
 pub const MAX_MASTER: u8 = 127;
 
-/// MS/TP frame types (Clause 9.3).
+/// MS/TP frame types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum FrameType {
@@ -108,12 +108,10 @@ pub struct MstpFrame {
 }
 
 // ---------------------------------------------------------------------------
-// CRC-8 (Header CRC) — Clause 9.5.2
+// CRC-8 (Header CRC)
 // ---------------------------------------------------------------------------
-// Polynomial: x^8 + x^2 + x + 1 (generator byte 0x07, reflected 0xE0)
-// Calculated per byte using the algorithm from the spec.
 
-/// CRC-8 lookup table per Clause 9 Annex G.
+/// CRC-8 lookup table.
 const CRC8_TABLE: [u8; 256] = {
     let mut table = [0u8; 256];
     let mut i = 0usize;
@@ -154,11 +152,10 @@ pub fn crc8_valid(data_with_crc: &[u8]) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// CRC-16 (Data CRC) — Clause 9.5.3
+// CRC-16 (Data CRC)
 // ---------------------------------------------------------------------------
-// Polynomial: x^16 + x^15 + x^2 + 1
 
-/// CRC-16 lookup table per Clause 9 Annex G.
+/// CRC-16 lookup table.
 const CRC16_TABLE: [u16; 256] = {
     let mut table = [0u16; 256];
     let mut i = 0usize;
@@ -279,7 +276,6 @@ pub fn decode_frame(data: &[u8]) -> Result<(MstpFrame, usize), Error> {
     let source = data[4];
 
     // Source address must be a valid master station (0..=MAX_MASTER).
-    // BROADCAST_MAC (0xFF) is not valid as a source per Clause 9.
     if source > MAX_MASTER && source != BROADCAST_MAC {
         return Err(Error::decoding(
             4,

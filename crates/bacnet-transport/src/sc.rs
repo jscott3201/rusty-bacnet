@@ -56,7 +56,7 @@ pub enum ScConnectionState {
 pub struct ScConnection {
     pub state: ScConnectionState,
     pub local_vmac: Vmac,
-    /// Device UUID (16 bytes, RFC 4122) per AB.1.5.3.
+    /// Device UUID (16 bytes, RFC 4122).
     pub device_uuid: [u8; 16],
     pub hub_vmac: Option<Vmac>,
     /// Maximum APDU length this node can accept (sent in ConnectRequest).
@@ -64,7 +64,7 @@ pub struct ScConnection {
     /// Maximum APDU length the hub can accept (learned from ConnectAccept).
     pub hub_max_apdu_length: u16,
     next_message_id: u16,
-    /// Pending Disconnect-ACK to send after receiving a Disconnect-Request (AB.7.4).
+    /// Pending Disconnect-ACK to send after receiving a Disconnect-Request.
     pub disconnect_ack_to_send: Option<ScMessage>,
 }
 
@@ -89,11 +89,7 @@ impl ScConnection {
         id
     }
 
-    /// Build a Connect-Request message.
-    ///
-    /// Payload per AB.2.10.1: VMAC(6) + Device_UUID(16) +
-    /// Max-BVLC-Length(2,BE) + Max-NPDU-Length(2,BE) = 26 bytes.
-    /// No Originating/Destination Virtual Address per AB.2.10.1.
+    /// Build a Connect-Request message (26-byte payload, no VMACs).
     pub fn build_connect_request(&mut self) -> ScMessage {
         self.state = ScConnectionState::Connecting;
         let mut payload_buf = Vec::with_capacity(26);
@@ -112,10 +108,7 @@ impl ScConnection {
         }
     }
 
-    /// Handle a received Connect-Accept.
-    ///
-    /// Accept payload per AB.2.11.1: VMAC(6) + Device_UUID(16) +
-    /// Max-BVLC-Length(2,BE) + Max-NPDU-Length(2,BE) = 26 bytes.
+    /// Handle a received Connect-Accept (26-byte payload).
     pub fn handle_connect_accept(&mut self, msg: &ScMessage) -> bool {
         if self.state != ScConnectionState::Connecting {
             return false;
@@ -142,11 +135,9 @@ impl ScConnection {
         true
     }
 
-    /// Build a Disconnect-Request message.
+    /// Build a Disconnect-Request message (no VMACs).
     ///
     /// Returns an error if not yet connected (no hub VMAC available).
-    /// Build a Disconnect-Request message.
-    /// AB.2.12.1: No Originating/Destination Virtual Address.
     pub fn build_disconnect_request(&mut self) -> Result<ScMessage, Error> {
         if self.hub_vmac.is_none() {
             return Err(Error::Encoding(
@@ -165,8 +156,7 @@ impl ScConnection {
         })
     }
 
-    /// Build a Heartbeat-Request message.
-    /// AB.2.14.1: No Originating/Destination Virtual Address.
+    /// Build a Heartbeat-Request message (no VMACs).
     pub fn build_heartbeat(&mut self) -> ScMessage {
         ScMessage {
             function: ScFunction::HeartbeatRequest,
@@ -215,7 +205,6 @@ impl ScConnection {
             }
             ScFunction::DisconnectRequest => {
                 self.state = ScConnectionState::Disconnected;
-                // AB.2.13.1: Disconnect-ACK has no VMACs
                 self.disconnect_ack_to_send = Some(ScMessage {
                     function: ScFunction::DisconnectAck,
                     message_id: msg.message_id,
@@ -234,8 +223,6 @@ impl ScConnection {
                 None
             }
             ScFunction::Result => {
-                // Per Annex AB: success = empty payload, error = 5 bytes
-                // (originating_function(1) + error_class(2,BE) + error_code(2,BE)).
                 let is_error = !msg.payload.is_empty();
                 if is_error {
                     self.state = ScConnectionState::Disconnected;
@@ -264,7 +251,6 @@ pub struct ScReconnectConfig {
 
 impl Default for ScReconnectConfig {
     fn default() -> Self {
-        // AB.6.1: minimum reconnect timeout 10..30s, max 600s
         Self {
             initial_delay_ms: 10_000,
             max_delay_ms: 600_000,
@@ -282,7 +268,7 @@ pub struct ScTransport<W: WebSocketPort> {
     ws: Option<W>,
     ws_shared: Option<Arc<W>>, // kept after start() for send methods
     local_vmac: Vmac,
-    /// Device UUID (16 bytes, RFC 4122) per AB.1.5.3.
+    /// Device UUID (16 bytes, RFC 4122).
     device_uuid: [u8; 16],
     connection: Option<Arc<Mutex<ScConnection>>>,
     recv_task: Option<JoinHandle<()>>,
@@ -310,8 +296,7 @@ impl<W: WebSocketPort> ScTransport<W> {
         }
     }
 
-    /// Set the device UUID (builder-style). Per AB.1.5.3, this should be
-    /// a RFC 4122 UUID that persists across device restarts.
+    /// Set the device UUID (builder-style). Should be a persistent RFC 4122 UUID.
     pub fn with_device_uuid(mut self, uuid: [u8; 16]) -> Self {
         self.device_uuid = uuid;
         self
@@ -747,7 +732,6 @@ mod tests {
         assert_eq!(req.function, ScFunction::ConnectRequest);
         assert_eq!(conn.state, ScConnectionState::Connecting);
 
-        // Handle connect accept — AB.2.11.1: 26-byte payload, no VMACs
         let mut accept_payload = Vec::with_capacity(26);
         accept_payload.extend_from_slice(&[0x10; 6]); // hub VMAC
         accept_payload.extend_from_slice(&[0u8; 16]); // hub UUID
@@ -910,7 +894,6 @@ mod tests {
 
         let hb = conn.build_heartbeat();
         assert_eq!(hb.function, ScFunction::HeartbeatRequest);
-        // AB.2.14.1: No VMACs
         assert!(hb.originating_vmac.is_none());
         assert!(hb.destination_vmac.is_none());
     }
@@ -923,7 +906,6 @@ mod tests {
 
         let msg = conn.build_disconnect_request().unwrap();
         assert_eq!(msg.function, ScFunction::DisconnectRequest);
-        // AB.2.12.1: No VMACs
         assert!(msg.originating_vmac.is_none());
         assert!(msg.destination_vmac.is_none());
         assert_eq!(conn.state, ScConnectionState::Disconnecting);
@@ -944,9 +926,7 @@ mod tests {
         let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
         let req = conn.build_connect_request();
 
-        // AB.2.10.1: VMAC(6) + Device_UUID(16) + Max-BVLC-Length(2) + Max-NPDU-Length(2) = 26
         assert_eq!(req.payload.len(), 26);
-        // No VMACs in control per AB.2.10.1
         assert!(req.originating_vmac.is_none());
         assert!(req.destination_vmac.is_none());
 
@@ -965,14 +945,12 @@ mod tests {
         let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
         let _req = conn.build_connect_request();
 
-        // AB.2.11.1: VMAC(6) + Device_UUID(16) + Max-BVLC-Length(2) + Max-NPDU-Length(2) = 26
         let mut accept_payload = Vec::with_capacity(26);
         accept_payload.extend_from_slice(&[0x10; 6]); // hub VMAC
         accept_payload.extend_from_slice(&[0u8; 16]); // hub Device UUID
         accept_payload.extend_from_slice(&1476u16.to_be_bytes()); // Max-BVLC-Length
         accept_payload.extend_from_slice(&480u16.to_be_bytes()); // Max-NPDU-Length
 
-        // No VMACs in ConnectAccept per AB.2.11.1
         let accept = ScMessage {
             function: ScFunction::ConnectAccept,
             message_id: 1,
@@ -1053,14 +1031,12 @@ mod tests {
         let req = decode_sc_message(&data).unwrap();
         assert_eq!(req.function, ScFunction::ConnectRequest);
 
-        // AB.2.11.1: VMAC(6) + Device_UUID(16) + Max-BVLC-Length(2) + Max-NPDU-Length(2) = 26
         let mut accept_payload = Vec::with_capacity(26);
         accept_payload.extend_from_slice(&hub_vmac);
         accept_payload.extend_from_slice(&[0u8; 16]); // Device UUID
         accept_payload.extend_from_slice(&1476u16.to_be_bytes());
         accept_payload.extend_from_slice(&1476u16.to_be_bytes());
 
-        // Send Connect-Accept back — no VMACs per AB.2.11.1
         let accept = ScMessage {
             function: ScFunction::ConnectAccept,
             message_id: req.message_id,
@@ -1187,7 +1163,6 @@ mod tests {
     fn bvlc_result_error_disconnects() {
         let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
         conn.state = ScConnectionState::Connected;
-        // Error BVLC-Result per Annex AB: 5-byte payload
         // originating_function(1) + error_class(2,BE) + error_code(2,BE).
         let msg = ScMessage {
             function: ScFunction::Result,
@@ -1207,7 +1182,6 @@ mod tests {
     fn bvlc_result_success_no_disconnect() {
         let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
         conn.state = ScConnectionState::Connected;
-        // Success BVLC-Result per Annex AB: empty payload.
         let msg = ScMessage {
             function: ScFunction::Result,
             message_id: 1,
@@ -1267,7 +1241,6 @@ mod tests {
             .unwrap();
         let msg = decode_sc_message(&data).unwrap();
         assert_eq!(msg.function, ScFunction::HeartbeatRequest);
-        // AB.2.14.1: no VMACs on HeartbeatRequest
         assert!(msg.originating_vmac.is_none());
 
         // Send HeartbeatAck back so the transport doesn't timeout
@@ -1331,7 +1304,6 @@ mod tests {
             let req = decode_sc_message(&data).unwrap();
             assert_eq!(req.function, ScFunction::ConnectRequest);
 
-            // Send ConnectAccept with 10-byte payload per Annex AB.7.2
             let mut payload = Vec::with_capacity(10);
             payload.extend_from_slice(&[0x10; 6]); // hub VMAC
             payload.extend_from_slice(&1476u16.to_be_bytes()); // Max-BVLC-Length
@@ -1449,7 +1421,6 @@ mod tests {
 
     #[test]
     fn reconnect_config_default() {
-        // AB.6.1: minimum reconnect timeout 10..30s, max 600s
         let config = ScReconnectConfig::default();
         assert_eq!(config.initial_delay_ms, 10_000);
         assert_eq!(config.max_delay_ms, 600_000);

@@ -9,7 +9,7 @@ use bytes::BytesMut;
 use crate::common::{BACnetPropertyValue, MAX_DECODED_ITEMS};
 
 // ---------------------------------------------------------------------------
-// WritePropertyMultipleRequest (Clause 15.10.1.1)
+// WritePropertyMultipleRequest
 // ---------------------------------------------------------------------------
 
 /// A single object + list of property values to write.

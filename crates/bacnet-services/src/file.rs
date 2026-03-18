@@ -7,7 +7,7 @@ use bytes::BytesMut;
 
 use crate::common::MAX_DECODED_ITEMS;
 
-/// Decode a tag from content and validate the slice bounds.
+/// Decode a tag and validate the resulting slice bounds.
 fn checked_slice<'a>(
     content: &'a [u8],
     offset: usize,
@@ -22,7 +22,7 @@ fn checked_slice<'a>(
 }
 
 // ---------------------------------------------------------------------------
-// AtomicReadFile-Request (Clause 15.1.1)
+// AtomicReadFile-Request
 // ---------------------------------------------------------------------------
 
 /// AtomicReadFile-Request — stream or record access.
@@ -98,7 +98,6 @@ impl AtomicReadFileRequest {
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 
-        // Application-tagged object identifier
         let (tag, pos) = tags::decode_tag(data, offset)?;
         let end = pos + tag.length as usize;
         if end > data.len() {
@@ -107,7 +106,6 @@ impl AtomicReadFileRequest {
         let file_identifier = ObjectIdentifier::decode(&data[pos..end])?;
         offset = end;
 
-        // Access method
         let (tag, tag_end) = tags::decode_tag(data, offset)?;
         let access = if tag.is_opening_tag(0) {
             let (content, _) = tags::extract_context_value(data, tag_end, 0)?;
@@ -241,7 +239,7 @@ impl AtomicWriteFileRequest {
 }
 
 // ---------------------------------------------------------------------------
-// AtomicReadFile-ACK (Clause 15.1.2)
+// AtomicReadFile-ACK
 // ---------------------------------------------------------------------------
 
 /// AtomicReadFile-ACK — response for stream or record access.
@@ -299,12 +297,10 @@ impl AtomicReadFileAck {
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 
-        // Application-tagged Boolean (value is in the tag's LVT bits, no content octets)
         let (tag, pos) = tags::decode_tag(data, offset)?;
         let end_of_file = tag.length != 0;
         offset = pos;
 
-        // Access method
         let (tag, tag_end) = tags::decode_tag(data, offset)?;
         let access = if tag.is_opening_tag(0) {
             let (content, _) = tags::extract_context_value(data, tag_end, 0)?;
@@ -365,7 +361,7 @@ impl AtomicReadFileAck {
 }
 
 // ---------------------------------------------------------------------------
-// AtomicWriteFile-ACK (Clause 15.2.2)
+// AtomicWriteFile-ACK
 // ---------------------------------------------------------------------------
 
 /// AtomicWriteFile-ACK — response for stream or record access.

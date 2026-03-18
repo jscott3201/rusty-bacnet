@@ -7,7 +7,7 @@ use bacnet_types::error::Error;
 use bytes::{BufMut, BytesMut};
 
 // ---------------------------------------------------------------------------
-// PrivateTransferRequest (Clause 15.19.1 / 16.10.6)
+// PrivateTransferRequest
 // ---------------------------------------------------------------------------
 
 /// Request parameters shared by ConfirmedPrivateTransfer and
@@ -82,7 +82,7 @@ impl PrivateTransferRequest {
 }
 
 // ---------------------------------------------------------------------------
-// PrivateTransferAck (Clause 15.19.2)
+// PrivateTransferAck
 // ---------------------------------------------------------------------------
 
 /// ConfirmedPrivateTransfer-ACK service parameters.

@@ -1,4 +1,4 @@
-//! Schedule execution engine (Clause 12.24).
+//! Schedule execution engine.
 //!
 //! Periodically evaluates Schedule objects and writes the effective value
 //! to all controlled object-property references.
@@ -19,7 +19,6 @@ fn current_time_components() -> (u8, u8, u8) {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    // Unix epoch (1970-01-01) was a Thursday (day 3 in 0=Mon convention).
     let day_of_week = ((secs / 86400 + 3) % 7) as u8;
     let time_of_day = secs % 86400;
     let hour = (time_of_day / 3600) as u8;
@@ -34,7 +33,6 @@ fn current_time_components() -> (u8, u8, u8) {
 pub async fn tick_schedules(db: &Arc<RwLock<ObjectDatabase>>) {
     let (day_of_week, hour, minute) = current_time_components();
 
-    // Phase 1: evaluate schedules and collect writes to make.
     let mut writes = Vec::new();
     {
         let mut db_w = db.write().await;
@@ -54,7 +52,6 @@ pub async fn tick_schedules(db: &Arc<RwLock<ObjectDatabase>>) {
             }
         }
 
-        // Phase 2: write to controlled properties (same lock scope).
         for (target_oid, prop_id, value) in writes {
             if let Some(target_obj) = db_w.get_mut(&target_oid) {
                 let prop = PropertyIdentifier::from_raw(prop_id);

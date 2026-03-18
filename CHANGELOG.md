@@ -91,6 +91,40 @@ Comprehensive 7-area compliance review and 55+ fixes across the entire protocol 
 - **Fixed** character set names — IBM_MICROSOFT_DBCS (was JIS_X0201), JIS_X_0208 (was JIS_C6226) per Clause 20.2.9
 - **Added** separate APDU_Segment_Timeout field in TSM config per Clause 5.4.1
 
+### BTL Compliance Test Harness
+
+New `bacnet-btl` crate — a full BTL Test Plan 26.1 compliance test harness with 3808 tests across all 13 BTL sections, 100% coverage of all BTL test references.
+
+#### Test Harness
+- **New crate** `bacnet-btl` with `bacnet-test` binary — self-test, external IUT testing, interactive shell
+- **3808 tests** organized across 13 BTL sections (s02–s14), one directory per section
+- **`self-test` command** — in-process server with all 64 object types, runs full suite in <1s
+- **`run` command** — tests against external BACnet device over BIP or BACnet/SC
+- **`serve` command** — runs the full BTL object database as a standalone server (BIP or SC)
+- **SC client/server support** — feature-gated behind `sc-tls`, includes self-signed cert generation
+- **Docker support** — `Dockerfile.btl` and `docker-compose.btl.yml` with SC hub + BIP + routing topologies
+- **RPM/WPM test helpers** — `read_property_multiple`, `rpm_all`, `rpm_required`, `rpm_optional`, `write_property_multiple`, `wpm_single` on TestContext
+
+#### Stack Compliance Fixes Found by BTL Tests (~40 fixes)
+- **Added** EVENT_STATE to AccessDoor, LoadControl, Timer, AlertEnrollment objects
+- **Added** Device properties: LOCAL_DATE, LOCAL_TIME, UTC_OFFSET, LAST_RESTART_REASON, DEVICE_UUID
+- **Added** Schedule PRIORITY_FOR_WRITING property
+- **Added** Device wildcard instance (4194303) support in ReadProperty/ReadPropertyMultiple handlers
+- **Added** PROPERTY_IS_NOT_AN_ARRAY error in ReadProperty handler
+- **Added** AccessDoor full command prioritization (priority array write, NULL relinquish)
+- **Added** `supports_cov() = true` on 11 additional object types (LifeSafetyPoint, LifeSafetyZone, AccessDoor, Loop, Accumulator, PulseConverter, LightingOutput, BinaryLightingOutput, Staging, Color, ColorTemperature)
+- **Fixed** AccumulatorObject `supports_cov()` was on wrong impl block (PulseConverterObject)
+- **Added** EVENT_ENABLE, ACKED_TRANSITIONS, NOTIFICATION_CLASS, EVENT_TIME_STAMPS to Binary and Multistate objects
+- **Added** EVENT_ENABLE, NOTIFICATION_CLASS to Multistate Input/Output/Value objects
+- **Changed** DatePatternValue, TimePatternValue, DateTimePatternValue from `define_value_object_simple!` to `define_value_object_commandable!` (per BTL spec, all value types are commandable)
+- **Added** LightingOutput DEFAULT_FADE_TIME property
+- **Added** Staging PRESENT_STAGE, STAGES properties
+- **Added** NotificationForwarder RECIPIENT_LIST, PROCESS_IDENTIFIER_FILTER properties
+- **Added** Lift FLOOR_NUMBER property
+- **New** Color object (type 63) — full implementation with CIE 1931 xy coordinates
+- **New** ColorTemperature object (type 64) — full implementation with Kelvin value
+- **Added** Device dynamic Protocol_Object_Types_Supported bitstring calculation (auto-detects all object types in database)
+
 ### Code Review Fixes
 
 #### Critical

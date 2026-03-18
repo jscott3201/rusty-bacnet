@@ -1,12 +1,8 @@
-//! Intrinsic reporting engine per ASHRAE 135-2020 Clause 13.3.
+//! Intrinsic reporting engine.
 //!
 //! Evaluates five intrinsic reporting algorithms periodically:
-//!
-//! - **CHANGE_OF_STATE** (Clause 13.3.1): Binary objects — present_value vs alarm_values
-//! - **CHANGE_OF_BITSTRING** (Clause 13.3.2): Bitstring masked comparison
-//! - **FLOATING_LIMIT** (Clause 13.3.5): Analog setpoint ± deadband
-//! - **COMMAND_FAILURE** (Clause 13.3.6): feedback_value vs present_value mismatch
-//! - **CHANGE_OF_VALUE** (Clause 13.3.8): COV-based intrinsic notifications
+//! CHANGE_OF_STATE, CHANGE_OF_BITSTRING, FLOATING_LIMIT, COMMAND_FAILURE,
+//! and CHANGE_OF_VALUE.
 //!
 //! The engine maintains per-object tracking state (last event state, time-delay
 //! countdown, last notified value) and is designed to be called on the same
@@ -21,8 +17,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 // ───────────────────────────────── helpers ──────────────────────────────────
 
-/// Status-flags bit positions (MSB-first BACnet bitstring):
-/// bit 0 = IN_ALARM, bit 1 = FAULT, bit 2 = OVERRIDDEN, bit 3 = OUT_OF_SERVICE.
+/// Returns a status-flags byte with the IN_ALARM bit set or clear.
 fn status_flags_byte(in_alarm: bool) -> u8 {
     if in_alarm {
         0x08
@@ -237,7 +232,6 @@ impl IntrinsicReportingEngine {
 
         let tracker = self.trackers.entry(oid).or_insert_with(|| {
             let mut t = ObjectTracker::new();
-            // Initialise from the object's current event_state.
             t.event_state =
                 EventState::from_raw(read_enum(obj, PropertyIdentifier::EVENT_STATE).unwrap_or(0));
             t
@@ -277,7 +271,6 @@ fn apply_time_delay(
     event_enable: u32,
 ) -> Option<IntrinsicEvent> {
     if desired_state == tracker.event_state {
-        // No change needed — cancel any pending transition.
         tracker.pending_state = None;
         tracker.time_delay_remaining = None;
         return None;
@@ -291,8 +284,6 @@ fn apply_time_delay(
     };
 
     if !enabled {
-        // Transition is not enabled — still update internal state instantly
-        // but suppress the event. This matches OutOfRangeDetector behaviour.
         tracker.event_state = desired_state;
         tracker.pending_state = None;
         tracker.time_delay_remaining = None;
@@ -300,7 +291,6 @@ fn apply_time_delay(
     }
 
     if time_delay == 0 {
-        // Instant transition.
         let change = EventStateChange {
             from: tracker.event_state,
             to: desired_state,
@@ -317,13 +307,10 @@ fn apply_time_delay(
         });
     }
 
-    // Time delay > 0.
     match tracker.pending_state {
         Some(ps) if ps == desired_state => {
-            // Already waiting for this transition.
             let remaining = tracker.time_delay_remaining.unwrap_or(time_delay);
             if remaining <= 1 {
-                // Delay elapsed.
                 let change = EventStateChange {
                     from: tracker.event_state,
                     to: desired_state,
@@ -344,7 +331,6 @@ fn apply_time_delay(
             }
         }
         _ => {
-            // Start a new pending transition.
             tracker.pending_state = Some(desired_state);
             tracker.time_delay_remaining = Some(time_delay);
             None
@@ -354,10 +340,9 @@ fn apply_time_delay(
 
 // ───────────────────── T38: CHANGE_OF_STATE ────────────────────────────────
 
-/// Clause 13.3.1 — CHANGE_OF_STATE for binary objects.
+/// CHANGE_OF_STATE for binary objects.
 ///
-/// If present_value is in alarm_values → OFFNORMAL.
-/// Otherwise → NORMAL.
+/// OFFNORMAL if present_value is in alarm_values, otherwise NORMAL.
 fn evaluate_change_of_state(
     oid: ObjectIdentifier,
     obj: &dyn bacnet_objects::traits::BACnetObject,
@@ -391,10 +376,9 @@ fn bitstring_and(a: &[u8], b: &[u8]) -> Vec<u8> {
     a.iter().zip(b.iter()).map(|(x, y)| x & y).collect()
 }
 
-/// Clause 13.3.2 — CHANGE_OF_BITSTRING.
+/// CHANGE_OF_BITSTRING.
 ///
-/// Masked present_value = present_value AND bit_mask.
-/// If masked value matches any entry in alarm_values → OFFNORMAL.
+/// OFFNORMAL if (present_value AND bit_mask) matches any alarm_values entry.
 fn evaluate_change_of_bitstring(
     oid: ObjectIdentifier,
     obj: &dyn bacnet_objects::traits::BACnetObject,
@@ -431,14 +415,10 @@ fn evaluate_change_of_bitstring(
 
 // ───────────────────── T40: FLOATING_LIMIT ─────────────────────────────────
 
-/// Clause 13.3.5 — FLOATING_LIMIT.
+/// FLOATING_LIMIT.
 ///
-/// Compares present_value against setpoint ± error_limit (deadband):
-/// - pv > setpoint + error_limit → HIGH_LIMIT
-/// - pv < setpoint - error_limit → LOW_LIMIT
-/// - within deadband → NORMAL
-///
-/// Respects LIMIT_ENABLE flags.
+/// Compares present_value against setpoint +/- error_limit with deadband
+/// hysteresis. Respects LIMIT_ENABLE flags.
 fn evaluate_floating_limit(
     oid: ObjectIdentifier,
     obj: &dyn bacnet_objects::traits::BACnetObject,
@@ -451,7 +431,6 @@ fn evaluate_floating_limit(
     let error_limit = read_real(obj, PropertyIdentifier::ERROR_LIMIT)?;
     let deadband = read_real(obj, PropertyIdentifier::DEADBAND).unwrap_or(0.0);
 
-    // Read LIMIT_ENABLE as a bitstring byte (bit 0 MSB = low, bit 1 = high).
     let limit_enable = read_bitstring(obj, PropertyIdentifier::LIMIT_ENABLE)
         .and_then(|(_, data)| data.first().copied())
         .unwrap_or(0);
@@ -504,11 +483,9 @@ fn evaluate_floating_limit(
 
 // ───────────────────── T41: COMMAND_FAILURE ─────────────────────────────────
 
-/// Clause 13.3.6 — COMMAND_FAILURE.
+/// COMMAND_FAILURE.
 ///
-/// Compares feedback_value with present_value.
-/// If they differ → OFFNORMAL (after time_delay).
-/// When they match → NORMAL.
+/// OFFNORMAL if feedback_value differs from present_value, otherwise NORMAL.
 fn evaluate_command_failure(
     oid: ObjectIdentifier,
     obj: &dyn bacnet_objects::traits::BACnetObject,
@@ -537,19 +514,15 @@ fn evaluate_command_failure(
 
 // ───────────────────── T42: CHANGE_OF_VALUE ────────────────────────────────
 
-/// Clause 13.3.8 — CHANGE_OF_VALUE (intrinsic COV).
+/// CHANGE_OF_VALUE (intrinsic COV).
 ///
-/// For analog objects: fires when present_value changes by more than
-/// cov_increment since last notification.
-/// For binary objects: fires when present_value changes state.
-///
-/// This does not use time_delay — notifications fire immediately on change.
+/// Fires when present_value changes by more than cov_increment (analog) or
+/// changes state (binary). Does not use time_delay.
 fn evaluate_change_of_value(
     oid: ObjectIdentifier,
     obj: &dyn bacnet_objects::traits::BACnetObject,
     tracker: &mut ObjectTracker,
 ) -> Option<IntrinsicEvent> {
-    // Try analog first (Real present_value).
     if let Some(pv) = read_real(obj, PropertyIdentifier::PRESENT_VALUE) {
         let increment = read_real(obj, PropertyIdentifier::COV_INCREMENT).unwrap_or(0.0);
 
@@ -558,7 +531,7 @@ fn evaluate_change_of_value(
                 let delta = (pv - last).abs();
                 increment <= 0.0 || delta >= increment
             }
-            None => true, // First evaluation — always notify.
+            None => true,
         };
 
         if should_notify {
@@ -577,7 +550,6 @@ fn evaluate_change_of_value(
         return None;
     }
 
-    // Try binary (Enumerated present_value).
     if let Some(pv) = read_enum(obj, PropertyIdentifier::PRESENT_VALUE) {
         let should_notify = match tracker.last_cov_binary {
             Some(last) => pv != last,

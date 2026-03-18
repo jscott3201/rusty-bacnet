@@ -31,7 +31,7 @@ pub struct BinaryInputObject {
     reliability: u32,
     active_text: String,
     inactive_text: String,
-    /// CHANGE_OF_STATE event detector (Clause 13.3.1).
+    /// CHANGE_OF_STATE event detector.
     event_detector: ChangeOfStateDetector,
 }
 
@@ -106,6 +106,29 @@ impl BACnetObject for BinaryInputObject {
             p if p == PropertyIdentifier::INACTIVE_TEXT => {
                 Ok(PropertyValue::CharacterString(self.inactive_text.clone()))
             }
+            p if p == PropertyIdentifier::ALARM_VALUES => Ok(PropertyValue::List(
+                self.event_detector
+                    .alarm_values
+                    .iter()
+                    .map(|v| PropertyValue::Enumerated(*v))
+                    .collect(),
+            )),
+            p if p == PropertyIdentifier::EVENT_ENABLE => Ok(PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![self.event_detector.event_enable << 5],
+            }),
+            p if p == PropertyIdentifier::ACKED_TRANSITIONS => Ok(PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![self.event_detector.acked_transitions << 5],
+            }),
+            p if p == PropertyIdentifier::NOTIFICATION_CLASS => Ok(PropertyValue::Unsigned(
+                self.event_detector.notification_class as u64,
+            )),
+            p if p == PropertyIdentifier::EVENT_TIME_STAMPS => Ok(PropertyValue::List(vec![
+                PropertyValue::Unsigned(0),
+                PropertyValue::Unsigned(0),
+                PropertyValue::Unsigned(0),
+            ])),
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -200,7 +223,7 @@ pub struct BinaryOutputObject {
     reliability: u32,
     active_text: String,
     inactive_text: String,
-    /// COMMAND_FAILURE event detector (Clause 13.3.3).
+    /// COMMAND_FAILURE event detector.
     event_detector: ChangeOfStateDetector,
 }
 
@@ -286,6 +309,22 @@ impl BACnetObject for BinaryOutputObject {
             p if p == PropertyIdentifier::INACTIVE_TEXT => {
                 Ok(PropertyValue::CharacterString(self.inactive_text.clone()))
             }
+            p if p == PropertyIdentifier::EVENT_ENABLE => Ok(PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![self.event_detector.event_enable << 5],
+            }),
+            p if p == PropertyIdentifier::ACKED_TRANSITIONS => Ok(PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![self.event_detector.acked_transitions << 5],
+            }),
+            p if p == PropertyIdentifier::NOTIFICATION_CLASS => Ok(PropertyValue::Unsigned(
+                self.event_detector.notification_class as u64,
+            )),
+            p if p == PropertyIdentifier::EVENT_TIME_STAMPS => Ok(PropertyValue::List(vec![
+                PropertyValue::Unsigned(0),
+                PropertyValue::Unsigned(0),
+                PropertyValue::Unsigned(0),
+            ])),
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -392,7 +431,7 @@ pub struct BinaryValueObject {
     reliability: u32,
     active_text: String,
     inactive_text: String,
-    /// CHANGE_OF_STATE event detector (Clause 13.3.1).
+    /// CHANGE_OF_STATE event detector.
     event_detector: ChangeOfStateDetector,
 }
 
@@ -477,6 +516,22 @@ impl BACnetObject for BinaryValueObject {
             p if p == PropertyIdentifier::INACTIVE_TEXT => {
                 Ok(PropertyValue::CharacterString(self.inactive_text.clone()))
             }
+            p if p == PropertyIdentifier::EVENT_ENABLE => Ok(PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![self.event_detector.event_enable << 5],
+            }),
+            p if p == PropertyIdentifier::ACKED_TRANSITIONS => Ok(PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![self.event_detector.acked_transitions << 5],
+            }),
+            p if p == PropertyIdentifier::NOTIFICATION_CLASS => Ok(PropertyValue::Unsigned(
+                self.event_detector.notification_class as u64,
+            )),
+            p if p == PropertyIdentifier::EVENT_TIME_STAMPS => Ok(PropertyValue::List(vec![
+                PropertyValue::Unsigned(0),
+                PropertyValue::Unsigned(0),
+                PropertyValue::Unsigned(0),
+            ])),
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -933,7 +988,7 @@ mod tests {
         }
     }
 
-    // --- Direct PRIORITY_ARRAY writes (Clause 15.9.1.1.3) ---
+    // --- Direct PRIORITY_ARRAY writes ---
 
     #[test]
     fn bo_direct_priority_array_write_value() {

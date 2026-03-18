@@ -38,8 +38,7 @@ impl TlsWebSocket {
     ) -> Result<Self, Error> {
         let connector = tokio_tungstenite::Connector::Rustls(tls_config);
 
-        // Build a request that negotiates the BACnet/SC WebSocket subprotocol
-        // per ASHRAE 135-2020 Annex AB.
+        // Negotiate the BACnet/SC WebSocket subprotocol.
         let uri: tokio_tungstenite::tungstenite::http::Uri = url
             .parse()
             .map_err(|e| Error::Encoding(format!("Invalid WebSocket URL: {e}")))?;
@@ -76,17 +75,16 @@ impl WebSocketPort for TlsWebSocket {
                 let mut read = self.read.lock().await;
                 read.next().await
             };
-            // read lock dropped here
             match msg {
                 Some(Ok(Message::Binary(data))) => return Ok(data.to_vec()),
                 Some(Ok(Message::Close(_))) => {
                     return Err(Error::Encoding("WebSocket closed".into()));
                 }
                 Some(Ok(Message::Ping(_) | Message::Pong(_))) => {
-                    continue; // skip ping/pong, re-acquire read lock
+                    continue;
                 }
                 Some(Ok(_)) => {
-                    // AB.7.5.3: non-binary data frames → close with 1003
+                    // Non-binary data frames: close with 1003
                     let mut w = self.write.lock().await;
                     let _ = w
                         .send(Message::Close(Some(
@@ -97,7 +95,7 @@ impl WebSocketPort for TlsWebSocket {
                         )))
                         .await;
                     return Err(Error::Encoding(
-                        "non-binary WebSocket frame received (AB.7.5.3)".into(),
+                        "non-binary WebSocket frame received".into(),
                     ));
                 }
                 Some(Err(e)) => {

@@ -39,7 +39,7 @@ pub trait SerialPort: Send + Sync + 'static {
 }
 
 // ---------------------------------------------------------------------------
-// MS/TP timing constants per Clause 9.5.6
+// MS/TP timing constants
 // ---------------------------------------------------------------------------
 
 /// Time without a token before a node assumes the token is lost (ms).
@@ -48,17 +48,14 @@ const T_NO_TOKEN_MS: u64 = 500;
 const T_REPLY_TIMEOUT_MS: u64 = 255;
 /// Time to wait for another node to begin using the token after it was passed (ms).
 const T_USAGE_TIMEOUT_MS: u64 = 20;
-/// T_SLOT: Clause 9.5.3 — "The width of the time slot within which a node
-/// may generate a token: 10 milliseconds."
+/// The width of the time slot within which a node may generate a token (ms).
 fn calculate_t_slot_ms(_baud_rate: u32) -> u64 {
     10
 }
 /// Maximum time a node may delay before sending a reply to DataExpectingReply (ms).
 const T_REPLY_DELAY_MS: u64 = 250;
-/// T_turnaround: minimum silence time (40 bit times) before transmitting after
-/// receiving last octet (Clause 9.5.5.1). Computed as (40 * 1000) / baud_rate ms.
+/// Minimum silence time (40 bit times) before transmitting after receiving last octet.
 fn calculate_t_turnaround_us(baud_rate: u32) -> u64 {
-    // 40 bit times in microseconds: (40 * 1_000_000) / baud_rate
     40_000_000u64 / baud_rate as u64
 }
 /// Number of retries for token pass before declaring token lost.
@@ -69,10 +66,10 @@ pub(crate) const MSTP_MAX_FRAME_BUF: usize = 1507;
 const MAX_TX_QUEUE_DEPTH: usize = 256;
 
 // ---------------------------------------------------------------------------
-// Master node state machine (Clause 9.5.6)
+// Master node state machine
 // ---------------------------------------------------------------------------
 
-/// Token-passing master node state per Clause 9.5.6.
+/// Token-passing master node state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MasterState {
     /// Waiting for a frame or timeout.
@@ -83,7 +80,7 @@ pub enum MasterState {
     UseToken,
     /// Done sending data frames; decide whether to poll or pass token.
     DoneWithToken,
-    /// Token has been passed to NS, waiting for NS to use it (Clause 9.5.6.6).
+    /// Token has been passed to NS, waiting for NS to use it.
     PassToken,
     /// Waiting for a reply after sending DataExpectingReply.
     WaitForReply,
@@ -93,7 +90,7 @@ pub enum MasterState {
     AnswerDataRequest,
 }
 
-/// Master node configuration constants (Clause 9.5.4).
+/// Master node configuration.
 #[derive(Debug, Clone)]
 pub struct MstpConfig {
     /// This station's MAC address (0..=MAX_MASTER).
@@ -145,8 +142,7 @@ pub struct MasterNode {
     pub pending_reply_source: Option<u8>,
     /// Computed T_SLOT in milliseconds, based on configured baud rate.
     pub t_slot_ms: u64,
-    /// EventCount: number of valid octets/frames received (Clause 9.5.2).
-    /// Used in PASS_TOKEN (SawTokenUser) and NO_TOKEN (SawFrame).
+    /// Number of valid octets/frames received (used in PassToken and NoToken states).
     pub event_count: u32,
 }
 
@@ -165,7 +161,6 @@ impl MasterNode {
         }
         let ts = config.this_station;
         let t_slot_ms = calculate_t_slot_ms(config.baud_rate);
-        // Clause 9.5.6.1 INITIALIZE: NS=TS, PS=TS, TokenCount=N_poll
         Ok(Self {
             config,
             state: MasterState::Idle,
@@ -191,11 +186,9 @@ impl MasterNode {
         frame: &MstpFrame,
         npdu_tx: &mpsc::Sender<ReceivedNpdu>,
     ) -> Option<MstpFrame> {
-        // Clause 9.5.2: increment EventCount on each valid frame received.
         self.event_count = self.event_count.saturating_add(1);
 
-        // Clause 9.5.6.6 SawTokenUser: if in PassToken and we see any valid
-        // frame, NS has started using the token → transition to Idle.
+        // SawTokenUser: NS has started using the token.
         if self.state == MasterState::PassToken {
             self.state = MasterState::Idle;
         }
@@ -203,7 +196,6 @@ impl MasterNode {
             FrameType::Token => {
                 if frame.destination == self.config.this_station {
                     debug!(src = frame.source, "received token");
-                    // Clause 9.5.6.2 ReceivedToken: set SoleMaster to FALSE
                     self.sole_master = false;
                     self.state = MasterState::UseToken;
                     self.frame_count = 0;
@@ -230,8 +222,6 @@ impl MasterNode {
                     && frame.destination == self.config.this_station
                 {
                     debug!(src = frame.source, "PFM reply — new successor");
-                    // Clause 9.5.6.8 ReceivedReplyToPFM: set NS=source, SoleMaster=false,
-                    // PS=TS, TokenCount=0, send Token to NS, enter PASS_TOKEN.
                     self.next_station = frame.source;
                     self.sole_master = false;
                     self.poll_station = self.config.this_station;
@@ -347,7 +337,6 @@ impl MasterNode {
     }
 
     /// Generate a token-pass frame to next_station.
-    /// Enters PassToken state to wait for NS to use the token (Clause 9.5.6.6).
     pub fn pass_token(&mut self) -> MstpFrame {
         self.state = MasterState::PassToken;
         self.retry_token_count = 0;
@@ -359,7 +348,7 @@ impl MasterNode {
         }
     }
 
-    /// Handle PassToken timeout (Clause 9.5.6.6).
+    /// Handle PassToken timeout.
     ///
     /// Called when T_usage_timeout expires after passing the token.
     /// Returns a frame to send (retry Token or PFM), or None if we should go to Idle.
@@ -631,7 +620,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                     };
                                     drop(node_guard);
 
-                                    // Clause 9.5.5.1: T_turnaround before transmitting
+                                    // T_turnaround before transmitting
                                     if !pending_writes.is_empty() {
                                         tokio::time::sleep(tokio::time::Duration::from_micros(
                                             t_turnaround_us,
@@ -666,17 +655,13 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                         let mut pending_writes: Vec<Vec<u8>> = Vec::new();
                         let timeout_ms = match node_guard.state {
                             MasterState::Idle => {
-                                // Clause 9.5.6.7: Enter NoToken. Wait T_no_token + T_slot*TS
-                                // before claiming the right to generate a token.
                                 node_guard.state = MasterState::NoToken;
                                 node_guard.retry_token_count = 0;
                                 let ts = node_guard.config.this_station as u64;
                                 T_NO_TOKEN_MS + node_guard.t_slot_ms * ts
                             }
                             MasterState::NoToken => {
-                                // Clause 9.5.6.7 GenerateToken: This node wins the
-                                // right to generate a token (its slot-based wait expired).
-                                // Send PFM to discover successor, enter PollForMaster.
+                                // GenerateToken: send PFM to discover successor.
                                 let ts = node_guard.config.this_station;
                                 let pfm = MstpFrame {
                                     frame_type: FrameType::PollForMaster,
@@ -708,8 +693,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                 }
                             }
                             MasterState::WaitForReply => {
-                                // Clause 9.5.6.4 ReplyTimeout: set FrameCount to
-                                // max_info_frames and enter DONE_WITH_TOKEN.
+                                // ReplyTimeout: enter DoneWithToken.
                                 node_guard.frame_count = node_guard.config.max_info_frames;
                                 node_guard.state = MasterState::DoneWithToken;
                                 // Fall through to DoneWithToken handling on next iteration
@@ -749,7 +733,6 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                 T_USAGE_TIMEOUT_MS
                             }
                             MasterState::PassToken => {
-                                // Clause 9.5.6.6: NS didn't use the token within T_usage_timeout
                                 if let Some(frame) = node_guard.pass_token_timeout() {
                                     encode_buf.clear();
                                     if let Ok(()) = encode_frame(&mut encode_buf, &frame) {
@@ -777,7 +760,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                         };
                         drop(node_guard);
 
-                        // Clause 9.5.5.1: T_turnaround before transmitting
+                        // T_turnaround before transmitting
                         if !pending_writes.is_empty() {
                             tokio::time::sleep(tokio::time::Duration::from_micros(
                                 t_turnaround_us,
@@ -958,7 +941,6 @@ mod tests {
         };
         let node = MasterNode::new(config).unwrap();
         assert_eq!(node.state, MasterState::Idle);
-        // Clause 9.5.6.1: NS=TS, PS=TS, TokenCount=N_poll
         assert_eq!(node.next_station, 5);
         assert_eq!(node.poll_station, 5);
         assert_eq!(node.token_count, NPOLL);
@@ -1164,8 +1146,7 @@ mod tests {
 
         let frame = node.use_token();
         assert_eq!(frame.frame_type, FrameType::Token);
-        assert_eq!(frame.destination, 1); // next_station
-                                          // pass_token() now enters PassToken state (Clause 9.5.6.6)
+        assert_eq!(frame.destination, 1);
         assert_eq!(node.state, MasterState::PassToken);
     }
 
@@ -1267,7 +1248,6 @@ mod tests {
 
         let response = node.handle_received_frame(&reply, &tx);
         assert_eq!(node.next_station, 42);
-        // Clause 9.5.6.8: send Token to NS, enter PassToken
         assert_eq!(node.state, MasterState::PassToken);
         assert!(!node.sole_master);
         // Should return a Token frame to send to the new NS
@@ -1486,8 +1466,6 @@ mod tests {
     #[test]
     fn test_no_token_timeout_claims_token() {
         // Simulate the NoToken -> sole master flow without the transport loop.
-        // Per Clause 9.5.6, N_retry_token=1 means 1 retry AFTER the initial PFM,
-        // so 2 total PFMs are sent before claiming sole master.
         //
         // Flow:
         //   Idle timeout -> enter NoToken, send 1st PFM, retry_token_count=0
@@ -1669,7 +1647,6 @@ mod tests {
         // use_token should just pass token since no gap
         let frame = node.use_token();
         assert_eq!(frame.frame_type, FrameType::Token);
-        // pass_token enters PassToken state (Clause 9.5.6.6)
         assert_eq!(node.state, MasterState::PassToken);
     }
 
@@ -1726,7 +1703,6 @@ mod tests {
 
     #[test]
     fn t_slot_baud_rate_9600() {
-        // Clause 9.5.3: T_slot = 10ms regardless of baud rate
         assert_eq!(calculate_t_slot_ms(9600), 10);
     }
 

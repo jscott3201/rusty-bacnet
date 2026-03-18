@@ -9,7 +9,7 @@ use bytes::BytesMut;
 use crate::common::MAX_DECODED_ITEMS;
 
 // ---------------------------------------------------------------------------
-// WriteGroupRequest (Clause 16.10.8)
+// WriteGroupRequest
 // ---------------------------------------------------------------------------
 
 /// A single entry in the WriteGroup change list.
@@ -80,10 +80,9 @@ impl WriteGroupRequest {
             return Err(Error::decoding(pos, "WriteGroup truncated at group-number"));
         }
         let group_number = primitives::decode_unsigned(&data[pos..end])? as u32;
-        // Clause 15.11.1.1.1: "Control group zero shall never be used and shall be reserved."
         if group_number == 0 {
             return Err(Error::Encoding(
-                "WriteGroup group number 0 is reserved (Clause 15.11.1.1.1)".into(),
+                "WriteGroup group number 0 is reserved".into(),
             ));
         }
         offset = end;
@@ -188,10 +187,6 @@ impl WriteGroupRequest {
         })
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

@@ -189,6 +189,10 @@ macro_rules! define_value_object_commandable {
                 ];
                 Cow::Borrowed(PROPS)
             }
+
+            fn supports_cov(&self) -> bool {
+                true
+            }
         }
     };
 
@@ -246,6 +250,8 @@ macro_rules! define_value_object_commandable {
 // ---------------------------------------------------------------------------
 
 /// Generate a non-commandable value object type (simple read/write PV).
+/// Currently unused — all value types are commandable.
+#[allow(unused_macros)]
 macro_rules! define_value_object_simple {
     (
         name: $struct_name:ident,
@@ -352,6 +358,10 @@ macro_rules! define_value_object_simple {
                     PropertyIdentifier::RELIABILITY,
                 ];
                 Cow::Borrowed(PROPS)
+            }
+
+            fn supports_cov(&self) -> bool {
+                true
             }
         }
     };
@@ -571,10 +581,10 @@ define_value_object_commandable! {
 }
 
 // ---------------------------------------------------------------------------
-// 3 Non-commandable pattern value objects
+// 3 Commandable pattern value objects (with priority array)
 // ---------------------------------------------------------------------------
 
-define_value_object_simple! {
+define_value_object_commandable! {
     name: DatePatternValueObject,
     doc: "BACnet Date Pattern Value object (type 41).",
     object_type: ObjectType::DATEPATTERN_VALUE,
@@ -582,9 +592,12 @@ define_value_object_simple! {
     default_value: Date { year: 0xFF, month: 0xFF, day: 0xFF, day_of_week: 0xFF },
     pv_to_property: (|v: &Date| PropertyValue::Date(*v)),
     property_to_pv: pv_to_date,
+    pa_wrap: PropertyValue::Date,
+    rd_wrap: (|v: &Date| PropertyValue::Date(*v)),
+    copy_type: copy,
 }
 
-define_value_object_simple! {
+define_value_object_commandable! {
     name: TimePatternValueObject,
     doc: "BACnet Time Pattern Value object (type 49).",
     object_type: ObjectType::TIMEPATTERN_VALUE,
@@ -592,9 +605,12 @@ define_value_object_simple! {
     default_value: Time { hour: 0xFF, minute: 0xFF, second: 0xFF, hundredths: 0xFF },
     pv_to_property: (|v: &Time| PropertyValue::Time(*v)),
     property_to_pv: pv_to_time,
+    pa_wrap: PropertyValue::Time,
+    rd_wrap: (|v: &Time| PropertyValue::Time(*v)),
+    copy_type: copy,
 }
 
-define_value_object_simple! {
+define_value_object_commandable! {
     name: DateTimePatternValueObject,
     doc: "BACnet DateTime Pattern Value object (type 43).",
     object_type: ObjectType::DATETIMEPATTERN_VALUE,
@@ -605,6 +621,9 @@ define_value_object_simple! {
     ),
     pv_to_property: (|v: &(Date, Time)| datetime_to_pv(v)),
     property_to_pv: pv_to_datetime,
+    pa_wrap: datetime_copy_to_pv,
+    rd_wrap: (|v: &(Date, Time)| datetime_to_pv(v)),
+    copy_type: copy,
 }
 
 // ---------------------------------------------------------------------------
@@ -1149,11 +1168,11 @@ mod tests {
     }
 
     #[test]
-    fn date_pattern_value_no_priority_array() {
+    fn date_pattern_value_has_priority_array() {
         let obj = DatePatternValueObject::new(1, "DPV-1").unwrap();
         let props = obj.property_list();
-        assert!(!props.contains(&PropertyIdentifier::PRIORITY_ARRAY));
-        assert!(!props.contains(&PropertyIdentifier::RELINQUISH_DEFAULT));
+        assert!(props.contains(&PropertyIdentifier::PRIORITY_ARRAY));
+        assert!(props.contains(&PropertyIdentifier::RELINQUISH_DEFAULT));
     }
 
     // -----------------------------------------------------------------------
@@ -1242,11 +1261,11 @@ mod tests {
     }
 
     #[test]
-    fn datetime_pattern_value_no_priority_array() {
+    fn datetime_pattern_value_has_priority_array() {
         let obj = DateTimePatternValueObject::new(1, "DTPV-1").unwrap();
         let props = obj.property_list();
-        assert!(!props.contains(&PropertyIdentifier::PRIORITY_ARRAY));
-        assert!(!props.contains(&PropertyIdentifier::RELINQUISH_DEFAULT));
+        assert!(props.contains(&PropertyIdentifier::PRIORITY_ARRAY));
+        assert!(props.contains(&PropertyIdentifier::RELINQUISH_DEFAULT));
     }
 
     // -----------------------------------------------------------------------
@@ -1382,7 +1401,6 @@ mod tests {
 
     #[test]
     fn value_object_write_object_name() {
-        // Clause 12.1.1.2: Object_Name shall be writable
         let mut obj = IntegerValueObject::new(1, "IV-1").unwrap();
         let result = obj.write_property(
             PropertyIdentifier::OBJECT_NAME,

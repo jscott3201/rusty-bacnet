@@ -10,7 +10,7 @@ use bytes::BytesMut;
 use crate::common::MAX_DECODED_ITEMS;
 
 // ---------------------------------------------------------------------------
-// GetEnrollmentSummaryRequest (Clause 13.8.1)
+// GetEnrollmentSummaryRequest
 // ---------------------------------------------------------------------------
 
 /// Priority filter sub-structure.
@@ -43,7 +43,6 @@ impl GetEnrollmentSummaryRequest {
     pub fn encode(&self, buf: &mut BytesMut) {
         // [0] acknowledgmentFilter
         primitives::encode_ctx_enumerated(buf, 0, self.acknowledgment_filter);
-        // [1] enrollmentFilter — not implemented (skip)
         // [2] eventStateFilter (optional)
         if let Some(es) = self.event_state_filter {
             primitives::encode_ctx_enumerated(buf, 2, es.to_raw());
@@ -84,7 +83,6 @@ impl GetEnrollmentSummaryRequest {
         if offset < data.len() {
             let (tag, tag_end) = tags::decode_tag(data, offset)?;
             if tag.is_opening_tag(1) {
-                // Skip over the entire constructed value
                 let (_, new_offset) = tags::extract_context_value(data, tag_end, 1)?;
                 offset = new_offset;
             }
@@ -173,7 +171,7 @@ impl GetEnrollmentSummaryRequest {
 }
 
 // ---------------------------------------------------------------------------
-// GetEnrollmentSummaryAck (Clause 13.8.2)
+// GetEnrollmentSummaryAck
 // ---------------------------------------------------------------------------
 
 /// One entry in the GetEnrollmentSummary-ACK sequence.
