@@ -32,5 +32,4 @@ Changelog = "https://github.com/jscott3201/rusty-bacnet/blob/main/CHANGELOG.md"
 [tool.maturin]
 features = ["pyo3/extension-module"]
 # Include type stubs for IDE autocomplete and type checking
-python-source = "."
 include = ["rusty_bacnet.pyi", "py.typed"]
