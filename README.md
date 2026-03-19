@@ -123,7 +123,7 @@ dependencyResolutionManagement {
 
 // build.gradle.kts
 dependencies {
-    implementation("io.github.jscott3201:bacnet-java:0.7.0")
+    implementation("io.github.jscott3201:bacnet-java:0.7.1")
 }
 ```
 
