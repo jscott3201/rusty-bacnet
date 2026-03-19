@@ -6,8 +6,8 @@ use serde::Deserialize;
 use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::parse::{
-    decode_raw_property_to_json, object_type_name, parse_object_type, parse_property_name,
-    property_name,
+    decode_raw_property_to_json_with_context, object_type_name, parse_object_type,
+    parse_property_name, property_name,
 };
 use crate::state::GatewayState;
 
@@ -60,30 +60,33 @@ pub struct WritePropertyParams {
     pub priority: Option<u8>,
 }
 
-pub async fn read_property_impl(state: &GatewayState, params: ReadPropertyParams) -> String {
+pub async fn read_property_impl(
+    state: &GatewayState,
+    params: ReadPropertyParams,
+) -> Result<String, String> {
     let client = match state.require_client() {
         Ok(c) => c,
-        Err(msg) => return format!("Error: {msg}"),
+        Err(msg) => return Err(msg),
     };
 
     let obj_type = match parse_object_type(&params.object_type) {
         Ok(t) => t,
-        Err(e) => return format!("Error: {e}"),
+        Err(e) => return Err(e),
     };
 
     let property = match parse_property_name(&params.property) {
         Ok(p) => p,
-        Err(e) => return format!("Error: {e}"),
+        Err(e) => return Err(e),
     };
 
     let oid = match ObjectIdentifier::new(obj_type, params.object_instance) {
         Ok(o) => o,
-        Err(e) => return format!("Error: {e}"),
+        Err(e) => return Err(format!("{e}")),
     };
 
     let entry = match state.resolve_device(params.device_instance).await {
         Ok(e) => e,
-        Err(msg) => return msg,
+        Err(msg) => return Err(msg),
     };
 
     match client
@@ -91,61 +94,62 @@ pub async fn read_property_impl(state: &GatewayState, params: ReadPropertyParams
         .await
     {
         Ok(ack) => {
-            let val = decode_raw_property_to_json(&ack.property_value);
+            let val = decode_raw_property_to_json_with_context(&ack.property_value, property);
             let display = match val.get("value") {
                 Some(v) => format!("{v}"),
                 None => format!("{val}"),
             };
-            format!(
+            Ok(format!(
                 "{}:{} {} = {}",
                 object_type_name(obj_type),
                 params.object_instance,
                 property_name(property),
                 display,
-            )
+            ))
         }
-        Err(e) => format!("Error reading property: {e}"),
+        Err(e) => Err(format!("Error reading property: {e}")),
     }
 }
 
-pub async fn write_property_impl(state: &GatewayState, params: WritePropertyParams) -> String {
-    if let Err(msg) = state.require_writable() {
-        return format!("Error: {msg}");
-    }
+pub async fn write_property_impl(
+    state: &GatewayState,
+    params: WritePropertyParams,
+) -> Result<String, String> {
+    state.require_writable()?;
     let client = match state.require_client() {
         Ok(c) => c,
-        Err(msg) => return format!("Error: {msg}"),
+        Err(msg) => return Err(msg),
     };
 
     let obj_type = match parse_object_type(&params.object_type) {
         Ok(t) => t,
-        Err(e) => return format!("Error: {e}"),
+        Err(e) => return Err(e),
     };
 
     let property = match parse_property_name(&params.property) {
         Ok(p) => p,
-        Err(e) => return format!("Error: {e}"),
+        Err(e) => return Err(e),
     };
 
     let oid = match ObjectIdentifier::new(obj_type, params.object_instance) {
         Ok(o) => o,
-        Err(e) => return format!("Error: {e}"),
+        Err(e) => return Err(format!("{e}")),
     };
 
     let value = match crate::parse::json_to_property_value(&params.value) {
         Ok(v) => v,
-        Err(e) => return format!("Error parsing value: {e}"),
+        Err(e) => return Err(format!("Error parsing value: {e}")),
     };
 
     let entry = match state.resolve_device(params.device_instance).await {
         Ok(e) => e,
-        Err(msg) => return msg,
+        Err(msg) => return Err(msg),
     };
 
     // Encode PropertyValue to bytes.
     let mut buf = bytes::BytesMut::new();
     if let Err(e) = bacnet_encoding::primitives::encode_property_value(&mut buf, &value) {
-        return format!("Error encoding value: {e}");
+        return Err(format!("Error encoding value: {e}"));
     }
 
     match client
@@ -159,13 +163,13 @@ pub async fn write_property_impl(state: &GatewayState, params: WritePropertyPara
         )
         .await
     {
-        Ok(()) => format!(
+        Ok(()) => Ok(format!(
             "Successfully wrote {} to {}:{} {}",
             params.value,
             object_type_name(obj_type),
             params.object_instance,
             property_name(property),
-        ),
-        Err(e) => format!("Error writing property: {e}"),
+        )),
+        Err(e) => Err(format!("Error writing property: {e}")),
     }
 }

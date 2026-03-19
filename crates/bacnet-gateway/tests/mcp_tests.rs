@@ -63,6 +63,7 @@ async fn mcp_list_local_objects() {
         objects::list_local_objects_impl(&state, objects::ListObjectsParams { object_type: None })
             .await;
 
+    let result = result.unwrap();
     assert!(result.contains("2 local object(s)"));
     assert!(result.contains("device:1234"));
     assert!(result.contains("analog-value:1"));
@@ -79,6 +80,7 @@ async fn mcp_list_local_objects_filtered() {
     )
     .await;
 
+    let result = result.unwrap();
     assert!(result.contains("1 local object(s)"));
     assert!(result.contains("analog-value:1"));
     assert!(!result.contains("device:1234"));
@@ -97,7 +99,7 @@ async fn mcp_read_local_property() {
     )
     .await;
 
-    assert!(result.contains("Test AV"));
+    assert!(result.unwrap().contains("Test AV"));
 }
 
 #[tokio::test]
@@ -115,7 +117,7 @@ async fn mcp_write_and_read_local_property() {
     )
     .await;
 
-    assert!(result.contains("Successfully wrote"));
+    assert!(result.unwrap().contains("Successfully wrote"));
 
     let result = objects::read_local_property_impl(
         &state,
@@ -127,7 +129,7 @@ async fn mcp_write_and_read_local_property() {
     )
     .await;
 
-    assert!(result.contains("42"));
+    assert!(result.unwrap().contains("42"));
 }
 
 #[tokio::test]
@@ -143,14 +145,14 @@ async fn mcp_read_nonexistent_object() {
     )
     .await;
 
-    assert!(result.contains("not found"));
+    assert!(result.unwrap_err().contains("not found"));
 }
 
 #[tokio::test]
 async fn mcp_list_known_devices_no_client() {
     let state = test_state();
     let result = discovery::list_known_devices_impl(&state).await;
-    assert!(result.contains("not started"));
+    assert!(result.unwrap_err().contains("not started"));
 }
 
 #[tokio::test]
@@ -162,11 +164,12 @@ async fn mcp_discover_devices_no_client() {
             low_instance: None,
             high_instance: None,
             timeout_seconds: Some(1),
+            target: None,
         },
     )
     .await;
 
-    assert!(result.contains("not started"));
+    assert!(result.unwrap_err().contains("not started"));
 }
 
 // --- Create/Delete local objects ---
@@ -185,6 +188,7 @@ async fn mcp_create_local_object() {
     )
     .await;
 
+    let result = result.unwrap();
     assert!(result.contains("Created"));
     assert!(result.contains("multi-state-value:1"));
 
@@ -196,7 +200,7 @@ async fn mcp_create_local_object() {
         },
     )
     .await;
-    assert!(list.contains("Test MSV"));
+    assert!(list.unwrap().contains("Test MSV"));
 }
 
 #[tokio::test]
@@ -213,7 +217,7 @@ async fn mcp_create_integer_value() {
     )
     .await;
 
-    assert!(result.contains("Created"));
+    assert!(result.unwrap().contains("Created"));
 }
 
 #[tokio::test]
@@ -228,7 +232,7 @@ async fn mcp_delete_local_object() {
     )
     .await;
 
-    assert!(result.contains("Deleted"));
+    assert!(result.unwrap().contains("Deleted"));
 
     // Verify it's gone.
     let read = objects::read_local_property_impl(
@@ -240,7 +244,7 @@ async fn mcp_delete_local_object() {
         },
     )
     .await;
-    assert!(read.contains("not found"));
+    assert!(read.unwrap_err().contains("not found"));
 }
 
 #[tokio::test]
@@ -255,7 +259,7 @@ async fn mcp_delete_device_object_rejected() {
     )
     .await;
 
-    assert!(result.contains("cannot delete"));
+    assert!(result.unwrap_err().to_lowercase().contains("cannot delete"));
 }
 
 // --- Reference resources ---

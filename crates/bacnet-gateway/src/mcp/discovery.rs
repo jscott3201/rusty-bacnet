@@ -21,6 +21,12 @@ pub struct DiscoverParams {
     /// How long to wait for responses in seconds (default: 3, max: 30).
     #[schemars(description = "Seconds to wait for IAm responses (default: 3, max: 30)")]
     pub timeout_seconds: Option<u64>,
+    /// Target address for unicast discovery (e.g., "192.168.1.100:47808").
+    /// If omitted, sends a broadcast WhoIs.
+    #[schemars(
+        description = "Target address for unicast WhoIs (e.g., '192.168.1.100:47808'). Omit for broadcast."
+    )]
+    pub target: Option<String>,
 }
 
 /// Parameters for get_device_info tool.
@@ -33,10 +39,37 @@ pub struct DeviceInfoParams {
     pub device_instance: u32,
 }
 
-pub async fn discover_devices_impl(state: &GatewayState, params: DiscoverParams) -> String {
+/// Parameters for register_device tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RegisterDeviceParams {
+    /// Device instance number.
+    #[schemars(description = "Device instance number")]
+    pub device_instance: u32,
+    /// Device address as ip:port (e.g., "192.168.1.100:47808").
+    #[schemars(description = "Device address as ip:port (e.g., '192.168.1.100:47808')")]
+    pub address: String,
+}
+
+pub async fn register_device_impl(
+    state: &GatewayState,
+    params: RegisterDeviceParams,
+) -> Result<String, String> {
+    state
+        .add_device_manual(params.device_instance, &params.address)
+        .await?;
+    Ok(format!(
+        "Registered device {} at {}",
+        params.device_instance, params.address
+    ))
+}
+
+pub async fn discover_devices_impl(
+    state: &GatewayState,
+    params: DiscoverParams,
+) -> Result<String, String> {
     let client = match state.require_client() {
         Ok(c) => c,
-        Err(msg) => return format!("Error: {msg}"),
+        Err(msg) => return Err(msg),
     };
 
     const MAX_DISCOVER_TIMEOUT_SECS: u64 = 30;
@@ -45,18 +78,34 @@ pub async fn discover_devices_impl(state: &GatewayState, params: DiscoverParams)
         .unwrap_or(3)
         .min(MAX_DISCOVER_TIMEOUT_SECS);
 
-    if let Err(e) = client
-        .who_is(params.low_instance, params.high_instance)
-        .await
-    {
-        return format!("Error sending WhoIs: {e}");
+    match &params.target {
+        Some(target) => {
+            let addr: std::net::SocketAddrV4 = target
+                .parse()
+                .map_err(|e| format!("invalid target address '{target}': {e}"))?;
+            let mac = crate::parse::socket_addr_to_mac(addr);
+            if let Err(e) = client
+                .who_is_directed(&mac, params.low_instance, params.high_instance)
+                .await
+            {
+                return Err(format!("Error sending directed WhoIs: {e}"));
+            }
+        }
+        None => {
+            if let Err(e) = client
+                .who_is(params.low_instance, params.high_instance)
+                .await
+            {
+                return Err(format!("Error sending WhoIs: {e}"));
+            }
+        }
     }
 
     tokio::time::sleep(std::time::Duration::from_secs(timeout)).await;
 
     let devices = client.discovered_devices().await;
     if devices.is_empty() {
-        return "No devices discovered.".to_string();
+        return Ok("No devices discovered.".to_string());
     }
 
     let mut result = format!("Discovered {} device(s):\n", devices.len());
@@ -73,18 +122,18 @@ pub async fn discover_devices_impl(state: &GatewayState, params: DiscoverParams)
         }
         result.push('\n');
     }
-    result
+    Ok(result)
 }
 
-pub async fn list_known_devices_impl(state: &GatewayState) -> String {
+pub async fn list_known_devices_impl(state: &GatewayState) -> Result<String, String> {
     let client = match state.require_client() {
         Ok(c) => c,
-        Err(msg) => return format!("No devices ({msg})."),
+        Err(msg) => return Err(msg),
     };
 
     let devices = client.discovered_devices().await;
     if devices.is_empty() {
-        return "No devices in the device table. Use discover_devices first.".to_string();
+        return Ok("No devices in the device table. Use discover_devices first.".to_string());
     }
 
     let mut result = format!("{} known device(s):\n", devices.len());
@@ -100,23 +149,26 @@ pub async fn list_known_devices_impl(state: &GatewayState) -> String {
         }
         result.push('\n');
     }
-    result
+    Ok(result)
 }
 
-pub async fn get_device_info_impl(state: &GatewayState, params: DeviceInfoParams) -> String {
+pub async fn get_device_info_impl(
+    state: &GatewayState,
+    params: DeviceInfoParams,
+) -> Result<String, String> {
     let client = match state.require_client() {
         Ok(c) => c,
-        Err(msg) => return format!("Error: {msg}"),
+        Err(msg) => return Err(msg),
     };
 
     let entry = match state.resolve_device(params.device_instance).await {
         Ok(e) => e,
-        Err(msg) => return msg,
+        Err(msg) => return Err(msg),
     };
 
     let device_oid = match ObjectIdentifier::new(ObjectType::DEVICE, params.device_instance) {
         Ok(oid) => oid,
-        Err(e) => return format!("Invalid device instance: {e}"),
+        Err(e) => return Err(format!("Invalid device instance: {e}")),
     };
 
     let mut result = format!("Device {} info:\n", params.device_instance);
@@ -149,5 +201,5 @@ pub async fn get_device_info_impl(state: &GatewayState, params: DeviceInfoParams
         }
     }
 
-    result
+    Ok(result)
 }

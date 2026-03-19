@@ -191,6 +191,8 @@ pub struct ObjectConfig {
     pub name: String,
     /// Engineering units (optional).
     pub units: Option<String>,
+    /// Number of states for multi-state objects (default: 2).
+    pub number_of_states: Option<u32>,
 }
 
 /// Configuration validation error.

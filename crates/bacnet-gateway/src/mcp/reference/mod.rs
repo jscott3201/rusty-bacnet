@@ -13,7 +13,7 @@ pub fn reference_resources() -> Vec<Resource> {
         resource(
             "bacnet://reference/object-types",
             "BACnet Object Types",
-            "Index of all 64 BACnet object types with name, category, and purpose",
+            "Index of all 65 BACnet object types with name, category, and purpose",
         ),
         resource(
             "bacnet://reference/properties",

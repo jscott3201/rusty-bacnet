@@ -10,8 +10,8 @@ use bacnet_types::primitives::ObjectIdentifier;
 use crate::state::GatewayState;
 
 use super::types::{
-    decode_raw_property_to_json, json_to_property_value, object_type_name, parse_object_specifier,
-    parse_property_name, property_name, ApiError, WritePropertyRequest,
+    decode_raw_property_to_json_with_context, json_to_property_value, object_type_name,
+    parse_object_specifier, parse_property_name, property_name, ApiError, WritePropertyRequest,
 };
 
 /// GET /api/v1/devices/{instance}/objects/{specifier}/properties/{property}
@@ -61,7 +61,7 @@ pub async fn read_remote_property(
             "device": instance,
             "object": format!("{}:{}", object_type_name(obj_type), obj_instance),
             "property": property_name(property),
-            "value": decode_raw_property_to_json(&ack.property_value),
+            "value": decode_raw_property_to_json_with_context(&ack.property_value, property),
         }))
         .into_response(),
         Err(e) => {

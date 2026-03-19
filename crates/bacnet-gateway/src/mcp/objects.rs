@@ -6,7 +6,8 @@ use serde::Deserialize;
 use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::parse::{
-    object_type_name, parse_object_type, parse_property_name, property_name, property_value_to_json,
+    object_type_name, parse_object_type, parse_property_name, property_name,
+    property_value_to_json_with_context,
 };
 use crate::state::GatewayState;
 
@@ -51,11 +52,14 @@ pub struct WriteLocalPropertyParams {
     pub value: serde_json::Value,
 }
 
-pub async fn list_local_objects_impl(state: &GatewayState, params: ListObjectsParams) -> String {
+pub async fn list_local_objects_impl(
+    state: &GatewayState,
+    params: ListObjectsParams,
+) -> Result<String, String> {
     let filter_type = match &params.object_type {
         Some(t) => match parse_object_type(t) {
             Ok(ot) => Some(ot),
-            Err(e) => return format!("Error: {e}"),
+            Err(e) => return Err(e),
         },
         None => None,
     };
@@ -71,10 +75,10 @@ pub async fn list_local_objects_impl(state: &GatewayState, params: ListObjectsPa
         .collect();
 
     if objects.is_empty() {
-        return match &params.object_type {
+        return Ok(match &params.object_type {
             Some(t) => format!("No local objects of type '{t}'."),
             None => "No local objects.".to_string(),
-        };
+        });
     }
 
     let mut result = format!("{} local object(s):\n", objects.len());
@@ -86,105 +90,103 @@ pub async fn list_local_objects_impl(state: &GatewayState, params: ListObjectsPa
             obj.object_name(),
         ));
     }
-    result
+    Ok(result)
 }
 
 pub async fn read_local_property_impl(
     state: &GatewayState,
     params: ReadLocalPropertyParams,
-) -> String {
+) -> Result<String, String> {
     let obj_type = match parse_object_type(&params.object_type) {
         Ok(t) => t,
-        Err(e) => return format!("Error: {e}"),
+        Err(e) => return Err(e),
     };
 
     let property = match parse_property_name(&params.property) {
         Ok(p) => p,
-        Err(e) => return format!("Error: {e}"),
+        Err(e) => return Err(e),
     };
 
     let oid = match ObjectIdentifier::new(obj_type, params.object_instance) {
         Ok(o) => o,
-        Err(e) => return format!("Error: {e}"),
+        Err(e) => return Err(format!("{e}")),
     };
 
     let db = state.db.read().await;
     let obj = match db.get(&oid) {
         Some(o) => o,
         None => {
-            return format!(
+            return Err(format!(
                 "Object {}:{} not found in local database.",
                 params.object_type, params.object_instance
-            );
+            ));
         }
     };
 
     match obj.read_property(property, None) {
         Ok(val) => {
-            let json_val = property_value_to_json(&val);
+            let json_val = property_value_to_json_with_context(&val, property);
             let display = match json_val.get("value") {
                 Some(v) => format!("{v}"),
                 None => format!("{json_val}"),
             };
-            format!(
+            Ok(format!(
                 "{}:{} {} = {}",
                 object_type_name(obj_type),
                 params.object_instance,
                 property_name(property),
                 display,
-            )
+            ))
         }
-        Err(e) => format!("Error reading property: {e}"),
+        Err(e) => Err(format!("Error reading property: {e}")),
     }
 }
 
 pub async fn write_local_property_impl(
     state: &GatewayState,
     params: WriteLocalPropertyParams,
-) -> String {
-    if let Err(msg) = state.require_writable() {
-        return format!("Error: {msg}");
-    }
+) -> Result<String, String> {
+    state.require_writable()?;
     let obj_type = match parse_object_type(&params.object_type) {
         Ok(t) => t,
-        Err(e) => return format!("Error: {e}"),
+        Err(e) => return Err(e),
     };
 
     let property = match parse_property_name(&params.property) {
         Ok(p) => p,
-        Err(e) => return format!("Error: {e}"),
+        Err(e) => return Err(e),
     };
 
     let value = match crate::parse::json_to_property_value(&params.value) {
         Ok(v) => v,
-        Err(e) => return format!("Error parsing value: {e}"),
+        Err(e) => return Err(format!("Error parsing value: {e}")),
     };
 
     let oid = match ObjectIdentifier::new(obj_type, params.object_instance) {
         Ok(o) => o,
-        Err(e) => return format!("Error: {e}"),
+        Err(e) => return Err(format!("{e}")),
     };
 
     let mut db = state.db.write().await;
     let obj = match db.get_mut(&oid) {
         Some(o) => o,
         None => {
-            return format!(
+            return Err(format!(
                 "Object {}:{} not found in local database.",
                 params.object_type, params.object_instance
-            );
+            ));
         }
     };
 
     match obj.write_property(property, None, value, None) {
-        Ok(()) => format!(
+        Ok(()) => Ok(format!(
             "Successfully wrote {} to local {}:{} {}",
             params.value,
             object_type_name(obj_type),
             params.object_instance,
             property_name(property),
-        ),
-        Err(e) => format!("Error writing property: {e}"),
+        )),
+        Err(e) => Err(format!("Error writing property: {e}")),
     }
 }
 
@@ -223,13 +225,11 @@ pub struct DeleteLocalObjectParams {
 pub async fn create_local_object_impl(
     state: &GatewayState,
     params: CreateLocalObjectParams,
-) -> String {
-    if let Err(msg) = state.require_writable() {
-        return format!("Error: {msg}");
-    }
+) -> Result<String, String> {
+    state.require_writable()?;
     let obj_type = match parse_object_type(&params.object_type) {
         Ok(t) => t,
-        Err(e) => return format!("Error: {e}"),
+        Err(e) => return Err(e),
     };
 
     let obj = match crate::parse::construct_object(
@@ -239,52 +239,50 @@ pub async fn create_local_object_impl(
         params.number_of_states,
     ) {
         Ok(o) => o,
-        Err(e) => return format!("Error: {e}"),
+        Err(e) => return Err(e),
     };
 
     let mut db = state.db.write().await;
     match db.add(obj) {
-        Ok(()) => format!(
+        Ok(()) => Ok(format!(
             "Created local object {}:{} \"{}\"",
             object_type_name(obj_type),
             params.object_instance,
             params.object_name,
-        ),
-        Err(e) => format!("Error creating object: {e}"),
+        )),
+        Err(e) => Err(format!("Error creating object: {e}")),
     }
 }
 
 pub async fn delete_local_object_impl(
     state: &GatewayState,
     params: DeleteLocalObjectParams,
-) -> String {
-    if let Err(msg) = state.require_writable() {
-        return format!("Error: {msg}");
-    }
+) -> Result<String, String> {
+    state.require_writable()?;
     let obj_type = match parse_object_type(&params.object_type) {
         Ok(t) => t,
-        Err(e) => return format!("Error: {e}"),
+        Err(e) => return Err(e),
     };
 
     let oid = match ObjectIdentifier::new(obj_type, params.object_instance) {
         Ok(o) => o,
-        Err(e) => return format!("Error: {e}"),
+        Err(e) => return Err(format!("{e}")),
     };
 
     if obj_type == bacnet_types::enums::ObjectType::DEVICE {
-        return "Error: cannot delete the Device object.".to_string();
+        return Err("Cannot delete the Device object.".to_string());
     }
 
     let mut db = state.db.write().await;
     match db.remove(&oid) {
-        Some(_) => format!(
+        Some(_) => Ok(format!(
             "Deleted local object {}:{}",
             object_type_name(obj_type),
             params.object_instance,
-        ),
-        None => format!(
+        )),
+        None => Err(format!(
             "Object {}:{} not found in local database.",
             params.object_type, params.object_instance,
-        ),
+        )),
     }
 }

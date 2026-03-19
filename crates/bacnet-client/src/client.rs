@@ -1912,6 +1912,31 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         self.device_table.lock().await.clear();
     }
 
+    /// Manually register a device in the device table.
+    ///
+    /// Useful for adding known devices without requiring WhoIs/IAm exchange.
+    /// Sets default values for max_apdu_length (1476), segmentation (NONE),
+    /// and vendor_id (0) since these are unknown without IAm.
+    pub async fn add_device(&self, instance: u32, mac: &[u8]) -> Result<(), Error> {
+        let oid = bacnet_types::primitives::ObjectIdentifier::new(
+            bacnet_types::enums::ObjectType::DEVICE,
+            instance,
+        )?;
+        let device = DiscoveredDevice {
+            object_identifier: oid,
+            mac_address: MacAddr::from_slice(mac),
+            max_apdu_length: 1476,
+            segmentation_supported: bacnet_types::enums::Segmentation::NONE,
+            max_segments_accepted: None,
+            vendor_id: 0,
+            last_seen: std::time::Instant::now(),
+            source_network: None,
+            source_address: None,
+        };
+        self.device_table.lock().await.upsert(device);
+        Ok(())
+    }
+
     /// Stop the client, aborting the dispatch task.
     pub async fn stop(&mut self) -> Result<(), Error> {
         if let Some(task) = self.dispatch_task.take() {

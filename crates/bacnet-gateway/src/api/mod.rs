@@ -38,7 +38,10 @@ pub fn api_router(state: GatewayState, auth: Option<Box<dyn Authenticator>>) -> 
             get(objects::get_object_property).put(objects::put_object_property),
         )
         // Device discovery.
-        .route("/devices", get(devices::list_devices))
+        .route(
+            "/devices",
+            get(devices::list_devices).post(devices::register_device),
+        )
         .route("/devices/discover", post(devices::discover_devices))
         .route("/devices/{instance}", get(devices::get_device_info))
         // Remote property access.

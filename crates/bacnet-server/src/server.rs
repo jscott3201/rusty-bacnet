@@ -233,6 +233,12 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
         self
     }
 
+    /// Set the vendor identifier (used in IAm responses and protocol operations).
+    pub fn vendor_id(mut self, id: u16) -> Self {
+        self.config.vendor_id = id;
+        self
+    }
+
     /// Build and start the server.
     pub async fn build(self) -> Result<BACnetServer<T>, Error> {
         let transport = self

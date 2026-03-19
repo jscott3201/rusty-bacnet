@@ -19,6 +19,9 @@ pub struct DiscoverRequest {
     pub low_instance: Option<u32>,
     pub high_instance: Option<u32>,
     pub timeout_seconds: Option<u64>,
+    /// Target address for unicast discovery (e.g., "192.168.1.100:47808").
+    /// If omitted, sends a broadcast WhoIs.
+    pub target: Option<String>,
 }
 
 pub async fn discover_devices(
@@ -47,14 +50,55 @@ pub async fn discover_devices(
         .unwrap_or(3)
         .min(MAX_DISCOVER_TIMEOUT_SECS);
 
-    if let Err(e) = client.who_is(low, high).await {
-        let (status, err) = ApiError::from_bacnet_error(&e);
-        return (status, Json(err)).into_response();
+    let target = body.as_ref().and_then(|b| b.target.as_ref());
+    match target {
+        Some(t) => {
+            let addr: std::net::SocketAddrV4 = match t.parse() {
+                Ok(a) => a,
+                Err(e) => {
+                    return ApiError::bad_request(format!("invalid target address: {e}"))
+                        .into_response()
+                }
+            };
+            let mac = crate::parse::socket_addr_to_mac(addr);
+            if let Err(e) = client.who_is_directed(&mac, low, high).await {
+                let (status, err) = ApiError::from_bacnet_error(&e);
+                return (status, Json(err)).into_response();
+            }
+        }
+        None => {
+            if let Err(e) = client.who_is(low, high).await {
+                let (status, err) = ApiError::from_bacnet_error(&e);
+                return (status, Json(err)).into_response();
+            }
+        }
     }
 
     tokio::time::sleep(std::time::Duration::from_secs(timeout)).await;
 
     list_known_devices_inner(&state).await.into_response()
+}
+
+/// POST /api/v1/devices
+#[derive(Debug, Deserialize)]
+pub struct RegisterDeviceRequest {
+    pub instance: u32,
+    pub address: String,
+}
+
+pub async fn register_device(
+    State(state): State<GatewayState>,
+    Json(req): Json<RegisterDeviceRequest>,
+) -> impl IntoResponse {
+    match state.add_device_manual(req.instance, &req.address).await {
+        Ok(()) => Json(serde_json::json!({
+            "status": "registered",
+            "instance": req.instance,
+            "address": req.address,
+        }))
+        .into_response(),
+        Err(msg) => ApiError::bad_request(msg).into_response(),
+    }
 }
 
 /// GET /api/v1/devices

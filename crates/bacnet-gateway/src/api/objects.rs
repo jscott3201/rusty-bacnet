@@ -12,7 +12,8 @@ use crate::state::GatewayState;
 
 use super::types::{
     json_to_property_value, object_type_name, parse_object_specifier, parse_object_type,
-    parse_property_name, property_name, property_value_to_json, ApiError, WritePropertyRequest,
+    parse_property_name, property_name, property_value_to_json,
+    property_value_to_json_with_context, ApiError, WritePropertyRequest,
 };
 
 #[derive(Debug, Deserialize)]
@@ -87,7 +88,7 @@ pub async fn get_object(
             obj.read_property(prop, None).ok().map(|val| {
                 serde_json::json!({
                     "property": property_name(prop),
-                    "value": property_value_to_json(&val),
+                    "value": property_value_to_json_with_context(&val, prop),
                 })
             })
         })
@@ -135,7 +136,7 @@ pub async fn get_object_property(
     match obj.read_property(property, array_index) {
         Ok(val) => Json(serde_json::json!({
             "property": property_name(property),
-            "value": property_value_to_json(&val),
+            "value": property_value_to_json_with_context(&val, property),
         }))
         .into_response(),
         Err(e) => {

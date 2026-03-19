@@ -82,10 +82,46 @@ pub fn property_value_to_json(value: &PropertyValue) -> serde_json::Value {
             })
         }
         PropertyValue::Date(d) => {
-            serde_json::json!({ "type": "date", "value": format!("{d:?}") })
+            // BACnet year is offset from 1900; 0xFF = unspecified
+            let year = if d.year == 0xFF {
+                "*".to_string()
+            } else {
+                format!("{}", 1900u16 + d.year as u16)
+            };
+            let month = if d.month == 0xFF {
+                "*".to_string()
+            } else {
+                format!("{:02}", d.month)
+            };
+            let day = if d.day == 0xFF {
+                "*".to_string()
+            } else {
+                format!("{:02}", d.day)
+            };
+            serde_json::json!({ "type": "date", "value": format!("{year}-{month}-{day}") })
         }
         PropertyValue::Time(t) => {
-            serde_json::json!({ "type": "time", "value": format!("{t:?}") })
+            let hour = if t.hour == 0xFF {
+                "*".to_string()
+            } else {
+                format!("{:02}", t.hour)
+            };
+            let min = if t.minute == 0xFF {
+                "*".to_string()
+            } else {
+                format!("{:02}", t.minute)
+            };
+            let sec = if t.second == 0xFF {
+                "*".to_string()
+            } else {
+                format!("{:02}", t.second)
+            };
+            let hun = if t.hundredths == 0xFF {
+                "*".to_string()
+            } else {
+                format!("{:02}", t.hundredths)
+            };
+            serde_json::json!({ "type": "time", "value": format!("{hour}:{min}:{sec}.{hun}") })
         }
         PropertyValue::List(items) => {
             let arr: Vec<serde_json::Value> = items.iter().map(property_value_to_json).collect();
@@ -140,6 +176,92 @@ pub fn property_name(pi: PropertyIdentifier) -> String {
         }
     }
     format!("proprietary-{}", pi.to_raw())
+}
+
+/// Look up a name for an enumerated value given the property context.
+///
+/// Returns a human-readable name when the property type is known (e.g., units,
+/// event-state, reliability), or None for unknown properties/values.
+fn enumerated_name_for_property(value: u32, property: PropertyIdentifier) -> Option<String> {
+    use bacnet_types::enums::*;
+
+    macro_rules! lookup {
+        ($enum_ty:ty) => {
+            <$enum_ty>::ALL_NAMED
+                .iter()
+                .find(|(_, v)| v.to_raw() as u32 == value)
+                .map(|(n, _)| n.replace('_', "-").to_lowercase())
+        };
+    }
+
+    match property {
+        PropertyIdentifier::OBJECT_TYPE => lookup!(ObjectType),
+        PropertyIdentifier::UNITS => lookup!(EngineeringUnits),
+        PropertyIdentifier::EVENT_STATE => lookup!(EventState),
+        PropertyIdentifier::RELIABILITY => lookup!(Reliability),
+        PropertyIdentifier::SYSTEM_STATUS => lookup!(DeviceStatus),
+        PropertyIdentifier::SEGMENTATION_SUPPORTED => lookup!(Segmentation),
+        PropertyIdentifier::NOTIFY_TYPE => lookup!(NotifyType),
+        _ => None,
+    }
+}
+
+/// Serialize a PropertyValue to JSON with property-context-aware enum decoding.
+///
+/// When the property is known (e.g., units, event-state, reliability), the
+/// enumerated value is decoded to the correct enum name.
+pub fn property_value_to_json_with_context(
+    value: &PropertyValue,
+    property: PropertyIdentifier,
+) -> serde_json::Value {
+    match value {
+        PropertyValue::Enumerated(e) => {
+            let mut obj = serde_json::json!({ "type": "enumerated", "value": e });
+            if let Some(name) = enumerated_name_for_property(*e, property) {
+                obj["name"] = serde_json::Value::String(name);
+            }
+            obj
+        }
+        _ => property_value_to_json(value),
+    }
+}
+
+/// Decode raw BACnet-encoded bytes into JSON with property-context-aware enum decoding.
+pub fn decode_raw_property_to_json_with_context(
+    data: &[u8],
+    property: PropertyIdentifier,
+) -> serde_json::Value {
+    let mut offset = 0;
+    let mut values = Vec::new();
+    while offset < data.len() {
+        match decode_application_value(data, offset) {
+            Ok((value, next)) => {
+                values.push(property_value_to_json_with_context(&value, property));
+                offset = next;
+            }
+            Err(_) => {
+                let hex: String = data[offset..]
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                values.push(serde_json::json!({ "type": "raw", "value": hex }));
+                break;
+            }
+        }
+    }
+    if values.len() == 1 {
+        values.into_iter().next().unwrap()
+    } else {
+        serde_json::json!({ "type": "list", "value": values })
+    }
+}
+
+/// Convert a SocketAddrV4 to a 6-byte BACnet/IP MAC (4 bytes IP + 2 bytes port big-endian).
+pub fn socket_addr_to_mac(addr: std::net::SocketAddrV4) -> Vec<u8> {
+    let ip = addr.ip().octets();
+    let port = addr.port().to_be_bytes();
+    vec![ip[0], ip[1], ip[2], ip[3], port[0], port[1]]
 }
 
 /// Parse a JSON value into a PropertyValue.
