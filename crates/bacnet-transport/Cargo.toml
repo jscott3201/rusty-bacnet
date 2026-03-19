@@ -21,6 +21,7 @@ tokio-rustls = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true }
 tokio-serial = { version = "5", optional = true }
+gpiocdev = { version = "0.8", optional = true }
 libc = { workspace = true }
 
 [features]
@@ -28,4 +29,5 @@ default = []
 ipv6 = []
 sc-tls = ["tokio-tungstenite", "tokio-rustls", "rustls", "futures-util"]
 serial = ["tokio-serial", "tokio/io-util"]
+serial-gpio = ["serial", "gpiocdev"]
 ethernet = []
