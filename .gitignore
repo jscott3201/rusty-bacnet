@@ -29,6 +29,10 @@ CLAUDE.md
 .cursor/
 .aider*
 .codeium/
+.superpowers/
+.mcp/
+.mcp.json
+mcp.json
 
 # Proprietary spec
 _spec/

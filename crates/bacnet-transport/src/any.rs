@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 
 use crate::bip::BipTransport;
 use crate::bip6::Bip6Transport;
+use crate::loopback::LoopbackTransport;
 use crate::mstp::{MstpTransport, SerialPort};
 use crate::port::{ReceivedNpdu, TransportPort};
 
@@ -35,6 +36,8 @@ pub enum AnyTransport<S: SerialPort + 'static> {
     /// BACnet/SC over TLS WebSocket.
     #[cfg(feature = "sc-tls")]
     Sc(Box<ScTransport<TlsWebSocket>>),
+    /// In-process loopback (for gateway client/server composition).
+    Loopback(LoopbackTransport),
 }
 
 impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
@@ -47,6 +50,7 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
             Self::Ethernet(t) => t.start().await,
             #[cfg(feature = "sc-tls")]
             Self::Sc(t) => t.start().await,
+            Self::Loopback(t) => t.start().await,
         }
     }
 
@@ -59,6 +63,7 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
             Self::Ethernet(t) => t.stop().await,
             #[cfg(feature = "sc-tls")]
             Self::Sc(t) => t.stop().await,
+            Self::Loopback(t) => t.stop().await,
         }
     }
 
@@ -71,6 +76,7 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
             Self::Ethernet(t) => t.send_unicast(npdu, mac).await,
             #[cfg(feature = "sc-tls")]
             Self::Sc(t) => t.send_unicast(npdu, mac).await,
+            Self::Loopback(t) => t.send_unicast(npdu, mac).await,
         }
     }
 
@@ -83,6 +89,7 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
             Self::Ethernet(t) => t.send_broadcast(npdu).await,
             #[cfg(feature = "sc-tls")]
             Self::Sc(t) => t.send_broadcast(npdu).await,
+            Self::Loopback(t) => t.send_broadcast(npdu).await,
         }
     }
 
@@ -95,6 +102,7 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
             Self::Ethernet(t) => t.local_mac(),
             #[cfg(feature = "sc-tls")]
             Self::Sc(t) => t.local_mac(),
+            Self::Loopback(t) => t.local_mac(),
         }
     }
 
@@ -107,6 +115,7 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
             Self::Ethernet(t) => t.max_apdu_length(),
             #[cfg(feature = "sc-tls")]
             Self::Sc(t) => t.max_apdu_length(),
+            Self::Loopback(t) => t.max_apdu_length(),
         }
     }
 }
@@ -140,6 +149,12 @@ impl<S: SerialPort> From<EthernetTransport> for AnyTransport<S> {
 impl<S: SerialPort> From<ScTransport<TlsWebSocket>> for AnyTransport<S> {
     fn from(t: ScTransport<TlsWebSocket>) -> Self {
         Self::Sc(Box::new(t))
+    }
+}
+
+impl<S: SerialPort> From<LoopbackTransport> for AnyTransport<S> {
+    fn from(t: LoopbackTransport) -> Self {
+        Self::Loopback(t)
     }
 }
 

@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2]
+
+### Added
+- **New crate: `bacnet-gateway`** — HTTP REST API and MCP (Model Context Protocol) server for BACnet networks
+  - REST API at `/api/v1/` with endpoints for device discovery, property read/write, local object CRUD, and health check
+  - MCP server at `/mcp` with 10 tools for LLM-driven BACnet interaction (discover_devices, read/write_property, list/read/write/create/delete local objects)
+  - MCP reference knowledge base — 9 static resources teaching BACnet concepts (object types, properties, units, errors, reliability, priority array, networking, services, troubleshooting) plus per-object-type drill-down templates
+  - 3 live state MCP resources (devices, local-objects, config)
+  - Pluggable authentication with bearer token default, applied to both REST and MCP endpoints
+  - TOML configuration with CLI overrides, config validation (reserved network numbers, mutual exclusivity checks)
+  - Feature-gated binary (`--features bin`) with graceful shutdown, tracing, `--no-mcp`/`--no-api` flags
+  - 13 supported object types for local creation (analog/binary/multi-state I/O/V, integer, large-analog, positive-integer, characterstring values)
+- **`LoopbackTransport`** in `bacnet-transport` — in-process transport backed by mpsc channels for gateway client/server composition
+- **`AnyTransport::Loopback`** variant for mixed-transport routing with loopback ports
+
 ## [0.7.1]
 
 ### Fixed
