@@ -107,8 +107,7 @@ impl TokioSerialPort {
         buf[2] = delay_after_send_us;
 
         // TIOCSRS485 = 0x542F
-        let ret =
-            unsafe { libc::ioctl(stream.as_raw_fd(), 0x542F, buf.as_mut_ptr()) };
+        let ret = unsafe { libc::ioctl(stream.as_raw_fd(), 0x542F, buf.as_mut_ptr()) };
         if ret < 0 {
             return Err(Error::Encoding(format!(
                 "TIOCSRS485 ioctl failed: {}",
@@ -185,12 +184,7 @@ impl<S: SerialPort> GpioDirectionPort<S> {
     /// - `line`: GPIO line number for DE/RE control (e.g., 18).
     /// - `active_high`: If true, GPIO HIGH enables the transmitter (most
     ///   common — MAX485 DE pin is active-high). If false, GPIO LOW enables TX.
-    pub fn new(
-        inner: S,
-        gpio_chip: &str,
-        line: u32,
-        active_high: bool,
-    ) -> Result<Self, Error> {
+    pub fn new(inner: S, gpio_chip: &str, line: u32, active_high: bool) -> Result<Self, Error> {
         Self::with_post_tx_delay(inner, gpio_chip, line, active_high, 0)
     }
 

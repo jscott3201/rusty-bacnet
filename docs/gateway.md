@@ -148,6 +148,32 @@ The gateway is configured via a TOML file (default: `gateway.toml`). The top-lev
 | `station_address` | `u8` | *(required)* | Station address (0--254). |
 | `max_master` | `u8` | `127` | Max master station address. |
 | `network_number` | `u16` | *(required)* | Network number for this transport. Must be 1--65534, unique. |
+| `rs485` | `Rs485Config?` | `None` | RS-485 direction control (see below). If omitted, assumes hardware auto-direction. |
+
+### `[transports.mstp.rs485]` -- RS-485 Direction Control (optional)
+
+Most USB RS-485 adapters handle direction switching automatically and need no configuration. For RS-485 hats or transceivers with manual DE/RE control, configure one of these modes:
+
+**GPIO mode** -- for RS-485 hats with a GPIO direction pin (e.g., Seeed Studio RS-485 Shield):
+
+```toml
+[transports.mstp.rs485]
+mode = "gpio"
+gpio_chip = "/dev/gpiochip0"  # default
+gpio_line = 18                 # GPIO pin number for DE/RE
+active_high = true             # true = HIGH enables transmitter (default)
+post_tx_delay_us = 200         # microseconds after TX before switching to RX (default: 200)
+```
+
+**Kernel RTS mode** -- for setups where DE/RE is wired to the UART's RTS pin:
+
+```toml
+[transports.mstp.rs485]
+mode = "kernel-rts"
+invert_rts = false             # true if DE is active-low (default: false)
+delay_before_send_us = 0       # microseconds delay before TX (default: 0)
+delay_after_send_us = 0        # microseconds delay after TX (default: 0)
+```
 
 ### `[bbmd]` -- BBMD Configuration
 
@@ -1089,7 +1115,7 @@ bdt = [
 ]
 ```
 
-### MS/TP on Linux
+### MS/TP on Linux (USB RS-485 adapter)
 
 ```toml
 [device]
@@ -1102,6 +1128,31 @@ baud_rate = 76800
 station_address = 1
 max_master = 127
 network_number = 3
+# No rs485 section needed — USB adapters handle direction automatically
+
+[transports.bip]
+broadcast = "192.168.1.255"
+network_number = 1
+```
+
+### MS/TP on Raspberry Pi (RS-485 Hat with GPIO)
+
+```toml
+[device]
+instance = 70002
+name = "Pi MS/TP Gateway"
+
+[transports.mstp]
+serial_port = "/dev/ttyS0"
+baud_rate = 76800
+station_address = 1
+max_master = 127
+network_number = 3
+
+# Seeed Studio RS-485 Shield: DE/RE on GPIO18
+[transports.mstp.rs485]
+mode = "gpio"
+gpio_line = 18
 
 [transports.bip]
 broadcast = "192.168.1.255"

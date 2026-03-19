@@ -138,6 +138,63 @@ pub struct MstpConfig {
     pub max_master: u8,
     /// Network number for this transport.
     pub network_number: u16,
+    /// RS-485 direction control configuration (optional).
+    /// If omitted, assumes the hardware handles direction automatically
+    /// (USB RS-485 adapters, auto-direction transceivers).
+    #[serde(default)]
+    pub rs485: Option<Rs485Config>,
+}
+
+/// RS-485 direction control configuration.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "mode")]
+pub enum Rs485Config {
+    /// Kernel RS-485 mode via TIOCSRS485 ioctl (Linux only).
+    /// The kernel toggles the UART's RTS pin for direction control.
+    /// Use when DE/RE is wired to the UART's RTS pin.
+    #[serde(rename = "kernel-rts")]
+    KernelRts {
+        /// Invert RTS polarity (default: false).
+        #[serde(default)]
+        invert_rts: bool,
+        /// Delay before send in microseconds (default: 0).
+        #[serde(default)]
+        delay_before_send_us: u32,
+        /// Delay after send in microseconds (default: 0).
+        #[serde(default)]
+        delay_after_send_us: u32,
+    },
+    /// GPIO direction control via Linux GPIO character device.
+    /// Toggles a GPIO pin for DE/RE control around each transmission.
+    /// Use for RS-485 hats where DE/RE is wired to a GPIO pin.
+    #[serde(rename = "gpio")]
+    Gpio {
+        /// GPIO chip device path (default: "/dev/gpiochip0").
+        #[serde(default = "default_gpio_chip")]
+        gpio_chip: String,
+        /// GPIO line number for DE/RE control.
+        gpio_line: u32,
+        /// If true, GPIO HIGH enables transmitter (default: true).
+        /// Most RS-485 transceivers (MAX485) use active-high DE.
+        #[serde(default = "default_true")]
+        active_high: bool,
+        /// Post-TX delay in microseconds before switching to RX mode (default: 200).
+        /// Covers the time for the last byte to leave the UART shift register.
+        #[serde(default = "default_post_tx_delay")]
+        post_tx_delay_us: u64,
+    },
+}
+
+fn default_gpio_chip() -> String {
+    "/dev/gpiochip0".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_post_tx_delay() -> u64 {
+    200
 }
 
 fn default_baud_rate() -> u32 {
