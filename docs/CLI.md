@@ -22,7 +22,7 @@ cargo install bacnet-cli --features sc-tls
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-i, --interface <IP>` | `0.0.0.0` | Network interface IP to bind |
+| `-i, --interface <IP>` | (see below) | Network interface IP to bind |
 | `-p, --port <PORT>` | `47808` | BACnet UDP port |
 | `-b, --broadcast <IP>` | `255.255.255.255` | Broadcast address for WhoIs |
 | `-t, --timeout <MS>` | `6000` | APDU timeout in milliseconds |
@@ -39,6 +39,23 @@ cargo install bacnet-cli --features sc-tls
 
 Output auto-detects: tables in TTY, JSON when piped.
 
+**Interface selection:** When launching the interactive shell without `--interface` on BACnet/IP, the CLI lists available network interfaces and prompts you to select one. For one-shot commands without `--interface`, it defaults to `0.0.0.0`.
+
+## Target Resolution
+
+Commands that take a `<target>` argument accept several formats:
+
+| Format | Example | Description |
+|--------|---------|-------------|
+| IPv4 address | `192.168.1.100` | Direct BIP target (default port 47808) |
+| IPv4:port | `10.0.1.5:47809` | Direct BIP target with explicit port |
+| IPv6 bracket | `[fe80::1]` | Direct BIP6 target (default port 47808) |
+| IPv6:port | `[fe80::1]:47809` | Direct BIP6 target with explicit port |
+| Device instance | `1234` | Looks up address from discovered device cache |
+| DNET:instance | `2:1234` | Routed device (network:instance) |
+
+When using a device instance number, the device must have been previously found via `discover`. In the shell, you can set a default target with the `target` command to omit the target argument from subsequent commands.
+
 ## Commands
 
 ### Interactive Shell
@@ -48,17 +65,63 @@ bacnet              # launch interactive REPL
 bacnet shell        # same as above
 ```
 
-The shell supports command history, tab completion, and all commands below.
+The shell provides:
+
+- **Tab completion** for commands, object types, and property names
+- **Command history** (saved to `~/.bacnet_history`) with history-based hints
+- **Default target** via the `target` command (omit target from subsequent commands)
+- **BBMD auto-renewal** at 80% of TTL when registered via `register`
+- **Colored output** (green for success/values, red for errors, cyan for addresses, dimmed for labels)
+- **Quoted string support** in arguments (e.g., `write 10.0.1.5 av:1 on "Zone Temp"`)
+
+Shell-only commands:
+
+```bash
+target 192.168.1.100        # set default target
+target 1234                 # set default target by device instance
+target clear                # clear default target
+target                      # show current default target
+
+status                      # show session state (transport, local address,
+                            # default target, BBMD registration, device count)
+
+help                        # list all commands
+exit                        # exit the shell (also: quit, Ctrl-D)
+```
+
+**Command aliases in shell:** `whois`=discover, `whohas`=find, `rp`=read, `rpm`=readm, `rr`=read-range, `wp`=write, `wpm`=writem, `cov`=subscribe, `dcc`=control, `ack`=ack-alarm, `ts`=time-sync
 
 ### Device Discovery
 
 ```bash
-bacnet discover                 # discover all devices
-bacnet discover 1000-2000       # discover devices in instance range
-bacnet discover --wait 5        # wait 5 seconds for responses
+bacnet discover                          # discover all devices
+bacnet discover 1000-2000                # discover devices in instance range
+bacnet discover --wait 5                 # wait 5 seconds for responses (default: 3)
+bacnet discover --target 192.168.1.100   # directed (unicast) WhoIs
+bacnet discover --dnet 2                 # target a specific remote network
+bacnet discover --bbmd 10.0.0.1          # register as foreign device before discovering
+bacnet discover --bbmd 10.0.0.1 --ttl 300  # BBMD registration with TTL (default: 300s)
+```
 
-bacnet find --name "Zone Temp"  # find objects by name (WhoHas)
-bacnet devices                  # list cached discovered devices
+**Discover flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--wait <N>` | `3` | Seconds to wait for responses |
+| `--target <ADDR>` | | Send directed WhoIs to a specific IP address |
+| `--dnet <N>` | | Target a specific remote network number |
+| `--bbmd <ADDR>` | | Register as foreign device with BBMD before discovering (BIP only) |
+| `--ttl <N>` | `300` | TTL in seconds for BBMD foreign device registration |
+
+```bash
+bacnet find "Zone Temp"                  # find objects by name (WhoHas)
+bacnet find --name "Zone Temp"           # same, explicit flag
+bacnet find "Zone Temp" --wait 5         # wait 5 seconds for responses
+```
+
+```bash
+bacnet devices                           # list cached discovered devices
+bacnet whois-router                      # send Who-Is-Router-To-Network
 ```
 
 ### Reading Properties
@@ -67,22 +130,59 @@ bacnet devices                  # list cached discovered devices
 bacnet read 192.168.1.100 ai:1 pv              # read present-value
 bacnet read 192.168.1.100 analog-input:1 present-value  # full names work too
 bacnet read 192.168.1.100 device:1234 object-name
+bacnet read 192.168.1.100 ai:1 ol[3]            # read array index (object-list[3])
+bacnet read 192.168.1.100 ai:1 all              # read ALL properties via RPM
 
-# Read multiple properties
+# Read multiple properties (ReadPropertyMultiple)
 bacnet readm 192.168.1.100 ai:1 pv,object-name ao:1 pv
 
 # Read range (trend logs, lists)
 bacnet read-range 192.168.1.100 trend-log:1 log-buffer
+bacnet read-range 192.168.1.100 trend-log:1     # defaults to log-buffer
 ```
+
+**Aliases:** `rp` = read, `rpm` = readm, `rr` = read-range
 
 ### Writing Properties
 
 ```bash
-bacnet write 192.168.1.100 av:1 pv 72.5              # write a value
-bacnet write 192.168.1.100 av:1 pv 72.5 --priority 8 # with priority
+bacnet write 192.168.1.100 av:1 pv 72.5              # write a float value
+bacnet write 192.168.1.100 av:1 pv 72.5 --priority 8 # with priority (1-16)
 bacnet write 192.168.1.100 bv:1 pv true               # boolean
+bacnet write 192.168.1.100 bv:1 pv active              # enumerated (active=1)
 bacnet write 192.168.1.100 av:1 pv null --priority 8   # relinquish
+bacnet write 192.168.1.100 av:1 on "\"Zone Temp\""    # character string
+bacnet write 192.168.1.100 av:1 pv 72.5@8             # inline priority syntax
+bacnet write 192.168.1.100 av:1 pv enumerated:3       # explicit enumerated
+bacnet write 192.168.1.100 sc:1 pv date:2024-03-15    # date value
+bacnet write 192.168.1.100 sc:1 pv time:14:30:00      # time value
+bacnet write 192.168.1.100 nc:1 pv object:ai:1        # object identifier value
 ```
+
+**Write multiple properties (shell only):**
+
+```bash
+writem 192.168.1.100 av:1 pv=72.5,desc="Zone Temp" av:2 pv=68.0
+```
+
+**Aliases:** `wp` = write, `wpm` = writem
+
+**Value formats:**
+
+| Format | Example | BACnet Type |
+|--------|---------|-------------|
+| `null` | `null` | Null |
+| `true` / `false` | `true` | Boolean |
+| `active` / `inactive` | `active` | Enumerated (1/0) |
+| Integer | `42`, `-5` | Unsigned / Signed |
+| Float | `72.5`, `1e10` | Real |
+| Quoted string | `"hello"` | CharacterString |
+| `enumerated:N` | `enumerated:3` | Enumerated |
+| `date:YYYY-MM-DD` | `date:2024-03-15` | Date (use `*` for unspecified) |
+| `time:HH:MM:SS[.hh]` | `time:14:30:00` | Time (use `*` for unspecified) |
+| `object:type:inst` | `object:ai:1` | ObjectIdentifier |
+
+Inline priority: append `@N` to any value (e.g., `72.5@8`, `null@16`).
 
 ### COV Subscriptions
 
@@ -92,16 +192,64 @@ bacnet subscribe 192.168.1.100 ai:1 --confirmed          # confirmed COV
 bacnet subscribe 192.168.1.100 ai:1 --lifetime 300       # 5-minute subscription
 ```
 
+Subscribes and then watches for COV notifications in real time. Press Ctrl+C to stop watching.
+
+**Alias:** `cov` = subscribe
+
+### Alarms and Events
+
+```bash
+bacnet alarms 192.168.1.100                              # get event/alarm summary
+
+bacnet ack-alarm 192.168.1.100 ai:1 --state 1            # acknowledge an alarm
+bacnet ack-alarm 192.168.1.100 ai:1 --state 1 --source "operator"  # custom source
+```
+
+**ack-alarm flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--state <N>` | (required) | Event state to acknowledge (0=normal, 1=fault, etc.) |
+| `--source <S>` | `bacnet-cli` | Acknowledgment source string |
+
+**Alias:** `ack` = ack-alarm
+
 ### Device Management
 
 ```bash
 # Communication control
 bacnet control 192.168.1.100 disable --duration 5
+bacnet control 192.168.1.100 disable-initiation
 bacnet control 192.168.1.100 enable
+bacnet control 192.168.1.100 disable --password secret
 
 # Reinitialize
-bacnet reinit 192.168.1.100 coldstart --password secret
+bacnet reinit 192.168.1.100 coldstart
+bacnet reinit 192.168.1.100 warmstart --password secret
+bacnet reinit 192.168.1.100 start-backup
+bacnet reinit 192.168.1.100 activate-changes
+```
 
+**Control actions:** `enable`, `disable`, `disable-initiation`
+
+**Control flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--duration <M>` | Duration in minutes |
+| `--password <P>` | Password string |
+
+**Aliases:** `dcc` = control
+
+**Reinit states:** `coldstart`, `warmstart`, `start-backup`, `end-backup`, `start-restore`, `end-restore`, `abort-restore`, `activate-changes`
+
+**Reinit flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--password <P>` | Password string |
+
+```bash
 # Time synchronization
 bacnet time-sync 192.168.1.100
 bacnet time-sync 192.168.1.100 --utc
@@ -109,17 +257,38 @@ bacnet time-sync 192.168.1.100 --utc
 # Create/delete objects
 bacnet create-object 192.168.1.100 av:100
 bacnet delete-object 192.168.1.100 av:100
-
-# Alarms and events
-bacnet alarms 192.168.1.100
-bacnet ack-alarm 192.168.1.100 ai:1 --state 1
 ```
+
+**Alias:** `ts` = time-sync
 
 ### File Transfer
 
 ```bash
-bacnet file-read 192.168.1.100 1 --count 4096 --output data.bin
-bacnet file-write 192.168.1.100 1 firmware.bin --start 0
+bacnet file-read 192.168.1.100 1 --output data.bin          # save to file
+bacnet file-read 192.168.1.100 1 --start 0 --count 4096     # with range
+bacnet file-write 192.168.1.100 1 firmware.bin               # write file
+bacnet file-write 192.168.1.100 1 firmware.bin --start 0     # with offset
+```
+
+**file-read flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--start <N>` | `0` | Start position in file |
+| `--count <N>` | `1024` | Byte count to read |
+| `--output <PATH>` | | Save data to file (otherwise hex-dumps to stdout) |
+
+**file-write flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--start <N>` | `0` | Start position in file |
+
+### Network and Routing
+
+```bash
+bacnet whois-router                       # send Who-Is-Router-To-Network
+bacnet devices                            # list cached discovered devices
 ```
 
 ### BBMD Management
@@ -132,6 +301,8 @@ bacnet fdt 192.168.1.1              # read foreign device table
 bacnet register 192.168.1.1 --ttl 300   # register as foreign device
 bacnet unregister 192.168.1.1       # unregister from BBMD
 ```
+
+In the interactive shell, `register` also starts a background auto-renewal task that re-registers at 80% of the TTL (e.g., every 240 seconds for a 300-second TTL). The renewal runs silently in the background and prints a dimmed confirmation on each renewal. Use `unregister` or `status` to check registration state.
 
 ### Packet Capture
 
@@ -178,6 +349,8 @@ bacnet capture --device eth0 --filter "host 10.0.0.1" --decode --save filtered.p
 | `--count <N>` | Stop after N packets |
 | `--snaplen <N>` | Max bytes per packet (default: 65535) |
 
+Note: `--read` and `--device` are mutually exclusive; `--quiet` requires `--save`.
+
 **Output example (summary):**
 ```
 12:34:56.789  192.168.1.100:47808 -> 192.168.1.255:47808  ORIGINAL_BROADCAST_NPDU  WHO_IS
@@ -215,16 +388,23 @@ bacnet --sc --sc-url wss://hub:443 --sc-cert cert.pem --sc-key key.pem read 00:0
 | `bi` | binary-input |
 | `bo` | binary-output |
 | `bv` | binary-value |
-| `mi` | multi-state-input |
-| `mo` | multi-state-output |
-| `mv` | multi-state-value |
+| `msi` | multi-state-input |
+| `mso` | multi-state-output |
+| `msv` | multi-state-value |
 | `dev` | device |
-| `file` | file |
-| `schedule` | schedule |
-| `calendar` | calendar |
-| `tl` | trend-log |
+| `sc` | schedule |
+| `cal` | calendar |
 | `nc` | notification-class |
-| `loop` | loop |
+| `trn` | trend-log |
+| `lo` | loop |
+| `lp` | life-safety-point |
+| `lsp` | life-safety-point |
+| `acc` | accumulator |
+| `pi` | pulse-converter |
+| `prg` | program |
+| `cmd` | command |
+
+All BACnet object types are also accepted by full name in kebab-case (e.g., `analog-input`, `notification-forwarder`, `color-temperature`) or by numeric value.
 
 ## Property Shorthand
 
@@ -233,10 +413,16 @@ bacnet --sc --sc-url wss://hub:443 --sc-cert cert.pem --sc-key key.pem read 00:0
 | `pv` | present-value |
 | `on` | object-name |
 | `ot` | object-type |
-| `sf` | status-flags |
-| `oos` | out-of-service |
 | `desc` | description |
-| `units` | units |
+| `sf` | status-flags |
+| `es` | event-state |
+| `oos` | out-of-service |
+| `pa` | priority-array |
+| `rd` | relinquish-default |
+| `ol` | object-list |
+| `all` | ALL (reads all properties via RPM) |
+
+All BACnet properties are also accepted by full name in kebab-case (e.g., `present-value`, `reliability`, `notification-class`) or by numeric value. Array indices use bracket syntax: `ol[3]`, `pa[8]`.
 
 ## Pre-built Binaries
 

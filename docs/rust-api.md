@@ -107,7 +107,7 @@ use bacnet_encoding::npdu::{NpduHeader, encode_npdu, decode_npdu};
 
 ## bacnet-services
 
-25+ BACnet service modules with request/response encoding and decoding.
+23 BACnet service modules with request/response encoding and decoding.
 
 ### ReadProperty / WriteProperty
 
@@ -301,6 +301,19 @@ let addr = hub.start().await?;  // Returns SocketAddr
 
 The SC hub is a TLS WebSocket relay. Both clients and servers connect to it as spoke nodes. Messages are routed by VMAC address.
 
+### Loopback Transport
+
+```rust
+use bacnet_transport::loopback::LoopbackTransport;
+
+let (side_a, side_b) = LoopbackTransport::pair(
+    vec![0x00, 0x01],  // MAC for side A
+    vec![0x00, 0x02],  // MAC for side B
+);
+```
+
+In-process channel-based transport for composing a gateway's client and server without real network sockets. `LoopbackTransport::pair()` creates two connected transports backed by `tokio::sync::mpsc` channels — sending on one delivers to the other. Available as `AnyTransport::Loopback` for use with the enum dispatch wrapper.
+
 ### AnyTransport (enum dispatch)
 
 ```rust
@@ -309,6 +322,8 @@ use bacnet_transport::mstp::NoSerial; // placeholder when serial feature is off
 
 let transport: AnyTransport<NoSerial> = AnyTransport::Bip(bip_transport);
 ```
+
+Variants: `Bip`, `Bip6`, `Mstp`, `Sc` (boxed), `Loopback`.
 
 ### BBMD
 
@@ -334,7 +349,7 @@ use bacnet_network::router::BACnetRouter;
 
 ## bacnet-objects
 
-BACnet object model: trait, database, and 62 object type implementations.
+BACnet object model: trait, database, and 65 object type implementations.
 
 ### BACnetObject Trait
 
@@ -366,7 +381,7 @@ let obj = db.get(&oid);                // Option<&dyn BACnetObject>
 let obj = db.get_mut(&oid);            // Option<&mut Box<dyn BACnetObject>>
 ```
 
-### Object Types (62)
+### Object Types (64)
 
 #### Core I/O (9)
 
@@ -416,12 +431,14 @@ let obj = db.get_mut(&oid);            // Option<&mut Box<dyn BACnetObject>>
 | `ChannelObject` | `::new(instance, name, channel_number)` |
 | `StagingObject` | `::new(instance, name, num_stages)` |
 
-#### Lighting (2)
+#### Lighting & Color (4)
 
 | Type | Constructor |
 |------|-------------|
 | `LightingOutputObject` | `::new(instance, name)` |
 | `BinaryLightingOutputObject` | `::new(instance, name)` |
+| `ColorObject` | `::new(instance, name)` |
+| `ColorTemperatureObject` | `::new(instance, name)` |
 
 #### Life Safety (2)
 
@@ -501,12 +518,31 @@ Async BACnet client with transaction state machine, segmentation, and discovery.
 ```rust
 use bacnet_client::client::BACnetClient;
 
+// Generic builder — accepts any pre-built TransportPort
 let client = BACnetClient::generic_builder()
     .transport(transport)
     .apdu_timeout_ms(6000)
     .build()
     .await?;
+
+// BIP-specific builder — constructs BipTransport from interface/port/broadcast
+let client = BACnetClient::bip_builder()
+    .interface(Ipv4Addr::UNSPECIFIED)
+    .port(0)
+    .broadcast_address(Ipv4Addr::BROADCAST)
+    .build()
+    .await?;
+
+// SC-specific builder (requires `sc-tls` feature)
+let client = BACnetClient::sc_builder()
+    .hub_url("wss://hub:1234")
+    .tls_config(tls_config)
+    .vmac([0, 1, 2, 3, 4, 5])
+    .build()
+    .await?;
 ```
+
+`BACnetClient::builder()` is an alias for `bip_builder()`.
 
 ### Property Access
 
@@ -654,9 +690,28 @@ Async BACnet server that hosts objects and dispatches incoming requests.
 ```rust
 use bacnet_server::server::BACnetServer;
 
+// Generic builder — accepts any pre-built TransportPort
 let server = BACnetServer::generic_builder()
     .database(db)
     .transport(transport)
+    .build()
+    .await?;
+
+// BIP-specific builder — constructs BipTransport from interface/port/broadcast
+let server = BACnetServer::bip_builder()
+    .database(db)
+    .interface(Ipv4Addr::UNSPECIFIED)
+    .port(0xBAC0)
+    .broadcast_address(Ipv4Addr::BROADCAST)
+    .build()
+    .await?;
+
+// SC-specific builder (requires `sc-tls` feature)
+let server = BACnetServer::sc_builder()
+    .database(db)
+    .hub_url("wss://hub:1234")
+    .tls_config(tls_config)
+    .vmac([0, 1, 2, 3, 4, 5])
     .build()
     .await?;
 
@@ -671,17 +726,36 @@ let state = server.comm_state(); // 0=Enable, 1=Disable, 2=DisableInitiation
 server.stop().await?;
 ```
 
+`BACnetServer::builder()` is an alias for `bip_builder()`.
+
 ### Handled Services
 
 The server automatically dispatches:
+
+**Confirmed:**
 - ReadProperty, WriteProperty
 - ReadPropertyMultiple, WritePropertyMultiple
-- SubscribeCOV (with COV notification engine)
-- WhoIs / IAm
-- GetEventInformation
-- DeviceCommunicationControl
+- SubscribeCOV, SubscribeCOVProperty, SubscribeCOVPropertyMultiple
 - CreateObject, DeleteObject
-- TimeSynchronization
+- DeviceCommunicationControl, ReinitializeDevice
+- GetEventInformation, AcknowledgeAlarm
+- GetAlarmSummary, GetEnrollmentSummary
+- ConfirmedTextMessage
+- LifeSafetyOperation
+- ReadRange
+- AtomicReadFile, AtomicWriteFile
+- AddListElement, RemoveListElement
+
+**Unconfirmed:**
+- WhoIs / IAm
+- WhoHas / IHave
+- TimeSynchronization, UTCTimeSynchronization
+- WriteGroup
+- UnconfirmedTextMessage
+
+**Outgoing (server-initiated):**
+- COV notifications (confirmed and unconfirmed, with ServerTsm retry for confirmed)
+- Event notifications (confirmed and unconfirmed, routed via NotificationClass recipients)
 
 ### Concurrency
 
@@ -689,6 +763,24 @@ The server automatically dispatches:
 - `seg_receivers` capped at 128 (DoS prevention)
 - `cov_in_flight` semaphore: max 255 concurrent confirmed COV notifications
 - `comm_state`: `Arc<AtomicU8>` — lock-free read
+
+---
+
+## bacnet-gateway
+
+BACnet HTTP REST API and MCP (Model Context Protocol) server gateway. Bridges BACnet networks to web clients and AI tools.
+
+### Feature Flags
+
+| Feature | Description |
+|---------|-------------|
+| `http` | Axum-based REST API (read/write properties, discover devices) |
+| `mcp` | MCP server for AI tool integration (via `rmcp`) |
+| `bin` | Binary target with CLI (`clap`), enables both `http` and `mcp` |
+| `sc-tls` | BACnet/SC transport support |
+| `serial` | MS/TP transport support (Linux only) |
+
+See `docs/gateway.md` for full REST API and MCP tool documentation.
 
 ---
 
@@ -718,12 +810,21 @@ use bacnet_transport::bip::BipTransport;
 use std::net::Ipv4Addr;
 
 // Client
-let client_transport = BipTransport::new(Ipv4Addr::UNSPECIFIED, 0, Ipv4Addr::BROADCAST);
-let client = BACnetClient::builder().transport(client_transport).build().await?;
+let client = BACnetClient::bip_builder()
+    .interface(Ipv4Addr::UNSPECIFIED)
+    .port(0)
+    .broadcast_address(Ipv4Addr::BROADCAST)
+    .build()
+    .await?;
 
 // Server
-let server_transport = BipTransport::new(Ipv4Addr::UNSPECIFIED, 0xBAC0, Ipv4Addr::BROADCAST);
-let server = BACnetServer::builder().database(db).transport(server_transport).build().await?;
+let server = BACnetServer::bip_builder()
+    .database(db)
+    .interface(Ipv4Addr::UNSPECIFIED)
+    .port(0xBAC0)
+    .broadcast_address(Ipv4Addr::BROADCAST)
+    .build()
+    .await?;
 ```
 
 ### BIP6 (IPv6)
@@ -733,7 +834,7 @@ use bacnet_transport::bip6::Bip6Transport;
 use std::net::Ipv6Addr;
 
 let transport = Bip6Transport::new(Ipv6Addr::UNSPECIFIED, 0xBAC0, None);
-let client = BACnetClient::builder().transport(transport).build().await?;
+let client = BACnetClient::generic_builder().transport(transport).build().await?;
 ```
 
 ### BACnet/SC with Hub
@@ -748,8 +849,10 @@ let hub = ScHub::new(listen_addr, tls_acceptor, [0xFF, 0, 0, 0, 0, 1]);
 let hub_addr = hub.start().await?;
 
 // Connect client to hub
-let tls = build_tls_config(ca_cert, Some(client_cert), Some(client_key))?;
-let ws = TlsWebSocket::connect(&format!("wss://127.0.0.1:{}", hub_addr.port()), tls).await?;
-let transport = ScTransport::new(ws, [0, 1, 2, 3, 4, 5]);
-let client = BACnetClient::builder().transport(transport).build().await?;
+let client = BACnetClient::sc_builder()
+    .hub_url(&format!("wss://127.0.0.1:{}", hub_addr.port()))
+    .tls_config(tls_config)
+    .vmac([0, 1, 2, 3, 4, 5])
+    .build()
+    .await?;
 ```

@@ -9,7 +9,7 @@ A complete BACnet protocol stack (ASHRAE 135-2020) written in Rust, with first-c
 
 - **Full BACnet/IP stack** — async client and server with 30+ service types
 - **5 transports** — BACnet/IP (UDP), BACnet/IPv6 (multicast), BACnet/SC (WebSocket+TLS with hub), MS/TP (serial), Ethernet (BPF)
-- **64 object types** — All standard BACnet objects including Analog/Binary/MultiState I/O, Device, Schedule, Calendar, Trend Log, Notification Class, Loop, Access Control, Lighting, Life Safety, Elevator, Color, Color Temperature, and more
+- **65 object types** — All standard BACnet objects including Analog/Binary/MultiState I/O, Device, Schedule, Calendar, Trend Log, Notification Class, Loop, Access Control, Lighting, Life Safety, Elevator, Color, Color Temperature, and more
 - **HTTP REST API + MCP server** — `bacnet-gateway` crate with REST endpoints and Model Context Protocol tools for LLM-driven BACnet interaction
 - **BTL compliance test harness** — 3,808 tests covering 100% of BTL Test Plan 26.1 across all 13 sections
 - **Python bindings** — async client, server, and SC hub with full API parity via PyO3
@@ -318,7 +318,7 @@ crates/
   bacnet-transport/   BIP, BIP6, BACnet/SC + Hub, MS/TP, BBMD, Ethernet, Loopback
   bacnet-network/     Network layer routing, router tables
   bacnet-client/      Async client with TSM, segmentation, discovery
-  bacnet-objects/     BACnetObject trait, ObjectDatabase, 64 object types
+  bacnet-objects/     BACnetObject trait, ObjectDatabase, 65 object types
   bacnet-server/      Async server (RP/WP/RPM/WPM/COV/Events/DCC/CreateObject/TimeSynchronization)
   bacnet-gateway/     HTTP REST API + MCP server gateway (Axum + rmcp)
   bacnet-btl/         BTL compliance test harness (BTL Test Plan 26.1, 3808 tests, all 13 sections)
@@ -442,10 +442,15 @@ Minimum Rust version: 1.93
 
 ## Documentation
 
-- [CLI Reference](docs/CLI.md)
-- [Rust API Reference](docs/rust-api.md)
-- [Python API Reference](docs/python-api.md)
-- [Benchmark Results](Benchmarks.md)
+- [Gateway Reference](docs/gateway.md) — HTTP REST API, MCP server, configuration, authentication
+- [Rust API Reference](docs/rust-api.md) — all 9 published crates with examples
+- [Python API Reference](docs/python-api.md) — 42+ async client methods, 61 server object types
+- [WASM/JS API Reference](docs/wasm-api.md) — BACnet/SC thin client for browsers
+- [CLI Reference](docs/CLI.md) — interactive shell and one-shot commands
+- [BTL Test Harness](docs/btl.md) — 3,808 compliance tests, 5 commands, Docker topologies
+- [Benchmark Results](Benchmarks.md) — 9 suites with throughput, latency, and memory
+- [Architecture Guide](docs/architecture.md) — crate graph, packet flow, concurrency model
+- [Changelog](CHANGELOG.md)
 - [Examples](examples/)
 
 ## License

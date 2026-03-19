@@ -2,11 +2,15 @@
 
 `rusty_bacnet` provides Python bindings for the Rust BACnet protocol stack via PyO3. All I/O operations are async (`asyncio`-based).
 
+**Requirements:** Python >= 3.11
+
 ## Installation
 
 ```bash
 pip install rusty-bacnet
 ```
+
+The package includes a `.pyi` type stub file for IDE autocompletion and type checking. Most editors (VS Code, PyCharm) will pick it up automatically from the installed package.
 
 ---
 
