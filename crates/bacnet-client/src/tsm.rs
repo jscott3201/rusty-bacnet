@@ -13,6 +13,8 @@ use tokio::sync::oneshot;
 pub struct TsmConfig {
     /// APDU timeout in milliseconds (default 6000).
     pub apdu_timeout_ms: u64,
+    /// APDU segment timeout in milliseconds (default = apdu_timeout_ms).
+    pub apdu_segment_timeout_ms: u64,
     /// Number of APDU retries (default 3).
     pub apdu_retries: u8,
 }
@@ -21,6 +23,7 @@ impl Default for TsmConfig {
     fn default() -> Self {
         Self {
             apdu_timeout_ms: 6000,
+            apdu_segment_timeout_ms: 6000,
             apdu_retries: 3,
         }
     }
@@ -41,7 +44,7 @@ pub enum TsmResponse {
     Abort { reason: u8 },
 }
 
-/// Per-destination invoke ID allocator.
+/// Invoke ID allocator scoped to a single destination MAC.
 struct InvokeIdAllocator {
     next_id: u8,
     in_use: [bool; 256],
@@ -65,7 +68,7 @@ impl InvokeIdAllocator {
                 return Some(id);
             }
             if self.next_id == start {
-                return None; // All 256 IDs exhausted
+                return None;
             }
         }
     }
@@ -89,14 +92,11 @@ const MAX_TSM_DESTINATIONS: usize = 1024;
 /// `(destination_mac, invoke_id)`.
 pub struct Tsm {
     config: TsmConfig,
-    /// Per-destination invoke ID allocators.
     allocators: HashMap<MacAddr, InvokeIdAllocator>,
-    /// Pending transactions: (mac, invoke_id) -> oneshot sender.
     pending: HashMap<(MacAddr, u8), oneshot::Sender<TsmResponse>>,
 }
 
 impl Tsm {
-    /// Create a new TSM with the given configuration.
     pub fn new(config: TsmConfig) -> Self {
         Self {
             config,
@@ -105,7 +105,6 @@ impl Tsm {
         }
     }
 
-    /// Get the TSM configuration.
     pub fn config(&self) -> &TsmConfig {
         &self.config
     }
@@ -116,7 +115,7 @@ impl Tsm {
     pub fn allocate_invoke_id(&mut self, destination_mac: &[u8]) -> Option<u8> {
         let key = MacAddr::from_slice(destination_mac);
         if !self.allocators.contains_key(&key) && self.allocators.len() >= MAX_TSM_DESTINATIONS {
-            return None; // Reject new destinations when at capacity
+            return None;
         }
         let allocator = self
             .allocators
@@ -145,12 +144,18 @@ impl Tsm {
         invoke_id: u8,
     ) -> oneshot::Receiver<TsmResponse> {
         let (tx, rx) = oneshot::channel();
+        debug_assert!(
+            !self
+                .pending
+                .contains_key(&(destination_mac.clone(), invoke_id)),
+            "duplicate TSM registration for invoke_id {}",
+            invoke_id
+        );
         self.pending.insert((destination_mac, invoke_id), tx);
         rx
     }
 
-    /// Complete a pending transaction by delivering the response.
-    /// Returns `true` if the transaction was found and completed.
+    /// Deliver a response to a pending transaction. Returns `true` if found.
     pub fn complete_transaction(
         &mut self,
         source_mac: &[u8],
@@ -159,9 +164,7 @@ impl Tsm {
     ) -> bool {
         let key = (MacAddr::from_slice(source_mac), invoke_id);
         if let Some(tx) = self.pending.remove(&key) {
-            // Release the invoke ID
             self.release_invoke_id(source_mac, invoke_id);
-            // Ignore send error (receiver may have been dropped/timed out)
             let _ = tx.send(response);
             true
         } else {
@@ -169,7 +172,7 @@ impl Tsm {
         }
     }
 
-    /// Cancel a pending transaction (e.g., on timeout). Returns `true` if found.
+    /// Cancel a pending transaction. Returns `true` if found.
     pub fn cancel_transaction(&mut self, destination_mac: &[u8], invoke_id: u8) -> bool {
         let key = (MacAddr::from_slice(destination_mac), invoke_id);
         if self.pending.remove(&key).is_some() {
@@ -180,7 +183,6 @@ impl Tsm {
         }
     }
 
-    /// Number of pending transactions.
     pub fn pending_count(&self) -> usize {
         self.pending.len()
     }
@@ -207,7 +209,6 @@ mod tests {
         let mac_b = [10, 0, 0, 2, 0xBA, 0xC0];
         let id_a = tsm.allocate_invoke_id(&mac_a);
         let id_b = tsm.allocate_invoke_id(&mac_b);
-        // Both destinations start at 0
         assert_eq!(id_a, Some(0));
         assert_eq!(id_b, Some(0));
     }
@@ -216,11 +217,9 @@ mod tests {
     fn allocate_invoke_id_wraps() {
         let mut tsm = Tsm::new(TsmConfig::default());
         let mac = [127, 0, 0, 1, 0xBA, 0xC0];
-        // Exhaust all 256 IDs
         for i in 0..256 {
             assert_eq!(tsm.allocate_invoke_id(&mac), Some(i as u8));
         }
-        // 257th should fail
         assert_eq!(tsm.allocate_invoke_id(&mac), None);
     }
 
@@ -232,14 +231,11 @@ mod tests {
         let id1 = tsm.allocate_invoke_id(&mac).unwrap();
         assert_eq!(id0, 0);
         assert_eq!(id1, 1);
-        // Release id0 — allocator still has id1 in use, so it persists
         tsm.release_invoke_id(&mac, id0);
-        // Next allocation wraps around and finds id0 free
         let id2 = tsm.allocate_invoke_id(&mac).unwrap();
-        assert_eq!(id2, 2); // sequential, skips in-use id1
+        assert_eq!(id2, 2);
         tsm.release_invoke_id(&mac, id1);
         tsm.release_invoke_id(&mac, id2);
-        // All released — allocator cleaned up, next alloc starts fresh
         let id3 = tsm.allocate_invoke_id(&mac).unwrap();
         assert_eq!(id3, 0);
     }
@@ -252,14 +248,12 @@ mod tests {
 
         let rx = tsm.register_transaction(mac.clone(), invoke_id);
 
-        // Simulate receiving a ComplexACK
         let response = TsmResponse::ComplexAck {
             service_data: Bytes::from_static(&[0xDE, 0xAD]),
         };
         let completed = tsm.complete_transaction(&mac, invoke_id, response);
         assert!(completed);
 
-        // The receiver should get the response
         let result = rx.await.unwrap();
         match result {
             TsmResponse::ComplexAck { service_data } => {

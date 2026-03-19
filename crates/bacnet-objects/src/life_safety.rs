@@ -233,6 +233,10 @@ impl BACnetObject for LifeSafetyPointObject {
         ];
         Cow::Borrowed(PROPS)
     }
+
+    fn supports_cov(&self) -> bool {
+        true
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -412,6 +416,10 @@ impl BACnetObject for LifeSafetyZoneObject {
             PropertyIdentifier::RELIABILITY,
         ];
         Cow::Borrowed(PROPS)
+    }
+
+    fn supports_cov(&self) -> bool {
+        true
     }
 }
 

@@ -10,7 +10,7 @@ use bytes::BytesMut;
 use crate::common::{PropertyReference, MAX_DECODED_ITEMS};
 
 // ---------------------------------------------------------------------------
-// ReadPropertyMultipleRequest (Clause 15.7.1.1)
+// ReadPropertyMultipleRequest
 // ---------------------------------------------------------------------------
 
 /// A single object + list of property references.
@@ -104,7 +104,7 @@ impl ReadPropertyMultipleRequest {
 }
 
 // ---------------------------------------------------------------------------
-// ReadPropertyMultipleACK (Clause 15.7.1.2)
+// ReadPropertyMultipleACK
 // ---------------------------------------------------------------------------
 
 /// A single result element: success (value) or failure (error).
@@ -223,7 +223,6 @@ impl ReadPropertyMultipleACK {
                     }
                     array_index = Some(primitives::decode_unsigned(&data[tag_end..end])? as u32);
                     offset = end;
-                    // Need to read next tag
                     let (tag, tag_end) = tags::decode_tag(data, offset)?;
                     if tag.is_opening_tag(4) {
                         let (value_bytes, new_offset) =

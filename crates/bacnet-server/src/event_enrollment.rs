@@ -1,17 +1,11 @@
-//! Event Enrollment algorithmic evaluation per ASHRAE 135-2020 Clause 13.4.
+//! Event Enrollment algorithmic evaluation.
 //!
 //! Unlike intrinsic reporting (built into object types), Event Enrollment is a
-//! separate object that monitors ANY other object's property and evaluates an
-//! algorithm against it.  The `event_type` field determines which algorithm to
-//! use, and `event_parameters` holds the algorithm-specific configuration
-//! encoded as raw bytes.
+//! separate object that monitors another object's property and evaluates an
+//! algorithm against it.
 //!
-//! Supported algorithms:
-//! - OUT_OF_RANGE (type 5): analog limit detection with deadband
-//! - FLOATING_LIMIT (type 4): setpoint-relative limit detection with deadband
-//! - CHANGE_OF_STATE (type 1): enumerated alarm-value detection
-//! - CHANGE_OF_BITSTRING (type 0): masked bitstring alarm detection
-//! - CHANGE_OF_VALUE (type 2): real-valued change detection with increment
+//! Supported algorithms: OUT_OF_RANGE, FLOATING_LIMIT, CHANGE_OF_STATE,
+//! CHANGE_OF_BITSTRING, CHANGE_OF_VALUE.
 
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::event::EventStateChange;
@@ -86,7 +80,7 @@ pub fn encode_change_of_bitstring_params(mask: &[u8], alarm_bits: &[u8]) -> Vec<
 
 // ---- Algorithm evaluation ----
 
-/// Evaluate the OUT_OF_RANGE algorithm (Clause 13.3.2).
+/// Evaluate the OUT_OF_RANGE algorithm.
 ///
 /// Compares a real present_value against high/low limits with deadband hysteresis.
 fn eval_out_of_range(params: &[u8], value: f32, current: EventState) -> EventState {
@@ -129,9 +123,9 @@ fn eval_out_of_range(params: &[u8], value: f32, current: EventState) -> EventSta
     }
 }
 
-/// Evaluate the FLOATING_LIMIT algorithm (Clause 13.3.3).
+/// Evaluate the FLOATING_LIMIT algorithm.
 ///
-/// Compares a real present_value against a setpoint ± differential limits,
+/// Compares a real present_value against a setpoint +/- differential limits
 /// with deadband hysteresis.
 fn eval_floating_limit(params: &[u8], value: f32, current: EventState) -> EventState {
     if params.len() < 16 {
@@ -177,10 +171,9 @@ fn eval_floating_limit(params: &[u8], value: f32, current: EventState) -> EventS
     }
 }
 
-/// Evaluate the CHANGE_OF_STATE algorithm (Clause 13.3.6).
+/// Evaluate the CHANGE_OF_STATE algorithm.
 ///
-/// Checks if an enumerated value is in the set of alarm values.
-/// If so → OFFNORMAL, otherwise → NORMAL.
+/// OFFNORMAL if the value matches any alarm value, otherwise NORMAL.
 fn eval_change_of_state(params: &[u8], value: u32, _current: EventState) -> EventState {
     if params.len() < 4 {
         return EventState::NORMAL;
@@ -205,10 +198,9 @@ fn eval_change_of_state(params: &[u8], value: u32, _current: EventState) -> Even
     EventState::NORMAL
 }
 
-/// Evaluate the CHANGE_OF_BITSTRING algorithm (Clause 13.3.5).
+/// Evaluate the CHANGE_OF_BITSTRING algorithm.
 ///
 /// Applies a mask to the monitored bitstring and compares against the alarm pattern.
-/// Match → OFFNORMAL, no match → NORMAL.
 fn eval_change_of_bitstring(params: &[u8], value_bits: &[u8], _current: EventState) -> EventState {
     if params.len() < 4 {
         return EventState::NORMAL;
@@ -222,7 +214,6 @@ fn eval_change_of_bitstring(params: &[u8], value_bits: &[u8], _current: EventSta
     let mask = &params[4..4 + mask_len];
     let alarm_bits = &params[4 + mask_len..4 + 2 * mask_len];
 
-    // Apply mask to monitored value and compare to alarm pattern
     for i in 0..mask_len {
         let monitored_byte = value_bits.get(i).copied().unwrap_or(0);
         if (monitored_byte & mask[i]) != (alarm_bits[i] & mask[i]) {
@@ -232,12 +223,9 @@ fn eval_change_of_bitstring(params: &[u8], value_bits: &[u8], _current: EventSta
     EventState::OFFNORMAL
 }
 
-/// Evaluate the CHANGE_OF_VALUE algorithm (Clause 13.3.7).
+/// Evaluate the CHANGE_OF_VALUE algorithm.
 ///
-/// For real values: if |current_value| >= increment, the state is OFFNORMAL.
-/// This simplified version treats values exceeding the increment threshold
-/// from zero as off-normal. In practice, the reference value would be tracked
-/// across evaluations.
+/// OFFNORMAL if |current_value| >= increment, otherwise NORMAL.
 fn eval_change_of_value(params: &[u8], value: f32, _current: EventState) -> EventState {
     if params.len() < 4 {
         return EventState::NORMAL;
@@ -305,17 +293,11 @@ fn read_object_property_ref(
 
 /// Evaluate all EventEnrollment objects in the database.
 ///
-/// For each EventEnrollment that is not out-of-service:
-/// 1. Reads the monitored object+property via object_property_reference
-/// 2. Evaluates the algorithm determined by event_type using event_parameters
-/// 3. If the event state changed and the transition is enabled, returns it
-///
-/// Follows the two-pass pattern (immutable read, then mutable write) to
-/// satisfy Rust borrow rules.
+/// For each active enrollment, reads the monitored property, evaluates the
+/// configured algorithm, and returns any state transitions.
 pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmentTransition> {
     let oids = db.find_by_type(ObjectType::EVENT_ENROLLMENT);
 
-    // Phase 1: Immutable reads — evaluate each enrollment against its monitored property.
     let mut updates: Vec<(
         ObjectIdentifier,
         ObjectIdentifier,
@@ -329,7 +311,6 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
             continue;
         };
 
-        // Skip out-of-service enrollments
         if let Ok(PropertyValue::Boolean(true)) =
             enrollment.read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
         {
@@ -360,7 +341,6 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
             continue;
         };
 
-        // Read the monitored property value from the referenced object
         let Some(monitored_obj) = db.get(&monitored_oid) else {
             continue;
         };
@@ -369,7 +349,6 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
             Err(_) => continue,
         };
 
-        // Evaluate the algorithm based on event_type
         let event_type = EventType::from_raw(event_type_raw);
         let new_state = if event_type == EventType::OUT_OF_RANGE {
             let Some(val) = extract_real(&monitored_value) else {
@@ -404,7 +383,6 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
             continue;
         }
 
-        // Check event_enable bitmask (bit 0 = TO_OFFNORMAL, bit 1 = TO_FAULT, bit 2 = TO_NORMAL)
         let transition_enabled = match new_state {
             s if s == EventState::NORMAL => event_enable & 0x04 != 0,
             s if s == EventState::HIGH_LIMIT
@@ -427,7 +405,6 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
         }
     }
 
-    // Phase 2: Mutable writes — update event_state for transitioned enrollments.
     let mut transitions = Vec::new();
     for (oid, monitored_oid, event_type_raw, from_state, to_state) in updates {
         if let Some(obj) = db.get_mut(&oid) {

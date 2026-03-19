@@ -431,6 +431,9 @@ impl BACnetObject for LiftObject {
             p if p == PropertyIdentifier::ENERGY_METER => {
                 Ok(PropertyValue::Real(self.energy_meter))
             }
+            p if p == PropertyIdentifier::FLOOR_NUMBER => {
+                Ok(PropertyValue::Unsigned(self.tracking_value))
+            }
             _ => Err(common::unknown_property_error()),
         }
     }

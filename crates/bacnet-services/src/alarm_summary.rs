@@ -10,7 +10,7 @@ use bytes::BytesMut;
 use crate::common::MAX_DECODED_ITEMS;
 
 // ---------------------------------------------------------------------------
-// GetAlarmSummaryAck (Clause 13.7.2)
+// GetAlarmSummaryAck
 // ---------------------------------------------------------------------------
 
 /// One entry in the GetAlarmSummary-ACK sequence.

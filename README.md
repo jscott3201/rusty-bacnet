@@ -9,12 +9,13 @@ A complete BACnet protocol stack (ASHRAE 135-2020) written in Rust, with first-c
 
 - **Full BACnet/IP stack** — async client and server with 30+ service types
 - **5 transports** — BACnet/IP (UDP), BACnet/IPv6 (multicast), BACnet/SC (WebSocket+TLS with hub), MS/TP (serial), Ethernet (BPF)
-- **62 object types** — All standard BACnet objects including Analog/Binary/MultiState I/O, Device, Schedule, Calendar, Trend Log, Notification Class, Loop, Access Control, Lighting, Life Safety, Elevator, and more
+- **64 object types** — All standard BACnet objects including Analog/Binary/MultiState I/O, Device, Schedule, Calendar, Trend Log, Notification Class, Loop, Access Control, Lighting, Life Safety, Elevator, Color, Color Temperature, and more
+- **BTL compliance test harness** — 3,808 tests covering 100% of BTL Test Plan 26.1 across all 13 sections
 - **Python bindings** — async client, server, and SC hub with full API parity via PyO3
 - **Kotlin/Java bindings** — async client and server via UniFFI, distributed as multi-platform JAR
 - **WASM/JavaScript** — BACnet/SC thin client for browsers via wasm-bindgen
 - **CLI tool** — interactive shell and scripting for BACnet/IP, IPv6, and SC
-- **1778 tests**, 0 clippy warnings, CI on Linux/macOS/Windows
+- **5,500+ tests**, 0 clippy warnings, CI on Linux/macOS/Windows
 
 ## Quick Start (Python)
 
@@ -66,9 +67,9 @@ asyncio.run(main())
 
 ```toml
 [dependencies]
-bacnet-client = "0.6"
-bacnet-types = "0.6"
-bacnet-encoding = "0.6"
+bacnet-client = "0.7"
+bacnet-types = "0.7"
+bacnet-encoding = "0.7"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -122,7 +123,7 @@ dependencyResolutionManagement {
 
 // build.gradle.kts
 dependencies {
-    implementation("io.github.jscott3201:bacnet-java:0.6.4")
+    implementation("io.github.jscott3201:bacnet-java:0.7.0")
 }
 ```
 
@@ -331,16 +332,17 @@ crates/
   bacnet-transport/   BIP, BIP6, BACnet/SC + Hub, MS/TP, BBMD, Ethernet
   bacnet-network/     Network layer routing, router tables
   bacnet-client/      Async client with TSM, segmentation, discovery
-  bacnet-objects/     BACnetObject trait, ObjectDatabase, 62 object types
-  bacnet-server/      Async server (RP/WP/RPM/WPM/COV/Events/DCC)
+  bacnet-objects/     BACnetObject trait, ObjectDatabase, 64 object types
+  bacnet-server/      Async server (RP/WP/RPM/WPM/COV/Events/DCC/CreateObject/TimeSynchronization)
+  bacnet-btl/         BTL compliance test harness (BTL Test Plan 26.1, 3808 tests, all 13 sections)
   rusty-bacnet/       Python bindings via PyO3 (client, server, hub)
   bacnet-java/        Kotlin/Java bindings via UniFFI (client, server)
   bacnet-wasm/        WASM/JavaScript BACnet/SC thin client
   bacnet-cli/         CLI tool with interactive shell
 java/                 Gradle build for multi-platform JAR
-benchmarks/           Criterion benchmarks (9 suites) + Python mixed-mode
-examples/             Rust, Python, and Docker examples
-docs/                 API documentation
+benchmarks/           Criterion benchmarks (9 suites) + Docker stress topology
+examples/             Rust, Python, Kotlin, and Docker examples
+docs/                 API documentation and design plans
 ```
 
 ## Supported Services
@@ -353,7 +355,7 @@ docs/                 API documentation
 | WritePropertyMultiple | ✓ | ✓ |
 | SubscribeCOV / UnsubscribeCOV | ✓ | ✓ |
 | SubscribeCOVProperty | ✓ | ✓ |
-| SubscribeCOVPropertyMultiple | ✓ | — |
+| SubscribeCOVPropertyMultiple | ✓ | ✓ |
 | COV Notifications (confirmed + unconfirmed) | ✓ | ✓ |
 | WhoIs / IAm | ✓ | ✓ |
 | WhoHas / IHave | ✓ | ✓ |
@@ -363,20 +365,20 @@ docs/                 API documentation
 | DeviceCommunicationControl | ✓ | ✓ |
 | ReinitializeDevice | ✓ | ✓ |
 | AcknowledgeAlarm | ✓ | — |
-| GetAlarmSummary | ✓ | — |
-| GetEnrollmentSummary | ✓ | — |
+| GetAlarmSummary | ✓ | ✓ |
+| GetEnrollmentSummary | ✓ | ✓ |
 | GetEventInformation | ✓ | ✓ |
-| LifeSafetyOperation | ✓ | — |
+| LifeSafetyOperation | ✓ | ✓ |
 | ReadRange | ✓ | — |
-| AtomicReadFile / AtomicWriteFile | ✓ | — |
+| AtomicReadFile / AtomicWriteFile | ✓ | ✓ |
 | AddListElement / RemoveListElement | ✓ | — |
 | ConfirmedPrivateTransfer / UnconfirmedPrivateTransfer | ✓ | — |
-| ConfirmedTextMessage / UnconfirmedTextMessage | ✓ | — |
-| WriteGroup | ✓ | — |
+| ConfirmedTextMessage / UnconfirmedTextMessage | ✓ | ✓ |
+| WriteGroup | ✓ | ✓ |
 | VTOpen / VTClose / VTData | ✓ | — |
 | AuditNotification (confirmed + unconfirmed) | ✓ | — |
 | AuditLogQuery | ✓ | — |
-| TimeSynchronization | — | ✓ |
+| TimeSynchronization / UTCTimeSynchronization | ✓ | ✓ |
 
 ## Transports
 
@@ -401,17 +403,45 @@ The `rusty-bacnet` crate provides full Python API parity:
 - **COV async iterator**: `async for notif in client.cov_notifications()`
 - **Typed exceptions**: `BacnetError`, `BacnetProtocolError`, `BacnetTimeoutError`, `BacnetRejectError`, `BacnetAbortError`
 
+## BTL Compliance Testing
+
+The `bacnet-btl` crate provides a full BTL Test Plan 26.1 compliance test harness:
+
+```bash
+# Run all 3,808 BTL tests against in-process server (<1s)
+cargo build -p bacnet-btl && ./target/debug/bacnet-test self-test
+
+# Run BTL tests against an external BACnet device
+./target/debug/bacnet-test run --target 192.168.1.100:47808
+
+# Run BTL tests over BACnet/SC
+./target/debug/bacnet-test run --target aa:bb:cc:dd:ee:ff \
+    --sc-hub=wss://hub:47809 --sc-no-verify
+
+# Start a standalone BTL server (all 64 object types)
+./target/debug/bacnet-test serve --interface 0.0.0.0 --port 47808
+
+# Docker SC topology (hub + server + tester)
+cd examples/docker
+docker compose -f docker-compose.btl.yml up btl-self-test
+```
+
+Coverage: 100% of all 13 BTL Test Plan sections (Basic BACnet, Objects, Data Sharing, Alarm & Event, Scheduling, Trending, Device Management, Data Link Layer, Network Management, Gateway, Network Security, Audit Reporting, Web Services).
+
 ## Development
 
 ```bash
-# Run tests (1778 tests)
+# Run workspace tests (1,701 tests)
 cargo test --workspace --exclude rusty-bacnet --exclude bacnet-wasm
+
+# Run BTL compliance tests (3,808 tests)
+cargo build -p bacnet-btl && ./target/debug/bacnet-test self-test
 
 # Check formatting
 cargo fmt --all --check
 
 # Lint (0 warnings required)
-RUSTFLAGS="-Dwarnings" cargo clippy --workspace --exclude rusty-bacnet --exclude bacnet-wasm --all-targets
+RUSTFLAGS="-Dwarnings" cargo clippy --workspace --exclude rusty-bacnet --all-targets
 
 # Check Python bindings compile
 cargo check -p rusty-bacnet --tests

@@ -10,7 +10,7 @@ use crate::traits::BACnetObject;
 
 /// A collection of BACnet objects, keyed by ObjectIdentifier.
 ///
-/// Enforces BACnet Clause 12.11.12: Object_Name must be unique within a device.
+/// Enforces Object_Name uniqueness within a device.
 /// Maintains secondary indexes for O(1) name lookup and O(1) type lookup.
 pub struct ObjectDatabase {
     objects: HashMap<ObjectIdentifier, Box<dyn BACnetObject>>,
@@ -38,8 +38,7 @@ impl ObjectDatabase {
 
     /// Add an object to the database.
     ///
-    /// Returns `Err` if another object already has the same `object_name()`
-    /// (BACnet Clause 12.11.12 requires unique names within a device).
+    /// Returns `Err` if another object already has the same `object_name()`.
     /// Replacing an object with the same OID is allowed (the old object is removed).
     pub fn add(&mut self, object: Box<dyn BACnetObject>) -> Result<(), Error> {
         let oid = object.object_identifier();

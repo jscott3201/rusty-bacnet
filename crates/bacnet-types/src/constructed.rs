@@ -339,7 +339,7 @@ pub struct BACnetDestination {
 /// The datum field of a BACnetLogRecord: a CHOICE covering all possible
 /// logged value types.
 ///
-/// Context tags per spec (Clause 12.20.5):
+/// Context tags per spec:
 /// - `[0]` log-status (BACnetLogStatus, 8-bit flags)
 /// - `[1]` boolean-value
 /// - `[2]` real-value
@@ -621,8 +621,8 @@ pub struct BACnetRecipientProcess {
 
 /// BACnet COV Subscription — represents an active COV subscription.
 ///
-/// Per Clause 12.11.40, `monitored_property_reference` is a
-/// `BACnetObjectPropertyReference` (object + property + optional index).
+/// The `monitored_property_reference` is a `BACnetObjectPropertyReference`
+/// (object + property + optional index).
 #[derive(Debug, Clone, PartialEq)]
 pub struct BACnetCOVSubscription {
     pub recipient: BACnetRecipientProcess,

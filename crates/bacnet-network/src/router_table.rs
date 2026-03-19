@@ -9,6 +9,17 @@ use std::time::{Duration, Instant};
 
 use bacnet_types::MacAddr;
 
+/// Reachability status of a route entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReachabilityStatus {
+    /// Route is available for traffic.
+    Reachable,
+    /// Route is temporarily unreachable due to congestion (Router-Busy).
+    Busy,
+    /// Route has permanently failed.
+    Unreachable,
+}
+
 /// A route entry in the router table.
 #[derive(Debug, Clone)]
 pub struct RouteEntry {
@@ -20,6 +31,7 @@ pub struct RouteEntry {
     pub next_hop_mac: MacAddr,
     /// When this learned route was last confirmed. `None` for direct routes.
     pub last_seen: Option<Instant>,
+    pub reachability: ReachabilityStatus,
 }
 
 /// BACnet routing table.
@@ -40,7 +52,11 @@ impl RouterTable {
     }
 
     /// Add a directly-connected network on the given port.
+    /// Network 0 and 0xFFFF are reserved and will be silently ignored.
     pub fn add_direct(&mut self, network: u16, port_index: usize) {
+        if network == 0 || network == 0xFFFF {
+            return;
+        }
         self.routes.insert(
             network,
             RouteEntry {
@@ -48,12 +64,23 @@ impl RouterTable {
                 directly_connected: true,
                 next_hop_mac: MacAddr::new(),
                 last_seen: None,
+                reachability: ReachabilityStatus::Reachable,
             },
         );
     }
 
     /// Add a learned route (network reachable via a next-hop router on the given port).
+    /// Network 0 and 0xFFFF are reserved and will be silently ignored.
+    /// Does not overwrite direct routes.
     pub fn add_learned(&mut self, network: u16, port_index: usize, next_hop_mac: MacAddr) {
+        if network == 0 || network == 0xFFFF {
+            return;
+        }
+        if let Some(existing) = self.routes.get(&network) {
+            if existing.directly_connected {
+                return; // never overwrite direct routes
+            }
+        }
         self.routes.insert(
             network,
             RouteEntry {
@@ -61,6 +88,7 @@ impl RouterTable {
                 directly_connected: false,
                 next_hop_mac,
                 last_seen: Some(Instant::now()),
+                reachability: ReachabilityStatus::Reachable,
             },
         );
     }
@@ -104,6 +132,11 @@ impl RouterTable {
         self.routes.get(&network)
     }
 
+    /// Lookup a mutable route entry by network number.
+    pub fn lookup_mut(&mut self, network: u16) -> Option<&mut RouteEntry> {
+        self.routes.get_mut(&network)
+    }
+
     /// Remove a route.
     pub fn remove(&mut self, network: u16) -> Option<RouteEntry> {
         self.routes.remove(&network)
@@ -115,9 +148,6 @@ impl RouterTable {
     }
 
     /// List networks reachable via ports OTHER than `exclude_port`.
-    ///
-    /// Per Clause 6.5.1, a Who-Is-Router response should only include
-    /// networks reachable via other ports, not the requesting port's own network.
     pub fn networks_not_on_port(&self, exclude_port: usize) -> Vec<u16> {
         self.routes
             .iter()
@@ -260,31 +290,16 @@ mod tests {
 
     #[test]
     fn learned_route_does_not_override_direct() {
-        // Per Clause 6.4: a directly-connected route should not be replaced
-        // by a learned route. The router.rs handle_network_message already
-        // skips this, but verify the table behaves correctly if add_learned
-        // is called for a network that already has a direct route.
         let mut table = RouterTable::new();
         table.add_direct(1000, 0);
 
-        // Verify direct route exists
         let entry = table.lookup(1000).unwrap();
         assert!(entry.directly_connected);
         assert_eq!(entry.port_index, 0);
 
-        // Simulate what the router does: check before adding learned route
-        // The router code checks `existing.directly_connected` and skips,
-        // so a properly-behaving router will never call add_learned for
-        // a directly-connected network. Verify the table allows lookup.
-        if let Some(existing) = table.lookup(1000) {
-            if existing.directly_connected {
-                // Router would skip — don't add learned
-            } else {
-                table.add_learned(1000, 1, MacAddr::from_slice(&[10, 0, 1, 1]));
-            }
-        }
+        // add_learned should not overwrite a direct route
+        table.add_learned(1000, 1, MacAddr::from_slice(&[10, 0, 1, 1]));
 
-        // Direct route should still be intact
         let entry = table.lookup(1000).unwrap();
         assert!(entry.directly_connected);
         assert_eq!(entry.port_index, 0);
@@ -293,8 +308,6 @@ mod tests {
 
     #[test]
     fn add_learned_overwrites_existing_learned() {
-        // If two different routers announce the same network, the second
-        // learned route should overwrite the first.
         let mut table = RouterTable::new();
         table.add_learned(3000, 0, MacAddr::from_slice(&[10, 0, 1, 1]));
 
@@ -302,7 +315,6 @@ mod tests {
         assert!(!entry.directly_connected);
         assert_eq!(entry.next_hop_mac.as_slice(), &[10, 0, 1, 1]);
 
-        // Second router announces same network
         table.add_learned(3000, 1, MacAddr::from_slice(&[10, 0, 2, 1]));
 
         let entry = table.lookup(3000).unwrap();
@@ -317,7 +329,6 @@ mod tests {
         table.add_direct(1000, 0);
         table.add_direct(2000, 1);
 
-        // Network 9999 is not in the table
         assert!(table.lookup(9999).is_none());
     }
 
@@ -325,7 +336,6 @@ mod tests {
     fn purge_stale_routes() {
         let mut table = RouterTable::new();
         table.add_learned(3000, 0, MacAddr::from_slice(&[1, 2, 3]));
-        // Immediately purge with zero duration — should remove the learned route
         let purged = table.purge_stale(Duration::from_secs(0));
         assert_eq!(purged, vec![3000]);
         assert!(table.lookup(3000).is_none());
@@ -344,9 +354,7 @@ mod tests {
     fn touch_refreshes_timestamp() {
         let mut table = RouterTable::new();
         table.add_learned(3000, 0, MacAddr::from_slice(&[1, 2, 3]));
-        // Touch the route
         table.touch(3000);
-        // Purge with a generous duration — should NOT be purged
         let purged = table.purge_stale(Duration::from_secs(3600));
         assert!(purged.is_empty());
         assert!(table.lookup(3000).is_some());
@@ -376,7 +384,6 @@ mod tests {
         table.add_learned(3000, 1, MacAddr::from_slice(&[10, 0, 1, 1]));
         table.add_learned(4000, 0, MacAddr::from_slice(&[10, 0, 2, 1]));
 
-        // Exclude port 0 — should only return networks on port 1
         let nets = table.networks_not_on_port(0);
         assert!(nets.contains(&2000));
         assert!(nets.contains(&3000));
@@ -384,7 +391,6 @@ mod tests {
         assert!(!nets.contains(&4000));
         assert_eq!(nets.len(), 2);
 
-        // Exclude port 1 — should only return networks on port 0
         let nets = table.networks_not_on_port(1);
         assert!(nets.contains(&1000));
         assert!(nets.contains(&4000));
@@ -412,7 +418,6 @@ mod tests {
         let mut table = RouterTable::new();
         table.add_learned(3000, 0, MacAddr::from_slice(&[10, 0, 1, 1]));
 
-        // Same port, different next-hop — should update
         let result = table.add_learned_stable(
             3000,
             0,
@@ -429,7 +434,6 @@ mod tests {
         let mut table = RouterTable::new();
         table.add_learned(3000, 0, MacAddr::from_slice(&[10, 0, 1, 1]));
 
-        // Different port — should NOT overwrite (route is fresh)
         let result = table.add_learned_stable(
             3000,
             1,
@@ -447,7 +451,6 @@ mod tests {
         let mut table = RouterTable::new();
         table.add_learned(3000, 0, MacAddr::from_slice(&[10, 0, 1, 1]));
 
-        // Different port, but with zero max_age — route is immediately stale
         let result = table.add_learned_stable(
             3000,
             1,

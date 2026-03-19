@@ -367,6 +367,10 @@ impl BACnetObject for LoopObject {
         ];
         Cow::Borrowed(PROPS)
     }
+
+    fn supports_cov(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

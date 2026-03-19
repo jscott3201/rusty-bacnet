@@ -6,6 +6,7 @@ pub mod analog;
 pub mod audit;
 pub mod averaging;
 pub mod binary;
+pub mod color;
 pub mod command;
 pub(crate) mod common;
 pub mod database;

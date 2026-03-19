@@ -111,8 +111,6 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
     }
 }
 
-// Ergonomic From impls
-
 impl<S: SerialPort> From<BipTransport> for AnyTransport<S> {
     fn from(t: BipTransport) -> Self {
         Self::Bip(t)
@@ -155,7 +153,6 @@ mod tests {
     fn any_transport_bip_local_mac() {
         let bip = BipTransport::new(Ipv4Addr::LOCALHOST, 47808, Ipv4Addr::BROADCAST);
         let any: AnyTransport<LoopbackSerial> = AnyTransport::Bip(bip);
-        // BIP local_mac is 6 bytes (IP:port)
         assert_eq!(any.local_mac().len(), 6);
     }
 

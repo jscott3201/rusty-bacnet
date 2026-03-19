@@ -21,7 +21,7 @@ use crate::primitives;
 use crate::tags;
 
 // ---------------------------------------------------------------------------
-// Max-segments encoding (Clause 20.1.2.4)
+// Max-segments encoding
 // ---------------------------------------------------------------------------
 
 /// Decoded max-segments values indexed by the 3-bit field (0-7).
@@ -34,7 +34,7 @@ const MAX_SEGMENTS_DECODE: [Option<u8>; 8] = [
     Some(16),  // 4
     Some(32),  // 5
     Some(64),  // 6
-    Some(255), // 7 = >64 segments accepted (Clause 20.1.2.4)
+    Some(255), // 7 = >64 segments accepted
 ];
 
 /// Encode a max-segments value to a 3-bit field.
@@ -57,7 +57,7 @@ fn decode_max_segments(value: u8) -> Option<u8> {
 }
 
 // ---------------------------------------------------------------------------
-// Max-APDU-length encoding (Clause 20.1.2.5)
+// Max-APDU-length encoding
 // ---------------------------------------------------------------------------
 
 /// Decoded max-APDU-length values indexed by the 4-bit field.
@@ -197,7 +197,6 @@ pub fn encode_apdu(buf: &mut BytesMut, apdu: &Apdu) {
 }
 
 fn encode_confirmed_request(buf: &mut BytesMut, pdu: &ConfirmedRequest) {
-    // Byte 0: PDU type (high nibble) + flags
     let mut byte0 = PduType::CONFIRMED_REQUEST.to_raw() << 4;
     if pdu.segmented {
         byte0 |= 0x08;
@@ -210,7 +209,6 @@ fn encode_confirmed_request(buf: &mut BytesMut, pdu: &ConfirmedRequest) {
     }
     buf.put_u8(byte0);
 
-    // Byte 1: max-segments (3 bits) + max-APDU-length (4 bits)
     let byte1 = (encode_max_segments(pdu.max_segments) << 4) | encode_max_apdu(pdu.max_apdu_length);
     buf.put_u8(byte1);
 
@@ -218,7 +216,7 @@ fn encode_confirmed_request(buf: &mut BytesMut, pdu: &ConfirmedRequest) {
 
     if pdu.segmented {
         buf.put_u8(pdu.sequence_number.unwrap_or(0));
-        buf.put_u8(pdu.proposed_window_size.unwrap_or(1));
+        buf.put_u8(pdu.proposed_window_size.unwrap_or(1).clamp(1, 127));
     }
 
     buf.put_u8(pdu.service_choice.to_raw());
@@ -251,7 +249,7 @@ fn encode_complex_ack(buf: &mut BytesMut, pdu: &ComplexAck) {
 
     if pdu.segmented {
         buf.put_u8(pdu.sequence_number.unwrap_or(0));
-        buf.put_u8(pdu.proposed_window_size.unwrap_or(1));
+        buf.put_u8(pdu.proposed_window_size.unwrap_or(1).clamp(1, 127));
     }
 
     buf.put_u8(pdu.service_choice.to_raw());
@@ -269,14 +267,13 @@ fn encode_segment_ack(buf: &mut BytesMut, pdu: &SegmentAck) {
     buf.put_u8(byte0);
     buf.put_u8(pdu.invoke_id);
     buf.put_u8(pdu.sequence_number);
-    buf.put_u8(pdu.actual_window_size);
+    buf.put_u8(pdu.actual_window_size.clamp(1, 127));
 }
 
 fn encode_error(buf: &mut BytesMut, pdu: &ErrorPdu) {
     buf.put_u8(PduType::ERROR.to_raw() << 4);
     buf.put_u8(pdu.invoke_id);
     buf.put_u8(pdu.service_choice.to_raw());
-    // Error class and code are application-tagged enumerated values
     primitives::encode_app_enumerated(buf, pdu.error_class.to_raw() as u32);
     primitives::encode_app_enumerated(buf, pdu.error_code.to_raw() as u32);
     if !pdu.error_data.is_empty() {
@@ -488,10 +485,17 @@ fn decode_error(data: Bytes) -> Result<ErrorPdu, Error> {
     let invoke_id = data[1];
     let service_choice = ConfirmedServiceChoice::from_raw(data[2]);
 
-    // Error class: application-tagged enumerated
     let mut offset = 3;
     let (tag, tag_end) = tags::decode_tag(&data, offset)?;
-    let class_end = tag_end + tag.length as usize;
+    if tag.class != tags::TagClass::Application || tag.number != tags::app_tag::ENUMERATED {
+        return Err(Error::decoding(
+            offset,
+            "ErrorPDU error class: expected application-tagged enumerated",
+        ));
+    }
+    let class_end = tag_end
+        .checked_add(tag.length as usize)
+        .ok_or_else(|| Error::decoding(tag_end, "ErrorPDU error class length overflow"))?;
     if class_end > data.len() {
         return Err(Error::decoding(
             tag_end,
@@ -501,16 +505,22 @@ fn decode_error(data: Bytes) -> Result<ErrorPdu, Error> {
     let error_class_raw = primitives::decode_unsigned(&data[tag_end..class_end])? as u16;
     offset = class_end;
 
-    // Error code: application-tagged enumerated
     let (tag, tag_end) = tags::decode_tag(&data, offset)?;
-    let code_end = tag_end + tag.length as usize;
+    if tag.class != tags::TagClass::Application || tag.number != tags::app_tag::ENUMERATED {
+        return Err(Error::decoding(
+            offset,
+            "ErrorPDU error code: expected application-tagged enumerated",
+        ));
+    }
+    let code_end = tag_end
+        .checked_add(tag.length as usize)
+        .ok_or_else(|| Error::decoding(tag_end, "ErrorPDU error code length overflow"))?;
     if code_end > data.len() {
         return Err(Error::decoding(tag_end, "ErrorPDU truncated at error code"));
     }
     let error_code_raw = primitives::decode_unsigned(&data[tag_end..code_end])? as u16;
     offset = code_end;
 
-    // Trailing error data (extended error types)
     let error_data = if offset < data.len() {
         data.slice(offset..)
     } else {
@@ -575,7 +585,6 @@ mod tests {
         assert_eq!(decode_max_segments(encode_max_segments(Some(16))), Some(16));
         assert_eq!(decode_max_segments(encode_max_segments(Some(32))), Some(32));
         assert_eq!(decode_max_segments(encode_max_segments(Some(64))), Some(64));
-        // >64 encodes to 7 which decodes to Some(255) per Clause 20.1.2.4
         assert_eq!(
             decode_max_segments(encode_max_segments(Some(100))),
             Some(255)
@@ -1044,7 +1053,6 @@ mod tests {
         buf.put_u8(1); // invoke_id
         buf.put_u8(0x0C); // service_choice (ReadProperty)
         primitives::encode_app_enumerated(&mut buf, 2); // error_class = PROPERTY
-                                                        // Missing error code
         assert!(decode_apdu(buf.freeze()).is_err());
     }
 

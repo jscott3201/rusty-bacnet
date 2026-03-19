@@ -11,10 +11,6 @@ use tokio::sync::Notify;
 
 use bacnet_types::enums::NetworkPriority;
 
-// ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
-
 /// An item tagged with a BACnet network priority.
 #[derive(Debug, Clone)]
 pub struct PrioritizedItem<T> {
@@ -56,10 +52,6 @@ pub struct PriorityReceiver<T> {
     sender_token: Weak<()>,
 }
 
-// ---------------------------------------------------------------------------
-// Priority index mapping
-// ---------------------------------------------------------------------------
-
 /// Map a `NetworkPriority` to a queue index (0 = highest priority).
 pub fn priority_index(p: NetworkPriority) -> usize {
     if p == NetworkPriority::LIFE_SAFETY {
@@ -72,10 +64,6 @@ pub fn priority_index(p: NetworkPriority) -> usize {
         3 // NORMAL and any unknown/vendor values
     }
 }
-
-// ---------------------------------------------------------------------------
-// Constructor
-// ---------------------------------------------------------------------------
 
 /// Create a priority channel with `capacity` slots per priority level.
 ///
@@ -107,10 +95,6 @@ pub fn priority_channel<T>(capacity: usize) -> (PrioritySender<T>, PriorityRecei
     (tx, rx)
 }
 
-// ---------------------------------------------------------------------------
-// Sender
-// ---------------------------------------------------------------------------
-
 impl<T> PrioritySender<T> {
     /// Enqueue an item into the appropriate priority queue.
     ///
@@ -130,10 +114,6 @@ impl<T> PrioritySender<T> {
         Ok(())
     }
 }
-
-// ---------------------------------------------------------------------------
-// Receiver
-// ---------------------------------------------------------------------------
 
 impl<T> PriorityReceiver<T> {
     /// Receive the next item, highest priority first.
@@ -165,10 +145,6 @@ impl<T> PriorityReceiver<T> {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -242,9 +218,7 @@ mod tests {
         .unwrap();
         drop(tx);
 
-        // Should get the queued item.
         assert_eq!(rx.recv().await.unwrap().data, vec![1]);
-        // Then None (closed).
         assert!(rx.recv().await.is_none());
     }
 
@@ -263,7 +237,6 @@ mod tests {
         })
         .await
         .unwrap();
-        // Third should fail (at capacity for NORMAL queue).
         let result = tx
             .send(PrioritizedItem {
                 priority: NetworkPriority::NORMAL,
@@ -272,7 +245,6 @@ mod tests {
             .await;
         assert!(result.is_err());
 
-        // But a different priority queue should still accept.
         tx.send(PrioritizedItem {
             priority: NetworkPriority::URGENT,
             data: 4,

@@ -209,6 +209,10 @@ impl BACnetObject for AccumulatorObject {
         ];
         Cow::Borrowed(PROPS)
     }
+
+    fn supports_cov(&self) -> bool {
+        true
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -399,6 +403,10 @@ impl BACnetObject for PulseConverterObject {
             PropertyIdentifier::RELIABILITY,
         ];
         Cow::Borrowed(PROPS)
+    }
+
+    fn supports_cov(&self) -> bool {
+        true
     }
 
     fn cov_increment(&self) -> Option<f32> {

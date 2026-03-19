@@ -149,6 +149,10 @@ bacnet_enum! {
     const AUDIT_REPORTER = 61;
     /// New in 135-2020.
     const AUDIT_LOG = 62;
+    /// New in 135-2020.
+    const COLOR = 63;
+    /// New in 135-2020.
+    const COLOR_TEMPERATURE = 64;
 }
 
 // ===========================================================================
@@ -680,6 +684,12 @@ bacnet_enum! {
     const SEND_NOW = 505;
     const FLOOR_NUMBER = 506;
     const DEVICE_UUID = 507;
+    /// New in 135-2020 Addendum bj (Color objects).
+    const COLOR_COMMAND = 508;
+    /// New in 135-2020 Addendum bj (Color Temperature objects).
+    const DEFAULT_COLOR_TEMPERATURE = 509;
+    /// New in 135-2020 Addendum bj (Color objects).
+    const DEFAULT_COLOR = 510;
 }
 
 // ===========================================================================
@@ -1012,7 +1022,8 @@ bacnet_enum! {
     const ROUTER_BUSY = 2;
     const UNKNOWN_MESSAGE_TYPE = 3;
     const MESSAGE_TOO_LONG = 4;
-    const SECURITY_ERROR = 5;
+    /// Removed per 135-2020
+    const REMOVED_5 = 5;
     const ADDRESSING_ERROR = 6;
 }
 
@@ -1053,7 +1064,7 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
-    /// BACnet/IPv6 BVLC function codes (Annex U).
+    /// BACnet/IPv6 BVLC function codes (Annex U, Table U-1).
     pub struct Bvlc6Function(u8);
 
     const BVLC_RESULT = 0x00;
@@ -1067,20 +1078,19 @@ bacnet_enum! {
     const FORWARDED_NPDU = 0x08;
     const REGISTER_FOREIGN_DEVICE = 0x09;
     const DELETE_FOREIGN_DEVICE_TABLE_ENTRY = 0x0A;
-    const DISTRIBUTE_BROADCAST_NPDU = 0x0B;
-    const SECURE_BVLL = 0x0C;
+    const DISTRIBUTE_BROADCAST_TO_NETWORK = 0x0C;
 }
 
 bacnet_enum! {
-    /// BACnet/IPv6 BVLC-Result codes (Annex U).
+    /// BACnet/IPv6 BVLC-Result codes (Annex U.2.1.1).
     pub struct Bvlc6ResultCode(u16);
 
     const SUCCESSFUL_COMPLETION = 0x0000;
     const ADDRESS_RESOLUTION_NAK = 0x0030;
-    const VIRTUAL_ADDRESS_RESOLUTION_NAK = 0x0040;
-    const REGISTER_FOREIGN_DEVICE_NAK = 0x0050;
-    const DELETE_FOREIGN_DEVICE_TABLE_ENTRY_NAK = 0x0060;
-    const DISTRIBUTE_BROADCAST_TO_NETWORK_NAK = 0x0070;
+    const VIRTUAL_ADDRESS_RESOLUTION_NAK = 0x0060;
+    const REGISTER_FOREIGN_DEVICE_NAK = 0x0090;
+    const DELETE_FOREIGN_DEVICE_TABLE_ENTRY_NAK = 0x00A0;
+    const DISTRIBUTE_BROADCAST_TO_NETWORK_NAK = 0x00C0;
 }
 
 // ===========================================================================

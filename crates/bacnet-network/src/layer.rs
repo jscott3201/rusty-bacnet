@@ -91,6 +91,17 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
                             continue;
                         }
 
+                        // Non-routing node: discard messages with a specific DNET.
+                        if let Some(ref dest) = npdu.destination {
+                            if dest.network != 0xFFFF {
+                                debug!(
+                                    dnet = dest.network,
+                                    "Discarding routed message (non-router)"
+                                );
+                                continue;
+                            }
+                        }
+
                         let source_network = npdu.source.clone();
 
                         let apdu = ReceivedApdu {
@@ -302,8 +313,7 @@ mod tests {
         let _rx_a = net_a.start().await.unwrap();
         let mut rx_b = net_b.start().await.unwrap();
 
-        // A simple APDU payload (e.g., UnconfirmedRequest WhoIs)
-        let test_apdu = vec![0x10, 0x08]; // PDU type 1 (unconfirmed), service 8 (WhoIs)
+        let test_apdu = vec![0x10, 0x08];
 
         net_a
             .send_apdu(
@@ -322,7 +332,7 @@ mod tests {
 
         assert_eq!(received.apdu, test_apdu);
         assert_eq!(received.source_mac.as_slice(), net_a.local_mac());
-        assert!(received.source_network.is_none()); // local, no routing
+        assert!(received.source_network.is_none());
 
         net_a.stop().await.unwrap();
         net_b.stop().await.unwrap();
@@ -330,7 +340,6 @@ mod tests {
 
     #[tokio::test]
     async fn end_to_end_who_is() {
-        // Full stack: encode WhoIs -> APDU -> NPDU -> BVLL -> UDP -> reverse
         use bacnet_encoding::apdu::{decode_apdu, encode_apdu, Apdu, UnconfirmedRequest};
         use bacnet_types::enums::UnconfirmedServiceChoice;
 
@@ -343,7 +352,6 @@ mod tests {
         let _rx_a = net_a.start().await.unwrap();
         let mut rx_b = net_b.start().await.unwrap();
 
-        // Encode a WhoIs APDU (empty service data = all devices)
         let who_is_apdu = Apdu::UnconfirmedRequest(UnconfirmedRequest {
             service_choice: UnconfirmedServiceChoice::WHO_IS,
             service_request: Bytes::new(),
@@ -351,13 +359,11 @@ mod tests {
         let mut apdu_buf = BytesMut::new();
         encode_apdu(&mut apdu_buf, &who_is_apdu);
 
-        // Send via network layer
         net_a
             .send_apdu(&apdu_buf, net_b.local_mac(), false, NetworkPriority::NORMAL)
             .await
             .unwrap();
 
-        // Receive and decode
         let received = timeout(Duration::from_secs(2), rx_b.recv())
             .await
             .expect("Timed out waiting for APDU")
@@ -408,9 +414,8 @@ mod tests {
     fn transport_accessor() {
         let transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
         let net = NetworkLayer::new(transport);
-        // Should be able to access transport-specific methods
         let mac = net.transport().local_mac();
-        assert_eq!(mac.len(), 6); // BIP MAC is 6 bytes (IP + port)
+        assert_eq!(mac.len(), 6);
     }
 
     #[test]
@@ -418,7 +423,6 @@ mod tests {
         use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
         use bacnet_types::enums::NetworkPriority;
 
-        // Verify the NPDU format that send_apdu_routed would produce
         let npdu = Npdu {
             is_network_message: false,
             expecting_reply: true,
@@ -448,8 +452,6 @@ mod tests {
         use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
         use bacnet_types::enums::NetworkPriority;
 
-        // Verify the NPDU format that broadcast_to_network would produce:
-        // specific DNET with empty DADR (broadcast on that network)
         let npdu = Npdu {
             is_network_message: false,
             expecting_reply: false,
@@ -469,7 +471,7 @@ mod tests {
         let decoded = decode_npdu(Bytes::from(buf)).unwrap();
         let dest = decoded.destination.unwrap();
         assert_eq!(dest.network, 42);
-        assert!(dest.mac_address.is_empty()); // broadcast: no specific MAC
+        assert!(dest.mac_address.is_empty());
         assert_eq!(decoded.hop_count, 255);
         assert!(!decoded.expecting_reply);
     }

@@ -13,7 +13,7 @@ pub const MAX_DECODED_ITEMS: usize = 10_000;
 // PropertyReference
 // ---------------------------------------------------------------------------
 
-/// BACnetPropertyReference per Clause 21.
+/// BACnetPropertyReference.
 ///
 /// ```text
 /// BACnetPropertyReference ::= SEQUENCE {
@@ -79,7 +79,7 @@ impl PropertyReference {
 // BACnetPropertyValue
 // ---------------------------------------------------------------------------
 
-/// BACnetPropertyValue per Clause 21.
+/// BACnetPropertyValue.
 ///
 /// ```text
 /// BACnetPropertyValue ::= SEQUENCE {
@@ -131,7 +131,7 @@ impl BACnetPropertyValue {
         let prop_id = primitives::decode_unsigned(&data[pos..end])? as u32;
         let mut offset = end;
 
-        // [1] propertyArrayIndex (optional) — peek to see if it's tag 1
+        // [1] propertyArrayIndex (optional)
         let mut array_index = None;
         if offset < data.len() {
             let (tag, new_pos) = tags::decode_tag(data, offset)?;
@@ -148,8 +148,7 @@ impl BACnetPropertyValue {
             }
         }
 
-        // [2] value — extract between opening/closing tag 2
-        // We need to skip the opening tag we already peeked at
+        // [2] value
         let (tag, tag_end) = tags::decode_tag(data, offset)?;
         if !tag.is_opening_tag(2) {
             return Err(Error::decoding(
@@ -203,10 +202,6 @@ impl BACnetPropertyValue {
         ))
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

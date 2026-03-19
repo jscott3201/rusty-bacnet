@@ -46,19 +46,50 @@ pub fn handle_read_property(
 ) -> Result<(), Error> {
     let request = ReadPropertyRequest::decode(service_data)?;
 
-    let object = db.get(&request.object_identifier).ok_or(Error::Protocol {
+    let lookup_oid = resolve_device_wildcard(db, &request.object_identifier);
+
+    let object = db.get(&lookup_oid).ok_or(Error::Protocol {
         class: ErrorClass::OBJECT.to_raw() as u32,
         code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
     })?;
 
+    if request.property_array_index.is_some() {
+        let is_array_property = matches!(
+            request.property_identifier,
+            p if p == PropertyIdentifier::PRIORITY_ARRAY
+                || p == PropertyIdentifier::OBJECT_LIST
+                || p == PropertyIdentifier::PROPERTY_LIST
+                || p == PropertyIdentifier::WEEKLY_SCHEDULE
+                || p == PropertyIdentifier::EXCEPTION_SCHEDULE
+                || p == PropertyIdentifier::DATE_LIST
+                || p == PropertyIdentifier::LIST_OF_GROUP_MEMBERS
+                || p == PropertyIdentifier::RECIPIENT_LIST
+                || p == PropertyIdentifier::LOG_BUFFER
+                || p == PropertyIdentifier::STATE_TEXT
+                || p == PropertyIdentifier::ALARM_VALUES
+                || p == PropertyIdentifier::FAULT_VALUES
+                || p == PropertyIdentifier::EVENT_TIME_STAMPS
+                || p == PropertyIdentifier::EVENT_MESSAGE_TEXTS
+                || p == PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES
+                || p == PropertyIdentifier::DEVICE_ADDRESS_BINDING
+                || p == PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS
+                || p == PropertyIdentifier::TAGS
+        );
+        if !is_array_property {
+            return Err(Error::Protocol {
+                class: ErrorClass::PROPERTY.to_raw() as u32,
+                code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32,
+            });
+        }
+    }
+
     let value = object.read_property(request.property_identifier, request.property_array_index)?;
 
-    // Encode the PropertyValue as application-tagged bytes
     let mut value_buf = BytesMut::new();
     encode_property_value(&mut value_buf, &value)?;
 
     let ack = ReadPropertyACK {
-        object_identifier: request.object_identifier,
+        object_identifier: lookup_oid,
         property_identifier: request.property_identifier,
         property_array_index: request.property_array_index,
         property_value: value_buf.to_vec(),
@@ -68,11 +99,21 @@ pub fn handle_read_property(
     Ok(())
 }
 
+/// Resolve Device wildcard instance 4194303 to the actual Device object.
+fn resolve_device_wildcard(db: &ObjectDatabase, oid: &ObjectIdentifier) -> ObjectIdentifier {
+    if oid.object_type() == ObjectType::DEVICE && oid.instance_number() == 4194303 {
+        for candidate in db.list_objects() {
+            if candidate.object_type() == ObjectType::DEVICE {
+                return candidate;
+            }
+        }
+    }
+    *oid
+}
+
 /// Handle a ReadPropertyMultiple request.
 ///
-/// Iterates over each requested object+property pair. Per-property errors are
-/// returned inline (as ReadResultElement with error) rather than failing the
-/// entire request — this matches the BACnet spec (Clause 15.7).
+/// Per-property errors are returned inline rather than failing the entire request.
 pub fn handle_read_property_multiple(
     db: &ObjectDatabase,
     service_data: &[u8],
@@ -87,7 +128,6 @@ pub fn handle_read_property_multiple(
         match db.get(&spec.object_identifier) {
             Some(object) => {
                 for prop_ref in &spec.list_of_property_references {
-                    // Expand ALL / REQUIRED / OPTIONAL per Clause 15.7.3.
                     let prop_ids: Vec<PropertyIdentifier> = match prop_ref.property_identifier {
                         PropertyIdentifier::ALL => object.property_list().to_vec(),
                         PropertyIdentifier::REQUIRED => object.required_properties().to_vec(),
@@ -113,13 +153,24 @@ pub fn handle_read_property_multiple(
                         match object.read_property(prop_id, array_index) {
                             Ok(value) => {
                                 let mut value_buf = BytesMut::new();
-                                encode_property_value(&mut value_buf, &value)?;
-                                elements.push(ReadResultElement {
-                                    property_identifier: prop_id,
-                                    property_array_index: array_index,
-                                    property_value: Some(value_buf.to_vec()),
-                                    error: None,
-                                });
+                                match encode_property_value(&mut value_buf, &value) {
+                                    Ok(()) => {
+                                        elements.push(ReadResultElement {
+                                            property_identifier: prop_id,
+                                            property_array_index: array_index,
+                                            property_value: Some(value_buf.to_vec()),
+                                            error: None,
+                                        });
+                                    }
+                                    Err(_) => {
+                                        elements.push(ReadResultElement {
+                                            property_identifier: prop_id,
+                                            property_array_index: array_index,
+                                            property_value: None,
+                                            error: Some((ErrorClass::PROPERTY, ErrorCode::OTHER)),
+                                        });
+                                    }
+                                }
                             }
                             Err(e) => {
                                 let (err_class, err_code) = match &e {
@@ -167,16 +218,15 @@ pub fn handle_read_property_multiple(
 
 /// Handle a WritePropertyMultiple request.
 ///
-/// Atomic per Clause 15.10: validates all properties first, then commits.
-/// If any object or property fails validation, no writes are applied.
-/// Returns the list of written object identifiers for COV/event notification.
+/// Validates all properties first, then commits atomically. If any write fails,
+/// all previously applied writes are rolled back. Returns the written object identifiers.
 pub fn handle_write_property_multiple(
     db: &mut ObjectDatabase,
     service_data: &[u8],
 ) -> Result<Vec<ObjectIdentifier>, Error> {
     let request = WritePropertyMultipleRequest::decode(service_data)?;
 
-    // Phase 1: Validate — decode all values and verify objects exist.
+    // Validate: decode all values and verify objects exist.
     #[allow(clippy::type_complexity)]
     let mut decoded_writes: Vec<(
         ObjectIdentifier,
@@ -206,7 +256,7 @@ pub fn handle_write_property_multiple(
         }
     }
 
-    // Phase 2: Commit — apply all writes, rolling back on failure.
+    // Commit: apply all writes, rolling back on failure.
     let mut applied: Vec<(
         ObjectIdentifier,
         PropertyIdentifier,
@@ -215,8 +265,8 @@ pub fn handle_write_property_multiple(
     )> = Vec::new();
 
     for (oid, prop_id, array_index, value, priority) in &decoded_writes {
-        let object = db.get_mut(oid).unwrap(); // validated in phase 1
-                                               // Save old value for rollback (best-effort; read may fail for write-only props).
+        let object = db.get_mut(oid).unwrap();
+        // Save old value for rollback (best-effort; read may fail for write-only props).
         let old_value = object.read_property(*prop_id, *array_index).ok();
         match object.write_property(*prop_id, *array_index, value.clone(), *priority) {
             Ok(()) => {
@@ -225,7 +275,6 @@ pub fn handle_write_property_multiple(
                 }
             }
             Err(e) => {
-                // Rollback all previously applied writes.
                 for (rb_oid, rb_prop, rb_idx, rb_val) in applied.into_iter().rev() {
                     if let Some(obj) = db.get_mut(&rb_oid) {
                         let _ = obj.write_property(rb_prop, rb_idx, rb_val, None);
@@ -236,7 +285,6 @@ pub fn handle_write_property_multiple(
         }
     }
 
-    // Collect unique written OIDs.
     let mut written_oids = Vec::new();
     for (oid, _, _, _, _) in &decoded_writes {
         if !written_oids.contains(oid) {
@@ -249,9 +297,7 @@ pub fn handle_write_property_multiple(
 
 /// Handle a WriteProperty request.
 ///
-/// Looks up the object, decodes the property value, writes it, and returns
-/// the written object identifier (the caller will send a SimpleACK and
-/// may use the OID for COV/event notifications).
+/// Returns the written object identifier for COV/event notifications.
 pub fn handle_write_property(
     db: &mut ObjectDatabase,
     service_data: &[u8],
@@ -264,7 +310,6 @@ pub fn handle_write_property(
         code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
     })?;
 
-    // Decode the application-tagged property value
     let (value, _) =
         bacnet_encoding::primitives::decode_application_value(&request.property_value, 0)?;
 
@@ -280,10 +325,8 @@ pub fn handle_write_property(
 
 /// Handle a SubscribeCOV request.
 ///
-/// If both optional fields are absent, this is a cancellation that removes an
-/// existing subscription. Otherwise it creates or updates a subscription.
-/// Returns an error if the monitored object does not exist in the database
-/// (only checked for new subscriptions, not cancellations).
+/// Absent optional fields indicate a cancellation. Otherwise creates or updates
+/// a subscription. Returns an error if the monitored object does not exist.
 pub fn handle_subscribe_cov(
     table: &mut CovSubscriptionTable,
     db: &ObjectDatabase,
@@ -301,12 +344,20 @@ pub fn handle_subscribe_cov(
         return Ok(());
     }
 
-    // Verify the monitored object exists
-    if db.get(&request.monitored_object_identifier).is_none() {
-        return Err(Error::Protocol {
-            class: ErrorClass::OBJECT.to_raw() as u32,
-            code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
-        });
+    match db.get(&request.monitored_object_identifier) {
+        None => {
+            return Err(Error::Protocol {
+                class: ErrorClass::OBJECT.to_raw() as u32,
+                code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+            });
+        }
+        Some(obj) if !obj.supports_cov() => {
+            return Err(Error::Protocol {
+                class: ErrorClass::OBJECT.to_raw() as u32,
+                code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+            });
+        }
+        _ => {}
     }
 
     const MAX_COV_SUBSCRIPTIONS: usize = 1024;
@@ -317,9 +368,13 @@ pub fn handle_subscribe_cov(
         });
     }
 
-    let expires_at = request
-        .lifetime
-        .map(|secs| Instant::now() + Duration::from_secs(secs as u64));
+    let expires_at = request.lifetime.and_then(|secs| {
+        if secs == 0 {
+            None
+        } else {
+            Some(Instant::now() + Duration::from_secs(secs as u64))
+        }
+    });
 
     table.subscribe(CovSubscription {
         subscriber_mac: MacAddr::from_slice(source_mac),
@@ -336,7 +391,7 @@ pub fn handle_subscribe_cov(
     Ok(())
 }
 
-/// Handle a SubscribeCOVProperty request (Clause 13.14.2).
+/// Handle a SubscribeCOVProperty request.
 ///
 /// Like SubscribeCOV but subscribes to changes on a specific property.
 pub fn handle_subscribe_cov_property(
@@ -358,7 +413,6 @@ pub fn handle_subscribe_cov_property(
         return Ok(());
     }
 
-    // Verify the monitored object exists
     let object = db
         .get(&request.monitored_object_identifier)
         .ok_or(Error::Protocol {
@@ -366,7 +420,6 @@ pub fn handle_subscribe_cov_property(
             code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
         })?;
 
-    // Verify the monitored property exists on this object
     object
         .read_property(
             request.monitored_property_identifier,
@@ -385,9 +438,13 @@ pub fn handle_subscribe_cov_property(
         });
     }
 
-    let expires_at = request
-        .lifetime
-        .map(|secs| Instant::now() + Duration::from_secs(secs as u64));
+    let expires_at = request.lifetime.and_then(|secs| {
+        if secs == 0 {
+            None
+        } else {
+            Some(Instant::now() + Duration::from_secs(secs as u64))
+        }
+    });
 
     table.subscribe(CovSubscription {
         subscriber_mac: MacAddr::from_slice(source_mac),
@@ -414,7 +471,6 @@ pub fn handle_who_has(
 ) -> Result<Option<IHaveRequest>, Error> {
     let request = WhoHasRequest::decode(service_data)?;
 
-    // Check device instance range
     let instance = device_oid.instance_number();
     if let (Some(low), Some(high)) = (request.low_limit, request.high_limit) {
         if instance < low || instance > high {
@@ -422,7 +478,6 @@ pub fn handle_who_has(
         }
     }
 
-    // Search for the object
     match &request.object {
         WhoHasObject::Identifier(oid) => {
             if let Some(obj) = db.get(oid) {
@@ -470,7 +525,6 @@ pub fn handle_create_object(
 
     let (object_type, instance) = match &request.object_specifier {
         ObjectSpecifier::Type(obj_type) => {
-            // Find next available instance number (O(n) via HashSet lookup)
             let existing: HashSet<u32> = db
                 .find_by_type(*obj_type)
                 .iter()
@@ -497,9 +551,6 @@ pub fn handle_create_object(
 
     let name = format!("{:?}-{}", object_type, instance);
 
-    // Create the appropriate object based on type.
-    // Analog objects use engineering units 95 (no-units) as default.
-    // Multistate objects use 2 states as default.
     let object: Box<dyn bacnet_objects::traits::BACnetObject> =
         if object_type == ObjectType::ANALOG_INPUT {
             Box::new(bacnet_objects::analog::AnalogInputObject::new(
@@ -543,8 +594,7 @@ pub fn handle_create_object(
     let created_oid = object.object_identifier();
     db.add(object)?;
 
-    // Apply list_of_initial_values (Clause 15.3.1.1).
-    // On failure, remove the created object and return the error.
+    // Apply initial values; on failure, remove the created object.
     for pv in &request.list_of_initial_values {
         let (value, _) = match bacnet_encoding::primitives::decode_application_value(&pv.value, 0) {
             Ok(v) => v,
@@ -566,7 +616,6 @@ pub fn handle_create_object(
         }
     }
 
-    // Encode the created object identifier as the ACK
     bacnet_encoding::primitives::encode_app_object_id(buf, &created_oid);
     Ok(())
 }
@@ -578,7 +627,6 @@ pub fn handle_create_object(
 pub fn handle_delete_object(db: &mut ObjectDatabase, service_data: &[u8]) -> Result<(), Error> {
     let request = DeleteObjectRequest::decode(service_data)?;
 
-    // Cannot delete the Device object
     if request.object_identifier.object_type() == ObjectType::DEVICE {
         return Err(Error::Protocol {
             class: ErrorClass::OBJECT.to_raw() as u32,
@@ -597,8 +645,6 @@ pub fn handle_delete_object(db: &mut ObjectDatabase, service_data: &[u8]) -> Res
 
 /// Validate a request password against the configured password.
 ///
-/// Returns `Ok(())` if no password is configured, or if the request password matches.
-/// Returns `Err(Error::Protocol { SECURITY, PASSWORD_FAILURE })` on mismatch or missing password.
 /// Uses constant-time comparison to prevent timing side-channel attacks.
 fn validate_password(
     configured: &Option<String>,
@@ -631,10 +677,8 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 
 /// Handle a DeviceCommunicationControl request.
 ///
-/// Decodes the request, stores the new communication state into the shared
-/// `AtomicU8` (0 = Enable, 1 = Disable, 2 = DisableInitiation), and returns
-/// the requested state plus optional duration (minutes). Per Clause 16.4.3,
-/// the caller should auto-revert to ENABLE after the duration expires.
+/// Updates the communication state and returns the requested state plus
+/// optional duration (minutes) for auto-revert.
 pub fn handle_device_communication_control(
     service_data: &[u8],
     comm_state: &AtomicU8,
@@ -642,10 +686,14 @@ pub fn handle_device_communication_control(
 ) -> Result<(EnableDisable, Option<u16>), Error> {
     let request = DeviceCommunicationControlRequest::decode(service_data)?;
     validate_password(dcc_password, &request.password)?;
+    if request.enable_disable == EnableDisable::DISABLE {
+        return Err(Error::Protocol {
+            class: ErrorClass::SERVICES.to_raw() as u32,
+            code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
+        });
+    }
     let new_state = if request.enable_disable == EnableDisable::ENABLE {
         0u8
-    } else if request.enable_disable == EnableDisable::DISABLE {
-        1u8
     } else if request.enable_disable == EnableDisable::DISABLE_INITIATION {
         2u8
     } else {
@@ -670,15 +718,13 @@ pub fn handle_reinitialize_device(
 ) -> Result<(), Error> {
     let request = ReinitializeDeviceRequest::decode(service_data)?;
     validate_password(reinit_password, &request.password)?;
-    // Accept the request (SimpleAck). Actual reinitialization is left
-    // to the application layer.
     Ok(())
 }
 
 /// Handle a GetEventInformation request.
 ///
 /// Returns event summaries for objects whose event_state is not NORMAL.
-/// Supports pagination via `last_received_object_identifier` (Clause 13.9).
+/// Supports pagination via `last_received_object_identifier`.
 pub fn handle_get_event_information(
     db: &ObjectDatabase,
     service_data: &[u8],
@@ -693,7 +739,6 @@ pub fn handle_get_event_information(
     let mut more_events = false;
 
     for (oid, object) in db.iter_objects() {
-        // Skip objects up to and including last_received_object_identifier.
         if skipping {
             if Some(oid) == request.last_received_object_identifier {
                 skipping = false;
@@ -763,15 +808,24 @@ pub fn handle_get_event_information(
                     })
                     .unwrap_or(0x07);
 
+                let event_timestamps = object
+                    .read_property(PropertyIdentifier::EVENT_TIME_STAMPS, None)
+                    .ok()
+                    .and_then(|v| match v {
+                        PropertyValue::List(items) if items.len() == 3 => None,
+                        _ => None,
+                    })
+                    .unwrap_or([
+                        BACnetTimeStamp::SequenceNumber(0),
+                        BACnetTimeStamp::SequenceNumber(0),
+                        BACnetTimeStamp::SequenceNumber(0),
+                    ]);
+
                 summaries.push(EventSummary {
                     object_identifier: oid,
                     event_state: state,
                     acknowledged_transitions: acked,
-                    event_timestamps: [
-                        BACnetTimeStamp::SequenceNumber(0),
-                        BACnetTimeStamp::SequenceNumber(0),
-                        BACnetTimeStamp::SequenceNumber(0),
-                    ],
+                    event_timestamps,
                     notify_type,
                     event_enable,
                     event_priorities,
@@ -790,15 +844,12 @@ pub fn handle_get_event_information(
     Ok(())
 }
 
-/// Handle an AcknowledgeAlarm request (Clause 13.3).
+/// Handle an AcknowledgeAlarm request.
 ///
-/// Decodes the request, verifies the referenced object exists in the database,
-/// updates the acknowledged_transitions bitfield, and returns Ok(()) to indicate
-/// a SimpleACK response.
+/// Updates the acknowledged_transitions bitfield on the referenced object.
 pub fn handle_acknowledge_alarm(db: &mut ObjectDatabase, service_data: &[u8]) -> Result<(), Error> {
     let request = AcknowledgeAlarmRequest::decode(service_data)?;
 
-    // Map event_state_acknowledged → transition bit (Clause 13.3.2).
     let transition_bit: u8 = match EventState::from_raw(request.event_state_acknowledged) {
         s if s == EventState::NORMAL => 0x04, // TO_NORMAL
         s if s == EventState::FAULT => 0x02,  // TO_FAULT
@@ -817,10 +868,203 @@ pub fn handle_acknowledge_alarm(db: &mut ObjectDatabase, service_data: &[u8]) ->
     Ok(())
 }
 
-/// Handle a ReadRange request (Clause 15.8).
+/// Handle a SubscribeCOVPropertyMultiple request.
 ///
-/// Reads items from a list property (e.g., LOG_BUFFER) with optional range
-/// filtering by position, sequence number, or time.
+/// Creates individual COV subscriptions for each property in each object
+/// referenced by the request.
+pub fn handle_subscribe_cov_property_multiple(
+    table: &mut CovSubscriptionTable,
+    db: &ObjectDatabase,
+    source_mac: &[u8],
+    service_data: &[u8],
+) -> Result<(), Error> {
+    use bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleRequest;
+
+    let request = SubscribeCOVPropertyMultipleRequest::decode(service_data)?;
+
+    let confirmed = request.issue_confirmed_notifications.unwrap_or(false);
+
+    for spec in &request.list_of_cov_subscription_specifications {
+        match db.get(&spec.monitored_object_identifier) {
+            None => {
+                return Err(Error::Protocol {
+                    class: ErrorClass::OBJECT.to_raw() as u32,
+                    code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+                });
+            }
+            Some(obj) if !obj.supports_cov() => {
+                return Err(Error::Protocol {
+                    class: ErrorClass::OBJECT.to_raw() as u32,
+                    code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+                });
+            }
+            _ => {}
+        }
+
+        for cov_ref in &spec.list_of_cov_references {
+            table.subscribe(CovSubscription {
+                subscriber_mac: MacAddr::from_slice(source_mac),
+                subscriber_process_identifier: request.subscriber_process_identifier,
+                monitored_object_identifier: spec.monitored_object_identifier,
+                issue_confirmed_notifications: confirmed,
+                expires_at: None, // SubscribeCOVPropertyMultiple has no lifetime
+                last_notified_value: None,
+                monitored_property: Some(cov_ref.monitored_property.property_identifier),
+                monitored_property_array_index: cov_ref.monitored_property.property_array_index,
+                cov_increment: cov_ref.cov_increment,
+            });
+        }
+    }
+
+    Ok(())
+}
+
+/// Handle a WriteGroup request.
+///
+/// Decodes the request and returns the parsed data for the server to apply.
+pub fn handle_write_group(
+    service_data: &[u8],
+) -> Result<bacnet_services::write_group::WriteGroupRequest, Error> {
+    bacnet_services::write_group::WriteGroupRequest::decode(service_data)
+}
+
+/// Handle a GetEnrollmentSummary request.
+///
+/// Returns event-enrollment objects that match the filter criteria.
+pub fn handle_get_enrollment_summary(
+    db: &ObjectDatabase,
+    service_data: &[u8],
+    buf: &mut BytesMut,
+) -> Result<(), Error> {
+    use bacnet_services::enrollment_summary::{
+        EnrollmentSummaryEntry, GetEnrollmentSummaryAck, GetEnrollmentSummaryRequest,
+    };
+
+    let request = GetEnrollmentSummaryRequest::decode(service_data)?;
+
+    let mut entries = Vec::new();
+    for (_oid, object) in db.iter_objects() {
+        let oid = object.object_identifier();
+
+        let event_state = object
+            .read_property(PropertyIdentifier::EVENT_STATE, None)
+            .ok()
+            .and_then(|v| match v {
+                PropertyValue::Enumerated(e) => Some(e),
+                _ => None,
+            })
+            .unwrap_or(0);
+
+        if let Some(filter_state) = request.event_state_filter {
+            if event_state != filter_state.to_raw() {
+                continue;
+            }
+        }
+
+        let notification_class = object
+            .read_property(PropertyIdentifier::NOTIFICATION_CLASS, None)
+            .ok()
+            .and_then(|v| match v {
+                PropertyValue::Unsigned(n) => Some(n as u16),
+                _ => None,
+            })
+            .unwrap_or(0);
+
+        if let Some(nc_filter) = request.notification_class_filter {
+            if notification_class != nc_filter {
+                continue;
+            }
+        }
+
+        if let Some(ref pf) = request.priority_filter {
+            let priority = 0u8;
+            if priority < pf.min_priority || priority > pf.max_priority {
+                continue;
+            }
+        }
+
+        if event_state == 0 && request.event_state_filter.is_none() {
+            continue;
+        }
+
+        entries.push(EnrollmentSummaryEntry {
+            object_identifier: oid,
+            event_type: bacnet_types::enums::EventType::CHANGE_OF_STATE,
+            event_state: bacnet_types::enums::EventState::from_raw(event_state),
+            priority: 0,
+            notification_class,
+        });
+    }
+
+    let ack = GetEnrollmentSummaryAck { entries };
+    ack.encode(buf);
+    Ok(())
+}
+
+/// Handle a ConfirmedTextMessage request.
+///
+/// Returns the decoded request for the application layer.
+pub fn handle_text_message(
+    service_data: &[u8],
+) -> Result<bacnet_services::text_message::TextMessageRequest, Error> {
+    bacnet_services::text_message::TextMessageRequest::decode(service_data)
+}
+
+/// Handle a LifeSafetyOperation request.
+///
+/// Decodes the request and returns Ok(()) for SimpleACK.
+pub fn handle_life_safety_operation(service_data: &[u8]) -> Result<(), Error> {
+    let _request = bacnet_services::life_safety::LifeSafetyOperationRequest::decode(service_data)?;
+    Ok(())
+}
+
+/// Handle a GetAlarmSummary request.
+///
+/// Returns objects with event_state != NORMAL.
+pub fn handle_get_alarm_summary(db: &ObjectDatabase, buf: &mut BytesMut) -> Result<(), Error> {
+    use bacnet_services::alarm_summary::{AlarmSummaryEntry, GetAlarmSummaryAck};
+
+    let mut entries = Vec::new();
+    for (_oid, object) in db.iter_objects() {
+        let oid = object.object_identifier();
+        let event_state = object
+            .read_property(PropertyIdentifier::EVENT_STATE, None)
+            .ok()
+            .and_then(|v| match v {
+                PropertyValue::Enumerated(e) => Some(e),
+                _ => None,
+            })
+            .unwrap_or(0);
+
+        if event_state != 0 {
+            let acked = object
+                .read_property(PropertyIdentifier::ACKED_TRANSITIONS, None)
+                .ok()
+                .and_then(|v| match v {
+                    PropertyValue::BitString {
+                        unused_bits, data, ..
+                    } => Some((unused_bits, data)),
+                    _ => None,
+                })
+                .unwrap_or((5, vec![0xE0])); // all acknowledged by default
+
+            entries.push(AlarmSummaryEntry {
+                object_identifier: oid,
+                alarm_state: bacnet_types::enums::EventState::from_raw(event_state),
+                acknowledged_transitions: acked,
+            });
+        }
+    }
+
+    let ack = GetAlarmSummaryAck { entries };
+    ack.encode(buf);
+    Ok(())
+}
+
+/// Handle a ReadRange request.
+///
+/// Reads items from a list property with optional range filtering by
+/// position, sequence number, or time.
 pub fn handle_read_range(
     db: &ObjectDatabase,
     service_data: &[u8],
@@ -835,7 +1079,6 @@ pub fn handle_read_range(
         code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
     })?;
 
-    // Read the full property value (list)
     let value = object.read_property(request.property_identifier, request.property_array_index)?;
 
     let items = match value {
@@ -850,29 +1093,25 @@ pub fn handle_read_range(
 
     let total = items.len();
 
-    // Apply range filtering
     let (selected, first_item, last_item) = match &request.range {
-        None => {
-            // No range: return all items
-            (items, true, true)
-        }
+        None => (items, true, true),
         Some(RangeSpec::ByPosition {
             reference_index,
             count,
         }) => {
             let ref_idx = *reference_index as usize;
             let cnt = *count;
-            if cnt == 0 || total == 0 {
+            if cnt == 0 || total == 0 || ref_idx == 0 || ref_idx > total {
                 (Vec::new(), true, true)
             } else if cnt > 0 {
-                let start = ref_idx.min(total).saturating_sub(1);
+                let start = ref_idx - 1; // 1-based to 0-based
                 let end = (start + cnt as usize).min(total);
                 let first = start == 0;
                 let last = end >= total;
                 (items[start..end].to_vec(), first, last)
             } else {
                 let abs_count = cnt.unsigned_abs() as usize;
-                let end = ref_idx.min(total);
+                let end = ref_idx; // ref_idx is 1-based, used as exclusive end in 0-based
                 let start = end.saturating_sub(abs_count);
                 let first = start == 0;
                 let last = end >= total;
@@ -883,7 +1122,6 @@ pub fn handle_read_range(
             reference_seq,
             count,
         }) => {
-            // Treat sequence numbers as 1-based indices into the list.
             let ref_idx = *reference_seq as usize;
             let cnt = *count;
             if cnt == 0 || total == 0 {
@@ -904,8 +1142,6 @@ pub fn handle_read_range(
             }
         }
         Some(RangeSpec::ByTime { .. }) => {
-            // Time-based filtering requires log record timestamps that aren't
-            // available through the property value interface.
             return Err(Error::Protocol {
                 class: ErrorClass::SERVICES.to_raw() as u32,
                 code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
@@ -913,7 +1149,6 @@ pub fn handle_read_range(
         }
     };
 
-    // Encode selected items, counting only those that encode successfully
     let mut item_data = BytesMut::new();
     let mut encoded_count: u32 = 0;
     for item in &selected {
@@ -938,7 +1173,7 @@ pub fn handle_read_range(
     Ok(())
 }
 
-/// Handle an AtomicReadFile request (Clause 15.1).
+/// Handle an AtomicReadFile request.
 pub fn handle_atomic_read_file(
     db: &ObjectDatabase,
     service_data: &[u8],
@@ -955,7 +1190,6 @@ pub fn handle_atomic_read_file(
         code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
     })?;
 
-    // Verify it's a File object
     if request.file_identifier.object_type() != ObjectType::FILE {
         return Err(Error::Protocol {
             class: ErrorClass::OBJECT.to_raw() as u32,
@@ -963,8 +1197,6 @@ pub fn handle_atomic_read_file(
         });
     }
 
-    // Read the file data via FILE_SIZE and then access raw data
-    // We use read_property to get FILE_SIZE for bounds checking
     let file_size = object
         .read_property(PropertyIdentifier::FILE_SIZE, None)
         .ok()
@@ -983,9 +1215,8 @@ pub fn handle_atomic_read_file(
             let count = requested_octet_count as u64;
             let end_of_file = start + count >= file_size;
 
-            // Read actual data via FILE_DATA property (OctetString)
             let file_data = object
-                .read_property(PropertyIdentifier::from_raw(PROP_FILE_DATA), None) // Not standard — fallback
+                .read_property(PropertyIdentifier::from_raw(PROP_FILE_DATA), None)
                 .ok()
                 .and_then(|v| match v {
                     PropertyValue::OctetString(d) => Some(d),
@@ -1018,7 +1249,6 @@ pub fn handle_atomic_read_file(
             let start = file_start_record.max(0) as usize;
             let count = requested_record_count as usize;
 
-            // Read RECORD_COUNT
             let record_count = object
                 .read_property(PropertyIdentifier::RECORD_COUNT, None)
                 .ok()
@@ -1031,13 +1261,7 @@ pub fn handle_atomic_read_file(
             let end = (start + count).min(record_count);
             let end_of_file = end >= record_count;
 
-            // Read records by reading FILE_DATA which returns list
-            let records_data: Vec<Vec<u8>> = (start..end)
-                .map(|_| {
-                    // Each record would need individual access; return empty for now
-                    Vec::new()
-                })
-                .collect();
+            let records_data: Vec<Vec<u8>> = (start..end).map(|_| Vec::new()).collect();
 
             let ack = AtomicReadFileAck {
                 end_of_file,
@@ -1053,7 +1277,7 @@ pub fn handle_atomic_read_file(
     }
 }
 
-/// Handle an AtomicWriteFile request (Clause 15.2).
+/// Handle an AtomicWriteFile request.
 pub fn handle_atomic_write_file(
     db: &mut ObjectDatabase,
     service_data: &[u8],
@@ -1065,7 +1289,6 @@ pub fn handle_atomic_write_file(
 
     let request = AtomicWriteFileRequest::decode(service_data)?;
 
-    // Verify File object exists
     let object = db.get(&request.file_identifier).ok_or(Error::Protocol {
         class: ErrorClass::OBJECT.to_raw() as u32,
         code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
@@ -1078,7 +1301,6 @@ pub fn handle_atomic_write_file(
         });
     }
 
-    // Check read-only
     let read_only = object
         .read_property(PropertyIdentifier::READ_ONLY, None)
         .ok()
@@ -1100,7 +1322,6 @@ pub fn handle_atomic_write_file(
             file_start_position,
             file_data,
         } => {
-            // Write file data at position — for now store via write_property if possible
             let object = db
                 .get_mut(&request.file_identifier)
                 .ok_or(Error::Protocol {
@@ -1108,7 +1329,6 @@ pub fn handle_atomic_write_file(
                     code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
                 })?;
 
-            // Read existing data, extend if needed, and write back
             let mut existing = object
                 .read_property(PropertyIdentifier::from_raw(PROP_FILE_DATA), None)
                 .ok()
@@ -1124,7 +1344,6 @@ pub fn handle_atomic_write_file(
             }
             existing[start..start + file_data.len()].copy_from_slice(&file_data);
 
-            // Update via write_property (OctetString)
             object.write_property(
                 PropertyIdentifier::from_raw(PROP_FILE_DATA),
                 None,
@@ -1152,10 +1371,9 @@ pub fn handle_atomic_write_file(
     }
 }
 
-/// Handle an AddListElement request (Clause 15.3.1).
+/// Handle an AddListElement request.
 ///
 /// Reads the target property, appends the new elements, and writes back.
-/// Returns Ok(()) for a SimpleACK response, or Err for protocol errors.
 pub fn handle_add_list_element(db: &mut ObjectDatabase, service_data: &[u8]) -> Result<(), Error> {
     use bacnet_encoding::primitives::decode_application_value;
     use bacnet_services::list_manipulation::ListElementRequest;
@@ -1169,7 +1387,6 @@ pub fn handle_add_list_element(db: &mut ObjectDatabase, service_data: &[u8]) -> 
             code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
         })?;
 
-    // Read current list
     let current =
         object.read_property(request.property_identifier, request.property_array_index)?;
     let mut items = match current {
@@ -1177,7 +1394,6 @@ pub fn handle_add_list_element(db: &mut ObjectDatabase, service_data: &[u8]) -> 
         _ => Vec::new(),
     };
 
-    // Decode elements from raw bytes
     let mut offset = 0;
     let data = &request.list_of_elements;
     while offset < data.len() {
@@ -1190,7 +1406,6 @@ pub fn handle_add_list_element(db: &mut ObjectDatabase, service_data: &[u8]) -> 
         }
     }
 
-    // Write back
     object.write_property(
         request.property_identifier,
         request.property_array_index,
@@ -1201,7 +1416,7 @@ pub fn handle_add_list_element(db: &mut ObjectDatabase, service_data: &[u8]) -> 
     Ok(())
 }
 
-/// Handle a RemoveListElement request (Clause 15.3.2).
+/// Handle a RemoveListElement request.
 ///
 /// Reads the target property, removes matching elements, and writes back.
 pub fn handle_remove_list_element(
@@ -1220,7 +1435,6 @@ pub fn handle_remove_list_element(
             code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
         })?;
 
-    // Read current list
     let current =
         object.read_property(request.property_identifier, request.property_array_index)?;
     let mut items = match current {
@@ -1228,7 +1442,6 @@ pub fn handle_remove_list_element(
         _ => Vec::new(),
     };
 
-    // Decode elements to remove
     let mut to_remove = Vec::new();
     let mut offset = 0;
     let data = &request.list_of_elements;
@@ -1245,7 +1458,6 @@ pub fn handle_remove_list_element(
     // Remove matching elements
     items.retain(|item| !to_remove.contains(item));
 
-    // Write back
     object.write_property(
         request.property_identifier,
         request.property_array_index,
@@ -1851,7 +2063,7 @@ mod tests {
 
         let request = bacnet_services::device_mgmt::DeviceCommunicationControlRequest {
             time_duration: Some(60),
-            enable_disable: EnableDisable::DISABLE,
+            enable_disable: EnableDisable::DISABLE_INITIATION,
             password: None,
         };
         let mut buf = BytesMut::new();
@@ -1859,9 +2071,9 @@ mod tests {
 
         let (state, duration) =
             handle_device_communication_control(&buf, &comm_state, &None).unwrap();
-        assert_eq!(state, EnableDisable::DISABLE);
+        assert_eq!(state, EnableDisable::DISABLE_INITIATION);
         assert_eq!(duration, Some(60));
-        assert_eq!(comm_state.load(Ordering::Acquire), 1);
+        assert_eq!(comm_state.load(Ordering::Acquire), 2);
     }
 
     #[test]
@@ -2356,6 +2568,7 @@ mod tests {
             event_state_acknowledged: 3,
             timestamp: BACnetTimeStamp::SequenceNumber(42),
             acknowledgment_source: "operator".into(),
+            time_of_acknowledgment: BACnetTimeStamp::SequenceNumber(0),
         };
         let mut buf = BytesMut::new();
         request.encode(&mut buf).unwrap();
@@ -2374,6 +2587,7 @@ mod tests {
             event_state_acknowledged: 3,
             timestamp: BACnetTimeStamp::SequenceNumber(42),
             acknowledgment_source: "operator".into(),
+            time_of_acknowledgment: BACnetTimeStamp::SequenceNumber(0),
         };
         let mut buf = BytesMut::new();
         request.encode(&mut buf).unwrap();
@@ -2401,7 +2615,7 @@ mod tests {
         // Send DCC DISABLE with 1-minute duration
         let request = bacnet_services::device_mgmt::DeviceCommunicationControlRequest {
             time_duration: Some(1), // 1 minute
-            enable_disable: EnableDisable::DISABLE,
+            enable_disable: EnableDisable::DISABLE_INITIATION,
             password: None,
         };
         let mut buf = BytesMut::new();
@@ -2409,9 +2623,9 @@ mod tests {
 
         let (state, duration) =
             handle_device_communication_control(&buf, &comm_state, &None).unwrap();
-        assert_eq!(state, EnableDisable::DISABLE);
+        assert_eq!(state, EnableDisable::DISABLE_INITIATION);
         assert_eq!(duration, Some(1));
-        assert_eq!(comm_state.load(Ordering::Acquire), 1);
+        assert_eq!(comm_state.load(Ordering::Acquire), 2);
 
         // Simulate what the server dispatch does: spawn a timer task
         let comm_clone = Arc::clone(&comm_state);
@@ -2422,7 +2636,7 @@ mod tests {
         });
 
         // State should still be DISABLE before timer fires
-        assert_eq!(comm_state.load(Ordering::Acquire), 1);
+        assert_eq!(comm_state.load(Ordering::Acquire), 2);
 
         // Advance time past the 1-minute duration
         tokio::time::advance(std::time::Duration::from_secs(61)).await;
@@ -2443,13 +2657,13 @@ mod tests {
         // Send DCC DISABLE with 2-minute duration
         let request = bacnet_services::device_mgmt::DeviceCommunicationControlRequest {
             time_duration: Some(2),
-            enable_disable: EnableDisable::DISABLE,
+            enable_disable: EnableDisable::DISABLE_INITIATION,
             password: None,
         };
         let mut buf = BytesMut::new();
         request.encode(&mut buf).unwrap();
         let (_, duration) = handle_device_communication_control(&buf, &comm_state, &None).unwrap();
-        assert_eq!(comm_state.load(Ordering::Acquire), 1);
+        assert_eq!(comm_state.load(Ordering::Acquire), 2);
 
         // Spawn first timer
         let comm_clone = Arc::clone(&comm_state);
@@ -2495,15 +2709,15 @@ mod tests {
 
         let request = bacnet_services::device_mgmt::DeviceCommunicationControlRequest {
             time_duration: None,
-            enable_disable: EnableDisable::DISABLE,
+            enable_disable: EnableDisable::DISABLE_INITIATION,
             password: Some("secret".to_string()),
         };
         let mut buf = BytesMut::new();
         request.encode(&mut buf).unwrap();
 
         let (state, _) = handle_device_communication_control(&buf, &comm_state, &pw).unwrap();
-        assert_eq!(state, EnableDisable::DISABLE);
-        assert_eq!(comm_state.load(Ordering::Acquire), 1);
+        assert_eq!(state, EnableDisable::DISABLE_INITIATION);
+        assert_eq!(comm_state.load(Ordering::Acquire), 2);
     }
 
     #[test]
@@ -2513,7 +2727,7 @@ mod tests {
 
         let request = bacnet_services::device_mgmt::DeviceCommunicationControlRequest {
             time_duration: None,
-            enable_disable: EnableDisable::DISABLE,
+            enable_disable: EnableDisable::DISABLE_INITIATION,
             password: Some("wrong".to_string()),
         };
         let mut buf = BytesMut::new();
@@ -2538,7 +2752,7 @@ mod tests {
 
         let request = bacnet_services::device_mgmt::DeviceCommunicationControlRequest {
             time_duration: None,
-            enable_disable: EnableDisable::DISABLE,
+            enable_disable: EnableDisable::DISABLE_INITIATION,
             password: None,
         };
         let mut buf = BytesMut::new();
@@ -2561,15 +2775,15 @@ mod tests {
 
         let request = bacnet_services::device_mgmt::DeviceCommunicationControlRequest {
             time_duration: None,
-            enable_disable: EnableDisable::DISABLE,
+            enable_disable: EnableDisable::DISABLE_INITIATION,
             password: Some("anything".to_string()),
         };
         let mut buf = BytesMut::new();
         request.encode(&mut buf).unwrap();
 
         let (state, _) = handle_device_communication_control(&buf, &comm_state, &None).unwrap();
-        assert_eq!(state, EnableDisable::DISABLE);
-        assert_eq!(comm_state.load(Ordering::Acquire), 1);
+        assert_eq!(state, EnableDisable::DISABLE_INITIATION);
+        assert_eq!(comm_state.load(Ordering::Acquire), 2);
     }
 
     #[test]

@@ -192,6 +192,8 @@ pub struct ScheduleObject {
     exception_schedule: Vec<BACnetSpecialEvent>,
     effective_period: Option<BACnetDateRange>,
     list_of_object_property_references: Vec<BACnetObjectPropertyReference>,
+    /// Priority for writing to referenced objects (1-16).
+    priority_for_writing: u8,
 }
 
 impl ScheduleObject {
@@ -214,6 +216,7 @@ impl ScheduleObject {
             exception_schedule: Vec::new(),
             effective_period: None,
             list_of_object_property_references: Vec::new(),
+            priority_for_writing: 16, // default: lowest priority
         })
     }
 
@@ -453,6 +456,9 @@ impl BACnetObject for ScheduleObject {
                         })
                         .collect(),
                 ))
+            }
+            p if p == PropertyIdentifier::PRIORITY_FOR_WRITING => {
+                Ok(PropertyValue::Unsigned(self.priority_for_writing as u64))
             }
             p if p == PropertyIdentifier::PROPERTY_LIST => {
                 read_property_list_property(&self.property_list(), array_index)

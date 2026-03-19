@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use bacnet_types::constructed::BACnetCOVSubscription;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier, Segmentation};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
 
 use crate::common::read_property_list_property;
 use crate::traits::BACnetObject;
@@ -82,12 +82,10 @@ pub struct DeviceObject {
     /// Cached object list for array-indexed reads.
     object_list: Vec<ObjectIdentifier>,
     /// Protocol_Object_Types_Supported — bitstring indicating which object
-    /// types this device supports (one bit per type, MSB-first within each
-    /// byte, per Clause 21).
+    /// types this device supports (one bit per type, MSB-first within each byte).
     protocol_object_types_supported: Vec<u8>,
     /// Protocol_Services_Supported — bitstring indicating which services
-    /// this device supports (one bit per service, MSB-first within each
-    /// byte, per Clause 21).
+    /// this device supports (one bit per service, MSB-first within each byte).
     protocol_services_supported: Vec<u8>,
     /// Active COV subscriptions maintained by the server.
     active_cov_subscriptions: Vec<BACnetCOVSubscription>,
@@ -168,6 +166,58 @@ impl DeviceObject {
             PropertyValue::CharacterString(String::new()),
         );
 
+        // Device_Address_Binding — starts empty; populated as devices are discovered.
+        properties.insert(
+            PropertyIdentifier::DEVICE_ADDRESS_BINDING,
+            PropertyValue::List(Vec::new()),
+        );
+
+        // Placeholder values updated by the server's time sync or system clock.
+        properties.insert(
+            PropertyIdentifier::LOCAL_DATE,
+            PropertyValue::Date(Date {
+                year: 126, // 2026 - 1900
+                month: 3,
+                day: 18,
+                day_of_week: 3, // Wednesday
+            }),
+        );
+        properties.insert(
+            PropertyIdentifier::LOCAL_TIME,
+            PropertyValue::Time(Time {
+                hour: 12,
+                minute: 0,
+                second: 0,
+                hundredths: 0,
+            }),
+        );
+
+        // UTC_Offset: signed integer minutes from UTC (e.g., -300 for EST).
+        properties.insert(
+            PropertyIdentifier::UTC_OFFSET,
+            PropertyValue::Signed(0), // UTC
+        );
+
+        // Last_Restart_Reason: 0=unknown, 1=coldstart, 2=warmstart, etc.
+        properties.insert(
+            PropertyIdentifier::LAST_RESTART_REASON,
+            PropertyValue::Enumerated(0), // unknown
+        );
+
+        // Device_UUID: 16-byte UUID stored as OctetString. Default: all zeros.
+        properties.insert(
+            PropertyIdentifier::DEVICE_UUID,
+            PropertyValue::OctetString(vec![0u8; 16]),
+        );
+
+        // Max_Segments_Accepted — only included when segmentation is supported.
+        if config.segmentation_supported != Segmentation::NONE {
+            properties.insert(
+                PropertyIdentifier::MAX_SEGMENTS_ACCEPTED,
+                PropertyValue::Unsigned(65), // default: more than 64 segments
+            );
+        }
+
         // Protocol_Object_Types_Supported: bitstring with one bit per
         // implemented object type.  Computed from the full set of types
         // that have concrete struct implementations in this crate.
@@ -234,6 +284,8 @@ impl DeviceObject {
             ObjectType::STAGING.to_raw(),
             ObjectType::AUDIT_REPORTER.to_raw(),
             ObjectType::AUDIT_LOG.to_raw(),
+            ObjectType::COLOR.to_raw(),
+            ObjectType::COLOR_TEMPERATURE.to_raw(),
         ]);
 
         // Protocol_Services_Supported: 6 bytes (48 bits).  Bits set for
@@ -307,11 +359,9 @@ impl BACnetObject for DeviceObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
-        // Special handling for object-list (array property)
         if property == PropertyIdentifier::OBJECT_LIST {
             return match array_index {
                 None => {
-                    // Return the entire array as a sequence of ObjectIdentifier values
                     let elements = self
                         .object_list
                         .iter()
@@ -337,21 +387,30 @@ impl BACnetObject for DeviceObject {
             };
         }
 
-        // Property-list returns all supported property identifiers
         if property == PropertyIdentifier::PROPERTY_LIST {
             return read_property_list_property(&self.property_list(), array_index);
         }
 
-        // Protocol_Object_Types_Supported (property 96)
         if property == PropertyIdentifier::PROTOCOL_OBJECT_TYPES_SUPPORTED {
-            // 8 bytes = 64 bits; 63 defined (types 0-62), 1 unused bit
+            let num_bytes = self.protocol_object_types_supported.len();
+            let total_bits = num_bytes * 8;
+            // Find highest set bit to determine actual used bits
+            let mut max_type = 0u32;
+            for (byte_idx, &byte) in self.protocol_object_types_supported.iter().enumerate() {
+                for bit in 0..8 {
+                    if byte & (1 << (7 - bit)) != 0 {
+                        max_type = (byte_idx * 8 + bit) as u32;
+                    }
+                }
+            }
+            let used_bits = max_type as usize + 1;
+            let unused = (total_bits - used_bits) as u8;
             return Ok(PropertyValue::BitString {
-                unused_bits: 1,
+                unused_bits: unused,
                 data: self.protocol_object_types_supported.clone(),
             });
         }
 
-        // Protocol_Services_Supported (property 97)
         if property == PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED {
             // 6 bytes = 48 bits; 41 defined (services 0-40), 7 unused bits
             return Ok(PropertyValue::BitString {
@@ -360,7 +419,6 @@ impl BACnetObject for DeviceObject {
             });
         }
 
-        // Active_COV_Subscriptions (property 152) — read-only list
         if property == PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS {
             let elements: Vec<PropertyValue> = self
                 .active_cov_subscriptions
@@ -636,8 +694,8 @@ mod tests {
             .unwrap();
         match val {
             PropertyValue::BitString { unused_bits, data } => {
-                assert_eq!(unused_bits, 1);
-                assert_eq!(data.len(), 8);
+                assert_eq!(unused_bits, 7);
+                assert_eq!(data.len(), 9);
                 // Byte 0 (types 0-7): all set
                 assert_eq!(data[0], 0xFF);
                 // Byte 1 (types 8-15): all set
@@ -652,8 +710,10 @@ mod tests {
                 assert_eq!(data[5], 0xFF);
                 // Byte 6 (types 48-55): all set
                 assert_eq!(data[6], 0xFF);
-                // Byte 7 (types 56-62): 56-62 set, bit 0 unused
-                assert_eq!(data[7], 0xFE);
+                // Byte 7 (types 56-63): all set (56-62 + Color=63)
+                assert_eq!(data[7], 0xFF);
+                // Byte 8 (type 64): ColorTemperature set, 7 unused bits
+                assert_eq!(data[8], 0x80);
             }
             _ => panic!("Expected BitString"),
         }

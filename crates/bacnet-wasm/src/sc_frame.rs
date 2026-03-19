@@ -101,20 +101,20 @@ pub struct ScControl {
 
 impl ScControl {
     /// Encode control flags to a byte per ASHRAE 135-2020 Annex AB.2.2.
-    /// Bits 7-4 carry the flags; bits 3-0 are reserved (zero).
+    /// Bits 7-4 are reserved (zero); bits 3-0 carry the flags.
     pub fn to_byte(self) -> u8 {
         let mut b = 0u8;
         if self.has_originating_vmac {
-            b |= 0x80; // bit 7
+            b |= 0x08; // bit 3
         }
         if self.has_destination_vmac {
-            b |= 0x40; // bit 6
+            b |= 0x04; // bit 2
         }
         if self.has_dest_options {
-            b |= 0x20; // bit 5
+            b |= 0x02; // bit 1
         }
         if self.has_data_options {
-            b |= 0x10; // bit 4
+            b |= 0x01; // bit 0
         }
         b
     }
@@ -122,10 +122,10 @@ impl ScControl {
     /// Decode control flags from a byte per ASHRAE 135-2020 Annex AB.2.2.
     pub fn from_byte(b: u8) -> Self {
         Self {
-            has_originating_vmac: b & 0x80 != 0, // bit 7
-            has_destination_vmac: b & 0x40 != 0, // bit 6
-            has_dest_options: b & 0x20 != 0,     // bit 5
-            has_data_options: b & 0x10 != 0,     // bit 4
+            has_originating_vmac: b & 0x08 != 0, // bit 3
+            has_destination_vmac: b & 0x04 != 0, // bit 2
+            has_dest_options: b & 0x02 != 0,     // bit 1
+            has_data_options: b & 0x01 != 0,     // bit 0
         }
     }
 }
@@ -133,23 +133,31 @@ impl ScControl {
 /// Virtual MAC address (6 bytes, per Annex AB).
 pub type Vmac = [u8; 6];
 
-/// Broadcast VMAC (all 0xFF).
+/// Broadcast VMAC (all 0xFF) per AB.1.5.2.
 pub const BROADCAST_VMAC: Vmac = [0xFF; 6];
 
-/// All-zeros broadcast VMAC (Annex AB.6).
-pub const BROADCAST_VMAC_ZEROS: Vmac = [0x00; 6];
+/// Unknown/uninitialized VMAC (all 0x00) per AB.1.5.2.
+pub const UNKNOWN_VMAC: Vmac = [0x00; 6];
 
-/// Check if a VMAC is a broadcast address (all-ones or all-zeros per AB.6).
+/// Check if a VMAC is the broadcast address (all 0xFF per AB.1.5.2).
 pub fn is_broadcast_vmac(vmac: &Vmac) -> bool {
-    *vmac == BROADCAST_VMAC || *vmac == BROADCAST_VMAC_ZEROS
+    *vmac == BROADCAST_VMAC
 }
 
-/// A single BACnet/SC option in TLV format (Annex AB.2.3).
+/// A single BACnet/SC header option (Annex AB.2.3).
+///
+/// Header Marker byte layout:
+///   Bit 7: More Options (1 = another option follows)
+///   Bit 6: Must Understand (1 = recipient must understand or reject)
+///   Bit 5: Header Data Flag (1 = Header Length + Header Data follow)
+///   Bits 4..0: Header Option Type (1..31)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScOption {
-    /// Option type (bits 6:0). Bit 7 is "more follows" flag, handled by codec.
+    /// Option type (bits 4..0, values 1..31).
     pub option_type: u8,
-    /// Option value (variable length).
+    /// If true, recipient must understand this option or reject the message.
+    pub must_understand: bool,
+    /// Option data (variable length). Empty for options with no data.
     pub data: Vec<u8>,
 }
 
@@ -207,14 +215,31 @@ pub fn encode_sc_message(buf: &mut BytesMut, msg: &ScMessage) {
     buf.put_slice(&msg.payload);
 }
 
-/// Encode SC header options (TLV format per Annex AB.2.3).
+/// Encode SC header options per Annex AB.2.3.
 fn encode_sc_options(buf: &mut BytesMut, options: &[ScOption]) {
     for (i, opt) in options.iter().enumerate() {
         let more_follows = i + 1 < options.len();
-        let type_byte = opt.option_type | if more_follows { 0x80 } else { 0 };
-        buf.put_u8(type_byte);
-        buf.put_u16(opt.data.len() as u16);
-        buf.put_slice(&opt.data);
+        let has_data = !opt.data.is_empty();
+        let mut marker = opt.option_type & 0x1F;
+        if more_follows {
+            marker |= 0x80;
+        }
+        if opt.must_understand {
+            marker |= 0x40;
+        }
+        if has_data {
+            marker |= 0x20;
+        }
+        buf.put_u8(marker);
+        if has_data {
+            debug_assert!(
+                opt.data.len() <= u16::MAX as usize,
+                "SC option data too large"
+            );
+            let data_len = (opt.data.len() as u64).min(u16::MAX as u64) as u16;
+            buf.put_u16(data_len);
+            buf.put_slice(&opt.data);
+        }
     }
 }
 
@@ -282,32 +307,45 @@ pub fn decode_sc_message(data: &[u8]) -> Result<ScMessage, Error> {
     })
 }
 
-/// Decode SC header options (TLV format per Annex AB.2.3).
-/// Each option: type(1) + length(2) + value(length).
-/// The "more options follow" bit (0x80 in type byte) indicates chaining.
+/// Decode SC header options per Annex AB.2.3.
 fn decode_sc_options(data: &[u8], offset: &mut usize) -> Result<Vec<ScOption>, Error> {
     const MAX_SC_OPTIONS: usize = 64;
     let mut options = Vec::new();
     loop {
-        if *offset + 3 > data.len() {
+        if *offset >= data.len() {
             return Err(Error::decoding(*offset, "SC option truncated"));
         }
-        let type_byte = data[*offset];
-        let option_type = type_byte & 0x7F;
-        let more_follows = type_byte & 0x80 != 0;
-        let length = u16::from_be_bytes([data[*offset + 1], data[*offset + 2]]) as usize;
-        *offset += 3;
-        if *offset + length > data.len() {
-            return Err(Error::decoding(*offset, "SC option data truncated"));
-        }
+        let marker = data[*offset];
+        let option_type = marker & 0x1F;
+        let must_understand = marker & 0x40 != 0;
+        let has_data = marker & 0x20 != 0;
+        let more_follows = marker & 0x80 != 0;
+        *offset += 1;
+
+        let option_data = if has_data {
+            if *offset + 2 > data.len() {
+                return Err(Error::decoding(*offset, "SC option length truncated"));
+            }
+            let length = u16::from_be_bytes([data[*offset], data[*offset + 1]]) as usize;
+            *offset += 2;
+            if *offset + length > data.len() {
+                return Err(Error::decoding(*offset, "SC option data truncated"));
+            }
+            let d = data[*offset..*offset + length].to_vec();
+            *offset += length;
+            d
+        } else {
+            Vec::new()
+        };
+
         if options.len() >= MAX_SC_OPTIONS {
             return Err(Error::decoding(*offset, "too many SC options"));
         }
         options.push(ScOption {
             option_type,
-            data: data[*offset..*offset + length].to_vec(),
+            must_understand,
+            data: option_data,
         });
-        *offset += length;
         if !more_follows {
             break;
         }
@@ -339,7 +377,7 @@ mod tests {
             has_data_options: false,
         };
         let b = ctrl.to_byte();
-        assert_eq!(b, 0xA0); // 0x80 | 0x20 (bits 7 + 5 per AB.2.2)
+        assert_eq!(b, 0x0A); // 0x08 | 0x02 (bits 3 + 1 per AB.2.2)
         let decoded = ScControl::from_byte(b);
         assert_eq!(decoded, ctrl);
     }
@@ -352,8 +390,8 @@ mod tests {
             has_dest_options: true,
             has_data_options: true,
         };
-        assert_eq!(ctrl.to_byte(), 0xF0); // bits 7-4 all set per AB.2.2
-        assert_eq!(ScControl::from_byte(0xF0), ctrl);
+        assert_eq!(ctrl.to_byte(), 0x0F); // bits 3-0 all set per AB.2.2
+        assert_eq!(ScControl::from_byte(0x0F), ctrl);
     }
 
     #[test]
@@ -487,14 +525,14 @@ mod tests {
     #[test]
     fn decode_truncated_originating_vmac() {
         // Has originating VMAC flag (bit 7) but only 2 bytes after header
-        let data = [0x01, 0x80, 0x00, 0x01, 0xAA, 0xBB];
+        let data = [0x01, 0x08, 0x00, 0x01, 0xAA, 0xBB];
         assert!(decode_sc_message(&data).is_err());
     }
 
     #[test]
     fn decode_truncated_destination_vmac() {
         // Has destination VMAC flag (bit 6) but only 2 bytes after header
-        let data = [0x01, 0x40, 0x00, 0x01, 0xAA, 0xBB];
+        let data = [0x01, 0x04, 0x00, 0x01, 0xAA, 0xBB];
         assert!(decode_sc_message(&data).is_err());
     }
 
@@ -524,7 +562,7 @@ mod tests {
     #[test]
     fn wire_format_check_both_vmacs() {
         // Both VMACs present — per ASHRAE 135-2020 Annex AB.2.2 the control
-        // byte uses bits 7 (originating) and 6 (destination), so both set = 0xC0.
+        // byte uses bits 3 (originating) and 2 (destination), so both set = 0x0C.
         let orig = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06];
         let dest = [0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F];
         let msg = ScMessage {
@@ -541,7 +579,7 @@ mod tests {
         encode_sc_message(&mut buf, &msg);
 
         assert_eq!(buf[0], 0x01); // EncapsulatedNpdu
-        assert_eq!(buf[1], 0xC0); // bits 7+6 set = both VMACs present (AB.2.2)
+        assert_eq!(buf[1], 0x0C); // bits 3+2 set = both VMACs present (AB.2.2)
         assert_eq!(buf[2], 0x00); // msg_id high
         assert_eq!(buf[3], 0x01); // msg_id low
         assert_eq!(&buf[4..10], &orig);
@@ -558,10 +596,12 @@ mod tests {
             destination_vmac: Some([0x02; 6]),
             dest_options: vec![ScOption {
                 option_type: 1,
+                must_understand: false,
                 data: vec![0xAA, 0xBB],
             }],
             data_options: vec![ScOption {
                 option_type: 2,
+                must_understand: false,
                 data: vec![0xCC],
             }],
             payload: Bytes::from_static(&[0x01, 0x00]),
@@ -602,10 +642,12 @@ mod tests {
             dest_options: vec![
                 ScOption {
                     option_type: 1,
+                    must_understand: false,
                     data: vec![0x10],
                 },
                 ScOption {
                     option_type: 2,
+                    must_understand: false,
                     data: vec![0x20, 0x21],
                 },
             ],

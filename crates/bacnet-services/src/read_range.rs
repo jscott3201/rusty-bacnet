@@ -8,7 +8,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 use bytes::BytesMut;
 
-/// Decode a tag from content and validate the slice bounds.
+/// Decode a tag and validate the resulting slice bounds.
 fn checked_slice<'a>(
     content: &'a [u8],
     offset: usize,
@@ -179,6 +179,17 @@ impl ReadRangeRequest {
             }
         }
         let _ = offset;
+
+        if let Some(ref r) = range {
+            let count = match r {
+                RangeSpec::ByPosition { count, .. } => *count,
+                RangeSpec::BySequenceNumber { count, .. } => *count,
+                RangeSpec::ByTime { count, .. } => *count,
+            };
+            if count == 0 {
+                return Err(Error::Encoding("ReadRange count may not be zero".into()));
+            }
+        }
 
         Ok(Self {
             object_identifier,

@@ -8,13 +8,13 @@ use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
 // ---------------------------------------------------------------------------
-// WhoIsRequest (Clause 16.10.1)
+// WhoIsRequest
 // ---------------------------------------------------------------------------
 
 /// Who-Is-Request service parameters.
 ///
 /// Both limits must be present or both absent. If only one is set,
-/// the request is treated as unbounded (per Clause 16.10.1.1.1).
+/// the request is treated as unbounded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WhoIsRequest {
     pub low_limit: Option<u32>,
@@ -77,19 +77,15 @@ impl WhoIsRequest {
             }
         }
 
-        // Both present or both absent per Clause 16.10.1.1.1
+        // Both present or both absent
         if low_limit.is_some() != high_limit.is_some() {
             tracing::warn!("WhoIs: only one of low/high limit present — treating as unbounded per lenient decode policy");
             return Ok(Self::all());
         }
 
-        // Per Clause 16.10.1.1.1, low_limit must be <= high_limit
         if let (Some(low), Some(high)) = (low_limit, high_limit) {
             if low > high {
-                return Err(Error::decoding(
-                    0,
-                    "WhoIs low_limit exceeds high_limit (Clause 16.10.1.1.1)",
-                ));
+                return Err(Error::decoding(0, "WhoIs low_limit exceeds high_limit"));
             }
         }
 
@@ -101,7 +97,7 @@ impl WhoIsRequest {
 }
 
 // ---------------------------------------------------------------------------
-// IAmRequest (Clause 16.10.2)
+// IAmRequest
 // ---------------------------------------------------------------------------
 
 /// I-Am-Request service parameters.
@@ -126,7 +122,6 @@ impl IAmRequest {
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 
-        // App object-identifier (tag 12)
         let (tag, pos) = tags::decode_tag(data, offset)?;
         let end = pos + tag.length as usize;
         if end > data.len() {
@@ -135,7 +130,6 @@ impl IAmRequest {
         let object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
         offset = end;
 
-        // App unsigned: max-APDU-length (tag 2)
         let (tag, pos) = tags::decode_tag(data, offset)?;
         let end = pos + tag.length as usize;
         if end > data.len() {
@@ -144,7 +138,6 @@ impl IAmRequest {
         let max_apdu_length = primitives::decode_unsigned(&data[pos..end])? as u32;
         offset = end;
 
-        // App enumerated: segmentation-supported (tag 9)
         let (tag, pos) = tags::decode_tag(data, offset)?;
         let end = pos + tag.length as usize;
         if end > data.len() {
@@ -154,7 +147,6 @@ impl IAmRequest {
         let segmentation_supported = Segmentation::from_raw(seg_raw);
         offset = end;
 
-        // App unsigned: vendor-id (tag 2)
         let (tag, pos) = tags::decode_tag(data, offset)?;
         let end = pos + tag.length as usize;
         if end > data.len() {
@@ -170,10 +162,6 @@ impl IAmRequest {
         })
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

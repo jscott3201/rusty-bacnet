@@ -7,6 +7,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
+use crate::event::{ChangeOfStateDetector, EventStateChange};
 use crate::traits::BACnetObject;
 
 // ---------------------------------------------------------------------------
@@ -30,6 +31,8 @@ pub struct BinaryInputObject {
     reliability: u32,
     active_text: String,
     inactive_text: String,
+    /// CHANGE_OF_STATE event detector.
+    event_detector: ChangeOfStateDetector,
 }
 
 impl BinaryInputObject {
@@ -46,6 +49,7 @@ impl BinaryInputObject {
             reliability: 0,
             active_text: "Active".into(),
             inactive_text: "Inactive".into(),
+            event_detector: ChangeOfStateDetector::default(),
         })
     }
 
@@ -69,6 +73,14 @@ impl BACnetObject for BinaryInputObject {
         &self.name
     }
 
+    fn supports_cov(&self) -> bool {
+        true
+    }
+
+    fn evaluate_intrinsic_reporting(&mut self) -> Option<EventStateChange> {
+        self.event_detector.evaluate(self.present_value)
+    }
+
     fn read_property(
         &self,
         property: PropertyIdentifier,
@@ -84,7 +96,9 @@ impl BACnetObject for BinaryInputObject {
             p if p == PropertyIdentifier::PRESENT_VALUE => {
                 Ok(PropertyValue::Enumerated(self.present_value))
             }
-            p if p == PropertyIdentifier::EVENT_STATE => Ok(PropertyValue::Enumerated(0)),
+            p if p == PropertyIdentifier::EVENT_STATE => Ok(PropertyValue::Enumerated(
+                self.event_detector.event_state.to_raw(),
+            )),
             p if p == PropertyIdentifier::POLARITY => Ok(PropertyValue::Enumerated(self.polarity)),
             p if p == PropertyIdentifier::ACTIVE_TEXT => {
                 Ok(PropertyValue::CharacterString(self.active_text.clone()))
@@ -92,6 +106,29 @@ impl BACnetObject for BinaryInputObject {
             p if p == PropertyIdentifier::INACTIVE_TEXT => {
                 Ok(PropertyValue::CharacterString(self.inactive_text.clone()))
             }
+            p if p == PropertyIdentifier::ALARM_VALUES => Ok(PropertyValue::List(
+                self.event_detector
+                    .alarm_values
+                    .iter()
+                    .map(|v| PropertyValue::Enumerated(*v))
+                    .collect(),
+            )),
+            p if p == PropertyIdentifier::EVENT_ENABLE => Ok(PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![self.event_detector.event_enable << 5],
+            }),
+            p if p == PropertyIdentifier::ACKED_TRANSITIONS => Ok(PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![self.event_detector.acked_transitions << 5],
+            }),
+            p if p == PropertyIdentifier::NOTIFICATION_CLASS => Ok(PropertyValue::Unsigned(
+                self.event_detector.notification_class as u64,
+            )),
+            p if p == PropertyIdentifier::EVENT_TIME_STAMPS => Ok(PropertyValue::List(vec![
+                PropertyValue::Unsigned(0),
+                PropertyValue::Unsigned(0),
+                PropertyValue::Unsigned(0),
+            ])),
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -133,6 +170,9 @@ impl BACnetObject for BinaryInputObject {
         if let Some(result) =
             common::write_out_of_service(&mut self.out_of_service, property, &value)
         {
+            return result;
+        }
+        if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
             return result;
         }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
@@ -183,6 +223,8 @@ pub struct BinaryOutputObject {
     reliability: u32,
     active_text: String,
     inactive_text: String,
+    /// COMMAND_FAILURE event detector.
+    event_detector: ChangeOfStateDetector,
 }
 
 impl BinaryOutputObject {
@@ -201,6 +243,7 @@ impl BinaryOutputObject {
             reliability: 0,
             active_text: "Active".into(),
             inactive_text: "Inactive".into(),
+            event_detector: ChangeOfStateDetector::default(),
         })
     }
 
@@ -224,6 +267,14 @@ impl BACnetObject for BinaryOutputObject {
         &self.name
     }
 
+    fn supports_cov(&self) -> bool {
+        true
+    }
+
+    fn evaluate_intrinsic_reporting(&mut self) -> Option<EventStateChange> {
+        self.event_detector.evaluate(self.present_value)
+    }
+
     fn read_property(
         &self,
         property: PropertyIdentifier,
@@ -239,12 +290,17 @@ impl BACnetObject for BinaryOutputObject {
             p if p == PropertyIdentifier::PRESENT_VALUE => {
                 Ok(PropertyValue::Enumerated(self.present_value))
             }
-            p if p == PropertyIdentifier::EVENT_STATE => Ok(PropertyValue::Enumerated(0)),
+            p if p == PropertyIdentifier::EVENT_STATE => Ok(PropertyValue::Enumerated(
+                self.event_detector.event_state.to_raw(),
+            )),
             p if p == PropertyIdentifier::PRIORITY_ARRAY => {
                 common::read_priority_array!(self, array_index, PropertyValue::Enumerated)
             }
             p if p == PropertyIdentifier::RELINQUISH_DEFAULT => {
                 Ok(PropertyValue::Enumerated(self.relinquish_default))
+            }
+            p if p == PropertyIdentifier::CURRENT_COMMAND_PRIORITY => {
+                Ok(common::current_command_priority(&self.priority_array))
             }
             p if p == PropertyIdentifier::POLARITY => Ok(PropertyValue::Enumerated(self.polarity)),
             p if p == PropertyIdentifier::ACTIVE_TEXT => {
@@ -253,6 +309,22 @@ impl BACnetObject for BinaryOutputObject {
             p if p == PropertyIdentifier::INACTIVE_TEXT => {
                 Ok(PropertyValue::CharacterString(self.inactive_text.clone()))
             }
+            p if p == PropertyIdentifier::EVENT_ENABLE => Ok(PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![self.event_detector.event_enable << 5],
+            }),
+            p if p == PropertyIdentifier::ACKED_TRANSITIONS => Ok(PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![self.event_detector.acked_transitions << 5],
+            }),
+            p if p == PropertyIdentifier::NOTIFICATION_CLASS => Ok(PropertyValue::Unsigned(
+                self.event_detector.notification_class as u64,
+            )),
+            p if p == PropertyIdentifier::EVENT_TIME_STAMPS => Ok(PropertyValue::List(vec![
+                PropertyValue::Unsigned(0),
+                PropertyValue::Unsigned(0),
+                PropertyValue::Unsigned(0),
+            ])),
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -307,6 +379,9 @@ impl BACnetObject for BinaryOutputObject {
         {
             return result;
         }
+        if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
+            return result;
+        }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
@@ -325,6 +400,7 @@ impl BACnetObject for BinaryOutputObject {
             PropertyIdentifier::OUT_OF_SERVICE,
             PropertyIdentifier::PRIORITY_ARRAY,
             PropertyIdentifier::RELINQUISH_DEFAULT,
+            PropertyIdentifier::CURRENT_COMMAND_PRIORITY,
             PropertyIdentifier::POLARITY,
             PropertyIdentifier::RELIABILITY,
             PropertyIdentifier::ACTIVE_TEXT,
@@ -355,6 +431,8 @@ pub struct BinaryValueObject {
     reliability: u32,
     active_text: String,
     inactive_text: String,
+    /// CHANGE_OF_STATE event detector.
+    event_detector: ChangeOfStateDetector,
 }
 
 impl BinaryValueObject {
@@ -373,6 +451,7 @@ impl BinaryValueObject {
             reliability: 0,
             active_text: "Active".into(),
             inactive_text: "Inactive".into(),
+            event_detector: ChangeOfStateDetector::default(),
         })
     }
 
@@ -396,6 +475,14 @@ impl BACnetObject for BinaryValueObject {
         &self.name
     }
 
+    fn supports_cov(&self) -> bool {
+        true
+    }
+
+    fn evaluate_intrinsic_reporting(&mut self) -> Option<EventStateChange> {
+        self.event_detector.evaluate(self.present_value)
+    }
+
     fn read_property(
         &self,
         property: PropertyIdentifier,
@@ -411,14 +498,17 @@ impl BACnetObject for BinaryValueObject {
             p if p == PropertyIdentifier::PRESENT_VALUE => {
                 Ok(PropertyValue::Enumerated(self.present_value))
             }
-            p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(0)) // normal
-            }
+            p if p == PropertyIdentifier::EVENT_STATE => Ok(PropertyValue::Enumerated(
+                self.event_detector.event_state.to_raw(),
+            )),
             p if p == PropertyIdentifier::PRIORITY_ARRAY => {
                 common::read_priority_array!(self, array_index, PropertyValue::Enumerated)
             }
             p if p == PropertyIdentifier::RELINQUISH_DEFAULT => {
                 Ok(PropertyValue::Enumerated(self.relinquish_default))
+            }
+            p if p == PropertyIdentifier::CURRENT_COMMAND_PRIORITY => {
+                Ok(common::current_command_priority(&self.priority_array))
             }
             p if p == PropertyIdentifier::ACTIVE_TEXT => {
                 Ok(PropertyValue::CharacterString(self.active_text.clone()))
@@ -426,6 +516,22 @@ impl BACnetObject for BinaryValueObject {
             p if p == PropertyIdentifier::INACTIVE_TEXT => {
                 Ok(PropertyValue::CharacterString(self.inactive_text.clone()))
             }
+            p if p == PropertyIdentifier::EVENT_ENABLE => Ok(PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![self.event_detector.event_enable << 5],
+            }),
+            p if p == PropertyIdentifier::ACKED_TRANSITIONS => Ok(PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![self.event_detector.acked_transitions << 5],
+            }),
+            p if p == PropertyIdentifier::NOTIFICATION_CLASS => Ok(PropertyValue::Unsigned(
+                self.event_detector.notification_class as u64,
+            )),
+            p if p == PropertyIdentifier::EVENT_TIME_STAMPS => Ok(PropertyValue::List(vec![
+                PropertyValue::Unsigned(0),
+                PropertyValue::Unsigned(0),
+                PropertyValue::Unsigned(0),
+            ])),
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -480,6 +586,9 @@ impl BACnetObject for BinaryValueObject {
         {
             return result;
         }
+        if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
+            return result;
+        }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
@@ -498,6 +607,7 @@ impl BACnetObject for BinaryValueObject {
             PropertyIdentifier::OUT_OF_SERVICE,
             PropertyIdentifier::PRIORITY_ARRAY,
             PropertyIdentifier::RELINQUISH_DEFAULT,
+            PropertyIdentifier::CURRENT_COMMAND_PRIORITY,
             PropertyIdentifier::RELIABILITY,
             PropertyIdentifier::ACTIVE_TEXT,
             PropertyIdentifier::INACTIVE_TEXT,
@@ -878,7 +988,7 @@ mod tests {
         }
     }
 
-    // --- Direct PRIORITY_ARRAY writes (Clause 15.9.1.1.3) ---
+    // --- Direct PRIORITY_ARRAY writes ---
 
     #[test]
     fn bo_direct_priority_array_write_value() {

@@ -7,17 +7,15 @@ use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
 // ---------------------------------------------------------------------------
-// WhoAmIRequest (Clause 16.10.9)
+// WhoAmIRequest
 // ---------------------------------------------------------------------------
 
-/// Who-Am-I-Request: no parameters — empty APDU.
+/// Who-Am-I-Request (empty APDU, no parameters).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WhoAmIRequest;
 
 impl WhoAmIRequest {
-    pub fn encode(&self, _buf: &mut BytesMut) {
-        // No parameters to encode.
-    }
+    pub fn encode(&self, _buf: &mut BytesMut) {}
 
     pub fn decode(_data: &[u8]) -> Result<Self, Error> {
         Ok(Self)
@@ -25,7 +23,7 @@ impl WhoAmIRequest {
 }
 
 // ---------------------------------------------------------------------------
-// YouAreRequest (Clause 16.10.10)
+// YouAreRequest
 // ---------------------------------------------------------------------------
 
 /// You-Are-Request service parameters.
@@ -127,10 +125,6 @@ impl YouAreRequest {
         })
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

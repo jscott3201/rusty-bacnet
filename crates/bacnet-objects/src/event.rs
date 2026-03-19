@@ -34,10 +34,9 @@ impl EventStateChange {
 
     /// Derive the event transition category from the state change.
     ///
-    /// Per Clause 13.2.5:
-    /// - `to == NORMAL` → `ToNormal`
-    /// - `to == FAULT` → `ToFault`
-    /// - Everything else (OFFNORMAL, HIGH_LIMIT, LOW_LIMIT) → `ToOffnormal`
+    /// - `to == NORMAL` -> `ToNormal`
+    /// - `to == FAULT` -> `ToFault`
+    /// - Everything else (OFFNORMAL, HIGH_LIMIT, LOW_LIMIT) -> `ToOffnormal`
     pub fn transition(&self) -> EventTransition {
         if self.to == EventState::NORMAL {
             EventTransition::ToNormal
@@ -73,7 +72,7 @@ impl EventTransition {
     }
 }
 
-/// Which limits are enabled (Clause 12.1.14).
+/// Which limits are enabled.
 ///
 /// Encoded as a BACnet BIT STRING: bit 0 = low_limit_enable, bit 1 = high_limit_enable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,7 +115,7 @@ impl LimitEnable {
 
 /// OUT_OF_RANGE event detector for analog objects.
 ///
-/// Implements the event state machine per Clause 13.3.2:
+/// Implements the OUT_OF_RANGE event state machine:
 /// - NORMAL → HIGH_LIMIT when `present_value > high_limit` (if high_limit enabled)
 /// - NORMAL → LOW_LIMIT when `present_value < low_limit` (if low_limit enabled)
 /// - HIGH_LIMIT → NORMAL when `present_value < high_limit - deadband`
@@ -157,7 +156,7 @@ impl Default for OutOfRangeDetector {
 }
 
 impl OutOfRangeDetector {
-    /// Event_Enable bit masks per Clause 13.1.4.
+    /// Event_Enable bit masks.
     const TO_OFFNORMAL: u8 = 0x01;
     const TO_FAULT: u8 = 0x02;
     const TO_NORMAL: u8 = 0x04;
@@ -165,7 +164,7 @@ impl OutOfRangeDetector {
     /// Evaluate the present value against configured limits.
     ///
     /// Returns `Some(EventStateChange)` if the event state changed **and**
-    /// the corresponding `event_enable` bit is set (Clause 13.1.4).
+    /// the corresponding `event_enable` bit is set.
     /// Internal state always updates regardless of event_enable.
     ///
     /// Note: This implementation uses instant transitions (ignores time_delay).
@@ -178,7 +177,7 @@ impl OutOfRangeDetector {
             };
             self.event_state = new_state;
 
-            // Check event_enable bitmask per Clause 13.1.4
+            // Check event_enable bitmask
             let enabled = match new_state {
                 s if s == EventState::NORMAL => self.event_enable & Self::TO_NORMAL != 0,
                 s if s == EventState::HIGH_LIMIT || s == EventState::LOW_LIMIT => {
@@ -235,6 +234,153 @@ impl OutOfRangeDetector {
                 EventState::LOW_LIMIT
             }
             _ => self.event_state, // No change for unknown states
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CHANGE_OF_STATE event detector
+// ---------------------------------------------------------------------------
+
+/// CHANGE_OF_STATE event detector for binary and multi-state objects.
+///
+/// Transitions to OFFNORMAL when the monitored value
+/// matches any value in the `alarm_values` list. Returns to NORMAL when
+/// the value no longer matches any alarm value.
+#[derive(Debug, Clone)]
+pub struct ChangeOfStateDetector {
+    /// Values that trigger an OFFNORMAL state.
+    pub alarm_values: Vec<u32>,
+    pub notification_class: u32,
+    pub notify_type: u32,
+    pub event_enable: u8,
+    pub time_delay: u32,
+    pub event_state: EventState,
+    pub acked_transitions: u8,
+}
+
+impl Default for ChangeOfStateDetector {
+    fn default() -> Self {
+        Self {
+            alarm_values: Vec::new(),
+            notification_class: 0,
+            notify_type: 0,
+            event_enable: 0,
+            time_delay: 0,
+            event_state: EventState::NORMAL,
+            acked_transitions: 0b111,
+        }
+    }
+}
+
+impl ChangeOfStateDetector {
+    const TO_OFFNORMAL: u8 = 0x01;
+    const TO_FAULT: u8 = 0x02;
+    const TO_NORMAL: u8 = 0x04;
+
+    /// Evaluate the present value against alarm_values.
+    ///
+    /// Returns `Some(EventStateChange)` if the event state changed and the
+    /// corresponding `event_enable` bit is set.
+    pub fn evaluate(&mut self, present_value: u32) -> Option<EventStateChange> {
+        let is_alarm = self.alarm_values.contains(&present_value);
+        let new_state = if is_alarm {
+            EventState::OFFNORMAL
+        } else {
+            EventState::NORMAL
+        };
+
+        if new_state != self.event_state {
+            let change = EventStateChange {
+                from: self.event_state,
+                to: new_state,
+            };
+            self.event_state = new_state;
+
+            let enabled = match new_state {
+                s if s == EventState::NORMAL => self.event_enable & Self::TO_NORMAL != 0,
+                s if s == EventState::OFFNORMAL => self.event_enable & Self::TO_OFFNORMAL != 0,
+                _ => self.event_enable & Self::TO_FAULT != 0,
+            };
+
+            if enabled {
+                Some(change)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+}
+
+/// COMMAND_FAILURE event detector for commandable output objects (BO, MSO).
+///
+/// Transitions to OFFNORMAL when present_value differs
+/// from feedback_value. Returns to NORMAL when they match.
+#[derive(Debug, Clone)]
+pub struct CommandFailureDetector {
+    pub notification_class: u32,
+    pub notify_type: u32,
+    pub event_enable: u8,
+    pub time_delay: u32,
+    pub event_state: EventState,
+    pub acked_transitions: u8,
+}
+
+impl Default for CommandFailureDetector {
+    fn default() -> Self {
+        Self {
+            notification_class: 0,
+            notify_type: 0,
+            event_enable: 0,
+            time_delay: 0,
+            event_state: EventState::NORMAL,
+            acked_transitions: 0b111,
+        }
+    }
+}
+
+impl CommandFailureDetector {
+    const TO_OFFNORMAL: u8 = 0x01;
+    #[allow(dead_code)]
+    const TO_FAULT: u8 = 0x02;
+    const TO_NORMAL: u8 = 0x04;
+
+    /// Evaluate present_value vs feedback_value.
+    ///
+    /// Returns `Some(EventStateChange)` if the event state changed.
+    pub fn evaluate(
+        &mut self,
+        present_value: u32,
+        feedback_value: u32,
+    ) -> Option<EventStateChange> {
+        let new_state = if present_value != feedback_value {
+            EventState::OFFNORMAL
+        } else {
+            EventState::NORMAL
+        };
+
+        if new_state != self.event_state {
+            let change = EventStateChange {
+                from: self.event_state,
+                to: new_state,
+            };
+            self.event_state = new_state;
+
+            let enabled = match new_state {
+                s if s == EventState::NORMAL => self.event_enable & Self::TO_NORMAL != 0,
+                s if s == EventState::OFFNORMAL => self.event_enable & Self::TO_OFFNORMAL != 0,
+                _ => false,
+            };
+
+            if enabled {
+                Some(change)
+            } else {
+                None
+            }
+        } else {
+            None
         }
     }
 }
@@ -482,5 +628,99 @@ mod tests {
             to: EventState::NORMAL,
         };
         assert_eq!(change.event_type(), EventType::CHANGE_OF_STATE);
+    }
+
+    // --- ChangeOfStateDetector tests ---
+
+    #[test]
+    fn cos_normal_when_no_alarm_values() {
+        let mut det = ChangeOfStateDetector {
+            event_enable: 0x07,
+            ..Default::default()
+        };
+        assert!(det.evaluate(0).is_none()); // empty alarm_values → always NORMAL
+    }
+
+    #[test]
+    fn cos_normal_to_offnormal() {
+        let mut det = ChangeOfStateDetector {
+            alarm_values: vec![1], // ACTIVE (1) is alarm
+            event_enable: 0x07,
+            ..Default::default()
+        };
+        let change = det.evaluate(1).unwrap();
+        assert_eq!(change.from, EventState::NORMAL);
+        assert_eq!(change.to, EventState::OFFNORMAL);
+    }
+
+    #[test]
+    fn cos_offnormal_to_normal() {
+        let mut det = ChangeOfStateDetector {
+            alarm_values: vec![1],
+            event_enable: 0x07,
+            ..Default::default()
+        };
+        det.evaluate(1); // → OFFNORMAL
+        let change = det.evaluate(0).unwrap(); // back to NORMAL
+        assert_eq!(change.from, EventState::OFFNORMAL);
+        assert_eq!(change.to, EventState::NORMAL);
+    }
+
+    #[test]
+    fn cos_stays_offnormal_while_in_alarm() {
+        let mut det = ChangeOfStateDetector {
+            alarm_values: vec![1],
+            event_enable: 0x07,
+            ..Default::default()
+        };
+        det.evaluate(1); // → OFFNORMAL
+        assert!(det.evaluate(1).is_none()); // still alarm value, no change
+    }
+
+    #[test]
+    fn cos_multistate_alarm_values() {
+        let mut det = ChangeOfStateDetector {
+            alarm_values: vec![3, 5, 7], // multiple alarm states
+            event_enable: 0x07,
+            ..Default::default()
+        };
+        assert!(det.evaluate(1).is_none()); // not an alarm state
+        let change = det.evaluate(5).unwrap();
+        assert_eq!(change.to, EventState::OFFNORMAL);
+        assert!(det.evaluate(3).is_none()); // still offnormal (different alarm value)
+        let change = det.evaluate(2).unwrap();
+        assert_eq!(change.to, EventState::NORMAL);
+    }
+
+    // --- CommandFailureDetector tests ---
+
+    #[test]
+    fn cmdfail_matching_stays_normal() {
+        let mut det = CommandFailureDetector {
+            event_enable: 0x07,
+            ..Default::default()
+        };
+        assert!(det.evaluate(1, 1).is_none()); // present == feedback
+    }
+
+    #[test]
+    fn cmdfail_mismatch_goes_offnormal() {
+        let mut det = CommandFailureDetector {
+            event_enable: 0x07,
+            ..Default::default()
+        };
+        let change = det.evaluate(1, 0).unwrap(); // present != feedback
+        assert_eq!(change.to, EventState::OFFNORMAL);
+    }
+
+    #[test]
+    fn cmdfail_match_restores_normal() {
+        let mut det = CommandFailureDetector {
+            event_enable: 0x07,
+            ..Default::default()
+        };
+        det.evaluate(1, 0); // → OFFNORMAL
+        let change = det.evaluate(1, 1).unwrap(); // match → NORMAL
+        assert_eq!(change.to, EventState::NORMAL);
     }
 }

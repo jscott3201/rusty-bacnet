@@ -25,6 +25,8 @@ pub enum ScConnectionState {
 pub struct ScConnection {
     pub state: ScConnectionState,
     pub local_vmac: Vmac,
+    /// Device UUID (16 bytes, RFC 4122) per AB.1.5.3.
+    pub device_uuid: [u8; 16],
     pub hub_vmac: Option<Vmac>,
     pub max_apdu_length: u16,
     pub hub_max_apdu_length: u16,
@@ -37,6 +39,7 @@ impl ScConnection {
         Self {
             state: ScConnectionState::Disconnected,
             local_vmac,
+            device_uuid: [0u8; 16],
             hub_vmac: None,
             max_apdu_length: 1476,
             hub_max_apdu_length: 1476,
@@ -53,17 +56,19 @@ impl ScConnection {
 
     /// Build a Connect-Request message.
     ///
-    /// Payload: VMAC(6) + Max-BVLC-Length(2,BE) + Max-NPDU-Length(2,BE) = 10 bytes (Annex AB.7.1).
+    /// AB.2.10.1: VMAC(6) + Device_UUID(16) + Max-BVLC-Length(2) + Max-NPDU-Length(2) = 26 bytes.
+    /// No Originating/Destination Virtual Address.
     pub fn build_connect_request(&mut self) -> ScMessage {
         self.state = ScConnectionState::Connecting;
-        let mut payload_buf = Vec::with_capacity(10);
+        let mut payload_buf = Vec::with_capacity(26);
         payload_buf.extend_from_slice(&self.local_vmac);
+        payload_buf.extend_from_slice(&self.device_uuid);
         payload_buf.extend_from_slice(&1476u16.to_be_bytes());
         payload_buf.extend_from_slice(&self.max_apdu_length.to_be_bytes());
         ScMessage {
             function: ScFunction::ConnectRequest,
             message_id: self.next_id(),
-            originating_vmac: Some(self.local_vmac),
+            originating_vmac: None,
             destination_vmac: None,
             dest_options: Vec::new(),
             data_options: Vec::new(),
@@ -71,7 +76,7 @@ impl ScConnection {
         }
     }
 
-    /// Handle a received Connect-Accept (Annex AB.7.2).
+    /// Handle a received Connect-Accept (AB.2.11.1).
     pub fn handle_connect_accept(&mut self, msg: &ScMessage) -> bool {
         if self.state != ScConnectionState::Connecting {
             return false;
@@ -79,25 +84,35 @@ impl ScConnection {
         if msg.function != ScFunction::ConnectAccept {
             return false;
         }
-        self.hub_vmac = msg.originating_vmac;
-        self.state = ScConnectionState::Connected;
-        if msg.payload.len() >= 10 {
-            self.hub_max_apdu_length = u16::from_be_bytes([msg.payload[8], msg.payload[9]]);
+        // AB.2.11.1: VMAC(6) + Device_UUID(16) + Max-BVLC-Length(2) + Max-NPDU-Length(2) = 26
+        if msg.payload.len() >= 26 {
+            let mut hub_vmac = [0u8; 6];
+            hub_vmac.copy_from_slice(&msg.payload[0..6]);
+            self.hub_vmac = Some(hub_vmac);
+            self.hub_max_apdu_length = u16::from_be_bytes([msg.payload[24], msg.payload[25]]);
+        } else if msg.payload.len() >= 6 {
+            let mut hub_vmac = [0u8; 6];
+            hub_vmac.copy_from_slice(&msg.payload[0..6]);
+            self.hub_vmac = Some(hub_vmac);
         }
+        self.state = ScConnectionState::Connected;
         true
     }
 
     /// Build a Disconnect-Request message.
+    /// AB.2.12.1: No Originating/Destination Virtual Address.
     pub fn build_disconnect_request(&mut self) -> Result<ScMessage, Error> {
-        let hub_vmac = self.hub_vmac.ok_or_else(|| {
-            Error::Encoding("cannot build DisconnectRequest: no hub VMAC (not connected)".into())
-        })?;
+        if self.hub_vmac.is_none() {
+            return Err(Error::Encoding(
+                "cannot build DisconnectRequest: no hub VMAC (not connected)".into(),
+            ));
+        }
         self.state = ScConnectionState::Disconnecting;
         Ok(ScMessage {
             function: ScFunction::DisconnectRequest,
             message_id: self.next_id(),
-            originating_vmac: Some(self.local_vmac),
-            destination_vmac: Some(hub_vmac),
+            originating_vmac: None,
+            destination_vmac: None,
             dest_options: Vec::new(),
             data_options: Vec::new(),
             payload: Bytes::new(),
@@ -105,12 +120,13 @@ impl ScConnection {
     }
 
     /// Build a Heartbeat-Request message.
+    /// AB.2.14.1: No Originating/Destination Virtual Address.
     pub fn build_heartbeat(&mut self) -> ScMessage {
         ScMessage {
             function: ScFunction::HeartbeatRequest,
             message_id: self.next_id(),
-            originating_vmac: Some(self.local_vmac),
-            destination_vmac: self.hub_vmac,
+            originating_vmac: None,
+            destination_vmac: None,
             dest_options: Vec::new(),
             data_options: Vec::new(),
             payload: Bytes::new(),
@@ -148,11 +164,12 @@ impl ScConnection {
             ScFunction::HeartbeatRequest => None,
             ScFunction::DisconnectRequest => {
                 self.state = ScConnectionState::Disconnected;
+                // AB.2.13.1: Disconnect-ACK has no VMACs
                 self.disconnect_ack_to_send = Some(ScMessage {
                     function: ScFunction::DisconnectAck,
                     message_id: msg.message_id,
-                    originating_vmac: Some(self.local_vmac),
-                    destination_vmac: msg.originating_vmac,
+                    originating_vmac: None,
+                    destination_vmac: None,
                     dest_options: Vec::new(),
                     data_options: Vec::new(),
                     payload: Bytes::new(),
@@ -190,20 +207,22 @@ mod tests {
         let req = conn.build_connect_request();
         assert_eq!(conn.state, ScConnectionState::Connecting);
         assert_eq!(req.function, ScFunction::ConnectRequest);
-        assert_eq!(req.originating_vmac, Some(vmac));
-        assert_eq!(req.payload.len(), 10);
+        // AB.2.10.1: no VMACs, 26-byte payload
+        assert!(req.originating_vmac.is_none());
+        assert_eq!(req.payload.len(), 26);
 
-        // Simulate ConnectAccept
+        // Simulate ConnectAccept with 26-byte payload
         let hub_vmac = [7, 8, 9, 10, 11, 12];
-        let mut accept_payload = Vec::with_capacity(10);
+        let mut accept_payload = Vec::with_capacity(26);
         accept_payload.extend_from_slice(&hub_vmac);
+        accept_payload.extend_from_slice(&[0u8; 16]); // Device UUID
         accept_payload.extend_from_slice(&1476u16.to_be_bytes());
         accept_payload.extend_from_slice(&1476u16.to_be_bytes());
         let accept = ScMessage {
             function: ScFunction::ConnectAccept,
             message_id: req.message_id,
-            originating_vmac: Some(hub_vmac),
-            destination_vmac: Some(vmac),
+            originating_vmac: None,
+            destination_vmac: None,
             dest_options: Vec::new(),
             data_options: Vec::new(),
             payload: Bytes::from(accept_payload),
@@ -241,14 +260,16 @@ mod tests {
         let req = conn.build_disconnect_request().unwrap();
         assert_eq!(conn.state, ScConnectionState::Disconnecting);
         assert_eq!(req.function, ScFunction::DisconnectRequest);
-        assert_eq!(req.destination_vmac, Some(hub_vmac));
+        // AB.2.12.1: no VMACs
+        assert!(req.originating_vmac.is_none());
+        assert!(req.destination_vmac.is_none());
 
         // Receive DisconnectAck
         let ack = ScMessage {
             function: ScFunction::DisconnectAck,
             message_id: req.message_id,
-            originating_vmac: Some(hub_vmac),
-            destination_vmac: Some(vmac),
+            originating_vmac: None,
+            destination_vmac: None,
             dest_options: Vec::new(),
             data_options: Vec::new(),
             payload: Bytes::new(),
@@ -356,7 +377,9 @@ mod tests {
         let ack = conn.disconnect_ack_to_send.take().unwrap();
         assert_eq!(ack.function, ScFunction::DisconnectAck);
         assert_eq!(ack.message_id, 99);
-        assert_eq!(ack.destination_vmac, Some([2; 6]));
+        // AB.2.13.1: no VMACs on DisconnectAck
+        assert!(ack.originating_vmac.is_none());
+        assert!(ack.destination_vmac.is_none());
     }
 
     #[test]
@@ -386,8 +409,9 @@ mod tests {
 
         let hb = conn.build_heartbeat();
         assert_eq!(hb.function, ScFunction::HeartbeatRequest);
-        assert_eq!(hb.originating_vmac, Some(vmac));
-        assert_eq!(hb.destination_vmac, Some(hub_vmac));
+        // AB.2.14.1: no VMACs on HeartbeatRequest
+        assert!(hb.originating_vmac.is_none());
+        assert!(hb.destination_vmac.is_none());
         assert!(hb.payload.is_empty());
     }
 

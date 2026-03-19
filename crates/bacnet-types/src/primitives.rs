@@ -68,6 +68,16 @@ impl ObjectIdentifier {
 
     /// Encode to the 4-byte BACnet wire format (big-endian).
     pub fn encode(&self) -> [u8; 4] {
+        debug_assert!(
+            self.object_type.to_raw() <= 0x3FF,
+            "ObjectType {} exceeds 10-bit field",
+            self.object_type.to_raw()
+        );
+        debug_assert!(
+            self.instance_number <= Self::MAX_INSTANCE,
+            "Instance {} exceeds MAX_INSTANCE",
+            self.instance_number
+        );
         let value = ((self.object_type.to_raw() & 0x3FF) << 22)
             | (self.instance_number & Self::MAX_INSTANCE);
         value.to_be_bytes()
@@ -205,7 +215,6 @@ impl Time {
 // ---------------------------------------------------------------------------
 
 /// BACnet timestamp -- a CHOICE of Time, sequence number, or DateTime.
-/// Per Clause 20.2.1.5 (ASHRAE 135-2020).
 #[derive(Debug, Clone, PartialEq)]
 pub enum BACnetTimeStamp {
     /// Context tag 0: Time
@@ -296,7 +305,6 @@ macro_rules! alloc_or_std_format {
     ($($arg:tt)*) => { alloc::format!($($arg)*) }
 }
 
-// Make macro usable within this module before its definition point
 use alloc_or_std_format;
 
 // ---------------------------------------------------------------------------
@@ -447,12 +455,13 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(debug_assertions, should_panic(expected = "exceeds 10-bit field"))]
     fn object_identifier_type_overflow_round_trip() {
-        // Verify that types > 1023 are masked to 10 bits
+        // In debug builds, encode() asserts type <= 1023.
+        // In release builds, types > 1023 are silently masked to 10 bits.
         let oid = ObjectIdentifier::new_unchecked(ObjectType::from_raw(1024), 0);
         let bytes = oid.encode();
         let decoded = ObjectIdentifier::decode(&bytes).unwrap();
-        // After 10-bit masking, type 1024 = type 0
         assert_eq!(decoded.object_type(), ObjectType::from_raw(0));
     }
 

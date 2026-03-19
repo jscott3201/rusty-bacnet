@@ -13,7 +13,7 @@ use bytes::BytesMut;
 use crate::common::{BACnetPropertyValue, MAX_DECODED_ITEMS};
 
 // ---------------------------------------------------------------------------
-// CreateObjectRequest (Clause 15.3.1.1)
+// CreateObjectRequest
 // ---------------------------------------------------------------------------
 
 /// The object specifier: by type (server picks instance) or by identifier.
@@ -69,7 +69,6 @@ impl CreateObjectRequest {
         }
         offset = tag_end;
 
-        // CHOICE inside [0]: context [0] object-type OR context [1] object-identifier
         let (tag, pos) = tags::decode_tag(data, offset)?;
         let end = pos + tag.length as usize;
         if end > data.len() {
@@ -92,7 +91,6 @@ impl CreateObjectRequest {
         };
         offset = end;
 
-        // closing tag 0
         let (tag, tag_end) = tags::decode_tag(data, offset)?;
         if !tag.is_closing_tag(0) {
             return Err(Error::decoding(
@@ -137,7 +135,7 @@ impl CreateObjectRequest {
 }
 
 // ---------------------------------------------------------------------------
-// DeleteObjectRequest (Clause 15.4.1.1)
+// DeleteObjectRequest
 // ---------------------------------------------------------------------------
 
 /// DeleteObject-Request service parameters (APPLICATION-tagged).

@@ -84,6 +84,12 @@ impl BACnetObject for NotificationForwarderObject {
             p if p == PropertyIdentifier::EVENT_DETECTION_ENABLE => {
                 Ok(PropertyValue::Boolean(self.event_detection_enable))
             }
+            p if p == PropertyIdentifier::RECIPIENT_LIST => {
+                Ok(PropertyValue::List(Vec::new())) // Empty recipient list by default
+            }
+            p if p == PropertyIdentifier::PROCESS_IDENTIFIER_FILTER => {
+                Ok(PropertyValue::List(Vec::new()))
+            }
             _ => Err(common::unknown_property_error()),
         }
     }

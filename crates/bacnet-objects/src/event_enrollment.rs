@@ -270,6 +270,8 @@ pub struct AlertEnrollmentObject {
     name: String,
     description: String,
     status_flags: StatusFlags,
+    /// Event_State: 0 = NORMAL.
+    event_state: u32,
     out_of_service: bool,
     reliability: u32,
     /// Present value — AlertState enumeration.
@@ -291,6 +293,7 @@ impl AlertEnrollmentObject {
             name: name.into(),
             description: String::new(),
             status_flags: StatusFlags::empty(),
+            event_state: 0, // NORMAL
             out_of_service: false,
             reliability: 0,
             present_value: 0,
@@ -334,6 +337,9 @@ impl BACnetObject for AlertEnrollmentObject {
             }),
             p if p == PropertyIdentifier::NOTIFICATION_CLASS => {
                 Ok(PropertyValue::Unsigned(self.notification_class as u64))
+            }
+            p if p == PropertyIdentifier::EVENT_STATE => {
+                Ok(PropertyValue::Enumerated(self.event_state))
             }
             _ => Err(common::unknown_property_error()),
         }

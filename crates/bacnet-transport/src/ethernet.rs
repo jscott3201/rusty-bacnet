@@ -28,7 +28,7 @@ pub const MIN_FRAME_LEN: usize = 6 + 6 + 2 + LLC_HEADER_LEN; // 17 bytes
 pub const MAX_LLC_LENGTH: usize = 1500;
 
 /// Minimum IEEE 802.3 payload size (excludes 14-byte header and 4-byte FCS).
-/// Frames shorter than this must be padded with zeros per 802.3.
+/// Frames shorter than this must be padded with zeros.
 pub const MIN_ETHERNET_PAYLOAD: usize = 46;
 
 /// BACnet broadcast MAC (all 0xFF).
@@ -53,7 +53,7 @@ pub struct EthernetFrame {
 /// ```
 ///
 /// The length field is the LLC header (3 bytes) plus the NPDU payload length,
-/// per IEEE 802.3 convention (does not include the 14-byte Ethernet header).
+/// (does not include the 14-byte Ethernet header).
 pub fn encode_ethernet_frame(
     buf: &mut BytesMut,
     destination: &[u8; 6],
@@ -72,7 +72,6 @@ pub fn encode_ethernet_frame(
     buf.put_u8(BACNET_LLC_SSAP);
     buf.put_u8(LLC_CONTROL_UI);
     buf.put_slice(npdu);
-    // Pad to minimum IEEE 802.3 frame size (14-byte header + 46-byte payload = 60 bytes)
     let min_frame_size = 14 + MIN_ETHERNET_PAYLOAD;
     if buf.len() < min_frame_size {
         let pad = min_frame_size - buf.len();
@@ -97,7 +96,6 @@ pub fn decode_ethernet_frame(data: &[u8]) -> Result<EthernetFrame, Error> {
 
     let length = u16::from_be_bytes([data[12], data[13]]) as usize;
 
-    // Values > 1500 are EtherType identifiers (e.g. 0x0800 = IPv4), not LLC length.
     if length > MAX_LLC_LENGTH {
         return Err(Error::decoding(
             12,
@@ -155,7 +153,7 @@ pub fn decode_ethernet_frame(data: &[u8]) -> Result<EthernetFrame, Error> {
 }
 
 // ---------------------------------------------------------------------------
-// Linux AF_PACKET transport (Clause 7 / Annex K)
+// Linux AF_PACKET transport
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "linux")]
@@ -173,7 +171,7 @@ mod transport {
     /// Max NPDU size for Ethernet: 1518 (max frame) - 14 (eth header) - 3 (LLC) - 4 (FCS by NIC) = 1497.
     pub const MAX_ETHERNET_NPDU: usize = 1497;
 
-    /// BACnet Ethernet transport over raw LLC frames (Clause 7 / Annex K).
+    /// BACnet Ethernet transport over raw LLC frames.
     ///
     /// Uses Linux AF_PACKET raw sockets. Requires `CAP_NET_RAW` or root.
     pub struct EthernetTransport {
@@ -410,7 +408,6 @@ mod transport {
             }
             let owned_fd = unsafe { OwnedFd::from_raw_fd(fd) };
 
-            // Resolve interface index and hardware address.
             self.if_index = Self::get_if_index(owned_fd.as_raw_fd(), &self.interface_name)?;
             self.local_mac = Self::get_hw_addr(owned_fd.as_raw_fd(), &self.interface_name)?;
 
@@ -421,11 +418,9 @@ mod transport {
                 "Ethernet transport binding"
             );
 
-            // Attach BPF filter (best-effort) to only accept BACnet LLC frames
-            // in the kernel, reducing userspace processing overhead.
+            // Attach BPF filter (best-effort) to only accept BACnet LLC frames.
             attach_bacnet_bpf_filter(owned_fd.as_raw_fd());
 
-            // Bind to the specific interface.
             let mut sll: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
             sll.sll_family = libc::AF_PACKET as u16;
             sll.sll_protocol = (libc::ETH_P_ALL as u16).to_be();
@@ -442,7 +437,6 @@ mod transport {
                 return Err(Error::Transport(std::io::Error::last_os_error()));
             }
 
-            // Set non-blocking for AsyncFd integration.
             let flags = unsafe { libc::fcntl(owned_fd.as_raw_fd(), libc::F_GETFL) };
             if flags < 0 {
                 return Err(Error::Transport(std::io::Error::last_os_error()));
@@ -500,7 +494,6 @@ mod transport {
                             let data = &recv_buf[..len];
                             match decode_ethernet_frame(data) {
                                 Ok(frame) => {
-                                    // Skip our own frames.
                                     if frame.source == local_mac {
                                         continue;
                                     }
@@ -519,7 +512,6 @@ mod transport {
                                         .await;
                                 }
                                 Err(_) => {
-                                    // Not a BACnet LLC frame — silently skip.
                                     continue;
                                 }
                             }
@@ -582,10 +574,6 @@ mod transport {
             sll.sll_halen = 6;
             sll.sll_addr[..6].copy_from_slice(&dst);
 
-            // Note: The socket is non-blocking. If the kernel send buffer is full, sendto()
-            // returns EAGAIN which we surface as a Transport error. This is acceptable for
-            // BACnet's low-throughput traffic patterns. Full async writable guards could be
-            // added if needed under heavy load.
             let ret = unsafe {
                 libc::sendto(
                     fd.as_raw_fd(),
@@ -646,7 +634,6 @@ mod tests {
         let npdu = vec![0xAA];
         let mut buf = BytesMut::new();
         encode_ethernet_frame(&mut buf, &dst, &src, &npdu);
-        // LLC at offset 14
         assert_eq!(buf[14], BACNET_LLC_DSAP);
         assert_eq!(buf[15], BACNET_LLC_SSAP);
         assert_eq!(buf[16], LLC_CONTROL_UI);
@@ -693,7 +680,6 @@ mod tests {
 
     #[test]
     fn rejects_ethertype_as_length() {
-        // A frame with length field = 0x0800 (IPv4 EtherType) should be rejected
         let mut buf = vec![0u8; 20];
         buf[12] = 0x08;
         buf[13] = 0x00; // length = 2048 > 1500
@@ -702,7 +688,6 @@ mod tests {
 
     #[test]
     fn rejects_length_1501() {
-        // Length = 1501 is above the 1500 threshold
         let mut buf = vec![0u8; 20];
         buf[12] = (1501u16 >> 8) as u8;
         buf[13] = (1501u16 & 0xFF) as u8;
@@ -711,8 +696,6 @@ mod tests {
 
     #[test]
     fn accepts_length_1500() {
-        // Length = 1500 is valid (at the boundary)
-        // Build a buffer large enough: 14 (header) + 1500 (payload) = 1514
         let mut buf = vec![0u8; 14 + 1500];
         buf[12] = (1500u16 >> 8) as u8;
         buf[13] = (1500u16 & 0xFF) as u8;

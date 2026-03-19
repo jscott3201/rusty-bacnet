@@ -175,7 +175,6 @@ impl BACnetObject for FileObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
-        // Try common properties first.
         if let Some(result) = read_common_properties!(self, property, array_index) {
             return result;
         }
@@ -212,12 +211,9 @@ impl BACnetObject for FileObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        // DESCRIPTION
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
-
-        // OUT_OF_SERVICE
         if let Some(result) =
             common::write_out_of_service(&mut self.out_of_service, property, &value)
         {

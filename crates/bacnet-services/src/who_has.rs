@@ -7,7 +7,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
 // ---------------------------------------------------------------------------
-// WhoHasRequest (Clause 16.9.1)
+// WhoHasRequest
 // ---------------------------------------------------------------------------
 
 /// The object to search for: by identifier or by name.
@@ -96,7 +96,7 @@ impl WhoHasRequest {
 }
 
 // ---------------------------------------------------------------------------
-// IHaveRequest (Clause 16.9.2)
+// IHaveRequest
 // ---------------------------------------------------------------------------
 
 /// I-Have-Request service parameters (APPLICATION-tagged).
@@ -118,7 +118,6 @@ impl IHaveRequest {
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 
-        // App object-id: device
         let (tag, pos) = tags::decode_tag(data, offset)?;
         let end = pos + tag.length as usize;
         if end > data.len() {
@@ -127,7 +126,6 @@ impl IHaveRequest {
         let device_identifier = ObjectIdentifier::decode(&data[pos..end])?;
         offset = end;
 
-        // App object-id: object
         let (tag, pos) = tags::decode_tag(data, offset)?;
         let end = pos + tag.length as usize;
         if end > data.len() {
@@ -136,7 +134,6 @@ impl IHaveRequest {
         let object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
         offset = end;
 
-        // App character-string: object-name
         let (tag, pos) = tags::decode_tag(data, offset)?;
         let end = pos + tag.length as usize;
         if end > data.len() {

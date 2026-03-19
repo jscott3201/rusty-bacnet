@@ -1,0 +1,164 @@
+# BTL compliance test topology.
+#
+# Topologies:
+#   1. SC Hub + BTL Server (SC node) + BTL Tester (SC client)
+#   2. BIP Subnet A + BTL Server (BIP) + BTL Tester (BIP)
+#   3. Router bridging two BIP subnets
+#
+# Usage:
+#   docker compose -f docker-compose.btl.yml build
+#   docker compose -f docker-compose.btl.yml up btl-self-test    # In-process self-test
+#   docker compose -f docker-compose.btl.yml up btl-sc-test      # SC topology test
+#   docker compose -f docker-compose.btl.yml up btl-bip-test     # BIP topology test
+#   docker compose -f docker-compose.btl.yml down
+
+services:
+
+  # ── BACnet/SC Topology ──────────────────────────────────────────────────
+
+  sc-hub:
+    build:
+      context: ../..
+      dockerfile: examples/docker/Dockerfile.btl
+    command:
+      - bacnet-sc-hub
+      - --listen=0.0.0.0:47809
+      - --self-signed
+    networks:
+      bacnet-sc:
+        ipv4_address: 172.21.0.2
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 47809 || exit 1"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+  # BTL server as SC node (IUT under test)
+  btl-sc-server:
+    build:
+      context: ../..
+      dockerfile: examples/docker/Dockerfile.btl
+    command:
+      - bacnet-test
+      - serve
+      - --sc-hub=wss://172.21.0.2:47809
+      - --sc-no-verify
+      - --device-instance=99999
+    networks:
+      bacnet-sc:
+        ipv4_address: 172.21.0.10
+    depends_on:
+      sc-hub:
+        condition: service_healthy
+
+  # BTL tester runs against the SC server
+  btl-sc-test:
+    build:
+      context: ../..
+      dockerfile: examples/docker/Dockerfile.btl
+    command:
+      - bacnet-test
+      - self-test
+    networks:
+      bacnet-sc:
+        ipv4_address: 172.21.0.100
+    depends_on:
+      - btl-sc-server
+
+  # ── BIP Topology ────────────────────────────────────────────────────────
+
+  # BTL server as BIP node
+  btl-bip-server:
+    build:
+      context: ../..
+      dockerfile: examples/docker/Dockerfile.btl
+    command:
+      - bacnet-test
+      - --interface=172.21.1.10
+      - --port=47808
+      - --broadcast=172.21.1.255
+      - serve
+      - --device-instance=99999
+    networks:
+      bacnet-bip:
+        ipv4_address: 172.21.1.10
+
+  # BTL tester (BIP) runs self-test in-process
+  btl-bip-test:
+    build:
+      context: ../..
+      dockerfile: examples/docker/Dockerfile.btl
+    command:
+      - bacnet-test
+      - self-test
+    networks:
+      bacnet-bip:
+        ipv4_address: 172.21.1.100
+    depends_on:
+      - btl-bip-server
+
+  # ── Multi-Network Routing ──────────────────────────────────────────────
+
+  # Router bridging subnet A and subnet B
+  btl-router:
+    build:
+      context: ../..
+      dockerfile: examples/docker/Dockerfile.btl
+    command:
+      - bacnet-router
+      - --ports=bip:172.21.1.1:47808:172.21.1.255:1,bip:172.21.2.1:47808:172.21.2.255:2
+    networks:
+      bacnet-bip:
+        ipv4_address: 172.21.1.1
+      bacnet-bip-b:
+        ipv4_address: 172.21.2.1
+
+  # Device on subnet B (reachable via router)
+  btl-remote-device:
+    build:
+      context: ../..
+      dockerfile: examples/docker/Dockerfile.btl
+    command:
+      - bacnet-device
+      - --transport=bip
+      - --interface=172.21.2.10
+      - --port=47808
+      - --broadcast=172.21.2.255
+      - --device-instance=20000
+      - --objects=10
+    networks:
+      bacnet-bip-b:
+        ipv4_address: 172.21.2.10
+
+  # ── Standalone Self-Test (no network needed) ────────────────────────────
+
+  btl-self-test:
+    build:
+      context: ../..
+      dockerfile: examples/docker/Dockerfile.btl
+    command:
+      - bacnet-test
+      - self-test
+
+# ── Networks ─────────────────────────────────────────────────────────────────
+networks:
+  bacnet-sc:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/24
+          gateway: 172.21.0.254
+
+  bacnet-bip:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.1.0/24
+          gateway: 172.21.1.254
+
+  bacnet-bip-b:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.2.0/24
+          gateway: 172.21.2.254

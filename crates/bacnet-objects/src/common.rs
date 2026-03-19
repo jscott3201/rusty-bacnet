@@ -18,26 +18,41 @@ pub(crate) fn protocol_error(
 
 /// Read the PROPERTY_LIST property for any object that implements property_list().
 /// Handles array_index variants: None = full list, Some(0) = length, Some(n) = nth element.
+/// Object_Name, Object_Type, Object_Identifier, and Property_List itself are excluded.
 pub fn read_property_list_property(
     props: &[bacnet_types::enums::PropertyIdentifier],
     array_index: Option<u32>,
 ) -> Result<bacnet_types::primitives::PropertyValue, bacnet_types::error::Error> {
+    use bacnet_types::enums::PropertyIdentifier;
+
+    // Filter out the four excluded properties
+    let filtered: Vec<_> = props
+        .iter()
+        .copied()
+        .filter(|p| {
+            *p != PropertyIdentifier::OBJECT_IDENTIFIER
+                && *p != PropertyIdentifier::OBJECT_NAME
+                && *p != PropertyIdentifier::OBJECT_TYPE
+                && *p != PropertyIdentifier::PROPERTY_LIST
+        })
+        .collect();
+
     match array_index {
         None => {
-            let elements = props
+            let elements = filtered
                 .iter()
                 .map(|p| bacnet_types::primitives::PropertyValue::Enumerated(p.to_raw()))
                 .collect();
             Ok(bacnet_types::primitives::PropertyValue::List(elements))
         }
         Some(0) => Ok(bacnet_types::primitives::PropertyValue::Unsigned(
-            props.len() as u64,
+            filtered.len() as u64,
         )),
         Some(idx) => {
             let i = (idx - 1) as usize;
-            if i < props.len() {
+            if i < filtered.len() {
                 Ok(bacnet_types::primitives::PropertyValue::Enumerated(
-                    props[i].to_raw(),
+                    filtered[i].to_raw(),
                 ))
             } else {
                 Err(invalid_array_index_error())
@@ -67,9 +82,21 @@ macro_rules! read_common_properties {
                 bacnet_types::primitives::PropertyValue::CharacterString($self.description.clone()),
             )),
             p if p == bacnet_types::enums::PropertyIdentifier::STATUS_FLAGS => {
+                // Compute StatusFlags dynamically from reliability and out_of_service
+                let mut flags = $self.status_flags;
+                if $self.reliability != 0 {
+                    flags |= bacnet_types::primitives::StatusFlags::FAULT;
+                } else {
+                    flags -= bacnet_types::primitives::StatusFlags::FAULT;
+                }
+                if $self.out_of_service {
+                    flags |= bacnet_types::primitives::StatusFlags::OUT_OF_SERVICE;
+                } else {
+                    flags -= bacnet_types::primitives::StatusFlags::OUT_OF_SERVICE;
+                }
                 Some(Ok(bacnet_types::primitives::PropertyValue::BitString {
                     unused_bits: 4,
-                    data: vec![$self.status_flags.bits() << 4],
+                    data: vec![flags.bits() << 4],
                 }))
             }
             p if p == bacnet_types::enums::PropertyIdentifier::OUT_OF_SERVICE => Some(Ok(
@@ -149,6 +176,31 @@ pub(crate) fn write_description(
     }
 }
 
+/// Write the OBJECT_NAME property.
+///
+/// Validates type and non-empty. Uniqueness must be checked by the caller
+/// (ObjectDatabase) before calling this.
+pub(crate) fn write_object_name(
+    name: &mut String,
+    property: bacnet_types::enums::PropertyIdentifier,
+    value: &bacnet_types::primitives::PropertyValue,
+) -> Option<Result<(), bacnet_types::error::Error>> {
+    if property == bacnet_types::enums::PropertyIdentifier::OBJECT_NAME {
+        if let bacnet_types::primitives::PropertyValue::CharacterString(s) = value {
+            if s.is_empty() {
+                Some(Err(value_out_of_range_error()))
+            } else {
+                *name = s.clone();
+                Some(Ok(()))
+            }
+        } else {
+            Some(Err(invalid_data_type_error()))
+        }
+    } else {
+        None
+    }
+}
+
 /// Return the write-access-denied protocol error.
 #[inline]
 pub(crate) fn write_access_denied_error() -> bacnet_types::error::Error {
@@ -218,6 +270,54 @@ pub(crate) fn recalculate_from_priority_array<T: Copy>(
         .unwrap_or(relinquish_default)
 }
 
+/// Value source tracking for commandable objects.
+///
+/// Stores the source that last wrote to each priority array slot.
+#[derive(Debug, Clone)]
+pub struct ValueSourceTracking {
+    /// Value_Source: the source of the current present_value.
+    /// Null if no command is active (relinquish default).
+    pub value_source: bacnet_types::primitives::PropertyValue,
+    /// Value_Source_Array[16]: source per priority slot.
+    #[allow(dead_code)]
+    pub value_source_array: [bacnet_types::primitives::PropertyValue; 16],
+    /// Last_Command_Time: timestamp of the last write.
+    pub last_command_time: bacnet_types::primitives::BACnetTimeStamp,
+    /// Command_Time_Array[16]: timestamp per priority slot.
+    #[allow(dead_code)]
+    pub command_time_array: [bacnet_types::primitives::BACnetTimeStamp; 16],
+}
+
+impl Default for ValueSourceTracking {
+    fn default() -> Self {
+        Self {
+            value_source: bacnet_types::primitives::PropertyValue::Null,
+            value_source_array: std::array::from_fn(|_| {
+                bacnet_types::primitives::PropertyValue::Null
+            }),
+            last_command_time: bacnet_types::primitives::BACnetTimeStamp::SequenceNumber(0),
+            command_time_array: std::array::from_fn(|_| {
+                bacnet_types::primitives::BACnetTimeStamp::SequenceNumber(0)
+            }),
+        }
+    }
+}
+
+/// Compute the Current_Command_Priority property value.
+///
+/// Returns the 1-based index of the active priority array slot, or
+/// Null if the relinquish default is in use.
+pub(crate) fn current_command_priority<T>(
+    priority_array: &[Option<T>; 16],
+) -> bacnet_types::primitives::PropertyValue {
+    for (i, slot) in priority_array.iter().enumerate() {
+        if slot.is_some() {
+            return bacnet_types::primitives::PropertyValue::Unsigned((i + 1) as u64);
+        }
+    }
+    bacnet_types::primitives::PropertyValue::Null
+}
+
 /// Common intrinsic-reporting read_property arms for objects with an
 /// `OutOfRangeDetector` event_detector field.
 ///
@@ -272,6 +372,47 @@ macro_rules! read_event_properties {
                     unused_bits: 5,
                     data: vec![$self.event_detector.acked_transitions << 5],
                 }))
+            }
+            p if p == bacnet_types::enums::PropertyIdentifier::EVENT_TIME_STAMPS => {
+                Some(Ok(bacnet_types::primitives::PropertyValue::List(vec![
+                    bacnet_types::primitives::PropertyValue::Unsigned(
+                        match $self.event_time_stamps[0] {
+                            bacnet_types::primitives::BACnetTimeStamp::SequenceNumber(n) => {
+                                n as u64
+                            }
+                            _ => 0,
+                        },
+                    ),
+                    bacnet_types::primitives::PropertyValue::Unsigned(
+                        match $self.event_time_stamps[1] {
+                            bacnet_types::primitives::BACnetTimeStamp::SequenceNumber(n) => {
+                                n as u64
+                            }
+                            _ => 0,
+                        },
+                    ),
+                    bacnet_types::primitives::PropertyValue::Unsigned(
+                        match $self.event_time_stamps[2] {
+                            bacnet_types::primitives::BACnetTimeStamp::SequenceNumber(n) => {
+                                n as u64
+                            }
+                            _ => 0,
+                        },
+                    ),
+                ])))
+            }
+            p if p == bacnet_types::enums::PropertyIdentifier::EVENT_MESSAGE_TEXTS => {
+                Some(Ok(bacnet_types::primitives::PropertyValue::List(vec![
+                    bacnet_types::primitives::PropertyValue::CharacterString(
+                        $self.event_message_texts[0].clone(),
+                    ),
+                    bacnet_types::primitives::PropertyValue::CharacterString(
+                        $self.event_message_texts[1].clone(),
+                    ),
+                    bacnet_types::primitives::PropertyValue::CharacterString(
+                        $self.event_message_texts[2].clone(),
+                    ),
+                ])))
             }
             _ => None,
         }
@@ -343,8 +484,6 @@ macro_rules! write_event_properties {
             p if p == bacnet_types::enums::PropertyIdentifier::EVENT_ENABLE => {
                 if let bacnet_types::primitives::PropertyValue::BitString { data, .. } = &$value {
                     if let Some(&byte) = data.first() {
-                        // BACnet bitstring: 3 bits used (5 unused), MSB-first
-                        // Bit 0 = TO_OFFNORMAL, Bit 1 = TO_FAULT, Bit 2 = TO_NORMAL
                         $self.event_detector.event_enable = byte >> 5;
                         Some(Ok(()))
                     } else {
@@ -389,7 +528,7 @@ macro_rules! write_event_properties {
                 }
             }
             p if p == bacnet_types::enums::PropertyIdentifier::ACKED_TRANSITIONS => {
-                // Read-only: modified only by AcknowledgeAlarm service (Clause 12.13.9)
+                // Read-only: modified only by AcknowledgeAlarm service
                 Some(Err($crate::common::write_access_denied_error()))
             }
             _ => None,
@@ -458,7 +597,7 @@ macro_rules! write_priority_array {
 }
 pub(crate) use write_priority_array;
 
-/// Handle direct writes to PRIORITY_ARRAY[index] per Clause 15.9.1.1.3.
+/// Handle direct writes to PRIORITY_ARRAY[index].
 ///
 /// If `property` is PRIORITY_ARRAY and `array_index` is Some(1..=16),
 /// writes to that priority slot. Null relinquishes; otherwise `$extract`

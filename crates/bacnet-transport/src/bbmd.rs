@@ -33,7 +33,7 @@ pub struct FdtEntry {
 }
 
 impl FdtEntry {
-    /// Grace period in seconds added beyond TTL before expiry (per J.5.2.3).
+    /// Grace period in seconds added beyond TTL before expiry.
     const GRACE_PERIOD: u64 = 30;
 
     /// Whether this entry has expired (TTL + grace period).
@@ -42,10 +42,11 @@ impl FdtEntry {
         self.registered_at.elapsed() > Duration::from_secs(total)
     }
 
-    /// Seconds remaining of the TTL (wire-facing, per Clause J.5.2.3).
+    /// Seconds remaining including the 30-second grace period.
     pub fn seconds_remaining(&self) -> u16 {
         let elapsed = self.registered_at.elapsed().as_secs();
-        (self.ttl as u64).saturating_sub(elapsed) as u16
+        let total = self.ttl as u64 + Self::GRACE_PERIOD;
+        total.saturating_sub(elapsed).min(u16::MAX as u64) as u16
     }
 }
 
@@ -202,7 +203,6 @@ impl BbmdState {
 
     /// Register or re-register a foreign device.
     pub fn register_foreign_device(&mut self, ip: [u8; 4], port: u16, ttl: u16) -> BvlcResultCode {
-        // Accept any TTL per J.4.3; re-registration interval is clamped on the sender side.
         // Update existing or insert new
         if let Some(entry) = self.fdt.iter_mut().find(|e| e.ip == ip && e.port == port) {
             entry.ttl = ttl;
@@ -292,9 +292,7 @@ impl BbmdState {
 
     /// Get all (ip, port) targets for forwarding a broadcast, excluding the
     /// source device and the local BBMD itself. BDT entries use directed
-    /// broadcast per J.4.2.2: `target = entry.ip | !entry.broadcast_mask`.
-    /// The local BBMD's own BDT entry is skipped per Annex J.4.2.2 to
-    /// prevent self-forwarding loops.
+    /// broadcast: `target = entry.ip | !entry.broadcast_mask`.
     /// Purges expired FDT entries.
     pub fn forwarding_targets(
         &mut self,
@@ -304,10 +302,8 @@ impl BbmdState {
         self.purge_expired();
         let mut targets = Vec::new();
 
-        // BDT peers: compute directed broadcast per J.4.2.2
-        // target = entry.ip | !entry.broadcast_mask
         for entry in &self.bdt {
-            // Skip self per Annex J.4.2.2
+            // Skip self
             if entry.ip == self.local_ip && entry.port == self.local_port {
                 continue;
             }
@@ -324,7 +320,6 @@ impl BbmdState {
             targets.push((directed_broadcast, entry.port));
         }
 
-        // FDT entries — unicast directly
         for entry in &self.fdt {
             if entry.ip == exclude_ip && entry.port == exclude_port {
                 continue;
@@ -481,9 +476,6 @@ mod tests {
         // Source is some device on our subnet (not us and not a BDT peer)
         let targets = bbmd.forwarding_targets([192, 168, 1, 100], 0xBAC0);
 
-        // Should include: BDT peer [192.168.2.1] + FDT [10.0.0.5]
-        // Self BDT [192.168.1.1] is excluded per Annex J.4.2.2
-        // Full mask (255.255.255.255) means directed broadcast = unicast IP
         assert_eq!(targets.len(), 2);
         assert!(targets.contains(&([192, 168, 2, 1], 0xBAC0)));
         assert!(targets.contains(&([10, 0, 0, 5], 0xBAC0)));
@@ -507,7 +499,6 @@ mod tests {
         .unwrap();
 
         let targets = bbmd.forwarding_targets([192, 168, 1, 100], 0xBAC0);
-        // Self entry [192.168.1.1] excluded per J.4.2.2, only peer remains
         assert_eq!(targets.len(), 1);
         assert!(targets.contains(&([192, 168, 2, 255], 0xBAC0)));
     }
@@ -530,7 +521,6 @@ mod tests {
         .unwrap();
 
         let targets = bbmd.forwarding_targets([192, 168, 1, 100], 0xBAC0);
-        // Self entry excluded per J.4.2.2, only the remote peer remains
         assert_eq!(targets.len(), 1);
         assert!(targets.contains(&([10, 0, 0, 1], 0xBAC0)));
     }
@@ -539,7 +529,7 @@ mod tests {
     fn ttl_accepted_as_is() {
         let mut bbmd = make_bbmd();
         bbmd.register_foreign_device([10, 0, 0, 5], 0xBAC0, 1);
-        assert_eq!(bbmd.fdt()[0].ttl, 1); // accepted as-is per J.4.3
+        assert_eq!(bbmd.fdt()[0].ttl, 1);
     }
 
     #[test]
@@ -580,13 +570,17 @@ mod tests {
     }
 
     #[test]
-    fn seconds_remaining_does_not_exceed_ttl() {
+    fn seconds_remaining_includes_grace_period() {
         let mut bbmd = make_bbmd();
         bbmd.register_foreign_device([10, 0, 0, 5], 0xBAC0, 60);
         let remaining = bbmd.fdt()[0].seconds_remaining();
         assert!(
-            remaining <= 60,
-            "seconds_remaining ({remaining}) must not exceed TTL (60)"
+            remaining <= 90, // TTL(60) + grace(30)
+            "seconds_remaining ({remaining}) must not exceed TTL+grace (90)"
+        );
+        assert!(
+            remaining > 60,
+            "should include grace period (got {remaining})"
         );
     }
 
@@ -619,7 +613,7 @@ mod tests {
         assert_eq!(entries[0].ip, [10, 0, 0, 5]);
         assert_eq!(entries[0].port, 0xBAC0);
         assert_eq!(entries[0].ttl, 60);
-        assert!(entries[0].seconds_remaining <= 60);
+        assert!(entries[0].seconds_remaining <= 90);
     }
 
     #[test]

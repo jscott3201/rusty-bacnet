@@ -54,7 +54,7 @@ impl DeviceTable {
         const MAX_DEVICE_TABLE_ENTRIES: usize = 4096;
         let key = device.object_identifier.instance_number();
         if !self.devices.contains_key(&key) && self.devices.len() >= MAX_DEVICE_TABLE_ENTRIES {
-            return; // table full, drop new entry
+            return;
         }
         self.devices.insert(key, device);
     }
@@ -173,11 +173,9 @@ mod tests {
     #[test]
     fn purge_stale_removes_old_entries() {
         let mut table = DeviceTable::new();
-        // Insert a device with a last_seen in the past
         let mut old_device = make_device(1);
         old_device.last_seen = Instant::now() - Duration::from_secs(120);
         table.upsert(old_device);
-        // Insert a fresh device
         table.upsert(make_device(2));
         assert_eq!(table.len(), 2);
 
@@ -216,10 +214,7 @@ mod tests {
         old_device.last_seen = Instant::now() - Duration::from_secs(120);
         table.upsert(old_device);
 
-        // Re-discover the same device (fresh timestamp)
         table.upsert(make_device(1));
-
-        // Should survive purge since last_seen was refreshed
         table.purge_stale(Duration::from_secs(60));
         assert_eq!(table.len(), 1);
         assert!(table.get(1).is_some());

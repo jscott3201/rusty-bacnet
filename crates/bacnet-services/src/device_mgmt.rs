@@ -13,7 +13,7 @@ use bacnet_types::primitives::{Date, Time};
 use bytes::BytesMut;
 
 // ---------------------------------------------------------------------------
-// DeviceCommunicationControlRequest (Clause 15.4.1)
+// DeviceCommunicationControlRequest
 // ---------------------------------------------------------------------------
 
 /// DeviceCommunicationControl-Request service parameters.
@@ -60,12 +60,15 @@ impl DeviceCommunicationControlRequest {
             EnableDisable::from_raw(primitives::decode_unsigned(&data[pos..end])? as u32);
         offset = end;
 
-        // [2] password (optional)
+        // [2] password (optional, max 20 characters)
         let mut password = None;
         if offset < data.len() {
             let (opt_data, _new_offset) = tags::decode_optional_context(data, offset, 2)?;
             if let Some(content) = opt_data {
                 let s = primitives::decode_character_string(content)?;
+                if s.len() > 20 {
+                    return Err(Error::Encoding("DCC password exceeds 20 characters".into()));
+                }
                 password = Some(s);
             }
         }
@@ -79,7 +82,7 @@ impl DeviceCommunicationControlRequest {
 }
 
 // ---------------------------------------------------------------------------
-// ReinitializeDeviceRequest (Clause 15.4.2)
+// ReinitializeDeviceRequest
 // ---------------------------------------------------------------------------
 
 /// ReinitializeDevice-Request service parameters.
@@ -131,7 +134,7 @@ impl ReinitializeDeviceRequest {
 }
 
 // ---------------------------------------------------------------------------
-// TimeSynchronizationRequest (Clause 16.10.5)
+// TimeSynchronizationRequest
 // ---------------------------------------------------------------------------
 
 /// TimeSynchronization-Request service parameters (APPLICATION-tagged).
@@ -152,7 +155,6 @@ impl TimeSynchronizationRequest {
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 
-        // App date (tag 10)
         let (tag, pos) = tags::decode_tag(data, offset)?;
         let end = pos + tag.length as usize;
         if end > data.len() {
@@ -161,7 +163,6 @@ impl TimeSynchronizationRequest {
         let date = Date::decode(&data[pos..end])?;
         offset = end;
 
-        // App time (tag 11)
         let (tag, pos) = tags::decode_tag(data, offset)?;
         let end = pos + tag.length as usize;
         if end > data.len() {

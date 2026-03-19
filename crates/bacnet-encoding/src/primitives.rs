@@ -13,7 +13,7 @@ use crate::tags::{self, app_tag, TagClass};
 // Raw value codecs (no tag header)
 // ===========================================================================
 
-// --- Unsigned Integer (Clause 20.2.4) ---
+// --- Unsigned Integer ---
 
 /// Encode an unsigned integer using the minimum number of big-endian octets.
 pub fn encode_unsigned(buf: &mut BytesMut, value: u64) {
@@ -77,7 +77,7 @@ pub fn decode_unsigned(data: &[u8]) -> Result<u64, Error> {
     Ok(value)
 }
 
-// --- Signed Integer (Clause 20.2.5) ---
+// --- Signed Integer ---
 
 /// Encode a signed integer using minimum octets, two's complement, big-endian.
 pub fn encode_signed(buf: &mut BytesMut, value: i32) {
@@ -113,7 +113,7 @@ pub fn decode_signed(data: &[u8]) -> Result<i32, Error> {
     Ok(i32::from_be_bytes(bytes))
 }
 
-// --- Real (Clause 20.2.6) ---
+// --- Real ---
 
 /// Encode an IEEE-754 single-precision float (big-endian, 4 bytes).
 pub fn encode_real(buf: &mut BytesMut, value: f32) {
@@ -128,7 +128,7 @@ pub fn decode_real(data: &[u8]) -> Result<f32, Error> {
     Ok(f32::from_be_bytes([data[0], data[1], data[2], data[3]]))
 }
 
-// --- Double (Clause 20.2.7) ---
+// --- Double ---
 
 /// Encode an IEEE-754 double-precision float (big-endian, 8 bytes).
 pub fn encode_double(buf: &mut BytesMut, value: f64) {
@@ -146,15 +146,21 @@ pub fn decode_double(data: &[u8]) -> Result<f64, Error> {
     Ok(f64::from_be_bytes(bytes))
 }
 
-// --- Character String (Clause 20.2.9) ---
+// --- Character String ---
 
-/// Character set identifiers per Clause 20.2.9.
+/// Character set identifiers.
 pub mod charset {
+    /// ISO 10646 (UTF-8) — X'00'
     pub const UTF8: u8 = 0;
-    pub const JIS_X0201: u8 = 1;
-    pub const JIS_C6226: u8 = 2;
+    /// IBM/Microsoft DBCS — X'01'
+    pub const IBM_MICROSOFT_DBCS: u8 = 1;
+    /// JIS X 0208 — X'02'
+    pub const JIS_X_0208: u8 = 2;
+    /// ISO 10646 (UCS-4) — X'03'
     pub const UCS4: u8 = 3;
+    /// ISO 10646 (UCS-2) — X'04'
     pub const UCS2: u8 = 4;
+    /// ISO 8859-1 — X'05'
     pub const ISO_8859_1: u8 = 5;
 }
 
@@ -179,8 +185,7 @@ pub fn character_string_len(value: &str) -> Result<u32, Error> {
 /// - 4 (UCS-2, big-endian)
 /// - 5 (ISO-8859-1)
 ///
-/// Charsets 1 (DBCS/JIS X 0201), 2 (JIS C 6226), and 3 (UCS-4)
-/// return an error.
+/// Other charsets return an error.
 pub fn decode_character_string(data: &[u8]) -> Result<String, Error> {
     if data.is_empty() {
         return Err(Error::Decoding {
@@ -196,7 +201,6 @@ pub fn decode_character_string(data: &[u8]) -> Result<String, Error> {
             message: format!("invalid UTF-8: {e}"),
         }),
         charset::UCS2 => {
-            // UCS-2 big-endian → UTF-8
             if !payload.len().is_multiple_of(2) {
                 return Err(Error::Decoding {
                     offset: 1,
@@ -217,11 +221,8 @@ pub fn decode_character_string(data: &[u8]) -> Result<String, Error> {
             }
             Ok(s)
         }
-        charset::ISO_8859_1 => {
-            // ISO-8859-1 maps 1:1 to Unicode code points 0-255
-            Ok(payload.iter().map(|&b| b as char).collect())
-        }
-        charset::JIS_X0201 | charset::JIS_C6226 | charset::UCS4 => Err(Error::Decoding {
+        charset::ISO_8859_1 => Ok(payload.iter().map(|&b| b as char).collect()),
+        charset::IBM_MICROSOFT_DBCS | charset::JIS_X_0208 | charset::UCS4 => Err(Error::Decoding {
             offset: 0,
             message: format!("unsupported charset: {charset_id}"),
         }),
@@ -232,7 +233,7 @@ pub fn decode_character_string(data: &[u8]) -> Result<String, Error> {
     }
 }
 
-// --- Bit String (Clause 20.2.10) ---
+// --- Bit String ---
 
 /// Encode a bit string: leading unused-bits count followed by data bytes.
 pub fn encode_bit_string(buf: &mut BytesMut, unused_bits: u8, data: &[u8]) {
@@ -271,8 +272,7 @@ pub fn encode_app_null(buf: &mut BytesMut) {
 
 /// Encode an application-tagged Boolean.
 ///
-/// Per Clause 20.2.3, the value is encoded in the tag's L/V/T bits
-/// with no content octets.
+/// The value is encoded in the tag's L/V/T bits with no content octets.
 pub fn encode_app_boolean(buf: &mut BytesMut, value: bool) {
     tags::encode_tag(
         buf,
@@ -310,12 +310,8 @@ pub fn encode_app_double(buf: &mut BytesMut, value: f64) {
 
 /// Encode an application-tagged OctetString.
 pub fn encode_app_octet_string(buf: &mut BytesMut, data: &[u8]) {
-    tags::encode_tag(
-        buf,
-        app_tag::OCTET_STRING,
-        TagClass::Application,
-        data.len() as u32,
-    );
+    let data_len = u32::try_from(data.len()).unwrap_or(u32::MAX);
+    tags::encode_tag(buf, app_tag::OCTET_STRING, TagClass::Application, data_len);
     buf.put_slice(data);
 }
 
@@ -329,7 +325,8 @@ pub fn encode_app_character_string(buf: &mut BytesMut, value: &str) -> Result<()
 
 /// Encode an application-tagged BitString.
 pub fn encode_app_bit_string(buf: &mut BytesMut, unused_bits: u8, data: &[u8]) {
-    let len = 1 + data.len() as u32;
+    let data_len = u32::try_from(data.len()).unwrap_or(u32::MAX);
+    let len = data_len.saturating_add(1);
     tags::encode_tag(buf, app_tag::BIT_STRING, TagClass::Application, len);
     encode_bit_string(buf, unused_bits, data);
 }
@@ -412,7 +409,8 @@ pub fn encode_ctx_object_id(buf: &mut BytesMut, tag: u8, oid: &ObjectIdentifier)
 
 /// Encode a context-tagged OctetString.
 pub fn encode_ctx_octet_string(buf: &mut BytesMut, tag: u8, data: &[u8]) {
-    tags::encode_tag(buf, tag, TagClass::Context, data.len() as u32);
+    let data_len = u32::try_from(data.len()).unwrap_or(u32::MAX);
+    tags::encode_tag(buf, tag, TagClass::Context, data_len);
     buf.put_slice(data);
 }
 
@@ -432,7 +430,8 @@ pub fn encode_ctx_date(buf: &mut BytesMut, tag: u8, date: &Date) {
 
 /// Encode a context-tagged BitString.
 pub fn encode_ctx_bit_string(buf: &mut BytesMut, tag: u8, unused_bits: u8, data: &[u8]) {
-    let len = 1 + data.len() as u32;
+    let data_len = u32::try_from(data.len()).unwrap_or(u32::MAX);
+    let len = data_len.saturating_add(1);
     tags::encode_tag(buf, tag, TagClass::Context, len);
     encode_bit_string(buf, unused_bits, data);
 }
@@ -465,7 +464,6 @@ pub fn decode_application_value(
         .checked_add(content_len)
         .ok_or_else(|| Error::decoding(content_start, "length overflow"))?;
 
-    // For boolean, content_len is actually the value (0 or 1), not a byte count
     if tag.number == app_tag::BOOLEAN {
         return Ok((PropertyValue::Boolean(tag.length != 0), content_start));
     }
@@ -538,15 +536,14 @@ pub fn encode_property_value(buf: &mut BytesMut, value: &PropertyValue) -> Resul
 }
 
 // ===========================================================================
-// BACnetTimeStamp encode/decode (Clause 20.2.1.5)
+// BACnetTimeStamp encode/decode
 // ===========================================================================
 
 /// Encode a BACnetTimeStamp wrapped in a context opening/closing tag pair.
 ///
-/// The outer tag_number is the context tag of the field that holds the
-/// timestamp (e.g., 3 for EventNotification timeStamp). Inside, the
-/// CHOICE variant is encoded with its own context tag (0=Time, 1=Unsigned,
-/// 2=DateTime).
+/// The outer `tag_number` is the context tag of the enclosing field.
+/// Inside, the CHOICE variant uses its own context tag (0=Time,
+/// 1=SequenceNumber, 2=DateTime).
 pub fn encode_timestamp(buf: &mut BytesMut, tag_number: u8, ts: &BACnetTimeStamp) {
     tags::encode_opening_tag(buf, tag_number);
     match ts {
@@ -576,7 +573,6 @@ pub fn decode_timestamp(
     offset: usize,
     tag_number: u8,
 ) -> Result<(BACnetTimeStamp, usize), Error> {
-    // Expect opening tag for tag_number
     let (tag, pos) = tags::decode_tag(data, offset)?;
     if !tag.is_opening_tag(tag_number) {
         return Err(Error::decoding(
@@ -585,20 +581,23 @@ pub fn decode_timestamp(
         ));
     }
 
-    // Peek at the inner choice tag
     let (inner_tag, inner_pos) = tags::decode_tag(data, pos)?;
 
     let (ts, after_inner) = if inner_tag.is_context(0) {
-        // Time choice (context tag 0, 4 bytes)
-        let end = inner_pos + inner_tag.length as usize;
+        let end = inner_pos
+            .checked_add(inner_tag.length as usize)
+            .ok_or_else(|| Error::decoding(inner_pos, "BACnetTimeStamp Time length overflow"))?;
         if end > data.len() {
             return Err(Error::decoding(inner_pos, "BACnetTimeStamp Time truncated"));
         }
         let t = Time::decode(&data[inner_pos..end])?;
         (BACnetTimeStamp::Time(t), end)
     } else if inner_tag.is_context(1) {
-        // SequenceNumber choice (context tag 1)
-        let end = inner_pos + inner_tag.length as usize;
+        let end = inner_pos
+            .checked_add(inner_tag.length as usize)
+            .ok_or_else(|| {
+                Error::decoding(inner_pos, "BACnetTimeStamp SequenceNumber length overflow")
+            })?;
         if end > data.len() {
             return Err(Error::decoding(
                 inner_pos,
@@ -608,8 +607,6 @@ pub fn decode_timestamp(
         let n = decode_unsigned(&data[inner_pos..end])?;
         (BACnetTimeStamp::SequenceNumber(n), end)
     } else if inner_tag.is_opening_tag(2) {
-        // DateTime choice (opening tag 2, app-tagged Date + Time, closing tag 2)
-        // Decode application-tagged Date
         let (date_tag, date_pos) = tags::decode_tag(data, inner_pos)?;
         if date_tag.class != TagClass::Application || date_tag.number != app_tag::DATE {
             return Err(Error::decoding(
@@ -617,7 +614,11 @@ pub fn decode_timestamp(
                 "BACnetTimeStamp DateTime expected Date",
             ));
         }
-        let date_end = date_pos + date_tag.length as usize;
+        let date_end = date_pos
+            .checked_add(date_tag.length as usize)
+            .ok_or_else(|| {
+                Error::decoding(date_pos, "BACnetTimeStamp DateTime Date length overflow")
+            })?;
         if date_end > data.len() {
             return Err(Error::decoding(
                 date_pos,
@@ -626,7 +627,6 @@ pub fn decode_timestamp(
         }
         let date = Date::decode(&data[date_pos..date_end])?;
 
-        // Decode application-tagged Time
         let (time_tag, time_pos) = tags::decode_tag(data, date_end)?;
         if time_tag.class != TagClass::Application || time_tag.number != app_tag::TIME {
             return Err(Error::decoding(
@@ -634,7 +634,11 @@ pub fn decode_timestamp(
                 "BACnetTimeStamp DateTime expected Time",
             ));
         }
-        let time_end = time_pos + time_tag.length as usize;
+        let time_end = time_pos
+            .checked_add(time_tag.length as usize)
+            .ok_or_else(|| {
+                Error::decoding(time_pos, "BACnetTimeStamp DateTime Time length overflow")
+            })?;
         if time_end > data.len() {
             return Err(Error::decoding(
                 time_pos,
@@ -643,7 +647,6 @@ pub fn decode_timestamp(
         }
         let time = Time::decode(&data[time_pos..time_end])?;
 
-        // Expect closing tag 2
         let (close_tag, close_pos) = tags::decode_tag(data, time_end)?;
         if !close_tag.is_closing_tag(2) {
             return Err(Error::decoding(
@@ -659,7 +662,6 @@ pub fn decode_timestamp(
         ));
     };
 
-    // Expect closing tag for tag_number
     let (close, final_pos) = tags::decode_tag(data, after_inner)?;
     if !close.is_closing_tag(tag_number) {
         return Err(Error::decoding(
@@ -1109,7 +1111,11 @@ mod tests {
 
     #[test]
     fn unsupported_charset_errors() {
-        for &cs in &[charset::JIS_X0201, charset::JIS_C6226, charset::UCS4] {
+        for &cs in &[
+            charset::IBM_MICROSOFT_DBCS,
+            charset::JIS_X_0208,
+            charset::UCS4,
+        ] {
             let data = [cs, 0x41, 0x42];
             let result = decode_character_string(&data);
             assert!(result.is_err(), "charset {cs} should return an error");

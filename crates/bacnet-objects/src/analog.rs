@@ -4,7 +4,7 @@
 
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
+use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties, read_event_properties, write_event_properties};
@@ -24,14 +24,21 @@ pub struct AnalogInputObject {
     units: u32,
     out_of_service: bool,
     status_flags: StatusFlags,
+    /// COV_Increment: minimum change threshold for COV notifications.
+    /// Default 0.0 means notify on any write (including no-change).
+    /// Set to a positive value for delta-based filtering.
     cov_increment: f32,
     event_detector: OutOfRangeDetector,
     /// Reliability: 0 = NO_FAULT_DETECTED.
     reliability: u32,
-    /// Optional minimum present value for fault detection (Clause 12).
+    /// Optional minimum present value for fault detection.
     min_pres_value: Option<f32>,
-    /// Optional maximum present value for fault detection (Clause 12).
+    /// Optional maximum present value for fault detection.
     max_pres_value: Option<f32>,
+    /// Event_Time_Stamps[3]: to-offnormal, to-fault, to-normal.
+    event_time_stamps: [BACnetTimeStamp; 3],
+    /// Event_Message_Texts[3]: to-offnormal, to-fault, to-normal.
+    event_message_texts: [String; 3],
 }
 
 impl AnalogInputObject {
@@ -51,11 +58,21 @@ impl AnalogInputObject {
             reliability: 0,
             min_pres_value: None,
             max_pres_value: None,
+            event_time_stamps: [
+                BACnetTimeStamp::SequenceNumber(0),
+                BACnetTimeStamp::SequenceNumber(0),
+                BACnetTimeStamp::SequenceNumber(0),
+            ],
+            event_message_texts: [String::new(), String::new(), String::new()],
         })
     }
 
     /// Set the present value (used by the application to update sensor readings).
     pub fn set_present_value(&mut self, value: f32) {
+        debug_assert!(
+            value.is_finite(),
+            "set_present_value called with non-finite value"
+        );
         self.present_value = value;
     }
 
@@ -144,6 +161,9 @@ impl BACnetObject for AnalogInputObject {
         {
             return result;
         }
+        if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
+            return result;
+        }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
@@ -186,8 +206,14 @@ impl BACnetObject for AnalogInputObject {
             PropertyIdentifier::TIME_DELAY,
             PropertyIdentifier::RELIABILITY,
             PropertyIdentifier::ACKED_TRANSITIONS,
+            PropertyIdentifier::EVENT_TIME_STAMPS,
+            PropertyIdentifier::EVENT_MESSAGE_TEXTS,
         ];
         Cow::Borrowed(PROPS)
+    }
+
+    fn supports_cov(&self) -> bool {
+        true
     }
 
     fn cov_increment(&self) -> Option<f32> {
@@ -199,7 +225,7 @@ impl BACnetObject for AnalogInputObject {
     }
 
     fn acknowledge_alarm(&mut self, transition_bit: u8) -> Result<(), bacnet_types::error::Error> {
-        self.event_detector.acked_transitions |= transition_bit;
+        self.event_detector.acked_transitions |= transition_bit & 0x07;
         Ok(())
     }
 }
@@ -217,17 +243,20 @@ pub struct AnalogOutputObject {
     units: u32,
     out_of_service: bool,
     status_flags: StatusFlags,
-    /// 16-level priority array. `None` = no command at that level.
     priority_array: [Option<f32>; 16],
     relinquish_default: f32,
+    /// COV_Increment: minimum change threshold for COV notifications.
+    /// Default 0.0 means notify on any write (including no-change).
+    /// Set to a positive value for delta-based filtering.
     cov_increment: f32,
     event_detector: OutOfRangeDetector,
-    /// Reliability: 0 = NO_FAULT_DETECTED.
     reliability: u32,
-    /// Optional minimum present value for fault detection (Clause 12).
     min_pres_value: Option<f32>,
-    /// Optional maximum present value for fault detection (Clause 12).
     max_pres_value: Option<f32>,
+    event_time_stamps: [BACnetTimeStamp; 3],
+    event_message_texts: [String; 3],
+    /// Value source tracking.
+    value_source: common::ValueSourceTracking,
 }
 
 impl AnalogOutputObject {
@@ -249,6 +278,13 @@ impl AnalogOutputObject {
             reliability: 0,
             min_pres_value: None,
             max_pres_value: None,
+            event_time_stamps: [
+                BACnetTimeStamp::SequenceNumber(0),
+                BACnetTimeStamp::SequenceNumber(0),
+                BACnetTimeStamp::SequenceNumber(0),
+            ],
+            event_message_texts: [String::new(), String::new(), String::new()],
+            value_source: common::ValueSourceTracking::default(),
         })
     }
 
@@ -308,6 +344,18 @@ impl BACnetObject for AnalogOutputObject {
             p if p == PropertyIdentifier::RELINQUISH_DEFAULT => {
                 Ok(PropertyValue::Real(self.relinquish_default))
             }
+            p if p == PropertyIdentifier::CURRENT_COMMAND_PRIORITY => {
+                Ok(common::current_command_priority(&self.priority_array))
+            }
+            p if p == PropertyIdentifier::VALUE_SOURCE => {
+                Ok(self.value_source.value_source.clone())
+            }
+            p if p == PropertyIdentifier::LAST_COMMAND_TIME => Ok(PropertyValue::Unsigned(
+                match self.value_source.last_command_time {
+                    BACnetTimeStamp::SequenceNumber(n) => n,
+                    _ => 0,
+                },
+            )),
             p if p == PropertyIdentifier::COV_INCREMENT => {
                 Ok(PropertyValue::Real(self.cov_increment))
             }
@@ -357,6 +405,9 @@ impl BACnetObject for AnalogOutputObject {
         {
             return result;
         }
+        if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
+            return result;
+        }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
@@ -390,6 +441,7 @@ impl BACnetObject for AnalogOutputObject {
             PropertyIdentifier::UNITS,
             PropertyIdentifier::PRIORITY_ARRAY,
             PropertyIdentifier::RELINQUISH_DEFAULT,
+            PropertyIdentifier::CURRENT_COMMAND_PRIORITY,
             PropertyIdentifier::COV_INCREMENT,
             PropertyIdentifier::HIGH_LIMIT,
             PropertyIdentifier::LOW_LIMIT,
@@ -401,8 +453,14 @@ impl BACnetObject for AnalogOutputObject {
             PropertyIdentifier::TIME_DELAY,
             PropertyIdentifier::RELIABILITY,
             PropertyIdentifier::ACKED_TRANSITIONS,
+            PropertyIdentifier::EVENT_TIME_STAMPS,
+            PropertyIdentifier::EVENT_MESSAGE_TEXTS,
         ];
         Cow::Borrowed(PROPS)
+    }
+
+    fn supports_cov(&self) -> bool {
+        true
     }
 
     fn cov_increment(&self) -> Option<f32> {
@@ -414,7 +472,7 @@ impl BACnetObject for AnalogOutputObject {
     }
 
     fn acknowledge_alarm(&mut self, transition_bit: u8) -> Result<(), bacnet_types::error::Error> {
-        self.event_detector.acked_transitions |= transition_bit;
+        self.event_detector.acked_transitions |= transition_bit & 0x07;
         Ok(())
     }
 }
@@ -435,14 +493,17 @@ pub struct AnalogValueObject {
     /// 16-level priority array. `None` = no command at that level.
     priority_array: [Option<f32>; 16],
     relinquish_default: f32,
+    /// COV_Increment: minimum change threshold for COV notifications.
+    /// Default 0.0 means notify on any write (including no-change).
+    /// Set to a positive value for delta-based filtering.
     cov_increment: f32,
     event_detector: OutOfRangeDetector,
     /// Reliability: 0 = NO_FAULT_DETECTED.
     reliability: u32,
-    /// Optional minimum present value for fault detection (Clause 12).
     min_pres_value: Option<f32>,
-    /// Optional maximum present value for fault detection (Clause 12).
     max_pres_value: Option<f32>,
+    event_time_stamps: [BACnetTimeStamp; 3],
+    event_message_texts: [String; 3],
 }
 
 impl AnalogValueObject {
@@ -464,12 +525,22 @@ impl AnalogValueObject {
             reliability: 0,
             min_pres_value: None,
             max_pres_value: None,
+            event_time_stamps: [
+                BACnetTimeStamp::SequenceNumber(0),
+                BACnetTimeStamp::SequenceNumber(0),
+                BACnetTimeStamp::SequenceNumber(0),
+            ],
+            event_message_texts: [String::new(), String::new(), String::new()],
         })
     }
 
     /// Set the present value directly (bypasses priority array; use when out-of-service
     /// or for initialisation before the priority-array mechanism takes over).
     pub fn set_present_value(&mut self, value: f32) {
+        debug_assert!(
+            value.is_finite(),
+            "set_present_value called with non-finite value"
+        );
         self.present_value = value;
     }
 
@@ -529,6 +600,9 @@ impl BACnetObject for AnalogValueObject {
             p if p == PropertyIdentifier::RELINQUISH_DEFAULT => {
                 Ok(PropertyValue::Real(self.relinquish_default))
             }
+            p if p == PropertyIdentifier::CURRENT_COMMAND_PRIORITY => {
+                Ok(common::current_command_priority(&self.priority_array))
+            }
             p if p == PropertyIdentifier::COV_INCREMENT => {
                 Ok(PropertyValue::Real(self.cov_increment))
             }
@@ -578,6 +652,9 @@ impl BACnetObject for AnalogValueObject {
         {
             return result;
         }
+        if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
+            return result;
+        }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
@@ -611,6 +688,7 @@ impl BACnetObject for AnalogValueObject {
             PropertyIdentifier::UNITS,
             PropertyIdentifier::PRIORITY_ARRAY,
             PropertyIdentifier::RELINQUISH_DEFAULT,
+            PropertyIdentifier::CURRENT_COMMAND_PRIORITY,
             PropertyIdentifier::COV_INCREMENT,
             PropertyIdentifier::HIGH_LIMIT,
             PropertyIdentifier::LOW_LIMIT,
@@ -622,8 +700,14 @@ impl BACnetObject for AnalogValueObject {
             PropertyIdentifier::TIME_DELAY,
             PropertyIdentifier::RELIABILITY,
             PropertyIdentifier::ACKED_TRANSITIONS,
+            PropertyIdentifier::EVENT_TIME_STAMPS,
+            PropertyIdentifier::EVENT_MESSAGE_TEXTS,
         ];
         Cow::Borrowed(PROPS)
+    }
+
+    fn supports_cov(&self) -> bool {
+        true
     }
 
     fn cov_increment(&self) -> Option<f32> {
@@ -635,7 +719,7 @@ impl BACnetObject for AnalogValueObject {
     }
 
     fn acknowledge_alarm(&mut self, transition_bit: u8) -> Result<(), bacnet_types::error::Error> {
-        self.event_detector.acked_transitions |= transition_bit;
+        self.event_detector.acked_transitions |= transition_bit & 0x07;
         Ok(())
     }
 }
@@ -1231,7 +1315,7 @@ mod tests {
         }
     }
 
-    // --- Direct PRIORITY_ARRAY writes (Clause 15.9.1.1.3) ---
+    // --- Direct PRIORITY_ARRAY writes ---
 
     #[test]
     fn ao_direct_priority_array_write_value() {
@@ -1878,21 +1962,43 @@ mod tests {
     #[test]
     fn ai_property_list_index_zero_returns_count() {
         let ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
-        let expected_count = ai.property_list().len() as u64;
+        // Property_List excludes OBJECT_IDENTIFIER, OBJECT_NAME,
+        // OBJECT_TYPE, and PROPERTY_LIST itself.
+        let filtered_count = ai
+            .property_list()
+            .iter()
+            .filter(|p| {
+                **p != PropertyIdentifier::OBJECT_IDENTIFIER
+                    && **p != PropertyIdentifier::OBJECT_NAME
+                    && **p != PropertyIdentifier::OBJECT_TYPE
+                    && **p != PropertyIdentifier::PROPERTY_LIST
+            })
+            .count() as u64;
         let result = ai
             .read_property(PropertyIdentifier::PROPERTY_LIST, Some(0))
             .unwrap();
-        assert_eq!(result, PropertyValue::Unsigned(expected_count));
+        assert_eq!(result, PropertyValue::Unsigned(filtered_count));
     }
 
     #[test]
     fn ai_property_list_index_one_returns_first_prop() {
         let ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
-        let props = ai.property_list();
+        // First property after filtering the 4 excluded ones
+        let first_filtered = ai
+            .property_list()
+            .iter()
+            .copied()
+            .find(|p| {
+                *p != PropertyIdentifier::OBJECT_IDENTIFIER
+                    && *p != PropertyIdentifier::OBJECT_NAME
+                    && *p != PropertyIdentifier::OBJECT_TYPE
+                    && *p != PropertyIdentifier::PROPERTY_LIST
+            })
+            .unwrap();
         let result = ai
             .read_property(PropertyIdentifier::PROPERTY_LIST, Some(1))
             .unwrap();
-        assert_eq!(result, PropertyValue::Enumerated(props[0].to_raw()));
+        assert_eq!(result, PropertyValue::Enumerated(first_filtered.to_raw()));
     }
 
     #[test]

@@ -10,7 +10,7 @@ use bytes::BytesMut;
 use crate::common::{BACnetPropertyValue, MAX_DECODED_ITEMS};
 
 // ---------------------------------------------------------------------------
-// SubscribeCOVRequest (Clause 13.14.1)
+// SubscribeCOVRequest
 // ---------------------------------------------------------------------------
 
 /// SubscribeCOV-Request service parameters.
@@ -101,7 +101,7 @@ impl SubscribeCOVRequest {
 }
 
 // ---------------------------------------------------------------------------
-// SubscribeCOVPropertyRequest (Clause 13.14.2)
+// SubscribeCOVPropertyRequest
 // ---------------------------------------------------------------------------
 
 /// SubscribeCOVProperty-Request service parameters.
@@ -206,7 +206,6 @@ impl SubscribeCOVPropertyRequest {
                 "expected context 4 for monitored-property",
             ));
         }
-        // Opening tag — decode inner property reference
         offset = pos;
         let (tag, pos) = tags::decode_tag(data, offset)?;
         let end = pos + tag.length as usize;
@@ -217,7 +216,7 @@ impl SubscribeCOVPropertyRequest {
             PropertyIdentifier::from_raw(primitives::decode_unsigned(&data[pos..end])? as u32);
         offset = end;
 
-        // Optional array index [1] inside property reference
+        // [1] propertyArrayIndex (optional)
         let mut monitored_property_array_index = None;
         if offset < data.len() {
             let (opt_data, new_offset) = tags::decode_optional_context(data, offset, 1)?;
@@ -227,7 +226,6 @@ impl SubscribeCOVPropertyRequest {
             }
         }
 
-        // Closing tag [4]
         let (_tag, pos) = tags::decode_tag(data, offset)?;
         offset = pos;
 
@@ -255,7 +253,7 @@ impl SubscribeCOVPropertyRequest {
 }
 
 // ---------------------------------------------------------------------------
-// COVNotificationRequest (Clause 13.14.7 / 16.10.3)
+// COVNotificationRequest
 // ---------------------------------------------------------------------------
 
 /// COVNotification-Request service parameters.
@@ -365,9 +363,6 @@ impl COVNotificationRequest {
             }
             let (tag, tag_end) = tags::decode_tag(data, offset)?;
             if tag.is_closing_tag(4) {
-                // Consume the closing tag for correctness; offset is not used
-                // after the loop today but would be needed if trailing fields
-                // are added in the future.
                 offset = tag_end;
                 break;
             }
@@ -375,7 +370,7 @@ impl COVNotificationRequest {
             values.push(pv);
             offset = new_offset;
         }
-        let _ = offset; // consumed after closing tag for future-proofing
+        let _ = offset;
 
         Ok(Self {
             subscriber_process_identifier,

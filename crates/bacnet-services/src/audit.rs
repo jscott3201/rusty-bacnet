@@ -13,8 +13,7 @@ use bytes::BytesMut;
 use crate::common::PropertyReference;
 
 // ---------------------------------------------------------------------------
-// AuditNotificationRequest (Confirmed=32, Unconfirmed=12)
-// Clause 15.2.8
+// AuditNotificationRequest
 // ---------------------------------------------------------------------------
 
 /// AuditNotification-Request service parameters.
@@ -257,7 +256,6 @@ impl AuditNotificationRequest {
                 let (_, inner_start) = tags::decode_tag(data, offset)?;
                 let (pr, pr_end) = PropertyReference::decode(data, inner_start)?;
                 target_property = Some(pr);
-                // closing tag 11
                 let (_tag, tag_end) = tags::decode_tag(data, pr_end)?;
                 offset = tag_end;
             }
@@ -332,10 +330,10 @@ impl AuditNotificationRequest {
 }
 
 // ---------------------------------------------------------------------------
-// AuditLogQueryRequest (Clause 15.2.9) — minimal codec
+// AuditLogQueryRequest
 // ---------------------------------------------------------------------------
 
-/// AuditLogQuery-Request — minimal codec storing query options as raw bytes.
+/// AuditLogQuery-Request storing query options as raw bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditLogQueryRequest {
     /// [0] acknowledgmentFilter
@@ -348,7 +346,6 @@ impl AuditLogQueryRequest {
     pub fn encode(&self, buf: &mut BytesMut) {
         // [0] acknowledgmentFilter
         primitives::encode_ctx_enumerated(buf, 0, self.acknowledgment_filter);
-        // Raw query options
         buf.extend_from_slice(&self.query_options_raw);
     }
 
@@ -367,7 +364,6 @@ impl AuditLogQueryRequest {
         let acknowledgment_filter = primitives::decode_unsigned(&data[pos..end])? as u32;
         offset = end;
 
-        // Remaining bytes are raw query options
         let query_options_raw = data[offset..].to_vec();
 
         Ok(Self {
@@ -376,10 +372,6 @@ impl AuditLogQueryRequest {
         })
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

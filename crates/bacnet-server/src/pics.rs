@@ -26,7 +26,7 @@ pub struct Pics {
     pub special_functionality: Vec<String>,
 }
 
-/// Vendor and device identification (Annex A.1).
+/// Vendor and device identification.
 #[derive(Debug, Clone)]
 pub struct VendorInfo {
     pub vendor_id: u16,
@@ -38,7 +38,7 @@ pub struct VendorInfo {
     pub protocol_revision: u16,
 }
 
-/// BACnet device profile (Annex A.2).
+/// BACnet device profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeviceProfile {
     /// BACnet Advanced Application Controller.
@@ -101,7 +101,7 @@ pub struct PropertySupport {
     pub access: PropertyAccess,
 }
 
-/// Object type support declaration (Annex A.3).
+/// Object type support declaration.
 #[derive(Debug, Clone)]
 pub struct ObjectTypeSupport {
     pub object_type: ObjectType,
@@ -110,7 +110,7 @@ pub struct ObjectTypeSupport {
     pub supported_properties: Vec<PropertySupport>,
 }
 
-/// Service support declaration (Annex A.4).
+/// Service support declaration.
 #[derive(Debug, Clone)]
 pub struct ServiceSupport {
     pub service_name: String,
@@ -118,7 +118,7 @@ pub struct ServiceSupport {
     pub executor: bool,
 }
 
-/// Data link layer support (Annex A.5).
+/// Data link layer support.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DataLinkSupport {
     BipV4,
@@ -140,7 +140,7 @@ impl fmt::Display for DataLinkSupport {
     }
 }
 
-/// Network layer capabilities (Annex A.6).
+/// Network layer capabilities.
 #[derive(Debug, Clone)]
 pub struct NetworkLayerSupport {
     pub router: bool,
@@ -148,7 +148,7 @@ pub struct NetworkLayerSupport {
     pub foreign_device: bool,
 }
 
-/// Character set support (Annex A.7).
+/// Character set support.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CharacterSet {
     Utf8,
@@ -261,7 +261,6 @@ impl<'a> PicsGenerator<'a> {
     }
 
     fn build_object_types(&self) -> Vec<ObjectTypeSupport> {
-        // Group objects by type using a BTreeMap for deterministic ordering.
         let mut by_type: BTreeMap<u32, Vec<&dyn bacnet_objects::traits::BACnetObject>> =
             BTreeMap::new();
         for (_oid, obj) in self.db.iter_objects() {
@@ -274,7 +273,6 @@ impl<'a> PicsGenerator<'a> {
         let mut result = Vec::with_capacity(by_type.len());
         for (raw_type, objects) in &by_type {
             let object_type = ObjectType::from_raw(*raw_type);
-            // Use the first object as representative for property enumeration.
             let representative = objects[0];
             let all_props = representative.property_list();
             let required = representative.required_properties();
@@ -283,8 +281,6 @@ impl<'a> PicsGenerator<'a> {
                 .iter()
                 .map(|&pid| {
                     let is_required = required.contains(&pid);
-                    // Try a probe write to check writability.  We only check the
-                    // representative and consider all listed properties readable.
                     let writable = Self::is_writable_property(object_type, pid);
                     PropertySupport {
                         property_id: pid,
@@ -310,9 +306,8 @@ impl<'a> PicsGenerator<'a> {
         result
     }
 
-    /// Heuristic: properties that are commonly writable per BACnet standard.
+    /// Heuristic for commonly writable properties.
     fn is_writable_property(object_type: ObjectType, pid: PropertyIdentifier) -> bool {
-        // Universal read-only properties
         if pid == PropertyIdentifier::OBJECT_IDENTIFIER
             || pid == PropertyIdentifier::OBJECT_TYPE
             || pid == PropertyIdentifier::PROPERTY_LIST
@@ -321,19 +316,16 @@ impl<'a> PicsGenerator<'a> {
             return false;
         }
 
-        // OBJECT_NAME is writable on most objects
         if pid == PropertyIdentifier::OBJECT_NAME {
             return true;
         }
 
-        // PRESENT_VALUE writability depends on object type
         if pid == PropertyIdentifier::PRESENT_VALUE {
             return object_type != ObjectType::ANALOG_INPUT
                 && object_type != ObjectType::BINARY_INPUT
                 && object_type != ObjectType::MULTI_STATE_INPUT;
         }
 
-        // Common writable properties
         pid == PropertyIdentifier::DESCRIPTION
             || pid == PropertyIdentifier::OUT_OF_SERVICE
             || pid == PropertyIdentifier::COV_INCREMENT
@@ -344,7 +336,6 @@ impl<'a> PicsGenerator<'a> {
     }
 
     fn is_createable(object_type: ObjectType) -> bool {
-        // Device and NetworkPort objects are not dynamically created.
         object_type != ObjectType::DEVICE && object_type != ObjectType::NETWORK_PORT
     }
 
@@ -356,7 +347,6 @@ impl<'a> PicsGenerator<'a> {
     fn build_services(&self) -> Vec<ServiceSupport> {
         let mut services = Vec::new();
 
-        // Confirmed services the server executes
         let executor_services = [
             "ReadProperty",
             "WriteProperty",
@@ -377,10 +367,8 @@ impl<'a> PicsGenerator<'a> {
             "RemoveListElement",
         ];
 
-        // Confirmed services the server initiates
         let initiator_services = ["ConfirmedCOVNotification", "ConfirmedEventNotification"];
 
-        // Unconfirmed services the server executes
         let unconfirmed_executor = [
             "WhoIs",
             "WhoHas",
@@ -388,7 +376,6 @@ impl<'a> PicsGenerator<'a> {
             "UTCTimeSynchronization",
         ];
 
-        // Unconfirmed services the server initiates
         let unconfirmed_initiator = [
             "I-Am",
             "I-Have",
@@ -396,7 +383,6 @@ impl<'a> PicsGenerator<'a> {
             "UnconfirmedEventNotification",
         ];
 
-        // Merge all service names, tracking initiator/executor status.
         let mut service_map: BTreeMap<&str, (bool, bool)> = BTreeMap::new();
         for name in &executor_services {
             service_map.entry(name).or_default().1 = true;
@@ -433,7 +419,6 @@ impl Pics {
         out.push_str("=== BACnet Protocol Implementation Conformance Statement (PICS) ===\n");
         out.push_str("    Per ASHRAE 135-2020 Annex A\n\n");
 
-        // Section 1: Vendor Information
         out.push_str("--- Vendor Information ---\n");
         out.push_str(&format!(
             "Vendor ID:                      {}\n",
@@ -464,11 +449,9 @@ impl Pics {
             self.vendor_info.protocol_revision
         ));
 
-        // Section 2: Device Profile
         out.push_str("--- BACnet Device Profile ---\n");
         out.push_str(&format!("Profile: {}\n\n", self.device_profile));
 
-        // Section 3: Supported Object Types
         out.push_str("--- Supported Object Types ---\n");
         for ot in &self.supported_object_types {
             out.push_str(&format!(
@@ -486,7 +469,6 @@ impl Pics {
         }
         out.push('\n');
 
-        // Section 4: Supported Services
         out.push_str("--- Supported Services ---\n");
         out.push_str(&format!(
             "  {:<45} {:>9} {:>9}\n",
@@ -503,14 +485,12 @@ impl Pics {
         }
         out.push('\n');
 
-        // Section 5: Data Link Layers
         out.push_str("--- Data Link Layer Support ---\n");
         for dl in &self.data_link_layers {
             out.push_str(&format!("  {dl}\n"));
         }
         out.push('\n');
 
-        // Section 6: Network Layer
         out.push_str("--- Network Layer Options ---\n");
         out.push_str(&format!(
             "  Router:         {}\n",
@@ -522,14 +502,12 @@ impl Pics {
             self.network_layer.foreign_device
         ));
 
-        // Section 7: Character Sets
         out.push_str("--- Character Sets Supported ---\n");
         for cs in &self.character_sets {
             out.push_str(&format!("  {cs}\n"));
         }
         out.push('\n');
 
-        // Section 8: Special Functionality
         if !self.special_functionality.is_empty() {
             out.push_str("--- Special Functionality ---\n");
             for sf in &self.special_functionality {
@@ -548,7 +526,6 @@ impl Pics {
         out.push_str("# BACnet Protocol Implementation Conformance Statement (PICS)\n\n");
         out.push_str("*Per ASHRAE 135-2020 Annex A*\n\n");
 
-        // Vendor Info
         out.push_str("## Vendor Information\n\n");
         out.push_str("| Field | Value |\n");
         out.push_str("|-------|-------|\n");
@@ -578,11 +555,9 @@ impl Pics {
             self.vendor_info.protocol_revision
         ));
 
-        // Device Profile
         out.push_str("## BACnet Device Profile\n\n");
         out.push_str(&format!("**{}**\n\n", self.device_profile));
 
-        // Object Types
         out.push_str("## Supported Object Types\n\n");
         for ot in &self.supported_object_types {
             out.push_str(&format!(
@@ -597,7 +572,6 @@ impl Pics {
             out.push('\n');
         }
 
-        // Services
         out.push_str("## Supported Services\n\n");
         out.push_str("| Service | Initiator | Executor |\n");
         out.push_str("|---------|-----------|----------|\n");
@@ -608,14 +582,12 @@ impl Pics {
         }
         out.push('\n');
 
-        // Data Link
         out.push_str("## Data Link Layer Support\n\n");
         for dl in &self.data_link_layers {
             out.push_str(&format!("- {dl}\n"));
         }
         out.push('\n');
 
-        // Network Layer
         out.push_str("## Network Layer Options\n\n");
         out.push_str("| Feature | Supported |\n");
         out.push_str("|---------|-----------|\n");
@@ -626,14 +598,12 @@ impl Pics {
             self.network_layer.foreign_device
         ));
 
-        // Character Sets
         out.push_str("## Character Sets Supported\n\n");
         for cs in &self.character_sets {
             out.push_str(&format!("- {cs}\n"));
         }
         out.push('\n');
 
-        // Special Functionality
         if !self.special_functionality.is_empty() {
             out.push_str("## Special Functionality\n\n");
             for sf in &self.special_functionality {
@@ -1029,7 +999,6 @@ mod tests {
         let pics = generate_pics(&db, &server_config, &pics_config);
 
         assert!(pics.supported_object_types.is_empty());
-        // Services should still be listed (server capability, not DB-dependent)
         assert!(!pics.supported_services.is_empty());
     }
 

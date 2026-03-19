@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use bytes::{Bytes, BytesMut};
-use tokio::sync::{mpsc, Mutex, RwLock, Semaphore};
+use tokio::sync::{mpsc, oneshot, Mutex, RwLock, Semaphore};
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tracing::{debug, warn};
@@ -48,13 +48,13 @@ use crate::handlers;
 /// Maximum number of concurrent segmented reassembly sessions.
 const MAX_SEG_RECEIVERS: usize = 128;
 
-/// Timeout for idle segmented reassembly sessions (Clause 9.1.6).
+/// Timeout for idle segmented reassembly sessions.
 const SEG_RECEIVER_TIMEOUT: Duration = Duration::from_secs(4);
 
 /// Maximum negative SegmentAck retries during segmented response send.
 const MAX_NEG_SEGMENT_ACK_RETRIES: u8 = 3;
 
-/// Default number of APDU retries for confirmed COV notifications (Clause 10.6.3).
+/// Default number of APDU retries for confirmed COV notifications.
 const DEFAULT_APDU_RETRIES: u8 = 3;
 
 // ---------------------------------------------------------------------------
@@ -78,8 +78,9 @@ pub enum CovAckResult {
 /// after each timeout to decide whether to resend.
 pub struct ServerTsm {
     next_invoke_id: u8,
-    /// Results written by the dispatch loop, read by retry tasks.
-    pending: HashMap<u8, CovAckResult>,
+    /// Oneshot senders keyed by invoke ID. When a result arrives from the
+    /// dispatch loop, we send it directly — no polling needed.
+    pending: HashMap<u8, oneshot::Sender<CovAckResult>>,
 }
 
 impl ServerTsm {
@@ -90,22 +91,22 @@ impl ServerTsm {
         }
     }
 
-    /// Allocate the next invoke ID.  The semaphore guarantees at most 255
-    /// concurrent callers, so wrapping is safe.
-    fn allocate(&mut self) -> u8 {
+    /// Allocate the next invoke ID and register a oneshot channel for the result.
+    /// Returns (invoke_id, receiver).
+    fn allocate(&mut self) -> (u8, oneshot::Receiver<CovAckResult>) {
         let id = self.next_invoke_id;
         self.next_invoke_id = self.next_invoke_id.wrapping_add(1);
-        id
+        let (tx, rx) = oneshot::channel();
+        self.pending.insert(id, tx);
+        (id, rx)
     }
 
     /// Record a result from the dispatch loop (SimpleAck, Error, etc.).
+    /// Sends immediately through the oneshot channel.
     fn record_result(&mut self, invoke_id: u8, result: CovAckResult) {
-        self.pending.insert(invoke_id, result);
-    }
-
-    /// Take the result for a given invoke ID (returns and removes it).
-    fn take_result(&mut self, invoke_id: u8) -> Option<CovAckResult> {
-        self.pending.remove(&invoke_id)
+        if let Some(tx) = self.pending.remove(&invoke_id) {
+            let _ = tx.send(result);
+        }
     }
 
     /// Remove a pending entry (cleanup on completion or exhaustion).
@@ -142,11 +143,11 @@ pub struct ServerConfig {
     pub cov_retry_timeout_ms: u64,
     /// Optional callback invoked when a TimeSynchronization request is received.
     pub on_time_sync: Option<Arc<dyn Fn(TimeSyncData) + Send + Sync>>,
-    /// Optional password required for DeviceCommunicationControl (Clause 16.4.1).
+    /// Optional password required for DeviceCommunicationControl.
     pub dcc_password: Option<String>,
-    /// Optional password required for ReinitializeDevice (Clause 16.4.2).
+    /// Optional password required for ReinitializeDevice.
     pub reinit_password: Option<String>,
-    /// Enable periodic fault detection / reliability evaluation (Clause 12).
+    /// Enable periodic fault detection / reliability evaluation.
     /// When true, the server evaluates analog objects every 10 s for
     /// OVER_RANGE / UNDER_RANGE faults.
     pub enable_fault_detection: bool,
@@ -323,16 +324,13 @@ pub struct BACnetServer<T: TransportPort> {
     /// to prevent invoke ID reuse (invoke IDs are u8 = 0..255).
     #[allow(dead_code)]
     cov_in_flight: Arc<Semaphore>,
-    /// Server-side TSM for outgoing confirmed COV notifications (Clause 10.6.3).
+    /// Server-side TSM for outgoing confirmed COV notifications.
     #[allow(dead_code)]
     server_tsm: Arc<Mutex<ServerTsm>>,
-    /// Communication state per DeviceCommunicationControl (Clause 16.4.3).
-    /// 0 = Enable, 1 = Disable, 2 = DisableInitiation.
+    /// Communication state: 0 = Enable, 1 = Disable, 2 = DisableInitiation.
     comm_state: Arc<AtomicU8>,
-    /// Handle for the DCC auto-re-enable timer (Clause 16.4.3).
-    /// When DCC DISABLE/DISABLE_INITIATION is received with a time_duration,
-    /// a timer task is spawned to revert comm_state to ENABLE after the duration.
-    /// Previous timers are aborted when a new DCC request arrives.
+    /// Handle for the DCC auto-re-enable timer. A new DCC request aborts
+    /// any previous timer.
     #[allow(dead_code)]
     dcc_timer: Arc<Mutex<Option<JoinHandle<()>>>>,
     dispatch_task: Option<JoinHandle<()>>,
@@ -499,7 +497,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         db: ObjectDatabase,
         transport: T,
     ) -> Result<Self, Error> {
-        // Clamp max_apdu_length to the transport's physical limit.
         let transport_max = transport.max_apdu_length() as u32;
         config.max_apdu_length = config.max_apdu_length.min(transport_max);
 
@@ -534,9 +531,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         let dispatch_task = tokio::spawn(async move {
             let mut apdu_rx = apdu_rx;
-            // State for reassembling segmented ConfirmedRequests from clients.
-            // Key: (source_mac, invoke_id).
-            // Value: (receiver, first segment's request with all metadata).
             let mut seg_receivers: HashMap<
                 SegKey,
                 (
@@ -547,7 +541,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             > = HashMap::new();
 
             while let Some(received) = apdu_rx.recv().await {
-                // Reap timed-out segmented reassembly sessions (Clause 9.1.6).
                 let now = Instant::now();
                 seg_receivers.retain(|_key, (_rx, _req, last_activity)| {
                     now.duration_since(*last_activity) < SEG_RECEIVER_TIMEOUT
@@ -557,7 +550,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     Ok(decoded) => {
                         let source_mac = received.source_mac.clone();
                         let mut received = Some(received);
-                        // Intercept segmented ConfirmedRequests for reassembly.
                         let handled = if let Apdu::ConfirmedRequest(ref req) = decoded {
                             if req.segmented {
                                 let seq = req.sequence_number.unwrap_or(0);
@@ -566,7 +558,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 if seq == 0 {
                                     // Reject if too many concurrent segmented sessions
                                     if seg_receivers.len() >= MAX_SEG_RECEIVERS {
-                                        warn!("Too many concurrent segmented sessions ({}), rejecting", seg_receivers.len());
                                         let abort_pdu = Apdu::Abort(AbortPdu {
                                             sent_by_server: true,
                                             invoke_id: req.invoke_id,
@@ -584,8 +575,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                             .await;
                                         continue;
                                     }
-                                    // First segment: create a new receiver and
-                                    // store the request metadata.
                                     let mut receiver = SegmentReceiver::new();
                                     if let Err(e) =
                                         receiver.receive(seq, req.service_request.clone())
@@ -608,8 +597,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     }
                                     *last_activity = Instant::now();
                                 } else {
-                                    // Non-initial segment without prior segment 0:
-                                    // send Abort PDU per Clause 9.20.1.7.
                                     warn!(
                                         invoke_id = req.invoke_id,
                                         seq = seq,
@@ -634,7 +621,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     continue;
                                 }
 
-                                // Send SegmentAck back to the client.
                                 let seg_ack = Apdu::SegmentAck(SegmentAckPdu {
                                     negative_ack: false,
                                     sent_by_server: true,
@@ -660,7 +646,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     );
                                 }
 
-                                // Last segment: reassemble and dispatch.
                                 if !req.more_follows {
                                     if let Some((receiver, first_req, _)) =
                                         seg_receivers.remove(&key)
@@ -702,7 +687,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                                     Apdu::ConfirmedRequest(reassembled),
                                                     received
                                                         .take()
-                                                        .expect("received consumed twice"),
+                                                        .unwrap_or_else(|| {
+                                                        warn!("received consumed twice — using empty fallback");
+                                                        bacnet_network::layer::ReceivedApdu {
+                                                            apdu: bytes::Bytes::new(),
+                                                            source_mac: bacnet_types::MacAddr::new(),
+                                                            source_network: None,
+                                                            reply_tx: None,
+                                                        }
+                                                    }),
                                                 )
                                                 .await;
                                             }
@@ -717,12 +710,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     }
                                 }
 
-                                true // Already handled
+                                true
                             } else {
-                                false // Not segmented, dispatch normally
+                                false
                             }
                         } else {
-                            false // Not a ConfirmedRequest, dispatch normally
+                            false
                         };
 
                         if !handled {
@@ -738,7 +731,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 &config_dispatch,
                                 &source_mac,
                                 decoded,
-                                received.take().expect("received consumed twice"),
+                                received.take().unwrap_or_else(|| {
+                                    warn!("received consumed twice — using empty fallback");
+                                    bacnet_network::layer::ReceivedApdu {
+                                        apdu: bytes::Bytes::new(),
+                                        source_mac: bacnet_types::MacAddr::new(),
+                                        source_network: None,
+                                        reply_tx: None,
+                                    }
+                                }),
                             )
                             .await;
                         }
@@ -786,8 +787,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             None
         };
 
-        // Event Enrollment evaluation task (Clause 13.4): evaluates EventEnrollment
-        // objects every 10 seconds alongside fault detection.
         let event_enrollment_task = if config.enable_fault_detection {
             let db_ee = Arc::clone(&db);
             Some(tokio::spawn(async move {
@@ -812,18 +811,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             None
         };
 
-        // Trend log polling task: polls TrendLog objects whose log_interval > 0.
         let db_trend = Arc::clone(&db);
+        let trend_log_state: crate::trend_log::TrendLogState =
+            Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
         let trend_log_task = Some(tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(1));
             loop {
                 interval.tick().await;
-                crate::trend_log::poll_trend_logs(&db_trend).await;
+                crate::trend_log::poll_trend_logs(&db_trend, &trend_log_state).await;
             }
         }));
 
-        // Schedule execution task (Clause 12.24): evaluates Schedule objects
-        // every 60 seconds and writes to controlled properties.
         let db_schedule = Arc::clone(&db);
         let schedule_tick_task = Some(tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
@@ -905,7 +903,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             task.abort();
             let _ = task.await;
         }
-        // Network cleanup happens when Arc is dropped (socket close on drop).
         Ok(())
     }
 
@@ -1026,9 +1023,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let client_accepts_segmented = req.segmented_response_accepted;
         let mut written_oids: Vec<ObjectIdentifier> = Vec::new();
 
-        // DCC DISABLE enforcement (Clause 16.4.3):
-        // When state == 1 (DISABLE), only DeviceCommunicationControl and
-        // ReinitializeDevice are permitted; all other requests are silently dropped.
         let state = comm_state.load(Ordering::Acquire);
         if state == 1
             && service_choice != ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL
@@ -1041,7 +1035,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return;
         }
 
-        // Helper closures for common response patterns
         let complex_ack = |ack_buf: BytesMut| -> Apdu {
             Apdu::ComplexAck(ComplexAck {
                 segmented: false,
@@ -1143,12 +1136,24 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
             s if s == ConfirmedServiceChoice::DELETE_OBJECT => {
+                let deleted_oid =
+                    bacnet_services::object_mgmt::DeleteObjectRequest::decode(&req.service_request)
+                        .ok()
+                        .map(|r| r.object_identifier);
+
                 let result = {
                     let mut db = db.write().await;
                     handlers::handle_delete_object(&mut db, &req.service_request)
                 };
                 match result {
-                    Ok(()) => simple_ack(),
+                    Ok(()) => {
+                        // Clean up COV subscriptions for the deleted object
+                        if let Some(oid) = deleted_oid {
+                            let mut table = cov_table.write().await;
+                            table.remove_for_object(oid);
+                        }
+                        simple_ack()
+                    }
                     Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
                 }
             }
@@ -1159,12 +1164,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     &config.dcc_password,
                 ) {
                     Ok((_state, duration)) => {
-                        // Abort any previous DCC timer.
                         if let Some(prev) = dcc_timer.lock().await.take() {
                             prev.abort();
                         }
-                        // If duration is specified for DISABLE/DISABLE_INITIATION,
-                        // spawn a timer to auto-revert to ENABLE (Clause 16.4.3).
                         if let Some(minutes) = duration {
                             let comm = Arc::clone(comm_state);
                             let handle = tokio::spawn(async move {
@@ -1250,6 +1252,47 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
                 }
             }
+            s if s == ConfirmedServiceChoice::GET_ALARM_SUMMARY => {
+                let mut buf = BytesMut::new();
+                let db = db.read().await;
+                match handlers::handle_get_alarm_summary(&db, &mut buf) {
+                    Ok(()) => complex_ack(buf),
+                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
+                }
+            }
+            s if s == ConfirmedServiceChoice::GET_ENROLLMENT_SUMMARY => {
+                let mut buf = BytesMut::new();
+                let db = db.read().await;
+                match handlers::handle_get_enrollment_summary(&db, &req.service_request, &mut buf) {
+                    Ok(()) => complex_ack(buf),
+                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
+                }
+            }
+            s if s == ConfirmedServiceChoice::CONFIRMED_TEXT_MESSAGE => {
+                match handlers::handle_text_message(&req.service_request) {
+                    Ok(_msg) => simple_ack(),
+                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
+                }
+            }
+            s if s == ConfirmedServiceChoice::LIFE_SAFETY_OPERATION => {
+                match handlers::handle_life_safety_operation(&req.service_request) {
+                    Ok(()) => simple_ack(),
+                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
+                }
+            }
+            s if s == ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE => {
+                let db = db.read().await;
+                let mut table = cov_table.write().await;
+                match handlers::handle_subscribe_cov_property_multiple(
+                    &mut table,
+                    &db,
+                    source_mac,
+                    &req.service_request,
+                ) {
+                    Ok(()) => simple_ack(),
+                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
+                }
+            }
             _ => {
                 debug!(
                     service = service_choice.to_raw(),
@@ -1262,16 +1305,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
         };
 
-        // Check if segmentation is needed for ComplexAck responses.
         if let Apdu::ComplexAck(ref ack) = response {
-            // Encode the full unsegmented response to check its size.
             let mut full_buf = BytesMut::new();
             encode_apdu(&mut full_buf, &response);
 
             if full_buf.len() > client_max_apdu as usize {
-                // Response exceeds the client's max APDU length — segmentation required.
                 if !client_accepts_segmented {
-                    // Client does not accept segmented responses — send Abort.
                     let abort = Apdu::Abort(AbortPdu {
                         sent_by_server: true,
                         invoke_id,
@@ -1286,9 +1325,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         warn!(error = %e, "Failed to send Abort for segmentation-not-supported");
                     }
                 } else {
-                    // Spawn the segmented send as a background task so the
-                    // dispatch loop can continue processing incoming SegmentAck
-                    // PDUs from the client.
                     let network = Arc::clone(network);
                     let seg_ack_senders = Arc::clone(seg_ack_senders);
                     let source_mac = MacAddr::from_slice(source_mac);
@@ -1307,9 +1343,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     });
                 }
 
-                // Fire post-write notifications even for segmented responses.
                 for oid in &written_oids {
-                    Self::fire_event_notifications(db, network, comm_state, oid).await;
+                    Self::fire_event_notifications(db, network, comm_state, server_tsm, oid).await;
                 }
                 for oid in &written_oids {
                     Self::fire_cov_notifications(
@@ -1328,10 +1363,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
         }
 
-        // Non-segmented path: send the response.
-        // If a reply_tx channel is available (MS/TP DataExpectingReply), encode as
-        // NPDU and send through the channel for a fast in-window reply. Otherwise
-        // fall back to the normal network send_apdu path.
         let mut buf = BytesMut::new();
         encode_apdu(&mut buf, &response);
 
@@ -1354,8 +1385,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
                 Err(e) => {
                     warn!(error = %e, "Failed to encode NPDU for MS/TP reply");
-                    // Fallback: try normal path (reply_tx consumed, so this will go
-                    // through the transport as a separate frame)
                     if let Err(e) = network
                         .send_apdu(&apdu_bytes, source_mac, false, NetworkPriority::NORMAL)
                         .await
@@ -1371,12 +1400,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             warn!(error = %e, "Failed to send response");
         }
 
-        // Evaluate intrinsic reporting and fire event notifications
         for oid in &written_oids {
-            Self::fire_event_notifications(db, network, comm_state, oid).await;
+            Self::fire_event_notifications(db, network, comm_state, server_tsm, oid).await;
         }
 
-        // Fire COV notifications for any written objects
         for oid in &written_oids {
             Self::fire_cov_notifications(
                 db,
@@ -1435,7 +1462,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             "Starting segmented ComplexAck send"
         );
 
-        // Register a channel for receiving SegmentAck PDUs during the send.
         let (seg_ack_tx, mut seg_ack_rx) = mpsc::channel(16);
         let key = (MacAddr::from_slice(source_mac), invoke_id);
         {
@@ -1472,7 +1498,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
             debug!(seq = seg_idx, is_last, "Sent ComplexAck segment");
 
-            // Wait for SegmentAck from the client before sending the next segment.
             if !is_last {
                 match tokio::time::timeout(seg_timeout, seg_ack_rx.recv()).await {
                     Ok(Some(ack)) => {
@@ -1506,7 +1531,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     .await;
                                 break;
                             }
-                            // Retransmit from the requested sequence number
                             let requested = ack.sequence_number as usize;
                             if requested >= total_segments {
                                 tracing::warn!(
@@ -1523,7 +1547,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             seg_idx = requested;
                             continue;
                         }
-                        // Positive ack — proceed to next segment
                     }
                     Ok(None) => {
                         warn!("SegmentAck channel closed during segmented send");
@@ -1552,7 +1575,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             seg_idx += 1;
         }
 
-        // Wait for final SegmentAck (best-effort, per Clause 9.22)
         match tokio::time::timeout(seg_timeout, seg_ack_rx.recv()).await {
             Ok(Some(_ack)) => {
                 debug!("Received final SegmentAck for ComplexAck");
@@ -1562,7 +1584,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
         }
 
-        // Clean up the seg_ack channel.
         seg_ack_senders.lock().await.remove(&key);
     }
 
@@ -1623,9 +1644,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     let mut buf = BytesMut::new();
                     encode_apdu(&mut buf, &pdu);
 
-                    // Per Clause 16.10: if the WhoIs came from a remote network
-                    // (NPDU has SNET/SADR), route the IAm back through the local
-                    // router. Otherwise broadcast locally.
                     if let Some(ref source_net) = received.source_network {
                         if let Err(e) = network
                             .send_apdu_routed(
@@ -1678,7 +1696,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             }
                         }
                     }
-                    Ok(None) => { /* Object not found or not in range — no response */ }
+                    Ok(None) => {}
                     Err(e) => {
                         warn!(error = %e, "Failed to decode WhoHas");
                     }
@@ -1696,6 +1714,34 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 };
                 callback(data);
             }
+        } else if req.service_choice == UnconfirmedServiceChoice::WRITE_GROUP {
+            match handlers::handle_write_group(&req.service_request) {
+                Ok(write_group) => {
+                    debug!(
+                        group = write_group.group_number,
+                        priority = write_group.write_priority,
+                        values = write_group.change_list.len(),
+                        "WriteGroup received"
+                    );
+                }
+                Err(e) => {
+                    debug!(error = %e, "WriteGroup decode failed");
+                }
+            }
+        } else if req.service_choice == UnconfirmedServiceChoice::UNCONFIRMED_TEXT_MESSAGE {
+            match handlers::handle_text_message(&req.service_request) {
+                Ok(msg) => {
+                    debug!(
+                        source = ?msg.source_device,
+                        priority = ?msg.message_priority,
+                        "UnconfirmedTextMessage: {}",
+                        msg.message
+                    );
+                }
+                Err(e) => {
+                    debug!(error = %e, "UnconfirmedTextMessage decode failed");
+                }
+            }
         } else {
             debug!(
                 service = req.service_choice.to_raw(),
@@ -1706,29 +1752,23 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
     /// Evaluate intrinsic reporting on an object and send event notifications
     /// to NotificationClass recipients (or broadcast if none configured).
-    ///
-    /// Called after a successful write to present_value (or any property
-    /// that might affect event evaluation).
-    ///
-    /// Skipped when `comm_state >= 1` (DISABLE or DISABLE_INITIATION) per
-    /// BACnet Clause 16.4.3 — the server must not initiate notifications.
+    /// Skipped when DCC is active (comm_state >= 1).
     async fn fire_event_notifications(
         db: &Arc<RwLock<ObjectDatabase>>,
         network: &Arc<NetworkLayer<T>>,
         comm_state: &Arc<AtomicU8>,
+        server_tsm: &Arc<Mutex<ServerTsm>>,
         oid: &ObjectIdentifier,
     ) {
         if comm_state.load(Ordering::Acquire) >= 1 {
             return;
         }
 
-        // Compute current day-of-week bit and time (UTC) for recipient filtering.
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default();
         let total_secs = now.as_secs();
-        // Jan 1, 1970 = Thursday; 0=Sunday, 1=Monday, ..., 6=Saturday
-        let dow = ((total_secs / 86400 + 4) % 7) as u8;
+        let dow = ((total_secs / 86400 + 3) % 7) as u8;
         let today_bit = 1u8 << dow;
         let day_secs = (total_secs % 86400) as u32;
         let current_time = Time {
@@ -1757,7 +1797,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 None => return,
             };
 
-            // Read notification parameters from the object
             let notification_class = object
                 .read_property(PropertyIdentifier::NOTIFICATION_CLASS, None)
                 .ok()
@@ -1776,7 +1815,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 })
                 .unwrap_or(NotifyType::ALARM.to_raw());
 
-            // Priority: HIGH_LIMIT/LOW_LIMIT -> high priority (100), NORMAL -> low (200)
             let priority = if change.to == bacnet_types::enums::EventState::NORMAL {
                 200u8
             } else {
@@ -1800,7 +1838,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 event_values: None,
             };
 
-            // Look up recipients from the NotificationClass object
             let recipients = get_notification_recipients(
                 &db,
                 notification_class,
@@ -1813,7 +1850,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         };
 
         if recipients.is_empty() {
-            // No matching recipients — fall back to broadcast (backward compatible)
             let mut service_buf = BytesMut::new();
             if let Err(e) = notification.encode(&mut service_buf) {
                 warn!(error = %e, "Failed to encode EventNotification");
@@ -1835,7 +1871,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 warn!(error = %e, "Failed to broadcast EventNotification");
             }
         } else {
-            // Send to each matching recipient
             for (recipient, process_id, confirmed) in &recipients {
                 let mut targeted = notification.clone();
                 targeted.process_identifier = *process_id;
@@ -1855,7 +1890,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         segmented_response_accepted: false,
                         max_segments: None,
                         max_apdu_length: 1476,
-                        invoke_id: 0, // simplified: no TSM for event notifications yet
+                        invoke_id: server_tsm.lock().await.allocate().0,
                         sequence_number: None,
                         proposed_window_size: None,
                         service_choice: ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
@@ -1875,7 +1910,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             }
                         }
                         bacnet_types::constructed::BACnetRecipient::Device(_) => {
-                            // Cannot resolve Device OID to MAC; broadcast as fallback
                             if let Err(e) = network
                                 .broadcast_apdu(&buf, true, NetworkPriority::NORMAL)
                                 .await
@@ -1906,7 +1940,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             }
                         }
                         bacnet_types::constructed::BACnetRecipient::Device(_) => {
-                            // Cannot resolve Device OID to MAC; broadcast as fallback
                             if let Err(e) = network
                                 .broadcast_apdu(&buf, false, NetworkPriority::NORMAL)
                                 .await
@@ -1924,13 +1957,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     }
 
     /// Fire COV notifications for all active subscriptions on the given object.
-    ///
-    /// Called after a successful write. Reads the object's Present_Value and
-    /// Status_Flags, checks COV_Increment filtering, and sends notifications
-    /// to subscribers whose change threshold is met.
-    ///
-    /// Skipped when `comm_state >= 1` (DISABLE or DISABLE_INITIATION) per
-    /// BACnet Clause 16.4.3 — the server must not initiate notifications.
+    /// Skipped when DCC is active (comm_state >= 1).
     #[allow(clippy::too_many_arguments)]
     async fn fire_cov_notifications(
         db: &Arc<RwLock<ObjectDatabase>>,
@@ -1945,7 +1972,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         if comm_state.load(Ordering::Acquire) >= 1 {
             return;
         }
-        // 1. Get active subscriptions for this object
         let subs: Vec<crate::cov::CovSubscription> = {
             let mut table = cov_table.write().await;
             table.subscriptions_for(oid).into_iter().cloned().collect()
@@ -1955,7 +1981,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return;
         }
 
-        // 2. Read COV-relevant properties and COV_Increment from the object
         let (device_oid, values, current_pv, cov_increment) = {
             let db = db.read().await;
             let object = match db.get(oid) {
@@ -2006,7 +2031,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return;
         }
 
-        // 3. Send a notification to each subscriber (if change exceeds COV_Increment)
         for sub in &subs {
             if !CovSubscriptionTable::should_notify(sub, current_pv, cov_increment) {
                 continue;
@@ -2015,20 +2039,43 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 exp.saturating_duration_since(Instant::now()).as_secs() as u32
             });
 
+            let notification_values = if let Some(prop) = sub.monitored_property {
+                let db = db.read().await;
+                if let Some(object) = db.get(oid) {
+                    if let Ok(pv) = object.read_property(prop, sub.monitored_property_array_index) {
+                        let mut buf = BytesMut::new();
+                        if encode_property_value(&mut buf, &pv).is_ok() {
+                            vec![BACnetPropertyValue {
+                                property_identifier: prop,
+                                property_array_index: sub.monitored_property_array_index,
+                                value: buf.to_vec(),
+                                priority: None,
+                            }]
+                        } else {
+                            values.clone()
+                        }
+                    } else {
+                        values.clone()
+                    }
+                } else {
+                    values.clone()
+                }
+            } else {
+                values.clone()
+            };
+
             let notification = COVNotificationRequest {
                 subscriber_process_identifier: sub.subscriber_process_identifier,
                 initiating_device_identifier: device_oid,
                 monitored_object_identifier: *oid,
                 time_remaining,
-                list_of_values: values.clone(),
+                list_of_values: notification_values,
             };
 
             let mut service_buf = BytesMut::new();
             notification.encode(&mut service_buf);
 
             if sub.issue_confirmed_notifications {
-                // Acquire a permit from the semaphore to cap in-flight confirmed
-                // COV notifications at 255, preventing invoke ID reuse.
                 let permit = match cov_in_flight.clone().try_acquire_owned() {
                     Ok(permit) => permit,
                     Err(_) => {
@@ -2040,8 +2087,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     }
                 };
 
-                // Allocate invoke ID from the server TSM.
-                let id = {
+                let (id, result_rx) = {
                     let mut tsm = server_tsm.lock().await;
                     tsm.allocate()
                 };
@@ -2062,13 +2108,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let mut buf = BytesMut::new();
                 encode_apdu(&mut buf, &pdu);
 
-                // Update last-notified value optimistically for confirmed sends
                 if let Some(pv) = current_pv {
                     let mut table = cov_table.write().await;
                     table.set_last_notified_value(
                         &sub.subscriber_mac,
                         sub.subscriber_process_identifier,
                         sub.monitored_object_identifier,
+                        sub.monitored_property,
                         pv,
                     );
                 }
@@ -2078,36 +2124,34 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let apdu_timeout = Duration::from_millis(config.cov_retry_timeout_ms);
                 let tsm = Arc::clone(server_tsm);
                 let apdu_retries = DEFAULT_APDU_RETRIES;
-                // The permit is moved into the spawned task; it is automatically
-                // released when the task completes (ACK, error, or max retries).
                 tokio::spawn(async move {
-                    let _permit = permit; // hold until task completes
+                    let _permit = permit;
+                    let mut pending_rx: Option<oneshot::Receiver<CovAckResult>> = Some(result_rx);
 
                     for attempt in 0..=apdu_retries {
-                        // Send (or resend) the ConfirmedCOVNotification.
                         if let Err(e) = network
                             .send_apdu(&buf, &mac, true, NetworkPriority::NORMAL)
                             .await
                         {
                             warn!(error = %e, attempt, "COV notification send failed");
-                            // Network-level failure: still retry after timeout
                         } else {
                             debug!(invoke_id = id, attempt, "Confirmed COV notification sent");
                         }
 
-                        // Wait up to apdu_timeout for the dispatch loop to
-                        // record a result, checking at short intervals.
-                        let poll_interval = Duration::from_millis(50);
-                        let result = tokio::time::timeout(apdu_timeout, async {
-                            loop {
-                                tokio::time::sleep(poll_interval).await;
-                                let mut tsm = tsm.lock().await;
-                                if let Some(r) = tsm.take_result(id) {
-                                    return r;
-                                }
-                            }
-                        })
-                        .await;
+                        let rx = pending_rx
+                            .take()
+                            .expect("receiver always set for each attempt");
+                        let result = match tokio::time::timeout(apdu_timeout, rx).await {
+                            Ok(Ok(r)) => Ok(r),
+                            Ok(Err(_)) => Err(()), // channel closed
+                            Err(_) => Err(()),     // timeout
+                        };
+
+                        if result.is_err() && attempt < apdu_retries {
+                            let (tx, new_rx) = oneshot::channel();
+                            tsm.lock().await.pending.insert(id, tx);
+                            pending_rx = Some(new_rx);
+                        }
 
                         match result {
                             Ok(CovAckResult::Ack) => {
@@ -2119,7 +2163,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 return;
                             }
                             Err(_) => {
-                                // Timeout — no response yet.
                                 if attempt < apdu_retries {
                                     debug!(
                                         invoke_id = id,
@@ -2135,7 +2178,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         }
                     }
 
-                    // Final cleanup: ensure no stale entry in the TSM map.
                     let mut tsm = tsm.lock().await;
                     tsm.remove(id);
                 });
@@ -2154,12 +2196,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 {
                     warn!(error = %e, "Failed to send COV notification");
                 } else if let Some(pv) = current_pv {
-                    // Update last-notified value on successful send
                     let mut table = cov_table.write().await;
                     table.set_last_notified_value(
                         &sub.subscriber_mac,
                         sub.subscriber_process_identifier,
                         sub.monitored_object_identifier,
+                        sub.monitored_property,
                         pv,
                     );
                 }
@@ -2213,68 +2255,67 @@ mod tests {
     #[test]
     fn server_tsm_allocate_increments() {
         let mut tsm = ServerTsm::new();
-        assert_eq!(tsm.allocate(), 0);
-        assert_eq!(tsm.allocate(), 1);
-        assert_eq!(tsm.allocate(), 2);
+        assert_eq!(tsm.allocate().0, 0);
+        assert_eq!(tsm.allocate().0, 1);
+        assert_eq!(tsm.allocate().0, 2);
     }
 
     #[test]
     fn server_tsm_allocate_wraps_at_255() {
         let mut tsm = ServerTsm::new();
         tsm.next_invoke_id = 255;
-        assert_eq!(tsm.allocate(), 255);
-        assert_eq!(tsm.allocate(), 0); // wraps
+        assert_eq!(tsm.allocate().0, 255);
+        assert_eq!(tsm.allocate().0, 0); // wraps
     }
 
     #[test]
     fn server_tsm_record_and_take_ack() {
         let mut tsm = ServerTsm::new();
-        tsm.record_result(42, CovAckResult::Ack);
-        assert_eq!(tsm.take_result(42), Some(CovAckResult::Ack));
-        // Second take returns None (already consumed)
-        assert_eq!(tsm.take_result(42), None);
+        let (_id, rx) = tsm.allocate();
+        tsm.record_result(_id, CovAckResult::Ack);
+        // Result should be delivered via the oneshot channel
+        assert_eq!(rx.blocking_recv(), Ok(CovAckResult::Ack));
     }
 
     #[test]
     fn server_tsm_record_and_take_error() {
         let mut tsm = ServerTsm::new();
-        tsm.record_result(7, CovAckResult::Error);
-        assert_eq!(tsm.take_result(7), Some(CovAckResult::Error));
+        let (id, rx) = tsm.allocate();
+        tsm.record_result(id, CovAckResult::Error);
+        // Oneshot delivers immediately
+        assert_eq!(rx.blocking_recv(), Ok(CovAckResult::Error));
     }
 
     #[test]
-    fn server_tsm_take_nonexistent_returns_none() {
+    fn server_tsm_record_nonexistent_is_noop() {
         let mut tsm = ServerTsm::new();
-        assert_eq!(tsm.take_result(99), None);
+        // Recording a result for an ID with no receiver is a no-op
+        tsm.record_result(99, CovAckResult::Ack);
+        assert!(tsm.pending.is_empty());
     }
 
     #[test]
     fn server_tsm_remove_cleans_up() {
         let mut tsm = ServerTsm::new();
-        tsm.record_result(10, CovAckResult::Ack);
-        tsm.remove(10);
-        assert_eq!(tsm.take_result(10), None);
+        let (id, _rx) = tsm.allocate();
+        tsm.remove(id);
+        assert!(!tsm.pending.contains_key(&id));
     }
 
     #[test]
     fn server_tsm_multiple_pending() {
         let mut tsm = ServerTsm::new();
-        tsm.record_result(1, CovAckResult::Ack);
-        tsm.record_result(2, CovAckResult::Error);
-        tsm.record_result(3, CovAckResult::Ack);
+        let (id1, rx1) = tsm.allocate();
+        let (id2, rx2) = tsm.allocate();
+        let (id3, rx3) = tsm.allocate();
 
-        assert_eq!(tsm.take_result(2), Some(CovAckResult::Error));
-        assert_eq!(tsm.take_result(1), Some(CovAckResult::Ack));
-        assert_eq!(tsm.take_result(3), Some(CovAckResult::Ack));
-    }
+        tsm.record_result(id2, CovAckResult::Error);
+        tsm.record_result(id1, CovAckResult::Ack);
+        tsm.record_result(id3, CovAckResult::Ack);
 
-    #[test]
-    fn server_tsm_overwrite_result() {
-        let mut tsm = ServerTsm::new();
-        tsm.record_result(5, CovAckResult::Ack);
-        // Overwrite with Error (e.g., duplicate response)
-        tsm.record_result(5, CovAckResult::Error);
-        assert_eq!(tsm.take_result(5), Some(CovAckResult::Error));
+        assert_eq!(rx2.blocking_recv(), Ok(CovAckResult::Error));
+        assert_eq!(rx1.blocking_recv(), Ok(CovAckResult::Ack));
+        assert_eq!(rx3.blocking_recv(), Ok(CovAckResult::Ack));
     }
 
     #[test]
