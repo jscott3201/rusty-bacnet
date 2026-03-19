@@ -249,7 +249,8 @@ Transport-layer implementations. All implement the `TransportPort` trait.
 | (default) | all | BIP (UDP/IPv4) |
 | `ipv6` | all | BIP6 (UDP/IPv6 multicast) |
 | `sc-tls` | all | BACnet/SC (WebSocket + TLS) + SC Hub |
-| `serial` | Linux | MS/TP (serial token-passing) |
+| `serial` | all | MS/TP (serial token-passing via `tokio-serial`) |
+| `serial-gpio` | Linux | MS/TP + GPIO direction control (adds `gpiocdev`) |
 | `ethernet` | Linux | BACnet Ethernet (BPF) |
 
 ### BIP (IPv4)
@@ -300,6 +301,82 @@ let addr = hub.start().await?;  // Returns SocketAddr
 ```
 
 The SC hub is a TLS WebSocket relay. Both clients and servers connect to it as spoke nodes. Messages are routed by VMAC address.
+
+### MS/TP (Serial RS-485)
+
+MS/TP is a token-passing protocol over RS-485 serial, commonly used for field-level BACnet devices. The serial I/O is abstracted behind the `SerialPort` trait, with three RS-485 direction control modes.
+
+#### Auto-Direction (USB RS-485 Adapters)
+
+Most USB RS-485 adapters (FTDI, CH340, CP2102) handle direction switching in hardware — no configuration needed.
+
+```rust
+use bacnet_transport::mstp_serial::{TokioSerialPort, SerialConfig};
+
+let serial = TokioSerialPort::open(&SerialConfig {
+    port_name: "/dev/ttyUSB0".into(),   // Linux
+    // port_name: "/dev/cu.usbserial-xxx".into(),  // macOS
+    baud_rate: 76800,
+})?;
+
+// Use with BACnetClient or BACnetServer via generic_builder
+let client = BACnetClient::generic_builder()
+    .transport(MstpTransport::new(serial, 1, 127))  // station 1, max_master 127
+    .build()
+    .await?;
+```
+
+#### Kernel RS-485 Mode (Linux, RTS-based)
+
+When DE/RE is wired to the UART's RTS pin, the Linux kernel can toggle it automatically via the `TIOCSRS485` ioctl. Zero userspace overhead.
+
+```rust
+let serial = TokioSerialPort::open(&config)?;
+serial.enable_kernel_rs485(
+    false,  // invert_rts: false = RTS HIGH during TX
+    0,      // delay_before_send_us
+    0,      // delay_after_send_us
+)?;
+```
+
+#### GPIO Direction Control (RS-485 Hats)
+
+For RS-485 hats where DE/RE is wired to a GPIO pin (e.g., Seeed Studio RS-485 Shield on Raspberry Pi with GPIO18), use `GpioDirectionPort` to wrap any `SerialPort`. Requires the `serial-gpio` feature.
+
+```rust
+use bacnet_transport::mstp_serial::{GpioDirectionPort, TokioSerialPort, SerialConfig};
+
+let serial = TokioSerialPort::open(&SerialConfig {
+    port_name: "/dev/ttyS0".into(),
+    baud_rate: 76800,
+})?;
+
+// Wrap with GPIO direction control: gpiochip0, line 18, active-high
+let port = GpioDirectionPort::new(serial, "/dev/gpiochip0", 18, true)?;
+
+// Or with explicit post-TX delay (microseconds before switching to RX):
+let port = GpioDirectionPort::with_post_tx_delay(
+    serial, "/dev/gpiochip0", 18, true, 200,
+)?;
+```
+
+The `GpioDirectionPort` wrapper:
+- Sets GPIO to receive mode (DE deasserted) on creation
+- Switches to TX mode before each `write()`
+- Waits for optional post-TX delay after write completes
+- Switches back to RX mode after each `write()`
+- Uses the Linux GPIO character device (`/dev/gpiochipN`) via `gpiocdev` — not deprecated sysfs
+
+#### SerialPort Trait
+
+The MS/TP state machine is hardware-agnostic. Custom serial implementations (e.g., for testing) can implement:
+
+```rust
+pub trait SerialPort: Send + Sync + 'static {
+    fn write(&self, data: &[u8]) -> impl Future<Output = Result<(), Error>> + Send;
+    fn read(&self, buf: &mut [u8]) -> impl Future<Output = Result<usize, Error>> + Send;
+}
+```
 
 ### Loopback Transport
 
@@ -853,6 +930,43 @@ let client = BACnetClient::sc_builder()
     .hub_url(&format!("wss://127.0.0.1:{}", hub_addr.port()))
     .tls_config(tls_config)
     .vmac([0, 1, 2, 3, 4, 5])
+    .build()
+    .await?;
+```
+
+### MS/TP with USB Adapter
+
+```rust
+use bacnet_transport::mstp::MstpTransport;
+use bacnet_transport::mstp_serial::{TokioSerialPort, SerialConfig};
+
+let serial = TokioSerialPort::open(&SerialConfig {
+    port_name: "/dev/ttyUSB0".into(),
+    baud_rate: 76800,
+})?;
+
+let client = BACnetClient::generic_builder()
+    .transport(MstpTransport::new(serial, 1, 127))
+    .build()
+    .await?;
+```
+
+### MS/TP with Raspberry Pi RS-485 Hat (GPIO)
+
+```rust
+use bacnet_transport::mstp::MstpTransport;
+use bacnet_transport::mstp_serial::{GpioDirectionPort, TokioSerialPort, SerialConfig};
+
+let serial = TokioSerialPort::open(&SerialConfig {
+    port_name: "/dev/ttyS0".into(),
+    baud_rate: 76800,
+})?;
+
+// Seeed Studio RS-485 Shield: GPIO18 for DE/RE, active-high
+let port = GpioDirectionPort::new(serial, "/dev/gpiochip0", 18, true)?;
+
+let client = BACnetClient::generic_builder()
+    .transport(MstpTransport::new(port, 1, 127))
     .build()
     .await?;
 ```

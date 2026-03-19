@@ -106,6 +106,27 @@ MAC address format varies by transport:
 
 `AnyTransport<S>` is a type-erased enum wrapping all transport types, enabling mixed-transport routing (e.g., BIP + MS/TP + Loopback on the same router).
 
+### RS-485 Direction Control (MS/TP)
+
+RS-485 is half-duplex — the transceiver's DE/RE pin must be toggled between transmit and receive. The stack supports three modes:
+
+```
+                              ┌──────────────────────────┐
+USB RS-485 Adapter ──────────>│  TokioSerialPort         │  Auto-direction
+(FTDI, CH340, etc.)           │  (no config needed)      │  (hardware handles DE/RE)
+                              └──────────────────────────┘
+
+UART + RTS → DE/RE ──────────>│  TokioSerialPort         │  Kernel RS-485
+(DE wired to UART RTS pin)    │  .enable_kernel_rs485()  │  (TIOCSRS485 ioctl)
+                              └──────────────────────────┘
+
+UART + GPIO → DE/RE ─────────>│  GpioDirectionPort<S>    │  GPIO direction
+(Pi hat, GPIO pin for DE)     │  wraps any SerialPort    │  (gpiocdev, serial-gpio feature)
+                              └──────────────────────────┘
+```
+
+`GpioDirectionPort` is a composable wrapper — it wraps any `SerialPort` and toggles a GPIO pin via the Linux character device API (`/dev/gpiochipN`) before and after each write. This keeps `TokioSerialPort` simple and platform-independent.
+
 ## Object Model
 
 Every BACnet object implements the `BACnetObject` trait:
