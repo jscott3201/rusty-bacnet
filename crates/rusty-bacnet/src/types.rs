@@ -772,6 +772,94 @@ pub(crate) fn py_to_wpm_specs(
 }
 
 // ---------------------------------------------------------------------------
+// BDT/FDT/Router types for BVLL operations
+// ---------------------------------------------------------------------------
+
+/// A Broadcast Distribution Table entry from a BBMD.
+#[pyclass(name = "BdtEntry", frozen)]
+pub struct PyBdtEntry {
+    #[pyo3(get)]
+    pub ip: String,
+    #[pyo3(get)]
+    pub port: u16,
+    #[pyo3(get)]
+    pub mask: String,
+}
+
+#[pymethods]
+impl PyBdtEntry {
+    fn __repr__(&self) -> String {
+        format!("BdtEntry({}:{}, mask={})", self.ip, self.port, self.mask)
+    }
+}
+
+impl PyBdtEntry {
+    pub fn from_rust(entry: &bacnet_transport::bbmd::BdtEntry) -> Self {
+        Self {
+            ip: format!("{}.{}.{}.{}", entry.ip[0], entry.ip[1], entry.ip[2], entry.ip[3]),
+            port: entry.port,
+            mask: format!(
+                "{}.{}.{}.{}",
+                entry.broadcast_mask[0],
+                entry.broadcast_mask[1],
+                entry.broadcast_mask[2],
+                entry.broadcast_mask[3]
+            ),
+        }
+    }
+}
+
+/// A Foreign Device Table entry from a BBMD.
+#[pyclass(name = "FdtEntry", frozen)]
+pub struct PyFdtEntry {
+    #[pyo3(get)]
+    pub ip: String,
+    #[pyo3(get)]
+    pub port: u16,
+    #[pyo3(get)]
+    pub ttl: u16,
+    #[pyo3(get)]
+    pub seconds_remaining: u16,
+}
+
+#[pymethods]
+impl PyFdtEntry {
+    fn __repr__(&self) -> String {
+        format!(
+            "FdtEntry({}:{}, ttl={}, remaining={})",
+            self.ip, self.port, self.ttl, self.seconds_remaining
+        )
+    }
+}
+
+impl PyFdtEntry {
+    pub fn from_rust(entry: &bacnet_transport::bbmd::FdtEntryWire) -> Self {
+        Self {
+            ip: format!("{}.{}.{}.{}", entry.ip[0], entry.ip[1], entry.ip[2], entry.ip[3]),
+            port: entry.port,
+            ttl: entry.ttl,
+            seconds_remaining: entry.seconds_remaining,
+        }
+    }
+}
+
+/// A discovered BACnet router and the networks it serves.
+#[pyclass(name = "RouterInfo", frozen)]
+pub struct PyRouterInfo {
+    #[pyo3(get)]
+    pub address: String,
+    #[pyo3(get)]
+    pub networks: Vec<u16>,
+}
+
+#[pymethods]
+impl PyRouterInfo {
+    fn __repr__(&self) -> String {
+        format!("RouterInfo({}, networks={:?})", self.address, self.networks)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Module registration
 // ---------------------------------------------------------------------------
 
@@ -817,6 +905,11 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDiscoveredDevice>()?;
     m.add_class::<PyCovNotification>()?;
     m.add_class::<PyCovNotificationIterator>()?;
+
+    // BVLL / router types
+    m.add_class::<PyBdtEntry>()?;
+    m.add_class::<PyFdtEntry>()?;
+    m.add_class::<PyRouterInfo>()?;
 
     Ok(())
 }

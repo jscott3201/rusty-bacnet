@@ -24,7 +24,9 @@ use bacnet_services::cov::COVNotificationRequest;
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::bip6::Bip6Transport;
 use bacnet_transport::port::TransportPort;
-use bacnet_types::enums::{ConfirmedServiceChoice, NetworkPriority, UnconfirmedServiceChoice};
+use bacnet_types::enums::{
+    ConfirmedServiceChoice, NetworkMessageType, NetworkPriority, UnconfirmedServiceChoice,
+};
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 
@@ -167,6 +169,15 @@ const SEG_RECEIVER_TIMEOUT: Duration = Duration::from_secs(4);
 /// Key for tracking in-progress segmented receives: (source_mac, invoke_id).
 type SegKey = (MacAddr, u8);
 
+/// Discovered router info from I-Am-Router-To-Network responses.
+#[derive(Debug, Clone)]
+pub struct RouterInfo {
+    /// MAC address of the router (transport-native format).
+    pub mac: MacAddr,
+    /// Network numbers reachable through this router.
+    pub networks: Vec<u16>,
+}
+
 /// BACnet client with low-level and high-level request APIs.
 pub struct BACnetClient<T: TransportPort> {
     config: ClientConfig,
@@ -239,6 +250,26 @@ impl BACnetClient<BipTransport> {
             .transport()
             .register_foreign_device_bvlc(target, ttl)
             .await
+    }
+}
+
+impl<S: bacnet_transport::mstp::SerialPort + 'static>
+    BACnetClient<bacnet_transport::any::AnyTransport<S>>
+{
+    /// Read the Broadcast Distribution Table from a BBMD (BIP transport only).
+    pub async fn read_bdt(
+        &self,
+        target: &[u8],
+    ) -> Result<Vec<bacnet_transport::bbmd::BdtEntry>, Error> {
+        self.network.transport().read_bdt(target).await
+    }
+
+    /// Read the Foreign Device Table from a BBMD (BIP transport only).
+    pub async fn read_fdt(
+        &self,
+        target: &[u8],
+    ) -> Result<Vec<bacnet_transport::bbmd::FdtEntryWire>, Error> {
+        self.network.transport().read_fdt(target).await
     }
 }
 
@@ -439,6 +470,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         config.max_apdu_length = config.max_apdu_length.min(transport_max);
 
         let mut network = NetworkLayer::new(transport);
+        // Enable network message forwarding before starting so that
+        // I-Am-Router-To-Network and similar messages are not discarded.
+        let _rx = network.network_messages();
         let mut apdu_rx = network.start().await?;
         let local_mac = MacAddr::from_slice(network.local_mac());
 
@@ -1487,6 +1521,75 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
         self.broadcast_network_unconfirmed(UnconfirmedServiceChoice::WHO_IS, &buf, dest_network)
             .await
+    }
+
+    /// Broadcast Who-Is-Router-To-Network and collect I-Am-Router-To-Network
+    /// responses for a configurable duration.
+    ///
+    /// If `network` is `Some`, asks specifically about that network number.
+    /// If `None`, asks for all networks.
+    ///
+    /// Returns a list of [`RouterInfo`] describing discovered routers and
+    /// the network numbers they serve.
+    pub async fn who_is_router_to_network(
+        &self,
+        network: Option<u16>,
+        wait_ms: u64,
+    ) -> Result<Vec<RouterInfo>, Error> {
+        // Subscribe to network messages before sending the broadcast.
+        let mut rx = self
+            .network
+            .subscribe_network_messages()
+            .ok_or_else(|| Error::Encoding("network message channel not initialized".into()))?;
+
+        // Encode the optional network number payload.
+        let payload = match network {
+            Some(net) => net.to_be_bytes().to_vec(),
+            None => Vec::new(),
+        };
+
+        self.network
+            .broadcast_network_message(
+                NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw(),
+                &payload,
+            )
+            .await?;
+
+        // Collect I-Am-Router-To-Network responses for the specified duration.
+        let mut routers: HashMap<MacAddr, Vec<u16>> = HashMap::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(wait_ms);
+
+        loop {
+            match tokio::time::timeout_at(deadline, rx.recv()).await {
+                Ok(Ok(msg)) => {
+                    if msg.message_type
+                        == NetworkMessageType::I_AM_ROUTER_TO_NETWORK.to_raw()
+                    {
+                        // Parse network numbers from the payload (2 bytes each).
+                        let data = &msg.payload;
+                        let mut offset = 0;
+                        let mut nets = Vec::new();
+                        while offset + 1 < data.len() {
+                            let net = u16::from_be_bytes([data[offset], data[offset + 1]]);
+                            nets.push(net);
+                            offset += 2;
+                        }
+                        routers
+                            .entry(msg.source_mac.clone())
+                            .or_default()
+                            .extend(nets);
+                    }
+                }
+                Ok(Err(broadcast::error::RecvError::Lagged(_))) => continue,
+                Ok(Err(broadcast::error::RecvError::Closed)) => break,
+                Err(_) => break, // Timeout reached
+            }
+        }
+
+        Ok(routers
+            .into_iter()
+            .map(|(mac, networks)| RouterInfo { mac, networks })
+            .collect())
     }
 
     /// Send a WhoHas broadcast to find an object by identifier or name.
