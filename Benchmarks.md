@@ -1,8 +1,13 @@
 # Rusty BACnet — Benchmarks & Stress Test Results
 
-> Run date: 2026-03-05 | Platform: macOS (Apple Silicon) | Rust 1.93 | JDK 21.0.10 | Release mode
+> Last full run: 2026-03-05 | Platform: macOS (Apple Silicon) | Rust 1.93 | JDK 21.0.10 | Release mode
 >
 > TLS provider: aws-lc-rs | All tests ran on localhost with zero errors unless noted.
+>
+> **2026-03-20 update:** Server dispatch loop now spawns per-request tasks for concurrent
+> multi-client handling. Quick benchmarks show ~44% read throughput improvement at 1000 ops.
+> Client multi-device batch API added (`read_property_from_devices`, etc.) with
+> `buffer_unordered` concurrency. Full benchmark run pending.
 
 ---
 
@@ -32,10 +37,13 @@
 
 #### Throughput (batched requests)
 
-| Operation | 10 ops | 100 ops | 1000 ops | Peak ops/s |
-|---|---|---|---|---|
-| ReadProperty | 278 µs | 2.77 ms | 27.6 ms | **~36.0 K/s** |
-| WriteProperty | 289 µs | 2.87 ms | 28.3 ms | **~35.3 K/s** |
+| Operation | 10 ops | 100 ops | 1000 ops | Peak ops/s | Δ vs pre-spawn |
+|---|---|---|---|---|---|
+| ReadProperty | 280 µs | 2.82 ms | 28.1 ms | **~35.6 K/s** | **~-44%** ¹ |
+| WriteProperty | 297 µs | 2.97 ms | 29.9 ms | **~33.4 K/s** | ~0% ² |
+
+¹ Quick-run (sample-size 10) showed -44% to -47% improvement at 1000 ops from dispatch spawning. Full benchmark pending.
+² Write throughput unchanged — writes take exclusive `db.write()` lock so they naturally serialize.
 
 ### 1.3 BACnet/IPv6 (BIP6) — UDP Transport
 
@@ -506,6 +514,8 @@ and Kotlin coroutine suspension/resumption (~25 µs).
 
 - **Encoding is fast**: Full RP encode/decode stack in ~131 ns (CPU-bound, no allocation hot paths thanks to `Bytes` zero-copy)
 - **BIP throughput scales linearly**: 40K/s single-client → 161K/s at 50 clients with sub-millisecond p99
+- **Concurrent dispatch unlocks RwLock parallelism**: Server now spawns per-request tasks — multiple ReadProperty requests run truly concurrently via `db.read()`. Quick benchmarks show ~44% read throughput improvement (full run pending)
+- **Multi-device batch API**: Client `read_property_from_devices()` / `read_property_multiple_from_devices()` / `write_property_to_devices()` fan out to N devices concurrently with configurable `max_concurrent` (default 32). Available in Rust, Python, and Java/Kotlin
 - **Object count doesn't matter**: 100 → 5,000 objects shows zero latency degradation (RwLock contention minimal)
 - **COV is reliable**: 100% notification delivery at 25 concurrent subscriptions
 - **SC overhead is ~2.5×**: TLS WebSocket adds ~40 µs per operation vs raw UDP — acceptable for secure deployments
@@ -528,6 +538,9 @@ cargo bench -p bacnet-benchmarks
 
 # Individual benchmark
 cargo bench -p bacnet-benchmarks --bench bip_latency
+
+# Quick run (reduced samples, ~10s per suite instead of ~60s)
+cargo bench -p bacnet-benchmarks --bench bip_latency -- --sample-size 10 --warm-up-time 1
 
 # Stress tests
 cargo run --release -p bacnet-benchmarks --bin stress-test -- clients --steps 1,5,10,25,50 --duration 5

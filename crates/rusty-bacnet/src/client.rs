@@ -445,6 +445,245 @@ impl BACnetClient {
     }
 
     // -----------------------------------------------------------------------
+    // Multi-device batch operations
+    // -----------------------------------------------------------------------
+
+    /// Read a property from multiple discovered devices concurrently.
+    ///
+    /// Args:
+    ///     requests: List of (device_instance, object_id, property_id, array_index) tuples
+    ///     max_concurrent: Max concurrent requests (default 32)
+    ///
+    /// Returns: List of dicts with 'device_instance', 'value' (PropertyValue or None),
+    ///          'error' (str or None)
+    #[pyo3(signature = (requests, max_concurrent=None))]
+    fn read_property_from_devices<'py>(
+        &self,
+        py: Python<'py>,
+        requests: Vec<(u32, PyObjectIdentifier, PyPropertyIdentifier, Option<u32>)>,
+        max_concurrent: Option<usize>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        let rust_requests: Vec<_> = requests
+            .into_iter()
+            .map(
+                |(device_instance, oid, pid, idx)| bacnet_client::client::DeviceReadRequest {
+                    device_instance,
+                    object_identifier: oid.to_rust(),
+                    property_identifier: pid.to_rust(),
+                    property_array_index: idx,
+                },
+            )
+            .collect();
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let c = {
+                let guard = inner.lock().await;
+                Arc::clone(guard.as_ref().ok_or_else(|| {
+                    PyRuntimeError::new_err("client not started — use 'async with'")
+                })?)
+            };
+
+            let results = c
+                .read_property_from_devices(rust_requests, max_concurrent)
+                .await;
+
+            Python::attach(|py| {
+                let py_results: Vec<_> = results
+                    .into_iter()
+                    .map(|r| {
+                        let dict = PyDict::new(py);
+                        dict.set_item("device_instance", r.device_instance).unwrap();
+                        match r.result {
+                            Ok(ack) => match decode_application_value(&ack.property_value, 0) {
+                                Ok((value, _)) => {
+                                    dict.set_item("value", PyPropertyValue::from_rust(value))
+                                        .unwrap();
+                                    dict.set_item("error", py.None()).unwrap();
+                                }
+                                Err(e) => {
+                                    dict.set_item("value", py.None()).unwrap();
+                                    dict.set_item("error", e.to_string()).unwrap();
+                                }
+                            },
+                            Err(e) => {
+                                dict.set_item("value", py.None()).unwrap();
+                                dict.set_item("error", e.to_string()).unwrap();
+                            }
+                        }
+                        dict.into_any().unbind()
+                    })
+                    .collect();
+                Ok(py_results)
+            })
+        })
+    }
+
+    /// Read multiple properties from multiple devices concurrently (RPM batch).
+    ///
+    /// Args:
+    ///     requests: List of (device_instance, [(object_id, [(property_id, array_index)])]) tuples
+    ///     max_concurrent: Max concurrent requests (default 32)
+    ///
+    /// Returns: List of dicts with 'device_instance', 'results' (list or None), 'error' (str or None)
+    #[pyo3(signature = (requests, max_concurrent=None))]
+    #[allow(clippy::type_complexity)]
+    fn read_property_multiple_from_devices<'py>(
+        &self,
+        py: Python<'py>,
+        requests: Vec<(
+            u32,
+            Vec<(PyObjectIdentifier, Vec<(PyPropertyIdentifier, Option<u32>)>)>,
+        )>,
+        max_concurrent: Option<usize>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        use bacnet_services::common::PropertyReference;
+
+        let inner = self.inner.clone();
+        let rust_requests: Vec<_> = requests
+            .into_iter()
+            .map(|(device_instance, specs)| {
+                let rust_specs = specs
+                    .into_iter()
+                    .map(
+                        |(oid, props)| bacnet_services::rpm::ReadAccessSpecification {
+                            object_identifier: oid.to_rust(),
+                            list_of_property_references: props
+                                .into_iter()
+                                .map(|(pid, idx)| PropertyReference {
+                                    property_identifier: pid.to_rust(),
+                                    property_array_index: idx,
+                                })
+                                .collect(),
+                        },
+                    )
+                    .collect();
+                bacnet_client::client::DeviceRpmRequest {
+                    device_instance,
+                    specs: rust_specs,
+                }
+            })
+            .collect();
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let c = {
+                let guard = inner.lock().await;
+                Arc::clone(guard.as_ref().ok_or_else(|| {
+                    PyRuntimeError::new_err("client not started — use 'async with'")
+                })?)
+            };
+
+            let results = c
+                .read_property_multiple_from_devices(rust_requests, max_concurrent)
+                .await;
+
+            Python::attach(|py| {
+                let py_results: Vec<_> = results
+                    .into_iter()
+                    .map(|r| {
+                        let dict = PyDict::new(py);
+                        dict.set_item("device_instance", r.device_instance).unwrap();
+                        match r.result {
+                            Ok(ack) => match rpm_ack_to_py(py, ack) {
+                                Ok(rpm_result) => {
+                                    dict.set_item("results", rpm_result).unwrap();
+                                    dict.set_item("error", py.None()).unwrap();
+                                }
+                                Err(e) => {
+                                    dict.set_item("results", py.None()).unwrap();
+                                    dict.set_item("error", e.to_string()).unwrap();
+                                }
+                            },
+                            Err(e) => {
+                                dict.set_item("results", py.None()).unwrap();
+                                dict.set_item("error", e.to_string()).unwrap();
+                            }
+                        }
+                        dict.into_any().unbind()
+                    })
+                    .collect();
+                Ok(py_results)
+            })
+        })
+    }
+
+    /// Write a property on multiple devices concurrently.
+    ///
+    /// Args:
+    ///     requests: List of (device_instance, object_id, property_id, value, priority, array_index)
+    ///     max_concurrent: Max concurrent requests (default 32)
+    ///
+    /// Returns: List of dicts with 'device_instance', 'error' (str or None)
+    #[pyo3(signature = (requests, max_concurrent=None))]
+    #[allow(clippy::type_complexity)]
+    fn write_property_to_devices<'py>(
+        &self,
+        py: Python<'py>,
+        requests: Vec<(
+            u32,
+            PyObjectIdentifier,
+            PyPropertyIdentifier,
+            PyPropertyValue,
+            Option<u8>,
+            Option<u32>,
+        )>,
+        max_concurrent: Option<usize>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        let rust_requests: Result<Vec<_>, PyErr> = requests
+            .into_iter()
+            .map(
+                |(device_instance, oid, pid, value, priority, array_index)| {
+                    let mut value_buf = BytesMut::new();
+                    encode_property_value(&mut value_buf, &value.inner).map_err(to_py_err)?;
+                    Ok(bacnet_client::client::DeviceWriteRequest {
+                        device_instance,
+                        object_identifier: oid.to_rust(),
+                        property_identifier: pid.to_rust(),
+                        property_array_index: array_index,
+                        property_value: value_buf.to_vec(),
+                        priority,
+                    })
+                },
+            )
+            .collect();
+        let rust_requests = rust_requests?;
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let c = {
+                let guard = inner.lock().await;
+                Arc::clone(guard.as_ref().ok_or_else(|| {
+                    PyRuntimeError::new_err("client not started — use 'async with'")
+                })?)
+            };
+
+            let results = c
+                .write_property_to_devices(rust_requests, max_concurrent)
+                .await;
+
+            Python::attach(|py| {
+                let py_results: Vec<_> = results
+                    .into_iter()
+                    .map(|r| {
+                        let dict = PyDict::new(py);
+                        dict.set_item("device_instance", r.device_instance).unwrap();
+                        match r.result {
+                            Ok(()) => {
+                                dict.set_item("error", py.None()).unwrap();
+                            }
+                            Err(e) => {
+                                dict.set_item("error", e.to_string()).unwrap();
+                            }
+                        }
+                        dict.into_any().unbind()
+                    })
+                    .collect();
+                Ok(py_results)
+            })
+        })
+    }
+
+    // -----------------------------------------------------------------------
     // COV
     // -----------------------------------------------------------------------
 

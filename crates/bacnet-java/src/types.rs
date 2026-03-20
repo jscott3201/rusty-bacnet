@@ -194,6 +194,62 @@ pub struct PropertyWrite {
     pub priority: Option<u8>,
 }
 
+// ---------------------------------------------------------------------------
+// Multi-device batch operation types
+// ---------------------------------------------------------------------------
+
+/// Request to read a single property from a discovered device.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct DeviceReadRequest {
+    pub device_instance: u32,
+    pub object_type: u32,
+    pub object_instance: u32,
+    pub property_id: u32,
+    pub array_index: Option<u32>,
+}
+
+/// Result of a single-property read from a device within a batch.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct DeviceReadResult {
+    pub device_instance: u32,
+    pub value: Option<BacnetPropertyValue>,
+    pub error: Option<String>,
+}
+
+/// Request to read multiple properties from a discovered device (RPM).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct DeviceRpmRequest {
+    pub device_instance: u32,
+    pub specs: Vec<ReadAccessSpec>,
+}
+
+/// Result of an RPM to a single device within a batch.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct DeviceRpmResult {
+    pub device_instance: u32,
+    pub results: Option<Vec<ObjectReadResult>>,
+    pub error: Option<String>,
+}
+
+/// Request to write a single property on a discovered device.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct DeviceWriteRequest {
+    pub device_instance: u32,
+    pub object_type: u32,
+    pub object_instance: u32,
+    pub property_id: u32,
+    pub value: BacnetPropertyValue,
+    pub priority: Option<u8>,
+    pub array_index: Option<u32>,
+}
+
+/// Result of a single-property write to a device within a batch.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct DeviceWriteResult {
+    pub device_instance: u32,
+    pub error: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

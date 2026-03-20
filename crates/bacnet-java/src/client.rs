@@ -224,6 +224,194 @@ impl BacnetClient {
         Ok(())
     }
 
+    // -----------------------------------------------------------------------
+    // Multi-device batch operations
+    // -----------------------------------------------------------------------
+
+    /// Read a property from multiple discovered devices concurrently.
+    pub async fn read_property_from_devices(
+        &self,
+        requests: Vec<crate::types::DeviceReadRequest>,
+        max_concurrent: Option<u32>,
+    ) -> Result<Vec<crate::types::DeviceReadResult>, BacnetError> {
+        let client = self.get_client().await?;
+        let rust_requests: Result<Vec<_>, BacnetError> = requests
+            .into_iter()
+            .map(|r| {
+                let oid =
+                    ObjectIdentifier::new(ObjectType::from_raw(r.object_type), r.object_instance)
+                        .map_err(BacnetError::from)?;
+                Ok(bacnet_client::client::DeviceReadRequest {
+                    device_instance: r.device_instance,
+                    object_identifier: oid,
+                    property_identifier: PropertyIdentifier::from_raw(r.property_id),
+                    property_array_index: r.array_index,
+                })
+            })
+            .collect();
+
+        let results = client
+            .read_property_from_devices(rust_requests?, max_concurrent.map(|n| n as usize))
+            .await;
+
+        results
+            .into_iter()
+            .map(|r| {
+                Ok(crate::types::DeviceReadResult {
+                    device_instance: r.device_instance,
+                    value: match &r.result {
+                        Ok(ack) => Some(decode_property_value(&ack.property_value)?),
+                        Err(_) => None,
+                    },
+                    error: r.result.err().map(|e| e.to_string()),
+                })
+            })
+            .collect()
+    }
+
+    /// Read multiple properties from multiple devices concurrently (RPM batch).
+    pub async fn read_property_multiple_from_devices(
+        &self,
+        requests: Vec<crate::types::DeviceRpmRequest>,
+        max_concurrent: Option<u32>,
+    ) -> Result<Vec<crate::types::DeviceRpmResult>, BacnetError> {
+        use bacnet_services::common::PropertyReference;
+
+        let client = self.get_client().await?;
+        let rust_requests: Result<Vec<_>, BacnetError> = requests
+            .into_iter()
+            .map(|r| {
+                let specs: Result<Vec<_>, BacnetError> = r
+                    .specs
+                    .into_iter()
+                    .map(|s| {
+                        let oid =
+                            ObjectIdentifier::new(ObjectType::from_raw(s.object_type), s.instance)
+                                .map_err(BacnetError::from)?;
+                        Ok(bacnet_services::rpm::ReadAccessSpecification {
+                            object_identifier: oid,
+                            list_of_property_references: s
+                                .properties
+                                .into_iter()
+                                .map(|p| PropertyReference {
+                                    property_identifier: PropertyIdentifier::from_raw(
+                                        p.property_id,
+                                    ),
+                                    property_array_index: p.array_index,
+                                })
+                                .collect(),
+                        })
+                    })
+                    .collect();
+                Ok(bacnet_client::client::DeviceRpmRequest {
+                    device_instance: r.device_instance,
+                    specs: specs?,
+                })
+            })
+            .collect();
+
+        let results = client
+            .read_property_multiple_from_devices(rust_requests?, max_concurrent.map(|n| n as usize))
+            .await;
+
+        Ok(results
+            .into_iter()
+            .map(|r| {
+                let (results, error) = match r.result {
+                    Ok(ack) => {
+                        let obj_results: Vec<_> = ack
+                            .list_of_read_access_results
+                            .into_iter()
+                            .map(|obj_result| {
+                                let read_results: Vec<_> = obj_result
+                                    .list_of_results
+                                    .into_iter()
+                                    .map(|elem| {
+                                        let (value, error_class, error_code) =
+                                            if let Some(ref data) = elem.property_value {
+                                                match decode_property_value(data) {
+                                                    Ok(v) => (Some(v), None, None),
+                                                    Err(_) => (None, None, None),
+                                                }
+                                            } else if let Some((ec, ecd)) = elem.error {
+                                                (None, Some(ec.to_raw()), Some(ecd.to_raw()))
+                                            } else {
+                                                (
+                                                    Some(crate::types::BacnetPropertyValue::Null),
+                                                    None,
+                                                    None,
+                                                )
+                                            };
+                                        crate::types::ReadResult {
+                                            property_id: elem.property_identifier.to_raw(),
+                                            array_index: elem.property_array_index,
+                                            value,
+                                            error_class,
+                                            error_code,
+                                        }
+                                    })
+                                    .collect();
+                                crate::types::ObjectReadResult {
+                                    object_type: obj_result
+                                        .object_identifier
+                                        .object_type()
+                                        .to_raw(),
+                                    instance: obj_result.object_identifier.instance_number(),
+                                    results: read_results,
+                                }
+                            })
+                            .collect();
+                        (Some(obj_results), None)
+                    }
+                    Err(e) => (None, Some(e.to_string())),
+                };
+                crate::types::DeviceRpmResult {
+                    device_instance: r.device_instance,
+                    results,
+                    error,
+                }
+            })
+            .collect())
+    }
+
+    /// Write a property on multiple devices concurrently.
+    pub async fn write_property_to_devices(
+        &self,
+        requests: Vec<crate::types::DeviceWriteRequest>,
+        max_concurrent: Option<u32>,
+    ) -> Result<Vec<crate::types::DeviceWriteResult>, BacnetError> {
+        let client = self.get_client().await?;
+        let rust_requests: Result<Vec<_>, BacnetError> = requests
+            .into_iter()
+            .map(|r| {
+                let oid =
+                    ObjectIdentifier::new(ObjectType::from_raw(r.object_type), r.object_instance)
+                        .map_err(BacnetError::from)?;
+                let encoded = encode_property_value(&r.value)?;
+                Ok(bacnet_client::client::DeviceWriteRequest {
+                    device_instance: r.device_instance,
+                    object_identifier: oid,
+                    property_identifier: PropertyIdentifier::from_raw(r.property_id),
+                    property_array_index: r.array_index,
+                    property_value: encoded,
+                    priority: r.priority,
+                })
+            })
+            .collect();
+
+        let results = client
+            .write_property_to_devices(rust_requests?, max_concurrent.map(|n| n as usize))
+            .await;
+
+        Ok(results
+            .into_iter()
+            .map(|r| crate::types::DeviceWriteResult {
+                device_instance: r.device_instance,
+                error: r.result.err().map(|e| e.to_string()),
+            })
+            .collect())
+    }
+
     /// Send a WhoIs broadcast to discover devices.
     pub async fn who_is(
         &self,
