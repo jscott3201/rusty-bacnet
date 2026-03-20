@@ -1,0 +1,13 @@
+FROM rust:1.93-alpine AS builder
+
+RUN apk add --no-cache musl-dev cmake make perl gcc g++
+
+WORKDIR /src
+COPY . .
+
+RUN cargo build --release -p bacnet-benchmarks --bin bvll-test
+
+FROM alpine:3.21
+RUN apk add --no-cache ca-certificates
+COPY --from=builder /src/target/release/bvll-test /usr/local/bin/
+CMD ["bvll-test"]
