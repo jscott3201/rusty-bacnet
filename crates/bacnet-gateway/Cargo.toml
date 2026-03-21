@@ -23,7 +23,7 @@ bytes.workspace = true
 tokio = { workspace = true, features = ["net", "rt", "rt-multi-thread", "sync", "macros", "time", "signal"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
+toml = "1"
 tracing.workspace = true
 
 # HTTP API deps (feature-gated)

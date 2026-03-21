@@ -188,6 +188,47 @@ impl Tsm {
     }
 }
 
+/// Drop guard that cleans up invoke IDs if a confirmed request task is cancelled.
+///
+/// Uses `try_lock` in Drop — best-effort cleanup. If the mutex is contended
+/// at drop time, the invoke ID leaks (acceptable: blocking in Drop is worse).
+pub(crate) struct TsmGuard {
+    tsm: std::sync::Arc<tokio::sync::Mutex<Tsm>>,
+    mac: MacAddr,
+    invoke_id: u8,
+    completed: bool,
+}
+
+impl TsmGuard {
+    pub(crate) fn new(
+        tsm: std::sync::Arc<tokio::sync::Mutex<Tsm>>,
+        mac: MacAddr,
+        invoke_id: u8,
+    ) -> Self {
+        Self {
+            tsm,
+            mac,
+            invoke_id,
+            completed: false,
+        }
+    }
+
+    /// Mark the transaction as completed (prevents cleanup on drop).
+    pub(crate) fn mark_completed(&mut self) {
+        self.completed = true;
+    }
+}
+
+impl Drop for TsmGuard {
+    fn drop(&mut self) {
+        if !self.completed {
+            if let Ok(mut tsm) = self.tsm.try_lock() {
+                tsm.cancel_transaction(&self.mac, self.invoke_id);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

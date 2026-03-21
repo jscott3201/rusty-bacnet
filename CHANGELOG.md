@@ -5,6 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0]
+
+### Spec Compliance — BBMD & Router (ASHRAE 135-2020 Annex J, Clause 6)
+
+Deep-dive review of the BBMD and Router implementations identified 22 spec compliance issues. All fixed.
+
+#### Router — Congestion & Reachability (Clause 6.6.3)
+- **Fixed** router forwards traffic to busy networks — now checks `effective_reachability()` before forwarding and rejects with reason 2 (ROUTER_BUSY) per Clause 6.6.3.6
+- **Fixed** router forwards traffic to permanently unreachable networks — now rejects with reason 1 per Clause 6.6.3.5
+- **Fixed** Router-Busy-To-Network handler — now uses `mark_busy()` with 30-second auto-clear timer per Clause 6.6.3.6 (was permanent until Router-Available)
+- **Fixed** Router-Available-To-Network handler — now uses `mark_available()` per Clause 6.6.3.7
+- **Fixed** Router-Busy/Available not re-broadcast to other ports — now re-broadcasts per Clause 6.6.3.6/7
+- **Fixed** Reject-Message-To-Network removed routes — now differentiates by reason: reason 1 marks permanently unreachable (keeps entry), reason 2 marks busy with 30s timer per Clause 6.6.3.5
+- **Fixed** unknown network message types silently dropped — now sends Reject with reason 3 (UNKNOWN_MESSAGE_TYPE) per Clause 6.6.3.5
+- **Added** `busy_until: Option<Instant>` to `RouteEntry` for timestamp-based busy auto-clear
+- **Added** `effective_reachability()` with inline deadline check (avoids 90-second worst-case from sweep granularity)
+- **Added** `mark_busy()`, `mark_available()`, `mark_unreachable()`, `clear_expired_busy()` to `RouterTable`
+- **Added** message-too-long framework — `max_apdu_length` captured per port for future size validation
+
+#### Router — Route Management (Clause 6.6.3.2/3)
+- **Fixed** I-Am-Router-To-Network not re-broadcast when no new routes learned — now re-broadcasts unconditionally per Clause 6.6.3.3
+- **Fixed** anti-flapping logic blocked spec-required route updates from different ports — replaced `add_learned_stable` with `add_learned_with_flap_detection` that always accepts updates per Clause 6.6.3.2 ("last message wins") but logs rapid changes for operator visibility
+- **Fixed** `touch()` never called — learned routes now refreshed on every route lookup during forwarding, preventing active routes from being purged by the 5-minute aging sweep
+- **Added** flap detection fields (`flap_count`, `last_port_change`) to `RouteEntry` for observability
+
+#### Router — Network Messages (Clause 6.4)
+- **Added** Initialize-Routing-Table-Ack handler — learns routes from peer ACK responses per Clause 6.4.8
+- **Added** Network-Number-Is handler — detects and logs network number conflicts per Clause 6.6.3.12
+- **Added** explicit match arm for security messages (0x0A-0x11) — prevents incorrect rejection
+- **Changed** Establish-Connection-To-Network log level from `debug` to `info` with "not implemented" note
+
+#### BBMD (Annex J)
+- **Fixed** BBMD not included in its own BDT — `ensure_self_in_bdt()` auto-inserts local BBMD entry on `set_bdt()` per J.4.2
+- **Fixed** non-BBMD Forwarded-NPDU uses wrong source_mac — now uses originating address from frame (spec J.2.5) instead of UDP sender address; fixes cross-BBMD unicast for non-BBMD nodes
+- **Fixed** non-BBMD silently drops Distribute-Broadcast-To-Network — now sends NAK (0x0060) per J.4.5
+- **Fixed** Register-Foreign-Device with empty payload silently defaults TTL=0 — now validates payload >= 2 bytes and NAKs if short
+- **Added** BDT persistence — optional file-backed persistence via `set_bdt_persist_path()` using BDT wire encoding (no serde dependency)
+- **Improved** `forward_npdu` yields every 32 sends to avoid starving the recv loop with large FDT (up to 512 entries)
+
+#### TSM (Clause 5.4)
+- **Fixed** invoke ID leak on task cancellation — `TsmGuard` drop guard in `confirmed_request_inner` cleans up invoke IDs if the tokio task is aborted before normal completion
+
+### Added
+- **New crate: `bacnet-gateway`** — HTTP REST API and MCP (Model Context Protocol) server for BACnet networks
+  - REST API at `/api/v1/` with endpoints for device discovery, property read/write, local object CRUD, and health check
+  - MCP server at `/mcp` with 10 tools for LLM-driven BACnet interaction
+  - MCP reference knowledge base — 9 static resources plus per-object-type drill-down templates
+  - Pluggable authentication with bearer token, TOML configuration with CLI overrides
+  - Feature-gated: `http`, `mcp`, `bin` — zero web deps by default
+- **`LoopbackTransport`** in `bacnet-transport` — in-process transport for gateway client/server composition
+- **RS-485 GPIO direction control** — `GpioDirectionPort<S>` wrapper with configurable `post_tx_delay_us`, kernel RS-485 ioctl on `TokioSerialPort`
+- **Client batch operations** — `read_property_from_devices()`, `read_property_multiple_from_devices()`, `write_property_to_devices()` with `buffer_unordered(max_concurrent)` for concurrent multi-device I/O
+- **Client auto-routing** — `resolve_device()` helper + `_from_device` variants for RP, RPM, WP, WPM
+- **Server concurrent dispatch** — spawns per-request tasks for ConfirmedRequest/UnconfirmedRequest, enabling concurrent `db.read()` from multiple clients
+- **Python bindings** — batch methods (`read_property_from_devices`, etc.) and COV async iterator improvements
+- **Java/Kotlin bindings** — batch methods and `CovNotificationStream` improvements
+- **Architecture documentation** — `docs/architecture.md`, expanded `docs/rust-api.md`, `docs/gateway.md`, `docs/btl.md`, `docs/wasm-api.md`
+
+### Changed
+- **Dependencies updated** — criterion 0.5→0.8, tokio-tungstenite 0.28→0.29, rand 0.9→0.10, rustyline 15→17, toml 0.8→1.0, rcgen 0.13→0.14, aws-lc-sys 0.38→0.39, rustls-webpki 0.103.9→0.103.10
+- **Security advisories resolved** — aws-lc-sys X.509 name constraints bypass, CRL distribution point logic errors; rustls-webpki CRL scope check
+
 ## [0.7.2]
 
 ### Added

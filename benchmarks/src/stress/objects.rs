@@ -5,7 +5,7 @@
 
 use std::time::{Duration, Instant};
 
-use rand::Rng;
+use rand::RngExt;
 
 use bacnet_services::common::PropertyReference;
 use bacnet_services::rpm::ReadAccessSpecification;

@@ -1,5 +1,6 @@
 use bytes::BytesMut;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
 
 use bacnet_encoding::apdu::{decode_apdu, encode_apdu, Apdu, ConfirmedRequest};
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};

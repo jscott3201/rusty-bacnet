@@ -3,7 +3,7 @@
 BACnet/SC thin client for browsers via WebAssembly.
 
 **npm package**: `@jscott3201/bacnet-wasm`
-**Version**: 0.7.2
+**Version**: 0.8.0
 **License**: MIT
 **Repository**: [github.com/jscott3201/rusty-bacnet](https://github.com/jscott3201/rusty-bacnet)
 
@@ -776,7 +776,7 @@ console.log(`Property ${ack.property_id} value:`, ack.value_bytes);
 version(): string
 ```
 
-Returns the crate version string (e.g., `"0.7.2"`).
+Returns the crate version string (e.g., `"0.8.0"`).
 
 **Example:**
 

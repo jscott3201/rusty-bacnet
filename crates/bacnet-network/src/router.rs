@@ -11,7 +11,7 @@
 //! - Learned routes from I-Am-Router-To-Network announcements
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
 use bacnet_transport::port::TransportPort;
@@ -24,7 +24,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
 use crate::layer::ReceivedApdu;
-use crate::router_table::RouterTable;
+use crate::router_table::{ReachabilityStatus, RouterTable};
 
 /// A send request to be forwarded on a port.
 #[derive(Debug)]
@@ -218,12 +218,39 @@ impl BACnetRouter {
                                 }
 
                                 // Route lookup for destination network
-                                let route = {
-                                    let tbl = table.lock().await;
-                                    tbl.lookup(dest_net).cloned()
+                                let (route, reachability) = {
+                                    let mut tbl = table.lock().await;
+                                    let route = tbl.lookup(dest_net).cloned();
+                                    let reachability = tbl.effective_reachability(dest_net);
+                                    if route.is_some() {
+                                        tbl.touch(dest_net);
+                                    }
+                                    (route, reachability)
                                 };
 
                                 if let Some(route) = route {
+                                    // Check reachability before forwarding (spec 6.6.3.6)
+                                    match reachability.unwrap_or(ReachabilityStatus::Reachable) {
+                                        ReachabilityStatus::Busy => {
+                                            send_reject(
+                                                &send_txs[port_idx],
+                                                &received.source_mac,
+                                                dest_net,
+                                                RejectMessageReason::ROUTER_BUSY,
+                                            );
+                                            continue;
+                                        }
+                                        ReachabilityStatus::Unreachable => {
+                                            send_reject(
+                                                &send_txs[port_idx],
+                                                &received.source_mac,
+                                                dest_net,
+                                                RejectMessageReason::NOT_DIRECTLY_CONNECTED,
+                                            );
+                                            continue;
+                                        }
+                                        ReachabilityStatus::Reachable => {}
+                                    }
                                     if route.port_index == port_idx
                                         && route.directly_connected
                                         && npdu
@@ -285,7 +312,10 @@ impl BACnetRouter {
             let max_age = Duration::from_secs(300); // 5 minutes
             loop {
                 interval.tick().await;
-                let purged = aging_table.lock().await.purge_stale(max_age);
+                let mut tbl = aging_table.lock().await;
+                let purged = tbl.purge_stale(max_age);
+                tbl.clear_expired_busy();
+                drop(tbl);
                 for net in purged {
                     debug!(network = net, "Purged stale route");
                 }
@@ -535,11 +565,8 @@ async fn handle_network_message(
             warn!(%e, "Router dropped I-Am-Router response: output channel full");
         }
     } else if msg_type == NetworkMessageType::I_AM_ROUTER_TO_NETWORK.to_raw() {
-        const LEARNED_ROUTE_MAX_AGE: Duration = Duration::from_secs(300);
-
         let data = &npdu.payload;
         let mut offset = 0;
-        let mut any_new = false;
         let mut table = table.lock().await;
 
         while offset + 2 <= data.len() {
@@ -551,13 +578,8 @@ async fn handle_network_message(
                 break;
             }
 
-            if table.add_learned_stable(
-                net,
-                port_idx,
-                MacAddr::from_slice(source_mac),
-                LEARNED_ROUTE_MAX_AGE,
-            ) {
-                any_new = true;
+            if table.add_learned_with_flap_detection(net, port_idx, MacAddr::from_slice(source_mac))
+            {
                 debug!(
                     network = net,
                     port = port_idx,
@@ -567,8 +589,8 @@ async fn handle_network_message(
         }
         drop(table);
 
-        // Re-broadcast to other ports only if new routes were learned (prevents loops).
-        if any_new && !npdu.payload.is_empty() {
+        // Re-broadcast to all other ports unconditionally (spec 6.6.3.3).
+        if !npdu.payload.is_empty() {
             let rebroadcast = Npdu {
                 is_network_message: true,
                 message_type: Some(NetworkMessageType::I_AM_ROUTER_TO_NETWORK.to_raw()),
@@ -600,7 +622,14 @@ async fn handle_network_message(
                 let mut tbl = table.lock().await;
                 if let Some(entry) = tbl.lookup(rejected_net) {
                     if !entry.directly_connected {
-                        tbl.remove(rejected_net);
+                        match reason {
+                            1 => tbl.mark_unreachable(rejected_net),
+                            2 => tbl
+                                .mark_busy(rejected_net, Instant::now() + Duration::from_secs(30)),
+                            _ => {
+                                tbl.remove(rejected_net);
+                            }
+                        }
                     }
                 }
             }
@@ -646,14 +675,35 @@ async fn handle_network_message(
     } else if msg_type == NetworkMessageType::ROUTER_BUSY_TO_NETWORK.to_raw() {
         let data = &npdu.payload;
         let mut offset = 0;
+        let deadline = Instant::now() + Duration::from_secs(30);
         let mut tbl = table.lock().await;
         while offset + 2 <= data.len() {
             let net = u16::from_be_bytes([data[offset], data[offset + 1]]);
             offset += 2;
-            if let Some(entry) = tbl.lookup_mut(net) {
-                entry.reachability = crate::router_table::ReachabilityStatus::Busy;
+            tbl.mark_busy(net, deadline);
+            debug!(
+                network = net,
+                "Router busy — marked network as congested (30s timer)"
+            );
+        }
+        drop(tbl);
+        // Re-broadcast to all other ports (spec 6.6.3.6)
+        let rebroadcast = Npdu {
+            is_network_message: true,
+            message_type: Some(NetworkMessageType::ROUTER_BUSY_TO_NETWORK.to_raw()),
+            payload: npdu.payload.clone(),
+            ..Npdu::default()
+        };
+        let mut buf = BytesMut::with_capacity(4 + npdu.payload.len());
+        if let Ok(()) = encode_npdu(&mut buf, &rebroadcast) {
+            let frozen = buf.freeze();
+            for (i, tx) in send_txs.iter().enumerate() {
+                if i != port_idx {
+                    let _ = tx.try_send(SendRequest::Broadcast {
+                        npdu: frozen.clone(),
+                    });
+                }
             }
-            debug!(network = net, "Router busy — marked network as congested");
         }
     } else if msg_type == NetworkMessageType::ROUTER_AVAILABLE_TO_NETWORK.to_raw() {
         let data = &npdu.payload;
@@ -662,10 +712,27 @@ async fn handle_network_message(
         while offset + 2 <= data.len() {
             let net = u16::from_be_bytes([data[offset], data[offset + 1]]);
             offset += 2;
-            if let Some(entry) = tbl.lookup_mut(net) {
-                entry.reachability = crate::router_table::ReachabilityStatus::Reachable;
-            }
+            tbl.mark_available(net);
             debug!(network = net, "Router available — cleared congestion");
+        }
+        drop(tbl);
+        // Re-broadcast to all other ports (spec 6.6.3.7)
+        let rebroadcast = Npdu {
+            is_network_message: true,
+            message_type: Some(NetworkMessageType::ROUTER_AVAILABLE_TO_NETWORK.to_raw()),
+            payload: npdu.payload.clone(),
+            ..Npdu::default()
+        };
+        let mut buf = BytesMut::with_capacity(4 + npdu.payload.len());
+        if let Ok(()) = encode_npdu(&mut buf, &rebroadcast) {
+            let frozen = buf.freeze();
+            for (i, tx) in send_txs.iter().enumerate() {
+                if i != port_idx {
+                    let _ = tx.try_send(SendRequest::Broadcast {
+                        npdu: frozen.clone(),
+                    });
+                }
+            }
         }
     } else if msg_type == NetworkMessageType::INITIALIZE_ROUTING_TABLE.to_raw() {
         let data = &npdu.payload;
@@ -769,10 +836,10 @@ async fn handle_network_message(
         if npdu.payload.len() >= 3 {
             let net = u16::from_be_bytes([npdu.payload[0], npdu.payload[1]]);
             let termination_time_min = npdu.payload[2];
-            debug!(
+            tracing::info!(
                 network = net,
                 termination_time_minutes = termination_time_min,
-                "Received Establish-Connection-To-Network"
+                "Received Establish-Connection-To-Network (PTP not implemented)"
             );
         }
     } else if msg_type == NetworkMessageType::DISCONNECT_CONNECTION_TO_NETWORK.to_raw() {
@@ -815,10 +882,77 @@ async fn handle_network_message(
         if let Err(e) = send_txs[port_idx].try_send(SendRequest::Broadcast { npdu: buf.freeze() }) {
             warn!(%e, "Router dropped Network-Number-Is: output channel full");
         }
-    } else {
+    } else if msg_type == NetworkMessageType::NETWORK_NUMBER_IS.to_raw() {
+        // Spec 6.6.3.12: process Network-Number-Is for conflict detection.
+        if npdu.payload.len() >= 3 {
+            let net = u16::from_be_bytes([npdu.payload[0], npdu.payload[1]]);
+            let configured = npdu.payload[2];
+            if net != port_network {
+                if configured == 1 {
+                    warn!(
+                        local_network = port_network,
+                        peer_network = net,
+                        "Network number conflict: port configured as {} but peer reports {} (configured)",
+                        port_network, net
+                    );
+                } else {
+                    debug!(
+                        local_network = port_network,
+                        peer_network = net,
+                        "Network-Number-Is from peer (learned, differs from local)"
+                    );
+                }
+            }
+        }
+    } else if msg_type == NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK.to_raw() {
+        // Spec 6.4.8: process Init-Routing-Table-Ack — learn routes from peer.
+        let data = &npdu.payload;
+        if data.is_empty() {
+            return;
+        }
+        let count = data[0] as usize;
+        let mut offset = 1usize;
+        let mut table = table.lock().await;
+        for _ in 0..count {
+            if offset + 4 > data.len() {
+                break;
+            }
+            let net = u16::from_be_bytes([data[offset], data[offset + 1]]);
+            let info_len = data[offset + 3] as usize;
+            if offset + 4 + info_len > data.len() {
+                break;
+            }
+            offset += 4 + info_len;
+            if net == 0 || net == 0xFFFF {
+                continue;
+            }
+            if table.len() >= MAX_LEARNED_ROUTES {
+                break;
+            }
+            table.add_learned_with_flap_detection(net, port_idx, MacAddr::from_slice(source_mac));
+            debug!(
+                network = net,
+                port = port_idx,
+                "Learned route from Init-Routing-Table-Ack"
+            );
+        }
+    } else if (0x0A..=0x11).contains(&msg_type) {
+        // Security messages — acknowledge but do not reject.
         debug!(
             message_type = msg_type,
-            "Router ignoring unhandled network message"
+            "Router received security network message (not implemented)"
+        );
+    } else {
+        // Unknown message type — reject with reason 3 (spec 6.6.3.5).
+        debug!(
+            message_type = msg_type,
+            "Router rejecting unknown network message type"
+        );
+        send_reject(
+            &send_txs[port_idx],
+            source_mac,
+            0,
+            RejectMessageReason::UNKNOWN_MESSAGE_TYPE,
         );
     }
 }
@@ -976,6 +1110,9 @@ mod tests {
             next_hop_mac: MacAddr::new(),
             last_seen: None,
             reachability: crate::router_table::ReachabilityStatus::Reachable,
+            busy_until: None,
+            flap_count: 0,
+            last_port_change: None,
         };
 
         let npdu = Npdu {
@@ -1036,6 +1173,9 @@ mod tests {
             next_hop_mac: MacAddr::new(),
             last_seen: None,
             reachability: crate::router_table::ReachabilityStatus::Reachable,
+            busy_until: None,
+            flap_count: 0,
+            last_port_change: None,
         };
 
         let npdu = Npdu {
@@ -1310,6 +1450,9 @@ mod tests {
             next_hop_mac: MacAddr::new(),
             last_seen: None,
             reachability: crate::router_table::ReachabilityStatus::Reachable,
+            busy_until: None,
+            flap_count: 0,
+            last_port_change: None,
         };
 
         let npdu = Npdu {

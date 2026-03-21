@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use tokio::sync::Mutex;
 
 use bacnet_objects::analog::AnalogOutputObject;
@@ -57,7 +57,7 @@ pub async fn run(_transport: &str, clients: u64, duration_secs: u64) -> Vec<Degr
                 }
             };
 
-            let mut rng = StdRng::from_os_rng();
+            let mut rng = StdRng::from_rng(&mut rand::rng());
             let mut cov_subscribed: Vec<u32> = Vec::new();
 
             while Instant::now() < deadline {

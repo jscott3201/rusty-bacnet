@@ -32,6 +32,12 @@ pub struct RouteEntry {
     /// When this learned route was last confirmed. `None` for direct routes.
     pub last_seen: Option<Instant>,
     pub reachability: ReachabilityStatus,
+    /// Deadline after which a `Busy` status auto-clears (spec 6.6.3.6).
+    pub busy_until: Option<Instant>,
+    /// Number of times this route changed ports within the flap detection window.
+    pub flap_count: u8,
+    /// When the route last changed ports.
+    pub last_port_change: Option<Instant>,
 }
 
 /// BACnet routing table.
@@ -65,6 +71,9 @@ impl RouterTable {
                 next_hop_mac: MacAddr::new(),
                 last_seen: None,
                 reachability: ReachabilityStatus::Reachable,
+                busy_until: None,
+                flap_count: 0,
+                last_port_change: None,
             },
         );
     }
@@ -89,42 +98,121 @@ impl RouterTable {
                 next_hop_mac,
                 last_seen: Some(Instant::now()),
                 reachability: ReachabilityStatus::Reachable,
+                busy_until: None,
+                flap_count: 0,
+                last_port_change: None,
             },
         );
     }
 
-    /// Add a learned route only if it won't cause route flapping.
+    /// Add a learned route, always accepting (spec 6.6.3.2: last I-Am-Router wins).
+    /// Detects rapid port changes for operator visibility but never suppresses updates.
     ///
-    /// A route is updated when:
-    /// - No existing route for this network, OR
-    /// - The existing route is from the same port (refresh), OR
-    /// - The existing learned route has expired per `max_age`.
-    ///
-    /// Returns `true` if the route was inserted/updated, `false` if skipped.
-    pub fn add_learned_stable(
+    /// Returns `true` if the route was inserted/updated.
+    pub fn add_learned_with_flap_detection(
         &mut self,
         network: u16,
         port_index: usize,
         next_hop_mac: MacAddr,
-        max_age: Duration,
     ) -> bool {
+        if network == 0 || network == 0xFFFF {
+            return false;
+        }
         if let Some(existing) = self.routes.get(&network) {
             if existing.directly_connected {
                 return false;
             }
             if existing.port_index != port_index {
-                // Different port — only overwrite if the existing route is stale
-                let stale = match existing.last_seen {
-                    Some(seen) => Instant::now().duration_since(seen) > max_age,
-                    None => false,
+                let now = Instant::now();
+                let flap_count = match existing.last_port_change {
+                    Some(changed) if now.duration_since(changed) < Duration::from_secs(60) => {
+                        existing.flap_count.saturating_add(1)
+                    }
+                    _ => 1,
                 };
-                if !stale {
-                    return false;
+                if flap_count >= 3 {
+                    tracing::warn!(
+                        network,
+                        old_port = existing.port_index,
+                        new_port = port_index,
+                        flap_count,
+                        "Route flapping detected — network changed ports {} times in 60s",
+                        flap_count
+                    );
                 }
+                self.routes.insert(
+                    network,
+                    RouteEntry {
+                        port_index,
+                        directly_connected: false,
+                        next_hop_mac,
+                        last_seen: Some(now),
+                        reachability: ReachabilityStatus::Reachable,
+                        busy_until: None,
+                        flap_count,
+                        last_port_change: Some(now),
+                    },
+                );
+                return true;
             }
         }
         self.add_learned(network, port_index, next_hop_mac);
         true
+    }
+
+    /// Mark a network as busy with a deadline for auto-clear (spec 6.6.3.6).
+    pub fn mark_busy(&mut self, network: u16, deadline: Instant) {
+        if let Some(entry) = self.routes.get_mut(&network) {
+            entry.reachability = ReachabilityStatus::Busy;
+            entry.busy_until = Some(deadline);
+        }
+    }
+
+    /// Mark a network as available, clearing any busy state (spec 6.6.3.7).
+    pub fn mark_available(&mut self, network: u16) {
+        if let Some(entry) = self.routes.get_mut(&network) {
+            entry.reachability = ReachabilityStatus::Reachable;
+            entry.busy_until = None;
+        }
+    }
+
+    /// Mark a network as permanently unreachable (spec 6.6.3.5, reject reason 1).
+    /// Keeps the entry in the table (unlike `remove`).
+    pub fn mark_unreachable(&mut self, network: u16) {
+        if let Some(entry) = self.routes.get_mut(&network) {
+            if !entry.directly_connected {
+                entry.reachability = ReachabilityStatus::Unreachable;
+                entry.busy_until = None;
+            }
+        }
+    }
+
+    /// Clear busy state for entries whose `busy_until` deadline has elapsed.
+    pub fn clear_expired_busy(&mut self) {
+        let now = Instant::now();
+        for entry in self.routes.values_mut() {
+            if let Some(deadline) = entry.busy_until {
+                if now >= deadline {
+                    entry.reachability = ReachabilityStatus::Reachable;
+                    entry.busy_until = None;
+                }
+            }
+        }
+    }
+
+    /// Get effective reachability, checking busy_until inline for immediate accuracy.
+    /// This avoids up to 90s worst-case from the 60s aging sweep granularity.
+    pub fn effective_reachability(&self, network: u16) -> Option<ReachabilityStatus> {
+        self.routes.get(&network).map(|entry| {
+            if entry.reachability == ReachabilityStatus::Busy {
+                if let Some(deadline) = entry.busy_until {
+                    if Instant::now() >= deadline {
+                        return ReachabilityStatus::Reachable;
+                    }
+                }
+            }
+            entry.reachability
+        })
     }
 
     /// Look up the route for a network number.
@@ -400,63 +488,33 @@ mod tests {
     }
 
     #[test]
-    fn add_learned_stable_inserts_new_route() {
+    fn add_learned_flap_inserts_new_route() {
         let mut table = RouterTable::new();
-        let result = table.add_learned_stable(
-            3000,
-            0,
-            MacAddr::from_slice(&[10, 0, 1, 1]),
-            Duration::from_secs(300),
-        );
+        let result =
+            table.add_learned_with_flap_detection(3000, 0, MacAddr::from_slice(&[10, 0, 1, 1]));
         assert!(result);
         let entry = table.lookup(3000).unwrap();
         assert_eq!(entry.port_index, 0);
     }
 
     #[test]
-    fn add_learned_stable_refreshes_same_port() {
+    fn add_learned_flap_refreshes_same_port() {
         let mut table = RouterTable::new();
         table.add_learned(3000, 0, MacAddr::from_slice(&[10, 0, 1, 1]));
-
-        let result = table.add_learned_stable(
-            3000,
-            0,
-            MacAddr::from_slice(&[10, 0, 1, 2]),
-            Duration::from_secs(300),
-        );
+        let result =
+            table.add_learned_with_flap_detection(3000, 0, MacAddr::from_slice(&[10, 0, 1, 2]));
         assert!(result);
         let entry = table.lookup(3000).unwrap();
         assert_eq!(entry.next_hop_mac.as_slice(), &[10, 0, 1, 2]);
     }
 
     #[test]
-    fn add_learned_stable_rejects_different_port_when_fresh() {
+    fn add_learned_flap_always_updates_different_port() {
         let mut table = RouterTable::new();
         table.add_learned(3000, 0, MacAddr::from_slice(&[10, 0, 1, 1]));
-
-        let result = table.add_learned_stable(
-            3000,
-            1,
-            MacAddr::from_slice(&[10, 0, 2, 1]),
-            Duration::from_secs(300),
-        );
-        assert!(!result);
-        let entry = table.lookup(3000).unwrap();
-        assert_eq!(entry.port_index, 0);
-        assert_eq!(entry.next_hop_mac.as_slice(), &[10, 0, 1, 1]);
-    }
-
-    #[test]
-    fn add_learned_stable_allows_different_port_when_stale() {
-        let mut table = RouterTable::new();
-        table.add_learned(3000, 0, MacAddr::from_slice(&[10, 0, 1, 1]));
-
-        let result = table.add_learned_stable(
-            3000,
-            1,
-            MacAddr::from_slice(&[10, 0, 2, 1]),
-            Duration::from_secs(0),
-        );
+        // Spec 6.6.3.2: last I-Am-Router wins — always accept even from different port
+        let result =
+            table.add_learned_with_flap_detection(3000, 1, MacAddr::from_slice(&[10, 0, 2, 1]));
         assert!(result);
         let entry = table.lookup(3000).unwrap();
         assert_eq!(entry.port_index, 1);
@@ -464,19 +522,98 @@ mod tests {
     }
 
     #[test]
-    fn add_learned_stable_rejects_direct_route() {
+    fn add_learned_flap_increments_flap_count() {
+        let mut table = RouterTable::new();
+        table.add_learned_with_flap_detection(3000, 0, MacAddr::from_slice(&[10, 0, 1, 1]));
+        table.add_learned_with_flap_detection(3000, 1, MacAddr::from_slice(&[10, 0, 2, 1]));
+        let entry = table.lookup(3000).unwrap();
+        assert_eq!(entry.flap_count, 1);
+        table.add_learned_with_flap_detection(3000, 0, MacAddr::from_slice(&[10, 0, 1, 1]));
+        let entry = table.lookup(3000).unwrap();
+        assert_eq!(entry.flap_count, 2);
+    }
+
+    #[test]
+    fn add_learned_flap_rejects_direct_route() {
         let mut table = RouterTable::new();
         table.add_direct(1000, 0);
-
-        let result = table.add_learned_stable(
-            1000,
-            1,
-            MacAddr::from_slice(&[10, 0, 2, 1]),
-            Duration::from_secs(300),
-        );
+        let result =
+            table.add_learned_with_flap_detection(1000, 1, MacAddr::from_slice(&[10, 0, 2, 1]));
         assert!(!result);
+        assert!(table.lookup(1000).unwrap().directly_connected);
+    }
+
+    #[test]
+    fn mark_busy_sets_reachability_and_deadline() {
+        let mut table = RouterTable::new();
+        table.add_learned(3000, 0, MacAddr::from_slice(&[1, 2, 3]));
+        let deadline = Instant::now() + Duration::from_secs(30);
+        table.mark_busy(3000, deadline);
+        let entry = table.lookup(3000).unwrap();
+        assert_eq!(entry.reachability, ReachabilityStatus::Busy);
+        assert_eq!(entry.busy_until, Some(deadline));
+    }
+
+    #[test]
+    fn mark_available_clears_busy() {
+        let mut table = RouterTable::new();
+        table.add_learned(3000, 0, MacAddr::from_slice(&[1, 2, 3]));
+        table.mark_busy(3000, Instant::now() + Duration::from_secs(30));
+        table.mark_available(3000);
+        let entry = table.lookup(3000).unwrap();
+        assert_eq!(entry.reachability, ReachabilityStatus::Reachable);
+        assert!(entry.busy_until.is_none());
+    }
+
+    #[test]
+    fn mark_unreachable_keeps_entry() {
+        let mut table = RouterTable::new();
+        table.add_learned(3000, 0, MacAddr::from_slice(&[1, 2, 3]));
+        table.mark_unreachable(3000);
+        let entry = table.lookup(3000).unwrap();
+        assert_eq!(entry.reachability, ReachabilityStatus::Unreachable);
+        assert!(table.lookup(3000).is_some());
+    }
+
+    #[test]
+    fn mark_unreachable_does_not_affect_direct_routes() {
+        let mut table = RouterTable::new();
+        table.add_direct(1000, 0);
+        table.mark_unreachable(1000);
         let entry = table.lookup(1000).unwrap();
-        assert!(entry.directly_connected);
-        assert_eq!(entry.port_index, 0);
+        assert_eq!(entry.reachability, ReachabilityStatus::Reachable);
+    }
+
+    #[test]
+    fn clear_expired_busy_clears_elapsed_deadlines() {
+        let mut table = RouterTable::new();
+        table.add_learned(3000, 0, MacAddr::from_slice(&[1, 2, 3]));
+        table.mark_busy(3000, Instant::now() - Duration::from_secs(1));
+        table.clear_expired_busy();
+        let entry = table.lookup(3000).unwrap();
+        assert_eq!(entry.reachability, ReachabilityStatus::Reachable);
+        assert!(entry.busy_until.is_none());
+    }
+
+    #[test]
+    fn effective_reachability_checks_deadline_inline() {
+        let mut table = RouterTable::new();
+        table.add_learned(3000, 0, MacAddr::from_slice(&[1, 2, 3]));
+        table.mark_busy(3000, Instant::now() - Duration::from_secs(1));
+        assert_eq!(
+            table.effective_reachability(3000),
+            Some(ReachabilityStatus::Reachable)
+        );
+    }
+
+    #[test]
+    fn effective_reachability_returns_busy_when_deadline_not_elapsed() {
+        let mut table = RouterTable::new();
+        table.add_learned(3000, 0, MacAddr::from_slice(&[1, 2, 3]));
+        table.mark_busy(3000, Instant::now() + Duration::from_secs(30));
+        assert_eq!(
+            table.effective_reachability(3000),
+            Some(ReachabilityStatus::Busy)
+        );
     }
 }

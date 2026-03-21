@@ -952,6 +952,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             (invoke_id, rx)
         };
 
+        // Guard cleans up invoke ID if this task is cancelled/aborted
+        let mut guard = crate::tsm::TsmGuard::new(
+            std::sync::Arc::clone(&self.tsm),
+            MacAddr::from_slice(tsm_mac),
+            invoke_id,
+        );
+
         let pdu = Apdu::ConfirmedRequest(ConfirmedRequestPdu {
             segmented: false,
             more_follows: false,
@@ -998,6 +1005,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 }
             };
             if let Err(e) = send_result {
+                guard.mark_completed();
                 let mut tsm = self.tsm.lock().await;
                 tsm.cancel_transaction(tsm_mac, invoke_id);
                 return Err(e);
@@ -1005,6 +1013,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
             match timeout(timeout_duration, &mut rx).await {
                 Ok(Ok(response)) => {
+                    guard.mark_completed();
                     return match response {
                         TsmResponse::SimpleAck => Ok(Bytes::new()),
                         TsmResponse::ComplexAck { service_data } => Ok(service_data),
@@ -1014,11 +1023,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     };
                 }
                 Ok(Err(_)) => {
+                    guard.mark_completed();
                     return Err(Error::Encoding("TSM response channel closed".into()));
                 }
                 Err(_timeout) => {
                     attempts += 1;
                     if attempts > max_retries {
+                        guard.mark_completed();
                         let mut tsm = self.tsm.lock().await;
                         tsm.cancel_transaction(tsm_mac, invoke_id);
                         return Err(Error::Timeout(timeout_duration));
