@@ -29,8 +29,11 @@ impl LoopbackTransport {
     /// Each transport has its own MAC address. Sending on transport A delivers
     /// to transport B's receive channel, and vice versa.
     pub fn pair(mac_a: impl Into<MacAddr>, mac_b: impl Into<MacAddr>) -> (Self, Self) {
-        let (tx_a, rx_a) = mpsc::channel(256);
-        let (tx_b, rx_b) = mpsc::channel(256);
+        /// NPDU receive channel capacity for loopback (matches high-throughput transports).
+        const NPDU_CHANNEL_CAPACITY: usize = 256;
+
+        let (tx_a, rx_a) = mpsc::channel(NPDU_CHANNEL_CAPACITY);
+        let (tx_b, rx_b) = mpsc::channel(NPDU_CHANNEL_CAPACITY);
 
         let a = Self {
             local_mac: mac_a.into(),

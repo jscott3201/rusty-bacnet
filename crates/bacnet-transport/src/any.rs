@@ -7,6 +7,7 @@ use bacnet_types::error::Error;
 use tokio::sync::mpsc;
 
 use crate::bip::BipTransport;
+#[cfg(feature = "ipv6")]
 use crate::bip6::Bip6Transport;
 use crate::loopback::LoopbackTransport;
 use crate::mstp::{MstpTransport, SerialPort};
@@ -29,6 +30,7 @@ pub enum AnyTransport<S: SerialPort + 'static> {
     /// MS/TP over RS-485.
     Mstp(MstpTransport<S>),
     /// BACnet/IPv6 over UDP.
+    #[cfg(feature = "ipv6")]
     Bip6(Bip6Transport),
     /// BACnet Ethernet over raw LLC frames (Linux only).
     #[cfg(all(feature = "ethernet", target_os = "linux"))]
@@ -45,6 +47,7 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
         match self {
             Self::Bip(t) => t.start().await,
             Self::Mstp(t) => t.start().await,
+            #[cfg(feature = "ipv6")]
             Self::Bip6(t) => t.start().await,
             #[cfg(all(feature = "ethernet", target_os = "linux"))]
             Self::Ethernet(t) => t.start().await,
@@ -58,6 +61,7 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
         match self {
             Self::Bip(t) => t.stop().await,
             Self::Mstp(t) => t.stop().await,
+            #[cfg(feature = "ipv6")]
             Self::Bip6(t) => t.stop().await,
             #[cfg(all(feature = "ethernet", target_os = "linux"))]
             Self::Ethernet(t) => t.stop().await,
@@ -71,6 +75,7 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
         match self {
             Self::Bip(t) => t.send_unicast(npdu, mac).await,
             Self::Mstp(t) => t.send_unicast(npdu, mac).await,
+            #[cfg(feature = "ipv6")]
             Self::Bip6(t) => t.send_unicast(npdu, mac).await,
             #[cfg(all(feature = "ethernet", target_os = "linux"))]
             Self::Ethernet(t) => t.send_unicast(npdu, mac).await,
@@ -84,6 +89,7 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
         match self {
             Self::Bip(t) => t.send_broadcast(npdu).await,
             Self::Mstp(t) => t.send_broadcast(npdu).await,
+            #[cfg(feature = "ipv6")]
             Self::Bip6(t) => t.send_broadcast(npdu).await,
             #[cfg(all(feature = "ethernet", target_os = "linux"))]
             Self::Ethernet(t) => t.send_broadcast(npdu).await,
@@ -97,6 +103,7 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
         match self {
             Self::Bip(t) => t.local_mac(),
             Self::Mstp(t) => t.local_mac(),
+            #[cfg(feature = "ipv6")]
             Self::Bip6(t) => t.local_mac(),
             #[cfg(all(feature = "ethernet", target_os = "linux"))]
             Self::Ethernet(t) => t.local_mac(),
@@ -110,6 +117,7 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
         match self {
             Self::Bip(t) => t.max_apdu_length(),
             Self::Mstp(t) => t.max_apdu_length(),
+            #[cfg(feature = "ipv6")]
             Self::Bip6(t) => t.max_apdu_length(),
             #[cfg(all(feature = "ethernet", target_os = "linux"))]
             Self::Ethernet(t) => t.max_apdu_length(),
@@ -132,6 +140,7 @@ impl<S: SerialPort> From<MstpTransport<S>> for AnyTransport<S> {
     }
 }
 
+#[cfg(feature = "ipv6")]
 impl<S: SerialPort> From<Bip6Transport> for AnyTransport<S> {
     fn from(t: Bip6Transport) -> Self {
         Self::Bip6(t)
@@ -215,6 +224,7 @@ mod tests {
         assert_eq!(any.max_apdu_length(), 480);
     }
 
+    #[cfg(feature = "ipv6")]
     #[test]
     fn any_transport_bip6_local_mac() {
         let bip6 = crate::bip6::Bip6Transport::new(std::net::Ipv6Addr::LOCALHOST, 47808, None);
@@ -222,6 +232,7 @@ mod tests {
         assert_eq!(any.local_mac().len(), 18);
     }
 
+    #[cfg(feature = "ipv6")]
     #[test]
     fn any_transport_bip6_max_apdu() {
         let bip6 = crate::bip6::Bip6Transport::new(std::net::Ipv6Addr::LOCALHOST, 47808, None);
@@ -229,6 +240,7 @@ mod tests {
         assert_eq!(any.max_apdu_length(), 1476);
     }
 
+    #[cfg(feature = "ipv6")]
     #[test]
     fn any_transport_from_bip6() {
         let bip6 = crate::bip6::Bip6Transport::new(std::net::Ipv6Addr::LOCALHOST, 47808, None);

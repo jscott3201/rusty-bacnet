@@ -47,6 +47,72 @@ Deep-dive review of the BBMD and Router implementations identified 22 spec compl
 #### TSM (Clause 5.4)
 - **Fixed** invoke ID leak on task cancellation — `TsmGuard` drop guard in `confirmed_request_inner` cleans up invoke IDs if the tokio task is aborted before normal completion
 
+### Spec Compliance — Transport Layer (ASHRAE 135-2020 Clauses 7-9, Annexes J, U, AB)
+
+Deep-dive review of all five transport implementations (BIP, BIPv6, BACnet/SC, Ethernet, MS/TP) identified 34 spec compliance issues. All addressed (31 fixed, 3 deferred as future features).
+
+#### MS/TP — State Machine (Clause 9.5)
+- **Fixed** IDLE state timeout used T_usage_timeout (20ms) instead of T_no_token (500ms) — node declared token lost 25x too quickly, causing premature token generation and bus collisions
+- **Fixed** WAIT_FOR_REPLY did not transition to DONE_WITH_TOKEN on receiving a reply — added ~255ms unnecessary latency to every confirmed MS/TP request
+- **Fixed** NoToken entry from PassToken timeout missing T_slot*TS per-station offset — multiple stations could simultaneously generate tokens
+- **Fixed** no source address validation on reply frames in WAIT_FOR_REPLY — a frame from the wrong station could be incorrectly accepted as a reply
+- **Fixed** ReplyPostponed frames (type 0x07) silently discarded — now transitions to DONE_WITH_TOKEN per Clause 9.5.6
+- **Added** T_frame_abort tracking — discards partial frames when inter-byte gap exceeds 60 bit times per Clause 9.3
+- **Added** `expected_reply_source` field to `MasterNode` for reply frame validation
+
+#### BACnet/IPv6 — VMAC & Address Resolution (Annex U)
+- **Fixed** Virtual-Address-Resolution wire format — was 10 bytes with duplicate VMAC payload, now 7 bytes per Clause U.2.7
+- **Fixed** Virtual-Address-Resolution-ACK — now accepts and encodes requester's destination VMAC (10 bytes per Clause U.2.7A)
+- **Fixed** `send_unicast` derived destination VMAC from IPv6 address bytes — now uses VMAC address table reverse lookup per Clause U.5
+- **Fixed** decoder only extracted destination VMAC for OriginalUnicast — now also extracts for AddressResolution, AddressResolutionAck, VirtualAddressResolutionAck
+- **Fixed** `derive_vmac_from_device_instance` did not mask to 22 bits per Clause H.7.2
+- **Added** `VmacTable` — VMAC-to-address mapping with learn-on-receive from all incoming frames per Clause U.5
+- **Added** Address-Resolution and Address-Resolution-ACK handlers in recv loop
+- **Added** `Bip6BroadcastScope` enum — configurable broadcast multicast scope (LinkLocal/SiteLocal/OrganizationLocal), default SiteLocal
+- **Added** `Bip6ForeignDeviceConfig` — foreign device registration with TTL/2 re-registration, Distribute-Broadcast-To-Network in FD mode
+- **Added** BVLC-Result handling in recv loop with NAK logging
+
+#### BACnet/SC — Client (Annex AB)
+- **Fixed** HeartbeatAck included unnecessary originating/destination VMACs — now omitted per AB.2.11
+- **Fixed** BVLC-Result parsing used payload-presence heuristic — now properly parses Result Code byte (0x00=ACK, 0x01=NAK) with error class/code extraction
+- **Fixed** ConnectAccept message_id not verified against ConnectRequest — now rejects mismatched responses per AB.3.1.3
+- **Fixed** `stop()` aborted task without DisconnectRequest — now sends DisconnectRequest with 2-second timeout before abort, clears shared state
+- **Added** Device UUID parsing from ConnectAccept payload (bytes 6..22), stored as `hub_device_uuid`
+- **Added** `build_heartbeat_ack()` method on `ScConnection` (extracted from inline recv loop construction)
+- **Added** `pending_connect_message_id` field for response verification
+
+#### BACnet/SC — Hub (Annex AB)
+- **Fixed** ConnectRequest accepted with >= 6 bytes — now requires exactly 26 bytes per AB.2.9, NAKs short payloads with MESSAGE_INCOMPLETE
+- **Fixed** pre-handshake messages silently dropped — now returns BVLC-Result NAK
+- **Fixed** unknown function codes silently ignored — now returns BVLC-Result NAK
+- **Fixed** broadcast relay was sequential — now parallel via `join_all` with per-client 5-second timeout
+- **Added** per-client `max_npdu` tracking from ConnectRequest — oversized NPDUs rejected on unicast relay
+- **Added** hub heartbeat initiation — periodic sweep (30s interval, 60s idle threshold) sends HeartbeatRequest to idle clients, removes clients on send failure
+- **Added** `HubClient` struct with `sink`, `max_npdu`, `last_activity` fields
+- **Added** `build_bvlc_result_nak()` helper for consistent NAK construction
+
+#### BACnet/SC — TLS (Annex AB.7.4)
+- **Changed** all `ClientConfig` builders to use `builder_with_protocol_versions(&[&TLS13])` — spec requires TLS 1.3
+
+#### Ethernet — LLC Commands (Clause 7.1)
+- **Added** XID and TEST command/response handling — Clause 7.1 "shall" requirement
+- **Added** `build_xid_response()` and `build_test_response()` frame builders
+- **Added** `check_llc_control()` helper for raw LLC control byte inspection
+- **Changed** BPF filter widened to accept UI, XID, and TEST control bytes (was UI only)
+- **Fixed** recv loop broke permanently on any error — now classifies transient (EAGAIN, EINTR, ENOBUFS) vs fatal errors
+
+#### BIP — Foreign Device (Annex J)
+- **Improved** BVLC-Result NAK handling — REGISTER_FOREIGN_DEVICE_NAK and DISTRIBUTE_BROADCAST_TO_NETWORK_NAK now logged at error level with specific messages
+
+#### Cross-Cutting Transport Improvements
+- **Fixed** BIP, BIP6, Ethernet `start()` leaked recv task and socket on double call — now returns error via `Option::take()` guard, matching SC/MS/TP/Loopback pattern
+- **Fixed** MS/TP and SC used `Error::Encoding` for "transport not started" — now uses `Error::Transport(NotConnected)`, matching BIP/BIP6/Ethernet
+- **Fixed** BIP, BIP6, Ethernet recv loops used `.await` on bounded channel send — now uses `try_send()` with warn log, preventing recv loop stall on slow consumers
+- **Fixed** MS/TP `stop()` left node queue and state intact — now clears queue and resets state
+- **Fixed** SC `stop()` left `ws_shared` and `connection` alive — now clears after disconnect
+- **Added** named `NPDU_CHANNEL_CAPACITY` constants in all transports (256 for BIP/BIP6/Ethernet/Loopback, 64 for SC/MS/TP) with documented rationale
+- **Changed** `bip6` module feature-gated behind `ipv6` feature flag — consistent with `ethernet` and `sc-tls` gating; propagated to bacnet-client, bacnet-java, bacnet-btl, bacnet-cli, benchmarks
+
 ### Added
 - **New crate: `bacnet-gateway`** — HTTP REST API and MCP (Model Context Protocol) server for BACnet networks
   - REST API at `/api/v1/` with endpoints for device discovery, property read/write, local object CRUD, and health check

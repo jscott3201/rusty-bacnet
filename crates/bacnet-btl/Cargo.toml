@@ -17,9 +17,9 @@ path = "src/main.rs"
 bacnet-types.workspace = true
 bacnet-encoding.workspace = true
 bacnet-services.workspace = true
-bacnet-transport.workspace = true
+bacnet-transport = { workspace = true, features = ["ipv6"] }
 bacnet-network.workspace = true
-bacnet-client.workspace = true
+bacnet-client = { workspace = true, features = ["ipv6"] }
 bacnet-objects.workspace = true
 bacnet-server.workspace = true
 bytes.workspace = true

@@ -290,6 +290,13 @@ impl BipTransport {
 
 impl TransportPort for BipTransport {
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
+        if self.recv_task.is_some() {
+            return Err(Error::Transport(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "BIP transport already started",
+            )));
+        }
+
         let socket2 = socket2::Socket::new(
             socket2::Domain::IPV4,
             socket2::Type::DGRAM,
@@ -352,7 +359,10 @@ impl TransportPort for BipTransport {
             self.bbmd = Some(Arc::new(Mutex::new(state)));
         }
 
-        let (npdu_tx, rx) = mpsc::channel(256);
+        /// NPDU receive channel capacity for high-throughput UDP transports.
+        const NPDU_CHANNEL_CAPACITY: usize = 256;
+
+        let (npdu_tx, rx) = mpsc::channel(NPDU_CHANNEL_CAPACITY);
 
         let recv_ctx = RecvContext {
             local_mac: self.local_mac,
@@ -512,14 +522,13 @@ async fn handle_bvll_message(msg: &bvll::BvllMessage, sender: ([u8; 4], u16), ct
             if *source_mac == ctx.local_mac[..] {
                 return;
             }
-            let _ = ctx
-                .npdu_tx
-                .send(ReceivedNpdu {
-                    npdu: msg.payload.clone(),
-                    source_mac,
-                    reply_tx: None,
-                })
-                .await;
+            if ctx.npdu_tx.try_send(ReceivedNpdu {
+                npdu: msg.payload.clone(),
+                source_mac,
+                reply_tx: None,
+            }).is_err() {
+                warn!("BIP: NPDU channel full, dropping incoming unicast frame");
+            }
         }
 
         f if f == BvlcFunction::ORIGINAL_BROADCAST_NPDU => {
@@ -528,14 +537,13 @@ async fn handle_bvll_message(msg: &bvll::BvllMessage, sender: ([u8; 4], u16), ct
                 return;
             }
 
-            let _ = ctx
-                .npdu_tx
-                .send(ReceivedNpdu {
-                    npdu: msg.payload.clone(),
-                    source_mac,
-                    reply_tx: None,
-                })
-                .await;
+            if ctx.npdu_tx.try_send(ReceivedNpdu {
+                npdu: msg.payload.clone(),
+                source_mac,
+                reply_tx: None,
+            }).is_err() {
+                warn!("BIP: NPDU channel full, dropping incoming broadcast frame");
+            }
 
             // If BBMD, forward as Forwarded-NPDU to BDT peers + FDT entries
             if let Some(bbmd) = &ctx.bbmd {
@@ -581,14 +589,13 @@ async fn handle_bvll_message(msg: &bvll::BvllMessage, sender: ([u8; 4], u16), ct
                     return;
                 }
 
-                let _ = ctx
-                    .npdu_tx
-                    .send(ReceivedNpdu {
-                        npdu: msg.payload.clone(),
-                        source_mac,
-                        reply_tx: None,
-                    })
-                    .await;
+                if ctx.npdu_tx.try_send(ReceivedNpdu {
+                    npdu: msg.payload.clone(),
+                    source_mac,
+                    reply_tx: None,
+                }).is_err() {
+                    warn!("BIP: NPDU channel full, dropping forwarded frame");
+                }
 
                 let orig_ip = msg.originating_ip.unwrap();
                 let orig_port = msg.originating_port.unwrap();
@@ -613,14 +620,13 @@ async fn handle_bvll_message(msg: &bvll::BvllMessage, sender: ([u8; 4], u16), ct
                 let _ = ctx.socket.send_to(&buf, dest).await;
             } else {
                 // Non-BBMD: use originating address as source_mac (spec J.2.5).
-                let _ = ctx
-                    .npdu_tx
-                    .send(ReceivedNpdu {
-                        npdu: msg.payload.clone(),
-                        source_mac,
-                        reply_tx: None,
-                    })
-                    .await;
+                if ctx.npdu_tx.try_send(ReceivedNpdu {
+                    npdu: msg.payload.clone(),
+                    source_mac,
+                    reply_tx: None,
+                }).is_err() {
+                    warn!("BIP: NPDU channel full, dropping forwarded frame");
+                }
             }
         }
 
@@ -648,14 +654,13 @@ async fn handle_bvll_message(msg: &bvll::BvllMessage, sender: ([u8; 4], u16), ct
                     return;
                 }
 
-                let _ = ctx
-                    .npdu_tx
-                    .send(ReceivedNpdu {
-                        npdu: msg.payload.clone(),
-                        source_mac,
-                        reply_tx: None,
-                    })
-                    .await;
+                if ctx.npdu_tx.try_send(ReceivedNpdu {
+                    npdu: msg.payload.clone(),
+                    source_mac,
+                    reply_tx: None,
+                }).is_err() {
+                    warn!("BIP: NPDU channel full, dropping distributed broadcast frame");
+                }
 
                 let targets = {
                     let mut state = bbmd.lock().await;
@@ -893,10 +898,24 @@ async fn handle_bvll_message(msg: &bvll::BvllMessage, sender: ([u8; 4], u16), ct
             } else if msg.payload.len() >= 2 {
                 let code =
                     BvlcResultCode::from_raw(u16::from_be_bytes([msg.payload[0], msg.payload[1]]));
-                if code != BvlcResultCode::SUCCESSFUL_COMPLETION {
-                    warn!(code = ?code, "Received BVLC-Result NAK");
-                } else {
-                    debug!("Received BVLC-Result: successful");
+                match code {
+                    BvlcResultCode::SUCCESSFUL_COMPLETION => {
+                        debug!("Received BVLC-Result: successful");
+                    }
+                    BvlcResultCode::REGISTER_FOREIGN_DEVICE_NAK => {
+                        tracing::error!(
+                            "BVLC-Result NAK: foreign device registration rejected by BBMD"
+                        );
+                    }
+                    BvlcResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK_NAK => {
+                        tracing::error!(
+                            "BVLC-Result NAK: broadcast distribution rejected — \
+                             foreign device registration may have failed or expired"
+                        );
+                    }
+                    _ => {
+                        warn!(code = ?code, "Received BVLC-Result NAK");
+                    }
                 }
             }
         }

@@ -8,9 +8,9 @@ publish = false
 bacnet-types = { path = "../crates/bacnet-types" }
 bacnet-encoding = { path = "../crates/bacnet-encoding" }
 bacnet-services = { path = "../crates/bacnet-services" }
-bacnet-transport = { path = "../crates/bacnet-transport", features = ["sc-tls"] }
+bacnet-transport = { path = "../crates/bacnet-transport", features = ["sc-tls", "ipv6"] }
 bacnet-network = { path = "../crates/bacnet-network" }
-bacnet-client = { path = "../crates/bacnet-client", features = ["sc-tls"] }
+bacnet-client = { path = "../crates/bacnet-client", features = ["sc-tls", "ipv6"] }
 bacnet-objects = { path = "../crates/bacnet-objects" }
 bacnet-server = { path = "../crates/bacnet-server", features = ["sc-tls"] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time", "signal"] }

@@ -83,7 +83,9 @@ pub async fn build_sc_client(
         ));
     }
 
-    let tls_config = rustls::ClientConfig::builder()
+    let tls_config = rustls::ClientConfig::builder_with_protocol_versions(&[
+            &rustls::version::TLS13,
+        ])
         .with_root_certificates(root_store)
         .with_client_auth_cert(certs, key)
         .map_err(|e| Error::Encoding(format!("TLS config error: {e}")))?;

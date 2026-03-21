@@ -13,6 +13,7 @@
 pub mod any;
 pub mod bbmd;
 pub mod bip;
+#[cfg(feature = "ipv6")]
 pub mod bip6;
 pub mod bvll;
 #[cfg(feature = "ethernet")]

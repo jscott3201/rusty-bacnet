@@ -22,6 +22,7 @@ use bacnet_encoding::npdu::NpduAddress;
 use bacnet_network::layer::NetworkLayer;
 use bacnet_services::cov::COVNotificationRequest;
 use bacnet_transport::bip::BipTransport;
+#[cfg(feature = "ipv6")]
 use bacnet_transport::bip6::Bip6Transport;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ConfirmedServiceChoice, NetworkPriority, UnconfirmedServiceChoice};
@@ -315,6 +316,7 @@ impl BACnetClient<BipTransport> {
     }
 }
 
+#[cfg(feature = "ipv6")]
 impl BACnetClient<Bip6Transport> {
     /// Create a BIP6-specific builder for BACnet/IPv6 transport.
     pub fn bip6_builder() -> Bip6ClientBuilder {
@@ -327,12 +329,14 @@ impl BACnetClient<Bip6Transport> {
 }
 
 /// BIP6-specific builder that constructs `Bip6Transport` from IPv6 interface/port/device-instance.
+#[cfg(feature = "ipv6")]
 pub struct Bip6ClientBuilder {
     config: ClientConfig,
     interface: Ipv6Addr,
     device_instance: Option<u32>,
 }
 
+#[cfg(feature = "ipv6")]
 impl Bip6ClientBuilder {
     /// Set the local IPv6 interface address.
     pub fn interface(mut self, ip: Ipv6Addr) -> Self {

@@ -32,6 +32,11 @@ impl TlsWebSocket {
     ///
     /// `url` should be a `wss://` URL.  The provided `tls_config` is used for
     /// the underlying `rustls` TLS handshake.
+    ///
+    /// Per spec AB.7.4, the `tls_config` should be configured for TLS 1.3 only:
+    /// ```ignore
+    /// ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+    /// ```
     pub async fn connect(
         url: &str,
         tls_config: Arc<tokio_rustls::rustls::ClientConfig>,

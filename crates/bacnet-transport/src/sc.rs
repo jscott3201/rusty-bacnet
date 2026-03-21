@@ -66,6 +66,10 @@ pub struct ScConnection {
     next_message_id: u16,
     /// Pending Disconnect-ACK to send after receiving a Disconnect-Request.
     pub disconnect_ack_to_send: Option<ScMessage>,
+    /// Message ID of the last ConnectRequest sent (for response verification).
+    pending_connect_message_id: Option<u16>,
+    /// Device UUID of the connected hub.
+    pub hub_device_uuid: Option<[u8; 16]>,
 }
 
 impl ScConnection {
@@ -79,6 +83,8 @@ impl ScConnection {
             hub_max_apdu_length: 1476,
             next_message_id: 1,
             disconnect_ack_to_send: None,
+            pending_connect_message_id: None,
+            hub_device_uuid: None,
         }
     }
 
@@ -97,9 +103,11 @@ impl ScConnection {
         payload_buf.extend_from_slice(&self.device_uuid);
         payload_buf.extend_from_slice(&1476u16.to_be_bytes()); // Max-BVLC-Length
         payload_buf.extend_from_slice(&self.max_apdu_length.to_be_bytes()); // Max-NPDU-Length
+        let msg_id = self.next_id();
+        self.pending_connect_message_id = Some(msg_id);
         ScMessage {
             function: ScFunction::ConnectRequest,
-            message_id: self.next_id(),
+            message_id: msg_id,
             originating_vmac: None,
             destination_vmac: None,
             dest_options: Vec::new(),
@@ -116,12 +124,27 @@ impl ScConnection {
         if msg.function != ScFunction::ConnectAccept {
             return false;
         }
+        // Verify message_id matches our ConnectRequest (spec AB.3.1.3)
+        if let Some(expected_id) = self.pending_connect_message_id {
+            if msg.message_id != expected_id {
+                tracing::warn!(
+                    "ConnectAccept message_id {:#x} does not match request {:#x}",
+                    msg.message_id,
+                    expected_id
+                );
+                return false;
+            }
+        }
+        self.pending_connect_message_id = None;
         // Parse hub VMAC from first 6 bytes of payload
         if msg.payload.len() >= 26 {
             let mut hub_vmac = [0u8; 6];
             hub_vmac.copy_from_slice(&msg.payload[0..6]);
             self.hub_vmac = Some(hub_vmac);
-            // bytes [6..22] = Device UUID (not stored currently)
+            // Parse Device UUID (bytes 6..22)
+            let mut uuid = [0u8; 16];
+            uuid.copy_from_slice(&msg.payload[6..22]);
+            self.hub_device_uuid = Some(uuid);
             // bytes [22..24] = Max-BVLC-Length
             // bytes [24..26] = Max-NPDU-Length
             self.hub_max_apdu_length = u16::from_be_bytes([msg.payload[24], msg.payload[25]]);
@@ -161,6 +184,19 @@ impl ScConnection {
         ScMessage {
             function: ScFunction::HeartbeatRequest,
             message_id: self.next_id(),
+            originating_vmac: None,
+            destination_vmac: None,
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::new(),
+        }
+    }
+
+    /// Build a Heartbeat-ACK message. Per spec AB.2.11, no VMACs.
+    pub fn build_heartbeat_ack(&self, request_message_id: u16) -> ScMessage {
+        ScMessage {
+            function: ScFunction::HeartbeatAck,
+            message_id: request_message_id,
             originating_vmac: None,
             destination_vmac: None,
             dest_options: Vec::new(),
@@ -223,8 +259,20 @@ impl ScConnection {
                 None
             }
             ScFunction::Result => {
-                let is_error = !msg.payload.is_empty();
-                if is_error {
+                // Parse Result Code: byte 1 of payload (0x00=ACK, 0x01=NAK)
+                let is_nak = msg.payload.len() >= 2 && msg.payload[1] == 0x01;
+                if is_nak {
+                    if msg.payload.len() >= 7 {
+                        let result_for = msg.payload[0];
+                        let error_class =
+                            u16::from_be_bytes([msg.payload[3], msg.payload[4]]);
+                        let error_code =
+                            u16::from_be_bytes([msg.payload[5], msg.payload[6]]);
+                        tracing::warn!(
+                            "BACnet/SC BVLC-Result NAK: function={result_for:#x} \
+                             error_class={error_class} error_code={error_code}"
+                        );
+                    }
                     self.state = ScConnectionState::Disconnected;
                 }
                 None
@@ -406,7 +454,10 @@ impl<W: WebSocketPort> ScTransport<W> {
 
 impl<W: WebSocketPort> TransportPort for ScTransport<W> {
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        let (npdu_tx, npdu_rx) = mpsc::channel(64);
+        /// NPDU receive channel capacity — smaller than BIP/Ethernet since SC is hub-relayed.
+        const NPDU_CHANNEL_CAPACITY: usize = 64;
+
+        let (npdu_tx, npdu_rx) = mpsc::channel(NPDU_CHANNEL_CAPACITY);
 
         let conn = Arc::new(Mutex::new(ScConnection::new(
             self.local_vmac,
@@ -480,18 +531,9 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
 
                                     // Handle Heartbeat-Request with Heartbeat-ACK
                                     if msg.function == ScFunction::HeartbeatRequest {
-                                        let local_vmac = {
+                                        let ack = {
                                             let c = conn.lock().await;
-                                            c.local_vmac
-                                        };
-                                        let ack = ScMessage {
-                                            function: ScFunction::HeartbeatAck,
-                                            message_id: msg.message_id,
-                                            originating_vmac: Some(local_vmac),
-                                            destination_vmac: msg.originating_vmac,
-                                            dest_options: Vec::new(),
-                                            data_options: Vec::new(),
-                                            payload: Bytes::new(),
+                                            c.build_heartbeat_ack(msg.message_id)
                                         };
                                         let mut buf = BytesMut::new();
                                         encode_sc_message(&mut buf, &ack);
@@ -614,10 +656,36 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
     }
 
     async fn stop(&mut self) -> Result<(), Error> {
+        // Attempt clean disconnect: send DisconnectRequest via the WebSocket
+        if let (Some(ws), Some(conn)) = (&self.ws_shared, &self.connection) {
+            let disconnect_msg = {
+                let mut c = conn.lock().await;
+                c.build_disconnect_request().ok()
+            };
+            if let Some(msg) = disconnect_msg {
+                let mut buf = BytesMut::new();
+                encode_sc_message(&mut buf, &msg);
+                // Best-effort send — don't block indefinitely
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    ws.send(&buf),
+                )
+                .await;
+            }
+        }
+
         if let Some(task) = self.recv_task.take() {
             task.abort();
             let _ = task.await;
         }
+
+        // Clear shared state to prevent stale sends
+        if let Some(conn) = &self.connection {
+            let mut c = conn.lock().await;
+            c.state = ScConnectionState::Disconnected;
+        }
+        self.ws_shared = None;
+        self.connection = None;
         Ok(())
     }
 
@@ -631,11 +699,17 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         let ws = self
             .ws_shared
             .as_ref()
-            .ok_or_else(|| Error::Encoding("BACnet/SC transport not started".into()))?;
+            .ok_or_else(|| Error::Transport(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "BACnet/SC transport not started",
+            )))?;
         let conn = self
             .connection
             .as_ref()
-            .ok_or_else(|| Error::Encoding("BACnet/SC transport not started".into()))?;
+            .ok_or_else(|| Error::Transport(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "BACnet/SC transport not started",
+            )))?;
 
         let mut dest_vmac = [0u8; 6];
         dest_vmac.copy_from_slice(mac);
@@ -1160,10 +1234,10 @@ mod tests {
     }
 
     #[test]
-    fn bvlc_result_error_disconnects() {
+    fn bvlc_result_nak_disconnects() {
         let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
         conn.state = ScConnectionState::Connected;
-        // originating_function(1) + error_class(2,BE) + error_code(2,BE).
+        // result_for(1) + result_code(1, 0x01=NAK) + error_marker(1) + error_class(2,BE) + error_code(2,BE)
         let msg = ScMessage {
             function: ScFunction::Result,
             message_id: 1,
@@ -1171,7 +1245,7 @@ mod tests {
             destination_vmac: Some([0x01; 6]),
             dest_options: Vec::new(),
             data_options: Vec::new(),
-            payload: Bytes::from_static(&[0x06, 0x00, 0x01, 0x00, 0x01]),
+            payload: Bytes::from_static(&[0x06, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01]),
         };
         let result = conn.handle_received(&msg);
         assert!(result.is_none());
@@ -1194,6 +1268,97 @@ mod tests {
         let result = conn.handle_received(&msg);
         assert!(result.is_none());
         assert_eq!(conn.state, ScConnectionState::Connected);
+    }
+
+    #[test]
+    fn bvlc_result_ack_with_payload_no_disconnect() {
+        let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
+        conn.state = ScConnectionState::Connected;
+        // result_for(1) + result_code(1, 0x00=ACK)
+        let msg = ScMessage {
+            function: ScFunction::Result,
+            message_id: 1,
+            originating_vmac: None,
+            destination_vmac: None,
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::from_static(&[0x06, 0x00]),
+        };
+        let result = conn.handle_received(&msg);
+        assert!(result.is_none());
+        assert_eq!(conn.state, ScConnectionState::Connected);
+    }
+
+    #[test]
+    fn heartbeat_ack_has_no_vmacs() {
+        let conn = ScConnection::new([0x01; 6], [0u8; 16]);
+        let ack = conn.build_heartbeat_ack(42);
+        assert!(ack.originating_vmac.is_none());
+        assert!(ack.destination_vmac.is_none());
+        assert_eq!(ack.message_id, 42);
+        assert_eq!(ack.function, ScFunction::HeartbeatAck);
+    }
+
+    #[test]
+    fn connect_accept_validates_message_id() {
+        let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
+        let req = conn.build_connect_request();
+        let req_id = req.message_id;
+
+        let accept = ScMessage {
+            function: ScFunction::ConnectAccept,
+            message_id: req_id,
+            originating_vmac: None,
+            destination_vmac: None,
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::from(vec![0u8; 26]),
+        };
+        assert!(conn.handle_connect_accept(&accept));
+        assert_eq!(conn.state, ScConnectionState::Connected);
+    }
+
+    #[test]
+    fn connect_accept_rejects_wrong_message_id() {
+        let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
+        let _req = conn.build_connect_request();
+
+        let accept = ScMessage {
+            function: ScFunction::ConnectAccept,
+            message_id: 9999,
+            originating_vmac: None,
+            destination_vmac: None,
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::from(vec![0u8; 26]),
+        };
+        assert!(!conn.handle_connect_accept(&accept));
+        assert_eq!(conn.state, ScConnectionState::Connecting);
+    }
+
+    #[test]
+    fn connect_accept_parses_device_uuid() {
+        let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
+        let req = conn.build_connect_request();
+        let mut payload = vec![0u8; 26];
+        payload[0..6].copy_from_slice(&[0x02; 6]); // hub VMAC
+        payload[6..22].copy_from_slice(&[0xAB; 16]); // hub UUID
+        payload[22..24].copy_from_slice(&1476u16.to_be_bytes());
+        payload[24..26].copy_from_slice(&1400u16.to_be_bytes());
+
+        let accept = ScMessage {
+            function: ScFunction::ConnectAccept,
+            message_id: req.message_id,
+            originating_vmac: None,
+            destination_vmac: None,
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::from(payload),
+        };
+        assert!(conn.handle_connect_accept(&accept));
+        assert_eq!(conn.hub_vmac, Some([0x02; 6]));
+        assert_eq!(conn.hub_device_uuid, Some([0xAB; 16]));
+        assert_eq!(conn.hub_max_apdu_length, 1400);
     }
 
     #[tokio::test]

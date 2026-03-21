@@ -17,6 +17,14 @@ pub const BACNET_LLC_SSAP: u8 = 0x82;
 
 /// LLC control byte for UI (Unnumbered Information) frames.
 pub const LLC_CONTROL_UI: u8 = 0x03;
+/// LLC control byte for XID command.
+pub const LLC_CONTROL_XID_CMD: u8 = 0xAF;
+/// LLC control byte for XID response.
+pub const LLC_CONTROL_XID_RSP: u8 = 0xBF;
+/// LLC control byte for TEST command.
+pub const LLC_CONTROL_TEST_CMD: u8 = 0xE3;
+/// LLC control byte for TEST response.
+pub const LLC_CONTROL_TEST_RSP: u8 = 0xF3;
 
 /// LLC header length: DSAP(1) + SSAP(1) + Control(1).
 pub const LLC_HEADER_LEN: usize = 3;
@@ -77,6 +85,72 @@ pub fn encode_ethernet_frame(
         let pad = min_frame_size - buf.len();
         buf.put_bytes(0x00, pad);
     }
+}
+
+/// Check if a raw frame has BACnet LLC headers (DSAP=0x82, SSAP=0x82).
+/// Returns the LLC control byte if the frame is valid, or `None` otherwise.
+pub fn check_llc_control(data: &[u8]) -> Option<u8> {
+    if data.len() < MIN_FRAME_LEN {
+        return None;
+    }
+    let length = u16::from_be_bytes([data[12], data[13]]) as usize;
+    if length > MAX_LLC_LENGTH || length < LLC_HEADER_LEN {
+        return None;
+    }
+    if data[14] == BACNET_LLC_DSAP && data[15] == BACNET_LLC_SSAP {
+        Some(data[16])
+    } else {
+        None
+    }
+}
+
+/// Build an XID response frame (Clause 7.1).
+///
+/// Swaps src/dest, sets control to XID response (0xBF), SSAP response bit set (0x83).
+pub fn build_xid_response(local_mac: &[u8; 6], remote_mac: &[u8; 6]) -> Vec<u8> {
+    // XID format: dest(6) + src(6) + length(2) + DSAP(1) + SSAP(1) + control(1) + XID info(3)
+    // XID info: format identifier (0x81), types (0x01), window size (0x01)
+    let llc_payload = [0x81u8, 0x01, 0x01]; // IEEE 802.2 XID format
+    let length = LLC_HEADER_LEN + llc_payload.len();
+    let mut buf = Vec::with_capacity(60);
+    buf.extend_from_slice(remote_mac);
+    buf.extend_from_slice(local_mac);
+    buf.extend_from_slice(&(length as u16).to_be_bytes());
+    buf.push(BACNET_LLC_DSAP);
+    buf.push(BACNET_LLC_SSAP | 0x01); // response bit set (0x83)
+    buf.push(LLC_CONTROL_XID_RSP);
+    buf.extend_from_slice(&llc_payload);
+    // Pad to minimum frame size
+    let min_size = 14 + MIN_ETHERNET_PAYLOAD;
+    if buf.len() < min_size {
+        buf.resize(min_size, 0x00);
+    }
+    buf
+}
+
+/// Build a TEST response frame (Clause 7.1).
+///
+/// Swaps src/dest, echoes the test data back with control set to TEST response (0xF3).
+pub fn build_test_response(
+    local_mac: &[u8; 6],
+    remote_mac: &[u8; 6],
+    test_data: &[u8],
+) -> Vec<u8> {
+    let length = LLC_HEADER_LEN + test_data.len();
+    let mut buf = Vec::with_capacity(14 + length + MIN_ETHERNET_PAYLOAD);
+    buf.extend_from_slice(remote_mac);
+    buf.extend_from_slice(local_mac);
+    buf.extend_from_slice(&(length as u16).to_be_bytes());
+    buf.push(BACNET_LLC_DSAP);
+    buf.push(BACNET_LLC_SSAP | 0x01); // response bit set (0x83)
+    buf.push(LLC_CONTROL_TEST_RSP);
+    buf.extend_from_slice(test_data);
+    // Pad to minimum frame size
+    let min_size = 14 + MIN_ETHERNET_PAYLOAD;
+    if buf.len() < min_size {
+        buf.resize(min_size, 0x00);
+    }
+    buf
 }
 
 /// Decode a BACnet Ethernet LLC frame from raw bytes.
@@ -251,21 +325,48 @@ mod transport {
         }
     }
 
-    /// Attach a BPF filter to the raw socket that only accepts BACnet LLC
-    /// frames (DSAP=0x82, SSAP=0x82, Control=0x03).
+    impl EthernetTransport {
+        /// Send a raw pre-built Ethernet frame via the AF_PACKET socket.
+        /// Used for LLC command responses (XID, TEST) which bypass the normal
+        /// BACnet NPDU encode path.
+        fn raw_sendto(fd: i32, if_index: i32, dest_mac: &[u8; 6], frame: &[u8]) -> Result<(), std::io::Error> {
+            let mut sll: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
+            sll.sll_family = libc::AF_PACKET as u16;
+            sll.sll_ifindex = if_index;
+            sll.sll_halen = 6;
+            sll.sll_addr[..6].copy_from_slice(dest_mac);
+            let ret = unsafe {
+                libc::sendto(
+                    fd,
+                    frame.as_ptr() as *const libc::c_void,
+                    frame.len(),
+                    0,
+                    &sll as *const libc::sockaddr_ll as *const libc::sockaddr,
+                    std::mem::size_of::<libc::sockaddr_ll>() as libc::socklen_t,
+                )
+            };
+            if ret < 0 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    /// Attach a BPF filter to the raw socket that accepts BACnet LLC
+    /// frames (DSAP=0x82, SSAP=0x82) with any control byte (UI, XID, TEST).
     ///
     /// This is best-effort: if the setsockopt call fails, we log a warning
     /// and continue (software-level filtering in the recv loop still works).
     fn attach_bacnet_bpf_filter(fd: i32) {
-        // BPF program:
+        // BPF program (no control byte check — accept UI, XID, and TEST per Clause 7.1):
         //   ldh [12]          ; load length/EtherType field
         //   jgt #1500, drop   ; if > 1500, it's an EtherType frame, drop
         //   ldb [14]          ; DSAP
         //   jneq #0x82, drop
-        //   ldb [15]          ; SSAP
+        //   ldb [15]          ; SSAP (accept 0x82 and 0x83 response bit)
+        //   and #0xFE         ; mask off response bit
         //   jneq #0x82, drop
-        //   ldb [16]          ; Control
-        //   jneq #0x03, drop
         //   ret #65535        ; accept
         //   drop: ret #0      ; reject
         #[repr(C)]
@@ -294,62 +395,59 @@ mod transport {
         const BPF_RET: u16 = 0x06;
         const BPF_K: u16 = 0x00;
 
-        let filter: [SockFilter; 10] = [
-            // ldh [12] — load EtherType/Length field
+        const BPF_ALU: u16 = 0x04;
+        const BPF_AND: u16 = 0x50;
+
+        // 9 instructions: 7 filter + accept + drop
+        let filter: [SockFilter; 9] = [
+            // [0] ldh [12] — load EtherType/Length field
             SockFilter {
                 code: BPF_LD | BPF_H | BPF_ABS,
                 jt: 0,
                 jf: 0,
                 k: 12,
             },
-            // jgt #1500, drop (offset +7 = instruction 8)
+            // [1] jgt #1500, drop(8) — skip 6 forward on true
             SockFilter {
                 code: BPF_JMP | BPF_JGT | BPF_K,
-                jt: 7,
+                jt: 6,
                 jf: 0,
                 k: 1500,
             },
-            // ldb [14] — DSAP
+            // [2] ldb [14] — DSAP
             SockFilter {
                 code: BPF_LD | BPF_B | BPF_ABS,
                 jt: 0,
                 jf: 0,
                 k: 14,
             },
-            // jneq #0x82, drop (offset +5 = instruction 8)
+            // [3] jeq #0x82, continue, drop(8) — skip 4 forward on false
             SockFilter {
                 code: BPF_JMP | BPF_JEQ | BPF_K,
                 jt: 0,
-                jf: 5,
+                jf: 4,
                 k: 0x82,
             },
-            // ldb [15] — SSAP
+            // [4] ldb [15] — SSAP
             SockFilter {
                 code: BPF_LD | BPF_B | BPF_ABS,
                 jt: 0,
                 jf: 0,
                 k: 15,
             },
-            // jneq #0x82, drop (offset +3 = instruction 8)
+            // [5] and #0xFE — mask off LLC response bit
             SockFilter {
-                code: BPF_JMP | BPF_JEQ | BPF_K,
-                jt: 0,
-                jf: 3,
-                k: 0x82,
-            },
-            // ldb [16] — Control
-            SockFilter {
-                code: BPF_LD | BPF_B | BPF_ABS,
+                code: BPF_ALU | BPF_AND | BPF_K,
                 jt: 0,
                 jf: 0,
-                k: 16,
+                k: 0xFE,
             },
-            // jneq #0x03, drop (offset +1 = instruction 8)
+            // [6] jeq #0x82, accept(7), drop(8) — skip 0/1
             SockFilter {
                 code: BPF_JMP | BPF_JEQ | BPF_K,
                 jt: 0,
                 jf: 1,
-                k: 0x03,
+                k: 0x82,
             },
             // ret #65535 — accept
             SockFilter {
@@ -388,13 +486,20 @@ mod transport {
             );
         } else {
             debug!(
-                "Attached BPF filter for BACnet LLC frames (DSAP=0x82, SSAP=0x82, Control=0x03)"
+                "Attached BPF filter for BACnet LLC frames (DSAP=0x82, SSAP=0x82, UI/XID/TEST)"
             );
         }
     }
 
     impl TransportPort for EthernetTransport {
         async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
+            if self.recv_task.is_some() {
+                return Err(Error::Transport(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "Ethernet transport already started",
+                )));
+            }
+
             // Open a raw AF_PACKET socket capturing all EtherType frames.
             let fd = unsafe {
                 libc::socket(
@@ -455,7 +560,10 @@ mod transport {
             let owned_fd = Arc::new(owned_fd);
             self.raw_fd = Some(Arc::clone(&owned_fd));
 
-            let (tx, rx) = mpsc::channel(256);
+            /// NPDU receive channel capacity for high-throughput raw socket transports.
+            const NPDU_CHANNEL_CAPACITY: usize = 256;
+
+            let (tx, rx) = mpsc::channel(NPDU_CHANNEL_CAPACITY);
             let local_mac = self.local_mac;
 
             let async_fd = AsyncFd::new(Arc::clone(&owned_fd)).map_err(|e| {
@@ -492,6 +600,38 @@ mod transport {
                     }) {
                         Ok(Ok(len)) => {
                             let data = &recv_buf[..len];
+
+                            // Handle XID/TEST commands before UI decode (Clause 7.1)
+                            if let Some(control) = check_llc_control(data) {
+                                if data.len() >= 12 && data[6..12] != local_mac {
+                                    let mut src_mac = [0u8; 6];
+                                    src_mac.copy_from_slice(&data[6..12]);
+                                    match control {
+                                        LLC_CONTROL_XID_CMD => {
+                                            debug!(src = ?src_mac, "XID command, sending response");
+                                            let resp = build_xid_response(&local_mac, &src_mac);
+                                            let _ = Self::raw_sendto(
+                                                raw_fd.as_raw_fd(), if_index, &src_mac, &resp,
+                                            );
+                                            continue;
+                                        }
+                                        LLC_CONTROL_TEST_CMD => {
+                                            // Echo back the test data (bytes after LLC header)
+                                            let test_data = if data.len() > 17 { &data[17..] } else { &[] };
+                                            debug!(src = ?src_mac, len = test_data.len(), "TEST command, sending response");
+                                            let resp = build_test_response(
+                                                &local_mac, &src_mac, test_data,
+                                            );
+                                            let _ = Self::raw_sendto(
+                                                raw_fd.as_raw_fd(), if_index, &src_mac, &resp,
+                                            );
+                                            continue;
+                                        }
+                                        _ => {} // UI and others fall through to decode
+                                    }
+                                }
+                            }
+
                             match decode_ethernet_frame(data) {
                                 Ok(frame) => {
                                     if frame.source == local_mac {
@@ -503,13 +643,13 @@ mod transport {
                                         payload_len = frame.payload.len(),
                                         "Ethernet frame received"
                                     );
-                                    let _ = tx
-                                        .send(ReceivedNpdu {
-                                            npdu: frame.payload.clone(),
-                                            source_mac: MacAddr::from(frame.source),
-                                            reply_tx: None,
-                                        })
-                                        .await;
+                                    if tx.try_send(ReceivedNpdu {
+                                        npdu: frame.payload.clone(),
+                                        source_mac: MacAddr::from(frame.source),
+                                        reply_tx: None,
+                                    }).is_err() {
+                                        warn!("Ethernet: NPDU channel full, dropping incoming frame");
+                                    }
                                 }
                                 Err(_) => {
                                     continue;
@@ -517,8 +657,17 @@ mod transport {
                             }
                         }
                         Ok(Err(e)) => {
-                            warn!(error = %e, "Ethernet recv error");
-                            break;
+                            let errno = e.raw_os_error().unwrap_or(0);
+                            match errno {
+                                libc::EAGAIN | libc::EINTR | libc::ENOBUFS | libc::ENOMEM => {
+                                    debug!(error = %e, "Ethernet: transient recv error");
+                                    continue;
+                                }
+                                _ => {
+                                    tracing::error!(error = %e, "Ethernet: fatal recv error");
+                                    break;
+                                }
+                            }
                         }
                         Err(_would_block) => continue,
                     }

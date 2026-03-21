@@ -17,7 +17,7 @@ bacnet-types = { workspace = true }
 bacnet-encoding = { workspace = true }
 bacnet-services = { workspace = true }
 bacnet-transport = { workspace = true, features = ["ipv6", "sc-tls"] }
-bacnet-client = { workspace = true }
+bacnet-client = { workspace = true, features = ["ipv6"] }
 bacnet-server = { workspace = true }
 bacnet-objects = { workspace = true }
 bacnet-network = { workspace = true }
