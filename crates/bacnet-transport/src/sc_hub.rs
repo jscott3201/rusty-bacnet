@@ -147,8 +147,9 @@ async fn accept_loop(
         let clients_for_hb = clients.clone();
         let next_msg_id = std::sync::atomic::AtomicU16::new(0x8000); // hub message IDs start high
         tokio::spawn(async move {
-            let mut interval =
-                tokio::time::interval(std::time::Duration::from_secs(HEARTBEAT_CHECK_INTERVAL_SECS));
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(
+                HEARTBEAT_CHECK_INTERVAL_SECS,
+            ));
             loop {
                 interval.tick().await;
                 let now = now_secs();
@@ -176,13 +177,10 @@ async fn accept_loop(
                     };
                     let mut buf = BytesMut::new();
                     encode_sc_message(&mut buf, &hb);
-                    let result = tokio::time::timeout(
-                        std::time::Duration::from_secs(5),
-                        async {
-                            let mut w = sink.lock().await;
-                            w.send(Message::Binary(buf.to_vec().into())).await
-                        },
-                    )
+                    let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                        let mut w = sink.lock().await;
+                        w.send(Message::Binary(buf.to_vec().into())).await
+                    })
                     .await;
                     if let Err(_) | Ok(Err(_)) = result {
                         warn!("Hub: heartbeat send failed for {vmac:02x?}, removing client");
@@ -337,9 +335,12 @@ async fn handle_client(
                 if sc_msg.payload.len() < 26 {
                     warn!("Hub: ConnectRequest from {peer_addr} has short payload ({} bytes, need 26)", sc_msg.payload.len());
                     let nak = build_bvlc_result_nak(
-                        sc_msg.message_id, ScFunction::ConnectRequest,
-                        0x00, 0x01, // communication
-                        0x00, 0x40, // message-incomplete
+                        sc_msg.message_id,
+                        ScFunction::ConnectRequest,
+                        0x00,
+                        0x01, // communication
+                        0x00,
+                        0x40, // message-incomplete
                     );
                     let mut buf = BytesMut::new();
                     encode_sc_message(&mut buf, &nak);
@@ -419,11 +420,14 @@ async fn handle_client(
                         let _ = w.send(Message::Binary(buf.to_vec().into())).await;
                         break;
                     }
-                    map.insert(vmac, HubClient {
-                        sink: write.clone(),
-                        max_npdu: client_max_npdu,
-                        last_activity: client_activity.clone(),
-                    });
+                    map.insert(
+                        vmac,
+                        HubClient {
+                            sink: write.clone(),
+                            max_npdu: client_max_npdu,
+                            last_activity: client_activity.clone(),
+                        },
+                    );
                 }
                 client_vmac = Some(vmac);
 
@@ -494,9 +498,12 @@ async fn handle_client(
                 let Some(registered_vmac) = client_vmac else {
                     warn!("Hub: EncapsulatedNpdu before ConnectRequest from {peer_addr} — sending NAK");
                     let nak = build_bvlc_result_nak(
-                        sc_msg.message_id, ScFunction::EncapsulatedNpdu,
-                        0x00, 0x01, // communication
-                        0x00, 0x01, // other
+                        sc_msg.message_id,
+                        ScFunction::EncapsulatedNpdu,
+                        0x00,
+                        0x01, // communication
+                        0x00,
+                        0x01, // other
                     );
                     let mut buf = BytesMut::new();
                     encode_sc_message(&mut buf, &nak);
@@ -545,21 +552,25 @@ async fn handle_client(
                             .collect()
                     };
                     let relay_shared = Bytes::from(relay_bytes);
-                    let futs: Vec<_> = sinks.into_iter().map(|(vmac, sink)| {
-                        let data = relay_shared.clone();
-                        async move {
-                            let result = tokio::time::timeout(
-                                std::time::Duration::from_secs(5),
-                                async {
-                                    let mut w = sink.lock().await;
-                                    w.send(Message::Binary(data.to_vec().into())).await
-                                },
-                            ).await;
-                            if let Err(_) | Ok(Err(_)) = result {
-                                warn!("Hub: broadcast relay failed to {vmac:02x?}");
+                    let futs: Vec<_> = sinks
+                        .into_iter()
+                        .map(|(vmac, sink)| {
+                            let data = relay_shared.clone();
+                            async move {
+                                let result = tokio::time::timeout(
+                                    std::time::Duration::from_secs(5),
+                                    async {
+                                        let mut w = sink.lock().await;
+                                        w.send(Message::Binary(data.to_vec().into())).await
+                                    },
+                                )
+                                .await;
+                                if let Err(_) | Ok(Err(_)) = result {
+                                    warn!("Hub: broadcast relay failed to {vmac:02x?}");
+                                }
                             }
-                        }
-                    }).collect();
+                        })
+                        .collect();
                     futures_util::future::join_all(futs).await;
                 } else {
                     let target = {
@@ -586,9 +597,12 @@ async fn handle_client(
             other => {
                 debug!("Hub: unknown function {other:?} from {peer_addr}, sending NAK");
                 let nak = build_bvlc_result_nak(
-                    sc_msg.message_id, other,
-                    0x00, 0x01, // communication
-                    0x00, 0x01, // other
+                    sc_msg.message_id,
+                    other,
+                    0x00,
+                    0x01, // communication
+                    0x00,
+                    0x01, // other
                 );
                 let mut buf = BytesMut::new();
                 encode_sc_message(&mut buf, &nak);

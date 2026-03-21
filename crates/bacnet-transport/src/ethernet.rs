@@ -131,11 +131,7 @@ pub fn build_xid_response(local_mac: &[u8; 6], remote_mac: &[u8; 6]) -> Vec<u8> 
 /// Build a TEST response frame (Clause 7.1).
 ///
 /// Swaps src/dest, echoes the test data back with control set to TEST response (0xF3).
-pub fn build_test_response(
-    local_mac: &[u8; 6],
-    remote_mac: &[u8; 6],
-    test_data: &[u8],
-) -> Vec<u8> {
+pub fn build_test_response(local_mac: &[u8; 6], remote_mac: &[u8; 6], test_data: &[u8]) -> Vec<u8> {
     let length = LLC_HEADER_LEN + test_data.len();
     let mut buf = Vec::with_capacity(14 + length + MIN_ETHERNET_PAYLOAD);
     buf.extend_from_slice(remote_mac);
@@ -329,7 +325,12 @@ mod transport {
         /// Send a raw pre-built Ethernet frame via the AF_PACKET socket.
         /// Used for LLC command responses (XID, TEST) which bypass the normal
         /// BACnet NPDU encode path.
-        fn raw_sendto(fd: i32, if_index: i32, dest_mac: &[u8; 6], frame: &[u8]) -> Result<(), std::io::Error> {
+        fn raw_sendto(
+            fd: i32,
+            if_index: i32,
+            dest_mac: &[u8; 6],
+            frame: &[u8],
+        ) -> Result<(), std::io::Error> {
             let mut sll: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
             sll.sll_family = libc::AF_PACKET as u16;
             sll.sll_ifindex = if_index;
@@ -485,9 +486,7 @@ mod transport {
                 "Failed to attach BPF filter for BACnet LLC frames (continuing without kernel filter)"
             );
         } else {
-            debug!(
-                "Attached BPF filter for BACnet LLC frames (DSAP=0x82, SSAP=0x82, UI/XID/TEST)"
-            );
+            debug!("Attached BPF filter for BACnet LLC frames (DSAP=0x82, SSAP=0x82, UI/XID/TEST)");
         }
     }
 
@@ -572,6 +571,8 @@ mod transport {
                 )))
             })?;
 
+            let send_fd = Arc::clone(&owned_fd);
+            let if_index = self.if_index;
             let recv_task = tokio::spawn(async move {
                 let mut recv_buf = vec![0u8; 2048];
                 loop {
@@ -610,20 +611,27 @@ mod transport {
                                         LLC_CONTROL_XID_CMD => {
                                             debug!(src = ?src_mac, "XID command, sending response");
                                             let resp = build_xid_response(&local_mac, &src_mac);
-                                            let _ = Self::raw_sendto(
-                                                raw_fd.as_raw_fd(), if_index, &src_mac, &resp,
+                                            let _ = EthernetTransport::raw_sendto(
+                                                send_fd.as_raw_fd(),
+                                                if_index,
+                                                &src_mac,
+                                                &resp,
                                             );
                                             continue;
                                         }
                                         LLC_CONTROL_TEST_CMD => {
                                             // Echo back the test data (bytes after LLC header)
-                                            let test_data = if data.len() > 17 { &data[17..] } else { &[] };
+                                            let test_data =
+                                                if data.len() > 17 { &data[17..] } else { &[] };
                                             debug!(src = ?src_mac, len = test_data.len(), "TEST command, sending response");
                                             let resp = build_test_response(
                                                 &local_mac, &src_mac, test_data,
                                             );
-                                            let _ = Self::raw_sendto(
-                                                raw_fd.as_raw_fd(), if_index, &src_mac, &resp,
+                                            let _ = EthernetTransport::raw_sendto(
+                                                send_fd.as_raw_fd(),
+                                                if_index,
+                                                &src_mac,
+                                                &resp,
                                             );
                                             continue;
                                         }
@@ -643,12 +651,17 @@ mod transport {
                                         payload_len = frame.payload.len(),
                                         "Ethernet frame received"
                                     );
-                                    if tx.try_send(ReceivedNpdu {
-                                        npdu: frame.payload.clone(),
-                                        source_mac: MacAddr::from(frame.source),
-                                        reply_tx: None,
-                                    }).is_err() {
-                                        warn!("Ethernet: NPDU channel full, dropping incoming frame");
+                                    if tx
+                                        .try_send(ReceivedNpdu {
+                                            npdu: frame.payload.clone(),
+                                            source_mac: MacAddr::from(frame.source),
+                                            reply_tx: None,
+                                        })
+                                        .is_err()
+                                    {
+                                        warn!(
+                                            "Ethernet: NPDU channel full, dropping incoming frame"
+                                        );
                                     }
                                 }
                                 Err(_) => {

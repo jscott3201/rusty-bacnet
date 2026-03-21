@@ -522,11 +522,15 @@ async fn handle_bvll_message(msg: &bvll::BvllMessage, sender: ([u8; 4], u16), ct
             if *source_mac == ctx.local_mac[..] {
                 return;
             }
-            if ctx.npdu_tx.try_send(ReceivedNpdu {
-                npdu: msg.payload.clone(),
-                source_mac,
-                reply_tx: None,
-            }).is_err() {
+            if ctx
+                .npdu_tx
+                .try_send(ReceivedNpdu {
+                    npdu: msg.payload.clone(),
+                    source_mac,
+                    reply_tx: None,
+                })
+                .is_err()
+            {
                 warn!("BIP: NPDU channel full, dropping incoming unicast frame");
             }
         }
@@ -537,11 +541,15 @@ async fn handle_bvll_message(msg: &bvll::BvllMessage, sender: ([u8; 4], u16), ct
                 return;
             }
 
-            if ctx.npdu_tx.try_send(ReceivedNpdu {
-                npdu: msg.payload.clone(),
-                source_mac,
-                reply_tx: None,
-            }).is_err() {
+            if ctx
+                .npdu_tx
+                .try_send(ReceivedNpdu {
+                    npdu: msg.payload.clone(),
+                    source_mac,
+                    reply_tx: None,
+                })
+                .is_err()
+            {
                 warn!("BIP: NPDU channel full, dropping incoming broadcast frame");
             }
 
@@ -589,11 +597,15 @@ async fn handle_bvll_message(msg: &bvll::BvllMessage, sender: ([u8; 4], u16), ct
                     return;
                 }
 
-                if ctx.npdu_tx.try_send(ReceivedNpdu {
-                    npdu: msg.payload.clone(),
-                    source_mac,
-                    reply_tx: None,
-                }).is_err() {
+                if ctx
+                    .npdu_tx
+                    .try_send(ReceivedNpdu {
+                        npdu: msg.payload.clone(),
+                        source_mac,
+                        reply_tx: None,
+                    })
+                    .is_err()
+                {
                     warn!("BIP: NPDU channel full, dropping forwarded frame");
                 }
 
@@ -620,11 +632,15 @@ async fn handle_bvll_message(msg: &bvll::BvllMessage, sender: ([u8; 4], u16), ct
                 let _ = ctx.socket.send_to(&buf, dest).await;
             } else {
                 // Non-BBMD: use originating address as source_mac (spec J.2.5).
-                if ctx.npdu_tx.try_send(ReceivedNpdu {
-                    npdu: msg.payload.clone(),
-                    source_mac,
-                    reply_tx: None,
-                }).is_err() {
+                if ctx
+                    .npdu_tx
+                    .try_send(ReceivedNpdu {
+                        npdu: msg.payload.clone(),
+                        source_mac,
+                        reply_tx: None,
+                    })
+                    .is_err()
+                {
                     warn!("BIP: NPDU channel full, dropping forwarded frame");
                 }
             }
@@ -654,11 +670,15 @@ async fn handle_bvll_message(msg: &bvll::BvllMessage, sender: ([u8; 4], u16), ct
                     return;
                 }
 
-                if ctx.npdu_tx.try_send(ReceivedNpdu {
-                    npdu: msg.payload.clone(),
-                    source_mac,
-                    reply_tx: None,
-                }).is_err() {
+                if ctx
+                    .npdu_tx
+                    .try_send(ReceivedNpdu {
+                        npdu: msg.payload.clone(),
+                        source_mac,
+                        reply_tx: None,
+                    })
+                    .is_err()
+                {
                     warn!("BIP: NPDU channel full, dropping distributed broadcast frame");
                 }
 

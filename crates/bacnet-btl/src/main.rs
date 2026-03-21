@@ -117,20 +117,20 @@ async fn cmd_serve(
         {
             let tls_config = if _sc_no_verify {
                 // No-verify TLS for testing (TLS 1.3 per spec AB.7.4)
-                let config = tokio_rustls::rustls::ClientConfig::builder_with_protocol_versions(
-                        &[&tokio_rustls::rustls::version::TLS13],
-                    )
-                    .dangerous()
-                    .with_custom_certificate_verifier(std::sync::Arc::new(NoVerify))
-                    .with_no_client_auth();
+                let config = tokio_rustls::rustls::ClientConfig::builder_with_protocol_versions(&[
+                    &tokio_rustls::rustls::version::TLS13,
+                ])
+                .dangerous()
+                .with_custom_certificate_verifier(std::sync::Arc::new(NoVerify))
+                .with_no_client_auth();
                 std::sync::Arc::new(config)
             } else {
                 let root_store = tokio_rustls::rustls::RootCertStore::empty();
-                let config = tokio_rustls::rustls::ClientConfig::builder_with_protocol_versions(
-                        &[&tokio_rustls::rustls::version::TLS13],
-                    )
-                    .with_root_certificates(root_store)
-                    .with_no_client_auth();
+                let config = tokio_rustls::rustls::ClientConfig::builder_with_protocol_versions(&[
+                    &tokio_rustls::rustls::version::TLS13,
+                ])
+                .with_root_certificates(root_store)
+                .with_no_client_auth();
                 std::sync::Arc::new(config)
             };
 
@@ -271,20 +271,20 @@ async fn cmd_run(
             use bacnet_client::client::BACnetClient;
 
             let tls_config = if _sc_no_verify {
-                let config = tokio_rustls::rustls::ClientConfig::builder_with_protocol_versions(
-                        &[&tokio_rustls::rustls::version::TLS13],
-                    )
-                    .dangerous()
-                    .with_custom_certificate_verifier(std::sync::Arc::new(NoVerify))
-                    .with_no_client_auth();
+                let config = tokio_rustls::rustls::ClientConfig::builder_with_protocol_versions(&[
+                    &tokio_rustls::rustls::version::TLS13,
+                ])
+                .dangerous()
+                .with_custom_certificate_verifier(std::sync::Arc::new(NoVerify))
+                .with_no_client_auth();
                 std::sync::Arc::new(config)
             } else {
                 let root_store = tokio_rustls::rustls::RootCertStore::empty();
-                let config = tokio_rustls::rustls::ClientConfig::builder_with_protocol_versions(
-                        &[&tokio_rustls::rustls::version::TLS13],
-                    )
-                    .with_root_certificates(root_store)
-                    .with_no_client_auth();
+                let config = tokio_rustls::rustls::ClientConfig::builder_with_protocol_versions(&[
+                    &tokio_rustls::rustls::version::TLS13,
+                ])
+                .with_root_certificates(root_store)
+                .with_no_client_auth();
                 std::sync::Arc::new(config)
             };
 

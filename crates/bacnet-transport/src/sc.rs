@@ -264,10 +264,8 @@ impl ScConnection {
                 if is_nak {
                     if msg.payload.len() >= 7 {
                         let result_for = msg.payload[0];
-                        let error_class =
-                            u16::from_be_bytes([msg.payload[3], msg.payload[4]]);
-                        let error_code =
-                            u16::from_be_bytes([msg.payload[5], msg.payload[6]]);
+                        let error_class = u16::from_be_bytes([msg.payload[3], msg.payload[4]]);
+                        let error_code = u16::from_be_bytes([msg.payload[5], msg.payload[6]]);
                         tracing::warn!(
                             "BACnet/SC BVLC-Result NAK: function={result_for:#x} \
                              error_class={error_class} error_code={error_code}"
@@ -666,11 +664,8 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                 let mut buf = BytesMut::new();
                 encode_sc_message(&mut buf, &msg);
                 // Best-effort send — don't block indefinitely
-                let _ = tokio::time::timeout(
-                    std::time::Duration::from_secs(2),
-                    ws.send(&buf),
-                )
-                .await;
+                let _ =
+                    tokio::time::timeout(std::time::Duration::from_secs(2), ws.send(&buf)).await;
             }
         }
 
@@ -696,20 +691,18 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                 mac.len()
             )));
         }
-        let ws = self
-            .ws_shared
-            .as_ref()
-            .ok_or_else(|| Error::Transport(std::io::Error::new(
+        let ws = self.ws_shared.as_ref().ok_or_else(|| {
+            Error::Transport(std::io::Error::new(
                 std::io::ErrorKind::NotConnected,
                 "BACnet/SC transport not started",
-            )))?;
-        let conn = self
-            .connection
-            .as_ref()
-            .ok_or_else(|| Error::Transport(std::io::Error::new(
+            ))
+        })?;
+        let conn = self.connection.as_ref().ok_or_else(|| {
+            Error::Transport(std::io::Error::new(
                 std::io::ErrorKind::NotConnected,
                 "BACnet/SC transport not started",
-            )))?;
+            ))
+        })?;
 
         let mut dest_vmac = [0u8; 6];
         dest_vmac.copy_from_slice(mac);

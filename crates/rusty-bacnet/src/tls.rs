@@ -99,9 +99,7 @@ pub fn build_client_tls_config(
     }
 
     // BACnet/SC requires TLS 1.3 per spec AB.7.4
-    let builder = rustls::ClientConfig::builder_with_protocol_versions(&[
-            &rustls::version::TLS13,
-        ])
+    let builder = rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
         .with_root_certificates(root_store);
 
     let config = match (client_cert_path, client_key_path) {
