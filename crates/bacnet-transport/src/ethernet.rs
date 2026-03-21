@@ -94,7 +94,7 @@ pub fn check_llc_control(data: &[u8]) -> Option<u8> {
         return None;
     }
     let length = u16::from_be_bytes([data[12], data[13]]) as usize;
-    if length > MAX_LLC_LENGTH || length < LLC_HEADER_LEN {
+    if !(LLC_HEADER_LEN..=MAX_LLC_LENGTH).contains(&length) {
         return None;
     }
     if data[14] == BACNET_LLC_DSAP && data[15] == BACNET_LLC_SSAP {

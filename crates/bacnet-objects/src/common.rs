@@ -4,6 +4,40 @@
 //! construction patterns that are identical across analog, binary, and
 //! multi-state object implementations.
 
+/// Compute StatusFlags with all four bits dynamically set.
+///
+/// IN_ALARM: TRUE when event_state != NORMAL (0).
+/// FAULT: TRUE when reliability != NO_FAULT_DETECTED (0).
+/// OUT_OF_SERVICE: from the object's out_of_service flag.
+/// OVERRIDDEN: always FALSE for software-only (callers can set in base_flags).
+pub fn compute_status_flags(
+    base_flags: bacnet_types::primitives::StatusFlags,
+    reliability: u32,
+    out_of_service: bool,
+    event_state: u32,
+) -> bacnet_types::primitives::PropertyValue {
+    let mut flags = base_flags;
+    if event_state != 0 {
+        flags |= bacnet_types::primitives::StatusFlags::IN_ALARM;
+    } else {
+        flags -= bacnet_types::primitives::StatusFlags::IN_ALARM;
+    }
+    if reliability != 0 {
+        flags |= bacnet_types::primitives::StatusFlags::FAULT;
+    } else {
+        flags -= bacnet_types::primitives::StatusFlags::FAULT;
+    }
+    if out_of_service {
+        flags |= bacnet_types::primitives::StatusFlags::OUT_OF_SERVICE;
+    } else {
+        flags -= bacnet_types::primitives::StatusFlags::OUT_OF_SERVICE;
+    }
+    bacnet_types::primitives::PropertyValue::BitString {
+        unused_bits: 4,
+        data: vec![flags.bits() << 4],
+    }
+}
+
 /// Construct a protocol `Error` from an `ErrorClass` and `ErrorCode`.
 #[inline]
 pub(crate) fn protocol_error(
@@ -82,22 +116,15 @@ macro_rules! read_common_properties {
                 bacnet_types::primitives::PropertyValue::CharacterString($self.description.clone()),
             )),
             p if p == bacnet_types::enums::PropertyIdentifier::STATUS_FLAGS => {
-                // Compute StatusFlags dynamically from reliability and out_of_service
-                let mut flags = $self.status_flags;
-                if $self.reliability != 0 {
-                    flags |= bacnet_types::primitives::StatusFlags::FAULT;
-                } else {
-                    flags -= bacnet_types::primitives::StatusFlags::FAULT;
-                }
-                if $self.out_of_service {
-                    flags |= bacnet_types::primitives::StatusFlags::OUT_OF_SERVICE;
-                } else {
-                    flags -= bacnet_types::primitives::StatusFlags::OUT_OF_SERVICE;
-                }
-                Some(Ok(bacnet_types::primitives::PropertyValue::BitString {
-                    unused_bits: 4,
-                    data: vec![flags.bits() << 4],
-                }))
+                // Compute StatusFlags dynamically. Objects with event detection
+                // should handle STATUS_FLAGS before calling this macro to include
+                // IN_ALARM from their event_state; this default uses event_state=0.
+                Some(Ok(common::compute_status_flags(
+                    $self.status_flags,
+                    $self.reliability,
+                    $self.out_of_service,
+                    0, // default: no IN_ALARM (non-event objects)
+                )))
             }
             p if p == bacnet_types::enums::PropertyIdentifier::OUT_OF_SERVICE => Some(Ok(
                 bacnet_types::primitives::PropertyValue::Boolean($self.out_of_service),

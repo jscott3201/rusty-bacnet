@@ -48,6 +48,23 @@ fn read_unsigned(
     }
 }
 
+/// Read EVENT_ENABLE as a 3-bit value.
+///
+/// Objects store EVENT_ENABLE as `BitString { unused_bits: 5, data: [value << 5] }`.
+/// This helper handles both BitString and Unsigned representations for robustness.
+fn read_event_enable(obj: &dyn bacnet_objects::traits::BACnetObject) -> u8 {
+    match obj.read_property(PropertyIdentifier::EVENT_ENABLE, None) {
+        Ok(PropertyValue::BitString { unused_bits, data }) => {
+            if data.is_empty() {
+                return 0;
+            }
+            data[0] >> unused_bits
+        }
+        Ok(PropertyValue::Unsigned(v)) => v as u8,
+        _ => 0,
+    }
+}
+
 /// Read an `Enumerated` property.
 fn read_enum(
     obj: &dyn bacnet_objects::traits::BACnetObject,
@@ -223,7 +240,7 @@ impl IntrinsicReportingEngine {
         };
 
         // Check EVENT_ENABLE — if it's 0 the object has intrinsic reporting disabled.
-        let event_enable = read_unsigned(obj, PropertyIdentifier::EVENT_ENABLE).unwrap_or(0);
+        let event_enable = read_event_enable(obj) as u32;
         if event_enable == 0 {
             return None;
         }

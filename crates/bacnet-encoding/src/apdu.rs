@@ -81,6 +81,10 @@ fn decode_max_apdu(value: u8) -> u16 {
     if idx < MAX_APDU_DECODE.len() {
         MAX_APDU_DECODE[idx]
     } else {
+        tracing::warn!(
+            value = idx,
+            "Reserved max-APDU-length field value, defaulting to 1476"
+        );
         1476
     }
 }
@@ -468,12 +472,19 @@ fn decode_segment_ack(data: Bytes) -> Result<SegmentAck, Error> {
     }
 
     let byte0 = data[0];
+    let raw_window = data[3];
+    if raw_window == 0 || raw_window > 127 {
+        tracing::warn!(
+            actual_window_size = raw_window,
+            "SegmentAck window size out of range (1-127), clamping"
+        );
+    }
     Ok(SegmentAck {
         negative_ack: byte0 & 0x02 != 0,
         sent_by_server: byte0 & 0x01 != 0,
         invoke_id: data[1],
         sequence_number: data[2],
-        actual_window_size: data[3],
+        actual_window_size: raw_window.clamp(1, 127),
     })
 }
 

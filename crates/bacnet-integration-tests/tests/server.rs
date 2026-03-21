@@ -929,23 +929,27 @@ async fn server_handles_segmented_request() {
 
 /// DCC DISABLE (deprecated in 2020 spec) is rejected with SERVICE_REQUEST_DENIED.
 #[tokio::test]
-async fn dcc_disable_rejected_per_2020_spec() {
+async fn dcc_disable_sets_comm_state() {
     use bacnet_types::enums::EnableDisable;
 
     let mut server = make_server().await;
     let mut client = make_client().await;
     let server_mac = server.local_mac().to_vec();
 
-    // Clause 16.1.1.3.1: deprecated DISABLE shall be rejected
+    // Clause 16.1: DISABLE sets comm_state to 1 (per spec, all three values are supported)
     let result = client
         .device_communication_control(&server_mac, EnableDisable::DISABLE, None, None)
         .await;
-    assert!(
-        result.is_err(),
-        "DCC DISABLE should be rejected per 2020 spec"
-    );
+    assert!(result.is_ok(), "DCC DISABLE should succeed per Clause 16.1");
 
-    // Server should remain in ENABLE state
+    // Server should be in DISABLE state (1)
+    assert_eq!(server.comm_state(), 1);
+
+    // Re-enable should work (DCC is allowed even when disabled)
+    let result = client
+        .device_communication_control(&server_mac, EnableDisable::ENABLE, None, None)
+        .await;
+    assert!(result.is_ok(), "DCC ENABLE should succeed");
     assert_eq!(server.comm_state(), 0);
 
     client.stop().await.unwrap();

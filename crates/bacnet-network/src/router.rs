@@ -181,16 +181,28 @@ impl BACnetRouter {
                     match decode_npdu(received.npdu.clone()) {
                         Ok(npdu) => {
                             if npdu.is_network_message {
-                                handle_network_message(
-                                    &table,
-                                    &send_txs,
-                                    port_idx,
-                                    port_network,
-                                    &received.source_mac,
-                                    &npdu,
-                                )
-                                .await;
-                                continue;
+                                // Proprietary network messages (type >= 0x80) with DNET
+                                // should be forwarded, not processed locally.
+                                let is_proprietary =
+                                    npdu.message_type.map(|t| t >= 0x80).unwrap_or(false);
+                                let has_remote_dest = npdu
+                                    .destination
+                                    .as_ref()
+                                    .is_some_and(|d| d.network != 0xFFFF);
+                                if is_proprietary && has_remote_dest {
+                                    // Fall through to normal DNET routing below
+                                } else {
+                                    handle_network_message(
+                                        &table,
+                                        &send_txs,
+                                        port_idx,
+                                        port_network,
+                                        &received.source_mac,
+                                        &npdu,
+                                    )
+                                    .await;
+                                    continue;
+                                }
                             }
 
                             if let Some(ref dest) = npdu.destination {
@@ -251,21 +263,42 @@ impl BACnetRouter {
                                         }
                                         ReachabilityStatus::Reachable => {}
                                     }
-                                    if route.port_index == port_idx
-                                        && route.directly_connected
-                                        && npdu
+                                    if route.port_index == port_idx && route.directly_connected {
+                                        let dest_mac = npdu
                                             .destination
                                             .as_ref()
-                                            .is_some_and(|d| d.mac_address == local_mac)
-                                    {
-                                        // DADR matches our MAC: deliver locally
-                                        let apdu = ReceivedApdu {
-                                            apdu: npdu.payload,
-                                            source_mac: received.source_mac,
-                                            source_network: npdu.source,
-                                            reply_tx: received.reply_tx,
-                                        };
-                                        let _ = local_tx.send(apdu).await;
+                                            .map(|d| &d.mac_address[..])
+                                            .unwrap_or(&[]);
+                                        if dest_mac == &local_mac[..] {
+                                            // DADR matches our MAC: deliver locally
+                                            let apdu = ReceivedApdu {
+                                                apdu: npdu.payload,
+                                                source_mac: received.source_mac,
+                                                source_network: npdu.source,
+                                                reply_tx: received.reply_tx,
+                                            };
+                                            let _ = local_tx.send(apdu).await;
+                                        } else {
+                                            // Remote broadcast to our network (DLEN=0):
+                                            // deliver locally AND forward
+                                            if dest_mac.is_empty() {
+                                                let apdu = ReceivedApdu {
+                                                    apdu: npdu.payload.clone(),
+                                                    source_mac: received.source_mac.clone(),
+                                                    source_network: npdu.source.clone(),
+                                                    reply_tx: None,
+                                                };
+                                                let _ = local_tx.send(apdu).await;
+                                            }
+                                            forward_unicast(
+                                                &send_txs,
+                                                &route,
+                                                port_network,
+                                                &received.source_mac,
+                                                npdu,
+                                                port_idx,
+                                            );
+                                        }
                                     } else {
                                         forward_unicast(
                                             &send_txs,
@@ -399,7 +432,7 @@ fn forward_unicast(
     };
 
     let forwarded = Npdu {
-        is_network_message: false,
+        is_network_message: npdu.is_network_message,
         expecting_reply: npdu.expecting_reply,
         priority: npdu.priority,
         destination: forwarded_dest,
@@ -451,14 +484,14 @@ fn forward_broadcast(
     }
 
     let forwarded = Npdu {
-        is_network_message: false,
+        is_network_message: npdu.is_network_message,
         expecting_reply: npdu.expecting_reply,
         priority: npdu.priority,
         destination: npdu.destination.clone(),
         source: Some(build_source(npdu, source_network, source_mac)),
         hop_count: npdu.hop_count - 1,
-        message_type: None,
-        vendor_id: None,
+        message_type: npdu.message_type,
+        vendor_id: npdu.vendor_id,
         payload: npdu.payload.clone(),
     };
 
@@ -781,9 +814,9 @@ async fn handle_network_message(
             let count = networks.len().min(255);
             payload.put_u8(count as u8);
             for net in networks.iter().take(count) {
-                if tbl.lookup(*net).is_some() {
+                if let Some(route) = tbl.lookup(*net) {
                     payload.put_u16(*net);
-                    payload.put_u8(0); // Port ID (simplified)
+                    payload.put_u8(route.port_index as u8); // Port ID
                     payload.put_u8(0); // Port info length
                 }
             }

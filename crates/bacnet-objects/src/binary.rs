@@ -3,7 +3,7 @@
 
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
+use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
@@ -86,6 +86,14 @@ impl BACnetObject for BinaryInputObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        if property == PropertyIdentifier::STATUS_FLAGS {
+            return Ok(common::compute_status_flags(
+                self.status_flags,
+                self.reliability,
+                self.out_of_service,
+                self.event_detector.event_state.to_raw(),
+            ));
+        }
         if let Some(result) = read_common_properties!(self, property, array_index) {
             return result;
         }
@@ -225,6 +233,8 @@ pub struct BinaryOutputObject {
     inactive_text: String,
     /// COMMAND_FAILURE event detector.
     event_detector: ChangeOfStateDetector,
+    /// Value source tracking (optional per spec — exposed via VALUE_SOURCE property).
+    value_source: common::ValueSourceTracking,
 }
 
 impl BinaryOutputObject {
@@ -244,6 +254,7 @@ impl BinaryOutputObject {
             active_text: "Active".into(),
             inactive_text: "Inactive".into(),
             event_detector: ChangeOfStateDetector::default(),
+            value_source: common::ValueSourceTracking::default(),
         })
     }
 
@@ -280,6 +291,14 @@ impl BACnetObject for BinaryOutputObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        if property == PropertyIdentifier::STATUS_FLAGS {
+            return Ok(common::compute_status_flags(
+                self.status_flags,
+                self.reliability,
+                self.out_of_service,
+                self.event_detector.event_state.to_raw(),
+            ));
+        }
         if let Some(result) = read_common_properties!(self, property, array_index) {
             return result;
         }
@@ -302,6 +321,15 @@ impl BACnetObject for BinaryOutputObject {
             p if p == PropertyIdentifier::CURRENT_COMMAND_PRIORITY => {
                 Ok(common::current_command_priority(&self.priority_array))
             }
+            p if p == PropertyIdentifier::VALUE_SOURCE => {
+                Ok(self.value_source.value_source.clone())
+            }
+            p if p == PropertyIdentifier::LAST_COMMAND_TIME => Ok(PropertyValue::Unsigned(
+                match self.value_source.last_command_time {
+                    BACnetTimeStamp::SequenceNumber(n) => n,
+                    _ => 0,
+                },
+            )),
             p if p == PropertyIdentifier::POLARITY => Ok(PropertyValue::Enumerated(self.polarity)),
             p if p == PropertyIdentifier::ACTIVE_TEXT => {
                 Ok(PropertyValue::CharacterString(self.active_text.clone()))
@@ -433,6 +461,8 @@ pub struct BinaryValueObject {
     inactive_text: String,
     /// CHANGE_OF_STATE event detector.
     event_detector: ChangeOfStateDetector,
+    /// Value source tracking (optional per spec — exposed via VALUE_SOURCE property).
+    value_source: common::ValueSourceTracking,
 }
 
 impl BinaryValueObject {
@@ -452,6 +482,7 @@ impl BinaryValueObject {
             active_text: "Active".into(),
             inactive_text: "Inactive".into(),
             event_detector: ChangeOfStateDetector::default(),
+            value_source: common::ValueSourceTracking::default(),
         })
     }
 
@@ -488,6 +519,14 @@ impl BACnetObject for BinaryValueObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        if property == PropertyIdentifier::STATUS_FLAGS {
+            return Ok(common::compute_status_flags(
+                self.status_flags,
+                self.reliability,
+                self.out_of_service,
+                self.event_detector.event_state.to_raw(),
+            ));
+        }
         if let Some(result) = read_common_properties!(self, property, array_index) {
             return result;
         }
@@ -510,6 +549,15 @@ impl BACnetObject for BinaryValueObject {
             p if p == PropertyIdentifier::CURRENT_COMMAND_PRIORITY => {
                 Ok(common::current_command_priority(&self.priority_array))
             }
+            p if p == PropertyIdentifier::VALUE_SOURCE => {
+                Ok(self.value_source.value_source.clone())
+            }
+            p if p == PropertyIdentifier::LAST_COMMAND_TIME => Ok(PropertyValue::Unsigned(
+                match self.value_source.last_command_time {
+                    BACnetTimeStamp::SequenceNumber(n) => n,
+                    _ => 0,
+                },
+            )),
             p if p == PropertyIdentifier::ACTIVE_TEXT => {
                 Ok(PropertyValue::CharacterString(self.active_text.clone()))
             }

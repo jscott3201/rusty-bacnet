@@ -122,6 +122,12 @@ impl ReinitializeDeviceRequest {
             let (opt_data, _new_offset) = tags::decode_optional_context(data, offset, 1)?;
             if let Some(content) = opt_data {
                 let s = primitives::decode_character_string(content)?;
+                if s.len() > 20 {
+                    return Err(Error::decoding(
+                        offset,
+                        "ReinitializeDevice password exceeds 20 characters",
+                    ));
+                }
                 password = Some(s);
             }
         }

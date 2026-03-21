@@ -833,7 +833,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
             loop {
                 interval.tick().await;
-                crate::schedule::tick_schedules(&db_schedule).await;
+                // TODO: Read UTC_Offset from Device object for local time
+                crate::schedule::tick_schedules(&db_schedule, 0).await;
             }
         }));
 
@@ -1868,8 +1869,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 notification_class,
                 priority,
                 event_type: change.event_type().to_raw(),
+                message_text: None,
                 notify_type,
-                ack_required: notify_type != NotifyType::ACK_NOTIFICATION.to_raw(),
+                ack_required: notify_type == NotifyType::ALARM.to_raw(),
                 from_state: change.from.to_raw(),
                 to_state: change.to.to_raw(),
                 event_values: None,

@@ -72,6 +72,13 @@ pub trait BACnetObject: Send + Sync {
         None
     }
 
+    /// Set the OVERRIDDEN bit in StatusFlags.
+    ///
+    /// For software-only objects this is always FALSE per spec. Hardware
+    /// integrations can override to set TRUE when present_value is overridden
+    /// by physical means (e.g., a manual switch on an output).
+    fn set_overridden(&mut self, _overridden: bool) {}
+
     /// Evaluate intrinsic reporting after a present_value change.
     ///
     /// Returns `Some(EventStateChange)` if the event state transitioned,

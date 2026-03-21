@@ -20,15 +20,25 @@ pub struct PriorityFilter {
     pub max_priority: u8,
 }
 
-/// GetEnrollmentSummary-Request service parameters.
+/// BACnetRecipientProcess — identifies a notification recipient.
 ///
-/// `enrollmentFilter` ([1] BACnetRecipientProcess) is omitted — it requires
-/// the full Recipient/RecipientProcess types which are rarely used in
-/// practice. A compliant implementation would extend this struct.
+/// Simplified: only the `device` choice of BACnetRecipient is supported,
+/// plus the process identifier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecipientProcess {
+    /// Device object identifier (from BACnetRecipient CHOICE [0] device).
+    pub device: Option<ObjectIdentifier>,
+    /// Process identifier.
+    pub process_identifier: u32,
+}
+
+/// GetEnrollmentSummary-Request service parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GetEnrollmentSummaryRequest {
     /// [0] acknowledgmentFilter: all(0), acked(1), not-acked(2).
     pub acknowledgment_filter: u32,
+    /// [1] enrollmentFilter (optional) — BACnetRecipientProcess.
+    pub enrollment_filter: Option<RecipientProcess>,
     /// [2] eventStateFilter (optional).
     pub event_state_filter: Option<EventState>,
     /// [3] eventTypeFilter (optional).
@@ -43,6 +53,19 @@ impl GetEnrollmentSummaryRequest {
     pub fn encode(&self, buf: &mut BytesMut) {
         // [0] acknowledgmentFilter
         primitives::encode_ctx_enumerated(buf, 0, self.acknowledgment_filter);
+        // [1] enrollmentFilter (optional, constructed)
+        if let Some(ref ef) = self.enrollment_filter {
+            tags::encode_opening_tag(buf, 1);
+            // recipient CHOICE: [0] device
+            if let Some(ref device) = ef.device {
+                tags::encode_opening_tag(buf, 0);
+                primitives::encode_ctx_object_id(buf, 0, device);
+                tags::encode_closing_tag(buf, 0);
+            }
+            // processIdentifier
+            primitives::encode_ctx_unsigned(buf, 1, ef.process_identifier as u64);
+            tags::encode_closing_tag(buf, 1);
+        }
         // [2] eventStateFilter (optional)
         if let Some(es) = self.event_state_filter {
             primitives::encode_ctx_enumerated(buf, 2, es.to_raw());
@@ -79,11 +102,49 @@ impl GetEnrollmentSummaryRequest {
         let acknowledgment_filter = primitives::decode_unsigned(&data[pos..end])? as u32;
         offset = end;
 
-        // [1] enrollmentFilter — skip if present
+        // [1] enrollmentFilter (optional, constructed)
+        let mut enrollment_filter = None;
         if offset < data.len() {
             let (tag, tag_end) = tags::decode_tag(data, offset)?;
             if tag.is_opening_tag(1) {
-                let (_, new_offset) = tags::extract_context_value(data, tag_end, 1)?;
+                // Parse BACnetRecipientProcess
+                let mut device = None;
+                let mut process_id = 0u32;
+                let (content, new_offset) = tags::extract_context_value(data, tag_end, 1)?;
+                let mut inner_offset = 0;
+                while inner_offset < content.len() {
+                    let (inner_tag, inner_pos) = tags::decode_tag(content, inner_offset)?;
+                    if inner_tag.is_opening_tag(0) {
+                        // recipient CHOICE — parse device [0]
+                        let (recipient_content, recipient_end) =
+                            tags::extract_context_value(content, inner_pos, 0)?;
+                        if !recipient_content.is_empty() {
+                            let (dev_tag, dev_pos) = tags::decode_tag(recipient_content, 0)?;
+                            if dev_tag.is_context(0) {
+                                let dev_end = dev_pos + dev_tag.length as usize;
+                                if dev_end <= recipient_content.len() {
+                                    device = Some(ObjectIdentifier::decode(
+                                        &recipient_content[dev_pos..dev_end],
+                                    )?);
+                                }
+                            }
+                        }
+                        inner_offset = recipient_end;
+                    } else if inner_tag.is_context(1) {
+                        let inner_end = inner_pos + inner_tag.length as usize;
+                        if inner_end <= content.len() {
+                            process_id =
+                                primitives::decode_unsigned(&content[inner_pos..inner_end])? as u32;
+                        }
+                        inner_offset = inner_end;
+                    } else {
+                        inner_offset = inner_pos + inner_tag.length as usize;
+                    }
+                }
+                enrollment_filter = Some(RecipientProcess {
+                    device,
+                    process_identifier: process_id,
+                });
                 offset = new_offset;
             }
         }
@@ -162,6 +223,7 @@ impl GetEnrollmentSummaryRequest {
 
         Ok(Self {
             acknowledgment_filter,
+            enrollment_filter,
             event_state_filter,
             event_type_filter,
             priority_filter,
@@ -297,6 +359,7 @@ mod tests {
     fn request_round_trip() {
         let req = GetEnrollmentSummaryRequest {
             acknowledgment_filter: 0, // all
+            enrollment_filter: None,
             event_state_filter: Some(EventState::OFFNORMAL),
             event_type_filter: None,
             priority_filter: Some(PriorityFilter {
@@ -315,6 +378,7 @@ mod tests {
     fn request_minimal_round_trip() {
         let req = GetEnrollmentSummaryRequest {
             acknowledgment_filter: 2, // not-acked
+            enrollment_filter: None,
             event_state_filter: None,
             event_type_filter: None,
             priority_filter: None,
@@ -374,6 +438,7 @@ mod tests {
     fn test_decode_request_truncated_1_byte() {
         let req = GetEnrollmentSummaryRequest {
             acknowledgment_filter: 0,
+            enrollment_filter: None,
             event_state_filter: Some(EventState::FAULT),
             event_type_filter: None,
             priority_filter: None,

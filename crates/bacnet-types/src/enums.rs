@@ -1426,24 +1426,27 @@ bacnet_enum! {
     const DISABLED = 12;
     const AUTOMATIC_RELEASE_DISABLED = 13;
     const DEFAULT = 14;
+    const ACTIVATED_OEO_ALARM = 15;
+    const ACTIVATED_OEO_EVACUATE = 16;
+    const ACTIVATED_OEO_PHASE1_RECALL = 17;
+    const ACTIVATED_OEO_UNAVAILABLE = 18;
+    const DEACTIVATED = 19;
 }
 
 bacnet_enum! {
-    /// Life safety commanded operation (Clause 12.15.13).
+    /// Life safety commanded operation (Clause 12.15.13, Table 12-54).
     pub struct LifeSafetyOperation(u32);
 
     const NONE = 0;
     const SILENCE = 1;
     const SILENCE_AUDIBLE = 2;
     const SILENCE_VISUAL = 3;
-    const SILENCE_ALL = 4;
-    const UNSILENCE = 5;
-    const UNSILENCE_AUDIBLE = 6;
-    const UNSILENCE_VISUAL = 7;
-    const UNSILENCE_ALL = 8;
-    const RESET = 9;
-    const RESET_ALARM = 10;
-    const RESET_FAULT = 11;
+    const RESET = 4;
+    const RESET_ALARM = 5;
+    const RESET_FAULT = 6;
+    const UNSILENCE = 7;
+    const UNSILENCE_AUDIBLE = 8;
+    const UNSILENCE_VISUAL = 9;
 }
 
 bacnet_enum! {
