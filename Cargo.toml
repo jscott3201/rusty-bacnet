@@ -12,16 +12,13 @@ members = [
     "crates/bacnet-integration-tests",
     "crates/rusty-bacnet",
     "crates/bacnet-wasm",
-    "crates/bacnet-java",
-    "crates/uniffi-bindgen",
-    "crates/bacnet-cli",
+"crates/bacnet-cli",
     "crates/bacnet-btl",
     "crates/bacnet-gateway",
     "benchmarks",
 ]
 # rusty-bacnet is a cdylib — `cargo test` can't link it without Python.
 # bacnet-wasm is a cdylib — needs wasm32-unknown-unknown target.
-# bacnet-java is a cdylib — needs JNI/UniFFI at runtime.
 # bacnet-cli has heavy deps (rustyline, clap) — excluded from default builds.
 # bacnet-btl has heavy deps (rustyline, clap, server) — excluded from default builds.
 # Use `cargo check -p rusty-bacnet --tests` and `cargo check -p bacnet-wasm --target wasm32-unknown-unknown`.

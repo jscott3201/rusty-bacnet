@@ -286,6 +286,61 @@ impl PyPropertyValue {
         }
     }
 
+    /// Create a Date property value.
+    ///
+    /// `year` is the full year (e.g. 2026; 255 for unspecified encodes as 0xFF internally).
+    /// `month` is 1-12 (or 255 for unspecified).
+    /// `day` is 1-31 (or 255 for unspecified).
+    /// `day_of_week` is 1=Monday..7=Sunday (or 255 for unspecified).
+    #[staticmethod]
+    fn date(year: u16, month: u8, day: u8, day_of_week: u8) -> Self {
+        Self {
+            inner: primitives::PropertyValue::Date(primitives::Date {
+                year: year.saturating_sub(1900) as u8,
+                month,
+                day,
+                day_of_week,
+            }),
+        }
+    }
+
+    /// Create a Time property value.
+    ///
+    /// `hour` is 0-23 (or 255 for unspecified).
+    /// `minute` is 0-59 (or 255 for unspecified).
+    /// `second` is 0-59 (or 255 for unspecified).
+    /// `hundredths` is 0-99 (or 255 for unspecified).
+    #[staticmethod]
+    fn time(hour: u8, minute: u8, second: u8, hundredths: u8) -> Self {
+        Self {
+            inner: primitives::PropertyValue::Time(primitives::Time {
+                hour,
+                minute,
+                second,
+                hundredths,
+            }),
+        }
+    }
+
+    /// Create a BitString property value.
+    ///
+    /// `unused_bits` is the number of unused bits in the last byte (0-7).
+    /// `data` is the raw bit data bytes.
+    #[staticmethod]
+    fn bit_string(unused_bits: u8, data: Vec<u8>) -> Self {
+        Self {
+            inner: primitives::PropertyValue::BitString { unused_bits, data },
+        }
+    }
+
+    /// Create a List (array) property value from a list of PropertyValue items.
+    #[staticmethod]
+    fn list(items: Vec<PyPropertyValue>) -> Self {
+        Self {
+            inner: primitives::PropertyValue::List(items.into_iter().map(|pv| pv.inner).collect()),
+        }
+    }
+
     // -- Accessors -----------------------------------------------------------
 
     /// The BACnet type tag (e.g. "real", "unsigned", "boolean").

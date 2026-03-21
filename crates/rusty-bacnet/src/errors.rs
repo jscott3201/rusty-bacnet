@@ -12,17 +12,38 @@ create_exception!(rusty_bacnet, BacnetRejectError, BacnetError);
 create_exception!(rusty_bacnet, BacnetAbortError, BacnetError);
 
 /// Convert a Rust `Error` into a Python exception.
+///
+/// Protocol errors, rejects, and aborts carry structured integer attributes
+/// (`error_class`/`error_code` or `reason`) so Python callers can inspect them
+/// programmatically without parsing the message string.
 pub fn to_py_err(err: Error) -> PyErr {
     match err {
         Error::Protocol { class, code } => {
-            BacnetProtocolError::new_err(format!("BACnet error: class={class} code={code}"))
+            let py_err =
+                BacnetProtocolError::new_err(format!("BACnet error: class={class} code={code}"));
+            Python::attach(|py| {
+                let val = py_err.value(py);
+                let _ = val.setattr("error_class", class);
+                let _ = val.setattr("error_code", code);
+            });
+            py_err
         }
         Error::Timeout(_) => BacnetTimeoutError::new_err(err.to_string()),
         Error::Reject { reason } => {
-            BacnetRejectError::new_err(format!("BACnet reject: reason={reason}"))
+            let py_err = BacnetRejectError::new_err(format!("BACnet reject: reason={reason}"));
+            Python::attach(|py| {
+                let val = py_err.value(py);
+                let _ = val.setattr("reason", reason);
+            });
+            py_err
         }
         Error::Abort { reason } => {
-            BacnetAbortError::new_err(format!("BACnet abort: reason={reason}"))
+            let py_err = BacnetAbortError::new_err(format!("BACnet abort: reason={reason}"));
+            Python::attach(|py| {
+                let val = py_err.value(py);
+                let _ = val.setattr("reason", reason);
+            });
+            py_err
         }
         _ => BacnetError::new_err(err.to_string()),
     }

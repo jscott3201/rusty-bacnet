@@ -26,10 +26,9 @@ bacnet-services       Service request/response structs (RP, WP, RPM, COV, etc.)
     |
     +---> rusty-bacnet        Python bindings (PyO3)
           bacnet-wasm         WASM/JS BACnet/SC thin client
-          bacnet-java         Kotlin/Java bindings (UniFFI)
 ```
 
-The bottom three rows are "application" crates — they compose the library crates into user-facing tools. They are excluded from `default-members` in the workspace to avoid pulling in their heavy dependencies (clap, axum, rmcp, pyo3, wasm-bindgen, uniffi) during normal development.
+The bottom rows are "application" crates — they compose the library crates into user-facing tools. They are excluded from `default-members` in the workspace to avoid pulling in their heavy dependencies (clap, axum, rmcp, pyo3, wasm-bindgen) during normal development.
 
 ## Packet Flow
 

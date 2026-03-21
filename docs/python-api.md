@@ -158,6 +158,10 @@ PropertyValue.character_string("hello")
 PropertyValue.octet_string(b"\x01\x02")
 PropertyValue.enumerated(1)
 PropertyValue.object_identifier(oid)
+PropertyValue.date(2026, 3, 21, 6)    # year, month, day, day_of_week (1=Mon)
+PropertyValue.time(14, 30, 0, 0)      # hour, minute, second, hundredths
+PropertyValue.bit_string(0, b"\xff")  # unused_bits, data
+PropertyValue.list([PropertyValue.unsigned(1), PropertyValue.unsigned(2)])
 ```
 
 ### Accessors
@@ -199,6 +203,8 @@ Read-only device information from WhoIs/IAm discovery (frozen).
 | `.segmentation_supported` | `Segmentation` | Segmentation capability |
 | `.vendor_id` | `int` | Vendor identifier |
 | `.seconds_since_seen` | `float` | Seconds since last IAm |
+| `.source_network` | `int \| None` | Remote network number (if routed) |
+| `.source_address` | `bytes \| None` | Remote MAC address (if routed) |
 
 ---
 
@@ -448,6 +454,98 @@ Reset the discovered devices table.
 ```python
 await client.clear_devices()
 ```
+
+#### `discover(timeout_ms=3000, low_limit=None, high_limit=None) -> list[DiscoveredDevice]`
+
+Convenience method: send WhoIs, wait, return devices.
+
+```python
+devices = await client.discover(timeout_ms=5000)
+for dev in devices:
+    print(f"Device {dev.object_identifier.instance}")
+```
+
+#### `who_is_directed(address, low_limit=None, high_limit=None)`
+
+Send a Who-Is to a specific device address (unicast).
+
+```python
+await client.who_is_directed("192.168.1.100:47808")
+```
+
+#### `add_device(device_instance, address)`
+
+Manually add a device to the discovery table.
+
+```python
+await client.add_device(1234, "192.168.1.100:47808")
+```
+
+---
+
+### Auto-Routing (by device instance)
+
+These methods look up the device address from the discovery table. Useful when you've already discovered devices.
+
+#### `read_property_from_device(device_instance, object_id, property_id, array_index=None) -> PropertyValue`
+
+```python
+value = await client.read_property_from_device(
+    1234,  # device instance
+    ObjectIdentifier(ObjectType.ANALOG_INPUT, 1),
+    PropertyIdentifier.PRESENT_VALUE,
+)
+```
+
+#### `read_property_multiple_from_device(device_instance, specs) -> list[dict]`
+
+```python
+results = await client.read_property_multiple_from_device(1234, [
+    (ObjectIdentifier(ObjectType.ANALOG_INPUT, 1), [
+        (PropertyIdentifier.PRESENT_VALUE, None),
+    ]),
+])
+```
+
+#### `write_property_to_device(device_instance, object_id, property_id, value, priority=None, array_index=None)`
+
+```python
+await client.write_property_to_device(
+    1234,
+    ObjectIdentifier(ObjectType.ANALOG_OUTPUT, 1),
+    PropertyIdentifier.PRESENT_VALUE,
+    PropertyValue.real(75.0),
+    priority=8,
+)
+```
+
+#### `write_property_multiple_to_device(device_instance, specs)`
+
+```python
+await client.write_property_multiple_to_device(1234, [
+    (ObjectIdentifier(ObjectType.ANALOG_OUTPUT, 1), [
+        (PropertyIdentifier.PRESENT_VALUE, PropertyValue.real(75.0), 8, None),
+    ]),
+])
+```
+
+---
+
+### Time Synchronization
+
+#### `time_synchronization(address, date, time)`
+
+```python
+await client.time_synchronization(
+    "192.168.1.100:47808",
+    date=(2026, 3, 21, 6),      # (year, month, day, day_of_week)
+    time=(14, 30, 0, 0),        # (hour, minute, second, hundredths)
+)
+```
+
+#### `utc_time_synchronization(address, date, time)`
+
+Same format as `time_synchronization`.
 
 ---
 
@@ -910,6 +1008,8 @@ server = BACnetServer(
     broadcast_address="255.255.255.255",
     transport="bip",             # "bip", "ipv6", or "sc"
     # SC options same as BACnetClient
+    dcc_password=None,           # password for DeviceCommunicationControl
+    reinit_password=None,        # password for ReinitializeDevice
 )
 ```
 
@@ -1105,15 +1205,26 @@ All BACnet errors are raised as Python exceptions:
 | `BacnetAbortError` | Remote device aborted the request |
 
 ```python
-from rusty_bacnet import BacnetError, BacnetTimeoutError
+from rusty_bacnet import (
+    BacnetError, BacnetProtocolError, BacnetTimeoutError,
+    BacnetRejectError, BacnetAbortError,
+)
 
 try:
     value = await client.read_property(addr, oid, pid)
 except BacnetTimeoutError:
     print("Device not responding")
+except BacnetProtocolError as e:
+    print(f"Protocol error: class={e.error_class}, code={e.error_code}")
+except BacnetRejectError as e:
+    print(f"Rejected: reason={e.reason}")
+except BacnetAbortError as e:
+    print(f"Aborted: reason={e.reason}")
 except BacnetError as e:
     print(f"BACnet error: {e}")
 ```
+
+`BacnetProtocolError` has `error_class` and `error_code` integer attributes. `BacnetRejectError` and `BacnetAbortError` have a `reason` integer attribute.
 
 ---
 

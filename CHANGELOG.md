@@ -113,6 +113,69 @@ Deep-dive review of all five transport implementations (BIP, BIPv6, BACnet/SC, E
 - **Added** named `NPDU_CHANNEL_CAPACITY` constants in all transports (256 for BIP/BIP6/Ethernet/Loopback, 64 for SC/MS/TP) with documented rationale
 - **Changed** `bip6` module feature-gated behind `ipv6` feature flag — consistent with `ethernet` and `sc-tls` gating; propagated to bacnet-client, bacnet-java, bacnet-btl, bacnet-cli, benchmarks
 
+### Spec Compliance — Stack-Wide (ASHRAE 135-2020 Clauses 5, 6, 12, 13, 15, 16, 20)
+
+Deep-dive review of encoding, types, services, objects, client, server, and network layers identified 43 spec compliance issues. All critical/high/medium fixed.
+
+#### Encoding & APDU (Clause 20)
+- **Fixed** SegmentAck window size not clamped to 1-127 range on decode — now clamps with warning log per Clause 20.1.6
+- **Fixed** reserved max_apdu values silently accepted — now logs warning for non-standard values
+
+#### Types & Enums (Clause 21)
+- **Fixed** LifeSafetyOperation enum ordering — reset=4, reset-alarm=5, reset-fault=6, unsilence=7 per Table 12-54
+- **Added** LifeSafetyMode OEO values (15-19) per 135-2020 addendum
+- **Added** DaysOfWeek bitflags type for schedule encoding
+- **Added** 11 new BACnetPropertyStates variants (UnsignedValue, DoorAlarmState, Action, DoorSecuredStatus, DoorStatus, DoorValue, TimerState, TimerTransition, LiftCarDirection, LiftCarDoorCommand)
+
+#### Services (Clauses 13-16)
+- **Fixed** TextMessage tags — messagePriority and message use context tags [2] and [3] (were [3] and [4])
+- **Fixed** ReinitializeDevice password validation — SIZE(1..20) per Clause 16.4.1.1.5
+- **Added** `message_text: Option<String>` field to EventNotificationRequest with encode/decode per Clause 13.8.1
+- **Added** `RecipientProcess` struct and `enrollment_filter` field to GetEnrollmentSummaryRequest
+
+#### Objects (Clause 12)
+- **Fixed** StatusFlags IN_ALARM never set — all 9 event-capable object types (AI/AO/AV/BI/BO/BV/MSI/MSO/MSV) now compute IN_ALARM from `event_detector.event_state`
+- **Added** `compute_status_flags()` helper function for consistent StatusFlags computation across object types
+- **Added** ValueSourceTracking fields (VALUE_SOURCE, LAST_COMMAND_TIME) to AV, BO, BV, MSO, MSV
+- **Added** `set_overridden()` default method on BACnetObject trait
+
+#### Client (Clause 5.4)
+- **Fixed** per-window SegmentAck — tracks window position for correct sequence acknowledgment
+- **Fixed** duplicate segment handling in segmented response reassembly
+- **Fixed** negative SegmentAck uses `wrapping_sub(1)` for correct sequence arithmetic
+- **Added** Abort on unsupported segmented response when `segmented_response_accepted` is false
+- **Added** `segmented_response_accepted` parameter threading through dispatch_apdu/handle_segmented_complex_ack
+- **Added** device table auto-purge every 5 minutes for stale entries
+
+#### Server
+- **Fixed** COV notification `ack_required` flag — `notify_type == NotifyType::ALARM` (was `!= ACK_NOTIFICATION`)
+- **Fixed** DCC DISABLE now accepted — all 3 EnableDisable values work correctly per 135-2020
+- **Fixed** COVProperty cancel now calls `unsubscribe_property()` instead of `unsubscribe()`
+- **Fixed** RPM handler resolves device wildcard via `resolve_device_wildcard()`
+- **Fixed** GetEnrollmentSummary priority lookup reads from notification class object (was hardcoded 0)
+- **Fixed** intrinsic reporting silently non-functional — EVENT_ENABLE stored as BitString but read via `read_unsigned()`; added `read_event_enable()` helper handling both types
+- **Fixed** schedule tick passes UTC offset parameter for correct time computation
+- **Fixed** EventNotificationRequest now includes `message_text: None` field
+- **Added** `days_to_date()` helper for full datetime in trend log records
+
+#### Network (Clause 6)
+- **Fixed** remote broadcast self-delivery — router now delivers broadcast to local network layer
+- **Fixed** `is_network_message` passthrough in routing (was hardcoded false)
+- **Fixed** proprietary network messages (type >= 0x80) with DNET now forwarded correctly
+- **Fixed** Init-Routing-Table-Ack uses actual port_index (was hardcoded)
+
+### Python Bindings Improvements
+
+- **Rewritten** `.pyi` type stubs from scratch (826 → 1598 lines) — all 47 client methods, 62+ server methods, correct exception names, CovNotification class, PropertyValue constructors, all 65 ObjectType constants
+- **Added** `time_synchronization()` and `utc_time_synchronization()` methods
+- **Added** `who_is_directed()` for unicast WhoIs
+- **Added** auto-routing methods: `read_property_from_device()`, `read_property_multiple_from_device()`, `write_property_to_device()`, `write_property_multiple_to_device()`
+- **Added** `add_device()` for manual device table population
+- **Added** `discover(timeout_ms)` convenience method — combines WhoIs + sleep + discovered_devices
+- **Added** `PropertyValue.date()`, `.time()`, `.bit_string()`, `.list()` static constructors
+- **Added** structured error attributes — `BacnetProtocolError.error_class`/`.error_code`, `BacnetRejectError.reason`, `BacnetAbortError.reason`
+- **Added** `dcc_password` and `reinit_password` parameters to `BACnetServer` constructor
+
 ### Added
 - **New crate: `bacnet-gateway`** — HTTP REST API and MCP (Model Context Protocol) server for BACnet networks
   - REST API at `/api/v1/` with endpoints for device discovery, property read/write, local object CRUD, and health check
@@ -125,13 +188,14 @@ Deep-dive review of all five transport implementations (BIP, BIPv6, BACnet/SC, E
 - **Client batch operations** — `read_property_from_devices()`, `read_property_multiple_from_devices()`, `write_property_to_devices()` with `buffer_unordered(max_concurrent)` for concurrent multi-device I/O
 - **Client auto-routing** — `resolve_device()` helper + `_from_device` variants for RP, RPM, WP, WPM
 - **Server concurrent dispatch** — spawns per-request tasks for ConfirmedRequest/UnconfirmedRequest, enabling concurrent `db.read()` from multiple clients
-- **Python bindings** — batch methods (`read_property_from_devices`, etc.) and COV async iterator improvements
-- **Java/Kotlin bindings** — batch methods and `CovNotificationStream` improvements
 - **Architecture documentation** — `docs/architecture.md`, expanded `docs/rust-api.md`, `docs/gateway.md`, `docs/btl.md`, `docs/wasm-api.md`
 
 ### Changed
 - **Dependencies updated** — criterion 0.5→0.8, tokio-tungstenite 0.28→0.29, rand 0.9→0.10, rustyline 15→17, toml 0.8→1.0, rcgen 0.13→0.14, aws-lc-sys 0.38→0.39, rustls-webpki 0.103.9→0.103.10
 - **Security advisories resolved** — aws-lc-sys X.509 name constraints bypass, CRL distribution point logic errors; rustls-webpki CRL scope check
+
+### Removed
+- **Java/Kotlin bindings** — removed `bacnet-java` crate, `uniffi-bindgen` crate, `java/` Gradle project, `examples/kotlin/`, and all associated CI jobs (no user base; maintenance burden)
 
 ## [0.7.2]
 
