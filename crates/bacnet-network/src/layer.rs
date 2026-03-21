@@ -11,9 +11,20 @@ use bacnet_types::enums::NetworkPriority;
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
+
+/// A received network-layer message (e.g., I-Am-Router-To-Network).
+#[derive(Debug, Clone)]
+pub struct ReceivedNetworkMessage {
+    /// The network message type byte.
+    pub message_type: u8,
+    /// Raw payload bytes (after the message type).
+    pub payload: Bytes,
+    /// Source MAC address in transport-native format.
+    pub source_mac: MacAddr,
+}
 
 /// A received APDU with source addressing information.
 pub struct ReceivedApdu {
@@ -59,6 +70,9 @@ impl std::fmt::Debug for ReceivedApdu {
 pub struct NetworkLayer<T: TransportPort> {
     transport: T,
     dispatch_task: Option<JoinHandle<()>>,
+    /// Broadcast sender for network-layer messages (e.g., I-Am-Router-To-Network).
+    /// Lazily initialized via `network_messages()`.
+    network_msg_tx: Option<broadcast::Sender<ReceivedNetworkMessage>>,
 }
 
 impl<T: TransportPort + 'static> NetworkLayer<T> {
@@ -67,7 +81,31 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         Self {
             transport,
             dispatch_task: None,
+            network_msg_tx: None,
         }
+    }
+
+    /// Enable network message forwarding and return a receiver.
+    ///
+    /// Must be called **before** `start()`. Network-layer messages
+    /// (Who-Is-Router, I-Am-Router, etc.) will be published on this channel
+    /// instead of being silently dropped.
+    pub fn network_messages(&mut self) -> broadcast::Receiver<ReceivedNetworkMessage> {
+        if let Some(ref tx) = self.network_msg_tx {
+            tx.subscribe()
+        } else {
+            let (tx, rx) = broadcast::channel(64);
+            self.network_msg_tx = Some(tx);
+            rx
+        }
+    }
+
+    /// Subscribe to network-layer messages. Returns `None` if
+    /// `network_messages()` was never called before `start()`.
+    pub fn subscribe_network_messages(
+        &self,
+    ) -> Option<broadcast::Receiver<ReceivedNetworkMessage>> {
+        self.network_msg_tx.as_ref().map(|tx| tx.subscribe())
     }
 
     /// Start the network layer. Returns a receiver for incoming APDUs.
@@ -78,16 +116,27 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         let mut npdu_rx = self.transport.start().await?;
 
         let (apdu_tx, apdu_rx) = mpsc::channel(256);
+        let network_msg_tx = self.network_msg_tx.clone();
 
         let dispatch_task = tokio::spawn(async move {
             while let Some(received) = npdu_rx.recv().await {
                 match decode_npdu(received.npdu.clone()) {
                     Ok(npdu) => {
                         if npdu.is_network_message {
-                            debug!(
-                                message_type = npdu.message_type,
-                                "Ignoring network layer message (non-router mode)"
-                            );
+                            if let Some(ref tx) = network_msg_tx {
+                                if let Some(msg_type) = npdu.message_type {
+                                    let _ = tx.send(ReceivedNetworkMessage {
+                                        message_type: msg_type,
+                                        payload: npdu.payload.clone(),
+                                        source_mac: received.source_mac.clone(),
+                                    });
+                                }
+                            } else {
+                                debug!(
+                                    message_type = npdu.message_type,
+                                    "Ignoring network layer message (non-router mode)"
+                                );
+                            }
                             continue;
                         }
 
@@ -270,6 +319,27 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         encode_npdu(&mut buf, &npdu)?;
 
         self.transport.send_unicast(&buf, router_mac).await
+    }
+
+    /// Broadcast a network-layer message (e.g., Who-Is-Router-To-Network).
+    ///
+    /// Encodes an NPDU with `is_network_message: true` and the given
+    /// message type and payload, then broadcasts on the local network.
+    pub async fn broadcast_network_message(
+        &self,
+        message_type: u8,
+        payload: &[u8],
+    ) -> Result<(), Error> {
+        let npdu = Npdu {
+            is_network_message: true,
+            message_type: Some(message_type),
+            payload: Bytes::copy_from_slice(payload),
+            ..Npdu::default()
+        };
+
+        let mut buf = BytesMut::with_capacity(4 + payload.len());
+        encode_npdu(&mut buf, &npdu)?;
+        self.transport.send_broadcast(&buf).await
     }
 
     /// Access the underlying transport.

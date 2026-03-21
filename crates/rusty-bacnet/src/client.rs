@@ -1812,6 +1812,129 @@ impl BACnetClient {
         })
     }
 
+    // -----------------------------------------------------------------------
+    // BVLL operations
+    // -----------------------------------------------------------------------
+
+    /// Read the Broadcast Distribution Table from a BBMD.
+    ///
+    /// Args:
+    ///     address: BBMD address as "ip:port"
+    ///
+    /// Returns: list of BdtEntry
+    #[pyo3(signature = (address))]
+    fn read_bdt<'py>(
+        &self,
+        py: Python<'py>,
+        address: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let mac = parse_address(&address)?;
+            let c = {
+                let guard = inner.lock().await;
+                Arc::clone(guard.as_ref().ok_or_else(|| {
+                    PyRuntimeError::new_err("client not started — use 'async with'")
+                })?)
+            };
+            let entries = c.read_bdt(&mac).await.map_err(to_py_err)?;
+            let py_entries: Vec<crate::types::PyBdtEntry> = entries
+                .iter()
+                .map(crate::types::PyBdtEntry::from_rust)
+                .collect();
+            Ok(py_entries)
+        })
+    }
+
+    /// Read the Foreign Device Table from a BBMD.
+    ///
+    /// Args:
+    ///     address: BBMD address as "ip:port"
+    ///
+    /// Returns: list of FdtEntry
+    #[pyo3(signature = (address))]
+    fn read_fdt<'py>(
+        &self,
+        py: Python<'py>,
+        address: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let mac = parse_address(&address)?;
+            let c = {
+                let guard = inner.lock().await;
+                Arc::clone(guard.as_ref().ok_or_else(|| {
+                    PyRuntimeError::new_err("client not started — use 'async with'")
+                })?)
+            };
+            let entries = c.read_fdt(&mac).await.map_err(to_py_err)?;
+            let py_entries: Vec<crate::types::PyFdtEntry> = entries
+                .iter()
+                .map(crate::types::PyFdtEntry::from_rust)
+                .collect();
+            Ok(py_entries)
+        })
+    }
+
+    /// Broadcast Who-Is-Router-To-Network and collect responses.
+    ///
+    /// Args:
+    ///     network: Optional network number to query. None queries all.
+    ///     timeout_ms: How long to wait for responses (default 3000ms).
+    ///
+    /// Returns: list of RouterInfo
+    #[pyo3(signature = (network=None, timeout_ms=3000))]
+    fn who_is_router_to_network<'py>(
+        &self,
+        py: Python<'py>,
+        network: Option<u16>,
+        timeout_ms: u64,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let c = {
+                let guard = inner.lock().await;
+                Arc::clone(guard.as_ref().ok_or_else(|| {
+                    PyRuntimeError::new_err("client not started — use 'async with'")
+                })?)
+            };
+            let routers = c
+                .who_is_router_to_network(network, timeout_ms)
+                .await
+                .map_err(to_py_err)?;
+
+            // Convert MAC addresses to human-readable format for Python.
+            let py_routers: Vec<crate::types::PyRouterInfo> = routers
+                .into_iter()
+                .map(|r| {
+                    let mac = r.mac.as_ref();
+                    let address = if mac.len() == 6 {
+                        // BIP: 4-byte IP + 2-byte port
+                        format!(
+                            "{}.{}.{}.{}:{}",
+                            mac[0],
+                            mac[1],
+                            mac[2],
+                            mac[3],
+                            u16::from_be_bytes([mac[4], mac[5]])
+                        )
+                    } else {
+                        // Fallback: hex
+                        mac.iter()
+                            .map(|b| format!("{b:02x}"))
+                            .collect::<Vec<_>>()
+                            .join(":")
+                    };
+                    crate::types::PyRouterInfo {
+                        address,
+                        networks: r.networks,
+                    }
+                })
+                .collect();
+            Ok(py_routers)
+        })
+    }
+
     /// Explicitly stop the client.
     fn stop<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();

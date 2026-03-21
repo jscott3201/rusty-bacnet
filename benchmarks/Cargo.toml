@@ -55,6 +55,10 @@ path = "src/bin/bacnet_sc_hub.rs"
 name = "stress-orchestrator"
 path = "src/bin/stress_orchestrator.rs"
 
+[[bin]]
+name = "bvll-test"
+path = "src/bin/bvll_test.rs"
+
 [[bench]]
 name = "encoding"
 harness = false

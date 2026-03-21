@@ -312,6 +312,63 @@ class CovNotificationIterator:
     async def __anext__(self) -> dict[str, Any]: ...
 
 
+class BdtEntry:
+    """A Broadcast Distribution Table entry from a BBMD."""
+
+    @property
+    def ip(self) -> str:
+        """IP address as dotted quad string."""
+        ...
+
+    @property
+    def port(self) -> int: ...
+
+    @property
+    def mask(self) -> str:
+        """Broadcast distribution mask as dotted quad string."""
+        ...
+
+    def __repr__(self) -> str: ...
+
+
+class FdtEntry:
+    """A Foreign Device Table entry from a BBMD."""
+
+    @property
+    def ip(self) -> str: ...
+
+    @property
+    def port(self) -> int: ...
+
+    @property
+    def ttl(self) -> int:
+        """Time-to-live in seconds."""
+        ...
+
+    @property
+    def seconds_remaining(self) -> int:
+        """Seconds remaining before expiry."""
+        ...
+
+    def __repr__(self) -> str: ...
+
+
+class RouterInfo:
+    """A discovered BACnet router and the networks it serves."""
+
+    @property
+    def address(self) -> str:
+        """Router address as 'ip:port'."""
+        ...
+
+    @property
+    def networks(self) -> list[int]:
+        """Network numbers reachable through this router."""
+        ...
+
+    def __repr__(self) -> str: ...
+
+
 # ---------------------------------------------------------------------------
 # Exceptions
 # ---------------------------------------------------------------------------
@@ -652,6 +709,22 @@ class BACnetClient:
         change_list: list[dict[str, Any]],
     ) -> None:
         """Send a WriteGroup request."""
+        ...
+
+    async def read_bdt(self, address: str) -> list[BdtEntry]:
+        """Read the Broadcast Distribution Table from a BBMD."""
+        ...
+
+    async def read_fdt(self, address: str) -> list[FdtEntry]:
+        """Read the Foreign Device Table from a BBMD."""
+        ...
+
+    async def who_is_router_to_network(
+        self,
+        network: Optional[int] = None,
+        timeout_ms: int = 3000,
+    ) -> list[RouterInfo]:
+        """Broadcast Who-Is-Router-To-Network and collect responses."""
         ...
 
     async def stop(self) -> None:

@@ -6,6 +6,7 @@
 use bacnet_types::error::Error;
 use tokio::sync::mpsc;
 
+use crate::bbmd::{BdtEntry, FdtEntryWire};
 use crate::bip::BipTransport;
 use crate::bip6::Bip6Transport;
 use crate::mstp::{MstpTransport, SerialPort};
@@ -107,6 +108,32 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
             Self::Ethernet(t) => t.max_apdu_length(),
             #[cfg(feature = "sc-tls")]
             Self::Sc(t) => t.max_apdu_length(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// BVLL operations — BIP-only, errors on other transports.
+// ---------------------------------------------------------------------------
+
+impl<S: SerialPort + 'static> AnyTransport<S> {
+    /// Read the Broadcast Distribution Table from a BBMD (BIP only).
+    pub async fn read_bdt(&self, target: &[u8]) -> Result<Vec<BdtEntry>, Error> {
+        match self {
+            Self::Bip(t) => t.read_bdt(target).await,
+            _ => Err(Error::Encoding(
+                "read_bdt is only supported on BIP transport".into(),
+            )),
+        }
+    }
+
+    /// Read the Foreign Device Table from a BBMD (BIP only).
+    pub async fn read_fdt(&self, target: &[u8]) -> Result<Vec<FdtEntryWire>, Error> {
+        match self {
+            Self::Bip(t) => t.read_fdt(target).await,
+            _ => Err(Error::Encoding(
+                "read_fdt is only supported on BIP transport".into(),
+            )),
         }
     }
 }
