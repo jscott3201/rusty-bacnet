@@ -4,7 +4,9 @@
 //! methods for sending confirmed and unconfirmed BACnet requests.
 
 use std::collections::HashMap;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::Ipv4Addr;
+#[cfg(feature = "ipv6")]
+use std::net::Ipv6Addr;
 use std::sync::Arc;
 use std::time::Instant;
 

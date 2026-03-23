@@ -12,8 +12,8 @@ use crate::state::GatewayState;
 
 use super::types::{
     json_to_property_value, object_type_name, parse_object_specifier, parse_object_type,
-    parse_property_name, property_name, property_value_to_json,
-    property_value_to_json_with_context, ApiError, WritePropertyRequest,
+    parse_property_name, property_name, property_value_to_json_with_context, ApiError,
+    WritePropertyRequest,
 };
 
 #[derive(Debug, Deserialize)]
