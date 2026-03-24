@@ -9,11 +9,31 @@ use alloc::string::String;
 #[cfg(feature = "std")]
 use std::time::Duration;
 
+use crate::enums::{ErrorClass, ErrorCode};
+
+fn format_protocol_error(class: u32, code: u32) -> String {
+    let class_name = ErrorClass::ALL_NAMED
+        .iter()
+        .find(|(_, v)| v.to_raw() as u32 == class)
+        .map(|(n, _)| n.to_lowercase().replace('_', "-"));
+    let code_name = ErrorCode::ALL_NAMED
+        .iter()
+        .find(|(_, v)| v.to_raw() as u32 == code)
+        .map(|(n, _)| n.to_lowercase().replace('_', "-"));
+
+    match (class_name, code_name) {
+        (Some(cn), Some(co)) => format!("BACnet error: {cn} / {co}"),
+        (Some(cn), None) => format!("BACnet error: {cn} / code={code}"),
+        (None, Some(co)) => format!("BACnet error: class={class} / {co}"),
+        (None, None) => format!("BACnet error: class={class} / code={code}"),
+    }
+}
+
 /// Top-level error type for the BACnet library.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// BACnet protocol error response (Clause 20.1.7).
-    #[error("BACnet error: class={class} code={code}")]
+    #[error("{}", format_protocol_error(*.class, *.code))]
     Protocol {
         /// Error class value.
         class: u32,
@@ -105,8 +125,16 @@ mod tests {
     #[test]
     fn protocol_error_display() {
         let err = Error::Protocol { class: 2, code: 31 };
-        assert!(err.to_string().contains("class=2"));
-        assert!(err.to_string().contains("code=31"));
+        assert!(err.to_string().contains("property"));
+        assert!(err.to_string().contains("unknown-object"));
+
+        // Unknown class/code falls back to numeric
+        let err2 = Error::Protocol {
+            class: 999,
+            code: 999,
+        };
+        assert!(err2.to_string().contains("class=999"));
+        assert!(err2.to_string().contains("code=999"));
     }
 
     #[test]

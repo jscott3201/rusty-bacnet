@@ -4,7 +4,9 @@
 //! methods for sending confirmed and unconfirmed BACnet requests.
 
 use std::collections::HashMap;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::Ipv4Addr;
+#[cfg(feature = "ipv6")]
+use std::net::Ipv6Addr;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -15,13 +17,14 @@ use tokio::time::{timeout, Duration};
 use tracing::{debug, warn};
 
 use bacnet_encoding::apdu::{
-    self, encode_apdu, Apdu, ConfirmedRequest as ConfirmedRequestPdu, SegmentAck as SegmentAckPdu,
-    SimpleAck,
+    self, encode_apdu, AbortPdu, Apdu, ConfirmedRequest as ConfirmedRequestPdu,
+    SegmentAck as SegmentAckPdu, SimpleAck,
 };
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_network::layer::NetworkLayer;
 use bacnet_services::cov::COVNotificationRequest;
 use bacnet_transport::bip::BipTransport;
+#[cfg(feature = "ipv6")]
 use bacnet_transport::bip6::Bip6Transport;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ConfirmedServiceChoice, NetworkPriority, UnconfirmedServiceChoice};
@@ -152,6 +155,79 @@ impl BipClientBuilder {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Multi-device batch operation types
+// ---------------------------------------------------------------------------
+
+/// Default concurrency limit for multi-device batch operations.
+const DEFAULT_BATCH_CONCURRENCY: usize = 32;
+
+/// A request to read a single property from a discovered device.
+#[derive(Debug, Clone)]
+pub struct DeviceReadRequest {
+    /// Device instance number (must be in the device table).
+    pub device_instance: u32,
+    /// Object to read from.
+    pub object_identifier: bacnet_types::primitives::ObjectIdentifier,
+    /// Property to read.
+    pub property_identifier: bacnet_types::enums::PropertyIdentifier,
+    /// Optional array index.
+    pub property_array_index: Option<u32>,
+}
+
+/// Result of a single-property read from a device within a batch.
+#[derive(Debug)]
+pub struct DeviceReadResult {
+    /// The device instance this result corresponds to.
+    pub device_instance: u32,
+    /// The read result (Ok = decoded ACK, Err = protocol/timeout error).
+    pub result: Result<bacnet_services::read_property::ReadPropertyACK, Error>,
+}
+
+/// A request to read multiple properties from a discovered device (RPM).
+#[derive(Debug, Clone)]
+pub struct DeviceRpmRequest {
+    /// Device instance number (must be in the device table).
+    pub device_instance: u32,
+    /// ReadAccessSpecifications to send in a single RPM.
+    pub specs: Vec<bacnet_services::rpm::ReadAccessSpecification>,
+}
+
+/// Result of an RPM to a single device within a batch.
+#[derive(Debug)]
+pub struct DeviceRpmResult {
+    /// The device instance this result corresponds to.
+    pub device_instance: u32,
+    /// The RPM result.
+    pub result: Result<bacnet_services::rpm::ReadPropertyMultipleACK, Error>,
+}
+
+/// A request to write a single property on a discovered device.
+#[derive(Debug, Clone)]
+pub struct DeviceWriteRequest {
+    /// Device instance number (must be in the device table).
+    pub device_instance: u32,
+    /// Object to write to.
+    pub object_identifier: bacnet_types::primitives::ObjectIdentifier,
+    /// Property to write.
+    pub property_identifier: bacnet_types::enums::PropertyIdentifier,
+    /// Optional array index.
+    pub property_array_index: Option<u32>,
+    /// Encoded property value bytes.
+    pub property_value: Vec<u8>,
+    /// Optional write priority (1-16).
+    pub priority: Option<u8>,
+}
+
+/// Result of a single-property write to a device within a batch.
+#[derive(Debug)]
+pub struct DeviceWriteResult {
+    /// The device instance this result corresponds to.
+    pub device_instance: u32,
+    /// The write result (Ok = success, Err = protocol/timeout error).
+    pub result: Result<(), Error>,
+}
+
 /// In-progress segmented receive state.
 struct SegmentedReceiveState {
     receiver: SegmentReceiver,
@@ -159,6 +235,10 @@ struct SegmentedReceiveState {
     expected_next_seq: u8,
     /// Timestamp of last received segment (for reaping stale sessions).
     last_activity: Instant,
+    /// Window position counter for per-window SegmentAck (Clause 5.2.2).
+    window_position: u8,
+    /// Proposed window size from the server.
+    proposed_window_size: u8,
 }
 
 /// Timeout for idle segmented reassembly sessions.
@@ -242,6 +322,7 @@ impl BACnetClient<BipTransport> {
     }
 }
 
+#[cfg(feature = "ipv6")]
 impl BACnetClient<Bip6Transport> {
     /// Create a BIP6-specific builder for BACnet/IPv6 transport.
     pub fn bip6_builder() -> Bip6ClientBuilder {
@@ -254,12 +335,14 @@ impl BACnetClient<Bip6Transport> {
 }
 
 /// BIP6-specific builder that constructs `Bip6Transport` from IPv6 interface/port/device-instance.
+#[cfg(feature = "ipv6")]
 pub struct Bip6ClientBuilder {
     config: ClientConfig,
     interface: Ipv6Addr,
     device_instance: Option<u32>,
 }
 
+#[cfg(feature = "ipv6")]
 impl Bip6ClientBuilder {
     /// Set the local IPv6 interface address.
     pub fn interface(mut self, ip: Ipv6Addr) -> Self {
@@ -459,15 +542,47 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let seg_ack_senders: Arc<Mutex<HashMap<SegKey, mpsc::Sender<SegmentAckPdu>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let seg_ack_senders_dispatch = Arc::clone(&seg_ack_senders);
+        let segmented_response_accepted = config.segmented_response_accepted;
 
         let dispatch_task = tokio::spawn(async move {
             let mut seg_state: HashMap<SegKey, SegmentedReceiveState> = HashMap::new();
+            let mut last_device_purge = Instant::now();
+            const DEVICE_PURGE_INTERVAL: Duration = Duration::from_secs(300);
+            const DEVICE_MAX_AGE: Duration = Duration::from_secs(600);
 
             while let Some(received) = apdu_rx.recv().await {
                 let now = Instant::now();
-                seg_state.retain(|_key, state| {
-                    now.duration_since(state.last_activity) < SEG_RECEIVER_TIMEOUT
-                });
+
+                // Periodically purge stale device table entries
+                if now.duration_since(last_device_purge) >= DEVICE_PURGE_INTERVAL {
+                    device_table_dispatch
+                        .lock()
+                        .await
+                        .purge_stale(DEVICE_MAX_AGE);
+                    last_device_purge = now;
+                }
+                // Reap stale segmented sessions and send Abort to the server
+                let stale_keys: Vec<SegKey> = seg_state
+                    .iter()
+                    .filter(|(_, state)| {
+                        now.duration_since(state.last_activity) >= SEG_RECEIVER_TIMEOUT
+                    })
+                    .map(|(key, _)| key.clone())
+                    .collect();
+                for key in &stale_keys {
+                    if let Some(_state) = seg_state.remove(key) {
+                        let abort = Apdu::Abort(AbortPdu {
+                            sent_by_server: false,
+                            invoke_id: key.1,
+                            abort_reason: bacnet_types::enums::AbortReason::TSM_TIMEOUT,
+                        });
+                        let mut buf = BytesMut::with_capacity(4);
+                        encode_apdu(&mut buf, &abort);
+                        let _ = network_dispatch
+                            .send_apdu(&buf, &key.0, false, NetworkPriority::NORMAL)
+                            .await;
+                    }
+                }
 
                 match apdu::decode_apdu(received.apdu.clone()) {
                     Ok(decoded) => {
@@ -481,6 +596,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                             &received.source_mac,
                             &received.source_network,
                             decoded,
+                            segmented_response_accepted,
                         )
                         .await;
                     }
@@ -515,6 +631,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         source_mac: &[u8],
         source_network: &Option<NpduAddress>,
         apdu: Apdu,
+        segmented_response_accepted: bool,
     ) {
         match apdu {
             Apdu::SimpleAck(ack) => {
@@ -524,8 +641,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             }
             Apdu::ComplexAck(ack) => {
                 if ack.segmented {
-                    Self::handle_segmented_complex_ack(tsm, network, seg_state, source_mac, ack)
-                        .await;
+                    Self::handle_segmented_complex_ack(
+                        tsm,
+                        network,
+                        seg_state,
+                        source_mac,
+                        ack,
+                        segmented_response_accepted,
+                    )
+                    .await;
                 } else {
                     debug!(invoke_id = ack.invoke_id, "Received ComplexAck");
                     let mut tsm = tsm.lock().await;
@@ -683,6 +807,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         seg_state: &mut HashMap<SegKey, SegmentedReceiveState>,
         source_mac: &[u8],
         ack: bacnet_encoding::apdu::ComplexAck,
+        segmented_response_accepted: bool,
     ) {
         let seq = ack.sequence_number.unwrap_or(0);
         let key = (MacAddr::from_slice(source_mac), ack.invoke_id);
@@ -694,6 +819,21 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             "Received segmented ComplexAck"
         );
 
+        // If client doesn't support segmented reception, send Abort per Clause 5.4.4.2
+        if !segmented_response_accepted {
+            let abort = Apdu::Abort(AbortPdu {
+                sent_by_server: false,
+                invoke_id: ack.invoke_id,
+                abort_reason: bacnet_types::enums::AbortReason::SEGMENTATION_NOT_SUPPORTED,
+            });
+            let mut buf = BytesMut::with_capacity(4);
+            encode_apdu(&mut buf, &abort);
+            let _ = network
+                .send_apdu(&buf, source_mac, false, NetworkPriority::NORMAL)
+                .await;
+            return;
+        }
+
         const MAX_CONCURRENT_SEG_SESSIONS: usize = 64;
         if !seg_state.contains_key(&key) && seg_state.len() >= MAX_CONCURRENT_SEG_SESSIONS {
             warn!(
@@ -704,29 +844,47 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             return;
         }
 
+        let proposed_ws = ack.proposed_window_size.unwrap_or(1);
         let state = seg_state
             .entry(key.clone())
             .or_insert_with(|| SegmentedReceiveState {
                 receiver: SegmentReceiver::new(),
                 expected_next_seq: 0,
                 last_activity: Instant::now(),
+                window_position: 0,
+                proposed_window_size: proposed_ws,
             });
 
         state.last_activity = Instant::now();
 
         if seq != state.expected_next_seq {
-            warn!(
-                invoke_id = ack.invoke_id,
-                expected = state.expected_next_seq,
-                received = seq,
-                "Segment gap detected, sending negative SegmentAck"
-            );
+            // Check for duplicate (already received) vs true gap
+            if seq < state.expected_next_seq {
+                // Duplicate segment — discard silently and ack
+                debug!(
+                    invoke_id = ack.invoke_id,
+                    seq, "Discarding duplicate segment"
+                );
+            } else {
+                // True gap — send negative SegmentAck with last correctly received seq
+                warn!(
+                    invoke_id = ack.invoke_id,
+                    expected = state.expected_next_seq,
+                    received = seq,
+                    "Segment gap detected, sending negative SegmentAck"
+                );
+            }
             let neg_ack = Apdu::SegmentAck(SegmentAckPdu {
-                negative_ack: true,
+                negative_ack: seq >= state.expected_next_seq,
                 sent_by_server: false,
                 invoke_id: ack.invoke_id,
-                sequence_number: state.expected_next_seq,
-                actual_window_size: ack.proposed_window_size.unwrap_or(1),
+                // Spec: sequence_number = last correctly received sequence number
+                sequence_number: if state.expected_next_seq > 0 {
+                    state.expected_next_seq.wrapping_sub(1)
+                } else {
+                    0
+                },
+                actual_window_size: proposed_ws,
             });
             let mut buf = BytesMut::with_capacity(4);
             encode_apdu(&mut buf, &neg_ack);
@@ -734,7 +892,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 .send_apdu(&buf, source_mac, false, NetworkPriority::NORMAL)
                 .await
             {
-                warn!(error = %e, "Failed to send negative SegmentAck");
+                warn!(error = %e, "Failed to send SegmentAck");
             }
             return;
         }
@@ -744,21 +902,28 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             return;
         }
         state.expected_next_seq = seq.wrapping_add(1);
+        state.window_position += 1;
 
-        let seg_ack = Apdu::SegmentAck(SegmentAckPdu {
-            negative_ack: false,
-            sent_by_server: false,
-            invoke_id: ack.invoke_id,
-            sequence_number: seq,
-            actual_window_size: ack.proposed_window_size.unwrap_or(1),
-        });
-        let mut buf = BytesMut::with_capacity(4);
-        encode_apdu(&mut buf, &seg_ack);
-        if let Err(e) = network
-            .send_apdu(&buf, source_mac, false, NetworkPriority::NORMAL)
-            .await
-        {
-            warn!(error = %e, "Failed to send SegmentAck");
+        // Per-window SegmentAck: only ack at window boundary or final segment (Clause 5.2.2)
+        let should_ack = !ack.more_follows || state.window_position >= state.proposed_window_size;
+
+        if should_ack {
+            state.window_position = 0;
+            let seg_ack = Apdu::SegmentAck(SegmentAckPdu {
+                negative_ack: false,
+                sent_by_server: false,
+                invoke_id: ack.invoke_id,
+                sequence_number: seq,
+                actual_window_size: proposed_ws,
+            });
+            let mut buf = BytesMut::with_capacity(4);
+            encode_apdu(&mut buf, &seg_ack);
+            if let Err(e) = network
+                .send_apdu(&buf, source_mac, false, NetworkPriority::NORMAL)
+                .await
+            {
+                warn!(error = %e, "Failed to send SegmentAck");
+            }
         }
 
         if !ack.more_follows {
@@ -879,6 +1044,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             (invoke_id, rx)
         };
 
+        // Guard cleans up invoke ID if this task is cancelled/aborted
+        let mut guard = crate::tsm::TsmGuard::new(
+            std::sync::Arc::clone(&self.tsm),
+            MacAddr::from_slice(tsm_mac),
+            invoke_id,
+        );
+
         let pdu = Apdu::ConfirmedRequest(ConfirmedRequestPdu {
             segmented: false,
             more_follows: false,
@@ -925,6 +1097,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 }
             };
             if let Err(e) = send_result {
+                guard.mark_completed();
                 let mut tsm = self.tsm.lock().await;
                 tsm.cancel_transaction(tsm_mac, invoke_id);
                 return Err(e);
@@ -932,6 +1105,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
             match timeout(timeout_duration, &mut rx).await {
                 Ok(Ok(response)) => {
+                    guard.mark_completed();
                     return match response {
                         TsmResponse::SimpleAck => Ok(Bytes::new()),
                         TsmResponse::ComplexAck { service_data } => Ok(service_data),
@@ -941,11 +1115,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     };
                 }
                 Ok(Err(_)) => {
+                    guard.mark_completed();
                     return Err(Error::Encoding("TSM response channel closed".into()));
                 }
                 Err(_timeout) => {
                     attempts += 1;
                     if attempts > max_retries {
+                        guard.mark_completed();
                         let mut tsm = self.tsm.lock().await;
                         tsm.cancel_transaction(tsm_mac, invoke_id);
                         return Err(Error::Timeout(timeout_duration));
@@ -1012,6 +1188,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             self.seg_ack_senders.lock().await.insert(key, seg_ack_tx);
         }
 
+        // Tseg: use APDU timeout for now (configurable via apdu_timeout_ms)
         let timeout_duration = Duration::from_millis(self.config.apdu_timeout_ms);
         let max_ack_retries = self.config.apdu_retries;
         let mut window_size = self.config.proposed_window_size.max(1) as usize;
@@ -1428,6 +1605,241 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await?;
 
         Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Auto-routing _from_device variants (RPM, WP, WPM)
+    // -----------------------------------------------------------------------
+
+    /// Read multiple properties from a discovered device, auto-routing if needed.
+    pub async fn read_property_multiple_from_device(
+        &self,
+        device_instance: u32,
+        specs: Vec<bacnet_services::rpm::ReadAccessSpecification>,
+    ) -> Result<bacnet_services::rpm::ReadPropertyMultipleACK, Error> {
+        let (mac, routing) = self.resolve_device(device_instance).await?;
+
+        if let Some((dnet, dadr)) = routing {
+            use bacnet_services::rpm::{ReadPropertyMultipleACK, ReadPropertyMultipleRequest};
+
+            let request = ReadPropertyMultipleRequest {
+                list_of_read_access_specs: specs,
+            };
+            let mut buf = BytesMut::new();
+            request.encode(&mut buf);
+
+            let response_data = self
+                .confirmed_request_routed(
+                    &mac,
+                    dnet,
+                    &dadr,
+                    ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+                    &buf,
+                )
+                .await?;
+
+            ReadPropertyMultipleACK::decode(&response_data)
+        } else {
+            self.read_property_multiple(&mac, specs).await
+        }
+    }
+
+    /// Write a property on a discovered device, auto-routing if needed.
+    pub async fn write_property_to_device(
+        &self,
+        device_instance: u32,
+        object_identifier: bacnet_types::primitives::ObjectIdentifier,
+        property_identifier: bacnet_types::enums::PropertyIdentifier,
+        property_array_index: Option<u32>,
+        property_value: Vec<u8>,
+        priority: Option<u8>,
+    ) -> Result<(), Error> {
+        let (mac, routing) = self.resolve_device(device_instance).await?;
+
+        if let Some((dnet, dadr)) = routing {
+            use bacnet_services::write_property::WritePropertyRequest;
+
+            let request = WritePropertyRequest {
+                object_identifier,
+                property_identifier,
+                property_array_index,
+                property_value,
+                priority,
+            };
+            let mut buf = BytesMut::new();
+            request.encode(&mut buf);
+
+            let _ = self
+                .confirmed_request_routed(
+                    &mac,
+                    dnet,
+                    &dadr,
+                    ConfirmedServiceChoice::WRITE_PROPERTY,
+                    &buf,
+                )
+                .await?;
+            Ok(())
+        } else {
+            self.write_property(
+                &mac,
+                object_identifier,
+                property_identifier,
+                property_array_index,
+                property_value,
+                priority,
+            )
+            .await
+        }
+    }
+
+    /// Write multiple properties on a discovered device, auto-routing if needed.
+    pub async fn write_property_multiple_to_device(
+        &self,
+        device_instance: u32,
+        specs: Vec<bacnet_services::wpm::WriteAccessSpecification>,
+    ) -> Result<(), Error> {
+        let (mac, routing) = self.resolve_device(device_instance).await?;
+
+        if let Some((dnet, dadr)) = routing {
+            use bacnet_services::wpm::WritePropertyMultipleRequest;
+
+            let request = WritePropertyMultipleRequest {
+                list_of_write_access_specs: specs,
+            };
+            let mut buf = BytesMut::new();
+            request.encode(&mut buf);
+
+            let _ = self
+                .confirmed_request_routed(
+                    &mac,
+                    dnet,
+                    &dadr,
+                    ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
+                    &buf,
+                )
+                .await?;
+            Ok(())
+        } else {
+            self.write_property_multiple(&mac, specs).await
+        }
+    }
+
+    /// Resolve a device instance to its MAC address and optional routing info.
+    async fn resolve_device(
+        &self,
+        device_instance: u32,
+    ) -> Result<(Vec<u8>, Option<(u16, Vec<u8>)>), Error> {
+        let dt = self.device_table.lock().await;
+        let device = dt.get(device_instance).ok_or_else(|| {
+            Error::Encoding(format!("device {device_instance} not in device table"))
+        })?;
+        let routing = match (&device.source_network, &device.source_address) {
+            (Some(snet), Some(sadr)) => Some((*snet, sadr.to_vec())),
+            _ => None,
+        };
+        Ok((device.mac_address.to_vec(), routing))
+    }
+
+    // -----------------------------------------------------------------------
+    // Multi-device batch operations
+    // -----------------------------------------------------------------------
+
+    /// Read a property from multiple discovered devices concurrently.
+    ///
+    /// All requests are dispatched concurrently (up to `max_concurrent`,
+    /// default 32) and results are returned in completion order. Each device
+    /// is resolved from the device table and auto-routed if behind a router.
+    pub async fn read_property_from_devices(
+        &self,
+        requests: Vec<DeviceReadRequest>,
+        max_concurrent: Option<usize>,
+    ) -> Vec<DeviceReadResult> {
+        use futures_util::stream::{self, StreamExt};
+
+        let concurrency = max_concurrent.unwrap_or(DEFAULT_BATCH_CONCURRENCY);
+
+        stream::iter(requests)
+            .map(|req| async move {
+                let result = self
+                    .read_property_from_device(
+                        req.device_instance,
+                        req.object_identifier,
+                        req.property_identifier,
+                        req.property_array_index,
+                    )
+                    .await;
+                DeviceReadResult {
+                    device_instance: req.device_instance,
+                    result,
+                }
+            })
+            .buffer_unordered(concurrency)
+            .collect()
+            .await
+    }
+
+    /// Read multiple properties from multiple devices concurrently (RPM batch).
+    ///
+    /// Sends an RPM to each device concurrently. This is the most efficient
+    /// way to poll many properties across many devices — RPM batches within
+    /// a single device, and this method batches across devices.
+    pub async fn read_property_multiple_from_devices(
+        &self,
+        requests: Vec<DeviceRpmRequest>,
+        max_concurrent: Option<usize>,
+    ) -> Vec<DeviceRpmResult> {
+        use futures_util::stream::{self, StreamExt};
+
+        let concurrency = max_concurrent.unwrap_or(DEFAULT_BATCH_CONCURRENCY);
+
+        stream::iter(requests)
+            .map(|req| async move {
+                let result = self
+                    .read_property_multiple_from_device(req.device_instance, req.specs)
+                    .await;
+                DeviceRpmResult {
+                    device_instance: req.device_instance,
+                    result,
+                }
+            })
+            .buffer_unordered(concurrency)
+            .collect()
+            .await
+    }
+
+    /// Write a property on multiple devices concurrently.
+    ///
+    /// All writes are dispatched concurrently (up to `max_concurrent`,
+    /// default 32). Results are returned in completion order.
+    pub async fn write_property_to_devices(
+        &self,
+        requests: Vec<DeviceWriteRequest>,
+        max_concurrent: Option<usize>,
+    ) -> Vec<DeviceWriteResult> {
+        use futures_util::stream::{self, StreamExt};
+
+        let concurrency = max_concurrent.unwrap_or(DEFAULT_BATCH_CONCURRENCY);
+
+        stream::iter(requests)
+            .map(|req| async move {
+                let result = self
+                    .write_property_to_device(
+                        req.device_instance,
+                        req.object_identifier,
+                        req.property_identifier,
+                        req.property_array_index,
+                        req.property_value,
+                        req.priority,
+                    )
+                    .await;
+                DeviceWriteResult {
+                    device_instance: req.device_instance,
+                    result,
+                }
+            })
+            .buffer_unordered(concurrency)
+            .collect()
+            .await
     }
 
     /// Send a WhoIs broadcast to discover devices.
@@ -1910,6 +2322,31 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Clear the discovered devices table.
     pub async fn clear_devices(&self) {
         self.device_table.lock().await.clear();
+    }
+
+    /// Manually register a device in the device table.
+    ///
+    /// Useful for adding known devices without requiring WhoIs/IAm exchange.
+    /// Sets default values for max_apdu_length (1476), segmentation (NONE),
+    /// and vendor_id (0) since these are unknown without IAm.
+    pub async fn add_device(&self, instance: u32, mac: &[u8]) -> Result<(), Error> {
+        let oid = bacnet_types::primitives::ObjectIdentifier::new(
+            bacnet_types::enums::ObjectType::DEVICE,
+            instance,
+        )?;
+        let device = DiscoveredDevice {
+            object_identifier: oid,
+            mac_address: MacAddr::from_slice(mac),
+            max_apdu_length: 1476,
+            segmentation_supported: bacnet_types::enums::Segmentation::NONE,
+            max_segments_accepted: None,
+            vendor_id: 0,
+            last_seen: std::time::Instant::now(),
+            source_network: None,
+            source_address: None,
+        };
+        self.device_table.lock().await.upsert(device);
+        Ok(())
     }
 
     /// Stop the client, aborting the dispatch task.

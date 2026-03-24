@@ -1,6 +1,6 @@
 # Rusty BACnet
 
-A complete BACnet protocol stack (ASHRAE 135-2020) written in Rust, with first-class Python, Kotlin/Java, and WASM/JavaScript bindings.
+A complete BACnet protocol stack (ASHRAE 135-2020) written in Rust, with first-class Python and WASM/JavaScript bindings, plus an HTTP/MCP gateway for AI-driven building automation.
 
 [![CI](https://github.com/jscott3201/rusty-bacnet/actions/workflows/ci.yml/badge.svg)](https://github.com/jscott3201/rusty-bacnet/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -9,10 +9,10 @@ A complete BACnet protocol stack (ASHRAE 135-2020) written in Rust, with first-c
 
 - **Full BACnet/IP stack** — async client and server with 30+ service types
 - **5 transports** — BACnet/IP (UDP), BACnet/IPv6 (multicast), BACnet/SC (WebSocket+TLS with hub), MS/TP (serial), Ethernet (BPF)
-- **64 object types** — All standard BACnet objects including Analog/Binary/MultiState I/O, Device, Schedule, Calendar, Trend Log, Notification Class, Loop, Access Control, Lighting, Life Safety, Elevator, Color, Color Temperature, and more
+- **65 object types** — All standard BACnet objects including Analog/Binary/MultiState I/O, Device, Schedule, Calendar, Trend Log, Notification Class, Loop, Access Control, Lighting, Life Safety, Elevator, Color, Color Temperature, and more
+- **HTTP REST API + MCP server** — `bacnet-gateway` crate with REST endpoints and Model Context Protocol tools for LLM-driven BACnet interaction
 - **BTL compliance test harness** — 3,808 tests covering 100% of BTL Test Plan 26.1 across all 13 sections
 - **Python bindings** — async client, server, and SC hub with full API parity via PyO3
-- **Kotlin/Java bindings** — async client and server via UniFFI, distributed as multi-platform JAR
 - **WASM/JavaScript** — BACnet/SC thin client for browsers via wasm-bindgen
 - **CLI tool** — interactive shell and scripting for BACnet/IP, IPv6, and SC
 - **5,500+ tests**, 0 clippy warnings, CI on Linux/macOS/Windows
@@ -103,61 +103,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-## Quick Start (Kotlin)
+## BACnet Gateway (HTTP API + MCP Server)
 
-Add the dependency (GitHub Packages):
+The `bacnet-gateway` crate provides an HTTP REST API and [MCP](https://modelcontextprotocol.io/) server, enabling programmatic and AI-driven interaction with BACnet networks.
 
-```kotlin
-// settings.gradle.kts
-dependencyResolutionManagement {
-    repositories {
-        maven {
-            url = uri("https://maven.pkg.github.com/jscott3201/rusty-bacnet")
-            credentials {
-                username = providers.gradleProperty("gpr.user").orNull ?: System.getenv("GITHUB_ACTOR")
-                password = providers.gradleProperty("gpr.key").orNull ?: System.getenv("GITHUB_TOKEN")
-            }
-        }
-    }
-}
+```toml
+# gateway.toml
+[server]
+bind = "0.0.0.0:3000"
+api_key = "your-secret-key"
 
-// build.gradle.kts
-dependencies {
-    implementation("io.github.jscott3201:bacnet-java:0.7.1")
-}
+[device]
+instance = 389001
+name = "BACnet Gateway"
+
+[transports.bip]
+interface = "0.0.0.0"
+port = 47808
+broadcast = "192.168.1.255"
+network_number = 1
 ```
 
-```kotlin
-import uniffi.bacnet_java.*
-import kotlinx.coroutines.runBlocking
-
-fun main() = runBlocking {
-    val client = BacnetClient(
-        transportType = "bip",
-        address = "0.0.0.0:47808",
-        broadcastAddress = "192.168.1.255:47808",
-    )
-    client.start()
-
-    // Read a property
-    val value = client.readProperty(
-        address = "192.168.1.100:47808",
-        objectType = 0u,      // analog-input
-        objectInstance = 1u,
-        propertyId = 85u,      // present-value
-        arrayIndex = null,
-    )
-    println("Value: $value")
-
-    // Discover devices
-    client.whoIs(lowLimit = null, highLimit = null)
-    kotlinx.coroutines.delay(2000)
-    val devices = client.discoveredDevices()
-    devices.forEach { println("Device ${it.deviceInstance} at ${it.address}") }
-
-    client.stop()
-}
+```bash
+# Build and run
+cargo build -p bacnet-gateway --features bin
+./target/debug/bacnet-gateway --config gateway.toml
 ```
+
+**REST API** at `/api/v1/`:
+- `POST /devices/discover` — WhoIs broadcast, returns discovered devices
+- `GET /devices/{instance}` — read device properties (name, vendor, model, firmware)
+- `GET/PUT /devices/{instance}/objects/{type}:{id}/properties/{prop}` — read/write remote properties
+- `GET/POST/DELETE /objects` — local object database CRUD
+- `GET /health` — health check
+
+**MCP Server** at `/mcp` (Streamable HTTP):
+- 10 tools: `discover_devices`, `list_known_devices`, `get_device_info`, `read_property`, `write_property`, `list_local_objects`, `read_local_property`, `write_local_property`, `create_local_object`, `delete_local_object`
+- BACnet reference knowledge base — 9 reference resources covering object types, properties, units, errors, reliability, priority arrays, networking, services, and troubleshooting
+- Per-object-type drill-down via `bacnet://reference/object-types/{type}` template
+- Live state resources: `bacnet://state/devices`, `bacnet://state/local-objects`, `bacnet://state/config`
+
+An LLM connected via MCP can discover devices, read sensor values, diagnose networking issues, and troubleshoot alarms — with zero prior BACnet knowledge, using the built-in reference resources.
 
 ## Quick Start (JavaScript/WASM)
 
@@ -329,19 +315,18 @@ crates/
   bacnet-types/       Enums, primitives, errors
   bacnet-encoding/    ASN.1 tags, APDU/NPDU codec, segmentation
   bacnet-services/    30+ services across 24 modules (RP, WP, RPM, WPM, COV, etc.)
-  bacnet-transport/   BIP, BIP6, BACnet/SC + Hub, MS/TP, BBMD, Ethernet
+  bacnet-transport/   BIP, BIP6, BACnet/SC + Hub, MS/TP, BBMD, Ethernet, Loopback
   bacnet-network/     Network layer routing, router tables
   bacnet-client/      Async client with TSM, segmentation, discovery
-  bacnet-objects/     BACnetObject trait, ObjectDatabase, 64 object types
+  bacnet-objects/     BACnetObject trait, ObjectDatabase, 65 object types
   bacnet-server/      Async server (RP/WP/RPM/WPM/COV/Events/DCC/CreateObject/TimeSynchronization)
+  bacnet-gateway/     HTTP REST API + MCP server gateway (Axum + rmcp)
   bacnet-btl/         BTL compliance test harness (BTL Test Plan 26.1, 3808 tests, all 13 sections)
   rusty-bacnet/       Python bindings via PyO3 (client, server, hub)
-  bacnet-java/        Kotlin/Java bindings via UniFFI (client, server)
   bacnet-wasm/        WASM/JavaScript BACnet/SC thin client
   bacnet-cli/         CLI tool with interactive shell
-java/                 Gradle build for multi-platform JAR
 benchmarks/           Criterion benchmarks (9 suites) + Docker stress topology
-examples/             Rust, Python, Kotlin, and Docker examples
+examples/             Rust, Python, and Docker examples
 docs/                 API documentation and design plans
 ```
 
@@ -431,7 +416,7 @@ Coverage: 100% of all 13 BTL Test Plan sections (Basic BACnet, Objects, Data Sha
 ## Development
 
 ```bash
-# Run workspace tests (1,701 tests)
+# Run workspace tests (1,800+ tests)
 cargo test --workspace --exclude rusty-bacnet --exclude bacnet-wasm
 
 # Run BTL compliance tests (3,808 tests)
@@ -449,9 +434,6 @@ cargo check -p rusty-bacnet --tests
 # Check WASM bindings compile
 cargo check -p bacnet-wasm --target wasm32-unknown-unknown
 
-# Build Java/Kotlin JAR (local platform only)
-cd java && ./build-local.sh --release
-
 # License/advisory checks
 cargo deny check
 ```
@@ -460,10 +442,15 @@ Minimum Rust version: 1.93
 
 ## Documentation
 
-- [CLI Reference](docs/CLI.md)
-- [Rust API Reference](docs/rust-api.md)
-- [Python API Reference](docs/python-api.md)
-- [Benchmark Results](Benchmarks.md)
+- [Gateway Reference](docs/gateway.md) — HTTP REST API, MCP server, configuration, authentication
+- [Rust API Reference](docs/rust-api.md) — all 9 published crates with examples
+- [Python API Reference](docs/python-api.md) — 42+ async client methods, 61 server object types
+- [WASM/JS API Reference](docs/wasm-api.md) — BACnet/SC thin client for browsers
+- [CLI Reference](docs/CLI.md) — interactive shell and one-shot commands
+- [BTL Test Harness](docs/btl.md) — 3,808 compliance tests, 5 commands, Docker topologies
+- [Benchmark Results](Benchmarks.md) — 9 suites with throughput, latency, and memory
+- [Architecture Guide](docs/architecture.md) — crate graph, packet flow, concurrency model
+- [Changelog](CHANGELOG.md)
 - [Examples](examples/)
 
 ## License

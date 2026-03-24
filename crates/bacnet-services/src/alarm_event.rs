@@ -137,6 +137,8 @@ pub struct EventNotificationRequest {
     pub priority: u8,
     /// Event type (e.g., OUT_OF_RANGE = 5).
     pub event_type: u32,
+    /// Optional message text ([7]).
+    pub message_text: Option<String>,
     /// Notify type: ALARM(0), EVENT(1), ACK_NOTIFICATION(2).
     pub notify_type: u32,
     /// Whether the recipient must acknowledge.
@@ -165,7 +167,10 @@ impl EventNotificationRequest {
         primitives::encode_ctx_unsigned(buf, 5, self.priority as u64);
         // [6] eventType
         primitives::encode_ctx_enumerated(buf, 6, self.event_type);
-        // [7] messageText — omitted
+        // [7] messageText (optional)
+        if let Some(ref text) = self.message_text {
+            primitives::encode_ctx_character_string(buf, 7, text)?;
+        }
         // [8] notifyType
         primitives::encode_ctx_enumerated(buf, 8, self.notify_type);
         // [9] ackRequired (only for ALARM/EVENT)
@@ -246,7 +251,22 @@ impl EventNotificationRequest {
         let event_type = primitives::decode_unsigned(&data[pos..end])? as u32;
         offset = end;
 
-        // Skip [7] messageText if present
+        // [7] messageText (optional)
+        let mut message_text = None;
+        if offset < data.len() {
+            let (peek, peek_pos) = tags::decode_tag(data, offset)?;
+            if peek.is_context(7) {
+                let mt_end = peek_pos + peek.length as usize;
+                if mt_end <= data.len() {
+                    message_text = Some(primitives::decode_character_string(
+                        &data[peek_pos..mt_end],
+                    )?);
+                }
+                offset = mt_end;
+            }
+        }
+
+        // Skip any remaining tags before [8] notifyType
         let mut skip_count = 0u32;
         while offset < data.len() {
             skip_count += 1;
@@ -261,7 +281,6 @@ impl EventNotificationRequest {
                 break;
             }
             if peek.is_opening {
-                // Skip the entire constructed value (opening tag ... closing tag)
                 let (_, new_offset) = tags::extract_context_value(data, peek_pos, peek.number)?;
                 offset = new_offset;
             } else if peek.is_closing {
@@ -360,6 +379,7 @@ impl EventNotificationRequest {
             notification_class,
             priority,
             event_type,
+            message_text,
             notify_type,
             ack_required,
             from_state,
@@ -1784,8 +1804,38 @@ fn encode_property_states(buf: &mut BytesMut, state: &BACnetPropertyStates) {
         BACnetPropertyStates::LifeSafetyMode(v) => {
             primitives::encode_ctx_unsigned(buf, 12, *v as u64);
         }
+        BACnetPropertyStates::UnsignedValue(v) => {
+            primitives::encode_ctx_unsigned(buf, 11, *v as u64);
+        }
         BACnetPropertyStates::LifeSafetyState(v) => {
             primitives::encode_ctx_unsigned(buf, 13, *v as u64);
+        }
+        BACnetPropertyStates::DoorAlarmState(v) => {
+            primitives::encode_ctx_unsigned(buf, 14, *v as u64);
+        }
+        BACnetPropertyStates::Action(v) => {
+            primitives::encode_ctx_unsigned(buf, 15, *v as u64);
+        }
+        BACnetPropertyStates::DoorSecuredStatus(v) => {
+            primitives::encode_ctx_unsigned(buf, 16, *v as u64);
+        }
+        BACnetPropertyStates::DoorStatus(v) => {
+            primitives::encode_ctx_unsigned(buf, 17, *v as u64);
+        }
+        BACnetPropertyStates::DoorValue(v) => {
+            primitives::encode_ctx_unsigned(buf, 18, *v as u64);
+        }
+        BACnetPropertyStates::TimerState(v) => {
+            primitives::encode_ctx_unsigned(buf, 38, *v as u64);
+        }
+        BACnetPropertyStates::TimerTransition(v) => {
+            primitives::encode_ctx_unsigned(buf, 39, *v as u64);
+        }
+        BACnetPropertyStates::LiftCarDirection(v) => {
+            primitives::encode_ctx_unsigned(buf, 40, *v as u64);
+        }
+        BACnetPropertyStates::LiftCarDoorCommand(v) => {
+            primitives::encode_ctx_unsigned(buf, 42, *v as u64);
         }
         BACnetPropertyStates::Other { tag, data } => {
             primitives::encode_ctx_octet_string(buf, *tag, data);
@@ -1839,10 +1889,40 @@ fn decode_property_states(data: &[u8], pos: &mut usize) -> Result<BACnetProperty
         10 => Ok(BACnetPropertyStates::Units(
             primitives::decode_unsigned(content)? as u32,
         )),
+        11 => Ok(BACnetPropertyStates::UnsignedValue(
+            primitives::decode_unsigned(content)? as u32,
+        )),
         12 => Ok(BACnetPropertyStates::LifeSafetyMode(
             primitives::decode_unsigned(content)? as u32,
         )),
         13 => Ok(BACnetPropertyStates::LifeSafetyState(
+            primitives::decode_unsigned(content)? as u32,
+        )),
+        14 => Ok(BACnetPropertyStates::DoorAlarmState(
+            primitives::decode_unsigned(content)? as u32,
+        )),
+        15 => Ok(BACnetPropertyStates::Action(
+            primitives::decode_unsigned(content)? as u32,
+        )),
+        16 => Ok(BACnetPropertyStates::DoorSecuredStatus(
+            primitives::decode_unsigned(content)? as u32,
+        )),
+        17 => Ok(BACnetPropertyStates::DoorStatus(
+            primitives::decode_unsigned(content)? as u32,
+        )),
+        18 => Ok(BACnetPropertyStates::DoorValue(
+            primitives::decode_unsigned(content)? as u32,
+        )),
+        38 => Ok(BACnetPropertyStates::TimerState(
+            primitives::decode_unsigned(content)? as u32,
+        )),
+        39 => Ok(BACnetPropertyStates::TimerTransition(
+            primitives::decode_unsigned(content)? as u32,
+        )),
+        40 => Ok(BACnetPropertyStates::LiftCarDirection(
+            primitives::decode_unsigned(content)? as u32,
+        )),
+        42 => Ok(BACnetPropertyStates::LiftCarDoorCommand(
             primitives::decode_unsigned(content)? as u32,
         )),
         n => Ok(BACnetPropertyStates::Other {
@@ -2333,7 +2413,8 @@ mod tests {
             timestamp: BACnetTimeStamp::SequenceNumber(7),
             notification_class: 5,
             priority: 100,
-            event_type: 5,  // OUT_OF_RANGE
+            event_type: 5, // OUT_OF_RANGE
+            message_text: None,
             notify_type: 0, // ALARM
             ack_required: true,
             from_state: 0, // NORMAL
@@ -2388,6 +2469,7 @@ mod tests {
             notification_class: 5,
             priority: 100,
             event_type: 5,
+            message_text: None,
             notify_type: 0,
             ack_required: true,
             from_state: 0,
@@ -2423,6 +2505,7 @@ mod tests {
             notification_class: 5,
             priority: 100,
             event_type: 5,
+            message_text: None,
             notify_type: 0,
             ack_required: true,
             from_state: 0,
@@ -2513,6 +2596,7 @@ mod tests {
             notification_class: 5,
             priority: 100,
             event_type: 5,
+            message_text: None,
             notify_type: 0,
             ack_required: true,
             from_state: 0,
@@ -2536,6 +2620,7 @@ mod tests {
             notification_class: 5,
             priority: 100,
             event_type: 5,
+            message_text: None,
             notify_type: 0,
             ack_required: true,
             from_state: 0,
@@ -2559,6 +2644,7 @@ mod tests {
             notification_class: 5,
             priority: 100,
             event_type: 5,
+            message_text: None,
             notify_type: 0,
             ack_required: true,
             from_state: 0,
@@ -2608,6 +2694,7 @@ mod tests {
             notification_class: 5,
             priority: 100,
             event_type: 5,
+            message_text: None,
             notify_type: 0,
             ack_required: true,
             from_state: 0,

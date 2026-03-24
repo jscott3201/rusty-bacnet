@@ -439,19 +439,29 @@ pub struct BACnetPrescale {
 /// We represent common variants typed, uncommon as raw bytes.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BACnetPropertyStates {
-    BooleanValue(bool),   // [0]
-    BinaryValue(u32),     // [1] BACnetBinaryPV
-    EventType(u32),       // [2]
-    Polarity(u32),        // [3]
-    ProgramChange(u32),   // [4]
-    ProgramState(u32),    // [5]
-    ReasonForHalt(u32),   // [6]
-    Reliability(u32),     // [7]
-    State(u32),           // [8] BACnetEventState
-    SystemStatus(u32),    // [9]
-    Units(u32),           // [10]
-    LifeSafetyMode(u32),  // [12]
-    LifeSafetyState(u32), // [13]
+    BooleanValue(bool),      // [0]
+    BinaryValue(u32),        // [1] BACnetBinaryPV
+    EventType(u32),          // [2]
+    Polarity(u32),           // [3]
+    ProgramChange(u32),      // [4]
+    ProgramState(u32),       // [5]
+    ReasonForHalt(u32),      // [6]
+    Reliability(u32),        // [7]
+    State(u32),              // [8] BACnetEventState
+    SystemStatus(u32),       // [9]
+    Units(u32),              // [10]
+    UnsignedValue(u32),      // [11]
+    LifeSafetyMode(u32),     // [12]
+    LifeSafetyState(u32),    // [13]
+    DoorAlarmState(u32),     // [14]
+    Action(u32),             // [15]
+    DoorSecuredStatus(u32),  // [16]
+    DoorStatus(u32),         // [17]
+    DoorValue(u32),          // [18]
+    LiftCarDirection(u32),   // [40]
+    LiftCarDoorCommand(u32), // [42]
+    TimerState(u32),         // [38]
+    TimerTransition(u32),    // [39]
     /// Catch-all for uncommon variants.
     Other {
         tag: u8,

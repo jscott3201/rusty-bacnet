@@ -125,7 +125,8 @@ pub fn handle_read_property_multiple(
     for spec in &request.list_of_read_access_specs {
         let mut elements = Vec::new();
 
-        match db.get(&spec.object_identifier) {
+        let lookup_oid = resolve_device_wildcard(db, &spec.object_identifier);
+        match db.get(&lookup_oid) {
             Some(object) => {
                 for prop_ref in &spec.list_of_property_references {
                     let prop_ids: Vec<PropertyIdentifier> = match prop_ref.property_identifier {
@@ -405,10 +406,11 @@ pub fn handle_subscribe_cov_property(
     let request = SubscribeCOVPropertyRequest::decode(service_data)?;
 
     if request.is_cancellation() {
-        table.unsubscribe(
+        table.unsubscribe_property(
             source_mac,
             request.subscriber_process_identifier,
             request.monitored_object_identifier,
+            request.monitored_property_identifier,
         );
         return Ok(());
     }
@@ -686,14 +688,10 @@ pub fn handle_device_communication_control(
 ) -> Result<(EnableDisable, Option<u16>), Error> {
     let request = DeviceCommunicationControlRequest::decode(service_data)?;
     validate_password(dcc_password, &request.password)?;
-    if request.enable_disable == EnableDisable::DISABLE {
-        return Err(Error::Protocol {
-            class: ErrorClass::SERVICES.to_raw() as u32,
-            code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
-        });
-    }
     let new_state = if request.enable_disable == EnableDisable::ENABLE {
         0u8
+    } else if request.enable_disable == EnableDisable::DISABLE {
+        1u8
     } else if request.enable_disable == EnableDisable::DISABLE_INITIATION {
         2u8
     } else {
@@ -977,7 +975,24 @@ pub fn handle_get_enrollment_summary(
         }
 
         if let Some(ref pf) = request.priority_filter {
-            let priority = 0u8;
+            // Look up priority from the notification class object for the current event state
+            let priority = ObjectIdentifier::new(
+                bacnet_types::enums::ObjectType::NOTIFICATION_CLASS,
+                notification_class as u32,
+            )
+            .ok()
+            .and_then(|nc_oid| db.get(&nc_oid))
+            .and_then(|nc_obj| {
+                // PRIORITY property returns an array of 3 priorities (TO_OFFNORMAL, TO_FAULT, TO_NORMAL)
+                nc_obj
+                    .read_property(PropertyIdentifier::PRIORITY, Some(1))
+                    .ok()
+                    .and_then(|v| match v {
+                        PropertyValue::Unsigned(p) => Some(p as u8),
+                        _ => None,
+                    })
+            })
+            .unwrap_or(0);
             if priority < pf.min_priority || priority > pf.max_priority {
                 continue;
             }

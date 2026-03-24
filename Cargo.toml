@@ -12,15 +12,13 @@ members = [
     "crates/bacnet-integration-tests",
     "crates/rusty-bacnet",
     "crates/bacnet-wasm",
-    "crates/bacnet-java",
-    "crates/uniffi-bindgen",
-    "crates/bacnet-cli",
+"crates/bacnet-cli",
     "crates/bacnet-btl",
+    "crates/bacnet-gateway",
     "benchmarks",
 ]
 # rusty-bacnet is a cdylib — `cargo test` can't link it without Python.
 # bacnet-wasm is a cdylib — needs wasm32-unknown-unknown target.
-# bacnet-java is a cdylib — needs JNI/UniFFI at runtime.
 # bacnet-cli has heavy deps (rustyline, clap) — excluded from default builds.
 # bacnet-btl has heavy deps (rustyline, clap, server) — excluded from default builds.
 # Use `cargo check -p rusty-bacnet --tests` and `cargo check -p bacnet-wasm --target wasm32-unknown-unknown`.
@@ -38,7 +36,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.7.1"
+version = "0.8.0"
 edition = "2021"
 rust-version = "1.93"
 license = "MIT"
@@ -49,14 +47,14 @@ keywords = ["bacnet", "building-automation", "ashrae", "iot", "protocol"]
 categories = ["network-programming", "embedded"]
 
 [workspace.dependencies]
-bacnet-types = { version = "0.7.1", path = "crates/bacnet-types" }
-bacnet-encoding = { version = "0.7.1", path = "crates/bacnet-encoding" }
-bacnet-services = { version = "0.7.1", path = "crates/bacnet-services" }
-bacnet-transport = { version = "0.7.1", path = "crates/bacnet-transport" }
-bacnet-network = { version = "0.7.1", path = "crates/bacnet-network" }
-bacnet-client = { version = "0.7.1", path = "crates/bacnet-client" }
-bacnet-objects = { version = "0.7.1", path = "crates/bacnet-objects" }
-bacnet-server = { version = "0.7.1", path = "crates/bacnet-server" }
+bacnet-types = { version = "0.8.0", path = "crates/bacnet-types" }
+bacnet-encoding = { version = "0.8.0", path = "crates/bacnet-encoding" }
+bacnet-services = { version = "0.8.0", path = "crates/bacnet-services" }
+bacnet-transport = { version = "0.8.0", path = "crates/bacnet-transport" }
+bacnet-network = { version = "0.8.0", path = "crates/bacnet-network" }
+bacnet-client = { version = "0.8.0", path = "crates/bacnet-client" }
+bacnet-objects = { version = "0.8.0", path = "crates/bacnet-objects" }
+bacnet-server = { version = "0.8.0", path = "crates/bacnet-server" }
 thiserror = "2"
 bitflags = "2"
 bytes = "1"
@@ -65,13 +63,13 @@ tokio = "1"
 socket2 = "0.6"
 pyo3 = { version = "0.28", features = ["extension-module"] }
 pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
-tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
 tokio-rustls = "0.26"
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "logging", "std"] }
 rustls-native-certs = "0.8"
 futures-util = "0.3"
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
 smallvec = "1"
-criterion = { version = "0.5", features = ["async_tokio"] }
+criterion = { version = "0.8", features = ["async_tokio"] }
 sysinfo = "0.38"
 libc = "0.2"

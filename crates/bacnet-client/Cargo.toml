@@ -19,8 +19,10 @@ bytes.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["net", "rt", "sync", "macros", "time"] }
 tokio-rustls = { workspace = true, optional = true }
+futures-util = { workspace = true }
 
 [features]
+ipv6 = ["bacnet-transport/ipv6"]
 sc-tls = ["bacnet-transport/sc-tls", "tokio-rustls"]
 
 [dev-dependencies]

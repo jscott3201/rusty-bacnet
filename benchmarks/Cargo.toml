@@ -1,6 +1,6 @@
 [package]
 name = "bacnet-benchmarks"
-version = "0.7.1"
+version = "0.8.0"
 edition = "2021"
 publish = false
 
@@ -8,13 +8,13 @@ publish = false
 bacnet-types = { path = "../crates/bacnet-types" }
 bacnet-encoding = { path = "../crates/bacnet-encoding" }
 bacnet-services = { path = "../crates/bacnet-services" }
-bacnet-transport = { path = "../crates/bacnet-transport", features = ["sc-tls"] }
+bacnet-transport = { path = "../crates/bacnet-transport", features = ["sc-tls", "ipv6"] }
 bacnet-network = { path = "../crates/bacnet-network" }
-bacnet-client = { path = "../crates/bacnet-client", features = ["sc-tls"] }
+bacnet-client = { path = "../crates/bacnet-client", features = ["sc-tls", "ipv6"] }
 bacnet-objects = { path = "../crates/bacnet-objects" }
 bacnet-server = { path = "../crates/bacnet-server", features = ["sc-tls"] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time", "signal"] }
-criterion = { version = "0.5", features = ["async_tokio"] }
+criterion = { version = "0.8", features = ["async_tokio"] }
 bytes = "1"
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
 tokio-rustls = "0.26"
@@ -25,7 +25,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hdrhistogram = "7"
 console-subscriber = { version = "0.5", optional = true }
-rand = "0.9"
+rand = "0.10"
 tracing-subscriber = "0.3"
 
 [features]

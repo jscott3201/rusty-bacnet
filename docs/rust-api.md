@@ -107,7 +107,7 @@ use bacnet_encoding::npdu::{NpduHeader, encode_npdu, decode_npdu};
 
 ## bacnet-services
 
-25+ BACnet service modules with request/response encoding and decoding.
+23 BACnet service modules with request/response encoding and decoding.
 
 ### ReadProperty / WriteProperty
 
@@ -249,7 +249,8 @@ Transport-layer implementations. All implement the `TransportPort` trait.
 | (default) | all | BIP (UDP/IPv4) |
 | `ipv6` | all | BIP6 (UDP/IPv6 multicast) |
 | `sc-tls` | all | BACnet/SC (WebSocket + TLS) + SC Hub |
-| `serial` | Linux | MS/TP (serial token-passing) |
+| `serial` | all | MS/TP (serial token-passing via `tokio-serial`) |
+| `serial-gpio` | Linux | MS/TP + GPIO direction control (adds `gpiocdev`) |
 | `ethernet` | Linux | BACnet Ethernet (BPF) |
 
 ### BIP (IPv4)
@@ -301,6 +302,95 @@ let addr = hub.start().await?;  // Returns SocketAddr
 
 The SC hub is a TLS WebSocket relay. Both clients and servers connect to it as spoke nodes. Messages are routed by VMAC address.
 
+### MS/TP (Serial RS-485)
+
+MS/TP is a token-passing protocol over RS-485 serial, commonly used for field-level BACnet devices. The serial I/O is abstracted behind the `SerialPort` trait, with three RS-485 direction control modes.
+
+#### Auto-Direction (USB RS-485 Adapters)
+
+Most USB RS-485 adapters (FTDI, CH340, CP2102) handle direction switching in hardware — no configuration needed.
+
+```rust
+use bacnet_transport::mstp_serial::{TokioSerialPort, SerialConfig};
+
+let serial = TokioSerialPort::open(&SerialConfig {
+    port_name: "/dev/ttyUSB0".into(),   // Linux
+    // port_name: "/dev/cu.usbserial-xxx".into(),  // macOS
+    baud_rate: 76800,
+})?;
+
+// Use with BACnetClient or BACnetServer via generic_builder
+let client = BACnetClient::generic_builder()
+    .transport(MstpTransport::new(serial, 1, 127))  // station 1, max_master 127
+    .build()
+    .await?;
+```
+
+#### Kernel RS-485 Mode (Linux, RTS-based)
+
+When DE/RE is wired to the UART's RTS pin, the Linux kernel can toggle it automatically via the `TIOCSRS485` ioctl. Zero userspace overhead.
+
+```rust
+let serial = TokioSerialPort::open(&config)?;
+serial.enable_kernel_rs485(
+    false,  // invert_rts: false = RTS HIGH during TX
+    0,      // delay_before_send_us
+    0,      // delay_after_send_us
+)?;
+```
+
+#### GPIO Direction Control (RS-485 Hats)
+
+For RS-485 hats where DE/RE is wired to a GPIO pin (e.g., Seeed Studio RS-485 Shield on Raspberry Pi with GPIO18), use `GpioDirectionPort` to wrap any `SerialPort`. Requires the `serial-gpio` feature.
+
+```rust
+use bacnet_transport::mstp_serial::{GpioDirectionPort, TokioSerialPort, SerialConfig};
+
+let serial = TokioSerialPort::open(&SerialConfig {
+    port_name: "/dev/ttyS0".into(),
+    baud_rate: 76800,
+})?;
+
+// Wrap with GPIO direction control: gpiochip0, line 18, active-high
+let port = GpioDirectionPort::new(serial, "/dev/gpiochip0", 18, true)?;
+
+// Or with explicit post-TX delay (microseconds before switching to RX):
+let port = GpioDirectionPort::with_post_tx_delay(
+    serial, "/dev/gpiochip0", 18, true, 200,
+)?;
+```
+
+The `GpioDirectionPort` wrapper:
+- Sets GPIO to receive mode (DE deasserted) on creation
+- Switches to TX mode before each `write()`
+- Waits for optional post-TX delay after write completes
+- Switches back to RX mode after each `write()`
+- Uses the Linux GPIO character device (`/dev/gpiochipN`) via `gpiocdev` — not deprecated sysfs
+
+#### SerialPort Trait
+
+The MS/TP state machine is hardware-agnostic. Custom serial implementations (e.g., for testing) can implement:
+
+```rust
+pub trait SerialPort: Send + Sync + 'static {
+    fn write(&self, data: &[u8]) -> impl Future<Output = Result<(), Error>> + Send;
+    fn read(&self, buf: &mut [u8]) -> impl Future<Output = Result<usize, Error>> + Send;
+}
+```
+
+### Loopback Transport
+
+```rust
+use bacnet_transport::loopback::LoopbackTransport;
+
+let (side_a, side_b) = LoopbackTransport::pair(
+    vec![0x00, 0x01],  // MAC for side A
+    vec![0x00, 0x02],  // MAC for side B
+);
+```
+
+In-process channel-based transport for composing a gateway's client and server without real network sockets. `LoopbackTransport::pair()` creates two connected transports backed by `tokio::sync::mpsc` channels — sending on one delivers to the other. Available as `AnyTransport::Loopback` for use with the enum dispatch wrapper.
+
 ### AnyTransport (enum dispatch)
 
 ```rust
@@ -309,6 +399,8 @@ use bacnet_transport::mstp::NoSerial; // placeholder when serial feature is off
 
 let transport: AnyTransport<NoSerial> = AnyTransport::Bip(bip_transport);
 ```
+
+Variants: `Bip`, `Bip6`, `Mstp`, `Sc` (boxed), `Loopback`.
 
 ### BBMD
 
@@ -334,7 +426,7 @@ use bacnet_network::router::BACnetRouter;
 
 ## bacnet-objects
 
-BACnet object model: trait, database, and 62 object type implementations.
+BACnet object model: trait, database, and 65 object type implementations.
 
 ### BACnetObject Trait
 
@@ -366,7 +458,7 @@ let obj = db.get(&oid);                // Option<&dyn BACnetObject>
 let obj = db.get_mut(&oid);            // Option<&mut Box<dyn BACnetObject>>
 ```
 
-### Object Types (62)
+### Object Types (64)
 
 #### Core I/O (9)
 
@@ -416,12 +508,14 @@ let obj = db.get_mut(&oid);            // Option<&mut Box<dyn BACnetObject>>
 | `ChannelObject` | `::new(instance, name, channel_number)` |
 | `StagingObject` | `::new(instance, name, num_stages)` |
 
-#### Lighting (2)
+#### Lighting & Color (4)
 
 | Type | Constructor |
 |------|-------------|
 | `LightingOutputObject` | `::new(instance, name)` |
 | `BinaryLightingOutputObject` | `::new(instance, name)` |
+| `ColorObject` | `::new(instance, name)` |
+| `ColorTemperatureObject` | `::new(instance, name)` |
 
 #### Life Safety (2)
 
@@ -501,12 +595,31 @@ Async BACnet client with transaction state machine, segmentation, and discovery.
 ```rust
 use bacnet_client::client::BACnetClient;
 
+// Generic builder — accepts any pre-built TransportPort
 let client = BACnetClient::generic_builder()
     .transport(transport)
     .apdu_timeout_ms(6000)
     .build()
     .await?;
+
+// BIP-specific builder — constructs BipTransport from interface/port/broadcast
+let client = BACnetClient::bip_builder()
+    .interface(Ipv4Addr::UNSPECIFIED)
+    .port(0)
+    .broadcast_address(Ipv4Addr::BROADCAST)
+    .build()
+    .await?;
+
+// SC-specific builder (requires `sc-tls` feature)
+let client = BACnetClient::sc_builder()
+    .hub_url("wss://hub:1234")
+    .tls_config(tls_config)
+    .vmac([0, 1, 2, 3, 4, 5])
+    .build()
+    .await?;
 ```
+
+`BACnetClient::builder()` is an alias for `bip_builder()`.
 
 ### Property Access
 
@@ -654,9 +767,28 @@ Async BACnet server that hosts objects and dispatches incoming requests.
 ```rust
 use bacnet_server::server::BACnetServer;
 
+// Generic builder — accepts any pre-built TransportPort
 let server = BACnetServer::generic_builder()
     .database(db)
     .transport(transport)
+    .build()
+    .await?;
+
+// BIP-specific builder — constructs BipTransport from interface/port/broadcast
+let server = BACnetServer::bip_builder()
+    .database(db)
+    .interface(Ipv4Addr::UNSPECIFIED)
+    .port(0xBAC0)
+    .broadcast_address(Ipv4Addr::BROADCAST)
+    .build()
+    .await?;
+
+// SC-specific builder (requires `sc-tls` feature)
+let server = BACnetServer::sc_builder()
+    .database(db)
+    .hub_url("wss://hub:1234")
+    .tls_config(tls_config)
+    .vmac([0, 1, 2, 3, 4, 5])
     .build()
     .await?;
 
@@ -671,17 +803,36 @@ let state = server.comm_state(); // 0=Enable, 1=Disable, 2=DisableInitiation
 server.stop().await?;
 ```
 
+`BACnetServer::builder()` is an alias for `bip_builder()`.
+
 ### Handled Services
 
 The server automatically dispatches:
+
+**Confirmed:**
 - ReadProperty, WriteProperty
 - ReadPropertyMultiple, WritePropertyMultiple
-- SubscribeCOV (with COV notification engine)
-- WhoIs / IAm
-- GetEventInformation
-- DeviceCommunicationControl
+- SubscribeCOV, SubscribeCOVProperty, SubscribeCOVPropertyMultiple
 - CreateObject, DeleteObject
-- TimeSynchronization
+- DeviceCommunicationControl, ReinitializeDevice
+- GetEventInformation, AcknowledgeAlarm
+- GetAlarmSummary, GetEnrollmentSummary
+- ConfirmedTextMessage
+- LifeSafetyOperation
+- ReadRange
+- AtomicReadFile, AtomicWriteFile
+- AddListElement, RemoveListElement
+
+**Unconfirmed:**
+- WhoIs / IAm
+- WhoHas / IHave
+- TimeSynchronization, UTCTimeSynchronization
+- WriteGroup
+- UnconfirmedTextMessage
+
+**Outgoing (server-initiated):**
+- COV notifications (confirmed and unconfirmed, with ServerTsm retry for confirmed)
+- Event notifications (confirmed and unconfirmed, routed via NotificationClass recipients)
 
 ### Concurrency
 
@@ -689,6 +840,24 @@ The server automatically dispatches:
 - `seg_receivers` capped at 128 (DoS prevention)
 - `cov_in_flight` semaphore: max 255 concurrent confirmed COV notifications
 - `comm_state`: `Arc<AtomicU8>` — lock-free read
+
+---
+
+## bacnet-gateway
+
+BACnet HTTP REST API and MCP (Model Context Protocol) server gateway. Bridges BACnet networks to web clients and AI tools.
+
+### Feature Flags
+
+| Feature | Description |
+|---------|-------------|
+| `http` | Axum-based REST API (read/write properties, discover devices) |
+| `mcp` | MCP server for AI tool integration (via `rmcp`) |
+| `bin` | Binary target with CLI (`clap`), enables both `http` and `mcp` |
+| `sc-tls` | BACnet/SC transport support |
+| `serial` | MS/TP transport support (Linux only) |
+
+See `docs/gateway.md` for full REST API and MCP tool documentation.
 
 ---
 
@@ -718,12 +887,21 @@ use bacnet_transport::bip::BipTransport;
 use std::net::Ipv4Addr;
 
 // Client
-let client_transport = BipTransport::new(Ipv4Addr::UNSPECIFIED, 0, Ipv4Addr::BROADCAST);
-let client = BACnetClient::builder().transport(client_transport).build().await?;
+let client = BACnetClient::bip_builder()
+    .interface(Ipv4Addr::UNSPECIFIED)
+    .port(0)
+    .broadcast_address(Ipv4Addr::BROADCAST)
+    .build()
+    .await?;
 
 // Server
-let server_transport = BipTransport::new(Ipv4Addr::UNSPECIFIED, 0xBAC0, Ipv4Addr::BROADCAST);
-let server = BACnetServer::builder().database(db).transport(server_transport).build().await?;
+let server = BACnetServer::bip_builder()
+    .database(db)
+    .interface(Ipv4Addr::UNSPECIFIED)
+    .port(0xBAC0)
+    .broadcast_address(Ipv4Addr::BROADCAST)
+    .build()
+    .await?;
 ```
 
 ### BIP6 (IPv6)
@@ -733,7 +911,7 @@ use bacnet_transport::bip6::Bip6Transport;
 use std::net::Ipv6Addr;
 
 let transport = Bip6Transport::new(Ipv6Addr::UNSPECIFIED, 0xBAC0, None);
-let client = BACnetClient::builder().transport(transport).build().await?;
+let client = BACnetClient::generic_builder().transport(transport).build().await?;
 ```
 
 ### BACnet/SC with Hub
@@ -748,8 +926,47 @@ let hub = ScHub::new(listen_addr, tls_acceptor, [0xFF, 0, 0, 0, 0, 1]);
 let hub_addr = hub.start().await?;
 
 // Connect client to hub
-let tls = build_tls_config(ca_cert, Some(client_cert), Some(client_key))?;
-let ws = TlsWebSocket::connect(&format!("wss://127.0.0.1:{}", hub_addr.port()), tls).await?;
-let transport = ScTransport::new(ws, [0, 1, 2, 3, 4, 5]);
-let client = BACnetClient::builder().transport(transport).build().await?;
+let client = BACnetClient::sc_builder()
+    .hub_url(&format!("wss://127.0.0.1:{}", hub_addr.port()))
+    .tls_config(tls_config)
+    .vmac([0, 1, 2, 3, 4, 5])
+    .build()
+    .await?;
+```
+
+### MS/TP with USB Adapter
+
+```rust
+use bacnet_transport::mstp::MstpTransport;
+use bacnet_transport::mstp_serial::{TokioSerialPort, SerialConfig};
+
+let serial = TokioSerialPort::open(&SerialConfig {
+    port_name: "/dev/ttyUSB0".into(),
+    baud_rate: 76800,
+})?;
+
+let client = BACnetClient::generic_builder()
+    .transport(MstpTransport::new(serial, 1, 127))
+    .build()
+    .await?;
+```
+
+### MS/TP with Raspberry Pi RS-485 Hat (GPIO)
+
+```rust
+use bacnet_transport::mstp::MstpTransport;
+use bacnet_transport::mstp_serial::{GpioDirectionPort, TokioSerialPort, SerialConfig};
+
+let serial = TokioSerialPort::open(&SerialConfig {
+    port_name: "/dev/ttyS0".into(),
+    baud_rate: 76800,
+})?;
+
+// Seeed Studio RS-485 Shield: GPIO18 for DE/RE, active-high
+let port = GpioDirectionPort::new(serial, "/dev/gpiochip0", 18, true)?;
+
+let client = BACnetClient::generic_builder()
+    .transport(MstpTransport::new(port, 1, 127))
+    .build()
+    .await?;
 ```

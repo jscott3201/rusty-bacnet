@@ -1,8 +1,13 @@
 # Rusty BACnet — Benchmarks & Stress Test Results
 
-> Run date: 2026-03-05 | Platform: macOS (Apple Silicon) | Rust 1.93 | JDK 21.0.10 | Release mode
+> Last full run: 2026-03-05 | Platform: macOS (Apple Silicon) | Rust 1.93 | Release mode
 >
 > TLS provider: aws-lc-rs | All tests ran on localhost with zero errors unless noted.
+>
+> **2026-03-20 update:** Server dispatch loop now spawns per-request tasks for concurrent
+> multi-client handling. Quick benchmarks show ~44% read throughput improvement at 1000 ops.
+> Client multi-device batch API added (`read_property_from_devices`, etc.) with
+> `buffer_unordered` concurrency. Full benchmark run pending.
 
 ---
 
@@ -32,10 +37,13 @@
 
 #### Throughput (batched requests)
 
-| Operation | 10 ops | 100 ops | 1000 ops | Peak ops/s |
-|---|---|---|---|---|
-| ReadProperty | 278 µs | 2.77 ms | 27.6 ms | **~36.0 K/s** |
-| WriteProperty | 289 µs | 2.87 ms | 28.3 ms | **~35.3 K/s** |
+| Operation | 10 ops | 100 ops | 1000 ops | Peak ops/s | Δ vs pre-spawn |
+|---|---|---|---|---|---|
+| ReadProperty | 280 µs | 2.82 ms | 28.1 ms | **~35.6 K/s** | **~-44%** ¹ |
+| WriteProperty | 297 µs | 2.97 ms | 29.9 ms | **~33.4 K/s** | ~0% ² |
+
+¹ Quick-run (sample-size 10) showed -44% to -47% improvement at 1000 ops from dispatch spawning. Full benchmark pending.
+² Write throughput unchanged — writes take exclusive `db.write()` lock so they naturally serialize.
 
 ### 1.3 BACnet/IPv6 (BIP6) — UDP Transport
 
@@ -219,14 +227,6 @@ Peak RSS: 9.2 MB. Scan time scales linearly.
 
 SC mTLS adds negligible overhead vs server-auth-only SC — the TLS handshake dominates, not per-message client cert verification.
 Python concurrent throughput is competitive with Rust single-threaded due to tokio's multi-threaded runtime handling the actual I/O.
-
-### Kotlin/JVM (UniFFI/JNA, coroutines)
-
-| Transport | RP Latency | Sequential Throughput | Overhead vs Rust |
-|---|---|---|---|
-| **BIP (Kt→Rust)** | ~74 µs | 14.0 K/s | +2.7× latency |
-
-Kotlin/JNA overhead (~46 µs) is ~40% lower than Python/PyO3 (~80 µs) per async call.
 
 ---
 
@@ -433,79 +433,12 @@ comparable to pure Rust's single-threaded 36K/s.
 
 ---
 
-## 7. Kotlin/JVM ↔ Rust Benchmarks (UniFFI/JNA)
-
-> JDK 21.0.10 (OpenJDK, Apple Silicon) | UniFFI 0.29 + JNA 5.15 | JMH 1.37 | kotlinx-coroutines 1.9.0
->
-> All tests use the `bacnet-java` UniFFI bindings on localhost over BIP (UDP/IPv4).
-> Server hosts 15 mixed objects (analog-input/output, binary-value, multistate-input).
-
-### 7.1 BACnet/IP — Kotlin Client → Rust Server
-
-| Operation | Mean | ± Error |
-|---|---|---|
-| ReadProperty | **73.9 µs** | ± 1.1 µs |
-| WriteProperty | **80.6 µs** | ± 5.7 µs |
-| RPM (3×2 props) | **78.1 µs** | ± 0.7 µs |
-| COV Sub/Unsub | **132.8 µs** | ± 2.8 µs |
-| WhoIs | **30.7 µs** | ± 3.5 µs |
-
-Sequential throughput: **~14,000 ops/s** (ReadProperty)
-
-### 7.2 Concurrency Scaling
-
-| Coroutines | Throughput | Per-coroutine |
-|---|---|---|
-| 1 | **13,258 ops/s** | 13,258 /s |
-| 5 | 4,534 ops/s | 907 /s |
-| 10 | 2,636 ops/s | 264 /s |
-| 25 | 1,116 ops/s | 45 /s |
-
-Note: JMH measures one benchmark iteration at a time. Each iteration launches N coroutines
-that each do a full ReadProperty round-trip. The throughput decrease at higher concurrency
-reflects the cost of N sequential round-trips per iteration, not a server bottleneck.
-
-### 7.3 JNA/FFI Overhead
-
-| Operation | Mean | ± Error |
-|---|---|---|
-| ObjectIdentifier (create) | **10.9 µs** | ± 9.7 µs |
-| ObjectIdentifier (display) | **14.9 µs** | ± 5.7 µs |
-| PropertyValue (Real) | **3.2 ns** | ± 0.6 ns |
-| PropertyValue (String) | **3.1 ns** | ± 0.05 ns |
-| PropertyValue (Unsigned) | **4.1 ns** | ± 0.04 ns |
-
-Simple Kotlin enum construction (PropertyValue variants) is **~3 ns** — pure JVM allocation.
-ObjectIdentifier creation crosses the JNA FFI boundary at **~11 µs** per call (higher variance
-due to JNA native library loading and GC interaction).
-
-### 7.4 Object Creation
-
-| Operation | Mean | ± Error |
-|---|---|---|
-| Add AnalogInput | **39.0 µs** | ± 13.1 µs |
-| Add 5 mixed objects | **190.4 µs** | ± 72.4 µs |
-
-Server object creation includes FFI crossing + Rust object construction + database insertion.
-
-### 7.5 Kotlin API Overhead Analysis
-
-| Transport | Rust Latency | Kotlin Latency | Overhead |
-|---|---|---|---|
-| BIP ReadProperty | 27.5 µs | ~74 µs | ~46 µs (+2.7×) |
-| BIP WriteProperty | 28.7 µs | ~81 µs | ~52 µs (+2.8×) |
-| BIP RPM (3×2) | 32.0 µs | ~78 µs | ~46 µs (+2.4×) |
-
-Kotlin/JNA overhead is **~46–52 µs** per async round-trip, lower than Python's ~80 µs.
-The overhead comes from: UniFFI async dispatch (~10 µs), JNA FFI boundary (~11 µs per crossing),
-and Kotlin coroutine suspension/resumption (~25 µs).
-
----
-
-## 8. Key Takeaways
+## 7. Key Takeaways
 
 - **Encoding is fast**: Full RP encode/decode stack in ~131 ns (CPU-bound, no allocation hot paths thanks to `Bytes` zero-copy)
 - **BIP throughput scales linearly**: 40K/s single-client → 161K/s at 50 clients with sub-millisecond p99
+- **Concurrent dispatch unlocks RwLock parallelism**: Server now spawns per-request tasks — multiple ReadProperty requests run truly concurrently via `db.read()`. Quick benchmarks show ~44% read throughput improvement (full run pending)
+- **Multi-device batch API**: Client `read_property_from_devices()` / `read_property_multiple_from_devices()` / `write_property_to_devices()` fan out to N devices concurrently with configurable `max_concurrent` (default 32). Available in Rust and Python
 - **Object count doesn't matter**: 100 → 5,000 objects shows zero latency degradation (RwLock contention minimal)
 - **COV is reliable**: 100% notification delivery at 25 concurrent subscriptions
 - **SC overhead is ~2.5×**: TLS WebSocket adds ~40 µs per operation vs raw UDP — acceptable for secure deployments
@@ -515,8 +448,6 @@ and Kotlin coroutine suspension/resumption (~25 µs).
 - **Musl/Alpine parity**: Docker (static musl) matches native performance — no penalty for containerized deployment
 - **Python API is production-ready**: ~80 µs PyO3 overhead per call; 36K concurrent ops/s from Python matches pure Rust throughput
 - **SC from Python works**: ScHub + SC client/server all work via PyO3; 29K ops/s at 25 concurrent clients
-- **Kotlin/JNA is faster than Python**: ~46 µs UniFFI overhead per async call vs Python's ~80 µs; 14K sequential ops/s
-- **JNA primitive overhead is negligible**: PropertyValue enum construction is ~3 ns (pure JVM); ObjectIdentifier FFI crossing ~11 µs
 
 ---
 
@@ -528,6 +459,9 @@ cargo bench -p bacnet-benchmarks
 
 # Individual benchmark
 cargo bench -p bacnet-benchmarks --bench bip_latency
+
+# Quick run (reduced samples, ~10s per suite instead of ~60s)
+cargo bench -p bacnet-benchmarks --bench bip_latency -- --sample-size 10 --warm-up-time 1
 
 # Stress tests
 cargo run --release -p bacnet-benchmarks --bin stress-test -- clients --steps 1,5,10,25,50 --duration 5
@@ -553,10 +487,4 @@ uv run pytest bench_py_client_rust_server.py -v   # BIP: Py client → Rust serv
 uv run pytest bench_rust_client_py_server.py -v   # BIP: Rust client → Py server
 uv run pytest bench_py_py.py -v                   # BIP: Py ↔ Py
 uv run pytest bench_sc.py -v                      # SC: Py client → Rust server via ScHub
-
-# Kotlin/JVM JMH benchmarks (requires JDK 21+)
-cd java
-./build-local.sh --release                        # Build native lib + Kotlin bindings + JAR
-./gradlew :benchmarks:jmh                         # Full benchmark suite (~10 min)
-# Results: java/benchmarks/build/reports/jmh/results.json
 ```

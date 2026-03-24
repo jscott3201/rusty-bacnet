@@ -29,6 +29,10 @@ CLAUDE.md
 .cursor/
 .aider*
 .codeium/
+.superpowers/
+.mcp/
+.mcp.json
+mcp.json
 
 # Proprietary spec
 _spec/
@@ -43,16 +47,6 @@ Thumbs.db
 *.swp
 *.swo
 *~
-
-# Java/Gradle
-java/.gradle/
-java/build/
-java/benchmarks/.gradle/
-java/benchmarks/build/
-java/src/main/kotlin/uniffi/
-java/src/main/resources/darwin-*/
-java/src/main/resources/linux-*/
-java/src/main/resources/win32-*/
 
 # JavaScript/WASM
 node_modules/

@@ -7,6 +7,7 @@ use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 use bytes::{BufMut, Bytes, BytesMut};
 use std::collections::hash_map::RandomState;
+use std::collections::HashMap;
 use std::hash::{BuildHasher, Hasher};
 use std::net::{Ipv6Addr, SocketAddrV6};
 use std::sync::Arc;
@@ -174,11 +175,20 @@ pub fn decode_bvlc6(data: &[u8]) -> Result<Bvlc6Frame, Error> {
     let mut source_vmac = [0u8; 3];
     source_vmac.copy_from_slice(&data[4..7]);
 
-    let (destination_vmac, payload_start) = if function == Bvlc6Function::OriginalUnicast {
+    // These message types include a 3-byte destination/target VMAC after the source VMAC
+    let has_dest_vmac = matches!(
+        function,
+        Bvlc6Function::OriginalUnicast
+            | Bvlc6Function::AddressResolution
+            | Bvlc6Function::AddressResolutionAck
+            | Bvlc6Function::VirtualAddressResolutionAck
+    );
+
+    let (destination_vmac, payload_start) = if has_dest_vmac {
         if length < BVLC6_UNICAST_HEADER_LENGTH {
             return Err(Error::decoding(
                 7,
-                "BVLC6 unicast frame too short for destination VMAC",
+                "BVLC6 frame too short for destination VMAC",
             ));
         }
         let mut dest = [0u8; 3];
@@ -225,33 +235,60 @@ pub fn encode_bvlc6_original_broadcast(buf: &mut BytesMut, source_vmac: &Bip6Vma
     encode_bvlc6(buf, Bvlc6Function::OriginalBroadcast, source_vmac, npdu);
 }
 
-/// Encode a BVLC-IPv6 Virtual-Address-Resolution frame.
+/// Encode a BVLC-IPv6 Virtual-Address-Resolution frame (7 bytes, no payload).
 ///
-/// The payload is the queried VMAC (3 bytes). The source VMAC in the header
-/// is set to the querying node's own VMAC.
+/// Per spec Clause U.2.7: type(1) + function(1) + length(2) + source_vmac(3) = 7.
 pub fn encode_virtual_address_resolution(source_vmac: &Bip6Vmac) -> BytesMut {
-    let mut buf = BytesMut::with_capacity(BVLC6_HEADER_LENGTH + 3);
+    let mut buf = BytesMut::with_capacity(BVLC6_HEADER_LENGTH);
     encode_bvlc6(
         &mut buf,
         Bvlc6Function::VirtualAddressResolution,
         source_vmac,
-        source_vmac,
+        &[], // no payload
     );
     buf
 }
 
-/// Encode a BVLC-IPv6 Virtual-Address-Resolution-Ack frame.
+/// Encode a BVLC-IPv6 Virtual-Address-Resolution-Ack frame (10 bytes).
 ///
-/// Sent in response to a VirtualAddressResolution when the queried VMAC
-/// matches our own. The payload is our VMAC (3 bytes).
-pub fn encode_virtual_address_resolution_ack(source_vmac: &Bip6Vmac) -> BytesMut {
-    let mut buf = BytesMut::with_capacity(BVLC6_HEADER_LENGTH + 3);
-    encode_bvlc6(
-        &mut buf,
-        Bvlc6Function::VirtualAddressResolutionAck,
-        source_vmac,
-        source_vmac,
-    );
+/// Per spec Clause U.2.7A: includes the requester's VMAC as destination.
+/// type(1) + function(1) + length(2) + source_vmac(3) + dest_vmac(3) = 10.
+pub fn encode_virtual_address_resolution_ack(
+    source_vmac: &Bip6Vmac,
+    dest_vmac: &Bip6Vmac,
+) -> BytesMut {
+    let mut buf = BytesMut::with_capacity(BVLC6_UNICAST_HEADER_LENGTH);
+    buf.put_u8(BVLC6_TYPE);
+    buf.put_u8(Bvlc6Function::VirtualAddressResolutionAck.to_byte());
+    buf.put_u16(BVLC6_UNICAST_HEADER_LENGTH as u16);
+    buf.put_slice(source_vmac);
+    buf.put_slice(dest_vmac);
+    buf
+}
+
+/// Encode a BVLC-IPv6 Address-Resolution frame (10 bytes).
+///
+/// Per spec Clause U.2.4: includes the target VMAC to resolve.
+pub fn encode_address_resolution(source_vmac: &Bip6Vmac, target_vmac: &Bip6Vmac) -> BytesMut {
+    let mut buf = BytesMut::with_capacity(BVLC6_UNICAST_HEADER_LENGTH);
+    buf.put_u8(BVLC6_TYPE);
+    buf.put_u8(Bvlc6Function::AddressResolution.to_byte());
+    buf.put_u16(BVLC6_UNICAST_HEADER_LENGTH as u16);
+    buf.put_slice(source_vmac);
+    buf.put_slice(target_vmac);
+    buf
+}
+
+/// Encode a BVLC-IPv6 Address-Resolution-Ack frame (10 bytes).
+///
+/// Per spec Clause U.2.5: includes the requester's VMAC as destination.
+pub fn encode_address_resolution_ack(source_vmac: &Bip6Vmac, dest_vmac: &Bip6Vmac) -> BytesMut {
+    let mut buf = BytesMut::with_capacity(BVLC6_UNICAST_HEADER_LENGTH);
+    buf.put_u8(BVLC6_TYPE);
+    buf.put_u8(Bvlc6Function::AddressResolutionAck.to_byte());
+    buf.put_u16(BVLC6_UNICAST_HEADER_LENGTH as u16);
+    buf.put_slice(source_vmac);
+    buf.put_slice(dest_vmac);
     buf
 }
 
@@ -327,6 +364,41 @@ pub fn decode_bip6_mac(mac: &[u8]) -> Result<(Ipv6Addr, u16), Error> {
     Ok((ip, port))
 }
 
+/// VMAC-to-address mapping table per Clause U.5.
+/// Updated from incoming frames (learn-on-receive) and AR exchanges.
+#[derive(Debug, Clone)]
+struct VmacTable {
+    entries: Arc<tokio::sync::RwLock<HashMap<Bip6Vmac, SocketAddrV6>>>,
+}
+
+impl VmacTable {
+    fn new() -> Self {
+        Self {
+            entries: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+        }
+    }
+
+    /// Learn a VMAC-to-address mapping from an incoming frame.
+    async fn learn(&self, vmac: Bip6Vmac, addr: SocketAddrV6) {
+        self.entries.write().await.insert(vmac, addr);
+    }
+
+    /// Look up the B/IPv6 address for a VMAC.
+    #[allow(dead_code)] // used by AR exchange (future)
+    async fn lookup(&self, vmac: &Bip6Vmac) -> Option<SocketAddrV6> {
+        self.entries.read().await.get(vmac).copied()
+    }
+
+    /// Reverse lookup: find the VMAC for a B/IPv6 address.
+    async fn lookup_by_addr(&self, addr: &SocketAddrV6) -> Option<Bip6Vmac> {
+        let entries = self.entries.read().await;
+        entries
+            .iter()
+            .find(|(_, a)| *a == addr)
+            .map(|(vmac, _)| *vmac)
+    }
+}
+
 /// BACnet/IPv6 transport over UDP (Annex U).
 pub struct Bip6Transport {
     interface: Ipv6Addr,
@@ -336,6 +408,46 @@ pub struct Bip6Transport {
     source_vmac: Bip6Vmac,
     socket: Option<Arc<UdpSocket>>,
     recv_task: Option<JoinHandle<()>>,
+    /// VMAC address table (Clause U.5).
+    vmac_table: VmacTable,
+    /// Broadcast scope for send_broadcast.
+    broadcast_scope: Bip6BroadcastScope,
+    /// Foreign device BBMD configuration (optional).
+    foreign_device: Option<Bip6ForeignDeviceConfig>,
+    /// Foreign device re-registration task handle.
+    registration_task: Option<JoinHandle<()>>,
+}
+
+/// Configuration for BIPv6 foreign device registration.
+#[derive(Debug, Clone)]
+pub struct Bip6ForeignDeviceConfig {
+    /// BBMD IPv6 address to register with.
+    pub bbmd_ip: Ipv6Addr,
+    /// BBMD port.
+    pub bbmd_port: u16,
+    /// Time-to-live in seconds.
+    pub ttl: u16,
+}
+
+/// IPv6 multicast scope for BACnet broadcasts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bip6BroadcastScope {
+    /// FF02::BAC0 — link-local (single link only)
+    LinkLocal,
+    /// FF05::BAC0 — site-local (building/campus, default)
+    SiteLocal,
+    /// FF08::BAC0 — organization-local
+    OrganizationLocal,
+}
+
+impl Bip6BroadcastScope {
+    fn multicast_addr(&self) -> Ipv6Addr {
+        match self {
+            Self::LinkLocal => BACNET_IPV6_MULTICAST_LINK_LOCAL,
+            Self::SiteLocal => BACNET_IPV6_MULTICAST_SITE_LOCAL,
+            Self::OrganizationLocal => BACNET_IPV6_MULTICAST_ORG_LOCAL,
+        }
+    }
 }
 
 impl Bip6Transport {
@@ -344,7 +456,7 @@ impl Bip6Transport {
     /// - `interface`: Local IPv6 address to bind (use `::` for all interfaces)
     /// - `port`: UDP port (default 47808 / 0xBAC0)
     /// - `device_instance`: If `Some(id)`, derive the 3-byte VMAC from the
-    ///   lower 24 bits of the device instance (per Annex U.5). Otherwise the
+    ///   lower 22 bits of the device instance (per Clause H.7.2). Otherwise the
     ///   VMAC is derived from the local IPv6 address + port.
     pub fn new(interface: Ipv6Addr, port: u16, device_instance: Option<u32>) -> Self {
         Self {
@@ -355,13 +467,51 @@ impl Bip6Transport {
             source_vmac: [0; 3],
             socket: None,
             recv_task: None,
+            vmac_table: VmacTable::new(),
+            broadcast_scope: Bip6BroadcastScope::SiteLocal,
+            foreign_device: None,
+            registration_task: None,
         }
+    }
+
+    /// Set the broadcast scope for send_broadcast.
+    pub fn set_broadcast_scope(&mut self, scope: Bip6BroadcastScope) {
+        self.broadcast_scope = scope;
+    }
+
+    /// Configure this transport as a foreign device.
+    /// Must be called before `start()`.
+    pub fn register_as_foreign_device(&mut self, config: Bip6ForeignDeviceConfig) {
+        self.foreign_device = Some(config);
     }
 }
 
 /// Derive a 3-byte VMAC from the lower 24 bits of a device instance (Annex U.5).
+/// Send a Register-Foreign-Device message (Clause U.4.5).
+async fn send_register_foreign_device_v6(
+    socket: &UdpSocket,
+    bbmd_addr: SocketAddrV6,
+    ttl: u16,
+    source_vmac: &Bip6Vmac,
+) {
+    let mut buf = BytesMut::with_capacity(BVLC6_HEADER_LENGTH + 2);
+    encode_bvlc6(
+        &mut buf,
+        Bvlc6Function::RegisterForeignDevice,
+        source_vmac,
+        &ttl.to_be_bytes(),
+    );
+    if let Err(e) = socket.send_to(&buf, bbmd_addr).await {
+        warn!(error = %e, "BIP6: failed to send Register-Foreign-Device");
+    } else {
+        debug!(bbmd = %bbmd_addr, ttl = ttl, "BIP6: sent Register-Foreign-Device");
+    }
+}
+
 fn derive_vmac_from_device_instance(device_instance: u32) -> Bip6Vmac {
-    let bytes = device_instance.to_be_bytes(); // [b0, b1, b2, b3]
+    // Mask to 22 bits per Clause H.7.2 (BACnet device instances are 22-bit)
+    let masked = device_instance & 0x3FFFFF;
+    let bytes = masked.to_be_bytes(); // [b0, b1, b2, b3]
     [bytes[1], bytes[2], bytes[3]]
 }
 
@@ -453,6 +603,13 @@ fn resolve_interface_index(addr: &Ipv6Addr) -> Option<u32> {
 
 impl TransportPort for Bip6Transport {
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
+        if self.recv_task.is_some() {
+            return Err(Error::Transport(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "BIP6 transport already started",
+            )));
+        }
+
         let socket2_sock = socket2::Socket::new(
             socket2::Domain::IPV6,
             socket2::Type::DGRAM,
@@ -535,15 +692,12 @@ impl TransportPort for Bip6Transport {
                     {
                         Ok(Ok((len, _peer))) => {
                             if let Ok(frame) = decode_bvlc6(&check_buf[..len]) {
+                                // VAR-ACK from another node using our VMAC
                                 if frame.function == Bvlc6Function::VirtualAddressResolutionAck
-                                    && frame.payload.len() >= 3
+                                    && frame.source_vmac == self.source_vmac
                                 {
-                                    let their_vmac: Bip6Vmac =
-                                        frame.payload[..3].try_into().unwrap();
-                                    if their_vmac == self.source_vmac {
-                                        collision = true;
-                                        break;
-                                    }
+                                    collision = true;
+                                    break;
                                 }
                             }
                         }
@@ -579,11 +733,15 @@ impl TransportPort for Bip6Transport {
             }
         }
 
-        let (tx, rx) = mpsc::channel(256);
+        /// NPDU receive channel capacity for high-throughput UDP transports.
+        const NPDU_CHANNEL_CAPACITY: usize = 256;
+
+        let (tx, rx) = mpsc::channel(NPDU_CHANNEL_CAPACITY);
         let local_mac = self.local_mac;
 
         let source_vmac_copy = self.source_vmac;
         let socket_for_recv = Arc::clone(&socket);
+        let vmac_table_clone = self.vmac_table.clone();
         let recv_task = tokio::spawn(async move {
             let mut recv_buf = vec![0u8; 2048];
             loop {
@@ -591,76 +749,121 @@ impl TransportPort for Bip6Transport {
                     Ok((len, addr)) => {
                         let data = &recv_buf[..len];
                         match decode_bvlc6(data) {
-                            Ok(frame) => match frame.function {
-                                Bvlc6Function::OriginalUnicast
-                                | Bvlc6Function::OriginalBroadcast => {
-                                    let source_mac = if let std::net::SocketAddr::V6(v6) = addr {
-                                        MacAddr::from_slice(&encode_bip6_mac(*v6.ip(), v6.port()))
-                                    } else {
-                                        continue;
-                                    };
-                                    if source_mac[..] == local_mac[..] {
-                                        continue;
+                            Ok(frame) => {
+                                // Learn-on-receive: update VMAC table from every frame
+                                if frame.source_vmac != [0; 3] {
+                                    if let std::net::SocketAddr::V6(v6) = addr {
+                                        vmac_table_clone.learn(frame.source_vmac, v6).await;
                                     }
-                                    let _ = tx
-                                        .send(ReceivedNpdu {
-                                            npdu: frame.payload.clone(),
-                                            source_mac,
-                                            reply_tx: None,
-                                        })
-                                        .await;
                                 }
 
-                                Bvlc6Function::ForwardedNpdu => {
-                                    match decode_forwarded_npdu_payload(&frame.payload) {
-                                        Ok((originating_vmac, _source_addr, npdu_bytes)) => {
-                                            if npdu_bytes.is_empty() {
-                                                debug!(
-                                                    "ForwardedNpdu with no NPDU payload, ignoring"
-                                                );
-                                                continue;
-                                            }
-                                            let _ = tx
-                                                .send(ReceivedNpdu {
-                                                    npdu: Bytes::copy_from_slice(npdu_bytes),
-                                                    source_mac: MacAddr::from_slice(
-                                                        &originating_vmac,
-                                                    ),
-                                                    reply_tx: None,
-                                                })
-                                                .await;
+                                match frame.function {
+                                    Bvlc6Function::OriginalUnicast
+                                    | Bvlc6Function::OriginalBroadcast => {
+                                        let source_mac = if let std::net::SocketAddr::V6(v6) = addr
+                                        {
+                                            MacAddr::from_slice(&encode_bip6_mac(
+                                                *v6.ip(),
+                                                v6.port(),
+                                            ))
+                                        } else {
+                                            continue;
+                                        };
+                                        if source_mac[..] == local_mac[..] {
+                                            continue;
                                         }
-                                        Err(e) => {
-                                            debug!(
-                                                error = %e,
-                                                "Failed to decode ForwardedNpdu payload"
+                                        if tx
+                                            .try_send(ReceivedNpdu {
+                                                npdu: frame.payload.clone(),
+                                                source_mac,
+                                                reply_tx: None,
+                                            })
+                                            .is_err()
+                                        {
+                                            warn!(
+                                                "BIP6: NPDU channel full, dropping incoming frame"
                                             );
                                         }
                                     }
-                                }
 
-                                Bvlc6Function::VirtualAddressResolution => {
-                                    if frame.payload.len() >= 3 {
-                                        let query_vmac: Bip6Vmac =
-                                            frame.payload[..3].try_into().unwrap();
-                                        if query_vmac == source_vmac_copy {
+                                    Bvlc6Function::ForwardedNpdu => {
+                                        match decode_forwarded_npdu_payload(&frame.payload) {
+                                            Ok((originating_vmac, _source_addr, npdu_bytes)) => {
+                                                if npdu_bytes.is_empty() {
+                                                    debug!(
+                                                    "ForwardedNpdu with no NPDU payload, ignoring"
+                                                );
+                                                    continue;
+                                                }
+                                                if tx
+                                                    .try_send(ReceivedNpdu {
+                                                        npdu: Bytes::copy_from_slice(npdu_bytes),
+                                                        source_mac: MacAddr::from_slice(
+                                                            &originating_vmac,
+                                                        ),
+                                                        reply_tx: None,
+                                                    })
+                                                    .is_err()
+                                                {
+                                                    warn!("BIP6: NPDU channel full, dropping forwarded frame");
+                                                }
+                                            }
+                                            Err(e) => {
+                                                debug!(
+                                                    error = %e,
+                                                    "Failed to decode ForwardedNpdu payload"
+                                                );
+                                            }
+                                        }
+                                    }
+
+                                    Bvlc6Function::VirtualAddressResolution => {
+                                        // VAR: sender is checking if anyone else uses their VMAC.
+                                        // If the source VMAC matches ours, respond (collision).
+                                        if frame.source_vmac == source_vmac_copy {
                                             debug!(
                                                 vmac = ?source_vmac_copy,
                                                 "Received VAR for our VMAC, sending VAR-Ack"
                                             );
                                             let ack = encode_virtual_address_resolution_ack(
                                                 &source_vmac_copy,
+                                                &frame.source_vmac,
                                             );
                                             let _ = socket_for_recv.send_to(&ack, addr).await;
                                         }
                                     }
-                                }
 
-                                Bvlc6Function::VirtualAddressResolutionAck => {
-                                    if frame.payload.len() >= 3 {
-                                        let their_vmac: Bip6Vmac =
-                                            frame.payload[..3].try_into().unwrap();
-                                        if their_vmac == source_vmac_copy {
+                                    Bvlc6Function::AddressResolution => {
+                                        // AR: sender wants to know our B/IPv6 address from our VMAC.
+                                        // destination_vmac is the target being resolved.
+                                        if let Some(target) = frame.destination_vmac {
+                                            if target == source_vmac_copy {
+                                                debug!(
+                                                    vmac = ?source_vmac_copy,
+                                                    "Received AR for our VMAC, sending AR-Ack"
+                                                );
+                                                let ack = encode_address_resolution_ack(
+                                                    &source_vmac_copy,
+                                                    &frame.source_vmac,
+                                                );
+                                                let _ = socket_for_recv.send_to(&ack, addr).await;
+                                            }
+                                        }
+                                    }
+
+                                    Bvlc6Function::AddressResolutionAck => {
+                                        // AR-ACK: learn the sender's VMAC→address mapping
+                                        // (will be used by VMAC table in future)
+                                        debug!(
+                                            vmac = ?frame.source_vmac,
+                                            addr = %addr,
+                                            "Received AR-Ack"
+                                        );
+                                    }
+
+                                    Bvlc6Function::VirtualAddressResolutionAck => {
+                                        // VAR-ACK: someone responded to our collision check
+                                        if frame.source_vmac == source_vmac_copy {
                                             warn!(
                                                 vmac = ?source_vmac_copy,
                                                 "BIP6 VMAC collision detected! \
@@ -668,15 +871,33 @@ impl TransportPort for Bip6Transport {
                                             );
                                         }
                                     }
-                                }
 
-                                _ => {
-                                    debug!(
-                                        function = ?frame.function,
-                                        "Unhandled BVLC6 function (not yet implemented)"
-                                    );
+                                    Bvlc6Function::Result => {
+                                        // Log BVLC-Result for diagnostics
+                                        if frame.payload.len() >= 2 {
+                                            let result_code = u16::from_be_bytes([
+                                                frame.payload[0],
+                                                frame.payload[1],
+                                            ]);
+                                            if result_code == 0x0000 {
+                                                debug!("BIP6: BVLC-Result successful");
+                                            } else {
+                                                tracing::error!(
+                                                    code = result_code,
+                                                    "BIP6: BVLC-Result NAK"
+                                                );
+                                            }
+                                        }
+                                    }
+
+                                    _ => {
+                                        debug!(
+                                            function = ?frame.function,
+                                            "Unhandled BVLC6 function"
+                                        );
+                                    }
                                 }
-                            },
+                            }
                             Err(e) => {
                                 warn!(error = %e, "Failed to decode BVLC6 frame");
                             }
@@ -691,10 +912,38 @@ impl TransportPort for Bip6Transport {
         });
 
         self.recv_task = Some(recv_task);
+
+        // Start foreign device registration if configured
+        if let Some(fd) = &self.foreign_device {
+            let bbmd_addr = SocketAddrV6::new(fd.bbmd_ip, fd.bbmd_port, 0, 0);
+            let ttl = fd.ttl;
+            let sock = Arc::clone(&socket);
+            let source_vmac = self.source_vmac;
+
+            // Send initial registration
+            send_register_foreign_device_v6(&sock, bbmd_addr, ttl, &source_vmac).await;
+
+            // Re-register at TTL/2 interval
+            let interval = std::time::Duration::from_secs(((ttl as u64) / 2).max(30));
+            let reg_task = tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(interval);
+                ticker.tick().await; // Skip first immediate tick
+                loop {
+                    ticker.tick().await;
+                    send_register_foreign_device_v6(&sock, bbmd_addr, ttl, &source_vmac).await;
+                }
+            });
+            self.registration_task = Some(reg_task);
+        }
+
         Ok(rx)
     }
 
     async fn stop(&mut self) -> Result<(), Error> {
+        if let Some(task) = self.registration_task.take() {
+            task.abort();
+            let _ = task.await;
+        }
         if let Some(task) = self.recv_task.take() {
             task.abort();
             let _ = task.await;
@@ -716,8 +965,13 @@ impl TransportPort for Bip6Transport {
 
         let mut buf = BytesMut::with_capacity(BVLC6_UNICAST_HEADER_LENGTH + npdu.len());
         let source_vmac = self.source_vmac;
-        // Derive dest VMAC from lower 3 bytes of dest IPv6 address.
-        let dest_vmac: Bip6Vmac = [ip.octets()[13], ip.octets()[14], ip.octets()[15]];
+        // Look up destination VMAC from table (Clause U.5).
+        // Fall back to reverse address lookup, then [0; 3] (unknown).
+        let dest_vmac = self
+            .vmac_table
+            .lookup_by_addr(&dest)
+            .await
+            .unwrap_or([0; 3]);
         encode_bvlc6_original_unicast(&mut buf, &source_vmac, &dest_vmac, npdu);
 
         socket.send_to(&buf, dest).await.map_err(Error::Transport)?;
@@ -733,10 +987,27 @@ impl TransportPort for Bip6Transport {
             ))
         })?;
 
-        let dest = SocketAddrV6::new(BACNET_IPV6_MULTICAST_SITE_LOCAL, self.port, 0, 0);
-
-        let mut buf = BytesMut::with_capacity(BVLC6_HEADER_LENGTH + npdu.len());
         let source_vmac = self.source_vmac;
+
+        // In foreign device mode, use Distribute-Broadcast-To-Network via BBMD
+        if let Some(fd) = &self.foreign_device {
+            let bbmd_addr = SocketAddrV6::new(fd.bbmd_ip, fd.bbmd_port, 0, 0);
+            let mut buf = BytesMut::with_capacity(BVLC6_HEADER_LENGTH + npdu.len());
+            encode_bvlc6(
+                &mut buf,
+                Bvlc6Function::DistributeBroadcastToNetwork,
+                &source_vmac,
+                npdu,
+            );
+            socket
+                .send_to(&buf, bbmd_addr)
+                .await
+                .map_err(Error::Transport)?;
+            return Ok(());
+        }
+
+        let dest = SocketAddrV6::new(self.broadcast_scope.multicast_addr(), self.port, 0, 0);
+        let mut buf = BytesMut::with_capacity(BVLC6_HEADER_LENGTH + npdu.len());
         encode_bvlc6_original_broadcast(&mut buf, &source_vmac, npdu);
 
         socket.send_to(&buf, dest).await.map_err(Error::Transport)?;
@@ -877,39 +1148,75 @@ mod tests {
         let vmac: Bip6Vmac = [0xAA, 0xBB, 0xCC];
         let buf = encode_virtual_address_resolution(&vmac);
 
-        // Verify header
+        // VAR is 7 bytes: type(1) + function(1) + length(2) + source_vmac(3)
+        assert_eq!(buf.len(), BVLC6_HEADER_LENGTH);
         assert_eq!(buf[0], BVLC6_TYPE);
         assert_eq!(buf[1], Bvlc6Function::VirtualAddressResolution.to_byte());
         let total_len = u16::from_be_bytes([buf[2], buf[3]]) as usize;
-        assert_eq!(total_len, BVLC6_HEADER_LENGTH + 3);
-        // Source VMAC in header
+        assert_eq!(total_len, BVLC6_HEADER_LENGTH);
         assert_eq!(&buf[4..7], &vmac);
-        // Payload = queried VMAC
-        assert_eq!(&buf[7..10], &vmac);
 
-        // Round-trip decode
         let frame = decode_bvlc6(&buf).unwrap();
         assert_eq!(frame.function, Bvlc6Function::VirtualAddressResolution);
         assert_eq!(frame.source_vmac, vmac);
-        assert_eq!(&frame.payload[..], &vmac);
+        assert!(frame.payload.is_empty());
     }
 
     #[test]
     fn encode_decode_virtual_address_resolution_ack() {
-        let vmac: Bip6Vmac = [0x11, 0x22, 0x33];
-        let buf = encode_virtual_address_resolution_ack(&vmac);
+        let source: Bip6Vmac = [0x11, 0x22, 0x33];
+        let dest: Bip6Vmac = [0x44, 0x55, 0x66];
+        let buf = encode_virtual_address_resolution_ack(&source, &dest);
 
+        // VAR-ACK is 10 bytes: type(1)+function(1)+length(2)+source(3)+dest(3)
+        assert_eq!(buf.len(), BVLC6_UNICAST_HEADER_LENGTH);
         assert_eq!(buf[0], BVLC6_TYPE);
         assert_eq!(buf[1], Bvlc6Function::VirtualAddressResolutionAck.to_byte());
         let total_len = u16::from_be_bytes([buf[2], buf[3]]) as usize;
-        assert_eq!(total_len, BVLC6_HEADER_LENGTH + 3);
-        assert_eq!(&buf[4..7], &vmac);
-        assert_eq!(&buf[7..10], &vmac);
+        assert_eq!(total_len, BVLC6_UNICAST_HEADER_LENGTH);
+        assert_eq!(&buf[4..7], &source);
+        assert_eq!(&buf[7..10], &dest);
 
         let frame = decode_bvlc6(&buf).unwrap();
         assert_eq!(frame.function, Bvlc6Function::VirtualAddressResolutionAck);
-        assert_eq!(frame.source_vmac, vmac);
-        assert_eq!(&frame.payload[..], &vmac);
+        assert_eq!(frame.source_vmac, source);
+        assert_eq!(frame.destination_vmac, Some(dest));
+        assert!(frame.payload.is_empty());
+    }
+
+    #[test]
+    fn encode_decode_address_resolution() {
+        let source: Bip6Vmac = [0x01, 0x02, 0x03];
+        let target: Bip6Vmac = [0x04, 0x05, 0x06];
+        let buf = encode_address_resolution(&source, &target);
+
+        assert_eq!(buf.len(), BVLC6_UNICAST_HEADER_LENGTH);
+        let frame = decode_bvlc6(&buf).unwrap();
+        assert_eq!(frame.function, Bvlc6Function::AddressResolution);
+        assert_eq!(frame.source_vmac, source);
+        assert_eq!(frame.destination_vmac, Some(target));
+    }
+
+    #[test]
+    fn encode_decode_address_resolution_ack() {
+        let source: Bip6Vmac = [0x0A, 0x0B, 0x0C];
+        let dest: Bip6Vmac = [0x0D, 0x0E, 0x0F];
+        let buf = encode_address_resolution_ack(&source, &dest);
+
+        assert_eq!(buf.len(), BVLC6_UNICAST_HEADER_LENGTH);
+        let frame = decode_bvlc6(&buf).unwrap();
+        assert_eq!(frame.function, Bvlc6Function::AddressResolutionAck);
+        assert_eq!(frame.source_vmac, source);
+        assert_eq!(frame.destination_vmac, Some(dest));
+    }
+
+    #[test]
+    fn vmac_from_device_instance_masks_to_22_bits() {
+        let vmac = derive_vmac_from_device_instance(0x123456);
+        assert_eq!(vmac, [0x12, 0x34, 0x56]);
+        // Value > 22 bits — upper bits should be masked off
+        let vmac = derive_vmac_from_device_instance(0xFFFFFFFF);
+        assert_eq!(vmac, [0x3F, 0xFF, 0xFF]);
     }
 
     // --- ForwardedNpdu tests ---
@@ -1025,22 +1332,14 @@ mod tests {
 
     #[tokio::test]
     async fn bip6_var_response() {
-        // Verify that receiving a VirtualAddressResolution for our VMAC
-        // causes a VirtualAddressResolutionAck response.
+        // Verify that receiving a VAR from a node with the same VMAC
+        // causes a VAR-Ack response (collision detection per Clause U.5).
         let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(42));
         let _rx = transport.start().await.unwrap();
         let our_vmac = transport.source_vmac;
 
-        // Build a VAR frame querying our VMAC
-        let querier_vmac: Bip6Vmac = [0xFF, 0xFE, 0xFD];
-        let mut buf = BytesMut::new();
-        // The VAR payload is the queried VMAC (our VMAC)
-        encode_bvlc6(
-            &mut buf,
-            Bvlc6Function::VirtualAddressResolution,
-            &querier_vmac,
-            &our_vmac,
-        );
+        // Build a VAR frame from a node claiming our VMAC (collision scenario)
+        let buf = encode_virtual_address_resolution(&our_vmac);
 
         // Send VAR to the transport
         let checker = UdpSocket::bind("[::1]:0").await.unwrap();
@@ -1048,7 +1347,7 @@ mod tests {
         let dest = SocketAddrV6::new(Ipv6Addr::LOCALHOST, transport_port, 0, 0);
         checker.send_to(&buf, dest).await.unwrap();
 
-        // We should receive a VAR-Ack back
+        // We should receive a VAR-Ack back (confirming collision)
         let mut resp_buf = vec![0u8; 64];
         let result =
             tokio::time::timeout(Duration::from_secs(2), checker.recv_from(&mut resp_buf)).await;
@@ -1058,7 +1357,8 @@ mod tests {
                 let frame = decode_bvlc6(&resp_buf[..len]).unwrap();
                 assert_eq!(frame.function, Bvlc6Function::VirtualAddressResolutionAck);
                 assert_eq!(frame.source_vmac, our_vmac);
-                assert_eq!(&frame.payload[..3], &our_vmac);
+                // destination_vmac should be the querier's VMAC (same as ours)
+                assert_eq!(frame.destination_vmac, Some(our_vmac));
             }
             Ok(Err(e)) => panic!("recv error: {e}"),
             Err(_) => panic!("timeout waiting for VAR-Ack response"),

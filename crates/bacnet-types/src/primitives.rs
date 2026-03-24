@@ -240,6 +240,23 @@ bitflags::bitflags! {
     }
 }
 
+bitflags::bitflags! {
+    /// BACnet DaysOfWeek -- 7-bit bitstring (Clause 21).
+    ///
+    /// Bit 0 (MSB=0x40) = Monday, Bit 6 (0x01) = Sunday.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct DaysOfWeek: u8 {
+        const MONDAY    = 0b0100_0000;
+        const TUESDAY   = 0b0010_0000;
+        const WEDNESDAY = 0b0001_0000;
+        const THURSDAY  = 0b0000_1000;
+        const FRIDAY    = 0b0000_0100;
+        const SATURDAY  = 0b0000_0010;
+        const SUNDAY    = 0b0000_0001;
+        const ALL       = 0b0111_1111;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // PropertyValue -- sum type for BACnet property values
 // ---------------------------------------------------------------------------

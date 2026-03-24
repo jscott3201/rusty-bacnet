@@ -5,6 +5,213 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0]
+
+### Spec Compliance — BBMD & Router (ASHRAE 135-2020 Annex J, Clause 6)
+
+Deep-dive review of the BBMD and Router implementations identified 22 spec compliance issues. All fixed.
+
+#### Router — Congestion & Reachability (Clause 6.6.3)
+- **Fixed** router forwards traffic to busy networks — now checks `effective_reachability()` before forwarding and rejects with reason 2 (ROUTER_BUSY) per Clause 6.6.3.6
+- **Fixed** router forwards traffic to permanently unreachable networks — now rejects with reason 1 per Clause 6.6.3.5
+- **Fixed** Router-Busy-To-Network handler — now uses `mark_busy()` with 30-second auto-clear timer per Clause 6.6.3.6 (was permanent until Router-Available)
+- **Fixed** Router-Available-To-Network handler — now uses `mark_available()` per Clause 6.6.3.7
+- **Fixed** Router-Busy/Available not re-broadcast to other ports — now re-broadcasts per Clause 6.6.3.6/7
+- **Fixed** Reject-Message-To-Network removed routes — now differentiates by reason: reason 1 marks permanently unreachable (keeps entry), reason 2 marks busy with 30s timer per Clause 6.6.3.5
+- **Fixed** unknown network message types silently dropped — now sends Reject with reason 3 (UNKNOWN_MESSAGE_TYPE) per Clause 6.6.3.5
+- **Added** `busy_until: Option<Instant>` to `RouteEntry` for timestamp-based busy auto-clear
+- **Added** `effective_reachability()` with inline deadline check (avoids 90-second worst-case from sweep granularity)
+- **Added** `mark_busy()`, `mark_available()`, `mark_unreachable()`, `clear_expired_busy()` to `RouterTable`
+- **Added** message-too-long framework — `max_apdu_length` captured per port for future size validation
+
+#### Router — Route Management (Clause 6.6.3.2/3)
+- **Fixed** I-Am-Router-To-Network not re-broadcast when no new routes learned — now re-broadcasts unconditionally per Clause 6.6.3.3
+- **Fixed** anti-flapping logic blocked spec-required route updates from different ports — replaced `add_learned_stable` with `add_learned_with_flap_detection` that always accepts updates per Clause 6.6.3.2 ("last message wins") but logs rapid changes for operator visibility
+- **Fixed** `touch()` never called — learned routes now refreshed on every route lookup during forwarding, preventing active routes from being purged by the 5-minute aging sweep
+- **Added** flap detection fields (`flap_count`, `last_port_change`) to `RouteEntry` for observability
+
+#### Router — Network Messages (Clause 6.4)
+- **Added** Initialize-Routing-Table-Ack handler — learns routes from peer ACK responses per Clause 6.4.8
+- **Added** Network-Number-Is handler — detects and logs network number conflicts per Clause 6.6.3.12
+- **Added** explicit match arm for security messages (0x0A-0x11) — prevents incorrect rejection
+- **Changed** Establish-Connection-To-Network log level from `debug` to `info` with "not implemented" note
+
+#### BBMD (Annex J)
+- **Fixed** BBMD not included in its own BDT — `ensure_self_in_bdt()` auto-inserts local BBMD entry on `set_bdt()` per J.4.2
+- **Fixed** non-BBMD Forwarded-NPDU uses wrong source_mac — now uses originating address from frame (spec J.2.5) instead of UDP sender address; fixes cross-BBMD unicast for non-BBMD nodes
+- **Fixed** non-BBMD silently drops Distribute-Broadcast-To-Network — now sends NAK (0x0060) per J.4.5
+- **Fixed** Register-Foreign-Device with empty payload silently defaults TTL=0 — now validates payload >= 2 bytes and NAKs if short
+- **Added** BDT persistence — optional file-backed persistence via `set_bdt_persist_path()` using BDT wire encoding (no serde dependency)
+- **Improved** `forward_npdu` yields every 32 sends to avoid starving the recv loop with large FDT (up to 512 entries)
+
+#### TSM (Clause 5.4)
+- **Fixed** invoke ID leak on task cancellation — `TsmGuard` drop guard in `confirmed_request_inner` cleans up invoke IDs if the tokio task is aborted before normal completion
+
+### Spec Compliance — Transport Layer (ASHRAE 135-2020 Clauses 7-9, Annexes J, U, AB)
+
+Deep-dive review of all five transport implementations (BIP, BIPv6, BACnet/SC, Ethernet, MS/TP) identified 34 spec compliance issues. All addressed (31 fixed, 3 deferred as future features).
+
+#### MS/TP — State Machine (Clause 9.5)
+- **Fixed** IDLE state timeout used T_usage_timeout (20ms) instead of T_no_token (500ms) — node declared token lost 25x too quickly, causing premature token generation and bus collisions
+- **Fixed** WAIT_FOR_REPLY did not transition to DONE_WITH_TOKEN on receiving a reply — added ~255ms unnecessary latency to every confirmed MS/TP request
+- **Fixed** NoToken entry from PassToken timeout missing T_slot*TS per-station offset — multiple stations could simultaneously generate tokens
+- **Fixed** no source address validation on reply frames in WAIT_FOR_REPLY — a frame from the wrong station could be incorrectly accepted as a reply
+- **Fixed** ReplyPostponed frames (type 0x07) silently discarded — now transitions to DONE_WITH_TOKEN per Clause 9.5.6
+- **Added** T_frame_abort tracking — discards partial frames when inter-byte gap exceeds 60 bit times per Clause 9.3
+- **Added** `expected_reply_source` field to `MasterNode` for reply frame validation
+
+#### BACnet/IPv6 — VMAC & Address Resolution (Annex U)
+- **Fixed** Virtual-Address-Resolution wire format — was 10 bytes with duplicate VMAC payload, now 7 bytes per Clause U.2.7
+- **Fixed** Virtual-Address-Resolution-ACK — now accepts and encodes requester's destination VMAC (10 bytes per Clause U.2.7A)
+- **Fixed** `send_unicast` derived destination VMAC from IPv6 address bytes — now uses VMAC address table reverse lookup per Clause U.5
+- **Fixed** decoder only extracted destination VMAC for OriginalUnicast — now also extracts for AddressResolution, AddressResolutionAck, VirtualAddressResolutionAck
+- **Fixed** `derive_vmac_from_device_instance` did not mask to 22 bits per Clause H.7.2
+- **Added** `VmacTable` — VMAC-to-address mapping with learn-on-receive from all incoming frames per Clause U.5
+- **Added** Address-Resolution and Address-Resolution-ACK handlers in recv loop
+- **Added** `Bip6BroadcastScope` enum — configurable broadcast multicast scope (LinkLocal/SiteLocal/OrganizationLocal), default SiteLocal
+- **Added** `Bip6ForeignDeviceConfig` — foreign device registration with TTL/2 re-registration, Distribute-Broadcast-To-Network in FD mode
+- **Added** BVLC-Result handling in recv loop with NAK logging
+
+#### BACnet/SC — Client (Annex AB)
+- **Fixed** HeartbeatAck included unnecessary originating/destination VMACs — now omitted per AB.2.11
+- **Fixed** BVLC-Result parsing used payload-presence heuristic — now properly parses Result Code byte (0x00=ACK, 0x01=NAK) with error class/code extraction
+- **Fixed** ConnectAccept message_id not verified against ConnectRequest — now rejects mismatched responses per AB.3.1.3
+- **Fixed** `stop()` aborted task without DisconnectRequest — now sends DisconnectRequest with 2-second timeout before abort, clears shared state
+- **Added** Device UUID parsing from ConnectAccept payload (bytes 6..22), stored as `hub_device_uuid`
+- **Added** `build_heartbeat_ack()` method on `ScConnection` (extracted from inline recv loop construction)
+- **Added** `pending_connect_message_id` field for response verification
+
+#### BACnet/SC — Hub (Annex AB)
+- **Fixed** ConnectRequest accepted with >= 6 bytes — now requires exactly 26 bytes per AB.2.9, NAKs short payloads with MESSAGE_INCOMPLETE
+- **Fixed** pre-handshake messages silently dropped — now returns BVLC-Result NAK
+- **Fixed** unknown function codes silently ignored — now returns BVLC-Result NAK
+- **Fixed** broadcast relay was sequential — now parallel via `join_all` with per-client 5-second timeout
+- **Added** per-client `max_npdu` tracking from ConnectRequest — oversized NPDUs rejected on unicast relay
+- **Added** hub heartbeat initiation — periodic sweep (30s interval, 60s idle threshold) sends HeartbeatRequest to idle clients, removes clients on send failure
+- **Added** `HubClient` struct with `sink`, `max_npdu`, `last_activity` fields
+- **Added** `build_bvlc_result_nak()` helper for consistent NAK construction
+
+#### BACnet/SC — TLS (Annex AB.7.4)
+- **Changed** all `ClientConfig` builders to use `builder_with_protocol_versions(&[&TLS13])` — spec requires TLS 1.3
+
+#### Ethernet — LLC Commands (Clause 7.1)
+- **Added** XID and TEST command/response handling — Clause 7.1 "shall" requirement
+- **Added** `build_xid_response()` and `build_test_response()` frame builders
+- **Added** `check_llc_control()` helper for raw LLC control byte inspection
+- **Changed** BPF filter widened to accept UI, XID, and TEST control bytes (was UI only)
+- **Fixed** recv loop broke permanently on any error — now classifies transient (EAGAIN, EINTR, ENOBUFS) vs fatal errors
+
+#### BIP — Foreign Device (Annex J)
+- **Improved** BVLC-Result NAK handling — REGISTER_FOREIGN_DEVICE_NAK and DISTRIBUTE_BROADCAST_TO_NETWORK_NAK now logged at error level with specific messages
+
+#### Cross-Cutting Transport Improvements
+- **Fixed** BIP, BIP6, Ethernet `start()` leaked recv task and socket on double call — now returns error via `Option::take()` guard, matching SC/MS/TP/Loopback pattern
+- **Fixed** MS/TP and SC used `Error::Encoding` for "transport not started" — now uses `Error::Transport(NotConnected)`, matching BIP/BIP6/Ethernet
+- **Fixed** BIP, BIP6, Ethernet recv loops used `.await` on bounded channel send — now uses `try_send()` with warn log, preventing recv loop stall on slow consumers
+- **Fixed** MS/TP `stop()` left node queue and state intact — now clears queue and resets state
+- **Fixed** SC `stop()` left `ws_shared` and `connection` alive — now clears after disconnect
+- **Added** named `NPDU_CHANNEL_CAPACITY` constants in all transports (256 for BIP/BIP6/Ethernet/Loopback, 64 for SC/MS/TP) with documented rationale
+- **Changed** `bip6` module feature-gated behind `ipv6` feature flag — consistent with `ethernet` and `sc-tls` gating; propagated to bacnet-client, bacnet-java, bacnet-btl, bacnet-cli, benchmarks
+
+### Spec Compliance — Stack-Wide (ASHRAE 135-2020 Clauses 5, 6, 12, 13, 15, 16, 20)
+
+Deep-dive review of encoding, types, services, objects, client, server, and network layers identified 43 spec compliance issues. All critical/high/medium fixed.
+
+#### Encoding & APDU (Clause 20)
+- **Fixed** SegmentAck window size not clamped to 1-127 range on decode — now clamps with warning log per Clause 20.1.6
+- **Fixed** reserved max_apdu values silently accepted — now logs warning for non-standard values
+
+#### Types & Enums (Clause 21)
+- **Fixed** LifeSafetyOperation enum ordering — reset=4, reset-alarm=5, reset-fault=6, unsilence=7 per Table 12-54
+- **Added** LifeSafetyMode OEO values (15-19) per 135-2020 addendum
+- **Added** DaysOfWeek bitflags type for schedule encoding
+- **Added** 11 new BACnetPropertyStates variants (UnsignedValue, DoorAlarmState, Action, DoorSecuredStatus, DoorStatus, DoorValue, TimerState, TimerTransition, LiftCarDirection, LiftCarDoorCommand)
+
+#### Services (Clauses 13-16)
+- **Fixed** TextMessage tags — messagePriority and message use context tags [2] and [3] (were [3] and [4])
+- **Fixed** ReinitializeDevice password validation — SIZE(1..20) per Clause 16.4.1.1.5
+- **Added** `message_text: Option<String>` field to EventNotificationRequest with encode/decode per Clause 13.8.1
+- **Added** `RecipientProcess` struct and `enrollment_filter` field to GetEnrollmentSummaryRequest
+
+#### Objects (Clause 12)
+- **Fixed** StatusFlags IN_ALARM never set — all 9 event-capable object types (AI/AO/AV/BI/BO/BV/MSI/MSO/MSV) now compute IN_ALARM from `event_detector.event_state`
+- **Added** `compute_status_flags()` helper function for consistent StatusFlags computation across object types
+- **Added** ValueSourceTracking fields (VALUE_SOURCE, LAST_COMMAND_TIME) to AV, BO, BV, MSO, MSV
+- **Added** `set_overridden()` default method on BACnetObject trait
+
+#### Client (Clause 5.4)
+- **Fixed** per-window SegmentAck — tracks window position for correct sequence acknowledgment
+- **Fixed** duplicate segment handling in segmented response reassembly
+- **Fixed** negative SegmentAck uses `wrapping_sub(1)` for correct sequence arithmetic
+- **Added** Abort on unsupported segmented response when `segmented_response_accepted` is false
+- **Added** `segmented_response_accepted` parameter threading through dispatch_apdu/handle_segmented_complex_ack
+- **Added** device table auto-purge every 5 minutes for stale entries
+
+#### Server
+- **Fixed** COV notification `ack_required` flag — `notify_type == NotifyType::ALARM` (was `!= ACK_NOTIFICATION`)
+- **Fixed** DCC DISABLE now accepted — all 3 EnableDisable values work correctly per 135-2020
+- **Fixed** COVProperty cancel now calls `unsubscribe_property()` instead of `unsubscribe()`
+- **Fixed** RPM handler resolves device wildcard via `resolve_device_wildcard()`
+- **Fixed** GetEnrollmentSummary priority lookup reads from notification class object (was hardcoded 0)
+- **Fixed** intrinsic reporting silently non-functional — EVENT_ENABLE stored as BitString but read via `read_unsigned()`; added `read_event_enable()` helper handling both types
+- **Fixed** schedule tick passes UTC offset parameter for correct time computation
+- **Fixed** EventNotificationRequest now includes `message_text: None` field
+- **Added** `days_to_date()` helper for full datetime in trend log records
+
+#### Network (Clause 6)
+- **Fixed** remote broadcast self-delivery — router now delivers broadcast to local network layer
+- **Fixed** `is_network_message` passthrough in routing (was hardcoded false)
+- **Fixed** proprietary network messages (type >= 0x80) with DNET now forwarded correctly
+- **Fixed** Init-Routing-Table-Ack uses actual port_index (was hardcoded)
+
+### Python Bindings Improvements
+
+- **Rewritten** `.pyi` type stubs from scratch (826 → 1598 lines) — all 47 client methods, 62+ server methods, correct exception names, CovNotification class, PropertyValue constructors, all 65 ObjectType constants
+- **Added** `time_synchronization()` and `utc_time_synchronization()` methods
+- **Added** `who_is_directed()` for unicast WhoIs
+- **Added** auto-routing methods: `read_property_from_device()`, `read_property_multiple_from_device()`, `write_property_to_device()`, `write_property_multiple_to_device()`
+- **Added** `add_device()` for manual device table population
+- **Added** `discover(timeout_ms)` convenience method — combines WhoIs + sleep + discovered_devices
+- **Added** `PropertyValue.date()`, `.time()`, `.bit_string()`, `.list()` static constructors
+- **Added** structured error attributes — `BacnetProtocolError.error_class`/`.error_code`, `BacnetRejectError.reason`, `BacnetAbortError.reason`
+- **Added** `dcc_password` and `reinit_password` parameters to `BACnetServer` constructor
+
+### Added
+- **New crate: `bacnet-gateway`** — HTTP REST API and MCP (Model Context Protocol) server for BACnet networks
+  - REST API at `/api/v1/` with endpoints for device discovery, property read/write, local object CRUD, and health check
+  - MCP server at `/mcp` with 10 tools for LLM-driven BACnet interaction
+  - MCP reference knowledge base — 9 static resources plus per-object-type drill-down templates
+  - Pluggable authentication with bearer token, TOML configuration with CLI overrides
+  - Feature-gated: `http`, `mcp`, `bin` — zero web deps by default
+- **`LoopbackTransport`** in `bacnet-transport` — in-process transport for gateway client/server composition
+- **RS-485 GPIO direction control** — `GpioDirectionPort<S>` wrapper with configurable `post_tx_delay_us`, kernel RS-485 ioctl on `TokioSerialPort`
+- **Client batch operations** — `read_property_from_devices()`, `read_property_multiple_from_devices()`, `write_property_to_devices()` with `buffer_unordered(max_concurrent)` for concurrent multi-device I/O
+- **Client auto-routing** — `resolve_device()` helper + `_from_device` variants for RP, RPM, WP, WPM
+- **Server concurrent dispatch** — spawns per-request tasks for ConfirmedRequest/UnconfirmedRequest, enabling concurrent `db.read()` from multiple clients
+- **Architecture documentation** — `docs/architecture.md`, expanded `docs/rust-api.md`, `docs/gateway.md`, `docs/btl.md`, `docs/wasm-api.md`
+
+### Changed
+- **Dependencies updated** — criterion 0.5→0.8, tokio-tungstenite 0.28→0.29, rand 0.9→0.10, rustyline 15→17, toml 0.8→1.0, rcgen 0.13→0.14, aws-lc-sys 0.38→0.39, rustls-webpki 0.103.9→0.103.10
+- **Security advisories resolved** — aws-lc-sys X.509 name constraints bypass, CRL distribution point logic errors; rustls-webpki CRL scope check
+
+### Removed
+- **Java/Kotlin bindings** — removed `bacnet-java` crate, `uniffi-bindgen` crate, `java/` Gradle project, `examples/kotlin/`, and all associated CI jobs (no user base; maintenance burden)
+
+## [0.7.2]
+
+### Added
+- **New crate: `bacnet-gateway`** — HTTP REST API and MCP (Model Context Protocol) server for BACnet networks
+  - REST API at `/api/v1/` with endpoints for device discovery, property read/write, local object CRUD, and health check
+  - MCP server at `/mcp` with 10 tools for LLM-driven BACnet interaction (discover_devices, read/write_property, list/read/write/create/delete local objects)
+  - MCP reference knowledge base — 9 static resources teaching BACnet concepts (object types, properties, units, errors, reliability, priority array, networking, services, troubleshooting) plus per-object-type drill-down templates
+  - 3 live state MCP resources (devices, local-objects, config)
+  - Pluggable authentication with bearer token default, applied to both REST and MCP endpoints
+  - TOML configuration with CLI overrides, config validation (reserved network numbers, mutual exclusivity checks)
+  - Feature-gated binary (`--features bin`) with graceful shutdown, tracing, `--no-mcp`/`--no-api` flags
+  - 13 supported object types for local creation (analog/binary/multi-state I/O/V, integer, large-analog, positive-integer, characterstring values)
+- **`LoopbackTransport`** in `bacnet-transport` — in-process transport backed by mpsc channels for gateway client/server composition
+- **`AnyTransport::Loopback`** variant for mixed-transport routing with loopback ports
+
 ## [0.7.1]
 
 ### Fixed

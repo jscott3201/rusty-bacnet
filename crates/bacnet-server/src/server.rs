@@ -233,6 +233,12 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
         self
     }
 
+    /// Set the vendor identifier (used in IAm responses and protocol operations).
+    pub fn vendor_id(mut self, id: u16) -> Self {
+        self.config.vendor_id = id;
+        self
+    }
+
     /// Build and start the server.
     pub async fn build(self) -> Result<BACnetServer<T>, Error> {
         let transport = self
@@ -527,7 +533,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let server_tsm_dispatch = Arc::clone(&server_tsm);
         let comm_state_dispatch = Arc::clone(&comm_state);
         let dcc_timer_dispatch = Arc::clone(&dcc_timer);
-        let config_dispatch = config.clone();
+        let config_dispatch = Arc::new(config.clone());
 
         let dispatch_task = tokio::spawn(async move {
             let mut apdu_rx = apdu_rx;
@@ -827,7 +833,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
             loop {
                 interval.tick().await;
-                crate::schedule::tick_schedules(&db_schedule).await;
+                // TODO: Read UTC_Offset from Device object for local time
+                crate::schedule::tick_schedules(&db_schedule, 0).await;
             }
         }));
 
@@ -907,6 +914,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     }
 
     /// Dispatch a received APDU.
+    ///
+    /// ConfirmedRequest and UnconfirmedRequest handlers are spawned as
+    /// independent tasks so the dispatch loop can immediately process the
+    /// next incoming APDU.  This allows the server to handle multiple
+    /// client requests concurrently (e.g. concurrent ReadProperty via
+    /// the RwLock on ObjectDatabase).
+    ///
+    /// Fast-path APDU types (SimpleAck, Error, Reject, Abort, SegmentAck)
+    /// remain inline since they are sub-microsecond TSM lookups.
     #[allow(clippy::too_many_arguments)]
     async fn dispatch(
         db: &Arc<RwLock<ObjectDatabase>>,
@@ -917,7 +933,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         server_tsm: &Arc<Mutex<ServerTsm>>,
         comm_state: &Arc<AtomicU8>,
         dcc_timer: &Arc<Mutex<Option<JoinHandle<()>>>>,
-        config: &ServerConfig,
+        config: &Arc<ServerConfig>,
         source_mac: &[u8],
         apdu: Apdu,
         mut received: bacnet_network::layer::ReceivedApdu,
@@ -925,28 +941,53 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         match apdu {
             Apdu::ConfirmedRequest(req) => {
                 let reply_tx = received.reply_tx.take();
-                Self::handle_confirmed_request(
-                    db,
-                    network,
-                    cov_table,
-                    seg_ack_senders,
-                    cov_in_flight,
-                    server_tsm,
-                    comm_state,
-                    dcc_timer,
-                    config,
-                    source_mac,
-                    req,
-                    reply_tx,
-                )
-                .await;
+                let db = Arc::clone(db);
+                let network = Arc::clone(network);
+                let cov_table = Arc::clone(cov_table);
+                let seg_ack_senders = Arc::clone(seg_ack_senders);
+                let cov_in_flight = Arc::clone(cov_in_flight);
+                let server_tsm = Arc::clone(server_tsm);
+                let comm_state = Arc::clone(comm_state);
+                let dcc_timer = Arc::clone(dcc_timer);
+                let config = Arc::clone(config);
+                let source_mac = MacAddr::from_slice(source_mac);
+                tokio::spawn(async move {
+                    Self::handle_confirmed_request(
+                        &db,
+                        &network,
+                        &cov_table,
+                        &seg_ack_senders,
+                        &cov_in_flight,
+                        &server_tsm,
+                        &comm_state,
+                        &dcc_timer,
+                        &config,
+                        &source_mac,
+                        req,
+                        reply_tx,
+                    )
+                    .await;
+                });
             }
             Apdu::UnconfirmedRequest(req) => {
-                Self::handle_unconfirmed_request(db, network, config, comm_state, req, &received)
+                let db = Arc::clone(db);
+                let network = Arc::clone(network);
+                let config = Arc::clone(config);
+                let comm_state = Arc::clone(comm_state);
+                tokio::spawn(async move {
+                    Self::handle_unconfirmed_request(
+                        &db,
+                        &network,
+                        &config,
+                        &comm_state,
+                        req,
+                        &received,
+                    )
                     .await;
+                });
             }
+            // Fast paths — remain inline (sub-microsecond TSM lookups)
             Apdu::SimpleAck(sa) => {
-                // Correlate with pending confirmed COV notification.
                 let mut tsm = server_tsm.lock().await;
                 tsm.record_result(sa.invoke_id, CovAckResult::Ack);
                 debug!(
@@ -955,7 +996,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 );
             }
             Apdu::Error(err) => {
-                // Correlate with pending confirmed COV notification.
                 let mut tsm = server_tsm.lock().await;
                 tsm.record_result(err.invoke_id, CovAckResult::Error);
                 debug!(
@@ -966,7 +1006,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 );
             }
             Apdu::Reject(rej) => {
-                // Treat Reject like Error for COV TSM purposes.
                 let mut tsm = server_tsm.lock().await;
                 tsm.record_result(rej.invoke_id, CovAckResult::Error);
                 debug!(
@@ -975,7 +1014,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 );
             }
             Apdu::Abort(abort) if !abort.sent_by_server => {
-                // Client-sent Abort for our outgoing request.
                 let mut tsm = server_tsm.lock().await;
                 tsm.record_result(abort.invoke_id, CovAckResult::Error);
                 debug!(
@@ -1831,8 +1869,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 notification_class,
                 priority,
                 event_type: change.event_type().to_raw(),
+                message_text: None,
                 notify_type,
-                ack_required: notify_type != NotifyType::ACK_NOTIFICATION.to_raw(),
+                ack_required: notify_type == NotifyType::ALARM.to_raw(),
                 from_state: change.from.to_raw(),
                 to_state: change.to.to_raw(),
                 event_values: None,

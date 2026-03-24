@@ -3,7 +3,7 @@
 
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
+use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
@@ -106,6 +106,14 @@ impl BACnetObject for MultiStateInputObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        if property == PropertyIdentifier::STATUS_FLAGS {
+            return Ok(common::compute_status_flags(
+                self.status_flags,
+                self.reliability,
+                self.out_of_service,
+                self.event_detector.event_state.to_raw(),
+            ));
+        }
         if let Some(result) = read_common_properties!(self, property, array_index) {
             return result;
         }
@@ -254,6 +262,8 @@ pub struct MultiStateOutputObject {
     fault_values: Vec<u32>,
     /// CHANGE_OF_STATE event detector.
     event_detector: ChangeOfStateDetector,
+    /// Value source tracking (optional per spec — exposed via VALUE_SOURCE property).
+    value_source: common::ValueSourceTracking,
 }
 
 impl MultiStateOutputObject {
@@ -280,6 +290,7 @@ impl MultiStateOutputObject {
             alarm_values: Vec::new(),
             fault_values: Vec::new(),
             event_detector: ChangeOfStateDetector::default(),
+            value_source: common::ValueSourceTracking::default(),
         })
     }
 
@@ -316,6 +327,14 @@ impl BACnetObject for MultiStateOutputObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        if property == PropertyIdentifier::STATUS_FLAGS {
+            return Ok(common::compute_status_flags(
+                self.status_flags,
+                self.reliability,
+                self.out_of_service,
+                self.event_detector.event_state.to_raw(),
+            ));
+        }
         if let Some(result) = read_common_properties!(self, property, array_index) {
             return result;
         }
@@ -332,6 +351,15 @@ impl BACnetObject for MultiStateOutputObject {
             p if p == PropertyIdentifier::NUMBER_OF_STATES => {
                 Ok(PropertyValue::Unsigned(self.number_of_states as u64))
             }
+            p if p == PropertyIdentifier::VALUE_SOURCE => {
+                Ok(self.value_source.value_source.clone())
+            }
+            p if p == PropertyIdentifier::LAST_COMMAND_TIME => Ok(PropertyValue::Unsigned(
+                match self.value_source.last_command_time {
+                    BACnetTimeStamp::SequenceNumber(n) => n,
+                    _ => 0,
+                },
+            )),
             p if p == PropertyIdentifier::PRIORITY_ARRAY => {
                 common::read_priority_array!(self, array_index, |v: u32| PropertyValue::Unsigned(
                     v as u64
@@ -493,6 +521,8 @@ pub struct MultiStateValueObject {
     fault_values: Vec<u32>,
     /// CHANGE_OF_STATE event detector.
     event_detector: ChangeOfStateDetector,
+    /// Value source tracking (optional per spec — exposed via VALUE_SOURCE property).
+    value_source: common::ValueSourceTracking,
 }
 
 impl MultiStateValueObject {
@@ -519,6 +549,7 @@ impl MultiStateValueObject {
             alarm_values: Vec::new(),
             fault_values: Vec::new(),
             event_detector: ChangeOfStateDetector::default(),
+            value_source: common::ValueSourceTracking::default(),
         })
     }
 
@@ -555,6 +586,14 @@ impl BACnetObject for MultiStateValueObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        if property == PropertyIdentifier::STATUS_FLAGS {
+            return Ok(common::compute_status_flags(
+                self.status_flags,
+                self.reliability,
+                self.out_of_service,
+                self.event_detector.event_state.to_raw(),
+            ));
+        }
         if let Some(result) = read_common_properties!(self, property, array_index) {
             return result;
         }
@@ -571,6 +610,15 @@ impl BACnetObject for MultiStateValueObject {
             p if p == PropertyIdentifier::NUMBER_OF_STATES => {
                 Ok(PropertyValue::Unsigned(self.number_of_states as u64))
             }
+            p if p == PropertyIdentifier::VALUE_SOURCE => {
+                Ok(self.value_source.value_source.clone())
+            }
+            p if p == PropertyIdentifier::LAST_COMMAND_TIME => Ok(PropertyValue::Unsigned(
+                match self.value_source.last_command_time {
+                    BACnetTimeStamp::SequenceNumber(n) => n,
+                    _ => 0,
+                },
+            )),
             p if p == PropertyIdentifier::PRIORITY_ARRAY => {
                 common::read_priority_array!(self, array_index, |v: u32| PropertyValue::Unsigned(
                     v as u64

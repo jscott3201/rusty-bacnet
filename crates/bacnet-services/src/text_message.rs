@@ -50,10 +50,10 @@ impl TextMessageRequest {
             }
             tags::encode_closing_tag(buf, 1);
         }
-        // [3] messagePriority
-        primitives::encode_ctx_enumerated(buf, 3, self.message_priority.to_raw());
-        // [4] message
-        primitives::encode_ctx_character_string(buf, 4, &self.message)?;
+        // [2] messagePriority (per Clause 16.5/16.6 ASN.1)
+        primitives::encode_ctx_enumerated(buf, 2, self.message_priority.to_raw());
+        // [3] message
+        primitives::encode_ctx_character_string(buf, 3, &self.message)?;
         Ok(())
     }
 
@@ -96,7 +96,7 @@ impl TextMessageRequest {
             }
         }
 
-        // [3] messagePriority
+        // [2] messagePriority (per Clause 16.5/16.6 ASN.1)
         let (tag, pos) = tags::decode_tag(data, offset)?;
         let end = pos + tag.length as usize;
         if end > data.len() {
@@ -109,7 +109,7 @@ impl TextMessageRequest {
             MessagePriority::from_raw(primitives::decode_unsigned(&data[pos..end])? as u32);
         offset = end;
 
-        // [4] message
+        // [3] message
         let (tag, pos) = tags::decode_tag(data, offset)?;
         let end = pos + tag.length as usize;
         if end > data.len() {

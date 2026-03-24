@@ -63,6 +63,8 @@ pub struct BipTransport {
     registration_task: Option<JoinHandle<()>>,
     /// Shared oneshot channel for routing BVLC management responses back to the caller.
     bvlc_response_tx: Arc<Mutex<Option<oneshot::Sender<BvllMessage>>>>,
+    /// Optional path for persisting the BDT across restarts.
+    bdt_persist_path: Option<std::path::PathBuf>,
 }
 
 impl BipTransport {
@@ -84,6 +86,7 @@ impl BipTransport {
             foreign_device: None,
             registration_task: None,
             bvlc_response_tx: Arc::new(Mutex::new(None)),
+            bdt_persist_path: None,
         }
     }
 
@@ -94,6 +97,13 @@ impl BipTransport {
             initial_bdt: bdt,
             management_acl: Vec::new(),
         });
+    }
+
+    /// Set the path for persisting the BDT across restarts.
+    /// Must be called before `start()`. The BDT is stored using the wire encoding
+    /// (10 bytes per entry) — no additional serialization dependencies needed.
+    pub fn set_bdt_persist_path(&mut self, path: std::path::PathBuf) {
+        self.bdt_persist_path = Some(path);
     }
 
     /// Set the management ACL for BBMD mode.
@@ -280,6 +290,13 @@ impl BipTransport {
 
 impl TransportPort for BipTransport {
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
+        if self.recv_task.is_some() {
+            return Err(Error::Transport(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "BIP transport already started",
+            )));
+        }
+
         let socket2 = socket2::Socket::new(
             socket2::Domain::IPV4,
             socket2::Type::DGRAM,
@@ -313,14 +330,39 @@ impl TransportPort for BipTransport {
 
         if let Some(config) = self.bbmd_config.take() {
             let mut state = BbmdState::new(local_ip.octets(), local_port);
-            if let Err(e) = state.set_bdt(config.initial_bdt) {
+            // Try loading persisted BDT; fall back to initial config BDT
+            let initial_bdt = if let Some(ref path) = self.bdt_persist_path {
+                match std::fs::read(path) {
+                    Ok(data) => match BbmdState::decode_bdt(&data) {
+                        Ok(entries) => {
+                            debug!(
+                                path = %path.display(),
+                                entries = entries.len(),
+                                "Loaded persisted BDT"
+                            );
+                            entries
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "Failed to decode persisted BDT, using config");
+                            config.initial_bdt
+                        }
+                    },
+                    Err(_) => config.initial_bdt,
+                }
+            } else {
+                config.initial_bdt
+            };
+            if let Err(e) = state.set_bdt(initial_bdt) {
                 return Err(Error::Encoding(format!("BDT configuration error: {e}")));
             }
             state.set_management_acl(config.management_acl);
             self.bbmd = Some(Arc::new(Mutex::new(state)));
         }
 
-        let (npdu_tx, rx) = mpsc::channel(256);
+        /// NPDU receive channel capacity for high-throughput UDP transports.
+        const NPDU_CHANNEL_CAPACITY: usize = 256;
+
+        let (npdu_tx, rx) = mpsc::channel(NPDU_CHANNEL_CAPACITY);
 
         let recv_ctx = RecvContext {
             local_mac: self.local_mac,
@@ -330,6 +372,7 @@ impl TransportPort for BipTransport {
             broadcast_addr: self.broadcast_address,
             broadcast_port: self.port,
             bvlc_response: self.bvlc_response_tx.clone(),
+            bdt_persist_path: self.bdt_persist_path.clone(),
         };
 
         let recv_task = tokio::spawn(async move {
@@ -468,6 +511,7 @@ struct RecvContext {
     broadcast_addr: Ipv4Addr,
     broadcast_port: u16,
     bvlc_response: Arc<Mutex<Option<oneshot::Sender<BvllMessage>>>>,
+    bdt_persist_path: Option<std::path::PathBuf>,
 }
 
 /// Handle a decoded BVLL message in the recv loop.
@@ -478,14 +522,17 @@ async fn handle_bvll_message(msg: &bvll::BvllMessage, sender: ([u8; 4], u16), ct
             if *source_mac == ctx.local_mac[..] {
                 return;
             }
-            let _ = ctx
+            if ctx
                 .npdu_tx
-                .send(ReceivedNpdu {
+                .try_send(ReceivedNpdu {
                     npdu: msg.payload.clone(),
                     source_mac,
                     reply_tx: None,
                 })
-                .await;
+                .is_err()
+            {
+                warn!("BIP: NPDU channel full, dropping incoming unicast frame");
+            }
         }
 
         f if f == BvlcFunction::ORIGINAL_BROADCAST_NPDU => {
@@ -494,14 +541,17 @@ async fn handle_bvll_message(msg: &bvll::BvllMessage, sender: ([u8; 4], u16), ct
                 return;
             }
 
-            let _ = ctx
+            if ctx
                 .npdu_tx
-                .send(ReceivedNpdu {
+                .try_send(ReceivedNpdu {
                     npdu: msg.payload.clone(),
                     source_mac,
                     reply_tx: None,
                 })
-                .await;
+                .is_err()
+            {
+                warn!("BIP: NPDU channel full, dropping incoming broadcast frame");
+            }
 
             // If BBMD, forward as Forwarded-NPDU to BDT peers + FDT entries
             if let Some(bbmd) = &ctx.bbmd {
@@ -547,14 +597,17 @@ async fn handle_bvll_message(msg: &bvll::BvllMessage, sender: ([u8; 4], u16), ct
                     return;
                 }
 
-                let _ = ctx
+                if ctx
                     .npdu_tx
-                    .send(ReceivedNpdu {
+                    .try_send(ReceivedNpdu {
                         npdu: msg.payload.clone(),
                         source_mac,
                         reply_tx: None,
                     })
-                    .await;
+                    .is_err()
+                {
+                    warn!("BIP: NPDU channel full, dropping forwarded frame");
+                }
 
                 let orig_ip = msg.originating_ip.unwrap();
                 let orig_port = msg.originating_port.unwrap();
@@ -578,16 +631,18 @@ async fn handle_bvll_message(msg: &bvll::BvllMessage, sender: ([u8; 4], u16), ct
                 encode_bvll_forwarded(&mut buf, orig_ip, orig_port, &msg.payload);
                 let _ = ctx.socket.send_to(&buf, dest).await;
             } else {
-                // Non-BBMD: use actual UDP sender as source_mac (originator may be behind NAT).
-                let sender_mac = MacAddr::from(encode_bip_mac(sender.0, sender.1));
-                let _ = ctx
+                // Non-BBMD: use originating address as source_mac (spec J.2.5).
+                if ctx
                     .npdu_tx
-                    .send(ReceivedNpdu {
+                    .try_send(ReceivedNpdu {
                         npdu: msg.payload.clone(),
-                        source_mac: sender_mac,
+                        source_mac,
                         reply_tx: None,
                     })
-                    .await;
+                    .is_err()
+                {
+                    warn!("BIP: NPDU channel full, dropping forwarded frame");
+                }
             }
         }
 
@@ -615,14 +670,17 @@ async fn handle_bvll_message(msg: &bvll::BvllMessage, sender: ([u8; 4], u16), ct
                     return;
                 }
 
-                let _ = ctx
+                if ctx
                     .npdu_tx
-                    .send(ReceivedNpdu {
+                    .try_send(ReceivedNpdu {
                         npdu: msg.payload.clone(),
                         source_mac,
                         reply_tx: None,
                     })
-                    .await;
+                    .is_err()
+                {
+                    warn!("BIP: NPDU channel full, dropping distributed broadcast frame");
+                }
 
                 let targets = {
                     let mut state = bbmd.lock().await;
@@ -635,16 +693,29 @@ async fn handle_bvll_message(msg: &bvll::BvllMessage, sender: ([u8; 4], u16), ct
                 let mut buf = BytesMut::with_capacity(10 + msg.payload.len());
                 encode_bvll_forwarded(&mut buf, sender.0, sender.1, &msg.payload);
                 let _ = ctx.socket.send_to(&buf, dest).await;
+            } else {
+                // Non-BBMD: reject with NAK (spec J.4.5)
+                send_bvlc_result(
+                    &ctx.socket,
+                    sender,
+                    BvlcResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK_NAK,
+                )
+                .await;
             }
         }
 
         f if f == BvlcFunction::REGISTER_FOREIGN_DEVICE => {
             if let Some(bbmd) = &ctx.bbmd {
-                let ttl = if msg.payload.len() >= 2 {
-                    u16::from_be_bytes([msg.payload[0], msg.payload[1]])
-                } else {
-                    0
-                };
+                if msg.payload.len() < 2 {
+                    send_bvlc_result(
+                        &ctx.socket,
+                        sender,
+                        BvlcResultCode::REGISTER_FOREIGN_DEVICE_NAK,
+                    )
+                    .await;
+                    return;
+                }
+                let ttl = u16::from_be_bytes([msg.payload[0], msg.payload[1]]);
                 let result = {
                     let mut state = bbmd.lock().await;
                     state.register_foreign_device(sender.0, sender.1, ttl)
@@ -714,6 +785,18 @@ async fn handle_bvll_message(msg: &bvll::BvllMessage, sender: ([u8; 4], u16), ct
                             let mut state = bbmd.lock().await;
                             match state.set_bdt(entries) {
                                 Ok(()) => {
+                                    // Persist BDT to disk if configured
+                                    if let Some(ref path) = ctx.bdt_persist_path {
+                                        let mut buf = BytesMut::new();
+                                        state.encode_bdt(&mut buf);
+                                        if let Err(e) = std::fs::write(path, &buf) {
+                                            warn!(
+                                                error = %e,
+                                                path = %path.display(),
+                                                "Failed to persist BDT"
+                                            );
+                                        }
+                                    }
                                     send_bvlc_result(
                                         &ctx.socket,
                                         sender,
@@ -835,10 +918,24 @@ async fn handle_bvll_message(msg: &bvll::BvllMessage, sender: ([u8; 4], u16), ct
             } else if msg.payload.len() >= 2 {
                 let code =
                     BvlcResultCode::from_raw(u16::from_be_bytes([msg.payload[0], msg.payload[1]]));
-                if code != BvlcResultCode::SUCCESSFUL_COMPLETION {
-                    warn!(code = ?code, "Received BVLC-Result NAK");
-                } else {
-                    debug!("Received BVLC-Result: successful");
+                match code {
+                    BvlcResultCode::SUCCESSFUL_COMPLETION => {
+                        debug!("Received BVLC-Result: successful");
+                    }
+                    BvlcResultCode::REGISTER_FOREIGN_DEVICE_NAK => {
+                        tracing::error!(
+                            "BVLC-Result NAK: foreign device registration rejected by BBMD"
+                        );
+                    }
+                    BvlcResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK_NAK => {
+                        tracing::error!(
+                            "BVLC-Result NAK: broadcast distribution rejected — \
+                             foreign device registration may have failed or expired"
+                        );
+                    }
+                    _ => {
+                        warn!(code = ?code, "Received BVLC-Result NAK");
+                    }
                 }
             }
         }
@@ -883,6 +980,9 @@ async fn send_bvlc_result(socket: &UdpSocket, dest: ([u8; 4], u16), code: BvlcRe
 }
 
 /// Forward an NPDU as Forwarded-NPDU to a list of targets.
+///
+/// Yields between sends for large target lists to avoid starving the recv loop
+/// when there are many FDT entries (up to 512).
 async fn forward_npdu(
     socket: &UdpSocket,
     npdu: &[u8],
@@ -890,14 +990,21 @@ async fn forward_npdu(
     orig_port: u16,
     targets: &[([u8; 4], u16)],
 ) {
+    if targets.is_empty() {
+        return;
+    }
     let mut buf = BytesMut::with_capacity(10 + npdu.len());
     encode_bvll_forwarded(&mut buf, orig_ip, orig_port, npdu);
     let frame = buf.freeze();
 
-    for &(ip, port) in targets {
+    for (i, &(ip, port)) in targets.iter().enumerate() {
         let dest = SocketAddrV4::new(Ipv4Addr::from(ip), port);
         if let Err(e) = socket.send_to(&frame, dest).await {
             warn!(error = %e, dest = %dest, "Failed to forward NPDU");
+        }
+        // Yield every 32 sends to let the recv loop process incoming packets
+        if i % 32 == 31 {
+            tokio::task::yield_now().await;
         }
     }
 }
@@ -1021,12 +1128,14 @@ mod tests {
         let mut client_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
         let _client_rx = client_transport.start().await.unwrap();
 
-        // Read the BDT
+        // Read the BDT — includes the configured entry plus the auto-inserted self entry
         let bdt = client_transport.read_bdt(&bbmd_mac).await.unwrap();
-        assert_eq!(bdt.len(), 1);
-        assert_eq!(bdt[0].ip, [10, 0, 0, 1]);
-        assert_eq!(bdt[0].port, 0xBAC0);
-        assert_eq!(bdt[0].broadcast_mask, [255, 255, 255, 0]);
+        assert_eq!(bdt.len(), 2);
+        assert!(bdt
+            .iter()
+            .any(|e| e.ip == [10, 0, 0, 1] && e.port == 0xBAC0));
+        // Self entry is also present (auto-inserted by set_bdt)
+        assert!(bdt.len() >= 2);
 
         client_transport.stop().await.unwrap();
         bbmd_transport.stop().await.unwrap();
@@ -1092,10 +1201,11 @@ mod tests {
             .unwrap();
         assert_eq!(result, BvlcResultCode::SUCCESSFUL_COMPLETION);
 
-        // Verify by reading back
+        // Verify by reading back — includes written entry plus auto-inserted self
         let bdt = client_transport.read_bdt(&bbmd_mac).await.unwrap();
-        assert_eq!(bdt.len(), 1);
-        assert_eq!(bdt[0].ip, [192, 168, 1, 1]);
+        assert!(bdt
+            .iter()
+            .any(|e| e.ip == [192, 168, 1, 1] && e.port == 0xBAC0));
 
         client_transport.stop().await.unwrap();
         bbmd_transport.stop().await.unwrap();

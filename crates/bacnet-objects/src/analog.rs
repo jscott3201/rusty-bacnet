@@ -106,6 +106,15 @@ impl BACnetObject for AnalogInputObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        // IN_ALARM: override STATUS_FLAGS with event_state before common macro
+        if property == PropertyIdentifier::STATUS_FLAGS {
+            return Ok(common::compute_status_flags(
+                self.status_flags,
+                self.reliability,
+                self.out_of_service,
+                self.event_detector.event_state.to_raw(),
+            ));
+        }
         if let Some(result) = read_common_properties!(self, property, array_index) {
             return result;
         }
@@ -324,6 +333,14 @@ impl BACnetObject for AnalogOutputObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        if property == PropertyIdentifier::STATUS_FLAGS {
+            return Ok(common::compute_status_flags(
+                self.status_flags,
+                self.reliability,
+                self.out_of_service,
+                self.event_detector.event_state.to_raw(),
+            ));
+        }
         if let Some(result) = read_common_properties!(self, property, array_index) {
             return result;
         }
@@ -504,6 +521,8 @@ pub struct AnalogValueObject {
     max_pres_value: Option<f32>,
     event_time_stamps: [BACnetTimeStamp; 3],
     event_message_texts: [String; 3],
+    /// Value source tracking.
+    value_source: common::ValueSourceTracking,
 }
 
 impl AnalogValueObject {
@@ -531,6 +550,7 @@ impl AnalogValueObject {
                 BACnetTimeStamp::SequenceNumber(0),
             ],
             event_message_texts: [String::new(), String::new(), String::new()],
+            value_source: common::ValueSourceTracking::default(),
         })
     }
 
@@ -580,6 +600,14 @@ impl BACnetObject for AnalogValueObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        if property == PropertyIdentifier::STATUS_FLAGS {
+            return Ok(common::compute_status_flags(
+                self.status_flags,
+                self.reliability,
+                self.out_of_service,
+                self.event_detector.event_state.to_raw(),
+            ));
+        }
         if let Some(result) = read_common_properties!(self, property, array_index) {
             return result;
         }
@@ -603,6 +631,15 @@ impl BACnetObject for AnalogValueObject {
             p if p == PropertyIdentifier::CURRENT_COMMAND_PRIORITY => {
                 Ok(common::current_command_priority(&self.priority_array))
             }
+            p if p == PropertyIdentifier::VALUE_SOURCE => {
+                Ok(self.value_source.value_source.clone())
+            }
+            p if p == PropertyIdentifier::LAST_COMMAND_TIME => Ok(PropertyValue::Unsigned(
+                match self.value_source.last_command_time {
+                    BACnetTimeStamp::SequenceNumber(n) => n,
+                    _ => 0,
+                },
+            )),
             p if p == PropertyIdentifier::COV_INCREMENT => {
                 Ok(PropertyValue::Real(self.cov_increment))
             }

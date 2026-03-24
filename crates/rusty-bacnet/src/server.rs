@@ -92,6 +92,9 @@ pub struct BACnetServer {
     sc_heartbeat_timeout_ms: Option<u64>,
     // IPv6 config
     ipv6_interface: Option<String>,
+    // Passwords
+    dcc_password: Option<String>,
+    reinit_password: Option<String>,
     /// Whether the server has been started.
     started: Arc<AtomicBool>,
     /// Objects to add before starting. Cleared after start.
@@ -139,7 +142,9 @@ impl BACnetServer {
         sc_client_key=None,
         sc_heartbeat_interval_ms=None,
         sc_heartbeat_timeout_ms=None,
-        ipv6_interface=None
+        ipv6_interface=None,
+        dcc_password=None,
+        reinit_password=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -157,6 +162,8 @@ impl BACnetServer {
         sc_heartbeat_interval_ms: Option<u64>,
         sc_heartbeat_timeout_ms: Option<u64>,
         ipv6_interface: Option<String>,
+        dcc_password: Option<String>,
+        reinit_password: Option<String>,
     ) -> Self {
         Self {
             inner: Arc::new(Mutex::new(None)),
@@ -174,6 +181,8 @@ impl BACnetServer {
             sc_heartbeat_interval_ms,
             sc_heartbeat_timeout_ms,
             ipv6_interface,
+            dcc_password,
+            reinit_password,
             started: Arc::new(AtomicBool::new(false)),
             pending_objects: std::sync::Mutex::new(Vec::new()),
         }
@@ -667,6 +676,8 @@ impl BACnetServer {
         let sc_heartbeat_interval_ms = self.sc_heartbeat_interval_ms;
         let sc_heartbeat_timeout_ms = self.sc_heartbeat_timeout_ms;
         let ipv6_interface = self.ipv6_interface.clone();
+        let dcc_password = self.dcc_password.clone();
+        let reinit_password = self.reinit_password.clone();
 
         // Take pending objects (synchronous, before async block)
         let objects: Vec<Box<dyn BACnetObject + Send>> = {
@@ -766,12 +777,16 @@ impl BACnetServer {
                 }
             };
 
-            let srv = server::BACnetServer::generic_builder()
+            let mut builder = server::BACnetServer::generic_builder()
                 .database(db)
-                .transport(transport)
-                .build()
-                .await
-                .map_err(to_py_err)?;
+                .transport(transport);
+            if let Some(pw) = dcc_password {
+                builder = builder.dcc_password(pw);
+            }
+            if let Some(pw) = reinit_password {
+                builder = builder.reinit_password(pw);
+            }
+            let srv = builder.build().await.map_err(to_py_err)?;
 
             *inner.lock().await = Some(srv);
             started.store(true, Ordering::Release);

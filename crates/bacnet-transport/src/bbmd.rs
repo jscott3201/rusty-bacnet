@@ -142,7 +142,23 @@ impl BbmdState {
             )));
         }
         self.bdt = entries;
+        self.ensure_self_in_bdt();
         Ok(())
+    }
+
+    /// Ensure the local BBMD is included in its own BDT (spec J.4.2).
+    fn ensure_self_in_bdt(&mut self) {
+        let has_self = self
+            .bdt
+            .iter()
+            .any(|e| e.ip == self.local_ip && e.port == self.local_port);
+        if !has_self {
+            self.bdt.push(BdtEntry {
+                ip: self.local_ip,
+                port: self.local_port,
+                broadcast_mask: [0xff, 0xff, 0xff, 0xff],
+            });
+        }
     }
 
     /// Get the current BDT.
@@ -375,13 +391,17 @@ mod tests {
         ];
         let mut bbmd = make_bbmd();
         bbmd.set_bdt(entries.clone()).unwrap();
+        // set_bdt auto-inserts self, so 3 entries total
+        assert_eq!(bbmd.bdt().len(), 3);
 
         let mut buf = BytesMut::new();
         bbmd.encode_bdt(&mut buf);
-        assert_eq!(buf.len(), 20); // 2 * 10 bytes
+        assert_eq!(buf.len(), 30); // 3 * 10 bytes
 
         let decoded = BbmdState::decode_bdt(&buf).unwrap();
-        assert_eq!(decoded, entries);
+        assert_eq!(decoded.len(), 3);
+        assert!(decoded.contains(&entries[0]));
+        assert!(decoded.contains(&entries[1]));
     }
 
     #[test]
@@ -533,6 +553,34 @@ mod tests {
     }
 
     #[test]
+    fn set_bdt_auto_inserts_self() {
+        let mut state = BbmdState::new([192, 168, 1, 1], 47808);
+        let entries = vec![BdtEntry {
+            ip: [192, 168, 1, 2],
+            port: 47808,
+            broadcast_mask: [255, 255, 255, 255],
+        }];
+        state.set_bdt(entries).unwrap();
+        assert_eq!(state.bdt().len(), 2);
+        assert!(state
+            .bdt()
+            .iter()
+            .any(|e| e.ip == [192, 168, 1, 1] && e.port == 47808));
+    }
+
+    #[test]
+    fn set_bdt_does_not_duplicate_self() {
+        let mut state = BbmdState::new([192, 168, 1, 1], 0xBAC0);
+        let entries = vec![BdtEntry {
+            ip: [192, 168, 1, 1],
+            port: 0xBAC0,
+            broadcast_mask: [255, 255, 255, 255],
+        }];
+        state.set_bdt(entries).unwrap();
+        assert_eq!(state.bdt().len(), 1); // self already present, no duplicate
+    }
+
+    #[test]
     fn fdt_grace_period() {
         let mut bbmd = make_bbmd();
         // Insert entry that expired based on TTL alone but within grace period
@@ -623,7 +671,7 @@ mod tests {
 
     #[test]
     fn encode_bdt_entries_matches_state() {
-        let entries = vec![
+        let mut entries = vec![
             BdtEntry {
                 ip: [10, 0, 1, 1],
                 port: 0xBAC0,
@@ -641,6 +689,12 @@ mod tests {
         bbmd.set_bdt(entries.clone()).unwrap();
         bbmd.encode_bdt(&mut buf_state);
 
+        // set_bdt auto-inserts self, so include self in the expected entries
+        entries.push(BdtEntry {
+            ip: [192, 168, 1, 1],
+            port: 0xBAC0,
+            broadcast_mask: [255, 255, 255, 255],
+        });
         let mut buf_fn = BytesMut::new();
         encode_bdt_entries(&entries, &mut buf_fn);
 

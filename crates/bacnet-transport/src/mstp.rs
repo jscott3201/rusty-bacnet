@@ -62,6 +62,12 @@ fn calculate_t_turnaround_us(baud_rate: u32) -> u64 {
 const N_RETRY_TOKEN: u8 = 1;
 /// Maximum frame buffer size: preamble(2) + header(6) + max data(1497) + CRC16(2)
 pub(crate) const MSTP_MAX_FRAME_BUF: usize = 1507;
+/// Maximum inter-byte gap within a frame before aborting reception.
+/// Spec Clause 9.5.5: minimum 60 bit times. Computed per baud rate.
+fn calculate_t_frame_abort_us(baud_rate: u32) -> u64 {
+    // 60 bit times in microseconds, rounded up
+    60_000_000u64.div_ceil(baud_rate as u64)
+}
 /// Maximum number of queued outgoing frames before rejecting new sends.
 const MAX_TX_QUEUE_DEPTH: usize = 256;
 
@@ -144,6 +150,8 @@ pub struct MasterNode {
     pub t_slot_ms: u64,
     /// Number of valid octets/frames received (used in PassToken and NoToken states).
     pub event_count: u32,
+    /// Station address we sent a DataExpectingReply to (for WAIT_FOR_REPLY validation).
+    pub expected_reply_source: Option<u8>,
 }
 
 /// How many tokens between PollForMaster attempts.
@@ -176,6 +184,7 @@ impl MasterNode {
             pending_reply_source: None,
             t_slot_ms,
             event_count: 0,
+            expected_reply_source: None,
         })
     }
 
@@ -233,7 +242,21 @@ impl MasterNode {
                 None
             }
             FrameType::BACnetDataNotExpectingReply => {
-                if frame.destination == self.config.this_station
+                if self.state == MasterState::WaitForReply
+                    && frame.destination == self.config.this_station
+                {
+                    // ReceivedReply or ReceivedUnexpectedFrame — validate source
+                    if self.expected_reply_source == Some(frame.source) {
+                        let _ = npdu_tx.try_send(ReceivedNpdu {
+                            npdu: frame.data.clone(),
+                            source_mac: MacAddr::from_slice(&[frame.source]),
+                            reply_tx: None,
+                        });
+                    }
+                    // Both cases → DoneWithToken per spec Clause 9.5.6
+                    self.expected_reply_source = None;
+                    self.state = MasterState::DoneWithToken;
+                } else if frame.destination == self.config.this_station
                     || frame.destination == BROADCAST_MAC
                 {
                     let _ = npdu_tx.try_send(ReceivedNpdu {
@@ -270,6 +293,16 @@ impl MasterNode {
                     None
                 }
             }
+            FrameType::ReplyPostponed => {
+                if self.state == MasterState::WaitForReply
+                    && frame.destination == self.config.this_station
+                {
+                    // Reply will come later when the replying node gets the token
+                    self.expected_reply_source = None;
+                    self.state = MasterState::DoneWithToken;
+                }
+                None
+            }
             _ => None,
         }
     }
@@ -292,6 +325,11 @@ impl MasterNode {
                         FrameType::BACnetDataNotExpectingReply
                     }
                 };
+
+                // Track expected reply source for WAIT_FOR_REPLY validation
+                if frame_type == FrameType::BACnetDataExpectingReply {
+                    self.expected_reply_source = Some(dest);
+                }
 
                 // If we've hit max_info_frames, transition to DoneWithToken
                 // so the caller knows to pass the token next.
@@ -487,7 +525,10 @@ impl<S: SerialPort> MstpTransport<S> {
 
 impl<S: SerialPort> TransportPort for MstpTransport<S> {
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        let (npdu_tx, npdu_rx) = mpsc::channel(64);
+        /// NPDU receive channel capacity — smaller than BIP/Ethernet for low-bandwidth serial.
+        const NPDU_CHANNEL_CAPACITY: usize = 64;
+
+        let (npdu_tx, npdu_rx) = mpsc::channel(NPDU_CHANNEL_CAPACITY);
 
         let node = Arc::new(Mutex::new(MasterNode::new(self.config.clone())?));
         self.node = Some(node.clone());
@@ -500,11 +541,13 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
         let serial = Arc::new(serial);
         let serial_clone = serial.clone();
         let t_turnaround_us = calculate_t_turnaround_us(self.config.baud_rate);
+        let t_frame_abort_us = calculate_t_frame_abort_us(self.config.baud_rate);
 
         // Receive loop using tokio::select! with timer
         let task = tokio::spawn(async move {
             let mut recv_buf = vec![0u8; 2048];
             let mut frame_buf = Vec::with_capacity(2048);
+            let mut last_byte_time = tokio::time::Instant::now();
 
             // Start with T_NO_TOKEN timeout — if we don't see anything, claim the token
             let sleep = tokio::time::sleep(tokio::time::Duration::from_millis(T_NO_TOKEN_MS));
@@ -519,6 +562,20 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                         match result {
                             Ok(0) => continue,
                             Ok(n) => {
+                                // T_frame_abort: discard partial frame if inter-byte gap
+                                // exceeds the spec limit (60 bit times).
+                                let now = tokio::time::Instant::now();
+                                if !frame_buf.is_empty() {
+                                    let gap = now.duration_since(last_byte_time);
+                                    if gap > tokio::time::Duration::from_micros(t_frame_abort_us) {
+                                        debug!(
+                                            "MS/TP: T_frame_abort exceeded ({gap:?}), discarding partial frame"
+                                        );
+                                        frame_buf.clear();
+                                    }
+                                }
+                                last_byte_time = now;
+
                                 // Prevent unbounded growth from malformed input:
                                 // check BEFORE extending to avoid a large allocation.
                                 if frame_buf.len() + n > MSTP_MAX_FRAME_BUF {
@@ -609,7 +666,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
 
                                     // Capture timeout before dropping lock
                                     let timeout_ms = match node_guard.state {
-                                        MasterState::Idle => T_USAGE_TIMEOUT_MS,
+                                        MasterState::Idle => T_NO_TOKEN_MS,
                                         MasterState::NoToken => T_NO_TOKEN_MS,
                                         MasterState::PollForMaster => node_guard.t_slot_ms,
                                         MasterState::WaitForReply => T_REPLY_TIMEOUT_MS,
@@ -694,6 +751,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                             }
                             MasterState::WaitForReply => {
                                 // ReplyTimeout: enter DoneWithToken.
+                                node_guard.expected_reply_source = None;
                                 node_guard.frame_count = node_guard.config.max_info_frames;
                                 node_guard.state = MasterState::DoneWithToken;
                                 // Fall through to DoneWithToken handling on next iteration
@@ -741,7 +799,11 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                 }
                                 match node_guard.state {
                                     MasterState::PassToken => T_USAGE_TIMEOUT_MS,
-                                    MasterState::NoToken => T_NO_TOKEN_MS,
+                                    MasterState::NoToken => {
+                                        // Per spec Clause 9.5.6: T_no_token + T_slot * TS
+                                        let ts = node_guard.config.this_station as u64;
+                                        T_NO_TOKEN_MS + node_guard.t_slot_ms * ts
+                                    }
                                     MasterState::UseToken => T_USAGE_TIMEOUT_MS,
                                     _ => T_USAGE_TIMEOUT_MS,
                                 }
@@ -792,6 +854,13 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
             task.abort();
             let _ = task.await;
         }
+        // Clear the node's queue to prevent stale sends after stop
+        if let Some(ref node) = self.node {
+            let mut n = node.lock().await;
+            n.tx_queue.clear();
+            n.state = MasterState::Idle;
+            n.expected_reply_source = None;
+        }
         Ok(())
     }
 
@@ -808,7 +877,10 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
             node.queue_npdu(dest, Bytes::copy_from_slice(npdu))?;
             Ok(())
         } else {
-            Err(Error::Encoding("MS/TP transport not started".into()))
+            Err(Error::Transport(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "MS/TP transport not started",
+            )))
         }
     }
 
@@ -818,7 +890,10 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
             node.queue_npdu(BROADCAST_MAC, Bytes::copy_from_slice(npdu))?;
             Ok(())
         } else {
-            Err(Error::Encoding("MS/TP transport not started".into()))
+            Err(Error::Transport(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "MS/TP transport not started",
+            )))
         }
     }
 
