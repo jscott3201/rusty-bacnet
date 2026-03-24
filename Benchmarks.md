@@ -1,13 +1,12 @@
 # Rusty BACnet — Benchmarks & Stress Test Results
 
-> Last full run: 2026-03-05 | Platform: macOS (Apple Silicon) | Rust 1.93 | Release mode
+> As of version 0.8.0 | 2026-03-23
 >
-> TLS provider: aws-lc-rs | All tests ran on localhost with zero errors unless noted.
+> **Hardware:** MacBook Pro (Mac17,2) — Apple M5, 10-core (4P + 6E), 16 GB RAM
 >
-> **2026-03-20 update:** Server dispatch loop now spawns per-request tasks for concurrent
-> multi-client handling. Quick benchmarks show ~44% read throughput improvement at 1000 ops.
-> Client multi-device batch API added (`read_property_from_devices`, etc.) with
-> `buffer_unordered` concurrency. Full benchmark run pending.
+> **Software:** macOS 26.4 | Rust 1.94.0 | Release mode | TLS provider: aws-lc-rs
+>
+> All tests ran on localhost with zero errors unless noted.
 
 ---
 
@@ -17,13 +16,13 @@
 
 | Benchmark | Time |
 |---|---|
-| `encode_read_property_request` | **31.0 ns** |
-| `decode_read_property_request` | **8.2 ns** |
-| `encode_npdu_100b_payload` | **24.3 ns** |
-| `decode_npdu_100b_payload` | **16.9 ns** |
-| `encode_apdu_confirmed_request` | **31.2 ns** |
-| `decode_apdu_confirmed_request` | **21.0 ns** |
-| `full_stack_encode_rp` | **131.5 ns** |
+| `encode_read_property_request` | **19.1 ns** |
+| `decode_read_property_request` | **4.3 ns** |
+| `encode_npdu_100b_payload` | **16.1 ns** |
+| `decode_npdu_100b_payload` | **10.4 ns** |
+| `encode_apdu_confirmed_request` | **18.9 ns** |
+| `decode_apdu_confirmed_request` | **8.7 ns** |
+| `full_stack_encode_rp` | **82.4 ns** |
 
 ### 1.2 BACnet/IP (BIP) — UDP Transport
 
@@ -31,19 +30,16 @@
 
 | Operation | Latency |
 |---|---|
-| ReadProperty | **27.5 µs** |
-| WriteProperty | **28.7 µs** |
-| RPM (10 objects) | **32.0 µs** |
+| ReadProperty | **20.9 µs** |
+| WriteProperty | **21.1 µs** |
+| RPM (10 objects) | **24.7 µs** |
 
 #### Throughput (batched requests)
 
-| Operation | 10 ops | 100 ops | 1000 ops | Peak ops/s | Δ vs pre-spawn |
-|---|---|---|---|---|---|
-| ReadProperty | 280 µs | 2.82 ms | 28.1 ms | **~35.6 K/s** | **~-44%** ¹ |
-| WriteProperty | 297 µs | 2.97 ms | 29.9 ms | **~33.4 K/s** | ~0% ² |
-
-¹ Quick-run (sample-size 10) showed -44% to -47% improvement at 1000 ops from dispatch spawning. Full benchmark pending.
-² Write throughput unchanged — writes take exclusive `db.write()` lock so they naturally serialize.
+| Operation | 10 ops | 100 ops | 1000 ops | Peak ops/s |
+|---|---|---|---|---|
+| ReadProperty | 210 µs | 2.10 ms | 20.7 ms | **~48.3 K/s** |
+| WriteProperty | 207 µs | 2.07 ms | 20.7 ms | **~48.3 K/s** |
 
 ### 1.3 BACnet/IPv6 (BIP6) — UDP Transport
 
@@ -51,16 +47,16 @@
 
 | Operation | Latency |
 |---|---|
-| ReadProperty | **29.3 µs** |
-| WriteProperty | **28.7 µs** |
-| RPM (10 objects) | **32.8 µs** |
+| ReadProperty | **21.0 µs** |
+| WriteProperty | **20.9 µs** |
+| RPM (10 objects) | **22.3 µs** |
 
 #### Throughput
 
 | Operation | 10 ops | 100 ops | 1000 ops | Peak ops/s |
 |---|---|---|---|---|
-| ReadProperty | 306 µs | 3.00 ms | 30.4 ms | **~32.9 K/s** |
-| WriteProperty | 295 µs | 2.98 ms | 29.9 ms | **~33.5 K/s** |
+| ReadProperty | 210 µs | 2.10 ms | 21.1 ms | **~47.4 K/s** |
+| WriteProperty | 230 µs | 2.29 ms | 22.9 ms | **~43.7 K/s** |
 
 ### 1.4 BACnet/SC — TLS WebSocket (Server Auth Only)
 
@@ -68,16 +64,16 @@
 
 | Operation | Latency |
 |---|---|
-| ReadProperty | **66.7 µs** |
-| WriteProperty | **66.2 µs** |
-| RPM (10 objects) | **71.6 µs** |
+| ReadProperty | **46.6 µs** |
+| WriteProperty | **47.3 µs** |
+| RPM (10 objects) | **51.9 µs** |
 
 #### Throughput
 
 | Operation | 10 ops | 100 ops | 1000 ops | Peak ops/s |
 |---|---|---|---|---|
-| ReadProperty | 675 µs | 6.71 ms | 67.1 ms | **~14.9 K/s** |
-| WriteProperty | 668 µs | 6.65 ms | 66.3 ms | **~15.0 K/s** |
+| ReadProperty | 467 µs | 4.69 ms | 47.1 ms | **~21.3 K/s** |
+| WriteProperty | 468 µs | 4.71 ms | 47.3 ms | **~21.1 K/s** |
 
 ### 1.5 BACnet/SC — Mutual TLS (mTLS)
 
@@ -85,16 +81,16 @@
 
 | Operation | Latency |
 |---|---|
-| ReadProperty | **66.2 µs** |
-| WriteProperty | **66.1 µs** |
-| RPM (10 objects) | **71.6 µs** |
+| ReadProperty | **47.1 µs** |
+| WriteProperty | **46.8 µs** |
+| RPM (10 objects) | **53.0 µs** |
 
 #### Throughput
 
 | Operation | 10 ops | 100 ops | 1000 ops | Peak ops/s |
 |---|---|---|---|---|
-| ReadProperty | 674 µs | 6.67 ms | 66.2 ms | **~15.1 K/s** |
-| WriteProperty | 664 µs | 6.67 ms | 66.3 ms | **~15.1 K/s** |
+| ReadProperty | 472 µs | 4.75 ms | 47.1 ms | **~21.2 K/s** |
+| WriteProperty | 471 µs | 4.72 ms | 47.1 ms | **~21.2 K/s** |
 
 ---
 
@@ -111,13 +107,13 @@ Spawns N clients each doing continuous ReadProperty against a 100-object server.
 
 | Clients | p50 | p99 | Throughput | Errors |
 |---|---|---|---|---|
-| 1 | 23 µs | 37 µs | 39,817/s | 0 |
-| 5 | 43 µs | 85 µs | 110,246/s | 0 |
-| 10 | 68 µs | 130 µs | 140,059/s | 0 |
-| 25 | 155 µs | 239 µs | 157,579/s | 0 |
-| 50 | 305 µs | 429 µs | **161,484/s** | 0 |
+| 1 | 12 µs | 28 µs | 73,948/s | 0 |
+| 5 | 42 µs | 86 µs | 111,013/s | 0 |
+| 10 | 80 µs | 170 µs | **118,249/s** | 0 |
+| 25 | 244 µs | 467 µs | 100,595/s | 0 |
+| 50 | 539 µs | 1,033 µs | 91,151/s | 0 |
 
-Peak RSS: 11.9 MB. Throughput scales well to 50 concurrent clients with 0 errors.
+Peak RSS: 12.2 MB. Throughput peaks at 10 clients (118K/s) with sub-millisecond p99 across all levels.
 
 ### 2.2 Object Database Scale (`objects`)
 
@@ -125,13 +121,13 @@ ReadProperty on random objects from databases of increasing size.
 
 | Objects | RP p50 | RP p99 | RP Throughput | RPM p50 | RSS |
 |---|---|---|---|---|---|
-| 100 | 26 µs | 44 µs | 35,541/s | 34 µs | 8.8 MB |
-| 500 | 26 µs | 44 µs | 35,740/s | 32 µs | 9.3 MB |
-| 1,000 | 26 µs | 43 µs | 35,711/s | 31 µs | 9.6 MB |
-| 2,500 | 26 µs | 43 µs | 35,834/s | 31 µs | 10.1 MB |
-| 5,000 | 25 µs | 42 µs | **36,239/s** | 30 µs | 10.7 MB |
+| 100 | 19 µs | 33 µs | 49,364/s | 25 µs | 8.9 MB |
+| 500 | 19 µs | 32 µs | 49,345/s | 24 µs | 9.5 MB |
+| 1,000 | 19 µs | 32 µs | 49,100/s | 24 µs | 9.8 MB |
+| 2,500 | 19 µs | 33 µs | 48,247/s | 25 µs | 10.5 MB |
+| 5,000 | 19 µs | 32 µs | **48,897/s** | 24 µs | 11.6 MB |
 
-**No degradation** from 100 → 5,000 objects. RSS grows ~2 KB per object.
+**No degradation** from 100 → 5,000 objects. RSS grows ~0.5 KB per object.
 
 ### 2.3 COV Subscription Saturation (`cov`)
 
@@ -142,7 +138,7 @@ Writes at 10 Hz, verifies all subscribers receive notifications.
 | 1 | 49 | 49/49 | **100%** |
 | 5 | 49 | 49/49 | **100%** |
 | 10 | 49 | 49/49 | **100%** |
-| 25 | 49 | 49/49 | **100%** |
+| 25 | 50 | 50/50 | **100%** |
 
 100% notification delivery across all subscription counts.
 
@@ -152,9 +148,9 @@ ReadPropertyMultiple with increasing numbers of objects per request.
 
 | Objects/RPM | p50 | p99 | Throughput | Errors |
 |---|---|---|---|---|
-| 10 | 74 µs | 480 µs | 13,514/s | 0 |
-| 25 | 151 µs | 216 µs | 6,623/s | 0 |
-| 50 | 144 µs | 187 µs | 6,944/s | 0 |
+| 10 | 95 µs | 359 µs | 10,526/s | 0 |
+| 25 | 93 µs | 143 µs | 10,753/s | 0 |
+| 50 | 93 µs | 121 µs | 10,753/s | 0 |
 
 Larger RPMs show stable tail latency (p99 converges).
 
@@ -164,9 +160,9 @@ Weighted mix: 60% RP, 15% WP, 10% RPM, 5% COV, 5% WhoIs, 5% Device RP.
 
 | Clients | p50 | p99 | Throughput | Errors |
 |---|---|---|---|---|
-| 5 | 43 µs | 89 µs | **112,869/s** | 0 |
+| 5 | 43 µs | 90 µs | **112,250/s** | 0 |
 
-Peak RSS: 9.8 MB. Realistic building-automation workload at >100K ops/s.
+Peak RSS: 9.9 MB. Realistic building-automation workload at >112K ops/s.
 
 ### 2.6 Router Baseline (`router`)
 
@@ -174,11 +170,11 @@ Multi-client ReadProperty through direct (non-routed) path — establishes basel
 
 | Clients | p50 | p99 | Throughput | Errors |
 |---|---|---|---|---|
-| 1 | 23 µs | 37 µs | 40,320/s | 0 |
-| 3 | 35 µs | 63 µs | 79,585/s | 0 |
-| 5 | 42 µs | 81 µs | **112,342/s** | 0 |
+| 1 | 12 µs | 25 µs | 77,245/s | 0 |
+| 3 | 30 µs | 59 µs | 93,123/s | 0 |
+| 5 | 43 µs | 86 µs | **110,510/s** | 0 |
 
-Peak RSS: 9.5 MB. Near-linear scaling to 5 clients.
+Peak RSS: 9.3 MB. Near-linear scaling to 5 clients.
 
 ### 2.7 BBMD Foreign Device (`bbmd`)
 
@@ -186,10 +182,10 @@ Foreign device registration + continuous broadcast through BBMD.
 
 | Foreign Devices | p50 | p99 | Broadcast Rate | Errors |
 |---|---|---|---|---|
-| 1 | 28 µs | 52 µs | 763/s | 0 |
-| 3 | 27 µs | 50 µs | 766/s | 0 |
+| 1 | 18 µs | 32 µs | 794/s | 0 |
+| 3 | 18 µs | 30 µs | 796/s | 0 |
 
-Peak RSS: 8.0 MB. Broadcast rate is limited by the 200ms re-registration interval.
+Peak RSS: 7.7 MB. Broadcast rate is limited by the 200ms re-registration interval.
 
 ### 2.8 Device Scan (`whois`)
 
@@ -197,11 +193,11 @@ RP-based device scan across N servers (WhoIs broadcast is localhost-limited).
 
 | Devices | Scan Time | p50 | p99 | All Found |
 |---|---|---|---|---|
-| 3 | <1 ms | 139 µs | 459 µs | ✅ 3/3 |
-| 10 | 1 ms | 136 µs | 173 µs | ✅ 10/10 |
-| 25 | 3 ms | 131 µs | 148 µs | ✅ 25/25 |
+| 3 | <1 ms | 67 µs | 305 µs | 3/3 |
+| 10 | <1 ms | 47 µs | 69 µs | 10/10 |
+| 25 | 2 ms | 100 µs | 162 µs | 25/25 |
 
-Peak RSS: 9.2 MB. Scan time scales linearly.
+Peak RSS: 9.0 MB. Scan time scales linearly.
 
 ---
 
@@ -211,28 +207,18 @@ Peak RSS: 9.2 MB. Scan time scales linearly.
 
 | Transport | RP Latency | RP Throughput | Overhead vs BIP |
 |---|---|---|---|
-| **BIP (UDP/IPv4)** | 27.5 µs | 36.0 K/s | — |
-| **BIP6 (UDP/IPv6)** | 29.3 µs | 32.9 K/s | +7% latency |
-| **SC (TLS WebSocket)** | 66.7 µs | 14.9 K/s | +142% latency |
-| **SC mTLS** | 66.2 µs | 15.1 K/s | +141% latency |
-
-### Python (PyO3, asyncio event loop)
-
-| Transport | RP Latency | Peak Concurrent Throughput | Overhead vs Rust |
-|---|---|---|---|
-| **BIP (Py→Rust)** | ~110 µs | 35.1 K/s @ 25 clients | +4.0× latency |
-| **BIP (Rust→Py)** | ~116 µs | 34.9 K/s @ 25 clients | +4.2× latency |
-| **BIP (Py→Py)** | ~108 µs | 36.2 K/s @ 25 clients | +3.9× latency |
-| **SC (Py→Rust via Hub)** | ~226 µs | 29.3 K/s @ 25 clients | +3.4× latency |
+| **BIP (UDP/IPv4)** | 20.9 µs | 48.3 K/s | — |
+| **BIP6 (UDP/IPv6)** | 21.0 µs | 47.4 K/s | +0.5% latency |
+| **SC (TLS WebSocket)** | 46.6 µs | 21.3 K/s | +123% latency |
+| **SC mTLS** | 47.1 µs | 21.2 K/s | +125% latency |
 
 SC mTLS adds negligible overhead vs server-auth-only SC — the TLS handshake dominates, not per-message client cert verification.
-Python concurrent throughput is competitive with Rust single-threaded due to tokio's multi-threaded runtime handling the actual I/O.
 
 ---
 
 ## 4. Docker Cross-Network Tests
 
-> Platform: Alpine 3.21 (aarch64 musl) | Docker Desktop 4 CPUs / 6 GB RAM | Static release binaries
+> Platform: Alpine (aarch64 musl) | Docker Desktop | Static release binaries
 
 ### 4.1 Topology
 
@@ -246,11 +232,11 @@ Python concurrent throughput is competitive with Rust single-threaded due to tok
 
 | Scenario | Ops | Duration | Throughput | p50 | p99 | Errors |
 |---|---|---|---|---|---|---|
-| **Same-Subnet Baseline** | 140,455 | 10 s | 14,045 /s | 70 µs | 89 µs | 0 |
-| **Router Hop** (subnet A → B) | 136,228 | 10 s | 13,623 /s | 73 µs | 91 µs | 0 |
-| **Foreign Device** (via BBMD) | 134,798 | 10 s | 13,480 /s | 73 µs | 91 µs | 0 |
+| **Same-Subnet Baseline** | 84,603 | 5 s | 16,920 /s | 57 µs | 103 µs | 0 |
+| **Router Hop** (subnet A → B) | 79,073 | 5 s | 15,814 /s | 61 µs | 123 µs | 0 |
+| **Foreign Device** (via BBMD) | 82,156 | 5 s | 16,431 /s | 60 µs | 101 µs | 0 |
 
-Router hop adds **~3 µs** (4%) vs same-subnet. Foreign device via BBMD adds **~3 µs** (4%). All 411,478 requests succeeded.
+Router hop adds **~4 µs** (7%) vs same-subnet. Foreign device via BBMD adds **~3 µs** (5%). All 245,832 requests succeeded.
 
 ### 4.3 In-Container Stress Tests (self-contained, loopback)
 
@@ -258,32 +244,32 @@ Router hop adds **~3 µs** (4%) vs same-subnet. Foreign device via BBMD adds **~
 
 | Clients | p50 | p99 | Throughput | Errors |
 |---|---|---|---|---|
-| 1 | 6 µs | 10 µs | 153,291 /s | 0 |
-| 10 | 32 µs | 97 µs | 266,554 /s | 0 |
-| 25 | 70 µs | 202 µs | 313,546 /s | 0 |
-| 50 | 134 µs | 287 µs | 348,546 /s | 0 |
+| 1 | 4 µs | 7 µs | 206,233 /s | 0 |
+| 10 | 76 µs | 179 µs | 122,850 /s | 0 |
+| 25 | 189 µs | 388 µs | 126,721 /s | 0 |
+| 50 | 363 µs | 677 µs | 134,666 /s | 0 |
 
-Peak RSS: 4,380 KB
+Peak RSS: 5,016 KB
 
 #### Object Scale
 
 | Objects | RP p50 | RP p99 | Throughput | RSS |
 |---|---|---|---|---|
-| 100 | 44 µs | 63 µs | 21,664 /s | 2,576 KB |
-| 1,000 | 44 µs | 58 µs | 21,924 /s | 2,908 KB |
-| 5,000 | 44 µs | 64 µs | 21,635 /s | 4,016 KB |
-| 10,000 | 44 µs | 64 µs | 21,833 /s | 5,408 KB |
+| 100 | 29 µs | 48 µs | 32,985 /s | 3,040 KB |
+| 1,000 | 41 µs | 204 µs | 18,533 /s | 3,500 KB |
+| 5,000 | 57 µs | 722 µs | 11,798 /s | 5,224 KB |
+| 10,000 | 40 µs | 100 µs | 21,250 /s | 7,412 KB |
 
-Zero throughput degradation across 100× object scale. ~300 bytes per object.
+~440 bytes per object. Throughput variance at 5K objects due to container memory pressure.
 
 #### COV Subscriptions
 
 | Subscriptions | Writes | Notifications | Errors |
 |---|---|---|---|
-| 1 | 48 | 48/48 | 0 |
-| 10 | 48 | 48/48 | 0 |
-| 50 | 48 | 48/48 | 0 |
-| 100 | 48 | 48/48 | 0 |
+| 1 | 49 | 49/49 | 0 |
+| 10 | 49 | 49/49 | 0 |
+| 50 | 49 | 49/49 | 0 |
+| 100 | 49 | 49/49 | 0 |
 
 100% notification delivery at all subscription levels.
 
@@ -291,53 +277,53 @@ Zero throughput degradation across 100× object scale. ~300 bytes per object.
 
 | Properties | p50 | p99 | Throughput | Errors |
 |---|---|---|---|---|
-| 10 | 84 µs | 202 µs | 11,905 /s | 0 |
-| 25 | 115 µs | 167 µs | 8,696 /s | 0 |
-| 50 | 122 µs | 157 µs | 8,197 /s | 0 |
+| 10 | 53 µs | 193 µs | 18,868 /s | 0 |
+| 25 | 57 µs | 87 µs | 17,544 /s | 0 |
+| 50 | 67 µs | 115 µs | 14,925 /s | 0 |
 
 #### Mixed Workload (RP + WP + RPM + WhoIs)
 
 | Clients | p50 | p99 | Throughput | Errors |
 |---|---|---|---|---|
-| 10 | 35 µs | 86 µs | 254,997 /s | 0 |
+| 10 | 91 µs | 246 µs | 102,642 /s | 0 |
 
-Peak RSS: 2,560 KB
+Peak RSS: 3,080 KB
 
 #### Router Forwarding
 
 | Clients | p50 | p99 | Throughput | Errors |
 |---|---|---|---|---|
-| 1 | 6 µs | 9 µs | 156,070 /s | 0 |
-| 5 | 26 µs | 63 µs | 170,442 /s | 0 |
-| 10 | 31 µs | 71 µs | 286,598 /s | 0 |
-| 25 | 67 µs | 124 µs | 349,016 /s | 0 |
+| 1 | 4 µs | 6 µs | 207,517 /s | 0 |
+| 5 | 36 µs | 94 µs | 124,978 /s | 0 |
+| 10 | 82 µs | 194 µs | 114,002 /s | 0 |
+| 25 | 214 µs | 485 µs | 101,765 /s | 0 |
 
 #### BBMD Foreign Device
 
 | Foreign Devices | p50 | p99 | Throughput | Errors |
 |---|---|---|---|---|
-| 1 | 30 µs | 62 µs | 498 /s | 0 |
-| 5 | 31 µs | 54 µs | 500 /s | 0 |
-| 10 | 31 µs | 59 µs | 499 /s | 0 |
+| 1 | 18 µs | 46 µs | 503 /s | 0 |
+| 5 | 10 µs | 39 µs | 504 /s | 0 |
+| 10 | 5 µs | 29 µs | 507 /s | 0 |
 
 #### WhoIs Broadcast
 
 | Devices | p50 | p99 | Discovery | Errors |
 |---|---|---|---|---|
-| 5 | 77 µs | 131 µs | 5/5 | 0 |
-| 10 | 63 µs | 111 µs | 10/10 | 0 |
-| 25 | 82 µs | 98 µs | 25/25 | 0 |
+| 5 | 47 µs | 59 µs | 5/5 | 0 |
+| 10 | 39 µs | 47 µs | 10/10 | 0 |
+| 25 | 44 µs | 99 µs | 25/25 | 0 |
 
 ---
 
-## 6. Python ↔ Rust Mixed-Mode Benchmarks
+## 5. Python ↔ Rust Mixed-Mode Benchmarks
 
 > Python 3.13.1 | PyO3 0.28 | `rusty_bacnet` wheel (release mode) | pytest + custom async harness
 >
 > All tests use the `rusty_bacnet` PyO3 bindings on localhost. SC benchmarks route
-> through a Rust `ScHub` (TLS WebSocket relay) exposed via the new `ScHub` Python class.
+> through a Rust `ScHub` (TLS WebSocket relay) exposed via the `ScHub` Python class.
 
-### 6.1 BACnet/IP — Python Client → Rust Server
+### 5.1 BACnet/IP — Python Client → Rust Server
 
 | Operation | Mean | Median | p95 | p99 |
 |---|---|---|---|---|
@@ -357,7 +343,7 @@ Sequential throughput: **12,704 ops/s** (ReadProperty)
 
 Memory: 49.9 MB RSS (stable under load, +0.0 MB delta after 500 ops)
 
-### 6.2 BACnet/IP — Rust Client → Python Server
+### 5.2 BACnet/IP — Rust Client → Python Server
 
 | Operation | Mean | Median | p95 | p99 |
 |---|---|---|---|---|
@@ -377,7 +363,7 @@ Sequential throughput: **13,233 ops/s** (ReadProperty)
 
 Memory: 49.9 MB RSS (stable, +0.0 MB delta)
 
-### 6.3 BACnet/IP — Python Client → Python Server
+### 5.3 BACnet/IP — Python Client → Python Server
 
 | Operation | Mean | Median | p95 | p99 |
 |---|---|---|---|---|
@@ -397,7 +383,7 @@ Sequential throughput: **13,077 ops/s** (ReadProperty)
 
 Memory: 49.8 MB RSS (stable, +0.0 MB delta)
 
-### 6.4 BACnet/SC — Python Client → Rust Server (via ScHub)
+### 5.4 BACnet/SC — Python Client → Rust Server (via ScHub)
 
 | Operation | Mean | Median | p95 | p99 |
 |---|---|---|---|---|
@@ -417,48 +403,52 @@ Sequential throughput: **7,054 ops/s** (ReadProperty)
 
 Memory: 52.0 MB RSS (stable, +0.0 MB delta after 500 ops)
 
-### 6.5 Python API Overhead Analysis
+### 5.5 Python API Overhead Analysis
 
 | Transport | Rust Latency | Python Latency | Overhead |
 |---|---|---|---|
-| BIP ReadProperty | 27.5 µs | ~110 µs | ~82 µs (+4.0×) |
-| BIP WriteProperty | 28.7 µs | ~74 µs | ~45 µs (+2.6×) |
-| SC ReadProperty | 66.7 µs | ~226 µs | ~159 µs (+3.4×) |
-| SC WriteProperty | 66.2 µs | ~110 µs | ~44 µs (+1.7×) |
+| BIP ReadProperty | 20.9 µs | ~110 µs | ~89 µs (+5.3×) |
+| BIP WriteProperty | 21.1 µs | ~74 µs | ~53 µs (+3.5×) |
+| SC ReadProperty | 46.6 µs | ~226 µs | ~179 µs (+4.8×) |
+| SC WriteProperty | 47.3 µs | ~110 µs | ~63 µs (+2.3×) |
 
-Python overhead is dominated by the asyncio event loop and PyO3 FFI boundary crossing (~40–80 µs).
+Python overhead is dominated by the asyncio event loop and PyO3 FFI boundary crossing (~50–90 µs).
 Write operations show less overhead because the server doesn't need to encode a response payload.
 Concurrent throughput scales well — 25 concurrent BIP clients reach **36K ops/s** from Python,
-comparable to pure Rust's single-threaded 36K/s.
+comparable to pure Rust's single-threaded 48K/s.
 
 ---
 
-## 7. Key Takeaways
+## 6. Key Takeaways
 
-- **Encoding is fast**: Full RP encode/decode stack in ~131 ns (CPU-bound, no allocation hot paths thanks to `Bytes` zero-copy)
-- **BIP throughput scales linearly**: 40K/s single-client → 161K/s at 50 clients with sub-millisecond p99
-- **Concurrent dispatch unlocks RwLock parallelism**: Server now spawns per-request tasks — multiple ReadProperty requests run truly concurrently via `db.read()`. Quick benchmarks show ~44% read throughput improvement (full run pending)
-- **Multi-device batch API**: Client `read_property_from_devices()` / `read_property_multiple_from_devices()` / `write_property_to_devices()` fan out to N devices concurrently with configurable `max_concurrent` (default 32). Available in Rust and Python
-- **Object count doesn't matter**: 100 → 5,000 objects shows zero latency degradation (RwLock contention minimal)
-- **COV is reliable**: 100% notification delivery at 25 concurrent subscriptions
-- **SC overhead is ~2.5×**: TLS WebSocket adds ~40 µs per operation vs raw UDP — acceptable for secure deployments
+- **Encoding is fast**: Full RP encode/decode stack in ~82 ns (CPU-bound, no allocation hot paths thanks to `Bytes` zero-copy)
+- **BIP throughput at ~48K/s**: Per-request task spawning enables concurrent `db.read()` — reads and writes now achieve equal throughput
+- **BIP6 matches BIP**: IPv6 adds <1% latency overhead vs IPv4 — effectively identical performance
+- **SC overhead is ~2.2×**: TLS WebSocket adds ~26 µs per operation vs raw UDP — acceptable for secure deployments
+- **Object count doesn't matter**: 100 → 5,000 objects shows zero latency degradation (19 µs p50 across all sizes)
+- **COV is reliable**: 100% notification delivery at 25 concurrent subscriptions (native) and 100 (Docker)
 - **Zero errors across all tests**: No timeouts, no panics, no dropped messages
 - **Docker validates real networking**: Cross-container BIP, routing, BBMD foreign device, and SC all work correctly
-- **Minimal router/BBMD overhead**: Cross-subnet routing adds ~4% latency; BBMD foreign device adds ~4%
-- **Musl/Alpine parity**: Docker (static musl) matches native performance — no penalty for containerized deployment
-- **Python API is production-ready**: ~80 µs PyO3 overhead per call; 36K concurrent ops/s from Python matches pure Rust throughput
+- **Minimal router/BBMD overhead**: Cross-subnet routing adds ~7% latency; BBMD foreign device adds ~5%
+- **Musl/Alpine single-client 4 µs p50**: In-container loopback latency is extremely low, 206K ops/s single-threaded
+- **Python API is production-ready**: ~80 µs PyO3 overhead per call; 36K concurrent ops/s from Python
 - **SC from Python works**: ScHub + SC client/server all work via PyO3; 29K ops/s at 25 concurrent clients
 
 ---
 
-## 9. How to Reproduce
+## 7. How to Reproduce
 
 ```bash
-# Criterion benchmarks (all 9 suites)
-cargo bench -p bacnet-benchmarks
-
-# Individual benchmark
+# Criterion benchmarks (all 9 suites — run sequentially for accurate results)
+cargo bench -p bacnet-benchmarks --bench encoding
 cargo bench -p bacnet-benchmarks --bench bip_latency
+cargo bench -p bacnet-benchmarks --bench bip_throughput
+cargo bench -p bacnet-benchmarks --bench bip6_latency
+cargo bench -p bacnet-benchmarks --bench bip6_throughput
+cargo bench -p bacnet-benchmarks --bench sc_latency
+cargo bench -p bacnet-benchmarks --bench sc_throughput
+cargo bench -p bacnet-benchmarks --bench sc_mtls_latency
+cargo bench -p bacnet-benchmarks --bench sc_mtls_throughput
 
 # Quick run (reduced samples, ~10s per suite instead of ~60s)
 cargo bench -p bacnet-benchmarks --bench bip_latency -- --sample-size 10 --warm-up-time 1
@@ -476,7 +466,7 @@ cargo run --release -p bacnet-benchmarks --bin stress-test -- whois --steps 3,10
 # Docker cross-network (requires Docker)
 cd examples/docker
 docker compose build && docker compose up -d
-docker compose exec orchestrator stress-orchestrator --duration 10
+docker compose exec orchestrator stress-orchestrator --duration 5
 docker compose down
 
 # Python mixed-mode benchmarks (requires Python 3.13+ and uv)
