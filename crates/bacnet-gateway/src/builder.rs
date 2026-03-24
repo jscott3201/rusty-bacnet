@@ -131,7 +131,7 @@ impl GatewayBuilder {
         let db = server.database().clone();
 
         // Create client transport (also needs foreign device config for broadcast routing).
-        let mut client_transport = BipTransport::new(interface, 0, broadcast);
+        let mut client_transport = BipTransport::new(interface, bip.port, broadcast);
         if let Some(ref fdc) = fd_config {
             client_transport.register_as_foreign_device(fdc.clone());
         }
