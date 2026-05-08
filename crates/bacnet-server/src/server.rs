@@ -1685,7 +1685,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
                     let pdu = Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
                         service_choice: UnconfirmedServiceChoice::I_AM,
-                        service_request: Bytes::from(service_buf.to_vec()),
+                        service_request: service_buf.freeze(),
                     });
 
                     let mut buf = BytesMut::new();
@@ -1729,7 +1729,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         } else {
                             let pdu = Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
                                 service_choice: UnconfirmedServiceChoice::I_HAVE,
-                                service_request: Bytes::from(service_buf.to_vec()),
+                                service_request: service_buf.freeze(),
                             });
 
                             let mut buf = BytesMut::new();
@@ -1906,7 +1906,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
             let pdu = Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
                 service_choice: UnconfirmedServiceChoice::UNCONFIRMED_EVENT_NOTIFICATION,
-                service_request: Bytes::from(service_buf.to_vec()),
+                service_request: service_buf.freeze(),
             });
 
             let mut buf = BytesMut::new();
@@ -1929,7 +1929,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     continue;
                 }
 
-                let service_bytes = Bytes::from(service_buf.to_vec());
+                let service_bytes = service_buf.freeze();
 
                 if *confirmed {
                     let pdu = Apdu::ConfirmedRequest(ConfirmedRequestPdu {
@@ -2150,7 +2150,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     sequence_number: None,
                     proposed_window_size: None,
                     service_choice: ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION,
-                    service_request: Bytes::from(service_buf.to_vec()),
+                    service_request: service_buf.freeze(),
                 });
 
                 let mut buf = BytesMut::new();
@@ -2232,7 +2232,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             } else {
                 let pdu = Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
                     service_choice: UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION,
-                    service_request: Bytes::from(service_buf.to_vec()),
+                    service_request: service_buf.freeze(),
                 });
 
                 let mut buf = BytesMut::new();
