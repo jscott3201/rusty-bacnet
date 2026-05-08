@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed Finding 8: confirmed EventNotification delivery now uses the server TSM with timeout and retry handling instead of fire-and-forget sends.
 - Fixed Finding 8: server-side confirmed notification acknowledgments are keyed by `(peer, invoke_id)` so responses from different peers cannot collide on a shared invoke ID.
 
+### Performance
+
+- Fixed Finding 10: notification send paths now freeze `BytesMut` payload buffers directly instead of copying them through `to_vec()` before constructing `Bytes`.
+
 ### Workspace reorganization
 
 The HTTP/MCP gateway and BTL compliance test harness were extracted into dedicated repositories. The remaining workspace focuses purely on the BACnet protocol stack: types, encoding, services, transport, network, client, server, objects, plus the Python and WASM bindings and the CLI.
