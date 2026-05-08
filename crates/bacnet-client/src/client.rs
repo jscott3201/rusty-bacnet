@@ -231,6 +231,8 @@ pub struct DeviceWriteResult {
 /// In-progress segmented receive state.
 struct SegmentedReceiveState {
     receiver: SegmentReceiver,
+    /// Immediate MAC used to send SegmentAck/Abort PDUs.
+    reply_mac: MacAddr,
     /// Next expected sequence number (for gap detection).
     expected_next_seq: u8,
     /// Timestamp of last received segment (for reaping stale sessions).
@@ -244,7 +246,7 @@ struct SegmentedReceiveState {
 /// Timeout for idle segmented reassembly sessions.
 const SEG_RECEIVER_TIMEOUT: Duration = Duration::from_secs(4);
 
-/// Key for tracking in-progress segmented receives: (source_mac, invoke_id).
+/// Key for tracking in-progress segmented receives: (correlation_mac, invoke_id).
 type SegKey = (MacAddr, u8);
 
 /// BACnet client with low-level and high-level request APIs.
@@ -486,6 +488,7 @@ impl ScClientBuilder {
 }
 
 /// Routing target for confirmed requests.
+#[derive(Clone, Copy)]
 enum ConfirmedTarget<'a> {
     Local {
         mac: &'a [u8],
@@ -498,12 +501,34 @@ enum ConfirmedTarget<'a> {
 }
 
 impl<'a> ConfirmedTarget<'a> {
-    /// The MAC used for TSM transaction matching.
-    fn tsm_mac(&self) -> &[u8] {
+    /// The key used for TSM transaction matching.
+    fn tsm_mac(&self) -> MacAddr {
         match self {
-            Self::Local { mac } => mac,
-            Self::Routed { router_mac, .. } => router_mac,
+            Self::Local { mac } => MacAddr::from_slice(mac),
+            Self::Routed {
+                dest_network,
+                dest_mac,
+                ..
+            } => routed_tsm_mac(*dest_network, dest_mac),
         }
+    }
+}
+
+fn routed_tsm_mac(network: u16, mac: &[u8]) -> MacAddr {
+    let mut key = MacAddr::new();
+    key.extend_from_slice(&[0xFF, b'R']);
+    key.extend_from_slice(&network.to_be_bytes());
+    key.push(mac.len() as u8);
+    key.extend_from_slice(mac);
+    key
+}
+
+fn response_tsm_mac(source_mac: &[u8], source_network: &Option<NpduAddress>) -> MacAddr {
+    match source_network {
+        Some(address) if !address.mac_address.is_empty() => {
+            routed_tsm_mac(address.network, &address.mac_address)
+        }
+        _ => MacAddr::from_slice(source_mac),
     }
 }
 
@@ -570,7 +595,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     .map(|(key, _)| key.clone())
                     .collect();
                 for key in &stale_keys {
-                    if let Some(_state) = seg_state.remove(key) {
+                    if let Some(state) = seg_state.remove(key) {
                         let abort = Apdu::Abort(AbortPdu {
                             sent_by_server: false,
                             invoke_id: key.1,
@@ -579,7 +604,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         let mut buf = BytesMut::with_capacity(4);
                         encode_apdu(&mut buf, &abort);
                         let _ = network_dispatch
-                            .send_apdu(&buf, &key.0, false, NetworkPriority::NORMAL)
+                            .send_apdu(&buf, &state.reply_mac, false, NetworkPriority::NORMAL)
                             .await;
                     }
                 }
@@ -633,11 +658,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         apdu: Apdu,
         segmented_response_accepted: bool,
     ) {
+        let tsm_mac = response_tsm_mac(source_mac, source_network);
         match apdu {
             Apdu::SimpleAck(ack) => {
                 debug!(invoke_id = ack.invoke_id, "Received SimpleAck");
                 let mut tsm = tsm.lock().await;
-                tsm.complete_transaction(source_mac, ack.invoke_id, TsmResponse::SimpleAck);
+                tsm.complete_transaction(&tsm_mac, ack.invoke_id, TsmResponse::SimpleAck);
             }
             Apdu::ComplexAck(ack) => {
                 if ack.segmented {
@@ -646,6 +672,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         network,
                         seg_state,
                         source_mac,
+                        source_network,
                         ack,
                         segmented_response_accepted,
                     )
@@ -654,7 +681,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     debug!(invoke_id = ack.invoke_id, "Received ComplexAck");
                     let mut tsm = tsm.lock().await;
                     tsm.complete_transaction(
-                        source_mac,
+                        &tsm_mac,
                         ack.invoke_id,
                         TsmResponse::ComplexAck {
                             service_data: ack.service_ack,
@@ -666,7 +693,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 debug!(invoke_id = err.invoke_id, "Received Error PDU");
                 let mut tsm = tsm.lock().await;
                 tsm.complete_transaction(
-                    source_mac,
+                    &tsm_mac,
                     err.invoke_id,
                     TsmResponse::Error {
                         class: err.error_class.to_raw() as u32,
@@ -678,7 +705,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 debug!(invoke_id = rej.invoke_id, "Received Reject PDU");
                 let mut tsm = tsm.lock().await;
                 tsm.complete_transaction(
-                    source_mac,
+                    &tsm_mac,
                     rej.invoke_id,
                     TsmResponse::Reject {
                         reason: rej.reject_reason.to_raw(),
@@ -689,7 +716,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 debug!(invoke_id = abt.invoke_id, "Received Abort PDU");
                 let mut tsm = tsm.lock().await;
                 tsm.complete_transaction(
-                    source_mac,
+                    &tsm_mac,
                     abt.invoke_id,
                     TsmResponse::Abort {
                         reason: abt.abort_reason.to_raw(),
@@ -785,7 +812,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 }
             }
             Apdu::SegmentAck(sa) => {
-                let key = (MacAddr::from_slice(source_mac), sa.invoke_id);
+                let key = (tsm_mac, sa.invoke_id);
                 let senders = seg_ack_senders.lock().await;
                 if let Some(tx) = senders.get(&key) {
                     let _ = tx.try_send(sa);
@@ -806,11 +833,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         network: &Arc<NetworkLayer<T>>,
         seg_state: &mut HashMap<SegKey, SegmentedReceiveState>,
         source_mac: &[u8],
+        source_network: &Option<NpduAddress>,
         ack: bacnet_encoding::apdu::ComplexAck,
         segmented_response_accepted: bool,
     ) {
         let seq = ack.sequence_number.unwrap_or(0);
-        let key = (MacAddr::from_slice(source_mac), ack.invoke_id);
+        let tsm_mac = response_tsm_mac(source_mac, source_network);
+        let key = (tsm_mac.clone(), ack.invoke_id);
 
         debug!(
             invoke_id = ack.invoke_id,
@@ -849,6 +878,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .entry(key.clone())
             .or_insert_with(|| SegmentedReceiveState {
                 receiver: SegmentReceiver::new(),
+                reply_mac: MacAddr::from_slice(source_mac),
                 expected_next_seq: 0,
                 last_activity: Instant::now(),
                 window_position: 0,
@@ -939,7 +969,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     );
                     let mut tsm = tsm.lock().await;
                     tsm.complete_transaction(
-                        source_mac,
+                        &tsm_mac,
                         ack.invoke_id,
                         TsmResponse::ComplexAck {
                             service_data: Bytes::from(service_data),
@@ -1010,46 +1040,59 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         service_data: &[u8],
     ) -> Result<Bytes, Error> {
         let tsm_mac = target.tsm_mac();
+        let unsegmented_apdu_size = 4 + service_data.len();
 
-        if let ConfirmedTarget::Local { mac } = &target {
-            let unsegmented_apdu_size = 4 + service_data.len();
-            let (remote_max_apdu, remote_max_segments) = {
-                let dt = self.device_table.lock().await;
-                let device = dt.get_by_mac(mac);
-                let max_apdu = device
-                    .map(|d| d.max_apdu_length as u16)
-                    .unwrap_or(self.config.max_apdu_length);
-                let max_seg = device.and_then(|d| d.max_segments_accepted);
-                (max_apdu, max_seg)
-            };
-            if unsegmented_apdu_size > remote_max_apdu as usize {
-                return self
-                    .segmented_confirmed_request(
-                        mac,
-                        service_choice,
-                        service_data,
-                        remote_max_apdu,
-                        remote_max_segments,
-                    )
-                    .await;
+        match target {
+            ConfirmedTarget::Local { mac } => {
+                let (remote_max_apdu, remote_max_segments) = {
+                    let dt = self.device_table.lock().await;
+                    let device = dt.get_by_mac(mac);
+                    let max_apdu = device
+                        .map(|d| d.max_apdu_length as u16)
+                        .unwrap_or(self.config.max_apdu_length);
+                    let max_seg = device.and_then(|d| d.max_segments_accepted);
+                    (max_apdu, max_seg)
+                };
+                if unsegmented_apdu_size > remote_max_apdu as usize {
+                    return self
+                        .segmented_confirmed_request(
+                            target,
+                            service_choice,
+                            service_data,
+                            remote_max_apdu,
+                            remote_max_segments,
+                        )
+                        .await;
+                }
+            }
+            ConfirmedTarget::Routed { .. } => {
+                let remote_max_apdu = self.config.max_apdu_length;
+                if unsegmented_apdu_size > remote_max_apdu as usize {
+                    return self
+                        .segmented_confirmed_request(
+                            target,
+                            service_choice,
+                            service_data,
+                            remote_max_apdu,
+                            None,
+                        )
+                        .await;
+                }
             }
         }
 
         let (invoke_id, rx) = {
             let mut tsm = self.tsm.lock().await;
-            let invoke_id = tsm.allocate_invoke_id(tsm_mac).ok_or_else(|| {
+            let invoke_id = tsm.allocate_invoke_id(&tsm_mac).ok_or_else(|| {
                 Error::Encoding("all invoke IDs exhausted for destination".into())
             })?;
-            let rx = tsm.register_transaction(MacAddr::from_slice(tsm_mac), invoke_id);
+            let rx = tsm.register_transaction(tsm_mac.clone(), invoke_id);
             (invoke_id, rx)
         };
 
         // Guard cleans up invoke ID if this task is cancelled/aborted
-        let mut guard = crate::tsm::TsmGuard::new(
-            std::sync::Arc::clone(&self.tsm),
-            MacAddr::from_slice(tsm_mac),
-            invoke_id,
-        );
+        let mut guard =
+            crate::tsm::TsmGuard::new(std::sync::Arc::clone(&self.tsm), tsm_mac.clone(), invoke_id);
 
         let pdu = Apdu::ConfirmedRequest(ConfirmedRequestPdu {
             segmented: false,
@@ -1099,7 +1142,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             if let Err(e) = send_result {
                 guard.mark_completed();
                 let mut tsm = self.tsm.lock().await;
-                tsm.cancel_transaction(tsm_mac, invoke_id);
+                tsm.cancel_transaction(&tsm_mac, invoke_id);
                 return Err(e);
             }
 
@@ -1123,7 +1166,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     if attempts > max_retries {
                         guard.mark_completed();
                         let mut tsm = self.tsm.lock().await;
-                        tsm.cancel_transaction(tsm_mac, invoke_id);
+                        tsm.cancel_transaction(&tsm_mac, invoke_id);
                         return Err(Error::Timeout(timeout_duration));
                     }
                     debug!(
@@ -1137,25 +1180,49 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
     }
 
+    async fn send_confirmed_target_apdu(
+        &self,
+        target: ConfirmedTarget<'_>,
+        apdu: &[u8],
+    ) -> Result<(), Error> {
+        match target {
+            ConfirmedTarget::Local { mac } => {
+                self.network
+                    .send_apdu(apdu, mac, true, NetworkPriority::NORMAL)
+                    .await
+            }
+            ConfirmedTarget::Routed {
+                router_mac,
+                dest_network,
+                dest_mac,
+            } => {
+                self.network
+                    .send_apdu_routed(
+                        apdu,
+                        dest_network,
+                        dest_mac,
+                        router_mac,
+                        true,
+                        NetworkPriority::NORMAL,
+                    )
+                    .await
+            }
+        }
+    }
+
     /// Send a confirmed request using segmented transfer with windowed flow control.
     async fn segmented_confirmed_request(
         &self,
-        destination_mac: &[u8],
+        target: ConfirmedTarget<'_>,
         service_choice: ConfirmedServiceChoice,
         service_data: &[u8],
         remote_max_apdu: u16,
         remote_max_segments: Option<u32>,
     ) -> Result<Bytes, Error> {
+        let tsm_mac = target.tsm_mac();
         let max_seg_size = max_segment_payload(remote_max_apdu, SegmentedPduType::ConfirmedRequest);
-        let segments = split_payload(service_data, max_seg_size);
+        let segments = split_payload(service_data, max_seg_size)?;
         let total_segments = segments.len();
-
-        if total_segments > 256 {
-            return Err(Error::Segmentation(format!(
-                "payload requires {} segments, maximum is 256",
-                total_segments
-            )));
-        }
 
         if let Some(max_seg) = remote_max_segments {
             if total_segments > max_seg as usize {
@@ -1175,16 +1242,16 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
         let (invoke_id, rx) = {
             let mut tsm = self.tsm.lock().await;
-            let invoke_id = tsm.allocate_invoke_id(destination_mac).ok_or_else(|| {
+            let invoke_id = tsm.allocate_invoke_id(&tsm_mac).ok_or_else(|| {
                 Error::Encoding("all invoke IDs exhausted for destination".into())
             })?;
-            let rx = tsm.register_transaction(MacAddr::from_slice(destination_mac), invoke_id);
+            let rx = tsm.register_transaction(tsm_mac.clone(), invoke_id);
             (invoke_id, rx)
         };
 
         let (seg_ack_tx, mut seg_ack_rx) = mpsc::channel(16);
         {
-            let key = (MacAddr::from_slice(destination_mac), invoke_id);
+            let key = (tsm_mac.clone(), invoke_id);
             self.seg_ack_senders.lock().await.insert(key, seg_ack_tx);
         }
 
@@ -1222,9 +1289,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     let mut buf = BytesMut::with_capacity(remote_max_apdu as usize);
                     encode_apdu(&mut buf, &pdu);
 
-                    self.network
-                        .send_apdu(&buf, destination_mac, true, NetworkPriority::NORMAL)
-                        .await?;
+                    self.send_confirmed_target_apdu(target, &buf).await?;
 
                     debug!(seq, is_last, "Sent segment");
                 }
@@ -1272,14 +1337,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                     let mut buf = BytesMut::with_capacity(remote_max_apdu as usize);
                                     encode_apdu(&mut buf, &pdu);
 
-                                    self.network
-                                        .send_apdu(
-                                            &buf,
-                                            destination_mac,
-                                            true,
-                                            NetworkPriority::NORMAL,
-                                        )
-                                        .await?;
+                                    self.send_confirmed_target_apdu(target, &buf).await?;
                                 }
                             }
                         }
@@ -1310,7 +1368,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                             "too many negative SegmentAck retransmissions".into(),
                         ));
                     }
-                    next_seq = ack_seq;
+                    next_seq = ack_seq + 1;
                 } else {
                     neg_ack_retries = 0;
                     next_seq = ack_seq + 1;
@@ -1325,7 +1383,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         .await;
 
         {
-            let key = (MacAddr::from_slice(destination_mac), invoke_id);
+            let key = (tsm_mac.clone(), invoke_id);
             self.seg_ack_senders.lock().await.remove(&key);
         }
 
@@ -1333,7 +1391,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             Ok(response) => response,
             Err(e) => {
                 let mut tsm = self.tsm.lock().await;
-                tsm.cancel_transaction(destination_mac, invoke_id);
+                tsm.cancel_transaction(&tsm_mac, invoke_id);
                 return Err(e);
             }
         };
@@ -2363,6 +2421,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 mod tests {
     use super::*;
     use bacnet_encoding::apdu::{ComplexAck, SimpleAck};
+    use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
+    use bacnet_transport::loopback::LoopbackTransport;
+    use bacnet_transport::port::TransportPort;
     use std::net::Ipv4Addr;
     use tokio::time::Duration;
 
@@ -2374,6 +2435,28 @@ mod tests {
             .build()
             .await
             .unwrap()
+    }
+
+    async fn send_routed_response<T: TransportPort>(
+        transport: &T,
+        client_mac: &[u8],
+        source_network: u16,
+        source_mac: &[u8],
+        apdu: Apdu,
+    ) {
+        let mut apdu_buf = BytesMut::new();
+        encode_apdu(&mut apdu_buf, &apdu);
+        let npdu = Npdu {
+            source: Some(NpduAddress {
+                network: source_network,
+                mac_address: MacAddr::from_slice(source_mac),
+            }),
+            payload: apdu_buf.freeze(),
+            ..Npdu::default()
+        };
+        let mut npdu_buf = BytesMut::new();
+        encode_npdu(&mut npdu_buf, &npdu).unwrap();
+        transport.send_unicast(&npdu_buf, client_mac).await.unwrap();
     }
 
     #[tokio::test]
@@ -2739,6 +2822,105 @@ mod tests {
 
         b_handle.await.unwrap();
         client.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn routed_segmented_request_uses_routed_tsm_key() {
+        let client_mac = vec![0x01];
+        let router_mac = vec![0x02];
+        let remote_network = 100;
+        let remote_mac = vec![0x03];
+        let (client_transport, mut router_transport) =
+            LoopbackTransport::pair(client_mac.clone(), router_mac.clone());
+        let mut router_rx = router_transport.start().await.unwrap();
+
+        let mut client = BACnetClient::generic_builder()
+            .transport(client_transport)
+            .apdu_timeout_ms(2000)
+            .max_apdu_length(50)
+            .build()
+            .await
+            .unwrap();
+
+        let service_data: Vec<u8> = (0u8..100).collect();
+        let expected_data = service_data.clone();
+        let router_mac_for_request = router_mac.clone();
+        let remote_mac_for_request = remote_mac.clone();
+
+        let request_task = tokio::spawn(async move {
+            let result = client
+                .confirmed_request_routed(
+                    &router_mac_for_request,
+                    remote_network,
+                    &remote_mac_for_request,
+                    ConfirmedServiceChoice::WRITE_PROPERTY,
+                    &service_data,
+                )
+                .await;
+            client.stop().await.unwrap();
+            result
+        });
+
+        let mut all_service_data = Vec::new();
+        let invoke_id = loop {
+            let received = timeout(Duration::from_secs(2), router_rx.recv())
+                .await
+                .expect("router timed out waiting for routed segment")
+                .expect("router channel closed");
+            assert_eq!(&received.source_mac[..], &client_mac[..]);
+
+            let npdu = decode_npdu(received.npdu).unwrap();
+            let destination = npdu.destination.expect("routed NPDU destination");
+            assert_eq!(destination.network, remote_network);
+            assert_eq!(&destination.mac_address[..], &remote_mac[..]);
+
+            let decoded = apdu::decode_apdu(npdu.payload).unwrap();
+            let Apdu::ConfirmedRequest(req) = decoded else {
+                panic!("Expected ConfirmedRequest, got {:?}", decoded);
+            };
+            assert!(req.segmented, "expected routed request to be segmented");
+            let seq = req.sequence_number.unwrap();
+            all_service_data.extend_from_slice(&req.service_request);
+
+            let seg_ack = Apdu::SegmentAck(SegmentAckPdu {
+                negative_ack: false,
+                sent_by_server: true,
+                invoke_id: req.invoke_id,
+                sequence_number: seq,
+                actual_window_size: 1,
+            });
+            send_routed_response(
+                &router_transport,
+                &client_mac,
+                remote_network,
+                &remote_mac,
+                seg_ack,
+            )
+            .await;
+
+            if !req.more_follows {
+                break req.invoke_id;
+            }
+        };
+
+        assert_eq!(all_service_data, expected_data);
+
+        let ack = Apdu::SimpleAck(SimpleAck {
+            invoke_id,
+            service_choice: ConfirmedServiceChoice::WRITE_PROPERTY,
+        });
+        send_routed_response(
+            &router_transport,
+            &client_mac,
+            remote_network,
+            &remote_mac,
+            ack,
+        )
+        .await;
+
+        let result = request_task.await.unwrap();
+        assert!(result.unwrap().is_empty());
+        router_transport.stop().await.unwrap();
     }
 
     #[tokio::test]

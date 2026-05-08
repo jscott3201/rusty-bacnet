@@ -33,21 +33,26 @@ pub fn max_segment_payload(max_apdu_length: u16, pdu_type: SegmentedPduType) -> 
 /// Split a payload into segments of at most `max_segment_size` bytes.
 ///
 /// Always returns at least one segment (possibly empty).
-/// If the payload would produce more than 256 segments (the BACnet sequence
-/// number limit), falls back to returning the entire payload as a single
-/// unsegmented segment.
-pub fn split_payload(payload: &[u8], max_segment_size: usize) -> Vec<Bytes> {
-    if max_segment_size == 0 || payload.is_empty() {
-        return vec![Bytes::copy_from_slice(payload)];
+pub fn split_payload(payload: &[u8], max_segment_size: usize) -> Result<Vec<Bytes>, Error> {
+    if payload.is_empty() {
+        return Ok(vec![Bytes::new()]);
+    }
+    if max_segment_size == 0 {
+        return Err(Error::Segmentation(
+            "non-empty payload cannot be segmented with max segment size 0".into(),
+        ));
     }
     let segments: Vec<Bytes> = payload
         .chunks(max_segment_size)
         .map(Bytes::copy_from_slice)
         .collect();
     if segments.len() > 256 {
-        return vec![Bytes::copy_from_slice(payload)];
+        return Err(Error::Segmentation(format!(
+            "payload requires {} segments, maximum is 256",
+            segments.len()
+        )));
     }
-    segments
+    Ok(segments)
 }
 
 /// Collects received segments for reassembly.
@@ -155,7 +160,7 @@ mod tests {
     #[test]
     fn split_payload_fits_single_segment() {
         let payload = vec![0u8; 100];
-        let segments = split_payload(&payload, 200);
+        let segments = split_payload(&payload, 200).unwrap();
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0], payload);
     }
@@ -163,7 +168,7 @@ mod tests {
     #[test]
     fn split_payload_exact_fit() {
         let payload = vec![0u8; 200];
-        let segments = split_payload(&payload, 100);
+        let segments = split_payload(&payload, 100).unwrap();
         assert_eq!(segments.len(), 2);
         assert_eq!(segments[0].len(), 100);
         assert_eq!(segments[1].len(), 100);
@@ -172,7 +177,7 @@ mod tests {
     #[test]
     fn split_payload_remainder() {
         let payload = vec![0u8; 250];
-        let segments = split_payload(&payload, 100);
+        let segments = split_payload(&payload, 100).unwrap();
         assert_eq!(segments.len(), 3);
         assert_eq!(segments[0].len(), 100);
         assert_eq!(segments[1].len(), 100);
@@ -181,7 +186,7 @@ mod tests {
 
     #[test]
     fn split_empty_payload() {
-        let segments = split_payload(&[], 100);
+        let segments = split_payload(&[], 100).unwrap();
         assert_eq!(segments.len(), 1);
         assert!(segments[0].is_empty());
     }
@@ -189,7 +194,7 @@ mod tests {
     #[test]
     fn reassemble_ordered_segments() {
         let original = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-        let segments = split_payload(&original, 3);
+        let segments = split_payload(&original, 3).unwrap();
         assert_eq!(segments.len(), 4); // 3+3+3+1
 
         let mut receiver = SegmentReceiver::new();
@@ -221,8 +226,12 @@ mod tests {
 
     #[test]
     fn split_payload_zero_segment_size() {
-        // Should not panic — returns entire payload as single segment
-        let result = split_payload(&[1, 2, 3], 0);
-        assert_eq!(result, vec![vec![1, 2, 3]]);
+        assert!(split_payload(&[1, 2, 3], 0).is_err());
+    }
+
+    #[test]
+    fn split_payload_over_256_segments_errors() {
+        let payload = vec![0u8; 257];
+        assert!(split_payload(&payload, 1).is_err());
     }
 }

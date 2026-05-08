@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed Finding 8: confirmed EventNotification delivery now uses the server TSM with timeout and retry handling instead of fire-and-forget sends.
 - Fixed Finding 8: server-side confirmed notification acknowledgments are keyed by `(peer, invoke_id)` so responses from different peers cannot collide on a shared invoke ID.
 
+### Spec Compliance - Segmentation (ASHRAE 135-2020 Clauses 5, 20.1.2.4, 20.1.2.5, 20.1.6.x)
+
+- Fixed Finding 1: `split_payload` now errors when a payload would require more than the 256 sequence numbers representable by BACnet segmentation instead of falling back to an oversized unsegmented payload.
+- Fixed Finding 2: segmented ComplexACK responses now honor the client's `max-segments-accepted` value and abort with `BUFFER_OVERFLOW` when the response cannot fit.
+- Fixed Finding 3: server-side segmented ConfirmedRequest receive state now validates proposed window size, ACKs only at the negotiated window boundary or final segment, and sends negative SegmentACKs for sequence gaps.
+- Fixed Finding 5: negative SegmentACK retransmission now resumes at `ack_seq + 1` on both client and server send paths.
+- Fixed Finding 9: routed confirmed requests now enter the segmented send path when they exceed the local APDU limit, and routed responses are matched with a routed endpoint TSM key instead of only the next-hop router MAC.
+
+### Changed
+
+- **API break**: `bacnet-encoding::segmentation::split_payload` now returns `Result<Vec<Bytes>, Error>` so callers must handle zero-payload-capacity and over-256-segment failures explicitly.
+
 ### Workspace reorganization
 
 The HTTP/MCP gateway and BTL compliance test harness were extracted into dedicated repositories. The remaining workspace focuses purely on the BACnet protocol stack: types, encoding, services, transport, network, client, server, objects, plus the Python and WASM bindings and the CLI.
@@ -27,7 +39,7 @@ The HTTP/MCP gateway and BTL compliance test harness were extracted into dedicat
 - `examples/docker/Dockerfile.btl` and `examples/docker/docker-compose.btl.yml` (BTL Docker assets — now in the BTL harness repo).
 
 ### Notes
-- Library crates' API is unchanged from 0.8.1. Consumers of `bacnet-types`, `bacnet-encoding`, `bacnet-services`, `bacnet-transport`, `bacnet-network`, `bacnet-client`, `bacnet-objects`, `bacnet-server` can upgrade with no source changes.
+- Library crate APIs changed from 0.8.1 where called out in this changelog.
 - Python (`rusty-bacnet`) and WASM (`bacnet-wasm`) bindings unchanged.
 - CLI (`bacnet-cli`) unchanged.
 
