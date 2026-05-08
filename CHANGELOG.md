@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1]
+
+### Security
+- Bumped `rustls-webpki` from 0.103.10 to 0.103.13 to address [RUSTSEC](https://rustsec.org/) advisory: panic reachable prior to CRL signature verification. Applications not using Certificate Revocation Lists were not exposed.
+
+### Fixed
+- **bacnet-gateway**: use the configured BIP port for the client transport instead of port 0 (which let the OS assign an ephemeral port). Devices replying to the standard BACnet port could not reach the gateway client. Thanks to @chappo (PR #8).
+- **bacnet-client**: gate `Ipv6Addr` import behind the `ipv6` feature to fix unused-import warning when the feature is disabled.
+- **bacnet-gateway**: drop unused `property_value_to_json` import in REST objects handler.
+
+### Documentation
+- **Benchmarks.md**: refreshed with results from a clean run across all 9 Criterion suites.
+
 ## [0.8.0]
 
 ### Spec Compliance — BBMD & Router (ASHRAE 135-2020 Annex J, Clause 6)

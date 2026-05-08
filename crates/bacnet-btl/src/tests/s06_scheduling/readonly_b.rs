@@ -72,8 +72,7 @@ pub fn register(registry: &mut TestRegistry) {
         "Time",
     ];
 
-    let mut idx = 7u32;
-    for dt in types {
+    for (idx, dt) in (7u32..).zip(types) {
         let id = Box::leak(format!("6.7.{idx}").into_boxed_str()) as &str;
         let name = Box::leak(format!("SCHED-RO-B: Datatype {dt}").into_boxed_str()) as &str;
         registry.add(TestDef {
@@ -86,7 +85,6 @@ pub fn register(registry: &mut TestRegistry) {
             timeout: None,
             run: |ctx| Box::pin(sched_ro_base(ctx)),
         });
-        idx += 1;
     }
 
     // Weekly schedule evaluation tests (mirrors internal-b)

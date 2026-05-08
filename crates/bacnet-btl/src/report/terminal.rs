@@ -44,10 +44,8 @@ pub fn print_test_result(result: &TestResult, verbose: bool) {
             let step_str = step.map(|s| format!("Step {}: ", s)).unwrap_or_default();
             println!("           {}{}", step_str, message.red());
         }
-        TestStatus::Skip { reason } => {
-            if verbose {
-                println!("           SKIP: {}", reason.yellow());
-            }
+        TestStatus::Skip { reason } if verbose => {
+            println!("           SKIP: {}", reason.yellow());
         }
         TestStatus::Error { message } => {
             println!("           ERROR: {}", message.red().bold());

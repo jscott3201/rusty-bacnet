@@ -236,7 +236,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-benchmarks"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "bacnet-client",
  "bacnet-encoding",
@@ -264,7 +264,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-btl"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "bacnet-client",
  "bacnet-encoding",
@@ -293,7 +293,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-cli"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "bacnet-client",
  "bacnet-encoding",
@@ -323,7 +323,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-client"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "bacnet-encoding",
  "bacnet-network",
@@ -340,7 +340,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-encoding"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "bacnet-types",
  "bytes",
@@ -349,7 +349,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-gateway"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "axum",
  "bacnet-client",
@@ -378,7 +378,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-integration-tests"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "bacnet-client",
  "bacnet-encoding",
@@ -394,7 +394,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-network"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "bacnet-encoding",
  "bacnet-transport",
@@ -406,7 +406,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-objects"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "bacnet-encoding",
  "bacnet-types",
@@ -416,7 +416,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-server"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "bacnet-encoding",
  "bacnet-network",
@@ -432,7 +432,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-services"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "bacnet-encoding",
  "bacnet-types",
@@ -442,7 +442,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-transport"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "bacnet-encoding",
  "bacnet-types",
@@ -461,7 +461,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-types"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "bitflags 2.11.0",
  "smallvec",
@@ -470,7 +470,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-wasm"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "bacnet-encoding",
  "bacnet-services",
@@ -2501,9 +2501,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.10"
+version = "0.103.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df33b2b81ac578cabaf06b89b0631153a3f416b0a886e8a7a1707fb51abbd1ef"
+checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -2519,7 +2519,7 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "rusty-bacnet"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "bacnet-client",
  "bacnet-encoding",

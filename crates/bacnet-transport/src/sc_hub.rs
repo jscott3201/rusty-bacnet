@@ -128,6 +128,10 @@ impl ScHub {
 // Accept loop
 // ---------------------------------------------------------------------------
 
+// Closure passed to `accept_hdr_async` returns the upstream tungstenite
+// `ErrorResponse`, whose size is fixed by the library. The clippy lint can't
+// be addressed without changing the foreign signature.
+#[allow(clippy::result_large_err)]
 async fn accept_loop(
     listener: TcpListener,
     tls_acceptor: TlsAcceptor,

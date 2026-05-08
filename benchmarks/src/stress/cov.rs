@@ -90,11 +90,10 @@ pub async fn run(duration_secs: u64, change_rate_hz: u64, steps: &[u64]) -> Vec<
         });
 
         // Write values at change_rate_hz for duration
-        let interval = if change_rate_hz > 0 {
-            Duration::from_micros(1_000_000 / change_rate_hz)
-        } else {
-            Duration::from_secs(1)
-        };
+        let interval = 1_000_000u64
+            .checked_div(change_rate_hz)
+            .map(Duration::from_micros)
+            .unwrap_or(Duration::from_secs(1));
         let deadline = Instant::now() + Duration::from_secs(duration_secs);
         let mut writes = 0u64;
         let mut write_errors = 0u64;
