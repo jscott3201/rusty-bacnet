@@ -357,7 +357,7 @@ mod tests {
             service_request: Bytes::new(),
         });
         let mut apdu_buf = BytesMut::new();
-        encode_apdu(&mut apdu_buf, &who_is_apdu);
+        encode_apdu(&mut apdu_buf, &who_is_apdu).expect("valid APDU encoding");
 
         net_a
             .send_apdu(&apdu_buf, net_b.local_mac(), false, NetworkPriority::NORMAL)

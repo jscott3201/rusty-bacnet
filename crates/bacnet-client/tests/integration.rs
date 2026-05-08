@@ -80,7 +80,7 @@ async fn full_read_property_round_trip() {
                 service_ack: Bytes::from(ack_buf.to_vec()),
             });
             let mut buf = BytesMut::new();
-            encode_apdu(&mut buf, &complex_ack);
+            encode_apdu(&mut buf, &complex_ack).expect("valid APDU encoding");
 
             net_b
                 .send_apdu(&buf, &received.source_mac, false, NetworkPriority::NORMAL)
@@ -168,7 +168,7 @@ async fn device_discovery_via_iam() {
         service_request: Bytes::from(service_buf.to_vec()),
     });
     let mut buf = BytesMut::new();
-    encode_apdu(&mut buf, &pdu);
+    encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
 
     net_b
         .send_apdu(&buf, client.local_mac(), false, NetworkPriority::NORMAL)

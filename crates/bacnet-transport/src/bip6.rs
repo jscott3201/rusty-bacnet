@@ -124,19 +124,20 @@ pub fn encode_bvlc6(
     function: Bvlc6Function,
     source_vmac: &Bip6Vmac,
     npdu: &[u8],
-) {
+) -> Result<(), Error> {
     let total_length = BVLC6_HEADER_LENGTH + npdu.len();
-    debug_assert!(
-        total_length <= u16::MAX as usize,
-        "BVLC6 frame length overflow"
-    );
-    let wire_length = (total_length as u64).min(u16::MAX as u64) as u16;
+    if total_length > u16::MAX as usize {
+        return Err(Error::Encoding(format!(
+            "BVLC6 frame length {total_length} exceeds 16-bit BVLC length field"
+        )));
+    }
     buf.reserve(total_length);
     buf.put_u8(BVLC6_TYPE);
     buf.put_u8(function.to_byte());
-    buf.put_u16(wire_length);
+    buf.put_u16(total_length as u16);
     buf.put_slice(source_vmac);
     buf.put_slice(npdu);
+    Ok(())
 }
 
 /// Decode a BVLC-IPv6 frame from raw bytes.
@@ -214,25 +215,30 @@ pub fn encode_bvlc6_original_unicast(
     source_vmac: &Bip6Vmac,
     dest_vmac: &Bip6Vmac,
     npdu: &[u8],
-) {
+) -> Result<(), Error> {
     let total_length = BVLC6_UNICAST_HEADER_LENGTH + npdu.len();
-    debug_assert!(
-        total_length <= u16::MAX as usize,
-        "BVLC6 unicast frame length overflow"
-    );
-    let wire_length = (total_length as u64).min(u16::MAX as u64) as u16;
+    if total_length > u16::MAX as usize {
+        return Err(Error::Encoding(format!(
+            "BVLC6 Original-Unicast-NPDU length {total_length} exceeds 16-bit BVLC length field"
+        )));
+    }
     buf.reserve(total_length);
     buf.put_u8(BVLC6_TYPE);
     buf.put_u8(Bvlc6Function::OriginalUnicast.to_byte());
-    buf.put_u16(wire_length);
+    buf.put_u16(total_length as u16);
     buf.put_slice(source_vmac);
     buf.put_slice(dest_vmac);
     buf.put_slice(npdu);
+    Ok(())
 }
 
 /// Encode a BVLC-IPv6 Original-Broadcast-NPDU frame.
-pub fn encode_bvlc6_original_broadcast(buf: &mut BytesMut, source_vmac: &Bip6Vmac, npdu: &[u8]) {
-    encode_bvlc6(buf, Bvlc6Function::OriginalBroadcast, source_vmac, npdu);
+pub fn encode_bvlc6_original_broadcast(
+    buf: &mut BytesMut,
+    source_vmac: &Bip6Vmac,
+    npdu: &[u8],
+) -> Result<(), Error> {
+    encode_bvlc6(buf, Bvlc6Function::OriginalBroadcast, source_vmac, npdu)
 }
 
 /// Encode a BVLC-IPv6 Virtual-Address-Resolution frame (7 bytes, no payload).
@@ -245,7 +251,8 @@ pub fn encode_virtual_address_resolution(source_vmac: &Bip6Vmac) -> BytesMut {
         Bvlc6Function::VirtualAddressResolution,
         source_vmac,
         &[], // no payload
-    );
+    )
+    .expect("empty Virtual-Address-Resolution frame fits in BVLC6 length field");
     buf
 }
 
@@ -495,12 +502,15 @@ async fn send_register_foreign_device_v6(
     source_vmac: &Bip6Vmac,
 ) {
     let mut buf = BytesMut::with_capacity(BVLC6_HEADER_LENGTH + 2);
-    encode_bvlc6(
+    if let Err(e) = encode_bvlc6(
         &mut buf,
         Bvlc6Function::RegisterForeignDevice,
         source_vmac,
         &ttl.to_be_bytes(),
-    );
+    ) {
+        warn!(error = %e, "BIP6: failed to encode Register-Foreign-Device");
+        return;
+    }
     if let Err(e) = socket.send_to(&buf, bbmd_addr).await {
         warn!(error = %e, "BIP6: failed to send Register-Foreign-Device");
     } else {
@@ -972,7 +982,7 @@ impl TransportPort for Bip6Transport {
             .lookup_by_addr(&dest)
             .await
             .unwrap_or([0; 3]);
-        encode_bvlc6_original_unicast(&mut buf, &source_vmac, &dest_vmac, npdu);
+        encode_bvlc6_original_unicast(&mut buf, &source_vmac, &dest_vmac, npdu)?;
 
         socket.send_to(&buf, dest).await.map_err(Error::Transport)?;
 
@@ -998,7 +1008,7 @@ impl TransportPort for Bip6Transport {
                 Bvlc6Function::DistributeBroadcastToNetwork,
                 &source_vmac,
                 npdu,
-            );
+            )?;
             socket
                 .send_to(&buf, bbmd_addr)
                 .await
@@ -1008,7 +1018,7 @@ impl TransportPort for Bip6Transport {
 
         let dest = SocketAddrV6::new(self.broadcast_scope.multicast_addr(), self.port, 0, 0);
         let mut buf = BytesMut::with_capacity(BVLC6_HEADER_LENGTH + npdu.len());
-        encode_bvlc6_original_broadcast(&mut buf, &source_vmac, npdu);
+        encode_bvlc6_original_broadcast(&mut buf, &source_vmac, npdu)?;
 
         socket.send_to(&buf, dest).await.map_err(Error::Transport)?;
 
@@ -1030,7 +1040,8 @@ mod tests {
         let dst_vmac: Bip6Vmac = [0x0A, 0x0B, 0x0C];
         let npdu = vec![0x01, 0x00, 0xAA];
         let mut buf = BytesMut::new();
-        encode_bvlc6_original_unicast(&mut buf, &src_vmac, &dst_vmac, &npdu);
+        encode_bvlc6_original_unicast(&mut buf, &src_vmac, &dst_vmac, &npdu)
+            .expect("valid BVLC6 unicast encoding");
         assert_eq!(buf[0], BVLC6_TYPE);
         assert_eq!(buf[1], Bvlc6Function::OriginalUnicast.to_byte());
         let len = u16::from_be_bytes([buf[2], buf[3]]);
@@ -1045,8 +1056,26 @@ mod tests {
         let vmac: Bip6Vmac = [0x01; 3];
         let npdu = vec![0xBB];
         let mut buf = BytesMut::new();
-        encode_bvlc6_original_broadcast(&mut buf, &vmac, &npdu);
+        encode_bvlc6_original_broadcast(&mut buf, &vmac, &npdu)
+            .expect("valid BVLC6 broadcast encoding");
         assert_eq!(buf[1], Bvlc6Function::OriginalBroadcast.to_byte());
+    }
+
+    #[test]
+    fn encode_bvlc6_oversized_payload_errors() {
+        let vmac: Bip6Vmac = [0x01; 3];
+        let npdu = vec![0; u16::MAX as usize - BVLC6_HEADER_LENGTH + 1];
+        let mut buf = BytesMut::new();
+        assert!(encode_bvlc6(&mut buf, Bvlc6Function::OriginalBroadcast, &vmac, &npdu).is_err());
+    }
+
+    #[test]
+    fn encode_bvlc6_unicast_oversized_payload_errors() {
+        let src_vmac: Bip6Vmac = [0x01, 0x02, 0x03];
+        let dst_vmac: Bip6Vmac = [0x0A, 0x0B, 0x0C];
+        let npdu = vec![0; u16::MAX as usize - BVLC6_UNICAST_HEADER_LENGTH + 1];
+        let mut buf = BytesMut::new();
+        assert!(encode_bvlc6_original_unicast(&mut buf, &src_vmac, &dst_vmac, &npdu).is_err());
     }
 
     #[test]
@@ -1055,7 +1084,8 @@ mod tests {
         let dst_vmac: Bip6Vmac = [0x0A, 0x0B, 0x0C];
         let npdu = vec![0x01, 0x00, 0xAA, 0xBB];
         let mut buf = BytesMut::new();
-        encode_bvlc6_original_unicast(&mut buf, &src_vmac, &dst_vmac, &npdu);
+        encode_bvlc6_original_unicast(&mut buf, &src_vmac, &dst_vmac, &npdu)
+            .expect("valid BVLC6 unicast encoding");
         let decoded = decode_bvlc6(&buf).unwrap();
         assert_eq!(decoded.function, Bvlc6Function::OriginalUnicast);
         assert_eq!(decoded.source_vmac, src_vmac);
@@ -1275,7 +1305,8 @@ mod tests {
             Bvlc6Function::ForwardedNpdu,
             &sender_vmac,
             &forwarded_payload,
-        );
+        )
+        .expect("valid BVLC6 encoding");
 
         let frame = decode_bvlc6(&buf).unwrap();
         assert_eq!(frame.function, Bvlc6Function::ForwardedNpdu);
@@ -1310,7 +1341,8 @@ mod tests {
             Bvlc6Function::ForwardedNpdu,
             &bbmd_vmac,
             &forwarded_payload,
-        );
+        )
+        .expect("valid BVLC6 encoding");
 
         // Send directly to the transport's bound address using a separate socket
         let sender = UdpSocket::bind("[::1]:0").await.unwrap();

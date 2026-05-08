@@ -17,9 +17,9 @@ use tokio::time::Duration;
 use tracing::{debug, warn};
 
 use bacnet_encoding::apdu::{
-    self, encode_apdu, AbortPdu, Apdu, ComplexAck, ConfirmedRequest as ConfirmedRequestPdu,
-    ErrorPdu, RejectPdu, SegmentAck as SegmentAckPdu, SimpleAck,
-    UnconfirmedRequest as UnconfirmedRequestPdu,
+    self, encode_apdu, validate_max_apdu_length, AbortPdu, Apdu, ComplexAck,
+    ConfirmedRequest as ConfirmedRequestPdu, ErrorPdu, RejectPdu, SegmentAck as SegmentAckPdu,
+    SimpleAck, UnconfirmedRequest as UnconfirmedRequestPdu,
 };
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_encoding::segmentation::{
@@ -505,6 +505,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ) -> Result<Self, Error> {
         let transport_max = transport.max_apdu_length() as u32;
         config.max_apdu_length = config.max_apdu_length.min(transport_max);
+        let max_apdu = u16::try_from(config.max_apdu_length).map_err(|_| {
+            Error::Encoding(format!(
+                "invalid max_apdu_length {}; expected one of 50, 128, 206, 480, 1024, 1476",
+                config.max_apdu_length
+            ))
+        })?;
+        validate_max_apdu_length(max_apdu)?;
 
         if config.vendor_id == 0 {
             warn!("vendor_id is 0 (ASHRAE reserved); set a valid vendor ID for production use");
@@ -570,7 +577,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                             abort_reason: AbortReason::BUFFER_OVERFLOW,
                                         });
                                         let mut abort_buf = BytesMut::new();
-                                        encode_apdu(&mut abort_buf, &abort_pdu);
+                                        encode_apdu(&mut abort_buf, &abort_pdu)
+                                            .expect("valid APDU encoding");
                                         let _ = network_dispatch
                                             .send_apdu(
                                                 &abort_buf,
@@ -615,7 +623,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                         abort_reason: AbortReason::INVALID_APDU_IN_THIS_STATE,
                                     });
                                     let mut abort_buf = BytesMut::new();
-                                    encode_apdu(&mut abort_buf, &abort_pdu);
+                                    encode_apdu(&mut abort_buf, &abort_pdu)
+                                        .expect("valid APDU encoding");
                                     let _ = network_dispatch
                                         .send_apdu(
                                             &abort_buf,
@@ -635,7 +644,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     actual_window_size: 1,
                                 });
                                 let mut ack_buf = BytesMut::new();
-                                encode_apdu(&mut ack_buf, &seg_ack);
+                                encode_apdu(&mut ack_buf, &seg_ack).expect("valid APDU encoding");
                                 if let Err(e) = network_dispatch
                                     .send_apdu(
                                         &ack_buf,
@@ -1345,7 +1354,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         if let Apdu::ComplexAck(ref ack) = response {
             let mut full_buf = BytesMut::new();
-            encode_apdu(&mut full_buf, &response);
+            encode_apdu(&mut full_buf, &response).expect("valid APDU encoding");
 
             if full_buf.len() > client_max_apdu as usize {
                 if !client_accepts_segmented {
@@ -1355,7 +1364,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         abort_reason: AbortReason::SEGMENTATION_NOT_SUPPORTED,
                     });
                     let mut buf = BytesMut::new();
-                    encode_apdu(&mut buf, &abort);
+                    encode_apdu(&mut buf, &abort).expect("valid APDU encoding");
                     if let Err(e) = network
                         .send_apdu(&buf, source_mac, false, NetworkPriority::NORMAL)
                         .await
@@ -1402,7 +1411,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
 
         let mut buf = BytesMut::new();
-        encode_apdu(&mut buf, &response);
+        encode_apdu(&mut buf, &response).expect("valid APDU encoding");
 
         if let Some(tx) = reply_tx {
             use bacnet_encoding::npdu::{encode_npdu, Npdu};
@@ -1486,7 +1495,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 abort_reason: AbortReason::BUFFER_OVERFLOW,
             });
             let mut buf = BytesMut::new();
-            encode_apdu(&mut buf, &abort);
+            encode_apdu(&mut buf, &abort).expect("valid APDU encoding");
             let _ = network
                 .send_apdu(&buf, source_mac, false, NetworkPriority::NORMAL)
                 .await;
@@ -1524,7 +1533,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             });
 
             let mut buf = BytesMut::with_capacity(client_max_apdu as usize);
-            encode_apdu(&mut buf, &pdu);
+            encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
 
             if let Err(e) = network
                 .send_apdu(&buf, source_mac, false, NetworkPriority::NORMAL)
@@ -1558,7 +1567,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     abort_reason: AbortReason::TSM_TIMEOUT,
                                 });
                                 let mut abort_buf = BytesMut::new();
-                                encode_apdu(&mut abort_buf, &abort);
+                                encode_apdu(&mut abort_buf, &abort).expect("valid APDU encoding");
                                 let _ = network
                                     .send_apdu(
                                         &abort_buf,
@@ -1601,7 +1610,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             abort_reason: AbortReason::TSM_TIMEOUT,
                         });
                         let mut abort_buf = BytesMut::new();
-                        encode_apdu(&mut abort_buf, &abort);
+                        encode_apdu(&mut abort_buf, &abort).expect("valid APDU encoding");
                         let _ = network
                             .send_apdu(&abort_buf, source_mac, false, NetworkPriority::NORMAL)
                             .await;
@@ -1680,7 +1689,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     });
 
                     let mut buf = BytesMut::new();
-                    encode_apdu(&mut buf, &pdu);
+                    encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
 
                     if let Some(ref source_net) = received.source_network {
                         if let Err(e) = network
@@ -1724,7 +1733,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             });
 
                             let mut buf = BytesMut::new();
-                            encode_apdu(&mut buf, &pdu);
+                            encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
 
                             if let Err(e) = network
                                 .broadcast_apdu(&buf, false, NetworkPriority::NORMAL)
@@ -1901,7 +1910,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             });
 
             let mut buf = BytesMut::new();
-            encode_apdu(&mut buf, &pdu);
+            encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
 
             if let Err(e) = network
                 .broadcast_apdu(&buf, false, NetworkPriority::NORMAL)
@@ -1937,7 +1946,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     });
 
                     let mut buf = BytesMut::new();
-                    encode_apdu(&mut buf, &pdu);
+                    encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
 
                     match recipient {
                         bacnet_types::constructed::BACnetRecipient::Address(addr) => {
@@ -1964,7 +1973,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     });
 
                     let mut buf = BytesMut::new();
-                    encode_apdu(&mut buf, &pdu);
+                    encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
 
                     match recipient {
                         bacnet_types::constructed::BACnetRecipient::Address(addr) => {
@@ -2145,7 +2154,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 });
 
                 let mut buf = BytesMut::new();
-                encode_apdu(&mut buf, &pdu);
+                encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
 
                 if let Some(pv) = current_pv {
                     let mut table = cov_table.write().await;
@@ -2227,7 +2236,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 });
 
                 let mut buf = BytesMut::new();
-                encode_apdu(&mut buf, &pdu);
+                encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
 
                 if let Err(e) = network
                     .send_apdu(&buf, &sub.subscriber_mac, false, NetworkPriority::NORMAL)
@@ -2285,6 +2294,18 @@ mod tests {
     fn server_config_time_sync_callback_default_is_none() {
         let config = ServerConfig::default();
         assert!(config.on_time_sync.is_none());
+    }
+
+    #[tokio::test]
+    async fn server_rejects_invalid_max_apdu_length() {
+        let config = ServerConfig {
+            max_apdu_length: 1000,
+            ..ServerConfig::default()
+        };
+        let transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+
+        let result = BACnetServer::start(config, ObjectDatabase::new(), transport).await;
+        assert!(result.is_err());
     }
 
     // -----------------------------------------------------------------------
