@@ -122,8 +122,11 @@ pub fn encode_real(buf: &mut BytesMut, value: f32) {
 
 /// Decode an IEEE-754 single-precision float from 4 big-endian bytes.
 pub fn decode_real(data: &[u8]) -> Result<f32, Error> {
-    if data.len() < 4 {
-        return Err(Error::buffer_too_short(4, data.len()));
+    if data.len() != 4 {
+        return Err(Error::decoding(
+            0,
+            format!("Real expects exactly 4 bytes, got {}", data.len()),
+        ));
     }
     Ok(f32::from_be_bytes([data[0], data[1], data[2], data[3]]))
 }
@@ -137,8 +140,11 @@ pub fn encode_double(buf: &mut BytesMut, value: f64) {
 
 /// Decode an IEEE-754 double-precision float from 8 big-endian bytes.
 pub fn decode_double(data: &[u8]) -> Result<f64, Error> {
-    if data.len() < 8 {
-        return Err(Error::buffer_too_short(8, data.len()));
+    if data.len() != 8 {
+        return Err(Error::decoding(
+            0,
+            format!("Double expects exactly 8 bytes, got {}", data.len()),
+        ));
     }
     let bytes: [u8; 8] = [
         data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
@@ -802,6 +808,25 @@ mod tests {
         let mut buf = BytesMut::new();
         encode_double(&mut buf, core::f64::consts::PI);
         assert_eq!(decode_double(&buf).unwrap(), core::f64::consts::PI);
+    }
+
+    #[test]
+    fn fixed_width_application_values_reject_overlong_tags() {
+        for (tag, len) in [
+            (app_tag::REAL, 5),
+            (app_tag::DOUBLE, 9),
+            (app_tag::DATE, 5),
+            (app_tag::TIME, 5),
+            (app_tag::OBJECT_IDENTIFIER, 5),
+        ] {
+            let mut bytes = BytesMut::new();
+            tags::encode_tag(&mut bytes, tag, TagClass::Application, len);
+            bytes.extend_from_slice(&vec![0; len as usize]);
+            assert!(
+                decode_application_value(&bytes, 0).is_err(),
+                "tag {tag} with length {len} should be rejected"
+            );
+        }
     }
 
     // --- Character string ---
