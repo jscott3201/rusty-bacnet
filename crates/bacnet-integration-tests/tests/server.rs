@@ -1,6 +1,8 @@
 //! End-to-end integration tests: real BACnetClient ↔ real BACnetServer over loopback UDP.
 
 use bacnet_client::client::BACnetClient;
+use bacnet_encoding::apdu::{encode_apdu, Apdu, ConfirmedRequest as ConfirmedRequestPdu};
+use bacnet_network::layer::NetworkLayer;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::binary::BinaryValueObject;
 use bacnet_objects::database::ObjectDatabase;
@@ -8,11 +10,15 @@ use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::bip::BipTransport;
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    AbortReason, ConfirmedServiceChoice, NetworkPriority, ObjectType, PropertyIdentifier,
+};
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use std::net::Ipv4Addr;
+use std::sync::Arc;
+use tokio::time::Duration;
 
 /// Build a server with a Device, an AnalogInput, and a BinaryValue.
 async fn make_server() -> BACnetServer<BipTransport> {
@@ -758,6 +764,54 @@ async fn server_segments_large_rpm_response() {
 // Server Rx Segmentation integration tests
 // ---------------------------------------------------------------------------
 
+fn read_property_service_payload() -> Vec<u8> {
+    use bacnet_services::read_property::ReadPropertyRequest;
+
+    let ai_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    let rp_req = ReadPropertyRequest {
+        object_identifier: ai_oid,
+        property_identifier: PropertyIdentifier::PRESENT_VALUE,
+        property_array_index: None,
+    };
+    let mut service_buf = BytesMut::new();
+    rp_req.encode(&mut service_buf);
+    service_buf.to_vec()
+}
+
+fn segmented_read_property_pdu(
+    invoke_id: u8,
+    seq: u8,
+    more_follows: bool,
+    proposed_window_size: Option<u8>,
+    service_request: Bytes,
+) -> Apdu {
+    Apdu::ConfirmedRequest(ConfirmedRequestPdu {
+        segmented: true,
+        more_follows,
+        segmented_response_accepted: true,
+        max_segments: None,
+        max_apdu_length: 1476,
+        invoke_id,
+        sequence_number: Some(seq),
+        proposed_window_size,
+        service_choice: ConfirmedServiceChoice::READ_PROPERTY,
+        service_request,
+    })
+}
+
+async fn send_raw_apdu(
+    raw_network: &Arc<NetworkLayer<BipTransport>>,
+    server_mac: &[u8],
+    apdu: Apdu,
+) {
+    let mut buf = BytesMut::new();
+    encode_apdu(&mut buf, &apdu).expect("valid APDU encoding");
+    raw_network
+        .send_apdu(&buf, server_mac, true, NetworkPriority::NORMAL)
+        .await
+        .unwrap();
+}
+
 /// When a client sends a segmented ConfirmedRequest (ReadProperty split across
 /// two segments), the server should reassemble it, process the full request,
 /// and return a correct ReadPropertyACK.
@@ -919,6 +973,164 @@ async fn server_handles_segmented_request() {
         got_response,
         "Should have received ReadPropertyACK response"
     );
+
+    server.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn server_aborts_segmented_request_with_invalid_window_size() {
+    let mut server = make_server().await;
+    let server_mac = server.local_mac().to_vec();
+
+    let raw_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
+    let mut raw_network = NetworkLayer::new(raw_transport);
+    let mut raw_rx = raw_network.start().await.unwrap();
+    let raw_network = Arc::new(raw_network);
+
+    let payload = read_property_service_payload();
+    let invoke_id = 43;
+    let seg0 = segmented_read_property_pdu(
+        invoke_id,
+        0,
+        true,
+        Some(1),
+        Bytes::copy_from_slice(&payload[..payload.len() / 2]),
+    );
+    let mut buf = BytesMut::new();
+    encode_apdu(&mut buf, &seg0).expect("valid APDU encoding");
+    buf[4] = 0;
+    raw_network
+        .send_apdu(&buf, &server_mac, true, NetworkPriority::NORMAL)
+        .await
+        .unwrap();
+
+    let received = tokio::time::timeout(Duration::from_secs(3), raw_rx.recv())
+        .await
+        .expect("Timed out waiting for Abort")
+        .expect("Channel closed while waiting for Abort");
+    let decoded = bacnet_encoding::apdu::decode_apdu(received.apdu).unwrap();
+    match decoded {
+        Apdu::Abort(abort) => {
+            assert!(abort.sent_by_server);
+            assert_eq!(abort.invoke_id, invoke_id);
+            assert_eq!(abort.abort_reason, AbortReason::WINDOW_SIZE_OUT_OF_RANGE);
+        }
+        other => panic!("Expected Abort, got {:?}", other),
+    }
+
+    server.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn server_naks_segmented_request_gap_with_last_good_sequence() {
+    let mut server = make_server().await;
+    let server_mac = server.local_mac().to_vec();
+
+    let raw_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
+    let mut raw_network = NetworkLayer::new(raw_transport);
+    let mut raw_rx = raw_network.start().await.unwrap();
+    let raw_network = Arc::new(raw_network);
+
+    let payload = read_property_service_payload();
+    let third = payload.len() / 3;
+    let invoke_id = 44;
+    let seg0 = segmented_read_property_pdu(
+        invoke_id,
+        0,
+        true,
+        Some(2),
+        Bytes::copy_from_slice(&payload[..third]),
+    );
+    send_raw_apdu(&raw_network, &server_mac, seg0).await;
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), raw_rx.recv())
+            .await
+            .is_err(),
+        "server should not ACK before the negotiated window boundary"
+    );
+
+    let seg2 = segmented_read_property_pdu(
+        invoke_id,
+        2,
+        true,
+        Some(2),
+        Bytes::copy_from_slice(&payload[third * 2..]),
+    );
+    send_raw_apdu(&raw_network, &server_mac, seg2).await;
+
+    let received = tokio::time::timeout(Duration::from_secs(3), raw_rx.recv())
+        .await
+        .expect("Timed out waiting for negative SegmentAck")
+        .expect("Channel closed while waiting for negative SegmentAck");
+    let decoded = bacnet_encoding::apdu::decode_apdu(received.apdu).unwrap();
+    match decoded {
+        Apdu::SegmentAck(sa) => {
+            assert!(sa.sent_by_server);
+            assert!(sa.negative_ack);
+            assert_eq!(sa.invoke_id, invoke_id);
+            assert_eq!(sa.sequence_number, 0);
+            assert_eq!(sa.actual_window_size, 2);
+        }
+        other => panic!("Expected SegmentAck, got {:?}", other),
+    }
+
+    server.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn server_acks_segmented_request_at_window_boundary() {
+    let mut server = make_server().await;
+    let server_mac = server.local_mac().to_vec();
+
+    let raw_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
+    let mut raw_network = NetworkLayer::new(raw_transport);
+    let mut raw_rx = raw_network.start().await.unwrap();
+    let raw_network = Arc::new(raw_network);
+
+    let payload = read_property_service_payload();
+    let mid = payload.len() / 2;
+    let invoke_id = 45;
+
+    let seg0 = segmented_read_property_pdu(
+        invoke_id,
+        0,
+        true,
+        Some(2),
+        Bytes::copy_from_slice(&payload[..mid]),
+    );
+    send_raw_apdu(&raw_network, &server_mac, seg0).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), raw_rx.recv())
+            .await
+            .is_err(),
+        "server should wait for the second segment before ACKing a two-segment window"
+    );
+
+    let seg1 = segmented_read_property_pdu(
+        invoke_id,
+        1,
+        true,
+        Some(2),
+        Bytes::copy_from_slice(&payload[mid..]),
+    );
+    send_raw_apdu(&raw_network, &server_mac, seg1).await;
+
+    let received = tokio::time::timeout(Duration::from_secs(3), raw_rx.recv())
+        .await
+        .expect("Timed out waiting for SegmentAck")
+        .expect("Channel closed while waiting for SegmentAck");
+    let decoded = bacnet_encoding::apdu::decode_apdu(received.apdu).unwrap();
+    match decoded {
+        Apdu::SegmentAck(sa) => {
+            assert!(sa.sent_by_server);
+            assert!(!sa.negative_ack);
+            assert_eq!(sa.invoke_id, invoke_id);
+            assert_eq!(sa.sequence_number, 1);
+            assert_eq!(sa.actual_window_size, 2);
+        }
+        other => panic!("Expected SegmentAck, got {:?}", other),
+    }
 
     server.stop().await.unwrap();
 }
