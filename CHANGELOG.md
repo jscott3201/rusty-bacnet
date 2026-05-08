@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 - Bumped `rustls-webpki` from 0.103.10 to 0.103.13 to address [RUSTSEC](https://rustsec.org/) advisory: panic reachable prior to CRL signature verification. Applications not using Certificate Revocation Lists were not exposed.
+- Bumped `rand` 0.10.0 → 0.10.1 and `rand` 0.9.2 → 0.9.4 to address [RUSTSEC-2026-0097](https://rustsec.org/advisories/RUSTSEC-2026-0097): `ThreadRng` unsoundness when a custom logger calls `rand::rng()` during reseed. Triggering preconditions are not present in this stack, but the patched versions are pulled in for defense in depth.
 
 ### Fixed
 - **bacnet-gateway**: use the configured BIP port for the client transport instead of port 0 (which let the OS assign an ephemeral port). Devices replying to the standard BACnet port could not reach the gateway client. Thanks to @chappo (PR #8).
