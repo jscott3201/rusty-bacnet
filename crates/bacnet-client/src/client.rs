@@ -2467,7 +2467,7 @@ mod tests {
         apdu: Apdu,
     ) {
         let mut apdu_buf = BytesMut::new();
-        encode_apdu(&mut apdu_buf, &apdu);
+        encode_apdu(&mut apdu_buf, &apdu).expect("valid APDU encoding");
         let npdu = Npdu {
             source: Some(NpduAddress {
                 network: source_network,
