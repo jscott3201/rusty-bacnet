@@ -316,7 +316,7 @@ fn encode_confirmed_pdu(
 
     let mut buf = BytesMut::new();
     npdu::encode_npdu(&mut buf, &npdu).map_err(js_err)?;
-    apdu::encode_apdu(&mut buf, &Apdu::ConfirmedRequest(confirmed));
+    apdu::encode_apdu(&mut buf, &Apdu::ConfirmedRequest(confirmed)).map_err(js_err)?;
     Ok(buf.to_vec())
 }
 
@@ -337,7 +337,7 @@ fn encode_unconfirmed_pdu(
 
     let mut buf = BytesMut::new();
     npdu::encode_npdu(&mut buf, &npdu).map_err(js_err)?;
-    apdu::encode_apdu(&mut buf, &Apdu::UnconfirmedRequest(unconfirmed));
+    apdu::encode_apdu(&mut buf, &Apdu::UnconfirmedRequest(unconfirmed)).map_err(js_err)?;
     Ok(buf.to_vec())
 }
 
