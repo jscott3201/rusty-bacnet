@@ -867,7 +867,7 @@ async fn server_handles_segmented_request() {
     });
 
     let mut buf = BytesMut::new();
-    encode_apdu(&mut buf, &seg0);
+    encode_apdu(&mut buf, &seg0).expect("valid APDU encoding");
     raw_network
         .send_apdu(
             &buf,
@@ -909,7 +909,7 @@ async fn server_handles_segmented_request() {
     });
 
     let mut buf = BytesMut::new();
-    encode_apdu(&mut buf, &seg1);
+    encode_apdu(&mut buf, &seg1).expect("valid APDU encoding");
     raw_network
         .send_apdu(
             &buf,
@@ -1435,7 +1435,7 @@ async fn iam_routed_back_to_remote_whois_requester() {
         service_request: Bytes::new(),
     });
     let mut apdu_buf = bytes::BytesMut::new();
-    encode_apdu(&mut apdu_buf, &who_is_apdu);
+    encode_apdu(&mut apdu_buf, &who_is_apdu).expect("valid APDU encoding");
 
     // Wrap in an NPDU with source routing: SNET=100, SADR=[10,20,30]
     // This simulates a WhoIs that was forwarded by a router from network 100.
@@ -1529,7 +1529,7 @@ async fn iam_broadcast_for_local_whois() {
         service_request: Bytes::new(),
     });
     let mut apdu_buf = bytes::BytesMut::new();
-    encode_apdu(&mut apdu_buf, &who_is_apdu);
+    encode_apdu(&mut apdu_buf, &who_is_apdu).expect("valid APDU encoding");
 
     // Wrap in an NPDU without source routing
     let npdu = Npdu {

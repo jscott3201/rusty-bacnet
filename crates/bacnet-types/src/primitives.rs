@@ -85,8 +85,14 @@ impl ObjectIdentifier {
 
     /// Decode from the 4-byte BACnet wire format (big-endian).
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        if data.len() < 4 {
-            return Err(Error::buffer_too_short(4, data.len()));
+        if data.len() != 4 {
+            return Err(Error::decoding(
+                0,
+                format!(
+                    "ObjectIdentifier expects exactly 4 bytes, got {}",
+                    data.len()
+                ),
+            ));
         }
         let value = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
         let type_raw = (value >> 22) & 0x3FF;
@@ -147,8 +153,11 @@ impl Date {
 
     /// Decode from 4 bytes.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        if data.len() < 4 {
-            return Err(Error::buffer_too_short(4, data.len()));
+        if data.len() != 4 {
+            return Err(Error::decoding(
+                0,
+                format!("Date expects exactly 4 bytes, got {}", data.len()),
+            ));
         }
         Ok(Self {
             year: data[0],
@@ -198,8 +207,11 @@ impl Time {
 
     /// Decode from 4 bytes.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        if data.len() < 4 {
-            return Err(Error::buffer_too_short(4, data.len()));
+        if data.len() != 4 {
+            return Err(Error::decoding(
+                0,
+                format!("Time expects exactly 4 bytes, got {}", data.len()),
+            ));
         }
         Ok(Self {
             hour: data[0],
@@ -375,6 +387,11 @@ mod tests {
     }
 
     #[test]
+    fn object_identifier_overlong_errors() {
+        assert!(ObjectIdentifier::decode(&[0x00, 0x00, 0x00, 0x01, 0xFF]).is_err());
+    }
+
+    #[test]
     fn date_encode_decode_round_trip() {
         let date = Date {
             year: 124, // 2024
@@ -400,6 +417,11 @@ mod tests {
     }
 
     #[test]
+    fn date_overlong_errors() {
+        assert!(Date::decode(&[124, 6, 15, 6, 0]).is_err());
+    }
+
+    #[test]
     fn time_encode_decode_round_trip() {
         let time = Time {
             hour: 14,
@@ -410,6 +432,11 @@ mod tests {
         let bytes = time.encode();
         let decoded = Time::decode(&bytes).unwrap();
         assert_eq!(time, decoded);
+    }
+
+    #[test]
+    fn time_overlong_errors() {
+        assert!(Time::decode(&[14, 30, 45, 50, 0]).is_err());
     }
 
     #[test]
@@ -462,13 +489,11 @@ mod tests {
     }
 
     #[test]
-    fn object_identifier_decode_extra_bytes_ignored() {
-        // If we have more than 4 bytes, only the first 4 are used
+    fn object_identifier_decode_extra_bytes_errors() {
         let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 42).unwrap();
         let mut bytes = oid.encode().to_vec();
-        bytes.extend_from_slice(&[0xFF, 0xFF]); // extra garbage
-        let decoded = ObjectIdentifier::decode(&bytes).unwrap();
-        assert_eq!(decoded, oid);
+        bytes.extend_from_slice(&[0xFF, 0xFF]);
+        assert!(ObjectIdentifier::decode(&bytes).is_err());
     }
 
     #[test]

@@ -63,29 +63,47 @@ fn decode_max_segments(value: u8) -> Option<u8> {
 /// Decoded max-APDU-length values indexed by the 4-bit field.
 const MAX_APDU_DECODE: [u16; 6] = [50, 128, 206, 480, 1024, 1476];
 
+/// Return true when `value` is one of the BACnet max-APDU-length encodings
+/// defined by ASHRAE 135-2020 Clause 20.1.2.5.
+pub fn is_valid_max_apdu_length(value: u16) -> bool {
+    matches!(value, 50 | 128 | 206 | 480 | 1024 | 1476)
+}
+
+/// Validate a locally configured max-APDU-length value.
+pub fn validate_max_apdu_length(value: u16) -> Result<(), Error> {
+    if is_valid_max_apdu_length(value) {
+        Ok(())
+    } else {
+        Err(Error::Encoding(format!(
+            "invalid max-APDU-length {value}; expected one of 50, 128, 206, 480, 1024, 1476"
+        )))
+    }
+}
+
 /// Encode a max-APDU-length to a 4-bit field.
-fn encode_max_apdu(value: u16) -> u8 {
+fn encode_max_apdu(value: u16) -> Result<u8, Error> {
+    validate_max_apdu_length(value)?;
     match value {
-        50 => 0,
-        128 => 1,
-        206 => 2,
-        480 => 3,
-        1024 => 4,
-        _ => 5, // 1476 (default)
+        50 => Ok(0),
+        128 => Ok(1),
+        206 => Ok(2),
+        480 => Ok(3),
+        1024 => Ok(4),
+        1476 => Ok(5),
+        _ => unreachable!("validated max-APDU-length"),
     }
 }
 
 /// Decode a 4-bit max-APDU-length field.
-fn decode_max_apdu(value: u8) -> u16 {
+fn decode_max_apdu(value: u8) -> Result<u16, Error> {
     let idx = (value & 0x0F) as usize;
     if idx < MAX_APDU_DECODE.len() {
-        MAX_APDU_DECODE[idx]
+        Ok(MAX_APDU_DECODE[idx])
     } else {
-        tracing::warn!(
-            value = idx,
-            "Reserved max-APDU-length field value, defaulting to 1476"
-        );
-        1476
+        Err(Error::decoding(
+            1,
+            format!("reserved max-APDU-length field value {idx}"),
+        ))
     }
 }
 
@@ -187,20 +205,35 @@ pub enum Apdu {
 // ---------------------------------------------------------------------------
 
 /// Encode an APDU to wire format.
-pub fn encode_apdu(buf: &mut BytesMut, apdu: &Apdu) {
+pub fn encode_apdu(buf: &mut BytesMut, apdu: &Apdu) -> Result<(), Error> {
     match apdu {
         Apdu::ConfirmedRequest(pdu) => encode_confirmed_request(buf, pdu),
-        Apdu::UnconfirmedRequest(pdu) => encode_unconfirmed_request(buf, pdu),
-        Apdu::SimpleAck(pdu) => encode_simple_ack(buf, pdu),
+        Apdu::UnconfirmedRequest(pdu) => {
+            encode_unconfirmed_request(buf, pdu);
+            Ok(())
+        }
+        Apdu::SimpleAck(pdu) => {
+            encode_simple_ack(buf, pdu);
+            Ok(())
+        }
         Apdu::ComplexAck(pdu) => encode_complex_ack(buf, pdu),
         Apdu::SegmentAck(pdu) => encode_segment_ack(buf, pdu),
-        Apdu::Error(pdu) => encode_error(buf, pdu),
-        Apdu::Reject(pdu) => encode_reject(buf, pdu),
-        Apdu::Abort(pdu) => encode_abort(buf, pdu),
+        Apdu::Error(pdu) => {
+            encode_error(buf, pdu);
+            Ok(())
+        }
+        Apdu::Reject(pdu) => {
+            encode_reject(buf, pdu);
+            Ok(())
+        }
+        Apdu::Abort(pdu) => {
+            encode_abort(buf, pdu);
+            Ok(())
+        }
     }
 }
 
-fn encode_confirmed_request(buf: &mut BytesMut, pdu: &ConfirmedRequest) {
+fn encode_confirmed_request(buf: &mut BytesMut, pdu: &ConfirmedRequest) -> Result<(), Error> {
     let mut byte0 = PduType::CONFIRMED_REQUEST.to_raw() << 4;
     if pdu.segmented {
         byte0 |= 0x08;
@@ -213,18 +246,23 @@ fn encode_confirmed_request(buf: &mut BytesMut, pdu: &ConfirmedRequest) {
     }
     buf.put_u8(byte0);
 
-    let byte1 = (encode_max_segments(pdu.max_segments) << 4) | encode_max_apdu(pdu.max_apdu_length);
+    let byte1 =
+        (encode_max_segments(pdu.max_segments) << 4) | encode_max_apdu(pdu.max_apdu_length)?;
     buf.put_u8(byte1);
 
     buf.put_u8(pdu.invoke_id);
 
     if pdu.segmented {
         buf.put_u8(pdu.sequence_number.unwrap_or(0));
-        buf.put_u8(pdu.proposed_window_size.unwrap_or(1).clamp(1, 127));
+        buf.put_u8(valid_window_size(
+            "ConfirmedRequest proposed-window-size",
+            pdu.proposed_window_size.unwrap_or(1),
+        )?);
     }
 
     buf.put_u8(pdu.service_choice.to_raw());
     buf.put_slice(&pdu.service_request);
+    Ok(())
 }
 
 fn encode_unconfirmed_request(buf: &mut BytesMut, pdu: &UnconfirmedRequest) {
@@ -239,7 +277,7 @@ fn encode_simple_ack(buf: &mut BytesMut, pdu: &SimpleAck) {
     buf.put_u8(pdu.service_choice.to_raw());
 }
 
-fn encode_complex_ack(buf: &mut BytesMut, pdu: &ComplexAck) {
+fn encode_complex_ack(buf: &mut BytesMut, pdu: &ComplexAck) -> Result<(), Error> {
     let mut byte0 = PduType::COMPLEX_ACK.to_raw() << 4;
     if pdu.segmented {
         byte0 |= 0x08;
@@ -253,14 +291,18 @@ fn encode_complex_ack(buf: &mut BytesMut, pdu: &ComplexAck) {
 
     if pdu.segmented {
         buf.put_u8(pdu.sequence_number.unwrap_or(0));
-        buf.put_u8(pdu.proposed_window_size.unwrap_or(1).clamp(1, 127));
+        buf.put_u8(valid_window_size(
+            "ComplexAck proposed-window-size",
+            pdu.proposed_window_size.unwrap_or(1),
+        )?);
     }
 
     buf.put_u8(pdu.service_choice.to_raw());
     buf.put_slice(&pdu.service_ack);
+    Ok(())
 }
 
-fn encode_segment_ack(buf: &mut BytesMut, pdu: &SegmentAck) {
+fn encode_segment_ack(buf: &mut BytesMut, pdu: &SegmentAck) -> Result<(), Error> {
     let mut byte0 = PduType::SEGMENT_ACK.to_raw() << 4;
     if pdu.negative_ack {
         byte0 |= 0x02;
@@ -271,7 +313,21 @@ fn encode_segment_ack(buf: &mut BytesMut, pdu: &SegmentAck) {
     buf.put_u8(byte0);
     buf.put_u8(pdu.invoke_id);
     buf.put_u8(pdu.sequence_number);
-    buf.put_u8(pdu.actual_window_size.clamp(1, 127));
+    buf.put_u8(valid_window_size(
+        "SegmentACK actual-window-size",
+        pdu.actual_window_size,
+    )?);
+    Ok(())
+}
+
+fn valid_window_size(field: &str, value: u8) -> Result<u8, Error> {
+    if (1..=127).contains(&value) {
+        Ok(value)
+    } else {
+        Err(Error::Encoding(format!(
+            "{field} {value} outside BACnet range 1..=127"
+        )))
+    }
 }
 
 fn encode_error(buf: &mut BytesMut, pdu: &ErrorPdu) {
@@ -350,7 +406,7 @@ fn decode_confirmed_request(data: Bytes) -> Result<ConfirmedRequest, Error> {
 
     let byte1 = data[1];
     let max_segments = decode_max_segments((byte1 >> 4) & 0x07);
-    let max_apdu_length = decode_max_apdu(byte1 & 0x0F);
+    let max_apdu_length = decode_max_apdu(byte1 & 0x0F)?;
 
     let invoke_id = data[2];
     let mut offset = 3;
@@ -474,17 +530,17 @@ fn decode_segment_ack(data: Bytes) -> Result<SegmentAck, Error> {
     let byte0 = data[0];
     let raw_window = data[3];
     if raw_window == 0 || raw_window > 127 {
-        tracing::warn!(
-            actual_window_size = raw_window,
-            "SegmentAck window size out of range (1-127), clamping"
-        );
+        return Err(Error::decoding(
+            3,
+            format!("SegmentACK actual-window-size {raw_window} outside range 1..=127"),
+        ));
     }
     Ok(SegmentAck {
         negative_ack: byte0 & 0x02 != 0,
         sent_by_server: byte0 & 0x01 != 0,
         invoke_id: data[1],
         sequence_number: data[2],
-        actual_window_size: raw_window.clamp(1, 127),
+        actual_window_size: raw_window,
     })
 }
 
@@ -581,7 +637,7 @@ mod tests {
 
     fn encode_to_vec(apdu: &Apdu) -> Vec<u8> {
         let mut buf = BytesMut::with_capacity(64);
-        encode_apdu(&mut buf, apdu);
+        encode_apdu(&mut buf, apdu).unwrap();
         buf.to_vec()
     }
 
@@ -604,14 +660,27 @@ mod tests {
 
     #[test]
     fn max_apdu_round_trip() {
-        assert_eq!(decode_max_apdu(encode_max_apdu(50)), 50);
-        assert_eq!(decode_max_apdu(encode_max_apdu(128)), 128);
-        assert_eq!(decode_max_apdu(encode_max_apdu(206)), 206);
-        assert_eq!(decode_max_apdu(encode_max_apdu(480)), 480);
-        assert_eq!(decode_max_apdu(encode_max_apdu(1024)), 1024);
-        assert_eq!(decode_max_apdu(encode_max_apdu(1476)), 1476);
-        // Unknown value defaults to 1476
-        assert_eq!(decode_max_apdu(encode_max_apdu(9999)), 1476);
+        for value in [50, 128, 206, 480, 1024, 1476] {
+            assert_eq!(
+                decode_max_apdu(encode_max_apdu(value).unwrap()).unwrap(),
+                value
+            );
+        }
+        assert!(encode_max_apdu(9999).is_err());
+    }
+
+    #[test]
+    fn decode_max_apdu_reserved_value_errors() {
+        for value in 6..=15 {
+            assert!(decode_max_apdu(value).is_err());
+        }
+    }
+
+    #[test]
+    fn decode_confirmed_request_reserved_max_apdu_errors() {
+        // Low nibble 0x06 is reserved by ASHRAE 135-2020 Clause 20.1.2.5.
+        let data = Bytes::from_static(&[0x00, 0x06, 0x01, 0x0C]);
+        assert!(decode_apdu(data).is_err());
     }
 
     // --- ConfirmedRequest ---
@@ -782,6 +851,47 @@ mod tests {
         assert_eq!(encoded.len(), 4);
         let decoded = decode_apdu(Bytes::from(encoded)).unwrap();
         assert_eq!(apdu, decoded);
+    }
+
+    #[test]
+    fn encode_segment_ack_invalid_window_errors() {
+        for actual_window_size in [0, 128] {
+            let apdu = Apdu::SegmentAck(SegmentAck {
+                negative_ack: false,
+                sent_by_server: false,
+                invoke_id: 1,
+                sequence_number: 0,
+                actual_window_size,
+            });
+            let mut buf = BytesMut::new();
+            assert!(encode_apdu(&mut buf, &apdu).is_err());
+        }
+    }
+
+    #[test]
+    fn decode_segment_ack_invalid_window_errors() {
+        assert!(decode_apdu(Bytes::from_static(&[0x40, 0x01, 0x00, 0x00])).is_err());
+        assert!(decode_apdu(Bytes::from_static(&[0x40, 0x01, 0x00, 0x80])).is_err());
+    }
+
+    #[test]
+    fn encode_segmented_proposed_window_invalid_errors() {
+        for proposed_window_size in [0, 128] {
+            let apdu = Apdu::ConfirmedRequest(ConfirmedRequest {
+                segmented: true,
+                more_follows: false,
+                segmented_response_accepted: false,
+                max_segments: None,
+                max_apdu_length: 1476,
+                invoke_id: 1,
+                sequence_number: Some(0),
+                proposed_window_size: Some(proposed_window_size),
+                service_choice: ConfirmedServiceChoice::READ_PROPERTY,
+                service_request: Bytes::new(),
+            });
+            let mut buf = BytesMut::new();
+            assert!(encode_apdu(&mut buf, &apdu).is_err());
+        }
     }
 
     #[test]

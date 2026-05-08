@@ -40,39 +40,48 @@ pub struct BvllMessage {
 
 /// Encode a standard BVLL frame (all functions except Forwarded-NPDU).
 ///
-/// Panics in debug builds if total frame exceeds u16::MAX. In release,
-/// the length field is capped at u16::MAX.
-pub fn encode_bvll(buf: &mut BytesMut, function: BvlcFunction, payload: &[u8]) {
+/// Returns an error if the total frame cannot be represented by the BVLC
+/// 16-bit length field.
+pub fn encode_bvll(
+    buf: &mut BytesMut,
+    function: BvlcFunction,
+    payload: &[u8],
+) -> Result<(), Error> {
     let total_length = BVLL_HEADER_LENGTH + payload.len();
-    debug_assert!(
-        total_length <= u16::MAX as usize,
-        "BVLL frame length {} exceeds u16::MAX",
-        total_length
-    );
-    let wire_length = (total_length as u64).min(u16::MAX as u64) as u16;
+    if total_length > u16::MAX as usize {
+        return Err(Error::Encoding(format!(
+            "BVLL frame length {total_length} exceeds 16-bit BVLC length field"
+        )));
+    }
     buf.reserve(total_length);
     buf.put_u8(BVLC_TYPE_BACNET_IP);
     buf.put_u8(function.to_raw());
-    buf.put_u16(wire_length);
+    buf.put_u16(total_length as u16);
     buf.put_slice(payload);
+    Ok(())
 }
 
 /// Encode a Forwarded-NPDU BVLL frame with originating address.
-pub fn encode_bvll_forwarded(buf: &mut BytesMut, ip: [u8; 4], port: u16, npdu: &[u8]) {
+pub fn encode_bvll_forwarded(
+    buf: &mut BytesMut,
+    ip: [u8; 4],
+    port: u16,
+    npdu: &[u8],
+) -> Result<(), Error> {
     let total_length = BVLL_HEADER_LENGTH + FORWARDED_ADDR_LENGTH + npdu.len();
-    debug_assert!(
-        total_length <= u16::MAX as usize,
-        "BVLL forwarded frame length {} exceeds u16::MAX",
-        total_length
-    );
-    let wire_length = (total_length as u64).min(u16::MAX as u64) as u16;
+    if total_length > u16::MAX as usize {
+        return Err(Error::Encoding(format!(
+            "BVLL Forwarded-NPDU length {total_length} exceeds 16-bit BVLC length field"
+        )));
+    }
     buf.reserve(total_length);
     buf.put_u8(BVLC_TYPE_BACNET_IP);
     buf.put_u8(BvlcFunction::FORWARDED_NPDU.to_raw());
-    buf.put_u16(wire_length);
+    buf.put_u16(total_length as u16);
     buf.put_slice(&ip);
     buf.put_u16(port);
     buf.put_slice(npdu);
+    Ok(())
 }
 
 /// Decode a BVLL frame from raw bytes.
@@ -158,7 +167,8 @@ mod tests {
     fn encode_decode_unicast() {
         let npdu = vec![0x01, 0x00, 0x10, 0x02, 0x03];
         let mut buf = BytesMut::new();
-        encode_bvll(&mut buf, BvlcFunction::ORIGINAL_UNICAST_NPDU, &npdu);
+        encode_bvll(&mut buf, BvlcFunction::ORIGINAL_UNICAST_NPDU, &npdu)
+            .expect("valid BVLL encoding");
 
         assert_eq!(buf[0], 0x81);
         assert_eq!(buf[1], 0x0A);
@@ -176,7 +186,8 @@ mod tests {
     fn encode_decode_broadcast() {
         let npdu = vec![0x01, 0x00];
         let mut buf = BytesMut::new();
-        encode_bvll(&mut buf, BvlcFunction::ORIGINAL_BROADCAST_NPDU, &npdu);
+        encode_bvll(&mut buf, BvlcFunction::ORIGINAL_BROADCAST_NPDU, &npdu)
+            .expect("valid BVLL encoding");
 
         let msg = decode_bvll(&buf).unwrap();
         assert_eq!(msg.function, BvlcFunction::ORIGINAL_BROADCAST_NPDU);
@@ -190,7 +201,7 @@ mod tests {
         let port = 0xBAC0;
 
         let mut buf = BytesMut::new();
-        encode_bvll_forwarded(&mut buf, ip, port, &npdu);
+        encode_bvll_forwarded(&mut buf, ip, port, &npdu).expect("valid BVLL forwarded encoding");
 
         assert_eq!(buf[0], 0x81);
         assert_eq!(buf[1], 0x04);
@@ -211,7 +222,8 @@ mod tests {
         // BVLC-Result with 2-byte result code (successful completion)
         let result_code = 0x0000u16.to_be_bytes().to_vec();
         let mut buf = BytesMut::new();
-        encode_bvll(&mut buf, BvlcFunction::BVLC_RESULT, &result_code);
+        encode_bvll(&mut buf, BvlcFunction::BVLC_RESULT, &result_code)
+            .expect("valid BVLL encoding");
 
         let msg = decode_bvll(&buf).unwrap();
         assert_eq!(msg.function, BvlcFunction::BVLC_RESULT);
@@ -223,7 +235,8 @@ mod tests {
         // 2-byte TTL in seconds
         let ttl = 60u16.to_be_bytes().to_vec();
         let mut buf = BytesMut::new();
-        encode_bvll(&mut buf, BvlcFunction::REGISTER_FOREIGN_DEVICE, &ttl);
+        encode_bvll(&mut buf, BvlcFunction::REGISTER_FOREIGN_DEVICE, &ttl)
+            .expect("valid BVLL encoding");
 
         let msg = decode_bvll(&buf).unwrap();
         assert_eq!(msg.function, BvlcFunction::REGISTER_FOREIGN_DEVICE);
@@ -238,7 +251,8 @@ mod tests {
             &mut buf,
             BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE,
             &[],
-        );
+        )
+        .expect("valid BVLL encoding");
 
         let msg = decode_bvll(&buf).unwrap();
         assert_eq!(
@@ -246,6 +260,20 @@ mod tests {
             BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE
         );
         assert!(msg.payload.is_empty());
+    }
+
+    #[test]
+    fn encode_bvll_oversized_payload_errors() {
+        let payload = vec![0; u16::MAX as usize - BVLL_HEADER_LENGTH + 1];
+        let mut buf = BytesMut::new();
+        assert!(encode_bvll(&mut buf, BvlcFunction::ORIGINAL_UNICAST_NPDU, &payload).is_err());
+    }
+
+    #[test]
+    fn encode_bvll_forwarded_oversized_payload_errors() {
+        let payload = vec![0; u16::MAX as usize - BVLL_HEADER_LENGTH - FORWARDED_ADDR_LENGTH + 1];
+        let mut buf = BytesMut::new();
+        assert!(encode_bvll_forwarded(&mut buf, [127, 0, 0, 1], 0xBAC0, &payload).is_err());
     }
 
     #[test]
@@ -293,7 +321,8 @@ mod tests {
         // NPDU: 01 20 FF FF 00 FF (version=1, dest=FFFF:broadcast, hop=255)
         let npdu = vec![0x01, 0x20, 0xFF, 0xFF, 0x00, 0xFF];
         let mut buf = BytesMut::new();
-        encode_bvll(&mut buf, BvlcFunction::ORIGINAL_BROADCAST_NPDU, &npdu);
+        encode_bvll(&mut buf, BvlcFunction::ORIGINAL_BROADCAST_NPDU, &npdu)
+            .expect("valid BVLL encoding");
 
         assert_eq!(&buf[..4], &[0x81, 0x0B, 0x00, 0x0A]);
         assert_eq!(&buf[4..], &npdu);

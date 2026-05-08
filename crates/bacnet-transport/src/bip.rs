@@ -165,7 +165,7 @@ impl BipTransport {
         }
 
         let mut buf = BytesMut::with_capacity(4 + payload.len());
-        encode_bvll(&mut buf, function, payload);
+        encode_bvll(&mut buf, function, payload)?;
         socket.send_to(&buf, dest).await.map_err(Error::Transport)?;
 
         match tokio::time::timeout(Self::BVLC_RESPONSE_TIMEOUT, rx).await {
@@ -449,7 +449,7 @@ impl TransportPort for BipTransport {
         let dest = SocketAddrV4::new(Ipv4Addr::from(ip), port);
 
         let mut buf = BytesMut::with_capacity(4 + npdu.len());
-        encode_bvll(&mut buf, BvlcFunction::ORIGINAL_UNICAST_NPDU, npdu);
+        encode_bvll(&mut buf, BvlcFunction::ORIGINAL_UNICAST_NPDU, npdu)?;
 
         socket.send_to(&buf, dest).await.map_err(Error::Transport)?;
 
@@ -466,7 +466,7 @@ impl TransportPort for BipTransport {
                 &mut buf,
                 BvlcFunction::DISTRIBUTE_BROADCAST_TO_NETWORK,
                 npdu,
-            );
+            )?;
             socket
                 .send_to(&buf, bbmd_addr)
                 .await
@@ -477,7 +477,7 @@ impl TransportPort for BipTransport {
         let dest = SocketAddrV4::new(self.broadcast_address, self.port);
 
         let mut buf = BytesMut::with_capacity(4 + npdu.len());
-        encode_bvll(&mut buf, BvlcFunction::ORIGINAL_BROADCAST_NPDU, npdu);
+        encode_bvll(&mut buf, BvlcFunction::ORIGINAL_BROADCAST_NPDU, npdu)?;
 
         socket.send_to(&buf, dest).await.map_err(Error::Transport)?;
 
@@ -493,7 +493,10 @@ impl TransportPort for BipTransport {
 async fn send_register_foreign_device(socket: &UdpSocket, bbmd_addr: SocketAddrV4, ttl: u16) {
     let payload = ttl.to_be_bytes().to_vec();
     let mut buf = BytesMut::with_capacity(6);
-    encode_bvll(&mut buf, BvlcFunction::REGISTER_FOREIGN_DEVICE, &payload);
+    if let Err(e) = encode_bvll(&mut buf, BvlcFunction::REGISTER_FOREIGN_DEVICE, &payload) {
+        warn!(error = %e, "Failed to encode Register-Foreign-Device");
+        return;
+    }
     if let Err(e) = socket.send_to(&buf, bbmd_addr).await {
         warn!(error = %e, "Failed to send Register-Foreign-Device");
     } else {
@@ -564,8 +567,12 @@ async fn handle_bvll_message(msg: &bvll::BvllMessage, sender: ([u8; 4], u16), ct
                 // Re-broadcast on local subnet as Forwarded-NPDU.
                 let dest = SocketAddrV4::new(ctx.broadcast_addr, ctx.broadcast_port);
                 let mut buf = BytesMut::with_capacity(10 + msg.payload.len());
-                encode_bvll_forwarded(&mut buf, sender.0, sender.1, &msg.payload);
-                let _ = ctx.socket.send_to(&buf, dest).await;
+                match encode_bvll_forwarded(&mut buf, sender.0, sender.1, &msg.payload) {
+                    Ok(()) => {
+                        let _ = ctx.socket.send_to(&buf, dest).await;
+                    }
+                    Err(e) => warn!(error = %e, "Failed to encode Forwarded-NPDU rebroadcast"),
+                }
             }
         }
 
@@ -628,8 +635,12 @@ async fn handle_bvll_message(msg: &bvll::BvllMessage, sender: ([u8; 4], u16), ct
                 // Re-broadcast on local subnet as Forwarded-NPDU
                 let dest = SocketAddrV4::new(ctx.broadcast_addr, ctx.broadcast_port);
                 let mut buf = BytesMut::with_capacity(10 + msg.payload.len());
-                encode_bvll_forwarded(&mut buf, orig_ip, orig_port, &msg.payload);
-                let _ = ctx.socket.send_to(&buf, dest).await;
+                match encode_bvll_forwarded(&mut buf, orig_ip, orig_port, &msg.payload) {
+                    Ok(()) => {
+                        let _ = ctx.socket.send_to(&buf, dest).await;
+                    }
+                    Err(e) => warn!(error = %e, "Failed to encode Forwarded-NPDU rebroadcast"),
+                }
             } else {
                 // Non-BBMD: use originating address as source_mac (spec J.2.5).
                 if ctx
@@ -691,8 +702,12 @@ async fn handle_bvll_message(msg: &bvll::BvllMessage, sender: ([u8; 4], u16), ct
                 // Broadcast locally as Forwarded-NPDU
                 let dest = SocketAddrV4::new(ctx.broadcast_addr, ctx.broadcast_port);
                 let mut buf = BytesMut::with_capacity(10 + msg.payload.len());
-                encode_bvll_forwarded(&mut buf, sender.0, sender.1, &msg.payload);
-                let _ = ctx.socket.send_to(&buf, dest).await;
+                match encode_bvll_forwarded(&mut buf, sender.0, sender.1, &msg.payload) {
+                    Ok(()) => {
+                        let _ = ctx.socket.send_to(&buf, dest).await;
+                    }
+                    Err(e) => warn!(error = %e, "Failed to encode Forwarded-NPDU broadcast"),
+                }
             } else {
                 // Non-BBMD: reject with NAK (spec J.4.5)
                 send_bvlc_result(
@@ -743,13 +758,17 @@ async fn handle_bvll_message(msg: &bvll::BvllMessage, sender: ([u8; 4], u16), ct
                 let mut payload = BytesMut::new();
                 state.encode_bdt(&mut payload);
                 let mut buf = BytesMut::with_capacity(4 + payload.len());
-                encode_bvll(
+                match encode_bvll(
                     &mut buf,
                     BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE_ACK,
                     &payload,
-                );
-                let dest = SocketAddrV4::new(Ipv4Addr::from(sender.0), sender.1);
-                let _ = ctx.socket.send_to(&buf, dest).await;
+                ) {
+                    Ok(()) => {
+                        let dest = SocketAddrV4::new(Ipv4Addr::from(sender.0), sender.1);
+                        let _ = ctx.socket.send_to(&buf, dest).await;
+                    }
+                    Err(e) => warn!(error = %e, "Failed to encode Read-BDT-Ack"),
+                }
             } else {
                 send_bvlc_result(
                     &ctx.socket,
@@ -841,13 +860,17 @@ async fn handle_bvll_message(msg: &bvll::BvllMessage, sender: ([u8; 4], u16), ct
                 state.encode_fdt(&mut payload);
                 drop(state);
                 let mut buf = BytesMut::with_capacity(4 + payload.len());
-                encode_bvll(
+                match encode_bvll(
                     &mut buf,
                     BvlcFunction::READ_FOREIGN_DEVICE_TABLE_ACK,
                     &payload,
-                );
-                let dest = SocketAddrV4::new(Ipv4Addr::from(sender.0), sender.1);
-                let _ = ctx.socket.send_to(&buf, dest).await;
+                ) {
+                    Ok(()) => {
+                        let dest = SocketAddrV4::new(Ipv4Addr::from(sender.0), sender.1);
+                        let _ = ctx.socket.send_to(&buf, dest).await;
+                    }
+                    Err(e) => warn!(error = %e, "Failed to encode Read-FDT-Ack"),
+                }
             } else {
                 send_bvlc_result(
                     &ctx.socket,
@@ -974,7 +997,10 @@ async fn handle_bvll_message(msg: &bvll::BvllMessage, sender: ([u8; 4], u16), ct
 async fn send_bvlc_result(socket: &UdpSocket, dest: ([u8; 4], u16), code: BvlcResultCode) {
     let payload = code.to_raw().to_be_bytes().to_vec();
     let mut buf = BytesMut::with_capacity(6);
-    encode_bvll(&mut buf, BvlcFunction::BVLC_RESULT, &payload);
+    if let Err(e) = encode_bvll(&mut buf, BvlcFunction::BVLC_RESULT, &payload) {
+        warn!(error = %e, "Failed to encode BVLC-Result");
+        return;
+    }
     let addr = SocketAddrV4::new(Ipv4Addr::from(dest.0), dest.1);
     let _ = socket.send_to(&buf, addr).await;
 }
@@ -994,7 +1020,10 @@ async fn forward_npdu(
         return;
     }
     let mut buf = BytesMut::with_capacity(10 + npdu.len());
-    encode_bvll_forwarded(&mut buf, orig_ip, orig_port, npdu);
+    if let Err(e) = encode_bvll_forwarded(&mut buf, orig_ip, orig_port, npdu) {
+        warn!(error = %e, "Failed to encode Forwarded-NPDU");
+        return;
+    }
     let frame = buf.freeze();
 
     for (i, &(ip, port)) in targets.iter().enumerate() {
