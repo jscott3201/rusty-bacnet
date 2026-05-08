@@ -78,9 +78,9 @@ pub enum CovAckResult {
 /// after each timeout to decide whether to resend.
 pub struct ServerTsm {
     next_invoke_id: u8,
-    /// Oneshot senders keyed by invoke ID. When a result arrives from the
-    /// dispatch loop, we send it directly — no polling needed.
-    pending: HashMap<u8, oneshot::Sender<CovAckResult>>,
+    /// Oneshot senders keyed by peer MAC and invoke ID. When a result arrives
+    /// from the dispatch loop, we send it directly — no polling needed.
+    pending: HashMap<(MacAddr, u8), oneshot::Sender<CovAckResult>>,
 }
 
 impl ServerTsm {
@@ -93,25 +93,34 @@ impl ServerTsm {
 
     /// Allocate the next invoke ID and register a oneshot channel for the result.
     /// Returns (invoke_id, receiver).
-    fn allocate(&mut self) -> (u8, oneshot::Receiver<CovAckResult>) {
+    fn allocate(&mut self, peer: MacAddr) -> (u8, oneshot::Receiver<CovAckResult>) {
         let id = self.next_invoke_id;
         self.next_invoke_id = self.next_invoke_id.wrapping_add(1);
-        let (tx, rx) = oneshot::channel();
-        self.pending.insert(id, tx);
+        let rx = self.register(peer, id);
         (id, rx)
+    }
+
+    /// Register or replace the pending receiver for a peer/invoke-id pair.
+    fn register(&mut self, peer: MacAddr, invoke_id: u8) -> oneshot::Receiver<CovAckResult> {
+        let (tx, rx) = oneshot::channel();
+        self.pending.insert((peer, invoke_id), tx);
+        rx
     }
 
     /// Record a result from the dispatch loop (SimpleAck, Error, etc.).
     /// Sends immediately through the oneshot channel.
-    fn record_result(&mut self, invoke_id: u8, result: CovAckResult) {
-        if let Some(tx) = self.pending.remove(&invoke_id) {
+    fn record_result(&mut self, peer: &MacAddr, invoke_id: u8, result: CovAckResult) -> bool {
+        if let Some(tx) = self.pending.remove(&(peer.clone(), invoke_id)) {
             let _ = tx.send(result);
+            true
+        } else {
+            false
         }
     }
 
     /// Remove a pending entry (cleanup on completion or exhaustion).
-    fn remove(&mut self, invoke_id: u8) {
-        self.pending.remove(&invoke_id);
+    fn remove(&mut self, peer: &MacAddr, invoke_id: u8) {
+        self.pending.remove(&(peer.clone(), invoke_id));
     }
 }
 
@@ -989,7 +998,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             // Fast paths — remain inline (sub-microsecond TSM lookups)
             Apdu::SimpleAck(sa) => {
                 let mut tsm = server_tsm.lock().await;
-                tsm.record_result(sa.invoke_id, CovAckResult::Ack);
+                let peer = MacAddr::from_slice(source_mac);
+                if !tsm.record_result(&peer, sa.invoke_id, CovAckResult::Ack) {
+                    tsm.record_result(&MacAddr::new(), sa.invoke_id, CovAckResult::Ack);
+                }
                 debug!(
                     invoke_id = sa.invoke_id,
                     "SimpleAck received for outgoing confirmed notification"
@@ -997,7 +1009,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
             Apdu::Error(err) => {
                 let mut tsm = server_tsm.lock().await;
-                tsm.record_result(err.invoke_id, CovAckResult::Error);
+                let peer = MacAddr::from_slice(source_mac);
+                if !tsm.record_result(&peer, err.invoke_id, CovAckResult::Error) {
+                    tsm.record_result(&MacAddr::new(), err.invoke_id, CovAckResult::Error);
+                }
                 debug!(
                     invoke_id = err.invoke_id,
                     error_class = err.error_class.to_raw(),
@@ -1007,7 +1022,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
             Apdu::Reject(rej) => {
                 let mut tsm = server_tsm.lock().await;
-                tsm.record_result(rej.invoke_id, CovAckResult::Error);
+                let peer = MacAddr::from_slice(source_mac);
+                if !tsm.record_result(&peer, rej.invoke_id, CovAckResult::Error) {
+                    tsm.record_result(&MacAddr::new(), rej.invoke_id, CovAckResult::Error);
+                }
                 debug!(
                     invoke_id = rej.invoke_id,
                     "Reject received for outgoing confirmed notification"
@@ -1015,7 +1033,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
             Apdu::Abort(abort) if !abort.sent_by_server => {
                 let mut tsm = server_tsm.lock().await;
-                tsm.record_result(abort.invoke_id, CovAckResult::Error);
+                let peer = MacAddr::from_slice(source_mac);
+                if !tsm.record_result(&peer, abort.invoke_id, CovAckResult::Error) {
+                    tsm.record_result(&MacAddr::new(), abort.invoke_id, CovAckResult::Error);
+                }
                 debug!(
                     invoke_id = abort.invoke_id,
                     "Abort received for outgoing confirmed notification"
@@ -1382,7 +1403,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
 
                 for oid in &written_oids {
-                    Self::fire_event_notifications(db, network, comm_state, server_tsm, oid).await;
+                    Self::fire_event_notifications(
+                        db,
+                        network,
+                        comm_state,
+                        server_tsm,
+                        oid,
+                        config.cov_retry_timeout_ms,
+                    )
+                    .await;
                 }
                 for oid in &written_oids {
                     Self::fire_cov_notifications(
@@ -1439,7 +1468,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
 
         for oid in &written_oids {
-            Self::fire_event_notifications(db, network, comm_state, server_tsm, oid).await;
+            Self::fire_event_notifications(
+                db,
+                network,
+                comm_state,
+                server_tsm,
+                oid,
+                config.cov_retry_timeout_ms,
+            )
+            .await;
         }
 
         for oid in &written_oids {
@@ -1797,6 +1834,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         comm_state: &Arc<AtomicU8>,
         server_tsm: &Arc<Mutex<ServerTsm>>,
         oid: &ObjectIdentifier,
+        retry_timeout_ms: u64,
     ) {
         if comm_state.load(Ordering::Acquire) >= 1 {
             return;
@@ -1923,13 +1961,25 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let service_bytes = Bytes::from(service_buf.to_vec());
 
                 if *confirmed {
+                    let target_mac = match recipient {
+                        bacnet_types::constructed::BACnetRecipient::Address(addr) => {
+                            Some(addr.mac_address.clone())
+                        }
+                        bacnet_types::constructed::BACnetRecipient::Device(_) => None,
+                    };
+                    let peer_key = target_mac.clone().unwrap_or_else(MacAddr::new);
+                    let (id, result_rx) = {
+                        let mut tsm = server_tsm.lock().await;
+                        tsm.allocate(peer_key.clone())
+                    };
+
                     let pdu = Apdu::ConfirmedRequest(ConfirmedRequestPdu {
                         segmented: false,
                         more_follows: false,
                         segmented_response_accepted: false,
                         max_segments: None,
                         max_apdu_length: 1476,
-                        invoke_id: server_tsm.lock().await.allocate().0,
+                        invoke_id: id,
                         sequence_number: None,
                         proposed_window_size: None,
                         service_choice: ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
@@ -1939,24 +1989,80 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     let mut buf = BytesMut::new();
                     encode_apdu(&mut buf, &pdu);
 
-                    match recipient {
-                        bacnet_types::constructed::BACnetRecipient::Address(addr) => {
-                            if let Err(e) = network
-                                .send_apdu(&buf, &addr.mac_address, true, NetworkPriority::NORMAL)
-                                .await
-                            {
-                                warn!(error = %e, "Failed to send confirmed EventNotification");
+                    let network = Arc::clone(network);
+                    let tsm = Arc::clone(server_tsm);
+                    let timeout = Duration::from_millis(retry_timeout_ms);
+                    let apdu_retries = DEFAULT_APDU_RETRIES;
+                    tokio::spawn(async move {
+                        let mut pending_rx: Option<oneshot::Receiver<CovAckResult>> =
+                            Some(result_rx);
+
+                        for attempt in 0..=apdu_retries {
+                            let send_result = if let Some(mac) = target_mac.as_ref() {
+                                network
+                                    .send_apdu(&buf, mac, true, NetworkPriority::NORMAL)
+                                    .await
+                            } else {
+                                network
+                                    .broadcast_apdu(&buf, true, NetworkPriority::NORMAL)
+                                    .await
+                            };
+
+                            if let Err(e) = send_result {
+                                warn!(error = %e, attempt, "Confirmed EventNotification send failed");
+                            } else {
+                                debug!(invoke_id = id, attempt, "Confirmed EventNotification sent");
+                            }
+
+                            let rx = pending_rx
+                                .take()
+                                .expect("receiver always set for each attempt");
+                            let result = match tokio::time::timeout(timeout, rx).await {
+                                Ok(Ok(r)) => Ok(r),
+                                Ok(Err(_)) => Err(()),
+                                Err(_) => Err(()),
+                            };
+
+                            if result.is_err() && attempt < apdu_retries {
+                                let new_rx = {
+                                    let mut tsm = tsm.lock().await;
+                                    tsm.register(peer_key.clone(), id)
+                                };
+                                pending_rx = Some(new_rx);
+                            }
+
+                            match result {
+                                Ok(CovAckResult::Ack) => {
+                                    debug!(invoke_id = id, "EventNotification acknowledged");
+                                    return;
+                                }
+                                Ok(CovAckResult::Error) => {
+                                    warn!(
+                                        invoke_id = id,
+                                        "EventNotification rejected by recipient"
+                                    );
+                                    return;
+                                }
+                                Err(_) => {
+                                    if attempt < apdu_retries {
+                                        debug!(
+                                            invoke_id = id,
+                                            attempt, "EventNotification timeout, retrying"
+                                        );
+                                    } else {
+                                        warn!(
+                                            invoke_id = id,
+                                            "EventNotification failed after {} retries",
+                                            apdu_retries
+                                        );
+                                    }
+                                }
                             }
                         }
-                        bacnet_types::constructed::BACnetRecipient::Device(_) => {
-                            if let Err(e) = network
-                                .broadcast_apdu(&buf, true, NetworkPriority::NORMAL)
-                                .await
-                            {
-                                warn!(error = %e, "Failed to broadcast confirmed EventNotification");
-                            }
-                        }
-                    }
+
+                        let mut tsm = tsm.lock().await;
+                        tsm.remove(&peer_key, id);
+                    });
                 } else {
                     let pdu = Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
                         service_choice: UnconfirmedServiceChoice::UNCONFIRMED_EVENT_NOTIFICATION,
@@ -2128,7 +2234,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
                 let (id, result_rx) = {
                     let mut tsm = server_tsm.lock().await;
-                    tsm.allocate()
+                    tsm.allocate(sub.subscriber_mac.clone())
                 };
 
                 let pdu = Apdu::ConfirmedRequest(ConfirmedRequestPdu {
@@ -2187,8 +2293,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         };
 
                         if result.is_err() && attempt < apdu_retries {
-                            let (tx, new_rx) = oneshot::channel();
-                            tsm.lock().await.pending.insert(id, tx);
+                            let new_rx = {
+                                let mut tsm = tsm.lock().await;
+                                tsm.register(mac.clone(), id)
+                            };
                             pending_rx = Some(new_rx);
                         }
 
@@ -2218,7 +2326,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     }
 
                     let mut tsm = tsm.lock().await;
-                    tsm.remove(id);
+                    tsm.remove(&mac, id);
                 });
             } else {
                 let pdu = Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
@@ -2291,27 +2399,34 @@ mod tests {
     // ServerTsm unit tests
     // -----------------------------------------------------------------------
 
+    fn test_mac(byte: u8) -> MacAddr {
+        MacAddr::from_slice(&[127, 0, 0, byte, 0xBA, 0xC0])
+    }
+
     #[test]
     fn server_tsm_allocate_increments() {
         let mut tsm = ServerTsm::new();
-        assert_eq!(tsm.allocate().0, 0);
-        assert_eq!(tsm.allocate().0, 1);
-        assert_eq!(tsm.allocate().0, 2);
+        let peer = test_mac(1);
+        assert_eq!(tsm.allocate(peer.clone()).0, 0);
+        assert_eq!(tsm.allocate(peer.clone()).0, 1);
+        assert_eq!(tsm.allocate(peer).0, 2);
     }
 
     #[test]
     fn server_tsm_allocate_wraps_at_255() {
         let mut tsm = ServerTsm::new();
+        let peer = test_mac(1);
         tsm.next_invoke_id = 255;
-        assert_eq!(tsm.allocate().0, 255);
-        assert_eq!(tsm.allocate().0, 0); // wraps
+        assert_eq!(tsm.allocate(peer.clone()).0, 255);
+        assert_eq!(tsm.allocate(peer).0, 0); // wraps
     }
 
     #[test]
     fn server_tsm_record_and_take_ack() {
         let mut tsm = ServerTsm::new();
-        let (_id, rx) = tsm.allocate();
-        tsm.record_result(_id, CovAckResult::Ack);
+        let peer = test_mac(1);
+        let (id, rx) = tsm.allocate(peer.clone());
+        assert!(tsm.record_result(&peer, id, CovAckResult::Ack));
         // Result should be delivered via the oneshot channel
         assert_eq!(rx.blocking_recv(), Ok(CovAckResult::Ack));
     }
@@ -2319,8 +2434,9 @@ mod tests {
     #[test]
     fn server_tsm_record_and_take_error() {
         let mut tsm = ServerTsm::new();
-        let (id, rx) = tsm.allocate();
-        tsm.record_result(id, CovAckResult::Error);
+        let peer = test_mac(1);
+        let (id, rx) = tsm.allocate(peer.clone());
+        assert!(tsm.record_result(&peer, id, CovAckResult::Error));
         // Oneshot delivers immediately
         assert_eq!(rx.blocking_recv(), Ok(CovAckResult::Error));
     }
@@ -2329,32 +2445,71 @@ mod tests {
     fn server_tsm_record_nonexistent_is_noop() {
         let mut tsm = ServerTsm::new();
         // Recording a result for an ID with no receiver is a no-op
-        tsm.record_result(99, CovAckResult::Ack);
+        assert!(!tsm.record_result(&test_mac(1), 99, CovAckResult::Ack));
         assert!(tsm.pending.is_empty());
     }
 
     #[test]
     fn server_tsm_remove_cleans_up() {
         let mut tsm = ServerTsm::new();
-        let (id, _rx) = tsm.allocate();
-        tsm.remove(id);
-        assert!(!tsm.pending.contains_key(&id));
+        let peer = test_mac(1);
+        let (id, _rx) = tsm.allocate(peer.clone());
+        tsm.remove(&peer, id);
+        assert!(!tsm.pending.contains_key(&(peer, id)));
     }
 
     #[test]
     fn server_tsm_multiple_pending() {
         let mut tsm = ServerTsm::new();
-        let (id1, rx1) = tsm.allocate();
-        let (id2, rx2) = tsm.allocate();
-        let (id3, rx3) = tsm.allocate();
+        let peer = test_mac(1);
+        let (id1, rx1) = tsm.allocate(peer.clone());
+        let (id2, rx2) = tsm.allocate(peer.clone());
+        let (id3, rx3) = tsm.allocate(peer.clone());
 
-        tsm.record_result(id2, CovAckResult::Error);
-        tsm.record_result(id1, CovAckResult::Ack);
-        tsm.record_result(id3, CovAckResult::Ack);
+        assert!(tsm.record_result(&peer, id2, CovAckResult::Error));
+        assert!(tsm.record_result(&peer, id1, CovAckResult::Ack));
+        assert!(tsm.record_result(&peer, id3, CovAckResult::Ack));
 
         assert_eq!(rx2.blocking_recv(), Ok(CovAckResult::Error));
         assert_eq!(rx1.blocking_recv(), Ok(CovAckResult::Ack));
         assert_eq!(rx3.blocking_recv(), Ok(CovAckResult::Ack));
+    }
+
+    #[test]
+    fn server_tsm_keys_results_by_peer() {
+        let mut tsm = ServerTsm::new();
+        let peer_a = test_mac(1);
+        let peer_b = test_mac(2);
+
+        let rx_a = tsm.register(peer_a.clone(), 7);
+        let rx_b = tsm.register(peer_b.clone(), 7);
+
+        assert!(tsm.record_result(&peer_b, 7, CovAckResult::Error));
+        assert_eq!(rx_b.blocking_recv(), Ok(CovAckResult::Error));
+        assert_eq!(tsm.pending.len(), 1);
+
+        assert!(tsm.record_result(&peer_a, 7, CovAckResult::Ack));
+        assert_eq!(rx_a.blocking_recv(), Ok(CovAckResult::Ack));
+        assert!(tsm.pending.is_empty());
+    }
+
+    #[tokio::test]
+    async fn server_tsm_timeout_cleanup_removes_pending() {
+        let tsm = Arc::new(Mutex::new(ServerTsm::new()));
+        let peer = test_mac(1);
+        let (id, rx) = {
+            let mut tsm = tsm.lock().await;
+            tsm.allocate(peer.clone())
+        };
+
+        assert!(tokio::time::timeout(Duration::from_millis(1), rx)
+            .await
+            .is_err());
+        {
+            let mut tsm = tsm.lock().await;
+            tsm.remove(&peer, id);
+            assert!(tsm.pending.is_empty());
+        }
     }
 
     #[test]
