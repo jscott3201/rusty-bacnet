@@ -12,16 +12,15 @@ members = [
     "crates/bacnet-integration-tests",
     "crates/rusty-bacnet",
     "crates/bacnet-wasm",
-"crates/bacnet-cli",
-    "crates/bacnet-btl",
-    "crates/bacnet-gateway",
+    "crates/bacnet-cli",
     "benchmarks",
 ]
 # rusty-bacnet is a cdylib — `cargo test` can't link it without Python.
 # bacnet-wasm is a cdylib — needs wasm32-unknown-unknown target.
 # bacnet-cli has heavy deps (rustyline, clap) — excluded from default builds.
-# bacnet-btl has heavy deps (rustyline, clap, server) — excluded from default builds.
 # Use `cargo check -p rusty-bacnet --tests` and `cargo check -p bacnet-wasm --target wasm32-unknown-unknown`.
+# BTL test harness now lives at https://github.com/jscott3201/rusty-bacnet-btl-harness
+# HTTP/MCP gateway now lives at https://github.com/jscott3201/rusty-bacnet-mcp
 default-members = [
     "crates/bacnet-types",
     "crates/bacnet-encoding",
@@ -36,7 +35,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.8.1"
+version = "0.9.0"
 edition = "2021"
 rust-version = "1.93"
 license = "MIT"
@@ -47,14 +46,14 @@ keywords = ["bacnet", "building-automation", "ashrae", "iot", "protocol"]
 categories = ["network-programming", "embedded"]
 
 [workspace.dependencies]
-bacnet-types = { version = "0.8.1", path = "crates/bacnet-types" }
-bacnet-encoding = { version = "0.8.1", path = "crates/bacnet-encoding" }
-bacnet-services = { version = "0.8.1", path = "crates/bacnet-services" }
-bacnet-transport = { version = "0.8.1", path = "crates/bacnet-transport" }
-bacnet-network = { version = "0.8.1", path = "crates/bacnet-network" }
-bacnet-client = { version = "0.8.1", path = "crates/bacnet-client" }
-bacnet-objects = { version = "0.8.1", path = "crates/bacnet-objects" }
-bacnet-server = { version = "0.8.1", path = "crates/bacnet-server" }
+bacnet-types = { version = "0.9.0", path = "crates/bacnet-types" }
+bacnet-encoding = { version = "0.9.0", path = "crates/bacnet-encoding" }
+bacnet-services = { version = "0.9.0", path = "crates/bacnet-services" }
+bacnet-transport = { version = "0.9.0", path = "crates/bacnet-transport" }
+bacnet-network = { version = "0.9.0", path = "crates/bacnet-network" }
+bacnet-client = { version = "0.9.0", path = "crates/bacnet-client" }
+bacnet-objects = { version = "0.9.0", path = "crates/bacnet-objects" }
+bacnet-server = { version = "0.9.0", path = "crates/bacnet-server" }
 thiserror = "2"
 bitflags = "2"
 bytes = "1"

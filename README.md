@@ -1,6 +1,6 @@
 # Rusty BACnet
 
-A complete BACnet protocol stack (ASHRAE 135-2020) written in Rust, with first-class Python and WASM/JavaScript bindings, plus an HTTP/MCP gateway for AI-driven building automation.
+A complete BACnet protocol stack (ASHRAE 135-2020) written in Rust, with first-class Python and WASM/JavaScript bindings.
 
 [![CI](https://github.com/jscott3201/rusty-bacnet/actions/workflows/ci.yml/badge.svg)](https://github.com/jscott3201/rusty-bacnet/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -10,8 +10,6 @@ A complete BACnet protocol stack (ASHRAE 135-2020) written in Rust, with first-c
 - **Full BACnet/IP stack** — async client and server with 30+ service types
 - **5 transports** — BACnet/IP (UDP), BACnet/IPv6 (multicast), BACnet/SC (WebSocket+TLS with hub), MS/TP (serial), Ethernet (BPF)
 - **65 object types** — All standard BACnet objects including Analog/Binary/MultiState I/O, Device, Schedule, Calendar, Trend Log, Notification Class, Loop, Access Control, Lighting, Life Safety, Elevator, Color, Color Temperature, and more
-- **HTTP REST API + MCP server** — `bacnet-gateway` crate with REST endpoints and Model Context Protocol tools for LLM-driven BACnet interaction
-- **BTL compliance test harness** — 3,808 tests covering 100% of BTL Test Plan 26.1 across all 13 sections
 - **Python bindings** — async client, server, and SC hub with full API parity via PyO3
 - **WASM/JavaScript** — BACnet/SC thin client for browsers via wasm-bindgen
 - **CLI tool** — interactive shell and scripting for BACnet/IP, IPv6, and SC
@@ -103,47 +101,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-## BACnet Gateway (HTTP API + MCP Server)
+## Companion projects
 
-The `bacnet-gateway` crate provides an HTTP REST API and [MCP](https://modelcontextprotocol.io/) server, enabling programmatic and AI-driven interaction with BACnet networks.
+- **[`rusty-bacnet-mcp`](https://github.com/jscott3201/rusty-bacnet-mcp)** — HTTP REST API + MCP server gateway. 10 MCP tools for AI-driven BACnet interaction, REST endpoints under `/api/v1/`, bearer-token auth, read-only mode, built-in BACnet reference knowledge base.
+- **[`rusty-bacnet-btl-harness`](https://github.com/jscott3201/rusty-bacnet-btl-harness)** — BTL Test Plan 26.1 compliance harness. 3,808 tests, in-process self-test runs in <1 second.
 
-```toml
-# gateway.toml
-[server]
-bind = "0.0.0.0:3000"
-api_key = "your-secret-key"
-
-[device]
-instance = 389001
-name = "BACnet Gateway"
-
-[transports.bip]
-interface = "0.0.0.0"
-port = 47808
-broadcast = "192.168.1.255"
-network_number = 1
-```
-
-```bash
-# Build and run
-cargo build -p bacnet-gateway --features bin
-./target/debug/bacnet-gateway --config gateway.toml
-```
-
-**REST API** at `/api/v1/`:
-- `POST /devices/discover` — WhoIs broadcast, returns discovered devices
-- `GET /devices/{instance}` — read device properties (name, vendor, model, firmware)
-- `GET/PUT /devices/{instance}/objects/{type}:{id}/properties/{prop}` — read/write remote properties
-- `GET/POST/DELETE /objects` — local object database CRUD
-- `GET /health` — health check
-
-**MCP Server** at `/mcp` (Streamable HTTP):
-- 10 tools: `discover_devices`, `list_known_devices`, `get_device_info`, `read_property`, `write_property`, `list_local_objects`, `read_local_property`, `write_local_property`, `create_local_object`, `delete_local_object`
-- BACnet reference knowledge base — 9 reference resources covering object types, properties, units, errors, reliability, priority arrays, networking, services, and troubleshooting
-- Per-object-type drill-down via `bacnet://reference/object-types/{type}` template
-- Live state resources: `bacnet://state/devices`, `bacnet://state/local-objects`, `bacnet://state/config`
-
-An LLM connected via MCP can discover devices, read sensor values, diagnose networking issues, and troubleshoot alarms — with zero prior BACnet knowledge, using the built-in reference resources.
+Both repos consume the published `bacnet-*` crates from this workspace.
 
 ## Quick Start (JavaScript/WASM)
 
@@ -320,8 +283,6 @@ crates/
   bacnet-client/      Async client with TSM, segmentation, discovery
   bacnet-objects/     BACnetObject trait, ObjectDatabase, 65 object types
   bacnet-server/      Async server (RP/WP/RPM/WPM/COV/Events/DCC/CreateObject/TimeSynchronization)
-  bacnet-gateway/     HTTP REST API + MCP server gateway (Axum + rmcp)
-  bacnet-btl/         BTL compliance test harness (BTL Test Plan 26.1, 3808 tests, all 13 sections)
   rusty-bacnet/       Python bindings via PyO3 (client, server, hub)
   bacnet-wasm/        WASM/JavaScript BACnet/SC thin client
   bacnet-cli/         CLI tool with interactive shell
@@ -388,39 +349,11 @@ The `rusty-bacnet` crate provides full Python API parity:
 - **COV async iterator**: `async for notif in client.cov_notifications()`
 - **Typed exceptions**: `BacnetError`, `BacnetProtocolError`, `BacnetTimeoutError`, `BacnetRejectError`, `BacnetAbortError`
 
-## BTL Compliance Testing
-
-The `bacnet-btl` crate provides a full BTL Test Plan 26.1 compliance test harness:
-
-```bash
-# Run all 3,808 BTL tests against in-process server (<1s)
-cargo build -p bacnet-btl && ./target/debug/bacnet-test self-test
-
-# Run BTL tests against an external BACnet device
-./target/debug/bacnet-test run --target 192.168.1.100:47808
-
-# Run BTL tests over BACnet/SC
-./target/debug/bacnet-test run --target aa:bb:cc:dd:ee:ff \
-    --sc-hub=wss://hub:47809 --sc-no-verify
-
-# Start a standalone BTL server (all 64 object types)
-./target/debug/bacnet-test serve --interface 0.0.0.0 --port 47808
-
-# Docker SC topology (hub + server + tester)
-cd examples/docker
-docker compose -f docker-compose.btl.yml up btl-self-test
-```
-
-Coverage: 100% of all 13 BTL Test Plan sections (Basic BACnet, Objects, Data Sharing, Alarm & Event, Scheduling, Trending, Device Management, Data Link Layer, Network Management, Gateway, Network Security, Audit Reporting, Web Services).
-
 ## Development
 
 ```bash
 # Run workspace tests (1,800+ tests)
 cargo test --workspace --exclude rusty-bacnet --exclude bacnet-wasm
-
-# Run BTL compliance tests (3,808 tests)
-cargo build -p bacnet-btl && ./target/debug/bacnet-test self-test
 
 # Check formatting
 cargo fmt --all --check
@@ -442,12 +375,10 @@ Minimum Rust version: 1.93
 
 ## Documentation
 
-- [Gateway Reference](docs/gateway.md) — HTTP REST API, MCP server, configuration, authentication
-- [Rust API Reference](docs/rust-api.md) — all 9 published crates with examples
+- [Rust API Reference](docs/rust-api.md) — all 8 published crates with examples
 - [Python API Reference](docs/python-api.md) — 42+ async client methods, 61 server object types
 - [WASM/JS API Reference](docs/wasm-api.md) — BACnet/SC thin client for browsers
 - [CLI Reference](docs/CLI.md) — interactive shell and one-shot commands
-- [BTL Test Harness](docs/btl.md) — 3,808 compliance tests, 5 commands, Docker topologies
 - [Benchmark Results](Benchmarks.md) — 9 suites with throughput, latency, and memory
 - [Architecture Guide](docs/architecture.md) — crate graph, packet flow, concurrency model
 - [Changelog](CHANGELOG.md)

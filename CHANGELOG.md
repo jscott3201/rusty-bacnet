@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0]
+
+### Workspace reorganization
+
+The HTTP/MCP gateway and BTL compliance test harness were extracted into dedicated repositories. The remaining workspace focuses purely on the BACnet protocol stack: types, encoding, services, transport, network, client, server, objects, plus the Python and WASM bindings and the CLI.
+
+- **`bacnet-gateway`** — moved to [`jscott3201/rusty-bacnet-mcp`](https://github.com/jscott3201/rusty-bacnet-mcp). Same crate name (`bacnet-gateway`); consumes the published `bacnet-*` library crates from crates.io. `default-features` flipped to `["http", "mcp"]` to make the binary's natural shape the default for the standalone repo.
+- **`bacnet-btl`** — moved to [`jscott3201/rusty-bacnet-btl-harness`](https://github.com/jscott3201/rusty-bacnet-btl-harness). Same crate name (`bacnet-btl`); consumes the published `bacnet-*` library crates from crates.io. Direct `bacnet-network` dep dropped (transitive via client/server).
+
+### Removed (from this workspace)
+- `crates/bacnet-btl/` directory.
+- `crates/bacnet-gateway/` directory.
+- `docs/btl.md` (now in the BTL harness repo).
+- `docs/gateway.md` (now in the MCP repo).
+- `examples/docker/Dockerfile.btl` and `examples/docker/docker-compose.btl.yml` (BTL Docker assets — now in the BTL harness repo).
+
+### Notes
+- Library crates' API is unchanged from 0.8.1. Consumers of `bacnet-types`, `bacnet-encoding`, `bacnet-services`, `bacnet-transport`, `bacnet-network`, `bacnet-client`, `bacnet-objects`, `bacnet-server` can upgrade with no source changes.
+- Python (`rusty-bacnet`) and WASM (`bacnet-wasm`) bindings unchanged.
+- CLI (`bacnet-cli`) unchanged.
+
 ## [0.8.1]
 
 ### Security

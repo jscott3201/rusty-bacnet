@@ -389,7 +389,7 @@ let (side_a, side_b) = LoopbackTransport::pair(
 );
 ```
 
-In-process channel-based transport for composing a gateway's client and server without real network sockets. `LoopbackTransport::pair()` creates two connected transports backed by `tokio::sync::mpsc` channels — sending on one delivers to the other. Available as `AnyTransport::Loopback` for use with the enum dispatch wrapper.
+In-process channel-based transport for composing a client and server without real network sockets (e.g. inside an HTTP gateway). `LoopbackTransport::pair()` creates two connected transports backed by `tokio::sync::mpsc` channels — sending on one delivers to the other. Available as `AnyTransport::Loopback` for use with the enum dispatch wrapper.
 
 ### AnyTransport (enum dispatch)
 
@@ -840,24 +840,6 @@ The server automatically dispatches:
 - `seg_receivers` capped at 128 (DoS prevention)
 - `cov_in_flight` semaphore: max 255 concurrent confirmed COV notifications
 - `comm_state`: `Arc<AtomicU8>` — lock-free read
-
----
-
-## bacnet-gateway
-
-BACnet HTTP REST API and MCP (Model Context Protocol) server gateway. Bridges BACnet networks to web clients and AI tools.
-
-### Feature Flags
-
-| Feature | Description |
-|---------|-------------|
-| `http` | Axum-based REST API (read/write properties, discover devices) |
-| `mcp` | MCP server for AI tool integration (via `rmcp`) |
-| `bin` | Binary target with CLI (`clap`), enables both `http` and `mcp` |
-| `sc-tls` | BACnet/SC transport support |
-| `serial` | MS/TP transport support (Linux only) |
-
-See `docs/gateway.md` for full REST API and MCP tool documentation.
 
 ---
 

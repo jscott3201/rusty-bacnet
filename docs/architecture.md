@@ -20,15 +20,19 @@ bacnet-services       Service request/response structs (RP, WP, RPM, COV, etc.)
     |     bacnet-client       Async BACnet client (TSM, segmentation, discovery)
     |     bacnet-server       Async BACnet server (dispatch, COV, events, scheduling)
     |         |
-    +---> bacnet-gateway      HTTP REST API + MCP server (optional, feature-gated)
-    |     bacnet-cli          Interactive shell and CLI tool
-    |     bacnet-btl          BTL compliance test harness (3,808 tests)
+    +---> bacnet-cli          Interactive shell and CLI tool
     |
     +---> rusty-bacnet        Python bindings (PyO3)
           bacnet-wasm         WASM/JS BACnet/SC thin client
 ```
 
-The bottom rows are "application" crates — they compose the library crates into user-facing tools. They are excluded from `default-members` in the workspace to avoid pulling in their heavy dependencies (clap, axum, rmcp, pyo3, wasm-bindgen) during normal development.
+The bottom rows are "application" crates — they compose the library crates into user-facing tools. They are excluded from `default-members` in the workspace to avoid pulling in their heavy dependencies (clap, pyo3, wasm-bindgen) during normal development.
+
+The HTTP/MCP gateway and BTL compliance test harness now live in dedicated repositories:
+- [`rusty-bacnet-mcp`](https://github.com/jscott3201/rusty-bacnet-mcp) — Axum REST API + rmcp MCP server
+- [`rusty-bacnet-btl-harness`](https://github.com/jscott3201/rusty-bacnet-btl-harness) — BTL Test Plan 26.1 compliance harness
+
+Both consume the published `bacnet-*` crates from this workspace.
 
 ## Packet Flow
 
@@ -176,26 +180,9 @@ The `BACnetServer` spawns several background tasks:
 
 The server handles 20+ services including ReadProperty, WriteProperty, ReadPropertyMultiple, WritePropertyMultiple, SubscribeCOV, CreateObject, DeleteObject, DeviceCommunicationControl, ReinitializeDevice, GetEventInformation, GetAlarmSummary, LifeSafetyOperation, AtomicReadFile, AtomicWriteFile, TimeSynchronization, and more.
 
-## Gateway Architecture
+## Companion projects
 
-The `bacnet-gateway` crate adds HTTP and MCP interfaces on top of the core stack. It compiles **zero** web dependencies by default — the `http` and `mcp` features must be explicitly enabled.
+The HTTP/MCP gateway and BTL compliance test harness live in separate repositories that consume this workspace's published crates:
 
-```
-┌────────────────────────────────┐
-│  HTTP REST API  │  MCP Server  │  (feature-gated: http, mcp)
-│  (Axum)         │  (rmcp)      │
-└───────┬─────────┴──────┬───────┘
-        │                │
-        v                v
-   GatewayState (shared)
-        │
-        v
-   BACnetClient + BACnetServer
-        │
-        v
-   BIP Transport (UDP)
-```
-
-`GatewayState` holds Arc references to the client and shared object database. Both REST handlers and MCP tools call the same methods on `GatewayState` — no duplicated BACnet logic.
-
-See [Gateway Reference](gateway.md) for full configuration, endpoint, and tool documentation.
+- **[`rusty-bacnet-mcp`](https://github.com/jscott3201/rusty-bacnet-mcp)** — HTTP REST API (Axum) and MCP server (rmcp) on top of `BACnetClient` + `BACnetServer`. Single shared `GatewayState` handles both surfaces — no duplicated BACnet logic.
+- **[`rusty-bacnet-btl-harness`](https://github.com/jscott3201/rusty-bacnet-btl-harness)** — BTL Test Plan 26.1 compliance test harness. 3,808 tests across all 13 BTL sections; in-process self-test runs in <1 second.
