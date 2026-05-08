@@ -277,7 +277,7 @@ mod tests {
         // Encode APDU
         let mut apdu_buf = BytesMut::new();
         if let Some(apdu) = apdu_data {
-            apdu::encode_apdu(&mut apdu_buf, apdu);
+            apdu::encode_apdu(&mut apdu_buf, apdu).expect("valid APDU encoding");
         }
 
         // Build NPDU with APDU as payload
@@ -289,7 +289,7 @@ mod tests {
 
         // Wrap in BVLC
         let mut bvlc_buf = BytesMut::new();
-        bvll::encode_bvll(&mut bvlc_buf, function, &npdu_buf);
+        bvll::encode_bvll(&mut bvlc_buf, function, &npdu_buf).expect("valid BVLL encoding");
         bvlc_buf.to_vec()
     }
 
@@ -454,7 +454,8 @@ mod tests {
         // BVLC-Result is a management frame with no NPDU.
         // Payload: 2-byte result code (0x0000 = success).
         let mut buf = BytesMut::new();
-        bvll::encode_bvll(&mut buf, BvlcFunction::BVLC_RESULT, &[0x00, 0x00]);
+        bvll::encode_bvll(&mut buf, BvlcFunction::BVLC_RESULT, &[0x00, 0x00])
+            .expect("valid BVLL encoding");
         let data = buf.to_vec();
 
         let packet = decode_packet(&data).unwrap();

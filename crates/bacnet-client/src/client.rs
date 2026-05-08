@@ -17,8 +17,8 @@ use tokio::time::{timeout, Duration};
 use tracing::{debug, warn};
 
 use bacnet_encoding::apdu::{
-    self, encode_apdu, AbortPdu, Apdu, ConfirmedRequest as ConfirmedRequestPdu,
-    SegmentAck as SegmentAckPdu, SimpleAck,
+    self, encode_apdu, validate_max_apdu_length, AbortPdu, Apdu,
+    ConfirmedRequest as ConfirmedRequestPdu, SegmentAck as SegmentAckPdu, SimpleAck,
 };
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_network::layer::NetworkLayer;
@@ -520,6 +520,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     pub async fn start(mut config: ClientConfig, transport: T) -> Result<Self, Error> {
         let transport_max = transport.max_apdu_length();
         config.max_apdu_length = config.max_apdu_length.min(transport_max);
+        validate_max_apdu_length(config.max_apdu_length)?;
+        if !(1..=127).contains(&config.proposed_window_size) {
+            return Err(Error::Encoding(format!(
+                "invalid proposed-window-size {}; expected 1..=127",
+                config.proposed_window_size
+            )));
+        }
 
         let mut network = NetworkLayer::new(transport);
         let mut apdu_rx = network.start().await?;
@@ -577,7 +584,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                             abort_reason: bacnet_types::enums::AbortReason::TSM_TIMEOUT,
                         });
                         let mut buf = BytesMut::with_capacity(4);
-                        encode_apdu(&mut buf, &abort);
+                        if let Err(e) = encode_apdu(&mut buf, &abort) {
+                            warn!(error = %e, "Failed to encode segmented receive timeout Abort");
+                            continue;
+                        }
                         let _ = network_dispatch
                             .send_apdu(&buf, &key.0, false, NetworkPriority::NORMAL)
                             .await;
@@ -711,7 +721,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 service_choice: req.service_choice,
                             });
                             let mut buf = BytesMut::with_capacity(4);
-                            encode_apdu(&mut buf, &ack);
+                            if let Err(e) = encode_apdu(&mut buf, &ack) {
+                                warn!(error = %e, "Failed to encode SimpleAck for COV notification");
+                                return;
+                            }
                             if let Err(e) = network
                                 .send_apdu(&buf, source_mac, false, NetworkPriority::NORMAL)
                                 .await
@@ -827,7 +840,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 abort_reason: bacnet_types::enums::AbortReason::SEGMENTATION_NOT_SUPPORTED,
             });
             let mut buf = BytesMut::with_capacity(4);
-            encode_apdu(&mut buf, &abort);
+            if let Err(e) = encode_apdu(&mut buf, &abort) {
+                warn!(error = %e, "Failed to encode segmentation-not-supported Abort");
+                return;
+            }
             let _ = network
                 .send_apdu(&buf, source_mac, false, NetworkPriority::NORMAL)
                 .await;
@@ -887,7 +903,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 actual_window_size: proposed_ws,
             });
             let mut buf = BytesMut::with_capacity(4);
-            encode_apdu(&mut buf, &neg_ack);
+            if let Err(e) = encode_apdu(&mut buf, &neg_ack) {
+                warn!(error = %e, "Failed to encode negative SegmentAck");
+                return;
+            }
             if let Err(e) = network
                 .send_apdu(&buf, source_mac, false, NetworkPriority::NORMAL)
                 .await
@@ -917,7 +936,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 actual_window_size: proposed_ws,
             });
             let mut buf = BytesMut::with_capacity(4);
-            encode_apdu(&mut buf, &seg_ack);
+            if let Err(e) = encode_apdu(&mut buf, &seg_ack) {
+                warn!(error = %e, "Failed to encode SegmentAck");
+                return;
+            }
             if let Err(e) = network
                 .send_apdu(&buf, source_mac, false, NetworkPriority::NORMAL)
                 .await
@@ -1065,7 +1087,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         });
 
         let mut buf = BytesMut::with_capacity(6 + service_data.len());
-        encode_apdu(&mut buf, &pdu);
+        encode_apdu(&mut buf, &pdu)?;
 
         let timeout_duration = Duration::from_millis(self.config.apdu_timeout_ms);
         let max_retries = self.config.apdu_retries;
@@ -1220,7 +1242,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     });
 
                     let mut buf = BytesMut::with_capacity(remote_max_apdu as usize);
-                    encode_apdu(&mut buf, &pdu);
+                    encode_apdu(&mut buf, &pdu)?;
 
                     self.network
                         .send_apdu(&buf, destination_mac, true, NetworkPriority::NORMAL)
@@ -1270,7 +1292,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                     });
 
                                     let mut buf = BytesMut::with_capacity(remote_max_apdu as usize);
-                                    encode_apdu(&mut buf, &pdu);
+                                    encode_apdu(&mut buf, &pdu)?;
 
                                     self.network
                                         .send_apdu(
@@ -1360,7 +1382,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         });
 
         let mut buf = BytesMut::with_capacity(2 + service_data.len());
-        encode_apdu(&mut buf, &pdu);
+        encode_apdu(&mut buf, &pdu)?;
 
         self.network
             .send_apdu(&buf, destination_mac, false, NetworkPriority::NORMAL)
@@ -1379,7 +1401,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         });
 
         let mut buf = BytesMut::with_capacity(2 + service_data.len());
-        encode_apdu(&mut buf, &pdu);
+        encode_apdu(&mut buf, &pdu)?;
 
         self.network
             .broadcast_apdu(&buf, false, NetworkPriority::NORMAL)
@@ -1398,7 +1420,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         });
 
         let mut buf = BytesMut::with_capacity(2 + service_data.len());
-        encode_apdu(&mut buf, &pdu);
+        encode_apdu(&mut buf, &pdu)?;
 
         self.network
             .broadcast_global_apdu(&buf, false, NetworkPriority::NORMAL)
@@ -1418,7 +1440,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         });
 
         let mut buf = BytesMut::with_capacity(2 + service_data.len());
-        encode_apdu(&mut buf, &pdu);
+        encode_apdu(&mut buf, &pdu)?;
 
         self.network
             .broadcast_to_network(&buf, dest_network, false, NetworkPriority::NORMAL)
@@ -2384,6 +2406,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn client_rejects_invalid_max_apdu_length() {
+        let result = BACnetClient::builder()
+            .interface(Ipv4Addr::LOCALHOST)
+            .port(0)
+            .max_apdu_length(1000)
+            .build()
+            .await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
     async fn confirmed_request_simple_ack() {
         let mut client_a = make_client().await;
 
@@ -2405,7 +2439,7 @@ mod tests {
                     service_choice: req.service_choice,
                 });
                 let mut buf = BytesMut::new();
-                encode_apdu(&mut buf, &ack);
+                encode_apdu(&mut buf, &ack).unwrap();
                 net_b
                     .send_apdu(&buf, &received.source_mac, false, NetworkPriority::NORMAL)
                     .await
@@ -2457,7 +2491,7 @@ mod tests {
                     service_ack: Bytes::from_static(&[0xDE, 0xAD, 0xBE, 0xEF]),
                 });
                 let mut buf = BytesMut::new();
-                encode_apdu(&mut buf, &ack);
+                encode_apdu(&mut buf, &ack).unwrap();
                 net_b
                     .send_apdu(&buf, &received.source_mac, false, NetworkPriority::NORMAL)
                     .await
@@ -2529,7 +2563,7 @@ mod tests {
                     service_ack: seg.clone(),
                 });
                 let mut buf = BytesMut::new();
-                encode_apdu(&mut buf, &ack);
+                encode_apdu(&mut buf, &ack).unwrap();
                 net_b
                     .send_apdu(&buf, &received.source_mac, false, NetworkPriority::NORMAL)
                     .await
@@ -2611,7 +2645,7 @@ mod tests {
                         actual_window_size: 1,
                     });
                     let mut buf = BytesMut::new();
-                    encode_apdu(&mut buf, &seg_ack);
+                    encode_apdu(&mut buf, &seg_ack).unwrap();
                     net_b
                         .send_apdu(&buf, &received.source_mac, false, NetworkPriority::NORMAL)
                         .await
@@ -2630,7 +2664,7 @@ mod tests {
                 service_choice: ConfirmedServiceChoice::WRITE_PROPERTY,
             });
             let mut buf = BytesMut::new();
-            encode_apdu(&mut buf, &ack);
+            encode_apdu(&mut buf, &ack).unwrap();
             net_b
                 .send_apdu(&buf, &client_mac, false, NetworkPriority::NORMAL)
                 .await
@@ -2699,7 +2733,7 @@ mod tests {
                         actual_window_size: 1,
                     });
                     let mut buf = BytesMut::new();
-                    encode_apdu(&mut buf, &seg_ack);
+                    encode_apdu(&mut buf, &seg_ack).unwrap();
                     net_b
                         .send_apdu(&buf, &received.source_mac, false, NetworkPriority::NORMAL)
                         .await
@@ -2721,7 +2755,7 @@ mod tests {
                 service_ack: Bytes::from_static(&[0xCA, 0xFE]),
             });
             let mut buf = BytesMut::new();
-            encode_apdu(&mut buf, &ack);
+            encode_apdu(&mut buf, &ack).unwrap();
             net_b
                 .send_apdu(&buf, &client_mac, false, NetworkPriority::NORMAL)
                 .await

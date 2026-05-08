@@ -7,9 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.9.0]
 
+### Spec Compliance - Codec Strictness (ASHRAE 135-2020 Clauses 20.1.2.7, 20.1.2.8, 20.1.6.x)
+
+- Fixed Finding 4: ConfirmedRequest max-APDU and SegmentACK window fields are now validated instead of silently accepting reserved or out-of-range wire values.
+- Fixed Finding 6: BVLL/BVLC encoders now reject frame lengths that cannot fit in the 16-bit BACnet length field instead of truncating.
+- Fixed Finding 7: fixed-width primitive decoders now reject incorrect lengths and trailing bytes for ObjectIdentifier, Date, Time, Real, Double, and overlong application-tag values.
+
 ### Performance
 
 - Fixed Finding 10: notification send paths now freeze `BytesMut` payload buffers directly instead of copying them through `to_vec()` before constructing `Bytes`.
+
+### Changed
+
+- **API break**: APDU/BVLL/BVLC encoder entry points now return `Result` where wire-length or field validation can fail.
+- **Behavior change**: primitive decoder strictness now rejects malformed encodings that were previously accepted with trailing bytes.
 
 ### Workspace reorganization
 
@@ -26,7 +37,7 @@ The HTTP/MCP gateway and BTL compliance test harness were extracted into dedicat
 - `examples/docker/Dockerfile.btl` and `examples/docker/docker-compose.btl.yml` (BTL Docker assets — now in the BTL harness repo).
 
 ### Notes
-- Library crates' API is unchanged from 0.8.1. Consumers of `bacnet-types`, `bacnet-encoding`, `bacnet-services`, `bacnet-transport`, `bacnet-network`, `bacnet-client`, `bacnet-objects`, `bacnet-server` can upgrade with no source changes.
+- Library crate APIs changed from 0.8.1 where called out in this changelog.
 - Python (`rusty-bacnet`) and WASM (`bacnet-wasm`) bindings unchanged.
 - CLI (`bacnet-cli`) unchanged.
 

@@ -92,7 +92,7 @@ fn bench_encode_apdu_confirmed(c: &mut Criterion) {
     c.bench_function("encode_apdu_confirmed_request", |b| {
         b.iter(|| {
             let mut buf = BytesMut::with_capacity(64);
-            encode_apdu(&mut buf, &apdu);
+            encode_apdu(&mut buf, &apdu).expect("valid APDU encoding");
             black_box(buf);
         })
     });
@@ -112,7 +112,7 @@ fn bench_decode_apdu_confirmed(c: &mut Criterion) {
         service_request: Bytes::from(vec![0u8; 20]),
     });
     let mut buf = BytesMut::new();
-    encode_apdu(&mut buf, &apdu);
+    encode_apdu(&mut buf, &apdu).expect("valid APDU encoding");
     let data = Bytes::from(buf.to_vec());
 
     c.bench_function("decode_apdu_confirmed_request", |b| {
@@ -148,7 +148,7 @@ fn bench_full_stack_encode(c: &mut Criterion) {
                 service_request: Bytes::from(svc_buf.to_vec()),
             });
             let mut apdu_buf = BytesMut::with_capacity(64);
-            encode_apdu(&mut apdu_buf, &apdu);
+            encode_apdu(&mut apdu_buf, &apdu).expect("valid APDU encoding");
 
             let npdu = Npdu {
                 payload: Bytes::from(apdu_buf.to_vec()),
