@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.93"
+          toolchain: "1.95.0"
           components: rustfmt
       - run: cargo fmt --all --check
 
@@ -47,7 +47,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.93"
+          toolchain: "1.95.0"
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --exclude rusty-bacnet --exclude bacnet-wasm --all-targets --locked
@@ -59,7 +59,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.93"
+          toolchain: "1.95.0"
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - run: cargo check -p bacnet-wasm --target wasm32-unknown-unknown --locked
@@ -95,6 +95,24 @@ jobs:
       - uses: actions/checkout@v4
       - run: bash .github/scripts/check-no-secrets.sh
 
+  msrv:
+    name: MSRV (1.93)
+    runs-on: ubuntu-latest
+    env:
+      # Override `rust-toolchain.toml` (which pins the dev/CI channel to
+      # 1.95.0) so this job exercises the documented MSRV from the
+      # workspace `Cargo.toml`.
+      RUSTUP_TOOLCHAIN: "1.93"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.93"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv
+      - run: cargo check --workspace --exclude rusty-bacnet --exclude bacnet-wasm --locked
+
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -115,7 +133,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.93"
+          toolchain: "1.95.0"
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.os }}
@@ -171,7 +189,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.93"
+          toolchain: "1.95.0"
       - uses: Swatinem/rust-cache@v2
 
       - name: Publish bacnet-types
@@ -295,7 +313,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.93"
+          toolchain: "1.95.0"
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
 
@@ -416,7 +434,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.93"
+          toolchain: "1.95.0"
           targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
