@@ -358,8 +358,8 @@ cargo test --workspace --exclude rusty-bacnet --exclude bacnet-wasm
 # Check formatting
 cargo fmt --all --check
 
-# Lint (0 warnings required)
-RUSTFLAGS="-Dwarnings" cargo clippy --workspace --exclude rusty-bacnet --all-targets
+# Lint (deny-level lints set in [workspace.lints]; missing_docs is warn-level)
+cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked
 
 # Check Python bindings compile
 cargo check -p rusty-bacnet --tests

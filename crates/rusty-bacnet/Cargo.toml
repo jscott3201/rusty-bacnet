@@ -24,3 +24,6 @@ tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 bytes.workspace = true
 tokio-rustls.workspace = true
 rustls-native-certs.workspace = true
+
+[lints]
+workspace = true

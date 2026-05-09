@@ -563,6 +563,7 @@ fn resolve_local_ipv6() -> Option<Ipv6Addr> {
 
 /// Best-effort resolution of IPv6 interface index for the given address.
 /// Returns `None` if the interface cannot be determined.
+#[allow(unsafe_code)]
 fn resolve_interface_index(addr: &Ipv6Addr) -> Option<u32> {
     #[cfg(unix)]
     {
@@ -572,10 +573,17 @@ fn resolve_interface_index(addr: &Ipv6Addr) -> Option<u32> {
         struct IfAddrsGuard(*mut libc::ifaddrs);
         impl Drop for IfAddrsGuard {
             fn drop(&mut self) {
+                // SAFETY: `self.0` was returned by `getifaddrs` and stored without modification;
+                // `freeifaddrs` is the matching deallocator and is called exactly once on drop.
                 unsafe { libc::freeifaddrs(self.0) }
             }
         }
 
+        // SAFETY: this block performs the `getifaddrs`/walk/family-dispatch dance. The
+        // returned linked list is owned by `_guard` (calls `freeifaddrs` on drop). All
+        // pointer dereferences of `cursor`/`ifa.ifa_addr` are gated on null checks; address
+        // family bytes are read after confirming `family == AF_INET6`. `CStr::from_ptr`
+        // requires NUL-terminated strings, which the kernel guarantees for `ifa_name`.
         unsafe {
             let mut ifaddrs: *mut libc::ifaddrs = std::ptr::null_mut();
             if libc::getifaddrs(&mut ifaddrs) != 0 {

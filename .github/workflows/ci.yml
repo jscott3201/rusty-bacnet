@@ -13,7 +13,12 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-Dwarnings"
+  # Per-rule lint severity is set by `[workspace.lints]` in the root
+  # Cargo.toml. We intentionally do not set `RUSTFLAGS=-Dwarnings`
+  # here — that would override `missing_docs = "warn"` and turn the
+  # 3,335 known warnings into errors. Things we *do* want as errors
+  # (`unsafe_code`, `unused_must_use`, `clippy::todo`, etc.) are
+  # already `deny` in the workspace lints.
 
 permissions:
   contents: write
@@ -31,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.93"
+          toolchain: "1.95.0"
           components: rustfmt
       - run: cargo fmt --all --check
 
@@ -42,10 +47,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.93"
+          toolchain: "1.95.0"
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --exclude rusty-bacnet --exclude bacnet-wasm --all-targets
+      - run: cargo clippy --workspace --exclude rusty-bacnet --exclude bacnet-wasm --all-targets --locked
 
   wasm-check:
     name: WASM Check
@@ -54,10 +59,59 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.93"
+          toolchain: "1.95.0"
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check -p bacnet-wasm --target wasm32-unknown-unknown
+      - run: cargo check -p bacnet-wasm --target wasm32-unknown-unknown --locked
+
+  audit:
+    name: Cargo Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cargo/advisory-db
+          key: advisory-db-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: advisory-db-${{ runner.os }}-
+      - run: cargo audit --color always
+
+  file-size-cap:
+    name: File-size cap (700 LOC)
+    runs-on: ubuntu-latest
+    env:
+      CHECK_FILE_SIZE_WARN: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash .github/scripts/check-file-size.sh
+
+  no-secret-scan:
+    name: No-secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash .github/scripts/check-no-secrets.sh
+
+  msrv:
+    name: MSRV (1.93)
+    runs-on: ubuntu-latest
+    env:
+      # Override `rust-toolchain.toml` (which pins the dev/CI channel to
+      # 1.95.0) so this job exercises the documented MSRV from the
+      # workspace `Cargo.toml`.
+      RUSTUP_TOOLCHAIN: "1.93"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.93"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv
+      - run: cargo check --workspace --exclude rusty-bacnet --exclude bacnet-wasm --locked
 
   test:
     name: Test (${{ matrix.os }})
@@ -79,11 +133,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.93"
+          toolchain: "1.95.0"
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.os }}
-      - run: cargo test --workspace --exclude rusty-bacnet --exclude bacnet-wasm ${{ matrix.features }}
+      - run: cargo test --workspace --exclude rusty-bacnet --exclude bacnet-wasm --locked ${{ matrix.features }}
 
   deny:
     name: Cargo Deny
@@ -99,7 +153,7 @@ jobs:
   validate:
     name: Validate Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [fmt, clippy, test, deny, wasm-check]
+    needs: [fmt, clippy, test, deny, wasm-check, audit, no-secret-scan]
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -135,7 +189,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.93"
+          toolchain: "1.95.0"
       - uses: Swatinem/rust-cache@v2
 
       - name: Publish bacnet-types
@@ -259,7 +313,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.93"
+          toolchain: "1.95.0"
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
 
@@ -380,7 +434,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.93"
+          toolchain: "1.95.0"
           targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2

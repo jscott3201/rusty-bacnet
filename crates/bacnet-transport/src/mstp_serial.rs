@@ -77,6 +77,7 @@ impl TokioSerialPort {
     /// - `delay_after_send_us`: Microseconds to wait after the last byte
     ///   before deasserting RTS. Covers last-byte drain time.
     #[cfg(target_os = "linux")]
+    #[allow(unsafe_code)]
     pub fn enable_kernel_rs485(
         &self,
         invert_rts: bool,
@@ -107,6 +108,9 @@ impl TokioSerialPort {
         buf[2] = delay_after_send_us;
 
         // TIOCSRS485 = 0x542F
+        // SAFETY: `stream` is a live `TokioSerial` instance whose fd is open for the duration
+        // of the lock guard; `buf` is a `[u32; 8]` stack array sized to match the kernel's
+        // `serial_rs485` struct (8 * u32 = 32 bytes); pointer is valid for the call.
         let ret = unsafe { libc::ioctl(stream.as_raw_fd(), 0x542F, buf.as_mut_ptr()) };
         if ret < 0 {
             return Err(Error::Encoding(format!(

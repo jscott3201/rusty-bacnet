@@ -72,3 +72,21 @@ smallvec = "1"
 criterion = { version = "0.8", features = ["async_tokio"] }
 sysinfo = "0.38"
 libc = "0.2"
+
+[workspace.lints.rust]
+# Workspace floor. `bacnet-transport` overrides nothing: each FFI site
+# carries `#[allow(unsafe_code)]` and a `// SAFETY:` comment, so this
+# stays `deny` everywhere.
+unsafe_code = "deny"
+# Surface missing pub-item docs in CI logs. Counts (2026-05-08): 3,335
+# warnings across the workspace. Per-crate ratchet to `deny` planned
+# for 0.9.x once each crate drops below ~25.
+missing_docs = "warn"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+todo = "deny"
+dbg_macro = "deny"
+print_stderr = "warn"
+print_stdout = "warn"

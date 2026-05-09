@@ -36,6 +36,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **API break**: `bacnet-encoding::segmentation::split_payload` now returns `Result<Vec<Bytes>, Error>` so callers must handle zero-payload-capacity and over-256-segment failures explicitly.
 - **Behavior change**: primitive decoder strictness now rejects malformed encodings that were previously accepted with trailing bytes.
 
+### Engineering — CI guardrails
+
+- Workspace lints centralized: `unsafe_code = "deny"` (workspace floor; per-site `#[allow]` + `// SAFETY:` comments on all 23 FFI sites in `bacnet-transport`), `missing_docs = "warn"`, `unused_must_use = "deny"`, plus clippy `todo`/`dbg_macro = "deny"` and `print_*` warnings.
+- `rust-toolchain.toml` (channel 1.95.0) and `rustfmt.toml` pin the dev/CI environment.
+- New CI jobs: `cargo audit` (advisory database), `check-no-secrets.sh` (AWS keys, private keys, Slack/GitHub/`sk-*` tokens), `check-file-size.sh` (700-LOC cap, warn-only until track-2 splits land).
+- `--locked` added to clippy/test/wasm-check so `Cargo.lock` updates can't slip in silently.
+
 ### Workspace reorganization
 
 The HTTP/MCP gateway and BTL compliance test harness were extracted into dedicated repositories. The remaining workspace focuses purely on the BACnet protocol stack: types, encoding, services, transport, network, client, server, objects, plus the Python and WASM bindings and the CLI.
