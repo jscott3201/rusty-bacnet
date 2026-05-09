@@ -45,7 +45,7 @@ jobs:
           toolchain: "1.93"
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --exclude rusty-bacnet --exclude bacnet-wasm --all-targets
+      - run: cargo clippy --workspace --exclude rusty-bacnet --exclude bacnet-wasm --all-targets --locked
 
   wasm-check:
     name: WASM Check
@@ -57,7 +57,38 @@ jobs:
           toolchain: "1.93"
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check -p bacnet-wasm --target wasm32-unknown-unknown
+      - run: cargo check -p bacnet-wasm --target wasm32-unknown-unknown --locked
+
+  audit:
+    name: Cargo Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cargo/advisory-db
+          key: advisory-db-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: advisory-db-${{ runner.os }}-
+      - run: cargo audit --color always
+
+  file-size-cap:
+    name: File-size cap (700 LOC)
+    runs-on: ubuntu-latest
+    env:
+      CHECK_FILE_SIZE_WARN: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash .github/scripts/check-file-size.sh
+
+  no-secret-scan:
+    name: No-secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash .github/scripts/check-no-secrets.sh
 
   test:
     name: Test (${{ matrix.os }})
@@ -83,7 +114,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.os }}
-      - run: cargo test --workspace --exclude rusty-bacnet --exclude bacnet-wasm ${{ matrix.features }}
+      - run: cargo test --workspace --exclude rusty-bacnet --exclude bacnet-wasm --locked ${{ matrix.features }}
 
   deny:
     name: Cargo Deny
@@ -99,7 +130,7 @@ jobs:
   validate:
     name: Validate Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [fmt, clippy, test, deny, wasm-check]
+    needs: [fmt, clippy, test, deny, wasm-check, audit, no-secret-scan]
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
