@@ -13,7 +13,12 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-Dwarnings"
+  # Per-rule lint severity is set by `[workspace.lints]` in the root
+  # Cargo.toml. We intentionally do not set `RUSTFLAGS=-Dwarnings`
+  # here — that would override `missing_docs = "warn"` and turn the
+  # 3,335 known warnings into errors. Things we *do* want as errors
+  # (`unsafe_code`, `unused_must_use`, `clippy::todo`, etc.) are
+  # already `deny` in the workspace lints.
 
 permissions:
   contents: write
