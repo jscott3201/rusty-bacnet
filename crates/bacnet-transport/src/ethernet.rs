@@ -266,7 +266,10 @@ mod transport {
         }
 
         /// Query the kernel for the interface index via `SIOCGIFINDEX`.
+        #[allow(unsafe_code)]
         fn get_if_index(fd: i32, name: &str) -> Result<i32, Error> {
+            // SAFETY: `libc::ifreq` is a C plain-old-data struct; zero-init produces
+            // a valid all-zero `ifreq` (cleared name, zero union members).
             let mut ifr: libc::ifreq = unsafe { std::mem::zeroed() };
             let name_bytes = name.as_bytes();
             if name_bytes.len() >= libc::IFNAMSIZ {
@@ -275,6 +278,8 @@ mod transport {
                     name
                 )));
             }
+            // SAFETY: bounds checked above (`name_bytes.len() < IFNAMSIZ`); src and dst
+            // are non-overlapping (`name_bytes` borrows the caller's str, `ifr` is local).
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     name_bytes.as_ptr(),
@@ -282,15 +287,21 @@ mod transport {
                     name_bytes.len(),
                 );
             }
+            // SAFETY: `fd` is a valid open AF_PACKET socket owned by the caller; `ifr`
+            // is a properly-initialized `ifreq` borrowed mutably for the duration of the call.
             let ret = unsafe { libc::ioctl(fd, libc::SIOCGIFINDEX as _, &mut ifr) };
             if ret < 0 {
                 return Err(Error::Transport(std::io::Error::last_os_error()));
             }
+            // SAFETY: kernel populated `ifr_ifru.ifru_ifindex` on the successful ioctl above
+            // (selected union variant matches the SIOCGIFINDEX request).
             Ok(unsafe { ifr.ifr_ifru.ifru_ifindex })
         }
 
         /// Query the kernel for the hardware (MAC) address via `SIOCGIFHWADDR`.
+        #[allow(unsafe_code)]
         fn get_hw_addr(fd: i32, name: &str) -> Result<[u8; 6], Error> {
+            // SAFETY: `libc::ifreq` is C plain-old-data; zero-init is a valid value.
             let mut ifr: libc::ifreq = unsafe { std::mem::zeroed() };
             let name_bytes = name.as_bytes();
             if name_bytes.len() >= libc::IFNAMSIZ {
@@ -299,6 +310,7 @@ mod transport {
                     name
                 )));
             }
+            // SAFETY: bounds checked above; src/dst are non-overlapping (separate allocations).
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     name_bytes.as_ptr(),
@@ -306,11 +318,14 @@ mod transport {
                     name_bytes.len(),
                 );
             }
+            // SAFETY: `fd` is a valid open AF_PACKET socket; `ifr` is properly initialized.
             let ret = unsafe { libc::ioctl(fd, libc::SIOCGIFHWADDR as _, &mut ifr) };
             if ret < 0 {
                 return Err(Error::Transport(std::io::Error::last_os_error()));
             }
             let mut mac = [0u8; 6];
+            // SAFETY: kernel populated the `ifru_hwaddr` union variant on the successful
+            // SIOCGIFHWADDR ioctl above; first 6 bytes of `sa_data` are the IEEE MAC.
             unsafe {
                 let data = ifr.ifr_ifru.ifru_hwaddr.sa_data;
                 for (i, byte) in mac.iter_mut().enumerate() {
@@ -325,17 +340,22 @@ mod transport {
         /// Send a raw pre-built Ethernet frame via the AF_PACKET socket.
         /// Used for LLC command responses (XID, TEST) which bypass the normal
         /// BACnet NPDU encode path.
+        #[allow(unsafe_code)]
         fn raw_sendto(
             fd: i32,
             if_index: i32,
             dest_mac: &[u8; 6],
             frame: &[u8],
         ) -> Result<(), std::io::Error> {
+            // SAFETY: `sockaddr_ll` is C POD; zero-init is a valid value before fields are set.
             let mut sll: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
             sll.sll_family = libc::AF_PACKET as u16;
             sll.sll_ifindex = if_index;
             sll.sll_halen = 6;
             sll.sll_addr[..6].copy_from_slice(dest_mac);
+            // SAFETY: `fd` is a valid AF_PACKET raw socket owned by the caller; `frame.as_ptr()`
+            // is valid for `frame.len()` bytes; `sll` is fully initialized above and valid for
+            // `size_of::<sockaddr_ll>()` bytes.
             let ret = unsafe {
                 libc::sendto(
                     fd,
@@ -359,6 +379,7 @@ mod transport {
     ///
     /// This is best-effort: if the setsockopt call fails, we log a warning
     /// and continue (software-level filtering in the recv loop still works).
+    #[allow(unsafe_code)]
     fn attach_bacnet_bpf_filter(fd: i32) {
         // BPF program (no control byte check — accept UI, XID, and TEST per Clause 7.1):
         //   ldh [12]          ; load length/EtherType field
@@ -471,6 +492,8 @@ mod transport {
             filter: filter.as_ptr(),
         };
 
+        // SAFETY: `fd` is the caller's open AF_PACKET socket; `prog` references the local
+        // `filter` array which outlives the call (kernel copies the program by value).
         let ret = unsafe {
             libc::setsockopt(
                 fd,
@@ -491,6 +514,7 @@ mod transport {
     }
 
     impl TransportPort for EthernetTransport {
+        #[allow(unsafe_code)]
         async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
             if self.recv_task.is_some() {
                 return Err(Error::Transport(std::io::Error::new(
@@ -500,6 +524,8 @@ mod transport {
             }
 
             // Open a raw AF_PACKET socket capturing all EtherType frames.
+            // SAFETY: pure syscall — no Rust-side memory invariants. Returned fd is
+            // checked for `< 0` and wrapped in `OwnedFd` below before any other use.
             let fd = unsafe {
                 libc::socket(
                     libc::AF_PACKET,
@@ -510,6 +536,8 @@ mod transport {
             if fd < 0 {
                 return Err(Error::Transport(std::io::Error::last_os_error()));
             }
+            // SAFETY: `fd >= 0` (checked above); we are the sole owner of this freshly
+            // opened socket and transfer ownership to `OwnedFd` so it is closed on drop.
             let owned_fd = unsafe { OwnedFd::from_raw_fd(fd) };
 
             self.if_index = Self::get_if_index(owned_fd.as_raw_fd(), &self.interface_name)?;
@@ -525,11 +553,14 @@ mod transport {
             // Attach BPF filter (best-effort) to only accept BACnet LLC frames.
             attach_bacnet_bpf_filter(owned_fd.as_raw_fd());
 
+            // SAFETY: `sockaddr_ll` is C POD; zero-init is valid before fields are set.
             let mut sll: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
             sll.sll_family = libc::AF_PACKET as u16;
             sll.sll_protocol = (libc::ETH_P_ALL as u16).to_be();
             sll.sll_ifindex = self.if_index;
 
+            // SAFETY: `owned_fd` is a valid AF_PACKET socket we just opened; `sll` is
+            // fully initialized above and valid for `size_of::<sockaddr_ll>()` bytes.
             let ret = unsafe {
                 libc::bind(
                     owned_fd.as_raw_fd(),
@@ -541,10 +572,13 @@ mod transport {
                 return Err(Error::Transport(std::io::Error::last_os_error()));
             }
 
+            // SAFETY: `owned_fd` is a valid open socket; `F_GETFL` reads flags and has no
+            // pointer arguments to validate.
             let flags = unsafe { libc::fcntl(owned_fd.as_raw_fd(), libc::F_GETFL) };
             if flags < 0 {
                 return Err(Error::Transport(std::io::Error::last_os_error()));
             }
+            // SAFETY: `owned_fd` is a valid open socket; `F_SETFL` takes an int flag.
             let ret = unsafe {
                 libc::fcntl(
                     owned_fd.as_raw_fd(),
@@ -585,6 +619,10 @@ mod transport {
                     };
 
                     match readable.try_io(|fd| {
+                        // SAFETY: `fd` borrows the live `OwnedFd` from `AsyncFd` (still open
+                        // since the task holds `Arc<OwnedFd>`); `recv_buf` is a heap buffer of
+                        // `len()` bytes valid for write for the duration of the call.
+                        #[allow(unsafe_code)]
                         let n = unsafe {
                             libc::recv(
                                 fd.get_ref().as_raw_fd(),
@@ -701,6 +739,7 @@ mod transport {
             Ok(())
         }
 
+        #[allow(unsafe_code)]
         async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
             let fd = self.raw_fd.as_ref().ok_or_else(|| {
                 Error::Transport(std::io::Error::new(
@@ -730,12 +769,15 @@ mod transport {
             let mut buf = BytesMut::with_capacity(MIN_FRAME_LEN + npdu.len());
             encode_ethernet_frame(&mut buf, &dst, &self.local_mac, npdu);
 
+            // SAFETY: `sockaddr_ll` is C POD; zero-init is valid before fields are set.
             let mut sll: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
             sll.sll_family = libc::AF_PACKET as u16;
             sll.sll_ifindex = self.if_index;
             sll.sll_halen = 6;
             sll.sll_addr[..6].copy_from_slice(&dst);
 
+            // SAFETY: `fd` is a live `OwnedFd` borrowed via `Arc`; `buf.as_ptr()` is valid
+            // for `buf.len()` bytes; `sll` is fully initialized; size matches `socklen_t`.
             let ret = unsafe {
                 libc::sendto(
                     fd.as_raw_fd(),

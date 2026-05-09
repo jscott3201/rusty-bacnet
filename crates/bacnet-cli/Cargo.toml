@@ -54,3 +54,6 @@ sc-tls = [
     "rustls-pki-types",
 ]
 pcap = ["dep:pcap", "dep:ctrlc", "dep:libc"]
+
+[lints]
+workspace = true

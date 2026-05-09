@@ -16,3 +16,6 @@ bacnet-transport.workspace = true
 bytes.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
+
+[lints]
+workspace = true

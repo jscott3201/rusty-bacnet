@@ -90,3 +90,6 @@ harness = false
 [[bench]]
 name = "sc_mtls_throughput"
 harness = false
+
+[lints]
+workspace = true

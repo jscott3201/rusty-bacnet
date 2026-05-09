@@ -1,0 +1,7 @@
+# Pinned toolchain for reproducible builds. MSRV is 1.93 (see workspace
+# Cargo.toml `rust-version`). This pin sets the channel used by `cargo`
+# without an explicit override; CI uses this exact version.
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]
+profile = "default"

@@ -27,3 +27,6 @@ sc-tls = ["bacnet-transport/sc-tls", "tokio-rustls"]
 [dev-dependencies]
 bacnet-transport.workspace = true
 tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync", "macros", "time", "test-util"] }
+
+[lints]
+workspace = true

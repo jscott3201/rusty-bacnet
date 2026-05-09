@@ -31,3 +31,6 @@ sc-tls = ["tokio-tungstenite", "tokio-rustls", "rustls", "futures-util"]
 serial = ["tokio-serial", "tokio/io-util"]
 serial-gpio = ["serial", "gpiocdev"]
 ethernet = []
+
+[lints]
+workspace = true
