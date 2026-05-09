@@ -82,8 +82,6 @@ jobs:
   file-size-cap:
     name: File-size cap (700 LOC)
     runs-on: ubuntu-latest
-    env:
-      CHECK_FILE_SIZE_WARN: "1"
     steps:
       - uses: actions/checkout@v4
       - run: bash .github/scripts/check-file-size.sh

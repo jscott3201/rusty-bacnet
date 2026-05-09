@@ -43,6 +43,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New CI jobs: `cargo audit` (advisory database), `check-no-secrets.sh` (AWS keys, private keys, Slack/GitHub/`sk-*` tokens), `check-file-size.sh` (700-LOC cap, warn-only until track-2 splits land).
 - `--locked` added to clippy/test/wasm-check so `Cargo.lock` updates can't slip in silently.
 
+### Engineering — Modularity (700 LOC cap)
+
+- 34 source files split into focused modules so every tracked `*.rs` is below the 700 non-empty / non-comment line cap.
+- `[lints]` re-export discipline preserved: every type, function, and macro is reachable at its previous import path; no API renames in this pass.
+- `.github/scripts/check-file-size.sh` flipped from warn-only (`CHECK_FILE_SIZE_WARN=1`) to strict — the cap is now enforced on every PR.
+
 ### Workspace reorganization
 
 The HTTP/MCP gateway and BTL compliance test harness were extracted into dedicated repositories. The remaining workspace focuses purely on the BACnet protocol stack: types, encoding, services, transport, network, client, server, objects, plus the Python and WASM bindings and the CLI.
