@@ -135,6 +135,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.os }}
+          # Do not cache ~/.cargo/bin; a stale cache from an older runner
+          # image can clobber rustup's shims after dtolnay installs them,
+          # causing `cargo test` to invoke a broken `rustup-init`. This
+          # bit us on macos-15-arm64 image 20260511.0048 — see PR #21.
+          cache-bin: false
       - run: cargo test --workspace --exclude rusty-bacnet --exclude bacnet-wasm --locked ${{ matrix.features }}
 
   deny:
