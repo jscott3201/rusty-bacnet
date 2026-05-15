@@ -306,7 +306,15 @@ impl TransportPort for BipTransport {
         socket2.set_broadcast(true).map_err(Error::Transport)?;
         socket2.set_nonblocking(true).map_err(Error::Transport)?;
 
-        let bind_addr = SocketAddrV4::new(self.interface, self.port);
+        // Always bind to INADDR_ANY so subnet- and limited-broadcast packets
+        // (destination 10.x.y.255 / 255.255.255.255) reach this socket.  A
+        // Linux UDP socket bound to a specific interface IP only receives
+        // packets whose destination IP matches the bound IP, so binding to
+        // self.interface would silently drop every inbound broadcast — see
+        // tests::bind_address_is_inaddr_any.  `self.interface` is still used
+        // below for the announced local MAC (line 318), so I-Am responses
+        // continue to advertise the correct source IP.
+        let bind_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, self.port);
         socket2.bind(&bind_addr.into()).map_err(Error::Transport)?;
 
         let std_socket: std::net::UdpSocket = socket2.into();
