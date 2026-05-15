@@ -306,6 +306,18 @@ impl TransportPort for BipTransport {
         socket2.set_broadcast(true).map_err(Error::Transport)?;
         socket2.set_nonblocking(true).map_err(Error::Transport)?;
 
+        // Validate self.interface is a real local IP before binding the real
+        // socket to 0.0.0.0 below. Previously the kernel enforced this when
+        // we bound directly to self.interface (EADDRNOTAVAIL on typos); now
+        // we probe with a throwaway bind on an ephemeral port so a
+        // misconfigured interface fails fast at startup rather than silently
+        // advertising an unowned IP in I-Am replies via local_mac. See
+        // tests::start_fails_on_nonlocal_interface.
+        if !self.interface.is_unspecified() {
+            std::net::UdpSocket::bind(SocketAddrV4::new(self.interface, 0))
+                .map_err(Error::Transport)?;
+        }
+
         // Always bind to INADDR_ANY so subnet- and limited-broadcast packets
         // (destination 10.x.y.255 / 255.255.255.255) reach this socket.  A
         // Linux UDP socket bound to a specific interface IP only receives

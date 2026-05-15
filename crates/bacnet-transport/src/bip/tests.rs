@@ -317,3 +317,22 @@ async fn bind_address_is_inaddr_any() {
 
     transport.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn start_fails_on_nonlocal_interface() {
+    // Now that we bind the real socket to 0.0.0.0, a typo'd interface IP
+    // would otherwise succeed at bind and only fail silently later when
+    // peers reply to an address we don't own.  start() must instead probe
+    // the configured interface and fail fast.  192.0.2.0/24 (RFC 5737
+    // TEST-NET-1) is reserved and never assignable to a real NIC, so the
+    // probe must reject it.
+    let mut transport = BipTransport::new(Ipv4Addr::new(192, 0, 2, 1), 0, Ipv4Addr::BROADCAST);
+    let err = transport
+        .start()
+        .await
+        .expect_err("start() must reject a non-local interface IP");
+    assert!(
+        matches!(err, Error::Transport(_)),
+        "expected Error::Transport, got: {err:?}"
+    );
+}
