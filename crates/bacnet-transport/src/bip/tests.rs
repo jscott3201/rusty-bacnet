@@ -283,3 +283,56 @@ async fn bvlc_request_rejects_concurrent_calls() {
 
     transport.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn bind_address_is_inaddr_any() {
+    // Regression for the "user-supplied interface IP" silently rejecting
+    // broadcast traffic.  Even when the caller passes a specific interface,
+    // the underlying socket must bind 0.0.0.0 so the kernel delivers
+    // subnet- and limited-broadcast packets to it.  The interface IP is
+    // still used for the announced local MAC.
+    let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    let _rx = transport.start().await.unwrap();
+
+    let local = transport
+        .socket
+        .as_ref()
+        .expect("socket exists after start")
+        .local_addr()
+        .expect("local_addr is queryable");
+
+    assert!(
+        local.ip().is_unspecified(),
+        "BIP socket must bind to 0.0.0.0 for broadcast reception; got {local}"
+    );
+
+    // The announced local MAC must still reflect the user-supplied interface,
+    // not the bind address.
+    let mac = transport.local_mac();
+    assert_eq!(
+        &mac[..4],
+        &Ipv4Addr::LOCALHOST.octets(),
+        "announced IP must match interface"
+    );
+
+    transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn start_fails_on_nonlocal_interface() {
+    // Now that we bind the real socket to 0.0.0.0, a typo'd interface IP
+    // would otherwise succeed at bind and only fail silently later when
+    // peers reply to an address we don't own.  start() must instead probe
+    // the configured interface and fail fast.  192.0.2.0/24 (RFC 5737
+    // TEST-NET-1) is reserved and never assignable to a real NIC, so the
+    // probe must reject it.
+    let mut transport = BipTransport::new(Ipv4Addr::new(192, 0, 2, 1), 0, Ipv4Addr::BROADCAST);
+    let err = transport
+        .start()
+        .await
+        .expect_err("start() must reject a non-local interface IP");
+    assert!(
+        matches!(err, Error::Transport(_)),
+        "expected Error::Transport, got: {err:?}"
+    );
+}
