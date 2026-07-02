@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Add `BACnetClient::device_events()` with discovery/update/loss notifications while keeping `discovered_devices()` as the device-table snapshot API.
+- Add BACnet client builder setters for APDU retries, accepted segment count, segmented-response acceptance, and proposed window size.
 
 ### Fixed
 

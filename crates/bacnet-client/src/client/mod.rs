@@ -631,6 +631,7 @@ fn response_tsm_mac(source_mac: &[u8], source_network: &Option<NpduAddress>) -> 
     }
 }
 
+mod builder_options;
 mod cov;
 mod device_events;
 mod device_mgmt;
@@ -643,6 +644,8 @@ mod property;
 mod requests;
 mod segmentation;
 
+#[cfg(test)]
+mod builder_options_tests;
 #[cfg(test)]
 mod device_events_tests;
 #[cfg(test)]
