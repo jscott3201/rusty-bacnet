@@ -1,5 +1,14 @@
 use super::*;
 
+const DEVICE_PURGE_INTERVAL: Duration = Duration::from_secs(300);
+#[cfg(not(test))]
+const DEVICE_MAX_AGE: Duration = Duration::from_secs(600);
+// Unit tests use Tokio's paused clock, while DeviceTable timestamps use
+// std::time::Instant. Use an immediate threshold so the purge timer is
+// observable without constructing an unrepresentable old Instant on Windows.
+#[cfg(test)]
+const DEVICE_MAX_AGE: Duration = Duration::ZERO;
+
 impl<T: TransportPort> BACnetClient<T> {
     fn abort_dispatch_task(&mut self) -> Option<JoinHandle<()>> {
         let task = self.dispatch_task.take()?;
@@ -46,8 +55,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
         let dispatch_task = tokio::spawn(async move {
             let mut seg_state: HashMap<SegKey, SegmentedReceiveState> = HashMap::new();
-            const DEVICE_PURGE_INTERVAL: Duration = Duration::from_secs(300);
-            const DEVICE_MAX_AGE: Duration = Duration::from_secs(600);
             let mut device_purge_interval = tokio::time::interval(DEVICE_PURGE_INTERVAL);
 
             loop {

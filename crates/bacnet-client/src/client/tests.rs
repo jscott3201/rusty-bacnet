@@ -139,7 +139,9 @@ async fn device_table_purge_runs_without_inbound_apdu() {
         segmentation_supported: Segmentation::NONE,
         max_segments_accepted: None,
         vendor_id: 42,
-        last_seen: Instant::now() - Duration::from_secs(601),
+        last_seen: Instant::now()
+            .checked_sub(Duration::from_millis(1))
+            .unwrap_or_else(Instant::now),
         source_network: None,
         source_address: None,
     });

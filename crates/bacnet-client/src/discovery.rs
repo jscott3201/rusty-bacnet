@@ -93,8 +93,14 @@ impl DeviceTable {
 
     /// Remove entries whose `last_seen` is older than `max_age`.
     pub fn purge_stale(&mut self, max_age: Duration) {
-        let cutoff = Instant::now() - max_age;
-        self.devices.retain(|_, d| d.last_seen >= cutoff);
+        self.purge_stale_at(Instant::now(), max_age);
+    }
+
+    fn purge_stale_at(&mut self, now: Instant, max_age: Duration) {
+        self.devices.retain(|_, d| {
+            now.checked_duration_since(d.last_seen)
+                .is_none_or(|age| age <= max_age)
+        });
     }
 }
 
@@ -173,13 +179,16 @@ mod tests {
     #[test]
     fn purge_stale_removes_old_entries() {
         let mut table = DeviceTable::new();
+        let now = Instant::now();
         let mut old_device = make_device(1);
-        old_device.last_seen = Instant::now() - Duration::from_secs(120);
+        old_device.last_seen = now;
         table.upsert(old_device);
-        table.upsert(make_device(2));
+        let mut fresh_device = make_device(2);
+        fresh_device.last_seen = now + Duration::from_secs(120);
+        table.upsert(fresh_device);
         assert_eq!(table.len(), 2);
 
-        table.purge_stale(Duration::from_secs(60));
+        table.purge_stale_at(now + Duration::from_secs(120), Duration::from_secs(60));
         assert_eq!(table.len(), 1);
         assert!(table.get(1).is_none());
         assert!(table.get(2).is_some());
@@ -197,26 +206,40 @@ mod tests {
     #[test]
     fn purge_stale_removes_all_when_expired() {
         let mut table = DeviceTable::new();
+        let now = Instant::now();
         let mut d1 = make_device(1);
-        d1.last_seen = Instant::now() - Duration::from_secs(200);
+        d1.last_seen = now;
         let mut d2 = make_device(2);
-        d2.last_seen = Instant::now() - Duration::from_secs(200);
+        d2.last_seen = now;
         table.upsert(d1);
         table.upsert(d2);
-        table.purge_stale(Duration::from_secs(60));
+        table.purge_stale_at(now + Duration::from_secs(200), Duration::from_secs(60));
         assert!(table.is_empty());
     }
 
     #[test]
     fn upsert_refreshes_last_seen() {
         let mut table = DeviceTable::new();
+        let now = Instant::now();
         let mut old_device = make_device(1);
-        old_device.last_seen = Instant::now() - Duration::from_secs(120);
+        old_device.last_seen = now;
         table.upsert(old_device);
 
-        table.upsert(make_device(1));
-        table.purge_stale(Duration::from_secs(60));
+        let mut refreshed = make_device(1);
+        refreshed.last_seen = now + Duration::from_secs(120);
+        table.upsert(refreshed);
+        table.purge_stale_at(now + Duration::from_secs(120), Duration::from_secs(60));
         assert_eq!(table.len(), 1);
         assert!(table.get(1).is_some());
+    }
+
+    #[test]
+    fn purge_stale_handles_max_age_larger_than_instant_history() {
+        let mut table = DeviceTable::new();
+        table.upsert(make_device(1));
+
+        table.purge_stale(Duration::MAX);
+
+        assert_eq!(table.len(), 1);
     }
 }
