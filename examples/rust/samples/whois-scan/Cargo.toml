@@ -1,0 +1,19 @@
+[package]
+name = "whois-scan"
+version = "0.1.0"
+edition = "2021"
+description = "BACnet Who-Is discovery scan"
+publish = false
+
+[[bin]]
+name = "whois-scan"
+path = "src/main.rs"
+
+[dependencies]
+bacnet-client = { path = "../../../../crates/bacnet-client" }
+bacnet-services = { path = "../../../../crates/bacnet-services" }
+bacnet-transport = { path = "../../../../crates/bacnet-transport" }
+bacnet-types = { path = "../../../../crates/bacnet-types" }
+bytes = "1"
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

@@ -15,7 +15,7 @@ bacnet-services       Service request/response structs (RP, WP, RPM, COV, etc.)
     |         |
     |     bacnet-network      Network layer, BACnetRouter, RouterTable
     |         |
-    +---> bacnet-objects      BACnetObject trait, ObjectDatabase, 65 object types
+    +---> bacnet-objects      BACnetObject trait, ObjectDatabase, object implementations
     |         |
     |     bacnet-client       Async BACnet client (TSM, segmentation, discovery)
     |     bacnet-server       Async BACnet server (dispatch, COV, events, scheduling)
@@ -30,7 +30,7 @@ The bottom rows are "application" crates — they compose the library crates int
 
 The HTTP/MCP gateway and BTL compliance test harness now live in dedicated repositories:
 - [`rusty-bacnet-mcp`](https://github.com/jscott3201/rusty-bacnet-mcp) — Axum REST API + rmcp MCP server
-- [`rusty-bacnet-btl-harness`](https://github.com/jscott3201/rusty-bacnet-btl-harness) — BTL Test Plan 26.1 compliance harness
+- [`rusty-bacnet-btl-harness`](https://github.com/jscott3201/rusty-bacnet-btl-harness) — BTL Test Plan 26.1-oriented test harness
 
 Both consume the published `bacnet-*` crates from this workspace.
 
@@ -44,12 +44,12 @@ Physical network (UDP socket / WebSocket / serial port)
     v
 TransportPort::start() -> mpsc::Receiver<ReceivedNpdu>
     |  Decodes data-link framing (BVLL for BIP, BVLC-SC for SC, MS/TP frames)
-    |  Extracts NPDU bytes + source MAC address
+    |  Extracts NPDU bytes + source MAC address + optional data attributes
     v
 NetworkLayer::start() -> mpsc::Receiver<ReceivedApdu>
     |  Decodes NPDU header (version, control, DNET/DADR/SNET/SADR)
     |  Filters: drops messages not for this device (wrong DNET)
-    |  Extracts APDU bytes + source network/address info
+    |  Extracts APDU bytes + source network/address info + data attributes
     v
 Client dispatch task / Server dispatch task
     |  Decodes APDU header (PDU type, service choice, invoke ID)
@@ -83,6 +83,8 @@ Loopback (local client/server) ─┘      |
 ```
 
 The router receives NPDUs from all transports, checks the destination network number in the NPDU header, and forwards to the appropriate transport. Messages for the local device (DNET matches a loopback port) are delivered to the client/server.
+
+Data attributes are carried on `ReceivedNpdu` and `ReceivedApdu`, and attribute-aware send helpers are available on `TransportPort` and `NetworkLayer`. BACnet/SC maps inbound Annex AB Data Options to these attributes and maps outbound attributes back to SC Data Options. Native BACnet/SC and the WASM browser receive loop treat valid Secure Path Data Option type 1 as understood, reject unsupported Must Understand Data Options before NPDU delivery, return a BVLC-Result NAK for non-broadcast traffic, drop broadcast traffic without a result, and preserve unsupported non-Must-Understand Data Options as attributes. The WASM client exposes incoming attributes through raw NPDU callback metadata, rejects malformed Secure Path Data Options before delivery, and can send broadcast or destination-VMAC raw NPDUs with Data Options. The router preserves inbound data attributes when forwarding unicast or broadcast NPDUs across attribute-capable transports, while data links that do not support attributes expose an empty list on receive and ignore attributes on send.
 
 ## Transport Abstraction
 
@@ -185,4 +187,4 @@ The server handles 20+ services including ReadProperty, WriteProperty, ReadPrope
 The HTTP/MCP gateway and BTL compliance test harness live in separate repositories that consume this workspace's published crates:
 
 - **[`rusty-bacnet-mcp`](https://github.com/jscott3201/rusty-bacnet-mcp)** — HTTP REST API (Axum) and MCP server (rmcp) on top of `BACnetClient` + `BACnetServer`. Single shared `GatewayState` handles both surfaces — no duplicated BACnet logic.
-- **[`rusty-bacnet-btl-harness`](https://github.com/jscott3201/rusty-bacnet-btl-harness)** — BTL Test Plan 26.1 compliance test harness. 3,808 tests across all 13 BTL sections; in-process self-test runs in <1 second.
+- **[`rusty-bacnet-btl-harness`](https://github.com/jscott3201/rusty-bacnet-btl-harness)** — external BTL Test Plan 26.1 harness project. Formal support status is tracked separately in the conformance ledger.

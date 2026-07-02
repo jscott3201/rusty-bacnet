@@ -13,7 +13,13 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{BinaryType, CloseEvent, ErrorEvent, MessageEvent, WebSocket};
 
+use crate::sc_websocket::{
+    require_hub_subprotocol, require_wss_uri, BACNET_SC_HUB_SUBPROTOCOL,
+    WEBSOCKET_DATA_NOT_ACCEPTED_CLOSE_CODE,
+};
+
 /// Wraps a browser WebSocket for BACnet/SC binary framing.
+#[derive(Clone)]
 pub struct BrowserWebSocket {
     ws: WebSocket,
     recv_queue: Rc<RefCell<VecDeque<Vec<u8>>>>,
@@ -24,7 +30,8 @@ pub struct BrowserWebSocket {
 impl BrowserWebSocket {
     /// Open a WebSocket connection to a BACnet/SC hub.
     pub async fn connect(url: &str) -> Result<Self, JsValue> {
-        let ws = WebSocket::new_with_str(url, "hub.bsc.bacnet.org")?;
+        require_wss_uri(url).map_err(JsValue::from_str)?;
+        let ws = WebSocket::new_with_str(url, BACNET_SC_HUB_SUBPROTOCOL)?;
         ws.set_binary_type(BinaryType::Arraybuffer);
 
         let recv_queue = Rc::new(RefCell::new(VecDeque::new()));
@@ -51,6 +58,10 @@ impl BrowserWebSocket {
         });
 
         JsFuture::from(open_promise).await?;
+        if let Err(message) = require_hub_subprotocol(&ws.protocol()) {
+            let _ = ws.close_with_code_and_reason(1002, message);
+            return Err(JsValue::from_str(message));
+        }
 
         // Set up persistent callbacks after connection
         // onerror (post-connect)
@@ -70,12 +81,24 @@ impl BrowserWebSocket {
         // onmessage
         {
             let queue = recv_queue.clone();
+            let error = error.clone();
             let waker = recv_waker.clone();
+            let ws_for_message = ws.clone();
             let onmessage = Closure::<dyn FnMut(MessageEvent)>::new(move |e: MessageEvent| {
                 if let Ok(buf) = e.data().dyn_into::<ArrayBuffer>() {
                     let array = Uint8Array::new(&buf);
                     let data = array.to_vec();
                     queue.borrow_mut().push_back(data);
+                    if let Some(w) = waker.borrow_mut().take() {
+                        w.wake();
+                    }
+                } else {
+                    let message = "BACnet/SC WebSocket data frame was not binary";
+                    *error.borrow_mut() = Some(message.into());
+                    let _ = ws_for_message.close_with_code_and_reason(
+                        WEBSOCKET_DATA_NOT_ACCEPTED_CLOSE_CODE,
+                        message,
+                    );
                     if let Some(w) = waker.borrow_mut().take() {
                         w.wake();
                     }

@@ -163,6 +163,246 @@ pub fn decode_bip_mac(mac: &[u8]) -> Result<([u8; 4], u16), Error> {
 mod tests {
     use super::*;
 
+    struct BvlcCodecCase {
+        name: &'static str,
+        function: BvlcFunction,
+        payload: &'static [u8],
+        expected_payload: &'static [u8],
+        expected_origin: Option<([u8; 4], u16)>,
+    }
+
+    const SAMPLE_NPDU: &[u8] = &[0x01, 0x20];
+    const SAMPLE_BDT_ENTRY: &[u8] = &[192, 0, 2, 10, 0xBA, 0xC0, 255, 255, 255, 0];
+    const SAMPLE_FDT_ENTRY: &[u8] = &[192, 0, 2, 20, 0xBA, 0xC0, 0x00, 0x3C, 0x00, 0x5A];
+    const SAMPLE_BIP_ADDRESS: &[u8] = &[192, 0, 2, 30, 0xBA, 0xC0];
+
+    fn encode_standard_frame(function: BvlcFunction, payload: &[u8]) -> BytesMut {
+        let mut buf = BytesMut::new();
+        encode_bvll(&mut buf, function, payload).expect("valid BVLL encoding");
+        buf
+    }
+
+    #[test]
+    fn annex_j_bvlc_function_constants_are_stable() {
+        let expected_annex_j_functions = [
+            ("BVLC_RESULT", BvlcFunction::BVLC_RESULT, 0x00),
+            (
+                "WRITE_BROADCAST_DISTRIBUTION_TABLE",
+                BvlcFunction::WRITE_BROADCAST_DISTRIBUTION_TABLE,
+                0x01,
+            ),
+            (
+                "READ_BROADCAST_DISTRIBUTION_TABLE",
+                BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE,
+                0x02,
+            ),
+            (
+                "READ_BROADCAST_DISTRIBUTION_TABLE_ACK",
+                BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE_ACK,
+                0x03,
+            ),
+            ("FORWARDED_NPDU", BvlcFunction::FORWARDED_NPDU, 0x04),
+            (
+                "REGISTER_FOREIGN_DEVICE",
+                BvlcFunction::REGISTER_FOREIGN_DEVICE,
+                0x05,
+            ),
+            (
+                "READ_FOREIGN_DEVICE_TABLE",
+                BvlcFunction::READ_FOREIGN_DEVICE_TABLE,
+                0x06,
+            ),
+            (
+                "READ_FOREIGN_DEVICE_TABLE_ACK",
+                BvlcFunction::READ_FOREIGN_DEVICE_TABLE_ACK,
+                0x07,
+            ),
+            (
+                "DELETE_FOREIGN_DEVICE_TABLE_ENTRY",
+                BvlcFunction::DELETE_FOREIGN_DEVICE_TABLE_ENTRY,
+                0x08,
+            ),
+            (
+                "DISTRIBUTE_BROADCAST_TO_NETWORK",
+                BvlcFunction::DISTRIBUTE_BROADCAST_TO_NETWORK,
+                0x09,
+            ),
+            (
+                "ORIGINAL_UNICAST_NPDU",
+                BvlcFunction::ORIGINAL_UNICAST_NPDU,
+                0x0A,
+            ),
+            (
+                "ORIGINAL_BROADCAST_NPDU",
+                BvlcFunction::ORIGINAL_BROADCAST_NPDU,
+                0x0B,
+            ),
+        ];
+
+        assert!(BvlcFunction::ALL_NAMED.len() >= expected_annex_j_functions.len());
+        for ((actual_name, actual_function), (name, function, raw)) in BvlcFunction::ALL_NAMED
+            .iter()
+            .take(expected_annex_j_functions.len())
+            .zip(expected_annex_j_functions)
+        {
+            assert_eq!(*actual_name, name);
+            assert_eq!(*actual_function, function);
+            assert_eq!(actual_function.to_raw(), raw);
+            assert_eq!(BvlcFunction::from_raw(raw), function);
+        }
+    }
+
+    #[test]
+    fn deleted_secure_bvll_function_is_exposed_as_passthrough() {
+        assert_eq!(BvlcFunction::SECURE_BVLL.to_raw(), 0x0C);
+        assert_eq!(BvlcFunction::from_raw(0x0C), BvlcFunction::SECURE_BVLL);
+    }
+
+    #[test]
+    fn decode_annex_j_bvlc_functions_and_deleted_secure_passthrough() {
+        let cases = [
+            BvlcCodecCase {
+                name: "BVLC-Result",
+                function: BvlcFunction::BVLC_RESULT,
+                payload: &[0x00, 0x00],
+                expected_payload: &[0x00, 0x00],
+                expected_origin: None,
+            },
+            BvlcCodecCase {
+                name: "Write-BDT",
+                function: BvlcFunction::WRITE_BROADCAST_DISTRIBUTION_TABLE,
+                payload: SAMPLE_BDT_ENTRY,
+                expected_payload: SAMPLE_BDT_ENTRY,
+                expected_origin: None,
+            },
+            BvlcCodecCase {
+                name: "Read-BDT",
+                function: BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE,
+                payload: &[],
+                expected_payload: &[],
+                expected_origin: None,
+            },
+            BvlcCodecCase {
+                name: "Read-BDT-Ack",
+                function: BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE_ACK,
+                payload: &[],
+                expected_payload: &[],
+                expected_origin: None,
+            },
+            BvlcCodecCase {
+                name: "Forwarded-NPDU",
+                function: BvlcFunction::FORWARDED_NPDU,
+                payload: SAMPLE_NPDU,
+                expected_payload: SAMPLE_NPDU,
+                expected_origin: Some(([192, 0, 2, 40], 0xBAC0)),
+            },
+            BvlcCodecCase {
+                name: "Register-Foreign-Device",
+                function: BvlcFunction::REGISTER_FOREIGN_DEVICE,
+                payload: &[0x00, 0x3C],
+                expected_payload: &[0x00, 0x3C],
+                expected_origin: None,
+            },
+            BvlcCodecCase {
+                name: "Read-FDT",
+                function: BvlcFunction::READ_FOREIGN_DEVICE_TABLE,
+                payload: &[],
+                expected_payload: &[],
+                expected_origin: None,
+            },
+            BvlcCodecCase {
+                name: "Read-FDT-Ack",
+                function: BvlcFunction::READ_FOREIGN_DEVICE_TABLE_ACK,
+                payload: SAMPLE_FDT_ENTRY,
+                expected_payload: SAMPLE_FDT_ENTRY,
+                expected_origin: None,
+            },
+            BvlcCodecCase {
+                name: "Delete-FDT-Entry",
+                function: BvlcFunction::DELETE_FOREIGN_DEVICE_TABLE_ENTRY,
+                payload: SAMPLE_BIP_ADDRESS,
+                expected_payload: SAMPLE_BIP_ADDRESS,
+                expected_origin: None,
+            },
+            BvlcCodecCase {
+                name: "Distribute-Broadcast-To-Network",
+                function: BvlcFunction::DISTRIBUTE_BROADCAST_TO_NETWORK,
+                payload: SAMPLE_NPDU,
+                expected_payload: SAMPLE_NPDU,
+                expected_origin: None,
+            },
+            BvlcCodecCase {
+                name: "Original-Unicast-NPDU",
+                function: BvlcFunction::ORIGINAL_UNICAST_NPDU,
+                payload: SAMPLE_NPDU,
+                expected_payload: SAMPLE_NPDU,
+                expected_origin: None,
+            },
+            BvlcCodecCase {
+                name: "Original-Broadcast-NPDU",
+                function: BvlcFunction::ORIGINAL_BROADCAST_NPDU,
+                payload: SAMPLE_NPDU,
+                expected_payload: SAMPLE_NPDU,
+                expected_origin: None,
+            },
+            BvlcCodecCase {
+                name: "Secure-BVLL passthrough",
+                function: BvlcFunction::SECURE_BVLL,
+                payload: &[],
+                expected_payload: &[],
+                expected_origin: None,
+            },
+        ];
+
+        for case in cases {
+            let frame = if let Some((ip, port)) = case.expected_origin {
+                let mut buf = BytesMut::new();
+                encode_bvll_forwarded(&mut buf, ip, port, case.payload)
+                    .expect("valid Forwarded-NPDU encoding");
+                buf
+            } else {
+                encode_standard_frame(case.function, case.payload)
+            };
+            let declared_length = u16::from_be_bytes([frame[2], frame[3]]) as usize;
+            assert_eq!(declared_length, frame.len(), "{}", case.name);
+
+            let msg = decode_bvll(&frame).unwrap_or_else(|err| panic!("{}: {err}", case.name));
+            assert_eq!(msg.function, case.function, "{}", case.name);
+            assert_eq!(msg.payload, case.expected_payload, "{}", case.name);
+            assert_eq!(
+                msg.originating_ip,
+                case.expected_origin.map(|(ip, _)| ip),
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                msg.originating_port,
+                case.expected_origin.map(|(_, port)| port),
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn decode_preserves_unknown_bvlc_function_code() {
+        let msg = decode_bvll(&[0x81, 0x7F, 0x00, 0x06, 0xAA, 0xBB]).unwrap();
+        assert_eq!(msg.function, BvlcFunction::from_raw(0x7F));
+        assert_eq!(msg.payload, Bytes::from_static(&[0xAA, 0xBB]));
+        assert!(msg.originating_ip.is_none());
+        assert!(msg.originating_port.is_none());
+    }
+
+    #[test]
+    fn decode_slices_payload_to_declared_length() {
+        // Current decoder policy: ignore datagram bytes after the declared BVLC length.
+        let msg =
+            decode_bvll(&[0x81, 0x0A, 0x00, 0x06, 0x01, 0x00, 0xDE, 0xAD, 0xBE, 0xEF]).unwrap();
+
+        assert_eq!(msg.function, BvlcFunction::ORIGINAL_UNICAST_NPDU);
+        assert_eq!(msg.payload, Bytes::from_static(&[0x01, 0x00]));
+    }
+
     #[test]
     fn encode_decode_unicast() {
         let npdu = vec![0x01, 0x00, 0x10, 0x02, 0x03];
@@ -291,6 +531,11 @@ mod tests {
     fn decode_length_exceeds_data() {
         // Claim length is 100, but only 4 bytes of data
         assert!(decode_bvll(&[0x81, 0x0A, 0x00, 0x64]).is_err());
+    }
+
+    #[test]
+    fn decode_length_shorter_than_header_errors() {
+        assert!(decode_bvll(&[0x81, 0x0A, 0x00, 0x03]).is_err());
     }
 
     #[test]

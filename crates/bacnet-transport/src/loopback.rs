@@ -66,6 +66,7 @@ impl TransportPort for LoopbackTransport {
         let msg = ReceivedNpdu {
             npdu: Bytes::copy_from_slice(npdu),
             source_mac: self.local_mac.clone(),
+            data_attributes: Vec::new(),
             reply_tx: None,
         };
         self.peer_tx

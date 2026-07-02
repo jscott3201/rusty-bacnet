@@ -56,9 +56,7 @@ pub(super) async fn handle_network_message(
                         let frozen = fwd_buf.freeze();
                         for (i, tx) in send_txs.iter().enumerate() {
                             if i != port_idx {
-                                let _ = tx.try_send(SendRequest::Broadcast {
-                                    npdu: frozen.clone(),
-                                });
+                                let _ = tx.try_send(SendRequest::broadcast(frozen.clone()));
                             }
                         }
                     }
@@ -93,7 +91,7 @@ pub(super) async fn handle_network_message(
         }
 
         // I-Am-Router-To-Network is always broadcast.
-        if let Err(e) = send_txs[port_idx].try_send(SendRequest::Broadcast { npdu: buf.freeze() }) {
+        if let Err(e) = send_txs[port_idx].try_send(SendRequest::broadcast(buf.freeze())) {
             warn!(%e, "Router dropped I-Am-Router response: output channel full");
         }
     } else if msg_type == NetworkMessageType::I_AM_ROUTER_TO_NETWORK.to_raw() {
@@ -134,9 +132,7 @@ pub(super) async fn handle_network_message(
                 let frozen = buf.freeze();
                 for (i, tx) in send_txs.iter().enumerate() {
                     if i != port_idx {
-                        let _ = tx.try_send(SendRequest::Broadcast {
-                            npdu: frozen.clone(),
-                        });
+                        let _ = tx.try_send(SendRequest::broadcast(frozen.clone()));
                     }
                 }
             }
@@ -192,13 +188,11 @@ pub(super) async fn handle_network_message(
                     let mut buf = BytesMut::with_capacity(32);
                     if let Ok(()) = encode_npdu(&mut buf, &forwarded) {
                         if dest_mac.is_empty() {
-                            let _ = send_txs[dest_port]
-                                .try_send(SendRequest::Broadcast { npdu: buf.freeze() });
+                            let _ =
+                                send_txs[dest_port].try_send(SendRequest::broadcast(buf.freeze()));
                         } else {
-                            let _ = send_txs[dest_port].try_send(SendRequest::Unicast {
-                                npdu: buf.freeze(),
-                                mac: dest_mac,
-                            });
+                            let _ = send_txs[dest_port]
+                                .try_send(SendRequest::unicast(buf.freeze(), dest_mac));
                         }
                     }
                 }
@@ -231,9 +225,7 @@ pub(super) async fn handle_network_message(
             let frozen = buf.freeze();
             for (i, tx) in send_txs.iter().enumerate() {
                 if i != port_idx {
-                    let _ = tx.try_send(SendRequest::Broadcast {
-                        npdu: frozen.clone(),
-                    });
+                    let _ = tx.try_send(SendRequest::broadcast(frozen.clone()));
                 }
             }
         }
@@ -260,9 +252,7 @@ pub(super) async fn handle_network_message(
             let frozen = buf.freeze();
             for (i, tx) in send_txs.iter().enumerate() {
                 if i != port_idx {
-                    let _ = tx.try_send(SendRequest::Broadcast {
-                        npdu: frozen.clone(),
-                    });
+                    let _ = tx.try_send(SendRequest::broadcast(frozen.clone()));
                 }
             }
         }
@@ -337,10 +327,10 @@ pub(super) async fn handle_network_message(
             return;
         }
 
-        if let Err(e) = send_txs[port_idx].try_send(SendRequest::Unicast {
-            npdu: buf.freeze(),
-            mac: MacAddr::from_slice(source_mac),
-        }) {
+        if let Err(e) = send_txs[port_idx].try_send(SendRequest::unicast(
+            buf.freeze(),
+            MacAddr::from_slice(source_mac),
+        )) {
             warn!(%e, "Router dropped Init-Routing-Table-ACK: output channel full");
         }
     } else if msg_type == NetworkMessageType::I_COULD_BE_ROUTER_TO_NETWORK.to_raw() {
@@ -411,7 +401,7 @@ pub(super) async fn handle_network_message(
             return;
         }
 
-        if let Err(e) = send_txs[port_idx].try_send(SendRequest::Broadcast { npdu: buf.freeze() }) {
+        if let Err(e) = send_txs[port_idx].try_send(SendRequest::broadcast(buf.freeze())) {
             warn!(%e, "Router dropped Network-Number-Is: output channel full");
         }
     } else if msg_type == NetworkMessageType::NETWORK_NUMBER_IS.to_raw() {

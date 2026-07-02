@@ -306,6 +306,12 @@ impl BipServerBuilder {
         self
     }
 
+    /// Set the vendor identifier advertised in I-Am responses.
+    pub fn vendor_id(mut self, id: u16) -> Self {
+        self.config.vendor_id = id;
+        self
+    }
+
     /// Build and start the server, constructing a BipTransport from the config.
     pub async fn build(self) -> Result<BACnetServer<BipTransport>, Error> {
         let transport = BipTransport::new(
@@ -365,6 +371,23 @@ pub struct BACnetServer<T: TransportPort> {
     trend_log_task: Option<JoinHandle<()>>,
     schedule_tick_task: Option<JoinHandle<()>>,
     local_mac: MacAddr,
+}
+
+/// Cloneable handle for sending unsolicited I-Am announcements.
+pub struct IAmBroadcaster<T: TransportPort> {
+    config: ServerConfig,
+    network: Arc<NetworkLayer<T>>,
+    db: Arc<RwLock<ObjectDatabase>>,
+}
+
+impl<T: TransportPort> Clone for IAmBroadcaster<T> {
+    fn clone(&self) -> Self {
+        Self {
+            config: self.config.clone(),
+            network: Arc::clone(&self.network),
+            db: Arc::clone(&self.db),
+        }
+    }
 }
 
 impl BACnetServer<BipTransport> {

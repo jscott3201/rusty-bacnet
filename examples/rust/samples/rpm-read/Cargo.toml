@@ -1,0 +1,20 @@
+[package]
+name = "rpm-read"
+version = "0.1.0"
+edition = "2021"
+description = "Who-Is a device, ReadPropertyMultiple on sensor points, print, exit"
+publish = false
+
+[[bin]]
+name = "rpm-read"
+path = "src/main.rs"
+
+[dependencies]
+bacnet-client = { path = "../../../../crates/bacnet-client" }
+bacnet-encoding = { path = "../../../../crates/bacnet-encoding" }
+bacnet-services = { path = "../../../../crates/bacnet-services" }
+bacnet-transport = { path = "../../../../crates/bacnet-transport" }
+bacnet-types = { path = "../../../../crates/bacnet-types" }
+bytes = "1"
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

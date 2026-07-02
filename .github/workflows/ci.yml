@@ -2,10 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main]
     tags: ["v*"]
   pull_request:
     branches: [main, dev]
+    types: [opened, synchronize, reopened]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -25,12 +26,15 @@ permissions:
   id-token: write
 
 # =============================================================================
-# Tier 1 — CI (runs on every push and PR)
+# Tier 1 — CI (runs on PR updates to main/dev, pushes to main, and v* tags)
 # =============================================================================
 
 jobs:
+  # Defense in depth with the top-level trigger: PRs run on main/dev,
+  # but merge pushes to dev must not spend CI if push filters change later.
   fmt:
     name: Rustfmt
+    if: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -42,6 +46,7 @@ jobs:
 
   clippy:
     name: Clippy
+    if: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -54,6 +59,7 @@ jobs:
 
   wasm-check:
     name: WASM Check
+    if: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -66,6 +72,7 @@ jobs:
 
   audit:
     name: Cargo Audit
+    if: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -81,6 +88,7 @@ jobs:
 
   file-size-cap:
     name: File-size cap (700 LOC)
+    if: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -88,6 +96,7 @@ jobs:
 
   no-secret-scan:
     name: No-secret scan
+    if: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -95,6 +104,7 @@ jobs:
 
   msrv:
     name: MSRV (1.93)
+    if: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     env:
       # Override `rust-toolchain.toml` (which pins the dev/CI channel to
@@ -113,6 +123,7 @@ jobs:
 
   test:
     name: Test (${{ matrix.os }})
+    if: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -135,10 +146,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.os }}
+          # Do not cache ~/.cargo/bin; a stale cache from an older runner
+          # image can clobber rustup's shims after dtolnay installs them,
+          # causing `cargo test` to invoke a broken `rustup-init`. This
+          # bit us on macos-15-arm64 image 20260511.0048 — see PR #21.
+          cache-bin: false
       - run: cargo test --workspace --exclude rusty-bacnet --exclude bacnet-wasm --locked ${{ matrix.features }}
 
   deny:
     name: Cargo Deny
+    if: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

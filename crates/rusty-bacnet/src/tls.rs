@@ -21,6 +21,9 @@ pub fn build_server_tls_config(
     let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&cert_data)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| Error::Encoding(format!("failed to parse server cert: {e}")))?;
+    if certs.is_empty() {
+        return Err(Error::Encoding("no server certificates found".into()));
+    }
     let key = PrivateKeyDer::from_pem_slice(&key_data)
         .map_err(|e| Error::Encoding(format!("failed to parse server key: {e}")))?;
 
@@ -31,6 +34,9 @@ pub fn build_server_tls_config(
         let ca_certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&ca_data)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| Error::Encoding(format!("failed to parse CA cert: {e}")))?;
+        if ca_certs.is_empty() {
+            return Err(Error::Encoding("no CA certificates found".into()));
+        }
 
         let mut root_store = rustls::RootCertStore::empty();
         for cert in ca_certs {
@@ -43,12 +49,12 @@ pub fn build_server_tls_config(
             .build()
             .map_err(|e| Error::Encoding(format!("failed to build client verifier: {e}")))?;
 
-        rustls::ServerConfig::builder()
+        rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
             .with_client_cert_verifier(client_verifier)
             .with_single_cert(certs, key)
             .map_err(|e| Error::Encoding(format!("TLS server config error: {e}")))?
     } else {
-        rustls::ServerConfig::builder()
+        rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
             .with_no_client_auth()
             .with_single_cert(certs, key)
             .map_err(|e| Error::Encoding(format!("TLS server config error: {e}")))?
@@ -73,6 +79,9 @@ pub fn build_client_tls_config(
         let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&ca_data)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| Error::Encoding(format!("failed to parse CA cert: {e}")))?;
+        if certs.is_empty() {
+            return Err(Error::Encoding("no CA certificates found".into()));
+        }
         for cert in certs {
             root_store
                 .add(cert)
@@ -112,6 +121,9 @@ pub fn build_client_tls_config(
             let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&cert_data)
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| Error::Encoding(format!("failed to parse client cert: {e}")))?;
+            if certs.is_empty() {
+                return Err(Error::Encoding("no client certificates found".into()));
+            }
 
             let key = PrivateKeyDer::from_pem_slice(&key_data)
                 .map_err(|e| Error::Encoding(format!("failed to parse client key: {e}")))?;

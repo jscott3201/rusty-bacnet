@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
-use bacnet_transport::port::TransportPort;
+use bacnet_transport::port::{DataAttribute, TransportPort};
 use bacnet_types::enums::{NetworkMessageType, RejectMessageReason};
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
@@ -35,8 +35,32 @@ use forwarding::{forward_broadcast, forward_unicast, send_reject};
 /// A send request to be forwarded on a port.
 #[derive(Debug)]
 enum SendRequest {
-    Unicast { npdu: Bytes, mac: MacAddr },
-    Broadcast { npdu: Bytes },
+    Unicast {
+        npdu: Bytes,
+        mac: MacAddr,
+        data_attributes: Vec<DataAttribute>,
+    },
+    Broadcast {
+        npdu: Bytes,
+        data_attributes: Vec<DataAttribute>,
+    },
+}
+
+impl SendRequest {
+    fn unicast(npdu: Bytes, mac: MacAddr) -> Self {
+        Self::Unicast {
+            npdu,
+            mac,
+            data_attributes: Vec::new(),
+        }
+    }
+
+    fn broadcast(npdu: Bytes) -> Self {
+        Self::Broadcast {
+            npdu,
+            data_attributes: Vec::new(),
+        }
+    }
 }
 
 /// A router port: a transport bound to a specific BACnet network number.
@@ -118,13 +142,26 @@ impl BACnetRouter {
             let task = tokio::spawn(async move {
                 while let Some(req) = send_rx.recv().await {
                     match req {
-                        SendRequest::Unicast { npdu, mac } => {
-                            if let Err(e) = transport.send_unicast(&npdu, &mac).await {
+                        SendRequest::Unicast {
+                            npdu,
+                            mac,
+                            data_attributes,
+                        } => {
+                            if let Err(e) = transport
+                                .send_unicast_with_data_attributes(&npdu, &mac, &data_attributes)
+                                .await
+                            {
                                 warn!(error = %e, "Router send_unicast failed");
                             }
                         }
-                        SendRequest::Broadcast { npdu } => {
-                            if let Err(e) = transport.send_broadcast(&npdu).await {
+                        SendRequest::Broadcast {
+                            npdu,
+                            data_attributes,
+                        } => {
+                            if let Err(e) = transport
+                                .send_broadcast_with_data_attributes(&npdu, &data_attributes)
+                                .await
+                            {
                                 warn!(error = %e, "Router send_broadcast failed");
                             }
                         }
@@ -168,7 +205,7 @@ impl BACnetRouter {
                 continue;
             }
 
-            if let Err(e) = tx.try_send(SendRequest::Broadcast { npdu: buf.freeze() }) {
+            if let Err(e) = tx.try_send(SendRequest::broadcast(buf.freeze())) {
                 warn!(%e, "Router dropped I-Am-Router announcement: output channel full");
             }
         }
@@ -222,6 +259,7 @@ impl BACnetRouter {
                                         port_network,
                                         &received.source_mac,
                                         &npdu,
+                                        &received.data_attributes,
                                     );
 
                                     // Deliver locally as well
@@ -229,6 +267,7 @@ impl BACnetRouter {
                                         apdu: npdu.payload,
                                         source_mac: received.source_mac,
                                         source_network: npdu.source,
+                                        data_attributes: received.data_attributes,
                                         reply_tx: received.reply_tx,
                                     };
                                     let _ = local_tx.send(apdu).await;
@@ -281,6 +320,7 @@ impl BACnetRouter {
                                                 apdu: npdu.payload,
                                                 source_mac: received.source_mac,
                                                 source_network: npdu.source,
+                                                data_attributes: received.data_attributes,
                                                 reply_tx: received.reply_tx,
                                             };
                                             let _ = local_tx.send(apdu).await;
@@ -292,6 +332,9 @@ impl BACnetRouter {
                                                     apdu: npdu.payload.clone(),
                                                     source_mac: received.source_mac.clone(),
                                                     source_network: npdu.source.clone(),
+                                                    data_attributes: received
+                                                        .data_attributes
+                                                        .clone(),
                                                     reply_tx: None,
                                                 };
                                                 let _ = local_tx.send(apdu).await;
@@ -303,6 +346,7 @@ impl BACnetRouter {
                                                 &received.source_mac,
                                                 npdu,
                                                 port_idx,
+                                                &received.data_attributes,
                                             );
                                         }
                                     } else {
@@ -313,6 +357,7 @@ impl BACnetRouter {
                                             &received.source_mac,
                                             npdu,
                                             port_idx,
+                                            &received.data_attributes,
                                         );
                                     }
                                 } else {
@@ -329,6 +374,7 @@ impl BACnetRouter {
                                     apdu: npdu.payload,
                                     source_mac: received.source_mac,
                                     source_network: npdu.source,
+                                    data_attributes: received.data_attributes,
                                     reply_tx: received.reply_tx,
                                 };
                                 let _ = local_tx.send(apdu).await;

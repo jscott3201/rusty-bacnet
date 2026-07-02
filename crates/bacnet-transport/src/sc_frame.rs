@@ -12,6 +12,13 @@
 use bacnet_types::error::Error;
 use bytes::{BufMut, Bytes, BytesMut};
 
+mod result;
+
+pub use result::{decode_sc_bvlc_result, ScBvlcResult};
+
+/// BACnet/SC hub WebSocket subprotocol (Annex AB.7.1).
+pub const BACNET_SC_HUB_SUBPROTOCOL: &str = "hub.bsc.bacnet.org";
+
 /// BACnet/SC BVLC function codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -100,6 +107,9 @@ pub struct ScControl {
 }
 
 impl ScControl {
+    /// Reserved bits in the control byte. Annex AB.2.2 requires them to be zero.
+    const RESERVED_MASK: u8 = 0xF0;
+
     /// Encode control flags to a byte. Bits 7-4 are reserved (zero); bits 3-0 carry the flags.
     pub fn to_byte(self) -> u8 {
         let mut b = 0u8;
@@ -116,6 +126,11 @@ impl ScControl {
             b |= 0x01; // bit 0
         }
         b
+    }
+
+    /// Return true when reserved control bits are clear.
+    pub fn has_valid_reserved_bits(b: u8) -> bool {
+        b & Self::RESERVED_MASK == 0
     }
 
     /// Decode control flags from a byte.
@@ -152,6 +167,10 @@ pub struct ScOption {
     pub must_understand: bool,
     /// Option data (variable length). Empty for options with no data.
     pub data: Vec<u8>,
+}
+
+fn is_valid_sc_option_type(option_type: u8) -> bool {
+    (1..=31).contains(&option_type)
 }
 
 /// A decoded BACnet/SC BVLC message.
@@ -243,6 +262,9 @@ pub fn decode_sc_message(data: &[u8]) -> Result<ScMessage, Error> {
     }
 
     let function = ScFunction::from_raw(data[0]);
+    if !ScControl::has_valid_reserved_bits(data[1]) {
+        return Err(Error::decoding(1, "reserved BACnet/SC control bits set"));
+    }
     let control = ScControl::from_byte(data[1]);
     let message_id = u16::from_be_bytes([data[2], data[3]]);
 
@@ -314,6 +336,10 @@ fn decode_sc_options(data: &[u8], offset: &mut usize) -> Result<Vec<ScOption>, E
         let has_data = marker & 0x20 != 0; // bit 5
         let more_follows = marker & 0x80 != 0; // bit 7
         *offset += 1;
+
+        if !is_valid_sc_option_type(option_type) {
+            return Err(Error::decoding(*offset - 1, "invalid SC option type 0"));
+        }
 
         let option_data = if has_data {
             if *offset + 2 > data.len() {
@@ -391,6 +417,15 @@ mod tests {
     fn control_no_flags() {
         let ctrl = ScControl::default();
         assert_eq!(ctrl.to_byte(), 0x00);
+    }
+
+    #[test]
+    fn decode_rejects_reserved_control_bits() {
+        // Annex AB.2.2 reserves bits 7..4 and requires them to be zero.
+        for reserved_bit in [0x10, 0x20, 0x40, 0x80, 0xF0] {
+            let data = [0x01, reserved_bit, 0x00, 0x01];
+            assert!(decode_sc_message(&data).is_err());
+        }
     }
 
     #[test]
@@ -654,5 +689,97 @@ mod tests {
         assert!(!decoded.dest_options[0].must_understand);
         assert_eq!(decoded.dest_options[1].option_type, 2);
         assert!(decoded.dest_options[1].must_understand);
+    }
+
+    #[test]
+    fn sc_options_decode_marker_fields_and_payload_split() {
+        // AB.2.17 shows destination options first, then data options, then payload.
+        let mut data = Vec::new();
+        data.extend_from_slice(&[
+            0x01, // Encapsulated-NPDU
+            0x07, // destination VMAC, destination options, and data options present
+            0xB5, 0xEC, // message ID
+            0x92, 0x7B, 0xF7, 0x1A, 0x96, 0xA2, // destination VMAC
+            0xBF, // more + data + proprietary option 31
+            0x00, 0x07, // destination option length
+            0x02, 0x2B, 0xBA, 0xC5, 0xEC, 0xC0, 0x99,
+            0x3F, // last + data + proprietary option 31
+            0x00, 0x03, // destination option length
+            0x03, 0x09, 0x39, 0x01, // last data option, secure path, no data
+            0x01, 0x04, 0x00, // payload
+        ]);
+
+        let decoded = decode_sc_message(&data).unwrap();
+        assert_eq!(decoded.function, ScFunction::EncapsulatedNpdu);
+        assert_eq!(decoded.message_id, 0xB5EC);
+        assert!(decoded.originating_vmac.is_none());
+        assert_eq!(
+            decoded.destination_vmac,
+            Some([0x92, 0x7B, 0xF7, 0x1A, 0x96, 0xA2])
+        );
+        assert_eq!(decoded.dest_options.len(), 2);
+        assert_eq!(decoded.dest_options[0].option_type, 31);
+        assert!(!decoded.dest_options[0].must_understand);
+        assert_eq!(
+            decoded.dest_options[0].data,
+            vec![0x02, 0x2B, 0xBA, 0xC5, 0xEC, 0xC0, 0x99]
+        );
+        assert_eq!(decoded.dest_options[1].option_type, 31);
+        assert!(!decoded.dest_options[1].must_understand);
+        assert_eq!(decoded.dest_options[1].data, vec![0x03, 0x09, 0x39]);
+        assert_eq!(decoded.data_options.len(), 1);
+        assert_eq!(decoded.data_options[0].option_type, 1);
+        assert!(decoded.data_options[0].data.is_empty());
+        assert_eq!(decoded.payload, Bytes::from_static(&[0x01, 0x04, 0x00]));
+    }
+
+    #[test]
+    fn sc_options_reject_option_type_zero() {
+        // AB.2.3 defines Header Option Type values as 1..31.
+        let data = [0x01, 0x02, 0x00, 0x01, 0x00];
+        assert!(decode_sc_message(&data).is_err());
+    }
+
+    #[test]
+    fn sc_options_reject_option_count_exhaustion() {
+        let option = ScOption {
+            option_type: 1,
+            must_understand: false,
+            data: Vec::new(),
+        };
+        let msg = ScMessage {
+            function: ScFunction::EncapsulatedNpdu,
+            message_id: 1,
+            originating_vmac: None,
+            destination_vmac: None,
+            dest_options: vec![option.clone(); 64],
+            data_options: Vec::new(),
+            payload: Bytes::new(),
+        };
+        let mut buf = BytesMut::new();
+        encode_sc_message(&mut buf, &msg);
+        let decoded = decode_sc_message(&buf).unwrap();
+        assert_eq!(decoded.dest_options.len(), 64);
+
+        let mut too_many = msg;
+        too_many.dest_options.push(option);
+        let mut buf = BytesMut::new();
+        encode_sc_message(&mut buf, &too_many);
+        assert!(decode_sc_message(&buf).is_err());
+    }
+
+    #[test]
+    fn sc_options_reject_truncated_length_and_data() {
+        let length_missing = [0x01, 0x02, 0x00, 0x01, 0x21, 0x00];
+        assert!(decode_sc_message(&length_missing).is_err());
+
+        let data_missing = [0x01, 0x02, 0x00, 0x01, 0x21, 0x00, 0x02, 0xAA];
+        assert!(decode_sc_message(&data_missing).is_err());
+    }
+
+    #[test]
+    fn sc_options_reject_unterminated_chain() {
+        let data = [0x01, 0x02, 0x00, 0x01, 0x81];
+        assert!(decode_sc_message(&data).is_err());
     }
 }

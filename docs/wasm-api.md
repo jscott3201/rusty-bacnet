@@ -16,7 +16,7 @@ The `bacnet-wasm` crate provides a BACnet/SC (Secure Connect) client for browser
 - Who-Is discovery with I-Am callback handling
 - COV (Change of Value) subscriptions and notification callbacks
 - BACnet APDU encoding/decoding for common data types
-- Automatic heartbeat response to keep connections alive
+- Automatic Heartbeat-Request/Heartbeat-ACK keep-alive handling
 
 The client connects to a BACnet/SC hub over `wss://` WebSocket, performs the SC Connect handshake, and then sends/receives BACnet service requests encapsulated in SC frames.
 
@@ -98,7 +98,7 @@ import init, {
 // Initialize the WASM module (required once before any API calls)
 await init();
 
-// Create a client (generates a random 6-byte VMAC automatically)
+// Create a client (generates an Annex H Random-48 VMAC automatically)
 const client = new BACnetScClient();
 
 // Connect to a BACnet/SC hub
@@ -143,12 +143,32 @@ The main client class for BACnet/SC communication. Uses browser WebSocket to con
 new BACnetScClient(): BACnetScClient
 ```
 
-Creates a new BACnet/SC client with a randomly generated 6-byte VMAC (Virtual MAC address). Uses `crypto.getRandomValues()` when available, falling back to `Math.random()`.
+Creates a new BACnet/SC client with an Annex H Random-48 VMAC (Virtual MAC address) and a generated RFC 4122 version 4 Device UUID. The constructor requires `crypto.getRandomValues()` and throws if secure browser randomness is unavailable. It sets the Random-48 marker nibble required by Standard 135.
 
 **Example:**
 
 ```javascript
 const client = new BACnetScClient();
+```
+
+---
+
+### withDeviceUuid
+
+```typescript
+BACnetScClient.withDeviceUuid(deviceUuid: Uint8Array): BACnetScClient
+```
+
+Creates a BACnet/SC client using a caller-supplied persistent 16-byte Device UUID and a new secure Random-48 VMAC. The UUID must be exactly 16 bytes and must not be all zero.
+
+**Example:**
+
+```javascript
+const deviceUuid = new Uint8Array([
+  0x6f, 0x8c, 0x4b, 0x8a, 0x4b, 0x31, 0x48, 0xa5,
+  0x9b, 0x4c, 0x8f, 0x79, 0x6a, 0x91, 0x2d, 0x11,
+]);
+const client = BACnetScClient.withDeviceUuid(deviceUuid);
 ```
 
 ---
@@ -161,7 +181,7 @@ connect(url: string): Promise<void>
 
 Connect to a BACnet/SC hub via WebSocket.
 
-Opens a WebSocket connection to the specified URL using the `hub.bsc.bacnet.org` subprotocol, sends a ConnectRequest with the client's VMAC and device UUID, and waits for a ConnectAccept response from the hub. Once connected, starts a background receive loop that dispatches incoming messages to pending request promises and event callbacks.
+Opens a WebSocket connection to the specified URL using the `hub.bsc.bacnet.org` subprotocol, sends a ConnectRequest with the client's VMAC and Device UUID, and waits for a ConnectAccept response from the hub. If the matching ConnectRequest is rejected with NODE_DUPLICATE_VMAC, the client closes the WebSocket and selects a new secure Random-48 VMAC for a later retry. Malformed connect-time responses close the WebSocket and clear the pending connect state. Once connected, starts a background receive loop that dispatches incoming messages to pending request promises and event callbacks.
 
 **Parameters:**
 
@@ -322,6 +342,128 @@ client.whoIs(1234, 1234);
 
 ---
 
+### sendNpdu
+
+```typescript
+sendNpdu(npduBytes: Uint8Array): void
+```
+
+Broadcast raw NPDU bytes through the established BACnet/SC hub connection without Data Options. The outbound Encapsulated-NPDU carries the broadcast Destination VMAC and no Originating VMAC.
+
+**Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `npduBytes` | `Uint8Array` | Complete BACnet NPDU bytes to encapsulate in BACnet/SC. |
+
+**Throws:**
+- `"not connected"` -- Client is not connected to a hub.
+- Max-NPDU-Length or Max-BVLC-Length errors when the encoded outbound message exceeds the peer limits learned from ConnectAccept.
+
+---
+
+### sendNpduTo
+
+```typescript
+sendNpduTo(destinationVmac: Uint8Array, npduBytes: Uint8Array): void
+```
+
+Send raw NPDU bytes to a 6-byte destination VMAC through the established BACnet/SC hub connection without Data Options. The outbound Encapsulated-NPDU carries the supplied Destination VMAC and no Originating VMAC.
+
+**Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `destinationVmac` | `Uint8Array` | Six-byte destination VMAC. Use `[0xff, 0xff, 0xff, 0xff, 0xff, 0xff]` for broadcast. |
+| `npduBytes` | `Uint8Array` | Complete BACnet NPDU bytes to encapsulate in BACnet/SC. |
+
+**Throws:**
+- `"not connected"` -- Client is not connected to a hub.
+- VMAC length errors when `destinationVmac` is not exactly 6 bytes.
+- Max-NPDU-Length or Max-BVLC-Length errors when the encoded outbound message exceeds the peer limits learned from ConnectAccept.
+
+---
+
+### sendNpduWithDataAttributes
+
+```typescript
+sendNpduWithDataAttributes(
+  npduBytes: Uint8Array,
+  dataAttributes: DataAttribute[]
+): void
+
+type DataAttribute = {
+  option_type: number;
+  must_understand: boolean;
+  data: number[] | Uint8Array;
+};
+```
+
+Broadcast raw NPDU bytes with BACnet/SC Data Options. Each data attribute maps to one BACnet/SC Data Option. The aliases `optionType` and `mustUnderstand` are also accepted on input.
+
+**Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `npduBytes` | `Uint8Array` | Complete BACnet NPDU bytes to encapsulate in BACnet/SC. |
+| `dataAttributes` | `DataAttribute[]` | Data Options to attach to the Encapsulated-NPDU. |
+
+**Throws:**
+- `"not connected"` -- Client is not connected to a hub.
+- Data Option validation errors for option types outside `1..31`, more than 64 attributes, or payloads larger than 65535 bytes.
+- Secure Path validation errors when option type `1` is sent without `must_understand: true` or with any data.
+- Max-NPDU-Length or Max-BVLC-Length errors when the encoded outbound message exceeds peer limits.
+
+**Example:**
+
+```javascript
+client.sendNpduWithDataAttributes(rawNpdu, [
+  { optionType: 1, mustUnderstand: true, data: [] },
+  { optionType: 31, mustUnderstand: false, data: [0x12, 0x34, 0x56] },
+]);
+```
+
+---
+
+### sendNpduToWithDataAttributes
+
+```typescript
+sendNpduToWithDataAttributes(
+  destinationVmac: Uint8Array,
+  npduBytes: Uint8Array,
+  dataAttributes: DataAttribute[]
+): void
+```
+
+Send raw NPDU bytes to a 6-byte destination VMAC with BACnet/SC Data Options.
+
+**Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `destinationVmac` | `Uint8Array` | Six-byte destination VMAC. Use `[0xff, 0xff, 0xff, 0xff, 0xff, 0xff]` for broadcast. |
+| `npduBytes` | `Uint8Array` | Complete BACnet NPDU bytes to encapsulate in BACnet/SC. |
+| `dataAttributes` | `DataAttribute[]` | Data Options to attach to the Encapsulated-NPDU. |
+
+**Throws:**
+- `"not connected"` -- Client is not connected to a hub.
+- VMAC length errors when `destinationVmac` is not exactly 6 bytes.
+- Data Option validation errors for option types outside `1..31`, more than 64 attributes, or payloads larger than 65535 bytes.
+- Secure Path validation errors when option type `1` is sent without `must_understand: true` or with any data.
+- Max-NPDU-Length or Max-BVLC-Length errors when the encoded outbound message exceeds peer limits.
+
+**Example:**
+
+```javascript
+const deviceVmac = new Uint8Array([0x02, 0, 0, 0, 0, 0x42]);
+client.sendNpduToWithDataAttributes(deviceVmac, rawNpdu, [
+  { optionType: 1, mustUnderstand: true, data: [] },
+  { optionType: 31, mustUnderstand: false, data: new Uint8Array([0x12, 0x34, 0x56]) },
+]);
+```
+
+---
+
 ### subscribeCov
 
 ```typescript
@@ -425,6 +567,41 @@ await client.subscribeCov(1, 0, 1, false, 300);
 
 ---
 
+### onNpdu
+
+```typescript
+onNpdu(
+  callback: (npduBytes: Uint8Array, metadata: ReceivedNpduMetadata) => void
+): void
+
+type ReceivedNpduMetadata = {
+  source_vmac: number[];
+  data_attributes: DataAttribute[];
+};
+```
+
+Register a callback for every received NPDU that is delivered to the browser client. The callback receives the full NPDU bytes plus BACnet/SC metadata, including Data Options converted to data attributes.
+
+Unsupported Must Understand Data Options and malformed Secure Path Data Options are handled before this callback runs. Non-broadcast traffic with a parseable SC header and rejected option receives a BVLC-Result NAK with `COMMUNICATION/HEADER_NOT_UNDERSTOOD`, broadcast traffic is dropped without a result, and unsupported non-Must-Understand Data Options are preserved in `metadata.data_attributes`.
+
+**Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `callback` | `(npduBytes, metadata) => void` | Function called for each delivered NPDU. |
+
+**Example:**
+
+```javascript
+client.onNpdu((npduBytes, metadata) => {
+  for (const attr of metadata.data_attributes) {
+    console.log(attr.option_type, attr.must_understand, attr.data);
+  }
+});
+```
+
+---
+
 ### disconnect
 
 ```typescript
@@ -462,6 +639,22 @@ Returns `true` when the SC connection state is `Connected` (after a successful `
 if (client.connected) {
   const value = await client.readProperty(0, 1, 85);
 }
+```
+
+---
+
+### localDeviceUuid (getter)
+
+```typescript
+readonly localDeviceUuid: Uint8Array
+```
+
+Returns the 16-byte local Device UUID included in BACnet/SC ConnectRequest payloads.
+
+**Example:**
+
+```javascript
+const uuid = client.localDeviceUuid;
 ```
 
 ## Codec Functions
@@ -925,10 +1118,29 @@ client.onCovNotification((data) => {
 await client.subscribeCov(1, 0, 1, false, 300);
 ```
 
+### Raw NPDU And Data Attributes Pattern
+
+Register `onNpdu()` when an application needs the full NPDU or BACnet/SC Data Options:
+
+```javascript
+const broadcastVmac = new Uint8Array([0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+
+client.onNpdu((npduBytes, metadata) => {
+  console.log("NPDU:", npduBytes);
+  console.log("Source VMAC:", metadata.source_vmac);
+  console.log("Data attributes:", metadata.data_attributes);
+});
+
+client.sendNpduToWithDataAttributes(broadcastVmac, rawNpdu, [
+  { optionType: 1, mustUnderstand: true, data: [] },
+]);
+```
+
 ### Callback Notes
 
 - Only one callback can be registered per event type. Setting a new callback replaces the previous one.
-- Callbacks receive raw BACnet service request bytes as `Uint8Array`. Use `decodeApdu()` or manual parsing to extract structured data.
+- `onIAm()` and `onCovNotification()` receive raw BACnet service request bytes as `Uint8Array`. Use `decodeApdu()` or manual parsing to extract structured data.
+- `onNpdu()` receives the full NPDU bytes plus `source_vmac` and `data_attributes` metadata.
 - Callbacks are invoked from the internal receive loop running via `wasm-bindgen-futures`. They execute on the browser's microtask queue.
 
 ## TypeScript Support
@@ -1032,13 +1244,19 @@ try {
 
 - **Browser only** -- Requires browser WebSocket and `web-sys` APIs. Does not work in Node.js, Deno, or other server-side JavaScript runtimes (the `client` and `ws_transport` modules are gated with `#[cfg(target_arch = "wasm32")]`). The codec and type modules are available on native targets for testing.
 
+- **Browser TLS policy** -- The WASM client enforces `wss://` and the BACnet/SC hub WebSocket subprotocol, but TLS trust stores and client certificate selection are controlled by the browser and platform. Annex AB mTLS conformance depends on that external certificate configuration.
+
 - **Client only** -- This is a thin client. It cannot act as a BACnet server, router, or SC hub. Use the `bacnet-server` or `bacnet-transport` Rust crates for server-side functionality.
 
 - **No segmentation** -- Requests are sent as unsegmented PDUs with a max APDU length of 1476 bytes. Very large property values that would require segmented transfers are not supported.
 
 - **Raw value bytes** -- ReadProperty responses return raw application-tagged bytes in `value_bytes`. Higher-level value decoding (e.g., parsing a Real from 4 bytes, extracting strings) must be done in JavaScript.
 
-- **Single callback per event** -- Only one `onIAm` and one `onCovNotification` callback can be active at a time. Setting a new callback replaces the previous one.
+- **Data attributes are raw NPDU metadata** -- BACnet/SC Data Options are exposed through `onNpdu()` metadata, `sendNpduWithDataAttributes()`, and `sendNpduToWithDataAttributes()`. High-level helpers such as `readProperty()`, `writeProperty()`, `whoIs()`, and `subscribeCov()` send without Data Options and do not include Data Option metadata in decoded results.
+
+- **Target VMAC selection is raw-send only** -- `sendNpduTo()` and `sendNpduToWithDataAttributes()` accept an explicit destination VMAC. High-level confirmed-service helpers do not perform BACnet/SC address resolution or expose destination VMAC selection.
+
+- **Single callback per event** -- Only one `onIAm`, one `onCovNotification`, and one `onNpdu` callback can be active at a time. Setting a new callback replaces the previous one.
 
 - **No automatic reconnection** -- If the WebSocket connection drops, the client moves to the Disconnected state. The application must detect this (via the `connected` getter) and call `connect()` again.
 

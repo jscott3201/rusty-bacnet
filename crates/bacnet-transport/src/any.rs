@@ -11,7 +11,7 @@ use crate::bip::BipTransport;
 use crate::bip6::Bip6Transport;
 use crate::loopback::LoopbackTransport;
 use crate::mstp::{MstpTransport, SerialPort};
-use crate::port::{ReceivedNpdu, TransportPort};
+use crate::port::{DataAttribute, ReceivedNpdu, TransportPort};
 
 #[cfg(all(feature = "ethernet", target_os = "linux"))]
 use crate::ethernet::EthernetTransport;
@@ -85,6 +85,43 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
         }
     }
 
+    async fn send_unicast_with_data_attributes(
+        &self,
+        npdu: &[u8],
+        mac: &[u8],
+        data_attributes: &[DataAttribute],
+    ) -> Result<(), Error> {
+        match self {
+            Self::Bip(t) => {
+                t.send_unicast_with_data_attributes(npdu, mac, data_attributes)
+                    .await
+            }
+            Self::Mstp(t) => {
+                t.send_unicast_with_data_attributes(npdu, mac, data_attributes)
+                    .await
+            }
+            #[cfg(feature = "ipv6")]
+            Self::Bip6(t) => {
+                t.send_unicast_with_data_attributes(npdu, mac, data_attributes)
+                    .await
+            }
+            #[cfg(all(feature = "ethernet", target_os = "linux"))]
+            Self::Ethernet(t) => {
+                t.send_unicast_with_data_attributes(npdu, mac, data_attributes)
+                    .await
+            }
+            #[cfg(feature = "sc-tls")]
+            Self::Sc(t) => {
+                t.send_unicast_with_data_attributes(npdu, mac, data_attributes)
+                    .await
+            }
+            Self::Loopback(t) => {
+                t.send_unicast_with_data_attributes(npdu, mac, data_attributes)
+                    .await
+            }
+        }
+    }
+
     async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
         match self {
             Self::Bip(t) => t.send_broadcast(npdu).await,
@@ -96,6 +133,42 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
             #[cfg(feature = "sc-tls")]
             Self::Sc(t) => t.send_broadcast(npdu).await,
             Self::Loopback(t) => t.send_broadcast(npdu).await,
+        }
+    }
+
+    async fn send_broadcast_with_data_attributes(
+        &self,
+        npdu: &[u8],
+        data_attributes: &[DataAttribute],
+    ) -> Result<(), Error> {
+        match self {
+            Self::Bip(t) => {
+                t.send_broadcast_with_data_attributes(npdu, data_attributes)
+                    .await
+            }
+            Self::Mstp(t) => {
+                t.send_broadcast_with_data_attributes(npdu, data_attributes)
+                    .await
+            }
+            #[cfg(feature = "ipv6")]
+            Self::Bip6(t) => {
+                t.send_broadcast_with_data_attributes(npdu, data_attributes)
+                    .await
+            }
+            #[cfg(all(feature = "ethernet", target_os = "linux"))]
+            Self::Ethernet(t) => {
+                t.send_broadcast_with_data_attributes(npdu, data_attributes)
+                    .await
+            }
+            #[cfg(feature = "sc-tls")]
+            Self::Sc(t) => {
+                t.send_broadcast_with_data_attributes(npdu, data_attributes)
+                    .await
+            }
+            Self::Loopback(t) => {
+                t.send_broadcast_with_data_attributes(npdu, data_attributes)
+                    .await
+            }
         }
     }
 

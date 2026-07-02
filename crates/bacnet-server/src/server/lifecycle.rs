@@ -285,6 +285,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 	                                                            apdu: bytes::Bytes::new(),
 	                                                            source_mac: bacnet_types::MacAddr::new(),
 	                                                            source_network: None,
+	                                                            data_attributes: Vec::new(),
 	                                                            reply_tx: None,
 	                                                        }
 	                                                    }),
@@ -328,6 +329,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                         apdu: bytes::Bytes::new(),
                                         source_mac: bacnet_types::MacAddr::new(),
                                         source_network: None,
+                                        data_attributes: Vec::new(),
                                         reply_tx: None,
                                     }
                                 }),
@@ -453,6 +455,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         &self.db
     }
 
+    /// Create a cloneable handle for unsolicited I-Am announcements.
+    pub fn i_am_broadcaster(&self) -> IAmBroadcaster<T> {
+        IAmBroadcaster {
+            config: self.config.clone(),
+            network: Arc::clone(&self.network),
+            db: Arc::clone(&self.db),
+        }
+    }
+
     /// Get the communication state per DeviceCommunicationControl.
     ///
     /// Returns 0 (Enable), 1 (Disable), or 2 (DisableInitiation).
@@ -467,6 +478,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     pub async fn generate_pics(&self, pics_config: &crate::pics::PicsConfig) -> crate::pics::Pics {
         let db = self.db.read().await;
         crate::pics::PicsGenerator::new(&db, &self.config, pics_config).generate()
+    }
+
+    /// Broadcast an I-Am for this server's Device object using the bound transport socket.
+    pub async fn broadcast_i_am(&self) -> Result<(), Error> {
+        broadcast_i_am_from(&self.config, &self.db, &self.network).await
     }
 
     /// Stop the server.
@@ -497,4 +513,47 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
         Ok(())
     }
+}
+
+impl<T: TransportPort + 'static> IAmBroadcaster<T> {
+    /// Broadcast an I-Am for this server's Device object using the bound transport socket.
+    pub async fn broadcast_i_am(&self) -> Result<(), Error> {
+        broadcast_i_am_from(&self.config, &self.db, &self.network).await
+    }
+}
+
+async fn broadcast_i_am_from<T: TransportPort + 'static>(
+    config: &ServerConfig,
+    db: &Arc<RwLock<ObjectDatabase>>,
+    network: &Arc<NetworkLayer<T>>,
+) -> Result<(), Error> {
+    let device_oid = {
+        let db = db.read().await;
+        db.list_objects()
+            .into_iter()
+            .find(|oid| oid.object_type() == ObjectType::DEVICE)
+            .ok_or_else(|| Error::Encoding("no Device object in database".into()))?
+    };
+
+    let i_am = IAmRequest {
+        object_identifier: device_oid,
+        max_apdu_length: config.max_apdu_length,
+        segmentation_supported: config.segmentation_supported,
+        vendor_id: config.vendor_id,
+    };
+
+    let mut service_buf = BytesMut::new();
+    i_am.encode(&mut service_buf);
+
+    let pdu = Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
+        service_choice: UnconfirmedServiceChoice::I_AM,
+        service_request: service_buf.freeze(),
+    });
+
+    let mut buf = BytesMut::new();
+    encode_apdu(&mut buf, &pdu)?;
+
+    network
+        .broadcast_apdu(&buf, false, NetworkPriority::NORMAL)
+        .await
 }

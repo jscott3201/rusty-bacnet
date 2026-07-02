@@ -3,22 +3,26 @@
 //! This is the main entry point for JS code. It wraps the SC connection state
 //! machine, browser WebSocket, and service codecs into a high-level async API.
 
+mod lifecycle;
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
 use bytes::BytesMut;
-use js_sys::Function;
-use wasm_bindgen::prelude::*;
-use wasm_bindgen_futures::spawn_local;
+use js_sys::{Array, Function, Reflect, Uint8Array};
+use serde::Serialize;
+use wasm_bindgen::{closure::Closure, prelude::*, JsCast};
 
 use crate::codec;
+use crate::data_attributes::{
+    self, DataAttribute, MAX_SC_DATA_ATTRIBUTES, MAX_SC_DATA_ATTRIBUTE_PAYLOAD,
+};
 use crate::sc_connection::{ScConnection, ScConnectionState};
-use crate::sc_frame::{decode_sc_message, encode_sc_message, ScFunction};
+use crate::sc_frame::{
+    decode_sc_bvlc_result, decode_sc_message, encode_sc_message, ScFunction, Vmac, BROADCAST_VMAC,
+};
 use crate::ws_transport::BrowserWebSocket;
-use bacnet_encoding::apdu;
-use bacnet_encoding::npdu;
-use bacnet_types::enums::{ConfirmedServiceChoice, UnconfirmedServiceChoice};
 
 /// BACnet/SC thin client for browser environments.
 ///
@@ -36,48 +40,31 @@ pub struct BACnetScClient {
     next_invoke_id: Rc<RefCell<u8>>,
     on_iam: Rc<RefCell<Option<Function>>>,
     on_cov: Rc<RefCell<Option<Function>>>,
+    on_npdu: Rc<RefCell<Option<Function>>>,
+    heartbeat_interval_id: Rc<RefCell<Option<i32>>>,
+    heartbeat_interval_closure: Rc<RefCell<Option<Closure<dyn FnMut()>>>>,
+}
+
+#[derive(Serialize)]
+struct ReceivedNpduMetadata {
+    source_vmac: Vec<u8>,
+    data_attributes: Vec<DataAttribute>,
 }
 
 #[wasm_bindgen]
 impl BACnetScClient {
-    /// Create a new BACnet/SC client with a random VMAC.
+    /// Create a new BACnet/SC client with a random VMAC and Device UUID.
     #[wasm_bindgen(constructor)]
-    pub fn new() -> Self {
-        // Generate random 6-byte VMAC
-        let mut vmac = [0u8; 6];
-        let crypto = js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("crypto"))
-            .ok()
-            .and_then(|c| js_sys::Reflect::get(&c, &JsValue::from_str("getRandomValues")).ok());
-        if crypto.is_some() {
-            let array = js_sys::Uint8Array::new_with_length(6);
-            let _ = js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("crypto")).and_then(
-                |c| {
-                    js_sys::Reflect::apply(
-                        &js_sys::Function::from(
-                            js_sys::Reflect::get(&c, &JsValue::from_str("getRandomValues"))
-                                .unwrap(),
-                        ),
-                        &c,
-                        &js_sys::Array::of1(&array),
-                    )
-                },
-            );
-            array.copy_to(&mut vmac);
-        } else {
-            // Fallback: use js_sys::Math::random
-            for byte in &mut vmac {
-                *byte = (js_sys::Math::random() * 256.0) as u8;
-            }
-        }
+    pub fn new() -> Result<Self, JsError> {
+        let device_uuid = Self::generate_device_uuid()?;
+        Self::with_validated_device_uuid(device_uuid)
+    }
 
-        Self {
-            ws: Rc::new(RefCell::new(None)),
-            connection: Rc::new(RefCell::new(ScConnection::new(vmac))),
-            pending: Rc::new(RefCell::new(HashMap::new())),
-            next_invoke_id: Rc::new(RefCell::new(0)),
-            on_iam: Rc::new(RefCell::new(None)),
-            on_cov: Rc::new(RefCell::new(None)),
-        }
+    /// Create a new BACnet/SC client with a caller-supplied persistent Device UUID.
+    #[wasm_bindgen(js_name = withDeviceUuid)]
+    pub fn with_device_uuid(device_uuid: &[u8]) -> Result<Self, JsError> {
+        let device_uuid = Self::parse_device_uuid(device_uuid)?;
+        Self::with_validated_device_uuid(device_uuid)
     }
 
     /// Connect to a BACnet/SC hub via WebSocket.
@@ -94,15 +81,90 @@ impl BACnetScClient {
             .map_err(|e| JsError::new(&format!("{:?}", e)))?;
 
         // Wait for ConnectAccept
-        let response = ws.recv().await.map_err(|e| JsError::new(&e))?;
-        let msg = decode_sc_message(&response).map_err(|e| JsError::new(&e.to_string()))?;
+        let response = match ws.recv().await {
+            Ok(response) => response,
+            Err(e) => {
+                self.connection.borrow_mut().abort_connect();
+                ws.close();
+                return Err(JsError::new(&e));
+            }
+        };
+        let msg = match decode_sc_message(&response) {
+            Ok(msg) => msg,
+            Err(e) => {
+                self.connection.borrow_mut().abort_connect();
+                ws.close();
+                return Err(JsError::new(&e.to_string()));
+            }
+        };
+        if msg.function == ScFunction::Result {
+            let result = match decode_sc_bvlc_result(&msg) {
+                Ok(result) => result,
+                Err(e) => {
+                    self.connection.borrow_mut().abort_connect();
+                    ws.close();
+                    return Err(JsError::new(&e.to_string()));
+                }
+            };
+            let needs_replacement = self
+                .connection
+                .borrow()
+                .connect_result_requires_random48_vmac(msg.message_id, &result);
+            let replacement_vmac = if needs_replacement {
+                match Self::generate_random48_vmac() {
+                    Ok(vmac) => Some(vmac),
+                    Err(e) => {
+                        self.connection.borrow_mut().abort_connect();
+                        ws.close();
+                        return Err(e);
+                    }
+                }
+            } else {
+                None
+            };
+            let duplicate_vmac = self
+                .connection
+                .borrow_mut()
+                .handle_connect_result(msg.message_id, &result, replacement_vmac)
+                .map_err(|e| JsError::new(&e.to_string()))?;
+            ws.close();
+            return Err(JsError::new(if duplicate_vmac {
+                "BACnet/SC ConnectRequest rejected with duplicate VMAC; selected new Random-48 VMAC"
+            } else {
+                "BACnet/SC ConnectRequest rejected by BVLC-Result"
+            }));
+        }
+        // Validate the monotonic clock before accepting the connection state.
+        let heartbeat_start_ms = match Self::monotonic_now_ms() {
+            Ok(now_ms) => now_ms,
+            Err(e) => {
+                self.connection.borrow_mut().abort_connect();
+                ws.close();
+                return Err(e);
+            }
+        };
         if !self.connection.borrow_mut().handle_connect_accept(&msg) {
+            self.connection.borrow_mut().abort_connect();
+            ws.close();
             return Err(JsError::new("ConnectAccept not received or invalid"));
         }
+        self.connection
+            .borrow_mut()
+            .start_heartbeat_tracking(heartbeat_start_ms);
 
         *self.ws.borrow_mut() = Some(ws);
 
-        // Start receive loop
+        if let Err(e) = self.start_heartbeat_loop() {
+            Self::terminate_connection(
+                &self.ws,
+                &self.connection,
+                &self.pending,
+                &self.heartbeat_interval_id,
+                &self.heartbeat_interval_closure,
+                "BACnet/SC heartbeat timer startup failed",
+            );
+            return Err(e);
+        }
         self.start_recv_loop();
 
         Ok(())
@@ -158,8 +220,57 @@ impl BACnetScClient {
     #[wasm_bindgen(js_name = whoIs)]
     pub fn who_is(&self, low: Option<u32>, high: Option<u32>) -> Result<(), JsError> {
         let npdu_bytes = codec::encode_who_is(low, high)?;
-        self.send_npdu(&npdu_bytes)?;
+        self.send_npdu_to(BROADCAST_VMAC, &npdu_bytes)?;
         Ok(())
+    }
+
+    /// Broadcast raw NPDU bytes through the established BACnet/SC hub connection.
+    #[wasm_bindgen(js_name = sendNpdu)]
+    pub fn send_raw_npdu(&self, npdu_bytes: &[u8]) -> Result<(), JsError> {
+        self.send_npdu_with_attributes_to(BROADCAST_VMAC, npdu_bytes, &[])
+    }
+
+    /// Send raw NPDU bytes to a destination VMAC through the established BACnet/SC hub connection.
+    #[wasm_bindgen(js_name = sendNpduTo)]
+    pub fn send_raw_npdu_to(
+        &self,
+        destination_vmac: &[u8],
+        npdu_bytes: &[u8],
+    ) -> Result<(), JsError> {
+        let destination_vmac = Self::parse_vmac(destination_vmac)?;
+        self.send_npdu_with_attributes_to(destination_vmac, npdu_bytes, &[])
+    }
+
+    /// Broadcast raw NPDU bytes with BACnet/SC Data Options.
+    ///
+    /// `dataAttributes` is an array of objects with `option_type`,
+    /// `must_understand`, and `data` fields. `optionType` and
+    /// `mustUnderstand` aliases are also accepted.
+    #[wasm_bindgen(js_name = sendNpduWithDataAttributes)]
+    pub fn send_raw_npdu_with_data_attributes(
+        &self,
+        npdu_bytes: &[u8],
+        data_attributes: JsValue,
+    ) -> Result<(), JsError> {
+        let data_attributes = Self::parse_data_attributes(&data_attributes)?;
+        self.send_npdu_with_attributes_to(BROADCAST_VMAC, npdu_bytes, &data_attributes)
+    }
+
+    /// Send raw NPDU bytes to a destination VMAC with BACnet/SC Data Options.
+    ///
+    /// `dataAttributes` is an array of objects with `option_type`,
+    /// `must_understand`, and `data` fields. `optionType` and
+    /// `mustUnderstand` aliases are also accepted.
+    #[wasm_bindgen(js_name = sendNpduToWithDataAttributes)]
+    pub fn send_raw_npdu_to_with_data_attributes(
+        &self,
+        destination_vmac: &[u8],
+        npdu_bytes: &[u8],
+        data_attributes: JsValue,
+    ) -> Result<(), JsError> {
+        let destination_vmac = Self::parse_vmac(destination_vmac)?;
+        let data_attributes = Self::parse_data_attributes(&data_attributes)?;
+        self.send_npdu_with_attributes_to(destination_vmac, npdu_bytes, &data_attributes)
     }
 
     /// Subscribe to COV notifications for an object.
@@ -198,6 +309,15 @@ impl BACnetScClient {
         *self.on_cov.borrow_mut() = Some(callback);
     }
 
+    /// Register a callback for every received NPDU and its BACnet/SC data attributes.
+    ///
+    /// The callback receives `(npduBytes, metadata)`, where `metadata` contains
+    /// `source_vmac` and `data_attributes`.
+    #[wasm_bindgen(js_name = onNpdu)]
+    pub fn on_npdu(&self, callback: Function) {
+        *self.on_npdu.borrow_mut() = Some(callback);
+    }
+
     /// Disconnect from the hub.
     pub async fn disconnect(&self) -> Result<(), JsError> {
         if let Ok(msg) = self.connection.borrow_mut().build_disconnect_request() {
@@ -207,10 +327,14 @@ impl BACnetScClient {
                 let _ = ws.send(&buf);
             }
         }
-        if let Some(ws) = self.ws.borrow().as_ref() {
-            ws.close();
-        }
-        self.connection.borrow_mut().state = ScConnectionState::Disconnected;
+        Self::terminate_connection(
+            &self.ws,
+            &self.connection,
+            &self.pending,
+            &self.heartbeat_interval_id,
+            &self.heartbeat_interval_closure,
+            "BACnet/SC client disconnected",
+        );
         Ok(())
     }
 
@@ -219,10 +343,83 @@ impl BACnetScClient {
     pub fn is_connected(&self) -> bool {
         self.connection.borrow().state == ScConnectionState::Connected
     }
+
+    /// Return the local Device UUID used in Connect-Request payloads.
+    #[wasm_bindgen(getter, js_name = localDeviceUuid)]
+    pub fn local_device_uuid(&self) -> Vec<u8> {
+        self.connection.borrow().device_uuid.to_vec()
+    }
 }
 
 // Private methods
 impl BACnetScClient {
+    fn with_validated_device_uuid(device_uuid: [u8; 16]) -> Result<Self, JsError> {
+        let vmac = Self::generate_random48_vmac()?;
+
+        Ok(Self {
+            ws: Rc::new(RefCell::new(None)),
+            connection: Rc::new(RefCell::new(ScConnection::new_with_device_uuid(
+                vmac,
+                device_uuid,
+            ))),
+            pending: Rc::new(RefCell::new(HashMap::new())),
+            next_invoke_id: Rc::new(RefCell::new(0)),
+            on_iam: Rc::new(RefCell::new(None)),
+            on_cov: Rc::new(RefCell::new(None)),
+            on_npdu: Rc::new(RefCell::new(None)),
+            heartbeat_interval_id: Rc::new(RefCell::new(None)),
+            heartbeat_interval_closure: Rc::new(RefCell::new(None)),
+        })
+    }
+
+    fn generate_random48_vmac() -> Result<Vmac, JsError> {
+        let mut vmac = [0u8; 6];
+        Self::fill_secure_random_bytes(&mut vmac)?;
+        vmac[0] = (vmac[0] & 0xF0) | 0x02;
+        Ok(vmac)
+    }
+
+    fn generate_device_uuid() -> Result<[u8; 16], JsError> {
+        let mut uuid = [0u8; 16];
+        Self::fill_secure_random_bytes(&mut uuid)?;
+        uuid[6] = (uuid[6] & 0x0F) | 0x40;
+        uuid[8] = (uuid[8] & 0x3F) | 0x80;
+        Ok(uuid)
+    }
+
+    fn fill_secure_random_bytes(bytes: &mut [u8]) -> Result<(), JsError> {
+        let crypto = Reflect::get(&js_sys::global(), &JsValue::from_str("crypto"))
+            .map_err(|_| JsError::new("WebCrypto crypto is required for BACnet/SC randomness"))?;
+        if crypto.is_undefined() || crypto.is_null() {
+            return Err(JsError::new(
+                "WebCrypto crypto is required for BACnet/SC randomness",
+            ));
+        }
+
+        let get_random_values = Reflect::get(&crypto, &JsValue::from_str("getRandomValues"))
+            .map_err(|_| JsError::new("crypto.getRandomValues is required"))?;
+        let get_random_values: Function = get_random_values
+            .dyn_into()
+            .map_err(|_| JsError::new("crypto.getRandomValues is required"))?;
+        let array = Uint8Array::new_with_length(bytes.len() as u32);
+        Reflect::apply(&get_random_values, &crypto, &Array::of1(&array))
+            .map_err(|_| JsError::new("crypto.getRandomValues failed"))?;
+        array.copy_to(bytes);
+        Ok(())
+    }
+
+    fn parse_device_uuid(device_uuid: &[u8]) -> Result<[u8; 16], JsError> {
+        if device_uuid.len() != 16 {
+            return Err(JsError::new("Device UUID must be exactly 16 bytes"));
+        }
+        let mut uuid = [0u8; 16];
+        uuid.copy_from_slice(device_uuid);
+        if uuid.iter().all(|byte| *byte == 0) {
+            return Err(JsError::new("Device UUID must not be all zero"));
+        }
+        Ok(uuid)
+    }
+
     fn next_invoke_id(&self) -> u8 {
         let mut id = self.next_invoke_id.borrow_mut();
         let current = *id;
@@ -231,24 +428,206 @@ impl BACnetScClient {
     }
 
     fn send_npdu(&self, npdu_bytes: &[u8]) -> Result<(), JsError> {
-        let conn = self.connection.borrow_mut();
+        self.send_npdu_to(BROADCAST_VMAC, npdu_bytes)
+    }
+
+    fn send_npdu_to(&self, destination_vmac: Vmac, npdu_bytes: &[u8]) -> Result<(), JsError> {
+        self.send_npdu_with_attributes_to(destination_vmac, npdu_bytes, &[])
+    }
+
+    fn send_npdu_with_attributes_to(
+        &self,
+        destination_vmac: Vmac,
+        npdu_bytes: &[u8],
+        data_attributes: &[DataAttribute],
+    ) -> Result<(), JsError> {
+        let mut conn = self.connection.borrow_mut();
         if conn.state != ScConnectionState::Connected {
             return Err(JsError::new("not connected"));
         }
-        let hub_vmac = conn.hub_vmac.unwrap_or([0xFF; 6]);
+        if npdu_bytes.len() > conn.hub_max_apdu_length as usize {
+            return Err(JsError::new(&format!(
+                "BACnet/SC NPDU length {} exceeds peer Max-NPDU-Length {}",
+                npdu_bytes.len(),
+                conn.hub_max_apdu_length
+            )));
+        }
+        let hub_max_bvlc_length = conn.hub_max_bvlc_length;
+        let data_options_len = data_attributes::encoded_data_options_len(data_attributes)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        let encoded_len = 4usize + destination_vmac.len() + data_options_len + npdu_bytes.len();
+        if encoded_len > hub_max_bvlc_length as usize {
+            return Err(JsError::new(&format!(
+                "BACnet/SC encoded BVLC length {} exceeds peer Max-BVLC-Length {}",
+                encoded_len, hub_max_bvlc_length
+            )));
+        }
+        let msg = conn
+            .build_encapsulated_npdu_with_data_attributes(
+                destination_vmac,
+                npdu_bytes,
+                data_attributes,
+            )
+            .map_err(|e| JsError::new(&e.to_string()))?;
         drop(conn);
 
-        let msg = self
-            .connection
-            .borrow_mut()
-            .build_encapsulated_npdu(hub_vmac, npdu_bytes);
         let mut buf = BytesMut::new();
         encode_sc_message(&mut buf, &msg);
+        if buf.len() > hub_max_bvlc_length as usize {
+            return Err(JsError::new(&format!(
+                "BACnet/SC encoded BVLC length {} exceeds peer Max-BVLC-Length {}",
+                buf.len(),
+                hub_max_bvlc_length
+            )));
+        }
         if let Some(ws) = self.ws.borrow().as_ref() {
             ws.send(&buf)
                 .map_err(|e| JsError::new(&format!("{:?}", e)))?;
         }
         Ok(())
+    }
+
+    fn parse_vmac(destination_vmac: &[u8]) -> Result<Vmac, JsError> {
+        if destination_vmac.len() != 6 {
+            return Err(JsError::new(&format!(
+                "BACnet/SC VMAC must be 6 bytes, got {}",
+                destination_vmac.len()
+            )));
+        }
+        let mut vmac = [0u8; 6];
+        vmac.copy_from_slice(destination_vmac);
+        Ok(vmac)
+    }
+
+    fn parse_data_attributes(value: &JsValue) -> Result<Vec<DataAttribute>, JsError> {
+        if !Array::is_array(value) {
+            return Err(JsError::new("dataAttributes must be an array"));
+        }
+        let array: Array = value
+            .clone()
+            .dyn_into()
+            .map_err(|_| JsError::new("dataAttributes must be an array"))?;
+        let len = array.length();
+        if len as usize > MAX_SC_DATA_ATTRIBUTES {
+            return Err(JsError::new(&format!(
+                "BACnet/SC Data Options exceed {MAX_SC_DATA_ATTRIBUTES} attributes"
+            )));
+        }
+
+        let mut attributes = Vec::with_capacity(len as usize);
+        for index in 0..len {
+            let item = array.get(index);
+            let option_type = Self::parse_option_type(&Self::required_alias_property(
+                &item,
+                "option_type",
+                "optionType",
+            )?)?;
+            let must_understand =
+                Self::required_alias_property(&item, "must_understand", "mustUnderstand")?
+                    .as_bool()
+                    .ok_or_else(|| {
+                        JsError::new("DataAttribute.must_understand must be a boolean")
+                    })?;
+            let data = Self::parse_attribute_data(&Self::required_property(&item, "data")?)?;
+            attributes.push(DataAttribute {
+                option_type,
+                must_understand,
+                data,
+            });
+        }
+        Ok(attributes)
+    }
+
+    fn required_alias_property(
+        object: &JsValue,
+        primary: &str,
+        alias: &str,
+    ) -> Result<JsValue, JsError> {
+        let primary_value = Self::reflect_get(object, primary)?;
+        if !primary_value.is_undefined() {
+            return Ok(primary_value);
+        }
+        let alias_value = Self::reflect_get(object, alias)?;
+        if !alias_value.is_undefined() {
+            return Ok(alias_value);
+        }
+        Err(JsError::new(&format!(
+            "DataAttribute.{primary} is required"
+        )))
+    }
+
+    fn required_property(object: &JsValue, property: &str) -> Result<JsValue, JsError> {
+        let value = Self::reflect_get(object, property)?;
+        if value.is_undefined() {
+            return Err(JsError::new(&format!(
+                "DataAttribute.{property} is required"
+            )));
+        }
+        Ok(value)
+    }
+
+    fn reflect_get(object: &JsValue, property: &str) -> Result<JsValue, JsError> {
+        Reflect::get(object, &JsValue::from_str(property))
+            .map_err(|_| JsError::new("DataAttribute entries must be objects"))
+    }
+
+    fn parse_option_type(value: &JsValue) -> Result<u8, JsError> {
+        let raw = value
+            .as_f64()
+            .ok_or_else(|| JsError::new("DataAttribute.option_type must be a number"))?;
+        if !raw.is_finite() || raw.fract() != 0.0 || !(1.0..=31.0).contains(&raw) {
+            return Err(JsError::new(&format!(
+                "BACnet/SC Data Option type must be 1..31, got {raw}"
+            )));
+        }
+        Ok(raw as u8)
+    }
+
+    fn parse_attribute_data(value: &JsValue) -> Result<Vec<u8>, JsError> {
+        if let Some(bytes) = value.dyn_ref::<Uint8Array>() {
+            let len = bytes.length() as usize;
+            if len > MAX_SC_DATA_ATTRIBUTE_PAYLOAD {
+                return Err(JsError::new(&format!(
+                    "BACnet/SC Data Option payload length {} exceeds 65535",
+                    len
+                )));
+            }
+            let mut data = vec![0u8; len];
+            bytes.copy_to(&mut data);
+            return Ok(data);
+        }
+
+        if !Array::is_array(value) {
+            return Err(JsError::new(
+                "DataAttribute.data must be a Uint8Array or byte array",
+            ));
+        }
+        let array: Array = value
+            .clone()
+            .dyn_into()
+            .map_err(|_| JsError::new("DataAttribute.data must be a byte array"))?;
+        let len = array.length() as usize;
+        if len > MAX_SC_DATA_ATTRIBUTE_PAYLOAD {
+            return Err(JsError::new(&format!(
+                "BACnet/SC Data Option payload length {} exceeds 65535",
+                len
+            )));
+        }
+
+        let mut data = Vec::with_capacity(len);
+        for index in 0..array.length() {
+            let value = array.get(index);
+            let raw = value
+                .as_f64()
+                .ok_or_else(|| JsError::new("DataAttribute.data entries must be numbers"))?;
+            if !raw.is_finite() || raw.fract() != 0.0 || !(0.0..=255.0).contains(&raw) {
+                return Err(JsError::new(&format!(
+                    "DataAttribute.data entries must be bytes, got {raw}"
+                )));
+            }
+            data.push(raw as u8);
+        }
+        Ok(data)
     }
 
     async fn send_confirmed(&self, npdu_bytes: &[u8], invoke_id: u8) -> Result<JsValue, JsError> {
@@ -262,144 +641,5 @@ impl BACnetScClient {
         wasm_bindgen_futures::JsFuture::from(promise)
             .await
             .map_err(|e| JsError::new(&format!("{:?}", e)))
-    }
-
-    fn start_recv_loop(&self) {
-        let ws = self.ws.clone();
-        let connection = self.connection.clone();
-        let pending = self.pending.clone();
-        let on_iam = self.on_iam.clone();
-        let on_cov = self.on_cov.clone();
-
-        spawn_local(async move {
-            loop {
-                let data = {
-                    let ws_ref = ws.borrow();
-                    let Some(ws) = ws_ref.as_ref() else {
-                        break;
-                    };
-                    match ws.recv().await {
-                        Ok(data) => data,
-                        Err(_) => break,
-                    }
-                };
-
-                // Decode SC frame
-                let Ok(sc_msg) = decode_sc_message(&data) else {
-                    continue;
-                };
-
-                // Handle SC message
-                {
-                    let npdu_data = connection.borrow_mut().handle_received(&sc_msg);
-                    if let Some((npdu_bytes, _source)) = npdu_data {
-                        Self::process_npdu(&npdu_bytes, &pending, &on_iam, &on_cov);
-                    }
-                    // Send disconnect ACK if pending
-                    let ack = connection.borrow_mut().disconnect_ack_to_send.take();
-                    if let Some(ack) = ack {
-                        let mut buf = BytesMut::new();
-                        encode_sc_message(&mut buf, &ack);
-                        if let Some(ws) = ws.borrow().as_ref() {
-                            let _ = ws.send(&buf);
-                        }
-                    }
-                }
-
-                // Handle heartbeat
-                if sc_msg.function == ScFunction::HeartbeatRequest {
-                    let ack = crate::sc_frame::ScMessage {
-                        function: ScFunction::HeartbeatAck,
-                        message_id: sc_msg.message_id,
-                        originating_vmac: sc_msg.destination_vmac,
-                        destination_vmac: sc_msg.originating_vmac,
-                        dest_options: Vec::new(),
-                        data_options: Vec::new(),
-                        payload: bytes::Bytes::new(),
-                    };
-                    let mut buf = BytesMut::new();
-                    encode_sc_message(&mut buf, &ack);
-                    if let Some(ws) = ws.borrow().as_ref() {
-                        let _ = ws.send(&buf);
-                    }
-                }
-            }
-        });
-    }
-
-    fn process_npdu(
-        npdu_bytes: &[u8],
-        pending: &Rc<RefCell<HashMap<u8, (Function, Function)>>>,
-        on_iam: &Rc<RefCell<Option<Function>>>,
-        on_cov: &Rc<RefCell<Option<Function>>>,
-    ) {
-        // Decode NPDU to get APDU
-        let Ok(npdu) = npdu::decode_npdu(bytes::Bytes::copy_from_slice(npdu_bytes)) else {
-            return;
-        };
-        let Ok(apdu_result) = apdu::decode_apdu(npdu.payload.clone()) else {
-            return;
-        };
-
-        match apdu_result {
-            apdu::Apdu::ComplexAck(ack) => {
-                if let Some((resolve, _reject)) = pending.borrow_mut().remove(&ack.invoke_id) {
-                    // Decode based on service choice
-                    let result = if ack.service_choice == ConfirmedServiceChoice::READ_PROPERTY {
-                        codec::decode_read_property_ack(&ack.service_ack).unwrap_or(JsValue::NULL)
-                    } else {
-                        JsValue::TRUE
-                    };
-                    let _ = resolve.call1(&JsValue::NULL, &result);
-                }
-            }
-            apdu::Apdu::SimpleAck(ack) => {
-                if let Some((resolve, _reject)) = pending.borrow_mut().remove(&ack.invoke_id) {
-                    let _ = resolve.call1(&JsValue::NULL, &JsValue::TRUE);
-                }
-            }
-            apdu::Apdu::Error(err) => {
-                if let Some((_resolve, reject)) = pending.borrow_mut().remove(&err.invoke_id) {
-                    let msg = format!(
-                        "BACnet error: class={} code={}",
-                        err.error_class.to_raw(),
-                        err.error_code.to_raw()
-                    );
-                    let _ = reject.call1(&JsValue::NULL, &JsValue::from_str(&msg));
-                }
-            }
-            apdu::Apdu::Reject(rej) => {
-                if let Some((_resolve, reject)) = pending.borrow_mut().remove(&rej.invoke_id) {
-                    let msg = format!("BACnet reject: reason={}", rej.reject_reason.to_raw());
-                    let _ = reject.call1(&JsValue::NULL, &JsValue::from_str(&msg));
-                }
-            }
-            apdu::Apdu::Abort(abt) => {
-                if let Some((_resolve, reject)) = pending.borrow_mut().remove(&abt.invoke_id) {
-                    let msg = format!("BACnet abort: reason={}", abt.abort_reason.to_raw());
-                    let _ = reject.call1(&JsValue::NULL, &JsValue::from_str(&msg));
-                }
-            }
-            apdu::Apdu::UnconfirmedRequest(req) => {
-                if req.service_choice == UnconfirmedServiceChoice::I_AM {
-                    if let Some(cb) = on_iam.borrow().as_ref() {
-                        let _ = cb.call1(
-                            &JsValue::NULL,
-                            &js_sys::Uint8Array::from(req.service_request.as_ref()),
-                        );
-                    }
-                } else if req.service_choice
-                    == UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION
-                {
-                    if let Some(cb) = on_cov.borrow().as_ref() {
-                        let _ = cb.call1(
-                            &JsValue::NULL,
-                            &js_sys::Uint8Array::from(req.service_request.as_ref()),
-                        );
-                    }
-                }
-            }
-            _ => {}
-        }
     }
 }

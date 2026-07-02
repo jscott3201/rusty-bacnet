@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0]
+
+### BACnet/SC - Connection Resilience (ASHRAE 135-2020 Annex AB.6.2, AB.6.3)
+
+- Duplicate-VMAC recovery per AB.6.2: a `NODE_DUPLICATE_VMAC` NAK now triggers a Random-48 VMAC reseed and reconnect instead of failing the connection permanently; reseed fails closed on RNG errors, and retry eligibility is preserved across primary-restore probes.
+- SC hub duplicate Device-UUID replacement: a device reconnecting after an unclean drop now reclaims its stale session slot instead of being NAK'd until hub restart.
+- Failover hub is now used after mid-life reconnect exhaustion (previously only attempted on cold start; the reconnect path carried a TODO), and the primary hub is probed and restored after a failover.
+- Heartbeats are sent only when the link is idle (AB.6.3), and a `Heartbeat-ACK` must correlate to the outstanding request - stale, foreign, or malformed ACKs no longer keep a dead link alive; hub-side heartbeat-ACK timeouts are enforced.
+- Fatal `BVLC-Result` NAKs, receive errors, heartbeat send failures, and reconnect exhaustion now tear the transport down and set the connection state to `Disconnected` - no more phantom-`Connected` states on a dead link; pending-connect correlation state is cleared on handshake decode/IO errors.
+
+### BACnet/SC - Protocol Conformance (Annex AB.2, AB.3)
+
+- `BVLC-Result` payloads (Error Class / Error Code / Error Details) are parsed and surfaced instead of skipped.
+- Malformed SC frame option chains (bad length, truncated, unterminated) are rejected instead of accepted.
+- SC data options: outbound encoding, inbound exposure as `ReceivedNpdu::data_attributes` (new `DataAttribute` type + default-bodied `TransportPort::send_*_with_data_attributes` methods), rejection of unsupported must-understand options, and preservation of data attributes across router and hub forwarding.
+- Hub hardening: exact ConnectRequest payload-length validation, advertised `Max-BVLC-Length` enforced on inbound and relayed frames, and inbound frames carrying an Originating VMAC rejected (the hub stamps the registered VMAC).
+- TLS 1.3 is enforced for SC configurations.
+- New `ErrorCode` constants 139-151 (Clause 5.4.6 / Annex AB), including `NODE_DUPLICATE_VMAC` and `NOT_A_BACNET_SC_HUB`.
+
+### BACnet/IP - Annex J
+
+- The BIP UDP socket now binds `INADDR_ANY` (the configured interface IP is retained for the advertised MAC and I-Am source) so subnet and limited broadcasts reach the socket on Linux, with a startup probe of the interface IP.
+- Forwarded-NPDU rebroadcast loops are prevented and Original-Broadcast local echo is suppressed.
+- BBMD: Distribute-Broadcast-To-Network forwarding failures return a NAK, FDT entries are purged by a timer task with lifecycle-edge validation, BDT persistence survives restart, and management ACK wire format and ACLs are validated.
+
+### WASM (browser bindings)
+
+- BACnet/SC heartbeat keepalive scheduling after Connect-Accept, disconnect handling, and callback cleanup; SC data attributes are routed and preserved through the WASM layer.
+
+### Server
+
+- New `BACnetServer::i_am_broadcaster()` / `broadcast_i_am()` and `BipServerBuilder::vendor_id(u16)` for host-driven I-Am announcement.
+
+### Dependencies
+
+- `pyo3` upgraded to 0.29 (resolves audit advisories).
+
 ## [0.9.0]
 
 ### Spec Compliance - Codec Strictness (ASHRAE 135-2020 Clauses 20.1.2.7, 20.1.2.8, 20.1.6.x)

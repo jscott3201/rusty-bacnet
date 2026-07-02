@@ -1566,10 +1566,13 @@ class ScHub:
 
     Usage::
 
-        hub = ScHub("0.0.0.0:47809", "cert.pem", "key.pem", b"\\x00" * 6)
+        hub = ScHub("0.0.0.0:47809", "cert.pem", "key.pem", b"\\x00" * 6, ca_cert="ca.pem")
         await hub.start()
         print(await hub.url())
         await hub.stop()
+
+    Omitting ``ca_cert`` leaves the hub in server-auth-only example mode and is
+    not claimed as BACnet/SC mTLS conformance evidence.
     """
 
     def __init__(

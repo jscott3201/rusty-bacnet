@@ -1,4 +1,5 @@
 use bacnet_encoding::npdu::{encode_npdu, Npdu, NpduAddress};
+use bacnet_transport::port::DataAttribute;
 use bacnet_types::enums::{NetworkMessageType, RejectMessageReason};
 use bacnet_types::MacAddr;
 use bytes::{BufMut, BytesMut};
@@ -23,6 +24,7 @@ pub(super) fn forward_unicast(
     source_mac: &[u8],
     npdu: Npdu,
     _source_port_idx: usize,
+    data_attributes: &[DataAttribute],
 ) {
     if npdu.hop_count == 0 {
         warn!("Discarding NPDU with hop_count=0");
@@ -76,14 +78,16 @@ pub(super) fn forward_unicast(
         return;
     }
     if dest_mac.is_empty() {
-        if let Err(e) =
-            send_txs[route.port_index].try_send(SendRequest::Broadcast { npdu: buf.freeze() })
-        {
+        if let Err(e) = send_txs[route.port_index].try_send(SendRequest::Broadcast {
+            npdu: buf.freeze(),
+            data_attributes: data_attributes.to_vec(),
+        }) {
             warn!(%e, "Router dropped message: output channel full");
         }
     } else if let Err(e) = send_txs[route.port_index].try_send(SendRequest::Unicast {
         npdu: buf.freeze(),
         mac: dest_mac,
+        data_attributes: data_attributes.to_vec(),
     }) {
         warn!(%e, "Router dropped message: output channel full");
     }
@@ -96,6 +100,7 @@ pub(super) fn forward_broadcast(
     source_network: u16,
     source_mac: &[u8],
     npdu: &Npdu,
+    data_attributes: &[DataAttribute],
 ) {
     if npdu.hop_count == 0 {
         warn!("Discarding NPDU with hop_count=0");
@@ -127,6 +132,7 @@ pub(super) fn forward_broadcast(
         }
         if let Err(e) = tx.try_send(SendRequest::Broadcast {
             npdu: encoded.clone(),
+            data_attributes: data_attributes.to_vec(),
         }) {
             warn!(%e, "Router dropped broadcast: output channel full");
         }
@@ -157,10 +163,10 @@ pub(super) fn send_reject(
         return;
     }
 
-    if let Err(e) = send_tx.try_send(SendRequest::Unicast {
-        npdu: buf.freeze(),
-        mac: MacAddr::from_slice(source_mac),
-    }) {
+    if let Err(e) = send_tx.try_send(SendRequest::unicast(
+        buf.freeze(),
+        MacAddr::from_slice(source_mac),
+    )) {
         warn!(%e, "Router dropped reject message: output channel full");
     }
 }

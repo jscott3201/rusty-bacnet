@@ -144,16 +144,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let hub_url = args.sc_hub.ok_or("--sc-hub is required for SC transport")?;
 
             let tls_config = if args.sc_no_verify {
-                let config = tokio_rustls::rustls::ClientConfig::builder()
-                    .dangerous()
-                    .with_custom_certificate_verifier(Arc::new(NoVerify))
-                    .with_no_client_auth();
+                let config = tokio_rustls::rustls::ClientConfig::builder_with_protocol_versions(&[
+                    &tokio_rustls::rustls::version::TLS13,
+                ])
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(NoVerify))
+                .with_no_client_auth();
                 Arc::new(config)
             } else {
                 let root_store = tokio_rustls::rustls::RootCertStore::empty();
-                let config = tokio_rustls::rustls::ClientConfig::builder()
-                    .with_root_certificates(root_store)
-                    .with_no_client_auth();
+                let config = tokio_rustls::rustls::ClientConfig::builder_with_protocol_versions(&[
+                    &tokio_rustls::rustls::version::TLS13,
+                ])
+                .with_root_certificates(root_store)
+                .with_no_client_auth();
                 Arc::new(config)
             };
 

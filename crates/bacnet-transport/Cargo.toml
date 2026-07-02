@@ -23,6 +23,7 @@ futures-util = { workspace = true, optional = true }
 tokio-serial = { version = "5", optional = true }
 gpiocdev = { version = "0.8", optional = true }
 libc = { workspace = true }
+getrandom = { workspace = true }
 
 [features]
 default = []

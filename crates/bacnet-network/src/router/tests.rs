@@ -4,6 +4,8 @@ use bacnet_transport::bip::BipTransport;
 use std::net::Ipv4Addr;
 use tokio::time::Duration;
 
+mod data_attributes;
+
 #[tokio::test]
 async fn router_forwards_between_networks() {
     let transport_a = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
@@ -137,7 +139,7 @@ fn forward_unicast_drops_hop_count_zero() {
         ..Npdu::default()
     };
 
-    forward_unicast(&send_txs, &route, 1000, &[0x0A], npdu, 0);
+    forward_unicast(&send_txs, &route, 1000, &[0x0A], npdu, 0, &[]);
 
     assert!(rx_a.try_recv().is_err());
     assert!(rx_b.try_recv().is_err());
@@ -163,7 +165,7 @@ fn forward_broadcast_drops_hop_count_zero() {
         ..Npdu::default()
     };
 
-    forward_broadcast(&send_txs, 0, 1000, &[0x0A], &npdu);
+    forward_broadcast(&send_txs, 0, 1000, &[0x0A], &npdu, &[]);
 
     assert!(rx_a.try_recv().is_err());
     assert!(rx_b.try_recv().is_err());
@@ -200,7 +202,7 @@ fn forward_unicast_decrements_hop_count() {
         ..Npdu::default()
     };
 
-    forward_unicast(&send_txs, &route, 1000, &[0x0A], npdu, 0);
+    forward_unicast(&send_txs, &route, 1000, &[0x0A], npdu, 0, &[]);
 
     let sent = rx_b.try_recv().unwrap();
     match sent {
@@ -209,7 +211,7 @@ fn forward_unicast_decrements_hop_count() {
             assert!(decoded.destination.is_none());
             assert!(decoded.source.is_some());
         }
-        SendRequest::Broadcast { npdu: data } => {
+        SendRequest::Broadcast { npdu: data, .. } => {
             let decoded = decode_npdu(data.clone()).unwrap();
             assert!(decoded.destination.is_none());
         }
@@ -232,7 +234,9 @@ fn send_reject_generates_reject_message() {
 
     let sent = rx.try_recv().unwrap();
     match sent {
-        SendRequest::Unicast { npdu: data, mac } => {
+        SendRequest::Unicast {
+            npdu: data, mac, ..
+        } => {
             assert_eq!(mac.as_slice(), &source_mac[..]);
             let decoded = decode_npdu(data.clone()).unwrap();
             assert!(decoded.is_network_message);
@@ -287,7 +291,7 @@ async fn single_port_router_no_i_am_router_announcement() {
         let mut buf = BytesMut::with_capacity(8 + payload_len);
         encode_npdu(&mut buf, &response).unwrap();
 
-        let _ = tx.try_send(SendRequest::Broadcast { npdu: buf.freeze() });
+        let _ = tx.try_send(SendRequest::broadcast(buf.freeze()));
     }
 
     assert!(send_rx.try_recv().is_err());
@@ -329,12 +333,12 @@ async fn two_port_router_sends_i_am_router_announcement() {
         let mut buf = BytesMut::with_capacity(8 + payload_len);
         encode_npdu(&mut buf, &response).unwrap();
 
-        let _ = tx.try_send(SendRequest::Broadcast { npdu: buf.freeze() });
+        let _ = tx.try_send(SendRequest::broadcast(buf.freeze()));
     }
 
     let sent_a = rx_a.try_recv().unwrap();
     match sent_a {
-        SendRequest::Broadcast { npdu: data } => {
+        SendRequest::Broadcast { npdu: data, .. } => {
             let decoded = decode_npdu(data.clone()).unwrap();
             assert!(decoded.is_network_message);
             assert_eq!(
@@ -350,7 +354,7 @@ async fn two_port_router_sends_i_am_router_announcement() {
 
     let sent_b = rx_b.try_recv().unwrap();
     match sent_b {
-        SendRequest::Broadcast { npdu: data } => {
+        SendRequest::Broadcast { npdu: data, .. } => {
             let decoded = decode_npdu(data.clone()).unwrap();
             assert!(decoded.is_network_message);
             assert_eq!(
@@ -402,12 +406,12 @@ async fn three_port_router_announces_multiple_networks() {
         let mut buf = BytesMut::with_capacity(8 + payload_len);
         encode_npdu(&mut buf, &response).unwrap();
 
-        let _ = tx.try_send(SendRequest::Broadcast { npdu: buf.freeze() });
+        let _ = tx.try_send(SendRequest::broadcast(buf.freeze()));
     }
 
     let sent_a = rx_a.try_recv().unwrap();
     match sent_a {
-        SendRequest::Broadcast { npdu: data } => {
+        SendRequest::Broadcast { npdu: data, .. } => {
             let decoded = decode_npdu(data.clone()).unwrap();
             assert!(decoded.is_network_message);
             assert_eq!(decoded.payload.len(), 4); // two u16 values
@@ -421,7 +425,7 @@ async fn three_port_router_announces_multiple_networks() {
 
     let sent_b = rx_b.try_recv().unwrap();
     match sent_b {
-        SendRequest::Broadcast { npdu: data } => {
+        SendRequest::Broadcast { npdu: data, .. } => {
             let decoded = decode_npdu(data.clone()).unwrap();
             assert_eq!(decoded.payload.len(), 4);
             let net1 = u16::from_be_bytes([decoded.payload[0], decoded.payload[1]]);
@@ -434,7 +438,7 @@ async fn three_port_router_announces_multiple_networks() {
 
     let sent_c = rx_c.try_recv().unwrap();
     match sent_c {
-        SendRequest::Broadcast { npdu: data } => {
+        SendRequest::Broadcast { npdu: data, .. } => {
             let decoded = decode_npdu(data.clone()).unwrap();
             assert_eq!(decoded.payload.len(), 4);
             let net1 = u16::from_be_bytes([decoded.payload[0], decoded.payload[1]]);
@@ -477,7 +481,7 @@ fn forward_unicast_with_hop_count_one_still_forwards() {
         ..Npdu::default()
     };
 
-    forward_unicast(&send_txs, &route, 1000, &[0x0A], npdu, 0);
+    forward_unicast(&send_txs, &route, 1000, &[0x0A], npdu, 0, &[]);
 
     let sent = rx_b.try_recv().unwrap();
     match sent {
@@ -486,7 +490,7 @@ fn forward_unicast_with_hop_count_one_still_forwards() {
             assert!(decoded.destination.is_none());
             assert!(decoded.source.is_some());
         }
-        SendRequest::Broadcast { npdu: data } => {
+        SendRequest::Broadcast { npdu: data, .. } => {
             let decoded = decode_npdu(data.clone()).unwrap();
             assert!(decoded.destination.is_none());
         }
@@ -575,7 +579,7 @@ async fn who_is_router_with_specific_network() {
 
     let sent = rx.try_recv().unwrap();
     match sent {
-        SendRequest::Broadcast { npdu: data } => {
+        SendRequest::Broadcast { npdu: data, .. } => {
             let decoded = decode_npdu(data.clone()).unwrap();
             assert!(decoded.is_network_message);
             assert_eq!(
@@ -637,7 +641,9 @@ async fn initialize_routing_table_ack() {
 
     let sent = rx.try_recv().unwrap();
     match sent {
-        SendRequest::Unicast { npdu: data, mac } => {
+        SendRequest::Unicast {
+            npdu: data, mac, ..
+        } => {
             assert_eq!(mac.as_slice(), &[0x0A]);
             let decoded = decode_npdu(data.clone()).unwrap();
             assert!(decoded.is_network_message);

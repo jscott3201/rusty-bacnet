@@ -1,19 +1,20 @@
 # Rusty BACnet
 
-A complete BACnet protocol stack (ASHRAE 135-2020) written in Rust, with first-class Python and WASM/JavaScript bindings.
+A BACnet protocol stack (ASHRAE 135-2020) written in Rust, with Python and WASM/JavaScript bindings.
 
 [![CI](https://github.com/jscott3201/rusty-bacnet/actions/workflows/ci.yml/badge.svg)](https://github.com/jscott3201/rusty-bacnet/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ## Features
 
-- **Full BACnet/IP stack** — async client and server with 30+ service types
-- **5 transports** — BACnet/IP (UDP), BACnet/IPv6 (multicast), BACnet/SC (WebSocket+TLS with hub), MS/TP (serial), Ethernet (BPF)
-- **65 object types** — All standard BACnet objects including Analog/Binary/MultiState I/O, Device, Schedule, Calendar, Trend Log, Notification Class, Loop, Access Control, Lighting, Life Safety, Elevator, Color, Color Temperature, and more
-- **Python bindings** — async client, server, and SC hub with full API parity via PyO3
+- **BACnet/IP implementation** — async client and server paths with 30+ service modules under conformance review
+- **Transport implementations** — BACnet/IP (UDP), BACnet/IPv6 (multicast), BACnet/SC (WebSocket+TLS with hub), MS/TP (serial), Ethernet (BPF); see the conformance ledger for current evidence status
+- **BACnet object implementations** — object structs and server helpers for common and extended BACnet object families, with clause-level evidence tracked in the ledger
+- **Python bindings** — async client, server, and SC hub bindings via PyO3
 - **WASM/JavaScript** — BACnet/SC thin client for browsers via wasm-bindgen
 - **CLI tool** — interactive shell and scripting for BACnet/IP, IPv6, and SC
-- **5,500+ tests**, 0 clippy warnings, CI on Linux/macOS/Windows
+- **5,500+ tests** and CI on Linux/macOS/Windows
+- **Conformance evidence** — draft Standard 135-2020 ledger and support summaries in [`docs/conformance/`](docs/conformance/standard-135-2020-ledger.md)
 
 ## Quick Start (Python)
 
@@ -104,7 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## Companion projects
 
 - **[`rusty-bacnet-mcp`](https://github.com/jscott3201/rusty-bacnet-mcp)** — HTTP REST API + MCP server gateway. 10 MCP tools for AI-driven BACnet interaction, REST endpoints under `/api/v1/`, bearer-token auth, read-only mode, built-in BACnet reference knowledge base.
-- **[`rusty-bacnet-btl-harness`](https://github.com/jscott3201/rusty-bacnet-btl-harness)** — BTL Test Plan 26.1 compliance harness. 3,808 tests, in-process self-test runs in <1 second.
+- **[`rusty-bacnet-btl-harness`](https://github.com/jscott3201/rusty-bacnet-btl-harness)** — external BTL Test Plan 26.1 harness project. Formal support status is tracked separately in the conformance ledger.
 
 Both repos consume the published `bacnet-*` crates from this workspace.
 
@@ -175,6 +176,7 @@ async def main():
     hub = ScHub(
         listen="127.0.0.1:0",
         cert="hub-cert.pem", key="hub-key.pem",
+        ca_cert="ca-cert.pem",
         vmac=b"\xff\x00\x00\x00\x00\x01",
     )
     await hub.start()
@@ -211,6 +213,11 @@ async def main():
 
 asyncio.run(main())
 ```
+
+For Annex AB production deployments, configure the hub with a trusted issuer CA
+(`ca_cert`) and configure every SC node with its own certificate/key pair.
+Omitting `ca_cert` leaves the hub in server-auth-only example mode, which is not
+claimed as BACnet/SC mTLS conformance evidence.
 
 ## CLI Tool
 
@@ -281,7 +288,7 @@ crates/
   bacnet-transport/   BIP, BIP6, BACnet/SC + Hub, MS/TP, BBMD, Ethernet, Loopback
   bacnet-network/     Network layer routing, router tables
   bacnet-client/      Async client with TSM, segmentation, discovery
-  bacnet-objects/     BACnetObject trait, ObjectDatabase, 65 object types
+  bacnet-objects/     BACnetObject trait, ObjectDatabase, object implementations
   bacnet-server/      Async server (RP/WP/RPM/WPM/COV/Events/DCC/CreateObject/TimeSynchronization)
   rusty-bacnet/       Python bindings via PyO3 (client, server, hub)
   bacnet-wasm/        WASM/JavaScript BACnet/SC thin client
@@ -328,6 +335,8 @@ docs/                 API documentation and design plans
 
 ## Transports
 
+The table below lists implemented transport code paths. Clause-level support evidence is tracked in the draft [conformance ledger](docs/conformance/standard-135-2020-ledger.md).
+
 | Transport | Platforms | Feature Flag |
 |-----------|-----------|-------------|
 | BACnet/IP (UDP/IPv4) | All | default |
@@ -337,14 +346,16 @@ docs/                 API documentation and design plans
 | MS/TP (serial token-passing) | Linux | `serial` |
 | Ethernet (802.3 via BPF) | Linux | `ethernet` |
 
+Annex J NAT traversal and IPv4 BACnet/IP multicast (B/IP-M) are not claimed by the current BACnet/IP transport; their support direction is tracked in the conformance ledger.
+
 ## Python Bindings
 
-The `rusty-bacnet` crate provides full Python API parity:
+The `rusty-bacnet` crate provides Python bindings for the core client, server, and hub APIs:
 
 - **11 enum types** with named constants: `ObjectType`, `PropertyIdentifier`, `ErrorClass`, `ErrorCode`, `EnableDisable`, `ReinitializedState`, `Segmentation`, `LifeSafetyOperation`, `EventState`, `EventType`, `MessagePriority`
 - **42 client methods** covering all services above (plus context manager and lifecycle)
 - **6 server runtime methods**: `start`, `stop`, `local_address`, `read_property`, `write_property_local`, `comm_state`
-- **61 server object types** via `add_*` methods
+- **Server object helpers** via `add_*` methods
 - **SC hub management**: `ScHub` class for running a BACnet/SC hub
 - **COV async iterator**: `async for notif in client.cov_notifications()`
 - **Typed exceptions**: `BacnetError`, `BacnetProtocolError`, `BacnetTimeoutError`, `BacnetRejectError`, `BacnetAbortError`
@@ -376,10 +387,11 @@ Minimum Rust version: 1.93
 ## Documentation
 
 - [Rust API Reference](docs/rust-api.md) — all 8 published crates with examples
-- [Python API Reference](docs/python-api.md) — 42+ async client methods, 61 server object types
+- [Python API Reference](docs/python-api.md) — async client, server, object helper, and SC hub bindings
 - [WASM/JS API Reference](docs/wasm-api.md) — BACnet/SC thin client for browsers
 - [CLI Reference](docs/CLI.md) — interactive shell and one-shot commands
 - [Benchmark Results](Benchmarks.md) — 9 suites with throughput, latency, and memory
+- [Conformance Ledger](docs/conformance/standard-135-2020-ledger.md) — draft Standard 135-2020 evidence map
 - [Architecture Guide](docs/architecture.md) — crate graph, packet flow, concurrency model
 - [Changelog](CHANGELOG.md)
 - [Examples](examples/)

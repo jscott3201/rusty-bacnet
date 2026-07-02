@@ -488,6 +488,7 @@ impl TransportPort for Bip6Transport {
                                             .try_send(ReceivedNpdu {
                                                 npdu: frame.payload.clone(),
                                                 source_mac,
+                                                data_attributes: Vec::new(),
                                                 reply_tx: None,
                                             })
                                             .is_err()
@@ -513,6 +514,7 @@ impl TransportPort for Bip6Transport {
                                                         source_mac: MacAddr::from_slice(
                                                             &originating_vmac,
                                                         ),
+                                                        data_attributes: Vec::new(),
                                                         reply_tx: None,
                                                     })
                                                     .is_err()

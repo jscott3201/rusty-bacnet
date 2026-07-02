@@ -3,15 +3,17 @@ use std::sync::Arc;
 
 use bytes::BytesMut;
 use tokio::net::UdpSocket;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, warn};
 
 use bacnet_types::enums::{BvlcFunction, BvlcResultCode};
 use bacnet_types::MacAddr;
 
 use crate::bbmd::BbmdState;
-use crate::bvll::{self, encode_bip_mac, encode_bvll, encode_bvll_forwarded, BvllMessage};
+use crate::bvll::{self, encode_bip_mac, encode_bvll, encode_bvll_forwarded};
 use crate::port::ReceivedNpdu;
+
+use super::{decode_bvlc_result_code, PendingBvlcResponse};
 
 /// Send a Register-Foreign-Device message to a BBMD.
 pub(super) async fn send_register_foreign_device(
@@ -41,8 +43,28 @@ pub(super) struct RecvContext {
     pub(super) bbmd: Option<Arc<Mutex<BbmdState>>>,
     pub(super) broadcast_addr: Ipv4Addr,
     pub(super) broadcast_port: u16,
-    pub(super) bvlc_response: Arc<Mutex<Option<oneshot::Sender<BvllMessage>>>>,
+    pub(super) pending_bvlc_response: Arc<Mutex<Option<PendingBvlcResponse>>>,
     pub(super) bdt_persist_path: Option<std::path::PathBuf>,
+    #[cfg(test)]
+    pub(super) force_dbtn_forward_failure: bool,
+}
+
+async fn complete_pending_bvlc_response(
+    msg: &bvll::BvllMessage,
+    sender: ([u8; 4], u16),
+    ctx: &RecvContext,
+) -> bool {
+    let mut slot = ctx.pending_bvlc_response.lock().await;
+    if slot
+        .as_ref()
+        .is_some_and(|pending| pending.matches(sender, msg.function))
+    {
+        let pending = slot.take().expect("pending response exists");
+        let _ = pending.tx.send(msg.clone());
+        true
+    } else {
+        false
+    }
 }
 
 /// Handle a decoded BVLL message in the recv loop.
@@ -62,6 +84,7 @@ pub(super) async fn handle_bvll_message(
                 .try_send(ReceivedNpdu {
                     npdu: msg.payload.clone(),
                     source_mac,
+                    data_attributes: Vec::new(),
                     reply_tx: None,
                 })
                 .is_err()
@@ -81,6 +104,7 @@ pub(super) async fn handle_bvll_message(
                 .try_send(ReceivedNpdu {
                     npdu: msg.payload.clone(),
                     source_mac,
+                    data_attributes: Vec::new(),
                     reply_tx: None,
                 })
                 .is_err()
@@ -94,17 +118,7 @@ pub(super) async fn handle_bvll_message(
                     let mut state = bbmd.lock().await;
                     state.forwarding_targets(sender.0, sender.1)
                 };
-                forward_npdu(&ctx.socket, &msg.payload, sender.0, sender.1, &targets).await;
-
-                // Re-broadcast on local subnet as Forwarded-NPDU.
-                let dest = SocketAddrV4::new(ctx.broadcast_addr, ctx.broadcast_port);
-                let mut buf = BytesMut::with_capacity(10 + msg.payload.len());
-                match encode_bvll_forwarded(&mut buf, sender.0, sender.1, &msg.payload) {
-                    Ok(()) => {
-                        let _ = ctx.socket.send_to(&buf, dest).await;
-                    }
-                    Err(e) => warn!(error = %e, "Failed to encode Forwarded-NPDU rebroadcast"),
-                }
+                let _ = forward_npdu(&ctx.socket, &msg.payload, sender.0, sender.1, &targets).await;
             }
         }
 
@@ -123,9 +137,12 @@ pub(super) async fn handle_bvll_message(
 
             // BBMD mode: only accept FORWARDED_NPDU from BDT peers
             if let Some(bbmd) = &ctx.bbmd {
-                let is_bdt_peer = {
+                let (is_bdt_peer, needs_local_broadcast) = {
                     let state = bbmd.lock().await;
-                    state.is_bdt_peer(sender.0, sender.1)
+                    (
+                        state.is_bdt_peer(sender.0, sender.1),
+                        state.forwarded_npdu_needs_local_broadcast(sender.0, sender.1),
+                    )
                 };
                 if !is_bdt_peer {
                     debug!(
@@ -141,6 +158,7 @@ pub(super) async fn handle_bvll_message(
                     .try_send(ReceivedNpdu {
                         npdu: msg.payload.clone(),
                         source_mac,
+                        data_attributes: Vec::new(),
                         reply_tx: None,
                     })
                     .is_err()
@@ -162,16 +180,15 @@ pub(super) async fn handle_bvll_message(
                         .map(|e| (e.ip, e.port))
                         .collect::<Vec<_>>()
                 };
-                forward_npdu(&ctx.socket, &msg.payload, orig_ip, orig_port, &fdt_targets).await;
+                let _ =
+                    forward_npdu(&ctx.socket, &msg.payload, orig_ip, orig_port, &fdt_targets).await;
 
-                // Re-broadcast on local subnet as Forwarded-NPDU
-                let dest = SocketAddrV4::new(ctx.broadcast_addr, ctx.broadcast_port);
-                let mut buf = BytesMut::with_capacity(10 + msg.payload.len());
-                match encode_bvll_forwarded(&mut buf, orig_ip, orig_port, &msg.payload) {
-                    Ok(()) => {
-                        let _ = ctx.socket.send_to(&buf, dest).await;
-                    }
-                    Err(e) => warn!(error = %e, "Failed to encode Forwarded-NPDU rebroadcast"),
+                // Full-mask BDT peers forward by unicast; masked peers forward by directed broadcast.
+                if needs_local_broadcast {
+                    let dest = SocketAddrV4::new(ctx.broadcast_addr, ctx.broadcast_port);
+                    let _ =
+                        send_forwarded_npdu(&ctx.socket, dest, orig_ip, orig_port, &msg.payload)
+                            .await;
                 }
             } else {
                 // Non-BBMD: use originating address as source_mac (spec J.2.5).
@@ -180,6 +197,7 @@ pub(super) async fn handle_bvll_message(
                     .try_send(ReceivedNpdu {
                         npdu: msg.payload.clone(),
                         source_mac,
+                        data_attributes: Vec::new(),
                         reply_tx: None,
                     })
                     .is_err()
@@ -218,6 +236,7 @@ pub(super) async fn handle_bvll_message(
                     .try_send(ReceivedNpdu {
                         npdu: msg.payload.clone(),
                         source_mac,
+                        data_attributes: Vec::new(),
                         reply_tx: None,
                     })
                     .is_err()
@@ -229,16 +248,25 @@ pub(super) async fn handle_bvll_message(
                     let mut state = bbmd.lock().await;
                     state.forwarding_targets(sender.0, sender.1)
                 };
-                forward_npdu(&ctx.socket, &msg.payload, sender.0, sender.1, &targets).await;
+                let mut forwarding_ok =
+                    forward_npdu(&ctx.socket, &msg.payload, sender.0, sender.1, &targets).await;
 
                 // Broadcast locally as Forwarded-NPDU
                 let dest = SocketAddrV4::new(ctx.broadcast_addr, ctx.broadcast_port);
-                let mut buf = BytesMut::with_capacity(10 + msg.payload.len());
-                match encode_bvll_forwarded(&mut buf, sender.0, sender.1, &msg.payload) {
-                    Ok(()) => {
-                        let _ = ctx.socket.send_to(&buf, dest).await;
-                    }
-                    Err(e) => warn!(error = %e, "Failed to encode Forwarded-NPDU broadcast"),
+                forwarding_ok &= if should_force_dbtn_forward_failure(ctx) {
+                    warn!("Forced DBTN forwarding failure");
+                    false
+                } else {
+                    send_forwarded_npdu(&ctx.socket, dest, sender.0, sender.1, &msg.payload).await
+                };
+
+                if !forwarding_ok {
+                    send_bvlc_result(
+                        &ctx.socket,
+                        sender,
+                        BvlcResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK_NAK,
+                    )
+                    .await;
                 }
             } else {
                 // Non-BBMD: reject with NAK (spec J.4.5)
@@ -253,7 +281,7 @@ pub(super) async fn handle_bvll_message(
 
         f if f == BvlcFunction::REGISTER_FOREIGN_DEVICE => {
             if let Some(bbmd) = &ctx.bbmd {
-                if msg.payload.len() < 2 {
+                if msg.payload.len() != 2 {
                     send_bvlc_result(
                         &ctx.socket,
                         sender,
@@ -432,7 +460,7 @@ pub(super) async fn handle_bvll_message(
                         BvlcResultCode::DELETE_FOREIGN_DEVICE_TABLE_ENTRY_NAK,
                     )
                     .await;
-                } else if msg.payload.len() >= 6 {
+                } else if msg.payload.len() == 6 {
                     let ip = [
                         msg.payload[0],
                         msg.payload[1],
@@ -464,57 +492,40 @@ pub(super) async fn handle_bvll_message(
         }
 
         f if f == BvlcFunction::BVLC_RESULT => {
-            let sender_opt = {
-                let mut slot = ctx.bvlc_response.lock().await;
-                slot.take()
-            };
-            if let Some(response_tx) = sender_opt {
-                let _ = response_tx.send(msg.clone());
-            } else if msg.payload.len() >= 2 {
-                let code =
-                    BvlcResultCode::from_raw(u16::from_be_bytes([msg.payload[0], msg.payload[1]]));
-                match code {
-                    BvlcResultCode::SUCCESSFUL_COMPLETION => {
+            if !complete_pending_bvlc_response(msg, sender, ctx).await {
+                match decode_bvlc_result_code(msg) {
+                    Ok(BvlcResultCode::SUCCESSFUL_COMPLETION) => {
                         debug!("Received BVLC-Result: successful");
                     }
-                    BvlcResultCode::REGISTER_FOREIGN_DEVICE_NAK => {
+                    Ok(BvlcResultCode::REGISTER_FOREIGN_DEVICE_NAK) => {
                         tracing::error!(
                             "BVLC-Result NAK: foreign device registration rejected by BBMD"
                         );
                     }
-                    BvlcResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK_NAK => {
+                    Ok(BvlcResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK_NAK) => {
                         tracing::error!(
-                            "BVLC-Result NAK: broadcast distribution rejected — \
+                            "BVLC-Result NAK: broadcast distribution rejected - \
                              foreign device registration may have failed or expired"
                         );
                     }
-                    _ => {
+                    Ok(code) => {
                         warn!(code = ?code, "Received BVLC-Result NAK");
+                    }
+                    Err(err) => {
+                        warn!(error = %err, "Received malformed BVLC-Result");
                     }
                 }
             }
         }
 
         f if f == BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE_ACK => {
-            let sender_opt = {
-                let mut slot = ctx.bvlc_response.lock().await;
-                slot.take()
-            };
-            if let Some(response_tx) = sender_opt {
-                let _ = response_tx.send(msg.clone());
-            } else {
+            if !complete_pending_bvlc_response(msg, sender, ctx).await {
                 debug!("Received Read-BDT-ACK with no pending request");
             }
         }
 
         f if f == BvlcFunction::READ_FOREIGN_DEVICE_TABLE_ACK => {
-            let sender_opt = {
-                let mut slot = ctx.bvlc_response.lock().await;
-                slot.take()
-            };
-            if let Some(response_tx) = sender_opt {
-                let _ = response_tx.send(msg.clone());
-            } else {
+            if !complete_pending_bvlc_response(msg, sender, ctx).await {
                 debug!("Received Read-FDT-ACK with no pending request");
             }
         }
@@ -537,6 +548,38 @@ async fn send_bvlc_result(socket: &UdpSocket, dest: ([u8; 4], u16), code: BvlcRe
     let _ = socket.send_to(&buf, addr).await;
 }
 
+#[cfg(test)]
+fn should_force_dbtn_forward_failure(ctx: &RecvContext) -> bool {
+    ctx.force_dbtn_forward_failure
+}
+
+#[cfg(not(test))]
+fn should_force_dbtn_forward_failure(_ctx: &RecvContext) -> bool {
+    false
+}
+
+async fn send_forwarded_npdu(
+    socket: &UdpSocket,
+    dest: SocketAddrV4,
+    orig_ip: [u8; 4],
+    orig_port: u16,
+    npdu: &[u8],
+) -> bool {
+    let mut buf = BytesMut::with_capacity(10 + npdu.len());
+    if let Err(e) = encode_bvll_forwarded(&mut buf, orig_ip, orig_port, npdu) {
+        warn!(error = %e, "Failed to encode Forwarded-NPDU");
+        return false;
+    }
+
+    match socket.send_to(&buf, dest).await {
+        Ok(_) => true,
+        Err(e) => {
+            warn!(error = %e, dest = %dest, "Failed to send Forwarded-NPDU");
+            false
+        }
+    }
+}
+
 /// Forward an NPDU as Forwarded-NPDU to a list of targets.
 ///
 /// Yields between sends for large target lists to avoid starving the recv loop
@@ -547,20 +590,22 @@ async fn forward_npdu(
     orig_ip: [u8; 4],
     orig_port: u16,
     targets: &[([u8; 4], u16)],
-) {
+) -> bool {
     if targets.is_empty() {
-        return;
+        return true;
     }
     let mut buf = BytesMut::with_capacity(10 + npdu.len());
     if let Err(e) = encode_bvll_forwarded(&mut buf, orig_ip, orig_port, npdu) {
         warn!(error = %e, "Failed to encode Forwarded-NPDU");
-        return;
+        return false;
     }
     let frame = buf.freeze();
+    let mut all_sent = true;
 
     for (i, &(ip, port)) in targets.iter().enumerate() {
         let dest = SocketAddrV4::new(Ipv4Addr::from(ip), port);
         if let Err(e) = socket.send_to(&frame, dest).await {
+            all_sent = false;
             warn!(error = %e, dest = %dest, "Failed to forward NPDU");
         }
         // Yield every 32 sends to let the recv loop process incoming packets
@@ -568,6 +613,7 @@ async fn forward_npdu(
             tokio::task::yield_now().await;
         }
     }
+    all_sent
 }
 
 /// Resolve the local IPv4 address by connecting a UDP socket to a remote

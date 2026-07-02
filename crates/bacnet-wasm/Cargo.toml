@@ -31,6 +31,8 @@ features = [
     "BinaryType",
     "CloseEvent",
     "Blob",
+    "Window",
+    "Performance",
 ]
 
 [dev-dependencies]

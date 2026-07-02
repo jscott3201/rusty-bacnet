@@ -16,6 +16,7 @@ bacnet-objects.workspace = true
 bacnet-client.workspace = true
 bacnet-server.workspace = true
 bytes.workspace = true
+serde_json = "1"
 tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync", "macros", "time", "test-util"] }
 
 [lints]

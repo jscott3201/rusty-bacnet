@@ -1,8 +1,10 @@
 # Rust
 /target
+target/
 **/*.rs.bk
 *.rlib
 *.rmeta
+bench-output/
 
 # Python
 *.pyo
@@ -22,6 +24,7 @@ dist/
 .ruff_cache/
 
 # AI assistants
+codex-id.json
 .claude/
 CLAUDE.md
 .copilot/

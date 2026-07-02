@@ -134,10 +134,15 @@ impl BbmdState {
     ///
     /// Returns an error if the number of entries exceeds `MAX_BDT_ENTRIES`.
     pub fn set_bdt(&mut self, entries: Vec<BdtEntry>) -> Result<(), Error> {
-        if entries.len() > Self::MAX_BDT_ENTRIES {
+        let needs_self = !entries
+            .iter()
+            .any(|e| e.ip == self.local_ip && e.port == self.local_port);
+        let effective_len = entries.len() + usize::from(needs_self);
+
+        if effective_len > Self::MAX_BDT_ENTRIES {
             return Err(Error::Encoding(format!(
-                "BDT size {} exceeds maximum of {}",
-                entries.len(),
+                "BDT size {} exceeds maximum of {} after self-entry insertion",
+                effective_len,
                 Self::MAX_BDT_ENTRIES
             )));
         }
@@ -219,6 +224,10 @@ impl BbmdState {
 
     /// Register or re-register a foreign device.
     pub fn register_foreign_device(&mut self, ip: [u8; 4], port: u16, ttl: u16) -> BvlcResultCode {
+        if ttl == 0 {
+            return BvlcResultCode::REGISTER_FOREIGN_DEVICE_NAK;
+        }
+
         // Update existing or insert new
         if let Some(entry) = self.fdt.iter_mut().find(|e| e.ip == ip && e.port == port) {
             entry.ttl = ttl;
@@ -248,9 +257,11 @@ impl BbmdState {
         }
     }
 
-    /// Purge expired FDT entries.
-    pub fn purge_expired(&mut self) {
+    /// Purge expired FDT entries and return the number removed.
+    pub fn purge_expired(&mut self) -> usize {
+        let before = self.fdt.len();
         self.fdt.retain(|e| !e.is_expired());
+        before - self.fdt.len()
     }
 
     /// Get the current FDT (purges expired entries first).
@@ -280,6 +291,14 @@ impl BbmdState {
         self.bdt.iter().any(|e| e.ip == ip && e.port == port)
     }
 
+    /// Whether a Forwarded-NPDU from this BDT peer still needs a local subnet broadcast.
+    pub fn forwarded_npdu_needs_local_broadcast(&self, ip: [u8; 4], port: u16) -> bool {
+        self.bdt
+            .iter()
+            .find(|e| e.ip == ip && e.port == port)
+            .is_some_and(|e| e.broadcast_mask == [0xff, 0xff, 0xff, 0xff])
+    }
+
     /// Check if a sender is a registered (non-expired) foreign device.
     pub fn is_registered_foreign_device(&mut self, ip: [u8; 4], port: u16) -> bool {
         self.purge_expired();
@@ -300,6 +319,26 @@ impl BbmdState {
     /// Set the management ACL. An empty list means all sources are allowed.
     pub fn set_management_acl(&mut self, acl: Vec<[u8; 4]>) {
         self.management_acl = acl;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn backdate_foreign_device_for_test(
+        &mut self,
+        ip: [u8; 4],
+        port: u16,
+        elapsed: Duration,
+    ) {
+        let entry = self
+            .fdt
+            .iter_mut()
+            .find(|entry| entry.ip == ip && entry.port == port)
+            .expect("foreign device entry exists");
+        entry.registered_at = Instant::now() - elapsed;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fdt_len_for_test(&self) -> usize {
+        self.fdt.len()
     }
 
     // -----------------------------------------------------------------------
@@ -410,6 +449,21 @@ mod tests {
     }
 
     #[test]
+    fn set_bdt_rejects_max_entries_when_self_insert_would_exceed_limit() {
+        let mut bbmd = make_bbmd();
+        let entries = (0..BbmdState::MAX_BDT_ENTRIES)
+            .map(|i| BdtEntry {
+                ip: [10, 0, (i / 256) as u8, i as u8],
+                port: 0xBAC0,
+                broadcast_mask: [255, 255, 255, 255],
+            })
+            .collect();
+
+        assert!(bbmd.set_bdt(entries).is_err());
+        assert!(bbmd.bdt().is_empty());
+    }
+
+    #[test]
     fn register_and_lookup_foreign_device() {
         let mut bbmd = make_bbmd();
         let result = bbmd.register_foreign_device([10, 0, 0, 5], 0xBAC0, 60);
@@ -417,6 +471,14 @@ mod tests {
         assert_eq!(bbmd.fdt().len(), 1);
         assert_eq!(bbmd.fdt()[0].ip, [10, 0, 0, 5]);
         assert_eq!(bbmd.fdt()[0].ttl, 60);
+    }
+
+    #[test]
+    fn register_foreign_device_zero_ttl_naks() {
+        let mut bbmd = make_bbmd();
+        let result = bbmd.register_foreign_device([10, 0, 0, 5], 0xBAC0, 0);
+        assert_eq!(result, BvlcResultCode::REGISTER_FOREIGN_DEVICE_NAK);
+        assert!(bbmd.fdt().is_empty());
     }
 
     #[test]
@@ -473,6 +535,20 @@ mod tests {
         assert_eq!(u16::from_be_bytes([buf[4], buf[5]]), 0xBAC0);
         // TTL
         assert_eq!(u16::from_be_bytes([buf[6], buf[7]]), 60);
+    }
+
+    #[test]
+    fn fdt_encode_caps_max_ttl_remaining_time() {
+        let mut bbmd = make_bbmd();
+        let result = bbmd.register_foreign_device([10, 0, 0, 5], 0xBAC0, u16::MAX);
+        assert_eq!(result, BvlcResultCode::SUCCESSFUL_COMPLETION);
+
+        let mut buf = BytesMut::new();
+        bbmd.encode_fdt(&mut buf);
+
+        assert_eq!(buf.len(), FDT_ENTRY_SIZE);
+        assert_eq!(u16::from_be_bytes([buf[6], buf[7]]), u16::MAX);
+        assert_eq!(u16::from_be_bytes([buf[8], buf[9]]), u16::MAX);
     }
 
     #[test]
@@ -546,6 +622,29 @@ mod tests {
     }
 
     #[test]
+    fn forwarding_targets_excludes_originating_foreign_device_and_expired_entries() {
+        let mut bbmd = BbmdState::new([192, 168, 1, 1], 0xBAC0);
+        bbmd.set_bdt(vec![BdtEntry {
+            ip: [192, 168, 2, 1],
+            port: 0xBAC0,
+            broadcast_mask: [255, 255, 255, 255],
+        }])
+        .unwrap();
+        bbmd.register_foreign_device([10, 0, 0, 5], 0xBAC0, 60);
+        bbmd.fdt.push(FdtEntry {
+            ip: [10, 0, 0, 6],
+            port: 0xBAC0,
+            ttl: 60,
+            registered_at: Instant::now() - Duration::from_secs(91),
+        });
+
+        let targets = bbmd.forwarding_targets([10, 0, 0, 5], 0xBAC0);
+
+        assert_eq!(targets, vec![([192, 168, 2, 1], 0xBAC0)]);
+        assert_eq!(bbmd.fdt().len(), 1);
+    }
+
+    #[test]
     fn ttl_accepted_as_is() {
         let mut bbmd = make_bbmd();
         bbmd.register_foreign_device([10, 0, 0, 5], 0xBAC0, 1);
@@ -607,6 +706,39 @@ mod tests {
         .unwrap();
         assert!(bbmd.is_bdt_peer([10, 0, 0, 1], 0xBAC0));
         assert!(!bbmd.is_bdt_peer([10, 0, 0, 2], 0xBAC0));
+    }
+
+    #[test]
+    fn forwarded_npdu_needs_local_broadcast_for_unicast_peer() {
+        let mut bbmd = make_bbmd();
+        bbmd.set_bdt(vec![BdtEntry {
+            ip: [10, 0, 0, 1],
+            port: 0xBAC0,
+            broadcast_mask: [255, 255, 255, 255],
+        }])
+        .unwrap();
+
+        assert!(bbmd.forwarded_npdu_needs_local_broadcast([10, 0, 0, 1], 0xBAC0));
+    }
+
+    #[test]
+    fn forwarded_npdu_skips_local_broadcast_for_directed_broadcast_peer() {
+        let mut bbmd = make_bbmd();
+        bbmd.set_bdt(vec![BdtEntry {
+            ip: [10, 0, 0, 1],
+            port: 0xBAC0,
+            broadcast_mask: [255, 255, 255, 0],
+        }])
+        .unwrap();
+
+        assert!(!bbmd.forwarded_npdu_needs_local_broadcast([10, 0, 0, 1], 0xBAC0));
+    }
+
+    #[test]
+    fn forwarded_npdu_skips_local_broadcast_for_unknown_peer() {
+        let bbmd = make_bbmd();
+
+        assert!(!bbmd.forwarded_npdu_needs_local_broadcast([10, 0, 0, 1], 0xBAC0));
     }
 
     #[test]

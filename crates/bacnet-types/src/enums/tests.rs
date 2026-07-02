@@ -89,6 +89,13 @@ fn network_message_type_values() {
 }
 
 #[test]
+fn bacnet_sc_error_code_values() {
+    assert_eq!(ErrorClass::COMMUNICATION.to_raw(), 7);
+    assert_eq!(ErrorCode::MESSAGE_INCOMPLETE.to_raw(), 147);
+    assert_eq!(ErrorCode::NODE_DUPLICATE_VMAC.to_raw(), 151);
+}
+
+#[test]
 fn event_state_values() {
     assert_eq!(EventState::NORMAL.to_raw(), 0);
     assert_eq!(EventState::LIFE_SAFETY_ALARM.to_raw(), 5);

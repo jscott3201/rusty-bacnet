@@ -57,7 +57,7 @@ fn make_self_signed_acceptor() -> TlsAcceptor {
             .unwrap();
     let key = PrivateKeyDer::from_pem_slice(server_key.serialize_pem().as_bytes()).unwrap();
 
-    let config = rustls::ServerConfig::builder()
+    let config = rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
         .with_no_client_auth()
         .with_single_cert(cert_chain, key)
         .unwrap();
@@ -68,7 +68,7 @@ fn make_self_signed_acceptor() -> TlsAcceptor {
 fn make_file_acceptor(
     cert_path: &str,
     key_path: &str,
-    _ca_path: Option<&str>,
+    ca_path: Option<&str>,
 ) -> Result<TlsAcceptor, Box<dyn std::error::Error>> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
@@ -77,11 +77,33 @@ fn make_file_acceptor(
 
     let cert_chain: Vec<CertificateDer<'static>> =
         CertificateDer::pem_slice_iter(&cert_pem).collect::<Result<Vec<_>, _>>()?;
+    if cert_chain.is_empty() {
+        return Err("no server certificates found".into());
+    }
     let key = PrivateKeyDer::from_pem_slice(&key_pem)?;
 
-    let config = rustls::ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(cert_chain, key)?;
+    let config = if let Some(ca_path) = ca_path {
+        let ca_pem = std::fs::read(ca_path)?;
+        let ca_certs: Vec<CertificateDer<'static>> =
+            CertificateDer::pem_slice_iter(&ca_pem).collect::<Result<Vec<_>, _>>()?;
+        if ca_certs.is_empty() {
+            return Err("no CA certificates found".into());
+        }
+        let mut client_auth_roots = rustls::RootCertStore::empty();
+        for cert in ca_certs {
+            client_auth_roots.add(cert)?;
+        }
+        let client_verifier =
+            rustls::server::WebPkiClientVerifier::builder(Arc::new(client_auth_roots)).build()?;
+
+        rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+            .with_client_cert_verifier(client_verifier)
+            .with_single_cert(cert_chain, key)?
+    } else {
+        rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+            .with_no_client_auth()
+            .with_single_cert(cert_chain, key)?
+    };
 
     Ok(TlsAcceptor::from(Arc::new(config)))
 }

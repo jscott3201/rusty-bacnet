@@ -290,6 +290,9 @@ let transport = ScTransport::new(ws, vmac)
     .with_heartbeat_timeout_ms(60_000);
 ```
 
+Production BACnet/SC transports validate heartbeat settings at `start()`: the interval must be
+`3_000..=300_000` ms, and the disconnect timeout must be greater than the interval.
+
 ### BACnet/SC Hub
 
 ```rust
@@ -405,10 +408,30 @@ Variants: `Bip`, `Bip6`, `Mstp`, `Sc` (boxed), `Loopback`.
 ### BBMD
 
 ```rust
-use bacnet_transport::bbmd::BbmdConfig;
+use std::net::Ipv4Addr;
+use std::path::PathBuf;
 
-// BBMD with broadcast distribution table + foreign device table
-// management_acl gates Write-BDT/Delete-FDT (empty = allow all)
+use bacnet_transport::bbmd::BdtEntry;
+use bacnet_transport::bip::{BipTransport, DEFAULT_BACNET_PORT};
+
+let mut transport = BipTransport::new(
+    Ipv4Addr::UNSPECIFIED,
+    DEFAULT_BACNET_PORT,
+    Ipv4Addr::BROADCAST,
+);
+
+transport.enable_bbmd(vec![BdtEntry {
+    ip: [192, 168, 1, 10],
+    port: DEFAULT_BACNET_PORT,
+    broadcast_mask: [255, 255, 255, 255],
+}]);
+
+// Optional: persist successful legacy Write-BDT updates and reload them on restart.
+transport.set_bdt_persist_path(PathBuf::from("/var/lib/rusty-bacnet/bdt.bin"));
+
+// Optional: restrict Write-BDT and Delete-FDT management operations.
+// An empty ACL allows all sources.
+transport.set_bbmd_management_acl(vec![[192, 168, 1, 100]]);
 ```
 
 ---
@@ -426,7 +449,7 @@ use bacnet_network::router::BACnetRouter;
 
 ## bacnet-objects
 
-BACnet object model: trait, database, and 65 object type implementations.
+BACnet object model: trait, database, and object implementations.
 
 ### BACnetObject Trait
 

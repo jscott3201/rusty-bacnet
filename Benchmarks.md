@@ -6,7 +6,7 @@
 >
 > **Software:** macOS 26.4 | Rust 1.94.0 | Release mode | TLS provider: aws-lc-rs
 >
-> All tests ran on localhost with zero errors unless noted.
+> Historical localhost benchmark report. Raw current-revision artifacts are not tracked in this repository; rerun the benchmark commands below before using these numbers as evidence.
 
 ---
 
@@ -59,6 +59,10 @@
 | WriteProperty | 230 µs | 2.29 ms | 22.9 ms | **~43.7 K/s** |
 
 ### 1.4 BACnet/SC — TLS WebSocket (Server Auth Only)
+
+Server-auth-only SC measurements are retained as a benchmark comparison mode.
+They are not BACnet/SC mTLS conformance evidence; secure Annex AB deployments
+use TLS 1.3 with mutual TLS as shown in the mTLS benchmarks.
 
 #### Latency
 
@@ -424,19 +428,53 @@ comparable to pure Rust's single-threaded 48K/s.
 - **Encoding is fast**: Full RP encode/decode stack in ~82 ns (CPU-bound, no allocation hot paths thanks to `Bytes` zero-copy)
 - **BIP throughput at ~48K/s**: Per-request task spawning enables concurrent `db.read()` — reads and writes now achieve equal throughput
 - **BIP6 matches BIP**: IPv6 adds <1% latency overhead vs IPv4 — effectively identical performance
-- **SC overhead is ~2.2×**: TLS WebSocket adds ~26 µs per operation vs raw UDP — acceptable for secure deployments
-- **Object count doesn't matter**: 100 → 5,000 objects shows zero latency degradation (19 µs p50 across all sizes)
+- **SC overhead is ~2.2×**: TLS WebSocket adds ~26 µs per operation vs raw UDP; secure Annex AB deployments use TLS 1.3 with mutual TLS
+- **Object count had little effect in this run**: 100 to 5,000 objects stayed near 19 µs p50 across recorded sizes
 - **COV is reliable**: 100% notification delivery at 25 concurrent subscriptions (native) and 100 (Docker)
-- **Zero errors across all tests**: No timeouts, no panics, no dropped messages
+- **Historical run completed cleanly**: No timeouts, panics, or dropped messages were observed in the recorded run
 - **Docker validates real networking**: Cross-container BIP, routing, BBMD foreign device, and SC all work correctly
 - **Minimal router/BBMD overhead**: Cross-subnet routing adds ~7% latency; BBMD foreign device adds ~5%
 - **Musl/Alpine single-client 4 µs p50**: In-container loopback latency is extremely low, 206K ops/s single-threaded
-- **Python API is production-ready**: ~80 µs PyO3 overhead per call; 36K concurrent ops/s from Python
+- **Python API benchmark coverage exists**: Recorded PyO3 overhead was ~80 µs per call, with 36K concurrent ops/s from Python in the historical run
 - **SC from Python works**: ScHub + SC client/server all work via PyO3; 29K ops/s at 25 concurrent clients
 
 ---
 
-## 7. How to Reproduce
+## 7. A/B Benchmark Harness
+
+The benchmark runner scripts capture current-revision evidence without comparing
+new runs to the historical tables above by hand.
+
+```bash
+# Local suite wrappers
+scripts/bench-local.sh smoke
+scripts/bench-local.sh bip --quick --noplot
+scripts/bench-local.sh bbmd --duration 5 --steps 1,3 --json
+
+# Base/head comparison with raw artifacts and a Markdown summary
+scripts/bench-ab.sh \
+  --base origin/dev \
+  --head HEAD \
+  --suites bip,bbmd \
+  --duration 5 \
+  --quick \
+  --noplot \
+  --output-dir bench-output/ab-annex-j
+```
+
+`bench-output/` is intentionally ignored by git. Each A/B run records
+environment metadata, per-suite stdout/stderr/status files for base and head,
+and `summary.md`. Stress suites emit JSON and are summarized automatically;
+Criterion suites are retained as raw textual logs until a Criterion JSON export
+is added.
+
+Machine-readable benchmark history rows should conform to
+`benchmarks/schema/benchmark-result.schema.json` when results are promoted from
+local artifacts into tracked history.
+
+---
+
+## 8. How to Reproduce
 
 ```bash
 # Criterion benchmarks (all 9 suites — run sequentially for accurate results)

@@ -23,7 +23,7 @@ use crate::errors::to_py_err;
 ///     listen="127.0.0.1:0",
 ///     cert="server.pem",
 ///     key="server.key",
-///     ca_cert="ca.pem",       # optional, enables mTLS
+///     ca_cert="ca.pem",       # trusted issuer CA, enables mTLS
 ///     vmac=b"\x00\x00\x00\x00\x00\x01",
 /// )
 /// await hub.start()
@@ -50,7 +50,8 @@ impl PyScHub {
     ///     listen: Bind address, e.g. ``"127.0.0.1:0"`` for a random port.
     ///     cert: Path to server certificate PEM file.
     ///     key: Path to server private key PEM file.
-    ///     ca_cert: Optional path to CA cert for mTLS (client certificate verification).
+    ///     ca_cert: Optional path to issuer CA cert for mTLS (client certificate verification).
+    ///         Omitting this leaves the hub in server-auth-only example mode.
     ///     vmac: 6-byte VMAC for the hub itself.
     #[new]
     #[pyo3(signature = (listen, cert, key, vmac, ca_cert=None))]

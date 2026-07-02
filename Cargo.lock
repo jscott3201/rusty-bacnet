@@ -232,6 +232,7 @@ dependencies = [
  "clap",
  "console-subscriber",
  "criterion",
+ "futures-util",
  "hdrhistogram",
  "rand 0.10.1",
  "rcgen",
@@ -241,12 +242,13 @@ dependencies = [
  "sysinfo",
  "tokio",
  "tokio-rustls",
+ "tokio-tungstenite",
  "tracing-subscriber",
 ]
 
 [[package]]
 name = "bacnet-cli"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bacnet-client",
  "bacnet-encoding",
@@ -276,7 +278,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-client"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-network",
@@ -293,7 +295,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-encoding"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bacnet-types",
  "bytes",
@@ -302,7 +304,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-integration-tests"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bacnet-client",
  "bacnet-encoding",
@@ -313,12 +315,13 @@ dependencies = [
  "bacnet-transport",
  "bacnet-types",
  "bytes",
+ "serde_json",
  "tokio",
 ]
 
 [[package]]
 name = "bacnet-network"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-transport",
@@ -330,7 +333,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-objects"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-types",
@@ -340,7 +343,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-server"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-network",
@@ -356,7 +359,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-services"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-types",
@@ -366,12 +369,13 @@ dependencies = [
 
 [[package]]
 name = "bacnet-transport"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-types",
  "bytes",
  "futures-util",
+ "getrandom 0.3.4",
  "gpiocdev",
  "libc",
  "rustls",
@@ -385,7 +389,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-types"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bitflags 2.11.1",
  "smallvec",
@@ -394,7 +398,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-wasm"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-services",
@@ -1972,9 +1976,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3"
-version = "0.28.3"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91fd8e38a3b50ed1167fb981cd6fd60147e091784c427b8f7183a7ee32c31c12"
+checksum = "cd274650b21d4bfc26a0a47587962c1edb425f69287324355cd040c3ea66071c"
 dependencies = [
  "inventory",
  "libc",
@@ -1987,9 +1991,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-async-runtimes"
-version = "0.28.0"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e7364a95bf00e8377bbf9b0f09d7ff9715a29d8fcf93b47d1a967363b973178"
+checksum = "b3ef68daa7316a3fac65e5e18b2203f010346de1c1c53456811a2624673ab046"
 dependencies = [
  "futures-channel",
  "futures-util",
@@ -2001,18 +2005,18 @@ dependencies = [
 
 [[package]]
 name = "pyo3-build-config"
-version = "0.28.3"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e368e7ddfdeb98c9bca7f8383be1648fd84ab466bf2bc015e94008db6d35611e"
+checksum = "c5e2a7d2f0d013342f295c048ad19237add5154a55b1c5a254c0ec93d4109078"
 dependencies = [
  "target-lexicon",
 ]
 
 [[package]]
 name = "pyo3-ffi"
-version = "0.28.3"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f29e10af80b1f7ccaf7f69eace800a03ecd13e883acfacc1e5d0988605f651e"
+checksum = "ca85c467da1bbc8d866eea5deff9cf29ea5f7785054a17da36e65bda9c05845b"
 dependencies = [
  "libc",
  "pyo3-build-config",
@@ -2020,9 +2024,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-macros"
-version = "0.28.3"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df6e520eff47c45997d2fc7dd8214b25dd1310918bbb2642156ef66a67f29813"
+checksum = "9ac53762fd065daa3194dd09337a38bd793a188100fd1a9304c4ab312d901771"
 dependencies = [
  "proc-macro2",
  "pyo3-macros-backend",
@@ -2032,13 +2036,12 @@ dependencies = [
 
 [[package]]
 name = "pyo3-macros-backend"
-version = "0.28.3"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4cdc218d835738f81c2338f822078af45b4afdf8b2e33cbb5916f108b813acb"
+checksum = "4ca3a1557399783172dc5bf39cfca835157732532cba56b71d2292161e53b362"
 dependencies = [
  "heck",
  "proc-macro2",
- "pyo3-build-config",
  "quote",
  "syn",
 ]
@@ -2284,7 +2287,7 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "rusty-bacnet"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bacnet-client",
  "bacnet-encoding",

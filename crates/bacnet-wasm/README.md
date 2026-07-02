@@ -4,6 +4,13 @@ BACnet/SC thin client for JavaScript/TypeScript via WebAssembly.
 
 Provides a browser-compatible BACnet/SC (Secure Connect) client that connects to BACnet/SC hubs over WebSocket. Built on the [rusty-bacnet](https://github.com/jscott3201/rusty-bacnet) protocol stack.
 
+The client starts BACnet/SC Heartbeat-Request/Heartbeat-ACK keep-alive handling after the Connect-Accept handshake.
+
+The client enforces `wss://` and BACnet/SC hub WebSocket framing, but browser
+trust stores and client certificate selection are controlled by the browser and
+platform. Annex AB mTLS conformance depends on that external certificate
+configuration.
+
 ## Installation
 
 ```bash
@@ -58,7 +65,8 @@ await client.disconnect();
 
 | Method | Description |
 |--------|-------------|
-| `new()` | Create a new client (random VMAC) |
+| `new()` | Create a new client with secure random VMAC and generated Device UUID |
+| `withDeviceUuid(deviceUuid)` | Create a new client with secure random VMAC and a supplied persistent Device UUID |
 | `connect(url)` | Connect to SC hub via WebSocket |
 | `readProperty(objectType, instance, propertyId, arrayIndex?)` | Read a property |
 | `writeProperty(objectType, instance, propertyId, valueBytes, priority?)` | Write a property |
@@ -68,6 +76,7 @@ await client.disconnect();
 | `onCovNotification(callback)` | Register COV notification callback |
 | `disconnect()` | Disconnect from hub |
 | `connected` | Property: connection status |
+| `localDeviceUuid` | Property: local 16-byte Device UUID |
 
 ### Value Encoding Helpers
 

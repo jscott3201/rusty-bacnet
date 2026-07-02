@@ -26,6 +26,74 @@ use io::{handle_bvll_message, resolve_local_ip, send_register_foreign_device, Re
 /// Default BACnet/IP port (0xBAC0 = 47808).
 pub const DEFAULT_BACNET_PORT: u16 = 0xBAC0;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum BvlcResponseKind {
+    Result,
+    ReadBroadcastDistributionTableAck,
+    ReadForeignDeviceTableAck,
+}
+
+impl BvlcResponseKind {
+    pub(super) fn accepts(self, function: BvlcFunction) -> bool {
+        match self {
+            Self::Result => function == BvlcFunction::BVLC_RESULT,
+            Self::ReadBroadcastDistributionTableAck => {
+                function == BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE_ACK
+                    || function == BvlcFunction::BVLC_RESULT
+            }
+            Self::ReadForeignDeviceTableAck => {
+                function == BvlcFunction::READ_FOREIGN_DEVICE_TABLE_ACK
+                    || function == BvlcFunction::BVLC_RESULT
+            }
+        }
+    }
+}
+
+pub(super) struct PendingBvlcResponse {
+    target: ([u8; 4], u16),
+    expected: BvlcResponseKind,
+    tx: oneshot::Sender<BvllMessage>,
+}
+
+impl PendingBvlcResponse {
+    pub(super) fn matches(&self, sender: ([u8; 4], u16), function: BvlcFunction) -> bool {
+        self.target == sender && self.expected.accepts(function)
+    }
+}
+
+pub(super) fn expect_bvlc_function(msg: &BvllMessage, expected: BvlcFunction) -> Result<(), Error> {
+    if msg.function == expected {
+        Ok(())
+    } else {
+        Err(Error::Encoding(format!(
+            "expected BVLC response {expected:?}, got {:?}",
+            msg.function
+        )))
+    }
+}
+
+pub(super) fn decode_bvlc_result_code(msg: &BvllMessage) -> Result<BvlcResultCode, Error> {
+    expect_bvlc_function(msg, BvlcFunction::BVLC_RESULT)?;
+    if msg.payload.len() != std::mem::size_of::<u16>() {
+        return Err(Error::Encoding(format!(
+            "BVLC-Result payload must be 2 bytes, got {}",
+            msg.payload.len()
+        )));
+    }
+
+    Ok(BvlcResultCode::from_raw(u16::from_be_bytes([
+        msg.payload[0],
+        msg.payload[1],
+    ])))
+}
+
+fn bvlc_result_error(msg: &BvllMessage) -> Error {
+    match decode_bvlc_result_code(msg) {
+        Ok(code) => Error::Encoding(format!("BVLC-Result: {code:?}")),
+        Err(err) => err,
+    }
+}
+
 /// Configuration for foreign device registration.
 #[derive(Debug, Clone)]
 pub struct ForeignDeviceConfig {
@@ -55,12 +123,14 @@ pub struct BipTransport {
     bbmd_config: Option<BbmdConfig>,
     /// BBMD state (when acting as a BBMD, created in `start()`).
     bbmd: Option<Arc<Mutex<BbmdState>>>,
+    /// BBMD FDT expiry purge task.
+    bbmd_fdt_purge_task: Option<JoinHandle<()>>,
     /// Foreign device config (when registered as a foreign device).
     foreign_device: Option<ForeignDeviceConfig>,
     /// Re-registration timer task.
     registration_task: Option<JoinHandle<()>>,
-    /// Shared oneshot channel for routing BVLC management responses back to the caller.
-    bvlc_response_tx: Arc<Mutex<Option<oneshot::Sender<BvllMessage>>>>,
+    /// Pending BVLC management response, including the expected sender and response kind.
+    pending_bvlc_response: Arc<Mutex<Option<PendingBvlcResponse>>>,
     /// Optional path for persisting the BDT across restarts.
     bdt_persist_path: Option<std::path::PathBuf>,
 }
@@ -81,9 +151,10 @@ impl BipTransport {
             recv_task: None,
             bbmd_config: None,
             bbmd: None,
+            bbmd_fdt_purge_task: None,
             foreign_device: None,
             registration_task: None,
-            bvlc_response_tx: Arc::new(Mutex::new(None)),
+            pending_bvlc_response: Arc::new(Mutex::new(None)),
             bdt_persist_path: None,
         }
     }
@@ -130,6 +201,12 @@ impl BipTransport {
     /// Timeout for BVLC management response waiting.
     const BVLC_RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
 
+    #[cfg(not(test))]
+    const BBMD_FDT_PURGE_INTERVAL: Duration = Duration::from_secs(1);
+
+    #[cfg(test)]
+    const BBMD_FDT_PURGE_INTERVAL: Duration = Duration::from_millis(20);
+
     /// Get the socket, returning an error if not started.
     fn require_socket(&self) -> Result<&Arc<UdpSocket>, Error> {
         self.socket.as_ref().ok_or_else(|| {
@@ -140,11 +217,28 @@ impl BipTransport {
         })
     }
 
+    fn spawn_bbmd_fdt_purge_task(bbmd: Arc<Mutex<BbmdState>>) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(Self::BBMD_FDT_PURGE_INTERVAL);
+            loop {
+                ticker.tick().await;
+                let purged = {
+                    let mut state = bbmd.lock().await;
+                    state.purge_expired()
+                };
+                if purged > 0 {
+                    debug!(purged, "Purged expired BBMD FDT entries");
+                }
+            }
+        })
+    }
+
     /// Send a raw BVLC management request and await the response.
     async fn bvlc_request(
         &self,
         target: &[u8],
         function: BvlcFunction,
+        expected_response: BvlcResponseKind,
         payload: &[u8],
     ) -> Result<BvllMessage, Error> {
         let socket = self.require_socket()?;
@@ -153,13 +247,17 @@ impl BipTransport {
 
         let (tx, rx) = oneshot::channel();
         {
-            let mut slot = self.bvlc_response_tx.lock().await;
+            let mut slot = self.pending_bvlc_response.lock().await;
             if slot.is_some() {
                 return Err(Error::Encoding(
                     "BVLC management request already in flight".into(),
                 ));
             }
-            *slot = Some(tx);
+            *slot = Some(PendingBvlcResponse {
+                target: (ip, port),
+                expected: expected_response,
+                tx,
+            });
         }
 
         let mut buf = BytesMut::with_capacity(4 + payload.len());
@@ -170,7 +268,7 @@ impl BipTransport {
             Ok(Ok(msg)) => Ok(msg),
             Ok(Err(_)) => Err(Error::Encoding("BVLC response channel dropped".to_string())),
             Err(_) => {
-                let mut slot = self.bvlc_response_tx.lock().await;
+                let mut slot = self.pending_bvlc_response.lock().await;
                 *slot = None;
                 Err(Error::Timeout(Self::BVLC_RESPONSE_TIMEOUT))
             }
@@ -180,16 +278,17 @@ impl BipTransport {
     /// Send Read-Broadcast-Distribution-Table and return the response entries.
     pub async fn read_bdt(&self, target: &[u8]) -> Result<Vec<BdtEntry>, Error> {
         let msg = self
-            .bvlc_request(target, BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE, &[])
+            .bvlc_request(
+                target,
+                BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE,
+                BvlcResponseKind::ReadBroadcastDistributionTableAck,
+                &[],
+            )
             .await?;
         if msg.function == BvlcFunction::BVLC_RESULT {
-            let code = if msg.payload.len() >= 2 {
-                BvlcResultCode::from_raw(u16::from_be_bytes([msg.payload[0], msg.payload[1]]))
-            } else {
-                BvlcResultCode::READ_BROADCAST_DISTRIBUTION_TABLE_NAK
-            };
-            return Err(Error::Encoding(format!("BVLC-Result: {code:?}")));
+            return Err(bvlc_result_error(&msg));
         }
+        expect_bvlc_function(&msg, BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE_ACK)?;
         BbmdState::decode_bdt(&msg.payload)
     }
 
@@ -205,32 +304,27 @@ impl BipTransport {
             .bvlc_request(
                 target,
                 BvlcFunction::WRITE_BROADCAST_DISTRIBUTION_TABLE,
+                BvlcResponseKind::Result,
                 &payload,
             )
             .await?;
-        if msg.payload.len() >= 2 {
-            Ok(BvlcResultCode::from_raw(u16::from_be_bytes([
-                msg.payload[0],
-                msg.payload[1],
-            ])))
-        } else {
-            Err(Error::Encoding("BVLC-Result too short".to_string()))
-        }
+        decode_bvlc_result_code(&msg)
     }
 
     /// Send Read-Foreign-Device-Table and return the response entries.
     pub async fn read_fdt(&self, target: &[u8]) -> Result<Vec<FdtEntryWire>, Error> {
         let msg = self
-            .bvlc_request(target, BvlcFunction::READ_FOREIGN_DEVICE_TABLE, &[])
+            .bvlc_request(
+                target,
+                BvlcFunction::READ_FOREIGN_DEVICE_TABLE,
+                BvlcResponseKind::ReadForeignDeviceTableAck,
+                &[],
+            )
             .await?;
         if msg.function == BvlcFunction::BVLC_RESULT {
-            let code = if msg.payload.len() >= 2 {
-                BvlcResultCode::from_raw(u16::from_be_bytes([msg.payload[0], msg.payload[1]]))
-            } else {
-                BvlcResultCode::READ_FOREIGN_DEVICE_TABLE_NAK
-            };
-            return Err(Error::Encoding(format!("BVLC-Result: {code:?}")));
+            return Err(bvlc_result_error(&msg));
         }
+        expect_bvlc_function(&msg, BvlcFunction::READ_FOREIGN_DEVICE_TABLE_ACK)?;
         bbmd::decode_fdt(&msg.payload)
     }
 
@@ -248,17 +342,11 @@ impl BipTransport {
             .bvlc_request(
                 target,
                 BvlcFunction::DELETE_FOREIGN_DEVICE_TABLE_ENTRY,
+                BvlcResponseKind::Result,
                 &payload,
             )
             .await?;
-        if msg.payload.len() >= 2 {
-            Ok(BvlcResultCode::from_raw(u16::from_be_bytes([
-                msg.payload[0],
-                msg.payload[1],
-            ])))
-        } else {
-            Err(Error::Encoding("BVLC-Result too short".to_string()))
-        }
+        decode_bvlc_result_code(&msg)
     }
 
     /// Send a Register-Foreign-Device BVLC message to a BBMD and return the result code.
@@ -273,16 +361,14 @@ impl BipTransport {
     ) -> Result<BvlcResultCode, Error> {
         let payload = ttl.to_be_bytes();
         let msg = self
-            .bvlc_request(target, BvlcFunction::REGISTER_FOREIGN_DEVICE, &payload)
+            .bvlc_request(
+                target,
+                BvlcFunction::REGISTER_FOREIGN_DEVICE,
+                BvlcResponseKind::Result,
+                &payload,
+            )
             .await?;
-        if msg.payload.len() >= 2 {
-            Ok(BvlcResultCode::from_raw(u16::from_be_bytes([
-                msg.payload[0],
-                msg.payload[1],
-            ])))
-        } else {
-            Err(Error::Encoding("BVLC-Result too short".to_string()))
-        }
+        decode_bvlc_result_code(&msg)
     }
 }
 
@@ -306,7 +392,27 @@ impl TransportPort for BipTransport {
         socket2.set_broadcast(true).map_err(Error::Transport)?;
         socket2.set_nonblocking(true).map_err(Error::Transport)?;
 
-        let bind_addr = SocketAddrV4::new(self.interface, self.port);
+        // Validate self.interface is a real local IP before binding the real
+        // socket to 0.0.0.0 below. Previously the kernel enforced this when
+        // we bound directly to self.interface (EADDRNOTAVAIL on typos); now
+        // we probe with a throwaway bind on an ephemeral port so a
+        // misconfigured interface fails fast at startup rather than silently
+        // advertising an unowned IP in I-Am replies via local_mac. See
+        // tests::start_fails_on_nonlocal_interface.
+        if !self.interface.is_unspecified() {
+            std::net::UdpSocket::bind(SocketAddrV4::new(self.interface, 0))
+                .map_err(Error::Transport)?;
+        }
+
+        // Always bind to INADDR_ANY so subnet- and limited-broadcast packets
+        // (destination 10.x.y.255 / 255.255.255.255) reach this socket.  A
+        // Linux UDP socket bound to a specific interface IP only receives
+        // packets whose destination IP matches the bound IP, so binding to
+        // self.interface would silently drop every inbound broadcast — see
+        // tests::socket_is_broadcast_capable_and_binds_inaddr_any. `self.interface`
+        // is still used below for the announced local MAC (line 318), so I-Am
+        // responses continue to advertise the correct source IP.
+        let bind_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, self.port);
         socket2.bind(&bind_addr.into()).map_err(Error::Transport)?;
 
         let std_socket: std::net::UdpSocket = socket2.into();
@@ -369,8 +475,10 @@ impl TransportPort for BipTransport {
             bbmd: self.bbmd.clone(),
             broadcast_addr: self.broadcast_address,
             broadcast_port: self.port,
-            bvlc_response: self.bvlc_response_tx.clone(),
+            pending_bvlc_response: self.pending_bvlc_response.clone(),
             bdt_persist_path: self.bdt_persist_path.clone(),
+            #[cfg(test)]
+            force_dbtn_forward_failure: false,
         };
 
         let recv_task = tokio::spawn(async move {
@@ -404,6 +512,10 @@ impl TransportPort for BipTransport {
 
         self.recv_task = Some(recv_task);
 
+        if let Some(bbmd) = self.bbmd.clone() {
+            self.bbmd_fdt_purge_task = Some(Self::spawn_bbmd_fdt_purge_task(bbmd));
+        }
+
         if let Some(fd) = &self.foreign_device {
             let bbmd_addr = SocketAddrV4::new(fd.bbmd_ip, fd.bbmd_port);
             let ttl = fd.ttl;
@@ -429,6 +541,10 @@ impl TransportPort for BipTransport {
 
     async fn stop(&mut self) -> Result<(), Error> {
         if let Some(task) = self.registration_task.take() {
+            task.abort();
+            let _ = task.await;
+        }
+        if let Some(task) = self.bbmd_fdt_purge_task.take() {
             task.abort();
             let _ = task.await;
         }
@@ -487,5 +603,21 @@ impl TransportPort for BipTransport {
     }
 }
 
+#[cfg(test)]
+mod acl_tests;
+#[cfg(test)]
+mod bdt_persistence_tests;
+#[cfg(test)]
+mod dbtn_tests;
+#[cfg(test)]
+mod fdt_tests;
+#[cfg(test)]
+mod forwarded_tests;
+#[cfg(test)]
+mod management_ack_tests;
+#[cfg(test)]
+mod npdu_addressing_tests;
+#[cfg(test)]
+mod original_tests;
 #[cfg(test)]
 mod tests;
