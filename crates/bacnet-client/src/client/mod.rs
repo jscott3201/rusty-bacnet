@@ -31,7 +31,7 @@ use bacnet_types::enums::{ConfirmedServiceChoice, NetworkPriority, UnconfirmedSe
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 
-use crate::discovery::{DeviceTable, DiscoveredDevice};
+use crate::discovery::{DeviceTable, DeviceUpsertResult, DiscoveredDevice};
 use crate::segmentation::{max_segment_payload, split_payload, SegmentReceiver, SegmentedPduType};
 use crate::tsm::{Tsm, TsmConfig, TsmResponse};
 
@@ -40,6 +40,29 @@ pub const DEFAULT_COV_CHANNEL_CAPACITY: usize = 64;
 
 /// Maximum COV notification broadcast channel capacity accepted at startup.
 pub const MAX_COV_CHANNEL_CAPACITY: usize = 65_536;
+
+/// Device discovery event broadcast channel capacity.
+pub const DEVICE_EVENT_CHANNEL_CAPACITY: usize = 64;
+
+/// Type of change observed in the device discovery table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceEventKind {
+    /// A new device instance was inserted into the discovery table.
+    Discovered,
+    /// An existing device instance was refreshed by a later I-Am.
+    Updated,
+    /// A previously discovered device was purged as stale.
+    Lost,
+}
+
+/// Notification emitted when the client observes a device discovery change.
+#[derive(Debug, Clone)]
+pub struct DeviceEvent {
+    /// The kind of discovery-table change.
+    pub kind: DeviceEventKind,
+    /// Snapshot of the device entry after discovery/update or before removal.
+    pub device: DiscoveredDevice,
+}
 
 /// Client configuration.
 #[derive(Debug, Clone)]
@@ -313,6 +336,7 @@ pub struct BACnetClient<T: TransportPort> {
     tsm: Arc<Mutex<Tsm>>,
     device_table: Arc<Mutex<DeviceTable>>,
     cov_tx: broadcast::Sender<COVNotificationRequest>,
+    device_tx: broadcast::Sender<DeviceEvent>,
     dispatch_task: Option<JoinHandle<()>>,
     seg_ack_senders: Arc<Mutex<HashMap<SegKey, mpsc::Sender<SegmentAckPdu>>>>,
     local_mac: MacAddr,
@@ -608,6 +632,7 @@ fn response_tsm_mac(source_mac: &[u8], source_network: &Option<NpduAddress>) -> 
 }
 
 mod cov;
+mod device_events;
 mod device_mgmt;
 mod discovery;
 mod dispatch;
@@ -618,6 +643,8 @@ mod property;
 mod requests;
 mod segmentation;
 
+#[cfg(test)]
+mod device_events_tests;
 #[cfg(test)]
 mod tests;
 

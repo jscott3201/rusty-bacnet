@@ -39,6 +39,13 @@ pub struct DeviceTable {
     devices: HashMap<u32, DiscoveredDevice>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeviceUpsertResult {
+    Inserted,
+    Updated,
+    Dropped,
+}
+
 impl DeviceTable {
     pub fn new() -> Self {
         Self {
@@ -51,12 +58,22 @@ impl DeviceTable {
     /// The table is capped at 4096 entries. If the table is full and the
     /// device is not already present, the new entry is silently dropped.
     pub fn upsert(&mut self, device: DiscoveredDevice) {
+        let _ = self.upsert_with_result(device);
+    }
+
+    pub(crate) fn upsert_with_result(&mut self, device: DiscoveredDevice) -> DeviceUpsertResult {
         const MAX_DEVICE_TABLE_ENTRIES: usize = 4096;
         let key = device.object_identifier.instance_number();
-        if !self.devices.contains_key(&key) && self.devices.len() >= MAX_DEVICE_TABLE_ENTRIES {
-            return;
+        let is_existing = self.devices.contains_key(&key);
+        if !is_existing && self.devices.len() >= MAX_DEVICE_TABLE_ENTRIES {
+            return DeviceUpsertResult::Dropped;
         }
         self.devices.insert(key, device);
+        if is_existing {
+            DeviceUpsertResult::Updated
+        } else {
+            DeviceUpsertResult::Inserted
+        }
     }
 
     /// Get all discovered devices as a snapshot.
@@ -93,14 +110,29 @@ impl DeviceTable {
 
     /// Remove entries whose `last_seen` is older than `max_age`.
     pub fn purge_stale(&mut self, max_age: Duration) {
-        self.purge_stale_at(Instant::now(), max_age);
+        let _ = self.purge_stale_at(Instant::now(), max_age);
     }
 
-    fn purge_stale_at(&mut self, now: Instant, max_age: Duration) {
-        self.devices.retain(|_, d| {
-            now.checked_duration_since(d.last_seen)
-                .is_none_or(|age| age <= max_age)
-        });
+    pub(crate) fn purge_stale_collect(&mut self, max_age: Duration) -> Vec<DiscoveredDevice> {
+        self.purge_stale_at(Instant::now(), max_age)
+    }
+
+    fn purge_stale_at(&mut self, now: Instant, max_age: Duration) -> Vec<DiscoveredDevice> {
+        let stale_keys: Vec<u32> = self
+            .devices
+            .iter()
+            .filter_map(|(key, device)| {
+                let is_stale = now
+                    .checked_duration_since(device.last_seen)
+                    .is_some_and(|age| age > max_age);
+                is_stale.then_some(*key)
+            })
+            .collect();
+
+        stale_keys
+            .into_iter()
+            .filter_map(|key| self.devices.remove(&key))
+            .collect()
     }
 }
 
@@ -141,6 +173,19 @@ mod tests {
         table.upsert(updated);
         assert_eq!(table.len(), 1);
         assert_eq!(table.get(1234).unwrap().vendor_id, 99);
+    }
+
+    #[test]
+    fn upsert_with_result_reports_insert_and_update() {
+        let mut table = DeviceTable::new();
+        assert_eq!(
+            table.upsert_with_result(make_device(1234)),
+            DeviceUpsertResult::Inserted
+        );
+        assert_eq!(
+            table.upsert_with_result(make_device(1234)),
+            DeviceUpsertResult::Updated
+        );
     }
 
     #[test]
@@ -188,8 +233,10 @@ mod tests {
         table.upsert(fresh_device);
         assert_eq!(table.len(), 2);
 
-        table.purge_stale_at(now + Duration::from_secs(120), Duration::from_secs(60));
+        let removed = table.purge_stale_at(now + Duration::from_secs(120), Duration::from_secs(60));
         assert_eq!(table.len(), 1);
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].object_identifier.instance_number(), 1);
         assert!(table.get(1).is_none());
         assert!(table.get(2).is_some());
     }
@@ -213,8 +260,9 @@ mod tests {
         d2.last_seen = now;
         table.upsert(d1);
         table.upsert(d2);
-        table.purge_stale_at(now + Duration::from_secs(200), Duration::from_secs(60));
+        let removed = table.purge_stale_at(now + Duration::from_secs(200), Duration::from_secs(60));
         assert!(table.is_empty());
+        assert_eq!(removed.len(), 2);
     }
 
     #[test]
@@ -228,8 +276,9 @@ mod tests {
         let mut refreshed = make_device(1);
         refreshed.last_seen = now + Duration::from_secs(120);
         table.upsert(refreshed);
-        table.purge_stale_at(now + Duration::from_secs(120), Duration::from_secs(60));
+        let removed = table.purge_stale_at(now + Duration::from_secs(120), Duration::from_secs(60));
         assert_eq!(table.len(), 1);
+        assert!(removed.is_empty());
         assert!(table.get(1).is_some());
     }
 

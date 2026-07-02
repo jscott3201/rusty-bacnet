@@ -8,6 +8,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         device_table: &Arc<Mutex<DeviceTable>>,
         network: &Arc<NetworkLayer<T>>,
         cov_tx: &broadcast::Sender<COVNotificationRequest>,
+        device_tx: &broadcast::Sender<DeviceEvent>,
         seg_state: &mut HashMap<SegKey, SegmentedReceiveState>,
         seg_ack_senders: &Arc<Mutex<HashMap<SegKey, mpsc::Sender<SegmentAckPdu>>>>,
         source_mac: &[u8],
@@ -143,7 +144,16 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 source_network: src_net,
                                 source_address: src_addr,
                             };
-                            device_table.lock().await.upsert(device);
+                            let status =
+                                device_table.lock().await.upsert_with_result(device.clone());
+                            let kind = match status {
+                                DeviceUpsertResult::Inserted => Some(DeviceEventKind::Discovered),
+                                DeviceUpsertResult::Updated => Some(DeviceEventKind::Updated),
+                                DeviceUpsertResult::Dropped => None,
+                            };
+                            if let Some(kind) = kind {
+                                let _ = device_tx.send(DeviceEvent { kind, device });
+                            }
                         }
                         Err(e) => {
                             warn!(error = %e, "Failed to decode IAm");

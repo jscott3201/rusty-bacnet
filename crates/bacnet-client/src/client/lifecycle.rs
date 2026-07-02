@@ -59,6 +59,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let (cov_tx, _) =
             broadcast::channel::<COVNotificationRequest>(options.cov_channel_capacity);
         let cov_tx_dispatch = cov_tx.clone();
+        let (device_tx, _) = broadcast::channel::<DeviceEvent>(DEVICE_EVENT_CHANNEL_CAPACITY);
+        let device_tx_dispatch = device_tx.clone();
         let seg_ack_senders: Arc<Mutex<HashMap<SegKey, mpsc::Sender<SegmentAckPdu>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let seg_ack_senders_dispatch = Arc::clone(&seg_ack_senders);
@@ -71,10 +73,16 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             loop {
                 tokio::select! {
                     _ = device_purge_interval.tick() => {
-                        device_table_dispatch
+                        let lost_devices = device_table_dispatch
                             .lock()
                             .await
-                            .purge_stale(DEVICE_MAX_AGE);
+                            .purge_stale_collect(DEVICE_MAX_AGE);
+                        for device in lost_devices {
+                            let _ = device_tx_dispatch.send(DeviceEvent {
+                                kind: DeviceEventKind::Lost,
+                                device,
+                            });
+                        }
                     }
                     received = apdu_rx.recv() => {
                         let Some(received) = received else {
@@ -115,6 +123,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                     &device_table_dispatch,
                                     &network_dispatch,
                                     &cov_tx_dispatch,
+                                    &device_tx_dispatch,
                                     &mut seg_state,
                                     &seg_ack_senders_dispatch,
                                     &received.source_mac,
@@ -139,6 +148,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             tsm,
             device_table,
             cov_tx,
+            device_tx,
             dispatch_task: Some(dispatch_task),
             seg_ack_senders,
             local_mac,
