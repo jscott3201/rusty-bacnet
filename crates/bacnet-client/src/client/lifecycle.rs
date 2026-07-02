@@ -19,7 +19,16 @@ impl<T: TransportPort> BACnetClient<T> {
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Start the client: bind transport, start network layer, spawn dispatch.
-    pub async fn start(mut config: ClientConfig, transport: T) -> Result<Self, Error> {
+    pub async fn start(config: ClientConfig, transport: T) -> Result<Self, Error> {
+        Self::start_with_options(config, transport, ClientOptions::default()).await
+    }
+
+    /// Start the client with additional startup options.
+    pub async fn start_with_options(
+        mut config: ClientConfig,
+        transport: T,
+        options: ClientOptions,
+    ) -> Result<Self, Error> {
         let transport_max = transport.max_apdu_length();
         config.max_apdu_length = config.max_apdu_length.min(transport_max);
         validate_max_apdu_length(config.max_apdu_length)?;
@@ -29,6 +38,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 config.proposed_window_size
             )));
         }
+        options.validate()?;
 
         let mut network = NetworkLayer::new(transport);
         let mut apdu_rx = network.start().await?;
@@ -46,7 +56,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let device_table = Arc::new(Mutex::new(DeviceTable::new()));
         let device_table_dispatch = Arc::clone(&device_table);
         let network_dispatch = Arc::clone(&network);
-        let (cov_tx, _) = broadcast::channel::<COVNotificationRequest>(64);
+        let (cov_tx, _) =
+            broadcast::channel::<COVNotificationRequest>(options.cov_channel_capacity);
         let cov_tx_dispatch = cov_tx.clone();
         let seg_ack_senders: Arc<Mutex<HashMap<SegKey, mpsc::Sender<SegmentAckPdu>>>> =
             Arc::new(Mutex::new(HashMap::new()));

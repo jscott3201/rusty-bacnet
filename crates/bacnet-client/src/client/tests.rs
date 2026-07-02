@@ -7,6 +7,7 @@ use bacnet_types::enums::{ObjectType, Segmentation};
 use bacnet_types::primitives::ObjectIdentifier;
 use std::net::Ipv4Addr;
 use std::time::Instant;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::time::Duration;
 
 async fn make_client() -> BACnetClient<BipTransport> {
@@ -165,6 +166,45 @@ async fn client_rejects_invalid_max_apdu_length() {
         .await;
 
     assert!(result.is_err());
+}
+
+fn cov_notification(process_id: u32) -> COVNotificationRequest {
+    COVNotificationRequest {
+        subscriber_process_identifier: process_id,
+        initiating_device_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 100).unwrap(),
+        monitored_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
+        time_remaining: 60,
+        list_of_values: Vec::new(),
+    }
+}
+
+#[tokio::test]
+async fn cov_notification_channel_uses_configured_capacity() {
+    assert_eq!(ClientOptions::default().cov_channel_capacity, 64);
+    let max_options = ClientOptions::default().with_cov_channel_capacity(MAX_COV_CHANNEL_CAPACITY);
+    assert!(max_options.validate().is_ok());
+    for capacity in [0, MAX_COV_CHANNEL_CAPACITY + 1] {
+        let (bad_transport, _) = LoopbackTransport::pair(vec![0x10], vec![0x11]);
+        assert!(BACnetClient::generic_builder()
+            .transport(bad_transport)
+            .cov_channel_capacity(capacity)
+            .build()
+            .await
+            .is_err());
+    }
+    let (transport, _) = LoopbackTransport::pair(vec![0x20], vec![0x21]);
+    let mut client = BACnetClient::generic_builder()
+        .transport(transport)
+        .cov_channel_capacity(1)
+        .build()
+        .await
+        .unwrap();
+    let mut rx = client.cov_notifications();
+    client.cov_tx.send(cov_notification(1)).unwrap();
+    client.cov_tx.send(cov_notification(2)).unwrap();
+    assert!(matches!(rx.recv().await, Err(RecvError::Lagged(1))));
+    assert_eq!(rx.recv().await.unwrap().subscriber_process_identifier, 2);
+    client.stop().await.unwrap();
 }
 
 #[tokio::test]

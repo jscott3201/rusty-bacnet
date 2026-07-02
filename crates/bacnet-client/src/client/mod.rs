@@ -35,6 +35,12 @@ use crate::discovery::{DeviceTable, DiscoveredDevice};
 use crate::segmentation::{max_segment_payload, split_payload, SegmentReceiver, SegmentedPduType};
 use crate::tsm::{Tsm, TsmConfig, TsmResponse};
 
+/// Default COV notification broadcast channel capacity.
+pub const DEFAULT_COV_CHANNEL_CAPACITY: usize = 64;
+
+/// Maximum COV notification broadcast channel capacity accepted at startup.
+pub const MAX_COV_CHANNEL_CAPACITY: usize = 65_536;
+
 /// Client configuration.
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
@@ -58,6 +64,17 @@ pub struct ClientConfig {
     pub proposed_window_size: u8,
 }
 
+/// Additional client startup options.
+#[derive(Debug, Clone)]
+pub struct ClientOptions {
+    /// Capacity of the COV notification broadcast channel.
+    ///
+    /// Slow receivers lag once more than this many notifications arrive before
+    /// they call `recv()`. The default preserves the historical fixed capacity
+    /// of 64.
+    pub cov_channel_capacity: usize,
+}
+
 impl Default for ClientConfig {
     fn default() -> Self {
         Self {
@@ -74,9 +91,36 @@ impl Default for ClientConfig {
     }
 }
 
+impl Default for ClientOptions {
+    fn default() -> Self {
+        Self {
+            cov_channel_capacity: DEFAULT_COV_CHANNEL_CAPACITY,
+        }
+    }
+}
+
+impl ClientOptions {
+    /// Set the COV notification broadcast channel capacity.
+    pub fn with_cov_channel_capacity(mut self, capacity: usize) -> Self {
+        self.cov_channel_capacity = capacity;
+        self
+    }
+
+    fn validate(&self) -> Result<(), Error> {
+        if !(1..=MAX_COV_CHANNEL_CAPACITY).contains(&self.cov_channel_capacity) {
+            return Err(Error::Encoding(format!(
+                "invalid cov-channel-capacity {}; expected 1..={}",
+                self.cov_channel_capacity, MAX_COV_CHANNEL_CAPACITY
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// Generic builder for BACnetClient with a pre-built transport.
 pub struct ClientBuilder<T: TransportPort> {
     config: ClientConfig,
+    options: ClientOptions,
     transport: Option<T>,
 }
 
@@ -99,18 +143,25 @@ impl<T: TransportPort + 'static> ClientBuilder<T> {
         self
     }
 
+    /// Set the COV notification broadcast channel capacity.
+    pub fn cov_channel_capacity(mut self, capacity: usize) -> Self {
+        self.options.cov_channel_capacity = capacity;
+        self
+    }
+
     /// Build and start the client.
     pub async fn build(self) -> Result<BACnetClient<T>, Error> {
         let transport = self
             .transport
             .ok_or_else(|| Error::Encoding("transport not set on ClientBuilder".into()))?;
-        BACnetClient::start(self.config, transport).await
+        BACnetClient::start_with_options(self.config, transport, self.options).await
     }
 }
 
 /// BIP-specific builder that constructs `BipTransport` from interface/port/broadcast fields.
 pub struct BipClientBuilder {
     config: ClientConfig,
+    options: ClientOptions,
 }
 
 impl BipClientBuilder {
@@ -144,6 +195,12 @@ impl BipClientBuilder {
         self
     }
 
+    /// Set the COV notification broadcast channel capacity.
+    pub fn cov_channel_capacity(mut self, capacity: usize) -> Self {
+        self.options.cov_channel_capacity = capacity;
+        self
+    }
+
     /// Build and start the client, constructing a BipTransport from the config.
     pub async fn build(self) -> Result<BACnetClient<BipTransport>, Error> {
         let transport = BipTransport::new(
@@ -151,7 +208,7 @@ impl BipClientBuilder {
             self.config.port,
             self.config.broadcast_address,
         );
-        BACnetClient::start(self.config, transport).await
+        BACnetClient::start_with_options(self.config, transport, self.options).await
     }
 }
 
@@ -266,6 +323,7 @@ impl BACnetClient<BipTransport> {
     pub fn bip_builder() -> BipClientBuilder {
         BipClientBuilder {
             config: ClientConfig::default(),
+            options: ClientOptions::default(),
         }
     }
 
@@ -330,6 +388,7 @@ impl BACnetClient<Bip6Transport> {
     pub fn bip6_builder() -> Bip6ClientBuilder {
         Bip6ClientBuilder {
             config: ClientConfig::default(),
+            options: ClientOptions::default(),
             interface: Ipv6Addr::UNSPECIFIED,
             device_instance: None,
         }
@@ -340,6 +399,7 @@ impl BACnetClient<Bip6Transport> {
 #[cfg(feature = "ipv6")]
 pub struct Bip6ClientBuilder {
     config: ClientConfig,
+    options: ClientOptions,
     interface: Ipv6Addr,
     device_instance: Option<u32>,
 }
@@ -376,10 +436,16 @@ impl Bip6ClientBuilder {
         self
     }
 
+    /// Set the COV notification broadcast channel capacity.
+    pub fn cov_channel_capacity(mut self, capacity: usize) -> Self {
+        self.options.cov_channel_capacity = capacity;
+        self
+    }
+
     /// Build and start the client, constructing a Bip6Transport from the config.
     pub async fn build(self) -> Result<BACnetClient<Bip6Transport>, Error> {
         let transport = Bip6Transport::new(self.interface, self.config.port, self.device_instance);
-        BACnetClient::start(self.config, transport).await
+        BACnetClient::start_with_options(self.config, transport, self.options).await
     }
 }
 
@@ -389,6 +455,7 @@ impl BACnetClient<bacnet_transport::sc::ScTransport<bacnet_transport::sc_tls::Tl
     pub fn sc_builder() -> ScClientBuilder {
         ScClientBuilder {
             config: ClientConfig::default(),
+            options: ClientOptions::default(),
             hub_url: String::new(),
             tls_config: None,
             vmac: [0; 6],
@@ -405,6 +472,7 @@ impl BACnetClient<bacnet_transport::sc::ScTransport<bacnet_transport::sc_tls::Tl
 #[cfg(feature = "sc-tls")]
 pub struct ScClientBuilder {
     config: ClientConfig,
+    options: ClientOptions,
     hub_url: String,
     tls_config: Option<std::sync::Arc<tokio_rustls::rustls::ClientConfig>>,
     vmac: bacnet_transport::sc_frame::Vmac,
@@ -442,6 +510,12 @@ impl ScClientBuilder {
         self
     }
 
+    /// Set the COV notification broadcast channel capacity.
+    pub fn cov_channel_capacity(mut self, capacity: usize) -> Self {
+        self.options.cov_channel_capacity = capacity;
+        self
+    }
+
     /// Set the heartbeat interval in milliseconds (default 30 000).
     pub fn heartbeat_interval_ms(mut self, ms: u64) -> Self {
         self.heartbeat_interval_ms = ms;
@@ -470,6 +544,7 @@ impl ScClientBuilder {
         let tls_config = self
             .tls_config
             .ok_or_else(|| Error::Encoding("SC client builder: tls_config is required".into()))?;
+        self.options.validate()?;
 
         let ws = bacnet_transport::sc_tls::TlsWebSocket::connect(&self.hub_url, tls_config).await?;
 
@@ -483,7 +558,7 @@ impl ScClientBuilder {
             }
         }
 
-        BACnetClient::start(self.config, transport).await
+        BACnetClient::start_with_options(self.config, transport, self.options).await
     }
 }
 
@@ -551,6 +626,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     pub fn generic_builder() -> ClientBuilder<T> {
         ClientBuilder {
             config: ClientConfig::default(),
+            options: ClientOptions::default(),
             transport: None,
         }
     }
