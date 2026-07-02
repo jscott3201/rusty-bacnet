@@ -42,7 +42,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, Time};
 use bacnet_types::MacAddr;
 
-use crate::cov::CovSubscriptionTable;
+use crate::cov::{CovSubscription, CovSubscriptionTable};
 use crate::handlers;
 
 /// Maximum number of concurrent segmented reassembly sessions.

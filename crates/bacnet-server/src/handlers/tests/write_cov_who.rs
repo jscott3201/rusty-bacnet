@@ -53,8 +53,97 @@ fn subscribe_cov_handler_success() {
     let mut buf = BytesMut::new();
     request.encode(&mut buf);
 
-    handle_subscribe_cov(&mut table, &db, &mac, &buf).unwrap();
+    let subscriptions = handle_subscribe_cov_with_initial(&mut table, &db, &mac, &buf).unwrap();
+    assert_eq!(subscriptions.len(), 1);
+    assert_eq!(subscriptions[0].monitored_object_identifier, oid);
+    assert_eq!(subscriptions[0].monitored_property, None);
     assert_eq!(table.len(), 1);
+}
+
+#[test]
+fn subscribe_cov_property_handler_returns_initial_subscription() {
+    let db = make_db_with_ai();
+    let mut table = CovSubscriptionTable::new();
+    let mac = vec![192, 168, 1, 1, 0xBA, 0xC0];
+    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+
+    let request = bacnet_services::cov::SubscribeCOVPropertyRequest {
+        subscriber_process_identifier: 1,
+        monitored_object_identifier: oid,
+        issue_confirmed_notifications: Some(false),
+        lifetime: Some(300),
+        monitored_property_identifier: PropertyIdentifier::PRESENT_VALUE,
+        monitored_property_array_index: None,
+        cov_increment: Some(0.5),
+    };
+    let mut buf = BytesMut::new();
+    request.encode(&mut buf);
+
+    let subscriptions =
+        handle_subscribe_cov_property_with_initial(&mut table, &db, &mac, &buf).unwrap();
+    assert_eq!(subscriptions.len(), 1);
+    assert_eq!(subscriptions[0].monitored_object_identifier, oid);
+    assert_eq!(
+        subscriptions[0].monitored_property,
+        Some(PropertyIdentifier::PRESENT_VALUE)
+    );
+    assert_eq!(table.len(), 1);
+}
+
+#[test]
+fn subscribe_cov_property_multiple_handler_returns_initial_subscriptions() {
+    use bacnet_services::common::PropertyReference;
+    use bacnet_services::cov_multiple::{
+        COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
+    };
+
+    let db = make_db_with_ai();
+    let mut table = CovSubscriptionTable::new();
+    let mac = vec![192, 168, 1, 1, 0xBA, 0xC0];
+    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+
+    let request = SubscribeCOVPropertyMultipleRequest {
+        subscriber_process_identifier: 1,
+        max_notification_delay: None,
+        issue_confirmed_notifications: Some(false),
+        list_of_cov_subscription_specifications: vec![COVSubscriptionSpecification {
+            monitored_object_identifier: oid,
+            list_of_cov_references: vec![
+                COVReference {
+                    monitored_property: PropertyReference {
+                        property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                        property_array_index: None,
+                    },
+                    cov_increment: Some(0.5),
+                    timestamped: false,
+                },
+                COVReference {
+                    monitored_property: PropertyReference {
+                        property_identifier: PropertyIdentifier::STATUS_FLAGS,
+                        property_array_index: None,
+                    },
+                    cov_increment: None,
+                    timestamped: false,
+                },
+            ],
+        }],
+    };
+    let mut buf = BytesMut::new();
+    request.encode(&mut buf);
+
+    let subscriptions =
+        handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf).unwrap();
+    assert_eq!(subscriptions.len(), 2);
+    assert_eq!(subscriptions[0].monitored_object_identifier, oid);
+    assert_eq!(
+        subscriptions[0].monitored_property,
+        Some(PropertyIdentifier::PRESENT_VALUE)
+    );
+    assert_eq!(
+        subscriptions[1].monitored_property,
+        Some(PropertyIdentifier::STATUS_FLAGS)
+    );
+    assert_eq!(table.len(), 2);
 }
 
 #[test]
@@ -105,7 +194,8 @@ fn subscribe_cov_cancellation() {
     };
     let mut buf = BytesMut::new();
     cancel.encode(&mut buf);
-    handle_subscribe_cov(&mut table, &db, &mac, &buf).unwrap();
+    let subscriptions = handle_subscribe_cov_with_initial(&mut table, &db, &mac, &buf).unwrap();
+    assert!(subscriptions.is_empty());
     assert!(table.is_empty());
 }
 

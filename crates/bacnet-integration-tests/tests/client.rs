@@ -60,6 +60,19 @@ async fn cov_subscribe_and_notification() {
         .await
         .unwrap();
 
+    let initial_notification = timeout(Duration::from_secs(2), cov_rx.recv())
+        .await
+        .expect("Timed out waiting for initial COV notification")
+        .expect("COV channel closed");
+    assert_eq!(
+        initial_notification.monitored_object_identifier,
+        ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap()
+    );
+    assert!(initial_notification
+        .list_of_values
+        .iter()
+        .any(|pv| pv.property_identifier == PropertyIdentifier::PRESENT_VALUE));
+
     // Write a new value to AO:1 — this should trigger a COV notification
     let mut value_buf = BytesMut::new();
     encode_app_real(&mut value_buf, 99.0);

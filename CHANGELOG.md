@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Abort `BACnetClient` dispatch on drop and cascade B/IP network cleanup so ungraceful teardown releases reader tasks and the UDP socket.
 - Run `BACnetClient` device-table stale-entry purging on an independent interval so fully silent datalinks can evict dead devices.
 - Avoid `Instant` underflow in `BACnetClient` device-table purging on fresh Windows runners.
+- Send the required initial COV notification after successful server-side COV subscription acceptance.
 
 ## [0.10.0]
 

@@ -10,6 +10,15 @@ pub fn handle_subscribe_cov(
     source_mac: &[u8],
     service_data: &[u8],
 ) -> Result<(), Error> {
+    handle_subscribe_cov_with_initial(table, db, source_mac, service_data).map(|_| ())
+}
+
+pub(crate) fn handle_subscribe_cov_with_initial(
+    table: &mut CovSubscriptionTable,
+    db: &ObjectDatabase,
+    source_mac: &[u8],
+    service_data: &[u8],
+) -> Result<Vec<CovSubscription>, Error> {
     let request = SubscribeCOVRequest::decode(service_data)?;
 
     if request.is_cancellation() {
@@ -18,7 +27,7 @@ pub fn handle_subscribe_cov(
             request.subscriber_process_identifier,
             request.monitored_object_identifier,
         );
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     match db.get(&request.monitored_object_identifier) {
@@ -53,7 +62,7 @@ pub fn handle_subscribe_cov(
         }
     });
 
-    table.subscribe(CovSubscription {
+    let subscription = CovSubscription {
         subscriber_mac: MacAddr::from_slice(source_mac),
         subscriber_process_identifier: request.subscriber_process_identifier,
         monitored_object_identifier: request.monitored_object_identifier,
@@ -63,9 +72,10 @@ pub fn handle_subscribe_cov(
         monitored_property: None,
         monitored_property_array_index: None,
         cov_increment: None,
-    });
+    };
+    table.subscribe(subscription.clone());
 
-    Ok(())
+    Ok(vec![subscription])
 }
 
 /// Handle a SubscribeCOVProperty request.
@@ -77,6 +87,15 @@ pub fn handle_subscribe_cov_property(
     source_mac: &[u8],
     service_data: &[u8],
 ) -> Result<(), Error> {
+    handle_subscribe_cov_property_with_initial(table, db, source_mac, service_data).map(|_| ())
+}
+
+pub(crate) fn handle_subscribe_cov_property_with_initial(
+    table: &mut CovSubscriptionTable,
+    db: &ObjectDatabase,
+    source_mac: &[u8],
+    service_data: &[u8],
+) -> Result<Vec<CovSubscription>, Error> {
     use bacnet_services::cov::SubscribeCOVPropertyRequest;
 
     let request = SubscribeCOVPropertyRequest::decode(service_data)?;
@@ -88,7 +107,7 @@ pub fn handle_subscribe_cov_property(
             request.monitored_object_identifier,
             request.monitored_property_identifier,
         );
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let object = db
@@ -124,7 +143,7 @@ pub fn handle_subscribe_cov_property(
         }
     });
 
-    table.subscribe(CovSubscription {
+    let subscription = CovSubscription {
         subscriber_mac: MacAddr::from_slice(source_mac),
         subscriber_process_identifier: request.subscriber_process_identifier,
         monitored_object_identifier: request.monitored_object_identifier,
@@ -134,9 +153,10 @@ pub fn handle_subscribe_cov_property(
         monitored_property: Some(request.monitored_property_identifier),
         monitored_property_array_index: request.monitored_property_array_index,
         cov_increment: request.cov_increment,
-    });
+    };
+    table.subscribe(subscription.clone());
 
-    Ok(())
+    Ok(vec![subscription])
 }
 /// Handle a SubscribeCOVPropertyMultiple request.
 ///
@@ -148,11 +168,22 @@ pub fn handle_subscribe_cov_property_multiple(
     source_mac: &[u8],
     service_data: &[u8],
 ) -> Result<(), Error> {
+    handle_subscribe_cov_property_multiple_with_initial(table, db, source_mac, service_data)
+        .map(|_| ())
+}
+
+pub(crate) fn handle_subscribe_cov_property_multiple_with_initial(
+    table: &mut CovSubscriptionTable,
+    db: &ObjectDatabase,
+    source_mac: &[u8],
+    service_data: &[u8],
+) -> Result<Vec<CovSubscription>, Error> {
     use bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleRequest;
 
     let request = SubscribeCOVPropertyMultipleRequest::decode(service_data)?;
 
     let confirmed = request.issue_confirmed_notifications.unwrap_or(false);
+    let mut subscriptions = Vec::new();
 
     for spec in &request.list_of_cov_subscription_specifications {
         match db.get(&spec.monitored_object_identifier) {
@@ -172,7 +203,7 @@ pub fn handle_subscribe_cov_property_multiple(
         }
 
         for cov_ref in &spec.list_of_cov_references {
-            table.subscribe(CovSubscription {
+            let subscription = CovSubscription {
                 subscriber_mac: MacAddr::from_slice(source_mac),
                 subscriber_process_identifier: request.subscriber_process_identifier,
                 monitored_object_identifier: spec.monitored_object_identifier,
@@ -182,9 +213,11 @@ pub fn handle_subscribe_cov_property_multiple(
                 monitored_property: Some(cov_ref.monitored_property.property_identifier),
                 monitored_property_array_index: cov_ref.monitored_property.property_array_index,
                 cov_increment: cov_ref.cov_increment,
-            });
+            };
+            table.subscribe(subscription.clone());
+            subscriptions.push(subscription);
         }
     }
 
-    Ok(())
+    Ok(subscriptions)
 }

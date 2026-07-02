@@ -108,6 +108,12 @@ async fn dcc_disable_initiation_allows_rp_blocks_cov() {
         .await
         .unwrap();
 
+    let initial_notification = tokio::time::timeout(Duration::from_secs(2), cov_rx.recv())
+        .await
+        .expect("Timed out waiting for initial COV notification")
+        .expect("COV channel closed");
+    assert_eq!(initial_notification.monitored_object_identifier, ao_oid);
+
     // Write to trigger a COV notification (should fire normally)
     let mut value_buf = bytes::BytesMut::new();
     bacnet_encoding::primitives::encode_app_real(&mut value_buf, 50.0);
@@ -209,6 +215,12 @@ async fn dcc_enable_restores_normal_operation() {
         .subscribe_cov(&server_mac, 42, ao_oid, false, Some(300))
         .await
         .unwrap();
+
+    let initial_notification = tokio::time::timeout(Duration::from_secs(2), cov_rx.recv())
+        .await
+        .expect("Timed out waiting for initial COV notification")
+        .expect("COV channel closed");
+    assert_eq!(initial_notification.monitored_object_identifier, ao_oid);
 
     // Disable initiation
     client

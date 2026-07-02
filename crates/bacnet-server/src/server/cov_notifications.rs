@@ -17,7 +17,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         if comm_state.load(Ordering::Acquire) >= 1 {
             return;
         }
-        let subs: Vec<crate::cov::CovSubscription> = {
+        let subs: Vec<CovSubscription> = {
             let mut table = cov_table.write().await;
             table.subscriptions_for(oid).into_iter().cloned().collect()
         };
@@ -26,6 +26,60 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return;
         }
 
+        Self::fire_cov_notifications_for_subscriptions(
+            db,
+            network,
+            cov_table,
+            cov_in_flight,
+            server_tsm,
+            config,
+            oid,
+            &subs,
+        )
+        .await;
+    }
+
+    /// Fire the initial COV notification for a newly accepted subscription.
+    /// Skipped when DCC is active (comm_state >= 1).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn fire_initial_cov_notification(
+        db: &Arc<RwLock<ObjectDatabase>>,
+        network: &Arc<NetworkLayer<T>>,
+        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
+        cov_in_flight: &Arc<Semaphore>,
+        server_tsm: &Arc<Mutex<ServerTsm>>,
+        comm_state: &Arc<AtomicU8>,
+        config: &ServerConfig,
+        subscription: &CovSubscription,
+    ) {
+        if comm_state.load(Ordering::Acquire) >= 1 {
+            return;
+        }
+
+        Self::fire_cov_notifications_for_subscriptions(
+            db,
+            network,
+            cov_table,
+            cov_in_flight,
+            server_tsm,
+            config,
+            &subscription.monitored_object_identifier,
+            std::slice::from_ref(subscription),
+        )
+        .await;
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn fire_cov_notifications_for_subscriptions(
+        db: &Arc<RwLock<ObjectDatabase>>,
+        network: &Arc<NetworkLayer<T>>,
+        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
+        cov_in_flight: &Arc<Semaphore>,
+        server_tsm: &Arc<Mutex<ServerTsm>>,
+        config: &ServerConfig,
+        oid: &ObjectIdentifier,
+        subs: &[CovSubscription],
+    ) {
         let (device_oid, values, current_pv, cov_increment) = {
             let db = db.read().await;
             let object = match db.get(oid) {
@@ -76,7 +130,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return;
         }
 
-        for sub in &subs {
+        for sub in subs {
             if !CovSubscriptionTable::should_notify(sub, current_pv, cov_increment) {
                 continue;
             }

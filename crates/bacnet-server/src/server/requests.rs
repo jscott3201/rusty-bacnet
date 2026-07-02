@@ -23,6 +23,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let client_accepts_segmented = req.segmented_response_accepted;
         let client_max_segments = req.max_segments;
         let mut written_oids: Vec<ObjectIdentifier> = Vec::new();
+        let mut initial_cov_subscriptions: Vec<CovSubscription> = Vec::new();
 
         let state = comm_state.load(Ordering::Acquire);
         if state == 1
@@ -103,26 +104,32 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             s if s == ConfirmedServiceChoice::SUBSCRIBE_COV => {
                 let db = db.read().await;
                 let mut table = cov_table.write().await;
-                match handlers::handle_subscribe_cov(
+                match handlers::handle_subscribe_cov_with_initial(
                     &mut table,
                     &db,
                     source_mac,
                     &req.service_request,
                 ) {
-                    Ok(()) => simple_ack(),
+                    Ok(subscriptions) => {
+                        initial_cov_subscriptions = subscriptions;
+                        simple_ack()
+                    }
                     Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
                 }
             }
             s if s == ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY => {
                 let db = db.read().await;
                 let mut table = cov_table.write().await;
-                match handlers::handle_subscribe_cov_property(
+                match handlers::handle_subscribe_cov_property_with_initial(
                     &mut table,
                     &db,
                     source_mac,
                     &req.service_request,
                 ) {
-                    Ok(()) => simple_ack(),
+                    Ok(subscriptions) => {
+                        initial_cov_subscriptions = subscriptions;
+                        simple_ack()
+                    }
                     Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
                 }
             }
@@ -284,13 +291,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             s if s == ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE => {
                 let db = db.read().await;
                 let mut table = cov_table.write().await;
-                match handlers::handle_subscribe_cov_property_multiple(
+                match handlers::handle_subscribe_cov_property_multiple_with_initial(
                     &mut table,
                     &db,
                     source_mac,
                     &req.service_request,
                 ) {
-                    Ok(()) => simple_ack(),
+                    Ok(subscriptions) => {
+                        initial_cov_subscriptions = subscriptions;
+                        simple_ack()
+                    }
                     Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
                 }
             }
@@ -369,6 +379,19 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     )
                     .await;
                 }
+                for subscription in &initial_cov_subscriptions {
+                    Self::fire_initial_cov_notification(
+                        db,
+                        network,
+                        cov_table,
+                        cov_in_flight,
+                        server_tsm,
+                        comm_state,
+                        config,
+                        subscription,
+                    )
+                    .await;
+                }
                 return;
             }
         }
@@ -432,6 +455,20 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 comm_state,
                 config,
                 oid,
+            )
+            .await;
+        }
+
+        for subscription in &initial_cov_subscriptions {
+            Self::fire_initial_cov_notification(
+                db,
+                network,
+                cov_table,
+                cov_in_flight,
+                server_tsm,
+                comm_state,
+                config,
+                subscription,
             )
             .await;
         }
