@@ -69,6 +69,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let dispatch_task = tokio::spawn(async move {
             let mut seg_state: HashMap<SegKey, SegmentedReceiveState> = HashMap::new();
             let mut device_purge_interval = tokio::time::interval(DEVICE_PURGE_INTERVAL);
+            // Tokio intervals tick immediately; consume that tick so discovery purges
+            // run on the configured cadence instead of racing the first APDU.
+            device_purge_interval.tick().await;
 
             loop {
                 tokio::select! {
