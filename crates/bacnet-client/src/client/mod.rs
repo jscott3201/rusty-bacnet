@@ -647,6 +647,8 @@ mod segmentation;
 #[cfg(test)]
 mod builder_options_tests;
 #[cfg(test)]
+mod cov_tests;
+#[cfg(test)]
 mod device_events_tests;
 #[cfg(test)]
 mod tests;
