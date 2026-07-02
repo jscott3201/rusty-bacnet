@@ -144,7 +144,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 );
             }
             Apdu::SegmentAck(sa) => {
-                let key = (MacAddr::from_slice(source_mac), sa.invoke_id);
+                let key = (
+                    MacAddr::from_slice(source_mac),
+                    received.source_network.clone(),
+                    sa.invoke_id,
+                );
                 let senders = seg_ack_senders.lock().await;
                 if let Some(tx) = senders.get(&key) {
                     let _ = tx.try_send(sa);

@@ -177,6 +177,89 @@ fn seg_receiver_timeout_is_4s() {
 }
 
 #[test]
+fn seg_key_distinguishes_routed_sources_behind_same_router() {
+    let router = test_mac(1);
+    let remote_a = NpduAddress {
+        network: 100,
+        mac_address: MacAddr::from_slice(&[0x0A]),
+    };
+    let remote_b = NpduAddress {
+        network: 100,
+        mac_address: MacAddr::from_slice(&[0x0B]),
+    };
+
+    let key_a: SegKey = (router.clone(), Some(remote_a), 7);
+    let key_b: SegKey = (router, Some(remote_b), 7);
+
+    assert_ne!(key_a, key_b);
+}
+
+#[tokio::test]
+async fn reply_tx_response_preserves_routed_npdu_destination() {
+    use bacnet_encoding::apdu::decode_apdu;
+    use bacnet_encoding::npdu::decode_npdu;
+
+    let network = Arc::new(NetworkLayer::new(BipTransport::new(
+        Ipv4Addr::LOCALHOST,
+        0,
+        Ipv4Addr::BROADCAST,
+    )));
+    let db = Arc::new(RwLock::new(ObjectDatabase::new()));
+    let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
+    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let cov_in_flight = Arc::new(Semaphore::new(1));
+    let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+    let comm_state = Arc::new(AtomicU8::new(0));
+    let dcc_timer = Arc::new(Mutex::new(None::<JoinHandle<()>>));
+    let config = ServerConfig::default();
+    let source_mac = test_mac(1);
+    let routed_source = NpduAddress {
+        network: 100,
+        mac_address: MacAddr::from_slice(&[0x0A, 0x0B]),
+    };
+    let req = ConfirmedRequestPdu {
+        segmented: false,
+        more_follows: false,
+        segmented_response_accepted: false,
+        max_segments: None,
+        max_apdu_length: 480,
+        invoke_id: 0x31,
+        sequence_number: None,
+        proposed_window_size: None,
+        service_choice: ConfirmedServiceChoice::AUDIT_LOG_QUERY,
+        service_request: Bytes::new(),
+    };
+    let (tx, rx) = oneshot::channel();
+
+    BACnetServer::<BipTransport>::handle_confirmed_request(
+        &db,
+        &network,
+        &cov_table,
+        &seg_ack_senders,
+        &cov_in_flight,
+        &server_tsm,
+        &comm_state,
+        &dcc_timer,
+        &config,
+        &source_mac,
+        Some(routed_source.clone()),
+        req,
+        Some(tx),
+    )
+    .await;
+
+    let npdu = decode_npdu(rx.await.expect("reply_tx should receive response")).unwrap();
+    assert_eq!(npdu.destination, Some(routed_source));
+    match decode_apdu(npdu.payload).unwrap() {
+        Apdu::Reject(reject) => {
+            assert_eq!(reject.invoke_id, 0x31);
+            assert_eq!(reject.reject_reason, RejectReason::UNRECOGNIZED_SERVICE);
+        }
+        other => panic!("expected Reject, got {other:?}"),
+    }
+}
+
+#[test]
 fn max_neg_segment_ack_retries_constant() {
     assert_eq!(MAX_NEG_SEGMENT_ACK_RETRIES, 3);
 }

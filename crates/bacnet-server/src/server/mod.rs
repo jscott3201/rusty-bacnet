@@ -348,8 +348,9 @@ impl BipServerBuilder {
     }
 }
 
-/// Key for tracking in-progress segmented sends: (source_mac, invoke_id).
-type SegKey = (MacAddr, u8);
+/// Key for tracking in-progress segmented sends:
+/// (source MAC/router MAC, optional routed source, invoke_id).
+type SegKey = (MacAddr, Option<NpduAddress>, u8);
 
 struct SegmentedRequestState {
     receiver: SegmentReceiver,

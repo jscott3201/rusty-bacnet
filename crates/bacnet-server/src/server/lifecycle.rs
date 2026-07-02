@@ -58,11 +58,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 match apdu::decode_apdu(received.apdu.clone()) {
                     Ok(decoded) => {
                         let source_mac = received.source_mac.clone();
+                        let source_network = received.source_network.clone();
                         let mut received = Some(received);
                         let handled = if let Apdu::ConfirmedRequest(ref req) = decoded {
                             if req.segmented {
                                 let seq = req.sequence_number.unwrap_or(0);
-                                let key: SegKey = (source_mac.clone(), req.invoke_id);
+                                let key: SegKey =
+                                    (source_mac.clone(), source_network.clone(), req.invoke_id);
 
                                 let mut ack_to_send: Option<SegmentAckPdu> = None;
                                 let mut final_total: Option<usize> = None;
@@ -84,14 +86,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                         let mut abort_buf = BytesMut::new();
                                         encode_apdu(&mut abort_buf, &abort_pdu)
                                             .expect("valid APDU encoding");
-                                        let _ = network_dispatch
-                                            .send_apdu(
-                                                &abort_buf,
-                                                &source_mac,
-                                                false,
-                                                NetworkPriority::NORMAL,
-                                            )
-                                            .await;
+                                        let _ = Self::send_confirmed_response_apdu(
+                                            &network_dispatch,
+                                            &abort_buf,
+                                            &source_mac,
+                                            source_network.as_ref(),
+                                        )
+                                        .await;
                                         continue;
                                     }
 
@@ -106,14 +107,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                         let mut abort_buf = BytesMut::new();
                                         encode_apdu(&mut abort_buf, &abort_pdu)
                                             .expect("valid APDU encoding");
-                                        let _ = network_dispatch
-                                            .send_apdu(
-                                                &abort_buf,
-                                                &source_mac,
-                                                false,
-                                                NetworkPriority::NORMAL,
-                                            )
-                                            .await;
+                                        let _ = Self::send_confirmed_response_apdu(
+                                            &network_dispatch,
+                                            &abort_buf,
+                                            &source_mac,
+                                            source_network.as_ref(),
+                                        )
+                                        .await;
                                         continue;
                                     }
 
@@ -206,14 +206,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     let mut abort_buf = BytesMut::new();
                                     encode_apdu(&mut abort_buf, &abort_pdu)
                                         .expect("valid APDU encoding");
-                                    let _ = network_dispatch
-                                        .send_apdu(
-                                            &abort_buf,
-                                            &source_mac,
-                                            false,
-                                            NetworkPriority::NORMAL,
-                                        )
-                                        .await;
+                                    let _ = Self::send_confirmed_response_apdu(
+                                        &network_dispatch,
+                                        &abort_buf,
+                                        &source_mac,
+                                        source_network.as_ref(),
+                                    )
+                                    .await;
                                     continue;
                                 }
 
@@ -222,14 +221,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     let mut ack_buf = BytesMut::new();
                                     encode_apdu(&mut ack_buf, &seg_ack)
                                         .expect("valid APDU encoding");
-                                    if let Err(e) = network_dispatch
-                                        .send_apdu(
-                                            &ack_buf,
-                                            &source_mac,
-                                            false,
-                                            NetworkPriority::NORMAL,
-                                        )
-                                        .await
+                                    if let Err(e) = Self::send_confirmed_response_apdu(
+                                        &network_dispatch,
+                                        &ack_buf,
+                                        &source_mac,
+                                        source_network.as_ref(),
+                                    )
+                                    .await
                                     {
                                         warn!(
                                             error = %e,

@@ -148,6 +148,73 @@ async fn routed_cov_send_preserves_npdu_destination() {
 }
 
 #[tokio::test]
+async fn routed_segmented_complex_ack_preserves_npdu_destination() {
+    let sent = StdArc::new(StdMutex::new(Vec::new()));
+    let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
+        &sent,
+    ))));
+    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let router_mac = MacAddr::from_slice(&[192, 168, 1, 1, 0xBA, 0xC0]);
+    let remote = NpduAddress {
+        network: 100,
+        mac_address: MacAddr::from_slice(&[0x0A, 0x14, 0x1E]),
+    };
+    let service_ack_data = vec![0x55; 128];
+
+    let handle = {
+        let network = Arc::clone(&network);
+        let seg_ack_senders = Arc::clone(&seg_ack_senders);
+        let remote = remote.clone();
+        let router_mac = router_mac.clone();
+        tokio::spawn(async move {
+            BACnetServer::<RecordingTransport>::send_segmented_complex_ack(
+                &network,
+                &seg_ack_senders,
+                router_mac.as_slice(),
+                Some(&remote),
+                0x44,
+                ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+                &service_ack_data,
+                50,
+                None,
+            )
+            .await;
+        })
+    };
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if !sent.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("segmented response did not send first segment");
+
+    handle.abort();
+    let _ = handle.await;
+
+    let sent = sent.lock().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].1, router_mac);
+    let npdu = decode_npdu(sent[0].0.clone()).unwrap();
+    assert_eq!(npdu.destination, Some(remote));
+    match decode_apdu(npdu.payload).unwrap() {
+        Apdu::ComplexAck(ack) => {
+            assert!(ack.segmented);
+            assert_eq!(ack.invoke_id, 0x44);
+            assert_eq!(
+                ack.service_choice,
+                ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE
+            );
+        }
+        other => panic!("expected segmented ComplexAck, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn cov_property_multiple_subscription_uses_multiple_notification_on_change() {
     let sent = StdArc::new(StdMutex::new(Vec::new()));
     let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(

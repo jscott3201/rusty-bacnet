@@ -369,6 +369,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             &network,
                             &seg_ack_senders,
                             &source_mac,
+                            source_network.as_ref(),
                             invoke_id,
                             service_choice,
                             &service_ack_data,
@@ -447,7 +448,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 is_network_message: false,
                 expecting_reply: false,
                 priority: NetworkPriority::NORMAL,
-                destination: None,
+                destination: source_network.clone(),
                 source: None,
                 payload: apdu_bytes.clone(),
                 ..Npdu::default()
