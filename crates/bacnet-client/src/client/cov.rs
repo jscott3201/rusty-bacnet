@@ -318,7 +318,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
     /// Get a receiver for incoming COV notifications. Each call returns a new
     /// independent receiver.
-    pub fn cov_notifications(&self) -> broadcast::Receiver<COVNotificationRequest> {
+    pub fn cov_notifications(&self) -> broadcast::Receiver<ReceivedCOVNotification> {
         self.cov_tx.subscribe()
     }
 }

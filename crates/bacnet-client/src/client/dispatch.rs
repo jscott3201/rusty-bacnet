@@ -7,7 +7,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         tsm: &Arc<Mutex<Tsm>>,
         device_table: &Arc<Mutex<DeviceTable>>,
         network: &Arc<NetworkLayer<T>>,
-        cov_tx: &broadcast::Sender<COVNotificationRequest>,
+        cov_tx: &broadcast::Sender<ReceivedCOVNotification>,
+        confirmed_cov_ack_policy: &ConfirmedCOVNotificationAckPolicy,
         device_tx: &broadcast::Sender<DeviceEvent>,
         seg_state: &mut HashMap<SegKey, SegmentedReceiveState>,
         seg_ack_senders: &Arc<Mutex<HashMap<SegKey, mpsc::Sender<SegmentAckPdu>>>>,
@@ -89,23 +90,23 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 object = ?notification.monitored_object_identifier,
                                 "Received ConfirmedCOVNotification"
                             );
-                            let _ = cov_tx.send(notification);
-
-                            let ack = Apdu::SimpleAck(SimpleAck {
-                                invoke_id: req.invoke_id,
-                                service_choice: req.service_choice,
-                            });
-                            let mut buf = BytesMut::with_capacity(4);
-                            if let Err(e) = encode_apdu(&mut buf, &ack) {
-                                warn!(error = %e, "Failed to encode SimpleAck for COV notification");
-                                return;
-                            }
-                            if let Err(e) = network
-                                .send_apdu(&buf, source_mac, false, NetworkPriority::NORMAL)
-                                .await
-                            {
-                                warn!(error = %e, "Failed to send SimpleAck for COV notification");
-                            }
+                            let received = ReceivedCOVNotification::new(
+                                notification,
+                                source_mac,
+                                source_network,
+                                COVNotificationDelivery::Confirmed,
+                            );
+                            let response = confirmed_cov_ack_policy(&received);
+                            let _ = cov_tx.send(received);
+                            Self::send_confirmed_cov_notification_response(
+                                network,
+                                source_mac,
+                                source_network,
+                                req.invoke_id,
+                                req.service_choice,
+                                response,
+                            )
+                            .await;
                         }
                         Err(e) => {
                             warn!(error = %e, "Failed to decode ConfirmedCOVNotification");
@@ -168,7 +169,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 object = ?notification.monitored_object_identifier,
                                 "Received UnconfirmedCOVNotification"
                             );
-                            let _ = cov_tx.send(notification);
+                            let received = ReceivedCOVNotification::new(
+                                notification,
+                                source_mac,
+                                source_network,
+                                COVNotificationDelivery::Unconfirmed,
+                            );
+                            let _ = cov_tx.send(received);
                         }
                         Err(e) => {
                             warn!(error = %e, "Failed to decode UnconfirmedCOVNotification");
@@ -193,6 +200,55 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     );
                 }
             }
+        }
+    }
+
+    async fn send_confirmed_cov_notification_response(
+        network: &Arc<NetworkLayer<T>>,
+        source_mac: &[u8],
+        source_network: &Option<NpduAddress>,
+        invoke_id: u8,
+        service_choice: ConfirmedServiceChoice,
+        response: ConfirmedCOVNotificationResponse,
+    ) {
+        let apdu = match response {
+            ConfirmedCOVNotificationResponse::Ack => Apdu::SimpleAck(SimpleAck {
+                invoke_id,
+                service_choice,
+            }),
+            ConfirmedCOVNotificationResponse::Reject(reject_reason) => Apdu::Reject(RejectPdu {
+                invoke_id,
+                reject_reason,
+            }),
+            ConfirmedCOVNotificationResponse::NoResponse => return,
+        };
+
+        let mut buf = BytesMut::with_capacity(4);
+        if let Err(e) = encode_apdu(&mut buf, &apdu) {
+            warn!(error = %e, "Failed to encode response for COV notification");
+            return;
+        }
+        let send_result = match source_network {
+            Some(address) if !address.mac_address.is_empty() => {
+                network
+                    .send_apdu_routed(
+                        &buf,
+                        address.network,
+                        &address.mac_address,
+                        source_mac,
+                        false,
+                        NetworkPriority::NORMAL,
+                    )
+                    .await
+            }
+            _ => {
+                network
+                    .send_apdu(&buf, source_mac, false, NetworkPriority::NORMAL)
+                    .await
+            }
+        };
+        if let Err(e) = send_result {
+            warn!(error = %e, "Failed to send response for COV notification");
         }
     }
 }

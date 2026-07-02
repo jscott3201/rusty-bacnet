@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add BACnet client builder setters for APDU retries, accepted segment count, segmented-response acceptance, and proposed window size.
 - Add `BACnetClient` COV subscribe/unsubscribe helpers that resolve discovered-device routing.
 - Add `BACnetClient` SubscribeCOVProperty subscribe/unsubscribe helpers for property-level COV subscriptions.
+- Add source metadata, delivery kind, and configurable confirmed-notification ACK policy to `BACnetClient` COV notification delivery.
 
 ### Fixed
 

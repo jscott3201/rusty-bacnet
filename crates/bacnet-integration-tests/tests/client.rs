@@ -65,10 +65,13 @@ async fn cov_subscribe_and_notification() {
         .expect("Timed out waiting for initial COV notification")
         .expect("COV channel closed");
     assert_eq!(
-        initial_notification.monitored_object_identifier,
+        initial_notification
+            .notification
+            .monitored_object_identifier,
         ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap()
     );
     assert!(initial_notification
+        .notification
         .list_of_values
         .iter()
         .any(|pv| pv.property_identifier == PropertyIdentifier::PRESENT_VALUE));
@@ -89,21 +92,22 @@ async fn cov_subscribe_and_notification() {
         .unwrap();
 
     // Receive the COV notification
-    let notification = timeout(Duration::from_secs(2), cov_rx.recv())
+    let received = timeout(Duration::from_secs(2), cov_rx.recv())
         .await
         .expect("Timed out waiting for COV notification")
         .expect("COV channel closed");
 
     assert_eq!(
-        notification.monitored_object_identifier,
+        received.notification.monitored_object_identifier,
         ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap()
     );
     assert_eq!(
-        notification.initiating_device_identifier,
+        received.notification.initiating_device_identifier,
         ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap()
     );
     // Should contain at least Present_Value
-    assert!(notification
+    assert!(received
+        .notification
         .list_of_values
         .iter()
         .any(|pv| pv.property_identifier == PropertyIdentifier::PRESENT_VALUE));

@@ -13,10 +13,10 @@ use pyo3::types::{PyBytes, PyDict, PyList};
 use pyo3::Py;
 use tokio::sync::broadcast;
 
+use bacnet_client::client::{COVNotificationDelivery, ReceivedCOVNotification};
 use bacnet_client::discovery::DiscoveredDevice;
 use bacnet_encoding::primitives::{decode_application_value, encode_property_value};
 use bacnet_services::common::{BACnetPropertyValue, PropertyReference};
-use bacnet_services::cov::COVNotificationRequest;
 use bacnet_services::rpm::{ReadAccessSpecification, ReadPropertyMultipleACK};
 use bacnet_services::wpm::WriteAccessSpecification;
 use bacnet_types::enums as bacnet_enums;

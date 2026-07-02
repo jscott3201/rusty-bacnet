@@ -24,6 +24,17 @@ impl<T: TransportPort + 'static> ClientBuilder<T> {
         self.config.proposed_window_size = window_size;
         self
     }
+
+    /// Set the response policy for decoded ConfirmedCOVNotifications.
+    pub fn confirmed_cov_notification_ack_policy<F>(mut self, policy: F) -> Self
+    where
+        F: Fn(&ReceivedCOVNotification) -> ConfirmedCOVNotificationResponse + Send + Sync + 'static,
+    {
+        self.options = self
+            .options
+            .with_confirmed_cov_notification_ack_policy(policy);
+        self
+    }
 }
 
 impl BipClientBuilder {
@@ -48,6 +59,17 @@ impl BipClientBuilder {
     /// Set the proposed segmented-transfer window size.
     pub fn proposed_window_size(mut self, window_size: u8) -> Self {
         self.config.proposed_window_size = window_size;
+        self
+    }
+
+    /// Set the response policy for decoded ConfirmedCOVNotifications.
+    pub fn confirmed_cov_notification_ack_policy<F>(mut self, policy: F) -> Self
+    where
+        F: Fn(&ReceivedCOVNotification) -> ConfirmedCOVNotificationResponse + Send + Sync + 'static,
+    {
+        self.options = self
+            .options
+            .with_confirmed_cov_notification_ack_policy(policy);
         self
     }
 }
@@ -77,6 +99,17 @@ impl Bip6ClientBuilder {
         self.config.proposed_window_size = window_size;
         self
     }
+
+    /// Set the response policy for decoded ConfirmedCOVNotifications.
+    pub fn confirmed_cov_notification_ack_policy<F>(mut self, policy: F) -> Self
+    where
+        F: Fn(&ReceivedCOVNotification) -> ConfirmedCOVNotificationResponse + Send + Sync + 'static,
+    {
+        self.options = self
+            .options
+            .with_confirmed_cov_notification_ack_policy(policy);
+        self
+    }
 }
 
 #[cfg(feature = "sc-tls")]
@@ -102,6 +135,17 @@ impl ScClientBuilder {
     /// Set the proposed segmented-transfer window size.
     pub fn proposed_window_size(mut self, window_size: u8) -> Self {
         self.config.proposed_window_size = window_size;
+        self
+    }
+
+    /// Set the response policy for decoded ConfirmedCOVNotifications.
+    pub fn confirmed_cov_notification_ack_policy<F>(mut self, policy: F) -> Self
+    where
+        F: Fn(&ReceivedCOVNotification) -> ConfirmedCOVNotificationResponse + Send + Sync + 'static,
+    {
+        self.options = self
+            .options
+            .with_confirmed_cov_notification_ack_policy(policy);
         self
     }
 }

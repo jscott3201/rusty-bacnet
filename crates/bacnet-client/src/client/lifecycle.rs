@@ -57,8 +57,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let device_table_dispatch = Arc::clone(&device_table);
         let network_dispatch = Arc::clone(&network);
         let (cov_tx, _) =
-            broadcast::channel::<COVNotificationRequest>(options.cov_channel_capacity);
+            broadcast::channel::<ReceivedCOVNotification>(options.cov_channel_capacity);
         let cov_tx_dispatch = cov_tx.clone();
+        let confirmed_cov_ack_policy = options.confirmed_cov_notification_ack_policy.clone();
         let (device_tx, _) = broadcast::channel::<DeviceEvent>(DEVICE_EVENT_CHANNEL_CAPACITY);
         let device_tx_dispatch = device_tx.clone();
         let seg_ack_senders: Arc<Mutex<HashMap<SegKey, mpsc::Sender<SegmentAckPdu>>>> =
@@ -126,6 +127,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                     &device_table_dispatch,
                                     &network_dispatch,
                                     &cov_tx_dispatch,
+                                    &confirmed_cov_ack_policy,
                                     &device_tx_dispatch,
                                     &mut seg_state,
                                     &seg_ack_senders_dispatch,

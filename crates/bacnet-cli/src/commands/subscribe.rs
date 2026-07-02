@@ -1,6 +1,6 @@
 //! COV subscription command.
 
-use bacnet_client::client::BACnetClient;
+use bacnet_client::client::{BACnetClient, COVNotificationDelivery, ReceivedCOVNotification};
 use bacnet_encoding::primitives::decode_application_value;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::ObjectType;
@@ -59,10 +59,8 @@ pub async fn subscribe_cmd<T: TransportPort + 'static>(
     Ok(())
 }
 
-fn print_cov_notification(
-    notification: &bacnet_services::cov::COVNotificationRequest,
-    format: OutputFormat,
-) {
+fn print_cov_notification(received: &ReceivedCOVNotification, format: OutputFormat) {
+    let notification = &received.notification;
     let obj = format!(
         "{}:{}",
         notification.monitored_object_identifier.object_type(),
@@ -72,6 +70,19 @@ fn print_cov_notification(
         "device:{}",
         notification.initiating_device_identifier.instance_number()
     );
+    let delivery = match received.delivery {
+        COVNotificationDelivery::Confirmed => "confirmed",
+        COVNotificationDelivery::Unconfirmed => "unconfirmed",
+    };
+    let source_mac = format_mac(&received.source_mac);
+    let source_address = received
+        .source_address
+        .as_ref()
+        .map(|address| format_mac(address));
+    let routed_source = received
+        .source_network
+        .zip(source_address.as_ref())
+        .map(|(network, address)| format!("{network}:{address}"));
 
     // Decode property values
     let mut props = Vec::new();
@@ -84,9 +95,12 @@ fn print_cov_notification(
     match format {
         OutputFormat::Table => {
             let mut parts = vec![format!(
-                "[COV] {obj} from {device}, remaining={}s",
-                notification.time_remaining
+                "[COV] {obj} from {device}, source={source_mac}, delivery={delivery}, remaining={}s",
+                notification.time_remaining,
             )];
+            if let Some(routed_source) = &routed_source {
+                parts.push(format!("  routed-source = {routed_source}"));
+            }
             for (prop, val) in &props {
                 parts.push(format!("  {prop} = {val}"));
             }
@@ -101,12 +115,23 @@ fn print_cov_notification(
                 "type": "cov",
                 "object": obj,
                 "device": device,
+                "delivery": delivery,
+                "source_mac": source_mac,
+                "source_network": received.source_network,
+                "source_address": source_address,
                 "time_remaining": notification.time_remaining,
                 "values": prop_map,
             });
             println!("{}", serde_json::to_string(&json).unwrap_or_default());
         }
     }
+}
+
+fn format_mac(mac: &[u8]) -> String {
+    mac.iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(":")
 }
 
 fn decode_cov_value(data: &[u8]) -> String {

@@ -18,7 +18,7 @@ use tracing::{debug, warn};
 
 use bacnet_encoding::apdu::{
     self, encode_apdu, validate_max_apdu_length, AbortPdu, Apdu,
-    ConfirmedRequest as ConfirmedRequestPdu, SegmentAck as SegmentAckPdu, SimpleAck,
+    ConfirmedRequest as ConfirmedRequestPdu, RejectPdu, SegmentAck as SegmentAckPdu, SimpleAck,
 };
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_network::layer::NetworkLayer;
@@ -27,7 +27,9 @@ use bacnet_transport::bip::BipTransport;
 #[cfg(feature = "ipv6")]
 use bacnet_transport::bip6::Bip6Transport;
 use bacnet_transport::port::TransportPort;
-use bacnet_types::enums::{ConfirmedServiceChoice, NetworkPriority, UnconfirmedServiceChoice};
+use bacnet_types::enums::{
+    ConfirmedServiceChoice, NetworkPriority, RejectReason, UnconfirmedServiceChoice,
+};
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 
@@ -88,7 +90,7 @@ pub struct ClientConfig {
 }
 
 /// Additional client startup options.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ClientOptions {
     /// Capacity of the COV notification broadcast channel.
     ///
@@ -96,6 +98,7 @@ pub struct ClientOptions {
     /// they call `recv()`. The default preserves the historical fixed capacity
     /// of 64.
     pub cov_channel_capacity: usize,
+    confirmed_cov_notification_ack_policy: ConfirmedCOVNotificationAckPolicy,
 }
 
 impl Default for ClientConfig {
@@ -118,6 +121,8 @@ impl Default for ClientOptions {
     fn default() -> Self {
         Self {
             cov_channel_capacity: DEFAULT_COV_CHANNEL_CAPACITY,
+            confirmed_cov_notification_ack_policy:
+                cov_notifications::default_confirmed_cov_notification_ack_policy(),
         }
     }
 }
@@ -335,7 +340,7 @@ pub struct BACnetClient<T: TransportPort> {
     network: Arc<NetworkLayer<T>>,
     tsm: Arc<Mutex<Tsm>>,
     device_table: Arc<Mutex<DeviceTable>>,
-    cov_tx: broadcast::Sender<COVNotificationRequest>,
+    cov_tx: broadcast::Sender<ReceivedCOVNotification>,
     device_tx: broadcast::Sender<DeviceEvent>,
     dispatch_task: Option<JoinHandle<()>>,
     seg_ack_senders: Arc<Mutex<HashMap<SegKey, mpsc::Sender<SegmentAckPdu>>>>,
@@ -633,6 +638,7 @@ fn response_tsm_mac(source_mac: &[u8], source_network: &Option<NpduAddress>) -> 
 
 mod builder_options;
 mod cov;
+mod cov_notifications;
 mod device_events;
 mod device_mgmt;
 mod discovery;
@@ -644,8 +650,15 @@ mod property;
 mod requests;
 mod segmentation;
 
+pub use cov_notifications::{
+    COVNotificationDelivery, ConfirmedCOVNotificationAckPolicy, ConfirmedCOVNotificationResponse,
+    ReceivedCOVNotification,
+};
+
 #[cfg(test)]
 mod builder_options_tests;
+#[cfg(test)]
+mod cov_notification_tests;
 #[cfg(test)]
 mod cov_tests;
 #[cfg(test)]
