@@ -21,7 +21,8 @@ use bacnet_encoding::apdu::{
     ConfirmedRequest as ConfirmedRequestPdu, ErrorPdu, RejectPdu, SegmentAck as SegmentAckPdu,
     SimpleAck, UnconfirmedRequest as UnconfirmedRequestPdu,
 };
-use bacnet_encoding::primitives::encode_property_value;
+use bacnet_encoding::npdu::NpduAddress;
+use bacnet_encoding::primitives::{encode_ctx_unsigned, encode_property_value};
 use bacnet_encoding::segmentation::{
     max_segment_payload, split_payload, SegmentReceiver, SegmentedPduType,
 };
@@ -31,6 +32,9 @@ use bacnet_objects::notification_class::get_notification_recipients;
 use bacnet_services::alarm_event::EventNotificationRequest;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::cov::COVNotificationRequest;
+use bacnet_services::cov_multiple::{
+    COVNotificationItem, COVNotificationMultipleRequest, COVNotificationValue,
+};
 use bacnet_services::who_is::{IAmRequest, WhoIsRequest};
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::port::TransportPort;
@@ -42,7 +46,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, Time};
 use bacnet_types::MacAddr;
 
-use crate::cov::{CovSubscription, CovSubscriptionTable};
+use crate::cov::{CovNotificationKind, CovSubscription, CovSubscriptionTable};
 use crate::handlers;
 
 /// Maximum number of concurrent segmented reassembly sessions.
@@ -56,6 +60,9 @@ const MAX_NEG_SEGMENT_ACK_RETRIES: u8 = 3;
 
 /// Default number of APDU retries for confirmed COV notifications.
 const DEFAULT_APDU_RETRIES: u8 = 3;
+
+type TsmPeer = (MacAddr, Option<NpduAddress>);
+type TsmKey = (MacAddr, Option<NpduAddress>, u8);
 
 // ---------------------------------------------------------------------------
 // Server-side Transaction State Machine (TSM) for outgoing confirmed requests
@@ -80,7 +87,7 @@ pub struct ServerTsm {
     next_invoke_id: u8,
     /// Oneshot senders keyed by peer MAC and invoke ID. When a result arrives
     /// from the dispatch loop, we send it directly — no polling needed.
-    pending: HashMap<(MacAddr, u8), oneshot::Sender<CovAckResult>>,
+    pending: HashMap<TsmKey, oneshot::Sender<CovAckResult>>,
 }
 
 impl ServerTsm {
@@ -93,24 +100,41 @@ impl ServerTsm {
 
     /// Allocate the next invoke ID and register a oneshot channel for the result.
     /// Returns (invoke_id, receiver).
-    fn allocate(&mut self, peer: MacAddr) -> (u8, oneshot::Receiver<CovAckResult>) {
-        let id = self.next_invoke_id;
-        self.next_invoke_id = self.next_invoke_id.wrapping_add(1);
-        let rx = self.register(peer, id);
-        (id, rx)
+    fn allocate(&mut self, peer: TsmPeer) -> Option<(u8, oneshot::Receiver<CovAckResult>)> {
+        for offset in 0..=u8::MAX {
+            let id = self.next_invoke_id.wrapping_add(offset);
+            if !self
+                .pending
+                .contains_key(&(peer.0.clone(), peer.1.clone(), id))
+            {
+                self.next_invoke_id = id.wrapping_add(1);
+                let rx = self.register(peer, id);
+                return Some((id, rx));
+            }
+        }
+        None
     }
 
     /// Register or replace the pending receiver for a peer/invoke-id pair.
-    fn register(&mut self, peer: MacAddr, invoke_id: u8) -> oneshot::Receiver<CovAckResult> {
+    fn register(&mut self, peer: TsmPeer, invoke_id: u8) -> oneshot::Receiver<CovAckResult> {
         let (tx, rx) = oneshot::channel();
-        self.pending.insert((peer, invoke_id), tx);
+        self.pending.insert((peer.0, peer.1, invoke_id), tx);
         rx
     }
 
     /// Record a result from the dispatch loop (SimpleAck, Error, etc.).
     /// Sends immediately through the oneshot channel.
-    fn record_result(&mut self, peer: &MacAddr, invoke_id: u8, result: CovAckResult) -> bool {
-        if let Some(tx) = self.pending.remove(&(peer.clone(), invoke_id)) {
+    fn record_result(
+        &mut self,
+        peer: &MacAddr,
+        network: Option<&NpduAddress>,
+        invoke_id: u8,
+        result: CovAckResult,
+    ) -> bool {
+        if let Some(tx) = self
+            .pending
+            .remove(&(peer.clone(), network.cloned(), invoke_id))
+        {
             let _ = tx.send(result);
             true
         } else {
@@ -119,8 +143,9 @@ impl ServerTsm {
     }
 
     /// Remove a pending entry (cleanup on completion or exhaustion).
-    fn remove(&mut self, peer: &MacAddr, invoke_id: u8) {
-        self.pending.remove(&(peer.clone(), invoke_id));
+    fn remove(&mut self, peer: &TsmPeer, invoke_id: u8) {
+        self.pending
+            .remove(&(peer.0.clone(), peer.1.clone(), invoke_id));
     }
 }
 
@@ -534,8 +559,11 @@ mod dispatch;
 mod event_notifications;
 mod lifecycle;
 mod requests;
+mod responses;
 mod segmentation;
 
+#[cfg(test)]
+mod cov_notifications_tests;
 #[cfg(test)]
 mod tests;
 

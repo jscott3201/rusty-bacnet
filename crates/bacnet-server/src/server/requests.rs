@@ -14,16 +14,22 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         dcc_timer: &Arc<Mutex<Option<JoinHandle<()>>>>,
         config: &ServerConfig,
         source_mac: &[u8],
+        source_network: Option<NpduAddress>,
         req: bacnet_encoding::apdu::ConfirmedRequest,
         reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
     ) {
+        enum InitialCovNotification {
+            Single(CovSubscription),
+            Multiple(Vec<CovSubscription>),
+        }
+
         let invoke_id = req.invoke_id;
         let service_choice = req.service_choice;
         let client_max_apdu = req.max_apdu_length;
         let client_accepts_segmented = req.segmented_response_accepted;
         let client_max_segments = req.max_segments;
         let mut written_oids: Vec<ObjectIdentifier> = Vec::new();
-        let mut initial_cov_subscriptions: Vec<CovSubscription> = Vec::new();
+        let mut initial_cov_notifications: Vec<InitialCovNotification> = Vec::new();
 
         let state = comm_state.load(Ordering::Acquire);
         if state == 1
@@ -104,14 +110,19 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             s if s == ConfirmedServiceChoice::SUBSCRIBE_COV => {
                 let db = db.read().await;
                 let mut table = cov_table.write().await;
-                match handlers::handle_subscribe_cov_with_initial(
+                match handlers::handle_subscribe_cov_with_initial_endpoint(
                     &mut table,
                     &db,
                     source_mac,
+                    source_network.as_ref(),
                     &req.service_request,
                 ) {
                     Ok(subscriptions) => {
-                        initial_cov_subscriptions = subscriptions;
+                        initial_cov_notifications.extend(
+                            subscriptions
+                                .into_iter()
+                                .map(InitialCovNotification::Single),
+                        );
                         simple_ack()
                     }
                     Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
@@ -120,14 +131,19 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             s if s == ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY => {
                 let db = db.read().await;
                 let mut table = cov_table.write().await;
-                match handlers::handle_subscribe_cov_property_with_initial(
+                match handlers::handle_subscribe_cov_property_with_initial_endpoint(
                     &mut table,
                     &db,
                     source_mac,
+                    source_network.as_ref(),
                     &req.service_request,
                 ) {
                     Ok(subscriptions) => {
-                        initial_cov_subscriptions = subscriptions;
+                        initial_cov_notifications.extend(
+                            subscriptions
+                                .into_iter()
+                                .map(InitialCovNotification::Single),
+                        );
                         simple_ack()
                     }
                     Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
@@ -291,14 +307,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             s if s == ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE => {
                 let db = db.read().await;
                 let mut table = cov_table.write().await;
-                match handlers::handle_subscribe_cov_property_multiple_with_initial(
+                match handlers::handle_subscribe_cov_property_multiple_with_initial_endpoint(
                     &mut table,
                     &db,
                     source_mac,
+                    source_network.as_ref(),
                     &req.service_request,
                 ) {
                     Ok(subscriptions) => {
-                        initial_cov_subscriptions = subscriptions;
+                        if !subscriptions.is_empty() {
+                            initial_cov_notifications
+                                .push(InitialCovNotification::Multiple(subscriptions));
+                        }
                         simple_ack()
                     }
                     Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
@@ -329,9 +349,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     });
                     let mut buf = BytesMut::new();
                     encode_apdu(&mut buf, &abort).expect("valid APDU encoding");
-                    if let Err(e) = network
-                        .send_apdu(&buf, source_mac, false, NetworkPriority::NORMAL)
-                        .await
+                    if let Err(e) = Self::send_confirmed_response_apdu(
+                        network,
+                        &buf,
+                        source_mac,
+                        source_network.as_ref(),
+                    )
+                    .await
                     {
                         warn!(error = %e, "Failed to send Abort for segmentation-not-supported");
                     }
@@ -379,18 +403,35 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     )
                     .await;
                 }
-                for subscription in &initial_cov_subscriptions {
-                    Self::fire_initial_cov_notification(
-                        db,
-                        network,
-                        cov_table,
-                        cov_in_flight,
-                        server_tsm,
-                        comm_state,
-                        config,
-                        subscription,
-                    )
-                    .await;
+                for notification in &initial_cov_notifications {
+                    match notification {
+                        InitialCovNotification::Single(subscription) => {
+                            Self::fire_initial_cov_notification(
+                                db,
+                                network,
+                                cov_table,
+                                cov_in_flight,
+                                server_tsm,
+                                comm_state,
+                                config,
+                                subscription,
+                            )
+                            .await;
+                        }
+                        InitialCovNotification::Multiple(subscriptions) => {
+                            Self::fire_initial_cov_notification_multiple(
+                                db,
+                                network,
+                                cov_table,
+                                cov_in_flight,
+                                server_tsm,
+                                comm_state,
+                                config,
+                                subscriptions,
+                            )
+                            .await;
+                        }
+                    }
                 }
                 return;
             }
@@ -418,17 +459,21 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
                 Err(e) => {
                     warn!(error = %e, "Failed to encode NPDU for MS/TP reply");
-                    if let Err(e) = network
-                        .send_apdu(&apdu_bytes, source_mac, false, NetworkPriority::NORMAL)
-                        .await
+                    if let Err(e) = Self::send_confirmed_response_apdu(
+                        network,
+                        &apdu_bytes,
+                        source_mac,
+                        source_network.as_ref(),
+                    )
+                    .await
                     {
                         warn!(error = %e, "Failed to send response");
                     }
                 }
             }
-        } else if let Err(e) = network
-            .send_apdu(&buf, source_mac, false, NetworkPriority::NORMAL)
-            .await
+        } else if let Err(e) =
+            Self::send_confirmed_response_apdu(network, &buf, source_mac, source_network.as_ref())
+                .await
         {
             warn!(error = %e, "Failed to send response");
         }
@@ -459,18 +504,35 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .await;
         }
 
-        for subscription in &initial_cov_subscriptions {
-            Self::fire_initial_cov_notification(
-                db,
-                network,
-                cov_table,
-                cov_in_flight,
-                server_tsm,
-                comm_state,
-                config,
-                subscription,
-            )
-            .await;
+        for notification in &initial_cov_notifications {
+            match notification {
+                InitialCovNotification::Single(subscription) => {
+                    Self::fire_initial_cov_notification(
+                        db,
+                        network,
+                        cov_table,
+                        cov_in_flight,
+                        server_tsm,
+                        comm_state,
+                        config,
+                        subscription,
+                    )
+                    .await;
+                }
+                InitialCovNotification::Multiple(subscriptions) => {
+                    Self::fire_initial_cov_notification_multiple(
+                        db,
+                        network,
+                        cov_table,
+                        cov_in_flight,
+                        server_tsm,
+                        comm_state,
+                        config,
+                        subscriptions,
+                    )
+                    .await;
+                }
+            }
         }
     }
     /// Handle an unconfirmed request (e.g., WhoIs).

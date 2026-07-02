@@ -177,6 +177,41 @@
       "notes": "Initial family row only; later work should split high-claim services and object families into detailed rows."
     },
     {
+      "id": "BACNET-13-COV-SUBSCRIPTIONS",
+      "standard_anchor": "Clauses 13.14-13.18",
+      "priority": "P1",
+      "requirement_summary": "Server-side COV subscription procedures validate subscription inputs, preserve subscriber endpoints, emit initial COV notifications after accepted SubscribeCOV, SubscribeCOVProperty, and SubscribeCOVPropertyMultiple requests, and preserve notification service family on later changes.",
+      "status": "implementation-present-needs-conformance-tests",
+      "code_anchors": [
+        "crates/bacnet-server/src/handlers/cov.rs",
+        "crates/bacnet-server/src/server/cov_notifications.rs",
+        "crates/bacnet-server/src/server/requests.rs",
+        "crates/bacnet-server/src/cov.rs",
+        "crates/bacnet-services/src/cov.rs",
+        "crates/bacnet-services/src/cov_multiple.rs"
+      ],
+      "positive_tests": [
+        "crates/bacnet-server/src/handlers/tests/write_cov_who.rs::subscribe_cov_property_multiple_handler_returns_initial_subscriptions",
+        "crates/bacnet-server/src/handlers/tests/write_cov_who.rs::subscribe_cov_records_routed_subscriber_endpoint",
+        "crates/bacnet-server/src/server/cov_notifications.rs::tests::unconfirmed_cov_multiple_apdu_uses_multiple_service_choice",
+        "crates/bacnet-server/src/server/cov_notifications.rs::tests::confirmed_cov_multiple_apdu_uses_multiple_service_choice",
+        "crates/bacnet-server/src/server/cov_notifications.rs::tests::routed_cov_send_preserves_npdu_destination",
+        "crates/bacnet-server/src/server/cov_notifications.rs::tests::cov_property_multiple_subscription_uses_multiple_notification_on_change",
+        "crates/bacnet-integration-tests/tests/server/routing_alarm.rs::subscribe_cov_routed_ack_and_initial_notification_return_to_remote_subscriber",
+        "crates/bacnet-integration-tests/tests/client.rs::cov_subscribe_and_notification",
+        "crates/bacnet-integration-tests/tests/server/error_cov.rs::cov_subscribe_then_cancel"
+      ],
+      "negative_tests": [
+        "crates/bacnet-server/src/handlers/tests/write_cov_who.rs::subscribe_cov_property_multiple_invalid_property_is_atomic",
+        "crates/bacnet-server/src/handlers/tests/write_cov_who.rs::subscribe_cov_property_multiple_capacity_failure_is_atomic",
+        "crates/bacnet-server/src/handlers/tests/write_cov_who.rs::subscribe_cov_unknown_object_fails",
+        "crates/bacnet-integration-tests/tests/server/dcc.rs::dcc_disable_initiation_allows_rp_blocks_cov"
+      ],
+      "benchmarks": [],
+      "public_claims": [],
+      "notes": "Issue #82 evidence adds post-acceptance initial notifications for SubscribeCOV and SubscribeCOVProperty, COVNotificationMultiple APDUs with the multiple service choices for SubscribeCOVPropertyMultiple initial and later-change notifications, property-validation and subscription-capacity atomicity, routed subscriber endpoint preservation for SimpleAck and notification sends, subscriber COV increment precedence, and server TSM invoke-ID collision avoidance for routed/confirmed notifications. This row remains below supported status until fuller BIBB/PICS and clause-level conformance evidence exists, including SubscribeCOVPropertyMultiple request lifetime/field-order wire fixtures, first-failed-subscription behavior, complete service parameter validation, Device active-COV property synchronization, and routed segmented-response coverage."
+    },
+    {
       "id": "BACNET-20-ENCODING",
       "standard_anchor": "Clause 20",
       "priority": "P1",

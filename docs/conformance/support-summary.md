@@ -13,11 +13,11 @@
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 15 |
-| Priority | P1 | 10 |
+| Priority | P1 | 11 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
-| Status | implementation-present-needs-conformance-tests | 9 |
+| Status | implementation-present-needs-conformance-tests | 10 |
 | Status | implementation-present-needs-negative-tests | 6 |
 | Status | implementation-present-needs-platform-tests | 1 |
 | Status | implementation-present-needs-security-tests | 1 |
@@ -45,6 +45,7 @@
 | `BACNET-10-PTP` | Clause 10 | P3 | unknown-pending-source-review | 0 |
 | `BACNET-11-LONTALK` | Clause 11 | P3 | unknown-pending-source-review | 0 |
 | `BACNET-12-OBJECT-MODEL` | Clauses 12-19 | P1 | implementation-present-needs-conformance-tests | 3 |
+| `BACNET-13-COV-SUBSCRIPTIONS` | Clauses 13.14-13.18 | P1 | implementation-present-needs-conformance-tests | 0 |
 | `BACNET-20-ENCODING` | Clause 20 | P1 | implementation-present-needs-negative-tests | 2 |
 | `BACNET-21-FORMAL-APDUS` | Clause 21 | P1 | implementation-present-needs-conformance-tests | 2 |
 | `BACNET-A-PICS` | Annex A | P1 | in-progress | 2 |

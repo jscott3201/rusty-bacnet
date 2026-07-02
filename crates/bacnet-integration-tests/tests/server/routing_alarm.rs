@@ -178,6 +178,117 @@ async fn iam_broadcast_for_local_whois() {
     server.stop().await.unwrap();
 }
 
+/// When a confirmed SubscribeCOV request arrives from a remote network, the
+/// SimpleAck and the initial COV notification should both be routed back to the
+/// original SNET/SADR through the router MAC.
+#[tokio::test]
+async fn subscribe_cov_routed_ack_and_initial_notification_return_to_remote_subscriber() {
+    use bacnet_encoding::apdu::{self, encode_apdu, Apdu, ConfirmedRequest};
+    use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+    use bacnet_services::cov::SubscribeCOVRequest;
+    use bacnet_transport::port::TransportPort;
+    use bacnet_types::enums::{ConfirmedServiceChoice, NetworkPriority, UnconfirmedServiceChoice};
+    use tokio::time::Duration;
+
+    let mut server = make_server().await;
+    let server_mac = server.local_mac().to_vec();
+
+    let mut raw_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
+    let mut raw_rx = raw_transport.start().await.unwrap();
+
+    let remote = NpduAddress {
+        network: 100,
+        mac_address: MacAddr::from_slice(&[10, 20, 30]),
+    };
+    let ai_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+
+    let subscribe = SubscribeCOVRequest {
+        subscriber_process_identifier: 42,
+        monitored_object_identifier: ai_oid,
+        issue_confirmed_notifications: Some(false),
+        lifetime: Some(60),
+    };
+    let mut service_buf = bytes::BytesMut::new();
+    subscribe.encode(&mut service_buf);
+
+    let request = Apdu::ConfirmedRequest(ConfirmedRequest {
+        segmented: false,
+        more_follows: false,
+        segmented_response_accepted: false,
+        max_segments: None,
+        max_apdu_length: 1476,
+        invoke_id: 0x22,
+        sequence_number: None,
+        proposed_window_size: None,
+        service_choice: ConfirmedServiceChoice::SUBSCRIBE_COV,
+        service_request: service_buf.freeze(),
+    });
+    let mut apdu_buf = bytes::BytesMut::new();
+    encode_apdu(&mut apdu_buf, &request).expect("valid APDU encoding");
+
+    let npdu = Npdu {
+        is_network_message: false,
+        expecting_reply: true,
+        priority: NetworkPriority::NORMAL,
+        destination: None,
+        source: Some(remote.clone()),
+        hop_count: 255,
+        payload: Bytes::from(apdu_buf.to_vec()),
+        ..Npdu::default()
+    };
+
+    let mut npdu_buf = bytes::BytesMut::new();
+    encode_npdu(&mut npdu_buf, &npdu).unwrap();
+    raw_transport
+        .send_unicast(&npdu_buf, &server_mac)
+        .await
+        .unwrap();
+
+    let ack_packet = tokio::time::timeout(Duration::from_secs(3), raw_rx.recv())
+        .await
+        .expect("Timed out waiting for routed SubscribeCOV SimpleAck")
+        .expect("Raw transport channel closed");
+    let ack_npdu = decode_npdu(ack_packet.npdu.clone()).unwrap();
+    assert_eq!(
+        ack_npdu.destination,
+        Some(remote.clone()),
+        "SubscribeCOV SimpleAck should route back to original SNET/SADR"
+    );
+    match apdu::decode_apdu(ack_npdu.payload.clone()).unwrap() {
+        Apdu::SimpleAck(ack) => {
+            assert_eq!(ack.invoke_id, 0x22);
+            assert_eq!(ack.service_choice, ConfirmedServiceChoice::SUBSCRIBE_COV);
+        }
+        other => panic!("Expected SubscribeCOV SimpleAck, got {:?}", other),
+    }
+
+    let cov_packet = tokio::time::timeout(Duration::from_secs(3), raw_rx.recv())
+        .await
+        .expect("Timed out waiting for routed initial COV notification")
+        .expect("Raw transport channel closed");
+    let cov_npdu = decode_npdu(cov_packet.npdu.clone()).unwrap();
+    assert_eq!(
+        cov_npdu.destination,
+        Some(remote),
+        "initial COV notification should route back to original SNET/SADR"
+    );
+    match apdu::decode_apdu(cov_npdu.payload.clone()).unwrap() {
+        Apdu::UnconfirmedRequest(req) => {
+            assert_eq!(
+                req.service_choice,
+                UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION
+            );
+        }
+        other => panic!(
+            "Expected initial unconfirmed COV notification, got {:?}",
+            other
+        ),
+    }
+
+    raw_transport.stop().await.unwrap();
+    server.stop().await.unwrap();
+}
+
 // ---------------------------------------------------------------------------
 // AcknowledgeAlarm integration test
 // ---------------------------------------------------------------------------

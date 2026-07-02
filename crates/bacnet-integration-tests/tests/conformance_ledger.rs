@@ -40,6 +40,7 @@ const REQUIRED_IDS: &[&str] = &[
     "BACNET-8-ARCNET",
     "BACNET-10-PTP",
     "BACNET-11-LONTALK",
+    "BACNET-13-COV-SUBSCRIPTIONS",
     "BACNET-O-ZIGBEE",
 ];
 

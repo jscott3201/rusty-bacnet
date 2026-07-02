@@ -39,6 +39,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let dcc_timer = Arc::clone(dcc_timer);
                 let config = Arc::clone(config);
                 let source_mac = MacAddr::from_slice(source_mac);
+                let source_network = received.source_network.clone();
                 tokio::spawn(async move {
                     Self::handle_confirmed_request(
                         &db,
@@ -51,6 +52,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         &dcc_timer,
                         &config,
                         &source_mac,
+                        source_network,
                         req,
                         reply_tx,
                     )
@@ -78,8 +80,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             Apdu::SimpleAck(sa) => {
                 let mut tsm = server_tsm.lock().await;
                 let peer = MacAddr::from_slice(source_mac);
-                if !tsm.record_result(&peer, sa.invoke_id, CovAckResult::Ack) {
-                    tsm.record_result(&MacAddr::new(), sa.invoke_id, CovAckResult::Ack);
+                if !tsm.record_result(
+                    &peer,
+                    received.source_network.as_ref(),
+                    sa.invoke_id,
+                    CovAckResult::Ack,
+                ) {
+                    tsm.record_result(&MacAddr::new(), None, sa.invoke_id, CovAckResult::Ack);
                 }
                 debug!(
                     invoke_id = sa.invoke_id,
@@ -89,8 +96,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             Apdu::Error(err) => {
                 let mut tsm = server_tsm.lock().await;
                 let peer = MacAddr::from_slice(source_mac);
-                if !tsm.record_result(&peer, err.invoke_id, CovAckResult::Error) {
-                    tsm.record_result(&MacAddr::new(), err.invoke_id, CovAckResult::Error);
+                if !tsm.record_result(
+                    &peer,
+                    received.source_network.as_ref(),
+                    err.invoke_id,
+                    CovAckResult::Error,
+                ) {
+                    tsm.record_result(&MacAddr::new(), None, err.invoke_id, CovAckResult::Error);
                 }
                 debug!(
                     invoke_id = err.invoke_id,
@@ -102,8 +114,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             Apdu::Reject(rej) => {
                 let mut tsm = server_tsm.lock().await;
                 let peer = MacAddr::from_slice(source_mac);
-                if !tsm.record_result(&peer, rej.invoke_id, CovAckResult::Error) {
-                    tsm.record_result(&MacAddr::new(), rej.invoke_id, CovAckResult::Error);
+                if !tsm.record_result(
+                    &peer,
+                    received.source_network.as_ref(),
+                    rej.invoke_id,
+                    CovAckResult::Error,
+                ) {
+                    tsm.record_result(&MacAddr::new(), None, rej.invoke_id, CovAckResult::Error);
                 }
                 debug!(
                     invoke_id = rej.invoke_id,
@@ -113,8 +130,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             Apdu::Abort(abort) if !abort.sent_by_server => {
                 let mut tsm = server_tsm.lock().await;
                 let peer = MacAddr::from_slice(source_mac);
-                if !tsm.record_result(&peer, abort.invoke_id, CovAckResult::Error) {
-                    tsm.record_result(&MacAddr::new(), abort.invoke_id, CovAckResult::Error);
+                if !tsm.record_result(
+                    &peer,
+                    received.source_network.as_ref(),
+                    abort.invoke_id,
+                    CovAckResult::Error,
+                ) {
+                    tsm.record_result(&MacAddr::new(), None, abort.invoke_id, CovAckResult::Error);
                 }
                 debug!(
                     invoke_id = abort.invoke_id,

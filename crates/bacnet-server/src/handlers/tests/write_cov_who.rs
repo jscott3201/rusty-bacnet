@@ -91,6 +91,60 @@ fn subscribe_cov_property_handler_returns_initial_subscription() {
 }
 
 #[test]
+fn subscribe_cov_update_existing_entry_allowed_at_capacity() {
+    let db = make_db_with_ai();
+    let mut table = CovSubscriptionTable::new();
+    let mac = vec![192, 168, 1, 1, 0xBA, 0xC0];
+    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+
+    for instance in 0..1023 {
+        table.subscribe(CovSubscription {
+            subscriber_mac: MacAddr::from_slice(&[10, 0, 0, (instance % 255) as u8, 0xBA, 0xC0]),
+            subscriber_network: None,
+            subscriber_process_identifier: instance,
+            monitored_object_identifier: ObjectIdentifier::new(
+                ObjectType::ANALOG_INPUT,
+                1000 + instance,
+            )
+            .unwrap(),
+            issue_confirmed_notifications: false,
+            expires_at: None,
+            last_notified_value: None,
+            monitored_property: None,
+            monitored_property_array_index: None,
+            cov_increment: None,
+            notification_kind: CovNotificationKind::Single,
+            timestamped: false,
+        });
+    }
+
+    let original = SubscribeCOVRequest {
+        subscriber_process_identifier: 1,
+        monitored_object_identifier: oid,
+        issue_confirmed_notifications: Some(false),
+        lifetime: Some(300),
+    };
+    let mut buf = BytesMut::new();
+    original.encode(&mut buf);
+    handle_subscribe_cov(&mut table, &db, &mac, &buf).unwrap();
+    assert_eq!(table.len(), 1024);
+
+    let update = SubscribeCOVRequest {
+        subscriber_process_identifier: 1,
+        monitored_object_identifier: oid,
+        issue_confirmed_notifications: Some(true),
+        lifetime: Some(600),
+    };
+    let mut buf = BytesMut::new();
+    update.encode(&mut buf);
+    let subscriptions = handle_subscribe_cov_with_initial(&mut table, &db, &mac, &buf).unwrap();
+
+    assert_eq!(subscriptions.len(), 1);
+    assert!(subscriptions[0].issue_confirmed_notifications);
+    assert_eq!(table.len(), 1024);
+}
+
+#[test]
 fn subscribe_cov_property_multiple_handler_returns_initial_subscriptions() {
     use bacnet_services::common::PropertyReference;
     use bacnet_services::cov_multiple::{
@@ -144,6 +198,171 @@ fn subscribe_cov_property_multiple_handler_returns_initial_subscriptions() {
         Some(PropertyIdentifier::STATUS_FLAGS)
     );
     assert_eq!(table.len(), 2);
+}
+
+#[test]
+fn subscribe_cov_property_multiple_invalid_property_is_atomic() {
+    use bacnet_services::common::PropertyReference;
+    use bacnet_services::cov_multiple::{
+        COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
+    };
+
+    let db = make_db_with_ai();
+    let mut table = CovSubscriptionTable::new();
+    let mac = vec![192, 168, 1, 1, 0xBA, 0xC0];
+    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+
+    let request = SubscribeCOVPropertyMultipleRequest {
+        subscriber_process_identifier: 1,
+        max_notification_delay: None,
+        issue_confirmed_notifications: Some(false),
+        list_of_cov_subscription_specifications: vec![COVSubscriptionSpecification {
+            monitored_object_identifier: oid,
+            list_of_cov_references: vec![
+                COVReference {
+                    monitored_property: PropertyReference {
+                        property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                        property_array_index: None,
+                    },
+                    cov_increment: Some(0.5),
+                    timestamped: false,
+                },
+                COVReference {
+                    monitored_property: PropertyReference {
+                        property_identifier: PropertyIdentifier::PRIORITY_ARRAY,
+                        property_array_index: None,
+                    },
+                    cov_increment: None,
+                    timestamped: false,
+                },
+            ],
+        }],
+    };
+    let mut buf = BytesMut::new();
+    request.encode(&mut buf);
+
+    let err = handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf)
+        .unwrap_err();
+    match err {
+        Error::Protocol { class, code } => {
+            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+            assert_eq!(code, ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32);
+        }
+        other => panic!("expected UNKNOWN_PROPERTY protocol error, got {other:?}"),
+    }
+    assert!(table.is_empty());
+}
+
+#[test]
+fn subscribe_cov_property_multiple_capacity_failure_is_atomic() {
+    use bacnet_services::common::PropertyReference;
+    use bacnet_services::cov_multiple::{
+        COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
+    };
+
+    let db = make_db_with_ai();
+    let mut table = CovSubscriptionTable::new();
+    let mac = vec![192, 168, 1, 1, 0xBA, 0xC0];
+    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+
+    for instance in 1000..2023 {
+        table.subscribe(CovSubscription {
+            subscriber_mac: MacAddr::from_slice(&mac),
+            subscriber_network: None,
+            subscriber_process_identifier: 99,
+            monitored_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance)
+                .unwrap(),
+            issue_confirmed_notifications: false,
+            expires_at: None,
+            last_notified_value: None,
+            monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
+            monitored_property_array_index: None,
+            cov_increment: None,
+            notification_kind: CovNotificationKind::Single,
+            timestamped: false,
+        });
+    }
+    assert_eq!(table.len(), 1023);
+
+    let request = SubscribeCOVPropertyMultipleRequest {
+        subscriber_process_identifier: 1,
+        max_notification_delay: None,
+        issue_confirmed_notifications: Some(false),
+        list_of_cov_subscription_specifications: vec![COVSubscriptionSpecification {
+            monitored_object_identifier: oid,
+            list_of_cov_references: vec![
+                COVReference {
+                    monitored_property: PropertyReference {
+                        property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                        property_array_index: None,
+                    },
+                    cov_increment: Some(0.5),
+                    timestamped: false,
+                },
+                COVReference {
+                    monitored_property: PropertyReference {
+                        property_identifier: PropertyIdentifier::STATUS_FLAGS,
+                        property_array_index: None,
+                    },
+                    cov_increment: None,
+                    timestamped: false,
+                },
+            ],
+        }],
+    };
+    let mut buf = BytesMut::new();
+    request.encode(&mut buf);
+
+    let err = handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf)
+        .unwrap_err();
+    match err {
+        Error::Protocol { class, code } => {
+            assert_eq!(class, ErrorClass::RESOURCES.to_raw() as u32);
+            assert_eq!(
+                code,
+                ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32
+            );
+        }
+        other => panic!("expected NO_SPACE_TO_ADD_LIST_ELEMENT protocol error, got {other:?}"),
+    }
+    assert_eq!(table.len(), 1023);
+}
+
+#[test]
+fn subscribe_cov_records_routed_subscriber_endpoint() {
+    let db = make_db_with_ai();
+    let mut table = CovSubscriptionTable::new();
+    let router_mac = vec![192, 168, 1, 1, 0xBA, 0xC0];
+    let remote = NpduAddress {
+        network: 100,
+        mac_address: MacAddr::from_slice(&[0x0A, 0x14, 0x1E]),
+    };
+    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+
+    let request = SubscribeCOVRequest {
+        subscriber_process_identifier: 1,
+        monitored_object_identifier: oid,
+        issue_confirmed_notifications: Some(false),
+        lifetime: Some(300),
+    };
+    let mut buf = BytesMut::new();
+    request.encode(&mut buf);
+
+    let subscriptions = handle_subscribe_cov_with_initial_endpoint(
+        &mut table,
+        &db,
+        &router_mac,
+        Some(&remote),
+        &buf,
+    )
+    .unwrap();
+    assert_eq!(subscriptions.len(), 1);
+    assert_eq!(subscriptions[0].subscriber_mac.as_slice(), &router_mac[..]);
+    assert_eq!(subscriptions[0].subscriber_network.as_ref(), Some(&remote));
+    assert_eq!(
+        table.subscriptions_for(&oid)[0].subscriber_network.as_ref(),
+        Some(&remote)
+    );
 }
 
 #[test]

@@ -143,10 +143,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         }
                         bacnet_types::constructed::BACnetRecipient::Device(_) => None,
                     };
-                    let peer_key = target_mac.clone().unwrap_or_else(MacAddr::new);
-                    let (id, result_rx) = {
+                    let peer_key = (target_mac.clone().unwrap_or_else(MacAddr::new), None);
+                    let (id, result_rx) = match {
                         let mut tsm = server_tsm.lock().await;
                         tsm.allocate(peer_key.clone())
+                    } {
+                        Some(allocated) => allocated,
+                        None => {
+                            warn!("No free invoke ID for confirmed EventNotification");
+                            continue;
+                        }
                     };
 
                     let pdu = Apdu::ConfirmedRequest(ConfirmedRequestPdu {
