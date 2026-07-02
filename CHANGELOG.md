@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Send the required initial COV notification after successful server-side COV subscription acceptance.
 - Encode `SubscribeCOVPropertyMultiple` lifetime/max-delay fields in standard order, validate their subscription/cancellation semantics, and expire server-side multiple-property COV subscriptions.
 - Correct `bacnet-client` property method rustdoc comments so read/write, auto-routing, and batch helpers describe the method they document.
+- Clarify `ObjectIdentifier` wildcard-instance semantics and add an addressable-object constructor that rejects the reserved wildcard value while preserving wire-level round trips.
 
 ## [0.10.0]
 

@@ -17,6 +17,13 @@ use crate::error::Error;
 ///
 /// Uniquely identifies a BACnet object within a device. Encoded as a
 /// 4-byte big-endian value: `(object_type << 22) | instance_number`.
+///
+/// The all-ones instance value [`WILDCARD_INSTANCE`](Self::WILDCARD_INSTANCE)
+/// is still a valid 22-bit wire value, and some service contexts give it
+/// wildcard meaning. Use [`ObjectIdentifier::new`] or [`ObjectIdentifier::decode`]
+/// when preserving wire-level values. Use [`ObjectIdentifier::new_addressable`]
+/// when constructing identifiers for concrete objects that can be stored,
+/// addressed, or compared as actual object instances.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ObjectIdentifier {
     object_type: ObjectType,
@@ -24,13 +31,34 @@ pub struct ObjectIdentifier {
 }
 
 impl ObjectIdentifier {
-    /// Maximum valid instance number (2^22 - 1 = 4,194,303).
+    /// Maximum encodable instance number (2^22 - 1 = 4,194,303).
+    ///
+    /// This is also [`WILDCARD_INSTANCE`](Self::WILDCARD_INSTANCE). It is
+    /// accepted by [`ObjectIdentifier::new`] and [`ObjectIdentifier::decode`]
+    /// for wire compatibility, but callers that need a concrete addressable
+    /// object should use [`MAX_ADDRESSABLE_INSTANCE`](Self::MAX_ADDRESSABLE_INSTANCE)
+    /// or [`ObjectIdentifier::new_addressable`].
     pub const MAX_INSTANCE: u32 = 0x3F_FFFF;
 
-    /// The "wildcard" instance number used in WhoIs/IAm (4,194,303).
+    /// The reserved wildcard instance number (4,194,303).
+    ///
+    /// BACnet service clauses assign this value special "any/local instance"
+    /// meaning in selected contexts, for example Who-Is/Who-Am-I discovery and
+    /// Device/Network Port object access. It is not a concrete object instance
+    /// for addressable-object storage.
     pub const WILDCARD_INSTANCE: u32 = Self::MAX_INSTANCE;
 
-    /// Create a new ObjectIdentifier.
+    /// Maximum instance number for a concrete addressable object (4,194,302).
+    ///
+    /// This excludes [`WILDCARD_INSTANCE`](Self::WILDCARD_INSTANCE).
+    pub const MAX_ADDRESSABLE_INSTANCE: u32 = Self::WILDCARD_INSTANCE - 1;
+
+    /// Create a new ObjectIdentifier from any valid 22-bit wire instance.
+    ///
+    /// This constructor preserves [`WILDCARD_INSTANCE`](Self::WILDCARD_INSTANCE)
+    /// because it is a valid encoded value in BACnet service payloads. Use
+    /// [`ObjectIdentifier::new_addressable`] when the identifier must name a
+    /// concrete object instance.
     ///
     /// # Errors
     /// Returns `Err` if `instance_number` exceeds [`MAX_INSTANCE`](Self::MAX_INSTANCE).
@@ -40,6 +68,37 @@ impl ObjectIdentifier {
                 "instance number {} exceeds max {}",
                 instance_number,
                 Self::MAX_INSTANCE
+            )));
+        }
+        Ok(Self {
+            object_type,
+            instance_number,
+        })
+    }
+
+    /// Create a new ObjectIdentifier for a concrete addressable object.
+    ///
+    /// This rejects [`WILDCARD_INSTANCE`](Self::WILDCARD_INSTANCE), while
+    /// [`ObjectIdentifier::new`] keeps accepting that value for wire-level
+    /// round trips and BACnet service contexts where it is meaningful.
+    ///
+    /// # Errors
+    /// Returns `Err` if `instance_number` exceeds
+    /// [`MAX_INSTANCE`](Self::MAX_INSTANCE) or equals
+    /// [`WILDCARD_INSTANCE`](Self::WILDCARD_INSTANCE).
+    pub fn new_addressable(object_type: ObjectType, instance_number: u32) -> Result<Self, Error> {
+        if instance_number > Self::MAX_INSTANCE {
+            return Err(Error::OutOfRange(alloc_or_std_format!(
+                "instance number {} exceeds max {}",
+                instance_number,
+                Self::MAX_INSTANCE
+            )));
+        }
+        if instance_number == Self::WILDCARD_INSTANCE {
+            return Err(Error::OutOfRange(alloc_or_std_format!(
+                "instance number {} is reserved as the wildcard value; maximum addressable instance is {}",
+                instance_number,
+                Self::MAX_ADDRESSABLE_INSTANCE
             )));
         }
         Ok(Self {
@@ -62,6 +121,11 @@ impl ObjectIdentifier {
     }
 
     /// The instance number (0 to 4,194,303).
+    ///
+    /// Values returned from wire decoding may equal
+    /// [`WILDCARD_INSTANCE`](Self::WILDCARD_INSTANCE). Treat that value as a
+    /// concrete addressable object only after the relevant service context has
+    /// resolved its wildcard semantics.
     pub const fn instance_number(&self) -> u32 {
         self.instance_number
     }
@@ -486,6 +550,56 @@ mod tests {
         let bytes = oid.encode();
         let decoded = ObjectIdentifier::decode(&bytes).unwrap();
         assert_eq!(decoded.instance_number(), ObjectIdentifier::MAX_INSTANCE);
+
+        let raw_wire_value = ((ObjectType::DEVICE.to_raw() << 22)
+            | ObjectIdentifier::WILDCARD_INSTANCE)
+            .to_be_bytes();
+        let decoded = ObjectIdentifier::decode(&raw_wire_value).unwrap();
+        assert_eq!(decoded.object_type(), ObjectType::DEVICE);
+        assert_eq!(
+            decoded.instance_number(),
+            ObjectIdentifier::WILDCARD_INSTANCE
+        );
+    }
+
+    #[test]
+    fn object_identifier_new_addressable_rejects_wildcard() {
+        assert_eq!(
+            ObjectIdentifier::MAX_ADDRESSABLE_INSTANCE,
+            ObjectIdentifier::WILDCARD_INSTANCE - 1
+        );
+
+        let oid = ObjectIdentifier::new_addressable(
+            ObjectType::DEVICE,
+            ObjectIdentifier::MAX_ADDRESSABLE_INSTANCE,
+        )
+        .unwrap();
+        assert_eq!(
+            oid.instance_number(),
+            ObjectIdentifier::MAX_ADDRESSABLE_INSTANCE
+        );
+
+        let analog_input = ObjectIdentifier::new_addressable(
+            ObjectType::ANALOG_INPUT,
+            ObjectIdentifier::MAX_ADDRESSABLE_INSTANCE,
+        )
+        .unwrap();
+        assert_eq!(analog_input.object_type(), ObjectType::ANALOG_INPUT);
+        assert_eq!(
+            analog_input.instance_number(),
+            ObjectIdentifier::MAX_ADDRESSABLE_INSTANCE
+        );
+
+        let wildcard =
+            ObjectIdentifier::new_addressable(ObjectType::DEVICE, ObjectIdentifier::MAX_INSTANCE)
+                .unwrap_err();
+        assert!(wildcard.to_string().contains("wildcard"));
+
+        let too_large = ObjectIdentifier::new_addressable(
+            ObjectType::DEVICE,
+            ObjectIdentifier::MAX_INSTANCE + 1,
+        );
+        assert!(too_large.is_err());
     }
 
     #[test]
