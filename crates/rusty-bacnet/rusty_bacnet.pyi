@@ -1075,11 +1075,14 @@ class BACnetClient:
             ]
         ],
         max_notification_delay: Optional[int] = None,
-        issue_confirmed_notifications: Optional[bool] = None,
+        issue_confirmed_notifications: bool = ...,
+        lifetime: Optional[int] = None,
     ) -> None:
         """Subscribe to COV notifications for multiple properties on multiple objects.
 
         ``specs`` is ``[(object_id, [(property_id, array_index, cov_increment, timestamped), ...]), ...]``.
+        For subscriptions and re-subscriptions, ``lifetime`` and ``max_notification_delay`` are both required.
+        For cancellations, omit both fields.
         """
         ...
 

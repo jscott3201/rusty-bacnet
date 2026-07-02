@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Run `BACnetClient` device-table stale-entry purging on an independent interval so fully silent datalinks can evict dead devices.
 - Avoid `Instant` underflow in `BACnetClient` device-table purging on fresh Windows runners.
 - Send the required initial COV notification after successful server-side COV subscription acceptance.
+- Encode `SubscribeCOVPropertyMultiple` lifetime/max-delay fields in standard order, validate their subscription/cancellation semantics, and expire server-side multiple-property COV subscriptions.
 
 ## [0.10.0]
 

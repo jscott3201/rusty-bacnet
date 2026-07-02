@@ -242,7 +242,62 @@ pub(crate) fn handle_subscribe_cov_property_multiple_with_initial_endpoint(
 
     let request = SubscribeCOVPropertyMultipleRequest::decode(service_data)?;
 
-    let confirmed = request.issue_confirmed_notifications.unwrap_or(false);
+    let confirmed = request
+        .issue_confirmed_notifications
+        .ok_or(Error::Protocol {
+            class: ErrorClass::SERVICES.to_raw() as u32,
+            code: ErrorCode::MISSING_REQUIRED_PARAMETER.to_raw() as u32,
+        })?;
+    let cancellation = match (request.lifetime, request.max_notification_delay) {
+        (None, None) => true,
+        (Some(_), Some(_)) => false,
+        _ => {
+            return Err(Error::Protocol {
+                class: ErrorClass::SERVICES.to_raw() as u32,
+                code: ErrorCode::INCONSISTENT_PARAMETERS.to_raw() as u32,
+            });
+        }
+    };
+
+    if cancellation {
+        if request.list_of_cov_subscription_specifications.is_empty() {
+            table.unsubscribe_cov_multiple_context(
+                source_mac,
+                source_network,
+                request.subscriber_process_identifier,
+                confirmed,
+            );
+        } else {
+            for spec in &request.list_of_cov_subscription_specifications {
+                for cov_ref in &spec.list_of_cov_references {
+                    table.unsubscribe_cov_multiple_property_at(
+                        source_mac,
+                        source_network,
+                        request.subscriber_process_identifier,
+                        confirmed,
+                        spec.monitored_object_identifier,
+                        cov_ref.monitored_property.property_identifier,
+                    );
+                }
+            }
+        }
+        return Ok(Vec::new());
+    }
+
+    let lifetime = request.lifetime.expect("validated COV-multiple lifetime");
+    let max_notification_delay = request
+        .max_notification_delay
+        .expect("validated COV-multiple max notification delay");
+    if lifetime == 0
+        || max_notification_delay > 3600
+        || u64::from(max_notification_delay) >= u64::from(lifetime)
+    {
+        return Err(Error::Protocol {
+            class: ErrorClass::SERVICES.to_raw() as u32,
+            code: ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32,
+        });
+    }
+    let expires_at = Some(Instant::now() + Duration::from_secs(lifetime as u64));
     let subscriber_mac = MacAddr::from_slice(source_mac);
     let mut subscriptions = Vec::new();
     let mut new_keys = HashSet::new();
@@ -295,7 +350,7 @@ pub(crate) fn handle_subscribe_cov_property_multiple_with_initial_endpoint(
                 subscriber_process_identifier: request.subscriber_process_identifier,
                 monitored_object_identifier: spec.monitored_object_identifier,
                 issue_confirmed_notifications: confirmed,
-                expires_at: None, // SubscribeCOVPropertyMultiple has no lifetime
+                expires_at,
                 last_notified_value: None,
                 monitored_property: Some(property_identifier),
                 monitored_property_array_index: property_array_index,
@@ -314,6 +369,13 @@ pub(crate) fn handle_subscribe_cov_property_multiple_with_initial_endpoint(
         });
     }
 
+    table.refresh_cov_multiple_context_lifetime(
+        source_mac,
+        source_network,
+        request.subscriber_process_identifier,
+        confirmed,
+        expires_at,
+    );
     for subscription in &subscriptions {
         table.subscribe(subscription.clone());
     }

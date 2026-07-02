@@ -864,9 +864,9 @@ raw = await client.get_enrollment_summary(
 
 ### COV Property Multiple
 
-#### `subscribe_cov_property_multiple(address, subscriber_process_identifier, specs, max_notification_delay=None, issue_confirmed_notifications=None)`
+#### `subscribe_cov_property_multiple(address, subscriber_process_identifier, specs, max_notification_delay=None, issue_confirmed_notifications=None, lifetime=None)`
 
-Subscribe to COV on multiple properties across multiple objects.
+Subscribe to COV on multiple properties across multiple objects. For subscriptions and re-subscriptions, pass both `lifetime` and `max_notification_delay`; for cancellations, omit both.
 
 ```python
 await client.subscribe_cov_property_multiple(
@@ -884,6 +884,7 @@ await client.subscribe_cov_property_multiple(
     ],
     max_notification_delay=10,
     issue_confirmed_notifications=True,
+    lifetime=300,
 )
 ```
 

@@ -139,7 +139,9 @@ let spec = ReadAccessSpecification {
 ```rust
 use bacnet_services::cov::{
     SubscribeCOVRequest, COVNotificationRequest, UnsubscribeCOVRequest,
-    SubscribeCOVPropertyMultipleRequest,
+};
+use bacnet_services::cov_multiple::{
+    COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
 };
 ```
 
@@ -672,7 +674,23 @@ client.write_property_multiple(&mac, specs).await?;
 client.subscribe_cov(&mac, process_id, oid, true, Some(300)).await?;
 
 // Subscribe to multiple properties at once
-client.subscribe_cov_property_multiple(&mac, process_id, specs, Some(10), Some(true)).await?;
+let cov_specs: Vec<COVSubscriptionSpecification> = vec![/* object/property references */];
+let request = SubscribeCOVPropertyMultipleRequest {
+    subscriber_process_identifier: process_id,
+    issue_confirmed_notifications: Some(true),
+    lifetime: Some(300),
+    max_notification_delay: Some(10),
+    list_of_cov_subscription_specifications: cov_specs,
+};
+let mut service_data = bytes::BytesMut::new();
+request.encode(&mut service_data);
+client
+    .confirmed_request(
+        &mac,
+        ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE,
+        &service_data,
+    )
+    .await?;
 
 // Receive notifications (broadcast channel — multiple consumers OK)
 let mut rx = client.cov_notifications();

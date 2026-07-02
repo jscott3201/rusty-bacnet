@@ -147,7 +147,8 @@ impl BACnetClient {
     ///
     /// `specs` is a list of `(ObjectIdentifier, [(PropertyIdentifier, array_index, cov_increment, timestamped), ...])`.
     /// `cov_increment` is an optional float; `timestamped` is a bool.
-    #[pyo3(signature = (address, subscriber_process_identifier, specs, max_notification_delay=None, issue_confirmed_notifications=None))]
+    /// For subscriptions and re-subscriptions, `lifetime` and `max_notification_delay` are both required.
+    #[pyo3(signature = (address, subscriber_process_identifier, specs, max_notification_delay=None, issue_confirmed_notifications=None, lifetime=None))]
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn subscribe_cov_property_multiple<'py>(
         &self,
@@ -160,7 +161,29 @@ impl BACnetClient {
         )>,
         max_notification_delay: Option<u32>,
         issue_confirmed_notifications: Option<bool>,
+        lifetime: Option<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let confirmed = issue_confirmed_notifications
+            .ok_or_else(|| PyValueError::new_err("issue_confirmed_notifications is required"))?;
+        match (lifetime, max_notification_delay) {
+            (None, None) => {}
+            (Some(lifetime), Some(max_delay)) => {
+                if lifetime == 0 {
+                    return Err(PyValueError::new_err("lifetime must be non-zero"));
+                }
+                if max_delay > 3600 || max_delay >= lifetime {
+                    return Err(PyValueError::new_err(
+                        "max_notification_delay must be <= 3600 and less than lifetime",
+                    ));
+                }
+            }
+            _ => {
+                return Err(PyValueError::new_err(
+                    "lifetime and max_notification_delay must be both present or both absent",
+                ));
+            }
+        }
+
         let inner = self.inner.clone();
         let rust_specs: Vec<COVSubscriptionSpecification> = specs
             .into_iter()
@@ -190,8 +213,9 @@ impl BACnetClient {
             };
             let req = SubscribeCOVPropertyMultipleRequest {
                 subscriber_process_identifier,
+                issue_confirmed_notifications: Some(confirmed),
+                lifetime,
                 max_notification_delay,
-                issue_confirmed_notifications,
                 list_of_cov_subscription_specifications: rust_specs,
             };
             let mut buf = BytesMut::new();

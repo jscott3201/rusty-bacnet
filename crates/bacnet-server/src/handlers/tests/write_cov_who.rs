@@ -158,8 +158,9 @@ fn subscribe_cov_property_multiple_handler_returns_initial_subscriptions() {
 
     let request = SubscribeCOVPropertyMultipleRequest {
         subscriber_process_identifier: 1,
-        max_notification_delay: None,
         issue_confirmed_notifications: Some(false),
+        lifetime: Some(300),
+        max_notification_delay: Some(10),
         list_of_cov_subscription_specifications: vec![COVSubscriptionSpecification {
             monitored_object_identifier: oid,
             list_of_cov_references: vec![
@@ -197,7 +198,175 @@ fn subscribe_cov_property_multiple_handler_returns_initial_subscriptions() {
         subscriptions[1].monitored_property,
         Some(PropertyIdentifier::STATUS_FLAGS)
     );
+    assert!(subscriptions.iter().all(|sub| sub.expires_at.is_some()));
     assert_eq!(table.len(), 2);
+}
+
+#[test]
+fn subscribe_cov_property_multiple_cancellation_removes_context_or_specs() {
+    use bacnet_services::common::PropertyReference;
+    use bacnet_services::cov_multiple::{
+        COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
+    };
+
+    let db = make_db_with_ai();
+    let mut table = CovSubscriptionTable::new();
+    let mac = vec![192, 168, 1, 1, 0xBA, 0xC0];
+    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+
+    let subscription_request = SubscribeCOVPropertyMultipleRequest {
+        subscriber_process_identifier: 1,
+        issue_confirmed_notifications: Some(false),
+        lifetime: Some(300),
+        max_notification_delay: Some(10),
+        list_of_cov_subscription_specifications: vec![COVSubscriptionSpecification {
+            monitored_object_identifier: oid,
+            list_of_cov_references: vec![
+                COVReference {
+                    monitored_property: PropertyReference {
+                        property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                        property_array_index: None,
+                    },
+                    cov_increment: Some(0.5),
+                    timestamped: false,
+                },
+                COVReference {
+                    monitored_property: PropertyReference {
+                        property_identifier: PropertyIdentifier::STATUS_FLAGS,
+                        property_array_index: None,
+                    },
+                    cov_increment: None,
+                    timestamped: false,
+                },
+            ],
+        }],
+    };
+    let mut buf = BytesMut::new();
+    subscription_request.encode(&mut buf);
+    handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf).unwrap();
+    assert_eq!(table.len(), 2);
+
+    let cancel_present_value = SubscribeCOVPropertyMultipleRequest {
+        subscriber_process_identifier: 1,
+        issue_confirmed_notifications: Some(false),
+        lifetime: None,
+        max_notification_delay: None,
+        list_of_cov_subscription_specifications: vec![COVSubscriptionSpecification {
+            monitored_object_identifier: oid,
+            list_of_cov_references: vec![COVReference {
+                monitored_property: PropertyReference {
+                    property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                    property_array_index: None,
+                },
+                cov_increment: None,
+                timestamped: false,
+            }],
+        }],
+    };
+    let mut buf = BytesMut::new();
+    cancel_present_value.encode(&mut buf);
+    let initial =
+        handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf).unwrap();
+    assert!(initial.is_empty());
+    let remaining: Vec<_> = table
+        .subscriptions_for(&oid)
+        .into_iter()
+        .map(|sub| sub.monitored_property)
+        .collect();
+    assert_eq!(remaining, vec![Some(PropertyIdentifier::STATUS_FLAGS)]);
+
+    let cancel_context = SubscribeCOVPropertyMultipleRequest {
+        subscriber_process_identifier: 1,
+        issue_confirmed_notifications: Some(false),
+        lifetime: None,
+        max_notification_delay: None,
+        list_of_cov_subscription_specifications: Vec::new(),
+    };
+    let mut buf = BytesMut::new();
+    cancel_context.encode(&mut buf);
+    let initial =
+        handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf).unwrap();
+    assert!(initial.is_empty());
+    assert!(table.is_empty());
+}
+
+#[test]
+fn subscribe_cov_property_multiple_rejects_invalid_service_parameters() {
+    use bacnet_services::common::PropertyReference;
+    use bacnet_services::cov_multiple::{
+        COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
+    };
+
+    let db = make_db_with_ai();
+    let mut table = CovSubscriptionTable::new();
+    let mac = vec![192, 168, 1, 1, 0xBA, 0xC0];
+    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    let specs = vec![COVSubscriptionSpecification {
+        monitored_object_identifier: oid,
+        list_of_cov_references: vec![COVReference {
+            monitored_property: PropertyReference {
+                property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                property_array_index: None,
+            },
+            cov_increment: Some(0.5),
+            timestamped: false,
+        }],
+    }];
+
+    for (issue_confirmed_notifications, lifetime, max_notification_delay, expected_code) in [
+        (
+            None,
+            Some(300),
+            Some(10),
+            ErrorCode::MISSING_REQUIRED_PARAMETER,
+        ),
+        (
+            Some(false),
+            Some(300),
+            None,
+            ErrorCode::INCONSISTENT_PARAMETERS,
+        ),
+        (
+            Some(false),
+            None,
+            Some(10),
+            ErrorCode::INCONSISTENT_PARAMETERS,
+        ),
+        (Some(false), Some(0), Some(0), ErrorCode::VALUE_OUT_OF_RANGE),
+        (
+            Some(false),
+            Some(300),
+            Some(300),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        ),
+        (
+            Some(false),
+            Some(4000),
+            Some(3601),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        ),
+    ] {
+        let request = SubscribeCOVPropertyMultipleRequest {
+            subscriber_process_identifier: 1,
+            issue_confirmed_notifications,
+            lifetime,
+            max_notification_delay,
+            list_of_cov_subscription_specifications: specs.clone(),
+        };
+        let mut buf = BytesMut::new();
+        request.encode(&mut buf);
+
+        let err = handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf)
+            .unwrap_err();
+        match err {
+            Error::Protocol { class, code } => {
+                assert_eq!(class, ErrorClass::SERVICES.to_raw() as u32);
+                assert_eq!(code, expected_code.to_raw() as u32);
+            }
+            other => panic!("expected service parameter protocol error, got {other:?}"),
+        }
+        assert!(table.is_empty());
+    }
 }
 
 #[test]
@@ -214,8 +383,9 @@ fn subscribe_cov_property_multiple_invalid_property_is_atomic() {
 
     let request = SubscribeCOVPropertyMultipleRequest {
         subscriber_process_identifier: 1,
-        max_notification_delay: None,
         issue_confirmed_notifications: Some(false),
+        lifetime: Some(300),
+        max_notification_delay: Some(10),
         list_of_cov_subscription_specifications: vec![COVSubscriptionSpecification {
             monitored_object_identifier: oid,
             list_of_cov_references: vec![
@@ -286,8 +456,9 @@ fn subscribe_cov_property_multiple_capacity_failure_is_atomic() {
 
     let request = SubscribeCOVPropertyMultipleRequest {
         subscriber_process_identifier: 1,
-        max_notification_delay: None,
         issue_confirmed_notifications: Some(false),
+        lifetime: Some(300),
+        max_notification_delay: Some(10),
         list_of_cov_subscription_specifications: vec![COVSubscriptionSpecification {
             monitored_object_identifier: oid,
             list_of_cov_references: vec![

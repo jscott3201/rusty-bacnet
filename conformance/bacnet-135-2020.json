@@ -193,7 +193,10 @@
         "crates/bacnet-services/src/cov_multiple.rs"
       ],
       "positive_tests": [
+        "crates/bacnet-services/src/cov_multiple.rs::tests::subscribe_cov_property_multiple_uses_standard_tags",
+        "crates/bacnet-server/src/cov.rs::tests::cov_multiple_context_lifetime_refreshes_and_expires",
         "crates/bacnet-server/src/handlers/tests/write_cov_who.rs::subscribe_cov_property_multiple_handler_returns_initial_subscriptions",
+        "crates/bacnet-server/src/handlers/tests/write_cov_who.rs::subscribe_cov_property_multiple_cancellation_removes_context_or_specs",
         "crates/bacnet-server/src/handlers/tests/write_cov_who.rs::subscribe_cov_records_routed_subscriber_endpoint",
         "crates/bacnet-server/src/server/cov_notifications_tests.rs::unconfirmed_cov_multiple_apdu_uses_multiple_service_choice",
         "crates/bacnet-server/src/server/cov_notifications_tests.rs::confirmed_cov_multiple_apdu_uses_multiple_service_choice",
@@ -205,6 +208,8 @@
         "crates/bacnet-integration-tests/tests/server/error_cov.rs::cov_subscribe_then_cancel"
       ],
       "negative_tests": [
+        "crates/bacnet-services/src/cov_multiple.rs::tests::subscribe_cov_property_multiple_rejects_malformed_header_fields",
+        "crates/bacnet-server/src/handlers/tests/write_cov_who.rs::subscribe_cov_property_multiple_rejects_invalid_service_parameters",
         "crates/bacnet-server/src/handlers/tests/write_cov_who.rs::subscribe_cov_property_multiple_invalid_property_is_atomic",
         "crates/bacnet-server/src/handlers/tests/write_cov_who.rs::subscribe_cov_property_multiple_capacity_failure_is_atomic",
         "crates/bacnet-server/src/handlers/tests/write_cov_who.rs::subscribe_cov_unknown_object_fails",
@@ -212,7 +217,7 @@
       ],
       "benchmarks": [],
       "public_claims": [],
-      "notes": "Issue #82 evidence adds post-acceptance initial notifications for SubscribeCOV and SubscribeCOVProperty, COVNotificationMultiple APDUs with the multiple service choices for SubscribeCOVPropertyMultiple initial and later-change notifications, property-validation and subscription-capacity atomicity, routed subscriber endpoint preservation for SimpleAck, notification sends, and segmented ComplexAck responses, subscriber COV increment precedence, and server TSM invoke-ID collision avoidance for routed/confirmed notifications. This row remains below supported status until fuller BIBB/PICS and clause-level conformance evidence exists, including SubscribeCOVPropertyMultiple request lifetime/field-order wire fixtures, first-failed-subscription behavior, complete service parameter validation, and Device active-COV property synchronization."
+      "notes": "Issue #82 evidence adds post-acceptance initial notifications for SubscribeCOV and SubscribeCOVProperty, COVNotificationMultiple APDUs with the multiple service choices for SubscribeCOVPropertyMultiple initial and later-change notifications, property-validation and subscription-capacity atomicity, routed subscriber endpoint preservation for SimpleAck, notification sends, and segmented ComplexAck responses, subscriber COV increment precedence, and server TSM invoke-ID collision avoidance for routed/confirmed notifications. Issue #83 evidence adds SubscribeCOVPropertyMultiple request lifetime encoding/decoding in the standard field order, mandatory issue-confirmed validation, paired lifetime/max-delay validation, cancellation handling for empty contexts and listed property specs, context lifetime refresh, and server-side subscription expiration from the decoded lifetime. This row remains below supported status until fuller BIBB/PICS and clause-level conformance evidence exists, including first-failed-subscription response shape, complete Device active-COV property synchronization, context-level Active_COV_Multiple_Subscriptions evidence, and fuller clause-level evidence."
     },
     {
       "id": "BACNET-20-ENCODING",
