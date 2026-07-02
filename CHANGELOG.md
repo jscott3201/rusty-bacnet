@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `BACnetClient` COV subscribe/unsubscribe helpers that resolve discovered-device routing.
 - Add `BACnetClient` SubscribeCOVProperty subscribe/unsubscribe helpers for property-level COV subscriptions.
 - Add source metadata, delivery kind, and configurable confirmed-notification ACK policy to `BACnetClient` COV notification delivery.
+- Add a managed finite `BACnetClient` COV subscription helper that renews before expiry and emits lifetime/renewal events.
 
 ### Fixed
 

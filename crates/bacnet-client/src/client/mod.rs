@@ -639,6 +639,7 @@ fn response_tsm_mac(source_mac: &[u8], source_network: &Option<NpduAddress>) -> 
 mod builder_options;
 mod cov;
 mod cov_notifications;
+mod cov_renewal;
 mod device_events;
 mod device_mgmt;
 mod discovery;
@@ -654,11 +655,16 @@ pub use cov_notifications::{
     COVNotificationDelivery, ConfirmedCOVNotificationAckPolicy, ConfirmedCOVNotificationResponse,
     ReceivedCOVNotification,
 };
+pub use cov_renewal::{
+    ManagedCOVSubscription, ManagedCOVSubscriptionEvent, ManagedCOVSubscriptionOptions,
+};
 
 #[cfg(test)]
 mod builder_options_tests;
 #[cfg(test)]
 mod cov_notification_tests;
+#[cfg(test)]
+mod cov_renewal_tests;
 #[cfg(test)]
 mod cov_tests;
 #[cfg(test)]
