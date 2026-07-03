@@ -176,6 +176,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         remote_max_segments: Option<u32>,
     ) -> Result<Bytes, Error> {
         let tsm_mac = target.tsm_mac();
+        let advertised_max_apdu = self.advertised_max_apdu_length_for_target(target)?;
         let max_seg_size = max_segment_payload(remote_max_apdu, SegmentedPduType::ConfirmedRequest);
         let segments = split_payload(service_data, max_seg_size)?;
         let total_segments = segments.len();
@@ -221,12 +222,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
         let result = async {
             while next_seq < total_segments {
-                let window_end = (next_seq + window_size).min(total_segments);
+                let window_start = next_seq;
+                let window_end = (window_start + window_size).min(total_segments);
 
-                for (seq, segment_data) in segments[next_seq..window_end]
+                for (seq, segment_data) in segments[window_start..window_end]
                     .iter()
                     .enumerate()
-                    .map(|(i, s)| (next_seq + i, s))
+                    .map(|(i, s)| (window_start + i, s))
                 {
                     let is_last = seq == total_segments - 1;
                     let pdu = Apdu::ConfirmedRequest(ConfirmedRequestPdu {
@@ -234,7 +236,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         more_follows: !is_last,
                         segmented_response_accepted: self.config.segmented_response_accepted,
                         max_segments: self.config.max_segments,
-                        max_apdu_length: self.config.max_apdu_length,
+                        max_apdu_length: advertised_max_apdu,
                         invoke_id,
                         sequence_number: Some(seq as u8),
                         proposed_window_size: Some(self.config.proposed_window_size.max(1)),
@@ -254,7 +256,39 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     let mut ack_retries: u8 = 0;
                     loop {
                         match timeout(timeout_duration, seg_ack_rx.recv()).await {
-                            Ok(Some(ack)) => break ack,
+                            Ok(Some(ack)) => {
+                                let ack_seq = ack.sequence_number as usize;
+                                if ack_seq >= total_segments {
+                                    return Err(Error::Segmentation(format!(
+                                        "SegmentAck sequence {} out of range (total {})",
+                                        ack_seq, total_segments
+                                    )));
+                                }
+
+                                let ack_in_current_window = if ack.negative_ack {
+                                    let resend_seq = if ack_seq == 0 && window_start == 0 {
+                                        0
+                                    } else {
+                                        ack_seq + 1
+                                    };
+                                    resend_seq >= window_start && resend_seq < window_end
+                                } else {
+                                    ack_seq >= window_start && ack_seq < window_end
+                                };
+
+                                if !ack_in_current_window {
+                                    debug!(
+                                        seq = ack.sequence_number,
+                                        negative = ack.negative_ack,
+                                        window_start,
+                                        window_end,
+                                        "Ignoring SegmentAck outside current send window"
+                                    );
+                                    continue;
+                                }
+
+                                break ack;
+                            }
                             Ok(None) => {
                                 return Err(Error::Encoding("SegmentAck channel closed".into()));
                             }
@@ -267,10 +301,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                     attempt = ack_retries,
                                     "Retransmitting segmented request window"
                                 );
-                                for (seq, segment_data) in segments[next_seq..window_end]
+                                for (seq, segment_data) in segments[window_start..window_end]
                                     .iter()
                                     .enumerate()
-                                    .map(|(i, s)| (next_seq + i, s))
+                                    .map(|(i, s)| (window_start + i, s))
                                 {
                                     let is_last = seq == total_segments - 1;
                                     let pdu = Apdu::ConfirmedRequest(ConfirmedRequestPdu {
@@ -280,7 +314,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                             .config
                                             .segmented_response_accepted,
                                         max_segments: self.config.max_segments,
-                                        max_apdu_length: self.config.max_apdu_length,
+                                        max_apdu_length: advertised_max_apdu,
                                         invoke_id,
                                         sequence_number: Some(seq as u8),
                                         proposed_window_size: Some(
@@ -310,13 +344,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 window_size = ack.actual_window_size.max(1) as usize;
 
                 let ack_seq = ack.sequence_number as usize;
-                if ack_seq >= total_segments {
-                    return Err(Error::Segmentation(format!(
-                        "SegmentAck sequence {} out of range (total {})",
-                        ack_seq, total_segments
-                    )));
-                }
-
                 if ack.negative_ack {
                     neg_ack_retries += 1;
                     if neg_ack_retries > MAX_NEG_ACK_RETRIES {
@@ -324,7 +351,16 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                             "too many negative SegmentAck retransmissions".into(),
                         ));
                     }
-                    next_seq = ack_seq + 1;
+                    // A first-window negative SegmentACK with sequence 0 is
+                    // ambiguous: it can mean segment 0 was the last accepted
+                    // segment, or that no segment has been accepted yet. Later
+                    // NAK 0 frames are stale for this window and are ignored
+                    // before reaching this branch.
+                    next_seq = if ack_seq == 0 && window_start == 0 {
+                        0
+                    } else {
+                        ack_seq + 1
+                    };
                 } else {
                     neg_ack_retries = 0;
                     next_seq = ack_seq + 1;

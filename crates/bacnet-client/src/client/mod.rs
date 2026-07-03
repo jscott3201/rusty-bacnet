@@ -46,6 +46,8 @@ pub const MAX_COV_CHANNEL_CAPACITY: usize = 65_536;
 /// Device discovery event broadcast channel capacity.
 pub const DEVICE_EVENT_CHANNEL_CAPACITY: usize = 64;
 
+const VALID_MAX_APDU_LENGTHS: [u16; 6] = [50, 128, 206, 480, 1024, 1476];
+
 /// Type of change observed in the device discovery table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceEventKind {
@@ -628,6 +630,32 @@ impl<'a> ConfirmedTarget<'a> {
             } => routed_tsm_mac(*dest_network, dest_mac),
         }
     }
+
+    fn additional_npdu_header_len(&self) -> u16 {
+        match self {
+            Self::Local { .. } => 0,
+            Self::Routed { dest_mac, .. } => u16::try_from(dest_mac.len())
+                .unwrap_or(u16::MAX)
+                .saturating_add(4),
+        }
+    }
+}
+
+fn max_apdu_bucket_at_or_below(limit: u16) -> Option<u16> {
+    VALID_MAX_APDU_LENGTHS
+        .iter()
+        .rev()
+        .copied()
+        .find(|bucket| *bucket <= limit)
+}
+
+fn cap_max_apdu_to_transport(configured: u16, transport_limit: u16) -> Result<u16, Error> {
+    let limit = configured.min(transport_limit);
+    max_apdu_bucket_at_or_below(limit).ok_or_else(|| {
+        Error::Encoding(format!(
+            "transport max-APDU-length {transport_limit} leaves no valid BACnet APDU bucket"
+        ))
+    })
 }
 
 fn routed_tsm_mac(network: u16, mac: &[u8]) -> MacAddr {
@@ -681,6 +709,10 @@ mod cov_renewal_tests;
 mod cov_tests;
 #[cfg(test)]
 mod device_events_tests;
+#[cfg(test)]
+mod sc_max_apdu_tests;
+#[cfg(test)]
+mod segmentation_retransmit_tests;
 #[cfg(test)]
 mod tests;
 

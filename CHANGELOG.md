@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Propagate negotiated BACnet/SC hub Max-NPDU/BVLC limits into `ScTransport::max_apdu_length()` and `BACnetClient` request segmentation, with `BACnetClient::transport_max_apdu_length()` exposing the live post-connect transport budget.
 - Return BACnet/SC handshake timeouts as `Error::Timeout` and malformed BVLC-Result failures as typed `ScConnectError` values instead of collapsing them into `Error::Encoding`; downstream code should match `Error::Timeout` directly and use `ScConnectError::from_error` for SC transport details.
 - Re-dial BACnet/SC WebSocket connections during reconnect, failover, and primary restore instead of reusing a torn-down socket object.
 - Abort BACnet/SC receive tasks and close WebSocket ownership on ungraceful `Drop`, including the `BACnetClient`/`NetworkLayer` drop cascade, while preserving graceful Disconnect-Request shutdown.

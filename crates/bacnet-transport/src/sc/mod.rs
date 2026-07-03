@@ -4,7 +4,10 @@
 //! The actual WebSocket I/O is abstracted behind the [`WebSocketPort`] trait
 //! so the connection state machine can be tested without a TLS stack.
 
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{
+    atomic::{AtomicU16, Ordering},
+    Arc, Mutex as StdMutex,
+};
 use std::time::{Duration, Instant};
 
 #[cfg(test)]
@@ -44,6 +47,10 @@ pub(crate) use random48::generate_random48_vmac;
 pub(crate) use random48::set_test_random48_vmac_generator;
 pub use reconnect::ScReconnectConfig;
 
+const DEFAULT_MAX_APDU_LENGTH: u16 = 1476;
+const BACNET_NPDU_BASE_HEADER_LEN: u16 = 2;
+const SC_ENCAPSULATED_NPDU_BASE_HEADER_LEN: u16 = 10;
+
 // ---------------------------------------------------------------------------
 // WebSocket abstraction
 // ---------------------------------------------------------------------------
@@ -71,6 +78,7 @@ pub struct ScTransport<W: WebSocketPort> {
     /// Device UUID (16 bytes, RFC 4122).
     device_uuid: [u8; 16],
     connection: Option<Arc<Mutex<ScConnection>>>,
+    effective_max_apdu_length: Arc<AtomicU16>,
     state_tx: watch::Sender<ScConnectionState>,
     recv_task: Option<JoinHandle<()>>,
     connect_timeout_ms: u64,
@@ -94,6 +102,7 @@ impl<W: WebSocketPort> ScTransport<W> {
             local_vmac,
             device_uuid: [0u8; 16],
             connection: None,
+            effective_max_apdu_length: Arc::new(AtomicU16::new(DEFAULT_MAX_APDU_LENGTH)),
             state_tx,
             recv_task: None,
             connect_timeout_ms: 10_000,
@@ -200,6 +209,8 @@ impl<W: WebSocketPort> ScTransport<W> {
                 c.state = ScConnectionState::Disconnected;
             }
         }
+        self.effective_max_apdu_length
+            .store(DEFAULT_MAX_APDU_LENGTH, Ordering::Relaxed);
         self.state_tx.send_replace(ScConnectionState::Disconnected);
         self.ws_shared = None;
         self.connection = None;
@@ -207,6 +218,18 @@ impl<W: WebSocketPort> ScTransport<W> {
         self.failover_ws = None;
         (task, restore_task)
     }
+}
+
+fn effective_max_apdu_length(conn: &ScConnection) -> u16 {
+    let bvlc_npdu_budget = conn
+        .hub_max_bvlc_length
+        .saturating_sub(SC_ENCAPSULATED_NPDU_BASE_HEADER_LEN);
+    let effective_npdu = conn.hub_max_apdu_length.min(bvlc_npdu_budget);
+    effective_npdu.saturating_sub(BACNET_NPDU_BASE_HEADER_LEN)
+}
+
+fn publish_effective_max_apdu_length(store: &AtomicU16, conn: &ScConnection) {
+    store.store(effective_max_apdu_length(conn), Ordering::Relaxed);
 }
 
 async fn connect_probe_from(conn: &Arc<Mutex<ScConnection>>) -> Arc<Mutex<ScConnection>> {
@@ -228,12 +251,14 @@ async fn publish_connected_ws<W: WebSocketPort>(
     ws: &Arc<W>,
     probe_conn: &Arc<Mutex<ScConnection>>,
     state_tx: &watch::Sender<ScConnectionState>,
+    effective_max_apdu_length: &AtomicU16,
 ) {
     let restored = probe_conn.lock().await.clone();
     let mut current = active_ws.lock().await;
     let mut c = conn.lock().await;
     *c = restored;
     *current = ws.clone();
+    publish_effective_max_apdu_length(effective_max_apdu_length, &c);
     state_tx.send_replace(c.state);
 }
 
@@ -312,7 +337,11 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
             }
         };
 
-        self.local_vmac = conn.lock().await.local_vmac;
+        {
+            let c = conn.lock().await;
+            self.local_vmac = c.local_vmac;
+            publish_effective_max_apdu_length(&self.effective_max_apdu_length, &c);
+        }
 
         let active_ws = Arc::new(Mutex::new(ws.clone()));
         self.ws_shared = Some(active_ws.clone());
@@ -332,6 +361,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         let primary_ws = primary_ws.clone();
         let mut ws_clone = ws.clone();
         let mut active_hub = active_hub;
+        let effective_max_apdu_length = self.effective_max_apdu_length.clone();
         let task = tokio::spawn(async move {
             let mut primary_restore_interval =
                 tokio::time::interval(Duration::from_millis(restore_interval_ms));
@@ -475,6 +505,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                 &restore_disconnect_task,
                                 &state_tx,
                                 connect_timeout_ms,
+                                &effective_max_apdu_length,
                             )
                             .await
                             {
@@ -576,6 +607,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                 &reconnect_ws,
                                 &probe_conn,
                                 &state_tx,
+                                &effective_max_apdu_length,
                             )
                             .await;
                             ws_clone = reconnect_ws;
@@ -626,6 +658,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                     &failover,
                                     &probe_conn,
                                     &state_tx,
+                                    &effective_max_apdu_length,
                                 )
                                 .await;
                                 ws_clone = failover;
@@ -733,6 +766,10 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         // Use a trick: reference the stored array.
         &self.local_vmac
     }
+
+    fn max_apdu_length(&self) -> u16 {
+        self.effective_max_apdu_length.load(Ordering::Relaxed)
+    }
 }
 
 impl<W: WebSocketPort> Drop for ScTransport<W> {
@@ -746,6 +783,9 @@ mod data_attribute_tests;
 
 #[cfg(test)]
 mod drop_tests;
+
+#[cfg(test)]
+mod max_apdu_tests;
 
 #[cfg(test)]
 mod receive_state_tests;

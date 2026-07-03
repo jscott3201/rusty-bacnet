@@ -1,6 +1,6 @@
 //! BACnet/SC primary/failover hub switching helpers.
 
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{atomic::AtomicU16, Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use bacnet_types::error::Error;
@@ -12,8 +12,8 @@ use tracing::warn;
 use crate::sc_frame::{encode_sc_message, ScMessage};
 
 use super::{
-    connector::dial_connector, handshake::perform_handshake, ScConnection, ScConnectionState,
-    WebSocketConnector, WebSocketPort,
+    connector::dial_connector, handshake::perform_handshake, publish_effective_max_apdu_length,
+    ScConnection, ScConnectionState, WebSocketConnector, WebSocketPort,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +31,7 @@ pub(super) async fn attempt_primary_restore<W: WebSocketPort>(
     restore_disconnect_task: &Arc<StdMutex<Option<JoinHandle<()>>>>,
     state_tx: &watch::Sender<ScConnectionState>,
     connect_timeout_ms: u64,
+    effective_max_apdu_length: &AtomicU16,
 ) -> Result<Arc<W>, Error> {
     let restored_ws = if let Some(connector) = primary_connector {
         Arc::new(dial_connector(connector, connect_timeout_ms).await?)
@@ -49,6 +50,7 @@ pub(super) async fn attempt_primary_restore<W: WebSocketPort>(
     let mut c = conn.lock().await;
     *c = restored;
     *current = restored_ws.clone();
+    publish_effective_max_apdu_length(effective_max_apdu_length, &c);
     state_tx.send_replace(c.state);
     drop(c);
     drop(current);

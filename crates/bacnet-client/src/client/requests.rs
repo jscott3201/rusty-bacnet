@@ -54,6 +54,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ) -> Result<Bytes, Error> {
         let tsm_mac = target.tsm_mac();
         let unsegmented_apdu_size = 4 + service_data.len();
+        let target_transport_max_apdu = self.target_transport_max_apdu_length(target);
 
         match target {
             ConfirmedTarget::Local { mac } => {
@@ -64,7 +65,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         .map(|d| d.max_apdu_length as u16)
                         .unwrap_or(self.config.max_apdu_length);
                     let max_seg = device.and_then(|d| d.max_segments_accepted);
-                    (max_apdu, max_seg)
+                    (max_apdu.min(target_transport_max_apdu), max_seg)
                 };
                 if unsegmented_apdu_size > remote_max_apdu as usize {
                     return self
@@ -79,7 +80,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 }
             }
             ConfirmedTarget::Routed { .. } => {
-                let remote_max_apdu = self.config.max_apdu_length;
+                let remote_max_apdu = self.config.max_apdu_length.min(target_transport_max_apdu);
                 if unsegmented_apdu_size > remote_max_apdu as usize {
                     return self
                         .segmented_confirmed_request(
@@ -94,6 +95,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             }
         }
 
+        let advertised_max_apdu = self.advertised_max_apdu_length_for_target(target)?;
         let (invoke_id, rx) = {
             let mut tsm = self.tsm.lock().await;
             let invoke_id = tsm.allocate_invoke_id(&tsm_mac).ok_or_else(|| {
@@ -112,7 +114,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             more_follows: false,
             segmented_response_accepted: self.config.segmented_response_accepted,
             max_segments: self.config.max_segments,
-            max_apdu_length: self.config.max_apdu_length,
+            max_apdu_length: advertised_max_apdu,
             invoke_id,
             sequence_number: None,
             proposed_window_size: None,
@@ -222,6 +224,24 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             }
         }
     }
+
+    pub(super) fn target_transport_max_apdu_length(&self, target: ConfirmedTarget<'_>) -> u16 {
+        self.network
+            .transport()
+            .max_apdu_length()
+            .saturating_sub(target.additional_npdu_header_len())
+    }
+
+    pub(super) fn advertised_max_apdu_length_for_target(
+        &self,
+        target: ConfirmedTarget<'_>,
+    ) -> Result<u16, Error> {
+        cap_max_apdu_to_transport(
+            self.config.max_apdu_length,
+            self.target_transport_max_apdu_length(target),
+        )
+    }
+
     /// Send an unconfirmed request (fire-and-forget) to a specific destination.
     pub async fn unconfirmed_request(
         &self,

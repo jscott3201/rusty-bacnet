@@ -29,9 +29,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         transport: T,
         options: ClientOptions,
     ) -> Result<Self, Error> {
-        let transport_max = transport.max_apdu_length();
-        config.max_apdu_length = config.max_apdu_length.min(transport_max);
         validate_max_apdu_length(config.max_apdu_length)?;
+        config.max_apdu_length =
+            cap_max_apdu_to_transport(config.max_apdu_length, transport.max_apdu_length())?;
         if !(1..=127).contains(&config.proposed_window_size) {
             return Err(Error::Encoding(format!(
                 "invalid proposed-window-size {}; expected 1..=127",
@@ -42,6 +42,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
         let mut network = NetworkLayer::new(transport);
         let mut apdu_rx = network.start().await?;
+        config.max_apdu_length = cap_max_apdu_to_transport(
+            config.max_apdu_length,
+            network.transport().max_apdu_length(),
+        )?;
         let local_mac = MacAddr::from_slice(network.local_mac());
 
         let network = Arc::new(network);
@@ -163,6 +167,30 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     pub fn local_mac(&self) -> &[u8] {
         &self.local_mac
     }
+
+    /// Current BACnet max-APDU bucket advertised by this client.
+    ///
+    /// Returns `0` if the live transport budget is below the smallest BACnet
+    /// max-APDU bucket and a confirmed request would currently fail before
+    /// encoding.
+    pub fn max_apdu_length(&self) -> u16 {
+        max_apdu_bucket_at_or_below(
+            self.config
+                .max_apdu_length
+                .min(self.network.transport().max_apdu_length()),
+        )
+        .unwrap_or(0)
+    }
+
+    /// Current APDU payload budget reported by the underlying transport.
+    ///
+    /// For BACnet/SC this reflects the negotiated hub envelope after connect
+    /// and may be lower than the encoded BACnet max-APDU bucket advertised by
+    /// the client.
+    pub fn transport_max_apdu_length(&self) -> u16 {
+        self.network.transport().max_apdu_length()
+    }
+
     /// Stop the client, aborting the dispatch task.
     pub async fn stop(&mut self) -> Result<(), Error> {
         if let Some(task) = self.abort_dispatch_task() {
