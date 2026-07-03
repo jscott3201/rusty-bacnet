@@ -399,6 +399,7 @@ impl<T: TransportPort> NetworkLayer<T> {
 impl<T: TransportPort> Drop for NetworkLayer<T> {
     fn drop(&mut self) {
         let _ = self.abort_dispatch_task();
+        self.transport.abort();
     }
 }
 
@@ -436,6 +437,42 @@ mod tests {
         let mut buf = BytesMut::new();
         encode_sc_message(&mut buf, &accept);
         ws_hub.send(&buf).await.unwrap();
+    }
+
+    async fn assert_sc_socket_closed_after_drop(ws_hub: &LoopbackWebSocket, context: &str) {
+        timeout(Duration::from_secs(1), async {
+            loop {
+                match ws_hub.recv().await {
+                    Ok(data) => {
+                        let msg = decode_sc_message(&data).unwrap();
+                        assert_ne!(
+                            msg.function,
+                            ScFunction::HeartbeatAck,
+                            "{context} must not leave SC answering heartbeats"
+                        );
+                    }
+                    Err(_) => break,
+                }
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("{context} did not close the SC WebSocket"));
+
+        let heartbeat = ScMessage {
+            function: ScFunction::HeartbeatRequest,
+            message_id: 0x66,
+            originating_vmac: None,
+            destination_vmac: None,
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::new(),
+        };
+        let mut buf = BytesMut::new();
+        encode_sc_message(&mut buf, &heartbeat);
+        assert!(
+            ws_hub.send(&buf).await.is_err(),
+            "{context} must reject post-drop Heartbeat-Request on the closed socket"
+        );
     }
 
     #[tokio::test]
@@ -542,6 +579,25 @@ mod tests {
         assert_eq!(received.data_attributes[1].data, vec![0x12, 0x34, 0x56]);
 
         net.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn network_layer_drop_releases_sc_transport_socket() {
+        let (ws_client, ws_hub) = LoopbackWebSocket::pair();
+        let hub_vmac = [0x10; 6];
+        let mut net = NetworkLayer::new(ScTransport::new(ws_client, [0x01; 6]));
+
+        let hub_accept_task = tokio::spawn(async move {
+            sc_hub_accept(&ws_hub, hub_vmac).await;
+            ws_hub
+        });
+
+        let _rx = net.start().await.unwrap();
+        let ws_hub = hub_accept_task.await.unwrap();
+
+        drop(net);
+
+        assert_sc_socket_closed_after_drop(&ws_hub, "dropped NetworkLayer").await;
     }
 
     #[tokio::test]

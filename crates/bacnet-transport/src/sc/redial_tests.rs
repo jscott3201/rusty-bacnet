@@ -637,3 +637,82 @@ async fn sc_primary_restore_publishes_before_hung_failover_disconnect_send() {
 
     transport.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn sc_drop_aborts_hung_primary_restore_failover_disconnect() {
+    let (primary_client, stale_primary_hub) =
+        GateSendWebSocket::pair(Arc::new(AtomicBool::new(false)));
+    drop(stale_primary_hub);
+    let failover_hang_send = Arc::new(AtomicBool::new(false));
+    let (failover_client, failover_hub) = GateSendWebSocket::pair(failover_hang_send.clone());
+    let (primary_hub_tx, mut primary_hub_rx) =
+        tokio::sync::mpsc::unbounded_channel::<GateSendWebSocket>();
+    let primary_dial_count = Arc::new(AtomicUsize::new(0));
+
+    let primary_hub_vmac = [0x10; 6];
+    let failover_hub_vmac = [0x20; 6];
+    let mut transport = ScTransport::new(primary_client, [0x01; 6])
+        .with_connect_timeout_ms(750)
+        .with_heartbeat_interval_ms(5_000)
+        .with_connector(gate_send_redial_connector(
+            primary_dial_count,
+            primary_hub_tx,
+        ))
+        .with_reconnect(ScReconnectConfig {
+            initial_delay_ms: 10,
+            max_delay_ms: 10,
+            max_retries: 1,
+        })
+        .with_failover(failover_client);
+
+    let failover_task = tokio::spawn(async move {
+        hub_accept(&failover_hub, failover_hub_vmac).await;
+        failover_hub
+    });
+
+    let _rx = transport.start().await.unwrap();
+    let failover_hub = failover_task.await.unwrap();
+    let conn = transport.connection().unwrap().clone();
+    assert_eq!(conn.lock().await.hub_vmac, Some(failover_hub_vmac));
+
+    failover_hang_send.store(true, Ordering::SeqCst);
+    let primary_restore_task = tokio::spawn(async move {
+        let primary_hub = primary_hub_rx.recv().await.unwrap();
+        hub_accept(&primary_hub, primary_hub_vmac).await;
+        primary_hub
+    });
+    let _primary_hub = tokio::time::timeout(Duration::from_secs(2), primary_restore_task)
+        .await
+        .expect("timed out waiting for primary restore handshake")
+        .unwrap();
+    wait_for_hub_vmac(&conn, primary_hub_vmac, Duration::from_millis(250)).await;
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if transport.restore_disconnect_task.lock().unwrap().is_some() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("timed out waiting for failover disconnect task");
+
+    let abort_handle = transport.recv_task.as_ref().unwrap().abort_handle();
+    drop(transport);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !abort_handle.is_finished() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("dropping SC transport aborts recv task");
+
+    let failover_recv = tokio::time::timeout(Duration::from_secs(1), failover_hub.recv())
+        .await
+        .expect("old failover socket stayed open after Drop");
+    assert!(
+        failover_recv.is_err(),
+        "old failover socket must close after Drop aborts restore disconnect task"
+    );
+}

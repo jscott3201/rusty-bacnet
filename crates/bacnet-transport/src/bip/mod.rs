@@ -564,6 +564,10 @@ impl TransportPort for BipTransport {
         Ok(())
     }
 
+    fn abort(&mut self) {
+        let _ = self.abort_background_tasks();
+    }
+
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
         let socket = self.require_socket()?;
 
@@ -613,7 +617,7 @@ impl TransportPort for BipTransport {
 
 impl Drop for BipTransport {
     fn drop(&mut self) {
-        let _ = self.abort_background_tasks();
+        self.abort();
     }
 }
 

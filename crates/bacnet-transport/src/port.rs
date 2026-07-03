@@ -77,6 +77,13 @@ pub trait TransportPort: Send + Sync {
     /// Stop the transport and clean up resources.
     fn stop(&mut self) -> impl std::future::Future<Output = Result<(), Error>> + Send;
 
+    /// Synchronously abort background work and release owned transport resources.
+    ///
+    /// This hook is intended for `Drop` paths where async [`Self::stop`] cannot
+    /// be awaited. Implementations should not attempt graceful protocol shutdown
+    /// here; graceful disconnects remain the responsibility of [`Self::stop`].
+    fn abort(&mut self) {}
+
     /// Send NPDU bytes to a specific MAC address (unicast).
     fn send_unicast(
         &self,

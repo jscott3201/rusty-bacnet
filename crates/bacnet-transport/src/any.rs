@@ -71,6 +71,20 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
         }
     }
 
+    fn abort(&mut self) {
+        match self {
+            Self::Bip(t) => t.abort(),
+            Self::Mstp(t) => t.abort(),
+            #[cfg(feature = "ipv6")]
+            Self::Bip6(t) => t.abort(),
+            #[cfg(all(feature = "ethernet", target_os = "linux"))]
+            Self::Ethernet(t) => t.abort(),
+            #[cfg(feature = "sc-tls")]
+            Self::Sc(t) => t.abort(),
+            Self::Loopback(t) => t.abort(),
+        }
+    }
+
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
         match self {
             Self::Bip(t) => t.send_unicast(npdu, mac).await,

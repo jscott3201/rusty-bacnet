@@ -1,11 +1,12 @@
 //! BACnet/SC primary/failover hub switching helpers.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tracing::warn;
 
 use crate::sc_frame::{encode_sc_message, ScMessage};
@@ -27,6 +28,7 @@ pub(super) async fn attempt_primary_restore<W: WebSocketPort>(
     current_ws: &Arc<W>,
     active_ws: &Arc<Mutex<Arc<W>>>,
     conn: &Arc<Mutex<ScConnection>>,
+    restore_disconnect_task: &Arc<StdMutex<Option<JoinHandle<()>>>>,
     connect_timeout_ms: u64,
 ) -> Result<Arc<W>, Error> {
     let restored_ws = if let Some(connector) = primary_connector {
@@ -50,9 +52,17 @@ pub(super) async fn attempt_primary_restore<W: WebSocketPort>(
     drop(current);
 
     let disconnect_ws = current_ws.clone();
-    let _ = tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         send_disconnect_request(&*disconnect_ws, disconnect_msg, connect_timeout_ms).await;
     });
+    match restore_disconnect_task.lock() {
+        Ok(mut slot) => {
+            if let Some(previous) = slot.replace(task) {
+                previous.abort();
+            }
+        }
+        Err(_) => task.abort(),
+    }
     Ok(restored_ws)
 }
 

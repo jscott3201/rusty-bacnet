@@ -3,6 +3,10 @@ use bacnet_encoding::apdu::{ComplexAck, SimpleAck};
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportPort;
+use bacnet_transport::sc::{LoopbackWebSocket, ScTransport, WebSocketPort};
+use bacnet_transport::sc_frame::{
+    decode_sc_message, encode_sc_message, ScFunction, ScMessage, Vmac,
+};
 use bacnet_types::enums::{ObjectType, Segmentation};
 use bacnet_types::primitives::ObjectIdentifier;
 use std::net::Ipv4Addr;
@@ -17,6 +21,67 @@ async fn make_client() -> BACnetClient<BipTransport> {
         .build()
         .await
         .unwrap()
+}
+
+async fn sc_hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
+    let data = ws_hub.recv().await.unwrap();
+    let req = decode_sc_message(&data).unwrap();
+    assert_eq!(req.function, ScFunction::ConnectRequest);
+
+    let mut accept_payload = Vec::with_capacity(26);
+    accept_payload.extend_from_slice(&hub_vmac);
+    accept_payload.extend_from_slice(&[0u8; 16]);
+    accept_payload.extend_from_slice(&1476u16.to_be_bytes());
+    accept_payload.extend_from_slice(&1476u16.to_be_bytes());
+
+    let accept = ScMessage {
+        function: ScFunction::ConnectAccept,
+        message_id: req.message_id,
+        originating_vmac: None,
+        destination_vmac: None,
+        dest_options: Vec::new(),
+        data_options: Vec::new(),
+        payload: Bytes::from(accept_payload),
+    };
+    let mut buf = BytesMut::new();
+    encode_sc_message(&mut buf, &accept);
+    ws_hub.send(&buf).await.unwrap();
+}
+
+async fn assert_sc_socket_closed_after_drop(ws_hub: &LoopbackWebSocket, context: &str) {
+    timeout(Duration::from_secs(1), async {
+        loop {
+            match ws_hub.recv().await {
+                Ok(data) => {
+                    let msg = decode_sc_message(&data).unwrap();
+                    assert_ne!(
+                        msg.function,
+                        ScFunction::HeartbeatAck,
+                        "{context} must not leave SC answering heartbeats"
+                    );
+                }
+                Err(_) => break,
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{context} did not close the SC WebSocket"));
+
+    let heartbeat = ScMessage {
+        function: ScFunction::HeartbeatRequest,
+        message_id: 0x66,
+        originating_vmac: None,
+        destination_vmac: None,
+        dest_options: Vec::new(),
+        data_options: Vec::new(),
+        payload: Bytes::new(),
+    };
+    let mut buf = BytesMut::new();
+    encode_sc_message(&mut buf, &heartbeat);
+    assert!(
+        ws_hub.send(&buf).await.is_err(),
+        "{context} must reject post-drop Heartbeat-Request on the closed socket"
+    );
 }
 
 async fn send_routed_response<T: TransportPort>(
@@ -123,6 +188,28 @@ async fn client_drop_releases_bip_socket() {
     })
     .await
     .expect("dropping BACnetClient releases the B/IP socket");
+}
+
+#[tokio::test]
+async fn client_drop_releases_sc_transport_socket() {
+    let (ws_client, ws_hub) = LoopbackWebSocket::pair();
+    let client_vmac = [0x01; 6];
+    let hub_vmac = [0x10; 6];
+    let transport = ScTransport::new(ws_client, client_vmac);
+
+    let hub_task = tokio::spawn(async move {
+        sc_hub_accept(&ws_hub, hub_vmac).await;
+        ws_hub
+    });
+
+    let client = BACnetClient::start(ClientConfig::default(), transport)
+        .await
+        .unwrap();
+    let ws_hub = hub_task.await.unwrap();
+
+    drop(client);
+
+    assert_sc_socket_closed_after_drop(&ws_hub, "dropped BACnetClient").await;
 }
 
 #[tokio::test(start_paused = true)]

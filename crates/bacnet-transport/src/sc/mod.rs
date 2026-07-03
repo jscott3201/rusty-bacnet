@@ -4,7 +4,7 @@
 //! The actual WebSocket I/O is abstracted behind the [`WebSocketPort`] trait
 //! so the connection state machine can be tested without a TLS stack.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 #[cfg(test)]
@@ -77,6 +77,7 @@ pub struct ScTransport<W: WebSocketPort> {
     primary_connector: Option<WebSocketConnector<W>>,
     failover_connector: Option<WebSocketConnector<W>>,
     reconnect_config: Option<ScReconnectConfig>,
+    restore_disconnect_task: Arc<StdMutex<Option<JoinHandle<()>>>>,
     #[cfg(test)]
     allow_test_heartbeat_timing: bool,
 }
@@ -97,6 +98,7 @@ impl<W: WebSocketPort> ScTransport<W> {
             primary_connector: None,
             failover_connector: None,
             reconnect_config: None,
+            restore_disconnect_task: Arc::new(StdMutex::new(None)),
             #[cfg(test)]
             allow_test_heartbeat_timing: false,
         }
@@ -161,6 +163,33 @@ impl<W: WebSocketPort> ScTransport<W> {
     /// Get the connection state (for testing/inspection).
     pub fn connection(&self) -> Option<&Arc<Mutex<ScConnection>>> {
         self.connection.as_ref()
+    }
+
+    fn abort_background_task_and_drop_sockets(
+        &mut self,
+    ) -> (Option<JoinHandle<()>>, Option<JoinHandle<()>>) {
+        let task = self.recv_task.take();
+        if let Some(task) = &task {
+            task.abort();
+        }
+        let restore_task = self
+            .restore_disconnect_task
+            .lock()
+            .ok()
+            .and_then(|mut task| task.take());
+        if let Some(task) = &restore_task {
+            task.abort();
+        }
+        if let Some(conn) = &self.connection {
+            if let Ok(mut c) = conn.try_lock() {
+                c.state = ScConnectionState::Disconnected;
+            }
+        }
+        self.ws_shared = None;
+        self.connection = None;
+        self.ws = None;
+        self.failover_ws = None;
+        (task, restore_task)
     }
 }
 
@@ -266,6 +295,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         let heartbeat_interval_ms = self.heartbeat_interval_ms;
         let heartbeat_timeout_ms = self.heartbeat_timeout_ms;
         let reconnect_config = self.reconnect_config.clone();
+        let restore_disconnect_task = self.restore_disconnect_task.clone();
         let connect_timeout_ms = self.connect_timeout_ms;
         let restore_enabled = reconnect_config.is_some();
         let restore_interval_ms = reconnect_config
@@ -408,6 +438,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                 &ws_clone,
                                 &active_ws,
                                 &conn,
+                                &restore_disconnect_task,
                                 connect_timeout_ms,
                             )
                             .await
@@ -588,19 +619,24 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
             }
         }
 
-        if let Some(task) = self.recv_task.take() {
-            task.abort();
+        let conn_for_state = self.connection.clone();
+        let (recv_task, restore_task) = self.abort_background_task_and_drop_sockets();
+        if let Some(task) = recv_task {
+            let _ = task.await;
+        }
+        if let Some(task) = restore_task {
             let _ = task.await;
         }
 
-        // Clear shared state to prevent stale sends
-        if let Some(conn) = &self.connection {
+        if let Some(conn) = conn_for_state {
             let mut c = conn.lock().await;
             c.state = ScConnectionState::Disconnected;
         }
-        self.ws_shared = None;
-        self.connection = None;
         Ok(())
+    }
+
+    fn abort(&mut self) {
+        let _ = self.abort_background_task_and_drop_sockets();
     }
 
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
@@ -638,8 +674,17 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
     }
 }
 
+impl<W: WebSocketPort> Drop for ScTransport<W> {
+    fn drop(&mut self) {
+        self.abort();
+    }
+}
+
 #[cfg(test)]
 mod data_attribute_tests;
+
+#[cfg(test)]
+mod drop_tests;
 
 #[cfg(test)]
 mod receive_state_tests;
