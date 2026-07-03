@@ -5,15 +5,15 @@ use std::time::Duration;
 
 use bacnet_types::error::Error;
 use bytes::BytesMut;
-use tokio::sync::Mutex;
+use tokio::sync::{watch, Mutex};
 use tokio::task::JoinHandle;
 use tracing::warn;
 
 use crate::sc_frame::{encode_sc_message, ScMessage};
 
 use super::{
-    connector::dial_connector, handshake::perform_handshake, ScConnection, WebSocketConnector,
-    WebSocketPort,
+    connector::dial_connector, handshake::perform_handshake, ScConnection, ScConnectionState,
+    WebSocketConnector, WebSocketPort,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +29,7 @@ pub(super) async fn attempt_primary_restore<W: WebSocketPort>(
     active_ws: &Arc<Mutex<Arc<W>>>,
     conn: &Arc<Mutex<ScConnection>>,
     restore_disconnect_task: &Arc<StdMutex<Option<JoinHandle<()>>>>,
+    state_tx: &watch::Sender<ScConnectionState>,
     connect_timeout_ms: u64,
 ) -> Result<Arc<W>, Error> {
     let restored_ws = if let Some(connector) = primary_connector {
@@ -37,7 +38,7 @@ pub(super) async fn attempt_primary_restore<W: WebSocketPort>(
         primary_ws.clone()
     };
     let probe_conn = Arc::new(Mutex::new(primary_probe_connection(conn).await));
-    if let Err(e) = perform_handshake(&*restored_ws, &probe_conn, connect_timeout_ms).await {
+    if let Err(e) = perform_handshake(&*restored_ws, &probe_conn, None, connect_timeout_ms).await {
         absorb_failed_probe(conn, &probe_conn).await;
         return Err(e);
     }
@@ -48,6 +49,7 @@ pub(super) async fn attempt_primary_restore<W: WebSocketPort>(
     let mut c = conn.lock().await;
     *c = restored;
     *current = restored_ws.clone();
+    state_tx.send_replace(c.state);
     drop(c);
     drop(current);
 

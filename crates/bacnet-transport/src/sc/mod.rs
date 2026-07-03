@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 #[cfg(test)]
 use bytes::Bytes;
 use bytes::BytesMut;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
@@ -69,6 +69,7 @@ pub struct ScTransport<W: WebSocketPort> {
     /// Device UUID (16 bytes, RFC 4122).
     device_uuid: [u8; 16],
     connection: Option<Arc<Mutex<ScConnection>>>,
+    state_tx: watch::Sender<ScConnectionState>,
     recv_task: Option<JoinHandle<()>>,
     connect_timeout_ms: u64,
     heartbeat_interval_ms: u64,
@@ -84,12 +85,14 @@ pub struct ScTransport<W: WebSocketPort> {
 
 impl<W: WebSocketPort> ScTransport<W> {
     pub fn new(ws: W, local_vmac: Vmac) -> Self {
+        let (state_tx, _) = watch::channel(ScConnectionState::Disconnected);
         Self {
             ws: Some(ws),
             ws_shared: None,
             local_vmac,
             device_uuid: [0u8; 16],
             connection: None,
+            state_tx,
             recv_task: None,
             connect_timeout_ms: 10_000,
             heartbeat_interval_ms: heartbeat::DEFAULT_HEARTBEAT_INTERVAL_MS,
@@ -165,6 +168,16 @@ impl<W: WebSocketPort> ScTransport<W> {
         self.connection.as_ref()
     }
 
+    /// Subscribe to BACnet/SC connection state changes.
+    ///
+    /// The returned watch receiver yields the latest known state immediately and
+    /// change notifications for subsequent state updates observed by the
+    /// transport. Rapid updates can coalesce under Tokio watch semantics, so use
+    /// this as a current-state signal rather than a durable transition log.
+    pub fn connection_state_changes(&self) -> watch::Receiver<ScConnectionState> {
+        self.state_tx.subscribe()
+    }
+
     fn abort_background_task_and_drop_sockets(
         &mut self,
     ) -> (Option<JoinHandle<()>>, Option<JoinHandle<()>>) {
@@ -185,6 +198,7 @@ impl<W: WebSocketPort> ScTransport<W> {
                 c.state = ScConnectionState::Disconnected;
             }
         }
+        self.state_tx.send_replace(ScConnectionState::Disconnected);
         self.ws_shared = None;
         self.connection = None;
         self.ws = None;
@@ -211,12 +225,14 @@ async fn publish_connected_ws<W: WebSocketPort>(
     active_ws: &Arc<Mutex<Arc<W>>>,
     ws: &Arc<W>,
     probe_conn: &Arc<Mutex<ScConnection>>,
+    state_tx: &watch::Sender<ScConnectionState>,
 ) {
     let restored = probe_conn.lock().await.clone();
     let mut current = active_ws.lock().await;
     let mut c = conn.lock().await;
     *c = restored;
     *current = ws.clone();
+    state_tx.send_replace(c.state);
 }
 
 impl<W: WebSocketPort> TransportPort for ScTransport<W> {
@@ -252,39 +268,47 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         let mut failover_ws = self.failover_ws.take().map(Arc::new);
         let primary_connector = self.primary_connector.clone();
         let failover_connector = self.failover_connector.clone();
+        let state_tx = self.state_tx.clone();
 
         // Attempt handshake on the primary WebSocket.
-        let (ws, active_hub) =
-            match perform_handshake(&*primary_ws, &conn, self.connect_timeout_ms).await {
-                Ok(()) => (primary_ws.clone(), ActiveHub::Primary),
-                Err(primary_err) => {
-                    // Primary failed — try failover if configured.
-                    if !conn.lock().await.connect_retry_allowed {
-                        self.local_vmac = conn.lock().await.local_vmac;
-                        return Err(primary_err);
-                    } else if let Some(failover) = dial_failover_ws(
-                        &failover_connector,
-                        &mut failover_ws,
-                        self.connect_timeout_ms,
-                    )
-                    .await
+        let (ws, active_hub) = match perform_handshake(
+            &*primary_ws,
+            &conn,
+            Some(&state_tx),
+            self.connect_timeout_ms,
+        )
+        .await
+        {
+            Ok(()) => (primary_ws.clone(), ActiveHub::Primary),
+            Err(primary_err) => {
+                // Primary failed — try failover if configured.
+                if !conn.lock().await.connect_retry_allowed {
+                    self.local_vmac = conn.lock().await.local_vmac;
+                    return Err(primary_err);
+                } else if let Some(failover) = dial_failover_ws(
+                    &failover_connector,
+                    &mut failover_ws,
+                    self.connect_timeout_ms,
+                )
+                .await
+                {
+                    debug!("BACnet/SC primary connect failed, attempting failover");
+                    // Reset connection state for the retry.
                     {
-                        debug!("BACnet/SC primary connect failed, attempting failover");
-                        // Reset connection state for the retry.
-                        {
-                            let mut c = conn.lock().await;
-                            c.reset_for_connect_retry();
-                        }
-                        perform_handshake(&*failover, &conn, self.connect_timeout_ms)
-                            .await
-                            .map(|()| (failover, ActiveHub::Failover))
-                            .map_err(|_| primary_err)?
-                    } else {
-                        self.local_vmac = conn.lock().await.local_vmac;
-                        return Err(primary_err);
+                        let mut c = conn.lock().await;
+                        c.reset_for_connect_retry();
+                        state_tx.send_replace(c.state);
                     }
+                    perform_handshake(&*failover, &conn, Some(&state_tx), self.connect_timeout_ms)
+                        .await
+                        .map(|()| (failover, ActiveHub::Failover))
+                        .map_err(|_| primary_err)?
+                } else {
+                    self.local_vmac = conn.lock().await.local_vmac;
+                    return Err(primary_err);
                 }
-            };
+            }
+        };
 
         self.local_vmac = conn.lock().await.local_vmac;
 
@@ -334,6 +358,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                             warn!("Malformed wire-level BACnet/SC BVLC-Result: {e}");
                                             let mut c = conn.lock().await;
                                             c.state = ScConnectionState::Disconnected;
+                                            state_tx.send_replace(c.state);
                                             break;
                                         }
                                         Err(e) => {
@@ -379,17 +404,23 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                     }
 
                                     // Handle NPDU — lock, extract results, drop before awaiting
-                                    let (npdu_result, disconnect_ack) = {
+                                    let (npdu_result, disconnect_ack, fatal_result, state_change) = {
                                         let mut c = conn.lock().await;
+                                        let before_state = c.state;
                                         let npdu = c.handle_received(&msg);
                                         let ack = c.disconnect_ack_to_send.take();
-                                        (npdu, ack)
+                                        let after_state = c.state;
+                                        (
+                                            npdu,
+                                            ack,
+                                            msg.function == ScFunction::Result
+                                                && after_state == ScConnectionState::Disconnected,
+                                            (after_state != before_state).then_some(after_state),
+                                        )
                                     };
-                                    let fatal_result = {
-                                        let c = conn.lock().await;
-                                        msg.function == ScFunction::Result
-                                            && c.state == ScConnectionState::Disconnected
-                                    };
+                                    if let Some(state) = state_change {
+                                        state_tx.send_replace(state);
+                                    }
 
                                     if let Some((npdu, source_vmac)) = npdu_result {
                                         if npdu_tx
@@ -423,6 +454,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                     warn!("BACnet/SC recv error: {}", e);
                                     let mut c = conn.lock().await;
                                     c.state = ScConnectionState::Disconnected;
+                                    state_tx.send_replace(c.state);
                                     break;
                                 }
                             }
@@ -439,6 +471,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                 &active_ws,
                                 &conn,
                                 &restore_disconnect_task,
+                                &state_tx,
                                 connect_timeout_ms,
                             )
                             .await
@@ -470,6 +503,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                     warn!("BACnet/SC heartbeat send error: {}", e);
                                     let mut c = conn.lock().await;
                                     c.state = ScConnectionState::Disconnected;
+                                    state_tx.send_replace(c.state);
                                     break;
                                 }
                                 pending_heartbeat_id = Some(heartbeat_message_id);
@@ -479,6 +513,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                 warn!("BACnet/SC heartbeat timeout — disconnecting");
                                 let mut c = conn.lock().await;
                                 c.state = ScConnectionState::Disconnected;
+                                state_tx.send_replace(c.state);
                                 break;
                             }
                         }
@@ -508,6 +543,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                     {
                         let mut c = conn.lock().await;
                         c.reset_for_connect_retry();
+                        state_tx.send_replace(c.state);
                     }
 
                     let reconnect_ws = match dial_reconnect_ws(
@@ -528,10 +564,18 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                     };
 
                     let probe_conn = connect_probe_from(&conn).await;
-                    match perform_handshake(&*reconnect_ws, &probe_conn, connect_timeout_ms).await {
+                    match perform_handshake(&*reconnect_ws, &probe_conn, None, connect_timeout_ms)
+                        .await
+                    {
                         Ok(()) => {
-                            publish_connected_ws(&conn, &active_ws, &reconnect_ws, &probe_conn)
-                                .await;
+                            publish_connected_ws(
+                                &conn,
+                                &active_ws,
+                                &reconnect_ws,
+                                &probe_conn,
+                                &state_tx,
+                            )
+                            .await;
                             ws_clone = reconnect_ws;
                             info!(attempt, "SC reconnected after backoff");
                             reconnected = true;
@@ -566,13 +610,22 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                         {
                             let mut c = conn.lock().await;
                             c.reset_for_connect_retry();
+                            state_tx.send_replace(c.state);
                         }
 
                         let probe_conn = connect_probe_from(&conn).await;
-                        match perform_handshake(&*failover, &probe_conn, connect_timeout_ms).await {
+                        match perform_handshake(&*failover, &probe_conn, None, connect_timeout_ms)
+                            .await
+                        {
                             Ok(()) => {
-                                publish_connected_ws(&conn, &active_ws, &failover, &probe_conn)
-                                    .await;
+                                publish_connected_ws(
+                                    &conn,
+                                    &active_ws,
+                                    &failover,
+                                    &probe_conn,
+                                    &state_tx,
+                                )
+                                .await;
                                 ws_clone = failover;
                                 active_hub = ActiveHub::Failover;
                                 info!("SC connected to failover hub after primary reconnect exhaustion");
@@ -593,6 +646,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                     );
                     let mut c = conn.lock().await;
                     c.state = ScConnectionState::Disconnected;
+                    state_tx.send_replace(c.state);
                     break 'transport;
                 }
             }
@@ -608,7 +662,11 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
             let (ws, disconnect_msg) = {
                 let ws = ws.lock().await;
                 let mut c = conn.lock().await;
-                (ws.clone(), c.build_disconnect_request().ok())
+                let disconnect_msg = c.build_disconnect_request().ok();
+                if disconnect_msg.is_some() {
+                    self.state_tx.send_replace(c.state);
+                }
+                (ws.clone(), disconnect_msg)
             };
             if let Some(msg) = disconnect_msg {
                 let mut buf = BytesMut::new();
@@ -631,6 +689,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         if let Some(conn) = conn_for_state {
             let mut c = conn.lock().await;
             c.state = ScConnectionState::Disconnected;
+            self.state_tx.send_replace(c.state);
         }
         Ok(())
     }
@@ -691,6 +750,9 @@ mod receive_state_tests;
 
 #[cfg(test)]
 mod result_tests;
+
+#[cfg(test)]
+mod state_watch_tests;
 
 #[cfg(test)]
 mod primary_restore_tests;

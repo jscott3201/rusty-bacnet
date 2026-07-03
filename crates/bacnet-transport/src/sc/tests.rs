@@ -226,6 +226,16 @@ fn build_disconnect_before_connect_returns_error() {
 }
 
 #[test]
+fn build_disconnect_after_disconnect_returns_error() {
+    let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
+    conn.hub_vmac = Some([0x10; 6]);
+
+    let result = conn.build_disconnect_request();
+    assert!(result.is_err());
+    assert_eq!(conn.state, ScConnectionState::Disconnected);
+}
+
+#[test]
 fn connect_request_has_payload() {
     let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
     conn.max_bvlc_length = 1200;

@@ -151,8 +151,13 @@ impl ScConnection {
 
     /// Build a Disconnect-Request message (no VMACs).
     ///
-    /// Returns an error if not yet connected (no hub VMAC available).
+    /// Returns an error if not connected.
     pub fn build_disconnect_request(&mut self) -> Result<ScMessage, Error> {
+        if self.state != ScConnectionState::Connected {
+            return Err(Error::Encoding(
+                "cannot build DisconnectRequest: connection is not connected".into(),
+            ));
+        }
         if self.hub_vmac.is_none() {
             return Err(Error::Encoding(
                 "cannot build DisconnectRequest: no hub VMAC (not connected)".into(),
