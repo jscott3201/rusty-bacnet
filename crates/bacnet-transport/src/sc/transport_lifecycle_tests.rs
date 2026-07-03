@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_types::error::Error;
 
 async fn hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
     let data = ws_hub.recv().await.unwrap();
@@ -62,12 +63,8 @@ async fn sc_connect_timeout() {
     let mut transport = ScTransport::new(ws_client, vmac).with_connect_timeout_ms(200);
     // Don't send ConnectAccept from server side; this should timeout.
     let result = transport.start().await;
-    assert!(result.is_err());
-    let err_msg = format!("{}", result.unwrap_err());
     assert!(
-        err_msg.contains("timeout"),
-        "Expected timeout error, got: {}",
-        err_msg
+        matches!(result, Err(Error::Timeout(duration)) if duration == Duration::from_millis(200))
     );
     let conn = transport.connection().unwrap();
     let c = conn.lock().await;
@@ -107,7 +104,12 @@ async fn sc_connect_rejects_mismatched_accept_message_id() {
 
     let result = transport.start().await;
     assert!(result.is_err());
-    let err_msg = format!("{}", result.unwrap_err());
+    let err = result.unwrap_err();
+    assert_eq!(
+        ScConnectError::from_error(&err),
+        Some(&ScConnectError::ConnectAcceptMismatch)
+    );
+    let err_msg = format!("{err}");
     assert!(
         err_msg.contains("Connect-Accept"),
         "Expected Connect-Accept mismatch error, got: {}",
@@ -599,12 +601,8 @@ async fn test_no_failover_without_config() {
     let mut transport = ScTransport::new(primary_client, vmac).with_connect_timeout_ms(200);
 
     let result = transport.start().await;
-    assert!(result.is_err());
-    let err_msg = format!("{}", result.unwrap_err());
     assert!(
-        err_msg.contains("timeout"),
-        "Expected timeout error, got: {}",
-        err_msg
+        matches!(result, Err(Error::Timeout(duration)) if duration == Duration::from_millis(200))
     );
 }
 

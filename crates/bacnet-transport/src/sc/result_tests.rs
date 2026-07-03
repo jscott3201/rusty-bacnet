@@ -237,12 +237,151 @@ async fn sc_connect_result_nak_fails_without_timeout() {
         started.elapsed() < Duration::from_secs(1),
         "BVLC-Result NAK should fail connect before timeout"
     );
-    let err_msg = result.unwrap_err().to_string();
-    assert!(err_msg.contains("BVLC-Result NAK"), "{err_msg}");
+    let err = result.unwrap_err();
+    let sc_error = ScConnectError::from_error(&err).expect("NAK should be a typed SC error");
+    match sc_error {
+        ScConnectError::HandshakeNak {
+            result_for,
+            error_class,
+            error_code,
+            duplicate_vmac_reseeded,
+            ..
+        } => {
+            assert_eq!(*result_for, ScFunction::ConnectRequest);
+            assert_eq!(*error_class, ErrorClass::COMMUNICATION.to_raw());
+            assert_eq!(*error_code, 0x0117);
+            assert!(!duplicate_vmac_reseeded);
+        }
+        other => panic!("expected HandshakeNak, got {other:?}"),
+    }
 
     let conn = transport.connection().unwrap();
     assert_eq!(conn.lock().await.state, ScConnectionState::Disconnected);
     hub_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn sc_connect_result_nak_preserves_error_details() {
+    let (ws_client, ws_server) = LoopbackWebSocket::pair();
+    let mut transport = ScTransport::new(ws_client, [0x01; 6]).with_connect_timeout_ms(5000);
+
+    let hub_task = tokio::spawn(async move {
+        let data = ws_server.recv().await.unwrap();
+        let req = decode_sc_message(&data).unwrap();
+        assert_eq!(req.function, ScFunction::ConnectRequest);
+        let mut nak = connect_result_nak(req.message_id, ErrorCode::NODE_DUPLICATE_VMAC.to_raw());
+        let mut payload = nak.payload.to_vec();
+        payload[2] = 0xBF;
+        payload.extend_from_slice(b"duplicate VMAC");
+        nak.payload = Bytes::from(payload);
+        send_message(&ws_server, &nak).await;
+    });
+
+    let err = transport.start().await.unwrap_err();
+    let sc_error = ScConnectError::from_error(&err).expect("NAK should be a typed SC error");
+    match sc_error {
+        ScConnectError::HandshakeNak {
+            result_for,
+            error_header_marker,
+            error_class,
+            error_code,
+            error_details,
+            duplicate_vmac_reseeded,
+        } => {
+            assert_eq!(*result_for, ScFunction::ConnectRequest);
+            assert_eq!(*error_header_marker, 0xBF);
+            assert_eq!(*error_class, ErrorClass::COMMUNICATION.to_raw());
+            assert_eq!(*error_code, ErrorCode::NODE_DUPLICATE_VMAC.to_raw());
+            assert_eq!(error_details, "duplicate VMAC");
+            assert!(*duplicate_vmac_reseeded);
+        }
+        other => panic!("expected HandshakeNak, got {other:?}"),
+    }
+    hub_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn sc_connect_not_hub_nak_preserves_error_code_for_matching() {
+    let (ws_client, ws_server) = LoopbackWebSocket::pair();
+    let mut transport = ScTransport::new(ws_client, [0x01; 6]).with_connect_timeout_ms(5000);
+
+    let hub_task = tokio::spawn(async move {
+        let data = ws_server.recv().await.unwrap();
+        let req = decode_sc_message(&data).unwrap();
+        assert_eq!(req.function, ScFunction::ConnectRequest);
+        send_message(
+            &ws_server,
+            &connect_result_nak(req.message_id, ErrorCode::NOT_A_BACNET_SC_HUB.to_raw()),
+        )
+        .await;
+    });
+
+    let err = transport.start().await.unwrap_err();
+    let sc_error = ScConnectError::from_error(&err).expect("NAK should be a typed SC error");
+    match sc_error {
+        ScConnectError::HandshakeNak {
+            error_class,
+            error_code,
+            duplicate_vmac_reseeded,
+            ..
+        } => {
+            assert_eq!(*error_class, ErrorClass::COMMUNICATION.to_raw());
+            assert_eq!(*error_code, ErrorCode::NOT_A_BACNET_SC_HUB.to_raw());
+            assert!(!duplicate_vmac_reseeded);
+        }
+        other => panic!("expected HandshakeNak, got {other:?}"),
+    }
+    hub_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn sc_connect_malformed_result_returns_typed_sc_error() {
+    let (ws_client, ws_server) = LoopbackWebSocket::pair();
+    let mut transport = ScTransport::new(ws_client, [0x01; 6]).with_connect_timeout_ms(5000);
+
+    let hub_task = tokio::spawn(async move {
+        let data = ws_server.recv().await.unwrap();
+        let req = decode_sc_message(&data).unwrap();
+        assert_eq!(req.function, ScFunction::ConnectRequest);
+        let malformed = ScMessage {
+            function: ScFunction::Result,
+            message_id: req.message_id,
+            originating_vmac: None,
+            destination_vmac: None,
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::from(vec![ScFunction::ConnectRequest.to_raw(), 0x01, 0x00]),
+        };
+        send_message(&ws_server, &malformed).await;
+    });
+
+    let err = transport.start().await.unwrap_err();
+    let sc_error =
+        ScConnectError::from_error(&err).expect("malformed Result should be a typed SC error");
+    match sc_error {
+        ScConnectError::MalformedBvlcResult { offset, message } => {
+            assert_eq!(*offset, 2);
+            assert!(message.contains("payload too short"), "{message}");
+        }
+        other => panic!("expected MalformedBvlcResult, got {other:?}"),
+    }
+    hub_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn sc_connect_timeout_returns_timeout_error() {
+    let (ws_client, _ws_server) = LoopbackWebSocket::pair();
+    let mut transport = ScTransport::new(ws_client, [0x01; 6]).with_connect_timeout_ms(20);
+
+    let err = transport.start().await.unwrap_err();
+    assert!(
+        ScConnectError::from_error(&err).is_none(),
+        "handshake timeout should use top-level Error::Timeout, got {err:?}"
+    );
+    match err {
+        Error::Timeout(duration) => assert_eq!(duration, Duration::from_millis(20)),
+        other => panic!("expected timeout, got {other:?}"),
+    }
 }
 
 #[tokio::test]
