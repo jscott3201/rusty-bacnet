@@ -575,15 +575,27 @@ impl ScClientBuilder {
             .ok_or_else(|| Error::Encoding("SC client builder: tls_config is required".into()))?;
         self.options.validate()?;
 
-        let ws = bacnet_transport::sc_tls::TlsWebSocket::connect(&self.hub_url, tls_config).await?;
+        let ws = bacnet_transport::sc_tls::TlsWebSocket::connect(&self.hub_url, tls_config.clone())
+            .await?;
 
         let mut transport = bacnet_transport::sc::ScTransport::new(ws, self.vmac)
             .with_heartbeat_interval_ms(self.heartbeat_interval_ms)
             .with_heartbeat_timeout_ms(self.heartbeat_timeout_ms);
         if let Some(rc) = self.reconnect {
+            let hub_url = self.hub_url.clone();
+            let tls_config = tls_config.clone();
             #[allow(deprecated)]
             {
-                transport = transport.with_reconnect(rc);
+                transport = transport
+                    .with_connector(move || {
+                        let hub_url = hub_url.clone();
+                        let tls_config = tls_config.clone();
+                        async move {
+                            bacnet_transport::sc_tls::TlsWebSocket::connect(&hub_url, tls_config)
+                                .await
+                        }
+                    })
+                    .with_reconnect(rc);
             }
         }
 
