@@ -40,6 +40,9 @@ mcp.json
 # Proprietary spec
 _spec/
 
+# Local conformance artifacts
+/conformance/
+
 # OS
 .DS_Store
 Thumbs.db

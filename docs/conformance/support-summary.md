@@ -1,12 +1,12 @@
 # BACnet Standard 135-2020 Support Summary
 
-> DRAFT internal support evidence. Generated from `conformance/bacnet-135-2020.json`; this is not a BTL certification claim or formal PICS/BIBB declaration.
+> DRAFT internal support evidence. Generated from `docs/conformance/bacnet-135-2020.json`; this is not a BTL certification claim or formal PICS/BIBB declaration.
 
 - Standard: ANSI/ASHRAE Standard 135-2020
-- Reviewed at: 2026-06-29
-- Implementation evidence SHA reviewed: `a889b76331bfcb4e2dd998b8a78e544ad37397b2`
-- Scope: Annex AB.6.3 BACnet/SC heartbeat initiation and liveness behavior for browser/WASM clients, covering post-Connect-Accept heartbeat tracking, monotonic Performance-clock scheduling, no-VMAC Heartbeat-ACK correlation, timeout/send-failure fail-closed disconnect, receive-loop/timer cleanup, and pending confirmed-service Promise rejection on terminal disconnect paths.
-- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.2.14 Heartbeat-Request, AB.2.15 Heartbeat-ACK, Annex AB.6.3 heartbeat interval/timeout behavior, and Table AB-1 BVLC-SC function constraints. The BACnet Committee Addenda page and ASHRAE Errata page were checked on 2026-06-29 for Standard 135-2020 addenda/errata through addenda bv, bx, ca, cc, cd, ce, cf, ch, ci, cj, ck, cn, cm, co, cp, cq, and cs, plus the 135-2020 base errata summary and listed addendum errata through addendum cp. No checked addendum or erratum changes the AB.6.3 browser heartbeat behavior covered by this tranche.
+- Reviewed at: 2026-07-04
+- Implementation evidence SHA reviewed: `8b8c0cba3e92caa30e145c91abedfa003c64f2c9`
+- Scope: Clause 5 server segmented ComplexAck send-side SegmentACK behavior, covering client-direction SegmentACK validation, current-window positive and negative SegmentACK handling, final SegmentACK validation, timeout retransmission before idle cleanup, client Abort routing, routed NPDU source matching, segmented-response NPDU expecting-reply, nonblocking full-queue dispatch, same-peer sender replacement cleanup, and root conformance artifact relocation from `conformance/` to `docs/conformance/`.
+- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Clause 5 segmented APDU transfer and SegmentACK behavior. No external addenda/errata check was performed for this tranche, so the affected Clause 5 rows remain in gap statuses rather than `supported-with-clause-evidence`.
 
 ## Counts
 

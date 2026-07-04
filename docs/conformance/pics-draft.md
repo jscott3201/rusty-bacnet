@@ -1,6 +1,6 @@
 # Draft BACnet PICS Support Evidence
 
-> DRAFT internal support evidence. Generated from `conformance/bacnet-135-2020.json`; this is not a BTL certification claim or formal PICS/BIBB declaration.
+> DRAFT internal support evidence. Generated from `docs/conformance/bacnet-135-2020.json`; this is not a BTL certification claim or formal PICS/BIBB declaration.
 
 This draft summarizes implementation evidence that may feed a future formal Protocol Implementation Conformance Statement. It intentionally stays below a certification claim.
 

@@ -1,6 +1,53 @@
 use super::*;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
+    async fn route_segmented_send_event(
+        seg_ack_senders: &Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>>,
+        key: SegKey,
+        event: SegmentedSendEvent,
+    ) -> bool {
+        let handle = {
+            let senders = seg_ack_senders.lock().await;
+            senders.get(&key).cloned()
+        };
+
+        let Some(handle) = handle else {
+            return false;
+        };
+
+        match event {
+            SegmentedSendEvent::Abort(abort) => {
+                handle.send_control(SegmentedSendControlEvent::Abort(abort));
+                true
+            }
+            SegmentedSendEvent::SegmentAck(ack) => {
+                let invoke_id = ack.invoke_id;
+                let seq = ack.sequence_number;
+                if !handle.accepts_segment_ack(&ack) {
+                    debug!(
+                        invoke_id,
+                        seq,
+                        negative = ack.negative_ack,
+                        "Ignoring SegmentAck outside current segmented-send window"
+                    );
+                    return true;
+                }
+
+                match handle.segment_ack_tx.try_send(ack) {
+                    Ok(()) => true,
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        warn!(
+                            invoke_id,
+                            seq, "Dropping SegmentAck because segmented-send queue is full"
+                        );
+                        true
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => false,
+                }
+            }
+        }
+    }
+
     /// Dispatch a received APDU.
     ///
     /// ConfirmedRequest and UnconfirmedRequest handlers are spawned as
@@ -16,7 +63,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         db: &Arc<RwLock<ObjectDatabase>>,
         network: &Arc<NetworkLayer<T>>,
         cov_table: &Arc<RwLock<CovSubscriptionTable>>,
-        seg_ack_senders: &Arc<Mutex<HashMap<SegKey, mpsc::Sender<SegmentAckPdu>>>>,
+        seg_ack_senders: &Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>>,
+        seg_send_permits: &Arc<Semaphore>,
         cov_in_flight: &Arc<Semaphore>,
         server_tsm: &Arc<Mutex<ServerTsm>>,
         comm_state: &Arc<AtomicU8>,
@@ -33,6 +81,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let network = Arc::clone(network);
                 let cov_table = Arc::clone(cov_table);
                 let seg_ack_senders = Arc::clone(seg_ack_senders);
+                let seg_send_permits = Arc::clone(seg_send_permits);
                 let cov_in_flight = Arc::clone(cov_in_flight);
                 let server_tsm = Arc::clone(server_tsm);
                 let comm_state = Arc::clone(comm_state);
@@ -46,6 +95,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         &network,
                         &cov_table,
                         &seg_ack_senders,
+                        &seg_send_permits,
                         &cov_in_flight,
                         &server_tsm,
                         &comm_state,
@@ -128,6 +178,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 );
             }
             Apdu::Abort(abort) if !abort.sent_by_server => {
+                let key = (
+                    MacAddr::from_slice(source_mac),
+                    received.source_network.clone(),
+                    abort.invoke_id,
+                );
+                let routed_segmented = Self::route_segmented_send_event(
+                    seg_ack_senders,
+                    key,
+                    SegmentedSendEvent::Abort(abort.clone()),
+                )
+                .await;
+
                 let mut tsm = server_tsm.lock().await;
                 let peer = MacAddr::from_slice(source_mac);
                 if !tsm.record_result(
@@ -140,21 +202,35 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
                 debug!(
                     invoke_id = abort.invoke_id,
-                    "Abort received for outgoing confirmed notification"
+                    routed_segmented,
+                    "Abort received for outgoing confirmed notification or segmented response"
                 );
             }
             Apdu::SegmentAck(sa) => {
+                let invoke_id = sa.invoke_id;
+                if sa.sent_by_server {
+                    debug!(
+                        invoke_id,
+                        seq = sa.sequence_number,
+                        "Server ignoring SegmentAck with server bit set"
+                    );
+                    return;
+                }
+
                 let key = (
                     MacAddr::from_slice(source_mac),
                     received.source_network.clone(),
-                    sa.invoke_id,
+                    invoke_id,
                 );
-                let senders = seg_ack_senders.lock().await;
-                if let Some(tx) = senders.get(&key) {
-                    let _ = tx.try_send(sa);
-                } else {
+                if !Self::route_segmented_send_event(
+                    seg_ack_senders,
+                    key,
+                    SegmentedSendEvent::SegmentAck(sa),
+                )
+                .await
+                {
                     debug!(
-                        invoke_id = sa.invoke_id,
+                        invoke_id,
                         "Server ignoring SegmentAck for unknown transaction"
                     );
                 }

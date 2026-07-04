@@ -7,7 +7,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         db: &Arc<RwLock<ObjectDatabase>>,
         network: &Arc<NetworkLayer<T>>,
         cov_table: &Arc<RwLock<CovSubscriptionTable>>,
-        seg_ack_senders: &Arc<Mutex<HashMap<SegKey, mpsc::Sender<SegmentAckPdu>>>>,
+        seg_ack_senders: &Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>>,
+        seg_send_permits: &Arc<Semaphore>,
         cov_in_flight: &Arc<Semaphore>,
         server_tsm: &Arc<Mutex<ServerTsm>>,
         comm_state: &Arc<AtomicU8>,
@@ -362,12 +363,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 } else {
                     let network = Arc::clone(network);
                     let seg_ack_senders = Arc::clone(seg_ack_senders);
+                    let seg_send_permits = Arc::clone(seg_send_permits);
                     let source_mac = MacAddr::from_slice(source_mac);
                     let service_ack_data = ack.service_ack.clone();
                     tokio::spawn(async move {
                         Self::send_segmented_complex_ack(
                             &network,
                             &seg_ack_senders,
+                            &seg_send_permits,
                             &source_mac,
                             source_network.as_ref(),
                             invoke_id,

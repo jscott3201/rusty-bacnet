@@ -27,8 +27,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let network = Arc::new(network);
         let db = Arc::new(RwLock::new(db));
         let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
-        let seg_ack_senders: Arc<Mutex<HashMap<SegKey, mpsc::Sender<SegmentAckPdu>>>> =
+        let seg_ack_senders: Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>> =
             Arc::new(Mutex::new(HashMap::new()));
+        let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
 
         let cov_in_flight = Arc::new(Semaphore::new(255));
         let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
@@ -39,6 +40,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let db_dispatch = Arc::clone(&db);
         let cov_dispatch = Arc::clone(&cov_table);
         let seg_ack_dispatch = Arc::clone(&seg_ack_senders);
+        let seg_send_permits_dispatch = Arc::clone(&seg_send_permits);
         let cov_in_flight_dispatch = Arc::clone(&cov_in_flight);
         let server_tsm_dispatch = Arc::clone(&server_tsm);
         let comm_state_dispatch = Arc::clone(&comm_state);
@@ -268,10 +270,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                                 Self::dispatch(
 	                                                    &db_dispatch,
 	                                                    &network_dispatch,
-	                                                    &cov_dispatch,
-	                                                    &seg_ack_dispatch,
-	                                                    &cov_in_flight_dispatch,
-	                                                    &server_tsm_dispatch,
+                                    &cov_dispatch,
+                                    &seg_ack_dispatch,
+                                    &seg_send_permits_dispatch,
+                                    &cov_in_flight_dispatch,
+                                    &server_tsm_dispatch,
 	                                                    &comm_state_dispatch,
 	                                                    &dcc_timer_dispatch,
 	                                                    &config_dispatch,
@@ -314,6 +317,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 &network_dispatch,
                                 &cov_dispatch,
                                 &seg_ack_dispatch,
+                                &seg_send_permits_dispatch,
                                 &cov_in_flight_dispatch,
                                 &server_tsm_dispatch,
                                 &comm_state_dispatch,
@@ -429,6 +433,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             db,
             cov_table,
             seg_ack_senders,
+            seg_send_permits,
             cov_in_flight,
             server_tsm,
             comm_state,

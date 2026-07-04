@@ -6,12 +6,12 @@
 
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
 use bytes::{Bytes, BytesMut};
-use tokio::sync::{mpsc, oneshot, Mutex, RwLock, Semaphore};
+use tokio::sync::{mpsc, oneshot, watch, Mutex, RwLock, Semaphore};
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tracing::{debug, warn};
@@ -52,11 +52,20 @@ use crate::handlers;
 /// Maximum number of concurrent segmented reassembly sessions.
 const MAX_SEG_RECEIVERS: usize = 128;
 
+/// Maximum number of concurrent segmented response send sessions.
+const MAX_SEG_SENDERS: usize = 128;
+
 /// Timeout for idle segmented reassembly sessions.
 const SEG_RECEIVER_TIMEOUT: Duration = Duration::from_secs(4);
 
 /// Maximum negative SegmentAck retries during segmented response send.
 const MAX_NEG_SEGMENT_ACK_RETRIES: u8 = 3;
+
+/// Default timeout while waiting for SegmentACK during segmented response send.
+const DEFAULT_APDU_SEGMENT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Default retransmission budget for segmented response segments.
+const DEFAULT_APDU_SEGMENT_RETRIES: u8 = MAX_NEG_SEGMENT_ACK_RETRIES;
 
 /// Default number of APDU retries for confirmed COV notifications.
 const DEFAULT_APDU_RETRIES: u8 = 3;
@@ -352,6 +361,89 @@ impl BipServerBuilder {
 /// (source MAC/router MAC, optional routed source, invoke_id).
 type SegKey = (MacAddr, Option<NpduAddress>, u8);
 
+#[derive(Debug)]
+enum SegmentedSendEvent {
+    SegmentAck(SegmentAckPdu),
+    Abort(AbortPdu),
+}
+
+#[derive(Debug, Clone)]
+enum SegmentedSendControlEvent {
+    Abort(AbortPdu),
+    Cancel,
+}
+
+struct SegmentedSendHandle {
+    segment_ack_tx: mpsc::Sender<SegmentAckPdu>,
+    control_tx: watch::Sender<Option<SegmentedSendControlEvent>>,
+    closed: AtomicBool,
+    current_sequence: AtomicU16,
+    total_segments: usize,
+}
+
+impl SegmentedSendHandle {
+    fn new(
+        segment_ack_tx: mpsc::Sender<SegmentAckPdu>,
+        control_tx: watch::Sender<Option<SegmentedSendControlEvent>>,
+        total_segments: usize,
+    ) -> Self {
+        Self {
+            segment_ack_tx,
+            control_tx,
+            closed: AtomicBool::new(false),
+            current_sequence: AtomicU16::new(u16::MAX),
+            total_segments,
+        }
+    }
+
+    fn accepts_segment_ack(&self, ack: &SegmentAckPdu) -> bool {
+        if ack.sent_by_server || self.closed.load(Ordering::Acquire) {
+            return false;
+        }
+
+        let current = self.current_sequence.load(Ordering::Acquire) as usize;
+        if current >= self.total_segments {
+            return false;
+        }
+
+        if ack.negative_ack {
+            let ack_seq = ack.sequence_number as usize;
+            let requested = if ack_seq == 0 && current == 0 {
+                0
+            } else {
+                ack_seq.saturating_add(1)
+            };
+            requested < self.total_segments && requested == current
+        } else {
+            ack.sequence_number as usize == current
+        }
+    }
+
+    fn send_control(&self, event: SegmentedSendControlEvent) {
+        self.closed.store(true, Ordering::Release);
+        self.control_tx.send_replace(Some(event));
+    }
+
+    fn same_channel(&self, sender: &mpsc::Sender<SegmentAckPdu>) -> bool {
+        self.segment_ack_tx.same_channel(sender)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SegmentedSendOptions {
+    segment_timeout: Duration,
+    max_retries: u8,
+}
+
+impl Default for SegmentedSendOptions {
+    fn default() -> Self {
+        Self {
+            segment_timeout: DEFAULT_APDU_SEGMENT_TIMEOUT,
+            max_retries: DEFAULT_APDU_SEGMENT_RETRIES,
+        }
+    }
+}
+
 struct SegmentedRequestState {
     receiver: SegmentReceiver,
     first_req: bacnet_encoding::apdu::ConfirmedRequest,
@@ -374,9 +466,13 @@ pub struct BACnetServer<T: TransportPort> {
     /// COV subscription table (held to keep Arc alive for dispatch task).
     #[allow(dead_code)]
     cov_table: Arc<RwLock<CovSubscriptionTable>>,
-    /// Channels for routing SegmentAck PDUs to in-progress segmented sends.
+    /// Channels for routing segmented-send events to in-progress segmented sends.
     #[allow(dead_code)]
-    seg_ack_senders: Arc<Mutex<HashMap<SegKey, mpsc::Sender<SegmentAckPdu>>>>,
+    seg_ack_senders: Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>>,
+    /// Permits that cap live segmented response sender tasks, including
+    /// cancelled senders that have not yet exited a transport send.
+    #[allow(dead_code)]
+    seg_send_permits: Arc<Semaphore>,
     /// Semaphore that caps confirmed COV notifications at 255 in-flight
     /// to prevent invoke ID reuse (invoke IDs are u8 = 0..255).
     #[allow(dead_code)]
@@ -577,6 +673,8 @@ mod segmentation;
 
 #[cfg(test)]
 mod cov_notifications_tests;
+#[cfg(test)]
+mod segmentation_tests;
 #[cfg(test)]
 mod tests;
 

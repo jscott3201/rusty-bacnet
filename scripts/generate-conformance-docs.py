@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-LEDGER = ROOT / "conformance" / "bacnet-135-2020.json"
+LEDGER = ROOT / "docs" / "conformance" / "bacnet-135-2020.json"
 OUTPUTS = {
     "support": ROOT / "docs" / "conformance" / "support-summary.md",
     "pics": ROOT / "docs" / "conformance" / "pics-draft.md",
@@ -27,7 +27,7 @@ def header(title: str) -> list[str]:
     return [
         f"# {title}",
         "",
-        "> DRAFT internal support evidence. Generated from `conformance/bacnet-135-2020.json`; this is not a BTL certification claim or formal PICS/BIBB declaration.",
+        "> DRAFT internal support evidence. Generated from `docs/conformance/bacnet-135-2020.json`; this is not a BTL certification claim or formal PICS/BIBB declaration.",
         "",
     ]
 

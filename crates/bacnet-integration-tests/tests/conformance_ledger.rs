@@ -7,7 +7,7 @@ use std::process::Command;
 
 use serde_json::{json, Value};
 
-const LEDGER_JSON: &str = include_str!("../../../conformance/bacnet-135-2020.json");
+const LEDGER_JSON: &str = include_str!("../../../docs/conformance/bacnet-135-2020.json");
 const SUPPORT_SUMMARY: &str = include_str!("../../../docs/conformance/support-summary.md");
 const PICS_DRAFT: &str = include_str!("../../../docs/conformance/pics-draft.md");
 const BIBBS_DRAFT: &str = include_str!("../../../docs/conformance/bibbs-draft.md");
@@ -183,7 +183,7 @@ fn read_repo_file(path: &str) -> String {
 fn ledger_schema_has_required_seed_rows_and_unique_ids() {
     let data = ledger();
     assert_eq!(data["standard"], "ANSI/ASHRAE Standard 135-2020");
-    assert_eq!(data["reviewed_at"], "2026-06-29");
+    assert_eq!(data["reviewed_at"], "2026-07-04");
     assert!(
         data["repo_sha"].as_str().is_some_and(|sha| sha.len() == 40),
         "repo_sha must be a full git SHA"
@@ -350,7 +350,7 @@ fn generated_support_docs_are_current_with_ledger() {
     let data = ledger();
     for doc in [SUPPORT_SUMMARY, PICS_DRAFT, BIBBS_DRAFT] {
         assert!(doc.contains("DRAFT internal support evidence"));
-        assert!(doc.contains("conformance/bacnet-135-2020.json"));
+        assert!(doc.contains("docs/conformance/bacnet-135-2020.json"));
     }
     assert!(STANDARD_LEDGER.contains("## Clause 4 Architecture"));
     assert!(STANDARD_LEDGER.contains("## Annex AB BACnet/SC"));

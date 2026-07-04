@@ -1,9 +1,9 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
-  "reviewed_at": "2026-06-29",
-  "repo_sha": "a889b76331bfcb4e2dd998b8a78e544ad37397b2",
-  "review_scope": "Annex AB.6.3 BACnet/SC heartbeat initiation and liveness behavior for browser/WASM clients, covering post-Connect-Accept heartbeat tracking, monotonic Performance-clock scheduling, no-VMAC Heartbeat-ACK correlation, timeout/send-failure fail-closed disconnect, receive-loop/timer cleanup, and pending confirmed-service Promise rejection on terminal disconnect paths.",
-  "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Annex AB.2.14 Heartbeat-Request, AB.2.15 Heartbeat-ACK, Annex AB.6.3 heartbeat interval/timeout behavior, and Table AB-1 BVLC-SC function constraints. The BACnet Committee Addenda page and ASHRAE Errata page were checked on 2026-06-29 for Standard 135-2020 addenda/errata through addenda bv, bx, ca, cc, cd, ce, cf, ch, ci, cj, ck, cn, cm, co, cp, cq, and cs, plus the 135-2020 base errata summary and listed addendum errata through addendum cp. No checked addendum or erratum changes the AB.6.3 browser heartbeat behavior covered by this tranche.",
+  "reviewed_at": "2026-07-04",
+  "repo_sha": "8b8c0cba3e92caa30e145c91abedfa003c64f2c9",
+  "review_scope": "Clause 5 server segmented ComplexAck send-side SegmentACK behavior, covering client-direction SegmentACK validation, current-window positive and negative SegmentACK handling, final SegmentACK validation, timeout retransmission before idle cleanup, client Abort routing, routed NPDU source matching, segmented-response NPDU expecting-reply, nonblocking full-queue dispatch, same-peer sender replacement cleanup, and root conformance artifact relocation from `conformance/` to `docs/conformance/`.",
+  "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Clause 5 segmented APDU transfer and SegmentACK behavior. No external addenda/errata check was performed for this tranche, so the affected Clause 5 rows remain in gap statuses rather than `supported-with-clause-evidence`.",
   "status_taxonomy": [
     "in-progress",
     "implementation-present-needs-conformance-tests",
@@ -52,12 +52,33 @@
       "priority": "P1",
       "requirement_summary": "Server transaction state machine behavior, segmented request handling, SegmentACK behavior, and abort/reject mapping.",
       "status": "implementation-present-needs-state-machine-audit",
-      "code_anchors": ["crates/bacnet-server/src", "crates/bacnet-integration-tests/tests/server/segmentation_rx.rs"],
-      "positive_tests": ["crates/bacnet-integration-tests/tests/server/segmentation_rx.rs"],
-      "negative_tests": [],
+      "code_anchors": ["crates/bacnet-server/src", "crates/bacnet-server/src/server/dispatch.rs", "crates/bacnet-server/src/server/responses.rs", "crates/bacnet-server/src/server/segmentation.rs", "crates/bacnet-server/src/server/segmentation_tests.rs", "crates/bacnet-integration-tests/tests/server/segmentation_rx.rs"],
+      "positive_tests": [
+        "crates/bacnet-integration-tests/tests/server/segmentation_rx.rs",
+        "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_retransmits_segment_zero_after_negative_ack_zero",
+        "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_retransmits_current_segment_after_negative_ack_previous_sequence",
+        "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_ignores_stale_positive_final_segment_ack",
+        "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_retransmits_after_segment_ack_timeout_then_goes_idle",
+        "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_sets_npdu_expecting_reply_for_segments"
+      ],
+      "negative_tests": [
+        "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_ignores_future_positive_segment_ack",
+        "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_ignores_out_of_range_negative_segment_ack",
+        "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_ignores_segment_ack_with_server_bit_set",
+        "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_aborts_after_repeated_negative_segment_ack",
+        "crates/bacnet-server/src/server/segmentation_tests.rs::client_abort_routed_by_dispatch_terminates_segmented_complex_ack",
+        "crates/bacnet-server/src/server/segmentation_tests.rs::dispatch_ack_flood_does_not_drop_valid_segment_ack",
+        "crates/bacnet-server/src/server/segmentation_tests.rs::dispatch_returns_when_segment_ack_queue_is_full",
+        "crates/bacnet-server/src/server/segmentation_tests.rs::dispatch_client_abort_not_blocked_by_full_segment_ack_queue",
+        "crates/bacnet-server/src/server/segmentation_tests.rs::same_key_replacement_does_not_wait_for_full_old_queue",
+        "crates/bacnet-server/src/server/segmentation_tests.rs::same_key_replacement_is_rejected_when_live_sender_permits_are_exhausted",
+        "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_rejects_new_sender_when_active_sender_limit_reached",
+        "crates/bacnet-server/src/server/segmentation_tests.rs::routed_source_segment_ack_and_abort_match_npdu_source",
+        "crates/bacnet-server/src/server/segmentation_tests.rs::overlapping_same_peer_invoke_id_cancels_old_segmented_sender"
+      ],
       "benchmarks": [],
       "public_claims": ["README supported services"],
-      "notes": "Requires independent audit of server TSM states and failure mapping."
+      "notes": "This slice adds server segmented ComplexAck send-side SegmentACK validation: SegmentACKs with the server bit set are ignored, positive ACKs advance only for the current segment, negative ACKs retransmit only the current requested segment, out-of-range negative ACKs are ignored, stale final ACKs do not complete the transfer, timeout retries retransmit before idle cleanup without a final timeout Abort, client Abort is routed to terminate the active segmented response without a spurious timeout Abort, routed SegmentACK/Abort events match the NPDU source-network key, segmented response frames set NPDU expecting_reply while waiting for SegmentACK, dispatch filters stale/future ACKs before queue insertion and does not block on a full SegmentACK queue, client Abort and same-peer/invoke-id replacement use nonblocking control events, live segmented sender tasks are capped by permits until each task exits, and replacement cancels the older sender so it cannot later emit a timeout Abort. The row remains below supported status pending a fuller server TSM transition audit, configured APDU segment timeout/retry exposure, and broader Reject/Error failure mapping coverage."
     },
     {
       "id": "BACNET-5-SEGMENTATION-WINDOW",
@@ -65,12 +86,27 @@
       "priority": "P1",
       "requirement_summary": "Only Confirmed-Request and ComplexACK may be segmented; SegmentACK windows and modulo-256 sequence handling are enforced.",
       "status": "implementation-present-needs-window-tests",
-      "code_anchors": ["crates/bacnet-encoding/src/segmentation.rs", "crates/bacnet-client/src/client/segmentation.rs"],
-      "positive_tests": ["crates/bacnet-integration-tests/tests/server/segmentation_rx.rs", "crates/bacnet-integration-tests/tests/server/segmentation_tx.rs"],
-      "negative_tests": [],
+      "code_anchors": ["crates/bacnet-encoding/src/segmentation.rs", "crates/bacnet-client/src/client/segmentation.rs", "crates/bacnet-server/src/server/dispatch.rs", "crates/bacnet-server/src/server/segmentation.rs", "crates/bacnet-server/src/server/segmentation_tests.rs"],
+      "positive_tests": [
+        "crates/bacnet-integration-tests/tests/server/segmentation_rx.rs",
+        "crates/bacnet-integration-tests/tests/server/segmentation_tx.rs",
+        "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_retransmits_segment_zero_after_negative_ack_zero",
+        "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_retransmits_current_segment_after_negative_ack_previous_sequence",
+        "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_ignores_stale_positive_final_segment_ack",
+        "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_retransmits_after_segment_ack_timeout_then_goes_idle"
+      ],
+      "negative_tests": [
+        "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_ignores_future_positive_segment_ack",
+        "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_ignores_out_of_range_negative_segment_ack",
+        "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_ignores_segment_ack_with_server_bit_set",
+        "crates/bacnet-server/src/server/segmentation_tests.rs::segmented_complex_ack_aborts_after_repeated_negative_segment_ack",
+        "crates/bacnet-server/src/server/segmentation_tests.rs::dispatch_ack_flood_does_not_drop_valid_segment_ack",
+        "crates/bacnet-server/src/server/segmentation_tests.rs::dispatch_returns_when_segment_ack_queue_is_full",
+        "crates/bacnet-server/src/server/segmentation_tests.rs::routed_source_segment_ack_and_abort_match_npdu_source"
+      ],
       "benchmarks": ["benchmarks/src/stress/segmentation.rs"],
       "public_claims": ["docs/wasm-api.md segmentation limitation", "docs/python-api.md segmentation support"],
-      "notes": "Needs duplicate, gap, out-of-order, final segment, max APDU, and max segment tests."
+      "notes": "This slice adds server ComplexAck send-side window evidence for current-sequence positive ACK advancement, first-window NAK0 retransmission, NAK of the previous sequence retransmitting the current segment, stale/future positive ACK ignore, wrong-direction ACK ignore, routed source-network matching, out-of-range NAK ignore, final ACK validation, timeout retransmission, repeated valid NAK abort, ACK flood/current-window filtering, and nonblocking full-queue SegmentACK dispatch. Remaining segmentation/window gaps include multi-segment window sizes beyond the current window-one send behavior, modulo-256 wrap, duplicate segment receive behavior, max APDU/max segment boundaries, and broader client/server receive-side out-of-order coverage."
     },
     {
       "id": "BACNET-6-NPDU-CONTROL",
