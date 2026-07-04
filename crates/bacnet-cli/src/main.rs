@@ -3,13 +3,10 @@
 //! Running `bacnet` with no arguments or with the `shell` subcommand launches
 //! an interactive REPL. Subcommands can also be used directly for scripting.
 
-use std::io::IsTerminal;
-use std::net::Ipv4Addr;
-use std::path::PathBuf;
+use std::{io::IsTerminal, net::Ipv4Addr, path::PathBuf};
 
 use bacnet_client::client::BACnetClient;
-use bacnet_transport::bip::BipTransport;
-use bacnet_transport::port::TransportPort;
+use bacnet_transport::{bip::BipTransport, port::TransportPort};
 use clap::{Parser, Subcommand};
 
 mod commands;
@@ -70,6 +67,14 @@ struct Cli {
     /// SC TLS private key PEM file.
     #[arg(long, global = true)]
     sc_key: Option<PathBuf>,
+
+    /// BACnet/SC local VMAC as 12 hex digits or colon-separated bytes.
+    #[arg(long, global = true, value_parser = transport::parse_sc_vmac_arg)]
+    sc_vmac: Option<[u8; 6]>,
+
+    /// BACnet/SC device UUID as 32 hex digits or RFC 4122 hyphenated text.
+    #[arg(long, global = true, value_parser = transport::parse_sc_device_uuid_arg)]
+    sc_device_uuid: Option<[u8; 16]>,
 
     /// Output format (table, json).
     #[arg(long, global = true)]
@@ -800,6 +805,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         sc_url: cli.sc_url.clone(),
         sc_cert: cli.sc_cert.clone(),
         sc_key: cli.sc_key.clone(),
+        sc_vmac: cli.sc_vmac,
+        sc_device_uuid: cli.sc_device_uuid,
         ipv6: cli.ipv6,
         ipv6_interface,
         device_instance: cli.device_instance,

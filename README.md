@@ -269,7 +269,7 @@ bacnet --ipv6 discover
 bacnet --ipv6 read [fe80::1]:47808 ai:1 pv
 
 # BACnet/SC
-bacnet --sc --sc-url wss://hub:443 --sc-cert cert.pem --sc-key key.pem read 00:01:02:03:04:05 ai:1 pv
+bacnet --sc --sc-url wss://hub:443 --sc-cert cert.pem --sc-key key.pem --sc-vmac 22:01:02:03:04:05 --sc-device-uuid 00112233-4455-6677-8899-aabbccddeeff read 00:01:02:03:04:05 ai:1 pv
 
 # Output formats
 bacnet --json discover           # JSON output (default when piped)

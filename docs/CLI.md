@@ -33,6 +33,8 @@ cargo install bacnet-cli --features sc-tls
 | `--sc-url <URL>` | | SC hub WebSocket URL |
 | `--sc-cert <FILE>` | | SC TLS certificate PEM |
 | `--sc-key <FILE>` | | SC TLS private key PEM |
+| `--sc-vmac <HEX>` | | SC local VMAC as 12 hex digits or separated bytes |
+| `--sc-device-uuid <UUID>` | | SC device UUID as 32 hex digits or hyphenated text |
 | `--format <FMT>` | auto | Output format: `table` or `json` |
 | `--json` | | JSON output shorthand |
 | `-v` | | Verbosity (`-v`, `-vv`, `-vvv`) |
@@ -375,7 +377,7 @@ bacnet --ipv6 discover
 bacnet --ipv6 read [fe80::1]:47808 ai:1 pv
 
 # BACnet/SC (requires sc-tls feature)
-bacnet --sc --sc-url wss://hub:443 --sc-cert cert.pem --sc-key key.pem read 00:01:02:03:04:05 ai:1 pv
+bacnet --sc --sc-url wss://hub:443 --sc-cert cert.pem --sc-key key.pem --sc-vmac 22:01:02:03:04:05 --sc-device-uuid 00112233-4455-6677-8899-aabbccddeeff read 00:01:02:03:04:05 ai:1 pv
 ```
 
 ## Object Type Shorthand

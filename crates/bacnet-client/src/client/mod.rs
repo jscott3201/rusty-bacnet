@@ -490,6 +490,7 @@ impl BACnetClient<bacnet_transport::sc::ScTransport<bacnet_transport::sc_tls::Tl
             hub_url: String::new(),
             tls_config: None,
             vmac: [0; 6],
+            device_uuid: [0; 16],
             heartbeat_interval_ms: 30_000,
             heartbeat_timeout_ms: 60_000,
             reconnect: None,
@@ -507,6 +508,7 @@ pub struct ScClientBuilder {
     hub_url: String,
     tls_config: Option<std::sync::Arc<tokio_rustls::rustls::ClientConfig>>,
     vmac: bacnet_transport::sc_frame::Vmac,
+    device_uuid: [u8; 16],
     heartbeat_interval_ms: u64,
     heartbeat_timeout_ms: u64,
     reconnect: Option<bacnet_transport::sc::ScReconnectConfig>,
@@ -532,6 +534,12 @@ impl ScClientBuilder {
     /// Set the local VMAC address.
     pub fn vmac(mut self, vmac: [u8; 6]) -> Self {
         self.vmac = vmac;
+        self
+    }
+
+    /// Set the persistent BACnet/SC device UUID.
+    pub fn device_uuid(mut self, uuid: [u8; 16]) -> Self {
+        self.device_uuid = uuid;
         self
     }
 
@@ -565,6 +573,44 @@ impl ScClientBuilder {
         self
     }
 
+    fn validate_identity(&self) -> Result<(), Error> {
+        match self.vmac {
+            bacnet_transport::sc_frame::UNKNOWN_VMAC => Err(Error::Encoding(
+                "SC client builder: vmac must not be the reserved unknown VMAC".into(),
+            )),
+            bacnet_transport::sc_frame::BROADCAST_VMAC => Err(Error::Encoding(
+                "SC client builder: vmac must not be the reserved broadcast VMAC".into(),
+            )),
+            _ if self.device_uuid == [0; 16] => Err(Error::Encoding(
+                "SC client builder: device_uuid is required and must not be all zero".into(),
+            )),
+            _ => Ok(()),
+        }
+    }
+
+    fn sc_transport<W: bacnet_transport::sc::WebSocketPort>(
+        &self,
+        ws: W,
+    ) -> bacnet_transport::sc::ScTransport<W> {
+        bacnet_transport::sc::ScTransport::new(ws, self.vmac)
+            .with_device_uuid(self.device_uuid)
+            .with_heartbeat_interval_ms(self.heartbeat_interval_ms)
+            .with_heartbeat_timeout_ms(self.heartbeat_timeout_ms)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn build_with_websocket_for_test<
+        W: bacnet_transport::sc::WebSocketPort + 'static,
+    >(
+        self,
+        ws: W,
+    ) -> Result<BACnetClient<bacnet_transport::sc::ScTransport<W>>, Error> {
+        self.validate_identity()?;
+        self.options.validate()?;
+        let transport = self.sc_transport(ws);
+        BACnetClient::start_with_options(self.config, transport, self.options).await
+    }
+
     /// Connect to the hub and start the client.
     pub async fn build(
         self,
@@ -572,17 +618,17 @@ impl ScClientBuilder {
         BACnetClient<bacnet_transport::sc::ScTransport<bacnet_transport::sc_tls::TlsWebSocket>>,
         Error,
     > {
-        let tls_config = self
-            .tls_config
-            .ok_or_else(|| Error::Encoding("SC client builder: tls_config is required".into()))?;
+        self.validate_identity()?;
         self.options.validate()?;
+        let tls_config =
+            self.tls_config.as_ref().cloned().ok_or_else(|| {
+                Error::Encoding("SC client builder: tls_config is required".into())
+            })?;
 
         let ws = bacnet_transport::sc_tls::TlsWebSocket::connect(&self.hub_url, tls_config.clone())
             .await?;
 
-        let mut transport = bacnet_transport::sc::ScTransport::new(ws, self.vmac)
-            .with_heartbeat_interval_ms(self.heartbeat_interval_ms)
-            .with_heartbeat_timeout_ms(self.heartbeat_timeout_ms);
+        let mut transport = self.sc_transport(ws);
         if let Some(rc) = self.reconnect {
             let hub_url = self.hub_url.clone();
             let tls_config = tls_config.clone();
@@ -709,6 +755,8 @@ mod cov_renewal_tests;
 mod cov_tests;
 #[cfg(test)]
 mod device_events_tests;
+#[cfg(all(test, feature = "sc-tls"))]
+mod sc_builder_tests;
 #[cfg(test)]
 mod sc_max_apdu_tests;
 #[cfg(test)]

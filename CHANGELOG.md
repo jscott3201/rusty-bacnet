@@ -17,9 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add a managed finite `BACnetClient` COV subscription helper that renews before expiry and emits lifetime/renewal events.
 - Add `ScTransport::connection_state_changes()` returning a `tokio::sync::watch::Receiver<ScConnectionState>` so BACnet/SC consumers can await latest link-state changes without polling the inspection-only connection handle; rapid transitions may coalesce under watch semantics.
 - Add typed BACnet/SC connect-path errors via `bacnet_transport::sc::ScConnectError`, preserving BVLC-Result NAK class/code/details and distinguishing WebSocket dial, TLS, handshake, and subprotocol failures without string parsing.
+- Add `ScClientBuilder::device_uuid(...)` and BACnet/SC CLI `--sc-vmac` / `--sc-device-uuid` options so convenience clients can provision stable SC identity without hand-assembling `ScTransport`.
 
 ### Fixed
 
+- Fail fast in `ScClientBuilder` and the BACnet/SC CLI path when required SC identity is missing or uses reserved VMAC values, preventing all-zero Unknown VMAC connects from reaching the wire.
 - Propagate negotiated BACnet/SC hub Max-NPDU/BVLC limits into `ScTransport::max_apdu_length()` and `BACnetClient` request segmentation, with `BACnetClient::transport_max_apdu_length()` exposing the live post-connect transport budget.
 - Return BACnet/SC handshake timeouts as `Error::Timeout` and malformed BVLC-Result failures as typed `ScConnectError` values instead of collapsing them into `Error::Encoding`; downstream code should match `Error::Timeout` directly and use `ScConnectError::from_error` for SC transport details.
 - Re-dial BACnet/SC WebSocket connections during reconnect, failover, and primary restore instead of reusing a torn-down socket object.
