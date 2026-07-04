@@ -6,7 +6,7 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020.
 - Reviewed at: 2026-07-04.
-- Implementation evidence SHA reviewed: `8b8c0cba3e92caa30e145c91abedfa003c64f2c9`.
+- Implementation evidence SHA reviewed: `e6be3eacfd2b780f11812de3931fb7f8e8dec584`.
 - Machine-readable source: `docs/conformance/bacnet-135-2020.json`.
 - Current scope: Clause 5 server segmented ComplexAck send-side SegmentACK behavior, covering client-direction SegmentACK validation, current-window positive and negative SegmentACK handling, final SegmentACK validation, timeout retransmission before idle cleanup, client Abort routing, routed NPDU source matching, segmented-response NPDU expecting-reply, nonblocking full-queue dispatch, same-peer sender replacement cleanup, and root conformance artifact relocation from `conformance/` to `docs/conformance/`.
 - Addenda/errata status: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Clause 5 segmented APDU transfer and SegmentACK behavior. No external addenda/errata check was performed for this tranche, so the affected Clause 5 rows remain in gap statuses rather than `supported-with-clause-evidence`.
