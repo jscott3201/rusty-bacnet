@@ -4,11 +4,11 @@ use bacnet_types::error::Error;
 
 use crate::sc_frame::Vmac;
 
-/// Generate an Annex H.7.3 Random-48 VMAC.
+/// Generate a Clause H.7.3 Random-48 VMAC.
 ///
 /// The low nibble of the first octet is fixed at X'2'; the high nibble and
 /// remaining five octets carry 44 bits of OS randomness.
-pub(crate) fn generate_random48_vmac() -> Result<Vmac, Error> {
+pub fn generate_random48_vmac() -> Result<Vmac, Error> {
     #[cfg(test)]
     if let Some(generator) = test_random48_vmac_generator() {
         return generator();

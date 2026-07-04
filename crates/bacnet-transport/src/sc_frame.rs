@@ -158,6 +158,14 @@ pub fn is_broadcast_vmac(vmac: &Vmac) -> bool {
     *vmac == BROADCAST_VMAC
 }
 
+/// Check if a VMAC has the Clause H.7.3 Random-48 shape.
+///
+/// A Random-48 VMAC is six octets with the least significant four bits of the
+/// first octet fixed at B'0010' (X'2'); the remaining 44 bits are random.
+pub fn is_valid_random48_vmac(vmac: &Vmac) -> bool {
+    vmac[0] & 0x0F == 0x02
+}
+
 /// A single BACnet/SC header option.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScOption {

@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `ScTransport::connection_state_changes()` returning a `tokio::sync::watch::Receiver<ScConnectionState>` so BACnet/SC consumers can await latest link-state changes without polling the inspection-only connection handle; rapid transitions may coalesce under watch semantics.
 - Add typed BACnet/SC connect-path errors via `bacnet_transport::sc::ScConnectError`, preserving BVLC-Result NAK class/code/details and distinguishing WebSocket dial, TLS, handshake, and subprotocol failures without string parsing.
 - Add `ScClientBuilder::device_uuid(...)` and BACnet/SC CLI `--sc-vmac` / `--sc-device-uuid` options so convenience clients can provision stable SC identity without hand-assembling `ScTransport`.
+- Export `bacnet_transport::sc::generate_random48_vmac()` and add `bacnet_transport::sc_frame::is_valid_random48_vmac()` so downstream composition roots can mint and validate Clause H.7.3 Random-48 VMACs without duplicating bit-shape logic.
 
 ### Fixed
 

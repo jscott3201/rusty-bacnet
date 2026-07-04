@@ -42,7 +42,7 @@ pub use errors::{ScConnectError, ScWebSocketErrorKind};
 use failover::{attempt_primary_restore, ActiveHub};
 use handshake::perform_handshake;
 pub use loopback::LoopbackWebSocket;
-pub(crate) use random48::generate_random48_vmac;
+pub use random48::generate_random48_vmac;
 #[cfg(test)]
 pub(crate) use random48::set_test_random48_vmac_generator;
 pub use reconnect::ScReconnectConfig;
