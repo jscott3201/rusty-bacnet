@@ -498,6 +498,24 @@ fn property_value_context_tagged_rejects_unrepresentable_tag_numbers() {
 }
 
 #[test]
+fn property_value_context_tagged_list_error_preserves_existing_buffer() {
+    let value = context_tagged(
+        20,
+        PropertyValue::List(vec![
+            PropertyValue::Unsigned(1),
+            context_tagged(255, PropertyValue::Null),
+        ]),
+    );
+    let sentinel = [0xDE, 0xAD, 0xBE, 0xEF];
+    let mut bytes = BytesMut::from(&sentinel[..]);
+
+    let error = encode_property_value(&mut bytes, &value).unwrap_err();
+
+    assert!(error.to_string().contains("context tag number 255"));
+    assert_eq!(&bytes[..], sentinel);
+}
+
+#[test]
 fn ctx_unsigned_encoding() {
     let bytes = encode_to_vec(|buf| encode_ctx_unsigned(buf, 1, 42));
     // Context tag 1, length 1, value 42

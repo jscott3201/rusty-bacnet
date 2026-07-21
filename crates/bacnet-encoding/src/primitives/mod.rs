@@ -599,7 +599,9 @@ pub fn encode_property_value(buf: &mut BytesMut, value: &PropertyValue) -> Resul
             }
         }
         PropertyValue::ContextTagged { tag_number, value } => {
-            encode_context_tagged_property_value(buf, *tag_number, value)?;
+            let mut encoded = BytesMut::new();
+            encode_context_tagged_property_value(&mut encoded, *tag_number, value)?;
+            buf.extend_from_slice(&encoded);
         }
     }
     Ok(())
