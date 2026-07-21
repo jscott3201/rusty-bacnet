@@ -1,6 +1,8 @@
 use super::super::*;
 use crate::event::LimitEnable;
+use bacnet_encoding::primitives::encode_property_value;
 use bacnet_types::enums::EventState;
+use bytes::BytesMut;
 
 // --- AnalogInput ---
 
@@ -94,6 +96,26 @@ fn ao_write_with_priority() {
         .read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(1))
         .unwrap();
     assert_eq!(slot, PropertyValue::Null);
+}
+
+#[test]
+fn ashrae_135_2020_clause_21_bacnet_priority_value_real_uses_application_tag() {
+    let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    ao.write_property(
+        PropertyIdentifier::PRESENT_VALUE,
+        None,
+        PropertyValue::Real(50.0),
+        Some(8),
+    )
+    .unwrap();
+
+    let priority_value = ao
+        .read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(8))
+        .unwrap();
+    let mut encoded = BytesMut::new();
+    encode_property_value(&mut encoded, &priority_value).unwrap();
+
+    assert_eq!(encoded.as_ref(), &[0x44, 0x42, 0x48, 0x00, 0x00]);
 }
 
 #[test]
