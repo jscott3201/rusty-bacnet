@@ -206,6 +206,9 @@ pub fn format_property_value(value: &PropertyValue) -> String {
             let formatted: Vec<String> = items.iter().map(format_property_value).collect();
             format!("[{}]", formatted.join(", "))
         }
+        PropertyValue::ContextTagged { tag_number, value } => {
+            format!("context[{tag_number}]({})", format_property_value(value))
+        }
     }
 }
 

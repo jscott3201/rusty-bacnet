@@ -75,6 +75,12 @@ fn property_value_to_py(py: Python<'_>, value: &primitives::PropertyValue) -> Py
             }
             list.into_any().unbind()
         }
+        primitives::PropertyValue::ContextTagged { tag_number, value } => {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("tag_number", tag_number)?;
+            dict.set_item("value", property_value_to_py(py, value)?)?;
+            dict.into_any().unbind()
+        }
     })
 }
 
@@ -207,6 +213,20 @@ impl PyPropertyValue {
         }
     }
 
+    /// Wrap a primitive or list value in an explicit BACnet context tag.
+    ///
+    /// Tag numbers 0-254 are encodable. Larger values are retained here so
+    /// encoding can return a typed error instead of truncating the number.
+    #[staticmethod]
+    fn context_tagged(tag_number: u32, value: &PyPropertyValue) -> Self {
+        Self {
+            inner: primitives::PropertyValue::ContextTagged {
+                tag_number,
+                value: Box::new(value.inner.clone()),
+            },
+        }
+    }
+
     // -- Accessors -----------------------------------------------------------
 
     /// The BACnet type tag (e.g. "real", "unsigned", "boolean").
@@ -227,6 +247,7 @@ impl PyPropertyValue {
             primitives::PropertyValue::Time(_) => "time",
             primitives::PropertyValue::ObjectIdentifier(_) => "object_identifier",
             primitives::PropertyValue::List(_) => "list",
+            primitives::PropertyValue::ContextTagged { .. } => "context_tagged",
         }
     }
 
@@ -270,6 +291,10 @@ impl PyPropertyValue {
             primitives::PropertyValue::List(elements) => {
                 format!("PropertyValue.list(<{} elements>)", elements.len())
             }
+            primitives::PropertyValue::ContextTagged { tag_number, value } => {
+                let inner = Self::from_rust((**value).clone()).__repr__();
+                format!("PropertyValue.context_tagged({tag_number}, {inner})")
+            }
         }
     }
 
@@ -283,5 +308,50 @@ impl PyPropertyValue {
         std::mem::discriminant(&self.inner).hash(&mut h);
         format!("{:?}", self.inner).hash(&mut h);
         h.finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_tagged_has_coherent_python_surface() {
+        let inner = PyPropertyValue::real(1.5);
+        let value = PyPropertyValue::context_tagged(1, &inner);
+
+        assert_eq!(value.tag(), "context_tagged");
+        assert_eq!(
+            value.__repr__(),
+            "PropertyValue.context_tagged(1, PropertyValue.real(1.5))"
+        );
+        assert_eq!(
+            value.inner,
+            primitives::PropertyValue::ContextTagged {
+                tag_number: 1,
+                value: Box::new(primitives::PropertyValue::Real(1.5)),
+            }
+        );
+
+        Python::attach(|py| {
+            let native = value.value(py).unwrap();
+            let dict = native.bind(py).cast::<pyo3::types::PyDict>().unwrap();
+            assert_eq!(
+                dict.get_item("tag_number")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<u32>()
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                dict.get_item("value")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<f64>()
+                    .unwrap(),
+                1.5
+            );
+        });
     }
 }

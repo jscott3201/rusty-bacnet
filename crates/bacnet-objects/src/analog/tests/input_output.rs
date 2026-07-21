@@ -2,6 +2,13 @@ use super::super::*;
 use crate::event::LimitEnable;
 use bacnet_types::enums::EventState;
 
+fn context(tag_number: u32, value: PropertyValue) -> PropertyValue {
+    PropertyValue::ContextTagged {
+        tag_number,
+        value: Box::new(value),
+    }
+}
+
 // --- AnalogInput ---
 
 #[test]
@@ -87,13 +94,13 @@ fn ao_write_with_priority() {
     let slot = ao
         .read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(8))
         .unwrap();
-    assert_eq!(slot, PropertyValue::Real(50.0));
+    assert_eq!(slot, context(1, PropertyValue::Real(50.0)));
 
     // Priority array at index 1 should be Null
     let slot = ao
         .read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(1))
         .unwrap();
-    assert_eq!(slot, PropertyValue::Null);
+    assert_eq!(slot, context(0, PropertyValue::Null));
 }
 
 #[test]
@@ -576,7 +583,7 @@ fn ao_priority_array_read_all_slots_none_by_default() {
     if let PropertyValue::List(elements) = val {
         assert_eq!(elements.len(), 16);
         for elem in &elements {
-            assert_eq!(elem, &PropertyValue::Null);
+            assert_eq!(elem, &context(0, PropertyValue::Null));
         }
     } else {
         panic!("Expected List for priority array without index");
@@ -606,7 +613,7 @@ fn ao_direct_priority_array_write_value() {
     assert_eq!(
         ao.read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(5))
             .unwrap(),
-        PropertyValue::Real(42.0)
+        context(1, PropertyValue::Real(42.0))
     );
 }
 
@@ -638,7 +645,7 @@ fn ao_direct_priority_array_relinquish() {
     assert_eq!(
         ao.read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(5))
             .unwrap(),
-        PropertyValue::Null
+        context(0, PropertyValue::Null)
     );
 }
 

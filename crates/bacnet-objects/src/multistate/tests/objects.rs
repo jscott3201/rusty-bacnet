@@ -1,4 +1,19 @@
 use super::super::*;
+use bacnet_encoding::primitives::encode_property_value;
+use bytes::BytesMut;
+
+fn encode_value(value: &PropertyValue) -> Vec<u8> {
+    let mut bytes = BytesMut::new();
+    encode_property_value(&mut bytes, value).unwrap();
+    bytes.to_vec()
+}
+
+fn context(tag_number: u32, value: PropertyValue) -> PropertyValue {
+    PropertyValue::ContextTagged {
+        tag_number,
+        value: Box::new(value),
+    }
+}
 
 // --- MultiStateInput ---
 
@@ -111,7 +126,7 @@ fn mso_write_with_priority() {
     let slot = mso
         .read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(8))
         .unwrap();
-    assert_eq!(slot, PropertyValue::Unsigned(3));
+    assert_eq!(slot, context(3, PropertyValue::Unsigned(3)));
 }
 
 #[test]
@@ -201,7 +216,24 @@ fn msv_write_with_priority() {
     let slot = msv
         .read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(8))
         .unwrap();
-    assert_eq!(slot, PropertyValue::Unsigned(2));
+    assert_eq!(slot, context(3, PropertyValue::Unsigned(2)));
+}
+
+#[test]
+fn msv_priority_array_slot_encodes_as_multistate_bacnet_priority_value_choice() {
+    let mut msv = MultiStateValueObject::new(1, "MSV-1", 3).unwrap();
+    msv.write_property(
+        PropertyIdentifier::PRESENT_VALUE,
+        None,
+        PropertyValue::Unsigned(2),
+        Some(8),
+    )
+    .unwrap();
+
+    let slot = msv
+        .read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(8))
+        .unwrap();
+    assert_eq!(encode_value(&slot), vec![0x39, 0x02]);
 }
 
 #[test]
@@ -242,7 +274,7 @@ fn msv_read_priority_array_all_none() {
     if let PropertyValue::List(elements) = val {
         assert_eq!(elements.len(), 16);
         for elem in &elements {
-            assert_eq!(elem, &PropertyValue::Null);
+            assert_eq!(elem, &context(0, PropertyValue::Null));
         }
     } else {
         panic!("Expected List for priority array without index");
@@ -332,7 +364,7 @@ fn msv_direct_priority_array_write_value() {
     assert_eq!(
         msv.read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(5))
             .unwrap(),
-        PropertyValue::Unsigned(3)
+        context(3, PropertyValue::Unsigned(3))
     );
 }
 
@@ -447,7 +479,7 @@ fn mso_direct_priority_array_write_value() {
     assert_eq!(
         mso.read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(5))
             .unwrap(),
-        PropertyValue::Unsigned(3)
+        context(3, PropertyValue::Unsigned(3))
     );
 }
 

@@ -162,6 +162,7 @@ PropertyValue.date(2026, 3, 21, 6)    # year, month, day, day_of_week (1=Mon)
 PropertyValue.time(14, 30, 0, 0)      # hour, minute, second, hundredths
 PropertyValue.bit_string(0, b"\xff")  # unused_bits, data
 PropertyValue.list([PropertyValue.unsigned(1), PropertyValue.unsigned(2)])
+PropertyValue.context_tagged(1, PropertyValue.real(72.5))
 ```
 
 ### Accessors
@@ -170,6 +171,11 @@ PropertyValue.list([PropertyValue.unsigned(1), PropertyValue.unsigned(2)])
 v = PropertyValue.real(72.5)
 v.tag     # "real"
 v.value   # 72.5 (native Python float)
+
+choice = PropertyValue.context_tagged(1, v)
+choice.tag    # "context_tagged"
+choice.value  # {"tag_number": 1, "value": 72.5}
+# repr(choice) == "PropertyValue.context_tagged(1, PropertyValue.real(72.5))"
 ```
 
 | Tag | Python `.value` type |
@@ -188,6 +194,14 @@ v.value   # 72.5 (native Python float)
 | `"date"` | `tuple(year, month, day, day_of_week)` |
 | `"time"` | `tuple(hour, minute, second, hundredths)` |
 | `"list"` | `list` of native Python values |
+| `"context_tagged"` | `dict` with `"tag_number"` and native `"value"` |
+
+Context tag numbers 0-254 are encodable. The constructor retains the supplied
+integer so an out-of-range tag fails during BACnet encoding instead of being
+silently truncated. A context-tagged `list` is encoded as a constructed value
+with an opening/closing tag pair; an unwrapped `list` retains concatenated
+application-tagged element encoding. Nested context-tagged wrappers are rejected
+with an encoding error because their construction semantics are ambiguous.
 
 ---
 

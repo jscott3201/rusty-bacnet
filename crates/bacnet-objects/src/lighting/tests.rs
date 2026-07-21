@@ -1,5 +1,12 @@
 use super::*;
 
+fn context(tag_number: u32, value: PropertyValue) -> PropertyValue {
+    PropertyValue::ContextTagged {
+        tag_number,
+        value: Box::new(value),
+    }
+}
+
 // --- LightingOutputObject ---
 
 #[test]
@@ -116,13 +123,13 @@ fn lighting_output_priority_array_read() {
     let slot = obj
         .read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(8))
         .unwrap();
-    assert_eq!(slot, PropertyValue::Real(50.0));
+    assert_eq!(slot, context(1, PropertyValue::Real(50.0)));
 
     // Read empty slot 1
     let slot = obj
         .read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(1))
         .unwrap();
-    assert_eq!(slot, PropertyValue::Null);
+    assert_eq!(slot, context(0, PropertyValue::Null));
 }
 
 #[test]
@@ -347,13 +354,13 @@ fn binary_lighting_output_priority_array() {
     let slot = obj
         .read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(5))
         .unwrap();
-    assert_eq!(slot, PropertyValue::Enumerated(1));
+    assert_eq!(slot, context(2, PropertyValue::Enumerated(1)));
 
     // Read empty slot 1
     let slot = obj
         .read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(1))
         .unwrap();
-    assert_eq!(slot, PropertyValue::Null);
+    assert_eq!(slot, context(0, PropertyValue::Null));
 }
 
 #[test]

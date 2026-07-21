@@ -1,5 +1,12 @@
 use super::super::*;
 
+fn context(tag_number: u32, value: PropertyValue) -> PropertyValue {
+    PropertyValue::ContextTagged {
+        tag_number,
+        value: Box::new(value),
+    }
+}
+
 #[test]
 fn bv_read_present_value_default() {
     let bv = BinaryValueObject::new(1, "BV-1").unwrap();
@@ -163,7 +170,7 @@ fn bo_write_with_priority() {
     let slot = bo
         .read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(8))
         .unwrap();
-    assert_eq!(slot, PropertyValue::Enumerated(1));
+    assert_eq!(slot, context(2, PropertyValue::Enumerated(1)));
 }
 
 #[test]
@@ -361,7 +368,7 @@ fn bo_priority_array_read_all_slots_none_by_default() {
     if let PropertyValue::List(elements) = val {
         assert_eq!(elements.len(), 16);
         for elem in &elements {
-            assert_eq!(elem, &PropertyValue::Null);
+            assert_eq!(elem, &context(0, PropertyValue::Null));
         }
     } else {
         panic!("Expected List for priority array without index");
@@ -388,7 +395,7 @@ fn bo_direct_priority_array_write_value() {
     assert_eq!(
         bo.read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(5))
             .unwrap(),
-        PropertyValue::Enumerated(1)
+        context(2, PropertyValue::Enumerated(1))
     );
 }
 

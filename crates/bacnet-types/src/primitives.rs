@@ -4,7 +4,9 @@
 //! [`Time`], and the [`PropertyValue`] sum type.
 
 #[cfg(not(feature = "std"))]
-use alloc::{string::String, vec::Vec};
+use alloc::{boxed::Box, string::String, vec::Vec};
+#[cfg(feature = "std")]
+use std::boxed::Box;
 
 use crate::enums::ObjectType;
 use crate::error::Error;
@@ -381,6 +383,18 @@ pub enum PropertyValue {
     /// (Clause 15.5.1). Each element is encoded as its own application-tagged
     /// value, concatenated in order.
     List(Vec<PropertyValue>),
+    /// A value encoded with a BACnet context tag rather than an application tag.
+    ///
+    /// Primitive values use a context tag header followed by their raw content.
+    /// A [`PropertyValue::List`] uses an opening/closing tag pair and preserves
+    /// the normal encoding of each contained value. Nested context-tagged
+    /// wrappers are rejected by the encoder.
+    ContextTagged {
+        /// Context tag number. Values greater than 254 are rejected by the encoder.
+        tag_number: u32,
+        /// Primitive or list value carried by the context tag.
+        value: Box<PropertyValue>,
+    },
 }
 
 // ---------------------------------------------------------------------------

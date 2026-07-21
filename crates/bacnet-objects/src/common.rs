@@ -564,6 +564,29 @@ macro_rules! write_event_properties {
 }
 pub(crate) use write_event_properties;
 
+/// Wrap one of the four standard `BACnetPriorityValue` CHOICE alternatives.
+///
+/// Other property-value kinds cannot be represented by this standard CHOICE
+/// and return an invalid-data-type protocol error.
+pub(crate) fn bacnet_priority_value(
+    value: bacnet_types::primitives::PropertyValue,
+) -> Result<bacnet_types::primitives::PropertyValue, bacnet_types::error::Error> {
+    use bacnet_types::primitives::PropertyValue;
+
+    let tag_number = match &value {
+        PropertyValue::Null => 0,
+        PropertyValue::Real(_) => 1,
+        PropertyValue::Enumerated(_) => 2,
+        PropertyValue::Unsigned(_) => 3,
+        _ => return Err(invalid_data_type_error()),
+    };
+
+    Ok(PropertyValue::ContextTagged {
+        tag_number,
+        value: Box::new(value),
+    })
+}
+
 /// Read a priority array property (handles array_index=None, Some(0), Some(1..=16)).
 ///
 /// `$wrap` is a closure/function that converts `T` into a `PropertyValue`.
@@ -576,17 +599,21 @@ macro_rules! read_priority_array {
                     .priority_array
                     .iter()
                     .map(|slot| match slot {
-                        Some(v) => wrap_fn(*v),
-                        None => bacnet_types::primitives::PropertyValue::Null,
+                        Some(v) => $crate::common::bacnet_priority_value(wrap_fn(*v)),
+                        None => $crate::common::bacnet_priority_value(
+                            bacnet_types::primitives::PropertyValue::Null,
+                        ),
                     })
-                    .collect();
+                    .collect::<Result<Vec<_>, bacnet_types::error::Error>>()?;
                 Ok(bacnet_types::primitives::PropertyValue::List(elements))
             }
             Some(0) => Ok(bacnet_types::primitives::PropertyValue::Unsigned(16)),
             Some(idx) if (1..=16).contains(&idx) => {
                 match $self.priority_array[(idx - 1) as usize] {
-                    Some(v) => Ok(wrap_fn(v)),
-                    None => Ok(bacnet_types::primitives::PropertyValue::Null),
+                    Some(v) => $crate::common::bacnet_priority_value(wrap_fn(v)),
+                    None => $crate::common::bacnet_priority_value(
+                        bacnet_types::primitives::PropertyValue::Null,
+                    ),
                 }
             }
             _ => Err($crate::common::invalid_array_index_error()),

@@ -357,6 +357,146 @@ fn property_value_encode_decode_all_types() {
 
 // --- Context-tagged encode ---
 
+fn context_tagged(tag_number: u32, value: PropertyValue) -> PropertyValue {
+    PropertyValue::ContextTagged {
+        tag_number,
+        value: Box::new(value),
+    }
+}
+
+#[test]
+fn property_value_context_tagged_encodes_all_primitive_contents() {
+    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    let cases = vec![
+        (context_tagged(0, PropertyValue::Null), vec![0x08]),
+        (
+            context_tagged(1, PropertyValue::Boolean(true)),
+            vec![0x19, 0x01],
+        ),
+        (
+            context_tagged(2, PropertyValue::Unsigned(42)),
+            vec![0x29, 0x2a],
+        ),
+        (
+            context_tagged(3, PropertyValue::Signed(-1)),
+            vec![0x39, 0xff],
+        ),
+        (
+            context_tagged(4, PropertyValue::Real(1.0)),
+            vec![0x4c, 0x3f, 0x80, 0x00, 0x00],
+        ),
+        (
+            context_tagged(5, PropertyValue::Double(1.0)),
+            vec![0x5d, 0x08, 0x3f, 0xf0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+        ),
+        (
+            context_tagged(6, PropertyValue::OctetString(vec![0xaa])),
+            vec![0x69, 0xaa],
+        ),
+        (
+            context_tagged(7, PropertyValue::CharacterString("A".into())),
+            vec![0x7a, 0x00, 0x41],
+        ),
+        (
+            context_tagged(
+                8,
+                PropertyValue::BitString {
+                    unused_bits: 0,
+                    data: vec![0xff],
+                },
+            ),
+            vec![0x8a, 0x00, 0xff],
+        ),
+        (
+            context_tagged(9, PropertyValue::Enumerated(1)),
+            vec![0x99, 0x01],
+        ),
+        (
+            context_tagged(
+                10,
+                PropertyValue::Date(Date {
+                    year: 124,
+                    month: 1,
+                    day: 2,
+                    day_of_week: 2,
+                }),
+            ),
+            vec![0xac, 124, 1, 2, 2],
+        ),
+        (
+            context_tagged(
+                11,
+                PropertyValue::Time(Time {
+                    hour: 12,
+                    minute: 34,
+                    second: 56,
+                    hundredths: 78,
+                }),
+            ),
+            vec![0xbc, 12, 34, 56, 78],
+        ),
+        (
+            context_tagged(12, PropertyValue::ObjectIdentifier(oid)),
+            vec![0xcc, 0x00, 0x00, 0x00, 0x01],
+        ),
+    ];
+
+    for (value, expected) in cases {
+        let bytes = encode_to_vec(|buf| encode_property_value(buf, &value).unwrap());
+        assert_eq!(bytes, expected, "wrong encoding for {value:?}");
+    }
+}
+
+#[test]
+fn property_value_context_tagged_list_uses_opening_and_closing_tags() {
+    let value = context_tagged(
+        20,
+        PropertyValue::List(vec![
+            PropertyValue::Unsigned(1),
+            context_tagged(2, PropertyValue::Enumerated(3)),
+        ]),
+    );
+
+    let bytes = encode_to_vec(|buf| encode_property_value(buf, &value).unwrap());
+    assert_eq!(bytes, vec![0xfe, 20, 0x21, 0x01, 0x29, 0x03, 0xff, 20]);
+}
+
+#[test]
+fn property_value_context_tagged_rejects_nested_context_tagged_values() {
+    let value = context_tagged(20, context_tagged(2, PropertyValue::Unsigned(1)));
+    let mut bytes = BytesMut::new();
+
+    let error = encode_property_value(&mut bytes, &value).unwrap_err();
+
+    assert!(
+        matches!(error, Error::Encoding(_)),
+        "unexpected error: {error}"
+    );
+    assert!(error.to_string().contains("nested context-tagged"));
+    assert!(bytes.is_empty());
+}
+
+#[test]
+fn property_value_context_tagged_supports_extended_tag_numbers() {
+    let value = context_tagged(254, PropertyValue::Real(1.0));
+    let bytes = encode_to_vec(|buf| encode_property_value(buf, &value).unwrap());
+    assert_eq!(bytes, vec![0xfc, 254, 0x3f, 0x80, 0x00, 0x00]);
+}
+
+#[test]
+fn property_value_context_tagged_rejects_unrepresentable_tag_numbers() {
+    for tag_number in [255, 256, u32::MAX] {
+        let value = context_tagged(tag_number, PropertyValue::Null);
+        let mut bytes = BytesMut::new();
+        let error = encode_property_value(&mut bytes, &value).unwrap_err();
+        assert!(
+            error.to_string().contains("context tag number"),
+            "unexpected error for tag {tag_number}: {error}"
+        );
+        assert!(bytes.is_empty());
+    }
+}
+
 #[test]
 fn ctx_unsigned_encoding() {
     let bytes = encode_to_vec(|buf| encode_ctx_unsigned(buf, 1, 42));

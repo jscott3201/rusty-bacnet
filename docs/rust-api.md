@@ -50,6 +50,12 @@ let val = PropertyValue::Real(72.5);
 let val = PropertyValue::Boolean(true);
 let val = PropertyValue::CharacterString("hello".into());
 let val = PropertyValue::Null;
+
+// Explicit context tag; tag numbers 0-254 are encodable.
+let val = PropertyValue::ContextTagged {
+    tag_number: 1,
+    value: Box::new(PropertyValue::Real(72.5)),
+};
 ```
 
 ### Error
@@ -78,13 +84,28 @@ use bytes::BytesMut;
 
 // Encode
 let mut buf = BytesMut::new();
-encode_property_value(&mut buf, &PropertyValue::Real(72.5));
+encode_property_value(&mut buf, &PropertyValue::Real(72.5))?;
 let bytes = buf.to_vec();
 
 // Decode
 let (value, bytes_consumed) = decode_application_value(&bytes, 0)?;
 assert_eq!(value, PropertyValue::Real(72.5));
+
+// Context-tagged primitive: context [1], four Real content octets.
+let context_value = PropertyValue::ContextTagged {
+    tag_number: 1,
+    value: Box::new(PropertyValue::Real(72.5)),
+};
+let mut context_buf = BytesMut::new();
+encode_property_value(&mut context_buf, &context_value)?;
+assert_eq!(context_buf[0], 0x1c);
 ```
+
+`PropertyValue::List` keeps its existing behavior: its elements are encoded as
+concatenated application-tagged values. Wrapping a `List` in
+`ContextTagged` emits an opening/closing context tag pair around those elements.
+Tag numbers above 254 and nested `ContextTagged` wrappers return
+`Error::Encoding`; tag numbers are never truncated.
 
 ### APDU Types
 

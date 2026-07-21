@@ -1,5 +1,14 @@
 use super::*;
-use bacnet_types::enums::ObjectType;
+use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
+
+fn assert_invalid_data_type(error: Error) {
+    assert!(matches!(
+        error,
+        Error::Protocol { class, code }
+            if class == ErrorClass::PROPERTY.to_raw() as u32
+                && code == ErrorCode::INVALID_DATA_TYPE.to_raw() as u32
+    ));
+}
 
 // -----------------------------------------------------------------------
 // IntegerValueObject
@@ -731,10 +740,10 @@ fn value_object_priority_array_direct_write() {
     .unwrap();
 
     // Read back slot 5
-    let slot = obj
+    let error = obj
         .read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(5))
-        .unwrap();
-    assert_eq!(slot, PropertyValue::Signed(77));
+        .unwrap_err();
+    assert_invalid_data_type(error);
 
     // PV should reflect it
     let pv = obj
@@ -756,6 +765,24 @@ fn value_object_priority_array_direct_write() {
         .read_property(PropertyIdentifier::PRESENT_VALUE, None)
         .unwrap();
     assert_eq!(pv, PropertyValue::Signed(0));
+}
+
+#[test]
+fn integer_value_priority_array_rejects_non_standard_choice() {
+    let mut obj = IntegerValueObject::new(1, "IV-1").unwrap();
+    obj.write_property(
+        PropertyIdentifier::PRESENT_VALUE,
+        None,
+        PropertyValue::Signed(77),
+        Some(5),
+    )
+    .unwrap();
+
+    let error = obj
+        .read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(5))
+        .unwrap_err();
+
+    assert_invalid_data_type(error);
 }
 
 #[test]

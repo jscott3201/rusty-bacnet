@@ -639,12 +639,16 @@ class PropertyValue:
     def list(items: list[PropertyValue]) -> PropertyValue:
         """Create a List (array) value from a list of PropertyValue items."""
         ...
+    @staticmethod
+    def context_tagged(tag_number: int, value: PropertyValue) -> PropertyValue:
+        """Wrap a primitive or list value in an explicit BACnet context tag."""
+        ...
 
     @property
     def tag(self) -> str:
         """Type tag: 'null', 'boolean', 'unsigned', 'signed', 'real', 'double',
         'octet_string', 'character_string', 'bit_string', 'enumerated',
-        'date', 'time', 'object_identifier'."""
+        'date', 'time', 'object_identifier', 'list', or 'context_tagged'."""
         ...
 
     @property

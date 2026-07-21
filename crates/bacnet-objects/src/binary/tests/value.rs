@@ -1,4 +1,19 @@
 use super::super::*;
+use bacnet_encoding::primitives::encode_property_value;
+use bytes::BytesMut;
+
+fn encode_value(value: &PropertyValue) -> Vec<u8> {
+    let mut bytes = BytesMut::new();
+    encode_property_value(&mut bytes, value).unwrap();
+    bytes.to_vec()
+}
+
+fn context(tag_number: u32, value: PropertyValue) -> PropertyValue {
+    PropertyValue::ContextTagged {
+        tag_number,
+        value: Box::new(value),
+    }
+}
 
 #[test]
 fn bv_read_present_value_default() {
@@ -89,7 +104,24 @@ fn bv_write_with_priority() {
     let slot = bv
         .read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(8))
         .unwrap();
-    assert_eq!(slot, PropertyValue::Enumerated(1));
+    assert_eq!(slot, context(2, PropertyValue::Enumerated(1)));
+}
+
+#[test]
+fn bv_priority_array_slot_encodes_as_binary_bacnet_priority_value_choice() {
+    let mut bv = BinaryValueObject::new(1, "BV-1").unwrap();
+    bv.write_property(
+        PropertyIdentifier::PRESENT_VALUE,
+        None,
+        PropertyValue::Enumerated(1),
+        Some(8),
+    )
+    .unwrap();
+
+    let slot = bv
+        .read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(8))
+        .unwrap();
+    assert_eq!(encode_value(&slot), vec![0x29, 0x01]);
 }
 
 #[test]
@@ -130,7 +162,7 @@ fn bv_read_priority_array_all_none() {
     if let PropertyValue::List(elements) = val {
         assert_eq!(elements.len(), 16);
         for elem in &elements {
-            assert_eq!(elem, &PropertyValue::Null);
+            assert_eq!(elem, &context(0, PropertyValue::Null));
         }
     } else {
         panic!("Expected List for priority array without index");
@@ -172,7 +204,7 @@ fn bv_direct_priority_array_write() {
     assert_eq!(
         bv.read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(5))
             .unwrap(),
-        PropertyValue::Enumerated(1)
+        context(2, PropertyValue::Enumerated(1))
     );
 }
 

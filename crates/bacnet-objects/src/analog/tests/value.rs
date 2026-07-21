@@ -1,6 +1,21 @@
 use super::super::*;
 use crate::event::LimitEnable;
+use bacnet_encoding::primitives::encode_property_value;
 use bacnet_types::enums::EventState;
+use bytes::BytesMut;
+
+fn encode_value(value: &PropertyValue) -> Vec<u8> {
+    let mut bytes = BytesMut::new();
+    encode_property_value(&mut bytes, value).unwrap();
+    bytes.to_vec()
+}
+
+fn context(tag_number: u32, value: PropertyValue) -> PropertyValue {
+    PropertyValue::ContextTagged {
+        tag_number,
+        value: Box::new(value),
+    }
+}
 
 // --- AnalogValue ---
 
@@ -64,13 +79,38 @@ fn av_write_with_priority() {
     let slot = av
         .read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(8))
         .unwrap();
-    assert_eq!(slot, PropertyValue::Real(55.0));
+    assert_eq!(slot, context(1, PropertyValue::Real(55.0)));
 
     // Priority array at index 1 should be Null
     let slot = av
         .read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(1))
         .unwrap();
-    assert_eq!(slot, PropertyValue::Null);
+    assert_eq!(slot, context(0, PropertyValue::Null));
+}
+
+#[test]
+fn av_priority_array_slots_encode_as_bacnet_priority_value_choices() {
+    let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    av.write_property(
+        PropertyIdentifier::PRESENT_VALUE,
+        None,
+        PropertyValue::Real(55.0),
+        Some(8),
+    )
+    .unwrap();
+
+    let null_slot = av
+        .read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(1))
+        .unwrap();
+    assert_eq!(encode_value(&null_slot), vec![0x08]);
+
+    let real_slot = av
+        .read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(8))
+        .unwrap();
+    assert_eq!(
+        encode_value(&real_slot),
+        [vec![0x1c], 55.0_f32.to_be_bytes().to_vec()].concat()
+    );
 }
 
 #[test]
@@ -144,7 +184,7 @@ fn av_priority_array_read_all_slots_none_by_default() {
     if let PropertyValue::List(elements) = val {
         assert_eq!(elements.len(), 16);
         for elem in &elements {
-            assert_eq!(elem, &PropertyValue::Null);
+            assert_eq!(elem, &context(0, PropertyValue::Null));
         }
     } else {
         panic!("Expected List for priority array without index");
@@ -235,7 +275,7 @@ fn av_direct_priority_array_write_value() {
     assert_eq!(
         av.read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(5))
             .unwrap(),
-        PropertyValue::Real(42.0)
+        context(1, PropertyValue::Real(42.0))
     );
 }
 
@@ -264,7 +304,7 @@ fn av_direct_priority_array_relinquish() {
     assert_eq!(
         av.read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(5))
             .unwrap(),
-        PropertyValue::Null
+        context(0, PropertyValue::Null)
     );
 }
 

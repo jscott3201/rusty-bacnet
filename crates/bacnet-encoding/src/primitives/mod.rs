@@ -514,7 +514,68 @@ pub fn decode_application_value(
     Ok((value, content_end))
 }
 
-/// Encode a `PropertyValue` as an application-tagged value.
+fn checked_context_tag_number(tag_number: u32) -> Result<u8, Error> {
+    let tag = u8::try_from(tag_number).map_err(|_| {
+        Error::Encoding(format!(
+            "context tag number {tag_number} exceeds the maximum encodable value 254"
+        ))
+    })?;
+    if tag == u8::MAX {
+        return Err(Error::Encoding(format!(
+            "context tag number {tag_number} exceeds the maximum encodable value 254"
+        )));
+    }
+    Ok(tag)
+}
+
+fn encode_context_tagged_property_value(
+    buf: &mut BytesMut,
+    tag_number: u32,
+    value: &PropertyValue,
+) -> Result<(), Error> {
+    let tag = checked_context_tag_number(tag_number)?;
+    match value {
+        PropertyValue::Null => tags::encode_tag(buf, tag, TagClass::Context, 0),
+        PropertyValue::Boolean(v) => encode_ctx_boolean(buf, tag, *v),
+        PropertyValue::Unsigned(v) => encode_ctx_unsigned(buf, tag, *v),
+        PropertyValue::Signed(v) => encode_ctx_signed(buf, tag, *v),
+        PropertyValue::Real(v) => encode_ctx_real(buf, tag, *v),
+        PropertyValue::Double(v) => encode_ctx_double(buf, tag, *v),
+        PropertyValue::OctetString(v) => encode_ctx_octet_string(buf, tag, v),
+        PropertyValue::CharacterString(v) => encode_ctx_character_string(buf, tag, v)?,
+        PropertyValue::BitString { unused_bits, data } => {
+            encode_ctx_bit_string(buf, tag, *unused_bits, data)
+        }
+        PropertyValue::Enumerated(v) => encode_ctx_enumerated(buf, tag, *v),
+        PropertyValue::Date(v) => encode_ctx_date(buf, tag, v),
+        PropertyValue::Time(v) => {
+            tags::encode_tag(buf, tag, TagClass::Context, 4);
+            buf.put_slice(&v.encode());
+        }
+        PropertyValue::ObjectIdentifier(v) => encode_ctx_object_id(buf, tag, v),
+        PropertyValue::List(values) => {
+            tags::encode_opening_tag(buf, tag);
+            for value in values {
+                encode_property_value(buf, value)?;
+            }
+            tags::encode_closing_tag(buf, tag);
+        }
+        PropertyValue::ContextTagged { .. } => {
+            return Err(Error::Encoding(
+                "nested context-tagged PropertyValue is ambiguous".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Encode a `PropertyValue` using its application or explicit context tag.
+///
+/// Existing primitive variants and [`PropertyValue::List`] retain their
+/// application-tagged behavior. [`PropertyValue::ContextTagged`] encodes the
+/// wrapped primitive as raw context-tagged content, or wraps a list in a
+/// context opening/closing tag pair. Nested context-tagged wrappers are
+/// rejected because their construction semantics are ambiguous.
 pub fn encode_property_value(buf: &mut BytesMut, value: &PropertyValue) -> Result<(), Error> {
     match value {
         PropertyValue::Null => encode_app_null(buf),
@@ -536,6 +597,9 @@ pub fn encode_property_value(buf: &mut BytesMut, value: &PropertyValue) -> Resul
             for v in values {
                 encode_property_value(buf, v)?;
             }
+        }
+        PropertyValue::ContextTagged { tag_number, value } => {
+            encode_context_tagged_property_value(buf, *tag_number, value)?;
         }
     }
     Ok(())

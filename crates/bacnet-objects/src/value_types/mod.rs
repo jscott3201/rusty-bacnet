@@ -227,17 +227,17 @@ macro_rules! define_value_object_commandable {
                     .priority_array
                     .iter()
                     .map(|slot| match slot {
-                        Some(v) => wrap_fn(v),
-                        None => PropertyValue::Null,
+                        Some(v) => common::bacnet_priority_value(wrap_fn(v)),
+                        None => common::bacnet_priority_value(PropertyValue::Null),
                     })
-                    .collect();
+                    .collect::<Result<Vec<_>, Error>>()?;
                 Ok(PropertyValue::List(elements))
             }
             Some(0) => Ok(PropertyValue::Unsigned(16)),
             Some(idx) if (1..=16).contains(&idx) => {
                 match &$self.priority_array[(idx - 1) as usize] {
-                    Some(v) => Ok(wrap_fn(v)),
-                    None => Ok(PropertyValue::Null),
+                    Some(v) => common::bacnet_priority_value(wrap_fn(v)),
+                    None => common::bacnet_priority_value(PropertyValue::Null),
                 }
             }
             _ => Err(common::invalid_array_index_error()),

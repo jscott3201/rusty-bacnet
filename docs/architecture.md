@@ -149,6 +149,25 @@ pub trait BACnetObject: Send + Sync {
 
 `ObjectDatabase` stores `Box<dyn BACnetObject>` keyed by `ObjectIdentifier`, with secondary indexes by name (for WhoHas) and by type (for efficient enumeration).
 
+### Property value wire representation
+
+`PropertyValue` separates value structure from the tag class used on the wire.
+Primitive variants and an unwrapped `List` retain the existing application-tag
+encoding; `List` concatenates each element in order. `ContextTagged` pairs a
+tag number with a primitive or `List` `PropertyValue`. Primitives emit the
+context header plus raw content, while a `List` emits an opening/closing context
+tag pair around its normally encoded elements. The encoder accepts the
+repository tag range 0-254 and returns an encoding error for larger numbers or
+ambiguous nested `ContextTagged` wrappers.
+
+Commandable object `Priority_Array` reads use this representation for
+BACnetPriorityValue choices: Null is context [0], Real is context [1], binary
+Enumerated is context [2], and multi-state Unsigned is context [3]. This applies
+to whole-array elements and indexed slots. Array index 0 remains an application
+Unsigned array length. Priority arrays whose element type is outside these four
+standard CHOICE alternatives return an invalid-data-type protocol error instead
+of inventing additional context tags.
+
 ## Concurrency Model
 
 The stack runs on a Tokio multi-threaded runtime.
