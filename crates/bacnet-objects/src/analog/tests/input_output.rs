@@ -99,7 +99,7 @@ fn ao_write_with_priority() {
 }
 
 #[test]
-fn ashrae_135_2020_clause_21_bacnet_priority_value_real_uses_application_tag() {
+fn ao_priority_array_real_encodes_as_application_value() {
     let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
     ao.write_property(
         PropertyIdentifier::PRESENT_VALUE,
