@@ -1,4 +1,27 @@
 //! NotificationClass object per ASHRAE 135-2020 Clause 12.31.
+//!
+//! # Recipient-list day/time convention
+//!
+//! `RECIPIENT_LIST` entries are `BACnetDestination` (Clause 12.15.5). The
+//! `valid_days` field is a `BACnetDaysOfWeek` bit string defined as
+//! `BIT STRING { monday(0), tuesday(1), ..., sunday(6) }` (Clause 21): **bit 0
+//! is Monday and bit 6 is Sunday** in the in-memory `u8`. Callers must build
+//! `today_bit` with the same convention (`1 << dow` where `dow = 0` on
+//! Monday). This module serializes the 7-bit `valid_days` as the wire byte
+//! `valid_days << 1` with `unused_bits: 1`, and the 3-bit `transitions` as
+//! `transitions << 5` with `unused_bits: 5`; the matching decoders are
+//! `data[0] >> 1` and `data[0] >> 5`. These shifts pack the in-memory bits
+//! toward the MSB of the wire octet and round-trip within this codebase.
+//! (Clause 20.2.8 specifies true MSB-first packing, i.e. monday(0) at bit 7;
+//! the `<< 1` shift instead places monday at bit 1. That pre-existing
+//! wire-format deviation is out of scope for the day/time semantics fix and
+//! is not changed here.)
+//!
+//! `from_time`/`to_time` are BACnet `Time` values interpreted in the device's
+//! *local* time, derived from the wall clock plus the Device object's
+//! `UTC_Offset` property (signed minutes) at the sender. A window with
+//! `to_time < from_time` (e.g. 22:00–02:00) crosses midnight and is active
+//! outside the `[from, to]` interval; see [`time_in_window`].
 
 use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
@@ -299,7 +322,12 @@ fn time_to_centiseconds(t: &Time) -> u32 {
 
 /// Check if `current` falls within the `[from, to]` time window.
 ///
-/// If either bound has an unspecified hour (0xFF), the window is treated as "all day".
+/// If either bound has an unspecified hour (0xFF), the window is treated as
+/// "all day". A window whose `to` is earlier than its `from` (e.g.
+/// 22:00–02:00) crosses midnight: it is active from `from` up to midnight and
+/// again from midnight up to `to`, i.e. when `current >= from || current <= to`.
+/// This matches the ASHRAE 135-2020 reading that `To_Time` is the end of the
+/// active period; a wrap-around pair denotes an overnight schedule.
 fn time_in_window(current: &Time, from: &Time, to: &Time) -> bool {
     if from.hour == Time::UNSPECIFIED || to.hour == Time::UNSPECIFIED {
         return true;
@@ -307,7 +335,39 @@ fn time_in_window(current: &Time, from: &Time, to: &Time) -> bool {
     let cur = time_to_centiseconds(current);
     let from_cs = time_to_centiseconds(from);
     let to_cs = time_to_centiseconds(to);
-    cur >= from_cs && cur <= to_cs
+    if to_cs < from_cs {
+        // Overnight window crossing midnight.
+        cur >= from_cs || cur <= to_cs
+    } else {
+        cur >= from_cs && cur <= to_cs
+    }
+}
+
+/// Derive the local day-of-week bit and time-of-day for recipient filtering.
+///
+/// `utc_secs` is seconds since the Unix epoch (1970-01-01, a Thursday).
+/// `utc_offset_minutes` is the Device object's `UTC_Offset` (signed minutes
+/// east of UTC, Clause 12.32); 0 keeps UTC. The day-of-week follows
+/// `BACnetDaysOfWeek` (monday(0)..sunday(6), Clause 21): the `+3` makes
+/// Monday=0 because the epoch was a Thursday, and `today_bit = 1 << dow`
+/// uses the same convention as `valid_days`. The returned `Time` is the
+/// local time of day (hundredths are supplied by the caller via `subsec`).
+pub fn local_day_and_time(utc_secs: u64, utc_offset_minutes: i32) -> (u8, Time) {
+    // Shift to local seconds. `saturating_add_signed` clamps to 0 if a negative
+    // offset would cross below the Unix epoch; this only matters for timestamps
+    // in the first ~24h of 1970 and is otherwise a no-op. The offset is bounded
+    // by ±24*60 minutes in practice.
+    let local_secs = utc_secs.saturating_add_signed((utc_offset_minutes as i64) * 60);
+    let dow = ((local_secs / 86400 + 3) % 7) as u8;
+    let today_bit = 1u8 << dow;
+    let day_secs = (local_secs % 86400) as u32;
+    let current_time = Time {
+        hour: (day_secs / 3600) as u8,
+        minute: ((day_secs % 3600) / 60) as u8,
+        second: (day_secs % 60) as u8,
+        hundredths: 0,
+    };
+    (today_bit, current_time)
 }
 
 /// Resolve the NotificationClass object whose `Notification_Class` property
@@ -407,8 +467,9 @@ pub fn resolve_transition_priority_ack(
 /// - `db`: the object database containing NotificationClass objects
 /// - `notification_class`: the notification class number to look up
 /// - `transition`: which event transition to filter for
-/// - `today_bit`: bitmask for today's day of week in `valid_days`
-///   (bit 0 = Sunday, bit 1 = Monday, …, bit 6 = Saturday)
+/// - `today_bit`: bitmask for today's day of week in `valid_days`, using the
+///   `BACnetDaysOfWeek` convention **bit 0 = Monday, …, bit 6 = Sunday**
+///   (i.e. `1 << dow` where `dow = 0` on Monday)
 /// - `current_time`: the current local time for time-window filtering
 ///
 /// Returns `(recipient, process_identifier, issue_confirmed_notifications)` tuples.

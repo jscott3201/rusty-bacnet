@@ -68,16 +68,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default();
-        let total_secs = now.as_secs();
-        let dow = ((total_secs / 86400 + 3) % 7) as u8;
-        let today_bit = 1u8 << dow;
-        let day_secs = (total_secs % 86400) as u32;
-        let current_time = Time {
-            hour: (day_secs / 3600) as u8,
-            minute: ((day_secs % 3600) / 60) as u8,
-            second: (day_secs % 60) as u8,
-            hundredths: (now.subsec_millis() / 10) as u8,
-        };
+        let utc_secs = now.as_secs();
 
         let (notification, recipients) = {
             let mut db = db.write().await;
@@ -87,6 +78,22 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .into_iter()
                 .find(|o| o.object_type() == ObjectType::DEVICE)
                 .unwrap_or_else(|| ObjectIdentifier::new(ObjectType::DEVICE, 0).unwrap());
+
+            // Project the wall clock into the device's local time using its
+            // UTC_Offset property (signed minutes from UTC, Clause 12.32),
+            // so the Recipient_List day/time filters are evaluated in the same
+            // frame the device's schedule uses. With the default UTC_Offset of 0
+            // this is a no-op (UTC).
+            let utc_offset_minutes = db
+                .get(&device_oid)
+                .and_then(|dev| dev.read_property(PropertyIdentifier::UTC_OFFSET, None).ok())
+                .and_then(|v| match v {
+                    PropertyValue::Signed(m) => Some(m),
+                    _ => None,
+                })
+                .unwrap_or(0);
+            let (today_bit, mut current_time) = local_day_and_time(utc_secs, utc_offset_minutes);
+            current_time.hundredths = (now.subsec_millis() / 10) as u8;
 
             let object = match db.get_mut(oid) {
                 Some(o) => o,
@@ -124,7 +131,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 process_identifier: 0,
                 initiating_device_identifier: device_oid,
                 event_object_identifier: *oid,
-                timestamp: BACnetTimeStamp::SequenceNumber(total_secs),
+                timestamp: BACnetTimeStamp::SequenceNumber(utc_secs),
                 notification_class,
                 priority,
                 event_type: change.event_type().to_raw(),
