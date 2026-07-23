@@ -228,8 +228,14 @@ impl OutOfRangeDetector {
         if self.time_delay == 0 {
             return self.fire(desired);
         }
-        // Nonzero delay: seed (or refresh) the pending transition without firing.
-        self.pending = Some(PendingTransition::seed(desired, self.time_delay));
+        // Nonzero delay: seed a pending transition only when there is none to
+        // the same target. A redundant write of the same qualifying value must
+        // NOT restart the countdown (ASHRAE 135-2020 §13.2.4 — Time_Delay is a
+        // debounce timer); re-seeding here would let writes faster than the
+        // 1s tick pin the transition forever. The periodic `tick` advances it.
+        if self.pending.as_ref().map_or(true, |p| p.state != desired) {
+            self.pending = Some(PendingTransition::seed(desired, self.time_delay));
+        }
         None
     }
 
@@ -384,7 +390,11 @@ impl ChangeOfStateDetector {
         if self.time_delay == 0 {
             return self.fire(desired);
         }
-        self.pending = Some(PendingTransition::seed(desired, self.time_delay));
+        // See [`OutOfRangeDetector::probe`]: do not restart an in-flight
+        // countdown to the same target on a redundant qualifying write.
+        if self.pending.as_ref().map_or(true, |p| p.state != desired) {
+            self.pending = Some(PendingTransition::seed(desired, self.time_delay));
+        }
         None
     }
 
@@ -495,7 +505,11 @@ impl CommandFailureDetector {
         if self.time_delay == 0 {
             return self.fire(desired);
         }
-        self.pending = Some(PendingTransition::seed(desired, self.time_delay));
+        // See [`OutOfRangeDetector::probe`]: do not restart an in-flight
+        // countdown to the same target on a redundant qualifying write.
+        if self.pending.as_ref().map_or(true, |p| p.state != desired) {
+            self.pending = Some(PendingTransition::seed(desired, self.time_delay));
+        }
         None
     }
 

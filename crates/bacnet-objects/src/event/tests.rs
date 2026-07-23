@@ -388,6 +388,55 @@ fn time_delay_repeated_probes_do_not_accelerate_countdown() {
 }
 
 #[test]
+fn time_delay_redundant_probe_does_not_reset_countdown() {
+    // Regression for the symmetric bug class: a redundant write of the SAME
+    // qualifying value while a pending transition already exists must NOT
+    // re-seed (which would reset `remaining` to the full delay). Per
+    // ASHRAE 135-2020 §13.2.4 Time_Delay is a debounce timer — writes faster
+    // than the 1s tick must not pin the transition forever. Interleave probe
+    // and tick to prove the elapsed countdown survives a redundant probe.
+    let mut det = make_delayed_detector(3);
+    det.probe(81.0); // seed HIGH_LIMIT, remaining = 3
+    assert!(det.tick(81.0).is_none()); // remaining 2
+
+    // A redundant probe of the same out-of-range value: the elapsed second
+    // must NOT be erased. `remaining` stays 2, not reset to 3.
+    assert!(det.probe(81.0).is_none());
+    assert_eq!(
+        det.pending.as_ref().unwrap().remaining,
+        2,
+        "redundant probe must not re-seed the countdown"
+    );
+
+    // And the transition still fires after the remaining ticks, not 3 more.
+    assert!(det.tick(81.0).is_none()); // remaining 1
+    let change = det.tick(81.0).unwrap(); // remaining 0 → fire
+    assert_eq!(change.to, EventState::HIGH_LIMIT);
+    assert_eq!(det.event_state, EventState::HIGH_LIMIT);
+}
+
+#[test]
+fn time_delay_chattering_input_still_fires() {
+    // The full pinning scenario: writes faster than the 1s tick. A 3s delay
+    // must still elapse after exactly 3 ticks despite sub-tick redundant writes.
+    let mut det = make_delayed_detector(3);
+    det.probe(81.0); // remaining 3
+    for _ in 0..3 {
+        // Chatter: a redundant probe before each tick.
+        assert!(det.probe(81.0).is_none());
+        let r = det.tick(81.0);
+        // First two ticks: no fire. Third tick (remaining 0): fire.
+        if det.pending.is_some() {
+            assert!(r.is_none());
+        } else {
+            assert!(r.is_some(), "transition must fire on the 3rd tick");
+        }
+    }
+    assert_eq!(det.event_state, EventState::HIGH_LIMIT);
+    assert!(det.pending.is_none());
+}
+
+#[test]
 fn time_delay_fires_after_exact_tick_count() {
     let mut det = make_delayed_detector(3);
     det.probe(81.0); // seed, remaining = 3

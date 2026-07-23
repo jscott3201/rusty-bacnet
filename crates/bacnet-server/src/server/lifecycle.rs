@@ -441,6 +441,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let intrinsic_retry_ms = config.cov_retry_timeout_ms;
         let intrinsic_reporting_task = Some(tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(1));
+            // The countdown decrements exactly once per call, so a delayed wake
+            // must NOT burst-deliver missed ticks (each would decrement
+            // `remaining`, compressing the Time_Delay). `Delay` collapses a
+            // missed deadline into a single tick, preserving per-second
+            // granularity (ASHRAE 135-2020 §13.2.4).
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 interval.tick().await;
                 if comm_state_intrinsic.load(Ordering::Acquire) >= 1 {
