@@ -237,6 +237,19 @@ impl BACnetObject for AnalogInputObject {
         self.event_detector.acked_transitions |= transition_bit & 0x07;
         Ok(())
     }
+
+    fn is_createable(&self) -> bool {
+        true
+    }
+
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        // Mirrors the AnalogInput `write_property` arms.
+        common::is_common_writable(property)
+            || property == PropertyIdentifier::PRESENT_VALUE
+            || property == PropertyIdentifier::RELIABILITY
+            || property == PropertyIdentifier::COV_INCREMENT
+            || common::is_event_property_writable(property)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -491,6 +504,20 @@ impl BACnetObject for AnalogOutputObject {
     fn acknowledge_alarm(&mut self, transition_bit: u8) -> Result<(), bacnet_types::error::Error> {
         self.event_detector.acked_transitions |= transition_bit & 0x07;
         Ok(())
+    }
+
+    fn is_createable(&self) -> bool {
+        true
+    }
+
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        // Mirrors the AnalogOutput `write_property` arms: commandable
+        // (PRIORITY_ARRAY + PRESENT_VALUE) + common + event properties.
+        common::is_commandable_property_writable(property)
+            || common::is_common_writable(property)
+            || property == PropertyIdentifier::RELIABILITY
+            || property == PropertyIdentifier::COV_INCREMENT
+            || common::is_event_property_writable(property)
     }
 }
 
@@ -758,6 +785,22 @@ impl BACnetObject for AnalogValueObject {
     fn acknowledge_alarm(&mut self, transition_bit: u8) -> Result<(), bacnet_types::error::Error> {
         self.event_detector.acked_transitions |= transition_bit & 0x07;
         Ok(())
+    }
+
+    /// AnalogValue is NOT createable: `handle_create_object` has no branch for
+    /// it, so PICS must not advertise createability the runtime rejects.
+    fn is_createable(&self) -> bool {
+        false
+    }
+
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        // Mirrors the AnalogValue `write_property` arms. Same set as
+        // AnalogOutput (commandable + common + event properties).
+        common::is_commandable_property_writable(property)
+            || common::is_common_writable(property)
+            || property == PropertyIdentifier::RELIABILITY
+            || property == PropertyIdentifier::COV_INCREMENT
+            || common::is_event_property_writable(property)
     }
 }
 

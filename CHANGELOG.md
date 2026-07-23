@@ -7,9 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add `BACnetObject::is_writable_property`, `BACnetObject::is_createable`, and `BACnetObject::is_deleteable` trait methods (with conservative defaults that preserve current behavior for unmigrated object types) so PICS generation and runtime dispatch share one truth source for property writability and object createability. The `bacnet-objects` crate is a public dependency; downstream implementors of `BACnetObject` now have these methods available to override (defaults preserve existing PICS output).
+
 ### Fixed
 
-- Correct the `AUDIT_LOG` and `AUDIT_REPORTER` `ObjectType` constants to match ASHRAE 135-2020 Clause 21.6 (`audit-log = 61`, `audit-reporter = 62`). The constants were previously swapped (`AUDIT_REPORTER = 61`, `AUDIT_LOG = 62`), so `AuditLog` and `AuditReporter` objects encoded each other's object type on the wire and in the `OBJECT_TYPE` property. Downstream consumers that persisted, logged, or matched on the prior raw values should re-key AuditLog as type `61` and AuditReporter as type `62`.
+- Correct PICS writable-property flags for the 9 core I/O/V object types (AnalogInput/Output/Value, BinaryInput/Output/Value, MultiStateInput/Output/Value) so they mirror the objects' real `write_property` arms. The previous static heuristic omitted 33 writable routes that the objects actually accept — `LIMIT_ENABLE`, `EVENT_ENABLE`, `NOTIFY_TYPE`, `TIME_DELAY`, `NOTIFICATION_CLASS`, `HIGH_LIMIT`, `LOW_LIMIT`, `DEADBAND` (event-capable analog types), `PRIORITY_ARRAY` (commandable types), `STATE_TEXT` (multistate types), and `PRESENT_VALUE` on input types (writable when out-of-service) — producing false-negatives in PICS. Writability is now derived from the object's own `is_writable_property` capability method, so PICS and runtime dispatch cannot drift apart.
+- Stop over-reporting `AnalogValue` as createable in PICS. The static heuristic declared all types createable except Device and NetworkPort, but `handle_create_object` has no branch for `AnalogValue` (it falls through to `UNSUPPORTED_OBJECT_TYPE`). `is_createable` now returns `true` only for the 8 types the runtime factory actually constructs (AI, AO, BI, BO, BV, MSI, MSO, MSV); `AnalogValue` is `false` until/unless a later PR adds the factory branch.
+- Stop over-reporting `Device` as deleteable via the static heuristic; `Device` and `NetworkPort` now override `is_deleteable` to `false` on the objects themselves.
+- Reconcile `handle_delete_object` with `is_deleteable`: the runtime DeleteObject handler now rejects `NetworkPort` (matching its `is_deleteable` override) in addition to `Device`, so PICS and runtime dispatch share one truth source for deleteability with no remaining drift.
 
 ## [0.10.1]
 

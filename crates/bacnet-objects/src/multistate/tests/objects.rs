@@ -511,3 +511,56 @@ fn mso_direct_priority_array_index_17_error() {
     );
     assert!(result.is_err());
 }
+
+// ── Trait capability method tests (issue #115 shared truth source) ──────────
+
+#[test]
+fn msi_is_createable_and_writable_match_factory() {
+    use crate::traits::BACnetObject;
+    let msi = MultiStateInputObject::new(1, "msi-1", 2).unwrap();
+    assert!(
+        msi.is_createable(),
+        "MultiStateInput is factory-constructable"
+    );
+    // PRESENT_VALUE (when OOS) + STATE_TEXT + common.
+    assert!(msi.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
+    assert!(msi.is_writable_property(PropertyIdentifier::STATE_TEXT));
+    assert!(msi.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
+    assert!(msi.is_writable_property(PropertyIdentifier::OBJECT_NAME));
+    // Not commandable.
+    assert!(!msi.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
+    // EVENT_ENABLE read-only on MSI.
+    assert!(!msi.is_writable_property(PropertyIdentifier::EVENT_ENABLE));
+}
+
+#[test]
+fn mso_is_createable_and_writable_match_factory() {
+    use crate::traits::BACnetObject;
+    let mso = MultiStateOutputObject::new(1, "mso-1", 2).unwrap();
+    assert!(
+        mso.is_createable(),
+        "MultiStateOutput is factory-constructable"
+    );
+    // Commandable + STATE_TEXT + common.
+    assert!(mso.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
+    assert!(mso.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
+    assert!(mso.is_writable_property(PropertyIdentifier::STATE_TEXT));
+    assert!(mso.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
+    // EVENT_ENABLE read-only on MSO.
+    assert!(!mso.is_writable_property(PropertyIdentifier::EVENT_ENABLE));
+}
+
+#[test]
+fn msv_is_createable_and_writable_match_factory() {
+    use crate::traits::BACnetObject;
+    let msv = MultiStateValueObject::new(1, "msv-1", 2).unwrap();
+    assert!(
+        msv.is_createable(),
+        "MultiStateValue is factory-constructable"
+    );
+    // Commandable + STATE_TEXT + common.
+    assert!(msv.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
+    assert!(msv.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
+    assert!(msv.is_writable_property(PropertyIdentifier::STATE_TEXT));
+    assert!(msv.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
+}

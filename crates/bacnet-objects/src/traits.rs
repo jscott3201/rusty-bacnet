@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 
 use bacnet_types::constructed::BACnetLogRecord;
-use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
@@ -38,6 +38,40 @@ pub trait BACnetObject: Send + Sync {
 
     /// List all properties this object supports.
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]>;
+
+    /// Whether `write_property` accepts `property` for this object.
+    ///
+    /// PICS generation and runtime dispatch MUST consult this (or
+    /// `write_property` itself) rather than a separate heuristic, so the PICS
+    /// writable flags cannot drift from the actual write routes. The default
+    /// reproduces the historical PICS heuristic (see
+    /// [`historical_writable_default`]) so unmigrated object types keep their
+    /// current PICS output. Object implementations override to mirror their
+    /// real `write_property` arms exactly.
+    ///
+    /// Universal read-only properties (`OBJECT_IDENTIFIER`, `OBJECT_TYPE`,
+    /// `PROPERTY_LIST`, `STATUS_FLAGS`) are always non-writable and are
+    /// excluded by the default; overrides should preserve that invariant.
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        historical_writable_default(self.object_identifier().object_type(), property)
+    }
+
+    /// Whether this object type can be created at runtime via CreateObject.
+    ///
+    /// Default `false`; override `true` only for types the network factory
+    /// (`handle_create_object`) actually constructs, so PICS createability
+    /// matches the runtime factory with no separate list to drift.
+    fn is_createable(&self) -> bool {
+        false
+    }
+
+    /// Whether this object type can be deleted at runtime via DeleteObject.
+    ///
+    /// Default `true`; override `false` on object types that are not
+    /// deleteable (e.g. `Device`, `NetworkPort`).
+    fn is_deleteable(&self) -> bool {
+        true
+    }
 
     /// List the REQUIRED properties for this object type.
     ///
@@ -115,4 +149,46 @@ pub trait BACnetObject: Send + Sync {
     ///
     /// Default is a no-op. TrendLog objects override to append to their buffer.
     fn add_trend_record(&mut self, _record: BACnetLogRecord) {}
+}
+
+/// The historical PICS writable-property heuristic, used by the default
+/// [`BACnetObject::is_writable_property`] so unmigrated object types keep
+/// their current PICS output.
+///
+/// This is a free function (not a per-object override) so the default trait
+/// method can delegate to it without requiring `Self: Sized` (which would
+/// break `dyn BACnetObject` dispatch). Object implementations should override
+/// [`BACnetObject::is_writable_property`] to mirror their real `write_property`
+/// arms exactly rather than calling this.
+#[inline]
+pub(crate) fn historical_writable_default(
+    object_type: ObjectType,
+    property: PropertyIdentifier,
+) -> bool {
+    // Universal read-only properties.
+    if property == PropertyIdentifier::OBJECT_IDENTIFIER
+        || property == PropertyIdentifier::OBJECT_TYPE
+        || property == PropertyIdentifier::PROPERTY_LIST
+        || property == PropertyIdentifier::STATUS_FLAGS
+    {
+        return false;
+    }
+
+    if property == PropertyIdentifier::OBJECT_NAME {
+        return true;
+    }
+
+    if property == PropertyIdentifier::PRESENT_VALUE {
+        return object_type != ObjectType::ANALOG_INPUT
+            && object_type != ObjectType::BINARY_INPUT
+            && object_type != ObjectType::MULTI_STATE_INPUT;
+    }
+
+    property == PropertyIdentifier::DESCRIPTION
+        || property == PropertyIdentifier::OUT_OF_SERVICE
+        || property == PropertyIdentifier::COV_INCREMENT
+        || property == PropertyIdentifier::HIGH_LIMIT
+        || property == PropertyIdentifier::LOW_LIMIT
+        || property == PropertyIdentifier::DEADBAND
+        || property == PropertyIdentifier::NOTIFICATION_CLASS
 }

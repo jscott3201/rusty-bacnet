@@ -268,6 +268,14 @@ impl BACnetObject for NetworkPortObject {
         ];
         Cow::Borrowed(PROPS)
     }
+
+    /// NetworkPort is not createable or deleteable at runtime.
+    fn is_createable(&self) -> bool {
+        false
+    }
+    fn is_deleteable(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]

@@ -599,3 +599,31 @@ fn ai_property_list_invalid_index_returns_error() {
     let result = ai.read_property(PropertyIdentifier::PROPERTY_LIST, Some(count + 1));
     assert!(result.is_err());
 }
+
+// ── Trait capability method tests (issue #115 shared truth source) ──────────
+
+#[test]
+fn av_is_not_createable_matches_factory() {
+    use crate::traits::BACnetObject;
+    let av = AnalogValueObject::new(1, "av-1", 95).unwrap();
+    // handle_create_object has NO branch for ANALOG_VALUE — it falls through
+    // to UNSUPPORTED_OBJECT_TYPE. PICS must not advertise createability.
+    assert!(!av.is_createable(), "AnalogValue must NOT be createable");
+}
+
+#[test]
+fn av_is_writable_property_mirrors_write_property() {
+    use crate::traits::BACnetObject;
+    let av = AnalogValueObject::new(1, "av-1", 95).unwrap();
+    // Commandable (same as AO).
+    assert!(av.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
+    assert!(av.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
+    // Event properties.
+    assert!(av.is_writable_property(PropertyIdentifier::LIMIT_ENABLE));
+    assert!(av.is_writable_property(PropertyIdentifier::NOTIFY_TYPE));
+    assert!(av.is_writable_property(PropertyIdentifier::TIME_DELAY));
+    // RELINQUISH_DEFAULT has no write arm.
+    assert!(!av.is_writable_property(PropertyIdentifier::RELINQUISH_DEFAULT));
+    // Universal read-only.
+    assert!(!av.is_writable_property(PropertyIdentifier::STATUS_FLAGS));
+}

@@ -281,7 +281,7 @@ impl<'a> PicsGenerator<'a> {
                 .iter()
                 .map(|&pid| {
                     let is_required = required.contains(&pid);
-                    let writable = Self::is_writable_property(object_type, pid);
+                    let writable = representative.is_writable_property(pid);
                     PropertySupport {
                         property_id: pid,
                         access: PropertyAccess {
@@ -293,8 +293,8 @@ impl<'a> PicsGenerator<'a> {
                 })
                 .collect();
 
-            let createable = Self::is_createable(object_type);
-            let deleteable = Self::is_deleteable(object_type);
+            let createable = representative.is_createable();
+            let deleteable = representative.is_deleteable();
 
             result.push(ObjectTypeSupport {
                 object_type,
@@ -304,43 +304,6 @@ impl<'a> PicsGenerator<'a> {
             });
         }
         result
-    }
-
-    /// Heuristic for commonly writable properties.
-    fn is_writable_property(object_type: ObjectType, pid: PropertyIdentifier) -> bool {
-        if pid == PropertyIdentifier::OBJECT_IDENTIFIER
-            || pid == PropertyIdentifier::OBJECT_TYPE
-            || pid == PropertyIdentifier::PROPERTY_LIST
-            || pid == PropertyIdentifier::STATUS_FLAGS
-        {
-            return false;
-        }
-
-        if pid == PropertyIdentifier::OBJECT_NAME {
-            return true;
-        }
-
-        if pid == PropertyIdentifier::PRESENT_VALUE {
-            return object_type != ObjectType::ANALOG_INPUT
-                && object_type != ObjectType::BINARY_INPUT
-                && object_type != ObjectType::MULTI_STATE_INPUT;
-        }
-
-        pid == PropertyIdentifier::DESCRIPTION
-            || pid == PropertyIdentifier::OUT_OF_SERVICE
-            || pid == PropertyIdentifier::COV_INCREMENT
-            || pid == PropertyIdentifier::HIGH_LIMIT
-            || pid == PropertyIdentifier::LOW_LIMIT
-            || pid == PropertyIdentifier::DEADBAND
-            || pid == PropertyIdentifier::NOTIFICATION_CLASS
-    }
-
-    fn is_createable(object_type: ObjectType) -> bool {
-        object_type != ObjectType::DEVICE && object_type != ObjectType::NETWORK_PORT
-    }
-
-    fn is_deleteable(object_type: ObjectType) -> bool {
-        object_type != ObjectType::DEVICE && object_type != ObjectType::NETWORK_PORT
     }
 
     /// Build the service support list based on what the server actually handles.
@@ -633,3 +596,6 @@ pub fn generate_pics(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod truth_source_tests;

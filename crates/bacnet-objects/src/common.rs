@@ -685,3 +685,97 @@ pub(crate) fn write_cov_increment(
         None
     }
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// PICS writability helpers
+// ──────────────────────────────────────────────────────────────────────────
+//
+// Shared property-set predicates used by the `is_writable_property` overrides
+// on the core object types. Each predicate mirrors the arms of the matching
+// `write_property` implementation (via the `write_event_properties!` macro and
+// the `write_priority_array!` / `write_priority_array_direct!` macros) so PICS
+// and runtime dispatch share one truth source. Keep these in lock-step with
+// the macros below.
+
+/// Writable event-detection properties exposed by objects that use the
+/// `write_event_properties!` macro (AnalogInput/Output/Value).
+///
+/// Mirrors the macro arms at `common.rs:459-565`: HIGH_LIMIT, LOW_LIMIT,
+/// DEADBAND, LIMIT_ENABLE, EVENT_ENABLE, NOTIFICATION_CLASS, NOTIFY_TYPE,
+/// TIME_DELAY. ACKED_TRANSITIONS is read-only (write-access-denied) and is
+/// intentionally excluded.
+#[inline]
+pub(crate) fn is_event_property_writable(
+    property: bacnet_types::enums::PropertyIdentifier,
+) -> bool {
+    matches!(
+        property,
+        bacnet_types::enums::PropertyIdentifier::HIGH_LIMIT
+            | bacnet_types::enums::PropertyIdentifier::LOW_LIMIT
+            | bacnet_types::enums::PropertyIdentifier::DEADBAND
+            | bacnet_types::enums::PropertyIdentifier::LIMIT_ENABLE
+            | bacnet_types::enums::PropertyIdentifier::EVENT_ENABLE
+            | bacnet_types::enums::PropertyIdentifier::NOTIFICATION_CLASS
+            | bacnet_types::enums::PropertyIdentifier::NOTIFY_TYPE
+            | bacnet_types::enums::PropertyIdentifier::TIME_DELAY
+    )
+}
+
+/// Writable commandable-object properties shared by all commandable types
+/// (AnalogOutput, AnalogValue, BinaryOutput, BinaryValue, MultiStateOutput,
+/// MultiStateValue): `PRIORITY_ARRAY` direct writes and commandable
+/// `PRESENT_VALUE` writes.
+///
+/// Returns `true` for `PRIORITY_ARRAY` and `PRESENT_VALUE` only.
+/// `RELINQUISH_DEFAULT` and `CURRENT_COMMAND_PRIORITY` are read-only in every
+/// current implementation (no `write_property` arm accepts either) and are
+/// intentionally not included here; if a future type grows a write arm for
+/// either, add it in that type's `is_writable_property` override.
+#[inline]
+pub(crate) fn is_commandable_property_writable(
+    property: bacnet_types::enums::PropertyIdentifier,
+) -> bool {
+    matches!(
+        property,
+        bacnet_types::enums::PropertyIdentifier::PRIORITY_ARRAY
+            | bacnet_types::enums::PropertyIdentifier::PRESENT_VALUE
+    )
+}
+
+/// Writable common properties shared by all core I/O/V object types
+/// (accepted via the `write_out_of_service`, `write_object_name`, and
+/// `write_description` helpers in `common.rs`).
+#[inline]
+pub(crate) fn is_common_writable(property: bacnet_types::enums::PropertyIdentifier) -> bool {
+    matches!(
+        property,
+        bacnet_types::enums::PropertyIdentifier::OUT_OF_SERVICE
+            | bacnet_types::enums::PropertyIdentifier::OBJECT_NAME
+            | bacnet_types::enums::PropertyIdentifier::DESCRIPTION
+    )
+}
+
+/// Writable properties for commandable Multi-State objects (MSO, MSV):
+/// commandable (PRIORITY_ARRAY + PRESENT_VALUE) + common + STATE_TEXT.
+/// Mirrors the `write_property` arms of MultiStateOutput/Value.
+#[inline]
+pub(crate) fn is_multistate_commandable_writable(
+    property: bacnet_types::enums::PropertyIdentifier,
+) -> bool {
+    is_commandable_property_writable(property)
+        || is_common_writable(property)
+        || property == bacnet_types::enums::PropertyIdentifier::STATE_TEXT
+}
+
+/// Writable properties for Multi-State Input (MSI): PRESENT_VALUE (when out
+/// of service) + common + STATE_TEXT. Mirrors the `write_property` arms of
+/// MultiStateInput (commandable `PRESENT_VALUE` is not accepted — inputs are
+/// not commandable — so this excludes `is_commandable_property_writable`).
+#[inline]
+pub(crate) fn is_multistate_input_writable(
+    property: bacnet_types::enums::PropertyIdentifier,
+) -> bool {
+    is_common_writable(property)
+        || property == bacnet_types::enums::PropertyIdentifier::PRESENT_VALUE
+        || property == bacnet_types::enums::PropertyIdentifier::STATE_TEXT
+}

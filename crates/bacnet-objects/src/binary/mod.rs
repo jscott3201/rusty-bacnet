@@ -206,6 +206,20 @@ impl BACnetObject for BinaryInputObject {
         ];
         Cow::Borrowed(PROPS)
     }
+
+    fn is_createable(&self) -> bool {
+        true
+    }
+
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        // Mirrors the BinaryInput `write_property` arms. EVENT_ENABLE,
+        // NOTIFICATION_CLASS, and ACKED_TRANSITIONS are read-only on BI
+        // (no write arms), so they are intentionally excluded.
+        common::is_common_writable(property)
+            || property == PropertyIdentifier::PRESENT_VALUE
+            || property == PropertyIdentifier::ACTIVE_TEXT
+            || property == PropertyIdentifier::INACTIVE_TEXT
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -436,6 +450,19 @@ impl BACnetObject for BinaryOutputObject {
         ];
         Cow::Borrowed(PROPS)
     }
+
+    fn is_createable(&self) -> bool {
+        true
+    }
+
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        // Mirrors the BinaryOutput `write_property` arms: commandable
+        // (PRIORITY_ARRAY + PRESENT_VALUE) + common + text properties.
+        common::is_commandable_property_writable(property)
+            || common::is_common_writable(property)
+            || property == PropertyIdentifier::ACTIVE_TEXT
+            || property == PropertyIdentifier::INACTIVE_TEXT
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -661,6 +688,19 @@ impl BACnetObject for BinaryValueObject {
             PropertyIdentifier::INACTIVE_TEXT,
         ];
         Cow::Borrowed(PROPS)
+    }
+
+    fn is_createable(&self) -> bool {
+        true
+    }
+
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        // Mirrors the BinaryValue `write_property` arms. Same set as
+        // BinaryOutput (commandable + common + text properties).
+        common::is_commandable_property_writable(property)
+            || common::is_common_writable(property)
+            || property == PropertyIdentifier::ACTIVE_TEXT
+            || property == PropertyIdentifier::INACTIVE_TEXT
     }
 }
 

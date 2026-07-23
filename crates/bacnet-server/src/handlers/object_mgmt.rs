@@ -162,15 +162,21 @@ pub fn handle_create_object(
 /// Handle a DeleteObject request.
 ///
 /// Removes the object from the database. Returns an error if the object
-/// doesn't exist or is the Device object (which cannot be deleted).
+/// doesn't exist or is an object type that cannot be deleted at runtime
+/// (Device and NetworkPort, which model the running node itself). The set
+/// of non-deleteable types is kept in sync with `BACnetObject::is_deleteable`
+/// so PICS and runtime dispatch share one truth source.
 pub fn handle_delete_object(db: &mut ObjectDatabase, service_data: &[u8]) -> Result<(), Error> {
     let request = DeleteObjectRequest::decode(service_data)?;
 
-    if request.object_identifier.object_type() == ObjectType::DEVICE {
-        return Err(Error::Protocol {
-            class: ErrorClass::OBJECT.to_raw() as u32,
-            code: ErrorCode::OBJECT_DELETION_NOT_PERMITTED.to_raw() as u32,
-        });
+    match request.object_identifier.object_type() {
+        ObjectType::DEVICE | ObjectType::NETWORK_PORT => {
+            return Err(Error::Protocol {
+                class: ErrorClass::OBJECT.to_raw() as u32,
+                code: ErrorCode::OBJECT_DELETION_NOT_PERMITTED.to_raw() as u32,
+            });
+        }
+        _ => {}
     }
 
     db.remove(&request.object_identifier)

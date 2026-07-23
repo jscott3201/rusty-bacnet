@@ -483,6 +483,14 @@ impl BACnetObject for DeviceObject {
         props.sort_by_key(|p| p.to_raw());
         Cow::Owned(props)
     }
+
+    /// Device is not createable or deleteable at runtime.
+    fn is_createable(&self) -> bool {
+        false
+    }
+    fn is_deleteable(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]

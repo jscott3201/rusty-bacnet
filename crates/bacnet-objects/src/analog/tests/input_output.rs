@@ -700,3 +700,64 @@ fn ao_direct_priority_array_index_17_error() {
     );
     assert!(result.is_err());
 }
+
+// ── Trait capability method tests (issue #115 shared truth source) ──────────
+
+#[test]
+fn ai_is_createable_matches_factory() {
+    use crate::traits::BACnetObject;
+    let ai = AnalogInputObject::new(1, "ai-1", 95).unwrap();
+    assert!(ai.is_createable(), "AnalogInput is factory-constructable");
+}
+
+#[test]
+fn ai_is_writable_property_mirrors_write_property() {
+    use crate::traits::BACnetObject;
+    let ai = AnalogInputObject::new(1, "ai-1", 95).unwrap();
+    // Event properties accepted via write_event_properties! — the old
+    // heuristic omitted these (false-negatives).
+    assert!(ai.is_writable_property(PropertyIdentifier::LIMIT_ENABLE));
+    assert!(ai.is_writable_property(PropertyIdentifier::NOTIFY_TYPE));
+    assert!(ai.is_writable_property(PropertyIdentifier::TIME_DELAY));
+    assert!(ai.is_writable_property(PropertyIdentifier::EVENT_ENABLE));
+    assert!(ai.is_writable_property(PropertyIdentifier::NOTIFICATION_CLASS));
+    // Common + RELIABILITY + COV_INCREMENT.
+    assert!(ai.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
+    assert!(ai.is_writable_property(PropertyIdentifier::OBJECT_NAME));
+    assert!(ai.is_writable_property(PropertyIdentifier::DESCRIPTION));
+    assert!(ai.is_writable_property(PropertyIdentifier::RELIABILITY));
+    assert!(ai.is_writable_property(PropertyIdentifier::COV_INCREMENT));
+    // PRESENT_VALUE accepted when out-of-service.
+    assert!(ai.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
+    // Universal read-only.
+    assert!(!ai.is_writable_property(PropertyIdentifier::OBJECT_IDENTIFIER));
+    assert!(!ai.is_writable_property(PropertyIdentifier::OBJECT_TYPE));
+    assert!(!ai.is_writable_property(PropertyIdentifier::PROPERTY_LIST));
+    assert!(!ai.is_writable_property(PropertyIdentifier::STATUS_FLAGS));
+    // Not accepted by AI write_property.
+    assert!(!ai.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
+    assert!(!ai.is_writable_property(PropertyIdentifier::RELINQUISH_DEFAULT));
+}
+
+#[test]
+fn ao_is_createable_matches_factory() {
+    use crate::traits::BACnetObject;
+    let ao = AnalogOutputObject::new(1, "ao-1", 95).unwrap();
+    assert!(ao.is_createable(), "AnalogOutput is factory-constructable");
+}
+
+#[test]
+fn ao_is_writable_property_mirrors_write_property() {
+    use crate::traits::BACnetObject;
+    let ao = AnalogOutputObject::new(1, "ao-1", 95).unwrap();
+    // Commandable.
+    assert!(ao.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
+    assert!(ao.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
+    // Event + common.
+    assert!(ao.is_writable_property(PropertyIdentifier::LIMIT_ENABLE));
+    assert!(ao.is_writable_property(PropertyIdentifier::NOTIFY_TYPE));
+    assert!(ao.is_writable_property(PropertyIdentifier::TIME_DELAY));
+    assert!(ao.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
+    // RELINQUISH_DEFAULT has no write arm.
+    assert!(!ao.is_writable_property(PropertyIdentifier::RELINQUISH_DEFAULT));
+}

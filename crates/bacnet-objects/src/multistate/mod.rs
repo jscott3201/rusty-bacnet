@@ -235,6 +235,14 @@ impl BACnetObject for MultiStateInputObject {
         ];
         Cow::Borrowed(PROPS)
     }
+
+    fn is_createable(&self) -> bool {
+        true
+    }
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        // Mirrors the MultiStateInput `write_property` arms.
+        common::is_multistate_input_writable(property)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -494,6 +502,14 @@ impl BACnetObject for MultiStateOutputObject {
         ];
         Cow::Borrowed(PROPS)
     }
+
+    fn is_createable(&self) -> bool {
+        true
+    }
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        // Mirrors the MultiStateOutput `write_property` arms.
+        common::is_multistate_commandable_writable(property)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -750,6 +766,14 @@ impl BACnetObject for MultiStateValueObject {
             PropertyIdentifier::STATE_TEXT,
         ];
         Cow::Borrowed(PROPS)
+    }
+
+    fn is_createable(&self) -> bool {
+        true
+    }
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        // Mirrors the MultiStateValue `write_property` arms.
+        common::is_multistate_commandable_writable(property)
     }
 }
 

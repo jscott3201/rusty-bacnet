@@ -712,3 +712,29 @@ fn delete_device_object_fails() {
 
     assert!(handle_delete_object(&mut db, &buf).is_err());
 }
+
+#[test]
+fn delete_network_port_object_fails() {
+    // NetworkPort models a running node's port and is not deleteable at
+    // runtime, mirroring `NetworkPortObject::is_deleteable` so PICS and the
+    // runtime DeleteObject handler share one truth source.
+    let mut db = ObjectDatabase::new();
+    let np = bacnet_objects::network_port::NetworkPortObject::new(1, "NP-1", 0).unwrap();
+    db.add(Box::new(np)).unwrap();
+
+    let oid = ObjectIdentifier::new(ObjectType::NETWORK_PORT, 1).unwrap();
+    let request = bacnet_services::object_mgmt::DeleteObjectRequest {
+        object_identifier: oid,
+    };
+    let mut buf = BytesMut::new();
+    request.encode(&mut buf);
+
+    assert!(
+        handle_delete_object(&mut db, &buf).is_err(),
+        "DeleteObject must reject NETWORK_PORT (non-deleteable)"
+    );
+    assert!(
+        db.get(&oid).is_some(),
+        "NetworkPort must still be present after a rejected delete"
+    );
+}

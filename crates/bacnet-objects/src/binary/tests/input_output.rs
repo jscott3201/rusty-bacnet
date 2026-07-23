@@ -452,3 +452,53 @@ fn bo_direct_priority_array_index_17_error() {
     );
     assert!(result.is_err());
 }
+
+// ── Trait capability method tests (issue #115 shared truth source) ──────────
+
+#[test]
+fn bi_is_createable_matches_factory() {
+    use crate::traits::BACnetObject;
+    let bi = BinaryInputObject::new(1, "bi-1").unwrap();
+    assert!(bi.is_createable(), "BinaryInput is factory-constructable");
+}
+
+#[test]
+fn bi_is_writable_property_mirrors_write_property() {
+    use crate::traits::BACnetObject;
+    let bi = BinaryInputObject::new(1, "bi-1").unwrap();
+    // BI accepts PRESENT_VALUE (when OOS), ACTIVE/INACTIVE_TEXT, common set.
+    assert!(bi.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
+    assert!(bi.is_writable_property(PropertyIdentifier::ACTIVE_TEXT));
+    assert!(bi.is_writable_property(PropertyIdentifier::INACTIVE_TEXT));
+    assert!(bi.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
+    assert!(bi.is_writable_property(PropertyIdentifier::OBJECT_NAME));
+    assert!(bi.is_writable_property(PropertyIdentifier::DESCRIPTION));
+    // EVENT_ENABLE/NOTIFICATION_CLASS/ACKED_TRANSITIONS are read-only on BI.
+    assert!(!bi.is_writable_property(PropertyIdentifier::EVENT_ENABLE));
+    assert!(!bi.is_writable_property(PropertyIdentifier::NOTIFICATION_CLASS));
+    assert!(!bi.is_writable_property(PropertyIdentifier::ACKED_TRANSITIONS));
+    // Not commandable.
+    assert!(!bi.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
+}
+
+#[test]
+fn bo_is_createable_matches_factory() {
+    use crate::traits::BACnetObject;
+    let bo = BinaryOutputObject::new(1, "bo-1").unwrap();
+    assert!(bo.is_createable(), "BinaryOutput is factory-constructable");
+}
+
+#[test]
+fn bo_is_writable_property_mirrors_write_property() {
+    use crate::traits::BACnetObject;
+    let bo = BinaryOutputObject::new(1, "bo-1").unwrap();
+    // Commandable.
+    assert!(bo.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
+    assert!(bo.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
+    // Text + common.
+    assert!(bo.is_writable_property(PropertyIdentifier::ACTIVE_TEXT));
+    assert!(bo.is_writable_property(PropertyIdentifier::INACTIVE_TEXT));
+    assert!(bo.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
+    // Not event-writable (read-only on BO).
+    assert!(!bo.is_writable_property(PropertyIdentifier::EVENT_ENABLE));
+}
