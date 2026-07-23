@@ -10,6 +10,21 @@ use crate::common::{self, read_common_properties};
 use crate::event::ChangeOfStateDetector;
 use crate::traits::BACnetObject;
 
+/// Reject a `number_of_states` of zero.
+///
+/// Every multi-state object starts `PRESENT_VALUE` (and, for Output/Value, the
+/// relinquish default) at 1, and accepts writes only in `1..=number_of_states`.
+/// With zero states that initial value is out of range with no attainable value,
+/// so the constructors centralize this guard here.
+fn require_nonzero_states(number_of_states: u32) -> Result<(), Error> {
+    if number_of_states == 0 {
+        return Err(Error::OutOfRange(
+            "number_of_states must be at least 1".into(),
+        ));
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // MultiStateInput (type 13)
 // ---------------------------------------------------------------------------
@@ -44,6 +59,7 @@ impl MultiStateInputObject {
         number_of_states: u32,
     ) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, instance)?;
+        require_nonzero_states(number_of_states)?;
         Ok(Self {
             oid,
             name: name.into(),
@@ -279,6 +295,7 @@ impl MultiStateOutputObject {
         number_of_states: u32,
     ) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_OUTPUT, instance)?;
+        require_nonzero_states(number_of_states)?;
         Ok(Self {
             oid,
             name: name.into(),
@@ -544,6 +561,7 @@ impl MultiStateValueObject {
         number_of_states: u32,
     ) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_VALUE, instance)?;
+        require_nonzero_states(number_of_states)?;
         Ok(Self {
             oid,
             name: name.into(),

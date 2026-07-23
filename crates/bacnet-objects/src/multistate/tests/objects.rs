@@ -564,3 +564,164 @@ fn msv_is_createable_and_writable_match_factory() {
     assert!(msv.is_writable_property(PropertyIdentifier::STATE_TEXT));
     assert!(msv.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
 }
+
+// --- number_of_states boundary (#119) ---
+
+#[test]
+fn msi_new_rejects_zero_states() {
+    let err = MultiStateInputObject::new(1, "MSI-1", 0);
+    assert!(err.is_err(), "expected an error, got Ok");
+    if let Err(e) = err {
+        assert!(matches!(e, Error::OutOfRange(_)), "got {e:?}");
+    }
+}
+
+#[test]
+fn mso_new_rejects_zero_states() {
+    let err = MultiStateOutputObject::new(1, "MSO-1", 0);
+    assert!(err.is_err(), "expected an error, got Ok");
+    if let Err(e) = err {
+        assert!(matches!(e, Error::OutOfRange(_)), "got {e:?}");
+    }
+}
+
+#[test]
+fn msv_new_rejects_zero_states() {
+    let err = MultiStateValueObject::new(1, "MSV-1", 0);
+    assert!(err.is_err(), "expected an error, got Ok");
+    if let Err(e) = err {
+        assert!(matches!(e, Error::OutOfRange(_)), "got {e:?}");
+    }
+}
+
+/// A single-state object is the minimum valid configuration: the initial
+/// `PRESENT_VALUE` (1) is within `1..=number_of_states`, and `STATE_TEXT`
+/// holds exactly one entry.
+#[test]
+fn msi_one_state_is_valid_initial_value_in_range() {
+    let msi = MultiStateInputObject::new(1, "MSI-1", 1).unwrap();
+    assert_eq!(
+        msi.read_property(PropertyIdentifier::NUMBER_OF_STATES, None)
+            .unwrap(),
+        PropertyValue::Unsigned(1)
+    );
+    assert_eq!(
+        msi.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Unsigned(1)
+    );
+    assert_eq!(
+        msi.read_property(PropertyIdentifier::STATE_TEXT, Some(1))
+            .unwrap(),
+        PropertyValue::CharacterString("State 1".into())
+    );
+    // No second state exists.
+    assert!(msi
+        .read_property(PropertyIdentifier::STATE_TEXT, Some(2))
+        .is_err());
+}
+
+#[test]
+fn mso_one_state_initial_and_relinquish_default_in_range() {
+    let mut mso = MultiStateOutputObject::new(1, "MSO-1", 1).unwrap();
+    assert_eq!(
+        mso.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Unsigned(1)
+    );
+    assert_eq!(
+        mso.read_property(PropertyIdentifier::RELINQUISH_DEFAULT, None)
+            .unwrap(),
+        PropertyValue::Unsigned(1)
+    );
+    // Command the only valid state (1) at priority 8, then relinquish slot 8 so
+    // the effective value genuinely falls back to the in-range default (not a
+    // no-op relinquish of an already-empty slot).
+    mso.write_property(
+        PropertyIdentifier::PRIORITY_ARRAY,
+        Some(8),
+        PropertyValue::Unsigned(1),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        mso.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Unsigned(1)
+    );
+    mso.write_property(
+        PropertyIdentifier::PRIORITY_ARRAY,
+        Some(8),
+        PropertyValue::Null,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        mso.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Unsigned(1)
+    );
+}
+
+#[test]
+fn msv_one_state_initial_and_relinquish_default_in_range() {
+    let mut msv = MultiStateValueObject::new(1, "MSV-1", 1).unwrap();
+    assert_eq!(
+        msv.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Unsigned(1)
+    );
+    assert_eq!(
+        msv.read_property(PropertyIdentifier::RELINQUISH_DEFAULT, None)
+            .unwrap(),
+        PropertyValue::Unsigned(1)
+    );
+    // Command the only valid state (1) at priority 8, then relinquish slot 8 so
+    // the effective value genuinely falls back to the in-range default.
+    msv.write_property(
+        PropertyIdentifier::PRIORITY_ARRAY,
+        Some(8),
+        PropertyValue::Unsigned(1),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        msv.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Unsigned(1)
+    );
+    msv.write_property(
+        PropertyIdentifier::PRIORITY_ARRAY,
+        Some(8),
+        PropertyValue::Null,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        msv.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Unsigned(1)
+    );
+}
+
+/// A write outside the valid range is still rejected for a one-state object
+/// (state 2 must be refused when only state 1 exists).
+#[test]
+fn msi_one_state_write_out_of_range_rejected() {
+    let mut msi = MultiStateInputObject::new(1, "MSI-1", 1).unwrap();
+    msi.write_property(
+        PropertyIdentifier::OUT_OF_SERVICE,
+        None,
+        PropertyValue::Boolean(true),
+        None,
+    )
+    .unwrap();
+    assert!(msi
+        .write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Unsigned(2),
+            None
+        )
+        .is_err());
+}
