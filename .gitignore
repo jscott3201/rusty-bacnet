@@ -25,6 +25,7 @@ dist/
 
 # AI assistants
 codex-id.json
+codex-overnight-status.md
 .claude/
 CLAUDE.md
 .copilot/

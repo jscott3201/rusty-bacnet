@@ -1,4 +1,4 @@
-//! AuditLog (type 62) and AuditReporter (type 61) objects per Addendum 135-2016bj.
+//! AuditLog (type 61) and AuditReporter (type 62) objects per Addendum 135-2016bj.
 
 use std::borrow::Cow;
 use std::collections::VecDeque;
@@ -11,7 +11,7 @@ use crate::common::read_property_list_property;
 use crate::traits::BACnetObject;
 
 // ---------------------------------------------------------------------------
-// AuditLog (type 62)
+// AuditLog (type 61)
 // ---------------------------------------------------------------------------
 
 /// A single audit log record.
@@ -184,7 +184,7 @@ impl BACnetObject for AuditLogObject {
 }
 
 // ---------------------------------------------------------------------------
-// AuditReporter (type 61)
+// AuditReporter (type 62)
 // ---------------------------------------------------------------------------
 
 /// BACnet AuditReporter object — configures which audit notifications to send.

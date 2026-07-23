@@ -73,9 +73,9 @@ bacnet_enum! {
     /// New in 135-2020.
     const STAGING = 60;
     /// New in 135-2020.
-    const AUDIT_REPORTER = 61;
+    const AUDIT_LOG = 61;
     /// New in 135-2020.
-    const AUDIT_LOG = 62;
+    const AUDIT_REPORTER = 62;
     /// New in 135-2020.
     const COLOR = 63;
     /// New in 135-2020.

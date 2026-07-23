@@ -20,6 +20,30 @@ fn object_type_display_known() {
     assert_eq!(format!("{:?}", ObjectType::DEVICE), "ObjectType::DEVICE");
 }
 
+/// Standard 135-2020 Clause 21.6 (`BACnetObjectType ::= ENUMERATED`) assigns
+/// `audit-log (61)` and `audit-reporter (62)`. Guard against a swap regression:
+/// the constants were previously reversed (`AUDIT_REPORTER = 61`, `AUDIT_LOG
+/// = 62`), which encoded the wrong object type on the wire.
+#[test]
+fn object_type_audit_codes_match_clause_21_6() {
+    assert_eq!(ObjectType::AUDIT_LOG.to_raw(), 61);
+    assert_eq!(ObjectType::AUDIT_REPORTER.to_raw(), 62);
+    assert_eq!(ObjectType::from_raw(61), ObjectType::AUDIT_LOG);
+    assert_eq!(ObjectType::from_raw(62), ObjectType::AUDIT_REPORTER);
+
+    // Lock the on-wire ObjectIdentifier encoding, not just the enum value:
+    // the high 10 bits of a 4-byte OID carry the object type, so an AuditLog
+    // (type 61) instance 1 must encode as `(61 << 22) | 1` big-endian.
+    let audit_log = crate::primitives::ObjectIdentifier::new(ObjectType::AUDIT_LOG, 1).unwrap();
+    assert_eq!(audit_log.encode(), ((61u32 << 22) | 1u32).to_be_bytes());
+    let audit_reporter =
+        crate::primitives::ObjectIdentifier::new(ObjectType::AUDIT_REPORTER, 1).unwrap();
+    assert_eq!(
+        audit_reporter.encode(),
+        ((62u32 << 22) | 1u32).to_be_bytes()
+    );
+}
+
 #[test]
 fn property_identifier_round_trip() {
     assert_eq!(PropertyIdentifier::PRESENT_VALUE.to_raw(), 85);

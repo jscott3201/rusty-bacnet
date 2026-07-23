@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Correct the `AUDIT_LOG` and `AUDIT_REPORTER` `ObjectType` constants to match ASHRAE 135-2020 Clause 21.6 (`audit-log = 61`, `audit-reporter = 62`). The constants were previously swapped (`AUDIT_REPORTER = 61`, `AUDIT_LOG = 62`), so `AuditLog` and `AuditReporter` objects encoded each other's object type on the wire and in the `OBJECT_TYPE` property. Downstream consumers that persisted, logged, or matched on the prior raw values should re-key AuditLog as type `61` and AuditReporter as type `62`.
+
 ## [0.10.1]
 
 ### Added

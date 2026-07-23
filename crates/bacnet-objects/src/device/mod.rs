@@ -282,8 +282,8 @@ impl DeviceObject {
             ObjectType::ESCALATOR.to_raw(),
             ObjectType::LIFT.to_raw(),
             ObjectType::STAGING.to_raw(),
-            ObjectType::AUDIT_REPORTER.to_raw(),
             ObjectType::AUDIT_LOG.to_raw(),
+            ObjectType::AUDIT_REPORTER.to_raw(),
             ObjectType::COLOR.to_raw(),
             ObjectType::COLOR_TEMPERATURE.to_raw(),
         ]);
