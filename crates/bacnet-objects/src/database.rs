@@ -156,6 +156,21 @@ impl ObjectDatabase {
         self.objects.iter().map(|(&oid, obj)| (oid, obj.as_ref()))
     }
 
+    /// Visit every `(ObjectIdentifier, &mut dyn BACnetObject)` pair.
+    ///
+    /// Mutable counterpart to [`iter_objects`](Self::iter_objects), used by
+    /// the intrinsic-reporting tick task to advance pending transitions. A
+    /// callback is used (rather than a returned `impl Iterator`) so the
+    /// `&mut dyn BACnetObject` borrow is tied to this call's lifetime.
+    pub fn for_each_object_mut<F>(&mut self, mut f: F)
+    where
+        F: FnMut(ObjectIdentifier, &mut dyn BACnetObject),
+    {
+        for (&oid, obj) in self.objects.iter_mut() {
+            f(oid, obj.as_mut());
+        }
+    }
+
     /// Number of objects in the database.
     pub fn len(&self) -> usize {
         self.objects.len()

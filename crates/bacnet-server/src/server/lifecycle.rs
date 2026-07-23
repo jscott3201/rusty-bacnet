@@ -427,6 +427,53 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
         }));
 
+        // One-second intrinsic-reporting task: advances the `Time_Delay`
+        // countdown for any object with a pending delayed transition and sends
+        // the EventNotification when the delay elapses. The per-write path
+        // only *seeds* a pending transition (see `fire_event_notifications`);
+        // this task is the sole confirmer, so repeated writes cannot shorten
+        // the delay (ASHRAE 135-2020 §13.2.4). Runs unconditionally like the
+        // trend-log task — a no-pending tick is a cheap empty iteration.
+        let db_intrinsic = Arc::clone(&db);
+        let network_intrinsic = Arc::clone(&network);
+        let comm_state_intrinsic = Arc::clone(&comm_state);
+        let server_tsm_intrinsic = Arc::clone(&server_tsm);
+        let intrinsic_retry_ms = config.cov_retry_timeout_ms;
+        let intrinsic_reporting_task = Some(tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(1));
+            loop {
+                interval.tick().await;
+                if comm_state_intrinsic.load(Ordering::Acquire) >= 1 {
+                    continue;
+                }
+                // Collect confirmed transitions under a brief write lock, then
+                // drop it before sending (never hold the db lock across a
+                // network send — matches the per-write notification path).
+                let fired: Vec<(ObjectIdentifier, bacnet_objects::event::EventStateChange)> = {
+                    let mut db = db_intrinsic.write().await;
+                    let mut out = Vec::new();
+                    db.for_each_object_mut(|oid, object| {
+                        if let Some(change) = object.tick_intrinsic_reporting() {
+                            out.push((oid, change));
+                        }
+                    });
+                    out
+                };
+                for (oid, change) in fired {
+                    Self::build_and_send_event_notification(
+                        &db_intrinsic,
+                        &network_intrinsic,
+                        &comm_state_intrinsic,
+                        &server_tsm_intrinsic,
+                        &oid,
+                        change,
+                        intrinsic_retry_ms,
+                    )
+                    .await;
+                }
+            }
+        }));
+
         Ok(Self {
             config,
             network,
@@ -444,6 +491,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             event_enrollment_task,
             trend_log_task,
             schedule_tick_task,
+            intrinsic_reporting_task,
             local_mac,
         })
     }
@@ -572,6 +620,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let _ = task.await;
         }
         if let Some(task) = self.schedule_tick_task.take() {
+            task.abort();
+            let _ = task.await;
+        }
+        if let Some(task) = self.intrinsic_reporting_task.take() {
             task.abort();
             let _ = task.await;
         }

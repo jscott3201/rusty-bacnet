@@ -4,12 +4,61 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Evaluate intrinsic reporting on an object and send event notifications
     /// to NotificationClass recipients (or broadcast if none configured).
     /// Skipped when DCC is active (comm_state >= 1).
+    ///
+    /// This is the per-write entry point: it probes the detector, which fires
+    /// immediately only when `Time_Delay == 0`. For a nonzero delay the probe
+    /// seeds a pending transition (returning `None`, so no notification is
+    /// sent here) and the one-second [`intrinsic_reporting_task`](Self::start)
+    /// advances the countdown and sends the notification on expiry.
     pub(super) async fn fire_event_notifications(
         db: &Arc<RwLock<ObjectDatabase>>,
         network: &Arc<NetworkLayer<T>>,
         comm_state: &Arc<AtomicU8>,
         server_tsm: &Arc<Mutex<ServerTsm>>,
         oid: &ObjectIdentifier,
+        retry_timeout_ms: u64,
+    ) {
+        if comm_state.load(Ordering::Acquire) >= 1 {
+            return;
+        }
+
+        let change = {
+            let mut db = db.write().await;
+            match db.get_mut(oid) {
+                Some(object) => object.evaluate_intrinsic_reporting(),
+                None => return,
+            }
+        };
+
+        if let Some(change) = change {
+            Self::build_and_send_event_notification(
+                db,
+                network,
+                comm_state,
+                server_tsm,
+                oid,
+                change,
+                retry_timeout_ms,
+            )
+            .await;
+        }
+    }
+
+    /// Build an `EventNotificationRequest` for a pre-computed transition and
+    /// send it to NotificationClass recipients (or broadcast if none).
+    ///
+    /// Shared by the per-write path ([`fire_event_notifications`]) and the
+    /// periodic `Time_Delay` confirmation path, so both emit identical
+    /// notifications. Skipped when DCC is active (comm_state >= 1). Re-reads
+    /// `Notification_Class` / `Notify_Type` under a brief `db.write()` guard,
+    /// then drops the lock before any network send.
+    pub(super) async fn build_and_send_event_notification(
+        db: &Arc<RwLock<ObjectDatabase>>,
+        network: &Arc<NetworkLayer<T>>,
+        comm_state: &Arc<AtomicU8>,
+        server_tsm: &Arc<Mutex<ServerTsm>>,
+        oid: &ObjectIdentifier,
+        change: EventStateChange,
         retry_timeout_ms: u64,
     ) {
         if comm_state.load(Ordering::Acquire) >= 1 {
@@ -41,11 +90,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
             let object = match db.get_mut(oid) {
                 Some(o) => o,
-                None => return,
-            };
-
-            let change = match object.evaluate_intrinsic_reporting() {
-                Some(c) => c,
                 None => return,
             };
 
@@ -281,5 +325,100 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bacnet_objects::analog::AnalogInputObject;
+    use bacnet_objects::device::{DeviceConfig, DeviceObject};
+    use bacnet_objects::event::EventStateChange;
+    use bacnet_types::enums::EventState;
+
+    /// A DCC-disabled server (comm_state >= 1) suppresses the periodic event
+    /// send: `build_and_send_event_notification` returns without sending,
+    /// matching the per-write path's DCC gate. Verified against a recording
+    /// transport that would otherwise capture the broadcast APDU.
+    #[tokio::test]
+    async fn dcc_suppresses_periodic_event_send() {
+        use bacnet_transport::port::TransportPort;
+        use bytes::Bytes;
+        use std::sync::{Arc as StdArc, Mutex as StdMutex};
+        use tokio::sync::mpsc;
+
+        #[derive(Clone, Default)]
+        struct RecordingTransport {
+            sent_broadcast: StdArc<StdMutex<Vec<Bytes>>>,
+            local_mac: Vec<u8>,
+        }
+        impl TransportPort for RecordingTransport {
+            async fn start(
+                &mut self,
+            ) -> Result<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
+                let (_tx, rx) = mpsc::channel(1);
+                Ok(rx)
+            }
+            async fn stop(&mut self) -> Result<(), Error> {
+                Ok(())
+            }
+            async fn send_unicast(&self, _npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
+                Ok(())
+            }
+            async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
+                self.sent_broadcast
+                    .lock()
+                    .unwrap()
+                    .push(Bytes::copy_from_slice(npdu));
+                Ok(())
+            }
+            fn local_mac(&self) -> &[u8] {
+                &self.local_mac
+            }
+        }
+
+        let sent = StdArc::new(StdMutex::new(Vec::new()));
+        let transport = RecordingTransport {
+            sent_broadcast: StdArc::clone(&sent),
+            local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
+        };
+        let network = Arc::new(NetworkLayer::new(transport));
+        let comm_state = Arc::new(AtomicU8::new(1)); // DCC disabled
+        let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(AnalogInputObject::new(1, "AI-1", 0).unwrap()))
+            .unwrap();
+        db.add(Box::new(
+            DeviceObject::new(DeviceConfig {
+                instance: 1,
+                name: "Dev".into(),
+                ..DeviceConfig::default()
+            })
+            .unwrap(),
+        ))
+        .unwrap();
+        let db = Arc::new(tokio::sync::RwLock::new(db));
+        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+
+        let change = EventStateChange {
+            from: EventState::NORMAL,
+            to: EventState::HIGH_LIMIT,
+        };
+        BACnetServer::<RecordingTransport>::build_and_send_event_notification(
+            &db,
+            &network,
+            &comm_state,
+            &server_tsm,
+            &oid,
+            change,
+            1000,
+        )
+        .await;
+
+        assert!(
+            sent.lock().unwrap().is_empty(),
+            "DCC-disabled server must not send event notifications"
+        );
     }
 }

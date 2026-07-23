@@ -7,7 +7,7 @@ use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue,
 use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
-use crate::event::{ChangeOfStateDetector, EventStateChange};
+use crate::event::ChangeOfStateDetector;
 use crate::traits::BACnetObject;
 
 // ---------------------------------------------------------------------------
@@ -97,9 +97,7 @@ impl BACnetObject for MultiStateInputObject {
         true
     }
 
-    fn evaluate_intrinsic_reporting(&mut self) -> Option<EventStateChange> {
-        self.event_detector.evaluate(self.present_value)
-    }
+    crate::impl_intrinsic_reporting!(event_detector, present_value);
 
     fn read_property(
         &self,
@@ -326,9 +324,7 @@ impl BACnetObject for MultiStateOutputObject {
         true
     }
 
-    fn evaluate_intrinsic_reporting(&mut self) -> Option<EventStateChange> {
-        self.event_detector.evaluate(self.present_value)
-    }
+    crate::impl_intrinsic_reporting!(event_detector, present_value);
 
     fn read_property(
         &self,
@@ -593,9 +589,7 @@ impl BACnetObject for MultiStateValueObject {
         true
     }
 
-    fn evaluate_intrinsic_reporting(&mut self) -> Option<EventStateChange> {
-        self.event_detector.evaluate(self.present_value)
-    }
+    crate::impl_intrinsic_reporting!(event_detector, present_value);
 
     fn read_property(
         &self,

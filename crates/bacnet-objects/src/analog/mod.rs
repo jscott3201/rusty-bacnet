@@ -8,7 +8,7 @@ use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue,
 use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties, read_event_properties, write_event_properties};
-use crate::event::{EventStateChange, OutOfRangeDetector};
+use crate::event::OutOfRangeDetector;
 use crate::traits::BACnetObject;
 
 // ---------------------------------------------------------------------------
@@ -229,9 +229,7 @@ impl BACnetObject for AnalogInputObject {
         Some(self.cov_increment)
     }
 
-    fn evaluate_intrinsic_reporting(&mut self) -> Option<EventStateChange> {
-        self.event_detector.evaluate(self.present_value)
-    }
+    crate::impl_intrinsic_reporting!(event_detector, present_value);
 
     fn acknowledge_alarm(&mut self, transition_bit: u8) -> Result<(), bacnet_types::error::Error> {
         self.event_detector.acked_transitions |= transition_bit & 0x07;
@@ -497,9 +495,7 @@ impl BACnetObject for AnalogOutputObject {
         Some(self.cov_increment)
     }
 
-    fn evaluate_intrinsic_reporting(&mut self) -> Option<EventStateChange> {
-        self.event_detector.evaluate(self.present_value)
-    }
+    crate::impl_intrinsic_reporting!(event_detector, present_value);
 
     fn acknowledge_alarm(&mut self, transition_bit: u8) -> Result<(), bacnet_types::error::Error> {
         self.event_detector.acked_transitions |= transition_bit & 0x07;
@@ -778,9 +774,7 @@ impl BACnetObject for AnalogValueObject {
         Some(self.cov_increment)
     }
 
-    fn evaluate_intrinsic_reporting(&mut self) -> Option<EventStateChange> {
-        self.event_detector.evaluate(self.present_value)
-    }
+    crate::impl_intrinsic_reporting!(event_detector, present_value);
 
     fn acknowledge_alarm(&mut self, transition_bit: u8) -> Result<(), bacnet_types::error::Error> {
         self.event_detector.acked_transitions |= transition_bit & 0x07;

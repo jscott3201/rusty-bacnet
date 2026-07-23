@@ -28,6 +28,7 @@ use bacnet_encoding::segmentation::{
 };
 use bacnet_network::layer::NetworkLayer;
 use bacnet_objects::database::ObjectDatabase;
+use bacnet_objects::event::EventStateChange;
 use bacnet_objects::notification_class::get_notification_recipients;
 use bacnet_services::alarm_event::EventNotificationRequest;
 use bacnet_services::common::BACnetPropertyValue;
@@ -491,6 +492,8 @@ pub struct BACnetServer<T: TransportPort> {
     event_enrollment_task: Option<JoinHandle<()>>,
     trend_log_task: Option<JoinHandle<()>>,
     schedule_tick_task: Option<JoinHandle<()>>,
+    /// One-second `Time_Delay` confirmation task for intrinsic reporting.
+    intrinsic_reporting_task: Option<JoinHandle<()>>,
     local_mac: MacAddr,
 }
 
