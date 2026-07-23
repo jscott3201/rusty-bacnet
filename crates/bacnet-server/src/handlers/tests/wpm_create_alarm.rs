@@ -293,6 +293,8 @@ fn make_db_with_commandable_ao() -> (ObjectDatabase, ObjectIdentifier) {
 }
 
 /// Read a single `PRIORITY_ARRAY` slot as `Option<f32>` (`None` if relinquished).
+/// Multi-state objects store `Unsigned` slots, so coerce those to `f32` for
+/// uniform comparison across commandable object kinds.
 fn priority_slot(db: &ObjectDatabase, oid: &ObjectIdentifier, slot: u32) -> Option<f32> {
     match db
         .get(oid)
@@ -301,8 +303,9 @@ fn priority_slot(db: &ObjectDatabase, oid: &ObjectIdentifier, slot: u32) -> Opti
         .unwrap()
     {
         PropertyValue::Real(v) => Some(v),
+        PropertyValue::Unsigned(v) => Some(v as f32),
         PropertyValue::Null => None,
-        other => panic!("expected Real or Null for priority slot {slot}, got {other:?}"),
+        other => panic!("expected Real, Unsigned, or Null for priority slot {slot}, got {other:?}"),
     }
 }
 
@@ -441,6 +444,203 @@ fn wpm_rollback_restores_relinquished_priority_slot() {
         Some(50.0),
         "rollback of a relinquish must restore the prior command"
     );
+    assert_eq!(
+        db.get(&oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Real(50.0)
+    );
+}
+
+/// Regression for the non-commandable half of #118: a `PRESENT_VALUE` write on a
+/// non-commandable object (no `PRIORITY_ARRAY`) must still roll back. The
+/// commandable fix snapshots `PRIORITY_ARRAY[priority]`, which returns `Err` on
+/// a non-commandable object; the snapshot then falls back to reading
+/// `PRESENT_VALUE` directly so the write is restored. Without that fallback a
+/// failed multi-write would leave the non-commandable `PRESENT_VALUE` changed
+/// despite reporting failure (ASHRAE 135-2020 §19.1.2).
+///
+/// `AnalogInput` is writable only while out-of-service, so place it OOS first.
+#[test]
+fn wpm_rollback_restores_noncommandable_present_value_analoginput() {
+    use bacnet_objects::analog::AnalogInputObject;
+    let mut db = ObjectDatabase::new();
+    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    ai.write_property(
+        PropertyIdentifier::OUT_OF_SERVICE,
+        None,
+        PropertyValue::Boolean(true),
+        None,
+    )
+    .unwrap();
+    ai.write_property(
+        PropertyIdentifier::PRESENT_VALUE,
+        None,
+        PropertyValue::Real(10.0),
+        None,
+    )
+    .unwrap();
+    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    db.add(Box::new(ai)).unwrap();
+    let pre_pv = db
+        .get(&oid)
+        .unwrap()
+        .read_property(PropertyIdentifier::PRESENT_VALUE, None)
+        .unwrap();
+    assert_eq!(pre_pv, PropertyValue::Real(10.0));
+
+    // First spec: write PRESENT_VALUE (succeeds, AI is OOS). Second spec:
+    // OBJECT_TYPE is read-only and fails, triggering rollback of the first.
+    let mut pv_buf = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_real(&mut pv_buf, 77.0);
+    let mut ot_buf = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_enumerated(&mut ot_buf, 0);
+
+    use bacnet_services::common::BACnetPropertyValue;
+    use bacnet_services::wpm::WriteAccessSpecification;
+    let request = bacnet_services::wpm::WritePropertyMultipleRequest {
+        list_of_write_access_specs: vec![WriteAccessSpecification {
+            object_identifier: oid,
+            list_of_properties: vec![
+                BACnetPropertyValue {
+                    property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                    property_array_index: None,
+                    value: pv_buf.to_vec(),
+                    priority: None,
+                },
+                BACnetPropertyValue {
+                    property_identifier: PropertyIdentifier::OBJECT_TYPE,
+                    property_array_index: None,
+                    value: ot_buf.to_vec(),
+                    priority: None,
+                },
+            ],
+        }],
+    };
+    let mut buf = BytesMut::new();
+    request.encode(&mut buf);
+
+    assert!(handle_write_property_multiple(&mut db, &buf).is_err());
+
+    let post_pv = db
+        .get(&oid)
+        .unwrap()
+        .read_property(PropertyIdentifier::PRESENT_VALUE, None)
+        .unwrap();
+    assert_eq!(
+        post_pv, pre_pv,
+        "non-commandable PRESENT_VALUE must roll back to {pre_pv:?}, got {post_pv:?}"
+    );
+}
+
+/// A commandable `MultiStateOutput` whose priority-8 command is overwritten and
+/// then rolled back must restore the priority-8 slot. Multi-state priority slots
+/// hold `Unsigned` values (not `Real`), so this exercises the `Unsigned`
+/// wrap/extract path end to end — the slot snapshot and the rollback write both
+/// carry an `Unsigned` `PropertyValue`.
+#[test]
+fn wpm_rollback_restores_commandable_priority_slot_multistate_output() {
+    use bacnet_objects::multistate::MultiStateOutputObject;
+    let mut db = ObjectDatabase::new();
+    let mut mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
+    // Active command at priority 8 = state 2.
+    mso.write_property(
+        PropertyIdentifier::PRESENT_VALUE,
+        None,
+        PropertyValue::Unsigned(2),
+        Some(8),
+    )
+    .unwrap();
+    let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_OUTPUT, 1).unwrap();
+    db.add(Box::new(mso)).unwrap();
+    assert_eq!(priority_slot(&db, &oid, 8), Some(2.0));
+
+    // First spec: overwrite priority 8 with state 3. Second spec: OBJECT_TYPE fails.
+    let mut pv_buf = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_unsigned(&mut pv_buf, 3);
+    let mut ot_buf = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_enumerated(&mut ot_buf, 0);
+
+    use bacnet_services::common::BACnetPropertyValue;
+    use bacnet_services::wpm::WriteAccessSpecification;
+    let request = bacnet_services::wpm::WritePropertyMultipleRequest {
+        list_of_write_access_specs: vec![WriteAccessSpecification {
+            object_identifier: oid,
+            list_of_properties: vec![
+                BACnetPropertyValue {
+                    property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                    property_array_index: None,
+                    value: pv_buf.to_vec(),
+                    priority: Some(8),
+                },
+                BACnetPropertyValue {
+                    property_identifier: PropertyIdentifier::OBJECT_TYPE,
+                    property_array_index: None,
+                    value: ot_buf.to_vec(),
+                    priority: None,
+                },
+            ],
+        }],
+    };
+    let mut buf = BytesMut::new();
+    request.encode(&mut buf);
+
+    assert!(handle_write_property_multiple(&mut db, &buf).is_err());
+
+    // Priority-8 slot restored to 2, no spurious priority-16 command.
+    assert_eq!(priority_slot(&db, &oid, 8), Some(2.0));
+    assert_eq!(priority_slot(&db, &oid, 16), None);
+}
+
+/// A commandable `PRESENT_VALUE` write with no explicit priority targets slot
+/// 16 (`priority.unwrap_or(16)`). Rolling it back must relinquish slot 16 (it
+/// was empty) and leave the higher-priority slot-8 command driving the
+/// effective value untouched.
+#[test]
+fn wpm_rollback_restores_commandable_priority_16_slot() {
+    let (mut db, oid) = make_db_with_commandable_ao();
+    // priority 8 holds 50.0 (from the helper); priority 16 is empty.
+    assert_eq!(priority_slot(&db, &oid, 8), Some(50.0));
+    assert_eq!(priority_slot(&db, &oid, 16), None);
+
+    // First spec: write PRESENT_VALUE with no priority → slot 16 = 99.0.
+    // Second spec: OBJECT_TYPE fails, triggering rollback of the slot-16 write.
+    let mut pv_buf = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_real(&mut pv_buf, 99.0);
+    let mut ot_buf = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_enumerated(&mut ot_buf, 0);
+
+    use bacnet_services::common::BACnetPropertyValue;
+    use bacnet_services::wpm::WriteAccessSpecification;
+    let request = bacnet_services::wpm::WritePropertyMultipleRequest {
+        list_of_write_access_specs: vec![WriteAccessSpecification {
+            object_identifier: oid,
+            list_of_properties: vec![
+                BACnetPropertyValue {
+                    property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                    property_array_index: None,
+                    value: pv_buf.to_vec(),
+                    priority: None,
+                },
+                BACnetPropertyValue {
+                    property_identifier: PropertyIdentifier::OBJECT_TYPE,
+                    property_array_index: None,
+                    value: ot_buf.to_vec(),
+                    priority: None,
+                },
+            ],
+        }],
+    };
+    let mut buf = BytesMut::new();
+    request.encode(&mut buf);
+
+    assert!(handle_write_property_multiple(&mut db, &buf).is_err());
+
+    // Slot 16 relinquished again (empty), slot 8 unchanged, effective PV still
+    // driven by the priority-8 command.
+    assert_eq!(priority_slot(&db, &oid, 16), None);
+    assert_eq!(priority_slot(&db, &oid, 8), Some(50.0));
     assert_eq!(
         db.get(&oid)
             .unwrap()

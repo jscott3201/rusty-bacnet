@@ -105,21 +105,44 @@ pub fn handle_write_property_multiple(
         // written. `read_property` is best-effort: a write-only property has no
         // readable value and yields no rollback record (matches the prior
         // behavior).
+        //
+        // A non-commandable object (e.g. an AnalogInput placed out-of-service,
+        // or a Command/Timer/Color object whose PRESENT_VALUE is always
+        // writable) has no PRIORITY_ARRAY, so reading that slot returns `Err`.
+        // In that case fall back to snapshotting PRESENT_VALUE directly — the
+        // same value the old code snapshotted — so the write still rolls back.
+        // Without this fallback a failed multi-write would leave the
+        // non-commandable PRESENT_VALUE changed despite reporting failure
+        // (ASHRAE 135-2020 §19.1.2).
         let rollback_record = if *prop_id == PropertyIdentifier::PRESENT_VALUE {
             // The write targets priority `priority.unwrap_or(16)` (matching
             // `write_priority_array!`). Snapshot that exact slot so rollback
             // restores it rather than writing the resolved value to priority 16.
-            // An out-of-range priority (e.g. 0) makes the *write* fail, so its
-            // snapshot is discarded anyway — but only snapshot a valid slot to
-            // avoid reading the array-size element (index 0) by mistake.
+            // An out-of-range priority (e.g. 0) makes a *commandable* write fail,
+            // so its snapshot is discarded anyway — but only snapshot a valid
+            // slot to avoid reading the array-size element (index 0) by mistake.
             let slot = priority.unwrap_or(16);
-            let valid_slot = (1..=16).contains(&slot);
-            valid_slot
-                .then(|| {
-                    object.read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(slot as u32))
-                })
-                .and_then(|r| r.ok())
-                .map(|v| (PropertyIdentifier::PRIORITY_ARRAY, Some(slot as u32), v))
+            if (1..=16).contains(&slot) {
+                object
+                    .read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(slot as u32))
+                    .ok()
+                    .map(|v| (PropertyIdentifier::PRIORITY_ARRAY, Some(slot as u32), v))
+                    .or_else(|| {
+                        object
+                            .read_property(*prop_id, *array_index)
+                            .ok()
+                            .map(|v| (*prop_id, *array_index, v))
+                    })
+            } else {
+                // Out-of-range priority: a commandable write will fail (so the
+                // snapshot is discarded), but a non-commandable write ignores the
+                // priority and succeeds — snapshot its PRESENT_VALUE so it still
+                // rolls back.
+                object
+                    .read_property(*prop_id, *array_index)
+                    .ok()
+                    .map(|v| (*prop_id, *array_index, v))
+            }
         } else {
             object
                 .read_property(*prop_id, *array_index)
