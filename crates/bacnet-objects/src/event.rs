@@ -70,6 +70,17 @@ impl EventTransition {
             EventTransition::ToNormal => 0x04,
         }
     }
+
+    /// Positional index into the NotificationClass `PRIORITY` and
+    /// `ACK_REQUIRED` arrays, both ordered `[TO_OFFNORMAL, TO_FAULT,
+    /// TO_NORMAL]` per ASHRAE 135-2020 Clause 12.31.5 / 12.31.6.
+    pub fn index(self) -> usize {
+        match self {
+            EventTransition::ToOffnormal => 0,
+            EventTransition::ToFault => 1,
+            EventTransition::ToNormal => 2,
+        }
+    }
 }
 
 /// Which limits are enabled.

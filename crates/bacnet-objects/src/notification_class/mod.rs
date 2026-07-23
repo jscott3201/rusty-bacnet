@@ -310,6 +310,94 @@ fn time_in_window(current: &Time, from: &Time, to: &Time) -> bool {
     cur >= from_cs && cur <= to_cs
 }
 
+/// Resolve the NotificationClass object whose `Notification_Class` property
+/// equals `notification_class`.
+///
+/// Tries a direct OID lookup first (instance == notification_class is the
+/// common case), then falls back to scanning every NotificationClass object.
+/// Returns `None` when no matching class is configured.
+fn find_notification_class(
+    db: &ObjectDatabase,
+    notification_class: u32,
+) -> Option<&dyn BACnetObject> {
+    // Try direct OID lookup first (instance == notification_class is the common case)
+    if let Ok(nc_oid) = ObjectIdentifier::new(ObjectType::NOTIFICATION_CLASS, notification_class) {
+        if let Some(obj) = db.get(&nc_oid) {
+            if matches!(
+                obj.read_property(PropertyIdentifier::NOTIFICATION_CLASS, None),
+                Ok(PropertyValue::Unsigned(n)) if n as u32 == notification_class
+            ) {
+                return Some(obj);
+            }
+        }
+    }
+
+    // Fall back to scanning all NotificationClass objects
+    db.find_by_type(ObjectType::NOTIFICATION_CLASS)
+        .iter()
+        .find_map(|oid| {
+            let obj = db.get(oid)?;
+            match obj.read_property(PropertyIdentifier::NOTIFICATION_CLASS, None) {
+                Ok(PropertyValue::Unsigned(n)) if n as u32 == notification_class => Some(obj),
+                _ => None,
+            }
+        })
+}
+
+/// Resolve the per-transition `Priority` and `Ack_Required` for an event
+/// notification from the referenced NotificationClass.
+///
+/// Per ASHRAE 135-2020 Clause 13.2.1, the `Priority` and `Ack_Required`
+/// projected into an `EventNotification` come from the NotificationClass
+/// referenced by the event-generating object's `Notification_Class` property,
+/// selected by the transition coordinate (TO_OFFNORMAL, TO_FAULT, or
+/// TO_NORMAL). Both properties are 3-element arrays ordered
+/// `[TO_OFFNORMAL, TO_FAULT, TO_NORMAL]`.
+///
+/// When no NotificationClass matches the given number (the object's
+/// `Notification_Class` was never configured or points at a missing class),
+/// the spec leaves the projection undefined; we fall back to the BACnet
+/// defaults — `Priority = 255` (lowest) and `Ack_Required = false` — so the
+/// notification is still delivered with a benign priority and no
+/// acknowledgement demand rather than dropped silently.
+pub fn resolve_transition_priority_ack(
+    db: &ObjectDatabase,
+    notification_class: u32,
+    transition: EventTransition,
+) -> (u8, bool) {
+    let Some(nc) = find_notification_class(db, notification_class) else {
+        return (255, false);
+    };
+    let idx = transition.index();
+
+    // PRIORITY is a 3-element array; index 0 is the array length, 1..=3 the
+    // per-transition values. Read the slot directly, defaulting to 255 when
+    // the property is absent or malformed (matches the NotificationClass
+    // default and the missing-class fallback).
+    let priority = nc
+        .read_property(PropertyIdentifier::PRIORITY, Some(idx as u32 + 1))
+        .ok()
+        .and_then(|v| match v {
+            PropertyValue::Unsigned(n) => Some(n as u8),
+            _ => None,
+        })
+        .unwrap_or(255);
+
+    // ACK_REQUIRED is a 3-bit bitstring: bit 0 (0x80) = TO_OFFNORMAL,
+    // bit 1 (0x40) = TO_FAULT, bit 2 (0x20) = TO_NORMAL.
+    let ack_required = nc
+        .read_property(PropertyIdentifier::ACK_REQUIRED, None)
+        .ok()
+        .and_then(|v| match v {
+            PropertyValue::BitString { data, .. } => data.first().copied(),
+            _ => None,
+        })
+        .map(|byte| byte & (0x80 >> idx) != 0)
+        .unwrap_or(false);
+
+    (priority, ack_required)
+}
+
 /// Get notification recipients for a given notification class number and transition.
 ///
 /// Looks up the `NotificationClass` object whose `Notification_Class` property equals
@@ -332,44 +420,13 @@ pub fn get_notification_recipients(
     today_bit: u8,
     current_time: &Time,
 ) -> Vec<(BACnetRecipient, u32, bool)> {
-    // Try direct OID lookup first (instance == notification_class is the common case)
-    let recipient_list_val = if let Ok(nc_oid) =
-        ObjectIdentifier::new(ObjectType::NOTIFICATION_CLASS, notification_class)
-    {
-        if let Some(obj) = db.get(&nc_oid) {
-            match obj.read_property(PropertyIdentifier::NOTIFICATION_CLASS, None) {
-                Ok(PropertyValue::Unsigned(n)) if n as u32 == notification_class => obj
-                    .read_property(PropertyIdentifier::RECIPIENT_LIST, None)
-                    .ok(),
-                _ => None,
-            }
-        } else {
-            None
-        }
-    } else {
-        None
+    let Some(nc) = find_notification_class(db, notification_class) else {
+        return Vec::new();
     };
-
-    // Fall back to scanning all NotificationClass objects
-    let recipient_list_val = recipient_list_val.or_else(|| {
-        db.find_by_type(ObjectType::NOTIFICATION_CLASS)
-            .iter()
-            .find_map(|oid| {
-                let obj = db.get(oid)?;
-                match obj.read_property(PropertyIdentifier::NOTIFICATION_CLASS, None) {
-                    Ok(PropertyValue::Unsigned(n)) if n as u32 == notification_class => obj
-                        .read_property(PropertyIdentifier::RECIPIENT_LIST, None)
-                        .ok(),
-                    _ => None,
-                }
-            })
-    });
-
-    let recipient_list_val = match recipient_list_val {
-        Some(v) => v,
-        None => return Vec::new(),
+    let recipient_list_val = match nc.read_property(PropertyIdentifier::RECIPIENT_LIST, None) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
     };
-
     filter_recipient_list(&recipient_list_val, transition, today_bit, current_time)
 }
 
