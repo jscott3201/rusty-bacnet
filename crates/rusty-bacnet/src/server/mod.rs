@@ -52,6 +52,7 @@ use bacnet_transport::any::AnyTransport;
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::bip6::Bip6Transport;
 use bacnet_transport::mstp::NoSerial;
+use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::PropertyValue;
 
 use crate::errors::to_py_err;

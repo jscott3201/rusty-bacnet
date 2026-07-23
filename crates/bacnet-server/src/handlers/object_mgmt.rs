@@ -142,6 +142,18 @@ pub fn handle_create_object(
                 return Err(e);
             }
         };
+        // Route Object_Name initial values through the database name index,
+        // matching the WriteProperty handlers: reject a duplicate up front and
+        // refresh the index after a successful rename. (The created object was
+        // added under its default name, so the index must follow a rename.)
+        if pv.property_identifier == PropertyIdentifier::OBJECT_NAME {
+            if let PropertyValue::CharacterString(ref new_name) = value {
+                if let Err(e) = db.check_name_available(&created_oid, new_name) {
+                    db.remove(&created_oid);
+                    return Err(e);
+                }
+            }
+        }
         if let Some(obj) = db.get_mut(&created_oid) {
             if let Err(e) = obj.write_property(
                 pv.property_identifier,
@@ -152,6 +164,11 @@ pub fn handle_create_object(
                 db.remove(&created_oid);
                 return Err(e);
             }
+        }
+        // A successful Object_Name write changed the object's name field;
+        // resync the database name index to the new name.
+        if pv.property_identifier == PropertyIdentifier::OBJECT_NAME {
+            db.update_name_index(&created_oid);
         }
     }
 

@@ -236,6 +236,11 @@ impl BACnetServer {
     }
 
     /// Write a property on a local object in the server's database.
+    ///
+    /// `OBJECT_NAME` writes are routed through the database name index — a
+    /// duplicate name is rejected up front and a successful rename refreshes
+    /// the index — so local writes obey the same uniqueness and lookup
+    /// invariants as the network WriteProperty handlers.
     #[pyo3(signature = (object_id, property_id, value, priority=None, array_index=None))]
     #[allow(clippy::too_many_arguments)]
     fn write_property_local<'py>(
@@ -261,11 +266,25 @@ impl BACnetServer {
                 srv.database().clone()
             };
             let mut db = db_arc.write().await;
+
+            // Enforce Object_Name uniqueness against the database index before
+            // mutating, matching the network WriteProperty handler.
+            if pid == PropertyIdentifier::OBJECT_NAME {
+                if let PropertyValue::CharacterString(ref new_name) = prop_value {
+                    db.check_name_available(&oid, new_name).map_err(to_py_err)?;
+                }
+            }
+
             let obj = db
                 .get_mut(&oid)
                 .ok_or_else(|| PyRuntimeError::new_err(format!("object {oid} not found")))?;
             obj.write_property(pid, array_index, prop_value, priority)
                 .map_err(to_py_err)?;
+
+            // Resync the database name index to the object's new name.
+            if pid == PropertyIdentifier::OBJECT_NAME {
+                db.update_name_index(&oid);
+            }
             Ok(())
         })
     }
