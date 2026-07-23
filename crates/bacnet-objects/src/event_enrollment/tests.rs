@@ -194,20 +194,63 @@ fn property_list_complete() {
 }
 
 #[test]
-fn write_event_parameters() {
+fn write_event_parameters_structured_round_trip() {
+    use bacnet_types::constructed::{event_parameter_tag, BACnetEventParameter};
     let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
-    let params = vec![0x01, 0x02, 0x03];
+    let params = BACnetEventParameter::OutOfRange {
+        time_delay: 5,
+        low_limit: 10.0,
+        high_limit: 90.0,
+        deadband: 1.0,
+    };
     ee.write_property(
         PropertyIdentifier::EVENT_PARAMETERS,
         None,
-        PropertyValue::OctetString(params.clone()),
+        params.encode(),
         None,
     )
     .unwrap();
     let val = ee
         .read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
         .unwrap();
-    assert_eq!(val, PropertyValue::OctetString(params));
+    assert_eq!(BACnetEventParameter::decode(&val).unwrap(), params);
+    assert_eq!(params.tag(), event_parameter_tag::OUT_OF_RANGE);
+}
+
+#[test]
+fn write_event_parameters_opaque_octets_preserved() {
+    use bacnet_types::constructed::BACnetEventParameter;
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    // Legacy raw-octet writes are preserved verbatim as an Opaque value so a
+    // remote client that wrote an algorithm this library does not model is
+    // never silently dropped.
+    let bytes = vec![0x01, 0x02, 0x03];
+    ee.write_property(
+        PropertyIdentifier::EVENT_PARAMETERS,
+        None,
+        PropertyValue::OctetString(bytes.clone()),
+        None,
+    )
+    .unwrap();
+    let val = ee
+        .read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
+        .unwrap();
+    match BACnetEventParameter::decode(&val).unwrap() {
+        BACnetEventParameter::Opaque { data, .. } => assert_eq!(data, bytes),
+        other => panic!("expected Opaque, got {other:?}"),
+    }
+}
+
+#[test]
+fn write_event_parameters_rejects_non_list() {
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let result = ee.write_property(
+        PropertyIdentifier::EVENT_PARAMETERS,
+        None,
+        PropertyValue::Boolean(true),
+        None,
+    );
+    assert!(result.is_err());
 }
 
 #[test]
@@ -247,44 +290,47 @@ fn fault_parameters_default_none() {
 #[test]
 fn fault_parameters_none_variant() {
     let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
-    ee.set_fault_parameters(Some(FaultParameters::FaultNone));
+    let fp = FaultParameters::FaultNone;
+    ee.set_fault_parameters(Some(fp.clone()));
     let val = ee
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
-    assert_eq!(val, PropertyValue::Unsigned(0));
+    assert_eq!(FaultParameters::decode_property_value(&val).unwrap(), fp);
 }
 
 #[test]
 fn fault_parameters_character_string() {
     let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
-    ee.set_fault_parameters(Some(FaultParameters::FaultCharacterString {
+    let fp = FaultParameters::FaultCharacterString {
         fault_values: vec!["alarm".to_string(), "critical".to_string()],
-    }));
+    };
+    ee.set_fault_parameters(Some(fp.clone()));
     let val = ee
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
-    assert_eq!(val, PropertyValue::Unsigned(1));
+    assert_eq!(FaultParameters::decode_property_value(&val).unwrap(), fp);
 }
 
 #[test]
 fn fault_parameters_extended() {
     let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
-    ee.set_fault_parameters(Some(FaultParameters::FaultExtended {
+    let fp = FaultParameters::FaultExtended {
         vendor_id: 42,
         extended_fault_type: 7,
         parameters: vec![0x01, 0x02],
-    }));
+    };
+    ee.set_fault_parameters(Some(fp.clone()));
     let val = ee
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
-    assert_eq!(val, PropertyValue::Unsigned(2));
+    assert_eq!(FaultParameters::decode_property_value(&val).unwrap(), fp);
 }
 
 #[test]
 fn fault_parameters_life_safety() {
     let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
     let ai_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-    ee.set_fault_parameters(Some(FaultParameters::FaultLifeSafety {
+    let fp = FaultParameters::FaultLifeSafety {
         fault_values: vec![1, 2, 3],
         mode_for_reference: BACnetDeviceObjectPropertyReference {
             object_identifier: ai_oid,
@@ -292,73 +338,78 @@ fn fault_parameters_life_safety() {
             property_array_index: None,
             device_identifier: None,
         },
-    }));
+    };
+    ee.set_fault_parameters(Some(fp.clone()));
     let val = ee
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
-    assert_eq!(val, PropertyValue::Unsigned(3));
+    assert_eq!(FaultParameters::decode_property_value(&val).unwrap(), fp);
 }
 
 #[test]
 fn fault_parameters_state() {
     use bacnet_types::constructed::BACnetPropertyStates;
     let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
-    ee.set_fault_parameters(Some(FaultParameters::FaultState {
+    let fp = FaultParameters::FaultState {
         fault_values: vec![BACnetPropertyStates::BooleanValue(true)],
-    }));
+    };
+    ee.set_fault_parameters(Some(fp.clone()));
     let val = ee
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
-    assert_eq!(val, PropertyValue::Unsigned(4));
+    assert_eq!(FaultParameters::decode_property_value(&val).unwrap(), fp);
 }
 
 #[test]
 fn fault_parameters_status_flags() {
     let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
     let ai_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-    ee.set_fault_parameters(Some(FaultParameters::FaultStatusFlags {
+    let fp = FaultParameters::FaultStatusFlags {
         reference: BACnetDeviceObjectPropertyReference {
             object_identifier: ai_oid,
             property_identifier: PropertyIdentifier::STATUS_FLAGS.to_raw(),
             property_array_index: None,
             device_identifier: None,
         },
-    }));
+    };
+    ee.set_fault_parameters(Some(fp.clone()));
     let val = ee
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
-    assert_eq!(val, PropertyValue::Unsigned(5));
+    assert_eq!(FaultParameters::decode_property_value(&val).unwrap(), fp);
 }
 
 #[test]
 fn fault_parameters_out_of_range() {
     let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
-    ee.set_fault_parameters(Some(FaultParameters::FaultOutOfRange {
+    let fp = FaultParameters::FaultOutOfRange {
         min_normal: 0.0,
         max_normal: 100.0,
-    }));
+    };
+    ee.set_fault_parameters(Some(fp.clone()));
     let val = ee
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
-    assert_eq!(val, PropertyValue::Unsigned(6));
+    assert_eq!(FaultParameters::decode_property_value(&val).unwrap(), fp);
 }
 
 #[test]
 fn fault_parameters_listed() {
     let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
     let ai_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-    ee.set_fault_parameters(Some(FaultParameters::FaultListed {
+    let fp = FaultParameters::FaultListed {
         reference: BACnetDeviceObjectPropertyReference {
             object_identifier: ai_oid,
             property_identifier: PropertyIdentifier::PRESENT_VALUE.to_raw(),
             property_array_index: None,
             device_identifier: None,
         },
-    }));
+    };
+    ee.set_fault_parameters(Some(fp.clone()));
     let val = ee
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
-    assert_eq!(val, PropertyValue::Unsigned(7));
+    assert_eq!(FaultParameters::decode_property_value(&val).unwrap(), fp);
 }
 
 #[test]
@@ -369,13 +420,53 @@ fn fault_parameters_in_property_list() {
 }
 
 #[test]
+fn fault_parameters_write_round_trip() {
+    let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+    let fp = FaultParameters::FaultOutOfRange {
+        min_normal: -5.0,
+        max_normal: 55.0,
+    };
+    ee.write_property(
+        PropertyIdentifier::FAULT_PARAMETERS,
+        None,
+        fp.encode_property_value(),
+        None,
+    )
+    .unwrap();
+    let val = ee
+        .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
+        .unwrap();
+    assert_eq!(FaultParameters::decode_property_value(&val).unwrap(), fp);
+}
+
+#[test]
+fn fault_parameters_write_clear_to_null() {
+    let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+    ee.set_fault_parameters(Some(FaultParameters::FaultNone));
+    ee.write_property(
+        PropertyIdentifier::FAULT_PARAMETERS,
+        None,
+        PropertyValue::Null,
+        None,
+    )
+    .unwrap();
+    let val = ee
+        .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
+        .unwrap();
+    assert_eq!(val, PropertyValue::Null);
+}
+
+#[test]
 fn fault_parameters_clear() {
     let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
     ee.set_fault_parameters(Some(FaultParameters::FaultNone));
     let val = ee
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
-    assert_eq!(val, PropertyValue::Unsigned(0));
+    assert_eq!(
+        FaultParameters::decode_property_value(&val).unwrap(),
+        FaultParameters::FaultNone
+    );
 
     // Clear back to None
     ee.set_fault_parameters(None);

@@ -3,7 +3,10 @@ use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::binary::BinaryInputObject;
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::traits::BACnetObject;
-use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
+use bacnet_types::constructed::{
+    BACnetDeviceObjectPropertyReference, BACnetEventParameter, BACnetPropertyStates,
+    ChangeOfValueCriteria,
+};
 
 /// Helper: create an EventEnrollment monitoring an AnalogInput with OUT_OF_RANGE.
 fn setup_out_of_range(
@@ -26,7 +29,12 @@ fn setup_out_of_range(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
     )));
-    ee.set_event_parameters(encode_out_of_range_params(high_limit, low_limit, deadband));
+    ee.set_event_parameters(BACnetEventParameter::OutOfRange {
+        time_delay: 0,
+        low_limit,
+        high_limit,
+        deadband,
+    });
     ee.set_event_enable(0x07); // all transitions
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
@@ -35,6 +43,9 @@ fn setup_out_of_range(
 }
 
 /// Helper: create an EventEnrollment monitoring an AnalogInput with FLOATING_LIMIT.
+///
+/// The setpoint is held by a separate AnalogInput so the
+/// `setpoint_reference` resolves to `setpoint` rather than the monitored value.
 fn setup_floating_limit(
     present_value: f32,
     setpoint: f32,
@@ -49,15 +60,28 @@ fn setup_floating_limit(
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
 
+    // Separate setpoint object the floating-limit reference resolves to.
+    let mut sp = AnalogInputObject::new(3, "AI-SP", 62).unwrap();
+    sp.set_present_value(setpoint);
+    let sp_oid = sp.object_identifier();
+    db.add(Box::new(sp)).unwrap();
+
     let mut ee =
         EventEnrollmentObject::new(2, "EE-FL", EventType::FLOATING_LIMIT.to_raw()).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
     )));
-    ee.set_event_parameters(encode_floating_limit_params(
-        setpoint, high_diff, low_diff, deadband,
-    ));
+    ee.set_event_parameters(BACnetEventParameter::FloatingLimit {
+        time_delay: 0,
+        setpoint_reference: BACnetDeviceObjectPropertyReference::new_local(
+            sp_oid,
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        ),
+        low_diff_limit: low_diff,
+        high_diff_limit: high_diff,
+        deadband,
+    });
     ee.set_event_enable(0x07);
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
@@ -83,7 +107,13 @@ fn setup_change_of_state(
         bi_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
     )));
-    ee.set_event_parameters(encode_change_of_state_params(alarm_values));
+    ee.set_event_parameters(BACnetEventParameter::ChangeOfState {
+        time_delay: 0,
+        list_of_values: alarm_values
+            .iter()
+            .map(|v| BACnetPropertyStates::UnsignedValue(*v))
+            .collect(),
+    });
     ee.set_event_enable(0x07);
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
@@ -212,7 +242,12 @@ fn out_of_range_event_enable_suppresses_notification() {
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
     )));
-    ee.set_event_parameters(encode_out_of_range_params(80.0, 20.0, 2.0));
+    ee.set_event_parameters(BACnetEventParameter::OutOfRange {
+        time_delay: 0,
+        low_limit: 20.0,
+        high_limit: 80.0,
+        deadband: 2.0,
+    });
     ee.set_event_enable(0x04); // only TO_NORMAL enabled
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
@@ -400,7 +435,11 @@ fn change_of_bitstring_normal() {
         PropertyIdentifier::EVENT_ENABLE.to_raw(),
     )));
     // mask=0xFF, alarm_pattern=0xE0 (all 3 high bits set)
-    ee.set_event_parameters(encode_change_of_bitstring_params(&[0xFF], &[0xE0]));
+    ee.set_event_parameters(BACnetEventParameter::ChangeOfBitstring {
+        time_delay: 0,
+        bitmask: (0, vec![0xFF]),
+        list_of_values: vec![(0, vec![0xE0])],
+    });
     ee.set_event_enable(0x07);
     db.add(Box::new(ee)).unwrap();
 
@@ -426,7 +465,11 @@ fn change_of_bitstring_offnormal() {
         PropertyIdentifier::EVENT_ENABLE.to_raw(),
     )));
     // mask=0xE0, alarm_pattern=0xE0 (all 3 high bits)
-    ee.set_event_parameters(encode_change_of_bitstring_params(&[0xE0], &[0xE0]));
+    ee.set_event_parameters(BACnetEventParameter::ChangeOfBitstring {
+        time_delay: 0,
+        bitmask: (0, vec![0xE0]),
+        list_of_values: vec![(0, vec![0xE0])],
+    });
     ee.set_event_enable(0x07);
     db.add(Box::new(ee)).unwrap();
 
@@ -453,7 +496,10 @@ fn change_of_value_within_increment() {
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
     )));
-    ee.set_event_parameters(encode_change_of_value_params(5.0));
+    ee.set_event_parameters(BACnetEventParameter::ChangeOfValue {
+        time_delay: 0,
+        criteria: ChangeOfValueCriteria::ReferencedPropertyIncrement(5.0),
+    });
     ee.set_event_enable(0x07);
     db.add(Box::new(ee)).unwrap();
 
@@ -477,7 +523,10 @@ fn change_of_value_exceeds_increment() {
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
     )));
-    ee.set_event_parameters(encode_change_of_value_params(5.0));
+    ee.set_event_parameters(BACnetEventParameter::ChangeOfValue {
+        time_delay: 0,
+        criteria: ChangeOfValueCriteria::ReferencedPropertyIncrement(5.0),
+    });
     ee.set_event_enable(0x07);
     db.add(Box::new(ee)).unwrap();
 
@@ -511,7 +560,12 @@ fn evaluates_multiple_enrollments() {
         ai1_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
     )));
-    ee1.set_event_parameters(encode_out_of_range_params(80.0, 20.0, 2.0));
+    ee1.set_event_parameters(BACnetEventParameter::OutOfRange {
+        time_delay: 0,
+        low_limit: 20.0,
+        high_limit: 80.0,
+        deadband: 2.0,
+    });
     ee1.set_event_enable(0x07);
     db.add(Box::new(ee1)).unwrap();
 
@@ -521,7 +575,12 @@ fn evaluates_multiple_enrollments() {
         ai2_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
     )));
-    ee2.set_event_parameters(encode_out_of_range_params(80.0, 20.0, 2.0));
+    ee2.set_event_parameters(BACnetEventParameter::OutOfRange {
+        time_delay: 0,
+        low_limit: 20.0,
+        high_limit: 80.0,
+        deadband: 2.0,
+    });
     ee2.set_event_enable(0x07);
     db.add(Box::new(ee2)).unwrap();
 
@@ -542,13 +601,193 @@ fn missing_monitored_object_is_skipped() {
         fake_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
     )));
-    ee.set_event_parameters(encode_out_of_range_params(80.0, 20.0, 2.0));
+    ee.set_event_parameters(BACnetEventParameter::OutOfRange {
+        time_delay: 0,
+        low_limit: 20.0,
+        high_limit: 80.0,
+        deadband: 2.0,
+    });
     ee.set_event_enable(0x07);
     db.add(Box::new(ee)).unwrap();
 
     // Should not panic or return transitions
     let transitions = evaluate_event_enrollments(&mut db);
     assert!(transitions.is_empty());
+}
+
+// ---- Extended / Opaque (compat) tests ----
+
+#[test]
+fn extended_algorithm_produces_no_transition() {
+    let mut db = ObjectDatabase::new();
+
+    let mut ai = AnalogInputObject::new(93, "AI-93", 62).unwrap();
+    ai.set_present_value(85.0);
+    let ai_oid = ai.object_identifier();
+    db.add(Box::new(ai)).unwrap();
+
+    let mut ee =
+        EventEnrollmentObject::new(93, "EE-ext", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+        ai_oid,
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+    )));
+    // Extended [9] is preserved but not evaluated — no transition.
+    ee.set_event_parameters(BACnetEventParameter::Extended {
+        vendor_id: 42,
+        extended_event_type: 99,
+        parameters: vec![0xDE, 0xAD],
+    });
+    ee.set_event_enable(0x07);
+    db.add(Box::new(ee)).unwrap();
+
+    let transitions = evaluate_event_enrollments(&mut db);
+    assert!(
+        transitions.is_empty(),
+        "Extended algorithm is not evaluated"
+    );
+}
+
+/// Legacy raw-octet OUT_OF_RANGE values written by an older client must still
+/// evaluate correctly. The octets are wrapped as `Opaque` and the evaluator
+/// falls back to the little-endian byte layout keyed on `Event_Type`.
+#[test]
+fn legacy_le_out_of_range_fallback_round_trip() {
+    let mut db = ObjectDatabase::new();
+
+    let mut ai = AnalogInputObject::new(94, "AI-94", 62).unwrap();
+    ai.set_present_value(85.0); // above high_limit 80 → HIGH_LIMIT
+    let ai_oid = ai.object_identifier();
+    db.add(Box::new(ai)).unwrap();
+
+    let mut ee =
+        EventEnrollmentObject::new(94, "EE-leg", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+        ai_oid,
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+    )));
+    // Simulate an old client writing raw little-endian octets.
+    ee.write_property(
+        PropertyIdentifier::EVENT_PARAMETERS,
+        None,
+        PropertyValue::OctetString(encode_out_of_range_params(80.0, 20.0, 2.0)),
+        None,
+    )
+    .unwrap();
+    ee.set_event_enable(0x07);
+    db.add(Box::new(ee)).unwrap();
+
+    let transitions = evaluate_event_enrollments(&mut db);
+    assert_eq!(transitions.len(), 1);
+    assert_eq!(transitions[0].change.to, EventState::HIGH_LIMIT);
+}
+
+/// Legacy raw-octet CHANGE_OF_STATE values must still evaluate correctly via
+/// the `Event_Type`-keyed fallback.
+#[test]
+fn legacy_le_change_of_state_fallback() {
+    let mut db = ObjectDatabase::new();
+
+    let mut bi = BinaryInputObject::new(95, "BI-95").unwrap();
+    bi.set_present_value(1); // matches alarm value 1 → OFFNORMAL
+    let bi_oid = bi.object_identifier();
+    db.add(Box::new(bi)).unwrap();
+
+    let mut ee =
+        EventEnrollmentObject::new(95, "EE-legcos", EventType::CHANGE_OF_STATE.to_raw()).unwrap();
+    ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+        bi_oid,
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+    )));
+    ee.set_event_parameters(BACnetEventParameter::Opaque {
+        tag: 0xFF,
+        data: encode_change_of_state_params(&[1]),
+    });
+    ee.set_event_enable(0x07);
+    db.add(Box::new(ee)).unwrap();
+
+    let transitions = evaluate_event_enrollments(&mut db);
+    assert_eq!(transitions.len(), 1);
+    assert_eq!(transitions[0].change.to, EventState::OFFNORMAL);
+}
+
+/// CHANGE_OF_VALUE with a `bitmask` criteria reports OFFNORMAL when any masked
+/// bit is set on the monitored bitstring value.
+#[test]
+fn change_of_value_bitmask_criteria() {
+    let mut db = ObjectDatabase::new();
+
+    // Target object exposing a bitstring property (EVENT_ENABLE, 3 bits).
+    let mut target = EventEnrollmentObject::new(96, "Tgt", EventType::NONE.to_raw()).unwrap();
+    target.set_event_enable(0x07); // 0x07 << 5 = 0xE0
+    let target_oid = target.object_identifier();
+    db.add(Box::new(target)).unwrap();
+
+    let mut ee =
+        EventEnrollmentObject::new(97, "EE-covbm", EventType::CHANGE_OF_VALUE.to_raw()).unwrap();
+    ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+        target_oid,
+        PropertyIdentifier::EVENT_ENABLE.to_raw(),
+    )));
+    // Bitmask criterion: any bit in 0x80 set → OFFNORMAL.
+    ee.set_event_parameters(BACnetEventParameter::ChangeOfValue {
+        time_delay: 0,
+        criteria: ChangeOfValueCriteria::Bitmask {
+            unused_bits: 5,
+            data: vec![0x80],
+        },
+    });
+    ee.set_event_enable(0x07);
+    db.add(Box::new(ee)).unwrap();
+
+    let transitions = evaluate_event_enrollments(&mut db);
+    // 0xE0 & 0x80 = 0x80 (bit set) → OFFNORMAL
+    assert_eq!(transitions.len(), 1);
+    assert_eq!(transitions[0].change.to, EventState::OFFNORMAL);
+}
+
+/// A CHANGE_OF_VALUE enrollment whose monitored value is the wrong type for
+/// its criterion must skip evaluation rather than spuriously transitioning
+/// to NORMAL (which could emit a false TO_NORMAL notification).
+#[test]
+fn change_of_value_wrong_type_monitored_value_skips() {
+    let mut db = ObjectDatabase::new();
+
+    // Target object whose EVENT_ENABLE is a BitString (not a Real) — the
+    // ReferencedPropertyIncrement criterion needs a Real.
+    let mut target = EventEnrollmentObject::new(98, "Tgt2", EventType::NONE.to_raw()).unwrap();
+    target.set_event_enable(0x07);
+    let target_oid = target.object_identifier();
+    db.add(Box::new(target)).unwrap();
+
+    let mut ee =
+        EventEnrollmentObject::new(99, "EE-covwt", EventType::CHANGE_OF_VALUE.to_raw()).unwrap();
+    ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+        target_oid,
+        PropertyIdentifier::EVENT_ENABLE.to_raw(),
+    )));
+    ee.set_event_parameters(BACnetEventParameter::ChangeOfValue {
+        time_delay: 0,
+        criteria: ChangeOfValueCriteria::ReferencedPropertyIncrement(5.0),
+    });
+    ee.set_event_enable(0x07);
+    // Force the enrollment into OFFNORMAL so a spurious NORMAL transition
+    // would otherwise be emitted.
+    ee.write_property(
+        PropertyIdentifier::EVENT_STATE,
+        None,
+        PropertyValue::Enumerated(EventState::OFFNORMAL.to_raw()),
+        None,
+    )
+    .unwrap();
+    db.add(Box::new(ee)).unwrap();
+
+    let transitions = evaluate_event_enrollments(&mut db);
+    // Wrong-type monitored value → skip, no transition to NORMAL.
+    assert!(
+        transitions.is_empty(),
+        "wrong-type monitored value must skip"
+    );
 }
 
 #[test]

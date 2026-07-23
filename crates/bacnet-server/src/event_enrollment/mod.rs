@@ -9,6 +9,7 @@
 
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::event::EventStateChange;
+use bacnet_types::constructed::BACnetEventParameter;
 use bacnet_types::enums::{EventState, EventType, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
@@ -241,6 +242,201 @@ fn eval_change_of_value(params: &[u8], value: f32, _current: EventState) -> Even
     }
 }
 
+// ---- Structured evaluation (consumes BACnetEventParameter fields) ----
+
+/// Structured OUT_OF_RANGE evaluation with explicit limits and deadband.
+fn eval_out_of_range_struct(
+    low_limit: f32,
+    high_limit: f32,
+    deadband: f32,
+    value: f32,
+    current: EventState,
+) -> EventState {
+    eval_out_of_range(
+        &encode_out_of_range_params(high_limit, low_limit, deadband),
+        value,
+        current,
+    )
+}
+
+/// Structured FLOATING_LIMIT evaluation with an explicit setpoint.
+fn eval_floating_limit_struct(
+    setpoint: f32,
+    high_diff_limit: f32,
+    low_diff_limit: f32,
+    deadband: f32,
+    value: f32,
+    current: EventState,
+) -> EventState {
+    eval_floating_limit(
+        &encode_floating_limit_params(setpoint, high_diff_limit, low_diff_limit, deadband),
+        value,
+        current,
+    )
+}
+
+/// Structured CHANGE_OF_STATE evaluation against a list of alarm values.
+///
+/// OFFNORMAL if the monitored enumerated value matches any listed
+/// [`BACnetPropertyStates`] payload, otherwise NORMAL.
+fn eval_change_of_state_struct(
+    alarm_values: &[bacnet_types::constructed::BACnetPropertyStates],
+    value: u32,
+    _current: EventState,
+) -> EventState {
+    use bacnet_types::constructed::BACnetPropertyStates as S;
+    for state in alarm_values {
+        let matched = match state {
+            S::BooleanValue(v) => value == u32::from(*v),
+            S::BinaryValue(v) => value == *v,
+            S::EventType(v) => value == *v,
+            S::Polarity(v) => value == *v,
+            S::ProgramChange(v) => value == *v,
+            S::ProgramState(v) => value == *v,
+            S::ReasonForHalt(v) => value == *v,
+            S::Reliability(v) => value == *v,
+            S::State(v) => value == *v,
+            S::SystemStatus(v) => value == *v,
+            S::Units(v) => value == *v,
+            S::UnsignedValue(v) => value == *v,
+            S::LifeSafetyMode(v) => value == *v,
+            S::LifeSafetyState(v) => value == *v,
+            S::DoorAlarmState(v) => value == *v,
+            S::Action(v) => value == *v,
+            S::DoorSecuredStatus(v) => value == *v,
+            S::DoorStatus(v) => value == *v,
+            S::DoorValue(v) => value == *v,
+            S::LiftCarDirection(v) => value == *v,
+            S::LiftCarDoorCommand(v) => value == *v,
+            S::TimerState(v) => value == *v,
+            S::TimerTransition(v) => value == *v,
+            S::Other { .. } => false,
+        };
+        if matched {
+            return EventState::OFFNORMAL;
+        }
+    }
+    EventState::NORMAL
+}
+
+/// Structured CHANGE_OF_BITSTRING evaluation against a bitmask and alarm values.
+fn eval_change_of_bitstring_struct(
+    bitmask: &(u8, Vec<u8>),
+    list_of_values: &[(u8, Vec<u8>)],
+    value_bits: &[u8],
+    _current: EventState,
+) -> EventState {
+    // OFFNORMAL if the masked monitored bits match any alarm pattern.
+    let mask = &bitmask.1;
+    for alarm in list_of_values {
+        let alarm_bits = &alarm.1;
+        let len = mask.len().min(alarm_bits.len()).min(value_bits.len());
+        let mut matched = true;
+        for i in 0..len {
+            if (value_bits[i] & mask[i]) != (alarm_bits[i] & mask[i]) {
+                matched = false;
+                break;
+            }
+        }
+        if matched && len > 0 {
+            return EventState::OFFNORMAL;
+        }
+    }
+    EventState::NORMAL
+}
+
+/// Structured CHANGE_OF_VALUE evaluation against a `cov-criteria`.
+///
+/// For a `bitmask` criterion the monitored value is a bitstring and the
+/// algorithm reports OFFNORMAL when any masked bit is set; for a
+/// `referenced-property-increment` criterion the monitored value is a real
+/// and the algorithm reports OFFNORMAL when `|value| >= increment`. Returns
+/// `None` when the monitored value is the wrong type for the criterion, so
+/// the caller can skip the enrollment rather than spuriously transitioning
+/// to `NORMAL`.
+fn eval_change_of_value_struct(
+    criteria: &bacnet_types::constructed::ChangeOfValueCriteria,
+    monitored_value: &PropertyValue,
+    _current: EventState,
+) -> Option<EventState> {
+    use bacnet_types::constructed::ChangeOfValueCriteria as C;
+    match criteria {
+        C::Bitmask { data, .. } => {
+            let bits = extract_bitstring(monitored_value)?;
+            let mut state = EventState::NORMAL;
+            for i in 0..data.len().min(bits.len()) {
+                if (bits[i] & data[i]) != 0 {
+                    state = EventState::OFFNORMAL;
+                    break;
+                }
+            }
+            Some(state)
+        }
+        C::ReferencedPropertyIncrement(increment) => extract_real(monitored_value)
+            .map(|v| eval_change_of_value(&increment.to_le_bytes(), v, EventState::NORMAL)),
+    }
+}
+
+/// Read the setpoint referenced by a FLOATING_LIMIT enrollment.
+///
+/// Returns the referenced property's real value, or `None` if the reference is
+/// remote or unreadable.
+fn read_setpoint(
+    db: &ObjectDatabase,
+    reference: &bacnet_types::constructed::BACnetDeviceObjectPropertyReference,
+) -> Option<f32> {
+    // Remote-device setpoint references are not resolvable from a local DB.
+    if reference.device_identifier.is_some() {
+        return None;
+    }
+    let obj = db.get(&reference.object_identifier)?;
+    let prop = PropertyIdentifier::from_raw(reference.property_identifier);
+    extract_real(
+        &obj.read_property(prop, reference.property_array_index)
+            .ok()?,
+    )
+}
+
+/// Legacy little-endian fallback for `Opaque` event parameters.
+///
+/// Used when an enrollment's `Event_Parameters` could not be decoded into a
+/// structured alternative (e.g. raw octets written by an older client that
+/// used the private little-endian byte layouts). The algorithm is inferred
+/// from the enrollment's `Event_Type`, and the original byte-oriented
+/// evaluators consume the opaque payload. Returns `current` (no transition)
+/// when the `Event_Type` does not name a known evaluator or the monitored
+/// value is the wrong type.
+fn eval_legacy_le(
+    data: &[u8],
+    monitored_value: &PropertyValue,
+    current: EventState,
+    event_type: EventType,
+) -> EventState {
+    if event_type == EventType::OUT_OF_RANGE {
+        extract_real(monitored_value)
+            .map(|v| eval_out_of_range(data, v, current))
+            .unwrap_or(current)
+    } else if event_type == EventType::FLOATING_LIMIT {
+        extract_real(monitored_value)
+            .map(|v| eval_floating_limit(data, v, current))
+            .unwrap_or(current)
+    } else if event_type == EventType::CHANGE_OF_STATE {
+        extract_enumerated(monitored_value)
+            .map(|v| eval_change_of_state(data, v, current))
+            .unwrap_or(current)
+    } else if event_type == EventType::CHANGE_OF_BITSTRING {
+        extract_bitstring(monitored_value)
+            .map(|bits| eval_change_of_bitstring(data, &bits, current))
+            .unwrap_or(current)
+    } else if event_type == EventType::CHANGE_OF_VALUE {
+        extract_real(monitored_value)
+            .map(|v| eval_change_of_value(data, v, current))
+            .unwrap_or(current)
+    } else {
+        current
+    }
+}
+
 /// Extract a real (f32) value from a PropertyValue.
 fn extract_real(pv: &PropertyValue) -> Option<f32> {
     match pv {
@@ -333,8 +529,13 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
         };
 
         let params = match enrollment.read_property(PropertyIdentifier::EVENT_PARAMETERS, None) {
-            Ok(PropertyValue::OctetString(bytes)) => bytes,
-            _ => Vec::new(),
+            Ok(v) => match BACnetEventParameter::decode(&v) {
+                Ok(ep) => ep,
+                // Malformed structured value: nothing to evaluate.
+                Err(_) => continue,
+            },
+            // Missing/unreadable Event_Parameters: nothing to evaluate.
+            Err(_) => continue,
         };
 
         let Some((monitored_oid, monitored_prop)) = read_object_property_ref(enrollment) else {
@@ -350,33 +551,74 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
         };
 
         let event_type = EventType::from_raw(event_type_raw);
-        let new_state = if event_type == EventType::OUT_OF_RANGE {
-            let Some(val) = extract_real(&monitored_value) else {
-                continue;
-            };
-            eval_out_of_range(&params, val, current_state)
-        } else if event_type == EventType::FLOATING_LIMIT {
-            let Some(val) = extract_real(&monitored_value) else {
-                continue;
-            };
-            eval_floating_limit(&params, val, current_state)
-        } else if event_type == EventType::CHANGE_OF_STATE {
-            let Some(val) = extract_enumerated(&monitored_value) else {
-                continue;
-            };
-            eval_change_of_state(&params, val, current_state)
-        } else if event_type == EventType::CHANGE_OF_BITSTRING {
-            let Some(bits) = extract_bitstring(&monitored_value) else {
-                continue;
-            };
-            eval_change_of_bitstring(&params, &bits, current_state)
-        } else if event_type == EventType::CHANGE_OF_VALUE {
-            let Some(val) = extract_real(&monitored_value) else {
-                continue;
-            };
-            eval_change_of_value(&params, val, current_state)
-        } else {
-            continue;
+        let new_state = match &params {
+            BACnetEventParameter::OutOfRange {
+                high_limit,
+                low_limit,
+                deadband,
+                ..
+            } => {
+                let Some(val) = extract_real(&monitored_value) else {
+                    continue;
+                };
+                eval_out_of_range_struct(*low_limit, *high_limit, *deadband, val, current_state)
+            }
+            BACnetEventParameter::FloatingLimit {
+                setpoint_reference,
+                low_diff_limit,
+                high_diff_limit,
+                deadband,
+                ..
+            } => {
+                let Some(setpoint) = read_setpoint(db, setpoint_reference) else {
+                    continue;
+                };
+                let Some(val) = extract_real(&monitored_value) else {
+                    continue;
+                };
+                eval_floating_limit_struct(
+                    setpoint,
+                    *high_diff_limit,
+                    *low_diff_limit,
+                    *deadband,
+                    val,
+                    current_state,
+                )
+            }
+            BACnetEventParameter::ChangeOfState { list_of_values, .. } => {
+                let Some(val) = extract_enumerated(&monitored_value) else {
+                    continue;
+                };
+                eval_change_of_state_struct(list_of_values, val, current_state)
+            }
+            BACnetEventParameter::ChangeOfBitstring {
+                bitmask,
+                list_of_values,
+                ..
+            } => {
+                let Some(bits) = extract_bitstring(&monitored_value) else {
+                    continue;
+                };
+                eval_change_of_bitstring_struct(bitmask, list_of_values, &bits, current_state)
+            }
+            BACnetEventParameter::ChangeOfValue { criteria, .. } => {
+                let Some(state) =
+                    eval_change_of_value_struct(criteria, &monitored_value, current_state)
+                else {
+                    continue;
+                };
+                state
+            }
+            // Opaque/Extended/unmodeled algorithms: fall back to the legacy
+            // little-endian byte layouts, dispatching on the enrollment's
+            // Event_Type, preserving compatibility with values written by
+            // older clients that used the raw-octets encoding.
+            BACnetEventParameter::Opaque { data, .. } => {
+                eval_legacy_le(data, &monitored_value, current_state, event_type)
+            }
+            // Extended [9] and any other modeled-but-unmodeled-for-evaluation
+            // alternatives produce no transition here.
+            _ => continue,
         };
 
         if new_state == current_state {

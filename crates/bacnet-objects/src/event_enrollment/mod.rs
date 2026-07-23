@@ -1,6 +1,8 @@
 //! EventEnrollment (type 9) object per ASHRAE 135-2020 Clause 12.12.
 
-use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, FaultParameters};
+use bacnet_types::constructed::{
+    BACnetDeviceObjectPropertyReference, BACnetEventParameter, FaultParameters,
+};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
@@ -12,15 +14,16 @@ use crate::traits::BACnetObject;
 /// BACnet EventEnrollment object.
 ///
 /// Provides algorithmic event detection for a referenced object property.
-/// The event_parameters are stored as raw bytes; full structured decoding
-/// is deferred to a future enhancement.
+/// The `event_parameters` are stored as a structured
+/// [`BACnetEventParameter`], preserving algorithm alternatives and unknown
+/// (vendor/reserved) values across a complete property round trip.
 pub struct EventEnrollmentObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
     event_type: u32,
     notify_type: u32,
-    event_parameters: Vec<u8>,
+    event_parameters: BACnetEventParameter,
     object_property_reference: Option<BACnetDeviceObjectPropertyReference>,
     event_state: u32,
     event_enable: u8,
@@ -44,7 +47,10 @@ impl EventEnrollmentObject {
             description: String::new(),
             event_type,
             notify_type: 0,
-            event_parameters: Vec::new(),
+            event_parameters: BACnetEventParameter::Opaque {
+                tag: 0xFF,
+                data: Vec::new(),
+            },
             object_property_reference: None,
             event_state: 0,
             event_enable: 0b111,
@@ -70,8 +76,8 @@ impl EventEnrollmentObject {
         self.object_property_reference = reference;
     }
 
-    /// Set the event parameters (raw bytes).
-    pub fn set_event_parameters(&mut self, params: Vec<u8>) {
+    /// Set the structured event parameters.
+    pub fn set_event_parameters(&mut self, params: BACnetEventParameter) {
         self.event_parameters = params;
     }
 
@@ -123,9 +129,7 @@ impl BACnetObject for EventEnrollmentObject {
             p if p == PropertyIdentifier::NOTIFY_TYPE => {
                 Ok(PropertyValue::Enumerated(self.notify_type))
             }
-            p if p == PropertyIdentifier::EVENT_PARAMETERS => {
-                Ok(PropertyValue::OctetString(self.event_parameters.clone()))
-            }
+            p if p == PropertyIdentifier::EVENT_PARAMETERS => Ok(self.event_parameters.encode()),
             p if p == PropertyIdentifier::OBJECT_PROPERTY_REFERENCE => {
                 match &self.object_property_reference {
                     None => Ok(PropertyValue::Null),
@@ -159,19 +163,7 @@ impl BACnetObject for EventEnrollmentObject {
             }
             p if p == PropertyIdentifier::FAULT_PARAMETERS => match &self.fault_parameters {
                 None => Ok(PropertyValue::Null),
-                Some(fp) => {
-                    let variant_tag = match fp {
-                        FaultParameters::FaultNone => 0u64,
-                        FaultParameters::FaultCharacterString { .. } => 1,
-                        FaultParameters::FaultExtended { .. } => 2,
-                        FaultParameters::FaultLifeSafety { .. } => 3,
-                        FaultParameters::FaultState { .. } => 4,
-                        FaultParameters::FaultStatusFlags { .. } => 5,
-                        FaultParameters::FaultOutOfRange { .. } => 6,
-                        FaultParameters::FaultListed { .. } => 7,
-                    };
-                    Ok(PropertyValue::Unsigned(variant_tag))
-                }
+                Some(fp) => Ok(fp.encode_property_value()),
             },
             _ => Err(common::unknown_property_error()),
         }
@@ -216,11 +208,30 @@ impl BACnetObject for EventEnrollmentObject {
             return Err(common::invalid_data_type_error());
         }
         if property == PropertyIdentifier::EVENT_PARAMETERS {
-            if let PropertyValue::OctetString(bytes) = value {
-                self.event_parameters = bytes;
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
+            self.event_parameters = match value {
+                // Legacy raw-octet write: preserve verbatim as an Opaque value
+                // using a sentinel tag (255) outside the BACnetEventParameter
+                // range so it never collides with a real algorithm on decode.
+                PropertyValue::OctetString(bytes) => BACnetEventParameter::Opaque {
+                    tag: 0xFF,
+                    data: bytes,
+                },
+                other => match BACnetEventParameter::decode(&other) {
+                    Ok(ep) => ep,
+                    Err(_) => return Err(common::invalid_data_type_error()),
+                },
+            };
+            return Ok(());
+        }
+        if property == PropertyIdentifier::FAULT_PARAMETERS {
+            self.fault_parameters = match value {
+                PropertyValue::Null => None,
+                _ => match FaultParameters::decode_property_value(&value) {
+                    Ok(fp) => Some(fp),
+                    Err(_) => return Err(common::invalid_data_type_error()),
+                },
+            };
+            return Ok(());
         }
         if let Some(result) =
             common::write_out_of_service(&mut self.out_of_service, property, &value)

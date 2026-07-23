@@ -655,6 +655,13 @@ pub enum BACnetValueSource {
 }
 
 // ---------------------------------------------------------------------------
+// BACnetEventParameter (Clause 13.5 -- Event_Parameters CHOICE alternatives)
+// ---------------------------------------------------------------------------
+
+mod event_parameter;
+pub use event_parameter::{event_parameter_tag, BACnetEventParameter, ChangeOfValueCriteria};
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
