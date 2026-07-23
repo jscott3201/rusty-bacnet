@@ -79,6 +79,8 @@ mod basic;
 mod dcc;
 #[path = "server/error_cov.rs"]
 mod error_cov;
+#[path = "server/local_write_cov.rs"]
+mod local_write_cov;
 #[path = "server/routing_alarm.rs"]
 mod routing_alarm;
 #[path = "server/segmentation_rx.rs"]

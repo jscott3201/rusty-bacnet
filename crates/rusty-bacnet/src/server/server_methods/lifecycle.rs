@@ -237,10 +237,23 @@ impl BACnetServer {
 
     /// Write a property on a local object in the server's database.
     ///
-    /// `OBJECT_NAME` writes are routed through the database name index — a
-    /// duplicate name is rejected up front and a successful rename refreshes
-    /// the index — so local writes obey the same uniqueness and lookup
-    /// invariants as the network WriteProperty handlers.
+    /// Delegates to the server-owned [`write_local`](server::BACnetServer::write_local)
+    /// entry point so a local write fires the same post-write COV and event
+    /// notifications as a network `WriteProperty`. `OBJECT_NAME` writes are
+    /// routed through the database name index — a duplicate name is rejected
+    /// up front and a successful rename refreshes the index — so local writes
+    /// obey the same uniqueness and lookup invariants as the network handlers.
+    ///
+    /// Errors are surfaced as [`BacnetProtocolError`] (with `error_class`/
+    /// `error_code`) for parity with the network path — e.g. an unknown object
+    /// yields `UNKNOWN_OBJECT` rather than a generic `RuntimeError`.
+    ///
+    /// The server lock is held for the whole call (including the post-write
+    /// COV/event sends), so concurrent Python calls on the same `BACnetServer`
+    /// serialize behind a local write. This is deliberate: it prevents a
+    /// `stop()` racing the notification sends mid-flight. A confirmed-COV send
+    /// to an unresponsive subscriber can therefore stall other Python calls
+    /// for up to the COV retry timeout.
     #[pyo3(signature = (object_id, property_id, value, priority=None, array_index=None))]
     #[allow(clippy::too_many_arguments)]
     fn write_property_local<'py>(
@@ -258,34 +271,16 @@ impl BACnetServer {
         let prop_value = value.inner;
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let db_arc = {
-                let guard = inner.lock().await;
-                let srv = guard
-                    .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
-                srv.database().clone()
-            };
-            let mut db = db_arc.write().await;
-
-            // Enforce Object_Name uniqueness against the database index before
-            // mutating, matching the network WriteProperty handler.
-            if pid == PropertyIdentifier::OBJECT_NAME {
-                if let PropertyValue::CharacterString(ref new_name) = prop_value {
-                    db.check_name_available(&oid, new_name).map_err(to_py_err)?;
-                }
-            }
-
-            let obj = db
-                .get_mut(&oid)
-                .ok_or_else(|| PyRuntimeError::new_err(format!("object {oid} not found")))?;
-            obj.write_property(pid, array_index, prop_value, priority)
-                .map_err(to_py_err)?;
-
-            // Resync the database name index to the object's new name.
-            if pid == PropertyIdentifier::OBJECT_NAME {
-                db.update_name_index(&oid);
-            }
-            Ok(())
+            // Hold the server guard for the duration of the call: `write_local`
+            // borrows `srv` and runs the post-write COV/event trigger path,
+            // so the server must stay alive across the await.
+            let guard = inner.lock().await;
+            let srv = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
+            srv.write_local(&oid, pid, array_index, prop_value, priority)
+                .await
+                .map_err(to_py_err)
         })
     }
 

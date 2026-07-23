@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Add `BACnetObject::is_writable_property`, `BACnetObject::is_createable`, and `BACnetObject::is_deleteable` trait methods (with conservative defaults that preserve current behavior for unmigrated object types) so PICS generation and runtime dispatch share one truth source for property writability and object createability. The `bacnet-objects` crate is a public dependency; downstream implementors of `BACnetObject` now have these methods available to override (defaults preserve existing PICS output).
+- Add `BACnetServer::write_local` as the server-owned local-mutation entry point. It writes a property under the database lock (routing `OBJECT_NAME` through the name-uniqueness check and index refresh, like the network handler) and then fires the same post-write COV and event notifications as a network `WriteProperty`. The Python `write_property_local` binding now delegates to it.
 
 ### Fixed
 
@@ -18,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stop over-reporting `Device` as deleteable via the static heuristic; `Device` and `NetworkPort` now override `is_deleteable` to `false` on the objects themselves.
 - Reconcile `handle_delete_object` with `is_deleteable`: the runtime DeleteObject handler now rejects `NetworkPort` (matching its `is_deleteable` override) in addition to `Device`, so PICS and runtime dispatch share one truth source for deleteability with no remaining drift.
 - Route `WriteProperty`, `WritePropertyMultiple`, `CreateObject` initial values, and the local `write_property_local` Python-binding writes of `OBJECT_NAME` through the `ObjectDatabase` name index. A duplicate name is now rejected up front with `DUPLICATE_NAME` (the database's `check_name_available` helper, previously dead code), and a successful rename refreshes the index via `update_name_index` so `find_by_name` resolves to the new name and the old name is freed for reuse. `WritePropertyMultiple` rollback re-syncs the index for any rolled-back `OBJECT_NAME` write, restoring the pre-transaction name mappings; `CreateObject` rolls back (removes the created object) when an `OBJECT_NAME` initial value collides. Previously, `write_property(OBJECT_NAME, …)` and `CreateObject` initial-value writes mutated the object's name field in place without touching the database secondary index, leaving stale lookups and allowing duplicates.
+- Fire COV (and event) notifications on local/internal property writes. The Python `write_property_local` path and direct object setters mutated objects without entering the server's post-write trigger path, so a subscription could observe a network mutation but not an equivalent local mutation. Local writes now go through `BACnetServer::write_local`, which applies the same post-write COV/event processing as the network dispatch loop (and respects DCC: notifications are skipped while communication is disabled). Low-level object setters (`set_present_value` and the like) remain notification-bypassing building blocks below the high-level server surface.
+
+### Changed
+
+- The Python `BACnetServer.write_property_local` now raises `BacnetProtocolError` (with `error_class`/`error_code`) for `UNKNOWN_OBJECT` and `DUPLICATE_NAME` instead of a generic `RuntimeError`, giving it structured parity with the network `WriteProperty` path. Python callers that caught `RuntimeError` specifically should catch `BacnetProtocolError` (or `Exception`) instead. The server lock is also held across the whole call (including post-write COV/event sends), so concurrent Python calls on the same `BACnetServer` serialize behind a local write; a confirmed-COV send to an unresponsive subscriber can stall other Python calls for up to the COV retry timeout. This prevents a `stop()` from racing the notification sends mid-flight.
 
 ## [0.10.1]
 

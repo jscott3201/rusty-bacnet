@@ -456,15 +456,14 @@ struct SegmentedRequestState {
 
 /// BACnet server with APDU dispatch and service handling.
 pub struct BACnetServer<T: TransportPort> {
-    #[allow(dead_code)]
     config: ServerConfig,
-    /// Shared network layer (also held by dispatch task).
-    #[allow(dead_code)]
+    /// Shared network layer (also held by dispatch task; read by
+    /// [`write_local`](Self::write_local) for post-write COV/event sends).
     network: Arc<NetworkLayer<T>>,
     /// Shared object database.
     db: Arc<RwLock<ObjectDatabase>>,
-    /// COV subscription table (held to keep Arc alive for dispatch task).
-    #[allow(dead_code)]
+    /// COV subscription table (also held by dispatch task; read by
+    /// [`write_local`](Self::write_local) to fire post-write notifications).
     cov_table: Arc<RwLock<CovSubscriptionTable>>,
     /// Channels for routing segmented-send events to in-progress segmented sends.
     #[allow(dead_code)]
@@ -474,11 +473,11 @@ pub struct BACnetServer<T: TransportPort> {
     #[allow(dead_code)]
     seg_send_permits: Arc<Semaphore>,
     /// Semaphore that caps confirmed COV notifications at 255 in-flight
-    /// to prevent invoke ID reuse (invoke IDs are u8 = 0..255).
-    #[allow(dead_code)]
+    /// to prevent invoke ID reuse (invoke IDs are u8 = 0..255). Read by
+    /// [`write_local`](Self::write_local).
     cov_in_flight: Arc<Semaphore>,
-    /// Server-side TSM for outgoing confirmed COV notifications.
-    #[allow(dead_code)]
+    /// Server-side TSM for outgoing confirmed COV notifications. Read by
+    /// [`write_local`](Self::write_local).
     server_tsm: Arc<Mutex<ServerTsm>>,
     /// Communication state: 0 = Enable, 1 = Disable, 2 = DisableInitiation.
     comm_state: Arc<AtomicU8>,

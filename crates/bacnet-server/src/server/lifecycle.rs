@@ -474,6 +474,75 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         self.comm_state.load(Ordering::Acquire)
     }
 
+    /// Write a property on a local object and fire the same post-write COV
+    /// and event notifications that a network [`WriteProperty`] does.
+    ///
+    /// This is the server-owned local-mutation entry point: it performs the
+    /// write under the database lock — routing `OBJECT_NAME` through the name
+    /// uniqueness check and index refresh, exactly like the network handler —
+    /// then releases the lock and runs the COV/event trigger path so a
+    /// subscription observes a local mutation just as it would a network one.
+    ///
+    /// Low-level object setters (`set_present_value` and friends) deliberately
+    /// bypass this path; they are building blocks below the high-level server
+    /// surface and are not expected to emit notifications.
+    ///
+    /// [`WriteProperty`]: bacnet_services::write_property::WritePropertyRequest
+    pub async fn write_local(
+        &self,
+        oid: &ObjectIdentifier,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+        value: PropertyValue,
+        priority: Option<u8>,
+    ) -> Result<(), Error> {
+        // Scoped write: mutate under the lock, then drop the guard before
+        // firing notifications — matching the network dispatch path, which
+        // releases the database lock before the post-write trigger loop.
+        {
+            let mut db = self.db.write().await;
+            if db.get(oid).is_none() {
+                return Err(Error::Protocol {
+                    class: ErrorClass::OBJECT.to_raw() as u32,
+                    code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+                });
+            }
+            if property == PropertyIdentifier::OBJECT_NAME {
+                if let PropertyValue::CharacterString(ref new_name) = value {
+                    db.check_name_available(oid, new_name)?;
+                }
+            }
+            let object = db.get_mut(oid).expect("existence checked above");
+            object.write_property(property, array_index, value, priority)?;
+            if property == PropertyIdentifier::OBJECT_NAME {
+                db.update_name_index(oid);
+            }
+        }
+
+        // Post-write COV/event trigger, mirroring the network handler's loop.
+        Self::fire_event_notifications(
+            &self.db,
+            &self.network,
+            &self.comm_state,
+            &self.server_tsm,
+            oid,
+            self.config.cov_retry_timeout_ms,
+        )
+        .await;
+        Self::fire_cov_notifications(
+            &self.db,
+            &self.network,
+            &self.cov_table,
+            &self.cov_in_flight,
+            &self.server_tsm,
+            &self.comm_state,
+            &self.config,
+            oid,
+        )
+        .await;
+        Ok(())
+    }
+
     /// Generate a PICS document from the current object database and server configuration.
     ///
     /// The caller must supply a [`PicsConfig`] for fields not available from the server
