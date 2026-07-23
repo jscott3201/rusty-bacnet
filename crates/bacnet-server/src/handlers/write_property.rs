@@ -34,6 +34,17 @@ fn check_and_prepare_name_write(
 /// duplicate name is rejected up front, and a successful rename refreshes the
 /// index. Rollback restores the index for any rolled-back `OBJECT_NAME` write
 /// so the pre-transaction name mappings are preserved.
+///
+/// `PRESENT_VALUE` writes on a commandable object are snapshotted at the
+/// **priority-array slot** the write targets, not as the effective present
+/// value. Reading `PRESENT_VALUE` returns the resolved (highest-priority)
+/// value, so a generic "read it, write it back" rollback would instead write
+/// that resolved value to priority 16 — leaving the originally-changed slot
+/// un-restored and adding a spurious priority-16 command. The snapshot reads
+/// `PRIORITY_ARRAY[priority]` (the exact slot about to change, or `Null` if it
+/// was relinquished) and the rollback restores that slot directly; a `Null`
+/// snapshot relinquishes the slot again. Non-commandable objects (where
+/// `PRIORITY_ARRAY` is not readable) fall back to the generic value snapshot.
 pub fn handle_write_property_multiple(
     db: &mut ObjectDatabase,
     service_data: &[u8],
@@ -85,8 +96,36 @@ pub fn handle_write_property_multiple(
             check_and_prepare_name_write(db, oid, value)?;
         }
         let object = db.get_mut(oid).unwrap();
-        // Save old value for rollback (best-effort; read may fail for write-only props).
-        let old_value = object.read_property(*prop_id, *array_index).ok();
+        // Capture a state-equivalent snapshot for rollback. For a commandable
+        // PRESENT_VALUE the readable value is the resolved priority-array
+        // output, not the slot being written, so snapshot the priority-array
+        // slot itself (see the function doc). `rollback_record` holds the
+        // (property, index, value) to restore; for the commandable case that is
+        // PRIORITY_ARRAY[priority], for every other case it is the property as
+        // written. `read_property` is best-effort: a write-only property has no
+        // readable value and yields no rollback record (matches the prior
+        // behavior).
+        let rollback_record = if *prop_id == PropertyIdentifier::PRESENT_VALUE {
+            // The write targets priority `priority.unwrap_or(16)` (matching
+            // `write_priority_array!`). Snapshot that exact slot so rollback
+            // restores it rather than writing the resolved value to priority 16.
+            // An out-of-range priority (e.g. 0) makes the *write* fail, so its
+            // snapshot is discarded anyway — but only snapshot a valid slot to
+            // avoid reading the array-size element (index 0) by mistake.
+            let slot = priority.unwrap_or(16);
+            let valid_slot = (1..=16).contains(&slot);
+            valid_slot
+                .then(|| {
+                    object.read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(slot as u32))
+                })
+                .and_then(|r| r.ok())
+                .map(|v| (PropertyIdentifier::PRIORITY_ARRAY, Some(slot as u32), v))
+        } else {
+            object
+                .read_property(*prop_id, *array_index)
+                .ok()
+                .map(|v| (*prop_id, *array_index, v))
+        };
         match object.write_property(*prop_id, *array_index, value.clone(), *priority) {
             Ok(()) => {
                 // A successful Object_Name write changed the object's name field;
@@ -94,13 +133,17 @@ pub fn handle_write_property_multiple(
                 if *prop_id == PropertyIdentifier::OBJECT_NAME {
                     db.update_name_index(oid);
                 }
-                if let Some(old) = old_value {
-                    applied.push((*oid, *prop_id, *array_index, old));
+                if let Some((rb_prop, rb_idx, rb_val)) = rollback_record {
+                    applied.push((*oid, rb_prop, rb_idx, rb_val));
                 }
             }
             Err(e) => {
                 for (rb_oid, rb_prop, rb_idx, rb_val) in applied.into_iter().rev() {
                     if let Some(obj) = db.get_mut(&rb_oid) {
+                        // Restore the snapshotted state. For a PRIORITY_ARRAY slot
+                        // the priority argument is ignored (write_priority_array_direct
+                        // writes the indexed slot; a `Null` value relinquishes it);
+                        // for any other property this re-writes the saved value.
                         let _ = obj.write_property(rb_prop, rb_idx, rb_val, None);
                         // The rollback restored the object's name field; resync
                         // the database index so it no longer maps the rolled-back
