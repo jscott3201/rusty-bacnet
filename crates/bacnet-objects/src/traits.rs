@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 
 use bacnet_types::constructed::BACnetLogRecord;
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
@@ -161,6 +161,32 @@ pub trait BACnetObject: Send + Sync {
             class: bacnet_types::enums::ErrorClass::OBJECT.to_raw() as u32,
             code: bacnet_types::enums::ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw()
                 as u32,
+        })
+    }
+
+    /// Apply an internally-detected `Event_State` transition.
+    ///
+    /// This is the **internal** lifecycle path for the algorithmically-derived
+    /// `Event_State` on objects such as Event Enrollment (ASHRAE 135-2020
+    /// Clause 12.12). It is deliberately distinct from the network
+    /// [`write_property`](Self::write_property) route: `Event_State` is
+    /// read-only over the network, so network writes are rejected while the
+    /// server's evaluator reaches the field through this method. Objects
+    /// without an algorithmic `Event_State` return
+    /// `OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`.
+    ///
+    /// The **default** returns `Err`, so objects without an algorithmic
+    /// `Event_State` opt out. Objects that do model one (e.g.
+    /// `EventEnrollmentObject`) override this to store the value verbatim:
+    /// the only caller is a trusted internal evaluator that passes a modeled
+    /// [`EventState`], mirroring the inherent `set_event_state` builder and
+    /// the existing read arm. Network-facing validation — rejecting all
+    /// `Event_State` writes — lives in [`write_property`](Self::write_property),
+    /// not here.
+    fn set_event_state_internal(&mut self, _state: EventState) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
         })
     }
 

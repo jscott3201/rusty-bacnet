@@ -262,6 +262,141 @@ fn read_event_state_default() {
     assert_eq!(val, PropertyValue::Enumerated(0)); // normal
 }
 
+/// `Event_State` is algorithmically derived (ASHRAE 135-2020 Clause 12.12) and
+/// read-only over the network: a WriteProperty of `EVENT_STATE` is rejected
+/// with `WRITE_ACCESS_DENIED` and leaves the field unchanged (issue #130).
+#[test]
+fn write_event_state_rejected_over_network() {
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let result = ee.write_property(
+        PropertyIdentifier::EVENT_STATE,
+        None,
+        PropertyValue::Enumerated(EventState::OFFNORMAL.to_raw()),
+        None,
+    );
+    assert!(
+        result.is_err(),
+        "network EVENT_STATE write must be rejected"
+    );
+    // The field is unchanged.
+    let val = ee
+        .read_property(PropertyIdentifier::EVENT_STATE, None)
+        .unwrap();
+    assert_eq!(val, PropertyValue::Enumerated(EventState::NORMAL.to_raw()));
+}
+
+/// The internal lifecycle path (`set_event_state_internal`) is the distinct
+/// route the evaluator uses to persist a detected transition. It is not the
+/// network `write_property` route (issue #130).
+#[test]
+fn set_event_state_internal_updates_field() {
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let result = ee.set_event_state_internal(EventState::HIGH_LIMIT);
+    assert!(
+        result.is_ok(),
+        "internal setter must accept a modeled state"
+    );
+    let val = ee
+        .read_property(PropertyIdentifier::EVENT_STATE, None)
+        .unwrap();
+    assert_eq!(
+        val,
+        PropertyValue::Enumerated(EventState::HIGH_LIMIT.to_raw())
+    );
+}
+
+/// The inherent `set_event_state` builder seeds state for tests/setup without
+/// going through the network write route (issue #130).
+#[test]
+fn set_event_state_seeds_field() {
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    ee.set_event_state(EventState::LOW_LIMIT.to_raw());
+    let val = ee
+        .read_property(PropertyIdentifier::EVENT_STATE, None)
+        .unwrap();
+    assert_eq!(
+        val,
+        PropertyValue::Enumerated(EventState::LOW_LIMIT.to_raw())
+    );
+}
+
+/// Objects that report `EVENT_ENROLLMENT` but do NOT model an algorithmic
+/// `Event_State` get the trait default for `set_event_state_internal`, which
+/// rejects with `OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`. The server evaluator
+/// drops such transitions (it only calls this on objects it found by type),
+/// so a custom downstream impl that forgets to override the method fails
+/// closed rather than silently storing garbage (issue #130).
+#[test]
+fn set_event_state_internal_default_rejects() {
+    use bacnet_types::enums::{ErrorClass, ErrorCode};
+    use bacnet_types::primitives::PropertyValue;
+    use std::borrow::Cow;
+
+    /// Reports `EVENT_ENROLLMENT` but does not override
+    /// `set_event_state_internal` — exercises the trait default.
+    struct DefaultOnly {
+        oid: ObjectIdentifier,
+    }
+
+    impl BACnetObject for DefaultOnly {
+        fn object_identifier(&self) -> ObjectIdentifier {
+            self.oid
+        }
+        fn object_name(&self) -> &str {
+            "default-only"
+        }
+        fn read_property(
+            &self,
+            property: PropertyIdentifier,
+            _array_index: Option<u32>,
+        ) -> Result<PropertyValue, bacnet_types::error::Error> {
+            if property == PropertyIdentifier::OBJECT_NAME {
+                Ok(PropertyValue::CharacterString("default-only".to_string()))
+            } else {
+                Err(bacnet_types::error::Error::Protocol {
+                    class: ErrorClass::PROPERTY.to_raw() as u32,
+                    code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                })
+            }
+        }
+        fn write_property(
+            &mut self,
+            _property: PropertyIdentifier,
+            _array_index: Option<u32>,
+            _value: PropertyValue,
+            _priority: Option<u8>,
+        ) -> Result<(), bacnet_types::error::Error> {
+            Err(bacnet_types::error::Error::Protocol {
+                class: ErrorClass::PROPERTY.to_raw() as u32,
+                code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+            })
+        }
+        fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
+            Cow::Borrowed(&[PropertyIdentifier::OBJECT_NAME])
+        }
+    }
+
+    let mut obj = DefaultOnly {
+        oid: ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, 1).unwrap(),
+    };
+    let result = obj.set_event_state_internal(EventState::FAULT);
+    assert!(
+        result.is_err(),
+        "default set_event_state_internal must reject"
+    );
+    let err = result.unwrap_err();
+    match err {
+        bacnet_types::error::Error::Protocol { class, code } => {
+            assert_eq!(class, ErrorClass::OBJECT.to_raw() as u32);
+            assert_eq!(
+                code,
+                ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32
+            );
+        }
+        _ => panic!("expected Error::Protocol from default set_event_state_internal"),
+    }
+}
+
 #[test]
 fn write_unknown_property_denied() {
     let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();

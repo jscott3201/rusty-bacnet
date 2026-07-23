@@ -3,7 +3,7 @@
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, FaultParameters,
 };
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
@@ -200,13 +200,12 @@ impl BACnetObject for EventEnrollmentObject {
             }
             return Err(common::invalid_data_type_error());
         }
-        if property == PropertyIdentifier::EVENT_STATE {
-            if let PropertyValue::Enumerated(v) = value {
-                self.event_state = v;
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
-        }
+        // EVENT_STATE is algorithmically derived (ASHRAE 135-2020 Clause 12.12)
+        // and read-only over the network: a WriteProperty of EVENT_STATE falls
+        // through to WRITE_ACCESS_DENIED below. The evaluator sets it through
+        // the internal `set_event_state_internal` trait method instead, so the
+        // network route and the internal lifecycle path no longer share an
+        // access path (issue #130).
         if property == PropertyIdentifier::EVENT_PARAMETERS {
             self.event_parameters = match value {
                 // Legacy raw-octet write: preserve verbatim as an Opaque value
@@ -242,6 +241,17 @@ impl BACnetObject for EventEnrollmentObject {
             return result;
         }
         Err(common::write_access_denied_error())
+    }
+
+    /// Internal lifecycle path for the algorithmically-derived `Event_State`.
+    ///
+    /// The evaluator calls this — not `write_property(EVENT_STATE, …)` — so the
+    /// network route (which rejects `EVENT_STATE`) and the internal lifecycle
+    /// path are distinct (issue #130). Stores the modeled state verbatim; the
+    /// only caller is the trusted server evaluator.
+    fn set_event_state_internal(&mut self, state: EventState) -> Result<(), Error> {
+        self.event_state = state.to_raw();
+        Ok(())
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {

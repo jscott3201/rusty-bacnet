@@ -772,14 +772,9 @@ fn change_of_value_wrong_type_monitored_value_skips() {
     });
     ee.set_event_enable(0x07);
     // Force the enrollment into OFFNORMAL so a spurious NORMAL transition
-    // would otherwise be emitted.
-    ee.write_property(
-        PropertyIdentifier::EVENT_STATE,
-        None,
-        PropertyValue::Enumerated(EventState::OFFNORMAL.to_raw()),
-        None,
-    )
-    .unwrap();
+    // would otherwise be emitted. Seeded via the internal builder, not a
+    // network write — `Event_State` is read-only over the network (issue #130).
+    ee.set_event_state(EventState::OFFNORMAL.to_raw());
     db.add(Box::new(ee)).unwrap();
 
     let transitions = evaluate_event_enrollments(&mut db);
@@ -822,4 +817,71 @@ fn empty_parameters_is_skipped() {
 
     let transitions = evaluate_event_enrollments(&mut db);
     assert!(transitions.is_empty());
+}
+
+/// Periodic evaluation persists a detected transition through the internal
+/// lifecycle path (`set_event_state_internal`), NOT the network
+/// `write_property(EVENT_STATE, …)` route. The network route rejects
+/// `EVENT_STATE` writes entirely (issue #130): driving a transition still
+/// updates `Event_State`, and a direct network write of `EVENT_STATE` on the
+/// same object is refused.
+#[test]
+fn evaluation_does_not_use_network_write_route() {
+    use bacnet_objects::event_enrollment::EventEnrollmentObject;
+
+    let mut db = ObjectDatabase::new();
+
+    let mut ai = AnalogInputObject::new(77, "AI-77", 62).unwrap();
+    ai.set_present_value(85.0); // above high_limit 80 → HIGH_LIMIT
+    let ai_oid = ai.object_identifier();
+    db.add(Box::new(ai)).unwrap();
+
+    let mut ee = EventEnrollmentObject::new(77, "EE-77", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+        ai_oid,
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+    )));
+    ee.set_event_parameters(BACnetEventParameter::OutOfRange {
+        time_delay: 0,
+        low_limit: 20.0,
+        high_limit: 80.0,
+        deadband: 2.0,
+    });
+    ee.set_event_enable(0x07);
+    let ee_oid = ee.object_identifier();
+    db.add(Box::new(ee)).unwrap();
+
+    // 1) Evaluation drives a transition and persists the new Event_State.
+    let transitions = evaluate_event_enrollments(&mut db);
+    assert_eq!(transitions.len(), 1);
+    assert_eq!(transitions[0].change.to, EventState::HIGH_LIMIT);
+    let obj = db.get(&ee_oid).unwrap();
+    assert_eq!(
+        obj.read_property(PropertyIdentifier::EVENT_STATE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(EventState::HIGH_LIMIT.to_raw()),
+        "evaluation must persist Event_State"
+    );
+
+    // 2) The network route rejects a direct EVENT_STATE write on the same
+    //    object — proving evaluation did NOT go through the public write route.
+    let obj = db.get_mut(&ee_oid).unwrap();
+    let net_result = obj.write_property(
+        PropertyIdentifier::EVENT_STATE,
+        None,
+        PropertyValue::Enumerated(EventState::NORMAL.to_raw()),
+        None,
+    );
+    assert!(
+        net_result.is_err(),
+        "network EVENT_STATE write must be rejected (read-only over the network)"
+    );
+    // And the field is still the evaluator-set value, not the rejected write.
+    let obj = db.get(&ee_oid).unwrap();
+    assert_eq!(
+        obj.read_property(PropertyIdentifier::EVENT_STATE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(EventState::HIGH_LIMIT.to_raw()),
+        "rejected network write must not mutate Event_State"
+    );
 }

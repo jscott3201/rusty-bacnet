@@ -650,15 +650,12 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
     let mut transitions = Vec::new();
     for (oid, monitored_oid, event_type_raw, from_state, to_state) in updates {
         if let Some(obj) = db.get_mut(&oid) {
-            if obj
-                .write_property(
-                    PropertyIdentifier::EVENT_STATE,
-                    None,
-                    PropertyValue::Enumerated(to_state.to_raw()),
-                    None,
-                )
-                .is_ok()
-            {
+            // Persist the transition through the internal lifecycle path, not
+            // the network `write_property(EVENT_STATE, …)` route. `Event_State`
+            // is algorithmically derived (ASHRAE 135-2020 Clause 12.12) and
+            // read-only over the network, so the evaluator reaches the field
+            // via `set_event_state_internal` (issue #130).
+            if obj.set_event_state_internal(to_state).is_ok() {
                 transitions.push(EventEnrollmentTransition {
                     enrollment_oid: oid,
                     monitored_oid,
