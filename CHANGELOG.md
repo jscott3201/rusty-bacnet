@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Split CI into a lean and a heavy tier so feature→dev PRs run only the fast gate (`rustfmt`, `clippy`, file-size cap, no-secret scan, and the Linux test matrix) while the cross-OS test matrix (macOS, Windows), MSRV, `cargo audit`, `cargo deny`, and the WASM check run on dev→main PRs, pushes to `main`, and `v*` tags. The feature→dev loop is no longer held up by macOS/Windows runners or the advisory/license/MSRV/WASM jobs; the full matrix still gates every merge into `main` and every release (the `validate` job waits on `test-cross` as well as `test`).
 - The Python `BACnetServer.write_property_local` now raises `BacnetProtocolError` (with `error_class`/`error_code`) for `UNKNOWN_OBJECT` and `DUPLICATE_NAME` instead of a generic `RuntimeError`, giving it structured parity with the network `WriteProperty` path. Python callers that caught `RuntimeError` specifically should catch `BacnetProtocolError` (or `Exception`) instead. The server lock is also held across the whole call (including post-write COV/event sends), so concurrent Python calls on the same `BACnetServer` serialize behind a local write; a confirmed-COV send to an unresponsive subscriber can stall other Python calls for up to the COV retry timeout. This prevents a `stop()` from racing the notification sends mid-flight.
 
 ## [0.10.1]

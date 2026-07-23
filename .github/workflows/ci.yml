@@ -26,7 +26,19 @@ permissions:
   id-token: write
 
 # =============================================================================
-# Tier 1 — CI (runs on PR updates to main/dev, pushes to main, and v* tags)
+# Tier 1 — CI
+#
+# Two tiers of jobs share the triggers (PRs to main/dev, push to main, v* tags):
+#   Lean  — every PR (incl. feature→dev), push to main, v* tags.
+#           Fast gate: fmt, clippy, file-size, no-secret, Linux test.
+#   Heavy — skips feature→dev PRs; runs on dev→main PRs, push to main, v* tags.
+#           Cross-OS tests, MSRV, WASM, cargo-audit, cargo-deny.
+# This keeps the high-throughput feature→dev loop fast while the dev→main
+# gate (and the tag/push-main release gate) run the full matrix before merge.
+#
+# Guard cheat-sheet (the `if:` on each job is one of these two):
+#   lean : github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+#   heavy: github.event_name == 'push' || github.base_ref == 'main'
 # =============================================================================
 
 jobs:
@@ -59,7 +71,7 @@ jobs:
 
   wasm-check:
     name: WASM Check
-    if: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
+    if: ${{ github.event_name == 'push' || github.base_ref == 'main' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -72,7 +84,7 @@ jobs:
 
   audit:
     name: Cargo Audit
-    if: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
+    if: ${{ github.event_name == 'push' || github.base_ref == 'main' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -104,7 +116,7 @@ jobs:
 
   msrv:
     name: MSRV (1.93)
-    if: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
+    if: ${{ github.event_name == 'push' || github.base_ref == 'main' }}
     runs-on: ubuntu-latest
     env:
       # Override `rust-toolchain.toml` (which pins the dev/CI channel to
@@ -129,15 +141,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux: full feature set (serial + ethernet are Linux-only deps)
+          # Linux only in the lean tier: the full-feature suite (serial +
+          # ethernet are Linux-only deps). macOS/Windows run in `test-cross`
+          # below, gated to dev→main PRs / push-main / tags so the
+          # feature→dev loop isn't held up by cross-OS runners.
           - os: ubuntu-latest
             features: "--features bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-transport/ethernet"
-          # macOS: ipv6 + sc-tls only
-          - os: macos-latest
-            features: "--features bacnet-transport/ipv6,bacnet-transport/sc-tls"
-          # Windows: ipv6 + sc-tls only
-          - os: windows-latest
-            features: "--features bacnet-transport/ipv6,bacnet-transport/sc-tls"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -153,9 +162,35 @@ jobs:
           cache-bin: false
       - run: cargo test --workspace --exclude rusty-bacnet --exclude bacnet-wasm --locked ${{ matrix.features }}
 
+  test-cross:
+    name: Test (${{ matrix.os }})
+    if: ${{ github.event_name == 'push' || github.base_ref == 'main' }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Cross-OS legs (macOS/Windows) — heavy tier, only on dev→main PRs,
+          # push to main, and v* tags. Linux is already covered by `test`
+          # above in the lean tier.
+          - os: macos-latest
+            features: "--features bacnet-transport/ipv6,bacnet-transport/sc-tls"
+          - os: windows-latest
+            features: "--features bacnet-transport/ipv6,bacnet-transport/sc-tls"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
+          cache-bin: false
+      - run: cargo test --workspace --exclude rusty-bacnet --exclude bacnet-wasm --locked ${{ matrix.features }}
+
   deny:
     name: Cargo Deny
-    if: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
+    if: ${{ github.event_name == 'push' || github.base_ref == 'main' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -168,7 +203,7 @@ jobs:
   validate:
     name: Validate Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [fmt, clippy, test, deny, wasm-check, audit, no-secret-scan]
+    needs: [fmt, clippy, test, test-cross, deny, wasm-check, audit, no-secret-scan]
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
