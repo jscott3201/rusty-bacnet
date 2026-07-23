@@ -156,14 +156,20 @@ impl BACnetObject for NotificationClass {
                             },
                             PropertyValue::Time(dest.from_time),
                             PropertyValue::Time(dest.to_time),
-                            // recipient
+                            // recipient: Device (ObjectIdentifier) or Address
+                            // (network_number + mac_address). The address form
+                            // is encoded as a two-element list so the network
+                            // number survives the round-trip; the flat
+                            // application-tagged shape mirrors the existing
+                            // Recipient_List encoding simplification.
                             match &dest.recipient {
                                 BACnetRecipient::Device(oid) => {
                                     PropertyValue::ObjectIdentifier(*oid)
                                 }
-                                BACnetRecipient::Address(addr) => {
-                                    PropertyValue::OctetString(addr.mac_address.to_vec())
-                                }
+                                BACnetRecipient::Address(addr) => PropertyValue::List(vec![
+                                    PropertyValue::Unsigned(addr.network_number as u64),
+                                    PropertyValue::OctetString(addr.mac_address.to_vec()),
+                                ]),
                             },
                             PropertyValue::Unsigned(dest.process_identifier as u64),
                             PropertyValue::Boolean(dest.issue_confirmed_notifications),
@@ -219,13 +225,22 @@ impl BACnetObject for NotificationClass {
                             PropertyValue::Time(t) => t,
                             _ => return Err(common::invalid_data_type_error()),
                         };
-                        // [3] recipient: ObjectIdentifier (Device) or OctetString (Address)
+                        // [3] recipient: Device (ObjectIdentifier) or Address
+                        // (List[Unsigned network_number, OctetString mac]).
                         let recipient = match &fields[3] {
                             PropertyValue::ObjectIdentifier(oid) => BACnetRecipient::Device(*oid),
-                            PropertyValue::OctetString(mac) => {
+                            PropertyValue::List(items) if items.len() == 2 => {
+                                let network_number = match &items[0] {
+                                    PropertyValue::Unsigned(v) => *v as u16,
+                                    _ => return Err(common::invalid_data_type_error()),
+                                };
+                                let mac_address = match &items[1] {
+                                    PropertyValue::OctetString(mac) => MacAddr::from_slice(mac),
+                                    _ => return Err(common::invalid_data_type_error()),
+                                };
                                 BACnetRecipient::Address(BACnetAddress {
-                                    network_number: 0,
-                                    mac_address: MacAddr::from_slice(mac),
+                                    network_number,
+                                    mac_address,
                                 })
                             }
                             _ => return Err(common::invalid_data_type_error()),
@@ -546,13 +561,24 @@ pub fn filter_recipient_list(
             continue;
         }
 
-        // [3] recipient
+        // [3] recipient: Device (ObjectIdentifier) or Address
+        // (List[Unsigned network_number, OctetString mac]).
         let recipient = match &fields[3] {
             PropertyValue::ObjectIdentifier(oid) => BACnetRecipient::Device(*oid),
-            PropertyValue::OctetString(mac) => BACnetRecipient::Address(BACnetAddress {
-                network_number: 0,
-                mac_address: MacAddr::from_slice(mac),
-            }),
+            PropertyValue::List(items) if items.len() == 2 => {
+                let network_number = match &items[0] {
+                    PropertyValue::Unsigned(v) => *v as u16,
+                    _ => continue,
+                };
+                let mac_address = match &items[1] {
+                    PropertyValue::OctetString(mac) => MacAddr::from_slice(mac),
+                    _ => continue,
+                };
+                BACnetRecipient::Address(BACnetAddress {
+                    network_number,
+                    mac_address,
+                })
+            }
             _ => continue,
         };
 

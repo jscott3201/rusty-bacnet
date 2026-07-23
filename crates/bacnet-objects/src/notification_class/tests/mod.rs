@@ -1,3 +1,5 @@
+mod recipient_list;
+
 use super::*;
 use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
 use bacnet_types::primitives::Time;
@@ -254,8 +256,14 @@ fn add_destination_address_variant() {
         panic!("Expected inner List");
     };
 
-    // recipient = OctetString of mac_address
-    assert_eq!(fields[3], PropertyValue::OctetString(mac.to_vec()));
+    // recipient = Address as List[Unsigned(network_number), OctetString(mac)]
+    assert_eq!(
+        fields[3],
+        PropertyValue::List(vec![
+            PropertyValue::Unsigned(0),
+            PropertyValue::OctetString(mac.to_vec()),
+        ])
+    );
 
     // process_identifier = 42
     assert_eq!(fields[4], PropertyValue::Unsigned(42));
