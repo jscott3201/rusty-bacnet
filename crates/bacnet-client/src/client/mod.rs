@@ -73,8 +73,10 @@ pub struct DeviceEvent {
 pub struct ClientConfig {
     /// Local interface to bind.
     pub interface: Ipv4Addr,
-    /// UDP port (0 for ephemeral).
-    pub port: u16,
+    /// UDP unicast port (0 for ephemeral).
+    pub unicast_port: u16,
+    /// UDP broadcast port.
+    pub broadcast_port: u16,
     /// Directed broadcast address.
     pub broadcast_address: Ipv4Addr,
     /// APDU timeout in milliseconds.
@@ -107,7 +109,8 @@ impl Default for ClientConfig {
     fn default() -> Self {
         Self {
             interface: Ipv4Addr::UNSPECIFIED,
-            port: 0xBAC0,
+            unicast_port: 0,
+            broadcast_port: 0xBAC0,
             broadcast_address: Ipv4Addr::BROADCAST,
             apdu_timeout_ms: 6000,
             apdu_retries: 3,
@@ -201,9 +204,15 @@ impl BipClientBuilder {
         self
     }
 
-    /// Set the UDP port (0 for ephemeral).
-    pub fn port(mut self, port: u16) -> Self {
-        self.config.port = port;
+    /// Set the UDP unicast port (0 for ephemeral).
+    pub fn unicast_port(mut self, port: u16) -> Self {
+        self.config.unicast_port = port;
+        self
+    }
+
+    /// Set the UDP broadcast port (0 for ephemeral).
+    pub fn broadcast_port(mut self, port: u16) -> Self {
+        self.config.broadcast_port = port;
         self
     }
 
@@ -235,7 +244,7 @@ impl BipClientBuilder {
     pub async fn build(self) -> Result<BACnetClient<BipTransport>, Error> {
         let transport = BipTransport::new(
             self.config.interface,
-            self.config.port,
+            self.config.broadcast_port,
             self.config.broadcast_address,
         );
         BACnetClient::start_with_options(self.config, transport, self.options).await
@@ -443,9 +452,15 @@ impl Bip6ClientBuilder {
         self
     }
 
-    /// Set the UDP port (0 for ephemeral).
-    pub fn port(mut self, port: u16) -> Self {
-        self.config.port = port;
+    /// Set the UDP unicast port (0 for ephemeral).
+    pub fn unicast_port(mut self, port: u16) -> Self {
+        self.config.unicast_port = port;
+        self
+    }
+
+    /// Set the UDP broadcast port.
+    pub fn broadcast_port(mut self, port: u16) -> Self {
+        self.config.broadcast_port = port;
         self
     }
 
@@ -475,7 +490,11 @@ impl Bip6ClientBuilder {
 
     /// Build and start the client, constructing a Bip6Transport from the config.
     pub async fn build(self) -> Result<BACnetClient<Bip6Transport>, Error> {
-        let transport = Bip6Transport::new(self.interface, self.config.port, self.device_instance);
+        let transport = Bip6Transport::new(
+            self.interface,
+            self.config.broadcast_port,
+            self.device_instance,
+        );
         BACnetClient::start_with_options(self.config, transport, self.options).await
     }
 }

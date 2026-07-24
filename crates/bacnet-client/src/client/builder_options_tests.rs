@@ -30,7 +30,7 @@ async fn generic_builder_sets_apdu_tuning_options() {
 async fn bip_builder_sets_apdu_tuning_options() {
     let mut client = BACnetClient::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
+        .broadcast_port(0)
         .apdu_retries(7)
         .max_segments(Some(8))
         .segmented_response_accepted(false)

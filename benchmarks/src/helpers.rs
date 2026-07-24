@@ -48,7 +48,7 @@ pub async fn make_bip_server() -> Result<BACnetServer<BipTransport>, Error> {
 
     BACnetServer::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
+        .broadcast_port(0)
         .broadcast_address(Ipv4Addr::LOCALHOST)
         .database(db)
         .build()
@@ -59,7 +59,6 @@ pub async fn make_bip_server() -> Result<BACnetServer<BipTransport>, Error> {
 pub async fn make_bip_client() -> Result<BACnetClient<BipTransport>, Error> {
     BACnetClient::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
         .broadcast_address(Ipv4Addr::LOCALHOST)
         .apdu_timeout_ms(2000)
         .build()

@@ -10,7 +10,8 @@ use bacnet_types::error::Error;
 #[allow(dead_code)]
 pub struct TransportArgs {
     pub interface: Ipv4Addr,
-    pub port: u16,
+    pub unicast_port: u16,
+    pub broadcast_port: u16,
     pub broadcast: Ipv4Addr,
     pub timeout_ms: u64,
     pub sc: bool,
@@ -78,7 +79,8 @@ pub fn parse_sc_device_uuid_arg(value: &str) -> Result<[u8; 16], String> {
 pub async fn build_bip_client(args: &TransportArgs) -> Result<BACnetClient<BipTransport>, Error> {
     BACnetClient::bip_builder()
         .interface(args.interface)
-        .port(args.port)
+        .unicast_port(args.unicast_port)
+        .broadcast_port(args.broadcast_port)
         .broadcast_address(args.broadcast)
         .apdu_timeout_ms(args.timeout_ms)
         .build()
@@ -163,7 +165,8 @@ pub async fn build_bip6_client(args: &TransportArgs) -> Result<BACnetClient<Bip6
 
     let mut builder = BACnetClient::bip6_builder()
         .interface(ipv6_addr)
-        .port(args.port)
+        .unicast_port(args.unicast_port)
+        .broadcast_port(args.broadcast_port)
         .apdu_timeout_ms(args.timeout_ms);
 
     if let Some(instance) = args.device_instance {

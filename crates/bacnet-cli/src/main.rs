@@ -28,9 +28,13 @@ struct Cli {
     #[arg(short, long, global = true)]
     interface: Option<Ipv4Addr>,
 
-    /// BACnet UDP port.
+    /// BACnet UDP broadcast port.
+    #[arg(short, long, default_value_t = 0, global = true)]
+    unicast_port: u16,
+
+    /// BACnet UDP broadcast port.
     #[arg(short, long, default_value_t = 0xBAC0, global = true)]
-    port: u16,
+    broadcast_port: u16,
 
     /// Broadcast address for WhoIs.
     #[arg(short, long, default_value = "255.255.255.255", global = true)]
@@ -798,7 +802,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args = transport::TransportArgs {
         interface,
-        port: cli.port,
+        unicast_port: cli.unicast_port,
+        broadcast_port: cli.broadcast_port,
         broadcast,
         timeout_ms: cli.timeout,
         sc: cli.sc,

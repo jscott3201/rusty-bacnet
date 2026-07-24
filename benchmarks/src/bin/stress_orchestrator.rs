@@ -71,7 +71,6 @@ async fn run_rp_scenario(
 ) -> DegradationPoint {
     let client = BACnetClient::bip_builder()
         .interface(interface)
-        .port(0)
         .broadcast_address(broadcast)
         .apdu_timeout_ms(5000)
         .build()
@@ -138,7 +137,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Probe server-a
     let probe_client = BACnetClient::bip_builder()
         .interface(Ipv4Addr::new(172, 20, 0, 100))
-        .port(0)
         .broadcast_address(Ipv4Addr::new(172, 20, 0, 255))
         .apdu_timeout_ms(5000)
         .build()

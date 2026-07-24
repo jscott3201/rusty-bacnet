@@ -48,7 +48,7 @@ async fn server_segments_large_rpm_response() {
 
     let mut server = BACnetServer::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
+        .broadcast_port(0)
         .database(db)
         .build()
         .await
@@ -58,7 +58,7 @@ async fn server_segments_large_rpm_response() {
     // Create a client with max_apdu_length=128 so the response must be segmented.
     let mut client = BACnetClient::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
+        .broadcast_port(0)
         .broadcast_address(Ipv4Addr::LOCALHOST)
         .apdu_timeout_ms(5000)
         .max_apdu_length(128)

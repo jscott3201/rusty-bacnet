@@ -91,7 +91,7 @@ async fn dcc_disable_initiation_allows_rp_blocks_cov() {
 
     let mut server = BACnetServer::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
+        .broadcast_port(0)
         .database(db)
         .build()
         .await
@@ -204,7 +204,7 @@ async fn dcc_enable_restores_normal_operation() {
 
     let mut server = BACnetServer::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
+        .broadcast_port(0)
         .database(db)
         .build()
         .await

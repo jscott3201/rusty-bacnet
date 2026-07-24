@@ -24,9 +24,13 @@ struct Args {
     #[arg(long, default_value = "0.0.0.0")]
     interface: String,
 
-    /// UDP port (BIP only)
+    /// UDP broadcast port (BIP only)
+    #[arg(long, default_value_t = 0)]
+    unicast_port: u16,
+
+    /// UDP broadcast port (BIP only)
     #[arg(long, default_value_t = 47808)]
-    port: u16,
+    broadcast_port: u16,
 
     /// Broadcast address (BIP only)
     #[arg(long, default_value = "255.255.255.255")]
@@ -108,7 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let bbmd_ip: Ipv4Addr = parts[0].parse()?;
                 let bbmd_port: u16 = parts.get(1).unwrap_or(&"47808").parse()?;
 
-                let mut transport = BipTransport::new(interface, args.port, broadcast);
+                let mut transport = BipTransport::new(interface, args.broadcast_port, broadcast);
                 transport.register_as_foreign_device(ForeignDeviceConfig {
                     bbmd_ip,
                     bbmd_port,
@@ -123,7 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 BACnetServer::bip_builder()
                     .interface(interface)
-                    .port(args.port)
+                    .broadcast_port(args.broadcast_port)
                     .broadcast_address(broadcast)
                     .database(db)
                     .build()

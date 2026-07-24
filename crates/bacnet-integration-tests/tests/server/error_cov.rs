@@ -221,7 +221,7 @@ async fn cov_subscribe_then_cancel() {
 
     let mut server = BACnetServer::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
+        .broadcast_port(0)
         .database(db)
         .build()
         .await

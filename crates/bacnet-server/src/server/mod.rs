@@ -175,8 +175,10 @@ pub struct TimeSyncData {
 pub struct ServerConfig {
     /// Local interface to bind.
     pub interface: Ipv4Addr,
-    /// UDP port (default 0xBAC0 = 47808).
-    pub port: u16,
+    /// UDP unicast port.
+    pub unicast_port: u16,
+    /// UDP broadcast port (default 0xBAC0 = 47808).
+    pub broadcast_port: u16,
     /// Directed broadcast address.
     pub broadcast_address: Ipv4Addr,
     /// Maximum APDU length accepted.
@@ -246,7 +248,8 @@ impl std::fmt::Debug for ServerConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ServerConfig")
             .field("interface", &self.interface)
-            .field("port", &self.port)
+            .field("unicast_port", &self.unicast_port)
+            .field("broadcast_port", &self.broadcast_port)
             .field("broadcast_address", &self.broadcast_address)
             .field("max_apdu_length", &self.max_apdu_length)
             .field("segmentation_supported", &self.segmentation_supported)
@@ -275,7 +278,8 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             interface: Ipv4Addr::UNSPECIFIED,
-            port: 0xBAC0,
+            unicast_port: 0,
+            broadcast_port: 0xBAC0,
             broadcast_address: Ipv4Addr::BROADCAST,
             max_apdu_length: 1476,
             segmentation_supported: Segmentation::NONE,
@@ -373,9 +377,15 @@ impl BipServerBuilder {
         self
     }
 
-    /// Set the UDP port.
-    pub fn port(mut self, port: u16) -> Self {
-        self.config.port = port;
+    /// Set the UDP unicast port.
+    pub fn unicast_port(mut self, port: u16) -> Self {
+        self.config.unicast_port = port;
+        self
+    }
+
+    /// Set the UDP broadcast port.
+    pub fn broadcast_port(mut self, port: u16) -> Self {
+        self.config.broadcast_port = port;
         self
     }
 
@@ -435,7 +445,7 @@ impl BipServerBuilder {
     pub async fn build(self) -> Result<BACnetServer<BipTransport>, Error> {
         let transport = BipTransport::new(
             self.config.interface,
-            self.config.port,
+            self.config.broadcast_port,
             self.config.broadcast_address,
         );
         BACnetServer::start(self.config, self.db, transport).await

@@ -16,7 +16,7 @@ use tokio::time::Duration;
 async fn make_client() -> BACnetClient<BipTransport> {
     BACnetClient::builder()
         .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
+        .broadcast_port(0)
         .apdu_timeout_ms(2000)
         .build()
         .await
@@ -125,7 +125,7 @@ async fn client_stop_releases_bip_socket_before_drop() {
         loop {
             match BACnetClient::builder()
                 .interface(Ipv4Addr::LOCALHOST)
-                .port(port)
+                .broadcast_port(port)
                 .build()
                 .await
             {
@@ -174,7 +174,7 @@ async fn client_drop_releases_bip_socket() {
         loop {
             match BACnetClient::builder()
                 .interface(Ipv4Addr::LOCALHOST)
-                .port(port)
+                .broadcast_port(port)
                 .build()
                 .await
             {
@@ -246,7 +246,7 @@ async fn device_table_purge_runs_without_inbound_apdu() {
 async fn client_rejects_invalid_max_apdu_length() {
     let result = BACnetClient::builder()
         .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
+        .broadcast_port(0)
         .max_apdu_length(1000)
         .build()
         .await;
@@ -440,7 +440,7 @@ async fn segmented_complex_ack_reassembly() {
 async fn segmented_confirmed_request_sends_segments() {
     let mut client = BACnetClient::builder()
         .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
+        .broadcast_port(0)
         .apdu_timeout_ms(5000)
         .max_apdu_length(50)
         .build()
@@ -532,7 +532,7 @@ async fn segmented_confirmed_request_sends_segments() {
 async fn segmented_request_with_complex_ack_response() {
     let mut client = BACnetClient::builder()
         .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
+        .broadcast_port(0)
         .apdu_timeout_ms(5000)
         .max_apdu_length(50)
         .build()
@@ -715,7 +715,7 @@ async fn routed_segmented_request_uses_routed_tsm_key() {
 async fn segment_overflow_guard() {
     let mut client = BACnetClient::builder()
         .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
+        .broadcast_port(0)
         .apdu_timeout_ms(2000)
         .max_apdu_length(50)
         .build()

@@ -54,7 +54,7 @@ async fn make_server() -> BACnetServer<BipTransport> {
 
     BACnetServer::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
-        .port(0) // ephemeral
+        .broadcast_port(0) // ephemeral
         .broadcast_address(Ipv4Addr::LOCALHOST)
         .database(db)
         .build()
@@ -65,7 +65,7 @@ async fn make_server() -> BACnetServer<BipTransport> {
 async fn make_client() -> BACnetClient<BipTransport> {
     BACnetClient::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
+        .broadcast_port(0)
         .broadcast_address(Ipv4Addr::LOCALHOST)
         .apdu_timeout_ms(2000)
         .build()

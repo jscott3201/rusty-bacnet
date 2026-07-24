@@ -26,7 +26,6 @@ async fn full_read_property_round_trip() {
     // Start the client
     let mut client = BACnetClient::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
         .apdu_timeout_ms(2000)
         .build()
         .await
@@ -124,7 +123,7 @@ async fn who_is_broadcast() {
     // Use LOCALHOST as broadcast address since 255.255.255.255 isn't routable in tests.
     let mut client = BACnetClient::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
+        .broadcast_port(0)
         .broadcast_address(Ipv4Addr::LOCALHOST)
         .build()
         .await
@@ -142,7 +141,7 @@ async fn device_discovery_via_iam() {
     // Client that will discover devices
     let mut client = BACnetClient::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
+        .broadcast_port(0)
         .apdu_timeout_ms(2000)
         .build()
         .await

@@ -30,7 +30,7 @@ async fn cov_subscribe_and_notification() {
 
     let mut server = BACnetServer::builder()
         .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
+        .broadcast_port(0)
         .database(db)
         .build()
         .await
@@ -40,7 +40,7 @@ async fn cov_subscribe_and_notification() {
     // Start a client
     let mut client = BACnetClient::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
+        .broadcast_port(0)
         .apdu_timeout_ms(2000)
         .build()
         .await
