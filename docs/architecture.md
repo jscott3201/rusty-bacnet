@@ -23,10 +23,9 @@ bacnet-services       Service request/response structs (RP, WP, RPM, COV, etc.)
     +---> bacnet-cli          Interactive shell and CLI tool
     |
     +---> rusty-bacnet        Python bindings (PyO3)
-          bacnet-wasm         WASM/JS BACnet/SC thin client
 ```
 
-The bottom rows are "application" crates — they compose the library crates into user-facing tools. They are excluded from `default-members` in the workspace to avoid pulling in their heavy dependencies (clap, pyo3, wasm-bindgen) during normal development.
+The bottom rows are "application" crates — they compose the library crates into user-facing tools. They are excluded from `default-members` in the workspace to avoid pulling in their heavy dependencies (clap, pyo3) during normal development.
 
 The HTTP/MCP gateway and BTL compliance test harness now live in dedicated repositories:
 - [`rusty-bacnet-mcp`](https://github.com/jscott3201/rusty-bacnet-mcp) — Axum REST API + rmcp MCP server
@@ -84,7 +83,7 @@ Loopback (local client/server) ─┘      |
 
 The router receives NPDUs from all transports, checks the destination network number in the NPDU header, and forwards to the appropriate transport. Messages for the local device (DNET matches a loopback port) are delivered to the client/server.
 
-Data attributes are carried on `ReceivedNpdu` and `ReceivedApdu`, and attribute-aware send helpers are available on `TransportPort` and `NetworkLayer`. BACnet/SC maps inbound Annex AB Data Options to these attributes and maps outbound attributes back to SC Data Options. Native BACnet/SC and the WASM browser receive loop treat valid Secure Path Data Option type 1 as understood, reject unsupported Must Understand Data Options before NPDU delivery, return a BVLC-Result NAK for non-broadcast traffic, drop broadcast traffic without a result, and preserve unsupported non-Must-Understand Data Options as attributes. The WASM client exposes incoming attributes through raw NPDU callback metadata, rejects malformed Secure Path Data Options before delivery, and can send broadcast or destination-VMAC raw NPDUs with Data Options. The router preserves inbound data attributes when forwarding unicast or broadcast NPDUs across attribute-capable transports, while data links that do not support attributes expose an empty list on receive and ignore attributes on send.
+Data attributes are carried on `ReceivedNpdu` and `ReceivedApdu`, and attribute-aware send helpers are available on `TransportPort` and `NetworkLayer`. BACnet/SC maps inbound Annex AB Data Options to these attributes and maps outbound attributes back to SC Data Options. Native BACnet/SC treats valid Secure Path Data Option type 1 as understood, rejects unsupported Must Understand Data Options before NPDU delivery, returns a BVLC-Result NAK for non-broadcast traffic, drops broadcast traffic without a result, and preserves unsupported non-Must-Understand Data Options as attributes. The router preserves inbound data attributes when forwarding unicast or broadcast NPDUs across attribute-capable transports, while data links that do not support attributes expose an empty list on receive and ignore attributes on send.
 
 ## Transport Abstraction
 

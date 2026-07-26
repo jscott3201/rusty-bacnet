@@ -1,6 +1,6 @@
 # Rusty BACnet
 
-A BACnet protocol stack (ASHRAE 135-2020) written in Rust, with Python and WASM/JavaScript bindings.
+A BACnet protocol stack (ASHRAE 135-2020) written in Rust, with Python bindings.
 
 [![CI](https://github.com/jscott3201/rusty-bacnet/actions/workflows/ci.yml/badge.svg)](https://github.com/jscott3201/rusty-bacnet/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -11,7 +11,6 @@ A BACnet protocol stack (ASHRAE 135-2020) written in Rust, with Python and WASM/
 - **Transport implementations** — BACnet/IP (UDP), BACnet/IPv6 (multicast), BACnet/SC (WebSocket+TLS with hub), MS/TP (serial), Ethernet (BPF); see the conformance ledger for current evidence status
 - **BACnet object implementations** — object structs and server helpers for common and extended BACnet object families, with clause-level evidence tracked in the ledger
 - **Python bindings** — async client, server, and SC hub bindings via PyO3
-- **WASM/JavaScript** — BACnet/SC thin client for browsers via wasm-bindgen
 - **CLI tool** — interactive shell and scripting for BACnet/IP, IPv6, and SC
 - **5,500+ tests** and CI on Linux/macOS/Windows
 - **Conformance evidence** — draft Standard 135-2020 ledger and support summaries in [`docs/conformance/`](docs/conformance/standard-135-2020-ledger.md)
@@ -108,31 +107,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - **[`rusty-bacnet-btl-harness`](https://github.com/jscott3201/rusty-bacnet-btl-harness)** — external BTL Test Plan 26.1 harness project. Formal support status is tracked separately in the conformance ledger.
 
 Both repos consume the published `bacnet-*` crates from this workspace.
-
-## Quick Start (JavaScript/WASM)
-
-```bash
-npm install @jscott3201/bacnet-wasm
-```
-
-```javascript
-import init, { BACnetScClient } from '@jscott3201/bacnet-wasm';
-
-await init();
-
-const client = new BACnetScClient("wss://sc-hub.example.com:443");
-await client.connect(new Uint8Array([0, 1, 2, 3, 4, 5]));  // VMAC
-
-const value = await client.readProperty(
-  new Uint8Array([0, 0, 0, 0, 0, 1]),  // target VMAC
-  0,   // analog-input
-  1,   // instance
-  85,  // present-value
-);
-console.log('Value:', value);
-
-client.disconnect();
-```
 
 ## Running a Server (Python)
 
@@ -291,7 +265,6 @@ crates/
   bacnet-objects/     BACnetObject trait, ObjectDatabase, object implementations
   bacnet-server/      Async server (RP/WP/RPM/WPM/COV/Events/DCC/CreateObject/TimeSynchronization)
   rusty-bacnet/       Python bindings via PyO3 (client, server, hub)
-  bacnet-wasm/        WASM/JavaScript BACnet/SC thin client
   bacnet-cli/         CLI tool with interactive shell
 benchmarks/           Criterion benchmarks (9 suites) + Docker stress topology
 examples/             Rust, Python, and Docker examples
@@ -364,7 +337,7 @@ The `rusty-bacnet` crate provides Python bindings for the core client, server, a
 
 ```bash
 # Run workspace tests (1,800+ tests)
-cargo test --workspace --exclude rusty-bacnet --exclude bacnet-wasm
+cargo test --workspace --exclude rusty-bacnet
 
 # Check formatting
 cargo fmt --all --check
@@ -374,9 +347,6 @@ cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked
 
 # Check Python bindings compile
 cargo check -p rusty-bacnet --tests
-
-# Check WASM bindings compile
-cargo check -p bacnet-wasm --target wasm32-unknown-unknown
 
 # License/advisory checks
 cargo deny check
@@ -388,7 +358,6 @@ Minimum Rust version: 1.93
 
 - [Rust API Reference](docs/rust-api.md) — all 8 published crates with examples
 - [Python API Reference](docs/python-api.md) — async client, server, object helper, and SC hub bindings
-- [WASM/JS API Reference](docs/wasm-api.md) — BACnet/SC thin client for browsers
 - [CLI Reference](docs/CLI.md) — interactive shell and one-shot commands
 - [Benchmark Results](Benchmarks.md) — 9 suites with throughput, latency, and memory
 - [Conformance Ledger](docs/conformance/standard-135-2020-ledger.md) — draft Standard 135-2020 evidence map

@@ -92,7 +92,6 @@ const CLAIM_RULES: &[ClaimRule] = &[
             "README.md",
             "docs/rust-api.md",
             "docs/python-api.md",
-            "docs/wasm-api.md",
             "docs/CLI.md",
         ],
         needle: "BACnet/SC",

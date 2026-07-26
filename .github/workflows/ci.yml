@@ -32,7 +32,7 @@ permissions:
 #   Lean  — every PR (incl. feature→dev), push to main, v* tags.
 #           Fast gate: fmt, clippy, file-size, no-secret, Linux test.
 #   Heavy — skips feature→dev PRs; runs on dev→main PRs, push to main, v* tags.
-#           Cross-OS tests, MSRV, WASM, cargo-audit, cargo-deny.
+#           Cross-OS tests, MSRV, cargo-audit, cargo-deny.
 # This keeps the high-throughput feature→dev loop fast while the dev→main
 # gate (and the tag/push-main release gate) run the full matrix before merge.
 #
@@ -67,20 +67,7 @@ jobs:
           toolchain: "1.95.0"
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --exclude rusty-bacnet --exclude bacnet-wasm --all-targets --locked
-
-  wasm-check:
-    name: WASM Check
-    if: ${{ github.event_name == 'push' || github.base_ref == 'main' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.95.0"
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo check -p bacnet-wasm --target wasm32-unknown-unknown --locked
+      - run: cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked
 
   audit:
     name: Cargo Audit
@@ -131,7 +118,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: msrv
-      - run: cargo check --workspace --exclude rusty-bacnet --exclude bacnet-wasm --locked
+      - run: cargo check --workspace --exclude rusty-bacnet --locked
 
   test:
     name: Test (${{ matrix.os }})
@@ -160,7 +147,7 @@ jobs:
           # causing `cargo test` to invoke a broken `rustup-init`. This
           # bit us on macos-15-arm64 image 20260511.0048 — see PR #21.
           cache-bin: false
-      - run: cargo test --workspace --exclude rusty-bacnet --exclude bacnet-wasm --locked ${{ matrix.features }}
+      - run: cargo test --workspace --exclude rusty-bacnet --locked ${{ matrix.features }}
 
   test-cross:
     name: Test (${{ matrix.os }})
@@ -186,7 +173,7 @@ jobs:
         with:
           key: ${{ matrix.os }}
           cache-bin: false
-      - run: cargo test --workspace --exclude rusty-bacnet --exclude bacnet-wasm --locked ${{ matrix.features }}
+      - run: cargo test --workspace --exclude rusty-bacnet --locked ${{ matrix.features }}
 
   deny:
     name: Cargo Deny
@@ -203,7 +190,7 @@ jobs:
   validate:
     name: Validate Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [fmt, clippy, test, test-cross, deny, wasm-check, audit, no-secret-scan]
+    needs: [fmt, clippy, test, test-cross, deny, audit, no-secret-scan]
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -354,38 +341,6 @@ jobs:
           name: wheels-sdist
           path: dist
 
-  build-wasm:
-    name: Build WASM
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: validate
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.95.0"
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-
-      - name: Build (bundler target)
-        run: wasm-pack build crates/bacnet-wasm --target bundler --out-dir ../../dist/wasm-npm
-
-      - name: Build (web target)
-        run: wasm-pack build crates/bacnet-wasm --target web --out-dir ../../dist/wasm-web
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wasm-npm
-          path: dist/wasm-npm
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wasm-web
-          path: dist/wasm-web
-
   publish-pypi:
     name: Publish to PyPI
     if: startsWith(github.ref, 'refs/tags/v')
@@ -401,33 +356,10 @@ jobs:
 
       - uses: pypa/gh-action-pypi-publish@release/v1
 
-  publish-npm:
-    name: Publish to npm
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-wasm]
-    runs-on: ubuntu-latest
-    environment: release
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: wasm-npm
-          path: dist/wasm-npm
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          registry-url: "https://registry.npmjs.org"
-
-      - name: Upgrade npm for trusted publishing
-        run: npm install -g npm@latest
-
-      - name: Publish to npm
-        run: cd dist/wasm-npm && npm publish --provenance --access public
-
   github-release:
     name: GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [publish-crates, publish-pypi, publish-npm, build-cli-binaries]
+    needs: [publish-crates, publish-pypi, build-cli-binaries]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

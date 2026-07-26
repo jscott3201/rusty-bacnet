@@ -12,7 +12,7 @@ Rules:
 - Do not edit files.
 - Do not treat implemented structs as conformance evidence unless service behavior and tests exist.
 - Map every support claim to ledger rows and tests where possible.
-- Identify client/server parity and Python/WASM exposure risks when relevant.
+- Identify client/server parity and Python exposure risks when relevant.
 
 Return:
 1. Reviewed service/object scope.

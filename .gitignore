@@ -25,6 +25,8 @@ dist/
 
 # AI assistants
 codex-id.json
+claude-id.json
+_codex-briefs/
 codex-overnight-status.md
 .claude/
 CLAUDE.md
@@ -54,8 +56,3 @@ Thumbs.db
 *.swp
 *.swo
 *~
-
-# JavaScript/WASM
-node_modules/
-pkg/
-*.tgz
