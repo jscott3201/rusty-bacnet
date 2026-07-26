@@ -12,6 +12,77 @@ fn server_config_time_sync_callback_default_is_none() {
     assert!(config.on_time_sync.is_none());
 }
 
+// -----------------------------------------------------------------------
+// Event Enrollment lifecycle configuration (issue #133)
+// -----------------------------------------------------------------------
+
+#[test]
+fn server_config_event_enrollment_defaults() {
+    let config = ServerConfig::default();
+    assert!(config.enable_event_enrollment);
+    assert_eq!(config.event_enrollment_interval_secs, 10);
+    // Enrollment evaluation defaults on while fault detection defaults off;
+    // the two settings are unrelated.
+    assert!(!config.enable_fault_detection);
+}
+
+#[test]
+fn event_enrollment_period_clamps_zero_to_one_second() {
+    // tokio::time::interval panics on a zero period, and that panic would land
+    // inside a spawned task where it cannot be observed by the caller.
+    assert_eq!(
+        super::lifecycle::event_enrollment_period(0),
+        Duration::from_secs(1)
+    );
+}
+
+#[test]
+fn event_enrollment_period_passes_through_nonzero() {
+    assert_eq!(
+        super::lifecycle::event_enrollment_period(30),
+        Duration::from_secs(30)
+    );
+}
+
+#[tokio::test]
+async fn server_evaluates_enrollments_without_fault_detection() {
+    // Regression for #133: enrollment evaluation used to be gated on
+    // enable_fault_detection, so this configuration silently skipped it.
+    let config = ServerConfig {
+        enable_fault_detection: false,
+        enable_event_enrollment: true,
+        ..ServerConfig::default()
+    };
+    let transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    let mut server = BACnetServer::start(config, ObjectDatabase::new(), transport)
+        .await
+        .expect("server should start");
+
+    assert!(server.event_enrollment_task.is_some());
+    assert!(server.fault_detection_task.is_none());
+
+    server.stop().await.expect("server should stop");
+}
+
+#[tokio::test]
+async fn server_runs_fault_detection_without_enrollment() {
+    // The inverse pairing must also hold, or the two settings are still coupled.
+    let config = ServerConfig {
+        enable_fault_detection: true,
+        enable_event_enrollment: false,
+        ..ServerConfig::default()
+    };
+    let transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    let mut server = BACnetServer::start(config, ObjectDatabase::new(), transport)
+        .await
+        .expect("server should start");
+
+    assert!(server.fault_detection_task.is_some());
+    assert!(server.event_enrollment_task.is_none());
+
+    server.stop().await.expect("server should stop");
+}
+
 #[tokio::test]
 async fn server_rejects_invalid_max_apdu_length() {
     let config = ServerConfig {

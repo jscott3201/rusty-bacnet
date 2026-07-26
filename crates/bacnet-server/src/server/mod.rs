@@ -196,7 +196,25 @@ pub struct ServerConfig {
     /// Enable periodic fault detection / reliability evaluation.
     /// When true, the server evaluates analog objects every 10 s for
     /// OVER_RANGE / UNDER_RANGE faults.
+    ///
+    /// This governs reliability evaluation only. Event Enrollment evaluation
+    /// is configured separately via [`enable_event_enrollment`](Self::enable_event_enrollment).
     pub enable_fault_detection: bool,
+    /// Enable periodic Event Enrollment evaluation (default `true`).
+    ///
+    /// When true, the server re-evaluates every Event Enrollment object's
+    /// monitored property on a fixed interval and drives the resulting state
+    /// transitions. Startup: the task is spawned by [`start`](BACnetServer::start)
+    /// and its first pass runs one interval later, not immediately. Shutdown:
+    /// [`stop`](BACnetServer::stop) aborts it and awaits the abort.
+    ///
+    /// Evaluation is a no-op on databases holding no Event Enrollment objects,
+    /// so the default is on.
+    pub enable_event_enrollment: bool,
+    /// Interval in seconds between Event Enrollment evaluation passes (default 10).
+    ///
+    /// Ignored when [`enable_event_enrollment`](Self::enable_event_enrollment) is false.
+    pub event_enrollment_interval_secs: u64,
 }
 
 impl std::fmt::Debug for ServerConfig {
@@ -219,6 +237,11 @@ impl std::fmt::Debug for ServerConfig {
                 &self.reinit_password.as_ref().map(|_| "***"),
             )
             .field("enable_fault_detection", &self.enable_fault_detection)
+            .field("enable_event_enrollment", &self.enable_event_enrollment)
+            .field(
+                "event_enrollment_interval_secs",
+                &self.event_enrollment_interval_secs,
+            )
             .finish()
     }
 }
@@ -237,6 +260,8 @@ impl Default for ServerConfig {
             dcc_password: None,
             reinit_password: None,
             enable_fault_detection: false,
+            enable_event_enrollment: true,
+            event_enrollment_interval_secs: 10,
         }
     }
 }
@@ -274,8 +299,24 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
     }
 
     /// Enable periodic fault detection / reliability evaluation.
+    ///
+    /// Reliability evaluation only; Event Enrollment evaluation is configured
+    /// by [`enable_event_enrollment`](Self::enable_event_enrollment).
     pub fn enable_fault_detection(mut self, enabled: bool) -> Self {
         self.config.enable_fault_detection = enabled;
+        self
+    }
+
+    /// Enable periodic Event Enrollment evaluation (default `true`).
+    pub fn enable_event_enrollment(mut self, enabled: bool) -> Self {
+        self.config.enable_event_enrollment = enabled;
+        self
+    }
+
+    /// Set the interval in seconds between Event Enrollment evaluation passes
+    /// (default 10).
+    pub fn event_enrollment_interval_secs(mut self, secs: u64) -> Self {
+        self.config.event_enrollment_interval_secs = secs;
         self
     }
 
@@ -338,8 +379,24 @@ impl BipServerBuilder {
     }
 
     /// Enable periodic fault detection / reliability evaluation.
+    ///
+    /// Reliability evaluation only; Event Enrollment evaluation is configured
+    /// by [`enable_event_enrollment`](Self::enable_event_enrollment).
     pub fn enable_fault_detection(mut self, enabled: bool) -> Self {
         self.config.enable_fault_detection = enabled;
+        self
+    }
+
+    /// Enable periodic Event Enrollment evaluation (default `true`).
+    pub fn enable_event_enrollment(mut self, enabled: bool) -> Self {
+        self.config.enable_event_enrollment = enabled;
+        self
+    }
+
+    /// Set the interval in seconds between Event Enrollment evaluation passes
+    /// (default 10).
+    pub fn event_enrollment_interval_secs(mut self, secs: u64) -> Self {
+        self.config.event_enrollment_interval_secs = secs;
         self
     }
 
@@ -623,8 +680,24 @@ impl ScServerBuilder {
     }
 
     /// Enable periodic fault detection / reliability evaluation.
+    ///
+    /// Reliability evaluation only; Event Enrollment evaluation is configured
+    /// by [`enable_event_enrollment`](Self::enable_event_enrollment).
     pub fn enable_fault_detection(mut self, enabled: bool) -> Self {
         self.config.enable_fault_detection = enabled;
+        self
+    }
+
+    /// Enable periodic Event Enrollment evaluation (default `true`).
+    pub fn enable_event_enrollment(mut self, enabled: bool) -> Self {
+        self.config.enable_event_enrollment = enabled;
+        self
+    }
+
+    /// Set the interval in seconds between Event Enrollment evaluation passes
+    /// (default 10).
+    pub fn event_enrollment_interval_secs(mut self, secs: u64) -> Self {
+        self.config.event_enrollment_interval_secs = secs;
         self
     }
 
