@@ -28,7 +28,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 comfy-table = "7"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-rustyline = "17"
+rustyline = "18"
 
 # SC-TLS optional deps
 tokio-rustls = { workspace = true, optional = true }
