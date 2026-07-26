@@ -44,6 +44,21 @@ fn event_enrollment_period_passes_through_nonzero() {
     );
 }
 
+#[tokio::test(start_paused = true)]
+async fn event_enrollment_first_pass_runs_immediately() {
+    // Pins the startup timing documented on ServerConfig::enable_event_enrollment.
+    // tokio's interval completes its first tick at once, so the evaluation loop's
+    // first pass runs when the task is spawned, not one interval later.
+    let start = tokio::time::Instant::now();
+    let mut interval = tokio::time::interval(super::lifecycle::event_enrollment_period(10));
+
+    interval.tick().await;
+    assert_eq!(start.elapsed(), Duration::ZERO);
+
+    interval.tick().await;
+    assert_eq!(start.elapsed(), Duration::from_secs(10));
+}
+
 #[tokio::test]
 async fn server_evaluates_enrollments_without_fault_detection() {
     // Regression for #133: enrollment evaluation used to be gated on

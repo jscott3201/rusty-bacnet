@@ -202,18 +202,34 @@ pub struct ServerConfig {
     pub enable_fault_detection: bool,
     /// Enable periodic Event Enrollment evaluation (default `true`).
     ///
-    /// When true, the server re-evaluates every Event Enrollment object's
-    /// monitored property on a fixed interval and drives the resulting state
-    /// transitions. Startup: the task is spawned by [`start`](BACnetServer::start)
-    /// and its first pass runs one interval later, not immediately. Shutdown:
+    /// When true, the server re-reads the property each Event Enrollment object
+    /// names in its `Object_Property_Reference` and applies the configured event
+    /// algorithm. Startup: the task is spawned by [`start`](BACnetServer::start)
+    /// and its first pass runs immediately, then once per interval. Shutdown:
     /// [`stop`](BACnetServer::stop) aborts it and awaits the abort.
+    ///
+    /// This switch governs the evaluation task; it is not the per-object
+    /// `Event_Detection_Enable` property of ASHRAE 135-2020 Clause 13.2.2.1.
+    /// Setting it false stops evaluation without performing the reset that
+    /// clause requires of a disabled detector (`Event_State` to NORMAL, with the
+    /// corresponding timestamp and acknowledgment state), so a device carrying
+    /// active enrollments will hold whatever state it last detected.
     ///
     /// Evaluation is a no-op on databases holding no Event Enrollment objects,
     /// so the default is on.
     pub enable_event_enrollment: bool,
     /// Interval in seconds between Event Enrollment evaluation passes (default 10).
     ///
-    /// Ignored when [`enable_event_enrollment`](Self::enable_event_enrollment) is false.
+    /// This is a sampling cadence with no basis in ASHRAE 135-2020, which
+    /// prescribes no evaluation frequency and leaves acquisition of a monitored
+    /// value a local matter (Clause 12.12). It is not the `Time_Delay` of an
+    /// event algorithm, which is how long a condition must persist before a
+    /// transition is indicated (Clause 13.3) — a coarse interval delays
+    /// detection and can miss a condition that both appears and clears between
+    /// two passes.
+    ///
+    /// A value of `0` is clamped to one second. Ignored when
+    /// [`enable_event_enrollment`](Self::enable_event_enrollment) is false.
     pub event_enrollment_interval_secs: u64,
 }
 
