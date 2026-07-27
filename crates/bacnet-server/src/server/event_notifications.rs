@@ -12,16 +12,6 @@ impl From<(EventStateChange, EventType)> for NotificationTransition {
     }
 }
 
-// Direct unit tests exercise notification construction independently of a
-// detector. Their synthetic transitions model OUT_OF_RANGE objects.
-#[cfg(test)]
-impl From<EventStateChange> for NotificationTransition {
-    fn from(change: EventStateChange) -> Self {
-        let event_type = change.event_type(EventType::OUT_OF_RANGE);
-        Self { change, event_type }
-    }
-}
-
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Evaluate intrinsic reporting on an object and send event notifications
     /// to NotificationClass recipients (or broadcast if none configured).

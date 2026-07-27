@@ -82,7 +82,7 @@ async fn dcc_suppresses_periodic_event_send() {
         &comm_state,
         &server_tsm,
         &oid,
-        change,
+        (change, EventType::OUT_OF_RANGE),
         1000,
     )
     .await;
@@ -209,7 +209,7 @@ async fn event_notification_projects_offnormal_priority_from_class() {
         &comm_state,
         &server_tsm,
         &oid,
-        change,
+        (change, EventType::OUT_OF_RANGE),
         1000,
     )
     .await;
@@ -238,7 +238,7 @@ async fn event_notification_projects_fault_priority_from_class() {
         &comm_state,
         &server_tsm,
         &oid,
-        change,
+        (change, EventType::CHANGE_OF_RELIABILITY),
         1000,
     )
     .await;
@@ -283,7 +283,7 @@ async fn event_notification_from_fault_is_change_of_reliability() {
         &comm_state,
         &server_tsm,
         &oid,
-        change,
+        (change, EventType::CHANGE_OF_RELIABILITY),
         1000,
     )
     .await;
@@ -314,7 +314,7 @@ async fn event_notification_projects_normal_priority_from_class() {
         &comm_state,
         &server_tsm,
         &oid,
-        change,
+        (change, EventType::OUT_OF_RANGE),
         1000,
     )
     .await;
@@ -380,7 +380,7 @@ async fn event_notification_missing_class_falls_back_to_defaults() {
         &comm_state,
         &server_tsm,
         &oid,
-        change,
+        (change, EventType::OUT_OF_RANGE),
         1000,
     )
     .await;
@@ -426,7 +426,7 @@ async fn event_notification_event_notify_type_honors_class_ack_required() {
         &comm_state,
         &server_tsm,
         &oid,
-        change,
+        (change, EventType::OUT_OF_RANGE),
         1000,
     )
     .await;
@@ -575,6 +575,13 @@ async fn event_enable_set_permits_per_write_send() {
         1,
         "Event_Enable with TO_OFFNORMAL set must distribute the notification"
     );
+    let sent = StdMutex::new(sent);
+    let notif = decode_broadcast_notification(&sent);
+    assert_eq!(
+        notif.event_type,
+        EventType::OUT_OF_RANGE.to_raw(),
+        "the detector's non-FAULT OUT_OF_RANGE algorithm must reach the wire"
+    );
 }
 
 /// The periodic `Time_Delay` path has its own `Event_Enable` gate, and it needs
@@ -686,5 +693,85 @@ async fn event_enable_cleared_suppresses_periodic_time_delay_send() {
             .unwrap(),
         PropertyValue::Enumerated(EventState::HIGH_LIMIT.to_raw()),
         "the delayed transition must still have been confirmed internally"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn periodic_time_delay_carries_detector_event_type_to_wire() {
+    let sent = StdArc::new(StdMutex::new(Vec::new()));
+    let transport = RecordingTransport {
+        sent_broadcast: StdArc::clone(&sent),
+        local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
+    };
+    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    for (property, value) in [
+        (PropertyIdentifier::HIGH_LIMIT, 80.0),
+        (PropertyIdentifier::LOW_LIMIT, 20.0),
+        (PropertyIdentifier::DEADBAND, 2.0),
+    ] {
+        ai.write_property(property, None, PropertyValue::Real(value), None)
+            .unwrap();
+    }
+    ai.write_property(
+        PropertyIdentifier::LIMIT_ENABLE,
+        None,
+        PropertyValue::BitString {
+            unused_bits: 6,
+            data: vec![0xC0],
+        },
+        None,
+    )
+    .unwrap();
+    ai.write_property(
+        PropertyIdentifier::EVENT_ENABLE,
+        None,
+        PropertyValue::BitString {
+            unused_bits: 5,
+            data: vec![0x20],
+        },
+        None,
+    )
+    .unwrap();
+    ai.write_property(
+        PropertyIdentifier::TIME_DELAY,
+        None,
+        PropertyValue::Unsigned(2),
+        None,
+    )
+    .unwrap();
+    ai.set_present_value(81.0);
+    let oid = ai.object_identifier();
+
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(ai)).unwrap();
+    db.add(Box::new(
+        DeviceObject::new(DeviceConfig {
+            instance: 1,
+            name: "Dev".into(),
+            ..DeviceConfig::default()
+        })
+        .unwrap(),
+    ))
+    .unwrap();
+    let server = BACnetServer::start(ServerConfig::default(), db, transport)
+        .await
+        .expect("server should start");
+    server
+        .write_local(
+            &oid,
+            PropertyIdentifier::DEADBAND,
+            None,
+            PropertyValue::Real(2.0),
+            None,
+        )
+        .await
+        .expect("local write should seed delayed transition");
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
+    let notif = decode_broadcast_notification(&sent);
+    assert_eq!(
+        notif.event_type,
+        EventType::OUT_OF_RANGE.to_raw(),
+        "the periodic path must preserve the detector's OUT_OF_RANGE type"
     );
 }
