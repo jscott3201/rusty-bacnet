@@ -135,6 +135,38 @@ fn fault_entry_cancels_an_in_flight_countdown() {
 }
 
 #[test]
+fn holding_fault_blocks_a_state_independent_algorithm() {
+    // `HoldFault` is what stops the event algorithm from running while the fault
+    // stands. This test uses ChangeOfStateDetector deliberately: its
+    // `compute_new_state` is a pure function of the present value, so without
+    // the guard it would answer NORMAL for a non-alarm value and fire a
+    // spurious FAULT -> NORMAL recovery while Reliability is still bad.
+    //
+    // OutOfRangeDetector cannot show this. Its `compute_new_state` matches on
+    // `self.event_state` and falls through to `_ => self.event_state`, so it is
+    // inert in FAULT and the guard is redundant *there* — which is exactly why
+    // asserting the hold only against that detector would prove nothing.
+    let mut det = ChangeOfStateDetector {
+        alarm_values: vec![1],
+        event_enable: 0x07,
+        time_delay: 0,
+        event_state: EventState::NORMAL,
+        ..Default::default()
+    };
+    assert_eq!(
+        det.probe(1, SHORTED_LOOP).unwrap().change.to,
+        EventState::FAULT
+    );
+    assert!(
+        det.probe(0, SHORTED_LOOP).is_none(),
+        "a non-alarm value must not recover the object while Reliability is bad"
+    );
+    assert_eq!(det.event_state, EventState::FAULT);
+    assert!(det.tick(0, SHORTED_LOOP).is_none());
+    assert_eq!(det.event_state, EventState::FAULT);
+}
+
+#[test]
 fn holding_fault_reports_no_further_transitions() {
     // The standing condition is satisfied once FAULT holds; re-evaluating must
     // not re-fire. (Clause 13.2.2.1 does define a FAULT re-entry on a *changed*

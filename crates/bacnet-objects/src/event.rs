@@ -363,6 +363,14 @@ impl OutOfRangeDetector {
             }
             FaultPrecedence::HoldFault => ControlFlow::Break(None),
             FaultPrecedence::RecoverToNormal => {
+                // Unreachable today, and kept deliberately: `EnterFault` above
+                // already cleared `pending`, and `HoldFault` returns before the
+                // algorithm can seed a new one, so nothing can be in flight
+                // while FAULT holds. Mutation testing confirms no test fails
+                // when this line is removed. It stays because it is the
+                // invariant this arm relies on rather than dead weight — were
+                // `HoldFault` ever to let the algorithm run, its absence would
+                // silently resurrect a stale countdown across the fault.
                 self.pending = None;
                 ControlFlow::Break(self.fire(EventState::NORMAL))
             }
