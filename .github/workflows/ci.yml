@@ -190,7 +190,22 @@ jobs:
   validate:
     name: Validate Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [fmt, clippy, test, test-cross, deny, audit, no-secret-scan]
+    # Every Tier 1 job, listed in declaration order so the list can be audited
+    # against the jobs above at a glance. A Tier 1 job omitted here still runs on
+    # the tag and can still fail — it just stops gating the release, which is how
+    # file-size-cap and msrv came to be missing.
+    needs:
+      [
+        fmt,
+        clippy,
+        audit,
+        file-size-cap,
+        no-secret-scan,
+        msrv,
+        test,
+        test-cross,
+        deny,
+      ]
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
