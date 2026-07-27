@@ -12,6 +12,33 @@ const NO_FAULT: u32 = Reliability::NO_FAULT_DETECTED.to_raw();
 const OVER_RANGE: u32 = Reliability::OVER_RANGE.to_raw();
 const SHORTED_LOOP: u32 = Reliability::SHORTED_LOOP.to_raw();
 
+#[test]
+fn event_transition_classifier_covers_every_event_state_and_bit() {
+    let cases = [
+        (EventState::NORMAL, EventTransition::ToNormal, 0x04),
+        (EventState::FAULT, EventTransition::ToFault, 0x02),
+        (EventState::OFFNORMAL, EventTransition::ToOffnormal, 0x01),
+        (EventState::HIGH_LIMIT, EventTransition::ToOffnormal, 0x01),
+        (EventState::LOW_LIMIT, EventTransition::ToOffnormal, 0x01),
+        (
+            EventState::LIFE_SAFETY_ALARM,
+            EventTransition::ToOffnormal,
+            0x01,
+        ),
+    ];
+
+    for (state, expected_transition, expected_bit) in cases {
+        let transition = EventTransition::for_target_state(state);
+        assert_eq!(transition, expected_transition, "state {}", state.to_raw());
+        assert_eq!(
+            transition.bit_mask(),
+            expected_bit,
+            "state {}",
+            state.to_raw()
+        );
+    }
+}
+
 /// High limit 80, low limit 20, deadband 2, no delay, all transitions enabled.
 fn detector() -> OutOfRangeDetector {
     OutOfRangeDetector {
@@ -277,6 +304,62 @@ fn fault_distribution_honors_the_to_fault_event_enable_bit() {
         EventState::FAULT,
         "a cleared bit must not suppress the Event_State write"
     );
+}
+
+#[test]
+fn out_of_range_distribution_selects_the_to_normal_bit() {
+    for (event_enable, expected) in [(0x04, true), (0x03, false)] {
+        let mut det = detector();
+        det.event_state = EventState::HIGH_LIMIT;
+        det.event_enable = event_enable;
+
+        let outcome = det.probe(50.0, NO_FAULT).expect("TO_NORMAL transition");
+        assert_eq!(outcome.change.to, EventState::NORMAL);
+        assert_eq!(outcome.distribute, expected, "mask {event_enable:#04x}");
+    }
+}
+
+#[test]
+fn out_of_range_distribution_selects_the_to_offnormal_bit() {
+    for (event_enable, expected) in [(0x01, true), (0x06, false)] {
+        let mut det = detector();
+        det.event_enable = event_enable;
+
+        let outcome = det.probe(90.0, NO_FAULT).expect("TO_OFFNORMAL transition");
+        assert_eq!(outcome.change.to, EventState::HIGH_LIMIT);
+        assert_eq!(outcome.distribute, expected, "mask {event_enable:#04x}");
+    }
+}
+
+#[test]
+fn change_of_state_distribution_selects_the_to_normal_bit() {
+    for (event_enable, expected) in [(0x04, true), (0x03, false)] {
+        let mut det = ChangeOfStateDetector {
+            alarm_values: vec![1],
+            event_enable,
+            event_state: EventState::OFFNORMAL,
+            ..Default::default()
+        };
+
+        let outcome = det.probe(0, NO_FAULT).expect("TO_NORMAL transition");
+        assert_eq!(outcome.change.to, EventState::NORMAL);
+        assert_eq!(outcome.distribute, expected, "mask {event_enable:#04x}");
+    }
+}
+
+#[test]
+fn change_of_state_distribution_selects_the_to_offnormal_bit() {
+    for (event_enable, expected) in [(0x01, true), (0x06, false)] {
+        let mut det = ChangeOfStateDetector {
+            alarm_values: vec![1],
+            event_enable,
+            ..Default::default()
+        };
+
+        let outcome = det.probe(1, NO_FAULT).expect("TO_OFFNORMAL transition");
+        assert_eq!(outcome.change.to, EventState::OFFNORMAL);
+        assert_eq!(outcome.distribute, expected, "mask {event_enable:#04x}");
+    }
 }
 
 // --- the other two detectors ---

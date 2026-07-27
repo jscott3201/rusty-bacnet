@@ -8,7 +8,7 @@
 //! CHANGE_OF_BITSTRING, CHANGE_OF_VALUE.
 
 use bacnet_objects::database::ObjectDatabase;
-use bacnet_objects::event::EventStateChange;
+use bacnet_objects::event::{EventStateChange, EventTransition};
 use bacnet_types::constructed::BACnetEventParameter;
 use bacnet_types::enums::{EventState, EventType, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -670,16 +670,8 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
         // `Event_Enable` governs distribution only (Clause 12.12). The
         // transition is recorded either way; the flag rides along so the
         // notification pipeline can suppress the send (#127).
-        let distribute = match new_state {
-            s if s == EventState::NORMAL => event_enable & 0x04 != 0,
-            s if s == EventState::HIGH_LIMIT
-                || s == EventState::LOW_LIMIT
-                || s == EventState::OFFNORMAL =>
-            {
-                event_enable & 0x01 != 0
-            }
-            _ => event_enable & 0x02 != 0,
-        };
+        let transition_bit = EventTransition::for_target_state(new_state).bit_mask();
+        let distribute = event_enable & transition_bit != 0;
 
         updates.push((
             *oid,

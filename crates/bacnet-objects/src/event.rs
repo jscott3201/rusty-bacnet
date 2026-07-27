@@ -95,13 +95,7 @@ impl EventStateChange {
     /// - `to == FAULT` -> `ToFault`
     /// - Everything else (OFFNORMAL, HIGH_LIMIT, LOW_LIMIT) -> `ToOffnormal`
     pub fn transition(&self) -> EventTransition {
-        if self.to == EventState::NORMAL {
-            EventTransition::ToNormal
-        } else if self.to == EventState::FAULT {
-            EventTransition::ToFault
-        } else {
-            EventTransition::ToOffnormal
-        }
+        EventTransition::for_target_state(self.to)
     }
 }
 
@@ -117,6 +111,22 @@ pub enum EventTransition {
 }
 
 impl EventTransition {
+    /// Classify a destination event state under ASHRAE 135-2020 Clause 13.2.
+    ///
+    /// "All states that are not normal and not fault are offnormal states,"
+    /// while Clause 13.2.2.1.2 confirms that "the OffNormal state includes all
+    /// event states other than NORMAL and FAULT". Therefore the residual case
+    /// is deliberately TO_OFFNORMAL, not TO_FAULT.
+    pub fn for_target_state(state: EventState) -> Self {
+        if state == EventState::NORMAL {
+            Self::ToNormal
+        } else if state == EventState::FAULT {
+            Self::ToFault
+        } else {
+            Self::ToOffnormal
+        }
+    }
+
     /// Bit mask for this transition in the `BACnetDestination.transitions` field.
     ///
     /// bit 0 = TO_OFFNORMAL, bit 1 = TO_FAULT, bit 2 = TO_NORMAL.
@@ -320,11 +330,6 @@ impl Default for OutOfRangeDetector {
 }
 
 impl OutOfRangeDetector {
-    /// Event_Enable bit masks.
-    const TO_OFFNORMAL: u8 = 0x01;
-    const TO_FAULT: u8 = 0x02;
-    const TO_NORMAL: u8 = 0x04;
-
     /// Evaluate the present value against configured limits.
     ///
     /// This is the per-write entry point: it seeds a pending delayed
@@ -458,13 +463,8 @@ impl OutOfRangeDetector {
             to: new_state,
         };
         self.event_state = new_state;
-        let distribute = match new_state {
-            s if s == EventState::NORMAL => self.event_enable & Self::TO_NORMAL != 0,
-            s if s == EventState::HIGH_LIMIT || s == EventState::LOW_LIMIT => {
-                self.event_enable & Self::TO_OFFNORMAL != 0
-            }
-            _ => self.event_enable & Self::TO_FAULT != 0,
-        };
+        let transition_bit = EventTransition::for_target_state(new_state).bit_mask();
+        let distribute = self.event_enable & transition_bit != 0;
         Some(TransitionOutcome { change, distribute })
     }
 
@@ -552,10 +552,6 @@ impl Default for ChangeOfStateDetector {
 }
 
 impl ChangeOfStateDetector {
-    const TO_OFFNORMAL: u8 = 0x01;
-    const TO_FAULT: u8 = 0x02;
-    const TO_NORMAL: u8 = 0x04;
-
     /// Per-write entry point; see [`OutOfRangeDetector::evaluate`].
     pub fn evaluate(&mut self, present_value: u32, reliability: u32) -> Option<TransitionOutcome> {
         self.probe(present_value, reliability)
@@ -635,11 +631,8 @@ impl ChangeOfStateDetector {
             to: new_state,
         };
         self.event_state = new_state;
-        let distribute = match new_state {
-            s if s == EventState::NORMAL => self.event_enable & Self::TO_NORMAL != 0,
-            s if s == EventState::OFFNORMAL => self.event_enable & Self::TO_OFFNORMAL != 0,
-            _ => self.event_enable & Self::TO_FAULT != 0,
-        };
+        let transition_bit = EventTransition::for_target_state(new_state).bit_mask();
+        let distribute = self.event_enable & transition_bit != 0;
         Some(TransitionOutcome { change, distribute })
     }
 
@@ -686,10 +679,6 @@ impl Default for CommandFailureDetector {
 }
 
 impl CommandFailureDetector {
-    const TO_OFFNORMAL: u8 = 0x01;
-    const TO_FAULT: u8 = 0x02;
-    const TO_NORMAL: u8 = 0x04;
-
     /// Per-write entry point; see [`OutOfRangeDetector::evaluate`].
     pub fn evaluate(
         &mut self,
@@ -789,11 +778,8 @@ impl CommandFailureDetector {
         // ever reached a detector (#200); Clause 13.2.5 scopes `Event_Enable` to
         // distribution uniformly across all three transition directions, so
         // there is no basis for treating TO_FAULT differently.
-        let distribute = match new_state {
-            s if s == EventState::NORMAL => self.event_enable & Self::TO_NORMAL != 0,
-            s if s == EventState::OFFNORMAL => self.event_enable & Self::TO_OFFNORMAL != 0,
-            _ => self.event_enable & Self::TO_FAULT != 0,
-        };
+        let transition_bit = EventTransition::for_target_state(new_state).bit_mask();
+        let distribute = self.event_enable & transition_bit != 0;
         Some(TransitionOutcome { change, distribute })
     }
 
