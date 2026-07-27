@@ -362,6 +362,35 @@ fn change_of_state_distribution_selects_the_to_offnormal_bit() {
     }
 }
 
+#[test]
+fn command_failure_distribution_selects_the_to_normal_bit() {
+    for (event_enable, expected) in [(0x04, true), (0x03, false)] {
+        let mut det = CommandFailureDetector {
+            event_enable,
+            event_state: EventState::OFFNORMAL,
+            ..Default::default()
+        };
+
+        let outcome = det.probe(1, 1, NO_FAULT).expect("TO_NORMAL transition");
+        assert_eq!(outcome.change.to, EventState::NORMAL);
+        assert_eq!(outcome.distribute, expected, "mask {event_enable:#04x}");
+    }
+}
+
+#[test]
+fn command_failure_distribution_selects_the_to_offnormal_bit() {
+    for (event_enable, expected) in [(0x01, true), (0x06, false)] {
+        let mut det = CommandFailureDetector {
+            event_enable,
+            ..Default::default()
+        };
+
+        let outcome = det.probe(1, 0, NO_FAULT).expect("TO_OFFNORMAL transition");
+        assert_eq!(outcome.change.to, EventState::OFFNORMAL);
+        assert_eq!(outcome.distribute, expected, "mask {event_enable:#04x}");
+    }
+}
+
 // --- the other two detectors ---
 
 #[test]
