@@ -118,7 +118,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: msrv
-      - run: cargo check --workspace --exclude rusty-bacnet --locked
+      # The 9 published crates, named explicitly. MSRV is a promise to people who
+      # depend on this workspace from crates.io, so only the crates they can
+      # actually depend on belong in the gate. An `--exclude` list would silently
+      # pull in any future member; this list cannot drift without being edited.
+      - run: >
+          cargo check --locked
+          -p bacnet-types
+          -p bacnet-encoding
+          -p bacnet-services
+          -p bacnet-transport
+          -p bacnet-network
+          -p bacnet-client
+          -p bacnet-objects
+          -p bacnet-server
+          -p bacnet-cli
 
   test:
     name: Test (${{ matrix.os }})
