@@ -1,6 +1,6 @@
 //! Intrinsic reporting — OUT_OF_RANGE event state machine.
 //!
-//! Per ASHRAE 135-2020 Clause 13.3.2, the OUT_OF_RANGE algorithm monitors
+//! Per ASHRAE 135-2020 Clause 13.3.6 (Table 13-7), the OUT_OF_RANGE algorithm monitors
 //! an analog present_value against HIGH_LIMIT and LOW_LIMIT with a DEADBAND
 //! to prevent oscillation at the boundary.
 
@@ -19,10 +19,12 @@ pub struct EventStateChange {
 ///
 /// ASHRAE 135-2020 Clause 13.2.2.1.4 mandates four actions on every transition:
 /// store the new `Event_State`, store the time in `Event_Time_Stamps`, store the
-/// message text in `Event_Message_Texts`, and indicate the transition to the
-/// alarm-acknowledgment and notification-distribution processes. `Event_Enable`
-/// governs only distribution (Clause 12.12), so a cleared bit must not suppress
-/// the first three actions, nor the alarm-acknowledgment half of the fourth.
+/// message text in `Event_Message_Texts` *if present*, and indicate the
+/// transition to the alarm-acknowledgment and notification-distribution
+/// processes. None of the four is `Event_Enable`-scoped; the property disables
+/// external distribution downstream (Clause 13.2.5), so a cleared bit must not
+/// suppress the first three actions, nor the alarm-acknowledgment half of the
+/// fourth.
 ///
 /// Separating the two answers keeps that distinction in the type: `None` from a
 /// detector means no transition occurred, while `distribute == false` means one

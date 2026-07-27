@@ -37,13 +37,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // inside the notification-distribution process — downstream of the
         // transition actions, none of which it governs.
         //
-        // Two things Clause 13.2.2.1.4 mandates unconditionally are still
-        // missing and hook this same point, ahead of the `distribute` check:
-        // the Event_Time_Stamps / Event_Message_Texts writes, and the
-        // indication to the alarm-acknowledgment process, which is what
-        // maintains Acked_Transitions from Ack_Required (Clause 13.2.3 — that
-        // bookkeeping is gated by Ack_Required, never by Event_Enable). Both
-        // are tracked as #123.
+        // Three of Clause 13.2.2.1.4's transition actions are still missing and
+        // hook this same point, ahead of the `distribute` check: the
+        // Event_Time_Stamps write, the Event_Message_Texts write (only "if
+        // present"), and the indication to the alarm-acknowledgment process.
+        // The first two are independent actions, not consequences of the third;
+        // the third is what maintains Acked_Transitions, and Clause 13.2.3 gates
+        // that on Ack_Required, never on Event_Enable. All tracked as #123.
         if let Some(outcome) = outcome {
             if outcome.distribute {
                 Self::build_and_send_event_notification(

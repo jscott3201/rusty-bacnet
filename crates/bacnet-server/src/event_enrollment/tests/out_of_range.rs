@@ -147,7 +147,7 @@ fn out_of_range_event_enable_suppresses_notification() {
     assert_eq!(transitions.len(), 1);
     assert!(
         !transitions[0].distribute,
-        "TO_OFFNORMAL disabled: the notification must not be distributed"
+        "TO_OFFNORMAL disabled: the notification must not be externally distributed"
     );
     assert_eq!(transitions[0].change.to, EventState::HIGH_LIMIT);
 
@@ -232,7 +232,8 @@ fn out_of_range_suppressed_offnormal_still_yields_enabled_return_to_normal() {
     assert_eq!(transitions[0].change.to, EventState::NORMAL);
     assert!(
         transitions[0].distribute,
-        "TO_NORMAL is enabled — this notification must be distributed"
+        "TO_NORMAL is enabled — this transition must be marked eligible for \
+         distribution (the enrollment path does not send it yet, see #127)"
     );
 
     let obj = db.get(&ee_oid).unwrap();
@@ -243,7 +244,8 @@ fn out_of_range_suppressed_offnormal_still_yields_enabled_return_to_normal() {
     );
 }
 
-/// `Event_Enable` of zero suppresses every notification but must still track
+/// `Event_Enable` of zero suppresses all *external* distribution (Clause 13.2.5
+/// leaves the effect on local objects a local matter) but must still track
 /// state, so a later re-enable resumes from the true condition rather than a
 /// stale NORMAL.
 #[test]
