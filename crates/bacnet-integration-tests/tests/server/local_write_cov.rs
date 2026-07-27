@@ -32,7 +32,7 @@ async fn local_write_fires_cov_notification() {
 
     let mut server = BACnetServer::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
+        .broadcast_port(0)
         .database(db)
         .build()
         .await
@@ -125,7 +125,7 @@ async fn local_object_name_write_refreshes_name_index() {
 
     let mut server = BACnetServer::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
+        .broadcast_port(0)
         .database(db)
         .build()
         .await
