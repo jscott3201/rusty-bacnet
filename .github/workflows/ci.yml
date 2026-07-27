@@ -118,21 +118,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: msrv
-      # The 9 published crates, named explicitly. MSRV is a promise to people who
-      # depend on this workspace from crates.io, so only the crates they can
-      # actually depend on belong in the gate. An `--exclude` list would silently
-      # pull in any future member; this list cannot drift without being edited.
-      - run: >
-          cargo check --locked
-          -p bacnet-types
-          -p bacnet-encoding
-          -p bacnet-services
-          -p bacnet-transport
-          -p bacnet-network
-          -p bacnet-client
-          -p bacnet-objects
-          -p bacnet-server
-          -p bacnet-cli
+      # Derives the publishable crates from cargo metadata and checks them with
+      # the optional features a consumer can enable. See the script for why the
+      # list is derived rather than written down.
+      - run: bash .github/scripts/check-msrv.sh
 
   test:
     name: Test (${{ matrix.os }})
