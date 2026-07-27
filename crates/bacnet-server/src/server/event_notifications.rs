@@ -1,4 +1,26 @@
 use super::*;
+use bacnet_types::enums::EventType;
+
+pub(super) struct NotificationTransition {
+    change: EventStateChange,
+    event_type: EventType,
+}
+
+impl From<(EventStateChange, EventType)> for NotificationTransition {
+    fn from((change, event_type): (EventStateChange, EventType)) -> Self {
+        Self { change, event_type }
+    }
+}
+
+// Direct unit tests exercise notification construction independently of a
+// detector. Their synthetic transitions model OUT_OF_RANGE objects.
+#[cfg(test)]
+impl From<EventStateChange> for NotificationTransition {
+    fn from(change: EventStateChange) -> Self {
+        let event_type = change.event_type(EventType::OUT_OF_RANGE);
+        Self { change, event_type }
+    }
+}
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Evaluate intrinsic reporting on an object and send event notifications
@@ -52,7 +74,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     comm_state,
                     server_tsm,
                     oid,
-                    outcome.change,
+                    (outcome.change, outcome.event_type),
                     retry_timeout_ms,
                 )
                 .await;
@@ -74,13 +96,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         comm_state: &Arc<AtomicU8>,
         server_tsm: &Arc<Mutex<ServerTsm>>,
         oid: &ObjectIdentifier,
-        change: EventStateChange,
+        transition: impl Into<NotificationTransition>,
         retry_timeout_ms: u64,
     ) {
         if comm_state.load(Ordering::Acquire) >= 1 {
             return;
         }
 
+        let NotificationTransition { change, event_type } = transition.into();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default();
@@ -150,7 +173,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 timestamp: BACnetTimeStamp::SequenceNumber(utc_secs),
                 notification_class,
                 priority,
-                event_type: change.event_type().to_raw(),
+                event_type: event_type.to_raw(),
                 message_text: None,
                 notify_type,
                 // ack_required is only meaningful for ALARM/EVENT notify types

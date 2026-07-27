@@ -508,26 +508,30 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 // suppressed transition is dropped here rather than at
                 // detection — its Event_State write already happened inside
                 // the detector.
-                let fired: Vec<(ObjectIdentifier, bacnet_objects::event::EventStateChange)> = {
+                let fired: Vec<(
+                    ObjectIdentifier,
+                    bacnet_objects::event::EventStateChange,
+                    bacnet_types::enums::EventType,
+                )> = {
                     let mut db = db_intrinsic.write().await;
                     let mut out = Vec::new();
                     db.for_each_object_mut(|oid, object| {
                         if let Some(outcome) = object.tick_intrinsic_reporting() {
                             if outcome.distribute {
-                                out.push((oid, outcome.change));
+                                out.push((oid, outcome.change, outcome.event_type));
                             }
                         }
                     });
                     out
                 };
-                for (oid, change) in fired {
+                for (oid, change, event_type) in fired {
                     Self::build_and_send_event_notification(
                         &db_intrinsic,
                         &network_intrinsic,
                         &comm_state_intrinsic,
                         &server_tsm_intrinsic,
                         &oid,
-                        change,
+                        (change, event_type),
                         intrinsic_retry_ms,
                     )
                     .await;

@@ -35,57 +35,26 @@ pub struct EventStateChange {
 pub struct TransitionOutcome {
     /// The transition itself. Always recorded, whatever `distribute` says.
     pub change: EventStateChange,
+    /// The Event Type selected by the detector's event algorithm, with the
+    /// mandatory `CHANGE_OF_RELIABILITY` override for transitions to/from FAULT.
+    pub event_type: EventType,
     /// The `Event_Enable` bit for this transition's direction.
     pub distribute: bool,
 }
 
 impl EventStateChange {
-    /// Derive the BACnet EventType from the state transition.
+    /// Select the notification's Event Type for this transition.
     ///
-    /// A transition with FAULT at either end is `CHANGE_OF_RELIABILITY`.
-    /// ASHRAE 135-2020 Clause 13.2.5.3 (Fault Event Notifications) opens with
-    /// an unconditional rule: "For all transitions to, or from, the FAULT
-    /// state, the corresponding event notification shall use the Event Type
-    /// CHANGE_OF_RELIABILITY." No clause carves an exception out of it. The
-    /// rest of 13.2.5.3 governs what such a notification must *carry* —
-    /// Table 13-4's `reliability` / `Status-flags` / `Property-values`
-    /// parameters, and Table 13-5's per-object-type property lists — which is
-    /// #135's territory, not this method's. Table 13-3 states the
-    /// Event Type rule itself in the same shape as this
-    /// method's predicate — "When 'To State' or 'From State' is FAULT, set to
-    /// CHANGE_OF_RELIABILITY" — and the Event Type parameter of
-    /// ConfirmedEventNotification (Clause 13.8) and UnconfirmedEventNotification
-    /// (Clause 13.9) gives the to-FAULT rule and then states the other direction
-    /// separately: "The Event Type CHANGE_OF_RELIABILITY shall be used for
-    /// reporting a transition from FAULT."
-    ///
-    /// This test comes first deliberately: a HIGH_LIMIT -> FAULT transition has
-    /// HIGH_LIMIT at one end, so an ordering that checked the limit states first
-    /// would report OUT_OF_RANGE for a fault.
-    ///
-    /// Otherwise the value is guessed from the states involved — HIGH_LIMIT or
-    /// LOW_LIMIT at either end means `OUT_OF_RANGE`, and anything else
-    /// `CHANGE_OF_STATE`. **That guess is not what the standard asks for.**
-    /// Clauses 13.8 and 13.9 continue, and Table 13-3 agrees: "Otherwise, this
-    /// parameter shall have the value associated with the event-initiating
-    /// object's configured event algorithm" — the algorithm, not the states.
-    /// The guess happens to be right
-    /// for every object type wired today only because each detector's state
-    /// vocabulary maps 1:1 onto its algorithm. Tracked as #210, which will
-    /// carry the algorithm in from the source and leave this method with only
-    /// the FAULT rule, the one part that genuinely is a function of the
-    /// transition.
-    pub fn event_type(&self) -> EventType {
+    /// ASHRAE 135-2020 Clause 13.2.5.3 requires
+    /// `CHANGE_OF_RELIABILITY` for every transition to or from FAULT.
+    /// Otherwise Clauses 13.8.1.1 and 13.9.1.1 require the Event Type
+    /// associated with the event-initiating object's configured event
+    /// algorithm, supplied here as `algorithm`.
+    pub fn event_type(&self, algorithm: EventType) -> EventType {
         if self.from == EventState::FAULT || self.to == EventState::FAULT {
             EventType::CHANGE_OF_RELIABILITY
-        } else if self.from == EventState::HIGH_LIMIT
-            || self.from == EventState::LOW_LIMIT
-            || self.to == EventState::HIGH_LIMIT
-            || self.to == EventState::LOW_LIMIT
-        {
-            EventType::OUT_OF_RANGE
         } else {
-            EventType::CHANGE_OF_STATE
+            algorithm
         }
     }
 
@@ -330,6 +299,9 @@ impl Default for OutOfRangeDetector {
 }
 
 impl OutOfRangeDetector {
+    /// BACnet Event Type corresponding to this detector's event algorithm.
+    pub const ALGORITHM: EventType = EventType::OUT_OF_RANGE;
+
     /// Evaluate the present value against configured limits.
     ///
     /// This is the per-write entry point: it seeds a pending delayed
@@ -465,7 +437,12 @@ impl OutOfRangeDetector {
         self.event_state = new_state;
         let transition_bit = EventTransition::for_target_state(new_state).bit_mask();
         let distribute = self.event_enable & transition_bit != 0;
-        Some(TransitionOutcome { change, distribute })
+        let event_type = change.event_type(Self::ALGORITHM);
+        Some(TransitionOutcome {
+            change,
+            event_type,
+            distribute,
+        })
     }
 
     fn compute_new_state(&self, pv: f32) -> EventState {
@@ -552,6 +529,9 @@ impl Default for ChangeOfStateDetector {
 }
 
 impl ChangeOfStateDetector {
+    /// BACnet Event Type corresponding to this detector's event algorithm.
+    pub const ALGORITHM: EventType = EventType::CHANGE_OF_STATE;
+
     /// Per-write entry point; see [`OutOfRangeDetector::evaluate`].
     pub fn evaluate(&mut self, present_value: u32, reliability: u32) -> Option<TransitionOutcome> {
         self.probe(present_value, reliability)
@@ -633,7 +613,12 @@ impl ChangeOfStateDetector {
         self.event_state = new_state;
         let transition_bit = EventTransition::for_target_state(new_state).bit_mask();
         let distribute = self.event_enable & transition_bit != 0;
-        Some(TransitionOutcome { change, distribute })
+        let event_type = change.event_type(Self::ALGORITHM);
+        Some(TransitionOutcome {
+            change,
+            event_type,
+            distribute,
+        })
     }
 
     fn compute_new_state(&self, present_value: u32) -> EventState {
@@ -679,6 +664,9 @@ impl Default for CommandFailureDetector {
 }
 
 impl CommandFailureDetector {
+    /// BACnet Event Type corresponding to this detector's event algorithm.
+    pub const ALGORITHM: EventType = EventType::COMMAND_FAILURE;
+
     /// Per-write entry point; see [`OutOfRangeDetector::evaluate`].
     pub fn evaluate(
         &mut self,
@@ -780,7 +768,12 @@ impl CommandFailureDetector {
         // there is no basis for treating TO_FAULT differently.
         let transition_bit = EventTransition::for_target_state(new_state).bit_mask();
         let distribute = self.event_enable & transition_bit != 0;
-        Some(TransitionOutcome { change, distribute })
+        let event_type = change.event_type(Self::ALGORITHM);
+        Some(TransitionOutcome {
+            change,
+            event_type,
+            distribute,
+        })
     }
 
     fn compute_new_state(&self, present_value: u32, feedback_value: u32) -> EventState {

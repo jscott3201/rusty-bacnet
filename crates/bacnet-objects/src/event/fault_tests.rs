@@ -279,12 +279,76 @@ fn fault_transitions_report_change_of_reliability() {
     // transition an object can actually produce.
     let mut det = detector();
     let into = det.probe(50.0, OVER_RANGE).unwrap().change;
-    assert_eq!(into.event_type(), EventType::CHANGE_OF_RELIABILITY);
+    assert_eq!(
+        into.event_type(OutOfRangeDetector::ALGORITHM),
+        EventType::CHANGE_OF_RELIABILITY
+    );
     assert_eq!(into.transition(), EventTransition::ToFault);
 
     let out = det.probe(50.0, NO_FAULT).unwrap().change;
-    assert_eq!(out.event_type(), EventType::CHANGE_OF_RELIABILITY);
+    assert_eq!(
+        out.event_type(OutOfRangeDetector::ALGORITHM),
+        EventType::CHANGE_OF_RELIABILITY
+    );
     assert_eq!(out.transition(), EventTransition::ToNormal);
+}
+
+#[test]
+fn fault_override_wins_in_both_directions_for_every_detector_algorithm() {
+    let mut out_of_range = detector();
+    let into = out_of_range.probe(50.0, OVER_RANGE).unwrap();
+    let out = out_of_range.probe(50.0, NO_FAULT).unwrap();
+    assert_eq!(into.event_type, EventType::CHANGE_OF_RELIABILITY);
+    assert_eq!(out.event_type, EventType::CHANGE_OF_RELIABILITY);
+
+    let mut change_of_state = ChangeOfStateDetector {
+        alarm_values: vec![1],
+        event_enable: 0x07,
+        ..Default::default()
+    };
+    let into = change_of_state.probe(0, OVER_RANGE).unwrap();
+    let out = change_of_state.probe(0, NO_FAULT).unwrap();
+    assert_eq!(into.event_type, EventType::CHANGE_OF_RELIABILITY);
+    assert_eq!(out.event_type, EventType::CHANGE_OF_RELIABILITY);
+
+    let mut command_failure = CommandFailureDetector {
+        event_enable: 0x07,
+        ..Default::default()
+    };
+    let into = command_failure.probe(0, 0, OVER_RANGE).unwrap();
+    let out = command_failure.probe(0, 0, NO_FAULT).unwrap();
+    assert_eq!(into.event_type, EventType::CHANGE_OF_RELIABILITY);
+    assert_eq!(out.event_type, EventType::CHANGE_OF_RELIABILITY);
+}
+
+#[test]
+fn out_of_range_detector_reports_its_algorithm_for_non_fault_transition() {
+    let outcome = detector().probe(99.0, NO_FAULT).unwrap();
+    assert_eq!(outcome.change.to, EventState::HIGH_LIMIT);
+    assert_eq!(outcome.event_type, EventType::OUT_OF_RANGE);
+}
+
+#[test]
+fn change_of_state_detector_reports_its_algorithm_for_non_fault_transition() {
+    let mut detector = ChangeOfStateDetector {
+        alarm_values: vec![1],
+        event_enable: 0x07,
+        ..Default::default()
+    };
+    let outcome = detector.probe(1, NO_FAULT).unwrap();
+    assert_eq!(outcome.change.to, EventState::OFFNORMAL);
+    assert_eq!(outcome.event_type, EventType::CHANGE_OF_STATE);
+}
+
+#[test]
+fn command_failure_offnormal_reports_command_failure_not_change_of_state() {
+    let mut detector = CommandFailureDetector {
+        event_enable: 0x07,
+        ..Default::default()
+    };
+    let outcome = detector.probe(1, 0, NO_FAULT).unwrap();
+    assert_eq!(outcome.change.to, EventState::OFFNORMAL);
+    assert_eq!(outcome.event_type, EventType::COMMAND_FAILURE);
 }
 
 #[test]
@@ -543,7 +607,7 @@ fn writing_reliability_on_an_object_drives_event_state_to_fault() {
         .expect("reliability must drive a transition");
     assert_eq!(outcome.change.to, EventState::FAULT);
     assert_eq!(
-        outcome.change.event_type(),
+        outcome.change.event_type(OutOfRangeDetector::ALGORITHM),
         EventType::CHANGE_OF_RELIABILITY
     );
 }

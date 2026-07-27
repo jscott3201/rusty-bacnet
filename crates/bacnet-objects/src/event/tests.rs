@@ -162,14 +162,17 @@ fn deadband_at_exact_boundary() {
 }
 
 #[test]
-fn event_state_change_derives_event_type() {
+fn event_state_change_uses_supplied_algorithm() {
     use bacnet_types::enums::EventType;
 
     let change = EventStateChange {
         from: EventState::NORMAL,
         to: EventState::HIGH_LIMIT,
     };
-    assert_eq!(change.event_type(), EventType::OUT_OF_RANGE);
+    assert_eq!(
+        change.event_type(OutOfRangeDetector::ALGORITHM),
+        EventType::OUT_OF_RANGE
+    );
 }
 
 /// ASHRAE 135-2020 Clause 13.2.5.3: "For all transitions to, or from, the FAULT
@@ -195,7 +198,7 @@ fn fault_transitions_are_change_of_reliability() {
     ] {
         let change = EventStateChange { from, to };
         assert_eq!(
-            change.event_type(),
+            change.event_type(OutOfRangeDetector::ALGORITHM),
             EventType::CHANGE_OF_RELIABILITY,
             "{from:?} -> {to:?} has FAULT at one end"
         );
@@ -220,15 +223,14 @@ fn fault_takes_precedence_over_limit_states() {
     ] {
         let change = EventStateChange { from, to };
         assert_eq!(
-            change.event_type(),
+            change.event_type(OutOfRangeDetector::ALGORITHM),
             EventType::CHANGE_OF_RELIABILITY,
             "{from:?} -> {to:?}: FAULT outranks the limit states"
         );
     }
 }
 
-/// Transitions with no FAULT end keep their previous classification, so the
-/// FAULT rule is additive rather than a rewrite of the existing behavior.
+/// Transitions with no FAULT end use the required algorithm argument.
 #[test]
 fn non_fault_transitions_are_unchanged() {
     use bacnet_types::enums::EventType;
@@ -256,7 +258,7 @@ fn non_fault_transitions_are_unchanged() {
         ),
     ] {
         let change = EventStateChange { from, to };
-        assert_eq!(change.event_type(), expected, "{from:?} -> {to:?}");
+        assert_eq!(change.event_type(expected), expected, "{from:?} -> {to:?}");
     }
 }
 
@@ -268,7 +270,10 @@ fn event_state_change_to_normal_from_high() {
         from: EventState::HIGH_LIMIT,
         to: EventState::NORMAL,
     };
-    assert_eq!(change.event_type(), EventType::OUT_OF_RANGE);
+    assert_eq!(
+        change.event_type(OutOfRangeDetector::ALGORITHM),
+        EventType::OUT_OF_RANGE
+    );
 }
 
 #[test]
@@ -346,7 +351,10 @@ fn event_state_change_generic() {
         from: EventState::NORMAL,
         to: EventState::NORMAL,
     };
-    assert_eq!(change.event_type(), EventType::CHANGE_OF_STATE);
+    assert_eq!(
+        change.event_type(ChangeOfStateDetector::ALGORITHM),
+        EventType::CHANGE_OF_STATE
+    );
 }
 
 // --- ChangeOfStateDetector tests ---
