@@ -217,6 +217,15 @@ pub struct ServerConfig {
     ///
     /// Evaluation is a no-op on databases holding no Event Enrollment objects,
     /// so the default is on.
+    ///
+    /// What a detected transition currently does is limited: it updates
+    /// `Event_State` and is logged. Routing it into the notification pipeline is
+    /// not implemented yet (see issue #127), nor are the `Acked_Transitions` and
+    /// `Event_Time_Stamps` updates a transition is supposed to carry (#123). A
+    /// device holding active enrollments will therefore change `Event_State`
+    /// without emitting an EventNotification, so a client learns of the alarm
+    /// only by polling. Enabling this by default makes that the standing
+    /// behavior rather than an opt-in one.
     pub enable_event_enrollment: bool,
     /// Interval in seconds between Event Enrollment evaluation passes (default 10).
     ///

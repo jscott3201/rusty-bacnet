@@ -406,6 +406,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let ee_period = event_enrollment_period(config.event_enrollment_interval_secs);
             Some(tokio::spawn(async move {
                 let mut interval = tokio::time::interval(ee_period);
+                // A stalled runtime must not fire a burst of catch-up passes; the
+                // adjacent intrinsic-reporting task sets this for the same reason.
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 loop {
                     interval.tick().await;
                     let mut db_guard = db_ee.write().await;

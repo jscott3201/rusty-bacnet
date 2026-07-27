@@ -44,23 +44,128 @@ fn event_enrollment_period_passes_through_nonzero() {
     );
 }
 
+#[test]
+fn all_builders_assign_event_enrollment_config() {
+    // Six near-identical assignments across three builders. Every neighbouring
+    // ServerConfig field is a bool or u64, so a copy-paste targeting the wrong one
+    // compiles and stays silent under clippy — hence the neighbour assertions.
+    let generic = BACnetServer::<BipTransport>::generic_builder()
+        .enable_event_enrollment(false)
+        .event_enrollment_interval_secs(7);
+    assert!(!generic.config.enable_event_enrollment);
+    assert_eq!(generic.config.event_enrollment_interval_secs, 7);
+    assert_eq!(generic.config.cov_retry_timeout_ms, 3000);
+    assert!(!generic.config.enable_fault_detection);
+
+    let bip = BACnetServer::<BipTransport>::bip_builder()
+        .enable_event_enrollment(false)
+        .event_enrollment_interval_secs(11);
+    assert!(!bip.config.enable_event_enrollment);
+    assert_eq!(bip.config.event_enrollment_interval_secs, 11);
+    assert_eq!(bip.config.cov_retry_timeout_ms, 3000);
+    assert!(!bip.config.enable_fault_detection);
+
+    #[cfg(feature = "sc-tls")]
+    {
+        let sc = BACnetServer::sc_builder()
+            .enable_event_enrollment(false)
+            .event_enrollment_interval_secs(13);
+        assert!(!sc.config.enable_event_enrollment);
+        assert_eq!(sc.config.event_enrollment_interval_secs, 13);
+        assert_eq!(sc.config.cov_retry_timeout_ms, 3000);
+    }
+}
+
 #[tokio::test(start_paused = true)]
-async fn event_enrollment_first_pass_runs_immediately() {
-    // Pins the startup timing documented on ServerConfig::enable_event_enrollment.
-    // tokio's interval completes its first tick at once, so the evaluation loop's
-    // first pass runs when the task is spawned, not one interval later.
-    let start = tokio::time::Instant::now();
-    let mut interval = tokio::time::interval(super::lifecycle::event_enrollment_period(10));
+async fn server_enrollment_task_evaluates_at_startup_on_its_configured_interval() {
+    use bacnet_objects::analog::AnalogInputObject;
+    use bacnet_objects::event_enrollment::EventEnrollmentObject;
+    use bacnet_objects::traits::BACnetObject;
+    use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetEventParameter};
+    use bacnet_types::enums::{EventState, EventType, PropertyIdentifier};
 
-    interval.tick().await;
-    assert_eq!(start.elapsed(), Duration::ZERO);
+    // Exercises the spawned task, not `tokio::time::interval` in isolation. Two
+    // regressions only this can reach: switching to `interval_at` (first pass one
+    // interval late, contradicting the documented startup behavior) and hardcoding
+    // the period so the config field is silently ignored.
+    let mut db = ObjectDatabase::new();
 
-    interval.tick().await;
-    assert_eq!(start.elapsed(), Duration::from_secs(10));
+    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    ai.set_present_value(150.0); // above high_limit
+    let ai_oid = ai.object_identifier();
+    db.add(Box::new(ai)).unwrap();
+
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+        ai_oid,
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+    )));
+    ee.set_event_parameters(BACnetEventParameter::OutOfRange {
+        time_delay: 0,
+        low_limit: 0.0,
+        high_limit: 100.0,
+        deadband: 1.0,
+    });
+    ee.set_event_enable(0x07);
+    let ee_oid = ee.object_identifier();
+    db.add(Box::new(ee)).unwrap();
+
+    // An hour, so a first pass deferred by one interval could never be observed.
+    let config = ServerConfig {
+        event_enrollment_interval_secs: 3600,
+        ..ServerConfig::default()
+    };
+    let transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    let mut server = BACnetServer::start(config, db, transport)
+        .await
+        .expect("server should start");
+
+    // The first pass runs at spawn, well inside the configured hour.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    {
+        let guard = server.db.read().await;
+        let state = guard
+            .get(&ee_oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::EVENT_STATE, None)
+            .unwrap();
+        assert_eq!(
+            state,
+            PropertyValue::Enumerated(EventState::HIGH_LIMIT.to_raw())
+        );
+    }
+
+    // Force it back, then advance far past a hardcoded 10s default but nowhere near
+    // the configured hour. A second pass would re-detect the (still out-of-range)
+    // value and revert this.
+    {
+        let mut guard = server.db.write().await;
+        guard
+            .get_mut(&ee_oid)
+            .unwrap()
+            .set_event_state_internal(EventState::NORMAL)
+            .unwrap();
+    }
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    {
+        let guard = server.db.read().await;
+        let state = guard
+            .get(&ee_oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::EVENT_STATE, None)
+            .unwrap();
+        assert_eq!(
+            state,
+            PropertyValue::Enumerated(EventState::NORMAL.to_raw()),
+            "a pass ran within 60s, so the configured interval was not honored"
+        );
+    }
+
+    server.stop().await.expect("server should stop");
 }
 
 #[tokio::test]
-async fn server_evaluates_enrollments_without_fault_detection() {
+async fn server_spawns_enrollment_task_without_fault_detection() {
     // Regression for #133: enrollment evaluation used to be gated on
     // enable_fault_detection, so this configuration silently skipped it.
     let config = ServerConfig {
