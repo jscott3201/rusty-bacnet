@@ -521,7 +521,7 @@ fn pics_writable<'a>(pics: &'a Pics, object_type: ObjectType, pid: PropertyIdent
 #[test]
 fn pics_event_properties_writable_on_analog_types() {
     // The old heuristic omitted LIMIT_ENABLE, NOTIFY_TYPE, TIME_DELAY,
-    // EVENT_ENABLE — which the objects actually accept via write_event_properties!.
+    // EVENT_ENABLE — which the objects actually accept via write_generic_event_properties!.
     let db = make_real_objects_db();
     let pics = generate_pics(&db, &ServerConfig::default(), &make_pics_config());
 
@@ -542,7 +542,7 @@ fn pics_event_properties_writable_on_analog_types() {
         ] {
             assert!(
                 pics_writable(&pics, ot, pid),
-                "{ot:?}: {pid:?} should be writable (accepted by write_event_properties!)"
+                "{ot:?}: {pid:?} should be writable (accepted by write_generic_event_properties!)"
             );
         }
     }

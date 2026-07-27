@@ -82,9 +82,10 @@ fn bo_feedback_value_rejects_a_value_outside_the_binary_enumeration() {
 }
 
 /// `feedback_value` initializes to match the initial `Present_Value` so that enabling
-/// detection on an untouched object does not immediately report a command failure. With
-/// detection now defaulting to FALSE, nothing else pins that initializer — every other test
-/// writes both properties before evaluating.
+/// detection on an untouched object does not immediately report a command failure. This
+/// states that property directly rather than relying on it incidentally: several other tests
+/// in this module also fail if the initializer changes, but each does so as a side effect of
+/// asserting something else, which is a fragile thing to depend on.
 #[test]
 fn bo_fresh_object_reports_nothing_when_detection_is_enabled() {
     let mut bo = BinaryOutputObject::new(1, "BO-1").unwrap();
@@ -95,6 +96,53 @@ fn bo_fresh_object_reports_nothing_when_detection_is_enabled() {
         bo.read_property(PropertyIdentifier::EVENT_STATE, None)
             .unwrap(),
         PropertyValue::Enumerated(EventState::NORMAL.to_raw())
+    );
+}
+
+/// Clause 13.2.2.1 requires that while detection is disabled "no transitions shall occur".
+/// Discarding an in-flight `Time_Delay` countdown is part of that: without it, a
+/// disable-then-enable cycle would leave a stale `PendingTransition` so the next tick fires
+/// immediately instead of restarting the full delay. Deleting `pending = None` from the write
+/// arm otherwise leaves the whole suite green.
+#[test]
+fn bo_disabling_detection_discards_an_in_flight_time_delay_countdown() {
+    /// Ticks a disagreeing object until it fires, returning how many ticks it took.
+    /// Counting rather than hardcoding keeps this independent of whether the countdown is
+    /// seeded by the probe or by the first tick.
+    fn ticks_until_offnormal(bo: &mut BinaryOutputObject) -> usize {
+        for n in 1..20 {
+            if let Some(outcome) = bo.tick_intrinsic_reporting() {
+                assert_eq!(outcome.change.to, EventState::OFFNORMAL);
+                return n;
+            }
+        }
+        panic!("never fired");
+    }
+
+    let mut baseline = BinaryOutputObject::new(1, "BO-baseline").unwrap();
+    set_detection_enabled(&mut baseline, true);
+    baseline.event_detector.time_delay = 3;
+    write_enumerated(&mut baseline, PropertyIdentifier::PRESENT_VALUE, 1);
+    let fresh = ticks_until_offnormal(&mut baseline);
+
+    let mut cycled = BinaryOutputObject::new(2, "BO-cycled").unwrap();
+    set_detection_enabled(&mut cycled, true);
+    cycled.event_detector.time_delay = 3;
+    write_enumerated(&mut cycled, PropertyIdentifier::PRESENT_VALUE, 1);
+
+    // Spend part of the countdown, then disable and re-enable.
+    assert_eq!(cycled.evaluate_intrinsic_reporting(), None);
+    assert_eq!(cycled.tick_intrinsic_reporting(), None);
+    set_detection_enabled(&mut cycled, false);
+    set_detection_enabled(&mut cycled, true);
+
+    // The full delay must run again from scratch. If the reset failed to discard the
+    // in-flight PendingTransition, the partially-spent countdown would survive and this
+    // object would fire sooner than a fresh one.
+    assert_eq!(
+        ticks_until_offnormal(&mut cycled),
+        fresh,
+        "a disable/enable cycle must restart Time_Delay, not resume it"
     );
 }
 
@@ -242,13 +290,6 @@ fn bo_generic_event_properties_round_trip_and_match_pics() {
             PropertyIdentifier::NOTIFICATION_CLASS,
             PropertyValue::Unsigned(42),
         ),
-        (
-            PropertyIdentifier::ACKED_TRANSITIONS,
-            PropertyValue::BitString {
-                unused_bits: 5,
-                data: vec![0x80],
-            },
-        ),
     ];
     for (property, value) in writes {
         bo.write_property(property, None, value.clone(), None)
@@ -256,12 +297,28 @@ fn bo_generic_event_properties_round_trip_and_match_pics() {
         assert_eq!(bo.read_property(property, None).unwrap(), value);
     }
 
+    // Acked_Transitions is readable but NOT writable: only the AcknowledgeAlarm service may
+    // change it. A property write would assign where the service ORs, so it could both
+    // fabricate and erase acknowledgments, and it would break the Clause 12.7 requirement
+    // that the field sit at its initial condition while Event_Detection_Enable is FALSE.
+    assert!(bo
+        .write_property(
+            PropertyIdentifier::ACKED_TRANSITIONS,
+            None,
+            PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![0x80],
+            },
+            None,
+        )
+        .is_err());
+    assert!(!bo.is_writable_property(PropertyIdentifier::ACKED_TRANSITIONS));
+
     for property in [
         PropertyIdentifier::EVENT_ENABLE,
         PropertyIdentifier::TIME_DELAY,
         PropertyIdentifier::NOTIFY_TYPE,
         PropertyIdentifier::NOTIFICATION_CLASS,
-        PropertyIdentifier::ACKED_TRANSITIONS,
     ] {
         assert!(bo.property_list().contains(&property));
         assert!(bo.is_writable_property(property));

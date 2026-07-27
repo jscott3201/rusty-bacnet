@@ -398,10 +398,10 @@ mod command_failure_tests {
     }
 
     /// `feedback_value` initializes to match the initial `Present_Value` so that enabling
-    /// detection on an untouched object does not immediately report a command failure. With
-    /// detection now defaulting to FALSE, nothing else pins that initializer — every other
-    /// test writes both properties before evaluating, so changing it to any other in-range
-    /// state would leave the suite green.
+    /// detection on an untouched object does not immediately report a command failure. This
+    /// states that property directly rather than relying on it incidentally: several other
+    /// tests in this module also fail if the initializer changes, but each does so as a side
+    /// effect of asserting something else, which is a fragile thing to depend on.
     #[test]
     fn fresh_object_reports_nothing_when_detection_is_enabled() {
         let mut mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
@@ -520,13 +520,6 @@ mod command_failure_tests {
                 PropertyIdentifier::NOTIFICATION_CLASS,
                 PropertyValue::Unsigned(42),
             ),
-            (
-                PropertyIdentifier::ACKED_TRANSITIONS,
-                PropertyValue::BitString {
-                    unused_bits: 5,
-                    data: vec![0x80],
-                },
-            ),
         ];
         for (property, value) in writes {
             mso.write_property(property, None, value.clone(), None)
@@ -534,12 +527,29 @@ mod command_failure_tests {
             assert_eq!(mso.read_property(property, None).unwrap(), value);
         }
 
+        // Acked_Transitions is readable but NOT writable: only the AcknowledgeAlarm service
+        // may change it. A property write would assign where the service ORs, so it could
+        // both fabricate and erase acknowledgments, and it would break the Clause 12.19
+        // requirement that the field sit at its initial condition while
+        // Event_Detection_Enable is FALSE.
+        assert!(mso
+            .write_property(
+                PropertyIdentifier::ACKED_TRANSITIONS,
+                None,
+                PropertyValue::BitString {
+                    unused_bits: 5,
+                    data: vec![0x80],
+                },
+                None,
+            )
+            .is_err());
+        assert!(!mso.is_writable_property(PropertyIdentifier::ACKED_TRANSITIONS));
+
         for property in [
             PropertyIdentifier::EVENT_ENABLE,
             PropertyIdentifier::TIME_DELAY,
             PropertyIdentifier::NOTIFY_TYPE,
             PropertyIdentifier::NOTIFICATION_CLASS,
-            PropertyIdentifier::ACKED_TRANSITIONS,
         ] {
             assert!(mso.property_list().contains(&property));
             assert!(mso.is_writable_property(property));

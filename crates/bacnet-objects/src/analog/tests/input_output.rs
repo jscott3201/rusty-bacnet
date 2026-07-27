@@ -714,7 +714,7 @@ fn ai_is_createable_matches_factory() {
 fn ai_is_writable_property_mirrors_write_property() {
     use crate::traits::BACnetObject;
     let ai = AnalogInputObject::new(1, "ai-1", 95).unwrap();
-    // Event properties accepted via write_event_properties! — the old
+    // Event properties accepted via write_generic_event_properties! / write_analog_event_properties! — the old
     // heuristic omitted these (false-negatives).
     assert!(ai.is_writable_property(PropertyIdentifier::LIMIT_ENABLE));
     assert!(ai.is_writable_property(PropertyIdentifier::NOTIFY_TYPE));
@@ -729,6 +729,27 @@ fn ai_is_writable_property_mirrors_write_property() {
     assert!(ai.is_writable_property(PropertyIdentifier::COV_INCREMENT));
     // PRESENT_VALUE accepted when out-of-service.
     assert!(ai.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
+    // Read-only despite being an event property: Acked_Transitions is modified only by the
+    // AcknowledgeAlarm service, which ORs the acknowledged bit in where a property write
+    // would assign — so an assignable arm could both fabricate and erase acknowledgments,
+    // and GetAlarmSummary / GetEventInformation read the field straight off the object.
+    // Asserted on both halves because this test is the mirror check: the #222 macro split
+    // silently turned this write into Ok(()) on all three analog types, and nothing here
+    // caught it.
+    let mut ai_mut = AnalogInputObject::new(2, "ai-2", 95).unwrap();
+    assert!(!ai.is_writable_property(PropertyIdentifier::ACKED_TRANSITIONS));
+    assert!(ai_mut
+        .write_property(
+            PropertyIdentifier::ACKED_TRANSITIONS,
+            None,
+            bacnet_types::primitives::PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![0x80],
+            },
+            None,
+        )
+        .is_err());
+
     // Universal read-only.
     assert!(!ai.is_writable_property(PropertyIdentifier::OBJECT_IDENTIFIER));
     assert!(!ai.is_writable_property(PropertyIdentifier::OBJECT_TYPE));

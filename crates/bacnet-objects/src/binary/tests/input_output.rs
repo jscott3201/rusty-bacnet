@@ -499,6 +499,8 @@ fn bo_is_writable_property_mirrors_write_property() {
     assert!(bo.is_writable_property(PropertyIdentifier::ACTIVE_TEXT));
     assert!(bo.is_writable_property(PropertyIdentifier::INACTIVE_TEXT));
     assert!(bo.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
-    // Not event-writable (read-only on BO).
+    // Writable since #222: Clause 12.7 requires a device to "support (T, T, T) at a minimum",
+    // and with no write path the transition bits were stuck at (F, F, F), so no COMMAND_FAILURE
+    // notification could ever be distributed.
     assert!(bo.is_writable_property(PropertyIdentifier::EVENT_ENABLE));
 }
