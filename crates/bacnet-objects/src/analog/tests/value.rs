@@ -356,7 +356,7 @@ fn av_intrinsic_reporting_normal_to_high_limit_to_normal() {
 
     // Go above high limit
     av.set_present_value(81.0);
-    let change = av.evaluate_intrinsic_reporting().unwrap();
+    let change = av.evaluate_intrinsic_reporting().unwrap().change;
     assert_eq!(change.from, EventState::NORMAL);
     assert_eq!(change.to, EventState::HIGH_LIMIT);
 
@@ -369,7 +369,7 @@ fn av_intrinsic_reporting_normal_to_high_limit_to_normal() {
 
     // Drop below deadband threshold → back to NORMAL
     av.set_present_value(77.0);
-    let change = av.evaluate_intrinsic_reporting().unwrap();
+    let change = av.evaluate_intrinsic_reporting().unwrap().change;
     assert_eq!(change.to, EventState::NORMAL);
 }
 
@@ -426,7 +426,7 @@ fn av_intrinsic_reporting_after_priority_write() {
         Some(8),
     )
     .unwrap();
-    let change = av.evaluate_intrinsic_reporting().unwrap();
+    let change = av.evaluate_intrinsic_reporting().unwrap().change;
     assert_eq!(change.to, EventState::HIGH_LIMIT);
 }
 

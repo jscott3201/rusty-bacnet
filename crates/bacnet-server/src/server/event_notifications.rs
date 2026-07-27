@@ -22,7 +22,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return;
         }
 
-        let change = {
+        let outcome = {
             let mut db = db.write().await;
             match db.get_mut(oid) {
                 Some(object) => object.evaluate_intrinsic_reporting(),
@@ -30,17 +30,33 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
         };
 
-        if let Some(change) = change {
-            Self::build_and_send_event_notification(
-                db,
-                network,
-                comm_state,
-                server_tsm,
-                oid,
-                change,
-                retry_timeout_ms,
-            )
-            .await;
+        // The transition is already stored in Event_State by the detector,
+        // whatever Event_Enable says. Only external distribution is gated here:
+        // Clause 12.12 defines Event_Enable as enabling and disabling the
+        // distribution of notifications, and Clause 13.2.5 places that gate
+        // inside the notification-distribution process — downstream of the
+        // transition actions, none of which it governs.
+        //
+        // Two things Clause 13.2.2.1.4 mandates unconditionally are still
+        // missing and hook this same point, ahead of the `distribute` check:
+        // the Event_Time_Stamps / Event_Message_Texts writes, and the
+        // indication to the alarm-acknowledgment process, which is what
+        // maintains Acked_Transitions from Ack_Required (Clause 13.2.3 — that
+        // bookkeeping is gated by Ack_Required, never by Event_Enable). Both
+        // are tracked as #123.
+        if let Some(outcome) = outcome {
+            if outcome.distribute {
+                Self::build_and_send_event_notification(
+                    db,
+                    network,
+                    comm_state,
+                    server_tsm,
+                    oid,
+                    outcome.change,
+                    retry_timeout_ms,
+                )
+                .await;
+            }
         }
     }
 

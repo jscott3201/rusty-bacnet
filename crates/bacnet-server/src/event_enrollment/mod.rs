@@ -24,6 +24,11 @@ pub struct EventEnrollmentTransition {
     pub change: EventStateChange,
     /// The event type that was evaluated.
     pub event_type: EventType,
+    /// Whether `Event_Enable` permits distributing a notification for this
+    /// transition. The transition is reported and `Event_State` persisted
+    /// either way; a cleared bit suppresses only the outbound notification
+    /// (ASHRAE 135-2020 Clause 12.12).
+    pub distribute: bool,
 }
 
 // ---- Event parameter encoding helpers ----
@@ -494,12 +499,14 @@ fn read_object_property_ref(
 pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmentTransition> {
     let oids = db.find_by_type(ObjectType::EVENT_ENROLLMENT);
 
+    // (enrollment, monitored, event_type, from, to, distribute)
     let mut updates: Vec<(
         ObjectIdentifier,
         ObjectIdentifier,
         u32,
         EventState,
         EventState,
+        bool,
     )> = Vec::new();
 
     for oid in &oids {
@@ -621,11 +628,20 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
             _ => continue,
         };
 
+        // Clause 13.2.2.1.4 requires the transition actions to run "even if the
+        // transition does not change the event state", so this skip is not
+        // conformant. Removing it alone would be worse: no evaluator here can
+        // yet distinguish a genuine same-state indication from "nothing
+        // changed", so an unguarded pass would re-fire every poll. Tracked as
+        // #166, which depends on the change baseline from #137.
         if new_state == current_state {
             continue;
         }
 
-        let transition_enabled = match new_state {
+        // `Event_Enable` governs distribution only (Clause 12.12). The
+        // transition is recorded either way; the flag rides along so the
+        // notification pipeline can suppress the send (#127).
+        let distribute = match new_state {
             s if s == EventState::NORMAL => event_enable & 0x04 != 0,
             s if s == EventState::HIGH_LIMIT
                 || s == EventState::LOW_LIMIT
@@ -636,19 +652,18 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
             _ => event_enable & 0x02 != 0,
         };
 
-        if transition_enabled {
-            updates.push((
-                *oid,
-                monitored_oid,
-                event_type_raw,
-                current_state,
-                new_state,
-            ));
-        }
+        updates.push((
+            *oid,
+            monitored_oid,
+            event_type_raw,
+            current_state,
+            new_state,
+            distribute,
+        ));
     }
 
     let mut transitions = Vec::new();
-    for (oid, monitored_oid, event_type_raw, from_state, to_state) in updates {
+    for (oid, monitored_oid, event_type_raw, from_state, to_state, distribute) in updates {
         if let Some(obj) = db.get_mut(&oid) {
             // Persist the transition through the internal lifecycle path, not
             // the network `write_property(EVENT_STATE, …)` route. `Event_State`
@@ -664,6 +679,7 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
                         to: to_state,
                     },
                     event_type: EventType::from_raw(event_type_raw),
+                    distribute,
                 });
             }
         }

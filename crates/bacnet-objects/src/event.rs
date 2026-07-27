@@ -15,6 +15,26 @@ pub struct EventStateChange {
     pub to: EventState,
 }
 
+/// A transition that occurred, and whether it may be distributed.
+///
+/// ASHRAE 135-2020 Clause 13.2.2.1.4 mandates four actions on every transition:
+/// store the new `Event_State`, store the time in `Event_Time_Stamps`, store the
+/// message text in `Event_Message_Texts`, and indicate the transition to the
+/// alarm-acknowledgment and notification-distribution processes. `Event_Enable`
+/// governs only distribution (Clause 12.12), so a cleared bit must not suppress
+/// the first three actions, nor the alarm-acknowledgment half of the fourth.
+///
+/// Separating the two answers keeps that distinction in the type: `None` from a
+/// detector means no transition occurred, while `distribute == false` means one
+/// occurred and must be recorded but not sent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransitionOutcome {
+    /// The transition itself. Always recorded, whatever `distribute` says.
+    pub change: EventStateChange,
+    /// The `Event_Enable` bit for this transition's direction.
+    pub distribute: bool,
+}
+
 impl EventStateChange {
     /// Derive the BACnet EventType from the state transition.
     ///
@@ -215,9 +235,10 @@ impl OutOfRangeDetector {
     /// This is the per-write entry point: it seeds a pending delayed
     /// transition (or fires immediately when `time_delay == 0`) but never
     /// advances the countdown — so repeated writes to the same value do not
-    /// shorten the delay. Returns `Some(EventStateChange)` only when a
-    /// transition fires **and** the corresponding `event_enable` bit is set.
-    pub fn evaluate(&mut self, present_value: f32) -> Option<EventStateChange> {
+    /// shorten the delay. Returns `Some(TransitionOutcome)` whenever a
+    /// transition fires; the outcome's `distribute` flag carries the
+    /// `event_enable` bit rather than withholding the transition.
+    pub fn evaluate(&mut self, present_value: f32) -> Option<TransitionOutcome> {
         self.probe(present_value)
     }
 
@@ -228,7 +249,7 @@ impl OutOfRangeDetector {
     /// behavior. Otherwise a [`PendingTransition`] is seeded (or cleared if
     /// the condition reverted) and `None` is returned; the periodic
     /// [`Self::tick`] advances and eventually confirms it.
-    pub fn probe(&mut self, present_value: f32) -> Option<EventStateChange> {
+    pub fn probe(&mut self, present_value: f32) -> Option<TransitionOutcome> {
         let desired = self.compute_new_state(present_value);
         if desired == self.event_state {
             // Condition reverted to the confirmed state: cancel any pending
@@ -252,10 +273,10 @@ impl OutOfRangeDetector {
 
     /// Periodic tick: advance the countdown and fire on expiry.
     ///
-    /// Returns `Some(EventStateChange)` when the pending transition's delay
+    /// Returns `Some(TransitionOutcome)` when the pending transition's delay
     /// elapses this tick, or `None` if still counting down / no pending
     /// transition / the condition reverted (which cancels the pending).
-    pub fn tick(&mut self, present_value: f32) -> Option<EventStateChange> {
+    pub fn tick(&mut self, present_value: f32) -> Option<TransitionOutcome> {
         let desired = self.compute_new_state(present_value);
         if desired == self.event_state {
             self.pending = None;
@@ -280,22 +301,29 @@ impl OutOfRangeDetector {
         }
     }
 
-    /// Confirm a transition to `new_state`: mutate `event_state` and, if the
-    /// matching `event_enable` bit is set, return the change for notification.
-    fn fire(&mut self, new_state: EventState) -> Option<EventStateChange> {
+    /// Confirm a transition to `new_state`: mutate `event_state` and report the
+    /// transition along with whether `Event_Enable` permits distributing it.
+    ///
+    /// The transition is always reported. A cleared `Event_Enable` bit sets
+    /// `distribute` to false; it does not withhold the transition, because
+    /// none of Clause 13.2.2.1.4's transition actions are `Event_Enable`-scoped
+    /// — the property disables external distribution downstream, inside the
+    /// event-notification-distribution process (Clause 13.2.5, and Clause 12.12
+    /// which defines the property in those terms).
+    fn fire(&mut self, new_state: EventState) -> Option<TransitionOutcome> {
         let change = EventStateChange {
             from: self.event_state,
             to: new_state,
         };
         self.event_state = new_state;
-        let enabled = match new_state {
+        let distribute = match new_state {
             s if s == EventState::NORMAL => self.event_enable & Self::TO_NORMAL != 0,
             s if s == EventState::HIGH_LIMIT || s == EventState::LOW_LIMIT => {
                 self.event_enable & Self::TO_OFFNORMAL != 0
             }
             _ => self.event_enable & Self::TO_FAULT != 0,
         };
-        enabled.then_some(change)
+        Some(TransitionOutcome { change, distribute })
     }
 
     fn compute_new_state(&self, pv: f32) -> EventState {
@@ -387,12 +415,12 @@ impl ChangeOfStateDetector {
     const TO_NORMAL: u8 = 0x04;
 
     /// Per-write entry point; see [`OutOfRangeDetector::evaluate`].
-    pub fn evaluate(&mut self, present_value: u32) -> Option<EventStateChange> {
+    pub fn evaluate(&mut self, present_value: u32) -> Option<TransitionOutcome> {
         self.probe(present_value)
     }
 
     /// Per-write probe: seed or cancel a pending transition, fire on zero delay.
-    pub fn probe(&mut self, present_value: u32) -> Option<EventStateChange> {
+    pub fn probe(&mut self, present_value: u32) -> Option<TransitionOutcome> {
         let desired = self.compute_new_state(present_value);
         if desired == self.event_state {
             self.pending = None;
@@ -410,7 +438,7 @@ impl ChangeOfStateDetector {
     }
 
     /// Periodic tick: advance the countdown and fire on expiry.
-    pub fn tick(&mut self, present_value: u32) -> Option<EventStateChange> {
+    pub fn tick(&mut self, present_value: u32) -> Option<TransitionOutcome> {
         let desired = self.compute_new_state(present_value);
         if desired == self.event_state {
             self.pending = None;
@@ -434,19 +462,21 @@ impl ChangeOfStateDetector {
         }
     }
 
-    /// Confirm a transition to `new_state`, gated by `event_enable`.
-    fn fire(&mut self, new_state: EventState) -> Option<EventStateChange> {
+    /// Confirm a transition to `new_state`, reporting whether `Event_Enable`
+    /// permits distributing it. The transition itself is always reported; see
+    /// [`TransitionOutcome`].
+    fn fire(&mut self, new_state: EventState) -> Option<TransitionOutcome> {
         let change = EventStateChange {
             from: self.event_state,
             to: new_state,
         };
         self.event_state = new_state;
-        let enabled = match new_state {
+        let distribute = match new_state {
             s if s == EventState::NORMAL => self.event_enable & Self::TO_NORMAL != 0,
             s if s == EventState::OFFNORMAL => self.event_enable & Self::TO_OFFNORMAL != 0,
             _ => self.event_enable & Self::TO_FAULT != 0,
         };
-        enabled.then_some(change)
+        Some(TransitionOutcome { change, distribute })
     }
 
     fn compute_new_state(&self, present_value: u32) -> EventState {
@@ -502,12 +532,12 @@ impl CommandFailureDetector {
         &mut self,
         present_value: u32,
         feedback_value: u32,
-    ) -> Option<EventStateChange> {
+    ) -> Option<TransitionOutcome> {
         self.probe(present_value, feedback_value)
     }
 
     /// Per-write probe: seed or cancel a pending transition, fire on zero delay.
-    pub fn probe(&mut self, present_value: u32, feedback_value: u32) -> Option<EventStateChange> {
+    pub fn probe(&mut self, present_value: u32, feedback_value: u32) -> Option<TransitionOutcome> {
         let desired = self.compute_new_state(present_value, feedback_value);
         if desired == self.event_state {
             self.pending = None;
@@ -525,7 +555,7 @@ impl CommandFailureDetector {
     }
 
     /// Periodic tick: advance the countdown and fire on expiry.
-    pub fn tick(&mut self, present_value: u32, feedback_value: u32) -> Option<EventStateChange> {
+    pub fn tick(&mut self, present_value: u32, feedback_value: u32) -> Option<TransitionOutcome> {
         let desired = self.compute_new_state(present_value, feedback_value);
         if desired == self.event_state {
             self.pending = None;
@@ -549,19 +579,21 @@ impl CommandFailureDetector {
         }
     }
 
-    /// Confirm a transition to `new_state`, gated by `event_enable`.
-    fn fire(&mut self, new_state: EventState) -> Option<EventStateChange> {
+    /// Confirm a transition to `new_state`, reporting whether `Event_Enable`
+    /// permits distributing it. The transition itself is always reported; see
+    /// [`TransitionOutcome`].
+    fn fire(&mut self, new_state: EventState) -> Option<TransitionOutcome> {
         let change = EventStateChange {
             from: self.event_state,
             to: new_state,
         };
         self.event_state = new_state;
-        let enabled = match new_state {
+        let distribute = match new_state {
             s if s == EventState::NORMAL => self.event_enable & Self::TO_NORMAL != 0,
             s if s == EventState::OFFNORMAL => self.event_enable & Self::TO_OFFNORMAL != 0,
             _ => false,
         };
-        enabled.then_some(change)
+        Some(TransitionOutcome { change, distribute })
     }
 
     fn compute_new_state(&self, present_value: u32, feedback_value: u32) -> EventState {
@@ -584,11 +616,11 @@ impl CommandFailureDetector {
 #[macro_export]
 macro_rules! impl_intrinsic_reporting {
     ($detector_field:ident, $present_value_field:ident) => {
-        fn evaluate_intrinsic_reporting(&mut self) -> Option<$crate::event::EventStateChange> {
+        fn evaluate_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
             self.$detector_field.probe(self.$present_value_field)
         }
 
-        fn tick_intrinsic_reporting(&mut self) -> Option<$crate::event::EventStateChange> {
+        fn tick_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
             self.$detector_field.tick(self.$present_value_field)
         }
     };

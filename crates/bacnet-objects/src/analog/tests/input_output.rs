@@ -332,7 +332,7 @@ fn ai_intrinsic_reporting_triggers_on_present_value_change() {
 
     // Go above high limit
     ai.set_present_value(81.0);
-    let change = ai.evaluate_intrinsic_reporting().unwrap();
+    let change = ai.evaluate_intrinsic_reporting().unwrap().change;
     assert_eq!(change.from, EventState::NORMAL);
     assert_eq!(change.to, EventState::HIGH_LIMIT);
 
@@ -345,7 +345,7 @@ fn ai_intrinsic_reporting_triggers_on_present_value_change() {
 
     // Drop below deadband threshold → back to NORMAL
     ai.set_present_value(77.0);
-    let change = ai.evaluate_intrinsic_reporting().unwrap();
+    let change = ai.evaluate_intrinsic_reporting().unwrap().change;
     assert_eq!(change.to, EventState::NORMAL);
 }
 
@@ -402,7 +402,7 @@ fn ao_intrinsic_reporting_after_priority_write() {
         Some(8),
     )
     .unwrap();
-    let change = ao.evaluate_intrinsic_reporting().unwrap();
+    let change = ao.evaluate_intrinsic_reporting().unwrap().change;
     assert_eq!(change.to, EventState::HIGH_LIMIT);
 }
 

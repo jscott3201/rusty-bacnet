@@ -415,11 +415,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     let transitions =
                         crate::event_enrollment::evaluate_event_enrollments(&mut db_guard);
                     for t in &transitions {
+                        // `distribute` is logged rather than acted on: this task
+                        // records Event_State but does not yet emit
+                        // EventNotifications (#127). Surfacing it keeps an
+                        // Event_Enable-suppressed transition visible to an
+                        // operator, who would otherwise see the state move with
+                        // no notification and no explanation.
                         debug!(
                             enrollment = %t.enrollment_oid,
                             monitored = %t.monitored_oid,
                             from = ?t.change.from,
                             to = ?t.change.to,
+                            distribute = t.distribute,
                             "Event enrollment: state changed"
                         );
                     }
@@ -478,12 +485,19 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 // Collect confirmed transitions under a brief write lock, then
                 // drop it before sending (never hold the db lock across a
                 // network send — matches the per-write notification path).
+                //
+                // Event_Enable gates distribution only (Clause 12.12), so a
+                // suppressed transition is dropped here rather than at
+                // detection — its Event_State write already happened inside
+                // the detector.
                 let fired: Vec<(ObjectIdentifier, bacnet_objects::event::EventStateChange)> = {
                     let mut db = db_intrinsic.write().await;
                     let mut out = Vec::new();
                     db.for_each_object_mut(|oid, object| {
-                        if let Some(change) = object.tick_intrinsic_reporting() {
-                            out.push((oid, change));
+                        if let Some(outcome) = object.tick_intrinsic_reporting() {
+                            if outcome.distribute {
+                                out.push((oid, outcome.change));
+                            }
                         }
                     });
                     out

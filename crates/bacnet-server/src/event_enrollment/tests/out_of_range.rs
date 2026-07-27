@@ -140,16 +140,149 @@ fn out_of_range_event_enable_suppresses_notification() {
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
-    // TO_OFFNORMAL not enabled — should not appear in transitions
+    // TO_OFFNORMAL is not enabled, so the notification must be suppressed —
+    // but the transition itself is still detected and reported. Clause 12.12
+    // scopes Event_Enable to distribution alone.
     let transitions = evaluate_event_enrollments(&mut db);
-    assert!(transitions.is_empty());
+    assert_eq!(transitions.len(), 1);
+    assert!(
+        !transitions[0].distribute,
+        "TO_OFFNORMAL disabled: the notification must not be distributed"
+    );
+    assert_eq!(transitions[0].change.to, EventState::HIGH_LIMIT);
 
-    // But event_state should NOT have been updated (notification suppressed)
+    // And Event_State IS updated. Storing the new event state is the first of
+    // Clause 13.2.2.1.4's transition actions, and none of them is
+    // Event_Enable-scoped — the property disables distribution downstream
+    // (Clause 13.2.5). Suppressing the notification must therefore not freeze
+    // the state. Leaving it at NORMAL here would also break the next
+    // transition, because the evaluator compares against a state that never
+    // advanced.
+    let obj = db.get(&ee_oid).unwrap();
+    assert_eq!(
+        obj.read_property(PropertyIdentifier::EVENT_STATE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(EventState::HIGH_LIMIT.to_raw())
+    );
+}
+
+/// A suppressed TO_OFFNORMAL must not cost us the *enabled* TO_NORMAL that
+/// follows it.
+///
+/// This is the concrete damage from gating `Event_State` on `Event_Enable`:
+/// with TO_OFFNORMAL disabled the old code left the enrollment sitting at
+/// NORMAL, so when the value came back into range the evaluator compared
+/// NORMAL against NORMAL, saw no change, and dropped a transition the operator
+/// had explicitly enabled. Clearing one `Event_Enable` bit silently disabled a
+/// different one.
+#[test]
+fn out_of_range_suppressed_offnormal_still_yields_enabled_return_to_normal() {
+    let mut db = ObjectDatabase::new();
+
+    let mut ai = AnalogInputObject::new(11, "AI-11", 62).unwrap();
+    ai.set_present_value(85.0);
+    let ai_oid = ai.object_identifier();
+    db.add(Box::new(ai)).unwrap();
+
+    let mut ee =
+        EventEnrollmentObject::new(11, "EE-ret", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+        ai_oid,
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+    )));
+    ee.set_event_parameters(BACnetEventParameter::OutOfRange {
+        time_delay: 0,
+        low_limit: 20.0,
+        high_limit: 80.0,
+        deadband: 2.0,
+    });
+    ee.set_event_enable(0x04); // only TO_NORMAL enabled
+    let ee_oid = ee.object_identifier();
+    db.add(Box::new(ee)).unwrap();
+
+    // Out of range: detected, state advances, notification suppressed.
+    let transitions = evaluate_event_enrollments(&mut db);
+    assert_eq!(transitions.len(), 1);
+    assert!(!transitions[0].distribute);
+
+    // Back into range, clear of the deadband (80 - 2 = 78).
+    let ai = db.get_mut(&ai_oid).unwrap();
+    ai.write_property(
+        PropertyIdentifier::OUT_OF_SERVICE,
+        None,
+        PropertyValue::Boolean(true),
+        None,
+    )
+    .unwrap();
+    ai.write_property(
+        PropertyIdentifier::PRESENT_VALUE,
+        None,
+        PropertyValue::Real(70.0),
+        None,
+    )
+    .unwrap();
+
+    let transitions = evaluate_event_enrollments(&mut db);
+    assert_eq!(
+        transitions.len(),
+        1,
+        "TO_NORMAL is enabled and must be reported"
+    );
+    assert_eq!(transitions[0].change.from, EventState::HIGH_LIMIT);
+    assert_eq!(transitions[0].change.to, EventState::NORMAL);
+    assert!(
+        transitions[0].distribute,
+        "TO_NORMAL is enabled — this notification must be distributed"
+    );
+
     let obj = db.get(&ee_oid).unwrap();
     assert_eq!(
         obj.read_property(PropertyIdentifier::EVENT_STATE, None)
             .unwrap(),
         PropertyValue::Enumerated(EventState::NORMAL.to_raw())
+    );
+}
+
+/// `Event_Enable` of zero suppresses every notification but must still track
+/// state, so a later re-enable resumes from the true condition rather than a
+/// stale NORMAL.
+#[test]
+fn out_of_range_event_enable_zero_still_tracks_event_state() {
+    let mut db = ObjectDatabase::new();
+
+    let mut ai = AnalogInputObject::new(12, "AI-12", 62).unwrap();
+    ai.set_present_value(15.0);
+    let ai_oid = ai.object_identifier();
+    db.add(Box::new(ai)).unwrap();
+
+    let mut ee =
+        EventEnrollmentObject::new(12, "EE-zero", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+        ai_oid,
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+    )));
+    ee.set_event_parameters(BACnetEventParameter::OutOfRange {
+        time_delay: 0,
+        low_limit: 20.0,
+        high_limit: 80.0,
+        deadband: 2.0,
+    });
+    ee.set_event_enable(0x00); // nothing distributed
+    let ee_oid = ee.object_identifier();
+    db.add(Box::new(ee)).unwrap();
+
+    let transitions = evaluate_event_enrollments(&mut db);
+    assert_eq!(transitions.len(), 1);
+    assert_eq!(transitions[0].change.to, EventState::LOW_LIMIT);
+    assert!(!transitions[0].distribute);
+
+    let obj = db.get(&ee_oid).unwrap();
+    assert_eq!(
+        obj.read_property(PropertyIdentifier::EVENT_STATE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(EventState::LOW_LIMIT.to_raw()),
+        "Event_State is a readable property, not a notification — it tracks \
+         the condition regardless of Event_Enable"
     );
 }
 

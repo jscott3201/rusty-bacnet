@@ -7,7 +7,7 @@ use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, ObjectType, Propert
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
-use crate::event::EventStateChange;
+use crate::event::TransitionOutcome;
 
 /// The core trait for all BACnet objects.
 ///
@@ -122,10 +122,14 @@ pub trait BACnetObject: Send + Sync {
     /// countdown advances once per elapsed second via
     /// [`tick_intrinsic_reporting`](Self::tick_intrinsic_reporting)).
     ///
-    /// Returns `Some(EventStateChange)` if a transition fired **and** the
-    /// matching `Event_Enable` bit is set, or `None` otherwise (no change,
-    /// delay seeded, or the object does not support intrinsic reporting).
-    fn evaluate_intrinsic_reporting(&mut self) -> Option<EventStateChange> {
+    /// Returns `Some(TransitionOutcome)` whenever a transition fired, or
+    /// `None` when none did (no change, delay seeded, or the object does not
+    /// support intrinsic reporting). A cleared `Event_Enable` bit sets the
+    /// outcome's `distribute` flag to false rather than withholding the
+    /// transition — Clause 13.2.2.1.4's transition actions run either way, and
+    /// `Event_Enable` disables only external distribution, downstream in the
+    /// notification-distribution process (Clause 13.2.5).
+    fn evaluate_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
         None
     }
 
@@ -133,10 +137,12 @@ pub trait BACnetObject: Send + Sync {
     ///
     /// Called by the server's one-second intrinsic-reporting task. Fires the
     /// pending transition when its delay elapses this tick, cancels it if the
-    /// triggering condition reverted, and returns `Some(EventStateChange)`
-    /// only when a transition fires **and** is `Event_Enable`-gated. Objects
-    /// without a delayed transition return `None`.
-    fn tick_intrinsic_reporting(&mut self) -> Option<EventStateChange> {
+    /// triggering condition reverted, and returns `Some(TransitionOutcome)`
+    /// when a transition fires. As with
+    /// [`evaluate_intrinsic_reporting`](Self::evaluate_intrinsic_reporting),
+    /// `Event_Enable` is reported via `distribute`, not by returning `None`.
+    /// Objects without a delayed transition return `None`.
+    fn tick_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
         None
     }
 
