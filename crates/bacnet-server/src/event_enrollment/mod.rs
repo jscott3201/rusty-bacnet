@@ -528,8 +528,10 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
         // non-NORMAL state the way the pre-#136 Event_Enable gate did.
         //
         // An object that does not model the property at all reads as an error
-        // here and is treated as enabled: the property is required (R) only on
-        // Event Enrollment, and absence must not silently disable detection.
+        // here and is treated as enabled. The property is required (R) on both
+        // Event Enrollment (Table 12-14) and Alert Enrollment (Table 12-61) and
+        // optional on most other types, so absence is common and must not
+        // silently disable detection.
         //
         // Removing this guard does NOT change observable behavior, and no test
         // fails if you do — `EventEnrollmentObject::set_event_state_internal`

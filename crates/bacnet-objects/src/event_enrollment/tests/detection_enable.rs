@@ -9,7 +9,7 @@ use super::super::*;
 /// present and readable on every Event Enrollment.
 ///
 /// The *value* TRUE is a project choice, not a spec requirement: 135-2020
-/// specifies no default for this property anywhere, and Clause 15.3.1.4 makes
+/// specifies no default for this property anywhere, and Clause 15.3's CreateObject Service Procedure makes
 /// the initial values of properties not named in a CreateObject request "a
 /// local matter". TRUE is chosen because it preserves the always-detecting
 /// behavior this object had before the property existed, and matches

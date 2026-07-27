@@ -1,10 +1,14 @@
 //! `Event_Detection_Enable` filtering in the three event-summarization
 //! services (ASHRAE 135-2020 Clause 13.2.4 Table 13-2, and the Service
-//! Procedures of Clauses 13.10.1.4, 13.11.1.4 and 13.12.1.4).
+//! Procedure of each of Clauses 13.10, 13.11 and 13.12).
 //!
-//! Each of those three clauses carries its own independent "shall be ignored"
-//! for an object whose `Event_Detection_Enable` is FALSE, so each service is
-//! tested separately rather than trusting one shared code path.
+//! Each of those three clauses states the exclusion independently, so each
+//! service is tested separately rather than trusting one shared code path. The
+//! wording differs and the difference matters: 13.10 and 13.11 say an object
+//! with the property FALSE "shall be ignored", while 13.12 inverts it into the
+//! search predicate — objects that "do not have an Event_Detection_Enable
+//! property with a value of FALSE" — which is what makes absence mean
+//! *included* rather than excluded.
 
 use super::*;
 use bacnet_objects::analog::AnalogInputObject;
@@ -102,7 +106,7 @@ fn alarm_summary_entry_count(db: &ObjectDatabase) -> usize {
     GetAlarmSummaryAck::decode(&buf).unwrap().entries.len()
 }
 
-/// Clause 13.10.1.4: "Any object that has an Event_Detection_Enable property
+/// Clause 13.10, Service Procedure: "Any object that has an Event_Detection_Enable property
 /// with a value of FALSE shall be ignored."
 #[test]
 fn get_alarm_summary_excludes_detection_disabled_object() {
@@ -120,7 +124,7 @@ fn get_alarm_summary_excludes_detection_disabled_object() {
 
 /// The exclusion tests the property, not the absence of the property.
 ///
-/// Clause 13.12.1.4 phrases it as a double negative — objects that "do not have
+/// Clause 13.12's Service Procedure phrases it as a double negative — objects that "do not have
 /// an Event_Detection_Enable property with a value of FALSE" are searched — so
 /// an object that does not model the property at all must still be reported.
 /// Getting this backwards would silently empty these responses for every object
@@ -167,7 +171,7 @@ fn summarization_includes_objects_without_the_property() {
     );
 }
 
-/// Clause 13.11.1.4 carries the same exclusion. This service matters most for
+/// Clause 13.11's Service Procedure carries the same exclusion. This service matters most for
 /// the check: unlike the other two it applies no default `Event_State` filter,
 /// so the exclusion cannot fall out of the forced-NORMAL invariant and has to
 /// be implemented explicitly.
@@ -205,7 +209,7 @@ fn get_enrollment_summary_excludes_detection_disabled_object() {
     );
 }
 
-/// Clause 13.12.1.4 carries the exclusion for GetEventInformation, the one
+/// Clause 13.12's Service Procedure carries the exclusion for GetEventInformation, the one
 /// summarization service Clause 13.2.4 requires notification-servers to
 /// support (the other two are deprecated).
 #[test]

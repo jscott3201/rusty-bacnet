@@ -100,7 +100,7 @@ fn detection_disabled_holds_event_state_at_normal() {
 /// that was ignored while disabled is now detected afresh from NORMAL.
 ///
 /// The standard is silent on the FALSE -> TRUE edge for this property — note
-/// the contrast with `Event_Algorithm_Inhibit`, which Clause 13.2.2.2 gives an
+/// the contrast with `Event_Algorithm_Inhibit`, which the standard gives an
 /// explicit re-arm rule ("any condition shall hold for its regular time delay
 /// after the change to FALSE"). Resuming from NORMAL is this implementation's
 /// choice, and follows from the reset having already run.
