@@ -28,6 +28,7 @@ pub struct EventEnrollmentObject {
     event_state: u32,
     event_enable: u8,
     acked_transitions: u8,
+    event_detection_enable: bool,
     notification_class: u32,
     fault_parameters: Option<FaultParameters>,
     status_flags: StatusFlags,
@@ -54,13 +55,45 @@ impl EventEnrollmentObject {
             object_property_reference: None,
             event_state: 0,
             event_enable: 0b111,
-            acked_transitions: 0b111,
+            // Clause 12.12: "Each flag shall have the value TRUE if no event of
+            // that type has ever occurred for the object." That all-TRUE value
+            // is also the initial condition the detection-disabled reset
+            // restores, so `RESET_ACKED_TRANSITIONS` names it once.
+            acked_transitions: Self::RESET_ACKED_TRANSITIONS,
+            event_detection_enable: true,
             notification_class: 0,
             fault_parameters: None,
             status_flags: StatusFlags::empty(),
             out_of_service: false,
             reliability: 0,
         })
+    }
+
+    /// `Acked_Transitions` in its initial condition: every transition flag TRUE,
+    /// meaning no event of that type has ever occurred (ASHRAE 135-2020
+    /// Clause 12.12).
+    const RESET_ACKED_TRANSITIONS: u8 = 0b111;
+
+    /// Apply the reset ASHRAE 135-2020 Clause 13.2.2.1 requires while
+    /// `Event_Detection_Enable` is FALSE: "no transitions shall occur,
+    /// Event_State shall be set to NORMAL, and Event_Time_Stamps,
+    /// Event_Message_Texts and Acked_Transitions shall be set to their
+    /// respective initial conditions."
+    ///
+    /// `Event_Time_Stamps` and `Event_Message_Texts` are not modeled on this
+    /// object yet (#123); when they are, their initial conditions belong here
+    /// — X'FF' octets / sequence number 0, and the empty string respectively.
+    ///
+    /// Only the `Event_State` assignment is observable today. Nothing on this
+    /// object ever clears `Acked_Transitions` — the alarm-acknowledgment
+    /// process of Clause 13.2.3 that would (and `acknowledge_alarm`, still
+    /// unimplemented here) is part of #123 — so the second line cannot change
+    /// the value and no test can prove it. It is written anyway so the reset is
+    /// already correct when #123 gives the field a mutator, rather than being a
+    /// line someone must remember to add later.
+    fn apply_detection_disabled_reset(&mut self) {
+        self.event_state = EventState::NORMAL.to_raw();
+        self.acked_transitions = Self::RESET_ACKED_TRANSITIONS;
     }
 
     /// Set the description string.
@@ -158,6 +191,9 @@ impl BACnetObject for EventEnrollmentObject {
                 unused_bits: 5,
                 data: vec![self.acked_transitions << 5],
             }),
+            p if p == PropertyIdentifier::EVENT_DETECTION_ENABLE => {
+                Ok(PropertyValue::Boolean(self.event_detection_enable))
+            }
             p if p == PropertyIdentifier::NOTIFICATION_CLASS => {
                 Ok(PropertyValue::Unsigned(self.notification_class as u64))
             }
@@ -197,6 +233,22 @@ impl BACnetObject for EventEnrollmentObject {
                     return Ok(());
                 }
                 return Err(common::invalid_data_type_error());
+            }
+            return Err(common::invalid_data_type_error());
+        }
+        if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {
+            if let PropertyValue::Boolean(v) = value {
+                self.event_detection_enable = v;
+                // Clause 12.12 states the disabled condition as an invariant —
+                // "When this property is FALSE, Event_State shall be NORMAL" —
+                // not as an action taken later. Resetting here rather than
+                // leaving it to the periodic evaluator closes the window in
+                // which a disabled object would still answer ReadProperty and
+                // the event-summarization services with a stale alarm state.
+                if !v {
+                    self.apply_detection_disabled_reset();
+                }
+                return Ok(());
             }
             return Err(common::invalid_data_type_error());
         }
@@ -249,9 +301,49 @@ impl BACnetObject for EventEnrollmentObject {
     /// network route (which rejects `EVENT_STATE`) and the internal lifecycle
     /// path are distinct (issue #130). Stores the modeled state verbatim; the
     /// only caller is the trusted server evaluator.
+    ///
+    /// Refuses any non-NORMAL state while `Event_Detection_Enable` is FALSE.
+    /// Clause 13.2.2.1 requires that "no transitions shall occur" in that case,
+    /// and the server evaluator already skips such objects — this guard makes
+    /// the invariant hold by construction rather than by the caller
+    /// remembering, so a future caller cannot reintroduce the violation.
     fn set_event_state_internal(&mut self, state: EventState) -> Result<(), Error> {
+        if !self.event_detection_enable && state != EventState::NORMAL {
+            return Err(common::write_access_denied_error());
+        }
         self.event_state = state.to_raw();
         Ok(())
+    }
+
+    /// Mirrors the `write_property` arms above, so PICS reports what dispatch
+    /// actually accepts.
+    ///
+    /// Enumerated rather than reusing `common::is_event_property_writable`:
+    /// that helper covers the intrinsic-reporting objects and includes
+    /// `HIGH_LIMIT`, `LOW_LIMIT`, `DEADBAND`, `LIMIT_ENABLE` and `TIME_DELAY`,
+    /// none of which an Event Enrollment accepts — it carries those inside
+    /// `Event_Parameters` instead. Reusing it would over-report writability.
+    ///
+    /// `Event_Detection_Enable` is writable even though Table 12-14 codes it R
+    /// rather than W: Clause 12.1.2 allows an R property to be writable "at the
+    /// implementor's option unless specifically prohibited in the text
+    /// describing that particular standard object's property", and Clause 12.12
+    /// prohibits nothing — it only says the value "is expected" to be set
+    /// during configuration, which is guidance, not a "shall". Annex K's
+    /// AE-AVM-A BIBB (Table K-17) positively requires a conforming workstation
+    /// to be able to *write* this property, so refusing the write would be
+    /// interoperably hostile.
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        common::is_common_writable(property)
+            || matches!(
+                property,
+                PropertyIdentifier::NOTIFY_TYPE
+                    | PropertyIdentifier::NOTIFICATION_CLASS
+                    | PropertyIdentifier::EVENT_ENABLE
+                    | PropertyIdentifier::EVENT_DETECTION_ENABLE
+                    | PropertyIdentifier::EVENT_PARAMETERS
+                    | PropertyIdentifier::FAULT_PARAMETERS
+            )
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
@@ -267,6 +359,7 @@ impl BACnetObject for EventEnrollmentObject {
             PropertyIdentifier::EVENT_STATE,
             PropertyIdentifier::EVENT_ENABLE,
             PropertyIdentifier::ACKED_TRANSITIONS,
+            PropertyIdentifier::EVENT_DETECTION_ENABLE,
             PropertyIdentifier::NOTIFICATION_CLASS,
             PropertyIdentifier::FAULT_PARAMETERS,
             PropertyIdentifier::STATUS_FLAGS,

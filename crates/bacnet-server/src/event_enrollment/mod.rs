@@ -520,6 +520,33 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
             continue;
         }
 
+        // Clause 13.2.2.1: "If the Event_Detection_Enable property is FALSE,
+        // then this state machine is not evaluated. In this case, no
+        // transitions shall occur". The accompanying reset is applied by the
+        // object when the property is written (Clause 12.12 states the disabled
+        // condition as an invariant), so skipping here cannot strand a stale
+        // non-NORMAL state the way the pre-#136 Event_Enable gate did.
+        //
+        // An object that does not model the property at all reads as an error
+        // here and is treated as enabled: the property is required (R) only on
+        // Event Enrollment, and absence must not silently disable detection.
+        //
+        // Removing this guard does NOT change observable behavior, and no test
+        // fails if you do — `EventEnrollmentObject::set_event_state_internal`
+        // independently refuses a non-NORMAL state while detection is off, and
+        // the push below is gated on that call succeeding. Verified by mutation;
+        // stated here so nobody deletes it believing it is covered. It stays for
+        // two reasons the object-level guard cannot serve: it implements the
+        // clause's first sentence literally (the algorithm genuinely does not
+        // run, and the monitored object is not read), and without it every pass
+        // over every disabled enrollment would do the full evaluation and then
+        // silently swallow an `Err` — once per interval, forever.
+        if let Ok(PropertyValue::Boolean(false)) =
+            enrollment.read_property(PropertyIdentifier::EVENT_DETECTION_ENABLE, None)
+        {
+            continue;
+        }
+
         let event_type_raw = match enrollment.read_property(PropertyIdentifier::EVENT_TYPE, None) {
             Ok(PropertyValue::Enumerated(v)) => v,
             _ => continue,

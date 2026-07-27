@@ -25,6 +25,7 @@ fn make_db_with_device_and_ai() -> ObjectDatabase {
 }
 
 mod async_dcc;
+mod detection_enable_summary;
 mod device_event;
 mod passwords;
 mod read_rpm;

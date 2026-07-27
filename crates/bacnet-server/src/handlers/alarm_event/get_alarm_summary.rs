@@ -13,6 +13,12 @@ pub fn handle_get_alarm_summary(db: &ObjectDatabase, buf: &mut BytesMut) -> Resu
 
     let mut entries = Vec::new();
     for (_oid, object) in db.iter_objects() {
+        // Clause 12.12: Event_Detection_Enable controls whether the object is
+        // considered by the event-summarization services.
+        if !super::event_detection_enabled(object) {
+            continue;
+        }
+
         let oid = object.object_identifier();
         let event_state = object
             .read_property(PropertyIdentifier::EVENT_STATE, None)

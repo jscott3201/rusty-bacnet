@@ -30,6 +30,13 @@ pub fn handle_get_event_information(
             continue;
         }
 
+        // Clause 12.12: Event_Detection_Enable controls whether the object is
+        // considered by the event-summarization services. Checked after the
+        // pagination skip so a disabled object cannot break resumption.
+        if !super::event_detection_enabled(object) {
+            continue;
+        }
+
         if let Ok(PropertyValue::Enumerated(state)) =
             object.read_property(PropertyIdentifier::EVENT_STATE, None)
         {

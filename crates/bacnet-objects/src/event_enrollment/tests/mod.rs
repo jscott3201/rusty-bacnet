@@ -1,3 +1,4 @@
 mod alert;
+mod detection_enable;
 mod enrollment;
 mod fault_parameters;

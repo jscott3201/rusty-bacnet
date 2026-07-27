@@ -21,6 +21,15 @@ pub fn handle_get_enrollment_summary(
 
     let mut entries = Vec::new();
     for (_oid, object) in db.iter_objects() {
+        // Clause 12.12: Event_Detection_Enable controls whether the object is
+        // considered by the event-summarization services. This service does not
+        // filter on Event_State by default, so unlike GetAlarmSummary and
+        // GetEventInformation the exclusion cannot fall out of the
+        // forced-NORMAL invariant — it has to be checked explicitly.
+        if !super::event_detection_enabled(object) {
+            continue;
+        }
+
         let oid = object.object_identifier();
 
         let event_state = object
