@@ -547,7 +547,7 @@ fn mso_is_createable_and_writable_match_factory() {
     assert!(mso.is_writable_property(PropertyIdentifier::STATE_TEXT));
     assert!(mso.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
     // EVENT_ENABLE read-only on MSO.
-    assert!(!mso.is_writable_property(PropertyIdentifier::EVENT_ENABLE));
+    assert!(mso.is_writable_property(PropertyIdentifier::EVENT_ENABLE));
 }
 
 #[test]

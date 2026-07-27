@@ -806,9 +806,13 @@ macro_rules! impl_intrinsic_reporting {
         $detector_field:ident,
         $present_value_field:ident,
         $feedback_value_field:ident,
-        $reliability_field:ident
+        $reliability_field:ident,
+        $event_detection_enable_field:ident
     ) => {
         fn evaluate_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
+            if !self.$event_detection_enable_field {
+                return None;
+            }
             self.$detector_field.probe(
                 self.$present_value_field,
                 self.$feedback_value_field,
@@ -817,6 +821,9 @@ macro_rules! impl_intrinsic_reporting {
         }
 
         fn tick_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
+            if !self.$event_detection_enable_field {
+                return None;
+            }
             self.$detector_field.tick(
                 self.$present_value_field,
                 self.$feedback_value_field,
@@ -824,6 +831,13 @@ macro_rules! impl_intrinsic_reporting {
             )
         }
     };
+    // There is deliberately no four-field arm — no feedback-driven detector without an
+    // Event_Detection_Enable gate. One existed briefly during this change and became unused
+    // once Binary Output and Multi-state Output moved to the gated form. Leaving it exported
+    // would have offered downstream implementors a supported way to wire a three-input
+    // detector with detection permanently on, which is the exact defect this gate was added
+    // to fix: Clauses 12.7 and 12.19 make intrinsic reporting optional ("required if the
+    // object supports intrinsic reporting"), and an ungated detector makes it mandatory.
     ($detector_field:ident, $present_value_field:ident, $reliability_field:ident) => {
         fn evaluate_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
             self.$detector_field

@@ -1,4 +1,8 @@
 use super::*;
+use crate::common::{
+    read_analog_event_properties, read_generic_event_properties, write_analog_event_properties,
+    write_generic_event_properties,
+};
 
 // ---------------------------------------------------------------------------
 // AnalogValue (type 2)
@@ -117,7 +121,10 @@ impl BACnetObject for AnalogValueObject {
         if let Some(result) = read_common_properties!(self, property, array_index) {
             return result;
         }
-        if let Some(result) = read_event_properties!(self, property) {
+        if let Some(result) = read_analog_event_properties!(self, property) {
+            return result;
+        }
+        if let Some(result) = read_generic_event_properties!(self, property) {
             return result;
         }
         match property {
@@ -212,7 +219,10 @@ impl BACnetObject for AnalogValueObject {
         {
             return result;
         }
-        if let Some(result) = write_event_properties!(self, property, value) {
+        if let Some(result) = write_analog_event_properties!(self, property, value) {
+            return result;
+        }
+        if let Some(result) = write_generic_event_properties!(self, property, value) {
             return result;
         }
         Err(common::write_access_denied_error())

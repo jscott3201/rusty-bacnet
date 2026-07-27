@@ -500,5 +500,5 @@ fn bo_is_writable_property_mirrors_write_property() {
     assert!(bo.is_writable_property(PropertyIdentifier::INACTIVE_TEXT));
     assert!(bo.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
     // Not event-writable (read-only on BO).
-    assert!(!bo.is_writable_property(PropertyIdentifier::EVENT_ENABLE));
+    assert!(bo.is_writable_property(PropertyIdentifier::EVENT_ENABLE));
 }
