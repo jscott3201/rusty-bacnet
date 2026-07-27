@@ -206,3 +206,44 @@ fn re_enabling_detection_resumes_from_normal() {
     // And detection works again.
     assert!(ee.set_event_state_internal(EventState::LOW_LIMIT).is_ok());
 }
+
+/// The `set_event_state` seeder honors the same invariant.
+///
+/// It is `pub` and bypasses both `write_property` and
+/// `set_event_state_internal`, so without its own guard it would be a public
+/// way around a rule the rest of the object enforces — the invariant would hold
+/// only by convention, and the claim that it holds by construction would be
+/// false.
+#[test]
+fn disabled_detection_ignores_non_normal_seed() {
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    ee.write_property(
+        PropertyIdentifier::EVENT_DETECTION_ENABLE,
+        None,
+        PropertyValue::Boolean(false),
+        None,
+    )
+    .unwrap();
+
+    ee.set_event_state(EventState::HIGH_LIMIT.to_raw());
+
+    assert_eq!(
+        ee.read_property(PropertyIdentifier::EVENT_STATE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(EventState::NORMAL.to_raw()),
+        "a non-NORMAL seed must not take effect while detection is disabled"
+    );
+}
+
+/// With detection enabled the seeder works normally — the guard is scoped, not
+/// a blanket disable of the setter.
+#[test]
+fn enabled_detection_accepts_seed() {
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    ee.set_event_state(EventState::HIGH_LIMIT.to_raw());
+    assert_eq!(
+        ee.read_property(PropertyIdentifier::EVENT_STATE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(EventState::HIGH_LIMIT.to_raw())
+    );
+}

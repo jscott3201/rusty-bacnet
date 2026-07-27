@@ -120,7 +120,17 @@ impl EventEnrollmentObject {
     }
 
     /// Set the event state (raw u32).
+    ///
+    /// A configuration/seeding helper, not a lifecycle path — the evaluator
+    /// uses [`BACnetObject::set_event_state_internal`]. It honors the same
+    /// Clause 13.2.2.1 rule: while `Event_Detection_Enable` is FALSE the object
+    /// must read NORMAL, so a non-NORMAL seed is ignored rather than silently
+    /// breaking the invariant. Without this the public API would offer a way
+    /// around a guard the rest of the object enforces.
     pub fn set_event_state(&mut self, state: u32) {
+        if !self.event_detection_enable && state != EventState::NORMAL.to_raw() {
+            return;
+        }
         self.event_state = state;
     }
 

@@ -8,32 +8,90 @@
 
 use super::*;
 use bacnet_objects::analog::AnalogInputObject;
-use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::traits::BACnetObject;
-use bacnet_types::enums::{EventState, EventType};
 
-/// An enrollment sitting in HIGH_LIMIT, with `Event_Detection_Enable` as given.
+/// A minimal event-initiating object that is simultaneously in HIGH_LIMIT and
+/// has `Event_Detection_Enable` FALSE.
 ///
-/// When disabling, `set_event_state` runs *after* the write so the object is
-/// left in the inconsistent state a non-conformant peer or a persistence
-/// restore could produce. That keeps these tests honest: they must prove the
-/// services filter on the property, not merely that the reset happened to move
-/// `Event_State` to NORMAL.
+/// A mock rather than a real `EventEnrollmentObject`, deliberately.
+/// `EventEnrollmentObject` now enforces the Clause 13.2.2.1 invariant on every
+/// path — `write_property`, `set_event_state_internal` and the `set_event_state`
+/// seeder all refuse to leave it non-NORMAL while detection is off — so it
+/// *cannot* reach this state, and a fixture built from it would prove only that
+/// the reset works, not that these services filter on the property.
+///
+/// The state is still reachable in the wild: `AlertEnrollmentObject` exposes
+/// `Event_Detection_Enable` and applies no reset (#205), and the standard states
+/// the exclusion independently in each of the three Service Procedures rather
+/// than deriving it from `Event_State`. So the filter must be tested directly,
+/// against an object that can actually be inconsistent.
+struct DisabledAlarmingObject {
+    oid: ObjectIdentifier,
+    detection_enable: bool,
+}
+
+impl BACnetObject for DisabledAlarmingObject {
+    fn object_identifier(&self) -> ObjectIdentifier {
+        self.oid
+    }
+    fn object_name(&self) -> &str {
+        "MOCK-1"
+    }
+    fn read_property(
+        &self,
+        property: PropertyIdentifier,
+        _array_index: Option<u32>,
+    ) -> Result<PropertyValue, Error> {
+        match property {
+            p if p == PropertyIdentifier::OBJECT_IDENTIFIER => {
+                Ok(PropertyValue::ObjectIdentifier(self.oid))
+            }
+            p if p == PropertyIdentifier::EVENT_STATE => Ok(PropertyValue::Enumerated(
+                bacnet_types::enums::EventState::HIGH_LIMIT.to_raw(),
+            )),
+            p if p == PropertyIdentifier::EVENT_DETECTION_ENABLE => {
+                Ok(PropertyValue::Boolean(self.detection_enable))
+            }
+            p if p == PropertyIdentifier::EVENT_TYPE => Ok(PropertyValue::Enumerated(
+                bacnet_types::enums::EventType::OUT_OF_RANGE.to_raw(),
+            )),
+            p if p == PropertyIdentifier::NOTIFICATION_CLASS => Ok(PropertyValue::Unsigned(0)),
+            _ => Err(Error::Protocol {
+                class: bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32,
+                code: bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+            }),
+        }
+    }
+    fn write_property(
+        &mut self,
+        _property: PropertyIdentifier,
+        _array_index: Option<u32>,
+        _value: PropertyValue,
+        _priority: Option<u8>,
+    ) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32,
+            code: bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+        })
+    }
+    fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
+        static PROPS: &[PropertyIdentifier] = &[
+            PropertyIdentifier::EVENT_STATE,
+            PropertyIdentifier::EVENT_DETECTION_ENABLE,
+            PropertyIdentifier::EVENT_TYPE,
+            PropertyIdentifier::NOTIFICATION_CLASS,
+        ];
+        std::borrow::Cow::Borrowed(PROPS)
+    }
+}
+
 fn db_with_enrollment(detection_enabled: bool) -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
-
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::OUT_OF_RANGE.to_raw()).unwrap();
-    if !detection_enabled {
-        ee.write_property(
-            PropertyIdentifier::EVENT_DETECTION_ENABLE,
-            None,
-            PropertyValue::Boolean(false),
-            None,
-        )
-        .unwrap();
-    }
-    ee.set_event_state(EventState::HIGH_LIMIT.to_raw());
-    db.add(Box::new(ee)).unwrap();
+    db.add(Box::new(DisabledAlarmingObject {
+        oid: ObjectIdentifier::new(bacnet_types::enums::ObjectType::EVENT_ENROLLMENT, 1).unwrap(),
+        detection_enable: detection_enabled,
+    }))
+    .unwrap();
     db
 }
 

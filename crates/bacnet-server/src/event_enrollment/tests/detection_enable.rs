@@ -14,7 +14,6 @@
 //! `disabled_detection_refuses_non_normal_internal_state` in bacnet-objects.
 
 use super::super::*;
-use super::*;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::traits::BACnetObject;
