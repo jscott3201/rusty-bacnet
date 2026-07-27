@@ -1,5 +1,11 @@
 use super::*;
 
+/// `Reliability::NO_FAULT_DETECTED`. These algorithm tests hold reliability
+/// constant so the event algorithm, rather than Clause 13.2.2 fault
+/// precedence, is what decides the state. Fault precedence has its own
+/// tests below.
+const NO_FAULT: u32 = bacnet_types::enums::Reliability::NO_FAULT_DETECTED.to_raw();
+
 fn make_detector() -> OutOfRangeDetector {
     OutOfRangeDetector {
         high_limit: 80.0,
@@ -19,14 +25,14 @@ fn make_detector() -> OutOfRangeDetector {
 #[test]
 fn normal_stays_normal_within_limits() {
     let mut det = make_detector();
-    assert!(det.evaluate(50.0).is_none());
+    assert!(det.evaluate(50.0, NO_FAULT).is_none());
     assert_eq!(det.event_state, EventState::NORMAL);
 }
 
 #[test]
 fn normal_to_high_limit() {
     let mut det = make_detector();
-    let change = det.evaluate(81.0).unwrap().change;
+    let change = det.evaluate(81.0, NO_FAULT).unwrap().change;
     assert_eq!(change.from, EventState::NORMAL);
     assert_eq!(change.to, EventState::HIGH_LIMIT);
     assert_eq!(det.event_state, EventState::HIGH_LIMIT);
@@ -35,7 +41,7 @@ fn normal_to_high_limit() {
 #[test]
 fn normal_to_low_limit() {
     let mut det = make_detector();
-    let change = det.evaluate(19.0).unwrap().change;
+    let change = det.evaluate(19.0, NO_FAULT).unwrap().change;
     assert_eq!(change.from, EventState::NORMAL);
     assert_eq!(change.to, EventState::LOW_LIMIT);
     assert_eq!(det.event_state, EventState::LOW_LIMIT);
@@ -45,21 +51,21 @@ fn normal_to_low_limit() {
 fn at_boundary_no_transition() {
     let mut det = make_detector();
     // At exactly high_limit — not exceeded, stays NORMAL
-    assert!(det.evaluate(80.0).is_none());
+    assert!(det.evaluate(80.0, NO_FAULT).is_none());
     // At exactly low_limit — not below, stays NORMAL
-    assert!(det.evaluate(20.0).is_none());
+    assert!(det.evaluate(20.0, NO_FAULT).is_none());
 }
 
 #[test]
 fn high_limit_to_normal_with_deadband() {
     let mut det = make_detector();
-    det.evaluate(81.0); // → HIGH_LIMIT
+    det.evaluate(81.0, NO_FAULT); // → HIGH_LIMIT
 
     // Still above (high_limit - deadband) = 78.0 — stay HIGH_LIMIT
-    assert!(det.evaluate(79.0).is_none());
+    assert!(det.evaluate(79.0, NO_FAULT).is_none());
 
     // Drop below deadband threshold
-    let change = det.evaluate(77.0).unwrap().change;
+    let change = det.evaluate(77.0, NO_FAULT).unwrap().change;
     assert_eq!(change.from, EventState::HIGH_LIMIT);
     assert_eq!(change.to, EventState::NORMAL);
 }
@@ -67,13 +73,13 @@ fn high_limit_to_normal_with_deadband() {
 #[test]
 fn low_limit_to_normal_with_deadband() {
     let mut det = make_detector();
-    det.evaluate(19.0); // → LOW_LIMIT
+    det.evaluate(19.0, NO_FAULT); // → LOW_LIMIT
 
     // Still below (low_limit + deadband) = 22.0 — stay LOW_LIMIT
-    assert!(det.evaluate(21.0).is_none());
+    assert!(det.evaluate(21.0, NO_FAULT).is_none());
 
     // Rise above deadband threshold
-    let change = det.evaluate(23.0).unwrap().change;
+    let change = det.evaluate(23.0, NO_FAULT).unwrap().change;
     assert_eq!(change.from, EventState::LOW_LIMIT);
     assert_eq!(change.to, EventState::NORMAL);
 }
@@ -81,10 +87,10 @@ fn low_limit_to_normal_with_deadband() {
 #[test]
 fn high_limit_to_low_limit_direct() {
     let mut det = make_detector();
-    det.evaluate(81.0); // → HIGH_LIMIT
+    det.evaluate(81.0, NO_FAULT); // → HIGH_LIMIT
 
     // Drop directly below low_limit
-    let change = det.evaluate(19.0).unwrap().change;
+    let change = det.evaluate(19.0, NO_FAULT).unwrap().change;
     assert_eq!(change.from, EventState::HIGH_LIMIT);
     assert_eq!(change.to, EventState::LOW_LIMIT);
 }
@@ -92,10 +98,10 @@ fn high_limit_to_low_limit_direct() {
 #[test]
 fn low_limit_to_high_limit_direct() {
     let mut det = make_detector();
-    det.evaluate(19.0); // → LOW_LIMIT
+    det.evaluate(19.0, NO_FAULT); // → LOW_LIMIT
 
     // Jump directly above high_limit
-    let change = det.evaluate(81.0).unwrap().change;
+    let change = det.evaluate(81.0, NO_FAULT).unwrap().change;
     assert_eq!(change.from, EventState::LOW_LIMIT);
     assert_eq!(change.to, EventState::HIGH_LIMIT);
 }
@@ -106,7 +112,7 @@ fn high_limit_disabled_no_transition() {
     det.limit_enable.high_limit_enable = false;
 
     // Above high_limit but disabled — stays NORMAL
-    assert!(det.evaluate(100.0).is_none());
+    assert!(det.evaluate(100.0, NO_FAULT).is_none());
 }
 
 #[test]
@@ -115,15 +121,15 @@ fn low_limit_disabled_no_transition() {
     det.limit_enable.low_limit_enable = false;
 
     // Below low_limit but disabled — stays NORMAL
-    assert!(det.evaluate(0.0).is_none());
+    assert!(det.evaluate(0.0, NO_FAULT).is_none());
 }
 
 #[test]
 fn both_limits_disabled() {
     let mut det = make_detector();
     det.limit_enable = LimitEnable::NONE;
-    assert!(det.evaluate(100.0).is_none());
-    assert!(det.evaluate(0.0).is_none());
+    assert!(det.evaluate(100.0, NO_FAULT).is_none());
+    assert!(det.evaluate(0.0, NO_FAULT).is_none());
 }
 
 #[test]
@@ -145,13 +151,13 @@ fn limit_enable_bits_round_trip() {
 #[test]
 fn deadband_at_exact_boundary() {
     let mut det = make_detector();
-    det.evaluate(81.0); // → HIGH_LIMIT
+    det.evaluate(81.0, NO_FAULT); // → HIGH_LIMIT
 
     // At exactly (high_limit - deadband) = 78.0 — still HIGH_LIMIT (need to be below)
-    assert!(det.evaluate(78.0).is_none());
+    assert!(det.evaluate(78.0, NO_FAULT).is_none());
 
     // Just below
-    let change = det.evaluate(77.99).unwrap().change;
+    let change = det.evaluate(77.99, NO_FAULT).unwrap().change;
     assert_eq!(change.to, EventState::NORMAL);
 }
 
@@ -279,7 +285,7 @@ fn event_enable_zero_suppresses_distribution_not_the_transition() {
         (19.0, EventState::LOW_LIMIT),
     ] {
         let outcome = det
-            .evaluate(pv)
+            .evaluate(pv, NO_FAULT)
             .expect("transition is reported even when suppressed");
         assert!(!outcome.distribute);
         assert_eq!(outcome.change.to, expected);
@@ -294,24 +300,24 @@ fn event_enable_to_normal_only() {
 
     // NORMAL → HIGH_LIMIT: TO_OFFNORMAL not enabled, so not distributed —
     // but still reported, and Event_State still advances.
-    let outcome = det.evaluate(81.0).unwrap();
+    let outcome = det.evaluate(81.0, NO_FAULT).unwrap();
     assert!(!outcome.distribute);
     assert_eq!(outcome.change.to, EventState::HIGH_LIMIT);
     assert_eq!(det.event_state, EventState::HIGH_LIMIT);
 
     // HIGH_LIMIT → NORMAL: TO_NORMAL enabled, fires
-    let change = det.evaluate(50.0).unwrap().change;
+    let change = det.evaluate(50.0, NO_FAULT).unwrap().change;
     assert_eq!(change.from, EventState::HIGH_LIMIT);
     assert_eq!(change.to, EventState::NORMAL);
 
     // NORMAL → LOW_LIMIT: TO_OFFNORMAL not enabled, so not distributed.
-    let outcome = det.evaluate(19.0).unwrap();
+    let outcome = det.evaluate(19.0, NO_FAULT).unwrap();
     assert!(!outcome.distribute);
     assert_eq!(outcome.change.to, EventState::LOW_LIMIT);
     assert_eq!(det.event_state, EventState::LOW_LIMIT);
 
     // LOW_LIMIT → NORMAL: TO_NORMAL enabled, fires
-    let change = det.evaluate(50.0).unwrap().change;
+    let change = det.evaluate(50.0, NO_FAULT).unwrap().change;
     assert_eq!(change.from, EventState::LOW_LIMIT);
     assert_eq!(change.to, EventState::NORMAL);
 }
@@ -322,11 +328,11 @@ fn event_enable_to_offnormal_only() {
     det.event_enable = 0x01; // only TO_OFFNORMAL
 
     // NORMAL → HIGH_LIMIT: TO_OFFNORMAL enabled, fires
-    let change = det.evaluate(81.0).unwrap().change;
+    let change = det.evaluate(81.0, NO_FAULT).unwrap().change;
     assert_eq!(change.to, EventState::HIGH_LIMIT);
 
     // HIGH_LIMIT → NORMAL: TO_NORMAL not enabled, so not distributed.
-    let outcome = det.evaluate(50.0).unwrap();
+    let outcome = det.evaluate(50.0, NO_FAULT).unwrap();
     assert!(!outcome.distribute);
     assert_eq!(outcome.change.to, EventState::NORMAL);
     assert_eq!(det.event_state, EventState::NORMAL);
@@ -351,7 +357,7 @@ fn cos_normal_when_no_alarm_values() {
         event_enable: 0x07,
         ..Default::default()
     };
-    assert!(det.evaluate(0).is_none()); // empty alarm_values → always NORMAL
+    assert!(det.evaluate(0, NO_FAULT).is_none()); // empty alarm_values → always NORMAL
 }
 
 #[test]
@@ -361,7 +367,7 @@ fn cos_normal_to_offnormal() {
         event_enable: 0x07,
         ..Default::default()
     };
-    let change = det.evaluate(1).unwrap().change;
+    let change = det.evaluate(1, NO_FAULT).unwrap().change;
     assert_eq!(change.from, EventState::NORMAL);
     assert_eq!(change.to, EventState::OFFNORMAL);
 }
@@ -373,8 +379,8 @@ fn cos_offnormal_to_normal() {
         event_enable: 0x07,
         ..Default::default()
     };
-    det.evaluate(1); // → OFFNORMAL
-    let change = det.evaluate(0).unwrap().change; // back to NORMAL
+    det.evaluate(1, NO_FAULT); // → OFFNORMAL
+    let change = det.evaluate(0, NO_FAULT).unwrap().change; // back to NORMAL
     assert_eq!(change.from, EventState::OFFNORMAL);
     assert_eq!(change.to, EventState::NORMAL);
 }
@@ -386,8 +392,8 @@ fn cos_stays_offnormal_while_in_alarm() {
         event_enable: 0x07,
         ..Default::default()
     };
-    det.evaluate(1); // → OFFNORMAL
-    assert!(det.evaluate(1).is_none()); // still alarm value, no change
+    det.evaluate(1, NO_FAULT); // → OFFNORMAL
+    assert!(det.evaluate(1, NO_FAULT).is_none()); // still alarm value, no change
 }
 
 #[test]
@@ -397,11 +403,11 @@ fn cos_multistate_alarm_values() {
         event_enable: 0x07,
         ..Default::default()
     };
-    assert!(det.evaluate(1).is_none()); // not an alarm state
-    let change = det.evaluate(5).unwrap().change;
+    assert!(det.evaluate(1, NO_FAULT).is_none()); // not an alarm state
+    let change = det.evaluate(5, NO_FAULT).unwrap().change;
     assert_eq!(change.to, EventState::OFFNORMAL);
-    assert!(det.evaluate(3).is_none()); // still offnormal (different alarm value)
-    let change = det.evaluate(2).unwrap().change;
+    assert!(det.evaluate(3, NO_FAULT).is_none()); // still offnormal (different alarm value)
+    let change = det.evaluate(2, NO_FAULT).unwrap().change;
     assert_eq!(change.to, EventState::NORMAL);
 }
 
@@ -413,7 +419,7 @@ fn cmdfail_matching_stays_normal() {
         event_enable: 0x07,
         ..Default::default()
     };
-    assert!(det.evaluate(1, 1).is_none()); // present == feedback
+    assert!(det.evaluate(1, 1, NO_FAULT).is_none()); // present == feedback
 }
 
 #[test]
@@ -422,7 +428,7 @@ fn cmdfail_mismatch_goes_offnormal() {
         event_enable: 0x07,
         ..Default::default()
     };
-    let change = det.evaluate(1, 0).unwrap().change; // present != feedback
+    let change = det.evaluate(1, 0, NO_FAULT).unwrap().change; // present != feedback
     assert_eq!(change.to, EventState::OFFNORMAL);
 }
 
@@ -432,8 +438,8 @@ fn cmdfail_match_restores_normal() {
         event_enable: 0x07,
         ..Default::default()
     };
-    det.evaluate(1, 0); // → OFFNORMAL
-    let change = det.evaluate(1, 1).unwrap().change; // match → NORMAL
+    det.evaluate(1, 0, NO_FAULT); // → OFFNORMAL
+    let change = det.evaluate(1, 1, NO_FAULT).unwrap().change; // match → NORMAL
     assert_eq!(change.to, EventState::NORMAL);
 }
 
@@ -454,7 +460,7 @@ fn make_delayed_detector(time_delay: u32) -> OutOfRangeDetector {
 #[test]
 fn time_delay_zero_fires_immediately_on_probe() {
     let mut det = make_delayed_detector(0);
-    let change = det.probe(81.0).unwrap().change;
+    let change = det.probe(81.0, NO_FAULT).unwrap().change;
     assert_eq!(change.to, EventState::HIGH_LIMIT);
     assert_eq!(det.event_state, EventState::HIGH_LIMIT);
     assert!(det.pending.is_none());
@@ -463,7 +469,7 @@ fn time_delay_zero_fires_immediately_on_probe() {
 #[test]
 fn time_delay_nonzero_probe_seeds_pending_without_firing() {
     let mut det = make_delayed_detector(3);
-    assert!(det.probe(81.0).is_none());
+    assert!(det.probe(81.0, NO_FAULT).is_none());
     // Event_State stays at the confirmed (old) state during the delay.
     assert_eq!(det.event_state, EventState::NORMAL);
     let pending = det.pending.expect("pending seeded");
@@ -478,7 +484,7 @@ fn time_delay_repeated_probes_do_not_accelerate_countdown() {
     // countdown. Three probes then three more — still pending, full delay.
     let mut det = make_delayed_detector(3);
     for _ in 0..6 {
-        assert!(det.probe(81.0).is_none());
+        assert!(det.probe(81.0, NO_FAULT).is_none());
     }
     assert_eq!(det.event_state, EventState::NORMAL);
     let pending = det.pending.expect("pending still seeded");
@@ -497,12 +503,12 @@ fn time_delay_redundant_probe_does_not_reset_countdown() {
     // than the 1s tick must not pin the transition forever. Interleave probe
     // and tick to prove the elapsed countdown survives a redundant probe.
     let mut det = make_delayed_detector(3);
-    det.probe(81.0); // seed HIGH_LIMIT, remaining = 3
-    assert!(det.tick(81.0).is_none()); // remaining 2
+    det.probe(81.0, NO_FAULT); // seed HIGH_LIMIT, remaining = 3
+    assert!(det.tick(81.0, NO_FAULT).is_none()); // remaining 2
 
     // A redundant probe of the same out-of-range value: the elapsed second
     // must NOT be erased. `remaining` stays 2, not reset to 3.
-    assert!(det.probe(81.0).is_none());
+    assert!(det.probe(81.0, NO_FAULT).is_none());
     assert_eq!(
         det.pending.as_ref().unwrap().remaining,
         2,
@@ -510,8 +516,8 @@ fn time_delay_redundant_probe_does_not_reset_countdown() {
     );
 
     // And the transition still fires after the remaining ticks, not 3 more.
-    assert!(det.tick(81.0).is_none()); // remaining 1
-    let change = det.tick(81.0).unwrap().change; // remaining 0 → fire
+    assert!(det.tick(81.0, NO_FAULT).is_none()); // remaining 1
+    let change = det.tick(81.0, NO_FAULT).unwrap().change; // remaining 0 → fire
     assert_eq!(change.to, EventState::HIGH_LIMIT);
     assert_eq!(det.event_state, EventState::HIGH_LIMIT);
 }
@@ -521,11 +527,11 @@ fn time_delay_chattering_input_still_fires() {
     // The full pinning scenario: writes faster than the 1s tick. A 3s delay
     // must still elapse after exactly 3 ticks despite sub-tick redundant writes.
     let mut det = make_delayed_detector(3);
-    det.probe(81.0); // remaining 3
+    det.probe(81.0, NO_FAULT); // remaining 3
     for _ in 0..3 {
         // Chatter: a redundant probe before each tick.
-        assert!(det.probe(81.0).is_none());
-        let r = det.tick(81.0);
+        assert!(det.probe(81.0, NO_FAULT).is_none());
+        let r = det.tick(81.0, NO_FAULT);
         // First two ticks: no fire. Third tick (remaining 0): fire.
         if det.pending.is_some() {
             assert!(r.is_none());
@@ -540,12 +546,12 @@ fn time_delay_chattering_input_still_fires() {
 #[test]
 fn time_delay_fires_after_exact_tick_count() {
     let mut det = make_delayed_detector(3);
-    det.probe(81.0); // seed, remaining = 3
+    det.probe(81.0, NO_FAULT); // seed, remaining = 3
     assert_eq!(det.event_state, EventState::NORMAL);
 
-    assert!(det.tick(81.0).is_none()); // remaining 2
-    assert!(det.tick(81.0).is_none()); // remaining 1
-    let change = det.tick(81.0).unwrap().change; // remaining 0 → fire
+    assert!(det.tick(81.0, NO_FAULT).is_none()); // remaining 2
+    assert!(det.tick(81.0, NO_FAULT).is_none()); // remaining 1
+    let change = det.tick(81.0, NO_FAULT).unwrap().change; // remaining 0 → fire
     assert_eq!(change.from, EventState::NORMAL);
     assert_eq!(change.to, EventState::HIGH_LIMIT);
     assert_eq!(det.event_state, EventState::HIGH_LIMIT);
@@ -555,28 +561,28 @@ fn time_delay_fires_after_exact_tick_count() {
 #[test]
 fn time_delay_cancelled_on_revert_before_expiry() {
     let mut det = make_delayed_detector(3);
-    det.probe(81.0); // seed pending HIGH_LIMIT
-    assert!(det.tick(81.0).is_none()); // remaining 2
+    det.probe(81.0, NO_FAULT); // seed pending HIGH_LIMIT
+    assert!(det.tick(81.0, NO_FAULT).is_none()); // remaining 2
 
     // Condition clears mid-delay: pending cancelled, no notification, no state change.
-    assert!(det.tick(50.0).is_none());
+    assert!(det.tick(50.0, NO_FAULT).is_none());
     assert!(det.pending.is_none());
     assert_eq!(det.event_state, EventState::NORMAL);
 
     // A subsequent tick with no out-of-range condition fires nothing.
-    assert!(det.tick(50.0).is_none());
+    assert!(det.tick(50.0, NO_FAULT).is_none());
     assert_eq!(det.event_state, EventState::NORMAL);
 }
 
 #[test]
 fn time_delay_reseeded_when_target_changes_mid_delay() {
     let mut det = make_delayed_detector(2);
-    det.probe(81.0); // pending HIGH_LIMIT, remaining 2
-    assert!(det.tick(81.0).is_none()); // remaining 1
+    det.probe(81.0, NO_FAULT); // pending HIGH_LIMIT, remaining 2
+    assert!(det.tick(81.0, NO_FAULT).is_none()); // remaining 1
 
     // Jump to a different out-of-range target (LOW_LIMIT): re-seed the delay
     // for the new target without firing the old one.
-    assert!(det.tick(19.0).is_none());
+    assert!(det.tick(19.0, NO_FAULT).is_none());
     let pending = det.pending.expect("re-seeded for new target");
     assert_eq!(pending.state, EventState::LOW_LIMIT);
     assert_eq!(pending.remaining, 2);
@@ -591,10 +597,10 @@ fn time_delay_change_of_state_seeds_and_fires() {
         time_delay: 2,
         ..Default::default()
     };
-    assert!(det.probe(1).is_none());
+    assert!(det.probe(1, NO_FAULT).is_none());
     assert_eq!(det.event_state, EventState::NORMAL);
-    assert!(det.tick(1).is_none()); // remaining 1
-    let change = det.tick(1).unwrap().change; // fire
+    assert!(det.tick(1, NO_FAULT).is_none()); // remaining 1
+    let change = det.tick(1, NO_FAULT).unwrap().change; // fire
     assert_eq!(change.to, EventState::OFFNORMAL);
     assert_eq!(det.event_state, EventState::OFFNORMAL);
 }
@@ -606,9 +612,9 @@ fn time_delay_command_failure_seeds_and_fires() {
         time_delay: 1,
         ..Default::default()
     };
-    assert!(det.probe(1, 0).is_none()); // mismatch → pending OFFNORMAL
+    assert!(det.probe(1, 0, NO_FAULT).is_none()); // mismatch → pending OFFNORMAL
     assert_eq!(det.event_state, EventState::NORMAL);
-    let change = det.tick(1, 0).unwrap().change; // remaining 0 → fire
+    let change = det.tick(1, 0, NO_FAULT).unwrap().change; // remaining 0 → fire
     assert_eq!(change.to, EventState::OFFNORMAL);
 }
 
@@ -619,9 +625,12 @@ fn time_delay_event_enable_gates_distribution_not_state_during_delay() {
     // `distribute` false so the notification is suppressed at the send site.
     let mut det = make_delayed_detector(1);
     det.event_enable = 0x00;
-    assert!(det.probe(81.0).is_none(), "delay seeded, nothing fired yet");
+    assert!(
+        det.probe(81.0, NO_FAULT).is_none(),
+        "delay seeded, nothing fired yet"
+    );
     let outcome = det
-        .tick(81.0)
+        .tick(81.0, NO_FAULT)
         .expect("delay elapsed: transition is reported");
     assert!(!outcome.distribute);
     assert_eq!(outcome.change.to, EventState::HIGH_LIMIT);

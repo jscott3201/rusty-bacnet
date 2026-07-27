@@ -88,7 +88,7 @@ impl BACnetObject for MultiStateInputObject {
         true
     }
 
-    crate::impl_intrinsic_reporting!(event_detector, present_value);
+    crate::impl_intrinsic_reporting!(event_detector, present_value, reliability);
 
     fn read_property(
         &self,

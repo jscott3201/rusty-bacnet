@@ -257,7 +257,7 @@ impl BACnetObject for AnalogValueObject {
         Some(self.cov_increment)
     }
 
-    crate::impl_intrinsic_reporting!(event_detector, present_value);
+    crate::impl_intrinsic_reporting!(event_detector, present_value, reliability);
 
     fn acknowledge_alarm(&mut self, transition_bit: u8) -> Result<(), bacnet_types::error::Error> {
         self.event_detector.acked_transitions |= transition_bit & 0x07;

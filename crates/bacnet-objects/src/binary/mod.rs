@@ -77,7 +77,7 @@ impl BACnetObject for BinaryInputObject {
         true
     }
 
-    crate::impl_intrinsic_reporting!(event_detector, present_value);
+    crate::impl_intrinsic_reporting!(event_detector, present_value, reliability);
 
     fn read_property(
         &self,
@@ -294,7 +294,7 @@ impl BACnetObject for BinaryOutputObject {
         true
     }
 
-    crate::impl_intrinsic_reporting!(event_detector, present_value);
+    crate::impl_intrinsic_reporting!(event_detector, present_value, reliability);
 
     fn read_property(
         &self,
@@ -533,7 +533,7 @@ impl BACnetObject for BinaryValueObject {
         true
     }
 
-    crate::impl_intrinsic_reporting!(event_detector, present_value);
+    crate::impl_intrinsic_reporting!(event_detector, present_value, reliability);
 
     fn read_property(
         &self,

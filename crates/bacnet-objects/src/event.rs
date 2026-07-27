@@ -4,7 +4,9 @@
 //! an analog present_value against HIGH_LIMIT and LOW_LIMIT with a DEADBAND
 //! to prevent oscillation at the boundary.
 
-use bacnet_types::enums::{EventState, EventType};
+use core::ops::ControlFlow;
+
+use bacnet_types::enums::{EventState, EventType, Reliability};
 
 /// A detected change in event state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -209,6 +211,64 @@ impl PendingTransition {
     }
 }
 
+/// What Clause 13.2.2's fault-precedence rule dictates for a single evaluation.
+///
+/// ASHRAE 135-2020 Clause 13.2.2: "The event algorithm determines the normal or
+/// offnormal states and the Reliability property determines whether or not the
+/// event state will indicate a fault. Fault detection takes precedence over the
+/// detection of normal and offnormal states. As such, when Reliability has a
+/// value other than NO_FAULT_DETECTED, the event-state-detection process will
+/// determine the object's event state to be FAULT."
+///
+/// The rule is a standing condition, not an edge: Clause 13.2.2.1 states the
+/// invariant directly — "In the Fault state reliability-evaluation indicates a
+/// value other than NO_FAULT_DETECTED." So this is recomputed from `reliability`
+/// on every evaluation and nothing about the fault is stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FaultPrecedence {
+    /// Reliability is bad and FAULT does not hold yet: transition immediately.
+    ///
+    /// Clause 13.2.2.1's ToFault transitions are unconditional and carry no
+    /// delay term — "If reliability-evaluation indicates a value other than
+    /// NO_FAULT_DETECTED, then perform the corresponding transition actions and
+    /// enter the Fault state." `Time_Delay` belongs to the event algorithm
+    /// (Clause 13.3.1 defines pTimeDelay as the time "that the offnormal
+    /// conditions must exist before an offnormal event state is indicated"), and
+    /// the algorithm is precisely what fault detection takes precedence over.
+    EnterFault,
+    /// Reliability is bad and FAULT already holds: the standing condition is
+    /// satisfied, so no transition fires — and the algorithm must not run.
+    HoldFault,
+    /// Reliability recovered while in FAULT.
+    ///
+    /// Clause 13.2.2.1's Fault ToNormal transition: "If reliability-evaluation
+    /// indicates a value of NO_FAULT_DETECTED, then perform the corresponding
+    /// transition actions and enter the Normal state." **NORMAL specifically —
+    /// not a state re-derived from the event algorithm.** Recovering straight
+    /// into HIGH_LIMIT because the present value is still out of range would
+    /// invent a transition the state machine does not define; the algorithm gets
+    /// to move the object out of NORMAL afterwards, under its own conditions and
+    /// its own `Time_Delay`.
+    RecoverToNormal,
+    /// No fault in play; the event algorithm determines the state.
+    RunAlgorithm,
+}
+
+/// Apply Clause 13.2.2's fault-precedence rule to one evaluation.
+///
+/// Shared by every detector so the rule has a single definition: a detector
+/// added later that forgets to consult it is a visible omission rather than a
+/// silently missing clause.
+pub(crate) fn fault_precedence(reliability: u32, current: EventState) -> FaultPrecedence {
+    let faulted = reliability != Reliability::NO_FAULT_DETECTED.to_raw();
+    match (faulted, current == EventState::FAULT) {
+        (true, false) => FaultPrecedence::EnterFault,
+        (true, true) => FaultPrecedence::HoldFault,
+        (false, true) => FaultPrecedence::RecoverToNormal,
+        (false, false) => FaultPrecedence::RunAlgorithm,
+    }
+}
+
 /// OUT_OF_RANGE event detector for analog objects.
 ///
 /// Implements the OUT_OF_RANGE event state machine:
@@ -273,8 +333,41 @@ impl OutOfRangeDetector {
     /// shorten the delay. Returns `Some(TransitionOutcome)` whenever a
     /// transition fires; the outcome's `distribute` flag carries the
     /// `event_enable` bit rather than withholding the transition.
-    pub fn evaluate(&mut self, present_value: f32) -> Option<TransitionOutcome> {
-        self.probe(present_value)
+    pub fn evaluate(&mut self, present_value: f32, reliability: u32) -> Option<TransitionOutcome> {
+        self.probe(present_value, reliability)
+    }
+
+    /// Apply Clause 13.2.2 fault precedence ahead of the event algorithm.
+    ///
+    /// `Break` means reliability governed this evaluation and the algorithm must
+    /// not run; the payload is the transition it produced, if any. `Continue`
+    /// hands the decision to the algorithm.
+    ///
+    /// Each detector carries its own copy because each reaches its own
+    /// `event_state`, `pending` and `fire`; the clause interpretation they share
+    /// lives once, in [`fault_precedence`].
+    fn fault_step(&mut self, reliability: u32) -> ControlFlow<Option<TransitionOutcome>> {
+        match fault_precedence(reliability, self.event_state) {
+            FaultPrecedence::EnterFault => {
+                // Drop any in-flight countdown. The standard does not say what
+                // becomes of one (Clauses 13.2.2, 13.2.2.1 and 13.3 are all
+                // silent), and this is the project's ruled choice rather than a
+                // quotation: on recovery the machine re-enters NORMAL, so a
+                // countdown seeded before the fault targets a transition out of
+                // a state the machine no longer occupies. The nearest analogous
+                // rule agrees — Clause 13.2.2.1.5 restarts the *full* delay when
+                // Event_Algorithm_Inhibit clears rather than resuming a partial
+                // one — but it is scoped to inhibition, not faults.
+                self.pending = None;
+                ControlFlow::Break(self.fire(EventState::FAULT))
+            }
+            FaultPrecedence::HoldFault => ControlFlow::Break(None),
+            FaultPrecedence::RecoverToNormal => {
+                self.pending = None;
+                ControlFlow::Break(self.fire(EventState::NORMAL))
+            }
+            FaultPrecedence::RunAlgorithm => ControlFlow::Continue(()),
+        }
     }
 
     /// Per-write probe: seed or cancel a pending transition, fire on zero delay.
@@ -284,7 +377,10 @@ impl OutOfRangeDetector {
     /// behavior. Otherwise a [`PendingTransition`] is seeded (or cleared if
     /// the condition reverted) and `None` is returned; the periodic
     /// [`Self::tick`] advances and eventually confirms it.
-    pub fn probe(&mut self, present_value: f32) -> Option<TransitionOutcome> {
+    pub fn probe(&mut self, present_value: f32, reliability: u32) -> Option<TransitionOutcome> {
+        if let ControlFlow::Break(result) = self.fault_step(reliability) {
+            return result;
+        }
         let desired = self.compute_new_state(present_value);
         if desired == self.event_state {
             // Condition reverted to the confirmed state: cancel any pending
@@ -311,7 +407,10 @@ impl OutOfRangeDetector {
     /// Returns `Some(TransitionOutcome)` when the pending transition's delay
     /// elapses this tick, or `None` if still counting down / no pending
     /// transition / the condition reverted (which cancels the pending).
-    pub fn tick(&mut self, present_value: f32) -> Option<TransitionOutcome> {
+    pub fn tick(&mut self, present_value: f32, reliability: u32) -> Option<TransitionOutcome> {
+        if let ControlFlow::Break(result) = self.fault_step(reliability) {
+            return result;
+        }
         let desired = self.compute_new_state(present_value);
         if desired == self.event_state {
             self.pending = None;
@@ -450,12 +549,31 @@ impl ChangeOfStateDetector {
     const TO_NORMAL: u8 = 0x04;
 
     /// Per-write entry point; see [`OutOfRangeDetector::evaluate`].
-    pub fn evaluate(&mut self, present_value: u32) -> Option<TransitionOutcome> {
-        self.probe(present_value)
+    pub fn evaluate(&mut self, present_value: u32, reliability: u32) -> Option<TransitionOutcome> {
+        self.probe(present_value, reliability)
+    }
+
+    /// Clause 13.2.2 fault precedence; see [`OutOfRangeDetector::fault_step`].
+    fn fault_step(&mut self, reliability: u32) -> ControlFlow<Option<TransitionOutcome>> {
+        match fault_precedence(reliability, self.event_state) {
+            FaultPrecedence::EnterFault => {
+                self.pending = None;
+                ControlFlow::Break(self.fire(EventState::FAULT))
+            }
+            FaultPrecedence::HoldFault => ControlFlow::Break(None),
+            FaultPrecedence::RecoverToNormal => {
+                self.pending = None;
+                ControlFlow::Break(self.fire(EventState::NORMAL))
+            }
+            FaultPrecedence::RunAlgorithm => ControlFlow::Continue(()),
+        }
     }
 
     /// Per-write probe: seed or cancel a pending transition, fire on zero delay.
-    pub fn probe(&mut self, present_value: u32) -> Option<TransitionOutcome> {
+    pub fn probe(&mut self, present_value: u32, reliability: u32) -> Option<TransitionOutcome> {
+        if let ControlFlow::Break(result) = self.fault_step(reliability) {
+            return result;
+        }
         let desired = self.compute_new_state(present_value);
         if desired == self.event_state {
             self.pending = None;
@@ -473,7 +591,10 @@ impl ChangeOfStateDetector {
     }
 
     /// Periodic tick: advance the countdown and fire on expiry.
-    pub fn tick(&mut self, present_value: u32) -> Option<TransitionOutcome> {
+    pub fn tick(&mut self, present_value: u32, reliability: u32) -> Option<TransitionOutcome> {
+        if let ControlFlow::Break(result) = self.fault_step(reliability) {
+            return result;
+        }
         let desired = self.compute_new_state(present_value);
         if desired == self.event_state {
             self.pending = None;
@@ -558,7 +679,6 @@ impl Default for CommandFailureDetector {
 
 impl CommandFailureDetector {
     const TO_OFFNORMAL: u8 = 0x01;
-    #[allow(dead_code)]
     const TO_FAULT: u8 = 0x02;
     const TO_NORMAL: u8 = 0x04;
 
@@ -567,12 +687,37 @@ impl CommandFailureDetector {
         &mut self,
         present_value: u32,
         feedback_value: u32,
+        reliability: u32,
     ) -> Option<TransitionOutcome> {
-        self.probe(present_value, feedback_value)
+        self.probe(present_value, feedback_value, reliability)
+    }
+
+    /// Clause 13.2.2 fault precedence; see [`OutOfRangeDetector::fault_step`].
+    fn fault_step(&mut self, reliability: u32) -> ControlFlow<Option<TransitionOutcome>> {
+        match fault_precedence(reliability, self.event_state) {
+            FaultPrecedence::EnterFault => {
+                self.pending = None;
+                ControlFlow::Break(self.fire(EventState::FAULT))
+            }
+            FaultPrecedence::HoldFault => ControlFlow::Break(None),
+            FaultPrecedence::RecoverToNormal => {
+                self.pending = None;
+                ControlFlow::Break(self.fire(EventState::NORMAL))
+            }
+            FaultPrecedence::RunAlgorithm => ControlFlow::Continue(()),
+        }
     }
 
     /// Per-write probe: seed or cancel a pending transition, fire on zero delay.
-    pub fn probe(&mut self, present_value: u32, feedback_value: u32) -> Option<TransitionOutcome> {
+    pub fn probe(
+        &mut self,
+        present_value: u32,
+        feedback_value: u32,
+        reliability: u32,
+    ) -> Option<TransitionOutcome> {
+        if let ControlFlow::Break(result) = self.fault_step(reliability) {
+            return result;
+        }
         let desired = self.compute_new_state(present_value, feedback_value);
         if desired == self.event_state {
             self.pending = None;
@@ -590,7 +735,15 @@ impl CommandFailureDetector {
     }
 
     /// Periodic tick: advance the countdown and fire on expiry.
-    pub fn tick(&mut self, present_value: u32, feedback_value: u32) -> Option<TransitionOutcome> {
+    pub fn tick(
+        &mut self,
+        present_value: u32,
+        feedback_value: u32,
+        reliability: u32,
+    ) -> Option<TransitionOutcome> {
+        if let ControlFlow::Break(result) = self.fault_step(reliability) {
+            return result;
+        }
         let desired = self.compute_new_state(present_value, feedback_value);
         if desired == self.event_state {
             self.pending = None;
@@ -623,10 +776,15 @@ impl CommandFailureDetector {
             to: new_state,
         };
         self.event_state = new_state;
+        // The FAULT arm reads `Event_Enable` like the other two. It previously
+        // hardcoded `false`, which was unobservable only because no reliability
+        // ever reached a detector (#200); Clause 13.2.5 scopes `Event_Enable` to
+        // distribution uniformly across all three transition directions, so
+        // there is no basis for treating TO_FAULT differently.
         let distribute = match new_state {
             s if s == EventState::NORMAL => self.event_enable & Self::TO_NORMAL != 0,
             s if s == EventState::OFFNORMAL => self.event_enable & Self::TO_OFFNORMAL != 0,
-            _ => false,
+            _ => self.event_enable & Self::TO_FAULT != 0,
         };
         Some(TransitionOutcome { change, distribute })
     }
@@ -641,25 +799,36 @@ impl CommandFailureDetector {
 }
 
 /// Implement the `BACnetObject` intrinsic-reporting trait methods for an
-/// object whose detector is exposed as `self.event_detector` and whose
-/// present value is `self.present_value`.
+/// object whose detector is exposed as `self.event_detector`, whose present
+/// value is `self.present_value`, and whose reliability is `self.reliability`.
 ///
 /// This wires both the per-write [`evaluate_intrinsic_reporting`](crate::traits::BACnetObject::evaluate_intrinsic_reporting)
 /// probe and the periodic [`tick_intrinsic_reporting`](crate::traits::BACnetObject::tick_intrinsic_reporting)
 /// tick to the detector's split `probe` / `tick` entry points, honoring
 /// `Time_Delay` without the object types repeating the delegation.
+///
+/// Reliability is passed on every call rather than only when it changes: per
+/// ASHRAE 135-2020 Clause 13.2.2 the FAULT determination is a standing
+/// condition, so the detector re-derives it each evaluation. That also means a
+/// Reliability written by any route — the server's fault detector, a local
+/// write, or a network write — reaches event-state-detection without each route
+/// needing to notify it.
 #[macro_export]
 macro_rules! impl_intrinsic_reporting {
-    ($detector_field:ident, $present_value_field:ident) => {
+    ($detector_field:ident, $present_value_field:ident, $reliability_field:ident) => {
         fn evaluate_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
-            self.$detector_field.probe(self.$present_value_field)
+            self.$detector_field
+                .probe(self.$present_value_field, self.$reliability_field)
         }
 
         fn tick_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
-            self.$detector_field.tick(self.$present_value_field)
+            self.$detector_field
+                .tick(self.$present_value_field, self.$reliability_field)
         }
     };
 }
 
+#[cfg(test)]
+mod fault_tests;
 #[cfg(test)]
 mod tests;
