@@ -116,7 +116,7 @@ fn out_of_range_no_change_when_already_faulted() {
 }
 
 #[test]
-fn out_of_range_event_enable_suppresses_notification() {
+fn out_of_range_event_enable_suppresses_distribution_not_the_transition() {
     let mut db = ObjectDatabase::new();
 
     let mut ai = AnalogInputObject::new(10, "AI-10", 62).unwrap();

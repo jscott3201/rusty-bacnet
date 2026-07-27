@@ -393,3 +393,251 @@ async fn event_notification_event_notify_type_honors_class_ack_required() {
     );
     assert_eq!(notif.priority, 50);
 }
+
+/// Build a one-object database whose AnalogInput will transition
+/// NORMAL -> HIGH_LIMIT on the next intrinsic evaluation, with `Event_Enable`
+/// set from `event_enable_byte`.
+///
+/// `Event_Enable` is written through `write_property` rather than an internal
+/// setter, so these tests cover the same path a network client takes. Note the
+/// byte is the *current* on-the-wire encoding, which packs the 3-bit string
+/// LSB-first (`value << 5`) instead of the MSB-first order Clause 20.2.10
+/// requires — see #203. When that is corrected these constants must be
+/// re-derived; they are written as `internal << 5` below to make the
+/// dependency explicit rather than magic.
+fn db_with_high_limit_transition(
+    event_enable_byte: u8,
+) -> Arc<tokio::sync::RwLock<ObjectDatabase>> {
+    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    for (p, v) in [
+        (PropertyIdentifier::HIGH_LIMIT, 80.0f32),
+        (PropertyIdentifier::LOW_LIMIT, 20.0),
+        (PropertyIdentifier::DEADBAND, 2.0),
+    ] {
+        ai.write_property(p, None, PropertyValue::Real(v), None)
+            .unwrap();
+    }
+    ai.write_property(
+        PropertyIdentifier::LIMIT_ENABLE,
+        None,
+        PropertyValue::BitString {
+            unused_bits: 6,
+            data: vec![0xC0], // low + high limit checking enabled
+        },
+        None,
+    )
+    .unwrap();
+    ai.write_property(
+        PropertyIdentifier::EVENT_ENABLE,
+        None,
+        PropertyValue::BitString {
+            unused_bits: 5,
+            data: vec![event_enable_byte],
+        },
+        None,
+    )
+    .unwrap();
+    ai.set_present_value(81.0); // above high_limit -> NORMAL -> HIGH_LIMIT
+
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(ai)).unwrap();
+    db.add(Box::new(
+        DeviceObject::new(DeviceConfig {
+            instance: 1,
+            name: "Dev".into(),
+            ..DeviceConfig::default()
+        })
+        .unwrap(),
+    ))
+    .unwrap();
+    Arc::new(tokio::sync::RwLock::new(db))
+}
+
+/// Drive the per-write path once and return the broadcasts it produced.
+async fn broadcasts_from_per_write_path(
+    db: &Arc<tokio::sync::RwLock<ObjectDatabase>>,
+) -> Vec<Bytes> {
+    let sent = StdArc::new(StdMutex::new(Vec::new()));
+    let transport = RecordingTransport {
+        sent_broadcast: StdArc::clone(&sent),
+        local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
+    };
+    let network = Arc::new(NetworkLayer::new(transport));
+    let comm_state = Arc::new(AtomicU8::new(0)); // DCC not blocking
+    let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+
+    BACnetServer::<RecordingTransport>::fire_event_notifications(
+        &db,
+        &network,
+        &comm_state,
+        &server_tsm,
+        &oid,
+        1000,
+    )
+    .await;
+
+    let out = sent.lock().unwrap().clone();
+    out
+}
+
+/// A cleared `Event_Enable` bit must suppress the outbound notification.
+///
+/// This is the gate this whole change moved. Before #136 the detector returned
+/// `None` for a suppressed transition, so nothing downstream *could* send;
+/// now the detector reports the transition and only this send site declines to
+/// distribute it (Clause 13.2.5). Without this test, deleting or inverting that
+/// check is invisible to the suite.
+#[tokio::test]
+async fn event_enable_cleared_suppresses_per_write_send() {
+    let db = db_with_high_limit_transition(0x00); // no transition distributable
+    let sent = broadcasts_from_per_write_path(&db).await;
+
+    assert!(
+        sent.is_empty(),
+        "Event_Enable with TO_OFFNORMAL clear must suppress the send, got {} broadcast(s)",
+        sent.len()
+    );
+
+    // The transition itself still happened — suppression is distribution-only.
+    let db = db.read().await;
+    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    assert_eq!(
+        db.get(&oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::EVENT_STATE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(EventState::HIGH_LIMIT.to_raw()),
+        "Event_State advances even though the notification was suppressed"
+    );
+}
+
+/// The other direction: with TO_OFFNORMAL set, the notification IS sent.
+///
+/// Paired deliberately with the suppression test — a gate stuck permanently
+/// closed would satisfy that one alone. Together they pin the gate to
+/// `Event_Enable` rather than to a constant.
+#[tokio::test]
+async fn event_enable_set_permits_per_write_send() {
+    // internal TO_OFFNORMAL = 0x01, encoded `<< 5` by the current codec (#203).
+    let db = db_with_high_limit_transition(0x01 << 5);
+    let sent = broadcasts_from_per_write_path(&db).await;
+
+    assert_eq!(
+        sent.len(),
+        1,
+        "Event_Enable with TO_OFFNORMAL set must distribute the notification"
+    );
+}
+
+/// The periodic `Time_Delay` path has its own `Event_Enable` gate, and it needs
+/// its own test: the per-write tests above cannot reach it, because a nonzero
+/// `Time_Delay` makes the per-write probe return `None` by design.
+///
+/// Drives the real spawned `intrinsic_reporting_task` on a paused clock: a
+/// local write seeds a pending transition, the clock advances past the delay,
+/// the task ticks and fires it — with TO_OFFNORMAL cleared, so nothing may go
+/// out. Proven to fail when the `outcome.distribute` check at that site is
+/// replaced with `if true`.
+#[tokio::test(start_paused = true)]
+async fn event_enable_cleared_suppresses_periodic_time_delay_send() {
+    let sent = StdArc::new(StdMutex::new(Vec::new()));
+    let transport = RecordingTransport {
+        sent_broadcast: StdArc::clone(&sent),
+        local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
+    };
+
+    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    for (p, v) in [
+        (PropertyIdentifier::HIGH_LIMIT, 80.0f32),
+        (PropertyIdentifier::LOW_LIMIT, 20.0),
+        (PropertyIdentifier::DEADBAND, 2.0),
+    ] {
+        ai.write_property(p, None, PropertyValue::Real(v), None)
+            .unwrap();
+    }
+    ai.write_property(
+        PropertyIdentifier::LIMIT_ENABLE,
+        None,
+        PropertyValue::BitString {
+            unused_bits: 6,
+            data: vec![0xC0],
+        },
+        None,
+    )
+    .unwrap();
+    ai.write_property(
+        PropertyIdentifier::EVENT_ENABLE,
+        None,
+        PropertyValue::BitString {
+            unused_bits: 5,
+            data: vec![0x00], // nothing distributable
+        },
+        None,
+    )
+    .unwrap();
+    // Nonzero Time_Delay: the per-write probe only seeds; the periodic task fires.
+    ai.write_property(
+        PropertyIdentifier::TIME_DELAY,
+        None,
+        PropertyValue::Unsigned(2),
+        None,
+    )
+    .unwrap();
+    ai.set_present_value(81.0); // already above high_limit
+    let oid = ai.object_identifier();
+
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(ai)).unwrap();
+    db.add(Box::new(
+        DeviceObject::new(DeviceConfig {
+            instance: 1,
+            name: "Dev".into(),
+            ..DeviceConfig::default()
+        })
+        .unwrap(),
+    ))
+    .unwrap();
+
+    let server = BACnetServer::start(ServerConfig::default(), db, transport)
+        .await
+        .expect("server should start");
+
+    // Any local write runs the post-write trigger path, which probes the
+    // detector and seeds the pending transition without sending.
+    server
+        .write_local(
+            &oid,
+            PropertyIdentifier::DEADBAND,
+            None,
+            PropertyValue::Real(2.0),
+            None,
+        )
+        .await
+        .expect("local write should succeed");
+    assert!(
+        sent.lock().unwrap().is_empty(),
+        "a nonzero Time_Delay must not send on the write itself"
+    );
+
+    // Past the delay: the periodic task ticks the countdown to zero and fires.
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
+    assert!(
+        sent.lock().unwrap().is_empty(),
+        "Event_Enable cleared: the periodic Time_Delay path must not send, got {} broadcast(s)",
+        sent.lock().unwrap().len()
+    );
+
+    // The transition did fire internally — only distribution was withheld.
+    let db_guard = server.database().read().await;
+    assert_eq!(
+        db_guard
+            .get(&oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::EVENT_STATE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(EventState::HIGH_LIMIT.to_raw()),
+        "the delayed transition must still have been confirmed internally"
+    );
+}
