@@ -178,7 +178,7 @@ fn holding_fault_reports_no_further_transitions() {
     assert!(det.tick(50.0, OVER_RANGE).is_none());
     assert!(
         det.probe(99.0, OVER_RANGE).is_none(),
-        "algorithm must not run"
+        "the standing fault must not report another transition"
     );
     assert_eq!(det.event_state, EventState::FAULT);
 }
@@ -315,6 +315,89 @@ fn command_failure_detector_applies_fault_precedence() {
     );
 }
 
+#[test]
+fn change_of_state_fault_entry_discards_an_in_flight_countdown() {
+    // Apply the same project ruling as the out-of-range detector: a countdown
+    // seeded before FAULT must not resume after recovery.
+    let mut det = ChangeOfStateDetector {
+        alarm_values: vec![1],
+        event_enable: 0x07,
+        time_delay: 2,
+        event_state: EventState::NORMAL,
+        ..Default::default()
+    };
+    assert!(det.probe(1, NO_FAULT).is_none(), "countdown seeded");
+    assert_eq!(det.pending.as_ref().unwrap().state, EventState::OFFNORMAL);
+    assert_eq!(
+        det.probe(1, SHORTED_LOOP).unwrap().change.to,
+        EventState::FAULT
+    );
+    assert!(det.pending.is_none(), "pre-fault countdown is discarded");
+
+    assert_eq!(
+        det.probe(1, NO_FAULT).unwrap().change.to,
+        EventState::NORMAL
+    );
+    assert!(det.tick(1, NO_FAULT).is_none(), "a fresh countdown starts");
+    assert_eq!(det.pending.as_ref().unwrap().remaining, 2);
+}
+
+#[test]
+fn command_failure_holds_fault_while_reliability_remains_bad() {
+    // Matching values make the algorithm answer NORMAL, pinning HoldFault.
+    let mut det = CommandFailureDetector {
+        event_enable: 0x07,
+        event_state: EventState::NORMAL,
+        ..Default::default()
+    };
+    assert_eq!(
+        det.probe(1, 1, SHORTED_LOOP).unwrap().change.to,
+        EventState::FAULT
+    );
+    assert!(det.probe(1, 1, SHORTED_LOOP).is_none());
+    assert!(det.tick(1, 1, SHORTED_LOOP).is_none());
+    assert_eq!(det.event_state, EventState::FAULT);
+}
+
+#[test]
+fn command_failure_recovers_to_normal_before_rerunning_its_algorithm() {
+    let mut det = CommandFailureDetector {
+        event_enable: 0x07,
+        event_state: EventState::NORMAL,
+        ..Default::default()
+    };
+    assert_eq!(
+        det.probe(1, 1, SHORTED_LOOP).unwrap().change.to,
+        EventState::FAULT
+    );
+    let recovery = det
+        .tick(1, 0, NO_FAULT)
+        .expect("healthy reliability recovers through the periodic path");
+    assert_eq!(recovery.change.from, EventState::FAULT);
+    assert_eq!(recovery.change.to, EventState::NORMAL);
+    assert_eq!(
+        det.probe(1, 0, NO_FAULT).unwrap().change.to,
+        EventState::OFFNORMAL
+    );
+}
+
+#[test]
+fn command_failure_fault_entry_discards_an_in_flight_countdown() {
+    let mut det = CommandFailureDetector {
+        event_enable: 0x07,
+        time_delay: 2,
+        event_state: EventState::NORMAL,
+        ..Default::default()
+    };
+    assert!(det.probe(1, 0, NO_FAULT).is_none(), "countdown seeded");
+    assert_eq!(det.pending.as_ref().unwrap().state, EventState::OFFNORMAL);
+    assert_eq!(
+        det.tick(1, 0, SHORTED_LOOP).unwrap().change.to,
+        EventState::FAULT
+    );
+    assert!(det.pending.is_none(), "pre-fault countdown is discarded");
+}
+
 // --- object level: the macro wiring reaches real objects ---
 
 #[test]
@@ -351,6 +434,41 @@ fn writing_reliability_on_an_object_drives_event_state_to_fault() {
         outcome.change.event_type(),
         EventType::CHANGE_OF_RELIABILITY
     );
+}
+
+#[test]
+fn ticking_an_object_uses_reliability_for_fault_and_recovery() {
+    // The running server drives this periodic macro arm.
+    use crate::analog::AnalogInputObject;
+    use crate::traits::BACnetObject;
+    use bacnet_types::enums::PropertyIdentifier;
+    use bacnet_types::primitives::PropertyValue;
+
+    let mut ai = AnalogInputObject::new(3, "ai-3", 62).expect("construct");
+    ai.write_property(
+        PropertyIdentifier::RELIABILITY,
+        None,
+        PropertyValue::Enumerated(OVER_RANGE),
+        None,
+    )
+    .expect("reliability is writable");
+    let fault = ai
+        .tick_intrinsic_reporting()
+        .expect("periodic tick must observe bad reliability");
+    assert_eq!(fault.change.to, EventState::FAULT);
+
+    ai.write_property(
+        PropertyIdentifier::RELIABILITY,
+        None,
+        PropertyValue::Enumerated(NO_FAULT),
+        None,
+    )
+    .expect("reliability is writable");
+    let recovery = ai
+        .tick_intrinsic_reporting()
+        .expect("periodic tick must observe recovered reliability");
+    assert_eq!(recovery.change.from, EventState::FAULT);
+    assert_eq!(recovery.change.to, EventState::NORMAL);
 }
 
 #[test]
