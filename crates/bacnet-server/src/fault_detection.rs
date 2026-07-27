@@ -51,6 +51,17 @@ impl FaultDetector {
     /// those limits.  If out of range the reliability is set to
     /// `OVER_RANGE` or `UNDER_RANGE`; otherwise `NO_FAULT_DETECTED`.
     ///
+    /// **Objects with `Out_Of_Service` TRUE are skipped entirely** — not compared,
+    /// not written, and not represented in the returned list. While an object is
+    /// out of service the client owns `Reliability`: ASHRAE 135-2020 Clause 12.2(c)
+    /// and 12.3(c) make it writable "to allow simulating specific conditions or for
+    /// testing purposes" (Clause 12.4(b) for Analog Value), and 12.2(b) / 12.3(b)
+    /// decouple it from the physical point. Re-deriving it here would overwrite a
+    /// simulated value within one evaluation interval.
+    ///
+    /// The check is fail-open: an object that does not report `Out_Of_Service`, or
+    /// reports it at an unexpected type, is still evaluated.
+    ///
     /// Returns a list of changes that were applied to the database.
     pub fn evaluate(&self, db: &mut ObjectDatabase) -> Vec<ReliabilityChange> {
         let analog_types = [
@@ -65,6 +76,33 @@ impl FaultDetector {
             let oids = db.find_by_type(obj_type);
             for oid in oids {
                 if let Some(obj) = db.get(&oid) {
+                    // While the object is out of service the client owns Reliability, so
+                    // re-deriving it here would defeat a behavior the standard mandates.
+                    // The three types ground that differently, so cite them separately:
+                    //
+                    // - Analog Input, Clause 12.2(b) and (c): Reliability "shall be
+                    //   decoupled from the physical input", and it "shall be writable to
+                    //   allow simulating specific conditions or for testing purposes".
+                    // - Analog Output, Clause 12.3(b) and (c): the same two, worded for a
+                    //   physical output.
+                    // - Analog Value, Clause 12.4(b): writability for simulation only.
+                    //   There is no decoupling item, because an Analog Value has no
+                    //   physical point to decouple from.
+                    //
+                    // Note the letters differ between 12.2/12.3 and 12.4 — writability is
+                    // (c) on the first two and (b) on the third.
+                    //
+                    // Deliberately fail-open: an object that does not report Out_Of_Service,
+                    // or reports it at an unexpected type, is still evaluated. That
+                    // preserves prior behavior for anything unusual rather than silently
+                    // disabling fault detection for it.
+                    if matches!(
+                        obj.read_property(PropertyIdentifier::OUT_OF_SERVICE, None),
+                        Ok(PropertyValue::Boolean(true))
+                    ) {
+                        continue;
+                    }
+
                     let current_reliability =
                         match obj.read_property(PropertyIdentifier::RELIABILITY, None) {
                             Ok(PropertyValue::Enumerated(v)) => v,
@@ -240,6 +278,13 @@ mod tests {
             )
             .unwrap();
         });
+        obj.write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(false),
+            None,
+        )
+        .unwrap();
 
         // Second evaluation: back to no-fault
         let changes = detector.evaluate(&mut db);
@@ -315,5 +360,144 @@ mod tests {
         let detector = FaultDetector::default();
         let changes = detector.evaluate(&mut db);
         assert_eq!(changes.len(), 2);
+    }
+
+    #[test]
+    fn out_of_service_preserves_client_written_reliability_without_change_record() {
+        let mut db = db_with_analog_input(50.0, Some(0.0), Some(100.0));
+        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+        let obj = db.get_mut(&oid).unwrap();
+        obj.write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(true),
+            None,
+        )
+        .unwrap();
+        obj.write_property(
+            PropertyIdentifier::RELIABILITY,
+            None,
+            PropertyValue::Enumerated(Reliability::NO_SENSOR.to_raw()),
+            None,
+        )
+        .unwrap();
+
+        let changes = FaultDetector::default().evaluate(&mut db);
+
+        assert!(changes.is_empty());
+        assert_eq!(
+            db.get(&oid)
+                .unwrap()
+                .read_property(PropertyIdentifier::RELIABILITY, None)
+                .unwrap(),
+            PropertyValue::Enumerated(Reliability::NO_SENSOR.to_raw())
+        );
+    }
+
+    #[test]
+    fn in_service_still_recomputes_client_written_reliability() {
+        let mut db = db_with_analog_input(50.0, Some(0.0), Some(100.0));
+        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+        db.get_mut(&oid)
+            .unwrap()
+            .write_property(
+                PropertyIdentifier::RELIABILITY,
+                None,
+                PropertyValue::Enumerated(Reliability::NO_SENSOR.to_raw()),
+                None,
+            )
+            .unwrap();
+
+        let changes = FaultDetector::default().evaluate(&mut db);
+
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].object_id, oid);
+        assert_eq!(
+            changes[0].new_reliability,
+            Reliability::NO_FAULT_DETECTED.to_raw()
+        );
+        assert_eq!(
+            db.get(&oid)
+                .unwrap()
+                .read_property(PropertyIdentifier::RELIABILITY, None)
+                .unwrap(),
+            PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw())
+        );
+    }
+
+    #[test]
+    fn out_of_service_out_of_range_does_not_overwrite_client_reliability() {
+        let mut db = db_with_analog_input(150.0, Some(0.0), Some(100.0));
+        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+        let obj = db.get_mut(&oid).unwrap();
+        obj.write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(true),
+            None,
+        )
+        .unwrap();
+        obj.write_property(
+            PropertyIdentifier::RELIABILITY,
+            None,
+            PropertyValue::Enumerated(Reliability::NO_SENSOR.to_raw()),
+            None,
+        )
+        .unwrap();
+
+        let changes = FaultDetector::default().evaluate(&mut db);
+
+        assert!(changes.is_empty());
+        assert_eq!(
+            db.get(&oid)
+                .unwrap()
+                .read_property(PropertyIdentifier::RELIABILITY, None)
+                .unwrap(),
+            PropertyValue::Enumerated(Reliability::NO_SENSOR.to_raw())
+        );
+    }
+
+    #[test]
+    fn mixed_service_states_evaluate_only_in_service_object() {
+        let mut db = ObjectDatabase::new();
+        let mut in_service = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+        in_service.set_present_value(150.0);
+        in_service.set_max_pres_value(100.0);
+        db.add(Box::new(in_service)).unwrap();
+
+        let mut out_of_service = AnalogInputObject::new(2, "AI-2", 62).unwrap();
+        out_of_service.set_present_value(150.0);
+        out_of_service.set_max_pres_value(100.0);
+        let out_of_service_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 2).unwrap();
+        db.add(Box::new(out_of_service)).unwrap();
+        let obj = db.get_mut(&out_of_service_oid).unwrap();
+        obj.write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(true),
+            None,
+        )
+        .unwrap();
+        obj.write_property(
+            PropertyIdentifier::RELIABILITY,
+            None,
+            PropertyValue::Enumerated(Reliability::NO_SENSOR.to_raw()),
+            None,
+        )
+        .unwrap();
+
+        let changes = FaultDetector::default().evaluate(&mut db);
+
+        let in_service_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].object_id, in_service_oid);
+        assert_eq!(changes[0].new_reliability, Reliability::OVER_RANGE.to_raw());
+        assert_eq!(
+            db.get(&out_of_service_oid)
+                .unwrap()
+                .read_property(PropertyIdentifier::RELIABILITY, None)
+                .unwrap(),
+            PropertyValue::Enumerated(Reliability::NO_SENSOR.to_raw())
+        );
     }
 }
