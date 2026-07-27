@@ -10,6 +10,7 @@ use super::*;
 
 const NO_FAULT: u32 = Reliability::NO_FAULT_DETECTED.to_raw();
 const OVER_RANGE: u32 = Reliability::OVER_RANGE.to_raw();
+const NO_SENSOR: u32 = Reliability::NO_SENSOR.to_raw();
 const SHORTED_LOOP: u32 = Reliability::SHORTED_LOOP.to_raw();
 
 #[test]
@@ -53,6 +54,7 @@ fn detector() -> OutOfRangeDetector {
         event_state: EventState::NORMAL,
         acked_transitions: 0b111,
         pending: None,
+        fault_reliability: None,
     }
 }
 
@@ -62,30 +64,35 @@ fn detector() -> OutOfRangeDetector {
 fn fault_precedence_truth_table() {
     // Bad reliability outside FAULT: transition in.
     assert_eq!(
-        fault_precedence(OVER_RANGE, EventState::NORMAL),
+        fault_precedence(OVER_RANGE, None, EventState::NORMAL),
         FaultPrecedence::EnterFault
     );
     assert_eq!(
-        fault_precedence(OVER_RANGE, EventState::HIGH_LIMIT),
+        fault_precedence(OVER_RANGE, None, EventState::HIGH_LIMIT),
         FaultPrecedence::EnterFault
     );
-    // Bad reliability already in FAULT: standing condition already satisfied.
+    // Unchanged bad reliability already in FAULT: hold.
     assert_eq!(
-        fault_precedence(OVER_RANGE, EventState::FAULT),
+        fault_precedence(OVER_RANGE, Some(OVER_RANGE), EventState::FAULT),
         FaultPrecedence::HoldFault
+    );
+    // Changed bad reliability already in FAULT: re-enter.
+    assert_eq!(
+        fault_precedence(NO_SENSOR, Some(OVER_RANGE), EventState::FAULT),
+        FaultPrecedence::ReenterFault
     );
     // Recovered while in FAULT.
     assert_eq!(
-        fault_precedence(NO_FAULT, EventState::FAULT),
+        fault_precedence(NO_FAULT, Some(OVER_RANGE), EventState::FAULT),
         FaultPrecedence::RecoverToNormal
     );
     // No fault in play.
     assert_eq!(
-        fault_precedence(NO_FAULT, EventState::NORMAL),
+        fault_precedence(NO_FAULT, None, EventState::NORMAL),
         FaultPrecedence::RunAlgorithm
     );
     assert_eq!(
-        fault_precedence(NO_FAULT, EventState::HIGH_LIMIT),
+        fault_precedence(NO_FAULT, None, EventState::HIGH_LIMIT),
         FaultPrecedence::RunAlgorithm
     );
 }
@@ -195,10 +202,13 @@ fn holding_fault_blocks_a_state_independent_algorithm() {
 
 #[test]
 fn holding_fault_reports_no_further_transitions() {
-    // The standing condition is satisfied once FAULT holds; re-evaluating must
-    // not re-fire. (Clause 13.2.2.1 does define a FAULT re-entry on a *changed*
-    // Reliability value, which is a separate transition this detector does not
-    // model yet — see the #167 PR notes.)
+    // The standing condition is satisfied once FAULT holds, so re-evaluating with
+    // the *same* Reliability value must not re-fire. Note every probe and tick
+    // here passes OVER_RANGE unchanged — that is the whole point. Clause 13.2.2.1
+    // does define a FAULT re-entry on a *changed* Reliability value, and #217
+    // implements it; this test pins the other half of that rule, and is what fails
+    // if the re-entry condition is widened to fire whenever the object is faulted
+    // rather than only when the value changed.
     let mut det = detector();
     assert!(det.probe(50.0, OVER_RANGE).is_some());
     assert!(det.probe(50.0, OVER_RANGE).is_none());
@@ -208,6 +218,118 @@ fn holding_fault_reports_no_further_transitions() {
         "the standing fault must not report another transition"
     );
     assert_eq!(det.event_state, EventState::FAULT);
+}
+
+#[test]
+fn out_of_range_reenters_fault_only_when_reliability_changes() {
+    let mut det = detector();
+
+    let mut outcomes = usize::from(det.probe(50.0, OVER_RANGE).is_some());
+    for _ in 0..4 {
+        outcomes += usize::from(det.tick(50.0, OVER_RANGE).is_some());
+    }
+    assert_eq!(outcomes, 1, "an unchanged fault must not flood");
+    assert_eq!(det.fault_reliability, Some(OVER_RANGE));
+
+    let reentry = det
+        .probe(50.0, NO_SENSOR)
+        .expect("changed reliability re-enters FAULT");
+    assert_eq!(reentry.change.from, EventState::FAULT);
+    assert_eq!(reentry.change.to, EventState::FAULT);
+    assert_eq!(reentry.event_type, EventType::CHANGE_OF_RELIABILITY);
+    assert_eq!(
+        EventTransition::for_target_state(reentry.change.to),
+        EventTransition::ToFault
+    );
+    assert_eq!(det.fault_reliability, Some(NO_SENSOR));
+    assert!(det.tick(50.0, NO_SENSOR).is_none());
+
+    assert_eq!(
+        det.probe(50.0, NO_FAULT).unwrap().change.to,
+        EventState::NORMAL
+    );
+    assert_eq!(det.fault_reliability, None);
+    assert_eq!(
+        det.probe(50.0, NO_SENSOR).unwrap().change.to,
+        EventState::FAULT
+    );
+}
+
+#[test]
+fn change_of_state_reenters_fault_only_when_reliability_changes() {
+    let mut det = ChangeOfStateDetector {
+        alarm_values: vec![1],
+        event_enable: 0x07,
+        ..Default::default()
+    };
+
+    let mut outcomes = usize::from(det.probe(0, OVER_RANGE).is_some());
+    for _ in 0..4 {
+        outcomes += usize::from(det.tick(0, OVER_RANGE).is_some());
+    }
+    assert_eq!(outcomes, 1, "an unchanged fault must not flood");
+    assert_eq!(det.fault_reliability, Some(OVER_RANGE));
+
+    let reentry = det
+        .probe(0, NO_SENSOR)
+        .expect("changed reliability re-enters FAULT");
+    assert_eq!(reentry.change.from, EventState::FAULT);
+    assert_eq!(reentry.change.to, EventState::FAULT);
+    assert_eq!(reentry.event_type, EventType::CHANGE_OF_RELIABILITY);
+    assert_eq!(
+        EventTransition::for_target_state(reentry.change.to),
+        EventTransition::ToFault
+    );
+    assert_eq!(det.fault_reliability, Some(NO_SENSOR));
+    assert!(det.tick(0, NO_SENSOR).is_none());
+
+    assert_eq!(
+        det.probe(0, NO_FAULT).unwrap().change.to,
+        EventState::NORMAL
+    );
+    assert_eq!(det.fault_reliability, None);
+    assert_eq!(
+        det.probe(0, NO_SENSOR).unwrap().change.to,
+        EventState::FAULT
+    );
+}
+
+#[test]
+fn command_failure_reenters_fault_only_when_reliability_changes() {
+    let mut det = CommandFailureDetector {
+        event_enable: 0x07,
+        ..Default::default()
+    };
+
+    let mut outcomes = usize::from(det.probe(0, 0, OVER_RANGE).is_some());
+    for _ in 0..4 {
+        outcomes += usize::from(det.tick(0, 0, OVER_RANGE).is_some());
+    }
+    assert_eq!(outcomes, 1, "an unchanged fault must not flood");
+    assert_eq!(det.fault_reliability, Some(OVER_RANGE));
+
+    let reentry = det
+        .probe(0, 0, NO_SENSOR)
+        .expect("changed reliability re-enters FAULT");
+    assert_eq!(reentry.change.from, EventState::FAULT);
+    assert_eq!(reentry.change.to, EventState::FAULT);
+    assert_eq!(reentry.event_type, EventType::CHANGE_OF_RELIABILITY);
+    assert_eq!(
+        EventTransition::for_target_state(reentry.change.to),
+        EventTransition::ToFault
+    );
+    assert_eq!(det.fault_reliability, Some(NO_SENSOR));
+    assert!(det.tick(0, 0, NO_SENSOR).is_none());
+
+    assert_eq!(
+        det.probe(0, 0, NO_FAULT).unwrap().change.to,
+        EventState::NORMAL
+    );
+    assert_eq!(det.fault_reliability, None);
+    assert_eq!(
+        det.probe(0, 0, NO_SENSOR).unwrap().change.to,
+        EventState::FAULT
+    );
 }
 
 // --- recovery: the reading that refuted the issue's own suggestion ---

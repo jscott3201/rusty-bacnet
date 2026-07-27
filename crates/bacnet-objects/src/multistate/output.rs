@@ -258,6 +258,7 @@ impl BACnetObject for MultiStateOutputObject {
                     self.event_detector.event_state = bacnet_types::enums::EventState::NORMAL;
                     self.event_detector.acked_transitions = 0b111;
                     self.event_detector.pending = None;
+                    self.event_detector.fault_reliability = None;
                 }
                 return Ok(());
             }

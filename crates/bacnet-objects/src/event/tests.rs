@@ -19,6 +19,7 @@ fn make_detector() -> OutOfRangeDetector {
         event_state: EventState::NORMAL,
         acked_transitions: 0b111,
         pending: None,
+        fault_reliability: None,
     }
 }
 

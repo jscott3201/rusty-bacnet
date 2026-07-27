@@ -199,10 +199,19 @@ impl PendingTransition {
 /// value other than NO_FAULT_DETECTED, the event-state-detection process will
 /// determine the object's event state to be FAULT."
 ///
-/// The rule is a standing condition, not an edge: Clause 13.2.2.1 states the
-/// invariant directly — "In the Fault state reliability-evaluation indicates a
-/// value other than NO_FAULT_DETECTED." So this is recomputed from `reliability`
-/// on every evaluation and nothing about the fault is stored.
+/// **Whether FAULT holds is a standing condition; whether a transition fires is
+/// an edge.** Clause 13.2.2.1 states the first directly — "In the Fault state
+/// reliability-evaluation indicates a value other than NO_FAULT_DETECTED" — so
+/// the FAULT determination is re-derived from `reliability` on every evaluation
+/// and is never latched. But the same clause's ToFault transition fires on "a
+/// **different** Reliability value", which is an edge and cannot be derived from
+/// the current value alone. That is what `fault_reliability` stores: the value in
+/// force at the last entry to FAULT, and nothing else.
+///
+/// The distinction matters because `fault_step` runs at the head of both `probe`
+/// and `tick`, and the server drives `tick` once per second. Deciding re-entry
+/// from the standing condition rather than the edge would emit a notification
+/// every second for as long as any object stayed faulted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FaultPrecedence {
     /// Reliability is bad and FAULT does not hold yet: transition immediately.
@@ -218,6 +227,9 @@ pub(crate) enum FaultPrecedence {
     /// Reliability is bad and FAULT already holds: the standing condition is
     /// satisfied, so no transition fires — and the algorithm must not run.
     HoldFault,
+    /// Reliability changed while FAULT already holds: execute the transition
+    /// actions and re-enter FAULT.
+    ReenterFault,
     /// Reliability recovered while in FAULT.
     ///
     /// Clause 13.2.2.1's Fault ToNormal transition: "If reliability-evaluation
@@ -238,13 +250,18 @@ pub(crate) enum FaultPrecedence {
 /// Shared by every detector so the rule has a single definition: a detector
 /// added later that forgets to consult it is a visible omission rather than a
 /// silently missing clause.
-pub(crate) fn fault_precedence(reliability: u32, current: EventState) -> FaultPrecedence {
+pub(crate) fn fault_precedence(
+    reliability: u32,
+    fault_reliability: Option<u32>,
+    current: EventState,
+) -> FaultPrecedence {
     let faulted = reliability != Reliability::NO_FAULT_DETECTED.to_raw();
-    match (faulted, current == EventState::FAULT) {
-        (true, false) => FaultPrecedence::EnterFault,
-        (true, true) => FaultPrecedence::HoldFault,
-        (false, true) => FaultPrecedence::RecoverToNormal,
-        (false, false) => FaultPrecedence::RunAlgorithm,
+    match (faulted, current == EventState::FAULT, fault_reliability) {
+        (true, false, _) => FaultPrecedence::EnterFault,
+        (true, true, Some(previous)) if previous == reliability => FaultPrecedence::HoldFault,
+        (true, true, _) => FaultPrecedence::ReenterFault,
+        (false, true, _) => FaultPrecedence::RecoverToNormal,
+        (false, false, _) => FaultPrecedence::RunAlgorithm,
     }
 }
 
@@ -278,6 +295,8 @@ pub struct OutOfRangeDetector {
     pub acked_transitions: u8,
     /// Pending delayed transition, or `None` when no delay is in progress.
     pub pending: Option<PendingTransition>,
+    /// Reliability value in force at the last entry to FAULT; `None` outside FAULT.
+    pub fault_reliability: Option<u32>,
 }
 
 impl Default for OutOfRangeDetector {
@@ -294,6 +313,7 @@ impl Default for OutOfRangeDetector {
             event_state: EventState::NORMAL,
             acked_transitions: 0b111, // all acknowledged by default
             pending: None,
+            fault_reliability: None,
         }
     }
 }
@@ -324,7 +344,7 @@ impl OutOfRangeDetector {
     /// `event_state`, `pending` and `fire`; the clause interpretation they share
     /// lives once, in [`fault_precedence`].
     fn fault_step(&mut self, reliability: u32) -> ControlFlow<Option<TransitionOutcome>> {
-        match fault_precedence(reliability, self.event_state) {
+        match fault_precedence(reliability, self.fault_reliability, self.event_state) {
             FaultPrecedence::EnterFault => {
                 // Drop any in-flight countdown. The standard does not say what
                 // becomes of one (Clauses 13.2.2, 13.2.2.1 and 13.3 are all
@@ -336,6 +356,12 @@ impl OutOfRangeDetector {
                 // Event_Algorithm_Inhibit clears rather than resuming a partial
                 // one — but it is scoped to inhibition, not faults.
                 self.pending = None;
+                self.fault_reliability = Some(reliability);
+                ControlFlow::Break(self.fire(EventState::FAULT))
+            }
+            FaultPrecedence::ReenterFault => {
+                self.pending = None;
+                self.fault_reliability = Some(reliability);
                 ControlFlow::Break(self.fire(EventState::FAULT))
             }
             FaultPrecedence::HoldFault => ControlFlow::Break(None),
@@ -349,9 +375,13 @@ impl OutOfRangeDetector {
                 // `HoldFault` ever to let the algorithm run, its absence would
                 // silently resurrect a stale countdown across the fault.
                 self.pending = None;
+                self.fault_reliability = None;
                 ControlFlow::Break(self.fire(EventState::NORMAL))
             }
-            FaultPrecedence::RunAlgorithm => ControlFlow::Continue(()),
+            FaultPrecedence::RunAlgorithm => {
+                self.fault_reliability = None;
+                ControlFlow::Continue(())
+            }
         }
     }
 
@@ -511,6 +541,8 @@ pub struct ChangeOfStateDetector {
     pub acked_transitions: u8,
     /// Pending delayed transition, or `None` when no delay is in progress.
     pub pending: Option<PendingTransition>,
+    /// Reliability value in force at the last entry to FAULT; `None` outside FAULT.
+    pub fault_reliability: Option<u32>,
 }
 
 impl Default for ChangeOfStateDetector {
@@ -524,6 +556,7 @@ impl Default for ChangeOfStateDetector {
             event_state: EventState::NORMAL,
             acked_transitions: 0b111,
             pending: None,
+            fault_reliability: None,
         }
     }
 }
@@ -539,17 +572,27 @@ impl ChangeOfStateDetector {
 
     /// Clause 13.2.2 fault precedence; see [`OutOfRangeDetector::fault_step`].
     fn fault_step(&mut self, reliability: u32) -> ControlFlow<Option<TransitionOutcome>> {
-        match fault_precedence(reliability, self.event_state) {
+        match fault_precedence(reliability, self.fault_reliability, self.event_state) {
             FaultPrecedence::EnterFault => {
                 self.pending = None;
+                self.fault_reliability = Some(reliability);
+                ControlFlow::Break(self.fire(EventState::FAULT))
+            }
+            FaultPrecedence::ReenterFault => {
+                self.pending = None;
+                self.fault_reliability = Some(reliability);
                 ControlFlow::Break(self.fire(EventState::FAULT))
             }
             FaultPrecedence::HoldFault => ControlFlow::Break(None),
             FaultPrecedence::RecoverToNormal => {
                 self.pending = None;
+                self.fault_reliability = None;
                 ControlFlow::Break(self.fire(EventState::NORMAL))
             }
-            FaultPrecedence::RunAlgorithm => ControlFlow::Continue(()),
+            FaultPrecedence::RunAlgorithm => {
+                self.fault_reliability = None;
+                ControlFlow::Continue(())
+            }
         }
     }
 
@@ -647,6 +690,8 @@ pub struct CommandFailureDetector {
     pub acked_transitions: u8,
     /// Pending delayed transition, or `None` when no delay is in progress.
     pub pending: Option<PendingTransition>,
+    /// Reliability value in force at the last entry to FAULT; `None` outside FAULT.
+    pub fault_reliability: Option<u32>,
 }
 
 impl Default for CommandFailureDetector {
@@ -659,6 +704,7 @@ impl Default for CommandFailureDetector {
             event_state: EventState::NORMAL,
             acked_transitions: 0b111,
             pending: None,
+            fault_reliability: None,
         }
     }
 }
@@ -679,17 +725,27 @@ impl CommandFailureDetector {
 
     /// Clause 13.2.2 fault precedence; see [`OutOfRangeDetector::fault_step`].
     fn fault_step(&mut self, reliability: u32) -> ControlFlow<Option<TransitionOutcome>> {
-        match fault_precedence(reliability, self.event_state) {
+        match fault_precedence(reliability, self.fault_reliability, self.event_state) {
             FaultPrecedence::EnterFault => {
                 self.pending = None;
+                self.fault_reliability = Some(reliability);
+                ControlFlow::Break(self.fire(EventState::FAULT))
+            }
+            FaultPrecedence::ReenterFault => {
+                self.pending = None;
+                self.fault_reliability = Some(reliability);
                 ControlFlow::Break(self.fire(EventState::FAULT))
             }
             FaultPrecedence::HoldFault => ControlFlow::Break(None),
             FaultPrecedence::RecoverToNormal => {
                 self.pending = None;
+                self.fault_reliability = None;
                 ControlFlow::Break(self.fire(EventState::NORMAL))
             }
-            FaultPrecedence::RunAlgorithm => ControlFlow::Continue(()),
+            FaultPrecedence::RunAlgorithm => {
+                self.fault_reliability = None;
+                ControlFlow::Continue(())
+            }
         }
     }
 
