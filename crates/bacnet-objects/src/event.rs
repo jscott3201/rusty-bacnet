@@ -224,11 +224,22 @@ pub(crate) enum FaultPrecedence {
     /// conditions must exist before an offnormal event state is indicated"), and
     /// the algorithm is precisely what fault detection takes precedence over.
     EnterFault,
-    /// Reliability is bad and FAULT already holds: the standing condition is
-    /// satisfied, so no transition fires — and the algorithm must not run.
+    /// Reliability is bad, **unchanged**, and FAULT already holds: the standing
+    /// condition is satisfied, so no transition fires — and the algorithm must
+    /// not run. [`FaultPrecedence::ReenterFault`] takes precedence when the value
+    /// differs; this variant is only the unchanged case.
     HoldFault,
     /// Reliability changed while FAULT already holds: execute the transition
     /// actions and re-enter FAULT.
+    ///
+    /// Clause 13.2.2.1's Fault ToFault transition: "If reliability-evaluation
+    /// indicates a different Reliability value and the new Reliability value is
+    /// not NO_FAULT_DETECTED ... then perform the corresponding transition
+    /// actions and re-enter the Fault state."
+    ///
+    /// Also selected when FAULT holds with no recorded value — a state this
+    /// crate never produces but a downstream implementor can construct, since
+    /// both fields are public. See the comment on that match arm.
     ReenterFault,
     /// Reliability recovered while in FAULT.
     ///
@@ -259,7 +270,20 @@ pub(crate) fn fault_precedence(
     match (faulted, current == EventState::FAULT, fault_reliability) {
         (true, false, _) => FaultPrecedence::EnterFault,
         (true, true, Some(previous)) if previous == reliability => FaultPrecedence::HoldFault,
-        (true, true, _) => FaultPrecedence::ReenterFault,
+        (true, true, Some(_)) => FaultPrecedence::ReenterFault,
+        // In FAULT with no recorded value. This breaks the field's invariant
+        // (`Some` exactly while FAULT holds) and no path in this crate produces
+        // it, but both `event_state` and `fault_reliability` are public on a
+        // published crate, so a downstream implementor can construct it.
+        //
+        // Re-entering is the deliberate choice, because it is self-healing:
+        // `ReenterFault` stores `Some(reliability)` and the invariant holds from
+        // then on, at a cost of one transition that may report no real change.
+        // Holding would be worse than it looks — it stores nothing, so the field
+        // would stay `None` forever and every later genuine change would land
+        // back on this arm and hold again, permanently disabling re-entry for
+        // that detector.
+        (true, true, None) => FaultPrecedence::ReenterFault,
         (false, true, _) => FaultPrecedence::RecoverToNormal,
         (false, false, _) => FaultPrecedence::RunAlgorithm,
     }
@@ -360,6 +384,11 @@ impl OutOfRangeDetector {
                 ControlFlow::Break(self.fire(EventState::FAULT))
             }
             FaultPrecedence::ReenterFault => {
+                // `pending = None` is unreachable today for the same reason it is
+                // in `RecoverToNormal` below — nothing can be in flight while
+                // FAULT holds — and mutation testing confirms no test fails when
+                // it is removed. It stays as the invariant this arm relies on,
+                // matching the treatment of the identical statement there.
                 self.pending = None;
                 self.fault_reliability = Some(reliability);
                 ControlFlow::Break(self.fire(EventState::FAULT))
@@ -379,6 +408,10 @@ impl OutOfRangeDetector {
                 ControlFlow::Break(self.fire(EventState::NORMAL))
             }
             FaultPrecedence::RunAlgorithm => {
+                // Also unreachable today and also kept: this arm requires
+                // `!faulted`, and the invariant means the field is already `None`
+                // whenever FAULT does not hold. Removing it leaves the suite
+                // green. It stays as the statement of that invariant.
                 self.fault_reliability = None;
                 ControlFlow::Continue(())
             }
@@ -579,6 +612,11 @@ impl ChangeOfStateDetector {
                 ControlFlow::Break(self.fire(EventState::FAULT))
             }
             FaultPrecedence::ReenterFault => {
+                // `pending = None` is unreachable today for the same reason it is
+                // in `RecoverToNormal` below — nothing can be in flight while
+                // FAULT holds — and mutation testing confirms no test fails when
+                // it is removed. It stays as the invariant this arm relies on,
+                // matching the treatment of the identical statement there.
                 self.pending = None;
                 self.fault_reliability = Some(reliability);
                 ControlFlow::Break(self.fire(EventState::FAULT))
@@ -590,6 +628,10 @@ impl ChangeOfStateDetector {
                 ControlFlow::Break(self.fire(EventState::NORMAL))
             }
             FaultPrecedence::RunAlgorithm => {
+                // Also unreachable today and also kept: this arm requires
+                // `!faulted`, and the invariant means the field is already `None`
+                // whenever FAULT does not hold. Removing it leaves the suite
+                // green. It stays as the statement of that invariant.
                 self.fault_reliability = None;
                 ControlFlow::Continue(())
             }
@@ -732,6 +774,11 @@ impl CommandFailureDetector {
                 ControlFlow::Break(self.fire(EventState::FAULT))
             }
             FaultPrecedence::ReenterFault => {
+                // `pending = None` is unreachable today for the same reason it is
+                // in `RecoverToNormal` below — nothing can be in flight while
+                // FAULT holds — and mutation testing confirms no test fails when
+                // it is removed. It stays as the invariant this arm relies on,
+                // matching the treatment of the identical statement there.
                 self.pending = None;
                 self.fault_reliability = Some(reliability);
                 ControlFlow::Break(self.fire(EventState::FAULT))
@@ -743,6 +790,10 @@ impl CommandFailureDetector {
                 ControlFlow::Break(self.fire(EventState::NORMAL))
             }
             FaultPrecedence::RunAlgorithm => {
+                // Also unreachable today and also kept: this arm requires
+                // `!faulted`, and the invariant means the field is already `None`
+                // whenever FAULT does not hold. Removing it leaves the suite
+                // green. It stays as the statement of that invariant.
                 self.fault_reliability = None;
                 ControlFlow::Continue(())
             }

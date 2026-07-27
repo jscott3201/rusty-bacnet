@@ -81,6 +81,15 @@ fn fault_precedence_truth_table() {
         fault_precedence(NO_SENSOR, Some(OVER_RANGE), EventState::FAULT),
         FaultPrecedence::ReenterFault
     );
+    // In FAULT with no recorded value: re-enter, do not hold. The crate never
+    // produces this state, but both fields are public so a downstream implementor
+    // can. Re-entering is self-healing — it stores the value and the invariant
+    // holds afterwards — whereas holding stores nothing, so the field would stay
+    // None and every later genuine change would land here and hold again.
+    assert_eq!(
+        fault_precedence(OVER_RANGE, None, EventState::FAULT),
+        FaultPrecedence::ReenterFault
+    );
     // Recovered while in FAULT.
     assert_eq!(
         fault_precedence(NO_FAULT, Some(OVER_RANGE), EventState::FAULT),
