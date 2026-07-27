@@ -3,7 +3,6 @@
 //! Split out to keep every file under the 700-LOC cap.
 
 use super::super::*;
-use bacnet_types::enums::ObjectType;
 
 // Common property tests (using IntegerValue as representative)
 // -----------------------------------------------------------------------
