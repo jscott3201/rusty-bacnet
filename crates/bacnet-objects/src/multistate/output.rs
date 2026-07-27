@@ -1,4 +1,5 @@
 use super::*;
+use crate::event::CommandFailureDetector;
 
 // ---------------------------------------------------------------------------
 // MultiStateOutput (type 14)
@@ -13,6 +14,7 @@ pub struct MultiStateOutputObject {
     name: String,
     description: String,
     present_value: u32,
+    feedback_value: u32,
     number_of_states: u32,
     out_of_service: bool,
     status_flags: StatusFlags,
@@ -23,8 +25,8 @@ pub struct MultiStateOutputObject {
     state_text: Vec<String>,
     alarm_values: Vec<u32>,
     fault_values: Vec<u32>,
-    /// CHANGE_OF_STATE event detector.
-    event_detector: ChangeOfStateDetector,
+    /// COMMAND_FAILURE event detector.
+    event_detector: CommandFailureDetector,
     /// Value source tracking (optional per spec — exposed via VALUE_SOURCE property).
     value_source: common::ValueSourceTracking,
 }
@@ -42,6 +44,7 @@ impl MultiStateOutputObject {
             name: name.into(),
             description: String::new(),
             present_value: 1,
+            feedback_value: 1,
             number_of_states,
             out_of_service: false,
             status_flags: StatusFlags::empty(),
@@ -53,7 +56,7 @@ impl MultiStateOutputObject {
                 .collect(),
             alarm_values: Vec::new(),
             fault_values: Vec::new(),
-            event_detector: ChangeOfStateDetector::default(),
+            event_detector: CommandFailureDetector::default(),
             value_source: common::ValueSourceTracking::default(),
         })
     }
@@ -82,7 +85,7 @@ impl BACnetObject for MultiStateOutputObject {
         true
     }
 
-    crate::impl_intrinsic_reporting!(event_detector, present_value, reliability);
+    crate::impl_intrinsic_reporting!(event_detector, present_value, feedback_value, reliability);
 
     fn read_property(
         &self,
@@ -106,6 +109,9 @@ impl BACnetObject for MultiStateOutputObject {
             )),
             p if p == PropertyIdentifier::PRESENT_VALUE => {
                 Ok(PropertyValue::Unsigned(self.present_value as u64))
+            }
+            p if p == PropertyIdentifier::FEEDBACK_VALUE => {
+                Ok(PropertyValue::Unsigned(self.feedback_value as u64))
             }
             p if p == PropertyIdentifier::EVENT_STATE => Ok(PropertyValue::Enumerated(
                 self.event_detector.event_state.to_raw(),
@@ -208,6 +214,22 @@ impl BACnetObject for MultiStateOutputObject {
                 }
             });
         }
+        if property == PropertyIdentifier::FEEDBACK_VALUE {
+            if let PropertyValue::Unsigned(u) = value {
+                // Deliberately not range-checked against Number_Of_States, unlike
+                // Present_Value. Clause 12.19 treats a Feedback_Value outside the state
+                // set as a condition to be *reported* — "If any of those properties other
+                // than Present_Value are out of range, the value of the Reliability
+                // property shall remain CONFIGURATION_ERROR" — not as a value to refuse.
+                // Feedback_Value reflects a sensed quantity whose determination is "a
+                // local matter", so it can legitimately fall outside the configured
+                // range. Rejecting the write would make CONFIGURATION_ERROR unreachable.
+                // Setting that reliability is tracked as #226.
+                self.feedback_value = u as u32;
+                return Ok(());
+            }
+            return Err(common::invalid_data_type_error());
+        }
         if property == PropertyIdentifier::STATE_TEXT {
             match array_index {
                 Some(idx) if idx >= 1 && (idx as usize) <= self.state_text.len() => {
@@ -242,6 +264,7 @@ impl BACnetObject for MultiStateOutputObject {
             PropertyIdentifier::DESCRIPTION,
             PropertyIdentifier::OBJECT_TYPE,
             PropertyIdentifier::PRESENT_VALUE,
+            PropertyIdentifier::FEEDBACK_VALUE,
             PropertyIdentifier::STATUS_FLAGS,
             PropertyIdentifier::EVENT_STATE,
             PropertyIdentifier::OUT_OF_SERVICE,
@@ -263,5 +286,108 @@ impl BACnetObject for MultiStateOutputObject {
     fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
         // Mirrors the MultiStateOutput `write_property` arms.
         common::is_multistate_commandable_writable(property)
+            || property == PropertyIdentifier::FEEDBACK_VALUE
+    }
+}
+
+#[cfg(test)]
+mod command_failure_tests {
+    use super::*;
+    use bacnet_types::enums::{EventState, EventType};
+
+    fn write_unsigned(
+        object: &mut MultiStateOutputObject,
+        property: PropertyIdentifier,
+        value: u64,
+    ) {
+        object
+            .write_property(property, None, PropertyValue::Unsigned(value), None)
+            .unwrap();
+    }
+
+    #[test]
+    fn feedback_value_round_trips_and_is_advertised_writable() {
+        let mut mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
+
+        write_unsigned(&mut mso, PropertyIdentifier::FEEDBACK_VALUE, 2);
+
+        assert_eq!(
+            mso.read_property(PropertyIdentifier::FEEDBACK_VALUE, None)
+                .unwrap(),
+            PropertyValue::Unsigned(2)
+        );
+        assert!(mso
+            .property_list()
+            .contains(&PropertyIdentifier::FEEDBACK_VALUE));
+        assert!(mso.is_writable_property(PropertyIdentifier::FEEDBACK_VALUE));
+        assert!(mso
+            .write_property(
+                PropertyIdentifier::FEEDBACK_VALUE,
+                None,
+                PropertyValue::Enumerated(2),
+                None,
+            )
+            .is_err());
+    }
+
+    /// Clause 12.19 defines an out-of-range Feedback_Value as a reportable condition
+    /// (Reliability CONFIGURATION_ERROR, see #226), not a value to refuse. Refusing it
+    /// would make that reliability unreachable, so the write is accepted even though
+    /// Present_Value at the same value would be rejected.
+    #[test]
+    fn feedback_value_outside_the_state_set_is_accepted_unlike_present_value() {
+        let mut mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
+
+        write_unsigned(&mut mso, PropertyIdentifier::FEEDBACK_VALUE, 7);
+        assert_eq!(
+            mso.read_property(PropertyIdentifier::FEEDBACK_VALUE, None)
+                .unwrap(),
+            PropertyValue::Unsigned(7)
+        );
+
+        assert!(mso
+            .write_property(
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+                PropertyValue::Unsigned(7),
+                None,
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn command_failure_uses_present_and_feedback_not_alarm_values() {
+        let mut disagreeing = MultiStateOutputObject::new(1, "MSO-disagree", 3).unwrap();
+        write_unsigned(&mut disagreeing, PropertyIdentifier::PRESENT_VALUE, 2);
+
+        let outcome = disagreeing.evaluate_intrinsic_reporting().unwrap();
+        assert_eq!(outcome.change.to, EventState::OFFNORMAL);
+        assert_eq!(outcome.event_type, EventType::COMMAND_FAILURE);
+
+        let mut agreeing = MultiStateOutputObject::new(2, "MSO-agree", 3).unwrap();
+        agreeing.alarm_values = vec![2];
+        write_unsigned(&mut agreeing, PropertyIdentifier::FEEDBACK_VALUE, 2);
+        write_unsigned(&mut agreeing, PropertyIdentifier::PRESENT_VALUE, 2);
+
+        assert_eq!(agreeing.evaluate_intrinsic_reporting(), None);
+        assert_eq!(
+            agreeing
+                .read_property(PropertyIdentifier::EVENT_STATE, None)
+                .unwrap(),
+            PropertyValue::Enumerated(EventState::NORMAL.to_raw())
+        );
+    }
+
+    #[test]
+    fn time_delay_gates_command_failure() {
+        let mut mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
+        mso.event_detector.time_delay = 2;
+        write_unsigned(&mut mso, PropertyIdentifier::PRESENT_VALUE, 2);
+
+        assert_eq!(mso.evaluate_intrinsic_reporting(), None);
+        assert_eq!(mso.tick_intrinsic_reporting(), None);
+        let outcome = mso.tick_intrinsic_reporting().unwrap();
+        assert_eq!(outcome.change.to, EventState::OFFNORMAL);
+        assert_eq!(outcome.event_type, EventType::COMMAND_FAILURE);
     }
 }

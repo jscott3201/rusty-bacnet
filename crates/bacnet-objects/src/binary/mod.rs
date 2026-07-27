@@ -7,7 +7,7 @@ use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue,
 use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
-use crate::event::ChangeOfStateDetector;
+use crate::event::{ChangeOfStateDetector, CommandFailureDetector};
 use crate::traits::BACnetObject;
 
 // ---------------------------------------------------------------------------
@@ -233,6 +233,7 @@ pub struct BinaryOutputObject {
     name: String,
     description: String,
     present_value: u32,
+    feedback_value: u32,
     out_of_service: bool,
     status_flags: StatusFlags,
     priority_array: [Option<u32>; 16],
@@ -244,7 +245,7 @@ pub struct BinaryOutputObject {
     active_text: String,
     inactive_text: String,
     /// COMMAND_FAILURE event detector.
-    event_detector: ChangeOfStateDetector,
+    event_detector: CommandFailureDetector,
     /// Value source tracking (optional per spec — exposed via VALUE_SOURCE property).
     value_source: common::ValueSourceTracking,
 }
@@ -257,6 +258,7 @@ impl BinaryOutputObject {
             name: name.into(),
             description: String::new(),
             present_value: 0,
+            feedback_value: 0,
             out_of_service: false,
             status_flags: StatusFlags::empty(),
             priority_array: [None; 16],
@@ -265,7 +267,7 @@ impl BinaryOutputObject {
             reliability: 0,
             active_text: "Active".into(),
             inactive_text: "Inactive".into(),
-            event_detector: ChangeOfStateDetector::default(),
+            event_detector: CommandFailureDetector::default(),
             value_source: common::ValueSourceTracking::default(),
         })
     }
@@ -294,7 +296,7 @@ impl BACnetObject for BinaryOutputObject {
         true
     }
 
-    crate::impl_intrinsic_reporting!(event_detector, present_value, reliability);
+    crate::impl_intrinsic_reporting!(event_detector, present_value, feedback_value, reliability);
 
     fn read_property(
         &self,
@@ -318,6 +320,9 @@ impl BACnetObject for BinaryOutputObject {
             )),
             p if p == PropertyIdentifier::PRESENT_VALUE => {
                 Ok(PropertyValue::Enumerated(self.present_value))
+            }
+            p if p == PropertyIdentifier::FEEDBACK_VALUE => {
+                Ok(PropertyValue::Enumerated(self.feedback_value))
             }
             p if p == PropertyIdentifier::EVENT_STATE => Ok(PropertyValue::Enumerated(
                 self.event_detector.event_state.to_raw(),
@@ -398,6 +403,16 @@ impl BACnetObject for BinaryOutputObject {
                 }
             });
         }
+        if property == PropertyIdentifier::FEEDBACK_VALUE {
+            if let PropertyValue::Enumerated(e) = value {
+                if e > 1 {
+                    return Err(common::value_out_of_range_error());
+                }
+                self.feedback_value = e;
+                return Ok(());
+            }
+            return Err(common::invalid_data_type_error());
+        }
         if property == PropertyIdentifier::ACTIVE_TEXT {
             if let PropertyValue::CharacterString(s) = value {
                 self.active_text = s;
@@ -433,6 +448,7 @@ impl BACnetObject for BinaryOutputObject {
             PropertyIdentifier::DESCRIPTION,
             PropertyIdentifier::OBJECT_TYPE,
             PropertyIdentifier::PRESENT_VALUE,
+            PropertyIdentifier::FEEDBACK_VALUE,
             PropertyIdentifier::STATUS_FLAGS,
             PropertyIdentifier::EVENT_STATE,
             PropertyIdentifier::OUT_OF_SERVICE,
@@ -456,6 +472,7 @@ impl BACnetObject for BinaryOutputObject {
         // (PRIORITY_ARRAY + PRESENT_VALUE) + common + text properties.
         common::is_commandable_property_writable(property)
             || common::is_common_writable(property)
+            || property == PropertyIdentifier::FEEDBACK_VALUE
             || property == PropertyIdentifier::ACTIVE_TEXT
             || property == PropertyIdentifier::INACTIVE_TEXT
     }
