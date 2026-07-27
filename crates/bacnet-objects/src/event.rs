@@ -40,10 +40,43 @@ pub struct TransitionOutcome {
 impl EventStateChange {
     /// Derive the BACnet EventType from the state transition.
     ///
-    /// If either the `from` or `to` state is `HIGH_LIMIT` or `LOW_LIMIT`,
-    /// the event type is `OUT_OF_RANGE`. Otherwise it is `CHANGE_OF_STATE`.
+    /// A transition with FAULT at either end is `CHANGE_OF_RELIABILITY`.
+    /// ASHRAE 135-2020 Clause 13.2.5.3 (Fault Event Notifications) opens with
+    /// an unconditional rule: "For all transitions to, or from, the FAULT
+    /// state, the corresponding event notification shall use the Event Type
+    /// CHANGE_OF_RELIABILITY." No clause carves an exception out of it. The
+    /// rest of 13.2.5.3 governs what such a notification must *carry* —
+    /// Table 13-4's `reliability` / `Status-flags` / `Property-values`
+    /// parameters, and Table 13-5's per-object-type property lists — which is
+    /// #135's territory, not this method's. Table 13-3 states the
+    /// Event Type rule itself in the same shape as this
+    /// method's predicate — "When 'To State' or 'From State' is FAULT, set to
+    /// CHANGE_OF_RELIABILITY" — and the Event Type parameter of
+    /// ConfirmedEventNotification (Clause 13.8) and UnconfirmedEventNotification
+    /// (Clause 13.9) gives the to-FAULT rule and then states the other direction
+    /// separately: "The Event Type CHANGE_OF_RELIABILITY shall be used for
+    /// reporting a transition from FAULT."
+    ///
+    /// This test comes first deliberately: a HIGH_LIMIT -> FAULT transition has
+    /// HIGH_LIMIT at one end, so an ordering that checked the limit states first
+    /// would report OUT_OF_RANGE for a fault.
+    ///
+    /// Otherwise the value is guessed from the states involved — HIGH_LIMIT or
+    /// LOW_LIMIT at either end means `OUT_OF_RANGE`, and anything else
+    /// `CHANGE_OF_STATE`. **That guess is not what the standard asks for.**
+    /// Clauses 13.8 and 13.9 continue, and Table 13-3 agrees: "Otherwise, this
+    /// parameter shall have the value associated with the event-initiating
+    /// object's configured event algorithm" — the algorithm, not the states.
+    /// The guess happens to be right
+    /// for every object type wired today only because each detector's state
+    /// vocabulary maps 1:1 onto its algorithm. Tracked as #210, which will
+    /// carry the algorithm in from the source and leave this method with only
+    /// the FAULT rule, the one part that genuinely is a function of the
+    /// transition.
     pub fn event_type(&self) -> EventType {
-        if self.from == EventState::HIGH_LIMIT
+        if self.from == EventState::FAULT || self.to == EventState::FAULT {
+            EventType::CHANGE_OF_RELIABILITY
+        } else if self.from == EventState::HIGH_LIMIT
             || self.from == EventState::LOW_LIMIT
             || self.to == EventState::HIGH_LIMIT
             || self.to == EventState::LOW_LIMIT

@@ -166,6 +166,94 @@ fn event_state_change_derives_event_type() {
     assert_eq!(change.event_type(), EventType::OUT_OF_RANGE);
 }
 
+/// ASHRAE 135-2020 Clause 13.2.5.3: "For all transitions to, or from, the FAULT
+/// state, the corresponding event notification shall use the Event Type
+/// CHANGE_OF_RELIABILITY."
+///
+/// Both directions are tested because the standard states them separately: the
+/// Event Type parameter of ConfirmedEventNotification (Clause 13.8) and
+/// UnconfirmedEventNotification (Clause 13.9) gives the to-FAULT rule and then
+/// adds "The Event Type CHANGE_OF_RELIABILITY shall be used for reporting a
+/// transition from FAULT." Table 13-3 states the combined predicate directly:
+/// "When 'To State' or 'From State' is FAULT, set to CHANGE_OF_RELIABILITY."
+#[test]
+fn fault_transitions_are_change_of_reliability() {
+    use bacnet_types::enums::EventType;
+
+    for (from, to) in [
+        (EventState::NORMAL, EventState::FAULT),
+        (EventState::FAULT, EventState::NORMAL),
+        (EventState::OFFNORMAL, EventState::FAULT),
+        (EventState::FAULT, EventState::OFFNORMAL),
+        (EventState::FAULT, EventState::FAULT),
+    ] {
+        let change = EventStateChange { from, to };
+        assert_eq!(
+            change.event_type(),
+            EventType::CHANGE_OF_RELIABILITY,
+            "{from:?} -> {to:?} has FAULT at one end"
+        );
+    }
+}
+
+/// The FAULT test must be evaluated before the limit-state test.
+///
+/// A HIGH_LIMIT -> FAULT transition has HIGH_LIMIT at one end, so appending the
+/// FAULT rule after the existing OUT_OF_RANGE branch instead of before it would
+/// report a fault as OUT_OF_RANGE. This is the case that distinguishes correct
+/// placement from a plausible-looking one.
+#[test]
+fn fault_takes_precedence_over_limit_states() {
+    use bacnet_types::enums::EventType;
+
+    for (from, to) in [
+        (EventState::HIGH_LIMIT, EventState::FAULT),
+        (EventState::LOW_LIMIT, EventState::FAULT),
+        (EventState::FAULT, EventState::HIGH_LIMIT),
+        (EventState::FAULT, EventState::LOW_LIMIT),
+    ] {
+        let change = EventStateChange { from, to };
+        assert_eq!(
+            change.event_type(),
+            EventType::CHANGE_OF_RELIABILITY,
+            "{from:?} -> {to:?}: FAULT outranks the limit states"
+        );
+    }
+}
+
+/// Transitions with no FAULT end keep their previous classification, so the
+/// FAULT rule is additive rather than a rewrite of the existing behavior.
+#[test]
+fn non_fault_transitions_are_unchanged() {
+    use bacnet_types::enums::EventType;
+
+    for (from, to, expected) in [
+        (
+            EventState::NORMAL,
+            EventState::HIGH_LIMIT,
+            EventType::OUT_OF_RANGE,
+        ),
+        (
+            EventState::LOW_LIMIT,
+            EventState::NORMAL,
+            EventType::OUT_OF_RANGE,
+        ),
+        (
+            EventState::NORMAL,
+            EventState::OFFNORMAL,
+            EventType::CHANGE_OF_STATE,
+        ),
+        (
+            EventState::OFFNORMAL,
+            EventState::NORMAL,
+            EventType::CHANGE_OF_STATE,
+        ),
+    ] {
+        let change = EventStateChange { from, to };
+        assert_eq!(change.event_type(), expected, "{from:?} -> {to:?}");
+    }
+}
+
 #[test]
 fn event_state_change_to_normal_from_high() {
     use bacnet_types::enums::EventType;

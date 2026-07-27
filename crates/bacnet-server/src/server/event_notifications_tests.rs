@@ -4,7 +4,7 @@ use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::event::EventStateChange;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_transport::port::TransportPort;
-use bacnet_types::enums::EventState;
+use bacnet_types::enums::{EventState, EventType};
 use bytes::Bytes;
 use std::sync::{Arc as StdArc, Mutex as StdMutex};
 use tokio::sync::mpsc;
@@ -249,6 +249,53 @@ async fn event_notification_projects_fault_priority_from_class() {
         !notif.ack_required,
         "TO_FAULT ack_required from ACK_REQUIRED bit 1"
     );
+    // Clause 13.2.5.3: a transition to FAULT is reported as
+    // CHANGE_OF_RELIABILITY, not as the object's own algorithm. Asserted on the
+    // decoded wire bytes rather than on `event_type()` in isolation, so the
+    // value is checked where it actually reaches a peer.
+    assert_eq!(
+        notif.event_type,
+        EventType::CHANGE_OF_RELIABILITY.to_raw(),
+        "TO_FAULT must be reported as CHANGE_OF_RELIABILITY"
+    );
+}
+
+/// The from-FAULT direction, which Clauses 13.8 and 13.9 state separately from
+/// the to-FAULT case: "The Event Type CHANGE_OF_RELIABILITY shall be used for
+/// reporting a transition from FAULT."
+///
+/// Worth its own test because the transition coordinate differs — this is a
+/// TO_NORMAL transition for Priority and Ack_Required purposes, while still
+/// being CHANGE_OF_RELIABILITY for Event Type. A fix that keyed the event type
+/// off the transition category rather than the states would get this wrong.
+#[tokio::test]
+async fn event_notification_from_fault_is_change_of_reliability() {
+    let (db, network, comm_state, server_tsm, sent, oid) =
+        fixture_with_commanded_nc(5, [50, 150, 250], [true, false, true]).await;
+
+    let change = EventStateChange {
+        from: EventState::FAULT,
+        to: EventState::NORMAL,
+    };
+    BACnetServer::<RecordingTransport>::build_and_send_event_notification(
+        &db,
+        &network,
+        &comm_state,
+        &server_tsm,
+        &oid,
+        change,
+        1000,
+    )
+    .await;
+
+    let notif = decode_broadcast_notification(&sent);
+    assert_eq!(
+        notif.event_type,
+        EventType::CHANGE_OF_RELIABILITY.to_raw(),
+        "a transition FROM FAULT is also CHANGE_OF_RELIABILITY"
+    );
+    // ...while the transition coordinate is still TO_NORMAL.
+    assert_eq!(notif.priority, 250, "TO_NORMAL priority from PRIORITY[2]");
 }
 
 /// TO_NORMAL projects PRIORITY[2] (250), not the legacy hardcoded 200.
