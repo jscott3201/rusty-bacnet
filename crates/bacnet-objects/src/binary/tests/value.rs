@@ -70,6 +70,69 @@ fn bv_read_reliability_default() {
     assert_eq!(val, PropertyValue::Enumerated(0)); // NO_FAULT_DETECTED
 }
 
+#[test]
+fn bv_detection_enable_resets_and_gates_intrinsic_reporting() {
+    let mut bv = BinaryValueObject::new(1, "BV-1").unwrap();
+    assert_eq!(
+        bv.read_property(PropertyIdentifier::EVENT_DETECTION_ENABLE, None)
+            .unwrap(),
+        PropertyValue::Boolean(true)
+    );
+    bv.event_detector.alarm_values = vec![1];
+    bv.event_detector.time_delay = 2;
+    bv.write_property(
+        PropertyIdentifier::PRESENT_VALUE,
+        None,
+        PropertyValue::Enumerated(1),
+        Some(8),
+    )
+    .unwrap();
+    assert_eq!(bv.evaluate_intrinsic_reporting(), None);
+    assert!(bv.event_detector.pending.is_some());
+
+    bv.event_detector.event_state = bacnet_types::enums::EventState::OFFNORMAL;
+    bv.event_detector.acked_transitions = 0;
+    bv.event_detector.fault_reliability = Some(1);
+    bv.write_property(
+        PropertyIdentifier::EVENT_DETECTION_ENABLE,
+        None,
+        PropertyValue::Boolean(false),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(
+        bv.read_property(PropertyIdentifier::EVENT_DETECTION_ENABLE, None)
+            .unwrap(),
+        PropertyValue::Boolean(false)
+    );
+    assert_eq!(
+        bv.read_property(PropertyIdentifier::EVENT_STATE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(bacnet_types::enums::EventState::NORMAL.to_raw())
+    );
+    assert_eq!(
+        bv.read_property(PropertyIdentifier::ACKED_TRANSITIONS, None)
+            .unwrap(),
+        PropertyValue::BitString {
+            unused_bits: 5,
+            data: vec![0xe0],
+        }
+    );
+    assert!(bv.event_detector.pending.is_none());
+    assert!(bv.event_detector.fault_reliability.is_none());
+    assert_eq!(bv.evaluate_intrinsic_reporting(), None);
+    assert_eq!(bv.tick_intrinsic_reporting(), None);
+    assert!(
+        bv.event_detector.pending.is_none(),
+        "evaluate/tick re-armed a countdown while detection is disabled"
+    );
+    assert!(bv
+        .property_list()
+        .contains(&PropertyIdentifier::EVENT_DETECTION_ENABLE));
+    assert!(bv.is_writable_property(PropertyIdentifier::EVENT_DETECTION_ENABLE));
+}
+
 // --- BinaryValue commandable tests ---
 
 #[test]

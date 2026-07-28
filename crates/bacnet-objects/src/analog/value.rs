@@ -25,6 +25,9 @@ pub struct AnalogValueObject {
     /// Set to a positive value for delta-based filtering.
     cov_increment: f32,
     event_detector: OutOfRangeDetector,
+    /// Event_Detection_Enable (Clause 12.4). Clause 13.2.2.1: "If the
+    /// Event_Detection_Enable property is FALSE, then this state machine is not evaluated."
+    event_detection_enable: bool,
     /// Reliability: 0 = NO_FAULT_DETECTED.
     reliability: u32,
     min_pres_value: Option<f32>,
@@ -51,6 +54,7 @@ impl AnalogValueObject {
             relinquish_default: 0.0,
             cov_increment: 0.0,
             event_detector: OutOfRangeDetector::default(),
+            event_detection_enable: true,
             reliability: 0,
             min_pres_value: None,
             max_pres_value: None,
@@ -126,6 +130,9 @@ impl BACnetObject for AnalogValueObject {
         }
         if let Some(result) = read_generic_event_properties!(self, property) {
             return result;
+        }
+        if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {
+            return Ok(PropertyValue::Boolean(self.event_detection_enable));
         }
         match property {
             p if p == PropertyIdentifier::OBJECT_TYPE => {
@@ -219,6 +226,25 @@ impl BACnetObject for AnalogValueObject {
         {
             return result;
         }
+        if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {
+            if let PropertyValue::Boolean(v) = value {
+                self.event_detection_enable = v;
+                if !v {
+                    self.event_detector.event_state = bacnet_types::enums::EventState::NORMAL;
+                    self.event_detector.acked_transitions = 0b111;
+                    self.event_detector.pending = None;
+                    self.event_detector.fault_reliability = None;
+                    self.event_time_stamps = [
+                        BACnetTimeStamp::SequenceNumber(0),
+                        BACnetTimeStamp::SequenceNumber(0),
+                        BACnetTimeStamp::SequenceNumber(0),
+                    ];
+                    self.event_message_texts = [String::new(), String::new(), String::new()];
+                }
+                return Ok(());
+            }
+            return Err(common::invalid_data_type_error());
+        }
         if let Some(result) = write_analog_event_properties!(self, property, value) {
             return result;
         }
@@ -237,6 +263,7 @@ impl BACnetObject for AnalogValueObject {
             PropertyIdentifier::PRESENT_VALUE,
             PropertyIdentifier::STATUS_FLAGS,
             PropertyIdentifier::EVENT_STATE,
+            PropertyIdentifier::EVENT_DETECTION_ENABLE,
             PropertyIdentifier::OUT_OF_SERVICE,
             PropertyIdentifier::UNITS,
             PropertyIdentifier::PRIORITY_ARRAY,
@@ -267,7 +294,12 @@ impl BACnetObject for AnalogValueObject {
         Some(self.cov_increment)
     }
 
-    crate::impl_intrinsic_reporting!(event_detector, present_value, reliability);
+    crate::impl_intrinsic_reporting!(
+        event_detector,
+        present_value,
+        reliability,
+        event_detection_enable
+    );
 
     fn acknowledge_alarm(&mut self, transition_bit: u8) -> Result<(), bacnet_types::error::Error> {
         self.event_detector.acked_transitions |= transition_bit & 0x07;
@@ -288,5 +320,69 @@ impl BACnetObject for AnalogValueObject {
             || property == PropertyIdentifier::RELIABILITY
             || property == PropertyIdentifier::COV_INCREMENT
             || common::is_event_property_writable(property)
+            || property == PropertyIdentifier::EVENT_DETECTION_ENABLE
+    }
+}
+
+#[cfg(test)]
+mod detection_enable_reset_tests {
+    use super::*;
+
+    /// Regression guard for issue #123: once transitions populate timestamps and messages,
+    /// disabling event detection must still restore their Clause 13.2.2.1 initial conditions.
+    #[test]
+    fn av_disabling_detection_resets_event_history() {
+        let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+        assert_eq!(
+            av.read_property(PropertyIdentifier::EVENT_DETECTION_ENABLE, None)
+                .unwrap(),
+            PropertyValue::Boolean(true)
+        );
+        av.event_detector.event_state = bacnet_types::enums::EventState::HIGH_LIMIT;
+        av.event_detector.acked_transitions = 0;
+        av.event_detector.pending = Some(crate::event::PendingTransition {
+            state: bacnet_types::enums::EventState::HIGH_LIMIT,
+            remaining: 2,
+        });
+        av.event_detector.fault_reliability = Some(1);
+        av.event_time_stamps = [
+            BACnetTimeStamp::SequenceNumber(1),
+            BACnetTimeStamp::SequenceNumber(2),
+            BACnetTimeStamp::SequenceNumber(3),
+        ];
+        av.event_message_texts = ["offnormal".into(), "fault".into(), "normal".into()];
+
+        av.write_property(
+            PropertyIdentifier::EVENT_DETECTION_ENABLE,
+            None,
+            PropertyValue::Boolean(false),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            av.read_property(PropertyIdentifier::EVENT_DETECTION_ENABLE, None)
+                .unwrap(),
+            PropertyValue::Boolean(false)
+        );
+        assert_eq!(
+            av.event_detector.event_state,
+            bacnet_types::enums::EventState::NORMAL
+        );
+        assert_eq!(av.event_detector.acked_transitions, 0b111);
+        assert!(av.event_detector.pending.is_none());
+        assert!(av.event_detector.fault_reliability.is_none());
+        assert_eq!(
+            av.event_time_stamps,
+            [
+                BACnetTimeStamp::SequenceNumber(0),
+                BACnetTimeStamp::SequenceNumber(0),
+                BACnetTimeStamp::SequenceNumber(0),
+            ]
+        );
+        assert_eq!(
+            av.event_message_texts,
+            [String::new(), String::new(), String::new()]
+        );
     }
 }

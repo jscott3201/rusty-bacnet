@@ -11,7 +11,6 @@
 //! *included* rather than excluded.
 
 use super::*;
-use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::traits::BACnetObject;
 
 /// A minimal event-initiating object that is simultaneously in HIGH_LIMIT and
@@ -31,7 +30,7 @@ use bacnet_objects::traits::BACnetObject;
 /// against an object that can actually be inconsistent.
 struct DisabledAlarmingObject {
     oid: ObjectIdentifier,
-    detection_enable: bool,
+    detection_enable: Option<bool>,
 }
 
 impl BACnetObject for DisabledAlarmingObject {
@@ -53,9 +52,13 @@ impl BACnetObject for DisabledAlarmingObject {
             p if p == PropertyIdentifier::EVENT_STATE => Ok(PropertyValue::Enumerated(
                 bacnet_types::enums::EventState::HIGH_LIMIT.to_raw(),
             )),
-            p if p == PropertyIdentifier::EVENT_DETECTION_ENABLE => {
-                Ok(PropertyValue::Boolean(self.detection_enable))
-            }
+            p if p == PropertyIdentifier::EVENT_DETECTION_ENABLE => self
+                .detection_enable
+                .map(PropertyValue::Boolean)
+                .ok_or_else(|| Error::Protocol {
+                    class: bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32,
+                    code: bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                }),
             p if p == PropertyIdentifier::EVENT_TYPE => Ok(PropertyValue::Enumerated(
                 bacnet_types::enums::EventType::OUT_OF_RANGE.to_raw(),
             )),
@@ -93,7 +96,7 @@ fn db_with_enrollment(detection_enabled: bool) -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
     db.add(Box::new(DisabledAlarmingObject {
         oid: ObjectIdentifier::new(bacnet_types::enums::ObjectType::EVENT_ENROLLMENT, 1).unwrap(),
-        detection_enable: detection_enabled,
+        detection_enable: Some(detection_enabled),
     }))
     .unwrap();
     db
@@ -131,38 +134,20 @@ fn get_alarm_summary_excludes_detection_disabled_object() {
 /// type that lacks the property, which is most of them.
 #[test]
 fn summarization_includes_objects_without_the_property() {
-    use bacnet_objects::event::LimitEnable;
-
     let mut db = ObjectDatabase::new();
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
-    for (p, v) in [
-        (PropertyIdentifier::HIGH_LIMIT, 80.0f32),
-        (PropertyIdentifier::LOW_LIMIT, 20.0),
-        (PropertyIdentifier::DEADBAND, 2.0),
-    ] {
-        ai.write_property(p, None, PropertyValue::Real(v), None)
-            .unwrap();
-    }
-    ai.write_property(
-        PropertyIdentifier::LIMIT_ENABLE,
-        None,
-        PropertyValue::BitString {
-            unused_bits: 6,
-            data: vec![LimitEnable::BOTH.to_bits()],
-        },
-        None,
-    )
-    .unwrap();
-    ai.set_present_value(85.0);
-    ai.evaluate_intrinsic_reporting(); // -> HIGH_LIMIT
+    let object = DisabledAlarmingObject {
+        oid: ObjectIdentifier::new(bacnet_types::enums::ObjectType::EVENT_ENROLLMENT, 2).unwrap(),
+        detection_enable: None,
+    };
 
     // Precondition: this object type really does lack the property.
     assert!(
-        ai.read_property(PropertyIdentifier::EVENT_DETECTION_ENABLE, None)
+        object
+            .read_property(PropertyIdentifier::EVENT_DETECTION_ENABLE, None)
             .is_err(),
-        "fixture assumes AnalogInput does not model Event_Detection_Enable"
+        "fixture must not model Event_Detection_Enable"
     );
-    db.add(Box::new(ai)).unwrap();
+    db.add(Box::new(object)).unwrap();
 
     assert_eq!(
         alarm_summary_entry_count(&db),

@@ -225,6 +225,63 @@ fn bo_read_reliability_default() {
     assert_eq!(val, PropertyValue::Enumerated(0)); // NO_FAULT_DETECTED
 }
 
+#[test]
+fn bi_detection_enable_resets_and_gates_intrinsic_reporting() {
+    let mut bi = BinaryInputObject::new(1, "BI-1").unwrap();
+    assert_eq!(
+        bi.read_property(PropertyIdentifier::EVENT_DETECTION_ENABLE, None)
+            .unwrap(),
+        PropertyValue::Boolean(true)
+    );
+    bi.event_detector.alarm_values = vec![1];
+    bi.event_detector.time_delay = 2;
+    bi.set_present_value(1);
+    assert_eq!(bi.evaluate_intrinsic_reporting(), None);
+    assert!(bi.event_detector.pending.is_some());
+
+    bi.event_detector.event_state = bacnet_types::enums::EventState::OFFNORMAL;
+    bi.event_detector.acked_transitions = 0;
+    bi.event_detector.fault_reliability = Some(1);
+    bi.write_property(
+        PropertyIdentifier::EVENT_DETECTION_ENABLE,
+        None,
+        PropertyValue::Boolean(false),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(
+        bi.read_property(PropertyIdentifier::EVENT_DETECTION_ENABLE, None)
+            .unwrap(),
+        PropertyValue::Boolean(false)
+    );
+    assert_eq!(
+        bi.read_property(PropertyIdentifier::EVENT_STATE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(bacnet_types::enums::EventState::NORMAL.to_raw())
+    );
+    assert_eq!(
+        bi.read_property(PropertyIdentifier::ACKED_TRANSITIONS, None)
+            .unwrap(),
+        PropertyValue::BitString {
+            unused_bits: 5,
+            data: vec![0xe0],
+        }
+    );
+    assert!(bi.event_detector.pending.is_none());
+    assert!(bi.event_detector.fault_reliability.is_none());
+    assert_eq!(bi.evaluate_intrinsic_reporting(), None);
+    assert_eq!(bi.tick_intrinsic_reporting(), None);
+    assert!(
+        bi.event_detector.pending.is_none(),
+        "evaluate/tick re-armed a countdown while detection is disabled"
+    );
+    assert!(bi
+        .property_list()
+        .contains(&PropertyIdentifier::EVENT_DETECTION_ENABLE));
+    assert!(bi.is_writable_property(PropertyIdentifier::EVENT_DETECTION_ENABLE));
+}
+
 // --- Priority array bounds tests (BinaryOutput) ---
 
 #[test]

@@ -1,31 +1,29 @@
 use super::*;
 
 // ---------------------------------------------------------------------------
-// MultiStateValue (type 19)
+// BinaryValue (type 5)
 // ---------------------------------------------------------------------------
 
-/// BACnet Multi-State Value object.
+/// BACnet Binary Value object.
 ///
-/// Commandable multi-state value with 16-level priority array.
-/// Present_Value is Unsigned, range 1..=number_of_states.
-pub struct MultiStateValueObject {
+/// Commandable binary value with 16-level priority array.
+/// Uses Enumerated values: 0 = inactive, 1 = active.
+pub struct BinaryValueObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    present_value: u32,
-    number_of_states: u32,
+    present_value: u32, // 0 = inactive, 1 = active
     out_of_service: bool,
     status_flags: StatusFlags,
     priority_array: [Option<u32>; 16],
     relinquish_default: u32,
     /// Reliability: 0 = NO_FAULT_DETECTED.
     reliability: u32,
-    state_text: Vec<String>,
-    alarm_values: Vec<u32>,
-    fault_values: Vec<u32>,
+    active_text: String,
+    inactive_text: String,
     /// CHANGE_OF_STATE event detector.
     event_detector: ChangeOfStateDetector,
-    /// Event_Detection_Enable (Clause 12.20). Clause 13.2.2.1: "If the
+    /// Event_Detection_Enable (Clause 12.8). Clause 13.2.2.1: "If the
     /// Event_Detection_Enable property is FALSE, then this state machine is not evaluated."
     /// The same clause also requires Event_Time_Stamps and Event_Message_Texts to be
     /// at their initial conditions while this is FALSE. This type models neither, so
@@ -37,30 +35,22 @@ pub struct MultiStateValueObject {
     value_source: common::ValueSourceTracking,
 }
 
-impl MultiStateValueObject {
-    pub fn new(
-        instance: u32,
-        name: impl Into<String>,
-        number_of_states: u32,
-    ) -> Result<Self, Error> {
-        let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_VALUE, instance)?;
-        require_nonzero_states(number_of_states)?;
+impl BinaryValueObject {
+    /// Create a new Binary Value object.
+    pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
+        let oid = ObjectIdentifier::new(ObjectType::BINARY_VALUE, instance)?;
         Ok(Self {
             oid,
             name: name.into(),
             description: String::new(),
-            present_value: 1,
-            number_of_states,
+            present_value: 0, // inactive
             out_of_service: false,
             status_flags: StatusFlags::empty(),
             priority_array: [None; 16],
-            relinquish_default: 1,
+            relinquish_default: 0,
             reliability: 0,
-            state_text: (1..=number_of_states)
-                .map(|i| format!("State {i}"))
-                .collect(),
-            alarm_values: Vec::new(),
-            fault_values: Vec::new(),
+            active_text: "Active".into(),
+            inactive_text: "Inactive".into(),
             event_detector: ChangeOfStateDetector::default(),
             event_detection_enable: true,
             value_source: common::ValueSourceTracking::default(),
@@ -78,7 +68,7 @@ impl MultiStateValueObject {
     }
 }
 
-impl BACnetObject for MultiStateValueObject {
+impl BACnetObject for BinaryValueObject {
     fn object_identifier(&self) -> ObjectIdentifier {
         self.oid
     }
@@ -118,17 +108,23 @@ impl BACnetObject for MultiStateValueObject {
             return Ok(PropertyValue::Boolean(self.event_detection_enable));
         }
         match property {
-            p if p == PropertyIdentifier::OBJECT_TYPE => Ok(PropertyValue::Enumerated(
-                ObjectType::MULTI_STATE_VALUE.to_raw(),
-            )),
+            p if p == PropertyIdentifier::OBJECT_TYPE => {
+                Ok(PropertyValue::Enumerated(ObjectType::BINARY_VALUE.to_raw()))
+            }
             p if p == PropertyIdentifier::PRESENT_VALUE => {
-                Ok(PropertyValue::Unsigned(self.present_value as u64))
+                Ok(PropertyValue::Enumerated(self.present_value))
             }
             p if p == PropertyIdentifier::EVENT_STATE => Ok(PropertyValue::Enumerated(
                 self.event_detector.event_state.to_raw(),
             )),
-            p if p == PropertyIdentifier::NUMBER_OF_STATES => {
-                Ok(PropertyValue::Unsigned(self.number_of_states as u64))
+            p if p == PropertyIdentifier::PRIORITY_ARRAY => {
+                common::read_priority_array!(self, array_index, PropertyValue::Enumerated)
+            }
+            p if p == PropertyIdentifier::RELINQUISH_DEFAULT => {
+                Ok(PropertyValue::Enumerated(self.relinquish_default))
+            }
+            p if p == PropertyIdentifier::CURRENT_COMMAND_PRIORITY => {
+                Ok(common::current_command_priority(&self.priority_array))
             }
             p if p == PropertyIdentifier::VALUE_SOURCE => {
                 Ok(self.value_source.value_source.clone())
@@ -139,42 +135,12 @@ impl BACnetObject for MultiStateValueObject {
                     _ => 0,
                 },
             )),
-            p if p == PropertyIdentifier::PRIORITY_ARRAY => {
-                common::read_priority_array!(self, array_index, |v: u32| PropertyValue::Unsigned(
-                    v as u64
-                ))
+            p if p == PropertyIdentifier::ACTIVE_TEXT => {
+                Ok(PropertyValue::CharacterString(self.active_text.clone()))
             }
-            p if p == PropertyIdentifier::RELINQUISH_DEFAULT => {
-                Ok(PropertyValue::Unsigned(self.relinquish_default as u64))
+            p if p == PropertyIdentifier::INACTIVE_TEXT => {
+                Ok(PropertyValue::CharacterString(self.inactive_text.clone()))
             }
-            p if p == PropertyIdentifier::CURRENT_COMMAND_PRIORITY => {
-                Ok(common::current_command_priority(&self.priority_array))
-            }
-            p if p == PropertyIdentifier::STATE_TEXT => match array_index {
-                None => Ok(PropertyValue::List(
-                    self.state_text
-                        .iter()
-                        .map(|s| PropertyValue::CharacterString(s.clone()))
-                        .collect(),
-                )),
-                Some(0) => Ok(PropertyValue::Unsigned(self.state_text.len() as u64)),
-                Some(idx) if idx >= 1 && (idx as usize) <= self.state_text.len() => Ok(
-                    PropertyValue::CharacterString(self.state_text[(idx - 1) as usize].clone()),
-                ),
-                _ => Err(common::invalid_array_index_error()),
-            },
-            p if p == PropertyIdentifier::ALARM_VALUES => Ok(PropertyValue::List(
-                self.alarm_values
-                    .iter()
-                    .map(|v| PropertyValue::Unsigned(*v as u64))
-                    .collect(),
-            )),
-            p if p == PropertyIdentifier::FAULT_VALUES => Ok(PropertyValue::List(
-                self.fault_values
-                    .iter()
-                    .map(|v| PropertyValue::Unsigned(*v as u64))
-                    .collect(),
-            )),
             p if p == PropertyIdentifier::EVENT_ENABLE => Ok(PropertyValue::BitString {
                 unused_bits: 5,
                 data: vec![self.event_detector.event_enable << 5],
@@ -186,6 +152,11 @@ impl BACnetObject for MultiStateValueObject {
             p if p == PropertyIdentifier::NOTIFICATION_CLASS => Ok(PropertyValue::Unsigned(
                 self.event_detector.notification_class as u64,
             )),
+            p if p == PropertyIdentifier::EVENT_TIME_STAMPS => Ok(PropertyValue::List(vec![
+                PropertyValue::Unsigned(0),
+                PropertyValue::Unsigned(0),
+                PropertyValue::Unsigned(0),
+            ])),
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -197,46 +168,43 @@ impl BACnetObject for MultiStateValueObject {
         value: PropertyValue,
         priority: Option<u8>,
     ) -> Result<(), Error> {
-        {
-            let num_states = self.number_of_states;
-            common::write_priority_array_direct!(self, property, array_index, value, |v| {
-                if let PropertyValue::Unsigned(u) = v {
-                    if u < 1 || u > num_states as u64 {
-                        Err(common::value_out_of_range_error())
-                    } else {
-                        Ok(u as u32)
-                    }
+        common::write_priority_array_direct!(self, property, array_index, value, |v| {
+            if let PropertyValue::Enumerated(e) = v {
+                if e > 1 {
+                    Err(common::value_out_of_range_error())
                 } else {
-                    Err(common::invalid_data_type_error())
+                    Ok(e)
                 }
-            });
-        }
-        if property == PropertyIdentifier::PRESENT_VALUE {
-            let num_states = self.number_of_states;
-            return common::write_priority_array!(self, value, priority, |v| {
-                if let PropertyValue::Unsigned(u) = v {
-                    if u < 1 || u > num_states as u64 {
-                        Err(common::value_out_of_range_error())
-                    } else {
-                        Ok(u as u32)
-                    }
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
-            });
-        }
-        if property == PropertyIdentifier::STATE_TEXT {
-            match array_index {
-                Some(idx) if idx >= 1 && (idx as usize) <= self.state_text.len() => {
-                    if let PropertyValue::CharacterString(s) = value {
-                        self.state_text[(idx - 1) as usize] = s;
-                        return Ok(());
-                    }
-                    return Err(common::invalid_data_type_error());
-                }
-                None => return Err(common::write_access_denied_error()),
-                _ => return Err(common::invalid_array_index_error()),
+            } else {
+                Err(common::invalid_data_type_error())
             }
+        });
+        if property == PropertyIdentifier::PRESENT_VALUE {
+            return common::write_priority_array!(self, value, priority, |v| {
+                if let PropertyValue::Enumerated(e) = v {
+                    if e > 1 {
+                        Err(common::value_out_of_range_error())
+                    } else {
+                        Ok(e)
+                    }
+                } else {
+                    Err(common::invalid_data_type_error())
+                }
+            });
+        }
+        if property == PropertyIdentifier::ACTIVE_TEXT {
+            if let PropertyValue::CharacterString(s) = value {
+                self.active_text = s;
+                return Ok(());
+            }
+            return Err(common::invalid_data_type_error());
+        }
+        if property == PropertyIdentifier::INACTIVE_TEXT {
+            if let PropertyValue::CharacterString(s) = value {
+                self.inactive_text = s;
+                return Ok(());
+            }
+            return Err(common::invalid_data_type_error());
         }
         if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {
             if let PropertyValue::Boolean(v) = value {
@@ -276,12 +244,12 @@ impl BACnetObject for MultiStateValueObject {
             PropertyIdentifier::EVENT_STATE,
             PropertyIdentifier::EVENT_DETECTION_ENABLE,
             PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::NUMBER_OF_STATES,
             PropertyIdentifier::PRIORITY_ARRAY,
             PropertyIdentifier::RELINQUISH_DEFAULT,
             PropertyIdentifier::CURRENT_COMMAND_PRIORITY,
             PropertyIdentifier::RELIABILITY,
-            PropertyIdentifier::STATE_TEXT,
+            PropertyIdentifier::ACTIVE_TEXT,
+            PropertyIdentifier::INACTIVE_TEXT,
         ];
         Cow::Borrowed(PROPS)
     }
@@ -289,77 +257,18 @@ impl BACnetObject for MultiStateValueObject {
     fn is_createable(&self) -> bool {
         true
     }
+
     fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        // Mirrors the MultiStateValue `write_property` arms.
-        common::is_multistate_commandable_writable(property)
+        // Mirrors the BinaryValue `write_property` arms. Same set as
+        // BinaryOutput (commandable + common + text properties).
+        common::is_commandable_property_writable(property)
+            || common::is_common_writable(property)
+            || property == PropertyIdentifier::ACTIVE_TEXT
+            || property == PropertyIdentifier::INACTIVE_TEXT
             || property == PropertyIdentifier::EVENT_DETECTION_ENABLE
     }
 }
 
 #[cfg(test)]
-mod detection_enable_tests {
-    use super::*;
-
-    #[test]
-    fn msv_detection_enable_resets_and_gates_intrinsic_reporting() {
-        let mut msv = MultiStateValueObject::new(1, "MSV-1", 3).unwrap();
-        assert_eq!(
-            msv.read_property(PropertyIdentifier::EVENT_DETECTION_ENABLE, None)
-                .unwrap(),
-            PropertyValue::Boolean(true)
-        );
-        msv.event_detector.alarm_values = vec![2];
-        msv.event_detector.time_delay = 2;
-        msv.write_property(
-            PropertyIdentifier::PRESENT_VALUE,
-            None,
-            PropertyValue::Unsigned(2),
-            Some(8),
-        )
-        .unwrap();
-        assert_eq!(msv.evaluate_intrinsic_reporting(), None);
-        assert!(msv.event_detector.pending.is_some());
-
-        msv.event_detector.event_state = bacnet_types::enums::EventState::OFFNORMAL;
-        msv.event_detector.acked_transitions = 0;
-        msv.event_detector.fault_reliability = Some(1);
-        msv.write_property(
-            PropertyIdentifier::EVENT_DETECTION_ENABLE,
-            None,
-            PropertyValue::Boolean(false),
-            None,
-        )
-        .unwrap();
-
-        assert_eq!(
-            msv.read_property(PropertyIdentifier::EVENT_DETECTION_ENABLE, None)
-                .unwrap(),
-            PropertyValue::Boolean(false)
-        );
-        assert_eq!(
-            msv.read_property(PropertyIdentifier::EVENT_STATE, None)
-                .unwrap(),
-            PropertyValue::Enumerated(bacnet_types::enums::EventState::NORMAL.to_raw())
-        );
-        assert_eq!(
-            msv.read_property(PropertyIdentifier::ACKED_TRANSITIONS, None)
-                .unwrap(),
-            PropertyValue::BitString {
-                unused_bits: 5,
-                data: vec![0xe0],
-            }
-        );
-        assert!(msv.event_detector.pending.is_none());
-        assert!(msv.event_detector.fault_reliability.is_none());
-        assert_eq!(msv.evaluate_intrinsic_reporting(), None);
-        assert_eq!(msv.tick_intrinsic_reporting(), None);
-        assert!(
-            msv.event_detector.pending.is_none(),
-            "evaluate/tick re-armed a countdown while detection is disabled"
-        );
-        assert!(msv
-            .property_list()
-            .contains(&PropertyIdentifier::EVENT_DETECTION_ENABLE));
-        assert!(msv.is_writable_property(PropertyIdentifier::EVENT_DETECTION_ENABLE));
-    }
-}
+#[path = "tests/value.rs"]
+mod value_tests;
