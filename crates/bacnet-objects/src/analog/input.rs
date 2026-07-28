@@ -27,6 +27,7 @@ pub struct AnalogInputObject {
     event_detection_enable: bool,
     /// Reliability: 0 = NO_FAULT_DETECTED.
     reliability: u32,
+    reliability_before_out_of_service: Option<u32>,
     /// Optional minimum present value for fault detection.
     min_pres_value: Option<f32>,
     /// Optional maximum present value for fault detection.
@@ -53,6 +54,7 @@ impl AnalogInputObject {
             event_detector: OutOfRangeDetector::default(),
             event_detection_enable: true,
             reliability: 0,
+            reliability_before_out_of_service: None,
             min_pres_value: None,
             max_pres_value: None,
             event_time_stamps: [
@@ -168,9 +170,13 @@ impl BACnetObject for AnalogInputObject {
             }
             return Err(common::invalid_data_type_error());
         }
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
+        if let Some(result) = common::write_out_of_service_with_reliability_restore(
+            &mut self.out_of_service,
+            &mut self.reliability,
+            &mut self.reliability_before_out_of_service,
+            property,
+            &value,
+        ) {
             return result;
         }
         if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
@@ -180,7 +186,13 @@ impl BACnetObject for AnalogInputObject {
             return result;
         }
         if property == PropertyIdentifier::RELIABILITY {
+            if !self.out_of_service {
+                return Err(common::write_access_denied_error());
+            }
             if let PropertyValue::Enumerated(v) = value {
+                if !common::is_reliability_value_valid(v) {
+                    return Err(common::value_out_of_range_error());
+                }
                 self.reliability = v;
                 return Ok(());
             }
@@ -264,6 +276,17 @@ impl BACnetObject for AnalogInputObject {
 
     fn acknowledge_alarm(&mut self, transition_bit: u8) -> Result<(), bacnet_types::error::Error> {
         self.event_detector.acked_transitions |= transition_bit & 0x07;
+        Ok(())
+    }
+
+    fn set_reliability_internal(&mut self, reliability: u32) -> Result<(), Error> {
+        if self.out_of_service {
+            return Err(common::write_access_denied_error());
+        }
+        if !common::is_reliability_value_valid(reliability) {
+            return Err(common::value_out_of_range_error());
+        }
+        self.reliability = reliability;
         Ok(())
     }
 

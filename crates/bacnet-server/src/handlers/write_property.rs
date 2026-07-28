@@ -45,6 +45,13 @@ fn check_and_prepare_name_write(
 /// was relinquished) and the rollback restores that slot directly; a `Null`
 /// snapshot relinquishes the slot again. Non-commandable objects (where
 /// `PRIORITY_ARRAY` is not readable) fall back to the generic value snapshot.
+///
+/// `OUT_OF_SERVICE` writes on objects with `Reliability` snapshot both
+/// properties. Returning to service restores the pre-simulation Reliability,
+/// so rolling back only `OUT_OF_SERVICE` would destroy the client's simulated
+/// value and the object's saved evaluated value. Rollback replays
+/// `OUT_OF_SERVICE` first and then `RELIABILITY`, reconstructing both visible
+/// state and the object's private saved-value slot.
 pub fn handle_write_property_multiple(
     db: &mut ObjectDatabase,
     service_data: &[u8],
@@ -99,12 +106,12 @@ pub fn handle_write_property_multiple(
         // Capture a state-equivalent snapshot for rollback. For a commandable
         // PRESENT_VALUE the readable value is the resolved priority-array
         // output, not the slot being written, so snapshot the priority-array
-        // slot itself (see the function doc). `rollback_record` holds the
-        // (property, index, value) to restore; for the commandable case that is
-        // PRIORITY_ARRAY[priority], for every other case it is the property as
+        // slot itself (see the function doc). `rollback_records` holds the
+        // (property, index, value) entries to restore; for commandable
+        // PRESENT_VALUE that is PRIORITY_ARRAY[priority], for OUT_OF_SERVICE
+        // it can also include RELIABILITY, and otherwise it is the property as
         // written. `read_property` is best-effort: a write-only property has no
-        // readable value and yields no rollback record (matches the prior
-        // behavior).
+        // readable value and yields no rollback record (matches prior behavior).
         //
         // A non-commandable object (e.g. an AnalogInput placed out-of-service,
         // or a Command/Timer/Color object whose PRESENT_VALUE is always
@@ -114,7 +121,7 @@ pub fn handle_write_property_multiple(
         // Without this fallback a failed multi-write would leave the
         // non-commandable PRESENT_VALUE changed despite reporting failure
         // (ASHRAE 135-2020 §19.1.2).
-        let rollback_record = if *prop_id == PropertyIdentifier::PRESENT_VALUE {
+        let rollback_records = if *prop_id == PropertyIdentifier::PRESENT_VALUE {
             // The write targets priority `priority.unwrap_or(16)` (matching
             // `write_priority_array!`). Snapshot that exact slot so rollback
             // restores it rather than writing the resolved value to priority 16.
@@ -133,6 +140,8 @@ pub fn handle_write_property_multiple(
                             .ok()
                             .map(|v| (*prop_id, *array_index, v))
                     })
+                    .into_iter()
+                    .collect()
             } else {
                 // Out-of-range priority: a commandable write will fail (so the
                 // snapshot is discarded), but a non-commandable write ignores the
@@ -142,12 +151,27 @@ pub fn handle_write_property_multiple(
                     .read_property(*prop_id, *array_index)
                     .ok()
                     .map(|v| (*prop_id, *array_index, v))
+                    .into_iter()
+                    .collect()
             }
+        } else if *prop_id == PropertyIdentifier::OUT_OF_SERVICE {
+            let mut records = Vec::new();
+            if let Ok(reliability) = object.read_property(PropertyIdentifier::RELIABILITY, None) {
+                // Pushed before OUT_OF_SERVICE so reverse-order rollback
+                // restores OOS first, then the client simulation.
+                records.push((PropertyIdentifier::RELIABILITY, None, reliability));
+            }
+            if let Ok(out_of_service) = object.read_property(*prop_id, *array_index) {
+                records.push((*prop_id, *array_index, out_of_service));
+            }
+            records
         } else {
             object
                 .read_property(*prop_id, *array_index)
                 .ok()
                 .map(|v| (*prop_id, *array_index, v))
+                .into_iter()
+                .collect()
         };
         match object.write_property(*prop_id, *array_index, value.clone(), *priority) {
             Ok(()) => {
@@ -156,7 +180,7 @@ pub fn handle_write_property_multiple(
                 if *prop_id == PropertyIdentifier::OBJECT_NAME {
                     db.update_name_index(oid);
                 }
-                if let Some((rb_prop, rb_idx, rb_val)) = rollback_record {
+                for (rb_prop, rb_idx, rb_val) in rollback_records {
                     applied.push((*oid, rb_prop, rb_idx, rb_val));
                 }
             }

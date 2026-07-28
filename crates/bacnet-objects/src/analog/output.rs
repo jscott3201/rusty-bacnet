@@ -28,6 +28,7 @@ pub struct AnalogOutputObject {
     /// Event_Detection_Enable property is FALSE, then this state machine is not evaluated."
     event_detection_enable: bool,
     reliability: u32,
+    reliability_before_out_of_service: Option<u32>,
     min_pres_value: Option<f32>,
     max_pres_value: Option<f32>,
     event_time_stamps: [BACnetTimeStamp; 3],
@@ -54,6 +55,7 @@ impl AnalogOutputObject {
             event_detector: OutOfRangeDetector::default(),
             event_detection_enable: true,
             reliability: 0,
+            reliability_before_out_of_service: None,
             min_pres_value: None,
             max_pres_value: None,
             event_time_stamps: [
@@ -192,9 +194,13 @@ impl BACnetObject for AnalogOutputObject {
                 }
             });
         }
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
+        if let Some(result) = common::write_out_of_service_with_reliability_restore(
+            &mut self.out_of_service,
+            &mut self.reliability,
+            &mut self.reliability_before_out_of_service,
+            property,
+            &value,
+        ) {
             return result;
         }
         if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
@@ -203,8 +209,19 @@ impl BACnetObject for AnalogOutputObject {
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
+        // Clause 12.3, while Out_Of_Service is TRUE: "the Present_Value property and
+        // the Reliability property, if present and capable of taking on values other
+        // than NO_FAULT_DETECTED, shall be writable to allow simulating specific
+        // conditions or for testing purposes".
+        // `is_writable_property` stays statically true because it describes capability.
         if property == PropertyIdentifier::RELIABILITY {
+            if !self.out_of_service {
+                return Err(common::write_access_denied_error());
+            }
             if let PropertyValue::Enumerated(v) = value {
+                if !common::is_reliability_value_valid(v) {
+                    return Err(common::value_out_of_range_error());
+                }
                 self.reliability = v;
                 return Ok(());
             }
@@ -291,6 +308,17 @@ impl BACnetObject for AnalogOutputObject {
 
     fn acknowledge_alarm(&mut self, transition_bit: u8) -> Result<(), bacnet_types::error::Error> {
         self.event_detector.acked_transitions |= transition_bit & 0x07;
+        Ok(())
+    }
+
+    fn set_reliability_internal(&mut self, reliability: u32) -> Result<(), Error> {
+        if self.out_of_service {
+            return Err(common::write_access_denied_error());
+        }
+        if !common::is_reliability_value_valid(reliability) {
+            return Err(common::value_out_of_range_error());
+        }
+        self.reliability = reliability;
         Ok(())
     }
 

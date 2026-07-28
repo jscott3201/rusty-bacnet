@@ -22,6 +22,7 @@ pub struct BinaryOutputObject {
     polarity: u32,
     /// Reliability: 0 = NO_FAULT_DETECTED.
     reliability: u32,
+    reliability_before_out_of_service: Option<u32>,
     event_detection_enable: bool,
     active_text: String,
     inactive_text: String,
@@ -46,6 +47,7 @@ impl BinaryOutputObject {
             relinquish_default: 0,
             polarity: 0,
             reliability: 0,
+            reliability_before_out_of_service: None,
             event_detection_enable: false,
             active_text: "Active".into(),
             inactive_text: "Inactive".into(),
@@ -223,9 +225,13 @@ impl BACnetObject for BinaryOutputObject {
         if let Some(result) = write_generic_event_properties!(self, property, value) {
             return result;
         }
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
+        if let Some(result) = common::write_out_of_service_with_reliability_restore(
+            &mut self.out_of_service,
+            &mut self.reliability,
+            &mut self.reliability_before_out_of_service,
+            property,
+            &value,
+        ) {
             return result;
         }
         if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
@@ -233,6 +239,24 @@ impl BACnetObject for BinaryOutputObject {
         }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
+        }
+        // Clause 12.7, while Out_Of_Service is TRUE: "the Present_Value property and
+        // the Reliability property, if present and capable of taking on values other
+        // than NO_FAULT_DETECTED, shall be writable to allow simulating specific
+        // conditions or for testing purposes".
+        // `is_writable_property` stays statically true because it describes capability.
+        if property == PropertyIdentifier::RELIABILITY {
+            if !self.out_of_service {
+                return Err(common::write_access_denied_error());
+            }
+            if let PropertyValue::Enumerated(v) = value {
+                if !common::is_reliability_value_valid(v) {
+                    return Err(common::value_out_of_range_error());
+                }
+                self.reliability = v;
+                return Ok(());
+            }
+            return Err(common::invalid_data_type_error());
         }
         Err(common::write_access_denied_error())
     }
@@ -269,6 +293,17 @@ impl BACnetObject for BinaryOutputObject {
         true
     }
 
+    fn set_reliability_internal(&mut self, reliability: u32) -> Result<(), Error> {
+        if self.out_of_service {
+            return Err(common::write_access_denied_error());
+        }
+        if !common::is_reliability_value_valid(reliability) {
+            return Err(common::value_out_of_range_error());
+        }
+        self.reliability = reliability;
+        Ok(())
+    }
+
     fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
         // Mirrors the BinaryOutput `write_property` arms: commandable
         // (PRIORITY_ARRAY + PRESENT_VALUE) + common + text properties.
@@ -278,6 +313,7 @@ impl BACnetObject for BinaryOutputObject {
             || property == PropertyIdentifier::FEEDBACK_VALUE
             || property == PropertyIdentifier::ACTIVE_TEXT
             || property == PropertyIdentifier::INACTIVE_TEXT
+            || property == PropertyIdentifier::RELIABILITY
             || property == PropertyIdentifier::EVENT_DETECTION_ENABLE
     }
 }

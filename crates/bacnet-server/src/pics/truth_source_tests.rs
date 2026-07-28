@@ -128,6 +128,13 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
 
     // AnalogOutput — commandable: PRIORITY_ARRAY + PRESENT_VALUE + event set.
     let mut ao = AnalogOutputObject::new(1, "ao", 95).unwrap();
+    ao.write_property(
+        PropertyIdentifier::OUT_OF_SERVICE,
+        None,
+        PropertyValue::Boolean(true),
+        None,
+    )
+    .unwrap();
     assert_accepts(
         &mut ao,
         PropertyIdentifier::PRESENT_VALUE,
@@ -163,6 +170,13 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
 
     // AnalogValue — same writable set as AnalogOutput.
     let mut av = AnalogValueObject::new(1, "av", 95).unwrap();
+    av.write_property(
+        PropertyIdentifier::OUT_OF_SERVICE,
+        None,
+        PropertyValue::Boolean(true),
+        None,
+    )
+    .unwrap();
     assert_accepts(
         &mut av,
         PropertyIdentifier::PRESENT_VALUE,

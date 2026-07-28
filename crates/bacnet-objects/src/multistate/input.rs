@@ -18,6 +18,7 @@ pub struct MultiStateInputObject {
     status_flags: StatusFlags,
     /// Reliability: 0 = NO_FAULT_DETECTED.
     reliability: u32,
+    reliability_before_out_of_service: Option<u32>,
     state_text: Vec<String>,
     /// Alarm_Values — state values that trigger OFFNORMAL.
     alarm_values: Vec<u32>,
@@ -52,6 +53,7 @@ impl MultiStateInputObject {
             out_of_service: false,
             status_flags: StatusFlags::empty(),
             reliability: 0,
+            reliability_before_out_of_service: None,
             state_text: (1..=number_of_states)
                 .map(|i| format!("State {i}"))
                 .collect(),
@@ -222,9 +224,13 @@ impl BACnetObject for MultiStateInputObject {
             }
             return Err(common::invalid_data_type_error());
         }
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
+        if let Some(result) = common::write_out_of_service_with_reliability_restore(
+            &mut self.out_of_service,
+            &mut self.reliability,
+            &mut self.reliability_before_out_of_service,
+            property,
+            &value,
+        ) {
             return result;
         }
         if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
@@ -232,6 +238,24 @@ impl BACnetObject for MultiStateInputObject {
         }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
+        }
+        // Clause 12.18, while Out_Of_Service is TRUE: "the Present_Value property and
+        // the Reliability property, if present and capable of taking on values other
+        // than NO_FAULT_DETECTED, shall be writable to allow simulating specific
+        // conditions or for testing purposes".
+        // `is_writable_property` stays statically true because it describes capability.
+        if property == PropertyIdentifier::RELIABILITY {
+            if !self.out_of_service {
+                return Err(common::write_access_denied_error());
+            }
+            if let PropertyValue::Enumerated(v) = value {
+                if !common::is_reliability_value_valid(v) {
+                    return Err(common::value_out_of_range_error());
+                }
+                self.reliability = v;
+                return Ok(());
+            }
+            return Err(common::invalid_data_type_error());
         }
         Err(common::write_access_denied_error())
     }
@@ -259,9 +283,21 @@ impl BACnetObject for MultiStateInputObject {
     fn is_createable(&self) -> bool {
         true
     }
+    fn set_reliability_internal(&mut self, reliability: u32) -> Result<(), Error> {
+        if self.out_of_service {
+            return Err(common::write_access_denied_error());
+        }
+        if !common::is_reliability_value_valid(reliability) {
+            return Err(common::value_out_of_range_error());
+        }
+        self.reliability = reliability;
+        Ok(())
+    }
+
     fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
         // Mirrors the MultiStateInput `write_property` arms.
         common::is_multistate_input_writable(property)
+            || property == PropertyIdentifier::RELIABILITY
             || property == PropertyIdentifier::EVENT_DETECTION_ENABLE
     }
 }

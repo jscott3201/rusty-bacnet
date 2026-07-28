@@ -196,6 +196,25 @@ pub trait BACnetObject: Send + Sync {
         })
     }
 
+    /// Apply an internally-derived `Reliability` value.
+    ///
+    /// This is the **internal** reliability-evaluation path, distinct from the
+    /// network [`write_property`](Self::write_property) route. Implementations
+    /// enforce symmetric ownership: clients may write while `Out_Of_Service`
+    /// is TRUE, and internal evaluation may write while it is FALSE. ASHRAE
+    /// 135-2020 Clause 3.2 defines reliability evaluation as "the process by
+    /// which an object determines its reliability and thus the value to set
+    /// into its Reliability property."
+    ///
+    /// The default rejects the operation, so object types without an internal
+    /// reliability-evaluation process remain unaffected.
+    fn set_reliability_internal(&mut self, _reliability: u32) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
     /// Add a trend log record (only meaningful for TrendLog / TrendLogMultiple).
     ///
     /// Default is a no-op. TrendLog objects override to append to their buffer.

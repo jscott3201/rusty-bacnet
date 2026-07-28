@@ -180,6 +180,42 @@ pub(crate) fn write_out_of_service(
     }
 }
 
+/// Handle writing OUT_OF_SERVICE for objects that temporarily transfer
+/// Reliability ownership to a client simulation.
+///
+/// The evaluated value is saved on the FALSE-to-TRUE edge and restored directly
+/// on the TRUE-to-FALSE edge. If the entry edge was not observed, the restore
+/// falls back to NO_FAULT_DETECTED.
+#[inline]
+pub(crate) fn write_out_of_service_with_reliability_restore(
+    out_of_service: &mut bool,
+    reliability: &mut u32,
+    saved_reliability: &mut Option<u32>,
+    property: bacnet_types::enums::PropertyIdentifier,
+    value: &bacnet_types::primitives::PropertyValue,
+) -> Option<Result<(), bacnet_types::error::Error>> {
+    if property == bacnet_types::enums::PropertyIdentifier::OUT_OF_SERVICE {
+        if let bacnet_types::primitives::PropertyValue::Boolean(v) = value {
+            if !*out_of_service && *v {
+                *saved_reliability = Some(*reliability);
+            } else if *out_of_service && !*v {
+                *reliability = saved_reliability
+                    .take()
+                    .unwrap_or(bacnet_types::enums::Reliability::NO_FAULT_DETECTED.to_raw());
+            }
+            *out_of_service = *v;
+            Some(Ok(()))
+        } else {
+            Some(Err(protocol_error(
+                bacnet_types::enums::ErrorClass::PROPERTY,
+                bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE,
+            )))
+        }
+    } else {
+        None
+    }
+}
+
 /// Handle writing the DESCRIPTION property.
 ///
 /// Returns `Some(Ok(()))` if the property was DESCRIPTION and successfully handled,
@@ -253,6 +289,13 @@ pub(crate) fn value_out_of_range_error() -> bacnet_types::error::Error {
         bacnet_types::enums::ErrorClass::PROPERTY,
         bacnet_types::enums::ErrorCode::VALUE_OUT_OF_RANGE,
     )
+}
+
+/// Return whether a raw BACnetReliability value is defined by ASHRAE or lies
+/// in the vendor-proprietary range.
+#[inline]
+pub(crate) fn is_reliability_value_valid(value: u32) -> bool {
+    matches!(value, 0..=10 | 12..=25 | 64..=65_535)
 }
 
 /// Return the invalid-array-index protocol error.
@@ -786,9 +829,10 @@ pub(crate) fn is_commandable_property_writable(
     )
 }
 
-/// Writable common properties shared by all core I/O/V object types
-/// (accepted via the `write_out_of_service`, `write_object_name`, and
-/// `write_description` helpers in `common.rs`).
+/// Writable common properties shared by all core I/O/V object types (accepted
+/// via `write_out_of_service` or
+/// `write_out_of_service_with_reliability_restore`, plus `write_object_name`
+/// and `write_description`).
 #[inline]
 pub(crate) fn is_common_writable(property: bacnet_types::enums::PropertyIdentifier) -> bool {
     matches!(

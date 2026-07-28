@@ -90,6 +90,87 @@ fn wpm_handler_atomicity_rollback() {
         "HIGH_LIMIT should be rolled back after failed WPM"
     );
 }
+
+#[test]
+fn wpm_rollback_restores_out_of_service_reliability_and_saved_value() {
+    use bacnet_services::common::BACnetPropertyValue;
+    use bacnet_services::wpm::WriteAccessSpecification;
+    use bacnet_types::enums::Reliability;
+
+    let mut db = make_db_with_ai();
+    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    let obj = db.get_mut(&oid).unwrap();
+    obj.set_reliability_internal(Reliability::OVER_RANGE.to_raw())
+        .unwrap();
+    obj.write_property(
+        PropertyIdentifier::OUT_OF_SERVICE,
+        None,
+        PropertyValue::Boolean(true),
+        None,
+    )
+    .unwrap();
+    obj.write_property(
+        PropertyIdentifier::RELIABILITY,
+        None,
+        PropertyValue::Enumerated(Reliability::NO_SENSOR.to_raw()),
+        None,
+    )
+    .unwrap();
+
+    let mut oos_buf = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_boolean(&mut oos_buf, false);
+    let mut object_type_buf = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_enumerated(&mut object_type_buf, 0);
+    let request = bacnet_services::wpm::WritePropertyMultipleRequest {
+        list_of_write_access_specs: vec![WriteAccessSpecification {
+            object_identifier: oid,
+            list_of_properties: vec![
+                BACnetPropertyValue {
+                    property_identifier: PropertyIdentifier::OUT_OF_SERVICE,
+                    property_array_index: None,
+                    value: oos_buf.to_vec(),
+                    priority: None,
+                },
+                BACnetPropertyValue {
+                    property_identifier: PropertyIdentifier::OBJECT_TYPE,
+                    property_array_index: None,
+                    value: object_type_buf.to_vec(),
+                    priority: None,
+                },
+            ],
+        }],
+    };
+    let mut buf = BytesMut::new();
+    request.encode(&mut buf);
+
+    assert!(handle_write_property_multiple(&mut db, &buf).is_err());
+    let obj = db.get_mut(&oid).unwrap();
+    assert_eq!(
+        obj.read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
+            .unwrap(),
+        PropertyValue::Boolean(true)
+    );
+    assert_eq!(
+        obj.read_property(PropertyIdentifier::RELIABILITY, None)
+            .unwrap(),
+        PropertyValue::Enumerated(Reliability::NO_SENSOR.to_raw()),
+        "rollback must restore the client's simulated Reliability"
+    );
+
+    obj.write_property(
+        PropertyIdentifier::OUT_OF_SERVICE,
+        None,
+        PropertyValue::Boolean(false),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        obj.read_property(PropertyIdentifier::RELIABILITY, None)
+            .unwrap(),
+        PropertyValue::Enumerated(Reliability::OVER_RANGE.to_raw()),
+        "rollback must reconstruct the saved evaluated Reliability"
+    );
+}
 #[test]
 fn create_object_by_type_assigns_next_instance() {
     let mut db = make_db_with_device_and_ai();

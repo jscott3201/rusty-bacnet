@@ -32,3 +32,6 @@ pub mod timer;
 pub mod traits;
 pub mod trend;
 pub mod value_types;
+
+#[cfg(test)]
+mod reliability_writability_tests;

@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `FaultDetector` gained a private field for warning suppression and is therefore
+  no longer constructible with struct-literal syntax. `FaultDetector { comm_timeout }`
+  becomes a compile error; use `FaultDetector::new(comm_timeout)`, which has been
+  available all along. `comm_timeout` remains `pub` and readable and writable as
+  before. This is a source break in a published crate and is called out separately
+  from the trait addition below, because the compiler error it produces names a
+  private field rather than the change that caused it.
+- Add `BACnetObject::set_reliability_internal` as the trusted lifecycle route for
+  object reliability evaluation, distinct from the network `WriteProperty`
+  route. Ownership is symmetric: clients may write `Reliability` only while
+  `Out_Of_Service` is TRUE, and internal evaluation may write it only while
+  `Out_Of_Service` is FALSE. Entering simulation saves the evaluated value and
+  leaving restores it, avoiding a transient NO_FAULT_DETECTED window on analog
+  objects while still discarding a client simulation; an object restored
+  already out of service falls back to NO_FAULT_DETECTED when no saved value
+  exists. The `bacnet-objects` crate is a public dependency;
+  downstream `BACnetObject` implementors registered as Analog Input, Analog
+  Output, or Analog Value must override this method to keep server fault
+  detection working. The `OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED` default leaves
+  their fault-detection update unapplied and emits a warning. Both public and
+  internal routes enforce the same BACnetReliability value set; repeated
+  identical internal-route failures are warned once per object until the error
+  changes or a write succeeds.
 - Add `Event_Detection_Enable` to Analog Input, Analog Output, Analog Value, Binary Input, Binary Value, Multi-state Input and Multi-state Value (ASHRAE 135-2020 Clauses 12.2, 12.3, 12.4, 12.6, 12.8, 12.18 and 12.20). It carries conformance code **O** on all seven with a bidirectional footnote pair — "These properties are required if the object supports intrinsic reporting" and "These properties shall be present only if the object supports intrinsic reporting" — so on types that do support intrinsic reporting, as these seven do, its presence is required rather than optional. With Binary Output and Multi-state Output already covered, all nine intrinsically-reporting types now model the property. The property gates both intrinsic-reporting entry points, and a write of FALSE establishes the Clause 13.2.2.1 initial conditions for the state each type actually carries: `Event_State` NORMAL, `Acked_Transitions` all-set, no pending Time_Delay countdown, and on the analog types `Event_Time_Stamps` and `Event_Message_Texts` restored as well. The reset runs on any write of FALSE rather than on the TRUE→FALSE edge, because an edge-only reset never fires for an object constructed or restored with the property already FALSE.
 
   **On Binary Input, Binary Value, Multi-state Input and Multi-state Value the invariant is established only partially, and not because those types are exempt.** Clause 13.2.2.1 names `Event_Time_Stamps` and `Event_Message_Texts` alongside `Acked_Transitions`, and the same conformance footnote pair that makes `Event_Detection_Enable` required on an intrinsically-reporting object makes those two required as well — they sit in the same footnote group in every one of these tables. Those four types do not model either property, so there is nothing for the reset to restore. That gap predates this change: all four already called `impl_intrinsic_reporting!` and therefore already supported intrinsic reporting without the properties their footnotes require. This change closes one of the three for them and leaves the other two, which are tracked as #235, alongside #230 (the identical omission on Multi-state Output). It does not make the gap worse, and the reset is complete for every property these types actually have.
@@ -58,6 +81,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Preserve WritePropertyMultiple atomicity when rolling back an
+  `Out_Of_Service` write. The rollback now restores the client-simulated
+  `Reliability` and reconstructs the saved evaluated value as well as restoring
+  `Out_Of_Service`.
 - Re-enter FAULT when `Reliability` changes to a *different* fault value (ASHRAE 135-2020 Clause 13.2.2.1). The Fault state defines a ToFault transition — "If reliability-evaluation indicates a different Reliability value and the new Reliability value is not NO_FAULT_DETECTED ... then perform the corresponding transition actions and re-enter the Fault state" — and the same clause makes the transition actions apply "even if the transition does not change the event state". `fault_precedence` reduced reliability to a boolean on its first line and no detector retained the previous value, so a change from `OVER_RANGE` to `NO_SENSOR` while already in FAULT held silently and no `CHANGE_OF_RELIABILITY` notification was produced.
 
   `FaultPrecedence` gains a `ReenterFault` variant, and each of the three detectors gains a `fault_reliability: Option<u32>` holding the value in force at the last entry to FAULT.

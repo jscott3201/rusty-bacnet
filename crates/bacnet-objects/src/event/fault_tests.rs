@@ -726,6 +726,13 @@ fn writing_reliability_on_an_object_drives_event_state_to_fault() {
     );
 
     ai.write_property(
+        PropertyIdentifier::OUT_OF_SERVICE,
+        None,
+        PropertyValue::Boolean(true),
+        None,
+    )
+    .expect("Out_Of_Service is writable");
+    ai.write_property(
         PropertyIdentifier::RELIABILITY,
         None,
         PropertyValue::Enumerated(OVER_RANGE),
@@ -752,6 +759,13 @@ fn ticking_an_object_uses_reliability_for_fault_and_recovery() {
     use bacnet_types::primitives::PropertyValue;
 
     let mut ai = AnalogInputObject::new(3, "ai-3", 62).expect("construct");
+    ai.write_property(
+        PropertyIdentifier::OUT_OF_SERVICE,
+        None,
+        PropertyValue::Boolean(true),
+        None,
+    )
+    .expect("Out_Of_Service is writable");
     ai.write_property(
         PropertyIdentifier::RELIABILITY,
         None,
@@ -793,13 +807,8 @@ fn faulted_object_reports_both_fault_and_in_alarm_status_flags() {
     use bacnet_types::primitives::{PropertyValue, StatusFlags};
 
     let mut ai = AnalogInputObject::new(2, "ai-2", 62).expect("construct");
-    ai.write_property(
-        PropertyIdentifier::RELIABILITY,
-        None,
-        PropertyValue::Enumerated(OVER_RANGE),
-        None,
-    )
-    .expect("reliability is writable");
+    ai.set_reliability_internal(OVER_RANGE)
+        .expect("in-service reliability evaluation is supported");
     ai.evaluate_intrinsic_reporting();
 
     let flags = ai

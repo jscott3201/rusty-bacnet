@@ -7,6 +7,8 @@
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use std::collections::HashMap;
+use std::sync::Mutex;
 
 /// A reliability change detected by the fault detector.
 #[derive(Debug, Clone, PartialEq)]
@@ -28,12 +30,14 @@ pub struct FaultDetector {
     /// Timeout after which an object is considered to have a communication
     /// failure.  Set to `None` to disable communication-failure detection.
     pub comm_timeout: Option<std::time::Duration>,
+    warned_internal_failures: Mutex<HashMap<ObjectIdentifier, String>>,
 }
 
 impl Default for FaultDetector {
     fn default() -> Self {
         Self {
             comm_timeout: Some(std::time::Duration::from_secs(60)),
+            warned_internal_failures: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -41,7 +45,30 @@ impl Default for FaultDetector {
 impl FaultDetector {
     /// Create a new fault detector with the given communication timeout.
     pub fn new(comm_timeout: Option<std::time::Duration>) -> Self {
-        Self { comm_timeout }
+        Self {
+            comm_timeout,
+            warned_internal_failures: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn should_warn_internal_failure(&self, oid: ObjectIdentifier, error: &str) -> bool {
+        let mut warned = self
+            .warned_internal_failures
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if warned.get(&oid).is_some_and(|previous| previous == error) {
+            false
+        } else {
+            warned.insert(oid, error.to_owned());
+            true
+        }
+    }
+
+    fn clear_internal_failure(&self, oid: &ObjectIdentifier) {
+        self.warned_internal_failures
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(oid);
     }
 
     /// Evaluate reliability for all objects in the database.
@@ -163,20 +190,25 @@ impl FaultDetector {
         let mut changes = Vec::new();
         for (oid, old_rel, new_rel) in updates {
             if let Some(obj) = db.get_mut(&oid) {
-                if obj
-                    .write_property(
-                        PropertyIdentifier::RELIABILITY,
-                        None,
-                        PropertyValue::Enumerated(new_rel),
-                        None,
-                    )
-                    .is_ok()
-                {
-                    changes.push(ReliabilityChange {
-                        object_id: oid,
-                        old_reliability: old_rel,
-                        new_reliability: new_rel,
-                    });
+                match obj.set_reliability_internal(new_rel) {
+                    Ok(()) => {
+                        self.clear_internal_failure(&oid);
+                        changes.push(ReliabilityChange {
+                            object_id: oid,
+                            old_reliability: old_rel,
+                            new_reliability: new_rel,
+                        });
+                    }
+                    Err(error) => {
+                        let error_text = error.to_string();
+                        if self.should_warn_internal_failure(oid, &error_text) {
+                            tracing::warn!(
+                                object = %oid,
+                                error = %error,
+                                "Fault detection could not apply Reliability through BACnetObject::set_reliability_internal"
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -189,6 +221,8 @@ impl FaultDetector {
 mod tests {
     use super::*;
     use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
+    use bacnet_types::enums::{ErrorClass, ErrorCode, EventState};
+    use bacnet_types::error::Error;
 
     /// Helper: build an ObjectDatabase with a single AI that has min/max limits.
     fn db_with_analog_input(
@@ -207,6 +241,20 @@ mod tests {
         let mut db = ObjectDatabase::new();
         db.add(Box::new(ai)).unwrap();
         db
+    }
+
+    #[test]
+    fn identical_internal_failure_warning_is_suppressed_until_state_changes() {
+        let detector = FaultDetector::default();
+        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+
+        assert!(detector.should_warn_internal_failure(oid, "first error"));
+        assert!(!detector.should_warn_internal_failure(oid, "first error"));
+        assert!(detector.should_warn_internal_failure(oid, "different error"));
+        assert!(!detector.should_warn_internal_failure(oid, "different error"));
+
+        detector.clear_internal_failure(&oid);
+        assert!(detector.should_warn_internal_failure(oid, "first error"));
     }
 
     #[test]
@@ -239,6 +287,68 @@ mod tests {
         assert_eq!(
             changes[0].new_reliability,
             Reliability::UNDER_RANGE.to_raw()
+        );
+    }
+
+    #[test]
+    fn analog_simulation_restores_derived_fault_without_normal_churn() {
+        let mut db = db_with_analog_input(150.0, Some(0.0), Some(100.0));
+        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+        let changes = FaultDetector::default().evaluate(&mut db);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].new_reliability, Reliability::OVER_RANGE.to_raw());
+
+        let obj = db.get_mut(&oid).unwrap();
+        let real_fault = obj
+            .evaluate_intrinsic_reporting()
+            .expect("derived Reliability must enter FAULT");
+        assert_eq!(real_fault.change.to, EventState::FAULT);
+
+        obj.write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(true),
+            None,
+        )
+        .unwrap();
+        obj.write_property(
+            PropertyIdentifier::RELIABILITY,
+            None,
+            PropertyValue::Enumerated(Reliability::NO_SENSOR.to_raw()),
+            None,
+        )
+        .unwrap();
+        let simulated_fault = obj
+            .evaluate_intrinsic_reporting()
+            .expect("different simulated fault must re-enter FAULT");
+        assert_eq!(simulated_fault.change.to, EventState::FAULT);
+
+        obj.write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(false),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            obj.read_property(PropertyIdentifier::RELIABILITY, None)
+                .unwrap(),
+            PropertyValue::Enumerated(Reliability::OVER_RANGE.to_raw())
+        );
+        assert_eq!(
+            obj.read_property(PropertyIdentifier::EVENT_STATE, None)
+                .unwrap(),
+            PropertyValue::Enumerated(EventState::FAULT.to_raw())
+        );
+
+        let restored_fault = obj
+            .evaluate_intrinsic_reporting()
+            .expect("restored real fault must re-enter FAULT");
+        assert_eq!(restored_fault.change.to, EventState::FAULT);
+        assert_eq!(
+            obj.read_property(PropertyIdentifier::EVENT_STATE, None)
+                .unwrap(),
+            PropertyValue::Enumerated(EventState::FAULT.to_raw())
         );
     }
 
@@ -286,7 +396,14 @@ mod tests {
         )
         .unwrap();
 
-        // Second evaluation: back to no-fault
+        assert_eq!(
+            obj.read_property(PropertyIdentifier::RELIABILITY, None)
+                .unwrap(),
+            PropertyValue::Enumerated(Reliability::OVER_RANGE.to_raw())
+        );
+
+        // Returning to service restores the pre-simulation fault. The detector
+        // then converges it to the corrected physical condition.
         let changes = detector.evaluate(&mut db);
         assert_eq!(changes.len(), 1);
         assert_eq!(
@@ -395,21 +512,30 @@ mod tests {
     }
 
     #[test]
-    fn in_service_still_recomputes_client_written_reliability() {
+    fn in_service_refuses_client_write_and_recomputes_reliability() {
         let mut db = db_with_analog_input(50.0, Some(0.0), Some(100.0));
         let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-        db.get_mut(&oid)
-            .unwrap()
+        let obj = db.get_mut(&oid).unwrap();
+        obj.set_reliability_internal(Reliability::NO_SENSOR.to_raw())
+            .unwrap();
+        let error = obj
             .write_property(
                 PropertyIdentifier::RELIABILITY,
                 None,
-                PropertyValue::Enumerated(Reliability::NO_SENSOR.to_raw()),
+                PropertyValue::Enumerated(Reliability::OVER_RANGE.to_raw()),
                 None,
             )
-            .unwrap();
+            .expect_err("in-service Reliability write must be refused");
 
         let changes = FaultDetector::default().evaluate(&mut db);
 
+        match error {
+            Error::Protocol { class, code } => {
+                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+                assert_eq!(code, ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32);
+            }
+            other => panic!("expected PROPERTY / WRITE_ACCESS_DENIED, got {other:?}"),
+        }
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].object_id, oid);
         assert_eq!(
