@@ -237,6 +237,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- Remove `bacnet_types::enums::LiftCarDoorStatus`. **This is a breaking removal
+  of a public type** — it was glob-exported from `enums`, though nothing in the
+  workspace referenced it. ASHRAE 135-2020 defines no lift-car-door-status
+  enumeration; the Lift object's `Car_Door_Status` property (Clause 12.59) is
+  `BACnetARRAY[N] of BACnetDoorStatus`, whose Clause 21 production `DoorStatus`
+  already models value-for-value, and the property resolver already routes
+  car-door-status (450) through `DoorStatus`. The removed type assigned
+  incompatible numbers to eight of the production's ten named values (its
+  `CLOSED` was 3; the standard's closed is 0) and did not name safety-locked
+  (8) or limited-opened (9) at all — which is why it is removed rather than
+  aliased. (#245)
 - Remove the three-ident ungated arm of the exported `impl_intrinsic_reporting!` macro. **This is a breaking change to a `#[macro_export]` macro.** All seven in-tree callers moved to a new four-ident gated arm `($detector, $present_value, $reliability, $event_detection_enable)` as part of adding `Event_Detection_Enable` to those types, leaving the ungated form with no callers. It is removed rather than retained for the reason its sibling comment already gave for the four-ident feedback arm: exporting an ungated form offers downstream implementors a supported way to wire a detector with event detection permanently on, which is the exact defect the gate exists to prevent — Clause 12's conformance footnotes make intrinsic reporting optional per object, and an ungated detector makes it mandatory. Downstream implementors using the three-ident form must add an `Event_Detection_Enable` field and pass it as the fourth argument.
 - Remove the `bacnet-wasm` crate and `docs/wasm-api.md`. The stack now ships as Rust with Python bindings through PyO3, and there is no browser or JavaScript client. Removed with it: the `wasm-check`, `build-wasm`, and `publish-npm` CI jobs, their entries in the `validate` and `github-release` `needs:` lists, the four `--exclude bacnet-wasm` flags on the clippy/MSRV/test/test-cross jobs, the README JavaScript quick-start, and the `node_modules/`, `pkg/`, and `*.tgz` ignore rules. The `@jscott3201/bacnet-wasm` npm package was never published, so no released artifact is affected; the README instructions for installing it described something that did not exist.
 - Withdraw the BACnet/SC WASM conformance evidence, narrowing those claims to native only. Seven rows in `docs/conformance/` lose their WASM code anchors, tests, public claims, and prose — `BACNET-AB-SC-FRAME`, `BACNET-AB-SC-BVLC-RESULT`, `BACNET-AB-SC-DATA-ATTRIBUTES`, `BACNET-AB-SC-CONNECTION-STATE`, `BACNET-AB-SC-WEBSOCKET-TLS`, `BACNET-AB-SC-HEARTBEAT`, and the `docs/wasm-api.md` claim on `BACNET-5-SEGMENTATION-WINDOW`. WASM was corroborating parity evidence in every case, never the sole basis, so each row keeps its native `bacnet-transport` anchors and tests and no row's status changed. Browser-specific remaining gaps (live browser/WebSocket smoke coverage, pending-Promise cleanup) are dropped rather than carried forward, because the capability they described no longer exists. Negative-test counts fall on two rows as a result — `BACNET-AB-SC-FRAME` from 10 to 5 and `BACNET-AB-SC-DATA-ATTRIBUTES` from 18 to 5 — and both already carried a `needs-…-tests` status that still holds.

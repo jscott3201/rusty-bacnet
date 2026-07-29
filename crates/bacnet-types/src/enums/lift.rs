@@ -55,20 +55,6 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
-    /// BACnet lift car door status (Clause 12.59).
-    pub struct LiftCarDoorStatus(u32);
-
-    const UNKNOWN = 0;
-    const NONE = 1;
-    const CLOSING = 2;
-    const CLOSED = 3;
-    const OPENING = 4;
-    const OPENED = 5;
-    const SAFETY_LOCKED = 6;
-    const LIMITED_OPENED = 7;
-}
-
-bacnet_enum! {
     /// BACnet lift car door command (Clause 21).
     pub struct LiftCarDoorCommand(u32);
 
