@@ -45,7 +45,7 @@ bacnet_enum! {
     const PROCESS_ERROR = 8;
     const MULTI_STATE_FAULT = 9;
     const CONFIGURATION_ERROR = 10;
-    // 11: removed from standard
+    // 11: reserved for a future addendum (135-2020 BACnetReliability production)
     const COMMUNICATION_FAILURE = 12;
     const MEMBER_FAULT = 13;
     const MONITORED_OBJECT_FAULT = 14;
