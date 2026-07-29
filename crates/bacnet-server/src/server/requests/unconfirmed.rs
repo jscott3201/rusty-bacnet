@@ -1,8 +1,22 @@
-//! Unconfirmed-service dispatch (Who-Is, I-Am, time sync, unconfirmed COV).
+//! Unconfirmed-service dispatch (Who-Is, Who-Has, time sync, WriteGroup,
+//! UnconfirmedTextMessage) — see [`EXECUTED_UNCONFIRMED`].
 //!
 //! Split out of `requests.rs` to keep every file under the 700-LOC cap.
 
 use super::super::*;
+
+/// Every unconfirmed service choice with an inbound execution arm in
+/// `handle_unconfirmed_request` below. Keep in lockstep with the dispatch
+/// chain — see `EXECUTED_CONFIRMED` in `requests/mod.rs` for the cross-check
+/// contract.
+pub(crate) const EXECUTED_UNCONFIRMED: &[UnconfirmedServiceChoice] = &[
+    UnconfirmedServiceChoice::WHO_IS,
+    UnconfirmedServiceChoice::WHO_HAS,
+    UnconfirmedServiceChoice::TIME_SYNCHRONIZATION,
+    UnconfirmedServiceChoice::UTC_TIME_SYNCHRONIZATION,
+    UnconfirmedServiceChoice::WRITE_GROUP,
+    UnconfirmedServiceChoice::UNCONFIRMED_TEXT_MESSAGE,
+];
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Handle an unconfirmed request (e.g., WhoIs).

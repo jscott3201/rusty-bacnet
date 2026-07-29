@@ -7,7 +7,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use bacnet_objects::database::ObjectDatabase;
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_objects::device::EXECUTED_SERVICES;
+use bacnet_types::enums::{ObjectType, PropertyIdentifier, ServiceSupported};
 
 use crate::server::ServerConfig;
 
@@ -307,68 +308,47 @@ impl<'a> PicsGenerator<'a> {
     }
 
     /// Build the service support list based on what the server actually handles.
+    /// Services this server initiates (the PICS initiator column): replies
+    /// and notifications constructed outbound by `bacnet-server`. Distinct
+    /// from [`EXECUTED_SERVICES`], which Clause 12.11 ties to execution.
+    const INITIATED_SERVICES: &'static [ServiceSupported] = &[
+        ServiceSupported::I_AM,
+        ServiceSupported::I_HAVE,
+        ServiceSupported::CONFIRMED_COV_NOTIFICATION,
+        ServiceSupported::CONFIRMED_EVENT_NOTIFICATION,
+        ServiceSupported::UNCONFIRMED_COV_NOTIFICATION,
+        ServiceSupported::UNCONFIRMED_EVENT_NOTIFICATION,
+        ServiceSupported::CONFIRMED_COV_NOTIFICATION_MULTIPLE,
+        ServiceSupported::UNCONFIRMED_COV_NOTIFICATION_MULTIPLE,
+    ];
+
     fn build_services(&self) -> Vec<ServiceSupport> {
-        let mut services = Vec::new();
-
-        let executor_services = [
-            "ReadProperty",
-            "WriteProperty",
-            "ReadPropertyMultiple",
-            "WritePropertyMultiple",
-            "SubscribeCOV",
-            "SubscribeCOVProperty",
-            "CreateObject",
-            "DeleteObject",
-            "DeviceCommunicationControl",
-            "ReinitializeDevice",
-            "GetEventInformation",
-            "AcknowledgeAlarm",
-            "ReadRange",
-            "AtomicReadFile",
-            "AtomicWriteFile",
-            "AddListElement",
-            "RemoveListElement",
-        ];
-
-        let initiator_services = ["ConfirmedCOVNotification", "ConfirmedEventNotification"];
-
-        let unconfirmed_executor = [
-            "WhoIs",
-            "WhoHas",
-            "TimeSynchronization",
-            "UTCTimeSynchronization",
-        ];
-
-        let unconfirmed_initiator = [
-            "I-Am",
-            "I-Have",
-            "UnconfirmedCOVNotification",
-            "UnconfirmedEventNotification",
-        ];
-
-        let mut service_map: BTreeMap<&str, (bool, bool)> = BTreeMap::new();
-        for name in &executor_services {
-            service_map.entry(name).or_default().1 = true;
+        // Executor column comes from the same constant the Device object's
+        // Protocol_Services_Supported is built from, so the PICS cannot drift
+        // from the property (both are cross-checked against the dispatch
+        // table by `executed_services_match_dispatch_table`).
+        let mut service_map: BTreeMap<&'static str, (bool, bool)> = BTreeMap::new();
+        for service in EXECUTED_SERVICES {
+            service_map
+                .entry(service_display_name(*service))
+                .or_default()
+                .1 = true;
         }
-        for name in &initiator_services {
-            service_map.entry(name).or_default().0 = true;
-        }
-        for name in &unconfirmed_executor {
-            service_map.entry(name).or_default().1 = true;
-        }
-        for name in &unconfirmed_initiator {
-            service_map.entry(name).or_default().0 = true;
+        for service in Self::INITIATED_SERVICES {
+            service_map
+                .entry(service_display_name(*service))
+                .or_default()
+                .0 = true;
         }
 
-        for (name, (initiator, executor)) in &service_map {
-            services.push(ServiceSupport {
-                service_name: (*name).to_string(),
-                initiator: *initiator,
-                executor: *executor,
-            });
-        }
-
-        services
+        service_map
+            .into_iter()
+            .map(|(name, (initiator, executor))| ServiceSupport {
+                service_name: name.to_string(),
+                initiator,
+                executor,
+            })
+            .collect()
     }
 }
 
@@ -593,6 +573,59 @@ pub fn generate_pics(
 }
 
 // ─────────────────────────────── Tests ─────────────────────────────────────
+
+/// PICS display name for a `BACnetServicesSupported` bit position.
+fn service_display_name(service: ServiceSupported) -> &'static str {
+    match service.to_raw() {
+        0 => "AcknowledgeAlarm",
+        1 => "ConfirmedCOVNotification",
+        2 => "ConfirmedEventNotification",
+        3 => "GetAlarmSummary",
+        4 => "GetEnrollmentSummary",
+        5 => "SubscribeCOV",
+        6 => "AtomicReadFile",
+        7 => "AtomicWriteFile",
+        8 => "AddListElement",
+        9 => "RemoveListElement",
+        10 => "CreateObject",
+        11 => "DeleteObject",
+        12 => "ReadProperty",
+        14 => "ReadPropertyMultiple",
+        15 => "WriteProperty",
+        16 => "WritePropertyMultiple",
+        17 => "DeviceCommunicationControl",
+        18 => "ConfirmedPrivateTransfer",
+        19 => "ConfirmedTextMessage",
+        20 => "ReinitializeDevice",
+        21 => "VT-Open",
+        22 => "VT-Close",
+        23 => "VT-Data",
+        26 => "I-Am",
+        27 => "I-Have",
+        28 => "UnconfirmedCOVNotification",
+        29 => "UnconfirmedEventNotification",
+        30 => "UnconfirmedPrivateTransfer",
+        31 => "UnconfirmedTextMessage",
+        32 => "TimeSynchronization",
+        33 => "WhoHas",
+        34 => "WhoIs",
+        35 => "ReadRange",
+        36 => "UTCTimeSynchronization",
+        37 => "LifeSafetyOperation",
+        38 => "SubscribeCOVProperty",
+        39 => "GetEventInformation",
+        40 => "WriteGroup",
+        41 => "SubscribeCOVPropertyMultiple",
+        42 => "ConfirmedCOVNotificationMultiple",
+        43 => "UnconfirmedCOVNotificationMultiple",
+        44 => "ConfirmedAuditNotification",
+        45 => "AuditLogQuery",
+        46 => "UnconfirmedAuditNotification",
+        47 => "Who-Am-I",
+        48 => "You-Are",
+        _ => "Unknown",
+    }
+}
 
 #[cfg(test)]
 mod tests;

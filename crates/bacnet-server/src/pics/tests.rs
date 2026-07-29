@@ -729,3 +729,40 @@ fn pics_writability_matches_runtime_write_property() {
         "write_property must reject STATUS_FLAGS, got: {result:?}"
     );
 }
+
+#[test]
+fn executed_services_match_dispatch_table() {
+    // The three-way truth chain for #192: dispatch arms (requests/mod.rs +
+    // unconfirmed.rs choice consts) -> BACnetServicesSupported bits ->
+    // device::EXECUTED_SERVICES, which feeds both the Device object's
+    // Protocol_Services_Supported and the PICS executor column. If a dispatch
+    // arm is added or removed without updating the choice const or the device
+    // constant, this test fails.
+    use bacnet_types::enums::ServiceSupported;
+
+    let mut from_dispatch: Vec<u8> = crate::server::EXECUTED_CONFIRMED
+        .iter()
+        .map(|c| {
+            ServiceSupported::from_confirmed_choice(*c)
+                .expect("dispatched confirmed choice has a defined bit")
+                .to_raw()
+        })
+        .chain(crate::server::EXECUTED_UNCONFIRMED.iter().map(|c| {
+            ServiceSupported::from_unconfirmed_choice(*c)
+                .expect("dispatched unconfirmed choice has a defined bit")
+                .to_raw()
+        }))
+        .collect();
+    from_dispatch.sort_unstable();
+
+    let mut declared: Vec<u8> = bacnet_objects::device::EXECUTED_SERVICES
+        .iter()
+        .map(|s| s.to_raw())
+        .collect();
+    declared.sort_unstable();
+
+    assert_eq!(
+        declared, from_dispatch,
+        "device::EXECUTED_SERVICES must equal the dispatch table's executed set"
+    );
+}

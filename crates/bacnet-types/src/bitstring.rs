@@ -386,7 +386,8 @@ mod tests {
 
     #[test]
     fn services_supported_follows_clause_21() {
-        // Device object's basic set: byte0=0xA4, byte1=0x0B, byte4=0x80.
+        // Arbitrary decode vector (historically the device's pre-#192
+        // hardcoded constant — NOT the property the Device object serves).
         let ss = ServicesSupported::from_bacnet(&[0xA4, 0x0B, 0x80, 0x35, 0x80, 0x00]);
         assert!(ss.contains(ServiceSupported::ACKNOWLEDGE_ALARM)); // bit 0
         assert!(ss.contains(ServiceSupported::SUBSCRIBE_COV)); // bit 5

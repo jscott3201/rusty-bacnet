@@ -2,6 +2,8 @@
 // Miscellaneous enums
 // ===========================================================================
 
+use super::{ConfirmedServiceChoice, UnconfirmedServiceChoice};
+
 bacnet_enum! {
     /// BACnet load control shed state (Clause 12.28).
     pub struct ShedState(u32);
@@ -112,6 +114,77 @@ bacnet_enum! {
     const YOU_ARE = 48;
 }
 
+impl ServiceSupported {
+    /// The `BACnetServicesSupported` bit for a confirmed service choice.
+    ///
+    /// The choice and bit numberings diverge for every service added after
+    /// the original standard (read-range is choice 26 but bit 35,
+    /// get-event-information choice 29 but bit 39, …) — always map through
+    /// here, never by reusing the choice number as a bit. `None` for choices
+    /// with no defined bit (reserved/unassigned values).
+    pub fn from_confirmed_choice(choice: ConfirmedServiceChoice) -> Option<Self> {
+        Some(match choice.to_raw() {
+            0 => Self::ACKNOWLEDGE_ALARM,
+            1 => Self::CONFIRMED_COV_NOTIFICATION,
+            2 => Self::CONFIRMED_EVENT_NOTIFICATION,
+            3 => Self::GET_ALARM_SUMMARY,
+            4 => Self::GET_ENROLLMENT_SUMMARY,
+            5 => Self::SUBSCRIBE_COV,
+            6 => Self::ATOMIC_READ_FILE,
+            7 => Self::ATOMIC_WRITE_FILE,
+            8 => Self::ADD_LIST_ELEMENT,
+            9 => Self::REMOVE_LIST_ELEMENT,
+            10 => Self::CREATE_OBJECT,
+            11 => Self::DELETE_OBJECT,
+            12 => Self::READ_PROPERTY,
+            14 => Self::READ_PROPERTY_MULTIPLE,
+            15 => Self::WRITE_PROPERTY,
+            16 => Self::WRITE_PROPERTY_MULTIPLE,
+            17 => Self::DEVICE_COMMUNICATION_CONTROL,
+            18 => Self::CONFIRMED_PRIVATE_TRANSFER,
+            19 => Self::CONFIRMED_TEXT_MESSAGE,
+            20 => Self::REINITIALIZE_DEVICE,
+            21 => Self::VT_OPEN,
+            22 => Self::VT_CLOSE,
+            23 => Self::VT_DATA,
+            26 => Self::READ_RANGE,
+            27 => Self::LIFE_SAFETY_OPERATION,
+            28 => Self::SUBSCRIBE_COV_PROPERTY,
+            29 => Self::GET_EVENT_INFORMATION,
+            30 => Self::SUBSCRIBE_COV_PROPERTY_MULTIPLE,
+            31 => Self::CONFIRMED_COV_NOTIFICATION_MULTIPLE,
+            32 => Self::CONFIRMED_AUDIT_NOTIFICATION,
+            33 => Self::AUDIT_LOG_QUERY,
+            _ => return None,
+        })
+    }
+
+    /// The `BACnetServicesSupported` bit for an unconfirmed service choice.
+    ///
+    /// Every unconfirmed choice diverges from its bit (who-is is choice 8 but
+    /// bit 34). `None` for choices with no defined bit.
+    pub fn from_unconfirmed_choice(choice: UnconfirmedServiceChoice) -> Option<Self> {
+        Some(match choice.to_raw() {
+            0 => Self::I_AM,
+            1 => Self::I_HAVE,
+            2 => Self::UNCONFIRMED_COV_NOTIFICATION,
+            3 => Self::UNCONFIRMED_EVENT_NOTIFICATION,
+            4 => Self::UNCONFIRMED_PRIVATE_TRANSFER,
+            5 => Self::UNCONFIRMED_TEXT_MESSAGE,
+            6 => Self::TIME_SYNCHRONIZATION,
+            7 => Self::WHO_HAS,
+            8 => Self::WHO_IS,
+            9 => Self::UTC_TIME_SYNCHRONIZATION,
+            10 => Self::WRITE_GROUP,
+            11 => Self::UNCONFIRMED_COV_NOTIFICATION_MULTIPLE,
+            12 => Self::UNCONFIRMED_AUDIT_NOTIFICATION,
+            13 => Self::WHO_AM_I,
+            14 => Self::YOU_ARE,
+            _ => return None,
+        })
+    }
+}
+
 bacnet_enum! {
     /// BACnet message priority for TextMessage services (Clause 16.5).
     pub struct MessagePriority(u32);
@@ -131,4 +204,77 @@ bacnet_enum! {
     const DEC_VT220 = 4;
     const HP_700_94 = 5;
     const IBM_3130 = 6;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_choice_to_bit_divergent_pairs() {
+        // The pairs where choice != bit — the exact confusions that produced
+        // the old hardcoded Protocol_Services_Supported constant (#192).
+        let confirmed = [
+            (26, ServiceSupported::READ_RANGE, 35),
+            (27, ServiceSupported::LIFE_SAFETY_OPERATION, 37),
+            (28, ServiceSupported::SUBSCRIBE_COV_PROPERTY, 38),
+            (29, ServiceSupported::GET_EVENT_INFORMATION, 39),
+            (30, ServiceSupported::SUBSCRIBE_COV_PROPERTY_MULTIPLE, 41),
+            (
+                31,
+                ServiceSupported::CONFIRMED_COV_NOTIFICATION_MULTIPLE,
+                42,
+            ),
+            (32, ServiceSupported::CONFIRMED_AUDIT_NOTIFICATION, 44),
+            (33, ServiceSupported::AUDIT_LOG_QUERY, 45),
+        ];
+        for (choice, expected, bit) in confirmed {
+            let got =
+                ServiceSupported::from_confirmed_choice(ConfirmedServiceChoice::from_raw(choice))
+                    .unwrap();
+            assert_eq!(got, expected);
+            assert_eq!(got.to_raw(), bit);
+        }
+
+        let unconfirmed = [
+            (0, ServiceSupported::I_AM, 26),
+            (5, ServiceSupported::UNCONFIRMED_TEXT_MESSAGE, 31),
+            (6, ServiceSupported::TIME_SYNCHRONIZATION, 32),
+            (7, ServiceSupported::WHO_HAS, 33),
+            (8, ServiceSupported::WHO_IS, 34),
+            (9, ServiceSupported::UTC_TIME_SYNCHRONIZATION, 36),
+            (10, ServiceSupported::WRITE_GROUP, 40),
+            (14, ServiceSupported::YOU_ARE, 48),
+        ];
+        for (choice, expected, bit) in unconfirmed {
+            let got = ServiceSupported::from_unconfirmed_choice(
+                UnconfirmedServiceChoice::from_raw(choice),
+            )
+            .unwrap();
+            assert_eq!(got, expected);
+            assert_eq!(got.to_raw(), bit);
+        }
+    }
+
+    #[test]
+    fn service_choice_identity_range_and_reserved() {
+        // Choices 0..=23 (minus reserved 13) map bit == choice.
+        for c in (0..=23u8).filter(|c| *c != 13) {
+            let bit = ServiceSupported::from_confirmed_choice(ConfirmedServiceChoice::from_raw(c))
+                .unwrap()
+                .to_raw();
+            assert_eq!(bit, c, "choice {c} should be the identity mapping");
+        }
+        // Reserved/unassigned choices have no bit.
+        assert!(
+            ServiceSupported::from_confirmed_choice(ConfirmedServiceChoice::from_raw(13)).is_none()
+        );
+        assert!(
+            ServiceSupported::from_confirmed_choice(ConfirmedServiceChoice::from_raw(34)).is_none()
+        );
+        assert!(
+            ServiceSupported::from_unconfirmed_choice(UnconfirmedServiceChoice::from_raw(15))
+                .is_none()
+        );
+    }
 }

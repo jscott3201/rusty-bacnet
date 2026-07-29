@@ -232,23 +232,61 @@ fn read_protocol_object_types_supported() {
 
 #[test]
 fn read_protocol_services_supported() {
+    use bacnet_types::bitstring::ServicesSupported;
+    use bacnet_types::enums::ServiceSupported;
+
     let dev = make_device();
     let val = dev
         .read_property(PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED, None)
         .unwrap();
     match val {
         PropertyValue::BitString { unused_bits, data } => {
+            // Full Clause 21 production: bits 0..=48 → 7 octets, 7 unused.
             assert_eq!(unused_bits, 7);
-            assert_eq!(data.len(), 6);
-            // Byte 0: services 0,2,5
-            assert_eq!(data[0], 0xA4);
-            // Byte 1: services 12,14,15
-            assert_eq!(data[1], 0x0B);
-            // Byte 4: service 32 (WhoIs)
-            assert_eq!(data[4], 0x80);
+            assert_eq!(data.len(), 7);
+
+            let ss = ServicesSupported::from_bacnet(&data);
+            for service in EXECUTED_SERVICES {
+                assert!(ss.contains(*service), "missing {service}");
+            }
+            assert_eq!(
+                ss.iter().count(),
+                EXECUTED_SERVICES.len(),
+                "no bits beyond EXECUTED_SERVICES may be set"
+            );
+
+            // Semantic pins from #192: divergent-numbering services land on
+            // their bit-35+ positions (impossible in the old 41-bit string)…
+            assert!(ss.contains(ServiceSupported::WHO_IS));
+            assert!(ss.contains(ServiceSupported::READ_RANGE));
+            assert!(ss.contains(ServiceSupported::SUBSCRIBE_COV_PROPERTY_MULTIPLE));
+            // …and initiate-only services are not declared as executed.
+            assert!(!ss.contains(ServiceSupported::I_AM));
+            assert!(!ss.contains(ServiceSupported::I_HAVE));
+            assert!(!ss.contains(ServiceSupported::CONFIRMED_EVENT_NOTIFICATION));
+            assert!(!ss.contains(ServiceSupported::UNCONFIRMED_COV_NOTIFICATION));
         }
         _ => panic!("Expected BitString"),
     }
+}
+
+#[test]
+fn set_services_supported_overrides_default() {
+    use bacnet_types::bitstring::ServicesSupported;
+    use bacnet_types::enums::ServiceSupported;
+
+    let mut dev = make_device();
+    dev.set_services_supported(&[ServiceSupported::READ_PROPERTY]);
+    let val = dev
+        .read_property(PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED, None)
+        .unwrap();
+    let PropertyValue::BitString { unused_bits, data } = val else {
+        panic!("Expected BitString");
+    };
+    assert_eq!((unused_bits, data.len()), (7, 7));
+    let ss = ServicesSupported::from_bacnet(&data);
+    assert!(ss.contains(ServiceSupported::READ_PROPERTY));
+    assert_eq!(ss.iter().count(), 1);
 }
 
 #[test]

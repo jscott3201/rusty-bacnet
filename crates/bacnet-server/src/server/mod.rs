@@ -770,6 +770,7 @@ mod dispatch;
 mod event_notifications;
 mod lifecycle;
 mod requests;
+pub(crate) use requests::{EXECUTED_CONFIRMED, EXECUTED_UNCONFIRMED};
 mod responses;
 mod segmentation;
 

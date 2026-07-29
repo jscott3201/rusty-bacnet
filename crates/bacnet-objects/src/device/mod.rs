@@ -8,12 +8,74 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use bacnet_types::constructed::BACnetCOVSubscription;
-use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier, Segmentation};
+use bacnet_types::enums::{
+    ErrorClass, ErrorCode, ObjectType, PropertyIdentifier, Segmentation, ServiceSupported,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
 
 use crate::common::read_property_list_property;
 use crate::traits::BACnetObject;
+
+/// Every service the bundled `bacnet-server` dispatch executes, as
+/// `BACnetServicesSupported` bit positions (Clause 21).
+///
+/// Default source for `Protocol_Services_Supported`, which Clause 12.11 ties
+/// to services *executed* — the server's initiate-only services (I-Am,
+/// I-Have, COV/event notifications) are deliberately absent. Kept in lockstep
+/// with the dispatch arms by `bacnet-server`'s executed-services cross-check
+/// test; deployments with a different dispatch surface override via
+/// [`DeviceObject::set_services_supported`].
+pub const EXECUTED_SERVICES: &[ServiceSupported] = &[
+    ServiceSupported::ACKNOWLEDGE_ALARM,
+    ServiceSupported::GET_ALARM_SUMMARY,
+    ServiceSupported::GET_ENROLLMENT_SUMMARY,
+    ServiceSupported::SUBSCRIBE_COV,
+    ServiceSupported::ATOMIC_READ_FILE,
+    ServiceSupported::ATOMIC_WRITE_FILE,
+    ServiceSupported::ADD_LIST_ELEMENT,
+    ServiceSupported::REMOVE_LIST_ELEMENT,
+    ServiceSupported::CREATE_OBJECT,
+    ServiceSupported::DELETE_OBJECT,
+    ServiceSupported::READ_PROPERTY,
+    ServiceSupported::READ_PROPERTY_MULTIPLE,
+    ServiceSupported::WRITE_PROPERTY,
+    ServiceSupported::WRITE_PROPERTY_MULTIPLE,
+    ServiceSupported::DEVICE_COMMUNICATION_CONTROL,
+    ServiceSupported::CONFIRMED_TEXT_MESSAGE,
+    ServiceSupported::REINITIALIZE_DEVICE,
+    ServiceSupported::UNCONFIRMED_TEXT_MESSAGE,
+    ServiceSupported::TIME_SYNCHRONIZATION,
+    ServiceSupported::WHO_HAS,
+    ServiceSupported::WHO_IS,
+    ServiceSupported::READ_RANGE,
+    ServiceSupported::UTC_TIME_SYNCHRONIZATION,
+    // Dispatched but decode-only pending #177 (LifeSafetyOperation applies
+    // no life-safety semantics yet).
+    ServiceSupported::LIFE_SAFETY_OPERATION,
+    ServiceSupported::SUBSCRIBE_COV_PROPERTY,
+    ServiceSupported::GET_EVENT_INFORMATION,
+    ServiceSupported::WRITE_GROUP,
+    ServiceSupported::SUBSCRIBE_COV_PROPERTY_MULTIPLE,
+];
+
+/// Number of bits in the `BACnetServicesSupported` production: bits 0..=48
+/// (you-Are is the highest defined bit, Clause 21).
+const SERVICES_SUPPORTED_BITS: usize = 49;
+
+/// Build the `Protocol_Services_Supported` bit string from a service set,
+/// sized for the full production (7 octets, 7 unused bits) and packed
+/// MSB-first per Clause 20.2.10: bit N at byte N/8, position 7-(N%8).
+fn compute_services_supported(services: &[ServiceSupported]) -> Vec<u8> {
+    let mut bits = vec![0u8; SERVICES_SUPPORTED_BITS.div_ceil(8)];
+    for service in services {
+        let n = service.to_raw() as usize;
+        if n < SERVICES_SUPPORTED_BITS {
+            bits[n / 8] |= 0x80 >> (n % 8);
+        }
+    }
+    bits
+}
 
 /// Build a BACnet bitstring representing supported object types.
 /// Each type N sets bit at byte N/8, position 7-(N%8) (MSB-first within each byte).
@@ -288,20 +350,7 @@ impl DeviceObject {
             ObjectType::COLOR_TEMPERATURE.to_raw(),
         ]);
 
-        // Protocol_Services_Supported: 6 bytes (48 bits).  Bits set for
-        // services we handle:
-        //   0=AcknowledgeAlarm, 2=ConfirmedEventNotification,
-        //   5=SubscribeCOV, 12=ReadProperty, 14=ReadPropertyMultiple,
-        //   15=WriteProperty, 16=WritePropertyMultiple,
-        //   26=IAm, 27=IHave, 29=UnconfirmedCOVNotification,
-        //   31=WhoHas, 32=WhoIs
-        //   Byte 0: bits 0,2,5 → 0xA4
-        //   Byte 1: bits 12,14,15 → 0x0B
-        //   Byte 2: bit 16 → 0x80
-        //   Byte 3: bits 26,27,29,31 → 0x35
-        //   Byte 4: bit 32 → 0x80
-        //   Byte 5: 0x00
-        let protocol_services_supported = vec![0xA4, 0x0B, 0x80, 0x35, 0x80, 0x00];
+        let protocol_services_supported = compute_services_supported(EXECUTED_SERVICES);
 
         Ok(Self {
             oid,
@@ -316,6 +365,16 @@ impl DeviceObject {
     /// Update the object-list with the current database contents.
     pub fn set_object_list(&mut self, oids: Vec<ObjectIdentifier>) {
         self.object_list = oids;
+    }
+
+    /// Replace the advertised executed-service set (`Protocol_Services_Supported`,
+    /// Clause 12.11). For deployments whose dispatch surface differs from the
+    /// bundled server's [`EXECUTED_SERVICES`].
+    ///
+    /// The production is closed at you-Are (bit 48); values past it are not
+    /// representable and are dropped.
+    pub fn set_services_supported(&mut self, services: &[ServiceSupported]) {
+        self.protocol_services_supported = compute_services_supported(services);
     }
 
     /// Get the device instance number.
@@ -412,9 +471,10 @@ impl BACnetObject for DeviceObject {
         }
 
         if property == PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED {
-            // 6 bytes = 48 bits; 41 defined (services 0-40), 7 unused bits
+            let unused =
+                (self.protocol_services_supported.len() * 8 - SERVICES_SUPPORTED_BITS) as u8;
             return Ok(PropertyValue::BitString {
-                unused_bits: 7,
+                unused_bits: unused,
                 data: self.protocol_services_supported.clone(),
             });
         }

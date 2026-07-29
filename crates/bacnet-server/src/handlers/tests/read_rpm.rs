@@ -340,3 +340,44 @@ fn rpm_handler_required_vs_optional() {
         );
     }
 }
+
+#[test]
+fn read_property_serves_derived_services_supported() {
+    // End-to-end pin for #192: the wire-level BitString a client receives for
+    // Protocol_Services_Supported, through the real ReadProperty handler path.
+    // Expected bytes derive from device::EXECUTED_SERVICES bits
+    // {0,3-12,14-17,19,20,31-41} packed MSB-first over the full production
+    // (49 defined bits, 7 octets, 7 unused).
+    let db = make_db_with_device_and_ai();
+    let oid = ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap();
+
+    let request = ReadPropertyRequest {
+        object_identifier: oid,
+        property_identifier: PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED,
+        property_array_index: None,
+    };
+    let mut buf = BytesMut::new();
+    request.encode(&mut buf);
+
+    let mut ack_buf = BytesMut::new();
+    handle_read_property(&db, &buf, &mut ack_buf).unwrap();
+    let ack = ReadPropertyACK::decode(&ack_buf.to_vec()).unwrap();
+
+    let (val, _) =
+        bacnet_encoding::primitives::decode_application_value(&ack.property_value, 0).unwrap();
+    assert_eq!(
+        val,
+        bacnet_types::primitives::PropertyValue::BitString {
+            unused_bits: 7,
+            data: vec![0x9F, 0xFB, 0xD8, 0x01, 0xFF, 0xC0, 0x00],
+        }
+    );
+
+    // The same bytes decode to the executed set by name.
+    let bacnet_types::primitives::PropertyValue::BitString { data, .. } = val else {
+        unreachable!()
+    };
+    let ss = bacnet_types::bitstring::ServicesSupported::from_bacnet(&data);
+    assert!(ss.contains(bacnet_types::enums::ServiceSupported::WHO_IS));
+    assert!(!ss.contains(bacnet_types::enums::ServiceSupported::I_AM));
+}

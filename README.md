@@ -290,14 +290,14 @@ docs/                 API documentation and design plans
 | DeleteObject | ✓ | ✓ |
 | DeviceCommunicationControl | ✓ | ✓ |
 | ReinitializeDevice | ✓ | ✓ |
-| AcknowledgeAlarm | ✓ | — |
+| AcknowledgeAlarm | ✓ | ✓ |
 | GetAlarmSummary | ✓ | ✓ |
 | GetEnrollmentSummary | ✓ | ✓ |
 | GetEventInformation | ✓ | ✓ |
 | LifeSafetyOperation | ✓ | ✓ |
-| ReadRange | ✓ | — |
+| ReadRange | ✓ | ✓ |
 | AtomicReadFile / AtomicWriteFile | ✓ | ✓ |
-| AddListElement / RemoveListElement | ✓ | — |
+| AddListElement / RemoveListElement | ✓ | ✓ |
 | ConfirmedPrivateTransfer / UnconfirmedPrivateTransfer | ✓ | — |
 | ConfirmedTextMessage / UnconfirmedTextMessage | ✓ | ✓ |
 | WriteGroup | ✓ | ✓ |

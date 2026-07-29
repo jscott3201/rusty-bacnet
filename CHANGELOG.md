@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The Device object's `Protocol_Services_Supported` is now derived from the
+  set of services the server dispatch actually executes, instead of a stale
+  hardcoded constant whose comment mislabeled three bits. The property gains
+  twenty executed-but-undeclared services (Who-Is and Who-Has among them),
+  drops four initiate-only bits (i-am, i-have,
+  confirmed/unconfirmed-event-notification — Clause 12.11 ties the property
+  to *executed* services), and is now sized for the full Clause 21 production
+  through you-Are (bit 48), so subscribe-cov-property-multiple (bit 41) is
+  representable. The PICS executor column derives from the same constant
+  (`bacnet_objects::device::EXECUTED_SERVICES`), a cross-check test ties both
+  to the dispatch table, and service choice → services-supported bit mapping
+  is now explicit via `ServiceSupported::from_confirmed_choice`/
+  `from_unconfirmed_choice`. Deployments embedding a different dispatch
+  surface can override via `DeviceObject::set_services_supported`. (#192)
+
 - **Breaking (wire format):** all ≤8-bit BACnet bit strings are now encoded
   MSB-first per Clause 20.2.10 — the first defined bit occupies bit 7 (`0x80`)
   of the octet. Previously `Event_Enable`/`Acked_Transitions` (here and in
