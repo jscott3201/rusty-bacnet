@@ -24,6 +24,13 @@ bacnet_enum! {
     const CLOSED = 0;
     const OPENED = 1;
     const UNKNOWN = 2;
+    const DOOR_FAULT = 3;
+    const UNUSED = 4;
+    const NONE = 5;
+    const CLOSING = 6;
+    const OPENING = 7;
+    const SAFETY_LOCKED = 8;
+    const LIMITED_OPENED = 9;
 }
 
 bacnet_enum! {

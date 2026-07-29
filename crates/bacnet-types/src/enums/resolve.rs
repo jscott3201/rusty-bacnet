@@ -15,6 +15,11 @@
 // type varies between Binary/Multi-state/Life-Safety objects) are intentionally
 // left unmapped: the property identifier alone is insufficient to name them
 // correctly, so they resolve to `Unknown`.
+//
+// One deliberate exception: `tracking-value` (164) is object-type-dependent
+// (Lighting Output types it REAL), but `BACnetLifeSafetyState` is its only
+// ENUMERATED form in the standard, so promoting the `Enumerated` case is
+// unambiguous and the arm is kept.
 
 #[cfg(not(feature = "std"))]
 use alloc::{string::String, vec::Vec};
@@ -99,7 +104,6 @@ resolved_enum! {
     LiftCarDriveStatus(LiftCarDriveStatus),
     LiftCarDirection(LiftCarDirection),
     LiftCarDoorCommand(LiftCarDoorCommand),
-    LiftCarDoorStatus(LiftCarDoorStatus),
     AuditLevel(AuditLevel),
 }
 
@@ -119,7 +123,12 @@ impl ResolvedEnum {
             72 => Self::NotifyType(NotifyType::from_raw(value)), // notify-type
             103 => Self::Reliability(Reliability::from_raw(value)), // reliability
             112 => Self::DeviceStatus(DeviceStatus::from_raw(value)), // system-status
-            107 => Self::Segmentation(Segmentation::from_raw(value as u8)), // segmentation-supported
+            // segmentation-supported: Segmentation is the one u8-backed enum,
+            // so out-of-range wire values fall through to `Unknown` instead of
+            // wrapping into a valid-looking named variant.
+            107 if value <= u8::MAX as u32 => {
+                Self::Segmentation(Segmentation::from_raw(value as u8))
+            }
 
             // engineering-units: units + the various *-units properties.
             20 | 27 | 50 | 82 | 94 | 117 | 455 => {
@@ -136,7 +145,9 @@ impl ResolvedEnum {
 
             // Life safety.
             160 | 175 => Self::LifeSafetyMode(LifeSafetyMode::from_raw(value)), // mode / accepted-modes
-            164 => Self::LifeSafetyState(LifeSafetyState::from_raw(value)),     // tracking-value
+            // tracking-value: BACnetLifeSafetyState is its only ENUMERATED
+            // form; Lighting Output's REAL never reaches this arm.
+            164 => Self::LifeSafetyState(LifeSafetyState::from_raw(value)),
             161 => Self::LifeSafetyOperation(LifeSafetyOperation::from_raw(value)), // operation-expected
             163 => Self::SilencedState(SilencedState::from_raw(value)),             // silenced
 
@@ -176,7 +187,10 @@ impl ResolvedEnum {
             453 => Self::LiftCarDriveStatus(LiftCarDriveStatus::from_raw(value)), // car-drive-status
             448 | 457 => Self::LiftCarDirection(LiftCarDirection::from_raw(value)), // car-assigned/moving-direction
             449 => Self::LiftCarDoorCommand(LiftCarDoorCommand::from_raw(value)), // car-door-command
-            450 => Self::LiftCarDoorStatus(LiftCarDoorStatus::from_raw(value)),   // car-door-status
+            // car-door-status is `BACnetARRAY[N] of BACnetDoorStatus` (Lift
+            // object, Clause 12); the standard defines no lift-specific door
+            // status enumeration.
+            450 => Self::DoorStatus(DoorStatus::from_raw(value)),
 
             // Audit.
             498 => Self::AuditLevel(AuditLevel::from_raw(value)), // audit-level
@@ -255,11 +269,8 @@ impl ResolvedBits {
     /// [`ResolvedBits::Unknown`] with the bytes intact.
     pub fn from_property(property: PropertyIdentifier, unused_bits: u8, data: &[u8]) -> Self {
         match property.to_raw() {
-            // status-flags / member-status-flags. StatusFlags keeps its own
-            // right-aligned representation, so decode via `first_byte >> unused`.
-            111 | 347 => Self::StatusFlags(StatusFlags::from_bits_truncate(
-                data.first().copied().unwrap_or(0) >> unused_bits.min(7),
-            )),
+            // status-flags / member-status-flags.
+            111 | 347 => Self::StatusFlags(crate::bitstring::status_flags_from_bacnet(data)),
 
             // event-enable / acked-transitions / ack-required.
             0 | 1 | 35 => Self::EventTransitionBits(EventTransitionBits::from_bacnet(data)),
@@ -484,6 +495,45 @@ mod tests {
         let bits = ResolvedBits::from_property(PropertyIdentifier::STATUS_FLAGS, 4, &[0x80]);
         assert_eq!(bits, ResolvedBits::StatusFlags(StatusFlags::IN_ALARM));
         assert_eq!(bits.to_string(), "IN_ALARM");
+    }
+
+    #[test]
+    fn status_flags_decode_ignores_declared_length() {
+        // Clause 20.2.10 fixes bit 0 at the MSB of the first octet, so the
+        // flags survive a peer that declares the wrong unused-bit count.
+        for unused in [0, 4, 5] {
+            assert_eq!(
+                ResolvedBits::from_property(PropertyIdentifier::STATUS_FLAGS, unused, &[0xC0]),
+                ResolvedBits::StatusFlags(StatusFlags::IN_ALARM | StatusFlags::FAULT),
+            );
+        }
+    }
+
+    #[test]
+    fn segmentation_out_of_range_stays_unknown() {
+        // Segmentation is u8-backed; a wire value past u8 must not wrap into a
+        // valid-looking named variant (259 & 0xFF would be NONE).
+        assert_eq!(
+            ResolvedEnum::from_property(PropertyIdentifier::SEGMENTATION_SUPPORTED, 259),
+            ResolvedEnum::Unknown(259),
+        );
+        assert_eq!(
+            ResolvedEnum::from_property(PropertyIdentifier::SEGMENTATION_SUPPORTED, 3),
+            ResolvedEnum::Segmentation(Segmentation::NONE),
+        );
+    }
+
+    #[test]
+    fn car_door_status_resolves_to_door_status() {
+        // Car_Door_Status is BACnetARRAY[N] of BACnetDoorStatus (Lift object);
+        // 135-2020 has no lift-specific door status enumeration.
+        let r = ResolvedEnum::from_property(PropertyIdentifier::CAR_DOOR_STATUS, 3);
+        assert_eq!(r, ResolvedEnum::DoorStatus(DoorStatus::DOOR_FAULT));
+        assert_eq!(r.to_string(), "DOOR_FAULT");
+        assert_eq!(
+            ResolvedEnum::from_property(PropertyIdentifier::CAR_DOOR_STATUS, 0),
+            ResolvedEnum::DoorStatus(DoorStatus::CLOSED),
+        );
     }
 
     #[test]

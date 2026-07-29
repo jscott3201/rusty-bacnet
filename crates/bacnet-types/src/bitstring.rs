@@ -20,6 +20,8 @@
 
 use crate::enums::{ObjectType, ServiceSupported};
 
+pub use crate::primitives::StatusFlags;
+
 /// Read bit `n` of a BACnet bit string (MSB-first) from its content bytes.
 ///
 /// `data` is the bit-string payload *without* the leading unused-bits count
@@ -27,6 +29,21 @@ use crate::enums::{ObjectType, ServiceSupported};
 fn wire_bit(data: &[u8], n: usize) -> bool {
     let mask = 0x80u8 >> (n % 8);
     data.get(n / 8).is_some_and(|b| b & mask != 0)
+}
+
+/// Decode a `BACnetStatusFlags` bit-string payload (MSB-first) into
+/// [`StatusFlags`], which keeps its right-aligned in-memory layout.
+///
+/// Reads wire bits 0–3 by position, so a peer that declares a wrong string
+/// length still decodes correctly — Clause 20.2.10 puts bit 0 in the most
+/// significant bit of the first octet regardless of length.
+pub fn status_flags_from_bacnet(data: &[u8]) -> StatusFlags {
+    let mut flags = StatusFlags::empty();
+    flags.set(StatusFlags::IN_ALARM, wire_bit(data, 0));
+    flags.set(StatusFlags::FAULT, wire_bit(data, 1));
+    flags.set(StatusFlags::OVERRIDDEN, wire_bit(data, 2));
+    flags.set(StatusFlags::OUT_OF_SERVICE, wire_bit(data, 3));
+    flags
 }
 
 /// Render a bitflags value as its set Clause-21 names (` NAME | NAME `), or `()`
@@ -184,10 +201,12 @@ impl core::fmt::Debug for ServicesSupported {
 /// string, one bit per object type (Clause 21).
 ///
 /// Stored as a `[u64; 16]` bitset (1024 bits): bit *N* is set iff [`ObjectType`]
-/// value *N* is supported. Unlike the closed services enumeration, object types
-/// span the full 10-bit range 0–1023 (proprietary types live at 128–1023), so
-/// the set can't collapse to a single integer — hence the 16-word array, which
-/// is allocation-free and `Copy`. The public API still yields named
+/// value *N* is supported. The property covers only standardized object types
+/// (Clause 12.11.15) and the bit-string production is closed, but
+/// `BACnetObjectType` values run to 1023, so decode tolerates the enumeration's
+/// full 10-bit range instead of discarding a nonconformant peer's extra bits —
+/// hence the 16-word array, which is allocation-free and `Copy`. The public API
+/// still yields named
 /// [`ObjectType`] values (reusing that table rather than duplicating it), and
 /// `Debug` prints names, never raw numbers.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
