@@ -125,3 +125,46 @@ fn write_recipient_list_rejects_malformed_address() {
         assert!(result.is_err(), "malformed address must be rejected");
     }
 }
+
+#[test]
+fn written_valid_days_decodes_msb_first() {
+    // Decode-side witness for #203: valid_days arrives as wire bytes and the
+    // filter observes the decoded internal mask, so a Monday-only wire byte
+    // (monday(0) = 0x80 per Clause 20.2.10) must match today_bit 0x01 (Monday)
+    // and not 0x40 (Sunday). Pure round trips cannot catch an inverted decode;
+    // this asymmetric byte can.
+    let mut nc = NotificationClass::new(1, "NC-1").unwrap();
+    let dev_oid = ObjectIdentifier::new(ObjectType::DEVICE, 10).unwrap();
+    let entry = PropertyValue::List(vec![
+        PropertyValue::BitString {
+            unused_bits: 1,
+            data: vec![0b1000_0000], // Monday only
+        },
+        PropertyValue::Time(make_time(0, 0)),
+        PropertyValue::Time(make_time(23, 59)),
+        PropertyValue::ObjectIdentifier(dev_oid),
+        PropertyValue::Unsigned(7),
+        PropertyValue::Boolean(false),
+        PropertyValue::BitString {
+            unused_bits: 5,
+            data: vec![0b1000_0000], // TO_OFFNORMAL only
+        },
+    ]);
+    nc.write_property(
+        PropertyIdentifier::RECIPIENT_LIST,
+        None,
+        PropertyValue::List(vec![entry]),
+        None,
+    )
+    .unwrap();
+
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(nc)).unwrap();
+    let noon = make_time(12, 0);
+
+    let monday = get_notification_recipients(&db, 1, EventTransition::ToOffnormal, 0x01, &noon);
+    assert_eq!(monday.len(), 1, "Monday-only entry must match Monday");
+
+    let sunday = get_notification_recipients(&db, 1, EventTransition::ToOffnormal, 0x40, &noon);
+    assert!(sunday.is_empty(), "Monday-only entry must not match Sunday");
+}

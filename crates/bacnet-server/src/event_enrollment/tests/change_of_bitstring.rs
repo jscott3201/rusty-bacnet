@@ -37,7 +37,7 @@ fn change_of_bitstring_normal() {
     db.add(Box::new(ee)).unwrap();
 
     let transitions = evaluate_event_enrollments(&mut db);
-    // 0x05 << 5 = 0xA0, mask 0xFF → 0xA0, alarm 0xE0 → no match → NORMAL
+    // internal 0x05 -> wire 0xA0 (MSB-first), mask 0xFF → 0xA0, alarm 0xE0 → no match → NORMAL
     assert!(transitions.is_empty());
 }
 
@@ -67,7 +67,7 @@ fn change_of_bitstring_offnormal() {
     db.add(Box::new(ee)).unwrap();
 
     let transitions = evaluate_event_enrollments(&mut db);
-    // 0x07 << 5 = 0xE0, mask 0xE0 → 0xE0, alarm 0xE0 → match → OFFNORMAL
+    // internal 0x07 -> wire 0xE0 (MSB-first), mask 0xE0 → 0xE0, alarm 0xE0 → match → OFFNORMAL
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].change.to, EventState::OFFNORMAL);
 }

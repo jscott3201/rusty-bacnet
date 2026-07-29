@@ -400,7 +400,9 @@ macro_rules! read_generic_event_properties {
             p if p == bacnet_types::enums::PropertyIdentifier::EVENT_ENABLE => {
                 Some(Ok(bacnet_types::primitives::PropertyValue::BitString {
                     unused_bits: 5,
-                    data: vec![$self.event_detector.event_enable << 5],
+                    data: vec![bacnet_types::bitstring::pack_octet(
+                        $self.event_detector.event_enable,
+                    )],
                 }))
             }
             p if p == bacnet_types::enums::PropertyIdentifier::NOTIFY_TYPE => {
@@ -421,7 +423,9 @@ macro_rules! read_generic_event_properties {
             p if p == bacnet_types::enums::PropertyIdentifier::ACKED_TRANSITIONS => {
                 Some(Ok(bacnet_types::primitives::PropertyValue::BitString {
                     unused_bits: 5,
-                    data: vec![$self.event_detector.acked_transitions << 5],
+                    data: vec![bacnet_types::bitstring::pack_octet(
+                        $self.event_detector.acked_transitions,
+                    )],
                 }))
             }
             _ => None,
@@ -577,7 +581,8 @@ macro_rules! write_generic_event_properties {
             p if p == bacnet_types::enums::PropertyIdentifier::EVENT_ENABLE => {
                 if let bacnet_types::primitives::PropertyValue::BitString { data, .. } = &$value {
                     if let Some(&byte) = data.first() {
-                        $self.event_detector.event_enable = byte >> 5;
+                        $self.event_detector.event_enable =
+                            bacnet_types::bitstring::unpack_octet(&[byte], 3);
                         Some(Ok(()))
                     } else {
                         Some(Err($crate::common::invalid_data_type_error()))

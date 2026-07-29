@@ -115,7 +115,7 @@ fn change_of_value_bitmask_criteria() {
 
     // Target object exposing a bitstring property (EVENT_ENABLE, 3 bits).
     let mut target = EventEnrollmentObject::new(96, "Tgt", EventType::NONE.to_raw()).unwrap();
-    target.set_event_enable(0x07); // 0x07 << 5 = 0xE0
+    target.set_event_enable(0x07); // internal 0x07 -> wire 0xE0 (MSB-first)
     let target_oid = target.object_identifier();
     db.add(Box::new(target)).unwrap();
 

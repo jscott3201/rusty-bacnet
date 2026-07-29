@@ -31,6 +31,31 @@ fn wire_bit(data: &[u8], n: usize) -> bool {
     data.get(n / 8).is_some_and(|b| b & mask != 0)
 }
 
+/// Pack a bit0-first value into its Clause 20.2.10 wire octet.
+///
+/// Every ≤8-bit BACnet bit string in this stack keeps its internal layout as
+/// `bit0 = first defined bit` (`TO_OFFNORMAL`, `monday`, `low-limit-enable`,
+/// …), while the wire wants the first defined bit in the most significant bit
+/// of the octet. Reversing the byte is that whole conversion: bit 0 lands at
+/// `0x80`, bit 1 at `0x40`, and the result is left-aligned for any width.
+pub fn pack_octet(bits_lsb0: u8) -> u8 {
+    bits_lsb0.reverse_bits()
+}
+
+/// Inverse of [`pack_octet`]: read the first octet of a bit-string payload
+/// back into bit0-first form, masked to the string's `defined_bits`.
+///
+/// Masking (rather than trusting the peer's declared unused-bit count) keeps
+/// nonconformant padding out of the value; an empty payload reads as zero.
+pub fn unpack_octet(data: &[u8], defined_bits: u32) -> u8 {
+    let mask = if defined_bits >= 8 {
+        u8::MAX
+    } else {
+        (1u8 << defined_bits) - 1
+    };
+    data.first().copied().unwrap_or(0).reverse_bits() & mask
+}
+
 /// Decode a `BACnetStatusFlags` bit-string payload (MSB-first) into
 /// [`StatusFlags`], which keeps its right-aligned in-memory layout.
 ///
@@ -117,6 +142,12 @@ impl EventTransitionBits {
         bits.set(Self::TO_NORMAL, wire_bit(data, 2));
         bits
     }
+
+    /// Encode to the single Clause 20.2.10 wire octet (`unused_bits: 5`):
+    /// `TO_OFFNORMAL` at `0x80`, `TO_FAULT` at `0x40`, `TO_NORMAL` at `0x20`.
+    pub fn to_bacnet(self) -> u8 {
+        pack_octet(self.bits())
+    }
 }
 
 impl_named_bit_display!(EventTransitionBits);
@@ -140,6 +171,12 @@ impl LimitEnable {
         bits.set(Self::LOW_LIMIT_ENABLE, wire_bit(data, 0));
         bits.set(Self::HIGH_LIMIT_ENABLE, wire_bit(data, 1));
         bits
+    }
+
+    /// Encode to the single Clause 20.2.10 wire octet (`unused_bits: 6`):
+    /// `LOW_LIMIT_ENABLE` at `0x80`, `HIGH_LIMIT_ENABLE` at `0x40`.
+    pub fn to_bacnet(self) -> u8 {
+        pack_octet(self.bits())
     }
 }
 
@@ -255,6 +292,29 @@ impl core::fmt::Debug for ObjectTypesSupported {
 mod tests {
     use super::*;
     use crate::primitives::StatusFlags;
+
+    #[test]
+    fn pack_unpack_octet_spec_vectors() {
+        // Clause 20.2.10: first defined bit -> MSB. Deliberately asymmetric
+        // values — round trips alone cannot catch a symmetric encode/decode
+        // inversion, only literal wire bytes can.
+        assert_eq!(pack_octet(0b001), 0x80); // TO_OFFNORMAL / monday
+        assert_eq!(pack_octet(0b100), 0x20); // TO_NORMAL
+        assert_eq!(pack_octet(0b0100_0000), 0x02); // sunday (7-bit valid_days)
+        assert_eq!(unpack_octet(&[0x80], 3), 0b001);
+        assert_eq!(unpack_octet(&[0x20], 3), 0b100);
+        assert_eq!(unpack_octet(&[0xFE], 7), 0x7F); // all seven days
+        assert_eq!(unpack_octet(&[], 3), 0);
+        // Nonconformant junk past the defined bits is masked off.
+        assert_eq!(unpack_octet(&[0xFF], 3), 0b111);
+        // The octet helpers and the typed codecs agree.
+        assert_eq!(
+            EventTransitionBits::from_bacnet(&[pack_octet(0b001)]),
+            EventTransitionBits::TO_OFFNORMAL
+        );
+        assert_eq!(EventTransitionBits::TO_OFFNORMAL.to_bacnet(), 0x80);
+        assert_eq!(LimitEnable::LOW_LIMIT_ENABLE.to_bacnet(), 0x80);
+    }
 
     #[test]
     fn event_transition_bits_msb_first() {

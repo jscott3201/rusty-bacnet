@@ -344,7 +344,7 @@ fn av_intrinsic_reporting_normal_to_high_limit_to_normal() {
         None,
         PropertyValue::BitString {
             unused_bits: 5,
-            data: vec![0x07 << 5],
+            data: vec![0xE0], // all transitions, MSB-first
         },
         None,
     )
@@ -412,7 +412,7 @@ fn av_intrinsic_reporting_after_priority_write() {
         None,
         PropertyValue::BitString {
             unused_bits: 5,
-            data: vec![0x07 << 5],
+            data: vec![0xE0], // all transitions, MSB-first
         },
         None,
     )

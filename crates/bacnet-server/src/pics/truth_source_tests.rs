@@ -206,8 +206,8 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
         &mut av,
         PropertyIdentifier::EVENT_ENABLE,
         PropertyValue::BitString {
-            unused_bits: 6,
-            data: vec![LimitEnable::BOTH.to_bits()],
+            unused_bits: 5,
+            data: vec![0xE0], // all three transitions, MSB-first
         },
         "AV",
     );

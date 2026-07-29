@@ -131,7 +131,7 @@ fn disabled_detection_reports_initial_acked_transitions() {
             .unwrap(),
         PropertyValue::BitString {
             unused_bits: 5,
-            // 0b111 << 5 — all three transition flags TRUE.
+            // All three transition flags TRUE, MSB-first.
             data: vec![0xE0],
         }
     );

@@ -524,7 +524,7 @@ mod command_failure_tests {
 
     #[test]
     fn event_enable_to_offnormal_bit_controls_distribution() {
-        for (encoded, expected) in [(0x20, true), (0x00, false)] {
+        for (encoded, expected) in [(0x80, true), (0x00, false)] {
             let mut mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
             set_detection_enabled(&mut mso, true);
             mso.write_property(

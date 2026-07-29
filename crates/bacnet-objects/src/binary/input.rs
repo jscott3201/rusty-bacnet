@@ -130,11 +130,15 @@ impl BACnetObject for BinaryInputObject {
             )),
             p if p == PropertyIdentifier::EVENT_ENABLE => Ok(PropertyValue::BitString {
                 unused_bits: 5,
-                data: vec![self.event_detector.event_enable << 5],
+                data: vec![bacnet_types::bitstring::pack_octet(
+                    self.event_detector.event_enable,
+                )],
             }),
             p if p == PropertyIdentifier::ACKED_TRANSITIONS => Ok(PropertyValue::BitString {
                 unused_bits: 5,
-                data: vec![self.event_detector.acked_transitions << 5],
+                data: vec![bacnet_types::bitstring::pack_octet(
+                    self.event_detector.acked_transitions,
+                )],
             }),
             p if p == PropertyIdentifier::NOTIFICATION_CLASS => Ok(PropertyValue::Unsigned(
                 self.event_detector.notification_class as u64,

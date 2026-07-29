@@ -560,7 +560,9 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
         };
 
         let event_enable = match enrollment.read_property(PropertyIdentifier::EVENT_ENABLE, None) {
-            Ok(PropertyValue::BitString { data, .. }) => data.first().map(|b| b >> 5).unwrap_or(0),
+            Ok(PropertyValue::BitString { data, .. }) => {
+                bacnet_types::bitstring::unpack_octet(&data, 3)
+            }
             _ => 0,
         };
 

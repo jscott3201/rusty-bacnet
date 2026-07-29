@@ -192,7 +192,7 @@ fn bo_time_delay_gates_command_failure() {
 
 #[test]
 fn bo_event_enable_to_offnormal_bit_controls_distribution() {
-    for (encoded, expected) in [(0x20, true), (0x00, false)] {
+    for (encoded, expected) in [(0x80, true), (0x00, false)] {
         let mut bo = BinaryOutputObject::new(1, "BO-1").unwrap();
         set_detection_enabled(&mut bo, true);
         write_event_enable(&mut bo, encoded);

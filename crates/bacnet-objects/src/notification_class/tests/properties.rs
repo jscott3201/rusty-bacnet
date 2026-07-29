@@ -171,7 +171,7 @@ fn add_destination_device_and_read_back() {
     // 7 fields: valid_days, from_time, to_time, recipient, process_id, confirmed, transitions
     assert_eq!(fields.len(), 7);
 
-    // valid_days bitstring: all days = 0b0111_1111 << 1 = 0b1111_1110 = 0xFE
+    // valid_days bitstring: all seven days MSB-first = 0b1111_1110 = 0xFE
     assert_eq!(
         fields[0],
         PropertyValue::BitString {
@@ -196,7 +196,7 @@ fn add_destination_device_and_read_back() {
     // issue_confirmed_notifications
     assert_eq!(fields[5], PropertyValue::Boolean(true));
 
-    // transitions: all = 0b0000_0111 << 5 = 0b1110_0000 = 0xE0
+    // transitions: all three, MSB-first = 0b1110_0000 = 0xE0
     assert_eq!(
         fields[6],
         PropertyValue::BitString {
@@ -245,18 +245,29 @@ fn add_destination_address_variant() {
         ])
     );
 
+    // valid_days: Tue–Sat is asymmetric under bit reversal, so this byte —
+    // unlike the all-days 0xFE — actually witnesses the MSB-first packing:
+    // tuesday(1)=0x40 .. saturday(5)=0x04.
+    assert_eq!(
+        fields[0],
+        PropertyValue::BitString {
+            unused_bits: 1,
+            data: vec![0b0111_1100],
+        }
+    );
+
     // process_identifier = 42
     assert_eq!(fields[4], PropertyValue::Unsigned(42));
 
     // issue_confirmed = false
     assert_eq!(fields[5], PropertyValue::Boolean(false));
 
-    // transitions: bit 0 only = 0b0000_0001 << 5 = 0b0010_0000 = 0x20
+    // transitions: to-offnormal only = wire bit 0 = 0b1000_0000 (Clause 20.2.10)
     assert_eq!(
         fields[6],
         PropertyValue::BitString {
             unused_bits: 5,
-            data: vec![0b0010_0000],
+            data: vec![0b1000_0000],
         }
     );
 }

@@ -320,7 +320,7 @@ fn ai_intrinsic_reporting_triggers_on_present_value_change() {
         None,
         PropertyValue::BitString {
             unused_bits: 5,
-            data: vec![0x07 << 5], // all transitions enabled
+            data: vec![0xE0], // all transitions, MSB-first
         },
         None,
     )
@@ -388,7 +388,7 @@ fn ao_intrinsic_reporting_after_priority_write() {
         None,
         PropertyValue::BitString {
             unused_bits: 5,
-            data: vec![0x07 << 5], // all transitions enabled
+            data: vec![0xE0], // all transitions, MSB-first
         },
         None,
     )

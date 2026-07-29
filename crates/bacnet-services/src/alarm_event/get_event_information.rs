@@ -111,7 +111,11 @@ impl GetEventInformationAck {
                 return Err(Error::decoding(pos, "truncated at ackedTransitions"));
             }
             // Content: [unused_bits_count, bit_data...]
-            let acknowledged_transitions = if end > pos + 1 { data[pos + 1] >> 5 } else { 0 };
+            let acknowledged_transitions = if end > pos + 1 {
+                bacnet_types::bitstring::unpack_octet(&[data[pos + 1]], 3)
+            } else {
+                0
+            };
             offset = end;
 
             // [3] eventTimeStamps — opening tag
@@ -198,7 +202,11 @@ impl GetEventInformationAck {
             if end > data.len() {
                 return Err(Error::decoding(pos, "truncated at eventEnable"));
             }
-            let event_enable = if end > pos + 1 { data[pos + 1] >> 5 } else { 0 };
+            let event_enable = if end > pos + 1 {
+                bacnet_types::bitstring::unpack_octet(&[data[pos + 1]], 3)
+            } else {
+                0
+            };
             offset = end;
 
             // [6] eventPriorities — opening tag
@@ -260,7 +268,14 @@ impl GetEventInformationAck {
             // [1] eventState
             primitives::encode_ctx_enumerated(buf, 1, summary.event_state);
             // [2] acknowledgedTransitions (3-bit bitstring)
-            primitives::encode_ctx_bit_string(buf, 2, 5, &[summary.acknowledged_transitions << 5]);
+            primitives::encode_ctx_bit_string(
+                buf,
+                2,
+                5,
+                &[bacnet_types::bitstring::pack_octet(
+                    summary.acknowledged_transitions,
+                )],
+            );
             // [3] eventTimeStamps (SEQUENCE OF 3 BACnetTimeStamp)
             tags::encode_opening_tag(buf, 3);
             for ts in &summary.event_timestamps {
@@ -287,7 +302,12 @@ impl GetEventInformationAck {
             // [4] notifyType
             primitives::encode_ctx_enumerated(buf, 4, summary.notify_type);
             // [5] eventEnable (3-bit bitstring)
-            primitives::encode_ctx_bit_string(buf, 5, 5, &[summary.event_enable << 5]);
+            primitives::encode_ctx_bit_string(
+                buf,
+                5,
+                5,
+                &[bacnet_types::bitstring::pack_octet(summary.event_enable)],
+            );
             // [6] eventPriorities (SEQUENCE OF 3 Unsigned)
             tags::encode_opening_tag(buf, 6);
             for &p in &summary.event_priorities {

@@ -70,7 +70,7 @@ fn alert_enrollment_event_enable() {
     let val = ae
         .read_property(PropertyIdentifier::EVENT_ENABLE, None)
         .unwrap();
-    // Default event_enable = 0b111, shifted left 5 = 0b1110_0000
+    // Default event_enable = 0b111 -> MSB-first wire byte 0b1110_0000
     assert_eq!(
         val,
         PropertyValue::BitString {

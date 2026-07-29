@@ -446,12 +446,8 @@ async fn event_notification_event_notify_type_honors_class_ack_required() {
 /// set from `event_enable_byte`.
 ///
 /// `Event_Enable` is written through `write_property` rather than an internal
-/// setter, so these tests cover the same path a network client takes. Note the
-/// byte is the *current* on-the-wire encoding, which packs the 3-bit string
-/// LSB-first (`value << 5`) instead of the MSB-first order Clause 20.2.10
-/// requires — see #203. When that is corrected these constants must be
-/// re-derived; they are written as `internal << 5` below to make the
-/// dependency explicit rather than magic.
+/// setter, so these tests cover the same path a network client takes. Bytes
+/// are the Clause 20.2.10 wire encoding: MSB-first, TO_OFFNORMAL at `0x80`.
 fn db_with_high_limit_transition(
     event_enable_byte: u8,
 ) -> Arc<tokio::sync::RwLock<ObjectDatabase>> {
@@ -566,8 +562,8 @@ async fn event_enable_cleared_suppresses_per_write_send() {
 /// `Event_Enable` rather than to a constant.
 #[tokio::test]
 async fn event_enable_set_permits_per_write_send() {
-    // internal TO_OFFNORMAL = 0x01, encoded `<< 5` by the current codec (#203).
-    let db = db_with_high_limit_transition(0x01 << 5);
+    // TO_OFFNORMAL only: wire bit 0 = 0x80 (Clause 20.2.10).
+    let db = db_with_high_limit_transition(0x80);
     let sent = broadcasts_from_per_write_path(&db).await;
 
     assert_eq!(
@@ -727,7 +723,7 @@ async fn periodic_time_delay_carries_detector_event_type_to_wire() {
         None,
         PropertyValue::BitString {
             unused_bits: 5,
-            data: vec![0x20],
+            data: vec![0x80], // TO_OFFNORMAL at wire bit 0
         },
         None,
     )

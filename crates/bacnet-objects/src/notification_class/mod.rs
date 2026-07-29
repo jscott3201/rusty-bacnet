@@ -7,15 +7,13 @@
 //! `BIT STRING { monday(0), tuesday(1), ..., sunday(6) }` (Clause 21): **bit 0
 //! is Monday and bit 6 is Sunday** in the in-memory `u8`. Callers must build
 //! `today_bit` with the same convention (`1 << dow` where `dow = 0` on
-//! Monday). This module serializes the 7-bit `valid_days` as the wire byte
-//! `valid_days << 1` with `unused_bits: 1`, and the 3-bit `transitions` as
-//! `transitions << 5` with `unused_bits: 5`; the matching decoders are
-//! `data[0] >> 1` and `data[0] >> 5`. These shifts pack the in-memory bits
-//! toward the MSB of the wire octet and round-trip within this codebase.
-//! (Clause 20.2.8 specifies true MSB-first packing, i.e. monday(0) at bit 7;
-//! the `<< 1` shift instead places monday at bit 1. That pre-existing
-//! wire-format deviation is out of scope for the day/time semantics fix and
-//! is not changed here.)
+//! Monday). On the wire both bit strings are packed MSB-first per Clause
+//! 20.2.10 — monday(0) at `0x80` of the `valid_days` octet (`unused_bits: 1`),
+//! to-offnormal(0) at `0x80` of the `transitions` octet (`unused_bits: 5`) —
+//! via [`bacnet_types::bitstring::pack_octet`]/[`unpack_octet`], which reverse
+//! the in-memory bit0-first byte.
+//!
+//! [`unpack_octet`]: bacnet_types::bitstring::unpack_octet
 //!
 //! `from_time`/`to_time` are BACnet `Time` values interpreted in the device's
 //! *local* time, derived from the wall clock plus the Device object's
@@ -152,7 +150,7 @@ impl BACnetObject for NotificationClass {
                             // valid_days as bitstring (7 bits used, 1 unused)
                             PropertyValue::BitString {
                                 unused_bits: 1,
-                                data: vec![dest.valid_days << 1],
+                                data: vec![bacnet_types::bitstring::pack_octet(dest.valid_days)],
                             },
                             PropertyValue::Time(dest.from_time),
                             PropertyValue::Time(dest.to_time),
@@ -176,7 +174,7 @@ impl BACnetObject for NotificationClass {
                             // transitions as bitstring (3 bits used, 5 unused)
                             PropertyValue::BitString {
                                 unused_bits: 5,
-                                data: vec![dest.transitions << 5],
+                                data: vec![bacnet_types::bitstring::pack_octet(dest.transitions)],
                             },
                         ])
                     })
@@ -211,7 +209,7 @@ impl BACnetObject for NotificationClass {
                         // [0] valid_days: BitString (7 bits, 1 unused)
                         let valid_days = match &fields[0] {
                             PropertyValue::BitString { data, .. } if !data.is_empty() => {
-                                data[0] >> 1
+                                bacnet_types::bitstring::unpack_octet(data, 7)
                             }
                             _ => return Err(common::invalid_data_type_error()),
                         };
@@ -258,7 +256,7 @@ impl BACnetObject for NotificationClass {
                         // [6] transitions: BitString (3 bits, 5 unused)
                         let transitions = match &fields[6] {
                             PropertyValue::BitString { data, .. } if !data.is_empty() => {
-                                data[0] >> 5
+                                bacnet_types::bitstring::unpack_octet(data, 3)
                             }
                             _ => return Err(common::invalid_data_type_error()),
                         };
@@ -532,7 +530,9 @@ pub fn filter_recipient_list(
 
         // [0] valid_days bitstring
         let valid_days = match &fields[0] {
-            PropertyValue::BitString { data, .. } if !data.is_empty() => data[0] >> 1,
+            PropertyValue::BitString { data, .. } if !data.is_empty() => {
+                bacnet_types::bitstring::unpack_octet(data, 7)
+            }
             _ => continue,
         };
         if valid_days & today_bit == 0 {
@@ -554,7 +554,9 @@ pub fn filter_recipient_list(
 
         // [6] transitions bitstring
         let transitions = match &fields[6] {
-            PropertyValue::BitString { data, .. } if !data.is_empty() => data[0] >> 5,
+            PropertyValue::BitString { data, .. } if !data.is_empty() => {
+                bacnet_types::bitstring::unpack_octet(data, 3)
+            }
             _ => continue,
         };
         if transitions & transition_mask == 0 {

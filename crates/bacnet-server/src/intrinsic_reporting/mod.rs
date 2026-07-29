@@ -48,17 +48,15 @@ fn read_unsigned(
     }
 }
 
-/// Read EVENT_ENABLE as a 3-bit value.
+/// Read EVENT_ENABLE as a 3-bit value (bit0 = TO_OFFNORMAL).
 ///
-/// Objects store EVENT_ENABLE as `BitString { unused_bits: 5, data: [value << 5] }`.
-/// This helper handles both BitString and Unsigned representations for robustness.
+/// Objects encode EVENT_ENABLE MSB-first per Clause 20.2.10 (TO_OFFNORMAL at
+/// `0x80`). This helper handles both BitString and Unsigned representations
+/// for robustness.
 fn read_event_enable(obj: &dyn bacnet_objects::traits::BACnetObject) -> u8 {
     match obj.read_property(PropertyIdentifier::EVENT_ENABLE, None) {
-        Ok(PropertyValue::BitString { unused_bits, data }) => {
-            if data.is_empty() {
-                return 0;
-            }
-            data[0] >> unused_bits
+        Ok(PropertyValue::BitString { data, .. }) => {
+            bacnet_types::bitstring::unpack_octet(&data, 3)
         }
         Ok(PropertyValue::Unsigned(v)) => v as u8,
         _ => 0,

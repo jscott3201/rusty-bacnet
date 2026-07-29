@@ -42,7 +42,7 @@ fn read_event_enable() {
     let val = ee
         .read_property(PropertyIdentifier::EVENT_ENABLE, None)
         .unwrap();
-    // Default event_enable = 0b111, shifted left 5 = 0b1110_0000
+    // Default event_enable = 0b111 -> MSB-first wire byte 0b1110_0000
     assert_eq!(
         val,
         PropertyValue::BitString {
@@ -160,7 +160,7 @@ fn write_notification_class() {
 #[test]
 fn write_event_enable() {
     let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
-    // Write only TO_OFFNORMAL enabled (bit 0 = 0b100 = 0x80 when shifted)
+    // Write only TO_OFFNORMAL enabled (wire bit 0 = 0x80, Clause 20.2.10)
     ee.write_property(
         PropertyIdentifier::EVENT_ENABLE,
         None,

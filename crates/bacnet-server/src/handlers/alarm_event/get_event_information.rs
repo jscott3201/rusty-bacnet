@@ -59,7 +59,9 @@ pub fn handle_get_event_information(
                     .read_property(PropertyIdentifier::EVENT_ENABLE, None)
                     .ok()
                     .and_then(|v| match v {
-                        PropertyValue::BitString { data, .. } => data.first().map(|b| b >> 5),
+                        PropertyValue::BitString { data, .. } => {
+                            Some(bacnet_types::bitstring::unpack_octet(&data, 3))
+                        }
                         _ => None,
                     })
                     .unwrap_or(0x07);
@@ -94,7 +96,9 @@ pub fn handle_get_event_information(
                     .read_property(PropertyIdentifier::ACKED_TRANSITIONS, None)
                     .ok()
                     .and_then(|v| match v {
-                        PropertyValue::BitString { data, .. } => data.first().map(|b| b >> 5),
+                        PropertyValue::BitString { data, .. } => {
+                            Some(bacnet_types::bitstring::unpack_octet(&data, 3))
+                        }
                         _ => None,
                     })
                     .unwrap_or(0x07);

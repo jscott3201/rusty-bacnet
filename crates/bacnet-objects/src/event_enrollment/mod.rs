@@ -195,11 +195,11 @@ impl BACnetObject for EventEnrollmentObject {
             }
             p if p == PropertyIdentifier::EVENT_ENABLE => Ok(PropertyValue::BitString {
                 unused_bits: 5,
-                data: vec![self.event_enable << 5],
+                data: vec![bacnet_types::bitstring::pack_octet(self.event_enable)],
             }),
             p if p == PropertyIdentifier::ACKED_TRANSITIONS => Ok(PropertyValue::BitString {
                 unused_bits: 5,
-                data: vec![self.acked_transitions << 5],
+                data: vec![bacnet_types::bitstring::pack_octet(self.acked_transitions)],
             }),
             p if p == PropertyIdentifier::EVENT_DETECTION_ENABLE => {
                 Ok(PropertyValue::Boolean(self.event_detection_enable))
@@ -239,7 +239,7 @@ impl BACnetObject for EventEnrollmentObject {
         if property == PropertyIdentifier::EVENT_ENABLE {
             if let PropertyValue::BitString { data, .. } = &value {
                 if let Some(&byte) = data.first() {
-                    self.event_enable = byte >> 5;
+                    self.event_enable = bacnet_types::bitstring::unpack_octet(&[byte], 3);
                     return Ok(());
                 }
                 return Err(common::invalid_data_type_error());
@@ -466,7 +466,7 @@ impl BACnetObject for AlertEnrollmentObject {
             }
             p if p == PropertyIdentifier::EVENT_ENABLE => Ok(PropertyValue::BitString {
                 unused_bits: 5,
-                data: vec![self.event_enable << 5],
+                data: vec![bacnet_types::bitstring::pack_octet(self.event_enable)],
             }),
             p if p == PropertyIdentifier::NOTIFICATION_CLASS => {
                 Ok(PropertyValue::Unsigned(self.notification_class as u64))
@@ -495,7 +495,7 @@ impl BACnetObject for AlertEnrollmentObject {
         if property == PropertyIdentifier::EVENT_ENABLE {
             if let PropertyValue::BitString { data, .. } = &value {
                 if let Some(&byte) = data.first() {
-                    self.event_enable = byte >> 5;
+                    self.event_enable = bacnet_types::bitstring::unpack_octet(&[byte], 3);
                     return Ok(());
                 }
                 return Err(common::invalid_data_type_error());

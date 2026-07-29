@@ -188,7 +188,7 @@ fn get_event_information_reads_event_enable_and_notify_type() {
         None,
         PropertyValue::BitString {
             unused_bits: 5,
-            data: vec![0x05 << 5],
+            data: vec![0xA0], // TO_OFFNORMAL|TO_NORMAL, MSB-first
         },
         None,
     )
@@ -240,7 +240,11 @@ fn get_event_information_reads_event_enable_and_notify_type() {
         .unwrap();
     match ev_enable {
         PropertyValue::BitString { data, .. } => {
-            assert_eq!(data[0] >> 5, 0x05, "EVENT_ENABLE should be 0x05");
+            assert_eq!(
+                bacnet_types::bitstring::unpack_octet(&data, 3),
+                0x05,
+                "EVENT_ENABLE should be 0x05"
+            );
         }
         other => panic!("expected BitString, got {:?}", other),
     }

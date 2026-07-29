@@ -218,6 +218,13 @@ fn get_event_information_ack_round_trip() {
     };
     let mut buf = BytesMut::new();
     ack.encode(&mut buf);
+    // Wire-byte check, not just a round trip: internal 0b101 must appear as
+    // its MSB-first octet 0xA0 (a symmetric encode/decode inversion would
+    // still round-trip, so the raw byte is the only witness — Clause 20.2.10).
+    assert!(
+        buf.iter().any(|&b| b == 0xA0),
+        "encoded ACK should contain the MSB-first acknowledged-transitions octet 0xA0"
+    );
     let decoded = GetEventInformationAck::decode(&buf).unwrap();
     assert_eq!(decoded.list_of_event_summaries.len(), 1);
     assert!(decoded.more_events);

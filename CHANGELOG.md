@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking (wire format):** all ≤8-bit BACnet bit strings are now encoded
+  MSB-first per Clause 20.2.10 — the first defined bit occupies bit 7 (`0x80`)
+  of the octet. Previously `Event_Enable`/`Acked_Transitions` (here and in
+  GetEventInformation ACKs) and `Recipient_List`'s `valid_days`/`transitions`
+  were packed LSB-first within the octet, so TO_OFFNORMAL/TO_NORMAL arrived
+  swapped and the `valid_days` week was reversed for conformant peers
+  (Monday/Sunday inverted). Both encode and decode changed together; peers
+  that interoperated with the old bytes (including older releases of this
+  stack) will see transition and day masks bit-reversed until upgraded.
+  `Status_Flags`, `Limit_Enable`, `Ack_Required`,
+  `Protocol_Object_Types_Supported` and `Protocol_Services_Supported` were
+  already MSB-first and are unchanged. The conversion now lives in
+  `bacnet_types::bitstring::pack_octet`/`unpack_octet` (with typed
+  `to_bacnet()` on `EventTransitionBits`/`LimitEnable`), tested against
+  asymmetric spec vectors (`TO_OFFNORMAL → 0x80`, `monday → 0x80`). (#203)
+
 ### Added
 
 - `FaultDetector` gained a private field for warning suppression and is therefore
