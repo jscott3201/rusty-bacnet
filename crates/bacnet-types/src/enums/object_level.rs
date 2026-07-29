@@ -59,6 +59,7 @@ bacnet_enum! {
     const PROPRIETARY_COMMAND_FAILURE = 22;
     const FAULTS_LISTED = 23;
     const REFERENCED_OBJECT_FAULT = 24;
+    const MULTI_STATE_OUT_OF_RANGE = 25;
 }
 
 bacnet_enum! {
@@ -183,6 +184,8 @@ bacnet_enum! {
     const PREPARING_FOR_RESTORE = 2;
     const PERFORMING_A_BACKUP = 3;
     const PERFORMING_A_RESTORE = 4;
+    const BACKUP_FAILURE = 5;
+    const RESTORE_FAILURE = 6;
 }
 
 bacnet_enum! {

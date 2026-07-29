@@ -537,6 +537,24 @@ mod tests {
     }
 
     #[test]
+    fn backup_and_restore_state_failure_states_resolve_by_name() {
+        // Backup_And_Restore_State (338) legitimately reports both failure
+        // states during Clause 19.1 procedures; they must not surface as
+        // bare numbers.
+        let r = ResolvedEnum::from_property(PropertyIdentifier::BACKUP_AND_RESTORE_STATE, 5);
+        assert_eq!(
+            r,
+            ResolvedEnum::BackupAndRestoreState(BackupAndRestoreState::BACKUP_FAILURE)
+        );
+        assert_eq!(r.to_string(), "BACKUP_FAILURE");
+        assert_eq!(
+            ResolvedEnum::from_property(PropertyIdentifier::BACKUP_AND_RESTORE_STATE, 6)
+                .to_string(),
+            "RESTORE_FAILURE"
+        );
+    }
+
+    #[test]
     fn resolves_limit_enable_and_event_enable() {
         assert!(matches!(
             ResolvedBits::from_property(PropertyIdentifier::LIMIT_ENABLE, 6, &[0xC0]),

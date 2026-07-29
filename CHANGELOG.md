@@ -42,6 +42,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Name the missing tail values of two enumerations, completing them against
+  their 135-2020 productions: `BackupAndRestoreState` gains `BACKUP_FAILURE`
+  (5) and `RESTORE_FAILURE` (6) — states a device legitimately reports during
+  Clause 19.1 backup/restore procedures — and `Reliability` gains
+  `MULTI_STATE_OUT_OF_RANGE` (25). Both are open enums, so the raw values
+  already round-tripped; what changes is that they now display by name
+  (previously a device reporting backup-failure showed as the bare number
+  `5`, including through `resolve_value` on Backup_And_Restore_State).
+  Purely additive, no wire-format change. (#246, #241)
 - `FaultDetector` gained a private field for warning suppression and is therefore
   no longer constructible with struct-literal syntax. `FaultDetector { comm_timeout }`
   becomes a compile error; use `FaultDetector::new(comm_timeout)`, which has been

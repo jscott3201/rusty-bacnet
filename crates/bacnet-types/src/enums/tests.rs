@@ -131,3 +131,32 @@ fn reliability_gap_at_11() {
     assert_eq!(Reliability::CONFIGURATION_ERROR.to_raw(), 10);
     assert_eq!(Reliability::COMMUNICATION_FAILURE.to_raw(), 12);
 }
+
+#[test]
+fn reliability_multi_state_out_of_range() {
+    assert_eq!(Reliability::MULTI_STATE_OUT_OF_RANGE.to_raw(), 25);
+    assert_eq!(
+        Reliability::from_raw(25),
+        Reliability::MULTI_STATE_OUT_OF_RANGE
+    );
+    assert_eq!(
+        format!("{}", Reliability::MULTI_STATE_OUT_OF_RANGE),
+        "MULTI_STATE_OUT_OF_RANGE"
+    );
+}
+
+#[test]
+fn backup_and_restore_state_failure_values() {
+    // A device reporting either failure state during a Clause 19.1
+    // backup/restore procedure now displays by name, not as a bare number.
+    assert_eq!(BackupAndRestoreState::BACKUP_FAILURE.to_raw(), 5);
+    assert_eq!(BackupAndRestoreState::RESTORE_FAILURE.to_raw(), 6);
+    assert_eq!(
+        format!("{}", BackupAndRestoreState::from_raw(5)),
+        "BACKUP_FAILURE"
+    );
+    assert_eq!(
+        format!("{}", BackupAndRestoreState::from_raw(6)),
+        "RESTORE_FAILURE"
+    );
+}
