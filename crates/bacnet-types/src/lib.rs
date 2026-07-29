@@ -11,6 +11,7 @@
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 
+pub mod bitstring;
 pub mod constructed;
 pub mod enums;
 pub mod error;

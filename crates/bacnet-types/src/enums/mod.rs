@@ -101,6 +101,8 @@ mod audit;
 pub use audit::*;
 mod units;
 pub use units::*;
+mod resolve;
+pub use resolve::*;
 
 #[cfg(test)]
 mod tests;

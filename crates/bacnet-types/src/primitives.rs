@@ -307,7 +307,7 @@ pub enum BACnetTimeStamp {
 
 bitflags::bitflags! {
     /// BACnet StatusFlags -- 4-bit bitstring present on most objects.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Clone, Copy, PartialEq, Eq, Hash)]
     pub struct StatusFlags: u8 {
         const IN_ALARM = 0b1000;
         const FAULT = 0b0100;
@@ -316,6 +316,30 @@ bitflags::bitflags! {
     }
 }
 
+impl core::fmt::Display for StatusFlags {
+    /// Renders the set flags by their Clause-21 names (`IN_ALARM | FAULT`), or
+    /// `()` when none are set — never a raw number.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut first = true;
+        for (name, _) in self.iter_names() {
+            if !first {
+                f.write_str(" | ")?;
+            }
+            f.write_str(name)?;
+            first = false;
+        }
+        if first {
+            f.write_str("()")?;
+        }
+        Ok(())
+    }
+}
+
+impl core::fmt::Debug for StatusFlags {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(self, f)
+    }
+}
 bitflags::bitflags! {
     /// BACnet DaysOfWeek -- 7-bit bitstring (Clause 21).
     ///

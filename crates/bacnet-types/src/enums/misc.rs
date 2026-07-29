@@ -59,6 +59,60 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
+    /// Bit positions within a `BACnetServicesSupported` bit string (Clause 21).
+    pub struct ServiceSupported(u8);
+
+    const ACKNOWLEDGE_ALARM = 0;
+    const CONFIRMED_COV_NOTIFICATION = 1;
+    const CONFIRMED_EVENT_NOTIFICATION = 2;
+    const GET_ALARM_SUMMARY = 3;
+    const GET_ENROLLMENT_SUMMARY = 4;
+    const SUBSCRIBE_COV = 5;
+    const ATOMIC_READ_FILE = 6;
+    const ATOMIC_WRITE_FILE = 7;
+    const ADD_LIST_ELEMENT = 8;
+    const REMOVE_LIST_ELEMENT = 9;
+    const CREATE_OBJECT = 10;
+    const DELETE_OBJECT = 11;
+    const READ_PROPERTY = 12;
+    // 13: readPropertyConditional (removed)
+    const READ_PROPERTY_MULTIPLE = 14;
+    const WRITE_PROPERTY = 15;
+    const WRITE_PROPERTY_MULTIPLE = 16;
+    const DEVICE_COMMUNICATION_CONTROL = 17;
+    const CONFIRMED_PRIVATE_TRANSFER = 18;
+    const CONFIRMED_TEXT_MESSAGE = 19;
+    const REINITIALIZE_DEVICE = 20;
+    const VT_OPEN = 21;
+    const VT_CLOSE = 22;
+    const VT_DATA = 23;
+    // 24: authenticate (removed), 25: requestKey (removed)
+    const I_AM = 26;
+    const I_HAVE = 27;
+    const UNCONFIRMED_COV_NOTIFICATION = 28;
+    const UNCONFIRMED_EVENT_NOTIFICATION = 29;
+    const UNCONFIRMED_PRIVATE_TRANSFER = 30;
+    const UNCONFIRMED_TEXT_MESSAGE = 31;
+    const TIME_SYNCHRONIZATION = 32;
+    const WHO_HAS = 33;
+    const WHO_IS = 34;
+    const READ_RANGE = 35;
+    const UTC_TIME_SYNCHRONIZATION = 36;
+    const LIFE_SAFETY_OPERATION = 37;
+    const SUBSCRIBE_COV_PROPERTY = 38;
+    const GET_EVENT_INFORMATION = 39;
+    const WRITE_GROUP = 40;
+    const SUBSCRIBE_COV_PROPERTY_MULTIPLE = 41;
+    const CONFIRMED_COV_NOTIFICATION_MULTIPLE = 42;
+    const UNCONFIRMED_COV_NOTIFICATION_MULTIPLE = 43;
+    const CONFIRMED_AUDIT_NOTIFICATION = 44;
+    const AUDIT_LOG_QUERY = 45;
+    const UNCONFIRMED_AUDIT_NOTIFICATION = 46;
+    const WHO_AM_I = 47;
+    const YOU_ARE = 48;
+}
+
+bacnet_enum! {
     /// BACnet message priority for TextMessage services (Clause 16.5).
     pub struct MessagePriority(u32);
 
