@@ -221,16 +221,8 @@ impl BACnetObject for MultiStateValueObject {
             }
         }
         if property == PropertyIdentifier::ALARM_VALUES {
-            let PropertyValue::List(values) = value else {
-                return Err(common::invalid_data_type_error());
-            };
-            self.event_detector.alarm_values = values
-                .into_iter()
-                .map(|value| match value {
-                    PropertyValue::Unsigned(value) => common::u64_to_u32(value),
-                    _ => Err(common::invalid_data_type_error()),
-                })
-                .collect::<Result<Vec<_>, _>>()?;
+            let values = decode_alarm_values_write(array_index, value)?;
+            self.event_detector.alarm_values = values;
             return Ok(());
         }
         if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {

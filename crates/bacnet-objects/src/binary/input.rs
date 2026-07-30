@@ -124,9 +124,17 @@ impl BACnetObject for BinaryInputObject {
             p if p == PropertyIdentifier::INACTIVE_TEXT => {
                 Ok(PropertyValue::CharacterString(self.inactive_text.clone()))
             }
-            p if p == PropertyIdentifier::ALARM_VALUE => Ok(PropertyValue::Enumerated(
-                self.event_detector.alarm_values[0],
-            )),
+            p if p == PropertyIdentifier::ALARM_VALUE => {
+                // Construction and writes keep exactly one value; ACTIVE is the
+                // defensive construction default if a future reset empties it.
+                Ok(PropertyValue::Enumerated(
+                    self.event_detector
+                        .alarm_values
+                        .first()
+                        .copied()
+                        .unwrap_or(1),
+                ))
+            }
             p if p == PropertyIdentifier::EVENT_TIME_STAMPS => Ok(PropertyValue::List(vec![
                 PropertyValue::Unsigned(0),
                 PropertyValue::Unsigned(0),

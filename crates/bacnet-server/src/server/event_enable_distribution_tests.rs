@@ -4,8 +4,8 @@
 //! `event_notifications_tests.rs` pins the TO_OFFNORMAL half of this gate for
 //! AnalogInput and has little headroom left under the 700-LOC cap, so the
 //! Multi-state Input cases live here alongside Binary Input and Multi-state
-//! Value proofs that Alarm_Value(s) can be commissioned entirely over the
-//! network.
+//! Value proofs that Alarm_Value(s) can be commissioned through working
+//! network routes.
 //!
 //! Both directions are covered on purpose. A gate written `event_enable & 0x01`
 //! instead of `event_enable & transition_bit` distributes TO_OFFNORMAL correctly
@@ -13,16 +13,18 @@
 //! direction leaves that mistake invisible.
 
 use super::*;
+use crate::handlers::{handle_add_list_element, handle_remove_list_element};
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::decode_npdu;
-use bacnet_objects::binary::BinaryInputObject;
+use bacnet_objects::binary::{BinaryInputObject, BinaryValueObject};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::multistate::{MultiStateInputObject, MultiStateValueObject};
 use bacnet_objects::traits::BACnetObject;
+use bacnet_services::list_manipulation::ListElementRequest;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{EventState, EventType, NotifyType};
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use std::sync::{Arc as StdArc, Mutex as StdMutex};
 use tokio::sync::mpsc;
 
@@ -77,15 +79,12 @@ impl Fixture {
     /// [`ALARM_STATE`] as its only alarm value and `Out_Of_Service` TRUE so that
     /// `Present_Value` accepts network writes.
     ///
-    /// Every commissioning property, including `Alarm_Values`, is written
-    /// through the same object dispatch used by network WriteProperty.
+    /// Scalar commissioning uses object dispatch. Alarm_Values uses
+    /// AddListElement through its handler, the only working network route
+    /// today; whole-list WriteProperty remains blocked by decoder issue #182.
     async fn new(bits: EventTransitionBits) -> Self {
         let mut msi = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();
         for (property, value) in [
-            (
-                PropertyIdentifier::ALARM_VALUES,
-                PropertyValue::List(vec![PropertyValue::Unsigned(ALARM_STATE)]),
-            ),
             (
                 PropertyIdentifier::OUT_OF_SERVICE,
                 PropertyValue::Boolean(true),
@@ -108,7 +107,9 @@ impl Fixture {
             msi.write_property(property, None, value, None)
                 .unwrap_or_else(|e| panic!("{property:?} must be writable since #229: {e:?}"));
         }
-        Self::from_object(Box::new(msi)).await
+        let fixture = Self::from_object(Box::new(msi)).await;
+        fixture.add_alarm_value(ALARM_STATE as u8).await;
+        fixture
     }
 
     async fn from_object(object: Box<dyn BACnetObject>) -> Self {
@@ -164,6 +165,35 @@ impl Fixture {
             1000,
         )
         .await;
+    }
+
+    /// Commission one Alarm_Values element through the AddListElement handler.
+    async fn add_alarm_value(&self, value: u8) {
+        let request = ListElementRequest {
+            object_identifier: self.oid,
+            property_identifier: PropertyIdentifier::ALARM_VALUES,
+            property_array_index: None,
+            list_of_elements: vec![0x21, value],
+        };
+        let mut encoded = BytesMut::new();
+        request.encode(&mut encoded);
+        let mut db = self.db.write().await;
+        handle_add_list_element(&mut db, &encoded)
+            .expect("AddListElement is the working network Alarm_Values route");
+    }
+
+    async fn remove_alarm_value(&self, value: u8) {
+        let request = ListElementRequest {
+            object_identifier: self.oid,
+            property_identifier: PropertyIdentifier::ALARM_VALUES,
+            property_array_index: None,
+            list_of_elements: vec![0x21, value],
+        };
+        let mut encoded = BytesMut::new();
+        request.encode(&mut encoded);
+        let mut db = self.db.write().await;
+        handle_remove_list_element(&mut db, &encoded)
+            .expect("RemoveListElement must remove the commissioned alarm value");
     }
 
     /// Take the broadcasts recorded since the last call.
@@ -317,12 +347,12 @@ async fn msi_to_normal_bit_alone_distributes_the_return_to_normal() {
 }
 
 #[tokio::test]
-async fn bi_and_msv_alarm_values_commission_over_network_and_reach_the_wire() {
+async fn bi_bv_and_msv_alarm_values_commission_and_reach_the_wire() {
     let mut bi = BinaryInputObject::new(1, "BI-1").unwrap();
     for (property, value) in [
         (
             PropertyIdentifier::ALARM_VALUE,
-            PropertyValue::Enumerated(1),
+            PropertyValue::Enumerated(0),
         ),
         (
             PropertyIdentifier::OUT_OF_SERVICE,
@@ -339,27 +369,63 @@ async fn bi_and_msv_alarm_values_commission_over_network_and_reach_the_wire() {
             PropertyIdentifier::NOTIFY_TYPE,
             PropertyValue::Enumerated(NotifyType::EVENT.to_raw()),
         ),
+        (
+            PropertyIdentifier::PRESENT_VALUE,
+            PropertyValue::Enumerated(1),
+        ),
     ] {
         bi.write_property(property, None, value, None).unwrap();
     }
     let bi_fixture = Fixture::from_object(Box::new(bi)).await;
     bi_fixture
-        .write_present_value_as(PropertyValue::Enumerated(1))
+        .write_present_value_as(PropertyValue::Enumerated(0))
         .await;
     assert_sole_notification(
         bi_fixture.drain(),
         bi_fixture.oid,
         EventState::NORMAL,
         EventState::OFFNORMAL,
-        "Binary Input Alarm_Value",
+        "Binary Input non-default Alarm_Value",
+    );
+
+    let mut bv = BinaryValueObject::new(1, "BV-1").unwrap();
+    for (property, value) in [
+        (
+            PropertyIdentifier::ALARM_VALUE,
+            PropertyValue::Enumerated(0),
+        ),
+        (
+            PropertyIdentifier::EVENT_ENABLE,
+            PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![EventTransitionBits::TO_OFFNORMAL.to_bacnet()],
+            },
+        ),
+        (
+            PropertyIdentifier::NOTIFY_TYPE,
+            PropertyValue::Enumerated(NotifyType::EVENT.to_raw()),
+        ),
+        (
+            PropertyIdentifier::PRESENT_VALUE,
+            PropertyValue::Enumerated(1),
+        ),
+    ] {
+        bv.write_property(property, None, value, None).unwrap();
+    }
+    let bv_fixture = Fixture::from_object(Box::new(bv)).await;
+    bv_fixture
+        .write_present_value_as(PropertyValue::Enumerated(0))
+        .await;
+    assert_sole_notification(
+        bv_fixture.drain(),
+        bv_fixture.oid,
+        EventState::NORMAL,
+        EventState::OFFNORMAL,
+        "Binary Value non-default Alarm_Value",
     );
 
     let mut msv = MultiStateValueObject::new(1, "MSV-1", 3).unwrap();
     for (property, value) in [
-        (
-            PropertyIdentifier::ALARM_VALUES,
-            PropertyValue::List(vec![PropertyValue::Unsigned(2)]),
-        ),
         (
             PropertyIdentifier::EVENT_ENABLE,
             PropertyValue::BitString {
@@ -375,6 +441,7 @@ async fn bi_and_msv_alarm_values_commission_over_network_and_reach_the_wire() {
         msv.write_property(property, None, value, None).unwrap();
     }
     let msv_fixture = Fixture::from_object(Box::new(msv)).await;
+    msv_fixture.add_alarm_value(2).await;
     msv_fixture.write_present_value(2).await;
     assert_sole_notification(
         msv_fixture.drain(),
@@ -382,5 +449,55 @@ async fn bi_and_msv_alarm_values_commission_over_network_and_reach_the_wire() {
         EventState::NORMAL,
         EventState::OFFNORMAL,
         "Multi-state Value Alarm_Values",
+    );
+}
+
+#[tokio::test]
+async fn fresh_binary_input_active_is_offnormal_without_distribution() {
+    let mut bi = BinaryInputObject::new(2, "BI-default").unwrap();
+    bi.write_property(
+        PropertyIdentifier::OUT_OF_SERVICE,
+        None,
+        PropertyValue::Boolean(true),
+        None,
+    )
+    .unwrap();
+    let fixture = Fixture::from_object(Box::new(bi)).await;
+    fixture
+        .write_present_value_as(PropertyValue::Enumerated(1))
+        .await;
+    assert_eq!(
+        fixture.event_state().await,
+        PropertyValue::Enumerated(EventState::OFFNORMAL.to_raw())
+    );
+    assert!(
+        fixture.drain().is_empty(),
+        "default Event_Enable must suppress distribution"
+    );
+}
+
+#[tokio::test]
+async fn remove_last_alarm_value_disarms_msi() {
+    let fixture = Fixture::new(EventTransitionBits::TO_OFFNORMAL).await;
+    fixture.remove_alarm_value(ALARM_STATE as u8).await;
+    assert_eq!(
+        fixture
+            .db
+            .read()
+            .await
+            .get(&fixture.oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::ALARM_VALUES, None)
+            .unwrap(),
+        PropertyValue::List(vec![])
+    );
+    fixture.write_present_value(ALARM_STATE).await;
+    assert_eq!(
+        fixture.event_state().await,
+        PropertyValue::Enumerated(EventState::NORMAL.to_raw())
+    );
+    assert!(
+        fixture.drain().is_empty(),
+        "an empty Alarm_Values list must not distribute"
     );
 }

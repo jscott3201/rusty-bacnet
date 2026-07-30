@@ -105,12 +105,12 @@ mod tests {
     use bacnet_types::enums::ObjectType;
     use bytes::BytesMut;
 
-    fn request(oid: ObjectIdentifier, element: u8) -> BytesMut {
+    fn request(oid: ObjectIdentifier, element: u8, array_index: Option<u32>) -> BytesMut {
         let mut encoded = BytesMut::new();
         ListElementRequest {
             object_identifier: oid,
             property_identifier: PropertyIdentifier::ALARM_VALUES,
-            property_array_index: None,
+            property_array_index: array_index,
             list_of_elements: vec![0x21, element],
         }
         .encode(&mut encoded);
@@ -124,7 +124,7 @@ mod tests {
         db.add(Box::new(MultiStateInputObject::new(1, "MSI-1", 3).unwrap()))
             .unwrap();
 
-        handle_add_list_element(&mut db, &request(oid, 2)).unwrap();
+        handle_add_list_element(&mut db, &request(oid, 2, None)).unwrap();
         assert_eq!(
             db.get(&oid)
                 .unwrap()
@@ -133,7 +133,7 @@ mod tests {
             PropertyValue::List(vec![PropertyValue::Unsigned(2)])
         );
 
-        handle_remove_list_element(&mut db, &request(oid, 2)).unwrap();
+        handle_remove_list_element(&mut db, &request(oid, 2, None)).unwrap();
         assert_eq!(
             db.get(&oid)
                 .unwrap()
@@ -141,5 +141,56 @@ mod tests {
                 .unwrap(),
             PropertyValue::List(vec![])
         );
+    }
+
+    #[test]
+    fn add_list_element_rejects_array_index_on_alarm_values() {
+        let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(MultiStateInputObject::new(1, "MSI-1", 3).unwrap()))
+            .unwrap();
+
+        match handle_add_list_element(&mut db, &request(oid, 2, Some(1))).unwrap_err() {
+            Error::Protocol { class, code } => {
+                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+                assert_eq!(code, ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32);
+            }
+            other => panic!("expected PROPERTY_IS_NOT_AN_ARRAY, got {other:?}"),
+        }
+        assert_eq!(
+            db.get(&oid)
+                .unwrap()
+                .read_property(PropertyIdentifier::ALARM_VALUES, None)
+                .unwrap(),
+            PropertyValue::List(vec![])
+        );
+    }
+
+    #[test]
+    fn whole_list_write_property_pins_decoder_gap() {
+        let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(MultiStateInputObject::new(1, "MSI-1", 3).unwrap()))
+            .unwrap();
+        let request = WritePropertyRequest {
+            object_identifier: oid,
+            property_identifier: PropertyIdentifier::ALARM_VALUES,
+            property_array_index: None,
+            // A BACnetLIST is consecutive application-tagged elements.
+            property_value: vec![0x21, 2, 0x21, 3],
+            priority: None,
+        };
+        let mut encoded = BytesMut::new();
+        request.encode(&mut encoded);
+
+        // #182: WriteProperty currently decodes exactly one primitive, so this
+        // is INVALID_DATA_TYPE. Flip this expectation when LIST decoding lands.
+        match handle_write_property(&mut db, &encoded).unwrap_err() {
+            Error::Protocol { class, code } => {
+                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+                assert_eq!(code, ErrorCode::INVALID_DATA_TYPE.to_raw() as u32);
+            }
+            other => panic!("expected INVALID_DATA_TYPE, got {other:?}"),
+        }
     }
 }

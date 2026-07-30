@@ -205,6 +205,13 @@ fn binary_alarm_value_round_trips_and_matches_pics() {
             ),
             ErrorCode::INVALID_DATA_TYPE,
         );
+        assert_eq!(
+            object
+                .read_property(PropertyIdentifier::ALARM_VALUE, None)
+                .unwrap(),
+            PropertyValue::Enumerated(0),
+            "a rejected wrong-type write must preserve Alarm_Value"
+        );
         assert_protocol_error(
             object.write_property(
                 PropertyIdentifier::ALARM_VALUE,
@@ -215,6 +222,14 @@ fn binary_alarm_value_round_trips_and_matches_pics() {
             ErrorCode::VALUE_OUT_OF_RANGE,
         );
     }
+
+    assert_protocol_error(
+        BinaryInputObject::new(2, "BI-2")
+            .unwrap()
+            .read_property(PropertyIdentifier::ALARM_VALUES, None)
+            .map(|_| ()),
+        ErrorCode::UNKNOWN_PROPERTY,
+    );
 }
 
 #[test]

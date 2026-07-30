@@ -11,8 +11,9 @@
 // promoted from a bare number to its named variant.
 //
 // Properties whose ENUMERATED type depends on the *object type* rather than the
-// property alone (e.g. `present-value`, plural `alarm-values`, `fault-values`, whose
-// type varies between Binary/Multi-state/Life-Safety objects) are intentionally
+// property alone (e.g. `present-value`, plural `alarm-values`, and
+// `fault-values`, whose type varies between Binary/Multi-state/Life-Safety
+// objects) are intentionally
 // left unmapped: the property identifier alone is insufficient to name them
 // correctly, so they resolve to `Unknown`.
 //
@@ -453,6 +454,18 @@ mod tests {
         assert_eq!(
             ResolvedEnum::from_property(PropertyIdentifier::ALARM_VALUE, 1),
             ResolvedEnum::BinaryPV(BinaryPV::ACTIVE),
+        );
+    }
+
+    #[test]
+    fn plural_alarm_and_fault_values_remain_unknown() {
+        assert_eq!(
+            ResolvedEnum::from_property(PropertyIdentifier::ALARM_VALUES, 1),
+            ResolvedEnum::Unknown(1)
+        );
+        assert_eq!(
+            ResolvedEnum::from_property(PropertyIdentifier::FAULT_VALUES, 1),
+            ResolvedEnum::Unknown(1)
         );
     }
 

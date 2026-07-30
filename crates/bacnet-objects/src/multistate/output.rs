@@ -466,26 +466,19 @@ mod command_failure_tests {
 
     #[test]
     fn command_failure_uses_present_and_feedback() {
-        let mut disagreeing = MultiStateOutputObject::new(1, "MSO-disagree", 3).unwrap();
-        set_detection_enabled(&mut disagreeing, true);
-        write_unsigned(&mut disagreeing, PropertyIdentifier::PRESENT_VALUE, 2);
+        let mut mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
+        set_detection_enabled(&mut mso, true);
+        write_unsigned(&mut mso, PropertyIdentifier::PRESENT_VALUE, 2);
 
-        let outcome = disagreeing.evaluate_intrinsic_reporting().unwrap();
+        let outcome = mso.evaluate_intrinsic_reporting().unwrap();
         assert_eq!(outcome.change.to, EventState::OFFNORMAL);
         assert_eq!(outcome.event_type, EventType::COMMAND_FAILURE);
 
-        let mut agreeing = MultiStateOutputObject::new(2, "MSO-agree", 3).unwrap();
-        set_detection_enabled(&mut agreeing, true);
-        write_unsigned(&mut agreeing, PropertyIdentifier::FEEDBACK_VALUE, 2);
-        write_unsigned(&mut agreeing, PropertyIdentifier::PRESENT_VALUE, 2);
-
-        assert_eq!(agreeing.evaluate_intrinsic_reporting(), None);
-        assert_eq!(
-            agreeing
-                .read_property(PropertyIdentifier::EVENT_STATE, None)
-                .unwrap(),
-            PropertyValue::Enumerated(EventState::NORMAL.to_raw())
-        );
+        write_unsigned(&mut mso, PropertyIdentifier::FEEDBACK_VALUE, 2);
+        let returned = mso.evaluate_intrinsic_reporting().unwrap();
+        assert_eq!(returned.change.from, EventState::OFFNORMAL);
+        assert_eq!(returned.change.to, EventState::NORMAL);
+        assert_eq!(returned.event_type, EventType::COMMAND_FAILURE);
     }
 
     #[test]
