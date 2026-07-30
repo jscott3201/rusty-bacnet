@@ -546,9 +546,10 @@ fn mso_is_createable_and_writable_match_factory() {
     assert!(mso.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
     assert!(mso.is_writable_property(PropertyIdentifier::STATE_TEXT));
     assert!(mso.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
-    // Writable since #222: Clause 12.19 requires a device to "support (T, T, T) at a minimum",
-    // and with no write path the transition bits were stuck at (F, F, F), so no COMMAND_FAILURE
-    // notification could ever be distributed.
+    // Writable since #222: Clause 12.19 requires the supported Event_Enable
+    // value set to include (T, T, T); writability is this stack's route to
+    // that minimum, since the detectors default to (F, F, F) and had no
+    // other commissioning path.
     assert!(mso.is_writable_property(PropertyIdentifier::EVENT_ENABLE));
 }
 

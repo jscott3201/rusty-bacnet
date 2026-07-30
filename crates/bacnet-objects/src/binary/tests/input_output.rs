@@ -530,14 +530,17 @@ fn bi_is_writable_property_mirrors_write_property() {
     assert!(bi.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
     assert!(bi.is_writable_property(PropertyIdentifier::OBJECT_NAME));
     assert!(bi.is_writable_property(PropertyIdentifier::DESCRIPTION));
-    // Writable since #229: Clause 12.6 requires a device to support (T, T, T)
-    // at a minimum, and with no write path the transition bits were stuck at
-    // (F, F, F), so no CHANGE_OF_STATE notification could ever be distributed.
+    // Writable since #229: Clause 12.6 requires the supported Event_Enable
+    // value set to include (T, T, T); writability is this stack's route to
+    // that minimum, since the detectors default to (F, F, F) and had no
+    // other commissioning path.
     assert!(bi.is_writable_property(PropertyIdentifier::EVENT_ENABLE));
     assert!(bi.is_writable_property(PropertyIdentifier::NOTIFICATION_CLASS));
     assert!(bi.is_writable_property(PropertyIdentifier::NOTIFY_TYPE));
     assert!(bi.is_writable_property(PropertyIdentifier::TIME_DELAY));
-    // ACKED_TRANSITIONS stays read-only: only AcknowledgeAlarm may change it.
+    // ACKED_TRANSITIONS stays read-only: the alarm-acknowledgment process
+    // maintains it from event-state transitions and acknowledgment
+    // indications, never a property write.
     assert!(!bi.is_writable_property(PropertyIdentifier::ACKED_TRANSITIONS));
     // Not commandable.
     assert!(!bi.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
@@ -561,8 +564,9 @@ fn bo_is_writable_property_mirrors_write_property() {
     assert!(bo.is_writable_property(PropertyIdentifier::ACTIVE_TEXT));
     assert!(bo.is_writable_property(PropertyIdentifier::INACTIVE_TEXT));
     assert!(bo.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
-    // Writable since #222: Clause 12.7 requires a device to "support (T, T, T) at a minimum",
-    // and with no write path the transition bits were stuck at (F, F, F), so no COMMAND_FAILURE
-    // notification could ever be distributed.
+    // Writable since #222: Clause 12.7 requires the supported Event_Enable
+    // value set to include (T, T, T); writability is this stack's route to
+    // that minimum, since the detectors default to (F, F, F) and had no
+    // other commissioning path.
     assert!(bo.is_writable_property(PropertyIdentifier::EVENT_ENABLE));
 }

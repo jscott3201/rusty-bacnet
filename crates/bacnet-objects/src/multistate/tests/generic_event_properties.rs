@@ -188,9 +188,11 @@ fn assert_event_properties_round_trip(object: &mut dyn BACnetObject, label: &str
         "{label}: TO_NORMAL alone must read back as wire bit 2"
     );
 
-    // Acked_Transitions is readable but never writable: only AcknowledgeAlarm
-    // may change it, and a property write would assign where the service ORs,
-    // so it could both fabricate and erase acknowledgments.
+    // Acked_Transitions is readable but never writable: the alarm-
+    // acknowledgment process maintains it from event-state transitions and
+    // acknowledgment indications, and an indication ORs the bit in where a
+    // property write would assign — a write could fabricate and erase
+    // acknowledgments alike.
     assert_write_access_denied(
         object.write_property(
             PropertyIdentifier::ACKED_TRANSITIONS,
