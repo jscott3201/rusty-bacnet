@@ -548,6 +548,39 @@ fn pics_event_properties_writable_on_analog_types() {
     }
 }
 
+/// Before #229 the four types below had no write path for the event set at all
+/// — Time_Delay and Notify_Type were absent entirely — so PICS advertised what
+/// no client could commission and no notification could ever be distributed.
+#[test]
+fn pics_event_properties_writable_on_binary_and_multistate_types() {
+    let db = make_real_objects_db();
+    let pics = generate_pics(&db, &ServerConfig::default(), &make_pics_config());
+
+    for ot in [
+        ObjectType::BINARY_INPUT,
+        ObjectType::BINARY_VALUE,
+        ObjectType::MULTI_STATE_INPUT,
+        ObjectType::MULTI_STATE_VALUE,
+    ] {
+        for pid in [
+            PropertyIdentifier::EVENT_ENABLE,
+            PropertyIdentifier::NOTIFY_TYPE,
+            PropertyIdentifier::TIME_DELAY,
+            PropertyIdentifier::NOTIFICATION_CLASS,
+        ] {
+            assert!(
+                pics_writable(&pics, ot, pid),
+                "{ot:?}: {pid:?} should be writable (accepted by write_generic_event_properties!)"
+            );
+        }
+        // Denied by the same macro, so PICS must not advertise it writable.
+        assert!(
+            !pics_writable(&pics, ot, PropertyIdentifier::ACKED_TRANSITIONS),
+            "{ot:?}: ACKED_TRANSITIONS must stay read-only"
+        );
+    }
+}
+
 #[test]
 fn pics_priority_array_writable_on_commandable_types() {
     let db = make_real_objects_db();

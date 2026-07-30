@@ -240,6 +240,15 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
         PropertyValue::CharacterString("off".into()),
         "BI",
     );
+    assert_accepts(
+        &mut bi,
+        PropertyIdentifier::EVENT_ENABLE,
+        PropertyValue::BitString {
+            unused_bits: 5,
+            data: vec![0xE0], // all three transitions, MSB-first
+        },
+        "BI",
+    );
     assert_rejects(&mut bi, READ_ONLY, "BI");
 
     // BinaryOutput — commandable + ACTIVE/INACTIVE_TEXT.
@@ -299,6 +308,12 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
         PropertyValue::CharacterString("off".into()),
         "BV",
     );
+    assert_accepts(
+        &mut bv,
+        PropertyIdentifier::NOTIFY_TYPE,
+        PropertyValue::Enumerated(0),
+        "BV",
+    );
     assert_rejects(&mut bv, READ_ONLY, "BV");
 
     // MultiStateInput — PRESENT_VALUE needs out-of-service; STATE_TEXT (array).
@@ -321,6 +336,12 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
         PropertyIdentifier::STATE_TEXT,
         1,
         PropertyValue::CharacterString("s1".into()),
+        "MSI",
+    );
+    assert_accepts(
+        &mut msi,
+        PropertyIdentifier::TIME_DELAY,
+        PropertyValue::Unsigned(5),
         "MSI",
     );
     assert_rejects(&mut msi, READ_ONLY, "MSI");
@@ -369,6 +390,12 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
         PropertyIdentifier::STATE_TEXT,
         1,
         PropertyValue::CharacterString("s1".into()),
+        "MSV",
+    );
+    assert_accepts(
+        &mut msv,
+        PropertyIdentifier::NOTIFICATION_CLASS,
+        PropertyValue::Unsigned(3),
         "MSV",
     );
     assert_rejects(&mut msv, READ_ONLY, "MSV");

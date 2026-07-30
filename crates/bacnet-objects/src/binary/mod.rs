@@ -18,3 +18,7 @@ mod value;
 pub use input::*;
 pub use output::*;
 pub use value::*;
+
+#[cfg(test)]
+#[path = "tests/generic_event_properties.rs"]
+mod generic_event_properties_tests;

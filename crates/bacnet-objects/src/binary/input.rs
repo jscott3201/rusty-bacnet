@@ -104,6 +104,9 @@ impl BACnetObject for BinaryInputObject {
         if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {
             return Ok(PropertyValue::Boolean(self.event_detection_enable));
         }
+        if let Some(result) = read_generic_event_properties!(self, property) {
+            return result;
+        }
         match property {
             p if p == PropertyIdentifier::OBJECT_TYPE => {
                 Ok(PropertyValue::Enumerated(ObjectType::BINARY_INPUT.to_raw()))
@@ -111,9 +114,6 @@ impl BACnetObject for BinaryInputObject {
             p if p == PropertyIdentifier::PRESENT_VALUE => {
                 Ok(PropertyValue::Enumerated(self.present_value))
             }
-            p if p == PropertyIdentifier::EVENT_STATE => Ok(PropertyValue::Enumerated(
-                self.event_detector.event_state.to_raw(),
-            )),
             p if p == PropertyIdentifier::POLARITY => Ok(PropertyValue::Enumerated(self.polarity)),
             p if p == PropertyIdentifier::ACTIVE_TEXT => {
                 Ok(PropertyValue::CharacterString(self.active_text.clone()))
@@ -127,21 +127,6 @@ impl BACnetObject for BinaryInputObject {
                     .iter()
                     .map(|v| PropertyValue::Enumerated(*v))
                     .collect(),
-            )),
-            p if p == PropertyIdentifier::EVENT_ENABLE => Ok(PropertyValue::BitString {
-                unused_bits: 5,
-                data: vec![bacnet_types::bitstring::pack_octet(
-                    self.event_detector.event_enable,
-                )],
-            }),
-            p if p == PropertyIdentifier::ACKED_TRANSITIONS => Ok(PropertyValue::BitString {
-                unused_bits: 5,
-                data: vec![bacnet_types::bitstring::pack_octet(
-                    self.event_detector.acked_transitions,
-                )],
-            }),
-            p if p == PropertyIdentifier::NOTIFICATION_CLASS => Ok(PropertyValue::Unsigned(
-                self.event_detector.notification_class as u64,
             )),
             p if p == PropertyIdentifier::EVENT_TIME_STAMPS => Ok(PropertyValue::List(vec![
                 PropertyValue::Unsigned(0),
@@ -199,6 +184,9 @@ impl BACnetObject for BinaryInputObject {
             }
             return Err(common::invalid_data_type_error());
         }
+        if let Some(result) = write_generic_event_properties!(self, property, value) {
+            return result;
+        }
         if let Some(result) = common::write_out_of_service_with_reliability_restore(
             &mut self.out_of_service,
             &mut self.reliability,
@@ -240,6 +228,11 @@ impl BACnetObject for BinaryInputObject {
             PropertyIdentifier::STATUS_FLAGS,
             PropertyIdentifier::EVENT_STATE,
             PropertyIdentifier::EVENT_DETECTION_ENABLE,
+            PropertyIdentifier::EVENT_ENABLE,
+            PropertyIdentifier::TIME_DELAY,
+            PropertyIdentifier::NOTIFY_TYPE,
+            PropertyIdentifier::NOTIFICATION_CLASS,
+            PropertyIdentifier::ACKED_TRANSITIONS,
             PropertyIdentifier::OUT_OF_SERVICE,
             PropertyIdentifier::POLARITY,
             PropertyIdentifier::RELIABILITY,
@@ -265,10 +258,14 @@ impl BACnetObject for BinaryInputObject {
     }
 
     fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        // Mirrors the BinaryInput `write_property` arms. EVENT_ENABLE,
-        // NOTIFICATION_CLASS, and ACKED_TRANSITIONS are read-only on BI
-        // (no write arms), so they are intentionally excluded.
+        // Mirrors the BinaryInput `write_property` arms. The generic event set
+        // became writable with #229: Clause 12.6 requires a device to support
+        // (T, T, T) at a minimum, and with no write path Event_Enable was stuck
+        // at (F, F, F), so no CHANGE_OF_STATE notification could ever be
+        // distributed. ACKED_TRANSITIONS stays out — the generic write arm
+        // denies it, since only AcknowledgeAlarm may change it.
         common::is_common_writable(property)
+            || common::is_generic_event_property_writable(property)
             || property == PropertyIdentifier::PRESENT_VALUE
             || property == PropertyIdentifier::ACTIVE_TEXT
             || property == PropertyIdentifier::INACTIVE_TEXT

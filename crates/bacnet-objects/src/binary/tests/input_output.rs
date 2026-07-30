@@ -530,9 +530,14 @@ fn bi_is_writable_property_mirrors_write_property() {
     assert!(bi.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
     assert!(bi.is_writable_property(PropertyIdentifier::OBJECT_NAME));
     assert!(bi.is_writable_property(PropertyIdentifier::DESCRIPTION));
-    // EVENT_ENABLE/NOTIFICATION_CLASS/ACKED_TRANSITIONS are read-only on BI.
-    assert!(!bi.is_writable_property(PropertyIdentifier::EVENT_ENABLE));
-    assert!(!bi.is_writable_property(PropertyIdentifier::NOTIFICATION_CLASS));
+    // Writable since #229: Clause 12.6 requires a device to support (T, T, T)
+    // at a minimum, and with no write path the transition bits were stuck at
+    // (F, F, F), so no CHANGE_OF_STATE notification could ever be distributed.
+    assert!(bi.is_writable_property(PropertyIdentifier::EVENT_ENABLE));
+    assert!(bi.is_writable_property(PropertyIdentifier::NOTIFICATION_CLASS));
+    assert!(bi.is_writable_property(PropertyIdentifier::NOTIFY_TYPE));
+    assert!(bi.is_writable_property(PropertyIdentifier::TIME_DELAY));
+    // ACKED_TRANSITIONS stays read-only: only AcknowledgeAlarm may change it.
     assert!(!bi.is_writable_property(PropertyIdentifier::ACKED_TRANSITIONS));
     // Not commandable.
     assert!(!bi.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));

@@ -529,8 +529,8 @@ fn msi_is_createable_and_writable_match_factory() {
     assert!(msi.is_writable_property(PropertyIdentifier::OBJECT_NAME));
     // Not commandable.
     assert!(!msi.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
-    // EVENT_ENABLE read-only on MSI.
-    assert!(!msi.is_writable_property(PropertyIdentifier::EVENT_ENABLE));
+    // EVENT_ENABLE writable since #229 (see generic_event_properties.rs).
+    assert!(msi.is_writable_property(PropertyIdentifier::EVENT_ENABLE));
 }
 
 #[test]

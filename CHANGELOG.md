@@ -123,6 +123,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Wire the generic event-configuration properties into Binary Input, Binary
+  Value, Multi-state Input and Multi-state Value. `Event_Enable` was readable
+  but not writable on all four, and `Time_Delay`/`Notify_Type` were absent
+  entirely — and since every detector defaults its transition bits to
+  (F, F, F), no event notification could ever be distributed from these
+  types, though Clauses 12.6, 12.8, 12.18 and 12.20 require (T, T, T)
+  support at a minimum. All four now run the shared
+  `read_generic_event_properties!` / `write_generic_event_properties!`
+  macros (the #227 split, already carried by Binary Output and Multi-state
+  Output), advertise the event set in `Property_List`, and report
+  writability through the same `is_generic_event_property_writable` truth
+  source PICS reads. `Event_State` stays read-only over the network and
+  `Acked_Transitions` writes are still denied — only AcknowledgeAlarm may
+  change it. Distribution is pinned at the wire: a Multi-state Input
+  commissioned over the network with a single `Event_Enable` bit set emits
+  exactly the notification that bit names, and none otherwise (single-bit
+  fixtures, because an all-bits fixture cannot tell a correct mask from an
+  inverted one — Multi-state Input is the vehicle since the other three
+  types' detectors cannot be fed until #228). (#229)
 - Preserve WritePropertyMultiple atomicity when rolling back an
   `Out_Of_Service` write. The rollback now restores the client-simulated
   `Reliability` and reconstructs the saved evaluated value as well as restoring

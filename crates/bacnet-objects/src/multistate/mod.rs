@@ -6,7 +6,9 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
 
-use crate::common::{self, read_common_properties};
+use crate::common::{
+    self, read_common_properties, read_generic_event_properties, write_generic_event_properties,
+};
 use crate::event::ChangeOfStateDetector;
 use crate::traits::BACnetObject;
 
