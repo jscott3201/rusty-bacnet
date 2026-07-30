@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Breaking:** remove the public
+  `bacnet_server::intrinsic_reporting` module and its
+  `IntrinsicReportingEngine`. The duplicate engine had no production callers,
+  did not gate evaluation on `Event_Detection_Enable` as required by Clause
+  13.2.2.1, and after #228 read the plural `Alarm_Values` property that Binary
+  Input and Binary Value no longer serve. Use the gated `BACnetObject` trait
+  path, `evaluate_intrinsic_reporting` and `tick_intrinsic_reporting`, which
+  the production server has always used. Closes #237 and #204.
+
 ### Changed
 
 - The Device object's `Protocol_Services_Supported` is now derived from the
