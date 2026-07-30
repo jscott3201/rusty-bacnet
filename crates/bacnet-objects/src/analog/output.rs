@@ -31,7 +31,7 @@ pub struct AnalogOutputObject {
     reliability_before_out_of_service: Option<u32>,
     min_pres_value: Option<f32>,
     max_pres_value: Option<f32>,
-    event_history: EventHistory,
+    pub(crate) event_history: EventHistory,
     /// Value source tracking.
     value_source: common::ValueSourceTracking,
 }

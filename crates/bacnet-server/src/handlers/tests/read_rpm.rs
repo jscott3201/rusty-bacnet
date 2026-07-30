@@ -45,9 +45,15 @@ fn read_property_handler_serves_multistate_event_time_stamps() {
         ack.property_identifier,
         PropertyIdentifier::EVENT_TIME_STAMPS
     );
-    let (first, _) =
-        bacnet_encoding::primitives::decode_application_value(&ack.property_value, 0).unwrap();
-    assert_eq!(first, bacnet_types::primitives::PropertyValue::Unsigned(0));
+    let mut offset = 0;
+    for _ in 0..3 {
+        let (value, next) =
+            bacnet_encoding::primitives::decode_application_value(&ack.property_value, offset)
+                .unwrap();
+        assert_eq!(value, bacnet_types::primitives::PropertyValue::Unsigned(0));
+        offset = next;
+    }
+    assert_eq!(offset, ack.property_value.len());
 }
 
 #[test]
@@ -307,16 +313,33 @@ fn rpm_all_includes_multistate_event_history() {
     let ack = bacnet_services::rpm::ReadPropertyMultipleACK::decode(&ack_buf.to_vec()).unwrap();
     let results = &ack.list_of_read_access_results[0].list_of_results;
 
-    for property in [
-        PropertyIdentifier::EVENT_TIME_STAMPS,
-        PropertyIdentifier::EVENT_MESSAGE_TEXTS,
-    ] {
-        let result = results
-            .iter()
-            .find(|result| result.property_identifier == property)
-            .unwrap_or_else(|| panic!("{property:?} missing from RPM ALL"));
-        assert!(result.property_value.is_some(), "{property:?} must succeed");
+    let timestamps = results
+        .iter()
+        .find(|result| result.property_identifier == PropertyIdentifier::EVENT_TIME_STAMPS)
+        .expect("EVENT_TIME_STAMPS missing from RPM ALL");
+    assert!(
+        timestamps.property_value.is_some(),
+        "EVENT_TIME_STAMPS must succeed"
+    );
+
+    let messages = results
+        .iter()
+        .find(|result| result.property_identifier == PropertyIdentifier::EVENT_MESSAGE_TEXTS)
+        .expect("EVENT_MESSAGE_TEXTS missing from RPM ALL")
+        .property_value
+        .as_ref()
+        .expect("EVENT_MESSAGE_TEXTS must succeed");
+    let mut offset = 0;
+    for _ in 0..3 {
+        let (value, next) =
+            bacnet_encoding::primitives::decode_application_value(messages, offset).unwrap();
+        assert_eq!(
+            value,
+            bacnet_types::primitives::PropertyValue::CharacterString(String::new())
+        );
+        offset = next;
     }
+    assert_eq!(offset, messages.len());
 }
 
 #[test]

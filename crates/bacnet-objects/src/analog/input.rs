@@ -32,7 +32,7 @@ pub struct AnalogInputObject {
     min_pres_value: Option<f32>,
     /// Optional maximum present value for fault detection.
     max_pres_value: Option<f32>,
-    event_history: EventHistory,
+    pub(crate) event_history: EventHistory,
 }
 
 impl AnalogInputObject {

@@ -1,5 +1,5 @@
-//! Generic intrinsic-reporting property wiring on Binary Input and Binary
-//! Value (#229).
+//! Intrinsic-reporting property wiring on Binary Input, Output, and Value
+//! objects, including event-history coverage for #235.
 //!
 //! Distribution is exercised at wire level in the server tests. These tests
 //! pin the object-level commissioning surface — before #229, Time_Delay
@@ -11,6 +11,19 @@ use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{ErrorClass, ErrorCode, EventState};
 
 fn assert_protocol_error(result: Result<(), Error>, code: ErrorCode) {
+    match result.unwrap_err() {
+        Error::Protocol {
+            class,
+            code: actual,
+        } => {
+            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+            assert_eq!(actual, code.to_raw() as u32);
+        }
+        other => panic!("expected protocol error, got {other:?}"),
+    }
+}
+
+fn assert_property_read_error(result: Result<PropertyValue, Error>, code: ErrorCode) {
     match result.unwrap_err() {
         Error::Protocol {
             class,
@@ -274,8 +287,19 @@ fn binary_event_history_is_listed_readable_and_read_only() {
         ] {
             assert!(object.property_list().contains(&property), "{label}");
             assert_eq!(object.read_property(property, None).unwrap(), *expected);
-            // #171 owns array-index semantics; storage currently returns the full list.
-            assert_eq!(object.read_property(property, Some(2)).unwrap(), *expected);
+            assert_eq!(
+                object.read_property(property, Some(0)).unwrap(),
+                PropertyValue::Unsigned(3)
+            );
+            let second = match property {
+                p if p == PropertyIdentifier::EVENT_TIME_STAMPS => PropertyValue::Unsigned(0),
+                _ => PropertyValue::CharacterString(String::new()),
+            };
+            assert_eq!(object.read_property(property, Some(2)).unwrap(), second);
+            assert_property_read_error(
+                object.read_property(property, Some(4)),
+                ErrorCode::INVALID_ARRAY_INDEX,
+            );
             assert_write_access_denied(
                 object.write_property(property, None, expected.clone(), None),
                 property,
@@ -284,4 +308,43 @@ fn binary_event_history_is_listed_readable_and_read_only() {
             assert!(!object.is_writable_property(property));
         }
     }
+}
+
+macro_rules! assert_binary_history_reset {
+    ($object:expr, $label:literal) => {{
+        let mut object = $object;
+        object.event_history.time_stamps[0] = BACnetTimeStamp::SequenceNumber(91);
+        object.event_history.message_texts[1] = "seeded".into();
+        object
+            .write_property(
+                PropertyIdentifier::EVENT_DETECTION_ENABLE,
+                None,
+                PropertyValue::Boolean(false),
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            object
+                .read_property(PropertyIdentifier::EVENT_TIME_STAMPS, None)
+                .unwrap(),
+            PropertyValue::List(vec![PropertyValue::Unsigned(0); 3]),
+            "{} timestamp reset",
+            $label
+        );
+        assert_eq!(
+            object
+                .read_property(PropertyIdentifier::EVENT_MESSAGE_TEXTS, None)
+                .unwrap(),
+            PropertyValue::List(vec![PropertyValue::CharacterString(String::new()); 3]),
+            "{} message reset",
+            $label
+        );
+    }};
+}
+
+#[test]
+fn binary_detection_disable_resets_each_event_history() {
+    assert_binary_history_reset!(BinaryInputObject::new(1, "BI-1").unwrap(), "BI");
+    assert_binary_history_reset!(BinaryOutputObject::new(1, "BO-1").unwrap(), "BO");
+    assert_binary_history_reset!(BinaryValueObject::new(1, "BV-1").unwrap(), "BV");
 }

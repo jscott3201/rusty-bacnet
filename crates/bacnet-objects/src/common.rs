@@ -436,8 +436,8 @@ pub(crate) use read_generic_event_properties;
 
 /// Analog-only intrinsic-reporting read properties for `OutOfRangeDetector`.
 ///
-/// The timestamp and message-text arms remain here because the analog objects
-/// expose their storage directly rather than through the detector.
+/// Event timestamps and message texts are served by `EventHistory::read`,
+/// invoked at every analog call site immediately after this macro.
 macro_rules! read_analog_event_properties {
     ($self:expr, $property:expr) => {
         match $property {

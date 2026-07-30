@@ -1,5 +1,5 @@
-//! Generic intrinsic-reporting property wiring on Multi-state Input and
-//! Multi-state Value (#229).
+//! Intrinsic-reporting property wiring on Multi-state Input, Output, and Value
+//! objects, including event-history coverage for #235.
 //!
 //! New multi-state tests live here rather than inline in the object files, which
 //! is where this module tree keeps them — `multistate/tests/` is declared by
@@ -269,8 +269,19 @@ fn multistate_event_history_is_listed_readable_and_read_only() {
         ] {
             assert!(object.property_list().contains(&property), "{label}");
             assert_eq!(object.read_property(property, None).unwrap(), *expected);
-            // #171 owns array-index semantics; storage currently returns the full list.
-            assert_eq!(object.read_property(property, Some(2)).unwrap(), *expected);
+            assert_eq!(
+                object.read_property(property, Some(0)).unwrap(),
+                PropertyValue::Unsigned(3)
+            );
+            let second = match property {
+                p if p == PropertyIdentifier::EVENT_TIME_STAMPS => PropertyValue::Unsigned(0),
+                _ => PropertyValue::CharacterString(String::new()),
+            };
+            assert_eq!(object.read_property(property, Some(2)).unwrap(), second);
+            assert_property_read_error(
+                object.read_property(property, Some(4)),
+                ErrorCode::INVALID_ARRAY_INDEX,
+            );
             assert_write_access_denied(
                 object.write_property(property, None, expected.clone(), None),
                 property,
@@ -279,6 +290,45 @@ fn multistate_event_history_is_listed_readable_and_read_only() {
             assert!(!object.is_writable_property(property));
         }
     }
+}
+
+macro_rules! assert_multistate_history_reset {
+    ($object:expr, $label:literal) => {{
+        let mut object = $object;
+        object.event_history.time_stamps[0] = BACnetTimeStamp::SequenceNumber(91);
+        object.event_history.message_texts[1] = "seeded".into();
+        object
+            .write_property(
+                PropertyIdentifier::EVENT_DETECTION_ENABLE,
+                None,
+                PropertyValue::Boolean(false),
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            object
+                .read_property(PropertyIdentifier::EVENT_TIME_STAMPS, None)
+                .unwrap(),
+            PropertyValue::List(vec![PropertyValue::Unsigned(0); 3]),
+            "{} timestamp reset",
+            $label
+        );
+        assert_eq!(
+            object
+                .read_property(PropertyIdentifier::EVENT_MESSAGE_TEXTS, None)
+                .unwrap(),
+            PropertyValue::List(vec![PropertyValue::CharacterString(String::new()); 3]),
+            "{} message reset",
+            $label
+        );
+    }};
+}
+
+#[test]
+fn multistate_detection_disable_resets_each_event_history() {
+    assert_multistate_history_reset!(MultiStateInputObject::new(1, "MSI-1", 3).unwrap(), "MSI");
+    assert_multistate_history_reset!(MultiStateOutputObject::new(1, "MSO-1", 3).unwrap(), "MSO");
+    assert_multistate_history_reset!(MultiStateValueObject::new(1, "MSV-1", 3).unwrap(), "MSV");
 }
 
 fn assert_property_error(result: Result<(), Error>, code: ErrorCode) {

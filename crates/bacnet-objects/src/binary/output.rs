@@ -28,7 +28,7 @@ pub struct BinaryOutputObject {
     inactive_text: String,
     /// COMMAND_FAILURE event detector.
     event_detector: CommandFailureDetector,
-    event_history: EventHistory,
+    pub(crate) event_history: EventHistory,
     /// Value source tracking (optional per spec — exposed via VALUE_SOURCE property).
     value_source: common::ValueSourceTracking,
 }

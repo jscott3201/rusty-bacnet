@@ -27,7 +27,7 @@ pub struct MultiStateValueObject {
     /// Event_Detection_Enable (Clause 12.20). Clause 13.2.2.1: "If the
     /// Event_Detection_Enable property is FALSE, then this state machine is not evaluated."
     event_detection_enable: bool,
-    event_history: EventHistory,
+    pub(crate) event_history: EventHistory,
     /// Value source tracking (optional per spec — exposed via VALUE_SOURCE property).
     value_source: common::ValueSourceTracking,
 }
