@@ -7,17 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Removed
-
-- **Breaking:** remove the public
-  `bacnet_server::intrinsic_reporting` module and its
-  `IntrinsicReportingEngine`. The duplicate engine had no production callers,
-  did not gate evaluation on `Event_Detection_Enable` as required by Clause
-  13.2.2.1, and after #228 read the plural `Alarm_Values` property that Binary
-  Input and Binary Value no longer serve. Use the gated `BACnetObject` trait
-  path, `evaluate_intrinsic_reporting` and `tick_intrinsic_reporting`, which
-  the production server has always used. Closes #237 and #204.
-
 ### Changed
 
 - The Device object's `Protocol_Services_Supported` is now derived from the
@@ -269,7 +258,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Make the release gate wait on every Tier 1 CI job. `validate` — which every publishing job descends from, directly (`publish-crates`, `build-wheels`, `build-sdist`, `build-cli-binaries`) or transitively (`publish-pypi`, `github-release`) — listed 7 of the 9 Tier 1 jobs in `needs`, omitting `file-size-cap` and `msrv`. Both run on a `v*` tag (`file-size-cap` via its `startsWith(github.ref, 'refs/tags/v')` guard, `msrv` because a tag push is `event_name == 'push'`), so both could fail while the release published anyway. The MSRV case is the damaging one: a tag whose code needs a compiler newer than 1.93 fails `msrv` but still publishes crates declaring `rust-version = "1.93"`, and a published crates.io version can only be yanked, never replaced. `needs` now lists all nine in declaration order so it can be audited against the job list at a glance.
 
-- Scope `Event_Enable` to notification distribution instead of letting it suppress the transition itself (ASHRAE 135-2020 Clauses 12.12, 13.2.2.1.4 and 13.2.5). Clause 13.2.2.1.4 ("Transition Actions") lists four actions a detected transition performs — store the new `Event_State`, store the time in `Event_Time_Stamps`, store the message text in `Event_Message_Texts` if present, and indicate the transition to *both* the alarm-acknowledgment process (Clause 13.2.3) and the event-notification-distribution process (Clause 13.2.5) — and states that they "shall be executed even if the transition does not change the event state." **None of the four is scoped to `Event_Enable`.** The property acts strictly downstream: Clause 12.12 defines it as three flags that "separately enable and disable the distribution of TO_OFFNORMAL, TO_FAULT, and TO_NORMAL notifications," and Clause 13.2.5 places the gate inside the distribution process, where it disables *external* distribution only (whether local objects such as Event Logs are affected is explicitly a local matter). `Acked_Transitions`, in particular, is not a transition action at all: Clause 13.2.3 has the alarm-acknowledgment process maintain it from the unconditionally-indicated transition, gated by `Ack_Required` and never by `Event_Enable`. The two *reachable* reporting families conflated detection with distribution, in different ways and to different effect. A third path, the published-but-uncalled `intrinsic_reporting::IntrinsicReportingEngine`, carries the same defect and is deliberately **not** changed here — it has no caller anywhere in this workspace, its disposition (delete the duplicate, or fix it) is a semver decision, and it is tracked as #204.
+- Scope `Event_Enable` to notification distribution instead of letting it suppress the transition itself (ASHRAE 135-2020 Clauses 12.12, 13.2.2.1.4 and 13.2.5). Clause 13.2.2.1.4 ("Transition Actions") lists four actions a detected transition performs — store the new `Event_State`, store the time in `Event_Time_Stamps`, store the message text in `Event_Message_Texts` if present, and indicate the transition to *both* the alarm-acknowledgment process (Clause 13.2.3) and the event-notification-distribution process (Clause 13.2.5) — and states that they "shall be executed even if the transition does not change the event state." **None of the four is scoped to `Event_Enable`.** The property acts strictly downstream: Clause 12.12 defines it as three flags that "separately enable and disable the distribution of TO_OFFNORMAL, TO_FAULT, and TO_NORMAL notifications," and Clause 13.2.5 places the gate inside the distribution process, where it disables *external* distribution only (whether local objects such as Event Logs are affected is explicitly a local matter). `Acked_Transitions`, in particular, is not a transition action at all: Clause 13.2.3 has the alarm-acknowledgment process maintain it from the unconditionally-indicated transition, gated by `Ack_Required` and never by `Event_Enable`. The two *reachable* reporting families conflated detection with distribution, in different ways and to different effect. A third path, the published-but-uncalled `intrinsic_reporting::IntrinsicReportingEngine`, carried the same defect and was deliberately **not** changed here — its disposition (delete the duplicate, or fix it) was a semver decision tracked as #204, settled later in this same block by deleting the module (see *Removed*).
 
   The Event Enrollment evaluator was the damaging case: it wrapped the entire state-persisting update in `if transition_enabled`, so a suppressed transition never reached `set_event_state_internal`. With `Event_Enable` cleared for TO_OFFNORMAL, an object that went out of range left `Event_State` at NORMAL — and when the value later came back into range the evaluator compared NORMAL against NORMAL, saw no change, and dropped the *enabled* TO_NORMAL notification as well. Clearing one bit silently disabled a different one, and `Event_State` — a readable property, not a notification — reported a condition the device was no longer in.
 
@@ -294,6 +283,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- Remove the public `bacnet_server::intrinsic_reporting` module —
+  `IntrinsicReportingEngine` and `IntrinsicEvent` (**breaking**: public API
+  removal). The engine was a second, uncalled intrinsic-reporting evaluator
+  with different conformance behavior than the production path: it had no
+  production caller (only its own tests exercised it), it evaluated event
+  algorithms without consulting `Event_Detection_Enable` — which Clause
+  13.2.2.1 requires to suppress the state machine entirely when FALSE — and
+  it keyed CHANGE_OF_STATE off the plural `Alarm_Values` identifier, a list
+  that was always empty and that Binary Input/Value no longer serve at all
+  since the singular-`Alarm_Value` correction earlier in this block. Its
+  deleted tests lose no live coverage: every assertion either maps to the
+  detector suites in `bacnet-objects` or exercised algorithms
+  (FLOATING_LIMIT, CHANGE_OF_BITSTRING, CHANGE_OF_VALUE) for which no
+  intrinsic detector exists — those run on the separate Event Enrollment and
+  COV paths, which have their own suites. Downstream consumers should drive
+  objects through the long-standing `BACnetObject` trait path,
+  `evaluate_intrinsic_reporting` and `tick_intrinsic_reporting`, gated on
+  `Event_Detection_Enable` since earlier in this block — the route the
+  production server uses. (#237, #204)
 - Remove the non-standard `Alarm_Values`/`Fault_Values` surface from
   Multi-state Output and the unimplemented `Fault_Values` surface from
   Multi-state Input/Value, including the public

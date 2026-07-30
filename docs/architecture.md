@@ -175,7 +175,8 @@ The `BACnetServer` spawns several background tasks:
 | Dispatch | Receives APDUs, routes to service handlers | Event-driven |
 | COV purge | Removes expired COV subscriptions | 60s |
 | Fault detection | Evaluates analog objects for over/under-range | 10s |
-| Event enrollment | Processes intrinsic reporting algorithms | 10s |
+| Intrinsic reporting | Advances Time_Delay countdowns and fires confirmed transitions via `tick_intrinsic_reporting` | 1s |
+| Event enrollment | Evaluates Event Enrollment objects against their monitored properties | 10s |
 | Trend log | Records data samples for trend log objects | Per-object interval |
 | Schedule tick | Evaluates weekly schedules and exception dates | 60s |
 
