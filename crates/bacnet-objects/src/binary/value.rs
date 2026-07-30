@@ -294,9 +294,9 @@ impl BACnetObject for BinaryValueObject {
         // Mirrors the BinaryValue `write_property` arms. Same set as
         // BinaryOutput (commandable + common + text + generic event
         // properties). The event set became writable with #229: Clause 12.8
-        // requires a device to support (T, T, T) at a minimum, and with no
-        // write path Event_Enable was stuck at (F, F, F), so no
-        // CHANGE_OF_STATE notification could ever be distributed.
+        // requires the supported Event_Enable value set to include (T, T, T),
+        // and these detectors default to (F, F, F) with, previously, no
+        // commissioning path at all.
         common::is_commandable_property_writable(property)
             || common::is_common_writable(property)
             || common::is_generic_event_property_writable(property)

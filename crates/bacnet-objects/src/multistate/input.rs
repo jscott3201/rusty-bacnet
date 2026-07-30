@@ -293,10 +293,9 @@ impl BACnetObject for MultiStateInputObject {
 
     fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
         // Mirrors the MultiStateInput `write_property` arms. The generic event
-        // set became writable with #229: Clause 12.18 requires a device to
-        // support (T, T, T) at a minimum, and with no write path Event_Enable
-        // was stuck at (F, F, F), so no CHANGE_OF_STATE notification could ever
-        // be distributed.
+        // set became writable with #229: Clause 12.18 requires the supported
+        // Event_Enable value set to include (T, T, T), and these detectors
+        // default to (F, F, F) with, previously, no commissioning path at all.
         common::is_multistate_input_writable(property)
             || common::is_generic_event_property_writable(property)
             || property == PropertyIdentifier::RELIABILITY

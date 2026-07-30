@@ -1,5 +1,6 @@
 //! Multi-State Input (type 13), Multi-State Output (type 14), and
-//! Multi-State Value (type 19) objects per ASHRAE 135-2020 Clauses 12.20-12.22.
+//! Multi-State Value (type 19) objects per ASHRAE 135-2020 Clauses 12.18,
+//! 12.19, and 12.20.
 
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;

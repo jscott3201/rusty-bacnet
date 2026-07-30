@@ -259,11 +259,11 @@ impl BACnetObject for BinaryInputObject {
 
     fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
         // Mirrors the BinaryInput `write_property` arms. The generic event set
-        // became writable with #229: Clause 12.6 requires a device to support
-        // (T, T, T) at a minimum, and with no write path Event_Enable was stuck
-        // at (F, F, F), so no CHANGE_OF_STATE notification could ever be
-        // distributed. ACKED_TRANSITIONS stays out — the generic write arm
-        // denies it, since only AcknowledgeAlarm may change it.
+        // became writable with #229: Clause 12.6 requires the supported
+        // Event_Enable value set to include (T, T, T), and these detectors
+        // default to (F, F, F) with, previously, no commissioning path at all.
+        // ACKED_TRANSITIONS stays out — the alarm-acknowledgment process
+        // maintains it, so the generic write arm denies assignment.
         common::is_common_writable(property)
             || common::is_generic_event_property_writable(property)
             || property == PropertyIdentifier::PRESENT_VALUE

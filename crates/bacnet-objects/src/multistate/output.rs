@@ -1,5 +1,4 @@
 use super::*;
-use crate::common::{read_generic_event_properties, write_generic_event_properties};
 use crate::event::CommandFailureDetector;
 
 // ---------------------------------------------------------------------------

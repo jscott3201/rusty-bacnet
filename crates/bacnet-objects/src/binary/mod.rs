@@ -1,5 +1,5 @@
 //! Binary Input (type 3), Binary Output (type 4), and Binary Value (type 5)
-//! objects per ASHRAE 135-2020 Clauses 12.4, 12.5, 12.6.
+//! objects per ASHRAE 135-2020 Clauses 12.6, 12.7, and 12.8.
 
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;

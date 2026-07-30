@@ -116,32 +116,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Multi-state Output has no `Event_Time_Stamps` property to reset, which the same footnote group requires once support is declared; adding an unmaintained one would report values that are always wrong, so it is tracked as #230 alongside #123 and #171 rather than stubbed here.
 - Split `read_event_properties!` / `write_event_properties!` into generic and analog halves — `read_generic_event_properties!`, `read_analog_event_properties!`, `write_generic_event_properties!`, `write_analog_event_properties!` — and wire the generic halves into Binary Output and Multi-state Output. The generic half covers `Event_State` (read-only), `Event_Enable`, `Notify_Type`, `Notification_Class`, `Time_Delay` and `Acked_Transitions`, all of which touch detector fields every detector carries; the analog half keeps `High_Limit`, `Low_Limit`, `Deadband`, `Limit_Enable` and the analog `Event_Time_Stamps` / `Event_Message_Texts` reads. The analog types call both halves and are unchanged.
 
-  Without this the algorithm ran but could not be commissioned. Every detector defaults to `event_enable: 0`, and `Event_Enable` had only a read arm on these types, so all three transition bits were stuck false and no notification could ever reach the wire; `Time_Delay` and `Notify_Type` had no arm at all, so `pTimeDelay` was permanently 0. Clauses 12.7 and 12.19 are explicit that this is not a permitted restriction: "A device is allowed to restrict the set of supported values for this property but shall support (T, T, T) at a minimum." Both objects' `Property_List` and `is_writable_property` now include the group. The same gap remains on Binary Input, Binary Value, Multi-state Input and Multi-state Value and is tracked as #229, which the split unblocks.
+  Without this the algorithm ran but could not be commissioned. Every detector defaults to `event_enable: 0`, and `Event_Enable` had only a read arm on these types, so all three transition bits were stuck false and no notification could ever reach the wire; `Time_Delay` and `Notify_Type` had no arm at all, so `pTimeDelay` was permanently 0. Clauses 12.7 and 12.19 are explicit that this is not a permitted restriction: "A device is allowed to restrict the set of supported values for this property but shall support (T, T, T) at a minimum." Both objects' `Property_List` and `is_writable_property` now include the group. The same gap on Binary Input, Binary Value, Multi-state Input and Multi-state Value was tracked as #229, which the split unblocked; it is closed under *Fixed* below.
 
-  **`Acked_Transitions` is the one member of that group that stays read-only**, on every object type that uses either macro half. It is modified only by the AcknowledgeAlarm service, which ORs the acknowledged bit in where a property write would assign — so a writable arm could both fabricate an acknowledgment and erase one, and GetAlarmSummary and GetEventInformation read the field straight off the object. It also carries the Clause 12.7 / 12.19 requirement that the field equal its initial condition while `Event_Detection_Enable` is FALSE, which an ungated write arm would be the only route to break. An intermediate revision of this change made it writable on the analog types; that was a regression against the denial they already had, and the mirror test `ai_is_writable_property_mirrors_write_property` — whose whole purpose is to keep `is_writable_property` and `write_property` in lock step — now asserts on this property, which it previously did not.
+  **`Acked_Transitions` is the one member of that group that stays read-only**, on every object type that uses either macro half. It is maintained by the alarm-acknowledgment process — via AcknowledgeAlarm or a local means — which ORs the acknowledged bit in where a property write would assign — so a writable arm could both fabricate an acknowledgment and erase one, and GetAlarmSummary and GetEventInformation read the field straight off the object. It also carries the Clause 12.7 / 12.19 requirement that the field equal its initial condition while `Event_Detection_Enable` is FALSE, which an ungated write arm would be the only route to break. An intermediate revision of this change made it writable on the analog types; that was a regression against the denial they already had, and the mirror test `ai_is_writable_property_mirrors_write_property` — whose whole purpose is to keep `is_writable_property` and `write_property` in lock step — now asserts on this property, which it previously did not.
 - Add gated arms to `impl_intrinsic_reporting!`: a five-ident form for feedback-driven detectors and a four-ident form for detectors without feedback, both taking an `Event_Detection_Enable` field. Binary Output and Multi-state Output use the five-ident arm; the other seven intrinsic-reporting types use the four-ident arm. There is deliberately no ungated form: the former three-ident arm was removed later in this same unreleased block, and no feedback-without-gate arm is provided, because either would offer downstream implementors a supported way to wire detection permanently on — the exact defect the gate was added to fix.
 
 ### Fixed
 
 - Wire the generic event-configuration properties into Binary Input, Binary
-  Value, Multi-state Input and Multi-state Value. `Event_Enable` was readable
-  but not writable on all four, and `Time_Delay`/`Notify_Type` were absent
-  entirely — and since every detector defaults its transition bits to
-  (F, F, F), no event notification could ever be distributed from these
-  types, though Clauses 12.6, 12.8, 12.18 and 12.20 require (T, T, T)
-  support at a minimum. All four now run the shared
-  `read_generic_event_properties!` / `write_generic_event_properties!`
-  macros (the #227 split, already carried by Binary Output and Multi-state
-  Output), advertise the event set in `Property_List`, and report
-  writability through the same `is_generic_event_property_writable` truth
-  source PICS reads. `Event_State` stays read-only over the network and
-  `Acked_Transitions` writes are still denied — only AcknowledgeAlarm may
-  change it. Distribution is pinned at the wire: a Multi-state Input
-  commissioned over the network with a single `Event_Enable` bit set emits
-  exactly the notification that bit names, and none otherwise (single-bit
-  fixtures, because an all-bits fixture cannot tell a correct mask from an
-  inverted one — Multi-state Input is the vehicle since the other three
-  types' detectors cannot be fed until #228). (#229)
+  Value, Multi-state Input and Multi-state Value: `Event_Enable`,
+  `Notification_Class`, `Notify_Type` and `Time_Delay` are now writable over
+  the network (the latter two previously had no arm at all), advertised in
+  `Property_List`, and reported through the same
+  `is_generic_event_property_writable` truth source PICS reads — the #227
+  macro split, already carried by Binary Output and Multi-state Output.
+  Clauses 12.6, 12.8, 12.18 and 12.20 require the supported `Event_Enable`
+  value set to include (T, T, T); these detectors default to (F, F, F) and
+  had no commissioning path, so notification distribution was unreachable in
+  practice. `Event_State` stays read-only, and `Acked_Transitions` writes
+  stay denied — the alarm-acknowledgment process maintains it. Wire-level
+  tests pin single-bit `Event_Enable` gating on Multi-state Input in both
+  transition directions; MSI is the vehicle because the other three types'
+  detectors cannot enter OFFNORMAL until #228 lands. (#229)
 - Preserve WritePropertyMultiple atomicity when rolling back an
   `Out_Of_Service` write. The rollback now restores the client-simulated
   `Reliability` and reconstructs the saved evaluated value as well as restoring

@@ -11,7 +11,33 @@
 
 use super::*;
 use bacnet_types::bitstring::EventTransitionBits;
-use bacnet_types::enums::EventState;
+use bacnet_types::enums::{ErrorClass, ErrorCode, EventState};
+
+/// Assert a refused write came back as PROPERTY / WRITE_ACCESS_DENIED, the error
+/// the generic write macro raises deliberately. Checking only `is_err` would also
+/// accept UNKNOWN_PROPERTY, which is what a property falling through to the
+/// catch-all arm returns — a silent loss of the denial, not a denial.
+fn assert_write_access_denied(
+    result: Result<(), Error>,
+    property: PropertyIdentifier,
+    label: &str,
+) {
+    match result.expect_err(&format!("{label}: {property:?} write must be refused")) {
+        Error::Protocol { class, code } => {
+            assert_eq!(
+                class,
+                ErrorClass::PROPERTY.to_raw() as u32,
+                "{label}: {property:?} error class"
+            );
+            assert_eq!(
+                code,
+                ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+                "{label}: {property:?} error code"
+            );
+        }
+        other => panic!("{label}: {property:?} expected WRITE_ACCESS_DENIED, got {other:?}"),
+    }
+}
 
 /// Every property that commissions intrinsic reporting must survive a network
 /// write and read back, and be advertised in both `property_list` and
@@ -80,19 +106,18 @@ fn assert_event_properties_round_trip(object: &mut dyn BACnetObject, label: &str
     // Acked_Transitions is readable but never writable: only AcknowledgeAlarm
     // may change it, and a property write would assign where the service ORs,
     // so it could both fabricate and erase acknowledgments.
-    assert!(
-        object
-            .write_property(
-                PropertyIdentifier::ACKED_TRANSITIONS,
-                None,
-                PropertyValue::BitString {
-                    unused_bits: 5,
-                    data: vec![EventTransitionBits::TO_OFFNORMAL.to_bacnet()],
-                },
-                None,
-            )
-            .is_err(),
-        "{label}: ACKED_TRANSITIONS write must be refused"
+    assert_write_access_denied(
+        object.write_property(
+            PropertyIdentifier::ACKED_TRANSITIONS,
+            None,
+            PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![EventTransitionBits::TO_OFFNORMAL.to_bacnet()],
+            },
+            None,
+        ),
+        PropertyIdentifier::ACKED_TRANSITIONS,
+        label,
     );
     assert!(!object.is_writable_property(PropertyIdentifier::ACKED_TRANSITIONS));
     assert!(object
@@ -101,16 +126,15 @@ fn assert_event_properties_round_trip(object: &mut dyn BACnetObject, label: &str
 
     // Event_State is maintained by the detector, never assignable from the
     // network — a write arm would let a client fake an alarm state.
-    assert!(
-        object
-            .write_property(
-                PropertyIdentifier::EVENT_STATE,
-                None,
-                PropertyValue::Enumerated(EventState::OFFNORMAL.to_raw()),
-                None,
-            )
-            .is_err(),
-        "{label}: EVENT_STATE write must be refused"
+    assert_write_access_denied(
+        object.write_property(
+            PropertyIdentifier::EVENT_STATE,
+            None,
+            PropertyValue::Enumerated(EventState::OFFNORMAL.to_raw()),
+            None,
+        ),
+        PropertyIdentifier::EVENT_STATE,
+        label,
     );
     assert!(!object.is_writable_property(PropertyIdentifier::EVENT_STATE));
 }

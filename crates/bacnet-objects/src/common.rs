@@ -626,7 +626,9 @@ macro_rules! write_generic_event_properties {
                 }
             }
             p if p == bacnet_types::enums::PropertyIdentifier::ACKED_TRANSITIONS => {
-                // Read-only: modified only by the AcknowledgeAlarm service.
+                // Read-only: maintained by the alarm-acknowledgment process
+                // (Clause 13.2.3) — via AcknowledgeAlarm or a local means —
+                // never by property write.
                 //
                 // This denial predates the generic/analog split and must survive it. The
                 // service path (`BACnetObject::acknowledge_alarm`) deliberately ORs the
