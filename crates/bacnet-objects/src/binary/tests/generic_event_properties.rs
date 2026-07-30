@@ -1,17 +1,27 @@
 //! Generic intrinsic-reporting property wiring on Binary Input and Binary
 //! Value (#229).
 //!
-//! Distribution itself is only exercised on Multi-state Input (see
-//! `multistate/tests/generic_event_properties.rs`): the binary types'
-//! `ChangeOfStateDetector` has no public path to an alarm value until #228
-//! lands, so there is no way to drive one out of NORMAL from here. What these
-//! tests pin is the reachability half of the defect — before #229, Time_Delay
+//! Distribution is exercised at wire level in the server tests. These tests
+//! pin the object-level commissioning surface — before #229, Time_Delay
 //! and Notify_Type had no arms at all and Event_Enable was readable but not
 //! writable, so the transition bits were stuck at (F, F, F).
 
 use super::*;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{ErrorClass, ErrorCode, EventState};
+
+fn assert_protocol_error(result: Result<(), Error>, code: ErrorCode) {
+    match result.unwrap_err() {
+        Error::Protocol {
+            class,
+            code: actual,
+        } => {
+            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+            assert_eq!(actual, code.to_raw() as u32);
+        }
+        other => panic!("expected protocol error, got {other:?}"),
+    }
+}
 
 /// Assert a refused write came back as PROPERTY / WRITE_ACCESS_DENIED, the error
 /// the generic write macro raises deliberately. Checking only `is_err` would also
@@ -151,6 +161,70 @@ fn bi_event_properties_round_trip_and_match_pics() {
 fn bv_event_properties_round_trip_and_match_pics() {
     let mut bv = BinaryValueObject::new(1, "BV-1").unwrap();
     assert_event_properties_round_trip(&mut bv, "BV");
+}
+
+#[test]
+fn binary_alarm_value_round_trips_and_matches_pics() {
+    for object in [
+        &mut BinaryInputObject::new(1, "BI-1").unwrap() as &mut dyn BACnetObject,
+        &mut BinaryValueObject::new(1, "BV-1").unwrap() as &mut dyn BACnetObject,
+    ] {
+        assert_eq!(
+            object
+                .read_property(PropertyIdentifier::ALARM_VALUE, None)
+                .unwrap(),
+            PropertyValue::Enumerated(1)
+        );
+        object
+            .write_property(
+                PropertyIdentifier::ALARM_VALUE,
+                None,
+                PropertyValue::Enumerated(0),
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            object
+                .read_property(PropertyIdentifier::ALARM_VALUE, None)
+                .unwrap(),
+            PropertyValue::Enumerated(0)
+        );
+        assert!(object
+            .property_list()
+            .contains(&PropertyIdentifier::ALARM_VALUE));
+        assert!(object.is_writable_property(PropertyIdentifier::ALARM_VALUE));
+        assert!(!object
+            .property_list()
+            .contains(&PropertyIdentifier::ALARM_VALUES));
+        assert_protocol_error(
+            object.write_property(
+                PropertyIdentifier::ALARM_VALUE,
+                None,
+                PropertyValue::Unsigned(1),
+                None,
+            ),
+            ErrorCode::INVALID_DATA_TYPE,
+        );
+        assert_protocol_error(
+            object.write_property(
+                PropertyIdentifier::ALARM_VALUE,
+                None,
+                PropertyValue::Enumerated(2),
+                None,
+            ),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        );
+    }
+}
+
+#[test]
+fn fresh_binary_input_is_default_armed_for_active() {
+    let mut bi = BinaryInputObject::new(1, "BI-1").unwrap();
+    bi.set_present_value(1);
+    let outcome = bi
+        .evaluate_intrinsic_reporting()
+        .expect("ACTIVE is the default Alarm_Value");
+    assert_eq!(outcome.change.to, EventState::OFFNORMAL);
 }
 
 /// The Event_Time_Stamps placeholder must keep answering while the event set

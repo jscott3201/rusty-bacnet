@@ -20,10 +20,6 @@ pub struct MultiStateInputObject {
     reliability: u32,
     reliability_before_out_of_service: Option<u32>,
     state_text: Vec<String>,
-    /// Alarm_Values — state values that trigger OFFNORMAL.
-    alarm_values: Vec<u32>,
-    /// Fault_Values — state values that indicate a fault.
-    fault_values: Vec<u32>,
     /// CHANGE_OF_STATE event detector.
     event_detector: ChangeOfStateDetector,
     /// Event_Detection_Enable (Clause 12.18). Clause 13.2.2.1: "If the
@@ -57,8 +53,6 @@ impl MultiStateInputObject {
             state_text: (1..=number_of_states)
                 .map(|i| format!("State {i}"))
                 .collect(),
-            alarm_values: Vec::new(),
-            fault_values: Vec::new(),
             event_detector: ChangeOfStateDetector::default(),
             event_detection_enable: true,
         })
@@ -66,13 +60,7 @@ impl MultiStateInputObject {
 
     /// Set the alarm values (states that trigger OFFNORMAL).
     pub fn set_alarm_values(&mut self, values: Vec<u32>) {
-        self.alarm_values = values.clone();
         self.event_detector.alarm_values = values;
-    }
-
-    /// Set the fault values (states that indicate a fault).
-    pub fn set_fault_values(&mut self, values: Vec<u32>) {
-        self.fault_values = values;
     }
 
     /// Set the present value (used by application to update input state).
@@ -152,13 +140,8 @@ impl BACnetObject for MultiStateInputObject {
                 _ => Err(common::invalid_array_index_error()),
             },
             p if p == PropertyIdentifier::ALARM_VALUES => Ok(PropertyValue::List(
-                self.alarm_values
-                    .iter()
-                    .map(|v| PropertyValue::Unsigned(*v as u64))
-                    .collect(),
-            )),
-            p if p == PropertyIdentifier::FAULT_VALUES => Ok(PropertyValue::List(
-                self.fault_values
+                self.event_detector
+                    .alarm_values
                     .iter()
                     .map(|v| PropertyValue::Unsigned(*v as u64))
                     .collect(),
@@ -199,6 +182,19 @@ impl BACnetObject for MultiStateInputObject {
                 None => return Err(common::write_access_denied_error()),
                 _ => return Err(common::invalid_array_index_error()),
             }
+        }
+        if property == PropertyIdentifier::ALARM_VALUES {
+            let PropertyValue::List(values) = value else {
+                return Err(common::invalid_data_type_error());
+            };
+            self.event_detector.alarm_values = values
+                .into_iter()
+                .map(|value| match value {
+                    PropertyValue::Unsigned(value) => common::u64_to_u32(value),
+                    _ => Err(common::invalid_data_type_error()),
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            return Ok(());
         }
         if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {
             if let PropertyValue::Boolean(v) = value {
@@ -272,7 +268,6 @@ impl BACnetObject for MultiStateInputObject {
             PropertyIdentifier::RELIABILITY,
             PropertyIdentifier::STATE_TEXT,
             PropertyIdentifier::ALARM_VALUES,
-            PropertyIdentifier::FAULT_VALUES,
         ];
         Cow::Borrowed(PROPS)
     }
@@ -300,6 +295,7 @@ impl BACnetObject for MultiStateInputObject {
             || common::is_generic_event_property_writable(property)
             || property == PropertyIdentifier::RELIABILITY
             || property == PropertyIdentifier::EVENT_DETECTION_ENABLE
+            || property == PropertyIdentifier::ALARM_VALUES
     }
 }
 

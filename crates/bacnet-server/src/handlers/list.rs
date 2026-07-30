@@ -96,3 +96,50 @@ pub fn handle_remove_list_element(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bacnet_objects::multistate::MultiStateInputObject;
+    use bacnet_services::list_manipulation::ListElementRequest;
+    use bacnet_types::enums::ObjectType;
+    use bytes::BytesMut;
+
+    fn request(oid: ObjectIdentifier, element: u8) -> BytesMut {
+        let mut encoded = BytesMut::new();
+        ListElementRequest {
+            object_identifier: oid,
+            property_identifier: PropertyIdentifier::ALARM_VALUES,
+            property_array_index: None,
+            list_of_elements: vec![0x21, element],
+        }
+        .encode(&mut encoded);
+        encoded
+    }
+
+    #[test]
+    fn add_and_remove_list_element_mutate_msi_alarm_values() {
+        let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(MultiStateInputObject::new(1, "MSI-1", 3).unwrap()))
+            .unwrap();
+
+        handle_add_list_element(&mut db, &request(oid, 2)).unwrap();
+        assert_eq!(
+            db.get(&oid)
+                .unwrap()
+                .read_property(PropertyIdentifier::ALARM_VALUES, None)
+                .unwrap(),
+            PropertyValue::List(vec![PropertyValue::Unsigned(2)])
+        );
+
+        handle_remove_list_element(&mut db, &request(oid, 2)).unwrap();
+        assert_eq!(
+            db.get(&oid)
+                .unwrap()
+                .read_property(PropertyIdentifier::ALARM_VALUES, None)
+                .unwrap(),
+            PropertyValue::List(vec![])
+        );
+    }
+}

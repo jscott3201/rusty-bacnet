@@ -49,7 +49,10 @@ impl BinaryInputObject {
             reliability_before_out_of_service: None,
             active_text: "Active".into(),
             inactive_text: "Inactive".into(),
-            event_detector: ChangeOfStateDetector::default(),
+            event_detector: ChangeOfStateDetector {
+                alarm_values: vec![1],
+                ..Default::default()
+            },
             event_detection_enable: true,
         })
     }
@@ -121,12 +124,8 @@ impl BACnetObject for BinaryInputObject {
             p if p == PropertyIdentifier::INACTIVE_TEXT => {
                 Ok(PropertyValue::CharacterString(self.inactive_text.clone()))
             }
-            p if p == PropertyIdentifier::ALARM_VALUES => Ok(PropertyValue::List(
-                self.event_detector
-                    .alarm_values
-                    .iter()
-                    .map(|v| PropertyValue::Enumerated(*v))
-                    .collect(),
+            p if p == PropertyIdentifier::ALARM_VALUE => Ok(PropertyValue::Enumerated(
+                self.event_detector.alarm_values[0],
             )),
             p if p == PropertyIdentifier::EVENT_TIME_STAMPS => Ok(PropertyValue::List(vec![
                 PropertyValue::Unsigned(0),
@@ -167,6 +166,16 @@ impl BACnetObject for BinaryInputObject {
         if property == PropertyIdentifier::INACTIVE_TEXT {
             if let PropertyValue::CharacterString(s) = value {
                 self.inactive_text = s;
+                return Ok(());
+            }
+            return Err(common::invalid_data_type_error());
+        }
+        if property == PropertyIdentifier::ALARM_VALUE {
+            if let PropertyValue::Enumerated(v) = value {
+                if v > 1 {
+                    return Err(common::value_out_of_range_error());
+                }
+                self.event_detector.alarm_values = vec![v];
                 return Ok(());
             }
             return Err(common::invalid_data_type_error());
@@ -238,6 +247,7 @@ impl BACnetObject for BinaryInputObject {
             PropertyIdentifier::RELIABILITY,
             PropertyIdentifier::ACTIVE_TEXT,
             PropertyIdentifier::INACTIVE_TEXT,
+            PropertyIdentifier::ALARM_VALUE,
         ];
         Cow::Borrowed(PROPS)
     }
@@ -269,6 +279,7 @@ impl BACnetObject for BinaryInputObject {
             || property == PropertyIdentifier::PRESENT_VALUE
             || property == PropertyIdentifier::ACTIVE_TEXT
             || property == PropertyIdentifier::INACTIVE_TEXT
+            || property == PropertyIdentifier::ALARM_VALUE
             || property == PropertyIdentifier::EVENT_DETECTION_ENABLE
             || property == PropertyIdentifier::RELIABILITY
     }
