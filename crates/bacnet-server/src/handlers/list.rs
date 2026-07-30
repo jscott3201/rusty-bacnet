@@ -35,12 +35,27 @@ pub fn handle_add_list_element(db: &mut ObjectDatabase, service_data: &[u8]) -> 
         }
     }
 
-    object.write_property(
-        request.property_identifier,
-        request.property_array_index,
-        PropertyValue::List(items),
-        None,
-    )?;
+    object
+        .write_property(
+            request.property_identifier,
+            request.property_array_index,
+            PropertyValue::List(items),
+            None,
+        )
+        .map_err(|err| match err {
+            // Clause 15.1 gives AddListElement its own resource error; the
+            // object arm only knows WriteProperty's.
+            Error::Protocol { class, code }
+                if class == ErrorClass::RESOURCES.to_raw() as u32
+                    && code == ErrorCode::NO_SPACE_TO_WRITE_PROPERTY.to_raw() as u32 =>
+            {
+                Error::Protocol {
+                    class,
+                    code: ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32,
+                }
+            }
+            other => other,
+        })?;
 
     Ok(())
 }
@@ -140,6 +155,38 @@ mod tests {
                 .read_property(PropertyIdentifier::ALARM_VALUES, None)
                 .unwrap(),
             PropertyValue::List(vec![])
+        );
+    }
+
+    #[test]
+    fn add_list_element_over_cap_returns_the_clause_15_1_error() {
+        let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
+        let mut msi = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();
+        // Fill to MAX_ALARM_VALUES (1024) so the appended element trips the cap.
+        msi.set_alarm_values((0..1024).collect());
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(msi)).unwrap();
+
+        let err = handle_add_list_element(&mut db, &request(oid, 7, None)).unwrap_err();
+        match err {
+            Error::Protocol { class, code } => {
+                assert_eq!(class, ErrorClass::RESOURCES.to_raw() as u32);
+                // Clause 15.1 names AddListElement's own error, not
+                // WriteProperty's NO_SPACE_TO_WRITE_PROPERTY.
+                assert_eq!(
+                    code,
+                    ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32
+                );
+            }
+            other => panic!("expected Protocol error, got {other:?}"),
+        }
+        // The list must be unchanged.
+        assert_eq!(
+            db.get(&oid)
+                .unwrap()
+                .read_property(PropertyIdentifier::ALARM_VALUES, None)
+                .unwrap(),
+            PropertyValue::List((0..1024).map(PropertyValue::Unsigned).collect())
         );
     }
 
