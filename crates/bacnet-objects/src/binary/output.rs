@@ -28,6 +28,7 @@ pub struct BinaryOutputObject {
     inactive_text: String,
     /// COMMAND_FAILURE event detector.
     event_detector: CommandFailureDetector,
+    event_history: EventHistory,
     /// Value source tracking (optional per spec — exposed via VALUE_SOURCE property).
     value_source: common::ValueSourceTracking,
 }
@@ -52,6 +53,7 @@ impl BinaryOutputObject {
             active_text: "Active".into(),
             inactive_text: "Inactive".into(),
             event_detector: CommandFailureDetector::default(),
+            event_history: EventHistory::default(),
             value_source: common::ValueSourceTracking::default(),
         })
     }
@@ -110,6 +112,9 @@ impl BACnetObject for BinaryOutputObject {
         if let Some(result) = read_generic_event_properties!(self, property) {
             return result;
         }
+        if let Some(result) = self.event_history.read(property, array_index) {
+            return result;
+        }
         match property {
             p if p == PropertyIdentifier::OBJECT_TYPE => Ok(PropertyValue::Enumerated(
                 ObjectType::BINARY_OUTPUT.to_raw(),
@@ -145,11 +150,6 @@ impl BACnetObject for BinaryOutputObject {
             p if p == PropertyIdentifier::INACTIVE_TEXT => {
                 Ok(PropertyValue::CharacterString(self.inactive_text.clone()))
             }
-            p if p == PropertyIdentifier::EVENT_TIME_STAMPS => Ok(PropertyValue::List(vec![
-                PropertyValue::Unsigned(0),
-                PropertyValue::Unsigned(0),
-                PropertyValue::Unsigned(0),
-            ])),
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -217,6 +217,7 @@ impl BACnetObject for BinaryOutputObject {
                     self.event_detector.acked_transitions = 0b111;
                     self.event_detector.pending = None;
                     self.event_detector.fault_reliability = None;
+                    self.event_history.reset();
                 }
                 return Ok(());
             }
@@ -277,6 +278,8 @@ impl BACnetObject for BinaryOutputObject {
             PropertyIdentifier::NOTIFY_TYPE,
             PropertyIdentifier::NOTIFICATION_CLASS,
             PropertyIdentifier::ACKED_TRANSITIONS,
+            PropertyIdentifier::EVENT_TIME_STAMPS,
+            PropertyIdentifier::EVENT_MESSAGE_TEXTS,
             PropertyIdentifier::OUT_OF_SERVICE,
             PropertyIdentifier::PRIORITY_ARRAY,
             PropertyIdentifier::RELINQUISH_DEFAULT,

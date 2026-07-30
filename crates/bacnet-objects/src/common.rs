@@ -456,47 +456,6 @@ macro_rules! read_analog_event_properties {
                     data: vec![$self.event_detector.limit_enable.to_bits()],
                 }))
             }
-            p if p == bacnet_types::enums::PropertyIdentifier::EVENT_TIME_STAMPS => {
-                Some(Ok(bacnet_types::primitives::PropertyValue::List(vec![
-                    bacnet_types::primitives::PropertyValue::Unsigned(
-                        match $self.event_time_stamps[0] {
-                            bacnet_types::primitives::BACnetTimeStamp::SequenceNumber(n) => {
-                                n as u64
-                            }
-                            _ => 0,
-                        },
-                    ),
-                    bacnet_types::primitives::PropertyValue::Unsigned(
-                        match $self.event_time_stamps[1] {
-                            bacnet_types::primitives::BACnetTimeStamp::SequenceNumber(n) => {
-                                n as u64
-                            }
-                            _ => 0,
-                        },
-                    ),
-                    bacnet_types::primitives::PropertyValue::Unsigned(
-                        match $self.event_time_stamps[2] {
-                            bacnet_types::primitives::BACnetTimeStamp::SequenceNumber(n) => {
-                                n as u64
-                            }
-                            _ => 0,
-                        },
-                    ),
-                ])))
-            }
-            p if p == bacnet_types::enums::PropertyIdentifier::EVENT_MESSAGE_TEXTS => {
-                Some(Ok(bacnet_types::primitives::PropertyValue::List(vec![
-                    bacnet_types::primitives::PropertyValue::CharacterString(
-                        $self.event_message_texts[0].clone(),
-                    ),
-                    bacnet_types::primitives::PropertyValue::CharacterString(
-                        $self.event_message_texts[1].clone(),
-                    ),
-                    bacnet_types::primitives::PropertyValue::CharacterString(
-                        $self.event_message_texts[2].clone(),
-                    ),
-                ])))
-            }
             _ => None,
         }
     };

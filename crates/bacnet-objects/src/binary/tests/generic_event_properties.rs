@@ -242,28 +242,46 @@ fn fresh_binary_input_is_default_armed_for_active() {
     assert_eq!(outcome.change.to, EventState::OFFNORMAL);
 }
 
-/// The Event_Time_Stamps placeholder must keep answering while the event set
-/// around it becomes writable: #235 owns replacing it with real storage, and a
-/// read that starts erroring in the meantime is a regression, not progress.
 #[test]
-fn event_time_stamps_placeholder_still_reads_on_binary_types() {
-    let placeholder = PropertyValue::List(vec![
+fn binary_event_history_is_listed_readable_and_read_only() {
+    let timestamps = PropertyValue::List(vec![
         PropertyValue::Unsigned(0),
         PropertyValue::Unsigned(0),
         PropertyValue::Unsigned(0),
     ]);
-    assert_eq!(
-        BinaryInputObject::new(1, "BI-1")
-            .unwrap()
-            .read_property(PropertyIdentifier::EVENT_TIME_STAMPS, None)
-            .unwrap(),
-        placeholder
-    );
-    assert_eq!(
-        BinaryValueObject::new(1, "BV-1")
-            .unwrap()
-            .read_property(PropertyIdentifier::EVENT_TIME_STAMPS, None)
-            .unwrap(),
-        placeholder
-    );
+    let messages = PropertyValue::List(vec![
+        PropertyValue::CharacterString(String::new()),
+        PropertyValue::CharacterString(String::new()),
+        PropertyValue::CharacterString(String::new()),
+    ]);
+    for (mut object, label) in [
+        (
+            Box::new(BinaryInputObject::new(1, "BI-1").unwrap()) as Box<dyn BACnetObject>,
+            "BI",
+        ),
+        (
+            Box::new(BinaryOutputObject::new(1, "BO-1").unwrap()) as Box<dyn BACnetObject>,
+            "BO",
+        ),
+        (
+            Box::new(BinaryValueObject::new(1, "BV-1").unwrap()) as Box<dyn BACnetObject>,
+            "BV",
+        ),
+    ] {
+        for (property, expected) in [
+            (PropertyIdentifier::EVENT_TIME_STAMPS, &timestamps),
+            (PropertyIdentifier::EVENT_MESSAGE_TEXTS, &messages),
+        ] {
+            assert!(object.property_list().contains(&property), "{label}");
+            assert_eq!(object.read_property(property, None).unwrap(), *expected);
+            // #171 owns array-index semantics; storage currently returns the full list.
+            assert_eq!(object.read_property(property, Some(2)).unwrap(), *expected);
+            assert_write_access_denied(
+                object.write_property(property, None, expected.clone(), None),
+                property,
+                label,
+            );
+            assert!(!object.is_writable_property(property));
+        }
+    }
 }

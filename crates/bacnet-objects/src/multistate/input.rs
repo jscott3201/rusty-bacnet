@@ -24,12 +24,8 @@ pub struct MultiStateInputObject {
     event_detector: ChangeOfStateDetector,
     /// Event_Detection_Enable (Clause 12.18). Clause 13.2.2.1: "If the
     /// Event_Detection_Enable property is FALSE, then this state machine is not evaluated."
-    /// The same clause also requires Event_Time_Stamps and Event_Message_Texts to be
-    /// at their initial conditions while this is FALSE. This type models neither, so
-    /// the reset covers only the state it carries. Both sit in the same conformance
-    /// footnote group as this property, so an intrinsically-reporting object owes all
-    /// three; the omission predates this property and is tracked as #235.
     event_detection_enable: bool,
+    event_history: EventHistory,
 }
 
 impl MultiStateInputObject {
@@ -55,6 +51,7 @@ impl MultiStateInputObject {
                 .collect(),
             event_detector: ChangeOfStateDetector::default(),
             event_detection_enable: true,
+            event_history: EventHistory::default(),
         })
     }
 
@@ -114,6 +111,9 @@ impl BACnetObject for MultiStateInputObject {
             return Ok(PropertyValue::Boolean(self.event_detection_enable));
         }
         if let Some(result) = read_generic_event_properties!(self, property) {
+            return result;
+        }
+        if let Some(result) = self.event_history.read(property, array_index) {
             return result;
         }
         match property {
@@ -196,6 +196,7 @@ impl BACnetObject for MultiStateInputObject {
                     self.event_detector.acked_transitions = 0b111;
                     self.event_detector.pending = None;
                     self.event_detector.fault_reliability = None;
+                    self.event_history.reset();
                 }
                 return Ok(());
             }
@@ -255,6 +256,8 @@ impl BACnetObject for MultiStateInputObject {
             PropertyIdentifier::NOTIFY_TYPE,
             PropertyIdentifier::NOTIFICATION_CLASS,
             PropertyIdentifier::ACKED_TRANSITIONS,
+            PropertyIdentifier::EVENT_TIME_STAMPS,
+            PropertyIdentifier::EVENT_MESSAGE_TEXTS,
             PropertyIdentifier::OUT_OF_SERVICE,
             PropertyIdentifier::NUMBER_OF_STATES,
             PropertyIdentifier::RELIABILITY,

@@ -33,8 +33,7 @@ pub struct AnalogValueObject {
     reliability_before_out_of_service: Option<u32>,
     min_pres_value: Option<f32>,
     max_pres_value: Option<f32>,
-    event_time_stamps: [BACnetTimeStamp; 3],
-    event_message_texts: [String; 3],
+    event_history: EventHistory,
     /// Value source tracking.
     value_source: common::ValueSourceTracking,
 }
@@ -60,12 +59,7 @@ impl AnalogValueObject {
             reliability_before_out_of_service: None,
             min_pres_value: None,
             max_pres_value: None,
-            event_time_stamps: [
-                BACnetTimeStamp::SequenceNumber(0),
-                BACnetTimeStamp::SequenceNumber(0),
-                BACnetTimeStamp::SequenceNumber(0),
-            ],
-            event_message_texts: [String::new(), String::new(), String::new()],
+            event_history: EventHistory::default(),
             value_source: common::ValueSourceTracking::default(),
         })
     }
@@ -128,6 +122,9 @@ impl BACnetObject for AnalogValueObject {
             return result;
         }
         if let Some(result) = read_analog_event_properties!(self, property) {
+            return result;
+        }
+        if let Some(result) = self.event_history.read(property, array_index) {
             return result;
         }
         if let Some(result) = read_generic_event_properties!(self, property) {
@@ -251,12 +248,7 @@ impl BACnetObject for AnalogValueObject {
                     self.event_detector.acked_transitions = 0b111;
                     self.event_detector.pending = None;
                     self.event_detector.fault_reliability = None;
-                    self.event_time_stamps = [
-                        BACnetTimeStamp::SequenceNumber(0),
-                        BACnetTimeStamp::SequenceNumber(0),
-                        BACnetTimeStamp::SequenceNumber(0),
-                    ];
-                    self.event_message_texts = [String::new(), String::new(), String::new()];
+                    self.event_history.reset();
                 }
                 return Ok(());
             }
@@ -373,12 +365,12 @@ mod detection_enable_reset_tests {
             remaining: 2,
         });
         av.event_detector.fault_reliability = Some(1);
-        av.event_time_stamps = [
+        av.event_history.time_stamps = [
             BACnetTimeStamp::SequenceNumber(1),
             BACnetTimeStamp::SequenceNumber(2),
             BACnetTimeStamp::SequenceNumber(3),
         ];
-        av.event_message_texts = ["offnormal".into(), "fault".into(), "normal".into()];
+        av.event_history.message_texts = ["offnormal".into(), "fault".into(), "normal".into()];
 
         av.write_property(
             PropertyIdentifier::EVENT_DETECTION_ENABLE,
@@ -401,7 +393,7 @@ mod detection_enable_reset_tests {
         assert!(av.event_detector.pending.is_none());
         assert!(av.event_detector.fault_reliability.is_none());
         assert_eq!(
-            av.event_time_stamps,
+            av.event_history.time_stamps,
             [
                 BACnetTimeStamp::SequenceNumber(0),
                 BACnetTimeStamp::SequenceNumber(0),
@@ -409,7 +401,7 @@ mod detection_enable_reset_tests {
             ]
         );
         assert_eq!(
-            av.event_message_texts,
+            av.event_history.message_texts,
             [String::new(), String::new(), String::new()]
         );
     }

@@ -8,7 +8,7 @@ use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue,
 use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
-use crate::event::OutOfRangeDetector;
+use crate::event::{history::EventHistory, OutOfRangeDetector};
 use crate::traits::BACnetObject;
 
 mod input;

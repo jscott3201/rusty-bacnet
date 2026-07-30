@@ -10,6 +10,15 @@ fn make_db_with_ai() -> ObjectDatabase {
     db
 }
 
+fn make_db_with_msi() -> ObjectDatabase {
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(
+        bacnet_objects::multistate::MultiStateInputObject::new(1, "MSI-1", 3).unwrap(),
+    ))
+    .unwrap();
+    db
+}
+
 fn make_db_with_device_and_ai() -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
     let device = bacnet_objects::device::DeviceObject::new(bacnet_objects::device::DeviceConfig {

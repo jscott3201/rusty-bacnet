@@ -27,6 +27,7 @@ pub struct MultiStateOutputObject {
     state_text: Vec<String>,
     /// COMMAND_FAILURE event detector.
     event_detector: CommandFailureDetector,
+    event_history: EventHistory,
     /// Value source tracking (optional per spec — exposed via VALUE_SOURCE property).
     value_source: common::ValueSourceTracking,
 }
@@ -57,6 +58,7 @@ impl MultiStateOutputObject {
                 .map(|i| format!("State {i}"))
                 .collect(),
             event_detector: CommandFailureDetector::default(),
+            event_history: EventHistory::default(),
             value_source: common::ValueSourceTracking::default(),
         })
     }
@@ -113,6 +115,9 @@ impl BACnetObject for MultiStateOutputObject {
             return result;
         }
         if let Some(result) = read_generic_event_properties!(self, property) {
+            return result;
+        }
+        if let Some(result) = self.event_history.read(property, array_index) {
             return result;
         }
         match property {
@@ -244,6 +249,7 @@ impl BACnetObject for MultiStateOutputObject {
                     self.event_detector.acked_transitions = 0b111;
                     self.event_detector.pending = None;
                     self.event_detector.fault_reliability = None;
+                    self.event_history.reset();
                 }
                 return Ok(());
             }
@@ -304,6 +310,8 @@ impl BACnetObject for MultiStateOutputObject {
             PropertyIdentifier::NOTIFY_TYPE,
             PropertyIdentifier::NOTIFICATION_CLASS,
             PropertyIdentifier::ACKED_TRANSITIONS,
+            PropertyIdentifier::EVENT_TIME_STAMPS,
+            PropertyIdentifier::EVENT_MESSAGE_TEXTS,
             PropertyIdentifier::OUT_OF_SERVICE,
             PropertyIdentifier::NUMBER_OF_STATES,
             PropertyIdentifier::PRIORITY_ARRAY,

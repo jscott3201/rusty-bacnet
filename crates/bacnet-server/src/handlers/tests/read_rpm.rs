@@ -27,6 +27,30 @@ fn read_property_handler_success() {
 }
 
 #[test]
+fn read_property_handler_serves_multistate_event_time_stamps() {
+    let db = make_db_with_msi();
+    let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
+    let request = ReadPropertyRequest {
+        object_identifier: oid,
+        property_identifier: PropertyIdentifier::EVENT_TIME_STAMPS,
+        property_array_index: None,
+    };
+    let mut buf = BytesMut::new();
+    request.encode(&mut buf);
+
+    let mut ack_buf = BytesMut::new();
+    handle_read_property(&db, &buf, &mut ack_buf).unwrap();
+    let ack = ReadPropertyACK::decode(&ack_buf.to_vec()).unwrap();
+    assert_eq!(
+        ack.property_identifier,
+        PropertyIdentifier::EVENT_TIME_STAMPS
+    );
+    let (first, _) =
+        bacnet_encoding::primitives::decode_application_value(&ack.property_value, 0).unwrap();
+    assert_eq!(first, bacnet_types::primitives::PropertyValue::Unsigned(0));
+}
+
+#[test]
 fn read_property_unknown_object() {
     let db = make_db_with_ai();
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 99).unwrap();
@@ -258,6 +282,41 @@ fn rpm_handler_all_properties_expanded() {
         .find(|e| e.property_identifier == PropertyIdentifier::PRESENT_VALUE)
         .expect("PRESENT_VALUE should be in ALL results");
     assert!(pv_elem.property_value.is_some());
+}
+
+#[test]
+fn rpm_all_includes_multistate_event_history() {
+    let db = make_db_with_msi();
+    let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
+    use bacnet_services::common::PropertyReference;
+    use bacnet_services::rpm::ReadAccessSpecification;
+
+    let request = bacnet_services::rpm::ReadPropertyMultipleRequest {
+        list_of_read_access_specs: vec![ReadAccessSpecification {
+            object_identifier: oid,
+            list_of_property_references: vec![PropertyReference {
+                property_identifier: PropertyIdentifier::ALL,
+                property_array_index: None,
+            }],
+        }],
+    };
+    let mut buf = BytesMut::new();
+    request.encode(&mut buf);
+    let mut ack_buf = BytesMut::new();
+    handle_read_property_multiple(&db, &buf, &mut ack_buf).unwrap();
+    let ack = bacnet_services::rpm::ReadPropertyMultipleACK::decode(&ack_buf.to_vec()).unwrap();
+    let results = &ack.list_of_read_access_results[0].list_of_results;
+
+    for property in [
+        PropertyIdentifier::EVENT_TIME_STAMPS,
+        PropertyIdentifier::EVENT_MESSAGE_TEXTS,
+    ] {
+        let result = results
+            .iter()
+            .find(|result| result.property_identifier == property)
+            .unwrap_or_else(|| panic!("{property:?} missing from RPM ALL"));
+        assert!(result.property_value.is_some(), "{property:?} must succeed");
+    }
 }
 
 #[test]

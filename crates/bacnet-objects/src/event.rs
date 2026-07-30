@@ -8,6 +8,8 @@ use core::ops::ControlFlow;
 
 use bacnet_types::enums::{EventState, EventType, Reliability};
 
+pub(crate) mod history;
+
 /// A detected change in event state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventStateChange {

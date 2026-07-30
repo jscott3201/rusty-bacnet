@@ -237,6 +237,50 @@ fn msv_event_properties_round_trip_and_match_pics() {
     assert_event_properties_round_trip(&mut msv, "MSV");
 }
 
+#[test]
+fn multistate_event_history_is_listed_readable_and_read_only() {
+    let timestamps = PropertyValue::List(vec![
+        PropertyValue::Unsigned(0),
+        PropertyValue::Unsigned(0),
+        PropertyValue::Unsigned(0),
+    ]);
+    let messages = PropertyValue::List(vec![
+        PropertyValue::CharacterString(String::new()),
+        PropertyValue::CharacterString(String::new()),
+        PropertyValue::CharacterString(String::new()),
+    ]);
+    for (mut object, label) in [
+        (
+            Box::new(MultiStateInputObject::new(1, "MSI-1", 3).unwrap()) as Box<dyn BACnetObject>,
+            "MSI",
+        ),
+        (
+            Box::new(MultiStateOutputObject::new(1, "MSO-1", 3).unwrap()) as Box<dyn BACnetObject>,
+            "MSO",
+        ),
+        (
+            Box::new(MultiStateValueObject::new(1, "MSV-1", 3).unwrap()) as Box<dyn BACnetObject>,
+            "MSV",
+        ),
+    ] {
+        for (property, expected) in [
+            (PropertyIdentifier::EVENT_TIME_STAMPS, &timestamps),
+            (PropertyIdentifier::EVENT_MESSAGE_TEXTS, &messages),
+        ] {
+            assert!(object.property_list().contains(&property), "{label}");
+            assert_eq!(object.read_property(property, None).unwrap(), *expected);
+            // #171 owns array-index semantics; storage currently returns the full list.
+            assert_eq!(object.read_property(property, Some(2)).unwrap(), *expected);
+            assert_write_access_denied(
+                object.write_property(property, None, expected.clone(), None),
+                property,
+                label,
+            );
+            assert!(!object.is_writable_property(property));
+        }
+    }
+}
+
 fn assert_property_error(result: Result<(), Error>, code: ErrorCode) {
     // Thin adapter keeps write assertions on the shared protocol-error helper.
     assert_property_read_error(result.map(|_| PropertyValue::Null), code);

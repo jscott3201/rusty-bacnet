@@ -9,7 +9,7 @@ use std::borrow::Cow;
 use crate::common::{
     self, read_common_properties, read_generic_event_properties, write_generic_event_properties,
 };
-use crate::event::{ChangeOfStateDetector, CommandFailureDetector};
+use crate::event::{history::EventHistory, ChangeOfStateDetector, CommandFailureDetector};
 use crate::traits::BACnetObject;
 
 mod input;

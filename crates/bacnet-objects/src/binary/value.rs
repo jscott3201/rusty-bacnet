@@ -26,12 +26,8 @@ pub struct BinaryValueObject {
     event_detector: ChangeOfStateDetector,
     /// Event_Detection_Enable (Clause 12.8). Clause 13.2.2.1: "If the
     /// Event_Detection_Enable property is FALSE, then this state machine is not evaluated."
-    /// The same clause also requires Event_Time_Stamps and Event_Message_Texts to be
-    /// at their initial conditions while this is FALSE. This type models neither, so
-    /// the reset covers only the state it carries. Both sit in the same conformance
-    /// footnote group as this property, so an intrinsically-reporting object owes all
-    /// three; the omission predates this property and is tracked as #235.
     event_detection_enable: bool,
+    event_history: EventHistory,
     /// Value source tracking (optional per spec — exposed via VALUE_SOURCE property).
     value_source: common::ValueSourceTracking,
 }
@@ -58,6 +54,7 @@ impl BinaryValueObject {
                 ..Default::default()
             },
             event_detection_enable: true,
+            event_history: EventHistory::default(),
             value_source: common::ValueSourceTracking::default(),
         })
     }
@@ -115,6 +112,9 @@ impl BACnetObject for BinaryValueObject {
         if let Some(result) = read_generic_event_properties!(self, property) {
             return result;
         }
+        if let Some(result) = self.event_history.read(property, array_index) {
+            return result;
+        }
         match property {
             p if p == PropertyIdentifier::OBJECT_TYPE => {
                 Ok(PropertyValue::Enumerated(ObjectType::BINARY_VALUE.to_raw()))
@@ -157,11 +157,6 @@ impl BACnetObject for BinaryValueObject {
                         .unwrap_or(1),
                 ))
             }
-            p if p == PropertyIdentifier::EVENT_TIME_STAMPS => Ok(PropertyValue::List(vec![
-                PropertyValue::Unsigned(0),
-                PropertyValue::Unsigned(0),
-                PropertyValue::Unsigned(0),
-            ])),
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -229,6 +224,7 @@ impl BACnetObject for BinaryValueObject {
                     self.event_detector.acked_transitions = 0b111;
                     self.event_detector.pending = None;
                     self.event_detector.fault_reliability = None;
+                    self.event_history.reset();
                 }
                 return Ok(());
             }
@@ -288,6 +284,8 @@ impl BACnetObject for BinaryValueObject {
             PropertyIdentifier::NOTIFY_TYPE,
             PropertyIdentifier::NOTIFICATION_CLASS,
             PropertyIdentifier::ACKED_TRANSITIONS,
+            PropertyIdentifier::EVENT_TIME_STAMPS,
+            PropertyIdentifier::EVENT_MESSAGE_TEXTS,
             PropertyIdentifier::OUT_OF_SERVICE,
             PropertyIdentifier::PRIORITY_ARRAY,
             PropertyIdentifier::RELINQUISH_DEFAULT,

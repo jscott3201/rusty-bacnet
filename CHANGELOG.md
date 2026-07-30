@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Analog event timestamp and message storage is consolidated into a shared
+  `EventHistory` implementation with no behavior change.
+
 - The Device object's `Protocol_Services_Supported` is now derived from the
   set of services the server dispatch actually executes, instead of a stale
   hardcoded constant whose comment mislabeled three bits. The property gains
@@ -41,6 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   asymmetric spec vectors (`TO_OFFNORMAL → 0x80`, `monday → 0x80`). (#203)
 
 ### Added
+
+- Model `Event_Time_Stamps` and optional `Event_Message_Texts` on Binary
+  Input/Output/Value and Multi-state Input/Output/Value objects. Both appear in
+  `Property_List` and return to their initial values when
+  `Event_Detection_Enable` is disabled. (#235, #230, #258)
 
 - Name the missing tail values of two enumerations, completing them against
   their 135-2020 productions: `BackupAndRestoreState` gains `BACKUP_FAILURE`
