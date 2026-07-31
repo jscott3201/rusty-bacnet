@@ -74,6 +74,8 @@ rustls-native-certs = "0.8"
 futures-util = "0.3"
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
 smallvec = "1"
+serde = { version = "1", default-features = false }
+serde_json = "1"
 criterion = { version = "0.8", features = ["async_tokio"] }
 sysinfo = "0.39"
 libc = "0.2"

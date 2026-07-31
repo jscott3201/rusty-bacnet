@@ -17,6 +17,8 @@ std = []
 bitflags = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
+serde = { workspace = true }
+
 
 [lints]
 workspace = true
