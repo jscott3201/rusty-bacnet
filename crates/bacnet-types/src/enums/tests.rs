@@ -160,3 +160,98 @@ fn backup_and_restore_state_failure_values() {
         "RESTORE_FAILURE"
     );
 }
+
+// ---------------------------------------------------------------------------
+// FromStr
+// ---------------------------------------------------------------------------
+
+#[test]
+fn from_str_accepts_every_case_style() {
+    for input in [
+        "analoginput",
+        "ANALOGINPUT",
+        "AnalogInput",
+        "analogInput",
+        "analog_input",
+        "ANALOG_INPUT",
+        "analog-input",
+        "ANALOG-INPUT",
+    ] {
+        assert_eq!(
+            input.parse::<ObjectType>(),
+            Ok(ObjectType::ANALOG_INPUT),
+            "input: {input}"
+        );
+    }
+}
+
+/// Every named constant of every enum must survive a `Display` -> `parse`
+/// round trip; the two directions share `ALL_NAMED`, so this also proves the
+/// name table itself is unambiguous (no two constants normalize alike).
+#[test]
+fn from_str_round_trips_display_for_all_named() {
+    macro_rules! assert_round_trips {
+        ($($Ty:ident),+ $(,)?) => {
+            $(
+                for &(name, value) in $Ty::ALL_NAMED {
+                    assert_eq!(name.parse::<$Ty>(), Ok(value), "{}::{name}", stringify!($Ty));
+                    assert_eq!(
+                        format!("{value}").parse::<$Ty>(),
+                        Ok(value),
+                        "{}::{name} via Display",
+                        stringify!($Ty),
+                    );
+                }
+            )+
+        };
+    }
+
+    assert_round_trips!(
+        ObjectType,
+        PropertyIdentifier,
+        EngineeringUnits,
+        EventState,
+        EventType,
+        Reliability,
+        BackupAndRestoreState,
+        LifeSafetyState,
+    );
+}
+
+#[test]
+fn from_str_rejects_unknown_and_numeric_names() {
+    let err = "not-an-object".parse::<ObjectType>().unwrap_err();
+    assert_eq!(err.type_name(), "ObjectType");
+    assert_eq!(format!("{err}"), "not a known ObjectType name");
+
+    // Raw wire values are `from_raw`'s job, including vendor-proprietary ones.
+    assert!("8".parse::<ObjectType>().is_err());
+    assert!("128".parse::<ObjectType>().is_err());
+
+    // Separators are ignored, but they cannot bridge distinct names.
+    assert!("analog input".parse::<ObjectType>().is_err());
+    assert!("analoginputs".parse::<ObjectType>().is_err());
+    assert!("".parse::<ObjectType>().is_err());
+}
+
+/// `AUDIT_LOG` is 61 and `AUDIT_REPORTER` is 62 per Clause 21.6; parsing by
+/// name must agree with the constants (see
+/// [`object_type_audit_codes_match_clause_21_6`]).
+#[test]
+fn from_str_audit_names_are_not_swapped() {
+    assert_eq!("audit-log".parse::<ObjectType>(), Ok(ObjectType::AUDIT_LOG));
+    assert_eq!(
+        "audit-log".parse::<ObjectType>().map(ObjectType::to_raw),
+        Ok(61)
+    );
+    assert_eq!(
+        "audit-reporter".parse::<ObjectType>(),
+        Ok(ObjectType::AUDIT_REPORTER)
+    );
+    assert_eq!(
+        "audit-reporter"
+            .parse::<ObjectType>()
+            .map(ObjectType::to_raw),
+        Ok(62)
+    );
+}

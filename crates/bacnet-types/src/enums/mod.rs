@@ -68,7 +68,70 @@ macro_rules! bacnet_enum {
                 }
             }
         }
+
+        impl core::str::FromStr for $Name {
+            type Err = $crate::enums::ParseEnumError;
+
+            /// Parse a symbolic constant name, ignoring `_`/`-` separators and
+            /// ASCII case, so every common spelling of a name is accepted
+            /// (`ANALOG_INPUT`, `analog-input`, `AnalogInput`, `analogInput`, ...).
+            ///
+            /// Raw numeric values are *not* accepted; use
+            /// [`from_raw`](Self::from_raw) for those.
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                Self::ALL_NAMED
+                    .iter()
+                    .find(|(name, _)| $crate::enums::names_eq(name, s))
+                    .map(|&(_, value)| value)
+                    .ok_or($crate::enums::ParseEnumError {
+                        type_name: stringify!($Name),
+                    })
+            }
+        }
     };
+}
+
+// ---------------------------------------------------------------------------
+// Name parsing
+// ---------------------------------------------------------------------------
+
+/// Returned by the `FromStr` impls of the BACnet enum newtypes when a string
+/// does not name any known constant of that type.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ParseEnumError {
+    type_name: &'static str,
+}
+
+impl ParseEnumError {
+    /// The name of the enum type that failed to parse, e.g. `"ObjectType"`.
+    #[inline]
+    pub const fn type_name(&self) -> &'static str {
+        self.type_name
+    }
+}
+
+impl core::fmt::Display for ParseEnumError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "not a known {} name", self.type_name)
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for ParseEnumError {}
+
+/// Compare two enum names for equality, ignoring `_`/`-` separators and ASCII
+/// case. Dropping separators and folding case collapses every supported spelling
+/// (lowercase, UPPERCASE, PascalCase, camelCase, snake_case,
+/// SCREAMING_SNAKE_CASE, kebab-case, SCREAMING-KEBAB-CASE) onto the same form,
+/// and comparing lazily keeps this allocation-free.
+fn names_eq(a: &str, b: &str) -> bool {
+    fn significant(s: &str) -> impl Iterator<Item = char> + '_ {
+        s.chars()
+            .filter(|c| *c != '_' && *c != '-')
+            .map(|c| c.to_ascii_lowercase())
+    }
+
+    significant(a).eq(significant(b))
 }
 
 mod object_type;

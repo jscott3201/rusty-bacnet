@@ -95,87 +95,7 @@ impl<'de> Deserialize<'de> for ObjectType {
         D: serde::Deserializer<'de>,
     {
         let string: String = Deserialize::deserialize(deserializer)?;
-
-        // Stripping separators and lowercasing collapses all supported
-        // case styles (lowercase, UPPERCASE, PascalCase, camelCase,
-        // snake_case, SCREAMING_SNAKE_CASE, kebab-case, SCREAMING-KEBAB-CASE)
-        // onto the same normalized form.
-        let normalized: String = string
-            .chars()
-            .filter(|c| *c != '_' && *c != '-')
-            .flat_map(|c| c.to_lowercase())
-            .collect();
-
-        let object_type = match normalized.as_str() {
-            "analoginput" => Self(0),
-            "analogoutput" => Self(1),
-            "analogvalue" => Self(2),
-            "binaryinput" => Self(3),
-            "binaryoutput" => Self(4),
-            "binaryvalue" => Self(5),
-            "calendar" => Self(6),
-            "command" => Self(7),
-            "device" => Self(8),
-            "eventenrollment" => Self(9),
-            "file" => Self(10),
-            "group" => Self(11),
-            "loop" => Self(12),
-            "multistateinput" => Self(13),
-            "multistateoutput" => Self(14),
-            "notificationclass" => Self(15),
-            "program" => Self(16),
-            "schedule" => Self(17),
-            "averaging" => Self(18),
-            "multistatevalue" => Self(19),
-            "trendlog" => Self(20),
-            "lifesafetypoint" => Self(21),
-            "lifesafetyzone" => Self(22),
-            "accumulator" => Self(23),
-            "pulseconverter" => Self(24),
-            "eventlog" => Self(25),
-            "globalgroup" => Self(26),
-            "trendlogmultiple" => Self(27),
-            "loadcontrol" => Self(28),
-            "structuredview" => Self(29),
-            "accessdoor" => Self(30),
-            "timer" => Self(31),
-            "accesscredential" => Self(32),
-            "accesspoint" => Self(33),
-            "accessrights" => Self(34),
-            "accessuser" => Self(35),
-            "accesszone" => Self(36),
-            "credentialdatainput" => Self(37),
-            "networksecurity" => Self(38),
-            "bitstringvalue" => Self(39),
-            "characterstringvalue" => Self(40),
-            "datepatternvalue" => Self(41),
-            "datevalue" => Self(42),
-            "datetimepatternvalue" => Self(43),
-            "datetimevalue" => Self(44),
-            "integervalue" => Self(45),
-            "largeanalogvalue" => Self(46),
-            "octetstringvalue" => Self(47),
-            "positiveintegervalue" => Self(48),
-            "timepatternvalue" => Self(49),
-            "timevalue" => Self(50),
-            "notificationforwarder" => Self(51),
-            "alertenrollment" => Self(52),
-            "channel" => Self(53),
-            "lightingoutput" => Self(54),
-            "binarylightingoutput" => Self(55),
-            "networkport" => Self(56),
-            "elevatorgroup" => Self(57),
-            "escalator" => Self(58),
-            "lift" => Self(59),
-            "staging" => Self(60),
-            "auditreporter" => Self(61),
-            "auditlog" => Self(62),
-            "color" => Self(63),
-            "colortemperature" => Self(64),
-            _ => return Err(serde::de::Error::custom("invalid ObjectType.")),
-        };
-
-        Ok(object_type)
+        string.parse().map_err(serde::de::Error::custom)
     }
 }
 
@@ -207,6 +127,18 @@ mod serde_tests {
     fn covers_the_full_standard_range() {
         assert_eq!(parse("device"), ObjectType::DEVICE);
         assert_eq!(parse("color-temperature"), ObjectType::COLOR_TEMPERATURE);
+    }
+
+    /// The hand-written name table this impl replaced still mapped
+    /// `audit-reporter` to 61 and `audit-log` to 62, contradicting the
+    /// constants (and Clause 21.6). Deriving names from `ALL_NAMED` keeps the
+    /// two from drifting apart again.
+    #[test]
+    fn audit_names_agree_with_the_constants() {
+        assert_eq!(parse("audit-log"), ObjectType::AUDIT_LOG);
+        assert_eq!(parse("audit-log").to_raw(), 61);
+        assert_eq!(parse("audit-reporter"), ObjectType::AUDIT_REPORTER);
+        assert_eq!(parse("audit-reporter").to_raw(), 62);
     }
 
     #[test]
