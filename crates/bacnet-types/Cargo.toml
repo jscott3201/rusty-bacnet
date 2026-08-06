@@ -12,12 +12,18 @@ categories = ["network-programming", "no-std"]
 [features]
 default = ["std"]
 std = []
+# `Deserialize` for `ObjectType` and `PropertyIdentifier`. Needs `alloc`
+# for the owned `String` the impls deserialize into.
+serde = ["dep:serde", "serde/alloc"]
 
 [dependencies]
 bitflags = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
-serde = { workspace = true }
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
 
 
 [lints]

@@ -5,6 +5,10 @@
 //!
 //! It has zero runtime dependencies beyond `bitflags` and `thiserror`,
 //! and supports `no_std` environments via the `std` feature flag.
+//!
+//! The optional `serde` feature adds `Deserialize` for [`enums::ObjectType`]
+//! and [`enums::PropertyIdentifier`], accepting any common case style
+//! (`analog-input`, `AnalogInput`, `ANALOG_INPUT`, ...).
 
 #![cfg_attr(not(feature = "std"), no_std)]
 

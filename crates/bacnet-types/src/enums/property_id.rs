@@ -2,6 +2,10 @@
 // PropertyIdentifier (Clause 21)
 // ===========================================================================
 
+#[cfg(all(feature = "serde", not(feature = "std")))]
+use alloc::string::String;
+
+#[cfg(feature = "serde")]
 use serde::Deserialize;
 
 bacnet_enum! {
@@ -537,6 +541,7 @@ bacnet_enum! {
     const DEFAULT_COLOR = 510;
 }
 
+#[cfg(feature = "serde")]
 impl<'de> Deserialize<'de> for PropertyIdentifier {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -1035,5 +1040,53 @@ impl<'de> Deserialize<'de> for PropertyIdentifier {
         };
 
         Ok(property_identifier)
+    }
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod serde_tests {
+    use super::PropertyIdentifier;
+
+    fn parse(input: &str) -> PropertyIdentifier {
+        serde_json::from_str(&format!("\"{input}\"")).expect("deserializes")
+    }
+
+    #[test]
+    fn accepts_every_supported_case_style() {
+        for input in [
+            "presentvalue",
+            "PRESENTVALUE",
+            "PresentValue",
+            "presentValue",
+            "present_value",
+            "PRESENT_VALUE",
+            "present-value",
+            "PRESENT-VALUE",
+        ] {
+            assert_eq!(
+                parse(input),
+                PropertyIdentifier::PRESENT_VALUE,
+                "input: {input}"
+            );
+        }
+    }
+
+    #[test]
+    fn covers_the_full_standard_range() {
+        assert_eq!(
+            parse("acked_transitions"),
+            PropertyIdentifier::ACKED_TRANSITIONS
+        );
+        assert_eq!(parse("default-color"), PropertyIdentifier::DEFAULT_COLOR);
+    }
+
+    #[test]
+    fn rejects_unknown_names() {
+        assert!(serde_json::from_str::<PropertyIdentifier>("\"not-a-property\"").is_err());
+    }
+
+    #[test]
+    fn rejects_non_string_input() {
+        assert!(serde_json::from_str::<PropertyIdentifier>("85").is_err());
     }
 }

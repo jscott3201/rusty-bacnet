@@ -395,6 +395,7 @@ version = "0.10.1"
 dependencies = [
  "bitflags 2.13.1",
  "serde",
+ "serde_json",
  "smallvec",
  "thiserror",
 ]

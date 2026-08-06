@@ -136,7 +136,7 @@ jobs:
           # below, gated to dev→main PRs / push-main / tags so the
           # feature→dev loop isn't held up by cross-OS runners.
           - os: ubuntu-latest
-            features: "--features bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-transport/ethernet"
+            features: "--features bacnet-types/serde,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-transport/ethernet"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -164,9 +164,9 @@ jobs:
           # push to main, and v* tags. Linux is already covered by `test`
           # above in the lean tier.
           - os: macos-latest
-            features: "--features bacnet-transport/ipv6,bacnet-transport/sc-tls"
+            features: "--features bacnet-types/serde,bacnet-transport/ipv6,bacnet-transport/sc-tls"
           - os: windows-latest
-            features: "--features bacnet-transport/ipv6,bacnet-transport/sc-tls"
+            features: "--features bacnet-types/serde,bacnet-transport/ipv6,bacnet-transport/sc-tls"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master

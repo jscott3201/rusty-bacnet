@@ -2,6 +2,10 @@
 // ObjectType (Clause 12)
 // ===========================================================================
 
+#[cfg(all(feature = "serde", not(feature = "std")))]
+use alloc::string::String;
+
+#[cfg(feature = "serde")]
 use serde::Deserialize;
 
 bacnet_enum! {
@@ -84,6 +88,7 @@ bacnet_enum! {
     const COLOR_TEMPERATURE = 64;
 }
 
+#[cfg(feature = "serde")]
 impl<'de> Deserialize<'de> for ObjectType {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -171,5 +176,46 @@ impl<'de> Deserialize<'de> for ObjectType {
         };
 
         Ok(object_type)
+    }
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod serde_tests {
+    use super::ObjectType;
+
+    fn parse(input: &str) -> ObjectType {
+        serde_json::from_str(&format!("\"{input}\"")).expect("deserializes")
+    }
+
+    #[test]
+    fn accepts_every_supported_case_style() {
+        for input in [
+            "analoginput",
+            "ANALOGINPUT",
+            "AnalogInput",
+            "analogInput",
+            "analog_input",
+            "ANALOG_INPUT",
+            "analog-input",
+            "ANALOG-INPUT",
+        ] {
+            assert_eq!(parse(input), ObjectType::ANALOG_INPUT, "input: {input}");
+        }
+    }
+
+    #[test]
+    fn covers_the_full_standard_range() {
+        assert_eq!(parse("device"), ObjectType::DEVICE);
+        assert_eq!(parse("color-temperature"), ObjectType::COLOR_TEMPERATURE);
+    }
+
+    #[test]
+    fn rejects_unknown_names() {
+        assert!(serde_json::from_str::<ObjectType>("\"not-an-object\"").is_err());
+    }
+
+    #[test]
+    fn rejects_non_string_input() {
+        assert!(serde_json::from_str::<ObjectType>("8").is_err());
     }
 }
