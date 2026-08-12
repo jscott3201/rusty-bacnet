@@ -218,7 +218,6 @@ fn destination_truncated_members_rejected() {
 #[test]
 fn destination_wrong_member_type_rejected() {
     // from-time replaced with an Unsigned — the Time check must fire.
-    let base = device_destination();
     let mut buf = BytesMut::new();
     primitives::encode_app_bit_string(&mut buf, 1, &[0xFE]);
     primitives::encode_app_unsigned(&mut buf, 3600);
