@@ -1,5 +1,23 @@
 use super::*;
 
+/// Timestamp fields for COVNotificationMultiple: the request-level
+/// `timestamp [3] BACnetTimeStamp` and each value's `timeOfChange [3]` both
+/// carry a sequence-number form. Clause 21's `BACnetTimeStamp` production
+/// constrains `sequence-number` to `Unsigned (0..65535)` and the shared
+/// codec rejects anything larger on encode — wrap seconds-of-epoch into the
+/// valid window ONCE so both fields agree (previously the request timestamp
+/// was wrapped but `timeOfChange` encoded raw seconds, reintroducing the
+/// non-conformant >65535 value the wrap exists to prevent).
+pub(crate) fn cov_multiple_timestamps(total_secs: u64) -> (BACnetTimeStamp, Vec<u8>) {
+    let seconds = total_secs % 65_536;
+    let mut timestamp_choice = BytesMut::new();
+    encode_ctx_unsigned(&mut timestamp_choice, 1, seconds);
+    (
+        BACnetTimeStamp::SequenceNumber(seconds),
+        timestamp_choice.to_vec(),
+    )
+}
+
 impl<T: TransportPort + 'static> BACnetServer<T> {
     pub(super) async fn send_cov_apdu(
         network: &NetworkLayer<T>,
@@ -285,14 +303,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default();
         let total_secs = now.as_secs();
-        // Clause 21 constrains BACnetTimeStamp's sequence-number to
-        // Unsigned (0..65535) and the shared codec enforces it on encode.
-        // Wrap seconds-of-epoch into the valid window rather than letting a
-        // conformant-but-larger raw value fail encoding (previously this
-        // emitted a >65535 sequence number — non-conformant bytes).
-        let timestamp = BACnetTimeStamp::SequenceNumber(total_secs % 65_536);
+        let (timestamp, timestamp_choice_bytes) = cov_multiple_timestamps(total_secs);
         let mut timestamp_choice = BytesMut::new();
-        encode_ctx_unsigned(&mut timestamp_choice, 1, total_secs);
+        timestamp_choice.extend_from_slice(&timestamp_choice_bytes);
 
         let (device_oid, items, last_notified) = {
             let db = db.read().await;
