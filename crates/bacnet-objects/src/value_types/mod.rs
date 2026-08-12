@@ -26,9 +26,9 @@ use crate::traits::BACnetObject;
 /// `rd_validate` performs any post-extraction validation for a
 /// Relinquish_Default value (#270); `rd_access` selects whether the
 /// `RELINQUISH_DEFAULT` network write arm exists (`writable`) or remains
-/// denied (`readonly` — used for the datetime-paired types, whose wire form
-/// needs multi-element decode that is not available yet: follow-up #182).
-/// The local `set_relinquish_default` setter is generated either way.
+/// denied (`readonly` — no current users; kept for a type whose wire form
+/// needs something the service decode cannot deliver). The local
+/// `set_relinquish_default` setter is generated either way.
 macro_rules! define_value_object_commandable {
     (
         name: $struct_name:ident,
@@ -87,8 +87,9 @@ macro_rules! define_value_object_commandable {
             /// Present_Value is resolved anew from the priority array so an
             /// empty array falls back to the new default immediately. The
             /// standard permits Relinquish_Default writability on commandable
-            /// types; for the datetime-paired types the value stays local-only
-            /// until the wire decode generalizes (#182).
+            /// types; the service decode's multi-element support (#182) makes
+            /// the datetime-paired wire form (a date+time pair) deliverable,
+            /// so every commandable value type takes network writes now.
             pub fn set_relinquish_default(&mut self, value: $val_type) -> Result<(), Error> {
                 ($rd_validate)(&value)?;
                 self.relinquish_default = value;
@@ -233,7 +234,7 @@ macro_rules! define_value_object_commandable {
         }
     };
     // `rd_access: readonly`: no arm — the default WRITE_ACCESS_DENIED at the
-    // end of write_property stands (datetime-paired types, follow-up #182).
+    // end of write_property stands (no current users).
     (@rd_write $self:ident, $property:ident, $value:ident, $prop_to_pv:expr, readonly) => {};
 
     // PICS writability mirrors the arms: common + commandable for every
@@ -658,7 +659,7 @@ define_value_object_commandable! {
     pa_wrap: datetime_copy_to_pv,
     rd_wrap: (|v: &(Date, Time)| datetime_to_pv(v)),
     rd_validate: (|_: &(Date, Time)| -> Result<(), Error> { Ok(()) }),
-    rd_access: readonly,
+    rd_access: writable,
     copy_type: copy,
 }
 
@@ -710,7 +711,7 @@ define_value_object_commandable! {
     pa_wrap: datetime_copy_to_pv,
     rd_wrap: (|v: &(Date, Time)| datetime_to_pv(v)),
     rd_validate: (|_: &(Date, Time)| -> Result<(), Error> { Ok(()) }),
-    rd_access: readonly,
+    rd_access: writable,
     copy_type: copy,
 }
 

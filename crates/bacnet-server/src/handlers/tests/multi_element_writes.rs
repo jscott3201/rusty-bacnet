@@ -266,6 +266,147 @@ fn empty_property_value_is_refused() {
 
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 
+// ---------------------------------------------------------------------------
+// DateTime-paired value properties (#182): a BACnetDateTime writes as
+// application-tagged Date + Time, which the decode loop delivers to the
+// value-object arms as `List([Date, Time])` (Clause 12.x value types,
+// tranche-L1 exclusion lifted).
+// ---------------------------------------------------------------------------
+
+use bacnet_objects::value_types::{DateTimePatternValueObject, DateTimeValueObject};
+use bacnet_types::primitives::{Date, Time};
+
+const TEST_DATE: Date = Date {
+    year: 0x7E, // 2026
+    month: 8,
+    day: 12,
+    day_of_week: 3,
+};
+const TEST_TIME: Time = Time {
+    hour: 9,
+    minute: 41,
+    second: 30,
+    hundredths: 0,
+};
+
+fn datetime_pv() -> PropertyValue {
+    PropertyValue::List(vec![
+        PropertyValue::Date(TEST_DATE),
+        PropertyValue::Time(TEST_TIME),
+    ])
+}
+
+#[test]
+fn datetime_value_present_value_and_priority_array_over_the_wire() {
+    let mut db = ObjectDatabase::new();
+    let obj = DateTimeValueObject::new(1, "DTV-1").unwrap();
+    let oid = obj.object_identifier();
+    db.add(Box::new(obj)).unwrap();
+
+    // Present_Value write: the two application-tagged members.
+    write_raw(
+        &mut db,
+        oid,
+        PropertyIdentifier::PRESENT_VALUE,
+        None,
+        encode_value(datetime_pv()),
+    )
+    .unwrap();
+    assert_eq!(
+        read_prop(&db, oid, PropertyIdentifier::PRESENT_VALUE),
+        datetime_pv()
+    );
+
+    // A priority-array ENTRY write of a different datetime: indexed write to
+    // slot 2 wins over the earlier priority-16 command.
+    let later = PropertyValue::List(vec![
+        PropertyValue::Date(TEST_DATE),
+        PropertyValue::Time(Time {
+            hour: 12,
+            ..TEST_TIME
+        }),
+    ]);
+    write_raw(
+        &mut db,
+        oid,
+        PropertyIdentifier::PRIORITY_ARRAY,
+        Some(2),
+        encode_value(later.clone()),
+    )
+    .unwrap();
+    assert_eq!(
+        read_prop(&db, oid, PropertyIdentifier::PRESENT_VALUE),
+        later
+    );
+}
+
+#[test]
+fn datetime_relinquish_default_over_the_wire_recaptures_present_value() {
+    let mut db = ObjectDatabase::new();
+    let obj = DateTimeValueObject::new(1, "DTV-1").unwrap();
+    let oid = obj.object_identifier();
+    db.add(Box::new(obj)).unwrap();
+
+    write_raw(
+        &mut db,
+        oid,
+        PropertyIdentifier::RELINQUISH_DEFAULT,
+        None,
+        encode_value(datetime_pv()),
+    )
+    .unwrap();
+    assert_eq!(
+        read_prop(&db, oid, PropertyIdentifier::RELINQUISH_DEFAULT),
+        datetime_pv()
+    );
+    assert_eq!(
+        read_prop(&db, oid, PropertyIdentifier::PRESENT_VALUE),
+        datetime_pv(),
+        "with an empty priority array, PV resolves to the written default"
+    );
+
+    // The pattern-typed sibling (DATETIMEPATTERN_VALUE) carries the same arm.
+    let pat = DateTimePatternValueObject::new(2, "DTPV-2").unwrap();
+    let pat_oid = pat.object_identifier();
+    db.add(Box::new(pat)).unwrap();
+    write_raw(
+        &mut db,
+        pat_oid,
+        PropertyIdentifier::RELINQUISH_DEFAULT,
+        None,
+        encode_value(datetime_pv()),
+    )
+    .unwrap();
+    assert_eq!(
+        read_prop(&db, pat_oid, PropertyIdentifier::RELINQUISH_DEFAULT),
+        datetime_pv()
+    );
+}
+
+#[test]
+fn datetime_write_with_mispaired_members_is_refused_and_preserves() {
+    let mut db = ObjectDatabase::new();
+    let obj = DateTimeValueObject::new(1, "DTV-1").unwrap();
+    let oid = obj.object_identifier();
+    db.add(Box::new(obj)).unwrap();
+    let baseline = read_prop(&db, oid, PropertyIdentifier::PRESENT_VALUE);
+
+    // Two Dates, no Time: decodes fine but fails the arm's pair shape.
+    let bytes = encode_value(PropertyValue::List(vec![
+        PropertyValue::Date(TEST_DATE),
+        PropertyValue::Date(TEST_DATE),
+    ]));
+    assert_refused(
+        &mut db,
+        oid,
+        PropertyIdentifier::PRESENT_VALUE,
+        bytes,
+        ErrorCode::INVALID_DATA_TYPE,
+        baseline,
+        "date+date is not a BACnetDateTime",
+    );
+}
+
 fn framed_reference(r: &BACnetObjectPropertyReference) -> Vec<u8> {
     let mut buf = BytesMut::new();
     bacnet_encoding::constructed::encode_object_property_reference(&mut buf, r);
@@ -527,19 +668,20 @@ fn wpm_reference_write_commits_in_order_and_rolls_back_on_failure() {
     wpm(
         &mut db,
         vec![
-        BACnetPropertyValue {
-            property_identifier: PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE,
-            property_array_index: None,
-            value: framed_reference(&BACnetObjectPropertyReference::new(target, present_value)),
-            priority: None,
-        },
-        BACnetPropertyValue {
-            property_identifier: PropertyIdentifier::SETPOINT,
-            property_array_index: None,
-            value: encode_value(PropertyValue::Real(21.5)),
-            priority: None,
-        },
-    ])
+            BACnetPropertyValue {
+                property_identifier: PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE,
+                property_array_index: None,
+                value: framed_reference(&BACnetObjectPropertyReference::new(target, present_value)),
+                priority: None,
+            },
+            BACnetPropertyValue {
+                property_identifier: PropertyIdentifier::SETPOINT,
+                property_array_index: None,
+                value: encode_value(PropertyValue::Real(21.5)),
+                priority: None,
+            },
+        ],
+    )
     .unwrap();
     assert_eq!(
         read_prop(&db, oid, PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE),

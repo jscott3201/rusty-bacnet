@@ -447,7 +447,7 @@ mod tests {
     }
 
     #[test]
-    fn whole_list_write_property_pins_decoder_gap() {
+    fn whole_list_write_property_decodes_all_elements() {
         let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(MultiStateInputObject::new(1, "MSI-1", 3).unwrap()))
@@ -463,8 +463,28 @@ mod tests {
         let mut encoded = BytesMut::new();
         request.encode(&mut encoded);
 
-        // #182: WriteProperty currently decodes exactly one primitive, so this
-        // is INVALID_DATA_TYPE. Flip this expectation when LIST decoding lands.
+        // #182: WriteProperty loop-decodes the whole payload, so the
+        // whole-list write lands with per-element validation in the arm.
+        handle_write_property(&mut db, &encoded).unwrap();
+        assert_eq!(
+            db.get(&oid)
+                .unwrap()
+                .read_property(PropertyIdentifier::ALARM_VALUES, None)
+                .unwrap(),
+            PropertyValue::List(vec![PropertyValue::Unsigned(2), PropertyValue::Unsigned(3)])
+        );
+
+        // Per-element validation still applies: one non-Unsigned member
+        // refuses the whole write and leaves the list untouched.
+        let request = WritePropertyRequest {
+            object_identifier: oid,
+            property_identifier: PropertyIdentifier::ALARM_VALUES,
+            property_array_index: None,
+            property_value: vec![0x21, 4, 0x11], // Unsigned 4, Boolean true
+            priority: None,
+        };
+        let mut encoded = BytesMut::new();
+        request.encode(&mut encoded);
         match handle_write_property(&mut db, &encoded).unwrap_err() {
             Error::Protocol { class, code } => {
                 assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
@@ -472,5 +492,13 @@ mod tests {
             }
             other => panic!("expected INVALID_DATA_TYPE, got {other:?}"),
         }
+        assert_eq!(
+            db.get(&oid)
+                .unwrap()
+                .read_property(PropertyIdentifier::ALARM_VALUES, None)
+                .unwrap(),
+            PropertyValue::List(vec![PropertyValue::Unsigned(2), PropertyValue::Unsigned(3)]),
+            "refused write leaves the list unchanged"
+        );
     }
 }
