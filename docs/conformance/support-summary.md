@@ -4,7 +4,7 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-08-12
-- Implementation evidence SHA reviewed: `6c3d6a8aca95f7c54399fbb48b65dc74039ae537`
+- Implementation evidence SHA reviewed: `db070989ce6af0a1866d2f76b7923ab62bde338a`
 - Scope: Clause 12.1.5 / 15.5.1.3 / 15.9.1.3 array-index gating tranche: a per-object `BACnetObject::is_array_property` classification replaces ReadProperty's identifier-static whitelist, all four object-access services (ReadProperty, ReadPropertyMultiple, WriteProperty, WritePropertyMultiple) reject an array index on a BACnetLIST property with PROPERTY / PROPERTY_IS_NOT_AN_ARRAY, indexed Notification Class Recipient_List access moved from the INVALID_DATA_TYPE stopgap to the same classification, and omitted-index Priority_Array writes surface PROPERTY / WRITE_ACCESS_DENIED instead of an unmappable Error::Encoding. Conventions unchanged: `repo_sha` names the tip of the PR branch `codex/array-index-gates` at the time of writing (the last code commit; this docs-refresh commit lands after it), matching how `265b2673` was recorded for the previous tranche.
 - Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Clauses 12.1.5.1/12.1.5.2, the Clause 15.5.1.3/15.9.1.3 error tables, and the Clause 12 property tables cited in the new row and its notes. No external addenda/errata check was performed for this tranche; per-row scope is recorded in each row's notes.
 
