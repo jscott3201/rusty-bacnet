@@ -12,7 +12,7 @@ bacnet_enum! {
     const FORCED_OPEN = 3;
     const TAMPER = 4;
     const DOOR_FAULT = 5;
-    const LOCK_FAULT = 6;
+    const LOCK_DOWN = 6;
     const FREE_ACCESS = 7;
     const EGRESS_OPEN = 8;
 }

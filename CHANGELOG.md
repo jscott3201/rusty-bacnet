@@ -912,6 +912,17 @@ Deep-dive review of encoding, types, services, objects, client, server, and netw
   `File_Access_Method` by value and `FileAccessMethod::from_raw`
   consumers must switch to the corrected assignments.
 
+- **Breaking (API):** `DoorAlarmState::LOCK_FAULT` is renamed
+  `DoorAlarmState::LOCK_DOWN`: the Clause 21 `BACnetDoorAlarmState`
+  production names value 6 `lock-down` and has no `lock-fault` member
+  (#274, Tranche Q audit). The wire value (6) is unchanged; what changes is
+  the constant name, the `Display`/`FromStr` text
+  (`LOCK_FAULT`/`lock-fault` → `LOCK_DOWN`/`lock-down`), and every decode or
+  display of Access Door `Door_Alarm_State` value 6. The neighbouring
+  `LockStatus::LOCK_FAULT` is a member of a different, correctly named
+  production and is untouched — code that conflated the two must now name
+  each correctly.
+
 
 ## [0.7.0]
 
