@@ -51,7 +51,35 @@ fn setpoint_reference_golden_vector() {
         buf.as_ref(),
         &[0x0E, 0x0C, 0x00, 0x00, 0x00, 0x0A, 0x19, 0x55, 0x0F]
     );
-    assert_eq!(decode_setpoint_reference(&buf).unwrap(), ai_ref(10, 85));
+    assert_eq!(
+        decode_setpoint_reference(&buf).unwrap(),
+        Some(ai_ref(10, 85))
+    );
+}
+
+#[test]
+fn setpoint_reference_golden_vector_indexed() {
+    // The optional property-array-index rides inside the frame as member [2].
+    let indexed = BACnetObjectPropertyReference::new_indexed(
+        ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 10).unwrap(),
+        85,
+        7,
+    );
+    let mut buf = BytesMut::new();
+    encode_setpoint_reference(&mut buf, &indexed);
+    assert_eq!(
+        buf.as_ref(),
+        &[0x0E, 0x0C, 0x00, 0x80, 0x00, 0x0A, 0x19, 0x55, 0x29, 0x07, 0x0F]
+    );
+    assert_eq!(decode_setpoint_reference(&buf).unwrap(), Some(indexed));
+}
+
+#[test]
+fn setpoint_reference_empty_frame_is_the_absent_alternative() {
+    // 0x0E 0x0F: opening/closing tag 0 with no members — the production's
+    // OPTIONAL member is absent, which Clause 12.17 defines as "no
+    // reference" (fixed setpoint), NOT an encoding error.
+    assert_eq!(decode_setpoint_reference(&[0x0E, 0x0F]).unwrap(), None);
 }
 
 #[test]

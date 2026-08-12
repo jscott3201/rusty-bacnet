@@ -81,7 +81,7 @@ pub(crate) fn decode_reference_write(
 ) -> Result<Option<BACnetObjectPropertyReference>, Error> {
     match value {
         PropertyValue::Null => Ok(None),
-        PropertyValue::ApplicationData(bytes) => decode_framed(bytes, frame).map(Some),
+        PropertyValue::ApplicationData(bytes) => decode_framed(bytes, frame),
         PropertyValue::List(items) => match items.first() {
             Some(PropertyValue::ObjectIdentifier(_)) => decode_legacy_list(items).map(Some),
             Some(PropertyValue::ApplicationData(_)) => {
@@ -99,7 +99,7 @@ pub(crate) fn decode_reference_write(
                         bytes.extend_from_slice(part);
                     }
                 }
-                decode_framed(&bytes, frame).map(Some)
+                decode_framed(&bytes, frame)
             }
             _ => Err(common::invalid_data_type_error()),
         },
@@ -107,14 +107,25 @@ pub(crate) fn decode_reference_write(
     }
 }
 
-/// The legacy local form: `[ObjectIdentifier, Enumerated( property)]` with an
+/// The legacy local form: `[ObjectIdentifier, property-id]` with an
 /// optional third `Unsigned` array index — exactly two or three members.
+///
+/// Member typing: the property member travels as `Enumerated` in the
+/// Loop/Pulse Converter flat form and as `Unsigned` in the Averaging flat
+/// form; both are accepted on write for cross-object compatibility (this
+/// mirrors Clause 21 where `BACnetPropertyIdentifier` is itself an
+/// ENUMERATED production, but the two flat conventions predate the framed
+/// codec and each object's read keeps its historical emission). Values past
+/// u32 (a >4-octet wire member, or an overflowing `Unsigned`) are refused.
 fn decode_legacy_list(items: &[PropertyValue]) -> Result<BACnetObjectPropertyReference, Error> {
     let Some(PropertyValue::ObjectIdentifier(object_identifier)) = items.first() else {
         return Err(common::invalid_data_type_error());
     };
     let property_identifier = match items.get(1) {
         Some(PropertyValue::Enumerated(property)) => *property,
+        Some(PropertyValue::Unsigned(property)) => {
+            u32::try_from(*property).map_err(|_| common::invalid_data_type_error())?
+        }
         _ => return Err(common::invalid_data_type_error()),
     };
     let property_array_index = match items.get(2) {
@@ -140,17 +151,24 @@ fn decode_legacy_list(items: &[PropertyValue]) -> Result<BACnetObjectPropertyRef
 /// well as the bare member sequence: the two are unambiguous (a bare
 /// reference always opens with *primitive* context tag [0], the frame with
 /// *opening* tag [0]), and the bare form is what a peer handling the
-/// reference generically — and this stack's own test tooling — may send.
+/// reference generically — and this stack's own test tooling — may send. The
+/// [0] frame with NO inner members is the production's absent-alternative
+/// (the member is OPTIONAL; Clause 12.17 Setpoint_Reference: "The absence of
+/// a reference indicates that the setpoint for this control loop is fixed
+/// and is contained in the Setpoint property") and clears, exactly like a
+/// `Null` write.
 fn decode_framed(
     bytes: &[u8],
     frame: ReferenceFrame,
-) -> Result<BACnetObjectPropertyReference, Error> {
+) -> Result<Option<BACnetObjectPropertyReference>, Error> {
     let bare = bacnet_encoding::constructed::decode_object_property_reference(bytes);
     match (bare, frame) {
-        (Ok(reference), _) => Ok(reference),
+        (Ok(reference), _) => Ok(Some(reference)),
         (Err(_), ReferenceFrame::Setpoint) => {
-            bacnet_encoding::constructed::decode_setpoint_reference(bytes)
-                .map_err(|_| common::invalid_data_encoding_error())
+            match bacnet_encoding::constructed::decode_setpoint_reference(bytes) {
+                Ok(reference) => Ok(reference),
+                Err(_) => Err(common::invalid_data_encoding_error()),
+            }
         }
         (Err(_), ReferenceFrame::Bare) => Err(common::invalid_data_encoding_error()),
     }

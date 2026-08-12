@@ -503,60 +503,24 @@ mod tests {
     }
 
     #[test]
-    fn loop_set_controlled_variable_reference_read_back() {
-        let mut lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+    fn loop_set_references_read_back() {
         let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 5).unwrap();
         let prop_raw = PropertyIdentifier::PRESENT_VALUE.to_raw();
+        let expect = PropertyValue::List(vec![
+            PropertyValue::ObjectIdentifier(oid),
+            PropertyValue::Enumerated(prop_raw),
+        ]);
+        let mut lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
         lo.set_controlled_variable_reference(BACnetObjectPropertyReference::new(oid, prop_raw));
-
-        let val = lo
-            .read_property(PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE, None)
-            .unwrap();
-        assert_eq!(
-            val,
-            PropertyValue::List(vec![
-                PropertyValue::ObjectIdentifier(oid),
-                PropertyValue::Enumerated(prop_raw),
-            ])
-        );
-    }
-
-    #[test]
-    fn loop_set_manipulated_variable_reference_read_back() {
-        let mut lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
-        let oid = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 3).unwrap();
-        let prop_raw = PropertyIdentifier::PRESENT_VALUE.to_raw();
         lo.set_manipulated_variable_reference(BACnetObjectPropertyReference::new(oid, prop_raw));
-
-        let val = lo
-            .read_property(PropertyIdentifier::MANIPULATED_VARIABLE_REFERENCE, None)
-            .unwrap();
-        assert_eq!(
-            val,
-            PropertyValue::List(vec![
-                PropertyValue::ObjectIdentifier(oid),
-                PropertyValue::Enumerated(prop_raw),
-            ])
-        );
-    }
-
-    #[test]
-    fn loop_set_setpoint_reference_read_back() {
-        let mut lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
-        let oid = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 10).unwrap();
-        let prop_raw = PropertyIdentifier::PRESENT_VALUE.to_raw();
         lo.set_setpoint_reference(BACnetObjectPropertyReference::new(oid, prop_raw));
-
-        let val = lo
-            .read_property(PropertyIdentifier::SETPOINT_REFERENCE, None)
-            .unwrap();
-        assert_eq!(
-            val,
-            PropertyValue::List(vec![
-                PropertyValue::ObjectIdentifier(oid),
-                PropertyValue::Enumerated(prop_raw),
-            ])
-        );
+        for property in [
+            PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE,
+            PropertyIdentifier::MANIPULATED_VARIABLE_REFERENCE,
+            PropertyIdentifier::SETPOINT_REFERENCE,
+        ] {
+            assert_eq!(lo.read_property(property, None).unwrap(), expect);
+        }
     }
 
     #[test]
@@ -739,6 +703,45 @@ mod tests {
                 PropertyValue::ObjectIdentifier(oid),
                 PropertyValue::Enumerated(prop_raw),
             ])
+        );
+    }
+
+    #[test]
+    fn loop_write_empty_setpoint_frame_clears_reference() {
+        let mut lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+        let oid = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 10).unwrap();
+        let r = BACnetObjectPropertyReference::new(oid, PropertyIdentifier::PRESENT_VALUE.to_raw());
+        let mut buf = bytes::BytesMut::new();
+        bacnet_encoding::constructed::encode_setpoint_reference(&mut buf, &r);
+        lo.write_property(
+            PropertyIdentifier::SETPOINT_REFERENCE,
+            None,
+            PropertyValue::ApplicationData(buf.to_vec()),
+            None,
+        )
+        .unwrap();
+        assert_ne!(
+            lo.read_property(PropertyIdentifier::SETPOINT_REFERENCE, None)
+                .unwrap(),
+            PropertyValue::Null
+        );
+
+        // 0x0E 0x0F: BACnetSetpointReference with its OPTIONAL member absent —
+        // Clause 12.17 defines the absence as "fixed setpoint", so a
+        // conformant peer clearing the reference this way must be accepted,
+        // exactly like a Null write (pinned over the wire in the server's
+        // `reference_writes` tests).
+        lo.write_property(
+            PropertyIdentifier::SETPOINT_REFERENCE,
+            None,
+            PropertyValue::ApplicationData(vec![0x0E, 0x0F]),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            lo.read_property(PropertyIdentifier::SETPOINT_REFERENCE, None)
+                .unwrap(),
+            PropertyValue::Null
         );
     }
 

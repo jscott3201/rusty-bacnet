@@ -97,8 +97,15 @@ fn legacy_list_shape_violations_are_invalid_data_type() {
     for (items, context) in [
         (vec![oid.clone()], "object id alone"),
         (
-            vec![oid.clone(), PropertyValue::Unsigned(85)],
-            "property id not Enumerated",
+            vec![oid.clone(), PropertyValue::Real(85.0)],
+            "property id neither Unsigned nor Enumerated",
+        ),
+        (
+            vec![
+                oid.clone(),
+                PropertyValue::Unsigned(u64::from(u32::MAX) + 1),
+            ],
+            "property id Unsigned beyond u32 (>4-octet member)",
         ),
         (
             vec![
@@ -107,6 +114,14 @@ fn legacy_list_shape_violations_are_invalid_data_type() {
                 PropertyValue::Real(1.0),
             ],
             "index not Unsigned",
+        ),
+        (
+            vec![
+                oid.clone(),
+                PropertyValue::Enumerated(85),
+                PropertyValue::Unsigned(u64::from(u32::MAX) + 1),
+            ],
+            "index beyond u32",
         ),
         (
             vec![
@@ -128,6 +143,20 @@ fn legacy_list_shape_violations_are_invalid_data_type() {
             decode_reference_write(&PropertyValue::List(items), ReferenceFrame::Bare),
             ErrorCode::INVALID_DATA_TYPE,
             context,
+        );
+    }
+}
+
+#[test]
+fn legacy_list_accepts_unsigned_or_enumerated_property_member() {
+    // The Averaging flat form carries Unsigned, the Loop/Pulse flat form
+    // Enumerated; both decode to the same reference.
+    let oid = ai_ref(5, 85).object_identifier;
+    for member in [PropertyValue::Unsigned(85), PropertyValue::Enumerated(85)] {
+        let value = PropertyValue::List(vec![PropertyValue::ObjectIdentifier(oid), member]);
+        assert_eq!(
+            decode_reference_write(&value, ReferenceFrame::Bare).unwrap(),
+            Some(ai_ref(5, 85))
         );
     }
 }
@@ -230,6 +259,24 @@ fn mixed_flat_and_framed_list_is_invalid_data_encoding() {
         decode_reference_write(&value, ReferenceFrame::Bare),
         ErrorCode::INVALID_DATA_ENCODING,
         "mixed framed + flat members",
+    );
+}
+
+#[test]
+fn empty_setpoint_frame_clears_only_on_the_setpoint_arm() {
+    // 0x0E 0x0F: the BACnetSetpointReference frame with its OPTIONAL member
+    // absent — a syntactically valid encoding Clause 12.17 defines as "no
+    // reference" (fixed setpoint). On the Setpoint arm it clears (None);
+    // on the bare reference properties it is not a valid value.
+    let empty_frame = PropertyValue::ApplicationData(vec![0x0E, 0x0F]);
+    assert_eq!(
+        decode_reference_write(&empty_frame, ReferenceFrame::Setpoint).unwrap(),
+        None
+    );
+    expect_protocol(
+        decode_reference_write(&empty_frame, ReferenceFrame::Bare),
+        ErrorCode::INVALID_DATA_ENCODING,
+        "empty setpoint frame on a bare-reference property",
     );
 }
 

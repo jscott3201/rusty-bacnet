@@ -89,7 +89,15 @@ pub fn decode_object_property_reference(
 /// Decode a whole property-value payload as the `BACnetSetpointReference`
 /// form: an opening/closing context tag 0 frame whose content is the bare
 /// reference, decoded with [`decode_object_property_reference`]'s strictness.
-pub fn decode_setpoint_reference(data: &[u8]) -> Result<BACnetObjectPropertyReference, Error> {
+///
+/// The production's member is `OPTIONAL`: an empty frame (`0x0E 0x0F`) is a
+/// syntactically valid encoding of the ABSENT alternative (Clause 12.17,
+/// `Setpoint_Reference`: "The absence of a reference indicates that the
+/// setpoint for this control loop is fixed and is contained in the Setpoint
+/// property") and yields `None` — not an encoding error.
+pub fn decode_setpoint_reference(
+    data: &[u8],
+) -> Result<Option<BACnetObjectPropertyReference>, Error> {
     let what = "BACnetSetpointReference";
     let (tag, pos) = tags::decode_tag(data, 0)?;
     if !tag.is_opening_tag(0) {
@@ -105,7 +113,10 @@ pub fn decode_setpoint_reference(data: &[u8]) -> Result<BACnetObjectPropertyRefe
             format!("{what}: trailing content after the closing tag"),
         ));
     }
-    decode_object_property_reference(inner)
+    if inner.is_empty() {
+        return Ok(None); // setpoint-reference [0] absent (OPTIONAL member)
+    }
+    decode_object_property_reference(inner).map(Some)
 }
 
 #[cfg(test)]
