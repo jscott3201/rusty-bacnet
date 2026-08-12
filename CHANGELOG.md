@@ -891,7 +891,27 @@ Deep-dive review of encoding, types, services, objects, client, server, and netw
 ## [0.7.1]
 
 ### Fixed
-- **Fixed** maturin wheel build — removed invalid `python-source` setting from pyproject.toml that broke wheel builds for pure Rust extension module
+
+- **Breaking (wire format):** `FileAccessMethod`'s enumeration values were
+  swapped: the stack defined `STREAM_ACCESS = 0` / `RECORD_ACCESS = 1`, but
+  the Clause 21 production is `record-access (0), stream-access (1)` (#273,
+  Tranche Q audit). Every File object in a running server therefore
+  reported the *other* access method in `File_Access_Method` — a
+  stream-backed object read back as record-access and vice versa — and
+  `ResolvedEnum` mislabeled both values for clients. The constants are now
+  `RECORD_ACCESS = 0` / `STREAM_ACCESS = 1`; the `bacnet-objects` File
+  object stops restating the numbers as literals and derives them from the
+  enum. Consumer audit: no compensating swaps existed elsewhere — the
+  service layer (`bacnet-services::file::{FileAccessMethod,
+  FileWriteAccessMethod}`) selects stream vs record by the
+  AtomicReadFile/AtomicWriteFile CHOICE tags (`[0]`/`[1]`), which are a
+  separate Clause 15.6/15.7 production and are unchanged; server handlers,
+  clients, and the CLI pass those through. **Migration:** any peer,
+  configuration, or stored record that persisted the raw property value
+  must be remapped (old 0 → 1, old 1 → 0); reads of
+  `File_Access_Method` by value and `FileAccessMethod::from_raw`
+  consumers must switch to the corrected assignments.
+
 
 ## [0.7.0]
 

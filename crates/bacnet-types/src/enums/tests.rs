@@ -163,6 +163,30 @@ macro_rules! assert_production_values {
     };
 }
 
+/// Standard 135-2020 Clause 21 (`BACnetFileAccessMethod ::= ENUMERATED`)
+/// assigns `record-access (0)` and `stream-access (1)`. Guard against a swap
+/// regression: the constants were previously reversed (`STREAM_ACCESS = 0`,
+/// `RECORD_ACCESS = 1`), which reported the wrong access method for every
+/// File object on the wire (#273).
+#[test]
+fn file_access_method_values_match_clause_21() {
+    assert_production_values!(FileAccessMethod, [("RECORD_ACCESS", 0), ("STREAM_ACCESS", 1)]);
+
+    // file-access-method (41) resolves by name with the corrected values.
+    assert_eq!(
+        ResolvedEnum::from_property(PropertyIdentifier::FILE_ACCESS_METHOD, 0),
+        ResolvedEnum::FileAccessMethod(FileAccessMethod::RECORD_ACCESS)
+    );
+    assert_eq!(
+        ResolvedEnum::from_property(PropertyIdentifier::FILE_ACCESS_METHOD, 1),
+        ResolvedEnum::FileAccessMethod(FileAccessMethod::STREAM_ACCESS)
+    );
+    assert_eq!(
+        ResolvedEnum::from_property(PropertyIdentifier::FILE_ACCESS_METHOD, 1).to_string(),
+        "STREAM_ACCESS"
+    );
+}
+
 /// 135-2020 Clause 21 (`BACnetLifeSafetyState ::= ENUMERATED`) runs through
 /// test-oeo-unaffected (34): the eleven values past test-supervisory (23)
 /// must exist without renumbering anything below them.

@@ -114,11 +114,13 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
-    /// BACnet file access method (Clause 12.12).
+    /// BACnet file access method (Clause 21 production; File object,
+    /// Clause 12.13). Wire order mirrors the production: record-access
+    /// precedes stream-access.
     pub struct FileAccessMethod(u32);
 
-    const STREAM_ACCESS = 0;
-    const RECORD_ACCESS = 1;
+    const RECORD_ACCESS = 0;
+    const STREAM_ACCESS = 1;
 }
 
 bacnet_enum! {

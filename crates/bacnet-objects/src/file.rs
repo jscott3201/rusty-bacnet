@@ -1,9 +1,9 @@
-//! File (type 10) object per ASHRAE 135-2020 Clause 12.11.
+//! File (type 10) object per ASHRAE 135-2020 Clause 12.13.
 //!
 //! Backs AtomicReadFile and AtomicWriteFile services. Supports both
 //! stream-access and record-access modes.
 
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{FileAccessMethod, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
 use std::borrow::Cow;
@@ -19,7 +19,8 @@ use crate::traits::BACnetObject;
 ///
 /// Represents a file accessible via AtomicReadFile / AtomicWriteFile services.
 /// The `file_access_method` determines whether the file is accessed as a
-/// byte stream (0) or as a sequence of fixed-length records (1).
+/// byte stream ([`FileAccessMethod::STREAM_ACCESS`]) or as a sequence of
+/// fixed-length records ([`FileAccessMethod::RECORD_ACCESS`]).
 pub struct FileObject {
     oid: ObjectIdentifier,
     name: String,
@@ -29,13 +30,14 @@ pub struct FileObject {
     modification_date: (Date, Time),
     archive: bool,
     read_only: bool,
-    /// 0 = stream access, 1 = record access.
+    /// Raw `BACnetFileAccessMethod` value; named in [`FileAccessMethod`]
+    /// (record-access = 0, stream-access = 1 per the Clause 21 production).
     file_access_method: u32,
     /// Record count (only meaningful for record-access files).
     record_count: Option<u64>,
-    /// Stream data (used when file_access_method == 0).
+    /// Stream data (used when file_access_method == STREAM_ACCESS).
     data: Vec<u8>,
-    /// Record data (used when file_access_method == 1).
+    /// Record data (used when file_access_method == RECORD_ACCESS).
     records: Vec<Vec<u8>>,
     status_flags: StatusFlags,
     out_of_service: bool,
@@ -46,8 +48,8 @@ pub struct FileObject {
 impl FileObject {
     /// Create a new File object.
     ///
-    /// Defaults to stream access (file_access_method = 0), empty data,
-    /// not read-only, archive = false.
+    /// Defaults to stream access (file_access_method = STREAM_ACCESS), empty
+    /// data, not read-only, archive = false.
     pub fn new(
         instance: u32,
         name: impl Into<String>,
@@ -76,7 +78,7 @@ impl FileObject {
             ),
             archive: false,
             read_only: false,
-            file_access_method: 0,
+            file_access_method: FileAccessMethod::STREAM_ACCESS.to_raw(),
             record_count: None,
             data: Vec::new(),
             records: Vec::new(),
@@ -107,10 +109,12 @@ impl FileObject {
         &self.data
     }
 
-    /// Set the file access method (0 = stream, 1 = record).
+    /// Set the file access method. Accepts the raw `BACnetFileAccessMethod`
+    /// value: [`FileAccessMethod::STREAM_ACCESS`] (1) or
+    /// [`FileAccessMethod::RECORD_ACCESS`] (0).
     pub fn set_file_access_method(&mut self, method: u32) {
         self.file_access_method = method;
-        if method == 1 {
+        if method == FileAccessMethod::RECORD_ACCESS.to_raw() {
             self.record_count = Some(self.records.len() as u64);
         } else {
             self.record_count = None;
@@ -449,7 +453,35 @@ mod tests {
         let val = file
             .read_property(PropertyIdentifier::FILE_ACCESS_METHOD, None)
             .unwrap();
-        assert_eq!(val, PropertyValue::Enumerated(0));
+        // stream-access is 1 per the Clause 21 production (#273).
+        assert_eq!(
+            val,
+            PropertyValue::Enumerated(FileAccessMethod::STREAM_ACCESS.to_raw())
+        );
+        assert_eq!(
+            val,
+            PropertyValue::Enumerated(1),
+            "stream-access enumeration value"
+        );
+    }
+
+    #[test]
+    fn file_read_file_access_method_record() {
+        let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
+        file.set_file_access_method(FileAccessMethod::RECORD_ACCESS.to_raw());
+        let val = file
+            .read_property(PropertyIdentifier::FILE_ACCESS_METHOD, None)
+            .unwrap();
+        // record-access is 0 per the Clause 21 production (#273).
+        assert_eq!(
+            val,
+            PropertyValue::Enumerated(FileAccessMethod::RECORD_ACCESS.to_raw())
+        );
+        assert_eq!(
+            val,
+            PropertyValue::Enumerated(0),
+            "record-access enumeration value"
+        );
     }
 
     #[test]
@@ -462,7 +494,7 @@ mod tests {
     #[test]
     fn file_set_records_updates_record_count_and_size() {
         let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        file.set_file_access_method(1);
+        file.set_file_access_method(FileAccessMethod::RECORD_ACCESS.to_raw());
         file.set_records(vec![vec![0x01, 0x02], vec![0x03, 0x04, 0x05]]);
         let count = file
             .read_property(PropertyIdentifier::RECORD_COUNT, None)
@@ -642,7 +674,7 @@ mod tests {
     #[test]
     fn file_property_list_record_access() {
         let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-        file.set_file_access_method(1);
+        file.set_file_access_method(FileAccessMethod::RECORD_ACCESS.to_raw());
         let props = file.property_list();
         assert!(props.contains(&PropertyIdentifier::RECORD_COUNT));
     }

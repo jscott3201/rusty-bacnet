@@ -261,6 +261,21 @@ fn app_enumerated_round_trip() {
     assert_eq!(end, bytes.len());
 }
 
+/// Standard 135-2020 Clause 21 pins `record-access (0)` / `stream-access (1)`
+/// for `BACnetFileAccessMethod`; on the wire the enumerated application tag
+/// is 0x91 with the value octet after it (Clause 20.2.4). Guard against the
+/// #273 swap regression at the encoder that puts the value on the wire.
+#[test]
+fn file_access_method_wire_values_match_clause_21() {
+    use bacnet_types::enums::FileAccessMethod;
+
+    let bytes = encode_to_vec(|buf| encode_app_enumerated(buf, FileAccessMethod::RECORD_ACCESS.to_raw()));
+    assert_eq!(bytes, [0x91, 0x00], "record-access encodes to value 0");
+
+    let bytes = encode_to_vec(|buf| encode_app_enumerated(buf, FileAccessMethod::STREAM_ACCESS.to_raw()));
+    assert_eq!(bytes, [0x91, 0x01], "stream-access encodes to value 1");
+}
+
 #[test]
 fn app_date_round_trip() {
     let date = Date {
