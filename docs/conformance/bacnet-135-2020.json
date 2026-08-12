@@ -1,7 +1,7 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
   "reviewed_at": "2026-08-12",
-  "repo_sha": "1f29ca859e7dd40e985c1a72d8c7ce9a08a274c7",
+  "repo_sha": "0c7be9744ffa8540ef95a7b84951ff376831c532",
   "review_scope": "Write-path structured-value decode tranche (branch codex/write-path-decode; issue #182): WriteProperty and WritePropertyMultiple loop-decode the entire propertyValue payload into a scalar or PropertyValue::List (mirroring encode_property_value's List flattening) with full consumption required (a partial or undecodable element is PROPERTY / INVALID_DATA_ENCODING); the Loop reference properties and Pulse Converter Input_Reference accept their Clause 21 BACnetObjectPropertyReference / BACnetSetpointReference wire frames and reject device-qualified members [3]; and the decode unlocks MSI Alarm_Values whole-list writes plus the datetime-paired Date/Time pair properties (DateTime Value Present_Value and Priority_Array entries, and Relinquish_Default on DateTime Value and DateTime Pattern Value — the last two tranche-L1 exclusions, completing #270). Conventions unchanged: `repo_sha` names the last code commit of the PR branch (this docs-refresh commit lands after it), matching how the previous tranches recorded their reviewed SHA.",
   "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for the Clause 15.9 / 15.10 write-service result text and the Clause 15.9.1.3 error table, the Clause 12.17 Loop clause and Table 12-20 (the reference-property types), the Clause 12.23 Pulse Converter Input_Reference text, the Clause 12.38 Table 12-45 and Clause 12.46 value-object tables, and the Clause 21 BACnetObjectPropertyReference / BACnetSetpointReference productions. No external addenda/errata check was performed for this tranche; per-row scope is recorded in each row's notes.",
   "status_taxonomy": [
@@ -312,9 +312,9 @@
     },
     {
       "id": "BACNET-12-REFERENCE-PROPERTY-WRITABILITY",
-      "standard_anchor": "Clause 12.17 with Table 12-20 (Loop), Clause 12.23 with Table 12-27 (Pulse Converter Input_Reference), Clause 21 BACnetObjectPropertyReference / BACnetSetpointReference productions",
+      "standard_anchor": "Clause 12.17 with Table 12-20 (Loop), Clause 12.23 with Table 12-27 (Pulse Converter Input_Reference), Clause 12.5 Table 12-5 (Averaging Object_Property_Reference - BACnetDeviceObjectPropertyReference), Clause 21 BACnetObjectPropertyReference / BACnetSetpointReference productions",
       "priority": "P1",
-      "requirement_summary": "The Loop Controlled_Variable_Reference, Manipulated_Variable_Reference, and Setpoint_Reference properties (Clause 12.17) and the Pulse Converter Input_Reference (Clause 12.23) are typed BACnetObjectPropertyReference - a SEQUENCE of primitive context-tagged members [0]/[1] plus optional property-array-index [2] - with Setpoint_Reference nested [0] inside the BACnetSetpointReference production. Network writes now land in these wire forms through the multi-element service decode: a strict typed codec (bacnet-encoding/src/constructed/object_property_reference.rs) requires full consumption and rejects a device-qualifying member [3], since unlike BACnetDeviceObjectPropertyReference these references are local-device only. Each arm also keeps the legacy local list form [ObjectIdentifier, Enumerated, Unsigned?] in exact shape.",
+      "requirement_summary": "The Loop Controlled_Variable_Reference, Manipulated_Variable_Reference, and Setpoint_Reference properties (Clause 12.17) and the Pulse Converter Input_Reference (Clause 12.23) are typed BACnetObjectPropertyReference - a SEQUENCE of primitive context-tagged members [0]/[1] plus optional property-array-index [2] - with Setpoint_Reference nested [0] inside the BACnetSetpointReference production. Network writes now land in these wire forms through the multi-element service decode: a strict typed codec (bacnet-encoding/src/constructed/object_property_reference.rs) requires full consumption and rejects a device-qualifying member [3], since unlike BACnetDeviceObjectPropertyReference these references are local-device only. Each arm also keeps the legacy local list form [ObjectIdentifier, Enumerated, Unsigned?] in exact shape, with the property-id member accepted as Unsigned OR Enumerated (the Averaging flat form carries Unsigned, the Loop/Pulse form Enumerated; both decode to the same reference). The Averaging arm - typed BACnetDeviceObjectPropertyReference by Table 12-5, whose remote-sample path is the standard's OPTIONAL branch and unmodeled here - routes through the same shared decode (review-round blocker fix), and the BACnetSetpointReference frame with its OPTIONAL member absent clears Setpoint_Reference exactly like a Null write (review-round runtime/dataflow item).",
       "status": "supported-with-clause-evidence",
       "code_anchors": [
         "crates/bacnet-encoding/src/constructed/object_property_reference.rs",
@@ -333,10 +333,20 @@
         "crates/bacnet-objects/src/loop_obj.rs::loop_write_setpoint_reference_accepts_bacnetsetpointreference_frame",
         "crates/bacnet-objects/src/loop_obj.rs::loop_write_local_list_with_index_still_accepted",
         "crates/bacnet-objects/src/accumulator.rs::pulse_converter_write_framed_indexed_input_reference_lands",
-        "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::loop_references_framed_writes_over_the_wire",
-        "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::reference_write_flattened_local_form_also_lands_over_the_wire",
-        "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::pulse_converter_input_reference_over_the_wire",
-        "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::wpm_reference_write_commits_in_order_and_rolls_back_on_failure"
+        "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::setpoint_reference_golden_vector_indexed",
+        "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::setpoint_reference_empty_frame_is_the_absent_alternative",
+        "crates/bacnet-objects/src/reference/tests.rs::empty_setpoint_frame_clears_only_on_the_setpoint_arm",
+        "crates/bacnet-objects/src/reference/tests.rs::legacy_list_accepts_unsigned_or_enumerated_property_member",
+        "crates/bacnet-objects/src/loop_obj.rs::loop_write_empty_setpoint_frame_clears_reference",
+        "crates/bacnet-objects/src/averaging.rs::averaging_reference_write_accepts_exact_shapes_and_both_member_typings",
+        "crates/bacnet-objects/src/averaging.rs::averaging_reference_write_accepts_the_framed_local_form",
+        "crates/bacnet-server/src/handlers/tests/reference_writes.rs::setpoint_reference_empty_frame_and_null_both_clear_over_the_wire",
+        "crates/bacnet-server/src/handlers/tests/reference_writes.rs::averaging_object_property_reference_over_the_wire",
+        "crates/bacnet-server/src/pics/truth_source_tests.rs::is_writable_property_matches_write_property_on_pulse_converter_and_averaging",
+        "crates/bacnet-server/src/handlers/tests/reference_writes.rs::loop_references_framed_writes_over_the_wire",
+        "crates/bacnet-server/src/handlers/tests/reference_writes.rs::reference_write_flattened_local_form_also_lands_over_the_wire",
+        "crates/bacnet-server/src/handlers/tests/reference_writes.rs::pulse_converter_input_reference_over_the_wire",
+        "crates/bacnet-server/src/handlers/tests/reference_writes.rs::wpm_reference_write_commits_in_order_and_rolls_back_on_failure"
       ],
       "negative_tests": [
         "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::bare_decode_rejects_device_qualified_reference",
@@ -349,11 +359,12 @@
         "crates/bacnet-objects/src/reference/tests.rs::wrong_value_datatypes_are_invalid_data_type",
         "crates/bacnet-objects/src/loop_obj.rs::loop_write_device_qualified_reference_rejected_and_preserves",
         "crates/bacnet-objects/src/accumulator.rs::pulse_converter_write_malformed_framed_input_reference_rejected",
-        "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::reference_write_rejections_over_the_wire_preserve_state"
+        "crates/bacnet-server/src/handlers/tests/reference_writes.rs::reference_write_rejections_over_the_wire_preserve_state",
+        "crates/bacnet-objects/src/averaging.rs::averaging_reference_write_rejects_bad_shapes_and_preserves_state"
       ],
       "benchmarks": [],
       "public_claims": [],
-      "notes": "Split child of BACNET-12-OBJECT-MODEL (#182). The four arms share one objects-layer helper (reference.rs) so the local List form (in-process compatibility) and the framed ApplicationData form (network) converge on the same strict Clause 21 decode; error pairings follow Clause 15.9.1.3: wrong value datatype is PROPERTY / INVALID_DATA_TYPE, malformed framing / device qualification / unknown trailing context tag is PROPERTY / INVALID_DATA_ENCODING, and a mixed flat+framed element list is refused rather than reinterpreted. Null clears, and read arms carry the reference's optional array index as a third list element. Setpoint_Reference additionally accepts the BACnetSetpointReference opening/closing tag [0] frame (unambiguous against the bare form's leading primitive [0]) while refusing unbalanced frames. WritePropertyMultiple in-order commit and rollback are proven for a reference+setpoint request failing its second property. Limitation: reads still emit the flat application-tagged list form rather than re-framing context tags - the encode side is unchanged by this tranche; interop evidence against a second implementation remains open."
+      "notes": "Split child of BACNET-12-OBJECT-MODEL (#182). The four arms share one objects-layer helper (reference.rs) so the local List form (in-process compatibility) and the framed ApplicationData form (network) converge on the same strict Clause 21 decode; error pairings follow Clause 15.9.1.3: wrong value datatype is PROPERTY / INVALID_DATA_TYPE, malformed framing / device qualification / unknown trailing context tag is PROPERTY / INVALID_DATA_ENCODING, and a mixed flat+framed element list is refused rather than reinterpreted. Null clears, and read arms carry the reference's optional array index as a third list element. Setpoint_Reference additionally accepts the BACnetSetpointReference opening/closing tag [0] frame (unambiguous against the bare form's leading primitive [0]) while refusing unbalanced frames. WritePropertyMultiple in-order commit and rollback are proven for a reference+setpoint request failing its second property. Review round: the adversary lane's blocker on the Averaging arm (silent member drop / member retype / as-u32 truncation, newly network-reachable) is fixed by routing it through the same shared decode; the runtime+dataflow empty-frame finding is fixed by the Option-returning decode_setpoint_reference; the dataflow PICS incoherence is fixed by exact is_writable_property overrides on Pulse Converter (PRESENT_VALUE / SCALE_FACTOR / ADJUST_VALUE / INPUT_REFERENCE + DESCRIPTION / OUT_OF_SERVICE / COV_INCREMENT) and Averaging (OBJECT_PROPERTY_REFERENCE + DESCRIPTION / OUT_OF_SERVICE), which also stop advertising OBJECT_NAME on both types (no arm routes it - a truth-toward-arms PICS correction). Limitation: reads still emit the flat application-tagged list form rather than re-framing context tags - the encode side is unchanged by this tranche; interop evidence against a second implementation remains open."
     },
     {
       "id": "BACNET-13-COV-SUBSCRIPTIONS",
@@ -423,6 +434,7 @@
       "negative_tests": [
         "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::list_properties_reject_indexed_read_property",
         "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::list_properties_reject_indexed_read_property_multiple_inline",
+        "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::reference_properties_reject_indexed_read_property",
         "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::list_properties_reject_indexed_write_property_and_write_property_multiple",
         "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::schedule_list_of_object_property_references_rejects_indexed_read_and_write",
         "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::wpm_gate_rejection_commits_nothing",
@@ -485,7 +497,7 @@
         "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::well_formed_trailing_element_reaches_scalar_arm_as_list_and_is_refused",
         "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::datetime_value_present_value_and_priority_array_over_the_wire",
         "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::datetime_relinquish_default_over_the_wire_recaptures_present_value",
-        "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::wpm_reference_write_commits_in_order_and_rolls_back_on_failure",
+        "crates/bacnet-server/src/handlers/tests/reference_writes.rs::wpm_reference_write_commits_in_order_and_rolls_back_on_failure",
         "crates/bacnet-server/src/handlers/tests/framed_properties.rs::recipient_list_framed_wire_round_trip",
         "crates/bacnet-server/src/handlers/tests/framed_properties.rs::event_parameters_framed_wire_round_trip"
       ],

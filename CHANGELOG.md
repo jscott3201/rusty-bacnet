@@ -27,6 +27,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   properties) arrive as one `ApplicationData` element per member for the
   object arm to reassemble. (#182)
 
+- Pulse Converter and Averaging PICS writability advertising now mirrors
+  their `write_property` arms exactly (the truth invariant the other
+  overrides follow): Pulse Converter advertises PRESENT_VALUE /
+  SCALE_FACTOR / ADJUST_VALUE / INPUT_REFERENCE plus DESCRIPTION /
+  OUT_OF_SERVICE / COV_INCREMENT (INPUT_REFERENCE was previously
+  advertised read-only while the arm accepted it), and Averaging
+  advertises OBJECT_PROPERTY_REFERENCE + DESCRIPTION / OUT_OF_SERVICE
+  (its arm was likewise unadvertised). Both also stop advertising
+  OBJECT_NAME, which no arm routes — a write was and is refused — so
+  this is a truth-toward-arms correction, flagged for visibility like
+  the Loop/Schedule corrections in #276. (panel round on #182)
+
 - Derive the Reliability write-validation set from `Reliability::ALL_NAMED`
   instead of a restated literal: the named range was copied into
   `is_reliability_value_valid` as `0..=10 | 12..=25 | 64..=65535` from the
@@ -107,6 +119,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   INVALID_DATA_ENCODING, wrong-datatype writes INVALID_DATA_TYPE, and
   WritePropertyMultiple in-order commit / rollback is proven on a failing
   reference request. (#182)
+
+- The empty `BACnetSetpointReference` frame (`0x0E 0x0F`) is accepted on
+  Loop `Setpoint_Reference`: the production's member is OPTIONAL and its
+  absence is the Clause 12.17 "fixed setpoint" state, so a conformant
+  peer writing the absent member now clears the reference exactly like a
+  `Null` write (previously refused PROPERTY / INVALID_DATA_ENCODING).
+  The framed codec's `decode_setpoint_reference` accordingly returns
+  `Option<BACnetObjectPropertyReference>`. (panel round on #182)
 
 - Make `Relinquish_Default` writable over the network and add a validated
   local `set_relinquish_default` on the commandable object types: Analog
@@ -217,6 +237,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add gated arms to `impl_intrinsic_reporting!`: a five-ident form for feedback-driven detectors and a four-ident form for detectors without feedback, both taking an `Event_Detection_Enable` field. Binary Output and Multi-state Output use the five-ident arm; the other seven intrinsic-reporting types use the four-ident arm. There is deliberately no ungated form: the former three-ident arm was removed later in this same unreleased block, and no feedback-without-gate arm is provided, because either would offer downstream implementors a supported way to wire detection permanently on — the exact defect the gate was added to fix.
 
 ### Fixed
+
+- Harden the Averaging `Object_Property_Reference` write arm, reachable
+  over the network for the first time via the #182 multi-element decode:
+  its `items.len() >= 2` acceptance silently dropped fourth-and-later
+  members, retyped a non-Unsigned third member to no-index, and truncated
+  64-bit property/index numerics with `as u32`. The arm now routes through
+  the shared reference-arm decode used by Loop/Pulse Converter: exact
+  two-or-three member shape, `u32::try_from` bounds (an oversized member
+  refused instead of truncated), framed-form full consumption, and a
+  device-qualifying member `[3]` refused PROPERTY / INVALID_DATA_ENCODING —
+  Clause 12.5 leaves referencing another device's object OPTIONAL
+  ("Optionally, the object property to be sampled may exist in a different
+  BACnet device") and this object samples local objects only. The flat
+  local form accepts its property-id member as Unsigned OR Enumerated (the
+  Averaging convention carries Unsigned, kept on reads; the framed form
+  stays the Clause 21 encoding). (adversary panel blocker on #182)
 
 - Gate in-service `Reliability` writes on the remaining Out_Of_Service
   carriers: Loop accepted any Enumerated unconditionally and Schedule stored
