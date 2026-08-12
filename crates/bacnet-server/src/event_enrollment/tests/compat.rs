@@ -107,6 +107,71 @@ fn legacy_le_change_of_state_fallback() {
     assert_eq!(transitions[0].change.to, EventState::OFFNORMAL);
 }
 
+/// A conformant framed write of an UNMODELED spec alternative (access-event
+/// [13]) lands as `Opaque` for read-back preservation, but must NEVER route
+/// to the legacy little-endian evaluator: the TLV body is not an LE limits
+/// payload, and reinterpreting it as one fabricates spurious transitions.
+/// (Review blocker: pre-fix, this test produced a HIGH_LIMIT transition.)
+#[test]
+fn framed_unmodeled_alternative_is_never_le_evaluated() {
+    let mut db = ObjectDatabase::new();
+
+    let mut ai = AnalogInputObject::new(96, "AI-96", 62).unwrap();
+    ai.set_present_value(85.0); // would exceed a 0.0/0.0 LE-decoded band
+    let ai_oid = ai.object_identifier();
+    db.add(Box::new(ai)).unwrap();
+
+    let mut ee =
+        EventEnrollmentObject::new(96, "EE-unmodeled", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+        ai_oid,
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+    )));
+    ee.set_event_enable(0x07);
+    let ee_oid = ee.object_identifier();
+    db.add(Box::new(ee)).unwrap();
+
+    // access-event [13] SEQUENCE { list-of-access-events [0] SEQUENCE OF
+    // BACnetAccessEvent, access-event-time-reference [1]
+    // BACnetDeviceObjectPropertyReference } — a TLV body whose first 12
+    // bytes, if misread as little-endian f32s, are all 0.0 (a band that
+    // 85.0 exceeds, so misrouting WOULD fire HIGH_LIMIT).
+    let framed: Vec<u8> = vec![
+        0xDE, // opening tag [13]
+        0x0E, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x0F, // [0] list-of-access-events = twelve NULL octets
+        0x1E, 0x0C, 0x00, 0x00, 0x00, 0x01, 0x19, 0x55, 0x1F, // [1] time reference
+        0xDF, // closing tag [13]
+    ];
+    let obj = db.get_mut(&ee_oid).unwrap();
+    obj.write_property(
+        PropertyIdentifier::EVENT_PARAMETERS,
+        None,
+        PropertyValue::ApplicationData(framed.clone()),
+        None,
+    )
+    .unwrap();
+
+    // The value READS BACK byte-identical (store-but-preserve)…
+    let val = db
+        .get(&ee_oid)
+        .unwrap()
+        .read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
+        .unwrap();
+    assert_eq!(
+        val,
+        PropertyValue::ApplicationData(framed),
+        "unmodeled framed alternative must round-trip verbatim"
+    );
+
+    // …but produces NO event transition: it is not evaluated as LE limits.
+    let transitions = evaluate_event_enrollments(&mut db);
+    assert!(
+        transitions.is_empty(),
+        "unmodeled spec alternative must not be fed to eval_legacy_le: {transitions:?}"
+    );
+}
+
 /// CHANGE_OF_VALUE with a `bitmask` criteria reports OFFNORMAL when any masked
 /// bit is set on the monitored bitstring value.
 #[test]
