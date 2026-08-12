@@ -438,7 +438,7 @@ impl BACnetObject for BinaryLightingOutputObject {
             return Err(common::invalid_data_type_error());
         }
 
-        // RELINQUISH_DEFAULT — writable per Table 12-65 (R; the standard
+        // RELINQUISH_DEFAULT — writable per Table 12-69 (R; the standard
         // permits writability), validated the same way a commanded
         // Present_Value is (BinaryLightingPV 0..=4). After the store,
         // Present_Value resolves anew so an empty priority array falls back
