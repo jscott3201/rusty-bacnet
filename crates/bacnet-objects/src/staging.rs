@@ -262,6 +262,33 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// Clause 12.62 types Present_Stage as Unsigned (an index into the
+    /// Stages array), not an enumeration — there is no `StagingState`
+    /// production in 135-2020 (#275).
+    #[test]
+    fn staging_present_stage_is_unsigned_array_index() {
+        let mut stg = StagingObject::new(1, "STG-1", 3).unwrap();
+        assert_eq!(
+            stg.read_property(PropertyIdentifier::PRESENT_STAGE, None)
+                .unwrap(),
+            PropertyValue::Unsigned(0)
+        );
+        stg.write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Unsigned(2),
+            None,
+        )
+        .unwrap();
+        match stg
+            .read_property(PropertyIdentifier::PRESENT_STAGE, None)
+            .unwrap()
+        {
+            PropertyValue::Unsigned(stage) => assert_eq!(stage, 2),
+            other => panic!("Present_Stage must stay Unsigned, got {other:?}"),
+        }
+    }
+
     #[test]
     fn staging_read_target_references() {
         let stg = StagingObject::new(1, "STG-1", 2).unwrap();

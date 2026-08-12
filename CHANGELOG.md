@@ -923,6 +923,16 @@ Deep-dive review of encoding, types, services, objects, client, server, and netw
   production and is untouched — code that conflated the two must now name
   each correctly.
 
+- **Breaking (API):** the invented `StagingState` enumeration
+  (`NOT_STAGED`/`STAGING`/`STAGED`/`COMMITTING`/`COMMITTED`/`ABANDONING`/
+  `ABANDONED`) is deleted from `bacnet-types` (#275, Tranche Q audit): no
+  such production exists anywhere in 135-2020. The Staging object's
+  `Present_Stage` is an Unsigned array index into the `Stages` array
+  (Clause 12.62, Table 12-80), which is how the object model already
+  carried it — no object, resolve arm, or test referenced the enum, so
+  the removal is source-local. Downstream users must treat staging state
+  as a raw Unsigned index; per-stage meaning comes from `Stage_Names`.
+
 
 ## [0.7.0]
 

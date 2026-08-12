@@ -1,19 +1,6 @@
 // ===========================================================================
-// Staging / Audit enums (new in 135-2020)
+// Audit enums (new in 135-2020)
 // ===========================================================================
-
-bacnet_enum! {
-    /// BACnet staging state (Clause 12.62, new in 135-2020).
-    pub struct StagingState(u32);
-
-    const NOT_STAGED = 0;
-    const STAGING = 1;
-    const STAGED = 2;
-    const COMMITTING = 3;
-    const COMMITTED = 4;
-    const ABANDONING = 5;
-    const ABANDONED = 6;
-}
 
 bacnet_enum! {
     /// BACnet audit level (Clause 19.6, new in 135-2020).
