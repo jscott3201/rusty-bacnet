@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Derive the Reliability write-validation set from `Reliability::ALL_NAMED`
+  instead of a restated literal: the named range was copied into
+  `is_reliability_value_valid` as `0..=10 | 12..=25 | 64..=65535` from the
+  Clause 21 production when the enum was short, and the two could silently
+  drift — the next addendum value would gain a constant in `bacnet-types`
+  while the write path kept rejecting it. The predicate now checks membership
+  in the enum's named set plus the explicit vendor-proprietary range, so a
+  new constant flips its value from rejected to accepted with no second edit;
+  11 (reserved) and 26..=63 stay refused, the boundary matrix
+  (11/25/26/63/64/65535/65536) is unchanged, and the nine consumers and
+  their tests are untouched. No wire behavior changes. (#252)
+
 - Analog event timestamp and message storage is consolidated into a shared
   implementation. Unindexed reads and the detection-disable resets are
   unchanged; indexed reads of `Event_Time_Stamps` / `Event_Message_Texts` on
@@ -49,6 +61,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   asymmetric spec vectors (`TO_OFFNORMAL → 0x80`, `monday → 0x80`). (#203)
 
 ### Added
+
+- Make `Relinquish_Default` writable over the network and add a validated
+  local `set_relinquish_default` on the commandable object types: Analog
+  Output, Analog Value, Binary Output, Binary Value, Multi-state Output,
+  Multi-state Value, Lighting Output, Binary Lighting Output, Access Door,
+  and the commandable value-object types (Integer, Positive Integer and
+  Large Analog scalars among them). Validation mirrors each type's
+  Present_Value write — finite Real on the analog types (0..=100 for
+  Lighting Output), BinaryPV 0/1, Unsigned 1..=Number_Of_States (whose
+  shrink interplay stays "a local matter" per Clauses 12.19 / 12.22 and is
+  deliberately not auto-adjusted), BinaryLightingPV 0..=4, and the Access
+  Door's BACnetDoorValue production 0..=3 (lock, unlock, pulse-unlock,
+  extended-pulse-unlock) — and a store re-resolves Present_Value from the
+  priority array, so an all-NULL array immediately adopts the new default
+  while a live command still outranks it. The conformance tables (e.g.
+  Tables 12-3, 12-8, 12-22, 12-64, 12-69, 12-30) permit rather than require
+  the writability, so this documents permitted-writability implemented, not
+  a conformance upgrade. The datetime-paired value types (DateTime Value,
+  DateTime Pattern Value) keep the local setter but stay network-read-only
+  until the write decoder generalizes to multi-element application values
+  (#182). These writes were previously refused; `Property_List` is unchanged.
+  (#270)
 
 - Model `Event_Time_Stamps` and optional `Event_Message_Texts` on Binary
   Input/Output/Value and Multi-state Input/Output/Value objects. Both appear in
@@ -138,6 +172,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add gated arms to `impl_intrinsic_reporting!`: a five-ident form for feedback-driven detectors and a four-ident form for detectors without feedback, both taking an `Event_Detection_Enable` field. Binary Output and Multi-state Output use the five-ident arm; the other seven intrinsic-reporting types use the four-ident arm. There is deliberately no ungated form: the former three-ident arm was removed later in this same unreleased block, and no feedback-without-gate arm is provided, because either would offer downstream implementors a supported way to wire detection permanently on — the exact defect the gate was added to fix.
 
 ### Fixed
+
+- Gate in-service `Reliability` writes on the remaining Out_Of_Service
+  carriers: Loop accepted any Enumerated unconditionally and Schedule stored
+  without validation; both now refuse PROPERTY / WRITE_ACCESS_DENIED in
+  service, validate out-of-service writes against the BACnetReliability set,
+  and save/restore the evaluated value across the Out_Of_Service edge like
+  the nine intrinsic-reporting types. Trend Log's Reliability arm — an
+  ungated, unvalidated store with no Clause 12.25 writability grant — now
+  refuses PROPERTY / WRITE_ACCESS_DENIED entirely, and Trend Log Multiple's
+  default denial is pinned as deliberate: neither table carries the
+  writability footnote and neither object's Reliability_Evaluation_Inhibit
+  text carries the out-of-service write provision. Previously-accepted
+  writes now fail on all three. (#240)
+
+- **Breaking (write validation):** `Notify_Type` writes validate against the
+  BACnetNotifyType production — alarm(0), event(1), ack-notification(2) —
+  and refuse out-of-production values with PROPERTY / VALUE_OUT_OF_RANGE
+  instead of storing them (an accepted `Enumerated(99)` previously read back
+  as 99 and could reach the wire as the notification's notifyType).
+  `Event_Enable` and `Limit_Enable` writes now require the canonical
+  encoding of their fixed-width productions (BACnetEventTransitionBits: one
+  content octet with 5 unused bits; BACnetLimitEnable: one with 6); any
+  other declared shape refuses PROPERTY / INVALID_DATA_ENCODING instead of
+  being silently masked and normalized, and an empty content reports
+  INVALID_DATA_ENCODING instead of INVALID_DATA_TYPE. Applies to the shared
+  event-property macros (all nine intrinsic-reporting types), Event
+  Enrollment, and Alert Enrollment. (#255)
 
 - Make CHANGE_OF_STATE alarm parameters reachable over BACnet: Binary Input
   now exposes singular `Alarm_Value` as `BACnetBinaryPV` per Table 12-6
