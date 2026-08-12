@@ -1,9 +1,9 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
   "reviewed_at": "2026-08-12",
-  "repo_sha": "926559c539c58043f1c77afb1148be0288bc34cc",
-  "review_scope": "Objects-layer write-path validation tranche (branch codex/write-path-validation; issues #252, #240, #255, #270): the Reliability write-path validity predicate derives from Reliability::ALL_NAMED plus the explicit 64..=65535 vendor range (#252); Loop, Schedule, and the nine intrinsic-reporting carriers gate in-service Reliability writes while Trend Log / Trend Log Multiple refuse them after their Clause 12 tables showed no writability grant (#240); Notify_Type writes validate against the three-value production and Event_Enable/Limit_Enable writes require the canonical fixed-width bit-string encoding (#255); and Relinquish_Default is network-writable and locally settable, with per-type validation, on the commandable object types (#270). Conventions unchanged: `repo_sha` names the last code commit of the PR branch (this docs-refresh commit lands after it), matching how the previous tranches recorded their reviewed SHA.",
-  "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for the Clause 12.17 Loop table and footnotes (Table 12-20), the Clause 12.24/12.25 Schedule/Trend Log tables and Reliability_Evaluation_Inhibit texts, the Clause 12.30 Trend Log Multiple table, the Clause 21 BACnetNotifyType / BACnetEventTransitionBits / BACnetLimitEnable / BACnetReliability productions, the Clause 15.9.1.3 error table, and the Clause 12 commandable-type tables cited by the Relinquish_Default row (Tables 12-3, 12-8, 12-10, 12-22, 12-23, 12-30, 12-64, 12-69 and the Clause 12.41+ value object tables). No external addenda/errata check was performed for this tranche; per-row scope is recorded in each row's notes.",
+  "repo_sha": "1f29ca859e7dd40e985c1a72d8c7ce9a08a274c7",
+  "review_scope": "Write-path structured-value decode tranche (branch codex/write-path-decode; issue #182): WriteProperty and WritePropertyMultiple loop-decode the entire propertyValue payload into a scalar or PropertyValue::List (mirroring encode_property_value's List flattening) with full consumption required (a partial or undecodable element is PROPERTY / INVALID_DATA_ENCODING); the Loop reference properties and Pulse Converter Input_Reference accept their Clause 21 BACnetObjectPropertyReference / BACnetSetpointReference wire frames and reject device-qualified members [3]; and the decode unlocks MSI Alarm_Values whole-list writes plus the datetime-paired Date/Time pair properties (DateTime Value Present_Value and Priority_Array entries, and Relinquish_Default on DateTime Value and DateTime Pattern Value — the last two tranche-L1 exclusions, completing #270). Conventions unchanged: `repo_sha` names the last code commit of the PR branch (this docs-refresh commit lands after it), matching how the previous tranches recorded their reviewed SHA.",
+  "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for the Clause 15.9 / 15.10 write-service result text and the Clause 15.9.1.3 error table, the Clause 12.17 Loop clause and Table 12-20 (the reference-property types), the Clause 12.10 Pulse Converter Input_Reference text, the Clause 12.38 Table 12-45 and Clause 12.46 value-object tables, and the Clause 21 BACnetObjectPropertyReference / BACnetSetpointReference productions. No external addenda/errata check was performed for this tranche; per-row scope is recorded in each row's notes.",
   "status_taxonomy": [
     "in-progress",
     "implementation-present-needs-conformance-tests",
@@ -272,7 +272,7 @@
       "id": "BACNET-12-RELINQUISH-DEFAULT-WRITABILITY",
       "standard_anchor": "Clause 12.3 Table 12-3 (Analog Output), Clause 12.7 Table 12-8 (Binary Output), Clause 12.8 Table 12-10 (Binary Value), Clause 12.19 Table 12-22 (Multi-state Output), Clause 12.20 Table 12-23 (Multi-state Value), Clause 12.26 Table 12-30 (Access Door), Clause 12.54 Table 12-64 (Lighting Output), Clause 12.55 Table 12-69 (Binary Lighting Output), Clause 12 value object tables; Clause 19 command prioritization",
       "priority": "P1",
-      "requirement_summary": "Relinquish_Default is network-writable and locally settable on the commandable object types, where the conformance tables carry it R or O and writability is permitted, not required - this row records permitted writability implemented, not a conformance upgrade. Each arm routes through a validated local set_relinquish_default and re-resolves Present_Value from the priority array afterward, so an all-NULL array falls back to the new default immediately while a live command still outranks it. Validation mirrors the Present_Value path per type: finite Real (AO/AV), BinaryPV 0/1 (BO/BV), Unsigned 1..=Number_Of_States (MSO/MSV), finite Real in 0..=100 (Lighting Output), BinaryLightingPV 0..=4 (Binary Lighting Output), the BACnetDoorValue production 0..=3 - lock, unlock, pulse-unlock, extended-pulse-unlock (Access Door), and per-type extraction bounds plus a finite check for the Large Analog Value (Double). The datetime-paired value types (DateTime Value, DateTime Pattern Value) stay network-read-only: their BACnetDateTime wire form needs multi-element decode the service layer does not have yet (follow-up #182), while the local setter exists uniformly.",
+      "requirement_summary": "Relinquish_Default is network-writable and locally settable on the commandable object types, where the conformance tables carry it R or O and writability is permitted, not required - this row records permitted writability implemented, not a conformance upgrade. Each arm routes through a validated local set_relinquish_default and re-resolves Present_Value from the priority array afterward, so an all-NULL array falls back to the new default immediately while a live command still outranks it. Validation mirrors the Present_Value path per type: finite Real (AO/AV), BinaryPV 0/1 (BO/BV), Unsigned 1..=Number_Of_States (MSO/MSV), finite Real in 0..=100 (Lighting Output), BinaryLightingPV 0..=4 (Binary Lighting Output), the BACnetDoorValue production 0..=3 - lock, unlock, pulse-unlock, extended-pulse-unlock (Access Door), and per-type extraction bounds plus a finite check for the Large Analog Value (Double). With #182 the datetime-paired value types (DateTime Value, Clause 12.38 Table 12-45; DateTime Pattern Value, Clause 12.46) join the network-writable set: the BACnetDateTime pair decodes from application-tagged Date+Time in the multi-element service decode.",
       "status": "supported-with-clause-evidence",
       "code_anchors": [
         "crates/bacnet-objects/src/common.rs",
@@ -297,15 +297,63 @@
         "crates/bacnet-objects/src/lighting/tests.rs::binary_lighting_output_relinquish_default_write_recaptures_present_value",
         "crates/bacnet-objects/src/access_control/tests.rs::access_door_relinquish_default_write_recaptures_present_value",
         "crates/bacnet-objects/src/value_types/tests/numeric.rs::scalar_value_relinquish_default_write_recaptures_present_value",
-        "crates/bacnet-objects/src/value_types/tests/temporal.rs::date_value_relinquish_default_write_recaptures_present_value"
+        "crates/bacnet-objects/src/value_types/tests/temporal.rs::date_value_relinquish_default_write_recaptures_present_value",
+        "crates/bacnet-objects/src/value_types/tests/temporal.rs::datetime_value_relinquish_default_write_recaptures_present_value",
+        "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::datetime_relinquish_default_over_the_wire_recaptures_present_value",
+        "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::datetime_value_present_value_and_priority_array_over_the_wire"
       ],
       "negative_tests": [
-        "crates/bacnet-objects/src/value_types/tests/temporal.rs::datetime_value_relinquish_default_is_not_network_writable",
+        "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::datetime_write_with_mispaired_members_is_refused_and_preserves",
         "crates/bacnet-objects/src/multistate/tests/relinquish_default.rs::mso_relinquish_default_is_not_range_locked_after_store"
       ],
       "benchmarks": [],
       "public_claims": [],
-      "notes": "Split child of BACNET-12-OBJECT-MODEL (#270). is_commandable_property_writable now advertises RELINQUISH_DEFAULT for the six core commandable types (its doc no longer claims universal read-only); Lighting Output, Binary Lighting Output, Access Door, and the define_value_object_commandable! macro gained is_writable_property overrides mirroring their write arms - the macro override also corrects the PRIORITY_ARRAY writability advertising for all twelve commandable value types (previously reported read-only by the historical default while the arm accepted writes). Invalid writes refuse with the Present_Value arm's pairings (VALUE_OUT_OF_RANGE for range/finiteness, INVALID_DATA_TYPE for a wrong BACnet datatype) and leave both Relinquish_Default and Present_Value untouched. Number_Of_States shrink interplay on MSO/MSV: Clause 12.19/12.22 leave stored-value adjustment a local matter and this implementation does not auto-adjust - pinned in a test comment, with CONFIGURATION_ERROR reporting for the condition tracked under #226. CURRENT_COMMAND_PRIORITY stays read-only (derived). The pre-existing unvalidated Present_Value arm on Access Door (any Enumerated accepted) is a separate defect noted for follow-up, as is the door property_list omitting PRIORITY_ARRAY/RELINQUISH_DEFAULT while both are readable."
+      "notes": "Split child of BACNET-12-OBJECT-MODEL (#270). is_commandable_property_writable now advertises RELINQUISH_DEFAULT for the six core commandable types (its doc no longer claims universal read-only); Lighting Output, Binary Lighting Output, Access Door, and the define_value_object_commandable! macro gained is_writable_property overrides mirroring their write arms - the macro override also corrects the PRIORITY_ARRAY writability advertising for all twelve commandable value types (previously reported read-only by the historical default while the arm accepted writes). Invalid writes refuse with the Present_Value arm's pairings (VALUE_OUT_OF_RANGE for range/finiteness, INVALID_DATA_TYPE for a wrong BACnet datatype) and leave both Relinquish_Default and Present_Value untouched. Number_Of_States shrink interplay on MSO/MSV: Clause 12.19/12.22 leave stored-value adjustment a local matter and this implementation does not auto-adjust - pinned in a test comment, with CONFIGURATION_ERROR reporting for the condition tracked under #226. CURRENT_COMMAND_PRIORITY stays read-only (derived). The pre-existing unvalidated Present_Value arm on Access Door (any Enumerated accepted) is a separate defect noted for follow-up, as is the door property_list omitting PRIORITY_ARRAY/RELINQUISH_DEFAULT while both are readable. #182 addendum: the `readonly` rd_access selection now has no users (kept in the macro for a future type whose wire form needs something the service decode cannot deliver); the pinned-denial test datetime_value_relinquish_default_is_not_network_writable is replaced by datetime_value_relinquish_default_write_recaptures_present_value."
+    },
+    {
+      "id": "BACNET-12-REFERENCE-PROPERTY-WRITABILITY",
+      "standard_anchor": "Clause 12.17 with Table 12-20 (Loop), Clause 12.10 (Pulse Converter Input_Reference), Clause 21 BACnetObjectPropertyReference / BACnetSetpointReference productions",
+      "priority": "P1",
+      "requirement_summary": "The Loop Controlled_Variable_Reference, Manipulated_Variable_Reference, and Setpoint_Reference properties (Clause 12.17) and the Pulse Converter Input_Reference (Clause 12.10) are typed BACnetObjectPropertyReference - a SEQUENCE of primitive context-tagged members [0]/[1] plus optional property-array-index [2] - with Setpoint_Reference nested [0] inside the BACnetSetpointReference production. Network writes now land in these wire forms through the multi-element service decode: a strict typed codec (bacnet-encoding/src/constructed/object_property_reference.rs) requires full consumption and rejects a device-qualifying member [3], since unlike BACnetDeviceObjectPropertyReference these references are local-device only. Each arm also keeps the legacy local list form [ObjectIdentifier, Enumerated, Unsigned?] in exact shape.",
+      "status": "supported-with-clause-evidence",
+      "code_anchors": [
+        "crates/bacnet-encoding/src/constructed/object_property_reference.rs",
+        "crates/bacnet-objects/src/reference.rs",
+        "crates/bacnet-objects/src/loop_obj.rs",
+        "crates/bacnet-objects/src/accumulator.rs"
+      ],
+      "positive_tests": [
+        "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::golden_vector_unindexed",
+        "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::golden_vector_indexed",
+        "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::setpoint_reference_golden_vector",
+        "crates/bacnet-objects/src/reference/tests.rs::legacy_local_list_form_round_trips_with_and_without_index",
+        "crates/bacnet-objects/src/reference/tests.rs::framed_form_decodes_from_one_or_split_application_data",
+        "crates/bacnet-objects/src/reference/tests.rs::setpoint_frame_acceptance_is_scoped_to_the_setpoint_property",
+        "crates/bacnet-objects/src/loop_obj.rs::loop_write_framed_indexed_reference_reads_back_with_index",
+        "crates/bacnet-objects/src/loop_obj.rs::loop_write_setpoint_reference_accepts_bacnetsetpointreference_frame",
+        "crates/bacnet-objects/src/loop_obj.rs::loop_write_local_list_with_index_still_accepted",
+        "crates/bacnet-objects/src/accumulator.rs::pulse_converter_write_framed_indexed_input_reference_lands",
+        "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::loop_references_framed_writes_over_the_wire",
+        "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::reference_write_flattened_local_form_also_lands_over_the_wire",
+        "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::pulse_converter_input_reference_over_the_wire",
+        "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::wpm_reference_write_commits_in_order_and_rolls_back_on_failure"
+      ],
+      "negative_tests": [
+        "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::bare_decode_rejects_device_qualified_reference",
+        "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::bare_decode_rejects_unknown_trailing_context_tag",
+        "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::bare_decode_rejects_partial_and_empty",
+        "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::setpoint_decode_requires_the_frame_and_full_consumption",
+        "crates/bacnet-objects/src/reference/tests.rs::legacy_list_shape_violations_are_invalid_data_type",
+        "crates/bacnet-objects/src/reference/tests.rs::framed_malformed_is_invalid_data_encoding",
+        "crates/bacnet-objects/src/reference/tests.rs::mixed_flat_and_framed_list_is_invalid_data_encoding",
+        "crates/bacnet-objects/src/reference/tests.rs::wrong_value_datatypes_are_invalid_data_type",
+        "crates/bacnet-objects/src/loop_obj.rs::loop_write_device_qualified_reference_rejected_and_preserves",
+        "crates/bacnet-objects/src/accumulator.rs::pulse_converter_write_malformed_framed_input_reference_rejected",
+        "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::reference_write_rejections_over_the_wire_preserve_state"
+      ],
+      "benchmarks": [],
+      "public_claims": [],
+      "notes": "Split child of BACNET-12-OBJECT-MODEL (#182). The four arms share one objects-layer helper (reference.rs) so the local List form (in-process compatibility) and the framed ApplicationData form (network) converge on the same strict Clause 21 decode; error pairings follow Clause 15.9.1.3: wrong value datatype is PROPERTY / INVALID_DATA_TYPE, malformed framing / device qualification / unknown trailing context tag is PROPERTY / INVALID_DATA_ENCODING, and a mixed flat+framed element list is refused rather than reinterpreted. Null clears, and read arms carry the reference's optional array index as a third list element. Setpoint_Reference additionally accepts the BACnetSetpointReference opening/closing tag [0] frame (unambiguous against the bare form's leading primitive [0]) while refusing unbalanced frames. WritePropertyMultiple in-order commit and rollback are proven for a reference+setpoint request failing its second property. Limitation: reads still emit the flat application-tagged list form rather than re-framing context tags - the encode side is unchanged by this tranche; interop evidence against a second implementation remains open."
     },
     {
       "id": "BACNET-13-COV-SUBSCRIPTIONS",
@@ -421,6 +469,36 @@
       "benchmarks": [],
       "public_claims": [],
       "notes": "Split child of BACNET-12-OBJECT-MODEL (#255; behavior change - previously-accepted invalid writes now fail). The generic macro arms cover AI/AO/AV/BI/BO/BV/MSI/MSO/MSV, the analog macro arm adds Limit_Enable, and the EventEnrollment and AlertEnrollment objects carry their own arms with identical validation. A shared objects-layer helper (common::check_fixed_width_bit_string) shapes the PROPERTY-class error; the decoding-layer sibling in bacnet-encoding is intentionally not reused across layers. Covered shapes: out-of-production Notify_Type (3, 99, u32::MAX), an 8-bit string where the production defines fewer bits, extra or missing content octets, a half-octet string, and - for Limit_Enable - the valid Event_Enable 3-bit shape, which must not cross-apply. Related unaddressed family: the Notification Class recipient-list decoder still masks transition/day bit strings without consulting declared counts - noted as a follow-up rather than folded into this tranche."
+    },
+    {
+      "id": "BACNET-15-STRUCTURED-WRITE-DECODE",
+      "standard_anchor": "Clause 15.9 WriteProperty (15.9.1.2 Result(+), 15.9.1.3 Result(-)), Clause 15.10 WritePropertyMultiple, Clause 20.2.1 (concatenated elements)",
+      "priority": "P1",
+      "requirement_summary": "WriteProperty and WritePropertyMultiple decode the entire propertyValue payload: elements are decoded with decode_application_value until the input is exhausted - the mirror of encode_property_value's List flattening - so one element yields the scalar PropertyValue and more than one yields PropertyValue::List. Full consumption is required: a partial or undecodable trailing element, and an empty payload, are PROPERTY / INVALID_DATA_ENCODING per Clause 15.9.1.3 (The encoding is not valid for the datatype of the property) - never a silent drop - with the stored value proven unchanged; a well-formed extra element reaches a scalar arm and fails its shape as INVALID_DATA_TYPE. The RECIPIENT_LIST verbatim special-case keeps its precedence and the context-tagged ApplicationData widening of the single-element decoder is preserved (framed CHOICE properties, Clause 12.17 reference members).",
+      "status": "supported-with-clause-evidence",
+      "code_anchors": [
+        "crates/bacnet-server/src/handlers/write_property.rs",
+        "crates/bacnet-encoding/src/primitives/mod.rs"
+      ],
+      "positive_tests": [
+        "crates/bacnet-server/src/handlers/list.rs::whole_list_write_property_decodes_all_elements",
+        "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::well_formed_trailing_element_reaches_scalar_arm_as_list_and_is_refused",
+        "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::datetime_value_present_value_and_priority_array_over_the_wire",
+        "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::datetime_relinquish_default_over_the_wire_recaptures_present_value",
+        "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::wpm_reference_write_commits_in_order_and_rolls_back_on_failure",
+        "crates/bacnet-server/src/handlers/tests/framed_properties.rs::recipient_list_framed_wire_round_trip",
+        "crates/bacnet-server/src/handlers/tests/framed_properties.rs::event_parameters_framed_wire_round_trip"
+      ],
+      "negative_tests": [
+        "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::scalar_write_with_undecodable_trailing_element_is_refused_and_preserves",
+        "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::list_write_with_undecodable_trailing_element_is_refused_and_preserves",
+        "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::list_write_with_tlv_truncated_tail_is_refused_before_the_value_decode",
+        "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::empty_property_value_is_refused",
+        "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::datetime_write_with_mispaired_members_is_refused_and_preserves"
+      ],
+      "benchmarks": [],
+      "public_claims": [],
+      "notes": "Split child of BACNET-12-OBJECT-MODEL (#182; behavior change - trailing bytes previously dropped between the single-element decoder and the arm now decide the write, and malformed value payloads map to PROPERTY / INVALID_DATA_ENCODING instead of the SERVICES/OTHER a propagated raw decoding error produced). A value TLV-truncated far enough to break framing is refused earlier by the service request's own [3]/[4] context walk (a framing error, still never silent; pinned by list_write_with_tlv_truncated_tail_is_refused_before_the_value_decode). Unlocks covered here: MSI Alarm_Values whole-list writes (the pin in handlers/list.rs flipped from pinned failure to per-element-validated success) and the datetime-paired value properties completing #270 (DateTime Value PV / Priority_Array entries, Relinquish_Default on DateTime Value + DateTime Pattern Value; see BACNET-12-RELINQUISH-DEFAULT-WRITABILITY). WPM keeps its validate-all-then-commit-with-rollback semantics for structured values. Known residues (follow-ups, not regressions): AddListElement/RemoveListElement still break their listOfElements loop on an undecodable element instead of erroring (#182's wider scope); Enumerated contents wider than four octets still truncate to u32 (#277, explicitly untouched); and properties declared SEQUENCE OF beyond the four reference arms (e.g. LIST_OF_OBJECT_PROPERTY_REFERENCES) keep their pre-existing arm-level behavior."
     },
     {
       "id": "BACNET-20-ENCODING",

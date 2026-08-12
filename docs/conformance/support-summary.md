@@ -4,16 +4,16 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-08-12
-- Implementation evidence SHA reviewed: `926559c539c58043f1c77afb1148be0288bc34cc`
-- Scope: Objects-layer write-path validation tranche (branch codex/write-path-validation; issues #252, #240, #255, #270): the Reliability write-path validity predicate derives from Reliability::ALL_NAMED plus the explicit 64..=65535 vendor range (#252); Loop, Schedule, and the nine intrinsic-reporting carriers gate in-service Reliability writes while Trend Log / Trend Log Multiple refuse them after their Clause 12 tables showed no writability grant (#240); Notify_Type writes validate against the three-value production and Event_Enable/Limit_Enable writes require the canonical fixed-width bit-string encoding (#255); and Relinquish_Default is network-writable and locally settable, with per-type validation, on the commandable object types (#270). Conventions unchanged: `repo_sha` names the last code commit of the PR branch (this docs-refresh commit lands after it), matching how the previous tranches recorded their reviewed SHA.
-- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for the Clause 12.17 Loop table and footnotes (Table 12-20), the Clause 12.24/12.25 Schedule/Trend Log tables and Reliability_Evaluation_Inhibit texts, the Clause 12.30 Trend Log Multiple table, the Clause 21 BACnetNotifyType / BACnetEventTransitionBits / BACnetLimitEnable / BACnetReliability productions, the Clause 15.9.1.3 error table, and the Clause 12 commandable-type tables cited by the Relinquish_Default row (Tables 12-3, 12-8, 12-10, 12-22, 12-23, 12-30, 12-64, 12-69 and the Clause 12.41+ value object tables). No external addenda/errata check was performed for this tranche; per-row scope is recorded in each row's notes.
+- Implementation evidence SHA reviewed: `1f29ca859e7dd40e985c1a72d8c7ce9a08a274c7`
+- Scope: Write-path structured-value decode tranche (branch codex/write-path-decode; issue #182): WriteProperty and WritePropertyMultiple loop-decode the entire propertyValue payload into a scalar or PropertyValue::List (mirroring encode_property_value's List flattening) with full consumption required (a partial or undecodable element is PROPERTY / INVALID_DATA_ENCODING); the Loop reference properties and Pulse Converter Input_Reference accept their Clause 21 BACnetObjectPropertyReference / BACnetSetpointReference wire frames and reject device-qualified members [3]; and the decode unlocks MSI Alarm_Values whole-list writes plus the datetime-paired Date/Time pair properties (DateTime Value Present_Value and Priority_Array entries, and Relinquish_Default on DateTime Value and DateTime Pattern Value — the last two tranche-L1 exclusions, completing #270). Conventions unchanged: `repo_sha` names the last code commit of the PR branch (this docs-refresh commit lands after it), matching how the previous tranches recorded their reviewed SHA.
+- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for the Clause 15.9 / 15.10 write-service result text and the Clause 15.9.1.3 error table, the Clause 12.17 Loop clause and Table 12-20 (the reference-property types), the Clause 12.10 Pulse Converter Input_Reference text, the Clause 12.38 Table 12-45 and Clause 12.46 value-object tables, and the Clause 21 BACnetObjectPropertyReference / BACnetSetpointReference productions. No external addenda/errata check was performed for this tranche; per-row scope is recorded in each row's notes.
 
 ## Counts
 
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 15 |
-| Priority | P1 | 18 |
+| Priority | P1 | 20 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
@@ -26,7 +26,7 @@
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
 | Status | in-progress | 3 |
-| Status | supported-with-clause-evidence | 8 |
+| Status | supported-with-clause-evidence | 10 |
 | Status | unknown-pending-source-review | 4 |
 
 ## Ledger Rows
@@ -49,9 +49,11 @@
 | `BACNET-12-EVENT-PARAMETERS-FRAMING` | Clause 12.12, Clause 21 | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-12-OOS-RELIABILITY-WRITABILITY` | Clause 12.17 Table 12-20 footnote 7 (Loop); Clause 12 Out_Of_Service property texts (12.2/12.3/12.4/12.6/12.7/12.8/12.19/12.21/12.22 families); Clause 12.24 Schedule Reliability_Evaluation_Inhibit text; Clause 12.25 Table 12-29 and Clause 12.30 Table 12-35 (Trend Log / Trend Log Multiple); Clause 21 BACnetReliability | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-12-RELINQUISH-DEFAULT-WRITABILITY` | Clause 12.3 Table 12-3 (Analog Output), Clause 12.7 Table 12-8 (Binary Output), Clause 12.8 Table 12-10 (Binary Value), Clause 12.19 Table 12-22 (Multi-state Output), Clause 12.20 Table 12-23 (Multi-state Value), Clause 12.26 Table 12-30 (Access Door), Clause 12.54 Table 12-64 (Lighting Output), Clause 12.55 Table 12-69 (Binary Lighting Output), Clause 12 value object tables; Clause 19 command prioritization | P1 | supported-with-clause-evidence | 0 |
+| `BACNET-12-REFERENCE-PROPERTY-WRITABILITY` | Clause 12.17 with Table 12-20 (Loop), Clause 12.10 (Pulse Converter Input_Reference), Clause 21 BACnetObjectPropertyReference / BACnetSetpointReference productions | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-13-COV-SUBSCRIPTIONS` | Clauses 13.14-13.18 | P1 | implementation-present-needs-conformance-tests | 0 |
 | `BACNET-15-ARRAY-INDEX-GATING` | Clause 15.5.1.3, Clause 15.9.1.3 (with Clause 12.1.5) | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-15-WP-EVENT-FIELD-VALIDATION` | Clause 15.9.1.3 (WriteProperty error table) with Clause 21 BACnetNotifyType / BACnetEventTransitionBits / BACnetLimitEnable productions | P1 | supported-with-clause-evidence | 0 |
+| `BACNET-15-STRUCTURED-WRITE-DECODE` | Clause 15.9 WriteProperty (15.9.1.2 Result(+), 15.9.1.3 Result(-)), Clause 15.10 WritePropertyMultiple, Clause 20.2.1 (concatenated elements) | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-20-ENCODING` | Clause 20 | P1 | implementation-present-needs-negative-tests | 2 |
 | `BACNET-21-FORMAL-APDUS` | Clause 21 | P1 | implementation-present-needs-conformance-tests | 2 |
 | `BACNET-21-TIMESTAMP-CHOICE` | Clause 21 (BACnetTimeStamp), Clause 20.2.1.5 | P1 | supported-with-clause-evidence | 1 |
