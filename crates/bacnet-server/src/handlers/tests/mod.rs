@@ -38,6 +38,7 @@ mod async_dcc;
 mod detection_enable_summary;
 mod device_event;
 mod framed_properties;
+mod multi_element_writes;
 mod passwords;
 mod read_rpm;
 mod wpm_create_alarm;

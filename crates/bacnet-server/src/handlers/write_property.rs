@@ -227,19 +227,42 @@ pub fn handle_write_property_multiple(
     Ok(written_oids)
 }
 
+/// PROPERTY / INVALID_DATA_ENCODING for a `propertyValue` payload that does
+/// not decode (Clause 15.9.1.3: "The encoding is not valid for the datatype
+/// of the property").
+fn invalid_data_encoding_error() -> Error {
+    Error::Protocol {
+        class: ErrorClass::PROPERTY.to_raw() as u32,
+        code: ErrorCode::INVALID_DATA_ENCODING.to_raw() as u32,
+    }
+}
+
 /// Decode the `propertyValue` bytes of a WriteProperty-family request into
 /// the `PropertyValue` handed to the object's write arm.
 ///
-/// Framed ASN.1 properties with a leading context tag (e.g.
-/// `Event_Parameters`) decode to one [`PropertyValue::ApplicationData`]
-/// element via the generic decoder. `Recipient_List` is different: its
-/// framed form is a `BACnetLIST` — a concatenation of destinations whose
-/// members are application-tagged — so the generic single-element decode
-/// would consume only the first member (the `valid_days` bit string) and
-/// discard the rest (the whole-list decode gap tracked as #182). The object
-/// layer owns the framed codec, so hand the complete content over verbatim;
-/// the property's Clause 12 datatype is fixed by its identifier wherever it
-/// appears (Notification Class, Notification Forwarder).
+/// The whole payload is consumed (#182): elements are decoded with
+/// `decode_application_value` until the input is exhausted, mirroring
+/// `encode_property_value`'s `List` flattening. Exactly one element yields a
+/// scalar `PropertyValue`; more than one yields `PropertyValue::List`. A
+/// partial element at the tail — and any other decode failure — is
+/// PROPERTY / INVALID_DATA_ENCODING; trailing bytes are never silently
+/// dropped on the floor between the single-element decoder and the object's
+/// write arm.
+///
+/// Context-tagged content keeps the generic decoder's `ApplicationData`
+/// widening: framed ASN.1 properties (e.g. `Event_Parameters`, one
+/// opening/closing CHOICE element) arrive as one `ApplicationData` scalar,
+/// and context-tagged member productions (the Loop/Accumulator reference
+/// properties, primitive context tags [0]/[1]/[2]) arrive as one
+/// `ApplicationData` element per member — the object arm owns their
+/// reassembly and framed decode (Clause 12.17).
+///
+/// `Recipient_List` stays verbatim: its framed form is a `BACnetLIST` — a
+/// concatenation of destinations whose members mix application tags with the
+/// recipient CHOICE's context tags — so the object layer keeps owning its
+/// framed codec, and the property's Clause 12 datatype is fixed by its
+/// identifier wherever it appears (Notification Class, Notification
+/// Forwarder).
 pub(crate) fn decode_write_property_value(
     property: PropertyIdentifier,
     bytes: &[u8],
@@ -247,7 +270,20 @@ pub(crate) fn decode_write_property_value(
     if property == PropertyIdentifier::RECIPIENT_LIST {
         return Ok(PropertyValue::ApplicationData(bytes.to_vec()));
     }
-    Ok(bacnet_encoding::primitives::decode_application_value(bytes, 0)?.0)
+    let mut values = Vec::new();
+    let mut offset = 0;
+    while offset < bytes.len() {
+        let (value, new_offset) =
+            bacnet_encoding::primitives::decode_application_value(bytes, offset)
+                .map_err(|_| invalid_data_encoding_error())?;
+        values.push(value);
+        offset = new_offset;
+    }
+    match values.len() {
+        0 => Err(invalid_data_encoding_error()),
+        1 => Ok(values.pop().expect("one element present")),
+        _ => Ok(PropertyValue::List(values)),
+    }
 }
 
 /// Handle a WriteProperty request.
