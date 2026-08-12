@@ -31,9 +31,13 @@ use crate::tags::{self, TagClass};
 
 pub mod event_parameter;
 pub mod fault_parameter;
+pub mod recipient;
 
 pub use event_parameter::{decode_event_parameter, encode_event_parameter};
 pub use fault_parameter::{decode_fault_parameters, encode_fault_parameters};
+pub use recipient::{
+    decode_destination, decode_destination_list, encode_destination, encode_destination_list,
+};
 
 /// Upper bound on decoded SEQUENCE OF / list lengths, mirroring the socket-
 /// facing posture of `bacnet-services`' `MAX_DECODED_ITEMS`. Prevents memory

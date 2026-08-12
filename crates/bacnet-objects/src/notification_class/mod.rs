@@ -142,44 +142,18 @@ impl BACnetObject for NotificationClass {
                     data: vec![byte],
                 })
             }
-            p if p == PropertyIdentifier::RECIPIENT_LIST => Ok(PropertyValue::List(
-                self.recipient_list
-                    .iter()
-                    .map(|dest| {
-                        PropertyValue::List(vec![
-                            // valid_days as bitstring (7 bits used, 1 unused)
-                            PropertyValue::BitString {
-                                unused_bits: 1,
-                                data: vec![bacnet_types::bitstring::pack_octet(dest.valid_days)],
-                            },
-                            PropertyValue::Time(dest.from_time),
-                            PropertyValue::Time(dest.to_time),
-                            // recipient: Device (ObjectIdentifier) or Address
-                            // (network_number + mac_address). The address form
-                            // is encoded as a two-element list so the network
-                            // number survives the round-trip; the flat
-                            // application-tagged shape mirrors the existing
-                            // Recipient_List encoding simplification.
-                            match &dest.recipient {
-                                BACnetRecipient::Device(oid) => {
-                                    PropertyValue::ObjectIdentifier(*oid)
-                                }
-                                BACnetRecipient::Address(addr) => PropertyValue::List(vec![
-                                    PropertyValue::Unsigned(addr.network_number as u64),
-                                    PropertyValue::OctetString(addr.mac_address.to_vec()),
-                                ]),
-                            },
-                            PropertyValue::Unsigned(dest.process_identifier as u64),
-                            PropertyValue::Boolean(dest.issue_confirmed_notifications),
-                            // transitions as bitstring (3 bits used, 5 unused)
-                            PropertyValue::BitString {
-                                unused_bits: 5,
-                                data: vec![bacnet_types::bitstring::pack_octet(dest.transitions)],
-                            },
-                        ])
-                    })
-                    .collect(),
-            )),
+            p if p == PropertyIdentifier::RECIPIENT_LIST => {
+                // Full ASN.1 framing: BACnetLIST of BACnetDestination — each
+                // entry a 7-element application-tagged SEQUENCE with the
+                // recipient discriminated by context tag (device [0]
+                // primitive / address [1] constructed), Clause 12.21 + 21.
+                let mut buf = bytes::BytesMut::new();
+                bacnet_encoding::constructed::encode_destination_list(
+                    &mut buf,
+                    &self.recipient_list,
+                );
+                Ok(PropertyValue::ApplicationData(buf.to_vec()))
+            }
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -199,84 +173,34 @@ impl BACnetObject for NotificationClass {
             return Err(common::invalid_data_type_error());
         }
         if property == PropertyIdentifier::RECIPIENT_LIST {
-            if let PropertyValue::List(entries) = value {
-                let mut new_list = Vec::with_capacity(entries.len());
-                for entry in entries {
-                    if let PropertyValue::List(fields) = entry {
-                        if fields.len() < 7 {
-                            return Err(common::invalid_data_type_error());
-                        }
-                        // [0] valid_days: BitString (7 bits, 1 unused)
-                        let valid_days = match &fields[0] {
-                            PropertyValue::BitString { data, .. } if !data.is_empty() => {
-                                bacnet_types::bitstring::unpack_octet(data, 7)
-                            }
-                            _ => return Err(common::invalid_data_type_error()),
-                        };
-                        // [1] from_time
-                        let from_time = match fields[1] {
-                            PropertyValue::Time(t) => t,
-                            _ => return Err(common::invalid_data_type_error()),
-                        };
-                        // [2] to_time
-                        let to_time = match fields[2] {
-                            PropertyValue::Time(t) => t,
-                            _ => return Err(common::invalid_data_type_error()),
-                        };
-                        // [3] recipient: Device (ObjectIdentifier) or Address
-                        // (List[Unsigned network_number, OctetString mac]).
-                        let recipient = match &fields[3] {
-                            PropertyValue::ObjectIdentifier(oid) => BACnetRecipient::Device(*oid),
-                            PropertyValue::List(items) if items.len() == 2 => {
-                                let network_number = match &items[0] {
-                                    PropertyValue::Unsigned(v) => *v as u16,
-                                    _ => return Err(common::invalid_data_type_error()),
-                                };
-                                let mac_address = match &items[1] {
-                                    PropertyValue::OctetString(mac) => MacAddr::from_slice(mac),
-                                    _ => return Err(common::invalid_data_type_error()),
-                                };
-                                BACnetRecipient::Address(BACnetAddress {
-                                    network_number,
-                                    mac_address,
-                                })
-                            }
-                            _ => return Err(common::invalid_data_type_error()),
-                        };
-                        // [4] process_identifier
-                        let process_identifier = match fields[4] {
-                            PropertyValue::Unsigned(v) => common::u64_to_u32(v)?,
-                            _ => return Err(common::invalid_data_type_error()),
-                        };
-                        // [5] issue_confirmed_notifications
-                        let issue_confirmed_notifications = match fields[5] {
-                            PropertyValue::Boolean(b) => b,
-                            _ => return Err(common::invalid_data_type_error()),
-                        };
-                        // [6] transitions: BitString (3 bits, 5 unused)
-                        let transitions = match &fields[6] {
-                            PropertyValue::BitString { data, .. } if !data.is_empty() => {
-                                bacnet_types::bitstring::unpack_octet(data, 3)
-                            }
-                            _ => return Err(common::invalid_data_type_error()),
-                        };
-                        new_list.push(BACnetDestination {
-                            valid_days,
-                            from_time,
-                            to_time,
-                            recipient,
-                            process_identifier,
-                            issue_confirmed_notifications,
-                            transitions,
-                        });
-                    } else {
-                        return Err(common::invalid_data_type_error());
+            self.recipient_list = match &value {
+                // Framed wire form (Clause 12.21 BACnetLIST of
+                // BACnetDestination): strict — one malformed entry rejects
+                // the whole write.
+                PropertyValue::ApplicationData(bytes) => {
+                    match bacnet_encoding::constructed::decode_destination_list(bytes) {
+                        Ok(list) => list,
+                        Err(_) => return Err(common::invalid_data_type_error()),
                     }
                 }
-                self.recipient_list = new_list;
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
+                // Legacy flat application-tagged form (pre-#152 layout):
+                // still accepted so older internal clients keep working.
+                PropertyValue::List(entries) => {
+                    let mut new_list = Vec::with_capacity(entries.len());
+                    for entry in entries {
+                        let PropertyValue::List(fields) = entry else {
+                            return Err(common::invalid_data_type_error());
+                        };
+                        match destination_from_flat_fields(fields) {
+                            Some(dest) => new_list.push(dest),
+                            None => return Err(common::invalid_data_type_error()),
+                        }
+                    }
+                    new_list
+                }
+                _ => return Err(common::invalid_data_type_error()),
+            };
+            return Ok(());
         }
         if let Some(result) =
             common::write_out_of_service(&mut self.out_of_service, property, &value)
@@ -504,9 +428,121 @@ pub fn get_notification_recipients(
     filter_recipient_list(&recipient_list_val, transition, today_bit, current_time)
 }
 
+/// Decode ONE legacy flat `Recipient_List` entry (the pre-#152
+/// application-tagged layout: seven `PropertyValue` fields in declaration
+/// order, the address recipient as
+/// `List[Unsigned network_number, OctetString mac]`).
+///
+/// Shared by the write path (where `None` aborts the whole write) and the
+/// recipient filter (where a malformed entry is skipped): the two must not
+/// grow apart again.
+fn destination_from_flat_fields(fields: &[PropertyValue]) -> Option<BACnetDestination> {
+    if fields.len() < 7 {
+        return None;
+    }
+    // [0] valid_days: BitString (7 bits, 1 unused)
+    let valid_days = match &fields[0] {
+        PropertyValue::BitString { data, .. } if !data.is_empty() => {
+            bacnet_types::bitstring::unpack_octet(data, 7)
+        }
+        _ => return None,
+    };
+    // [1] from_time
+    let from_time = match fields[1] {
+        PropertyValue::Time(t) => t,
+        _ => return None,
+    };
+    // [2] to_time
+    let to_time = match fields[2] {
+        PropertyValue::Time(t) => t,
+        _ => return None,
+    };
+    // [3] recipient: Device (ObjectIdentifier) or Address
+    // (List[Unsigned network_number, OctetString mac]).
+    let recipient = match &fields[3] {
+        PropertyValue::ObjectIdentifier(oid) => BACnetRecipient::Device(*oid),
+        PropertyValue::List(items) if items.len() == 2 => {
+            let network_number = match &items[0] {
+                PropertyValue::Unsigned(v) => *v as u16,
+                _ => return None,
+            };
+            let mac_address = match &items[1] {
+                PropertyValue::OctetString(mac) => MacAddr::from_slice(mac),
+                _ => return None,
+            };
+            BACnetRecipient::Address(BACnetAddress {
+                network_number,
+                mac_address,
+            })
+        }
+        _ => return None,
+    };
+    // [4] process_identifier
+    let process_identifier = match fields[4] {
+        PropertyValue::Unsigned(v) => u32::try_from(v).ok()?,
+        _ => return None,
+    };
+    // [5] issue_confirmed_notifications
+    let issue_confirmed_notifications = match fields[5] {
+        PropertyValue::Boolean(b) => b,
+        _ => return None,
+    };
+    // [6] transitions: BitString (3 bits, 5 unused)
+    let transitions = match &fields[6] {
+        PropertyValue::BitString { data, .. } if !data.is_empty() => {
+            bacnet_types::bitstring::unpack_octet(data, 3)
+        }
+        _ => return None,
+    };
+    Some(BACnetDestination {
+        valid_days,
+        from_time,
+        to_time,
+        recipient,
+        process_identifier,
+        issue_confirmed_notifications,
+        transitions,
+    })
+}
+
+/// Decode a `RECIPIENT_LIST` property value into its destinations.
+///
+/// Framed wire form ([`PropertyValue::ApplicationData`]): parses the
+/// `BACnetLIST of BACnetDestination` concatenation — an unparseable entry
+/// stops the walk, keeping the entries before it (read path stays
+/// best-effort). Legacy flat form ([`PropertyValue::List`]):
+/// [`destination_from_flat_fields`], skipping malformed entries.
+fn decode_destination_list_pv(value: &PropertyValue) -> Vec<BACnetDestination> {
+    match value {
+        PropertyValue::ApplicationData(bytes) => {
+            let mut destinations = Vec::new();
+            let mut pos = 0;
+            while pos < bytes.len() {
+                match bacnet_encoding::constructed::decode_destination(bytes, pos) {
+                    Ok((dest, new_pos)) => {
+                        destinations.push(dest);
+                        pos = new_pos;
+                    }
+                    Err(_) => break,
+                }
+            }
+            destinations
+        }
+        PropertyValue::List(entries) => entries
+            .iter()
+            .filter_map(|entry| match entry {
+                PropertyValue::List(fields) => destination_from_flat_fields(fields),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// Filter an encoded `RECIPIENT_LIST` property value by day, time, and transition.
 ///
-/// Parses `PropertyValue::List` entries (as returned by `read_property(RECIPIENT_LIST)`)
+/// Parses the value as returned by `read_property(RECIPIENT_LIST)` — the
+/// framed `BACnetLIST of BACnetDestination` form, or the legacy flat form —
 /// and returns only those recipients matching the given filters.
 pub fn filter_recipient_list(
     recipient_list_value: &PropertyValue,
@@ -514,92 +550,20 @@ pub fn filter_recipient_list(
     today_bit: u8,
     current_time: &Time,
 ) -> Vec<(BACnetRecipient, u32, bool)> {
-    let entries = match recipient_list_value {
-        PropertyValue::List(l) => l,
-        _ => return Vec::new(),
-    };
-
     let transition_mask = transition.bit_mask();
-    let mut result = Vec::new();
-
-    for entry in entries {
-        let fields = match entry {
-            PropertyValue::List(f) if f.len() >= 7 => f,
-            _ => continue,
-        };
-
-        // [0] valid_days bitstring
-        let valid_days = match &fields[0] {
-            PropertyValue::BitString { data, .. } if !data.is_empty() => {
-                bacnet_types::bitstring::unpack_octet(data, 7)
-            }
-            _ => continue,
-        };
-        if valid_days & today_bit == 0 {
-            continue;
-        }
-
-        // [1] from_time, [2] to_time
-        let from_time = match &fields[1] {
-            PropertyValue::Time(t) => t,
-            _ => continue,
-        };
-        let to_time = match &fields[2] {
-            PropertyValue::Time(t) => t,
-            _ => continue,
-        };
-        if !time_in_window(current_time, from_time, to_time) {
-            continue;
-        }
-
-        // [6] transitions bitstring
-        let transitions = match &fields[6] {
-            PropertyValue::BitString { data, .. } if !data.is_empty() => {
-                bacnet_types::bitstring::unpack_octet(data, 3)
-            }
-            _ => continue,
-        };
-        if transitions & transition_mask == 0 {
-            continue;
-        }
-
-        // [3] recipient: Device (ObjectIdentifier) or Address
-        // (List[Unsigned network_number, OctetString mac]).
-        let recipient = match &fields[3] {
-            PropertyValue::ObjectIdentifier(oid) => BACnetRecipient::Device(*oid),
-            PropertyValue::List(items) if items.len() == 2 => {
-                let network_number = match &items[0] {
-                    PropertyValue::Unsigned(v) => *v as u16,
-                    _ => continue,
-                };
-                let mac_address = match &items[1] {
-                    PropertyValue::OctetString(mac) => MacAddr::from_slice(mac),
-                    _ => continue,
-                };
-                BACnetRecipient::Address(BACnetAddress {
-                    network_number,
-                    mac_address,
-                })
-            }
-            _ => continue,
-        };
-
-        // [4] process_identifier
-        let process_id = match &fields[4] {
-            PropertyValue::Unsigned(v) => *v as u32,
-            _ => continue,
-        };
-
-        // [5] issue_confirmed_notifications
-        let confirmed = match &fields[5] {
-            PropertyValue::Boolean(b) => *b,
-            _ => continue,
-        };
-
-        result.push((recipient, process_id, confirmed));
-    }
-
-    result
+    decode_destination_list_pv(recipient_list_value)
+        .into_iter()
+        .filter(|dest| dest.valid_days & today_bit != 0)
+        .filter(|dest| time_in_window(current_time, &dest.from_time, &dest.to_time))
+        .filter(|dest| dest.transitions & transition_mask != 0)
+        .map(|dest| {
+            (
+                dest.recipient,
+                dest.process_identifier,
+                dest.issue_confirmed_notifications,
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -8,6 +8,7 @@ use bacnet_types::enums::ObjectType;
 
 mod event_parameter;
 mod fault_parameter;
+mod recipient;
 
 /// A local BACnetDeviceObjectPropertyReference for tests.
 pub(crate) fn dopr_ai(instance: u32, property: u32) -> BACnetDeviceObjectPropertyReference {

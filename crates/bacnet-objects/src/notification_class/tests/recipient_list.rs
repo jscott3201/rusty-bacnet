@@ -6,7 +6,7 @@
 //! Split out of `tests.rs` to keep both files under the 700-LOC cap.
 
 use super::super::*;
-use super::make_time;
+use super::{make_dest_device, make_time};
 use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
 use bacnet_types::MacAddr;
 
@@ -40,19 +40,19 @@ fn recipient_address_preserves_network_number_all_forms() {
     let val = nc
         .read_property(PropertyIdentifier::RECIPIENT_LIST, None)
         .unwrap();
-    let PropertyValue::List(outer) = &val else {
-        panic!("Expected outer List")
+    // Framed form: the network number is the application-Unsigned16 member
+    // inside the constructed address [1] recipient.
+    let PropertyValue::ApplicationData(bytes) = &val else {
+        panic!("Expected ApplicationData");
     };
-    let PropertyValue::List(fields) = &outer[0] else {
-        panic!("Expected entry List")
-    };
-    assert_eq!(
-        fields[3],
-        PropertyValue::List(vec![
-            PropertyValue::Unsigned(0xBAC0),
-            PropertyValue::OctetString(mac.to_vec()),
-        ])
-    );
+    let decoded = bacnet_encoding::constructed::decode_destination_list(bytes).unwrap();
+    match &decoded[0].recipient {
+        BACnetRecipient::Address(addr) => {
+            assert_eq!(addr.network_number, 0xBAC0);
+            assert_eq!(addr.mac_address, mac);
+        }
+        other => panic!("expected Address recipient, got {other:?}"),
+    }
     nc.write_property(PropertyIdentifier::RECIPIENT_LIST, None, val, None)
         .unwrap();
     match &nc.recipient_list[0].recipient {
@@ -89,6 +89,85 @@ fn recipient_address_preserves_network_number_all_forms() {
         vec![0xFFFF, 0, 1000],
         "all three network forms survive"
     );
+}
+
+#[test]
+fn recipient_list_framed_eight_entry_write_round_trip() {
+    // Annex K.2.25 (AE-N-A BIBB) requires at least 8 writable Recipient_List
+    // entries: write a framed 8-entry BACnetLIST, read it back.
+    let mut nc = NotificationClass::new(9, "NC-9").unwrap();
+    let entries: Vec<BACnetDestination> = (0..8u32)
+        .map(|i| {
+            let mut d = make_dest_device(100 + i);
+            d.process_identifier = i;
+            if i % 2 == 1 {
+                d.recipient = BACnetRecipient::Address(BACnetAddress {
+                    network_number: (1000 + i) as u16,
+                    mac_address: MacAddr::from_slice(&[10, 0, i as u8, 1, 0xBA, 0xC0]),
+                });
+            }
+            d
+        })
+        .collect();
+    let mut framed = bytes::BytesMut::new();
+    bacnet_encoding::constructed::encode_destination_list(&mut framed, &entries);
+    nc.write_property(
+        PropertyIdentifier::RECIPIENT_LIST,
+        None,
+        PropertyValue::ApplicationData(framed.to_vec()),
+        None,
+    )
+    .unwrap();
+    assert_eq!(nc.recipient_list, entries);
+    // The read arm re-emits the identical framed bytes.
+    let val = nc
+        .read_property(PropertyIdentifier::RECIPIENT_LIST, None)
+        .unwrap();
+    assert_eq!(val, PropertyValue::ApplicationData(framed.to_vec()));
+    // And the filter decodes them for routing.
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(nc)).unwrap();
+    let noon = make_time(12, 0);
+    let hits = get_notification_recipients(&db, 9, EventTransition::ToOffnormal, 0x01, &noon);
+    assert_eq!(hits.len(), 8);
+}
+
+#[test]
+fn recipient_list_framed_bad_recipient_tag_rejected() {
+    // recipient under context tag [2] — not a BACnetRecipient choice.
+    let mut framed = bytes::BytesMut::new();
+    bacnet_encoding::primitives::encode_app_bit_string(&mut framed, 1, &[0xFE]);
+    bacnet_encoding::primitives::encode_app_time(&mut framed, &make_time(0, 0));
+    bacnet_encoding::primitives::encode_app_time(&mut framed, &make_time(23, 59));
+    bacnet_encoding::primitives::encode_ctx_unsigned(&mut framed, 2, 1);
+    let mut nc = NotificationClass::new(1, "NC-1").unwrap();
+    let result = nc.write_property(
+        PropertyIdentifier::RECIPIENT_LIST,
+        None,
+        PropertyValue::ApplicationData(framed.to_vec()),
+        None,
+    );
+    assert!(result.is_err(), "recipient tag [2] must be rejected");
+}
+
+#[test]
+fn recipient_list_framed_opening_without_closing_rejected() {
+    // address [1] opened but never closed, mid-list.
+    let mut framed = bytes::BytesMut::new();
+    bacnet_encoding::primitives::encode_app_bit_string(&mut framed, 1, &[0xFE]);
+    bacnet_encoding::primitives::encode_app_time(&mut framed, &make_time(0, 0));
+    bacnet_encoding::primitives::encode_app_time(&mut framed, &make_time(23, 59));
+    bacnet_encoding::tags::encode_opening_tag(&mut framed, 1);
+    bacnet_encoding::primitives::encode_app_unsigned(&mut framed, 0xBAC0);
+    bacnet_encoding::primitives::encode_app_octet_string(&mut framed, &[1, 2, 3]);
+    let mut nc = NotificationClass::new(1, "NC-1").unwrap();
+    let result = nc.write_property(
+        PropertyIdentifier::RECIPIENT_LIST,
+        None,
+        PropertyValue::ApplicationData(framed.to_vec()),
+        None,
+    );
+    assert!(result.is_err(), "unbalanced address must be rejected");
 }
 
 #[test]

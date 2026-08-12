@@ -145,11 +145,8 @@ fn read_recipient_list_empty() {
     let val = nc
         .read_property(PropertyIdentifier::RECIPIENT_LIST, None)
         .unwrap();
-    if let PropertyValue::List(items) = val {
-        assert!(items.is_empty());
-    } else {
-        panic!("Expected List");
-    }
+    // An empty BACnetLIST encodes to zero bytes.
+    assert_eq!(val, PropertyValue::ApplicationData(Vec::new()));
 }
 
 #[test]
@@ -160,50 +157,36 @@ fn add_destination_device_and_read_back() {
     let val = nc
         .read_property(PropertyIdentifier::RECIPIENT_LIST, None)
         .unwrap();
-    let PropertyValue::List(outer) = val else {
-        panic!("Expected outer List");
-    };
-    assert_eq!(outer.len(), 1);
-
-    let PropertyValue::List(fields) = &outer[0] else {
-        panic!("Expected inner List");
-    };
-    // 7 fields: valid_days, from_time, to_time, recipient, process_id, confirmed, transitions
-    assert_eq!(fields.len(), 7);
-
-    // valid_days bitstring: all seven days MSB-first = 0b1111_1110 = 0xFE
+    // Full ASN.1 framing: a BACnetDestination SEQUENCE with untagged
+    // (application-tagged, in-order) members and the recipient under
+    // primitive context tag [0].
     assert_eq!(
-        fields[0],
-        PropertyValue::BitString {
-            unused_bits: 1,
-            data: vec![0b1111_1110],
-        }
+        val,
+        PropertyValue::ApplicationData(vec![
+            0x82, 0x01, 0xFE, // valid-days: all seven days MSB-first
+            0xB4, 0x00, 0x00, 0x00, 0x00, // from_time 00:00:00.00
+            0xB4, 0x17, 0x3B, 0x00, 0x00, // to_time 23:59:00.00
+            0x0C, 0x02, 0x00, 0x00, 0x63, // recipient device [0]: (8<<22)|99
+            0x21, 0x01, // process_identifier 1
+            0x11, // issue_confirmed_notifications TRUE
+            0x82, 0x05, 0xE0, // transitions: all three MSB-first
+        ])
     );
 
-    // from_time
-    assert_eq!(fields[1], PropertyValue::Time(make_time(0, 0)));
-
-    // to_time
-    assert_eq!(fields[2], PropertyValue::Time(make_time(23, 59)));
-
-    // recipient = Device OID for instance 99
+    // …and it decodes back to the exact destination.
+    let PropertyValue::ApplicationData(bytes) = &val else {
+        unreachable!();
+    };
+    let decoded = bacnet_encoding::constructed::decode_destination_list(bytes).unwrap();
     let dev_oid = ObjectIdentifier::new(ObjectType::DEVICE, 99).unwrap();
-    assert_eq!(fields[3], PropertyValue::ObjectIdentifier(dev_oid));
-
-    // process_identifier
-    assert_eq!(fields[4], PropertyValue::Unsigned(1));
-
-    // issue_confirmed_notifications
-    assert_eq!(fields[5], PropertyValue::Boolean(true));
-
-    // transitions: all three, MSB-first = 0b1110_0000 = 0xE0
-    assert_eq!(
-        fields[6],
-        PropertyValue::BitString {
-            unused_bits: 5,
-            data: vec![0b1110_0000],
-        }
-    );
+    assert_eq!(decoded.len(), 1);
+    assert_eq!(decoded[0].valid_days, 0b0111_1111);
+    assert_eq!(decoded[0].from_time, make_time(0, 0));
+    assert_eq!(decoded[0].to_time, make_time(23, 59));
+    assert_eq!(decoded[0].recipient, BACnetRecipient::Device(dev_oid));
+    assert_eq!(decoded[0].process_identifier, 1);
+    assert!(decoded[0].issue_confirmed_notifications);
+    assert_eq!(decoded[0].transitions, 0b0000_0111);
 }
 
 #[test]
@@ -222,54 +205,33 @@ fn add_destination_address_variant() {
         issue_confirmed_notifications: false,
         transitions: 0b0000_0001, // TO_OFFNORMAL only
     };
-    nc.add_destination(dest);
+    nc.add_destination(dest.clone());
 
     let val = nc
         .read_property(PropertyIdentifier::RECIPIENT_LIST, None)
         .unwrap();
-    let PropertyValue::List(outer) = val else {
-        panic!("Expected outer List");
-    };
-    assert_eq!(outer.len(), 1);
-
-    let PropertyValue::List(fields) = &outer[0] else {
-        panic!("Expected inner List");
-    };
-
-    // recipient = Address as List[Unsigned(network_number), OctetString(mac)]
+    // address [1] is constructed BACnetAddress: opening tag 1 /
+    // application-Unsigned16 network number / application-OctetString MAC /
+    // closing tag 1. valid_days Tue–Sat is asymmetric under bit reversal,
+    // so the 0x7C byte witnesses the MSB-first packing (Clause 20.2.10).
     assert_eq!(
-        fields[3],
-        PropertyValue::List(vec![
-            PropertyValue::Unsigned(0),
-            PropertyValue::OctetString(mac.to_vec()),
+        val,
+        PropertyValue::ApplicationData(vec![
+            0x82, 0x01, 0x7C, // valid-days Tue–Sat
+            0xB4, 0x08, 0x00, 0x00, 0x00, // from_time 08:00:00.00
+            0xB4, 0x11, 0x00, 0x00, 0x00, // to_time 17:00:00.00
+            0x1E, 0x21, 0x00, 0x65, 0x06, 0xC0, 0xA8, 0x01, 0x64, 0xBA, 0xC0,
+            0x1F, // recipient address [1] (network 0 + MAC)
+            0x21, 0x2A, // process_identifier 42
+            0x10, // issue_confirmed_notifications FALSE
+            0x82, 0x05, 0x80, // transitions: TO_OFFNORMAL only
         ])
     );
-
-    // valid_days: Tue–Sat is asymmetric under bit reversal, so this byte —
-    // unlike the all-days 0xFE — actually witnesses the MSB-first packing:
-    // tuesday(1)=0x40 .. saturday(5)=0x04.
-    assert_eq!(
-        fields[0],
-        PropertyValue::BitString {
-            unused_bits: 1,
-            data: vec![0b0111_1100],
-        }
-    );
-
-    // process_identifier = 42
-    assert_eq!(fields[4], PropertyValue::Unsigned(42));
-
-    // issue_confirmed = false
-    assert_eq!(fields[5], PropertyValue::Boolean(false));
-
-    // transitions: to-offnormal only = wire bit 0 = 0b1000_0000 (Clause 20.2.10)
-    assert_eq!(
-        fields[6],
-        PropertyValue::BitString {
-            unused_bits: 5,
-            data: vec![0b1000_0000],
-        }
-    );
+    let PropertyValue::ApplicationData(bytes) = &val else {
+        unreachable!();
+    };
+    let decoded = bacnet_encoding::constructed::decode_destination_list(bytes).unwrap();
+    assert_eq!(decoded, vec![dest]);
 }
 
 #[test]
@@ -282,10 +244,19 @@ fn add_multiple_destinations() {
     let val = nc
         .read_property(PropertyIdentifier::RECIPIENT_LIST, None)
         .unwrap();
-    let PropertyValue::List(outer) = val else {
-        panic!("Expected List");
+    let PropertyValue::ApplicationData(bytes) = &val else {
+        panic!("Expected ApplicationData");
     };
-    assert_eq!(outer.len(), 3);
+    let decoded = bacnet_encoding::constructed::decode_destination_list(bytes).unwrap();
+    assert_eq!(decoded.len(), 3);
+    let instances: Vec<u32> = decoded
+        .iter()
+        .map(|d| match &d.recipient {
+            BACnetRecipient::Device(oid) => oid.instance_number(),
+            other => panic!("expected Device recipient, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(instances, vec![100, 200, 300]);
 }
 
 #[test]
