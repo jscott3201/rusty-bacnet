@@ -225,6 +225,98 @@ fn destination_wrong_member_type_rejected() {
 }
 
 #[test]
+fn destination_wrong_width_valid_days_rejected() {
+    // BACnetDaysOfWeek is exactly 1 content octet with unused_bits == 1
+    // (Clause 20.2.10 + Clause 21); empty, overlong, or mismatched encodings
+    // must fail rather than unpack to an all-zero dormant destination.
+    let base = device_destination();
+    let tail = {
+        let mut tail = BytesMut::new();
+        // from/to time + recipient + process id + confirmed + transitions
+        primitives::encode_app_time(&mut tail, &base.from_time);
+        primitives::encode_app_time(&mut tail, &base.to_time);
+        encode_recipient(&mut tail, &base.recipient);
+        primitives::encode_app_unsigned(&mut tail, base.process_identifier as u64);
+        primitives::encode_app_boolean(&mut tail, base.issue_confirmed_notifications);
+        primitives::encode_app_bit_string(&mut tail, 5, &[0xE0]);
+        tail.to_vec()
+    };
+    for bad_days in [
+        // zero content octets
+        {
+            let mut b = BytesMut::new();
+            primitives::encode_app_bit_string(&mut b, 0, &[]);
+            b.to_vec()
+        },
+        // two content octets (overlong)
+        {
+            let mut b = BytesMut::new();
+            primitives::encode_app_bit_string(&mut b, 6, &[0xFE, 0x00]);
+            b.to_vec()
+        },
+        // one octet but wrong unused-bits count (claims all 8 bits)
+        {
+            let mut b = BytesMut::new();
+            primitives::encode_app_bit_string(&mut b, 0, &[0xFE]);
+            b.to_vec()
+        },
+        // one octet, correct count for `transitions` (5) but NOT valid-days (1)
+        {
+            let mut b = BytesMut::new();
+            primitives::encode_app_bit_string(&mut b, 5, &[0xFE]);
+            b.to_vec()
+        },
+    ] {
+        let mut buf = bad_days.clone();
+        buf.extend_from_slice(&tail);
+        assert!(
+            decode_destination(&buf, 0).is_err(),
+            "valid-days {bad_days:?} must be rejected"
+        );
+    }
+}
+
+#[test]
+fn destination_wrong_width_transitions_rejected() {
+    let base = device_destination();
+    let mut head = BytesMut::new();
+    primitives::encode_app_bit_string(&mut head, 1, &[0xFE]);
+    primitives::encode_app_time(&mut head, &base.from_time);
+    primitives::encode_app_time(&mut head, &base.to_time);
+    encode_recipient(&mut head, &base.recipient);
+    primitives::encode_app_unsigned(&mut head, base.process_identifier as u64);
+    primitives::encode_app_boolean(&mut head, base.issue_confirmed_notifications);
+
+    for bad_transitions in [
+        // empty
+        {
+            let mut b = BytesMut::new();
+            primitives::encode_app_bit_string(&mut b, 0, &[]);
+            b.to_vec()
+        },
+        // two content octets
+        {
+            let mut b = BytesMut::new();
+            primitives::encode_app_bit_string(&mut b, -5i8 as u8 & 0xFF, &[0xE0, 0x00]);
+            b.to_vec()
+        },
+        // wrong unused-bits count (1 — the valid-days count)
+        {
+            let mut b = BytesMut::new();
+            primitives::encode_app_bit_string(&mut b, 1, &[0xE0]);
+            b.to_vec()
+        },
+    ] {
+        let mut buf = head.clone();
+        buf.extend_from_slice(&bad_transitions);
+        assert!(
+            decode_destination(&buf, 0).is_err(),
+            "transitions {bad_transitions:?} must be rejected"
+        );
+    }
+}
+
+#[test]
 fn destination_network_number_over_unsigned16_rejected() {
     let base = device_destination();
     let mut buf = BytesMut::new();

@@ -150,7 +150,8 @@ pub fn decode_recipient(data: &[u8], offset: usize) -> Result<(BACnetRecipient, 
 pub fn decode_destination(data: &[u8], offset: usize) -> Result<(BACnetDestination, usize), Error> {
     let what = "BACnetDestination";
     // valid-days: BACnetDaysOfWeek (bit 0 = Monday, MSB-first on the wire).
-    let ((_, days_data), pos) = decode_app_bit_string(data, offset, what)?;
+    let ((days_unused, days_data), pos) = decode_app_bit_string(data, offset, what)?;
+    check_fixed_bit_string(days_unused, &days_data, 1, "valid-days (BACnetDaysOfWeek: 7 bits)")?;
     let valid_days = unpack_octet(&days_data, 7);
     // from-time / to-time.
     let (from_time, pos) = decode_app_time(data, pos, what)?;
@@ -176,7 +177,13 @@ pub fn decode_destination(data: &[u8], offset: usize) -> Result<(BACnetDestinati
     }
     let issue_confirmed_notifications = tag.length != 0;
     // transitions: BACnetEventTransitionBits (3 bits).
-    let ((_, transitions_data), pos) = decode_app_bit_string(data, pos, what)?;
+    let ((transitions_unused, transitions_data), pos) = decode_app_bit_string(data, pos, what)?;
+    check_fixed_bit_string(
+        transitions_unused,
+        &transitions_data,
+        5,
+        "transitions (BACnetEventTransitionBits: 3 bits)",
+    )?;
     let transitions = unpack_octet(&transitions_data, 3);
 
     Ok((
@@ -270,6 +277,33 @@ fn decode_app_time(data: &[u8], offset: usize, what: &str) -> Result<(Time, usiz
         return Err(Error::buffer_too_short(end, data.len()));
     }
     Ok((Time::decode(&data[pos..end])?, end))
+}
+
+/// Fixed-width bit-string member validation. Per Clause 20.2.10 (initial
+/// octet = unused-bit count; defined bits MSB-first) and the Clause 21
+/// productions, the named-bit sets here fit in exactly one subsequent
+/// octet: `BACnetDaysOfWeek` has 7 defined bits (unused_bits 1) and
+/// `BACnetEventTransitionBits` has 3 (unused_bits 5). A zero-length,
+/// overlong, or mismatched-unused-bits encoding is not a destination a
+/// notifier may act on — reject it rather than unpacking an all-zero
+/// (dormant) one.
+fn check_fixed_bit_string(
+    unused_bits: u8,
+    data: &[u8],
+    expected_unused: u8,
+    name: &str,
+) -> Result<(), Error> {
+    if data.len() != 1 || unused_bits != expected_unused {
+        return Err(Error::decoding(
+            0,
+            format!(
+                "{name}: expected 1 content octet with unused_bits {expected_unused} \
+                 (got {} content octet(s), unused_bits {unused_bits})",
+                data.len()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// Decode an application-tagged BIT STRING member, returning

@@ -36,7 +36,8 @@ pub mod recipient;
 pub use event_parameter::{decode_event_parameter, encode_event_parameter};
 pub use fault_parameter::{decode_fault_parameters, encode_fault_parameters};
 pub use recipient::{
-    decode_destination, decode_destination_list, encode_destination, encode_destination_list,
+    decode_destination, decode_destination_list, decode_recipient, encode_destination,
+    encode_destination_list, encode_recipient,
 };
 
 /// Upper bound on decoded SEQUENCE OF / list lengths, mirroring the socket-
