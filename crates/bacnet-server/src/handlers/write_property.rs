@@ -77,7 +77,7 @@ pub fn handle_write_property_multiple(
             });
         }
         for prop in &spec.list_of_properties {
-            let (value, _) = bacnet_encoding::primitives::decode_application_value(&prop.value, 0)?;
+            let value = decode_write_property_value(prop.property_identifier, &prop.value)?;
             decoded_writes.push((
                 oid,
                 prop.property_identifier,
@@ -222,6 +222,29 @@ pub fn handle_write_property_multiple(
 /// `OBJECT_NAME` writes are routed through the database name index: a
 /// duplicate name is rejected up front, and a successful rename refreshes
 /// the index so lookups resolve to the new name and the old name is freed.
+/// Decode the `propertyValue` bytes of a WriteProperty-family request into
+/// the `PropertyValue` handed to the object's write arm.
+///
+/// Framed ASN.1 properties with a leading context tag (e.g.
+/// `Event_Parameters`) decode to one [`PropertyValue::ApplicationData`]
+/// element via the generic decoder. `Recipient_List` is different: its
+/// framed form is a `BACnetLIST` — a concatenation of destinations whose
+/// members are application-tagged — so the generic single-element decode
+/// would consume only the first member (the `valid_days` bit string) and
+/// discard the rest (the whole-list decode gap tracked as #182). The object
+/// layer owns the framed codec, so hand the complete content over verbatim;
+/// the property's Clause 12 datatype is fixed by its identifier wherever it
+/// appears (Notification Class, Notification Forwarder).
+pub(crate) fn decode_write_property_value(
+    property: PropertyIdentifier,
+    bytes: &[u8],
+) -> Result<PropertyValue, Error> {
+    if property == PropertyIdentifier::RECIPIENT_LIST {
+        return Ok(PropertyValue::ApplicationData(bytes.to_vec()));
+    }
+    Ok(bacnet_encoding::primitives::decode_application_value(bytes, 0)?.0)
+}
+
 pub fn handle_write_property(
     db: &mut ObjectDatabase,
     service_data: &[u8],
@@ -239,8 +262,7 @@ pub fn handle_write_property(
         });
     }
 
-    let (value, _) =
-        bacnet_encoding::primitives::decode_application_value(&request.property_value, 0)?;
+    let value = decode_write_property_value(request.property_identifier, &request.property_value)?;
 
     // Enforce Object_Name uniqueness against the database index before mutating.
     if request.property_identifier == PropertyIdentifier::OBJECT_NAME {
