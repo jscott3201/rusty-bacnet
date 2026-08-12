@@ -30,6 +30,18 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
+    /// BACnet escalator operation direction and speed (Clause 21).
+    pub struct EscalatorOperationDirection(u32);
+
+    const UNKNOWN = 0;
+    const STOPPED = 1;
+    const UP_RATED_SPEED = 2;
+    const UP_REDUCED_SPEED = 3;
+    const DOWN_RATED_SPEED = 4;
+    const DOWN_REDUCED_SPEED = 5;
+}
+
+bacnet_enum! {
     /// BACnet lift car travel direction (Clause 12.59).
     pub struct LiftCarDirection(u32);
 

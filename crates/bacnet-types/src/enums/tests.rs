@@ -181,6 +181,29 @@ fn life_safety_state_tail_values_match_clause_21() {
     );
 }
 
+/// 135-2020 Clause 21 (`BACnetEscalatorOperationDirection ::= ENUMERATED`):
+/// the values are direction *and* speed combined (reduced vs rated), not a
+/// plain up/down triplet.
+#[test]
+fn escalator_operation_direction_values_match_clause_21() {
+    let all = [
+        ("UNKNOWN", 0),
+        ("STOPPED", 1),
+        ("UP_RATED_SPEED", 2),
+        ("UP_REDUCED_SPEED", 3),
+        ("DOWN_RATED_SPEED", 4),
+        ("DOWN_REDUCED_SPEED", 5),
+    ];
+    assert_eq!(EscalatorOperationDirection::ALL_NAMED.len(), all.len());
+    for (i, &(name, raw)) in all.iter().enumerate() {
+        let (named_name, value) = EscalatorOperationDirection::ALL_NAMED[i];
+        assert_eq!(named_name, name);
+        assert_eq!(value.to_raw(), raw);
+        assert_eq!(EscalatorOperationDirection::from_raw(raw), value);
+        assert_eq!(format!("{value}"), name);
+    }
+}
+
 #[test]
 fn backup_and_restore_state_failure_values() {
     // A device reporting either failure state during a Clause 19.1
