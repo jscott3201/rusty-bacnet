@@ -400,3 +400,133 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
     );
     assert_rejects(&mut msv, READ_ONLY, "MSV");
 }
+
+/// The per-object `write_property` arms and the `is_writable_property`
+/// override must agree on the two objects hardened in the #182 review round:
+/// Pulse Converter (whose historical default advertised INPUT_REFERENCE
+/// read-only while the arm accepted it — and OBJECT_NAME writable while no
+/// arm routes it) and Averaging (same OBJECT_NAME misadvertising; its
+/// OBJECT_PROPERTY_REFERENCE arm stayed unadvertised). Each advertised
+/// property is written with a canonical good value; each unadvertised one
+/// must reject even a plausible value.
+#[test]
+fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging() {
+    use bacnet_objects::accumulator::PulseConverterObject;
+    use bacnet_objects::averaging::AveragingObject;
+    use bacnet_types::enums::ObjectType;
+    use bacnet_types::primitives::ObjectIdentifier;
+
+    fn assert_exactly(
+        obj: &mut dyn BACnetObject,
+        label: &str,
+        accepted: &[(PropertyIdentifier, PropertyValue)],
+        rejected: &[(PropertyIdentifier, PropertyValue)],
+    ) {
+        for (pid, value) in accepted.iter().cloned() {
+            assert!(
+                obj.is_writable_property(pid),
+                "{label}: {pid:?} must be advertised writable"
+            );
+            assert!(
+                obj.write_property(pid, None, value, None).is_ok(),
+                "{label}: {pid:?} advertised writable but the arm rejected a good value"
+            );
+        }
+        for (pid, value) in rejected.iter().cloned() {
+            assert!(
+                !obj.is_writable_property(pid),
+                "{label}: {pid:?} must NOT be advertised writable"
+            );
+            assert!(
+                obj.write_property(pid, None, value, None).is_err(),
+                "{label}: {pid:?} not advertised but the arm accepted a write"
+            );
+        }
+    }
+
+    let reference_value = PropertyValue::List(vec![
+        PropertyValue::ObjectIdentifier(
+            ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 5).unwrap(),
+        ),
+        PropertyValue::Enumerated(PropertyIdentifier::PRESENT_VALUE.to_raw()),
+    ]);
+
+    let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    assert_exactly(
+        &mut pc,
+        "PC",
+        &[
+            (PropertyIdentifier::PRESENT_VALUE, PropertyValue::Real(10.0)),
+            (PropertyIdentifier::SCALE_FACTOR, PropertyValue::Real(1.5)),
+            (PropertyIdentifier::ADJUST_VALUE, PropertyValue::Real(2.0)),
+            (PropertyIdentifier::COV_INCREMENT, PropertyValue::Real(0.5)),
+            (PropertyIdentifier::INPUT_REFERENCE, reference_value.clone()),
+            (
+                PropertyIdentifier::DESCRIPTION,
+                PropertyValue::CharacterString("d".into()),
+            ),
+            (
+                PropertyIdentifier::OUT_OF_SERVICE,
+                PropertyValue::Boolean(true),
+            ),
+        ],
+        &[
+            (
+                PropertyIdentifier::OBJECT_NAME,
+                PropertyValue::CharacterString("renamed".into()),
+            ),
+            (PropertyIdentifier::UNITS, PropertyValue::Enumerated(95)),
+            (
+                PropertyIdentifier::RELIABILITY,
+                PropertyValue::Enumerated(0),
+            ),
+            (
+                PropertyIdentifier::EVENT_STATE,
+                PropertyValue::Enumerated(0),
+            ),
+            (
+                PropertyIdentifier::STATUS_FLAGS,
+                PropertyValue::BitString {
+                    unused_bits: 4,
+                    data: vec![0],
+                },
+            ),
+        ],
+    );
+
+    let mut avg = AveragingObject::new(1, "AVG-1").unwrap();
+    assert_exactly(
+        &mut avg,
+        "AVG",
+        &[
+            (
+                PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
+                reference_value,
+            ),
+            (
+                PropertyIdentifier::DESCRIPTION,
+                PropertyValue::CharacterString("d".into()),
+            ),
+            (
+                PropertyIdentifier::OUT_OF_SERVICE,
+                PropertyValue::Boolean(true),
+            ),
+        ],
+        &[
+            (
+                PropertyIdentifier::OBJECT_NAME,
+                PropertyValue::CharacterString("renamed".into()),
+            ),
+            (PropertyIdentifier::PRESENT_VALUE, PropertyValue::Real(1.0)),
+            (PropertyIdentifier::MINIMUM_VALUE, PropertyValue::Real(1.0)),
+            (
+                PropertyIdentifier::WINDOW_INTERVAL,
+                PropertyValue::Unsigned(60),
+            ),
+            (
+                PropertyIdentifier::RELIABILITY,
+                PropertyValue::Enumerated(0),
+            ),
+        ],
+    );
+}

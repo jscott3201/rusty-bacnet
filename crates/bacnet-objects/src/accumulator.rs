@@ -399,6 +399,25 @@ impl BACnetObject for PulseConverterObject {
     fn cov_increment(&self) -> Option<f32> {
         Some(self.cov_increment)
     }
+
+    /// Mirror the `write_property` arms exactly (PICS truth invariant):
+    /// Pulse Converter accepts PRESENT_VALUE / SCALE_FACTOR / ADJUST_VALUE /
+    /// INPUT_REFERENCE plus the shared DESCRIPTION / OUT_OF_SERVICE /
+    /// COV_INCREMENT routes. OBJECT_NAME is NOT advertised: unlike the
+    /// historical default's blanket claim, no arm routes it (a network write
+    /// falls through to WRITE_ACCESS_DENIED).
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        matches!(
+            property,
+            PropertyIdentifier::PRESENT_VALUE
+                | PropertyIdentifier::SCALE_FACTOR
+                | PropertyIdentifier::ADJUST_VALUE
+                | PropertyIdentifier::INPUT_REFERENCE
+                | PropertyIdentifier::DESCRIPTION
+                | PropertyIdentifier::OUT_OF_SERVICE
+                | PropertyIdentifier::COV_INCREMENT
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
