@@ -256,3 +256,344 @@ fn empty_property_value_is_refused() {
         "empty propertyValue",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Structured reference properties (#182): the Loop references (Clause 12.17)
+// and Pulse Converter Input_Reference (Clause 12.10) are
+// BACnetObjectPropertyReference — primitive context-tagged members [0]/[1]/[2]
+// that the generic decode hands to the arm as `ApplicationData` element(s).
+// ---------------------------------------------------------------------------
+
+use bacnet_types::constructed::BACnetObjectPropertyReference;
+
+fn framed_reference(r: &BACnetObjectPropertyReference) -> Vec<u8> {
+    let mut buf = BytesMut::new();
+    bacnet_encoding::constructed::encode_object_property_reference(&mut buf, r);
+    buf.to_vec()
+}
+
+fn local_reference_oid() -> ObjectIdentifier {
+    ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 7).unwrap()
+}
+
+fn add_loop(db: &mut ObjectDatabase, instance: u32) -> ObjectIdentifier {
+    let lo = LoopObject::new(instance, format!("LOOP-{instance}"), 62).unwrap();
+    let oid = lo.object_identifier();
+    db.add(Box::new(lo)).unwrap();
+    oid
+}
+
+#[test]
+fn loop_references_framed_writes_over_the_wire() {
+    let mut db = ObjectDatabase::new();
+    let oid = add_loop(&mut db, 1);
+    let target = local_reference_oid();
+    let present_value = PropertyIdentifier::PRESENT_VALUE.to_raw();
+
+    // Indexed CONTROLLED_VARIABLE_REFERENCE: bare member sequence.
+    write_raw(
+        &mut db,
+        oid,
+        PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE,
+        None,
+        framed_reference(&BACnetObjectPropertyReference::new_indexed(
+            target,
+            present_value,
+            3,
+        )),
+    )
+    .unwrap();
+    assert_eq!(
+        read_prop(&db, oid, PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE),
+        PropertyValue::List(vec![
+            PropertyValue::ObjectIdentifier(target),
+            PropertyValue::Enumerated(present_value),
+            PropertyValue::Unsigned(3),
+        ])
+    );
+
+    // MANIPULATED_VARIABLE_REFERENCE: bare members, no index → 3 context-tag
+    // elements minus [2] = 2 ApplicationData elements through the decode loop.
+    write_raw(
+        &mut db,
+        oid,
+        PropertyIdentifier::MANIPULATED_VARIABLE_REFERENCE,
+        None,
+        framed_reference(&BACnetObjectPropertyReference::new(target, present_value)),
+    )
+    .unwrap();
+    assert_eq!(
+        read_prop(&db, oid, PropertyIdentifier::MANIPULATED_VARIABLE_REFERENCE),
+        PropertyValue::List(vec![
+            PropertyValue::ObjectIdentifier(target),
+            PropertyValue::Enumerated(present_value),
+        ])
+    );
+
+    // SETPOINT_REFERENCE: the BACnetSetpointReference [0] frame — one
+    // ApplicationData element through the decode loop.
+    let mut wrapped = BytesMut::new();
+    bacnet_encoding::constructed::encode_setpoint_reference(
+        &mut wrapped,
+        &BACnetObjectPropertyReference::new(target, present_value),
+    );
+    write_raw(
+        &mut db,
+        oid,
+        PropertyIdentifier::SETPOINT_REFERENCE,
+        None,
+        wrapped.to_vec(),
+    )
+    .unwrap();
+    assert_eq!(
+        read_prop(&db, oid, PropertyIdentifier::SETPOINT_REFERENCE),
+        PropertyValue::List(vec![
+            PropertyValue::ObjectIdentifier(target),
+            PropertyValue::Enumerated(present_value),
+        ])
+    );
+}
+
+#[test]
+fn reference_write_flattened_local_form_also_lands_over_the_wire() {
+    let mut db = ObjectDatabase::new();
+    let oid = add_loop(&mut db, 1);
+    let target = local_reference_oid();
+    let present_value = PropertyIdentifier::PRESENT_VALUE.to_raw();
+
+    // A peer (or this stack's own read-build-write-back tooling) writing the
+    // flattened application-tagged form: the decode loop builds the legacy
+    // local List the arm already understood.
+    let bytes = encode_value(PropertyValue::List(vec![
+        PropertyValue::ObjectIdentifier(target),
+        PropertyValue::Enumerated(present_value),
+    ]));
+    write_raw(
+        &mut db,
+        oid,
+        PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE,
+        None,
+        bytes,
+    )
+    .unwrap();
+    assert_eq!(
+        read_prop(&db, oid, PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE),
+        PropertyValue::List(vec![
+            PropertyValue::ObjectIdentifier(target),
+            PropertyValue::Enumerated(present_value),
+        ])
+    );
+
+    // Null clears.
+    write_raw(
+        &mut db,
+        oid,
+        PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE,
+        None,
+        encode_value(PropertyValue::Null),
+    )
+    .unwrap();
+    assert_eq!(
+        read_prop(&db, oid, PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE),
+        PropertyValue::Null
+    );
+}
+
+#[test]
+fn reference_write_rejections_over_the_wire_preserve_state() {
+    let mut db = ObjectDatabase::new();
+    let oid = add_loop(&mut db, 1);
+    let target = local_reference_oid();
+    let present_value = PropertyIdentifier::PRESENT_VALUE.to_raw();
+    let r = BACnetObjectPropertyReference::new(target, present_value);
+    let baseline = PropertyValue::List(vec![
+        PropertyValue::ObjectIdentifier(target),
+        PropertyValue::Enumerated(present_value),
+    ]);
+
+    write_raw(
+        &mut db,
+        oid,
+        PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE,
+        None,
+        framed_reference(&r),
+    )
+    .unwrap();
+
+    // Device-qualified ([3]): not part of the BACnetObjectPropertyReference
+    // production — INVALID_DATA_ENCODING.
+    let mut framed = BytesMut::new();
+    framed.extend_from_slice(&framed_reference(&r));
+    bacnet_encoding::primitives::encode_ctx_object_id(
+        &mut framed,
+        3,
+        &ObjectIdentifier::new(ObjectType::DEVICE, 77).unwrap(),
+    );
+    assert_refused(
+        &mut db,
+        oid,
+        PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE,
+        framed.to_vec(),
+        ErrorCode::INVALID_DATA_ENCODING,
+        baseline.clone(),
+        "device-qualified reference",
+    );
+
+    // Unknown trailing context tag [4]: rejected, baseline preserved.
+    let mut bytes = framed_reference(&r);
+    bytes.extend_from_slice(&[0x49, 0x01]);
+    assert_refused(
+        &mut db,
+        oid,
+        PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE,
+        bytes,
+        ErrorCode::INVALID_DATA_ENCODING,
+        baseline.clone(),
+        "unknown trailing context tag",
+    );
+
+    // Wrong datatype for the property: a two-element Unsigned list is not a
+    // reference — INVALID_DATA_TYPE.
+    let bytes = encode_value(PropertyValue::List(vec![
+        PropertyValue::Unsigned(1),
+        PropertyValue::Unsigned(2),
+    ]));
+    assert_refused(
+        &mut db,
+        oid,
+        PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE,
+        bytes,
+        ErrorCode::INVALID_DATA_TYPE,
+        baseline,
+        "wrong-typed value",
+    );
+}
+
+#[test]
+fn pulse_converter_input_reference_over_the_wire() {
+    use bacnet_objects::accumulator::PulseConverterObject;
+    let mut db = ObjectDatabase::new();
+    let pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let oid = pc.object_identifier();
+    db.add(Box::new(pc)).unwrap();
+
+    let target = ObjectIdentifier::new(ObjectType::ACCUMULATOR, 1).unwrap();
+    let present_value = PropertyIdentifier::PRESENT_VALUE.to_raw();
+    write_raw(
+        &mut db,
+        oid,
+        PropertyIdentifier::INPUT_REFERENCE,
+        None,
+        framed_reference(&BACnetObjectPropertyReference::new_indexed(
+            target,
+            present_value,
+            4,
+        )),
+    )
+    .unwrap();
+    assert_eq!(
+        read_prop(&db, oid, PropertyIdentifier::INPUT_REFERENCE),
+        PropertyValue::List(vec![
+            PropertyValue::ObjectIdentifier(target),
+            PropertyValue::Enumerated(present_value),
+            PropertyValue::Unsigned(4),
+        ])
+    );
+}
+
+#[test]
+fn wpm_reference_write_commits_in_order_and_rolls_back_on_failure() {
+    use bacnet_services::common::BACnetPropertyValue;
+    use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
+
+    let mut db = ObjectDatabase::new();
+    let oid = add_loop(&mut db, 2);
+    let target = local_reference_oid();
+    let present_value = PropertyIdentifier::PRESENT_VALUE.to_raw();
+
+    let wpm = |db: &mut ObjectDatabase, props: Vec<BACnetPropertyValue>| {
+        let request = WritePropertyMultipleRequest {
+            list_of_write_access_specs: vec![WriteAccessSpecification {
+                object_identifier: oid,
+                list_of_properties: props,
+            }],
+        };
+        let mut buf = BytesMut::new();
+        request.encode(&mut buf);
+        handle_write_property_multiple(db, &buf)
+    };
+
+    // Whole request applies atomically on success.
+    wpm(
+        &mut db,
+        vec![
+        BACnetPropertyValue {
+            property_identifier: PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE,
+            property_array_index: None,
+            value: framed_reference(&BACnetObjectPropertyReference::new(target, present_value)),
+            priority: None,
+        },
+        BACnetPropertyValue {
+            property_identifier: PropertyIdentifier::SETPOINT,
+            property_array_index: None,
+            value: encode_value(PropertyValue::Real(21.5)),
+            priority: None,
+        },
+    ])
+    .unwrap();
+    assert_eq!(
+        read_prop(&db, oid, PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE),
+        PropertyValue::List(vec![
+            PropertyValue::ObjectIdentifier(target),
+            PropertyValue::Enumerated(present_value),
+        ])
+    );
+    assert_eq!(
+        read_prop(&db, oid, PropertyIdentifier::SETPOINT),
+        PropertyValue::Real(21.5)
+    );
+
+    // Failing second property rolls the whole request back: the reference
+    // returns to Null, not to a half-committed new value.
+    let err = wpm(
+        &mut db,
+        vec![
+            BACnetPropertyValue {
+                property_identifier: PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE,
+                property_array_index: None,
+                value: framed_reference(&BACnetObjectPropertyReference::new(
+                    ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 3).unwrap(),
+                    present_value,
+                )),
+                priority: None,
+            },
+            BACnetPropertyValue {
+                property_identifier: PropertyIdentifier::SETPOINT,
+                property_array_index: None,
+                value: encode_value(PropertyValue::Unsigned(42)), // wrong type: fails
+                priority: None,
+            },
+        ],
+    )
+    .unwrap_err();
+    match err {
+        Error::Protocol { class, code } => {
+            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+            assert_eq!(code, ErrorCode::INVALID_DATA_TYPE.to_raw() as u32);
+        }
+        other => panic!("expected PROPERTY/INVALID_DATA_TYPE, got {other:?}"),
+    }
+    assert_eq!(
+        read_prop(&db, oid, PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE),
+        PropertyValue::List(vec![
+            PropertyValue::ObjectIdentifier(target),
+            PropertyValue::Enumerated(present_value),
+        ]),
+        "rolled back to the pre-request reference"
+    );
+    assert_eq!(
+        read_prop(&db, oid, PropertyIdentifier::SETPOINT),
+        PropertyValue::Real(21.5),
+        "rolled back to the pre-request setpoint"
+    );
+}

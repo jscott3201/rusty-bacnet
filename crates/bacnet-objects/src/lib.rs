@@ -26,6 +26,7 @@ pub mod multistate;
 pub mod network_port;
 pub mod notification_class;
 pub mod program;
+pub(crate) mod reference;
 pub mod schedule;
 pub mod staging;
 pub mod timer;

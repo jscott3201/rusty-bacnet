@@ -31,10 +31,15 @@ use crate::tags::{self, TagClass};
 
 pub mod event_parameter;
 pub mod fault_parameter;
+pub mod object_property_reference;
 pub mod recipient;
 
 pub use event_parameter::{decode_event_parameter, encode_event_parameter};
 pub use fault_parameter::{decode_fault_parameters, encode_fault_parameters};
+pub use object_property_reference::{
+    decode_object_property_reference, decode_setpoint_reference,
+    encode_object_property_reference, encode_setpoint_reference,
+};
 pub use recipient::{
     decode_destination, decode_destination_list, decode_recipient, encode_destination,
     encode_destination_list, encode_recipient,
