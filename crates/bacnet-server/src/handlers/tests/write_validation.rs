@@ -55,9 +55,7 @@ fn read_wire(
     request.encode(&mut buf);
     let mut ack_buf = BytesMut::new();
     handle_read_property(db, &buf, &mut ack_buf).unwrap();
-    let raw = ReadPropertyACK::decode(&ack_buf.to_vec())
-        .unwrap()
-        .property_value;
+    let raw = ReadPropertyACK::decode(&ack_buf).unwrap().property_value;
     bacnet_encoding::primitives::decode_application_value(&raw, 0)
         .unwrap()
         .0
@@ -310,7 +308,7 @@ fn analog_event_property_writes_are_validated_over_write_property() {
 
     // Limit_Enable is a 2-bit production (BACnetLimitEnable): unused_bits must
     // be 6; the 3-bit Event_Enable shape must not be accepted here.
-    let baseline = read_wire(&mut db, ai_oid, PropertyIdentifier::LIMIT_ENABLE);
+    let baseline = read_wire(&db, ai_oid, PropertyIdentifier::LIMIT_ENABLE);
     for (unused_bits, data, label) in [
         (0u8, vec![0xFFu8], "8-bit string where 2 are defined"),
         (5u8, vec![0xE0u8], "Event_Enable's 3-bit shape"),
@@ -396,7 +394,7 @@ fn relinquish_default_write_recaptures_present_value_over_write_property() {
     slot.encode(&mut buf);
     handle_write_property(&mut db, &buf).unwrap();
     assert_eq!(
-        read_wire(&mut db, ao_oid, PropertyIdentifier::PRESENT_VALUE),
+        read_wire(&db, ao_oid, PropertyIdentifier::PRESENT_VALUE),
         PropertyValue::Real(55.0)
     );
 
@@ -408,11 +406,11 @@ fn relinquish_default_write_recaptures_present_value_over_write_property() {
     )
     .expect("Relinquish_Default must be writable");
     assert_eq!(
-        read_wire(&mut db, ao_oid, PropertyIdentifier::RELINQUISH_DEFAULT),
+        read_wire(&db, ao_oid, PropertyIdentifier::RELINQUISH_DEFAULT),
         PropertyValue::Real(12.5)
     );
     assert_eq!(
-        read_wire(&mut db, ao_oid, PropertyIdentifier::PRESENT_VALUE),
+        read_wire(&db, ao_oid, PropertyIdentifier::PRESENT_VALUE),
         PropertyValue::Real(55.0),
         "a live command must still outrank the new default"
     );
@@ -440,7 +438,7 @@ fn relinquish_default_write_recaptures_present_value_over_write_property() {
     slot.encode(&mut buf);
     handle_write_property(&mut db, &buf).unwrap();
     assert_eq!(
-        read_wire(&mut db, ao_oid, PropertyIdentifier::PRESENT_VALUE),
+        read_wire(&db, ao_oid, PropertyIdentifier::PRESENT_VALUE),
         PropertyValue::Real(12.5),
         "with an empty priority array, PV must resolve to the written default"
     );
