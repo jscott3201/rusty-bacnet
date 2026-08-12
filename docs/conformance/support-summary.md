@@ -3,10 +3,10 @@
 > DRAFT internal support evidence. Generated from `docs/conformance/bacnet-135-2020.json`; this is not a BTL certification claim or formal PICS/BIBB declaration.
 
 - Standard: ANSI/ASHRAE Standard 135-2020
-- Reviewed at: 2026-07-04
-- Implementation evidence SHA reviewed: `e6be3eacfd2b780f11812de3931fb7f8e8dec584`
-- Scope: Clause 5 server segmented ComplexAck send-side SegmentACK behavior, covering client-direction SegmentACK validation, current-window positive and negative SegmentACK handling, final SegmentACK validation, timeout retransmission before idle cleanup, client Abort routing, routed NPDU source matching, segmented-response NPDU expecting-reply, nonblocking full-queue dispatch, same-peer sender replacement cleanup, and root conformance artifact relocation from `conformance/` to `docs/conformance/`.
-- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Clause 5 segmented APDU transfer and SegmentACK behavior. No external addenda/errata check was performed for this tranche, so the affected Clause 5 rows remain in gap statuses rather than `supported-with-clause-evidence`.
+- Reviewed at: 2026-08-12
+- Implementation evidence SHA reviewed: `265b267390a6df3812e80650a33f379236533012`
+- Scope: Clause 20/21 ASN.1 framing tranche: a single shared BACnetTimeStamp codec (bare CHOICE + wrapped forms, sequence-number range enforced in both directions), full Clause 21 framing of BACnetEventParameter, BACnetFaultParameter, BACnetPropertyStates, BACnetDeviceObjectPropertyReference, BACnetRecipient, and BACnetAddress driving Event_Parameters/Fault_Parameters/Recipient_List property reads and writes, the GetEventInformation-ACK bare-timestamp migration, plus review hardening (trailing-bytes rejection, fixed-width bit-string validation, strict stored-list routing). Conventions unchanged: `repo_sha` names the tip of the PR branch `codex/encoding-asn1-framing` at the time of writing (the last code commit; this docs-refresh commit lands after it), matching how `e6be3eac` was recorded for the previous tranche.
+- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for the Clause 20.2.1 tag-form rules, the cited Clause 21 productions, Clause 12.12/12.21 + Table 12-25, and Annex K.2.25. No external addenda/errata check was performed for this tranche; per-row scope is recorded in each row's notes.
 
 ## Counts
 
