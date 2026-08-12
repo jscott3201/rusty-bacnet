@@ -41,6 +41,7 @@ mod framed_properties;
 mod multi_element_writes;
 mod passwords;
 mod read_rpm;
+mod reference_writes;
 mod wpm_create_alarm;
 mod write_cov_who;
 mod write_property_name;

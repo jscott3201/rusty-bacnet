@@ -736,3 +736,53 @@ fn wpm_gate_rejection_commits_nothing() {
         "the valid reference must NOT be applied when a sibling hits the gate"
     );
 }
+
+// --- #182: structured reference properties are scalar-typed -------------
+
+/// The BACnetObjectPropertyReference-typed properties (Loop Clause 12.17,
+/// Pulse Converter Clause 12.23, Averaging Clause 12.5 — the last typed
+/// BACnetDeviceObjectPropertyReference) are scalars, not BACnetARRAY: an
+/// indexed ReadProperty hits the same gate as any other scalar (#260).
+#[test]
+fn reference_properties_reject_indexed_read_property() {
+    use bacnet_objects::accumulator::PulseConverterObject;
+    use bacnet_objects::averaging::AveragingObject;
+    use bacnet_objects::loop_obj::LoopObject;
+
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(LoopObject::new(1, "LOOP-1", 62).unwrap()))
+        .unwrap();
+    db.add(Box::new(PulseConverterObject::new(1, "PC-1", 62).unwrap()))
+        .unwrap();
+    db.add(Box::new(AveragingObject::new(1, "AVG-1").unwrap()))
+        .unwrap();
+
+    let targets: &[(ObjectIdentifier, PropertyIdentifier)] = &[
+        (
+            oid(ObjectType::LOOP, 1),
+            PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE,
+        ),
+        (
+            oid(ObjectType::LOOP, 1),
+            PropertyIdentifier::MANIPULATED_VARIABLE_REFERENCE,
+        ),
+        (
+            oid(ObjectType::LOOP, 1),
+            PropertyIdentifier::SETPOINT_REFERENCE,
+        ),
+        (
+            oid(ObjectType::PULSE_CONVERTER, 1),
+            PropertyIdentifier::INPUT_REFERENCE,
+        ),
+        (
+            oid(ObjectType::AVERAGING, 1),
+            PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
+        ),
+    ];
+    for &(target, property) in targets {
+        assert_not_an_array(
+            read_indexed(&db, target, property, 2),
+            &format!("ReadProperty {target:?}.{property:?}[2]"),
+        );
+    }
+}
