@@ -293,9 +293,19 @@ pub(crate) fn value_out_of_range_error() -> bacnet_types::error::Error {
 
 /// Return whether a raw BACnetReliability value is defined by ASHRAE or lies
 /// in the vendor-proprietary range.
+///
+/// The named set is derived from `Reliability::ALL_NAMED` so the predicate
+/// tracks the enum: when an addendum value lands as a constant in
+/// `bacnet_types::enums::Reliability`, this write-path gate accepts it with no
+/// second edit. The production's gaps stay explicit here: 11 is reserved for
+/// a future addendum, 26..=63 are reserved for ASHRAE, and 64..=65535 is the
+/// vendor-proprietary range (Clause 21 BACnetReliability).
 #[inline]
 pub(crate) fn is_reliability_value_valid(value: u32) -> bool {
-    matches!(value, 0..=10 | 12..=25 | 64..=65_535)
+    bacnet_types::enums::Reliability::ALL_NAMED
+        .iter()
+        .any(|&(_, named)| named.to_raw() == value)
+        || (64..=65_535).contains(&value)
 }
 
 /// Return the invalid-array-index protocol error.
