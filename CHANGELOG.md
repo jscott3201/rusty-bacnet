@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Tranche-Q 135-2020 enumeration parity (#253): the `bacnet-types` enum
+  catalogue now covers the Clause 21 productions the audit found missing,
+  and enumerated resolution promotes their raw wire values by property.
+
+  - `LifeSafetyState` gains the production tail — non-default-mode (24)
+    through test-oeo-unaffected (34) — without renumbering any existing
+    value; life-safety states past 23 no longer display as bare numbers.
+  - New `EscalatorOperationDirection` (unknown / stopped / up-rated-speed /
+    up-reduced-speed / down-rated-speed / down-reduced-speed): the
+    Escalator object's `operation_direction` (477) now resolves and
+    displays by name instead of falling through to `ResolvedEnum::Unknown`.
+    The object still stores a raw `u32`; retyping is follow-up work.
+  - New `BinaryLightingPV` (off / on / warn / warn-off / warn-relinquish /
+    stop) and `LightingTransition` (none / fade / ramp); `transition` (385)
+    now resolves. No resolve arm exists for `BinaryLightingPV` — it types
+    only object-type-dependent present values, which stay numeric by
+    policy. Binary Lighting Output docs no longer cite a nonexistent
+    "fade-on" value (4 is warn-relinquish; 5 is stop); its write
+    validation behavior is unchanged.
+  - Access family: new `AuthenticationStatus`,
+    `AuthorizationExemption`, `AccessZoneOccupancyState`, and `DoorValue`,
+    with `authentication-status` (260), `authorization-exemptions` (364),
+    and `occupancy-state` (296) resolving by name. `AccessDoorObject`'s
+    `Relinquish_Default` validation now bounds against
+    `DoorValue::EXTENDED_PULSE_UNLOCK` instead of a literal `0..=3`, so the
+    write domain cannot drift from the Clause 21 production.
+  - New `ProgramError` (normal / load-failed / internal / program /
+    other), `RestartReason` (unknown..activate-changes, 0-8),
+    `Maintenance` (none..need-service-inoperative, 0-3), and
+    `Relationship` (unknown/default plus the even/odd forward/reverse
+    pairs 2-29, mirroring the production's pairing note). The properties
+    `reason-for-halt` (100), `last-restart-reason` (196), and
+    `maintenance-required` (158) resolve as scalars;
+    `subordinate-relationships` (489, a BACnetARRAY) and
+    `authorization-exemptions` (364, a BACnetLIST) resolve element-wise
+    through `resolve_value`'s list recursion — the same convention the
+    pre-existing `accepted-modes` (175) arm follows. `represents` (491)
+    deliberately has no arm: the Structured View object types it as
+    `BACnetDeviceObjectReference`, not `BACnetRelationship`.
+  - Two comment corrections binding comments to the production text:
+    `NetworkType::NON_BACNET` was removed in version 1, revision 18 (not
+    "protocol revision 16"), and `EventType`'s tag-6/tag-7 gap note now
+    mirrors the Clause 21 production (tag 6 kept clear for the
+    `complex-event-type` CHOICE of `BACnetNotificationParameters`; tag 7
+    deprecated).
+
 ### Changed
 
 - WriteProperty and WritePropertyMultiple now decode the ENTIRE
