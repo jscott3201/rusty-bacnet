@@ -207,6 +207,33 @@ fn fault_parameters_framed_write_round_trip() {
 }
 
 #[test]
+fn fault_parameters_framed_trailing_garbage_rejected() {
+    let fp = FaultParameters::FaultOutOfRange {
+        min_normal: -5.0,
+        max_normal: 55.0,
+    };
+    let mut good = bytes::BytesMut::new();
+    bacnet_encoding::constructed::encode_fault_parameters(&mut good, &fp).unwrap();
+    for extra in 1..=4usize {
+        let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+        let mut bytes = good.to_vec();
+        bytes.extend_from_slice(&vec![0x55; extra]);
+        let result = ee.write_property(
+            PropertyIdentifier::FAULT_PARAMETERS,
+            None,
+            PropertyValue::ApplicationData(bytes),
+            None,
+        );
+        assert!(result.is_err(), "trailing {extra} byte(s) must be rejected");
+        // Untouched: Fault_Parameters still reads as Null (never set).
+        let val = ee
+            .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
+            .unwrap();
+        assert_eq!(val, PropertyValue::Null);
+    }
+}
+
+#[test]
 fn fault_parameters_framed_malformed_rejected() {
     let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
     // opening [6] with no closing.

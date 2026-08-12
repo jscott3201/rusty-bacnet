@@ -269,6 +269,59 @@ fn write_event_parameters_framed_round_trip() {
 }
 
 #[test]
+fn write_event_parameters_framed_trailing_garbage_rejected() {
+    use bacnet_types::constructed::BACnetEventParameter;
+    // Review blocker: a well-formed framed element followed by garbage must
+    // be REJECTED (pre-fix the head was accepted and the tail silently
+    // dropped between wire and read-back).
+    let params = BACnetEventParameter::OutOfRange {
+        time_delay: 5,
+        low_limit: 10.0,
+        high_limit: 90.0,
+        deadband: 1.0,
+    };
+    let mut good = bytes::BytesMut::new();
+    bacnet_encoding::constructed::encode_event_parameter(&mut good, &params);
+    for extra in 1..=4usize {
+        let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+        let mut bytes = good.to_vec();
+        bytes.extend_from_slice(&vec![0xAA; extra]);
+        let result = ee.write_property(
+            PropertyIdentifier::EVENT_PARAMETERS,
+            None,
+            PropertyValue::ApplicationData(bytes),
+            None,
+        );
+        match result.unwrap_err() {
+            bacnet_types::error::Error::Protocol { class, code } => {
+                assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32);
+                assert_eq!(
+                    code,
+                    bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE.to_raw() as u32
+                );
+            }
+            other => panic!("expected PROPERTY/INVALID_DATA_TYPE, got {other:?}"),
+        }
+        // Stored value is untouched: the default Opaque placeholder remains.
+        let val = ee
+            .read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
+            .unwrap();
+        let PropertyValue::ApplicationData(bytes) = &val else {
+            panic!("expected ApplicationData");
+        };
+        let (decoded, _) =
+            bacnet_encoding::constructed::decode_event_parameter(bytes, 0).unwrap();
+        assert_eq!(
+            decoded,
+            BACnetEventParameter::Opaque {
+                tag: 0xFF,
+                data: Vec::new()
+            }
+        );
+    }
+}
+
+#[test]
 fn write_event_parameters_framed_malformed_rejected() {
     let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
     // Truncated framed value: out-of-range opening with no closing.

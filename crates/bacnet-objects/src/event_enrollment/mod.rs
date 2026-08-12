@@ -289,10 +289,13 @@ impl BACnetObject for EventEnrollmentObject {
                     data: bytes,
                 },
                 // Framed wire form: full ASN.1 CHOICE framing per Clause 21.
+                // The CHOICE is exactly one element — trailing bytes after
+                // it are rejected rather than silently swallowed (otherwise
+                // the stored value reads back as only the first element).
                 PropertyValue::ApplicationData(bytes) => {
                     match bacnet_encoding::constructed::decode_event_parameter(&bytes, 0) {
-                        Ok((ep, _)) => ep,
-                        Err(_) => return Err(common::invalid_data_type_error()),
+                        Ok((ep, consumed)) if consumed == bytes.len() => ep,
+                        _ => return Err(common::invalid_data_type_error()),
                     }
                 }
                 // Legacy flat application-tagged form (pre-framing layout):
@@ -309,8 +312,8 @@ impl BACnetObject for EventEnrollmentObject {
                 PropertyValue::Null => None,
                 PropertyValue::ApplicationData(bytes) => {
                     match bacnet_encoding::constructed::decode_fault_parameters(&bytes, 0) {
-                        Ok((fp, _)) => Some(fp),
-                        Err(_) => return Err(common::invalid_data_type_error()),
+                        Ok((fp, consumed)) if consumed == bytes.len() => Some(fp),
+                        _ => return Err(common::invalid_data_type_error()),
                     }
                 }
                 // Legacy flat application-tagged form (pre-framing layout).
