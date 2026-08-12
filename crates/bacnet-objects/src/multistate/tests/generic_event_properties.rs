@@ -143,6 +143,10 @@ fn assert_event_properties_round_trip(object: &mut dyn BACnetObject, label: &str
             PropertyValue::Unsigned(42),
         ),
         (PropertyIdentifier::TIME_DELAY, PropertyValue::Unsigned(7)),
+        (
+            PropertyIdentifier::TIME_DELAY_NORMAL,
+            PropertyValue::Unsigned(9),
+        ),
     ] {
         object
             .write_property(property, None, value.clone(), None)
@@ -161,6 +165,35 @@ fn assert_event_properties_round_trip(object: &mut dyn BACnetObject, label: &str
             "{label}: {property:?} must be advertised writable"
         );
     }
+
+    // Time_Delay_Normal mirrors Time_Delay's write validation: Unsigned within
+    // the u32 span or refused with the Clause 15.9.1.3 pairings, and a refused
+    // write leaves the stored value untouched.
+    assert_property_error(
+        object.write_property(
+            PropertyIdentifier::TIME_DELAY_NORMAL,
+            None,
+            PropertyValue::Enumerated(9),
+            None,
+        ),
+        ErrorCode::INVALID_DATA_TYPE,
+    );
+    assert_property_error(
+        object.write_property(
+            PropertyIdentifier::TIME_DELAY_NORMAL,
+            None,
+            PropertyValue::Unsigned(u32::MAX as u64 + 1),
+            None,
+        ),
+        ErrorCode::VALUE_OUT_OF_RANGE,
+    );
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::TIME_DELAY_NORMAL, None)
+            .unwrap(),
+        PropertyValue::Unsigned(9),
+        "{label}: refused Time_Delay_Normal writes must leave the value untouched"
+    );
 
     // A single set bit must land on the transition it names, not on whichever
     // bit a mask error happens to select. The literal is the Clause 20.2.10 wire
@@ -235,6 +268,58 @@ fn msi_event_properties_round_trip_and_match_pics() {
 fn msv_event_properties_round_trip_and_match_pics() {
     let mut msv = MultiStateValueObject::new(1, "MSV-1", 3).unwrap();
     assert_event_properties_round_trip(&mut msv, "MSV");
+}
+
+#[test]
+fn mso_event_properties_round_trip_and_match_pics() {
+    let mut mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
+    assert_event_properties_round_trip(&mut mso, "MSO");
+}
+
+/// Clause 13.3: "If no value is available for this parameter, then it takes on
+/// the value of the pTimeDelay parameter." An object that was never written a
+/// Time_Delay_Normal reads back the effective (fallback) delay.
+#[test]
+fn multistate_time_delay_normal_defaults_to_time_delay_when_unwritten() {
+    for (mut object, label) in [
+        (
+            Box::new(MultiStateInputObject::new(1, "MSI-1", 3).unwrap()) as Box<dyn BACnetObject>,
+            "MSI",
+        ),
+        (
+            Box::new(MultiStateOutputObject::new(1, "MSO-1", 3).unwrap()) as Box<dyn BACnetObject>,
+            "MSO",
+        ),
+        (
+            Box::new(MultiStateValueObject::new(1, "MSV-1", 3).unwrap()) as Box<dyn BACnetObject>,
+            "MSV",
+        ),
+    ] {
+        assert_eq!(
+            object
+                .read_property(PropertyIdentifier::TIME_DELAY_NORMAL, None)
+                .unwrap(),
+            object
+                .read_property(PropertyIdentifier::TIME_DELAY, None)
+                .unwrap(),
+            "{label}: unwritten Time_Delay_Normal reads back Time_Delay"
+        );
+        object
+            .write_property(
+                PropertyIdentifier::TIME_DELAY,
+                None,
+                PropertyValue::Unsigned(11),
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            object
+                .read_property(PropertyIdentifier::TIME_DELAY_NORMAL, None)
+                .unwrap(),
+            PropertyValue::Unsigned(11),
+            "{label}: the fallback tracks Time_Delay"
+        );
+    }
 }
 
 #[test]

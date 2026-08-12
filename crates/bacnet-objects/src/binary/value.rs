@@ -301,6 +301,7 @@ impl BACnetObject for BinaryValueObject {
             PropertyIdentifier::EVENT_DETECTION_ENABLE,
             PropertyIdentifier::EVENT_ENABLE,
             PropertyIdentifier::TIME_DELAY,
+            PropertyIdentifier::TIME_DELAY_NORMAL,
             PropertyIdentifier::NOTIFY_TYPE,
             PropertyIdentifier::NOTIFICATION_CLASS,
             PropertyIdentifier::ACKED_TRANSITIONS,

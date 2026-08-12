@@ -483,6 +483,18 @@ macro_rules! read_generic_event_properties {
                     $self.event_detector.time_delay as u64,
                 )))
             }
+            p if p == bacnet_types::enums::PropertyIdentifier::TIME_DELAY_NORMAL => {
+                // Clause 13.3: "If no value is available for this parameter,
+                // then it takes on the value of the pTimeDelay parameter" —
+                // so the read-back of an unwritten Time_Delay_Normal is
+                // Time_Delay's value, matching the algorithm's behavior.
+                Some(Ok(bacnet_types::primitives::PropertyValue::Unsigned(
+                    $self
+                        .event_detector
+                        .time_delay_normal
+                        .unwrap_or($self.event_detector.time_delay) as u64,
+                )))
+            }
             p if p == bacnet_types::enums::PropertyIdentifier::ACKED_TRANSITIONS => {
                 Some(Ok(bacnet_types::primitives::PropertyValue::BitString {
                     unused_bits: 5,
@@ -531,9 +543,9 @@ pub(crate) use read_analog_event_properties;
 /// Handles: HIGH_LIMIT, LOW_LIMIT, DEADBAND, LIMIT_ENABLE.
 ///
 /// This is the analog half of the split. The properties every detector carries —
-/// EVENT_ENABLE, NOTIFICATION_CLASS, NOTIFY_TYPE, TIME_DELAY and the ACKED_TRANSITIONS
-/// denial — live in [`write_generic_event_properties!`], and a call site that needs both
-/// must invoke both.
+/// EVENT_ENABLE, NOTIFICATION_CLASS, NOTIFY_TYPE, TIME_DELAY, TIME_DELAY_NORMAL
+/// and the ACKED_TRANSITIONS denial — live in [`write_generic_event_properties!`],
+/// and a call site that needs both must invoke both.
 ///
 /// Returns `Some(Ok(()))` if the property was handled,
 /// `Some(Err(...))` for type/validation errors,
@@ -660,6 +672,19 @@ macro_rules! write_generic_event_properties {
                     match $crate::common::u64_to_u32(v) {
                         Ok(v32) => {
                             $self.event_detector.time_delay = v32;
+                            Some(Ok(()))
+                        }
+                        Err(e) => Some(Err(e)),
+                    }
+                } else {
+                    Some(Err($crate::common::invalid_data_type_error()))
+                }
+            }
+            p if p == bacnet_types::enums::PropertyIdentifier::TIME_DELAY_NORMAL => {
+                if let bacnet_types::primitives::PropertyValue::Unsigned(v) = $value {
+                    match $crate::common::u64_to_u32(v) {
+                        Ok(v32) => {
+                            $self.event_detector.time_delay_normal = Some(v32);
                             Some(Ok(()))
                         }
                         Err(e) => Some(Err(e)),
@@ -831,6 +856,11 @@ pub(crate) fn write_cov_increment(
 // the macros below.
 
 /// Generic writable event-detection properties shared by every detector.
+///
+/// `TIME_DELAY_NORMAL` mirrors `TIME_DELAY`: every Clause 12 conformance
+/// table carries both as O-coded (present-only-if-intrinsic-reporting), so
+/// writability is permitted rather than required — and accepting the write
+/// is what makes the Clause 13.3 delay asymmetry commissionable at all.
 #[inline]
 pub(crate) fn is_generic_event_property_writable(
     property: bacnet_types::enums::PropertyIdentifier,
@@ -841,6 +871,7 @@ pub(crate) fn is_generic_event_property_writable(
             | bacnet_types::enums::PropertyIdentifier::NOTIFICATION_CLASS
             | bacnet_types::enums::PropertyIdentifier::NOTIFY_TYPE
             | bacnet_types::enums::PropertyIdentifier::TIME_DELAY
+            | bacnet_types::enums::PropertyIdentifier::TIME_DELAY_NORMAL
     )
     // ACKED_TRANSITIONS is deliberately absent: the generic write arm denies it, and this
     // predicate is what PICS reports, so listing it would advertise a write dispatch rejects.

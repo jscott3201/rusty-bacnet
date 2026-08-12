@@ -443,3 +443,73 @@ fn relinquish_default_write_recaptures_present_value_over_write_property() {
         "with an empty priority array, PV must resolve to the written default"
     );
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// #225 — Time_Delay_Normal (property 356): the Clause 13.3 pTimeDelayNormal
+// backing store on a representative intrinsic-reporting type (Analog Input,
+// Table 12-2 row O5). RP/WP over the wire, fallback readback when unwritten,
+// and the shared write-path validation pairings on refusal.
+// ──────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn time_delay_normal_round_trips_over_write_property_and_read_property() {
+    let mut db = ObjectDatabase::new();
+    let ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let ai_oid = ai.object_identifier();
+    db.add(Box::new(ai)).unwrap();
+
+    // Never written, the read-back is Time_Delay's value: Clause 13.3 — "If
+    // no value is available for this parameter, then it takes on the value of
+    // the pTimeDelay parameter."
+    write_wire(
+        &mut db,
+        ai_oid,
+        PropertyIdentifier::TIME_DELAY,
+        PropertyValue::Unsigned(11),
+    )
+    .expect("Time_Delay must be writable");
+    assert_eq!(
+        read_wire(&db, ai_oid, PropertyIdentifier::TIME_DELAY_NORMAL),
+        PropertyValue::Unsigned(11)
+    );
+
+    // The property itself is settlable and reads back independently.
+    write_wire(
+        &mut db,
+        ai_oid,
+        PropertyIdentifier::TIME_DELAY_NORMAL,
+        PropertyValue::Unsigned(9),
+    )
+    .expect("Time_Delay_Normal must be writable");
+    assert_eq!(
+        read_wire(&db, ai_oid, PropertyIdentifier::TIME_DELAY_NORMAL),
+        PropertyValue::Unsigned(9)
+    );
+    assert_eq!(
+        read_wire(&db, ai_oid, PropertyIdentifier::TIME_DELAY),
+        PropertyValue::Unsigned(11),
+        "Time_Delay is untouched by a Time_Delay_Normal write"
+    );
+
+    // Wrong BACnet datatype: PROPERTY / INVALID_DATA_TYPE, value preserved.
+    assert_refused(
+        &mut db,
+        ai_oid,
+        PropertyIdentifier::TIME_DELAY_NORMAL,
+        PropertyValue::Enumerated(9),
+        ErrorCode::INVALID_DATA_TYPE,
+        PropertyValue::Unsigned(9),
+        "AI Enumerated Time_Delay_Normal",
+    );
+
+    // Unrepresentable in the u32 backing store: PROPERTY / VALUE_OUT_OF_RANGE.
+    assert_refused(
+        &mut db,
+        ai_oid,
+        PropertyIdentifier::TIME_DELAY_NORMAL,
+        PropertyValue::Unsigned(u32::MAX as u64 + 1),
+        ErrorCode::VALUE_OUT_OF_RANGE,
+        PropertyValue::Unsigned(9),
+        "AI oversized Time_Delay_Normal",
+    );
+}

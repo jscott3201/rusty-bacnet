@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Time_Delay_Normal` (property 356) on the nine intrinsic-reporting object
+  types (#225): Clause 13.3's second, normal-direction delay
+  (`pTimeDelayNormal`) is now honored by all three intrinsic event
+  detectors. Transitions into any OFFNORMAL state — including
+  offnormal→offnormal re-indication — still wait `Time_Delay`; the
+  sustained-condition return to NORMAL waits `Time_Delay_Normal`, which
+  takes on `Time_Delay`'s value while never configured, per the parameter's
+  normative fallback. The property reads back the effective delay (the
+  fallback value before any write), is writable as Unsigned within the u32
+  span, and is advertised in `Property_List` and the PICS writability set,
+  mirroring `Time_Delay`. FAULT transitions carry no delay in either
+  direction.
+
 - Tranche-Q 135-2020 enumeration parity (#253): the `bacnet-types` enum
   catalogue now covers the Clause 21 productions the audit found missing,
   and enumerated resolution promotes their raw wire values by property.

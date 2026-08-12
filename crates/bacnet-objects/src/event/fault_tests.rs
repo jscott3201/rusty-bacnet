@@ -51,6 +51,7 @@ fn detector() -> OutOfRangeDetector {
         notify_type: 0,
         event_enable: 0x07,
         time_delay: 0,
+        time_delay_normal: None,
         event_state: EventState::NORMAL,
         acked_transitions: 0b111,
         pending: None,

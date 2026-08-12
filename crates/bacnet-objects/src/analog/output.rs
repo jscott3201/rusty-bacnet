@@ -293,6 +293,7 @@ impl BACnetObject for AnalogOutputObject {
             PropertyIdentifier::NOTIFY_TYPE,
             PropertyIdentifier::NOTIFICATION_CLASS,
             PropertyIdentifier::TIME_DELAY,
+            PropertyIdentifier::TIME_DELAY_NORMAL,
             PropertyIdentifier::RELIABILITY,
             PropertyIdentifier::ACKED_TRANSITIONS,
             PropertyIdentifier::EVENT_TIME_STAMPS,

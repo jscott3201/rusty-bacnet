@@ -16,6 +16,7 @@ fn make_detector() -> OutOfRangeDetector {
         notify_type: 0,
         event_enable: 0x07, // all transitions
         time_delay: 0,
+        time_delay_normal: None,
         event_state: EventState::NORMAL,
         acked_transitions: 0b111,
         pending: None,
@@ -481,7 +482,7 @@ fn time_delay_nonzero_probe_seeds_pending_without_firing() {
     assert!(det.probe(81.0, NO_FAULT).is_none());
     // Event_State stays at the confirmed (old) state during the delay.
     assert_eq!(det.event_state, EventState::NORMAL);
-    let pending = det.pending.expect("pending seeded");
+    let pending = det.pending.as_ref().expect("pending seeded");
     assert_eq!(pending.state, EventState::HIGH_LIMIT);
     assert_eq!(pending.remaining, 3);
 }
@@ -496,7 +497,7 @@ fn time_delay_repeated_probes_do_not_accelerate_countdown() {
         assert!(det.probe(81.0, NO_FAULT).is_none());
     }
     assert_eq!(det.event_state, EventState::NORMAL);
-    let pending = det.pending.expect("pending still seeded");
+    let pending = det.pending.as_ref().expect("pending still seeded");
     assert_eq!(
         pending.remaining, 3,
         "writes must not advance the countdown"
@@ -592,7 +593,7 @@ fn time_delay_reseeded_when_target_changes_mid_delay() {
     // Jump to a different out-of-range target (LOW_LIMIT): re-seed the delay
     // for the new target without firing the old one.
     assert!(det.tick(19.0, NO_FAULT).is_none());
-    let pending = det.pending.expect("re-seeded for new target");
+    let pending = det.pending.as_ref().expect("re-seeded for new target");
     assert_eq!(pending.state, EventState::LOW_LIMIT);
     assert_eq!(pending.remaining, 2);
     assert_eq!(det.event_state, EventState::NORMAL);

@@ -190,6 +190,60 @@ fn bo_time_delay_gates_command_failure() {
     assert_eq!(outcome.event_type, EventType::COMMAND_FAILURE);
 }
 
+/// Clause 13.3.4 applies the two delays asymmetrically: the OFFNORMAL
+/// indication waits pTimeDelay (condition (a)), the NORMAL indication waits
+/// pTimeDelayNormal (condition (b)). Both are commissioned as properties here
+/// — no direct field access — so the wiring from Time_Delay_Normal through
+/// the detector is exercised end to end at object level.
+#[test]
+fn bo_time_delay_normal_selects_the_return_to_normal_delay() {
+    let mut bo = BinaryOutputObject::new(1, "BO-1").unwrap();
+    set_detection_enabled(&mut bo, true);
+    bo.write_property(
+        PropertyIdentifier::TIME_DELAY,
+        None,
+        PropertyValue::Unsigned(2),
+        None,
+    )
+    .unwrap();
+    bo.write_property(
+        PropertyIdentifier::TIME_DELAY_NORMAL,
+        None,
+        PropertyValue::Unsigned(4),
+        None,
+    )
+    .unwrap();
+    write_enumerated(&mut bo, PropertyIdentifier::PRESENT_VALUE, 1);
+
+    assert_eq!(bo.evaluate_intrinsic_reporting(), None);
+    assert_eq!(bo.tick_intrinsic_reporting(), None);
+    let outcome = bo.tick_intrinsic_reporting().unwrap();
+    assert_eq!(
+        outcome.change.to,
+        EventState::OFFNORMAL,
+        "condition (a): OFFNORMAL after Time_Delay = 2"
+    );
+    assert_eq!(outcome.event_type, EventType::COMMAND_FAILURE);
+
+    write_enumerated(&mut bo, PropertyIdentifier::FEEDBACK_VALUE, 1);
+    assert_eq!(
+        bo.evaluate_intrinsic_reporting(),
+        None,
+        "condition (b): agreement only seeds the NORMAL countdown"
+    );
+    for _ in 0..3 {
+        assert_eq!(
+            bo.tick_intrinsic_reporting(),
+            None,
+            "Time_Delay_Normal = 4 must hold the NORMAL state off"
+        );
+    }
+    let outcome = bo.tick_intrinsic_reporting().unwrap();
+    assert_eq!(outcome.change.from, EventState::OFFNORMAL);
+    assert_eq!(outcome.change.to, EventState::NORMAL);
+    assert_eq!(outcome.event_type, EventType::COMMAND_FAILURE);
+}
+
 #[test]
 fn bo_event_enable_to_offnormal_bit_controls_distribution() {
     for (encoded, expected) in [(0x80, true), (0x00, false)] {

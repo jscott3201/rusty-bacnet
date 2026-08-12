@@ -178,17 +178,45 @@ impl LimitEnable {
 pub struct PendingTransition {
     /// The state the detector wants to transition to once the delay elapses.
     pub state: EventState,
-    /// Seconds remaining; seeded with `time_delay` and decremented per tick.
+    /// Seconds remaining; seeded with the direction-appropriate delay (see
+    /// [`delay_toward`]) and decremented per tick.
     pub remaining: u32,
 }
 
 impl PendingTransition {
-    /// Begin a pending transition to `state`, seeded with `time_delay` seconds.
-    fn seed(state: EventState, time_delay: u32) -> Self {
+    /// Begin a pending transition to `state`, seeded with `delay` seconds.
+    fn seed(state: EventState, delay: u32) -> Self {
         Self {
             state,
-            remaining: time_delay,
+            remaining: delay,
         }
+    }
+}
+
+/// Select the delay governing a transition toward `target`.
+///
+/// ASHRAE 135-2020 Clause 13.3 gives the event algorithms two independent
+/// delays. pTimeDelay is "the time, in seconds, that the offnormal conditions
+/// must exist before an offnormal event state is indicated": it governs
+/// every indication into an OFFNORMAL state, including offnormal→offnormal
+/// re-indication (CHANGE_OF_STATE (c) at 13.3.2, OUT_OF_RANGE (d)/(g) at
+/// 13.3.6, COMMAND_FAILURE (a) at 13.3.4). pTimeDelayNormal is "the time, in
+/// seconds, that the Normal conditions must exist before a NORMAL event
+/// state is indicated" and gates only the sustained-condition return to
+/// NORMAL (CHANGE_OF_STATE (b), COMMAND_FAILURE (b), OUT_OF_RANGE (e)/(h)).
+///
+/// The fallback for the absent case is normative text: "If no value is
+/// available for this parameter, then it takes on the value of the
+/// pTimeDelay parameter" — so `None` behaves exactly as `time_delay`, never
+/// as an error or a zero.
+///
+/// FAULT never reaches this selector: Clause 13.2.2 fault precedence runs
+/// ahead of the event algorithm and carries no delay term.
+fn delay_toward(time_delay: u32, time_delay_normal: Option<u32>, target: EventState) -> u32 {
+    if target == EventState::NORMAL {
+        time_delay_normal.unwrap_or(time_delay)
+    } else {
+        time_delay
     }
 }
 
@@ -301,10 +329,12 @@ pub(crate) fn fault_precedence(
 /// - HIGH_LIMIT → LOW_LIMIT when `present_value < low_limit`
 /// - LOW_LIMIT → HIGH_LIMIT when `present_value > high_limit`
 ///
-/// `Time_Delay` is honored via the split [`Self::probe`] / [`Self::tick`]
-/// entry points: a present-value write calls `probe`, which seeds a pending
-/// transition (or fires immediately when `time_delay == 0`); a one-second
-/// periodic task calls `tick` to advance the countdown and fire on expiry.
+/// `Time_Delay` (and `Time_Delay_Normal` for the NORMAL direction) is
+/// honored via the split [`Self::probe`] / [`Self::tick`] entry points: a
+/// present-value write calls `probe`, which seeds a pending transition (or
+/// fires immediately when the direction-appropriate delay is zero,
+/// [`delay_toward`]); a one-second periodic task calls `tick` to advance the
+/// countdown and fire on expiry.
 #[derive(Debug, Clone)]
 pub struct OutOfRangeDetector {
     pub high_limit: f32,
@@ -315,6 +345,12 @@ pub struct OutOfRangeDetector {
     pub notify_type: u32,
     pub event_enable: u8,
     pub time_delay: u32,
+    /// `Time_Delay_Normal` (property 356): the Clause 13.3.6 pTimeDelayNormal
+    /// parameter — seconds that Normal conditions must persist before a
+    /// NORMAL event state is indicated. `None` is the not-configured case
+    /// and takes on `time_delay`: "If no value is available for this
+    /// parameter, then it takes on the value of the pTimeDelay parameter."
+    pub time_delay_normal: Option<u32>,
     pub event_state: EventState,
     /// Acknowledged-transitions bitfield (3 bits: TO_OFFNORMAL, TO_FAULT, TO_NORMAL).
     /// A set bit means the corresponding transition has been acknowledged.
@@ -336,6 +372,7 @@ impl Default for OutOfRangeDetector {
             notify_type: 0, // ALARM
             event_enable: 0,
             time_delay: 0,
+            time_delay_normal: None,
             event_state: EventState::NORMAL,
             acked_transitions: 0b111, // all acknowledged by default
             pending: None,
@@ -351,11 +388,11 @@ impl OutOfRangeDetector {
     /// Evaluate the present value against configured limits.
     ///
     /// This is the per-write entry point: it seeds a pending delayed
-    /// transition (or fires immediately when `time_delay == 0`) but never
-    /// advances the countdown — so repeated writes to the same value do not
-    /// shorten the delay. Returns `Some(TransitionOutcome)` whenever a
-    /// transition fires; the outcome's `distribute` flag carries the
-    /// `event_enable` bit rather than withholding the transition.
+    /// transition (or fires immediately when the direction-appropriate delay
+    /// is zero) but never advances the countdown — so repeated writes to the
+    /// same value do not shorten the delay. Returns `Some(TransitionOutcome)`
+    /// whenever a transition fires; the outcome's `distribute` flag carries
+    /// the `event_enable` bit rather than withholding the transition.
     pub fn evaluate(&mut self, present_value: f32, reliability: u32) -> Option<TransitionOutcome> {
         self.probe(present_value, reliability)
     }
@@ -422,11 +459,12 @@ impl OutOfRangeDetector {
 
     /// Per-write probe: seed or cancel a pending transition, fire on zero delay.
     ///
-    /// When `time_delay == 0` the transition is confirmed immediately and
-    /// `event_state` is updated, preserving the legacy instant-transition
-    /// behavior. Otherwise a [`PendingTransition`] is seeded (or cleared if
-    /// the condition reverted) and `None` is returned; the periodic
-    /// [`Self::tick`] advances and eventually confirms it.
+    /// When the direction-appropriate delay ([`delay_toward`]) is zero the
+    /// transition is confirmed immediately and `event_state` is updated,
+    /// preserving the legacy instant-transition behavior. Otherwise a
+    /// [`PendingTransition`] is seeded (or cleared if the condition
+    /// reverted) and `None` is returned; the periodic [`Self::tick`]
+    /// advances and eventually confirms it.
     pub fn probe(&mut self, present_value: f32, reliability: u32) -> Option<TransitionOutcome> {
         if let ControlFlow::Break(result) = self.fault_step(reliability) {
             return result;
@@ -438,7 +476,8 @@ impl OutOfRangeDetector {
             self.pending = None;
             return None;
         }
-        if self.time_delay == 0 {
+        let delay = delay_toward(self.time_delay, self.time_delay_normal, desired);
+        if delay == 0 {
             return self.fire(desired);
         }
         // Nonzero delay: seed a pending transition only when there is none to
@@ -447,7 +486,7 @@ impl OutOfRangeDetector {
         // debounce timer); re-seeding here would let writes faster than the
         // 1s tick pin the transition forever. The periodic `tick` advances it.
         if self.pending.as_ref().map_or(true, |p| p.state != desired) {
-            self.pending = Some(PendingTransition::seed(desired, self.time_delay));
+            self.pending = Some(PendingTransition::seed(desired, delay));
         }
         None
     }
@@ -478,8 +517,10 @@ impl OutOfRangeDetector {
                 None
             }
             _ => {
-                // Condition changed target mid-delay, or no pending yet: re-seed.
-                self.pending = Some(PendingTransition::seed(desired, self.time_delay));
+                // Condition changed target mid-delay, or no pending yet: re-seed
+                // with the delay for the CURRENT target's direction.
+                let delay = delay_toward(self.time_delay, self.time_delay_normal, desired);
+                self.pending = Some(PendingTransition::seed(desired, delay));
                 None
             }
         }
@@ -572,6 +613,12 @@ pub struct ChangeOfStateDetector {
     pub notify_type: u32,
     pub event_enable: u8,
     pub time_delay: u32,
+    /// `Time_Delay_Normal` (property 356): the Clause 13.3.2 pTimeDelayNormal
+    /// parameter — seconds that Normal conditions must persist before a
+    /// NORMAL event state is indicated. `None` is the not-configured case
+    /// and takes on `time_delay`: "If no value is available for this
+    /// parameter, then it takes on the value of the pTimeDelay parameter."
+    pub time_delay_normal: Option<u32>,
     pub event_state: EventState,
     pub acked_transitions: u8,
     /// Pending delayed transition, or `None` when no delay is in progress.
@@ -588,6 +635,7 @@ impl Default for ChangeOfStateDetector {
             notify_type: 0,
             event_enable: 0,
             time_delay: 0,
+            time_delay_normal: None,
             event_state: EventState::NORMAL,
             acked_transitions: 0b111,
             pending: None,
@@ -650,13 +698,14 @@ impl ChangeOfStateDetector {
             self.pending = None;
             return None;
         }
-        if self.time_delay == 0 {
+        let delay = delay_toward(self.time_delay, self.time_delay_normal, desired);
+        if delay == 0 {
             return self.fire(desired);
         }
         // See [`OutOfRangeDetector::probe`]: do not restart an in-flight
         // countdown to the same target on a redundant qualifying write.
         if self.pending.as_ref().map_or(true, |p| p.state != desired) {
-            self.pending = Some(PendingTransition::seed(desired, self.time_delay));
+            self.pending = Some(PendingTransition::seed(desired, delay));
         }
         None
     }
@@ -683,7 +732,9 @@ impl ChangeOfStateDetector {
                 None
             }
             _ => {
-                self.pending = Some(PendingTransition::seed(desired, self.time_delay));
+                // Re-seed with the delay for the CURRENT target's direction.
+                let delay = delay_toward(self.time_delay, self.time_delay_normal, desired);
+                self.pending = Some(PendingTransition::seed(desired, delay));
                 None
             }
         }
@@ -730,6 +781,12 @@ pub struct CommandFailureDetector {
     pub notify_type: u32,
     pub event_enable: u8,
     pub time_delay: u32,
+    /// `Time_Delay_Normal` (property 356): the Clause 13.3.4 pTimeDelayNormal
+    /// parameter — seconds that Normal conditions must persist before a
+    /// NORMAL event state is indicated. `None` is the not-configured case
+    /// and takes on `time_delay`: "If no value is available for this
+    /// parameter, then it takes on the value of the pTimeDelay parameter."
+    pub time_delay_normal: Option<u32>,
     pub event_state: EventState,
     pub acked_transitions: u8,
     /// Pending delayed transition, or `None` when no delay is in progress.
@@ -745,6 +802,7 @@ impl Default for CommandFailureDetector {
             notify_type: 0,
             event_enable: 0,
             time_delay: 0,
+            time_delay_normal: None,
             event_state: EventState::NORMAL,
             acked_transitions: 0b111,
             pending: None,
@@ -817,13 +875,14 @@ impl CommandFailureDetector {
             self.pending = None;
             return None;
         }
-        if self.time_delay == 0 {
+        let delay = delay_toward(self.time_delay, self.time_delay_normal, desired);
+        if delay == 0 {
             return self.fire(desired);
         }
         // See [`OutOfRangeDetector::probe`]: do not restart an in-flight
         // countdown to the same target on a redundant qualifying write.
         if self.pending.as_ref().map_or(true, |p| p.state != desired) {
-            self.pending = Some(PendingTransition::seed(desired, self.time_delay));
+            self.pending = Some(PendingTransition::seed(desired, delay));
         }
         None
     }
@@ -855,7 +914,9 @@ impl CommandFailureDetector {
                 None
             }
             _ => {
-                self.pending = Some(PendingTransition::seed(desired, self.time_delay));
+                // Re-seed with the delay for the CURRENT target's direction.
+                let delay = delay_toward(self.time_delay, self.time_delay_normal, desired);
+                self.pending = Some(PendingTransition::seed(desired, delay));
                 None
             }
         }
@@ -974,3 +1035,5 @@ macro_rules! impl_intrinsic_reporting {
 mod fault_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod time_delay_normal_tests;

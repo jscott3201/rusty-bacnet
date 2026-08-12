@@ -509,3 +509,212 @@ fn ai_limit_enable_rejects_noncanonical_bit_strings() {
         }
     );
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// #225 — Time_Delay_Normal on the OUT_OF_RANGE family (AI/AO/AV).
+// ──────────────────────────────────────────────────────────────────────────
+
+fn assert_tdn_protocol_error(result: Result<(), Error>, code: bacnet_types::enums::ErrorCode) {
+    match result.unwrap_err() {
+        Error::Protocol {
+            class,
+            code: actual,
+        } => {
+            assert_eq!(
+                class,
+                bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
+            );
+            assert_eq!(actual, code.to_raw() as u32);
+        }
+        other => panic!("expected protocol error, got {other:?}"),
+    }
+}
+
+/// The property round-trips on all three analog types and is advertised in
+/// both `property_list` and `is_writable_property` (the Clause 12 tables make
+/// it O-coded, so writability mirrors Time_Delay — permitted, and the only
+/// way the Clause 13.3 delay asymmetry is commissionable).
+#[test]
+fn analog_time_delay_normal_round_trips_and_matches_pics() {
+    for (mut object, label) in [
+        (
+            Box::new(AnalogInputObject::new(1, "AI-1", 62).unwrap()) as Box<dyn BACnetObject>,
+            "AI",
+        ),
+        (
+            Box::new(AnalogOutputObject::new(1, "AO-1", 62).unwrap()) as Box<dyn BACnetObject>,
+            "AO",
+        ),
+        (
+            Box::new(AnalogValueObject::new(1, "AV-1", 62).unwrap()) as Box<dyn BACnetObject>,
+            "AV",
+        ),
+    ] {
+        object
+            .write_property(
+                PropertyIdentifier::TIME_DELAY_NORMAL,
+                None,
+                PropertyValue::Unsigned(9),
+                None,
+            )
+            .unwrap_or_else(|e| panic!("{label}: Time_Delay_Normal write rejected: {e:?}"));
+        assert_eq!(
+            object
+                .read_property(PropertyIdentifier::TIME_DELAY_NORMAL, None)
+                .unwrap(),
+            PropertyValue::Unsigned(9),
+            "{label}: Time_Delay_Normal must read back what was written"
+        );
+        assert!(
+            object
+                .property_list()
+                .contains(&PropertyIdentifier::TIME_DELAY_NORMAL),
+            "{label}: Time_Delay_Normal must be advertised in Property_List"
+        );
+        assert!(
+            object.is_writable_property(PropertyIdentifier::TIME_DELAY_NORMAL),
+            "{label}: Time_Delay_Normal must be advertised writable"
+        );
+
+        // Validation mirrors Time_Delay: Unsigned within the u32 span, with
+        // the Clause 15.9.1.3 pairings on refusal and the value untouched.
+        assert_tdn_protocol_error(
+            object.write_property(
+                PropertyIdentifier::TIME_DELAY_NORMAL,
+                None,
+                PropertyValue::Enumerated(9),
+                None,
+            ),
+            bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE,
+        );
+        assert_tdn_protocol_error(
+            object.write_property(
+                PropertyIdentifier::TIME_DELAY_NORMAL,
+                None,
+                PropertyValue::Unsigned(u32::MAX as u64 + 1),
+                None,
+            ),
+            bacnet_types::enums::ErrorCode::VALUE_OUT_OF_RANGE,
+        );
+        assert_eq!(
+            object
+                .read_property(PropertyIdentifier::TIME_DELAY_NORMAL, None)
+                .unwrap(),
+            PropertyValue::Unsigned(9),
+            "{label}: refused Time_Delay_Normal writes must leave the value untouched"
+        );
+    }
+}
+
+/// Clause 13.3: "If no value is available for this parameter, then it takes on
+/// the value of the pTimeDelay parameter" — an object with no Time_Delay_Normal
+/// ever written reads back the effective (fallback) delay.
+#[test]
+fn analog_time_delay_normal_defaults_to_time_delay_when_unwritten() {
+    for (mut object, label) in [
+        (
+            Box::new(AnalogInputObject::new(1, "AI-1", 62).unwrap()) as Box<dyn BACnetObject>,
+            "AI",
+        ),
+        (
+            Box::new(AnalogOutputObject::new(1, "AO-1", 62).unwrap()) as Box<dyn BACnetObject>,
+            "AO",
+        ),
+        (
+            Box::new(AnalogValueObject::new(1, "AV-1", 62).unwrap()) as Box<dyn BACnetObject>,
+            "AV",
+        ),
+    ] {
+        assert_eq!(
+            object
+                .read_property(PropertyIdentifier::TIME_DELAY_NORMAL, None)
+                .unwrap(),
+            object
+                .read_property(PropertyIdentifier::TIME_DELAY, None)
+                .unwrap(),
+            "{label}: unwritten Time_Delay_Normal reads back Time_Delay"
+        );
+        object
+            .write_property(
+                PropertyIdentifier::TIME_DELAY,
+                None,
+                PropertyValue::Unsigned(11),
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            object
+                .read_property(PropertyIdentifier::TIME_DELAY_NORMAL, None)
+                .unwrap(),
+            PropertyValue::Unsigned(11),
+            "{label}: the fallback tracks Time_Delay"
+        );
+    }
+}
+
+/// Clause 13.3.6's asymmetry at object level, commissioned entirely over
+/// `write_property`: the HIGH_LIMIT indication (a) waits Time_Delay, the
+/// NORMAL indication (e) waits Time_Delay_Normal.
+#[test]
+fn ai_time_delay_normal_gates_the_return_to_normal() {
+    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    for (property, value) in [
+        (PropertyIdentifier::HIGH_LIMIT, 80.0),
+        (PropertyIdentifier::LOW_LIMIT, 20.0),
+        (PropertyIdentifier::DEADBAND, 2.0),
+    ] {
+        ai.write_property(property, None, PropertyValue::Real(value), None)
+            .unwrap();
+    }
+    ai.write_property(
+        PropertyIdentifier::LIMIT_ENABLE,
+        None,
+        PropertyValue::BitString {
+            unused_bits: 6,
+            data: vec![LimitEnable::BOTH.to_bits()],
+        },
+        None,
+    )
+    .unwrap();
+    ai.write_property(
+        PropertyIdentifier::TIME_DELAY,
+        None,
+        PropertyValue::Unsigned(2),
+        None,
+    )
+    .unwrap();
+    ai.write_property(
+        PropertyIdentifier::TIME_DELAY_NORMAL,
+        None,
+        PropertyValue::Unsigned(4),
+        None,
+    )
+    .unwrap();
+
+    ai.set_present_value(81.0);
+    assert_eq!(ai.evaluate_intrinsic_reporting(), None);
+    assert_eq!(ai.tick_intrinsic_reporting(), None);
+    let outcome = ai.tick_intrinsic_reporting().unwrap();
+    assert_eq!(
+        outcome.change.to,
+        EventState::HIGH_LIMIT,
+        "condition (a): HIGH_LIMIT after Time_Delay = 2"
+    );
+
+    ai.set_present_value(50.0); // back inside (high_limit - deadband) = 78.0
+    assert_eq!(
+        ai.evaluate_intrinsic_reporting(),
+        None,
+        "condition (e): return to NORMAL only seeds the countdown"
+    );
+    for _ in 0..3 {
+        assert_eq!(
+            ai.tick_intrinsic_reporting(),
+            None,
+            "Time_Delay_Normal = 4 must hold the NORMAL state off"
+        );
+    }
+    let outcome = ai.tick_intrinsic_reporting().unwrap();
+    assert_eq!(outcome.change.from, EventState::HIGH_LIMIT);
+    assert_eq!(outcome.change.to, EventState::NORMAL);
+}
