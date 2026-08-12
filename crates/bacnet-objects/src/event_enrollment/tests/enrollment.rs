@@ -294,7 +294,10 @@ fn write_event_parameters_framed_trailing_garbage_rejected() {
         );
         match result.unwrap_err() {
             bacnet_types::error::Error::Protocol { class, code } => {
-                assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32);
+                assert_eq!(
+                    class,
+                    bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
+                );
                 assert_eq!(
                     code,
                     bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE.to_raw() as u32
@@ -309,8 +312,7 @@ fn write_event_parameters_framed_trailing_garbage_rejected() {
         let PropertyValue::ApplicationData(bytes) = &val else {
             panic!("expected ApplicationData");
         };
-        let (decoded, _) =
-            bacnet_encoding::constructed::decode_event_parameter(bytes, 0).unwrap();
+        let (decoded, _) = bacnet_encoding::constructed::decode_event_parameter(bytes, 0).unwrap();
         assert_eq!(
             decoded,
             BACnetEventParameter::Opaque {

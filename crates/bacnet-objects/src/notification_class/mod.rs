@@ -454,8 +454,7 @@ pub fn get_notification_recipients_strict(
     let Some(nc) = find_notification_class(db, notification_class) else {
         return Some(Vec::new());
     };
-    let Ok(recipient_list_val) = nc.read_property(PropertyIdentifier::RECIPIENT_LIST, None)
-    else {
+    let Ok(recipient_list_val) = nc.read_property(PropertyIdentifier::RECIPIENT_LIST, None) else {
         return Some(Vec::new());
     };
     let destinations = decode_destination_list_pv(&recipient_list_val).ok()?;

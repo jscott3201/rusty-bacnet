@@ -151,7 +151,12 @@ pub fn decode_destination(data: &[u8], offset: usize) -> Result<(BACnetDestinati
     let what = "BACnetDestination";
     // valid-days: BACnetDaysOfWeek (bit 0 = Monday, MSB-first on the wire).
     let ((days_unused, days_data), pos) = decode_app_bit_string(data, offset, what)?;
-    check_fixed_bit_string(days_unused, &days_data, 1, "valid-days (BACnetDaysOfWeek: 7 bits)")?;
+    check_fixed_bit_string(
+        days_unused,
+        &days_data,
+        1,
+        "valid-days (BACnetDaysOfWeek: 7 bits)",
+    )?;
     let valid_days = unpack_octet(&days_data, 7);
     // from-time / to-time.
     let (from_time, pos) = decode_app_time(data, pos, what)?;
