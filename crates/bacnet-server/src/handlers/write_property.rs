@@ -215,13 +215,6 @@ pub fn handle_write_property_multiple(
     Ok(written_oids)
 }
 
-/// Handle a WriteProperty request.
-///
-/// Returns the written object identifier for COV/event notifications.
-///
-/// `OBJECT_NAME` writes are routed through the database name index: a
-/// duplicate name is rejected up front, and a successful rename refreshes
-/// the index so lookups resolve to the new name and the old name is freed.
 /// Decode the `propertyValue` bytes of a WriteProperty-family request into
 /// the `PropertyValue` handed to the object's write arm.
 ///
@@ -245,6 +238,13 @@ pub(crate) fn decode_write_property_value(
     Ok(bacnet_encoding::primitives::decode_application_value(bytes, 0)?.0)
 }
 
+/// Handle a WriteProperty request.
+///
+/// Returns the written object identifier for COV/event notifications.
+///
+/// `OBJECT_NAME` writes are routed through the database name index: a
+/// duplicate name is rejected up front, and a successful rename refreshes
+/// the index so lookups resolve to the new name and the old name is freed.
 pub fn handle_write_property(
     db: &mut ObjectDatabase,
     service_data: &[u8],
