@@ -4,16 +4,16 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-08-12
-- Implementation evidence SHA reviewed: `0c7be9744ffa8540ef95a7b84951ff376831c532`
-- Scope: Write-path structured-value decode tranche (branch codex/write-path-decode; issue #182): WriteProperty and WritePropertyMultiple loop-decode the entire propertyValue payload into a scalar or PropertyValue::List (mirroring encode_property_value's List flattening) with full consumption required (a partial or undecodable element is PROPERTY / INVALID_DATA_ENCODING); the Loop reference properties and Pulse Converter Input_Reference accept their Clause 21 BACnetObjectPropertyReference / BACnetSetpointReference wire frames and reject device-qualified members [3]; and the decode unlocks MSI Alarm_Values whole-list writes plus the datetime-paired Date/Time pair properties (DateTime Value Present_Value and Priority_Array entries, and Relinquish_Default on DateTime Value and DateTime Pattern Value — the last two tranche-L1 exclusions, completing #270). Conventions unchanged: `repo_sha` names the last code commit of the PR branch (this docs-refresh commit lands after it), matching how the previous tranches recorded their reviewed SHA.
-- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for the Clause 15.9 / 15.10 write-service result text and the Clause 15.9.1.3 error table, the Clause 12.17 Loop clause and Table 12-20 (the reference-property types), the Clause 12.23 Pulse Converter Input_Reference text, the Clause 12.38 Table 12-45 and Clause 12.46 value-object tables, and the Clause 21 BACnetObjectPropertyReference / BACnetSetpointReference productions. No external addenda/errata check was performed for this tranche; per-row scope is recorded in each row's notes.
+- Implementation evidence SHA reviewed: `53dd962c7a85e2fe8a16b1dc6f1e836d47f864f0`
+- Scope: Time_Delay_Normal tranche (branch codex/event-evaluator, tranche C1; issue #225): the Clause 13.3 pTimeDelayNormal parameter now exists as the Time_Delay_Normal property (identifier 356) on the nine intrinsic-reporting object types (AI/AO/AV/BI/BO/BV/MSI/MSO/MSV), and all three intrinsic event detectors (OutOfRange/ChangeOfState/CommandFailure, Clause 13.3.6/13.3.2/13.3.4) select the delay by transition direction: every indication into an OFFNORMAL state (including offnormal→offnormal re-indication) waits pTimeDelay; the sustained-condition return to NORMAL waits pTimeDelayNormal; an unwritten Time_Delay_Normal takes on Time_Delay's value per the parameter's fallback text, so absent behavior is byte-identical to the pre-tranche single-delay behavior. The property reads back the effective delay, is writable as Unsigned within the u32 span (every table carries it O-coded, so writability is permitted and mirrors Time_Delay - the #229 commissioning rationale), and is advertised in Property_List and the PICS writability truth source. FAULT transitions carry no delay (Clause 13.2.2 fault precedence, unchanged). Conventions unchanged: `repo_sha` names the last code commit of the PR branch (this docs-refresh commit lands after it), matching how the previous tranches recorded their reviewed SHA.
+- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` (text extract) was reviewed for the pTimeDelayNormal definitions and condition letters of Clause 13.3.1/13.3.2 (CHANGE_OF_BITSTRING/CHANGE_OF_STATE) and 13.3.4/13.3.6 (COMMAND_FAILURE/OUT_OF_RANGE), and for the Time_Delay_Normal rows - conformance code AND writability - of all nine intrinsic object tables (12-2/12-3/12-4/12-6/12-8/12-10/12-21/12-22/12-23), with the extract's two-column page-break interleave handled by count-based alignment (each table's property/datatype pair count equals its conformance-code count) plus footnote-body adjacency checks; see the new row's notes. No external addenda/errata check was performed for this tranche.
 
 ## Counts
 
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 15 |
-| Priority | P1 | 20 |
+| Priority | P1 | 21 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
@@ -26,7 +26,7 @@
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
 | Status | in-progress | 3 |
-| Status | supported-with-clause-evidence | 10 |
+| Status | supported-with-clause-evidence | 11 |
 | Status | unknown-pending-source-review | 4 |
 
 ## Ledger Rows
@@ -50,6 +50,7 @@
 | `BACNET-12-OOS-RELIABILITY-WRITABILITY` | Clause 12.17 Table 12-20 footnote 7 (Loop); Clause 12 Out_Of_Service property texts (12.2/12.3/12.4/12.6/12.7/12.8/12.19/12.21/12.22 families); Clause 12.24 Schedule Reliability_Evaluation_Inhibit text; Clause 12.25 Table 12-29 and Clause 12.30 Table 12-35 (Trend Log / Trend Log Multiple); Clause 21 BACnetReliability | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-12-RELINQUISH-DEFAULT-WRITABILITY` | Clause 12.3 Table 12-3 (Analog Output), Clause 12.7 Table 12-8 (Binary Output), Clause 12.8 Table 12-10 (Binary Value), Clause 12.19 Table 12-22 (Multi-state Output), Clause 12.20 Table 12-23 (Multi-state Value), Clause 12.26 Table 12-30 (Access Door), Clause 12.54 Table 12-64 (Lighting Output), Clause 12.55 Table 12-69 (Binary Lighting Output), Clause 12 value object tables; Clause 19 command prioritization | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-12-REFERENCE-PROPERTY-WRITABILITY` | Clause 12.17 with Table 12-20 (Loop), Clause 12.23 with Table 12-27 (Pulse Converter Input_Reference), Clause 12.5 Table 12-5 (Averaging Object_Property_Reference - BACnetDeviceObjectPropertyReference), Clause 21 BACnetObjectPropertyReference / BACnetSetpointReference productions | P1 | supported-with-clause-evidence | 0 |
+| `BACNET-12-TIME-DELAY-NORMAL` | Clause 13.3.2 CHANGE_OF_STATE, Clause 13.3.4 COMMAND_FAILURE, Clause 13.3.6 OUT_OF_RANGE (pTimeDelayNormal definitions and condition letters); Clause 12.2 Table 12-2 (Analog Input, O5), 12.3 Table 12-3 (Analog Output, O4), 12.4 Table 12-4 (Analog Value, O6), 12.6 Table 12-6 (Binary Input, O7), 12.7 Table 12-8 (Binary Output, O6), 12.8 Table 12-10 (Binary Value, O8), 12.18 Table 12-21 (Multi-state Input, O5), 12.19 Table 12-22 (Multi-state Output, O3), 12.20 Table 12-23 (Multi-state Value, O6) | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-13-COV-SUBSCRIPTIONS` | Clauses 13.14-13.18 | P1 | implementation-present-needs-conformance-tests | 0 |
 | `BACNET-15-ARRAY-INDEX-GATING` | Clause 15.5.1.3, Clause 15.9.1.3 (with Clause 12.1.5) | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-15-WP-EVENT-FIELD-VALIDATION` | Clause 15.9.1.3 (WriteProperty error table) with Clause 21 BACnetNotifyType / BACnetEventTransitionBits / BACnetLimitEnable productions | P1 | supported-with-clause-evidence | 0 |
