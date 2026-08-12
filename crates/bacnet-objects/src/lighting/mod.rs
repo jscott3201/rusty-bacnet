@@ -76,6 +76,21 @@ impl LightingOutputObject {
         self.present_value =
             common::recalculate_from_priority_array(&self.priority_array, self.relinquish_default);
     }
+
+    /// Set the Relinquish_Default (#270).
+    ///
+    /// Validated the same way a commanded Present_Value is (finite Real
+    /// within the 0..=100 light level); after the store, Present_Value is
+    /// resolved anew from the priority array so an empty array falls back to
+    /// the new default immediately.
+    pub fn set_relinquish_default(&mut self, value: f32) -> Result<(), Error> {
+        if !value.is_finite() || !(0.0..=100.0).contains(&value) {
+            return Err(common::value_out_of_range_error());
+        }
+        self.relinquish_default = value;
+        self.recalculate_present_value();
+        Ok(())
+    }
 }
 
 impl BACnetObject for LightingOutputObject {
@@ -194,17 +209,10 @@ impl BACnetObject for LightingOutputObject {
 
         // RELINQUISH_DEFAULT — writable per Table 12-64 (R; the standard
         // permits writability), validated the same way a commanded
-        // Present_Value is: finite Real within the 0..=100 light level.
-        // After the store, Present_Value resolves anew so an empty priority
-        // array falls back to the new default immediately.
+        // Present_Value is by the shared setter.
         if property == PropertyIdentifier::RELINQUISH_DEFAULT {
             if let PropertyValue::Real(f) = value {
-                if !f.is_finite() || !(0.0..=100.0).contains(&f) {
-                    return Err(common::value_out_of_range_error());
-                }
-                self.relinquish_default = f;
-                self.recalculate_present_value();
-                return Ok(());
+                return self.set_relinquish_default(f);
             }
             return Err(common::invalid_data_type_error());
         }
@@ -340,6 +348,21 @@ impl BinaryLightingOutputObject {
         self.present_value =
             common::recalculate_from_priority_array(&self.priority_array, self.relinquish_default);
     }
+
+    /// Set the Relinquish_Default (#270).
+    ///
+    /// Validated the same way a commanded Present_Value is (BinaryLightingPV
+    /// 0..=4: off, on, warn, warn-off, fade-on) per Table 12-69; after the
+    /// store, Present_Value is resolved anew from the priority array so an
+    /// empty array falls back to the new default immediately.
+    pub fn set_relinquish_default(&mut self, value: u32) -> Result<(), Error> {
+        if value > Self::MAX_PV {
+            return Err(common::value_out_of_range_error());
+        }
+        self.relinquish_default = value;
+        self.recalculate_present_value();
+        Ok(())
+    }
 }
 
 impl BACnetObject for BinaryLightingOutputObject {
@@ -440,17 +463,10 @@ impl BACnetObject for BinaryLightingOutputObject {
 
         // RELINQUISH_DEFAULT — writable per Table 12-69 (R; the standard
         // permits writability), validated the same way a commanded
-        // Present_Value is (BinaryLightingPV 0..=4). After the store,
-        // Present_Value resolves anew so an empty priority array falls back
-        // to the new default immediately.
+        // Present_Value is by the shared setter.
         if property == PropertyIdentifier::RELINQUISH_DEFAULT {
             if let PropertyValue::Enumerated(e) = value {
-                if e > Self::MAX_PV {
-                    return Err(common::value_out_of_range_error());
-                }
-                self.relinquish_default = e;
-                self.recalculate_present_value();
-                return Ok(());
+                return self.set_relinquish_default(e);
             }
             return Err(common::invalid_data_type_error());
         }

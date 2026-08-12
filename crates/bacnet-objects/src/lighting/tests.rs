@@ -593,3 +593,49 @@ fn binary_lighting_output_relinquish_default_write_recaptures_present_value() {
         );
     }
 }
+
+/// Binary Lighting Output: `Enumerated(5)` is past the BinaryLightingPV set
+/// (Table 12-69 types Relinquish_Default as BACnetBinaryLightingPV); the
+/// refuse carries PROPERTY / VALUE_OUT_OF_RANGE and the stored default is
+/// byte-identical afterward.
+#[test]
+fn blo_relinquish_default_rejects_values_past_binary_lighting_pv() {
+    let mut blo = BinaryLightingOutputObject::new(1, "BLO-1").unwrap();
+    blo.set_relinquish_default(4).unwrap(); // fade-on: the production ceiling
+
+    for value in [
+        PropertyValue::Enumerated(5),
+        PropertyValue::Enumerated(u32::MAX),
+    ] {
+        match blo
+            .write_property(PropertyIdentifier::RELINQUISH_DEFAULT, None, value, None)
+            .expect_err("out-of-production Relinquish_Default must refuse")
+        {
+            Error::Protocol { class, code } => {
+                assert_eq!(
+                    class,
+                    bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
+                );
+                assert_eq!(
+                    code,
+                    bacnet_types::enums::ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32
+                );
+            }
+            other => panic!("expected PROPERTY / VALUE_OUT_OF_RANGE, got {other:?}"),
+        }
+        assert_eq!(
+            blo.read_property(PropertyIdentifier::RELINQUISH_DEFAULT, None)
+                .unwrap(),
+            PropertyValue::Enumerated(4),
+            "a refused write must leave Relinquish_Default byte-identical"
+        );
+        assert_eq!(
+            blo.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+                .unwrap(),
+            PropertyValue::Enumerated(4)
+        );
+    }
+
+    // The local setter enforces the same ceiling.
+    assert!(blo.set_relinquish_default(5).is_err());
+}
