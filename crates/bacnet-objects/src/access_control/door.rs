@@ -6,12 +6,13 @@ use super::*;
 /// BACnet Access Door object (type 30).
 ///
 /// Represents a physical door or barrier in an access control system.
-/// Present value indicates the door command status (DoorStatus enumeration).
+/// Present value carries the door command (BACnetDoorValue); Door_Status
+/// reports the physical DoorStatus.
 pub struct AccessDoorObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    present_value: u32,    // DoorStatus: 0=closed, 1=opened, 2=unknown
+    present_value: u32,    // BACnetDoorValue: 0=lock, 1=unlock
     door_status: u32,      // DoorStatus enumeration
     lock_status: u32,      // LockStatus enumeration
     secured_status: u32,   // DoorSecuredStatus enumeration
@@ -35,7 +36,7 @@ impl AccessDoorObject {
             oid,
             name: name.into(),
             description: String::new(),
-            present_value: 0, // closed
+            present_value: 0, // lock
             door_status: 0,   // closed
             lock_status: 0,
             secured_status: 0,
@@ -46,7 +47,7 @@ impl AccessDoorObject {
             out_of_service: false,
             reliability: 0,
             priority_array: Default::default(),
-            relinquish_default: 0, // closed
+            relinquish_default: 0, // lock
         })
     }
 
@@ -56,9 +57,11 @@ impl AccessDoorObject {
     /// BACnetDoorValue, whose Clause 21 production is a closed set of four:
     /// the accepted domain is `DoorValue::LOCK..=DoorValue::EXTENDED_PULSE_UNLOCK`
     /// (0..=3), matching what the priority-slot Present_Value arm accepts
-    /// for value 3. After the store, Present_Value is resolved anew from the
-    /// priority array so an empty array falls back to the new default
-    /// immediately.
+    /// for value 3. The bacnet-types test `door_value_values_match_clause_21`
+    /// pins the production's closed-set length, so this derivation cannot
+    /// silently drift from the enum. After the store, Present_Value is
+    /// resolved anew from the priority array so an empty array falls back
+    /// to the new default immediately.
     pub fn set_relinquish_default(&mut self, value: u32) -> Result<(), Error> {
         if value > DoorValue::EXTENDED_PULSE_UNLOCK.to_raw() {
             return Err(common::value_out_of_range_error());

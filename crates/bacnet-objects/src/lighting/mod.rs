@@ -319,7 +319,7 @@ pub struct BinaryLightingOutputObject {
 impl BinaryLightingOutputObject {
     /// Highest BinaryLightingPV value accepted in writes. The Clause 21
     /// production runs off=0, on=1, warn=2, warn-off=3, warn-relinquish=4,
-    /// stop=5; this object accepts 0..=4 (stop is a known gap, #253).
+    /// stop=5; this object accepts 0..=4 (stop is a known gap, #283).
     const MAX_PV: u32 = 4;
 
     /// Create a new Binary Lighting Output object.

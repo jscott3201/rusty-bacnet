@@ -186,7 +186,10 @@ pub struct EscalatorObject {
     energy_meter_ref: Vec<u8>,
     /// Power mode (Boolean).
     power_mode: bool,
-    /// Operation direction (Enumerated: 0=unknown, 1=up, 2=down, 3=stopped).
+    /// Operation direction (BACnetEscalatorOperationDirection, Clause 21):
+    /// 0=unknown, 1=stopped, 2=up-rated-speed, 3=up-reduced-speed,
+    /// 4=down-rated-speed, 5=down-reduced-speed. Retyping this raw `u32` to
+    /// the enum is tracked in #284.
     operation_direction: u32,
     status_flags: StatusFlags,
     out_of_service: bool,
