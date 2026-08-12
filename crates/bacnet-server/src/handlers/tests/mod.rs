@@ -43,3 +43,4 @@ mod read_rpm;
 mod wpm_create_alarm;
 mod write_cov_who;
 mod write_property_name;
+mod write_validation;

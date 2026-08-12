@@ -518,3 +518,85 @@ fn trendlog_multiple_write_log_enable() {
     tlm.add_record(make_record(10, 72.5));
     assert_eq!(tlm.records().len(), 0);
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// Reliability writability pins (#240 sweep)
+// ──────────────────────────────────────────────────────────────────────────
+
+/// Clause 12.25 Table 12-29 lists Reliability as plain O with no writability
+/// footnote, and the Trend Log Reliability_Evaluation_Inhibit paragraph ends at
+/// "shall have the value NO_FAULT_DETECTED." — unlike the Schedule (Clause
+/// 12.24) and intrinsic-reporting objects it does NOT carry the "...unless
+/// Out_Of_Service is TRUE and an alternate value has been written to the
+/// Reliability property" provision. The log owns the property as a logging
+/// status/fault indication, so no-write is the conformant posture; a client
+/// write is refused PROPERTY / WRITE_ACCESS_DENIED in and out of service.
+#[test]
+fn trendlog_reliability_is_not_network_writable() {
+    let mut tl = TrendLogObject::new(1, "TL-1", 100).unwrap();
+    assert!(!tl.is_writable_property(PropertyIdentifier::RELIABILITY));
+
+    for context in ["in service", "out of service"] {
+        let result = tl.write_property(
+            PropertyIdentifier::RELIABILITY,
+            None,
+            PropertyValue::Enumerated(1),
+            None,
+        );
+        match result.expect_err("Reliability write must be refused") {
+            Error::Protocol { class, code } => {
+                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32, "{context}");
+                assert_eq!(
+                    code,
+                    ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+                    "{context}"
+                );
+            }
+            other => panic!("expected PROPERTY / WRITE_ACCESS_DENIED, got {other:?}"),
+        }
+        assert_eq!(
+            tl.read_property(PropertyIdentifier::RELIABILITY, None)
+                .unwrap(),
+            PropertyValue::Enumerated(0),
+            "a refused write must leave Reliability untouched ({context})"
+        );
+
+        tl.write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(true),
+            None,
+        )
+        .expect("Out_Of_Service stays writable");
+    }
+}
+
+/// Clause 12.30 Table 12-35 lists Reliability as plain O with the same
+/// no-provision Reliability_Evaluation_Inhibit text as the Trend Log, so
+/// Trend Log Multiple keeps the trait-default denial and this pin documents
+/// that the absence of a write arm is deliberate, not an omission.
+#[test]
+fn trendlog_multiple_reliability_is_not_network_writable() {
+    let mut tlm = TrendLogMultipleObject::new(1, "TLM-1", 100).unwrap();
+    assert!(!tlm.is_writable_property(PropertyIdentifier::RELIABILITY));
+
+    let result = tlm.write_property(
+        PropertyIdentifier::RELIABILITY,
+        None,
+        PropertyValue::Enumerated(1),
+        None,
+    );
+    match result.expect_err("Reliability write must be refused") {
+        Error::Protocol { class, code } => {
+            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+            assert_eq!(code, ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32);
+        }
+        other => panic!("expected PROPERTY / WRITE_ACCESS_DENIED, got {other:?}"),
+    }
+    assert_eq!(
+        tlm.read_property(PropertyIdentifier::RELIABILITY, None)
+            .unwrap(),
+        PropertyValue::Enumerated(0),
+        "a refused write must leave Reliability untouched"
+    );
+}

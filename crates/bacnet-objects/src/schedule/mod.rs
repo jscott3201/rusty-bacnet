@@ -9,7 +9,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
 
-use crate::common::read_property_list_property;
+use crate::common::{self, read_property_list_property};
 use crate::traits::BACnetObject;
 
 // ---------------------------------------------------------------------------
@@ -186,6 +186,9 @@ pub struct ScheduleObject {
     schedule_default: PropertyValue,
     out_of_service: bool,
     reliability: u32,
+    /// Evaluated Reliability saved while a client simulation owns the property
+    /// (Out_Of_Service TRUE); restored on the return to service.
+    reliability_before_out_of_service: Option<u32>,
     status_flags: StatusFlags,
     /// 7-day weekly schedule: index 0 = Monday, index 6 = Sunday.
     weekly_schedule: [Vec<BACnetTimeValue>; 7],
@@ -211,6 +214,7 @@ impl ScheduleObject {
             schedule_default,
             out_of_service: false,
             reliability: 0,
+            reliability_before_out_of_service: None,
             status_flags: StatusFlags::empty(),
             weekly_schedule: [vec![], vec![], vec![], vec![], vec![], vec![], vec![]],
             exception_schedule: Vec::new(),
@@ -481,8 +485,23 @@ impl BACnetObject for ScheduleObject {
             self.schedule_default = value;
             return Ok(());
         }
+        // Clause 12.24 Table 12-28 carries no writable footnote on Reliability
+        // (plain R), but the object text still anticipates client simulation:
+        // the Reliability_Evaluation_Inhibit description states the property
+        // holds NO_FAULT_DETECTED while evaluation is disabled "unless
+        // Out_Of_Service is TRUE and an alternate value has been written to the
+        // Reliability property". In service the property reports the object's
+        // own consistency evaluation (CONFIGURATION_ERROR et al.), so a network
+        // write is refused; the internal route is `set_reliability_internal`
+        // with the complementary guard.
         if property == PropertyIdentifier::RELIABILITY {
+            if !self.out_of_service {
+                return Err(common::write_access_denied_error());
+            }
             if let PropertyValue::Enumerated(v) = value {
+                if !common::is_reliability_value_valid(v) {
+                    return Err(common::value_out_of_range_error());
+                }
                 self.reliability = v;
                 return Ok(());
             }
@@ -491,15 +510,14 @@ impl BACnetObject for ScheduleObject {
                 code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
             });
         }
-        if property == PropertyIdentifier::OUT_OF_SERVICE {
-            if let PropertyValue::Boolean(v) = value {
-                self.out_of_service = v;
-                return Ok(());
-            }
-            return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
-            });
+        if let Some(result) = common::write_out_of_service_with_reliability_restore(
+            &mut self.out_of_service,
+            &mut self.reliability,
+            &mut self.reliability_before_out_of_service,
+            property,
+            &value,
+        ) {
+            return result;
         }
         if property == PropertyIdentifier::DESCRIPTION {
             if let PropertyValue::CharacterString(s) = value {
@@ -535,6 +553,32 @@ impl BACnetObject for ScheduleObject {
             PropertyIdentifier::OUT_OF_SERVICE,
         ];
         Cow::Borrowed(PROPS)
+    }
+
+    fn set_reliability_internal(&mut self, reliability: u32) -> Result<(), Error> {
+        // While Out_Of_Service is TRUE the client owns the simulated value;
+        // refusing here keeps the internal consistency evaluation from
+        // clobbering the simulation.
+        if self.out_of_service {
+            return Err(common::write_access_denied_error());
+        }
+        if !common::is_reliability_value_valid(reliability) {
+            return Err(common::value_out_of_range_error());
+        }
+        self.reliability = reliability;
+        Ok(())
+    }
+
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        // Mirrors the ScheduleObject `write_property` arms so the PICS and
+        // runtime dispatch share one truth source.
+        matches!(
+            property,
+            PropertyIdentifier::SCHEDULE_DEFAULT
+                | PropertyIdentifier::RELIABILITY
+                | PropertyIdentifier::OUT_OF_SERVICE
+                | PropertyIdentifier::DESCRIPTION
+        )
     }
 
     fn tick_schedule(

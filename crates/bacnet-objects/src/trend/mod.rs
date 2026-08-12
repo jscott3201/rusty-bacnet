@@ -267,14 +267,18 @@ impl BACnetObject for TrendLogObject {
                 code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
             });
         }
+        // Clause 12.25 Table 12-29 lists Reliability as plain O with no
+        // writability footnote, and unlike the intrinsic-reporting objects the
+        // Trend Log Reliability_Evaluation_Inhibit paragraph ends at "shall
+        // have the value NO_FAULT_DETECTED." — it does NOT carry the "...unless
+        // Out_Of_Service is TRUE and an alternate value has been written to the
+        // Reliability property" provision. Nothing in Clause 12.25 grants a
+        // network client this property: the log owns it (logging status and
+        // fault indication), so every write is refused.
         if property == PropertyIdentifier::RELIABILITY {
-            if let PropertyValue::Enumerated(v) = value {
-                self.reliability = v;
-                return Ok(());
-            }
             return Err(Error::Protocol {
                 class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
+                code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
             });
         }
         if property == PropertyIdentifier::OUT_OF_SERVICE {

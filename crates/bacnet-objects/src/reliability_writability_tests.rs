@@ -1,6 +1,8 @@
 use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
+use crate::loop_obj::LoopObject;
 use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
+use crate::schedule::ScheduleObject;
 use crate::traits::BACnetObject;
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
@@ -340,4 +342,17 @@ reliability_gate_test!(
 reliability_gate_test!(
     multistate_value_reliability_requires_out_of_service,
     MultiStateValueObject::new(1, "MSV-1", 3).unwrap()
+);
+// Clause 12.17 Table 12-20 lists Reliability O7; footnote 7 requires
+// writability when Out_Of_Service is TRUE.
+reliability_gate_test!(
+    loop_reliability_requires_out_of_service,
+    LoopObject::new(1, "LOOP-1", 62).unwrap()
+);
+// Clause 12.24: the Reliability_Evaluation_Inhibit text anticipates an
+// out-of-service client write ("...unless Out_Of_Service is TRUE and an
+// alternate value has been written to the Reliability property").
+reliability_gate_test!(
+    schedule_reliability_requires_out_of_service,
+    ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(0.0)).unwrap()
 );

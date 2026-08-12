@@ -26,6 +26,9 @@ pub struct LoopObject {
     update_interval: u32,
     out_of_service: bool,
     reliability: u32,
+    /// Evaluated Reliability saved while a client simulation owns the property
+    /// (Out_Of_Service TRUE); restored on the return to service.
+    reliability_before_out_of_service: Option<u32>,
     status_flags: StatusFlags,
     controlled_variable_reference: Option<BACnetObjectPropertyReference>,
     manipulated_variable_reference: Option<BACnetObjectPropertyReference>,
@@ -48,6 +51,7 @@ impl LoopObject {
             update_interval: 1000, // milliseconds
             out_of_service: false,
             reliability: 0,
+            reliability_before_out_of_service: None,
             status_flags: StatusFlags::empty(),
             controlled_variable_reference: None,
             manipulated_variable_reference: None,
@@ -183,6 +187,15 @@ impl BACnetObject for LoopObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        if let Some(result) = common::write_out_of_service_with_reliability_restore(
+            &mut self.out_of_service,
+            &mut self.reliability,
+            &mut self.reliability_before_out_of_service,
+            property,
+            &value,
+        ) {
+            return result;
+        }
         match property {
             p if p == PropertyIdentifier::SETPOINT => {
                 if let PropertyValue::Real(v) = value {
@@ -238,19 +251,26 @@ impl BACnetObject for LoopObject {
                     code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
                 })
             }
+            // Clause 12.17 Table 12-20 lists Reliability O7, whose footnote reads
+            // "These properties are required to be writable when Out_Of_Service
+            // is TRUE", and the Out_Of_Service property text then narrows the grant:
+            // while TRUE, "the Present_Value property and the Reliability property,
+            // if present and capable of taking on values other than
+            // NO_FAULT_DETECTED, shall be writable to allow simulating specific
+            // conditions or for testing purposes". In service the property is owned
+            // by the algorithm, so a network write is refused here; the internal
+            // evaluator route is `set_reliability_internal` with the complementary
+            // guard, and Out_Of_Service saves/restores the evaluated value (handled
+            // above the match).
             p if p == PropertyIdentifier::RELIABILITY => {
-                if let PropertyValue::Enumerated(v) = value {
-                    self.reliability = v;
-                    return Ok(());
+                if !self.out_of_service {
+                    return Err(common::write_access_denied_error());
                 }
-                Err(Error::Protocol {
-                    class: ErrorClass::PROPERTY.to_raw() as u32,
-                    code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
-                })
-            }
-            p if p == PropertyIdentifier::OUT_OF_SERVICE => {
-                if let PropertyValue::Boolean(v) = value {
-                    self.out_of_service = v;
+                if let PropertyValue::Enumerated(v) = value {
+                    if !common::is_reliability_value_valid(v) {
+                        return Err(common::value_out_of_range_error());
+                    }
+                    self.reliability = v;
                     return Ok(());
                 }
                 Err(Error::Protocol {
@@ -370,6 +390,40 @@ impl BACnetObject for LoopObject {
 
     fn supports_cov(&self) -> bool {
         true
+    }
+
+    fn set_reliability_internal(&mut self, reliability: u32) -> Result<(), Error> {
+        // While Out_Of_Service is TRUE the client owns the simulated value;
+        // an internal write would clobber the simulation (Clause 12.17
+        // Out_Of_Service paragraph: Reliability is "decoupled from the
+        // algorithm"), so it is refused until the object returns to service.
+        if self.out_of_service {
+            return Err(common::write_access_denied_error());
+        }
+        if !common::is_reliability_value_valid(reliability) {
+            return Err(common::value_out_of_range_error());
+        }
+        self.reliability = reliability;
+        Ok(())
+    }
+
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        // Mirrors the LoopObject `write_property` arms so the PICS and
+        // runtime dispatch share one truth source.
+        matches!(
+            property,
+            PropertyIdentifier::SETPOINT
+                | PropertyIdentifier::PROPORTIONAL_CONSTANT
+                | PropertyIdentifier::INTEGRAL_CONSTANT
+                | PropertyIdentifier::DERIVATIVE_CONSTANT
+                | PropertyIdentifier::UPDATE_INTERVAL
+                | PropertyIdentifier::RELIABILITY
+                | PropertyIdentifier::OUT_OF_SERVICE
+                | PropertyIdentifier::DESCRIPTION
+                | PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE
+                | PropertyIdentifier::MANIPULATED_VARIABLE_REFERENCE
+                | PropertyIdentifier::SETPOINT_REFERENCE
+        )
     }
 }
 
