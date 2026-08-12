@@ -52,12 +52,15 @@ impl AccessDoorObject {
 
     /// Set the Relinquish_Default (#270).
     ///
-    /// Validated against the DoorValue set the object models (0=closed,
-    /// 1=opened, 2=unknown); after the store, Present_Value is resolved anew
-    /// from the priority array so an empty array falls back to the new
+    /// Table 12-30 types both Present_Value and Relinquish_Default as
+    /// BACnetDoorValue, whose Clause 21 production is a closed set of four:
+    /// lock(0), unlock(1), pulse-unlock(2), extended-pulse-unlock(3) — so the
+    /// valid domain is 0..=3, matching what the priority-slot Present_Value
+    /// arm accepts for value 3. After the store, Present_Value is resolved
+    /// anew from the priority array so an empty array falls back to the new
     /// default immediately.
     pub fn set_relinquish_default(&mut self, value: u32) -> Result<(), Error> {
-        if value > 2 {
+        if value > 3 {
             return Err(common::value_out_of_range_error());
         }
         self.relinquish_default = value;
@@ -168,8 +171,8 @@ impl BACnetObject for AccessDoorObject {
                 self.recalculate_present_value();
                 Ok(())
             }
-            // Table 12-30 carries Relinquish_Default R for the commandable
-            // Access Door; the standard permits writability.
+            // Table 12-30 carries Relinquish_Default R (BACnetDoorValue) for
+            // the commandable Access Door; the standard permits writability.
             p if p == PropertyIdentifier::RELINQUISH_DEFAULT => {
                 if let PropertyValue::Enumerated(v) = value {
                     return self.set_relinquish_default(v);

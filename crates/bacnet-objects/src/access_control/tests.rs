@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_types::enums::{ErrorClass, ErrorCode};
 
 // --- AccessDoorObject ---
 
@@ -520,10 +521,11 @@ fn credential_data_input_write_denied() {
 // #270 — writable Relinquish_Default (Access Door)
 // ---------------------------------------------------------------------------
 
-/// Access Door: Relinquish_Default carries R in Table 12-30 and writability
-/// is permitted; the write is validated against the DoorValue set the object
-/// models (0=closed, 1=opened, 2=unknown) and — with an all-NULL priority
-/// array — Present_Value immediately resolves to the written default.
+/// Access Door: Relinquish_Default carries R in Table 12-30 typed as
+/// BACnetDoorValue (Clause 21: lock(0), unlock(1), pulse-unlock(2),
+/// extended-pulse-unlock(3)) and writability is permitted; the write is
+/// validated against that production and — with an all-NULL priority array —
+/// Present_Value immediately resolves to the written default.
 #[test]
 fn access_door_relinquish_default_write_recaptures_present_value() {
     let mut door = AccessDoorObject::new(1, "DOOR-1").unwrap();
@@ -532,7 +534,7 @@ fn access_door_relinquish_default_write_recaptures_present_value() {
     door.write_property(
         PropertyIdentifier::RELINQUISH_DEFAULT,
         None,
-        PropertyValue::Enumerated(1), // opened
+        PropertyValue::Enumerated(1), // unlock
         None,
     )
     .unwrap();
@@ -548,26 +550,69 @@ fn access_door_relinquish_default_write_recaptures_present_value() {
         "with an empty priority array, PV must resolve to the written default"
     );
 
-    // Values past the modeled DoorValue set and wrong types refuse; neither
-    // touches the stored default.
-    for value in [PropertyValue::Enumerated(3), PropertyValue::Real(1.0)] {
-        assert!(door
+    // Every named BACnetDoorValue is accepted, including
+    // extended-pulse-unlock (3) — matching the priority-slot PV arm.
+    for named in [0u32, 2, 3] {
+        door.write_property(
+            PropertyIdentifier::RELINQUISH_DEFAULT,
+            None,
+            PropertyValue::Enumerated(named),
+            None,
+        )
+        .expect("named BACnetDoorValue must be accepted");
+        assert_eq!(
+            door.read_property(PropertyIdentifier::RELINQUISH_DEFAULT, None)
+                .unwrap(),
+            PropertyValue::Enumerated(named)
+        );
+        assert_eq!(
+            door.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+                .unwrap(),
+            PropertyValue::Enumerated(named)
+        );
+    }
+    door.set_relinquish_default(1).unwrap();
+
+    // 4 is out of the production; so are large values; so are wrong types.
+    // Each refuses PROPERTY / VALUE_OUT_OF_RANGE (or INVALID_DATA_TYPE) and
+    // the stored default is byte-identical afterward.
+    for (value, code) in [
+        (PropertyValue::Enumerated(4), ErrorCode::VALUE_OUT_OF_RANGE),
+        (
+            PropertyValue::Enumerated(u32::MAX),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        ),
+        (PropertyValue::Real(1.0), ErrorCode::INVALID_DATA_TYPE),
+    ] {
+        match door
             .write_property(PropertyIdentifier::RELINQUISH_DEFAULT, None, value, None)
-            .is_err());
+            .expect_err("out-of-production Relinquish_Default must refuse")
+        {
+            Error::Protocol { class, code: c } => {
+                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+                assert_eq!(c, code.to_raw() as u32);
+            }
+            other => panic!("expected protocol error, got {other:?}"),
+        }
         assert_eq!(
             door.read_property(PropertyIdentifier::RELINQUISH_DEFAULT, None)
                 .unwrap(),
             PropertyValue::Enumerated(1),
-            "refused writes must leave Relinquish_Default untouched"
+            "a refused write must leave Relinquish_Default byte-identical"
+        );
+        assert_eq!(
+            door.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+                .unwrap(),
+            PropertyValue::Enumerated(1)
         );
     }
 
-    // The local setter shares the validation.
-    assert!(door.set_relinquish_default(3).is_err());
-    door.set_relinquish_default(0).unwrap();
+    // The local setter shares the validation domain.
+    assert!(door.set_relinquish_default(4).is_err());
+    door.set_relinquish_default(3).unwrap();
     assert_eq!(
         door.read_property(PropertyIdentifier::PRESENT_VALUE, None)
             .unwrap(),
-        PropertyValue::Enumerated(0)
+        PropertyValue::Enumerated(3)
     );
 }
