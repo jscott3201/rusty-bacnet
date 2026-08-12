@@ -252,15 +252,16 @@ pub trait BACnetObject: Send + Sync {
 ///   (Table 12-24), WEEKLY_SCHEDULE / EXCEPTION_SCHEDULE (Table 12-28),
 ///   EVENT_TIME_STAMPS / EVENT_MESSAGE_TEXTS (Table 12-2 family),
 ///   PRIORITY_ARRAY (the commandable family), TAGS (Annex Y),
-///   SUBORDINATE_LIST / SUBORDINATE_ANNOTATIONS (Table 12-34), and
+///   SUBORDINATE_LIST / SUBORDINATE_ANNOTATIONS (Table 12-34),
 ///   GROUP_MEMBERS / GROUP_MEMBER_NAMES (Table 12-57; Elevator/Lift also type
-///   GROUP_MEMBERS BACnetARRAY).
+///   GROUP_MEMBERS BACnetARRAY), ACTION (Table 12-12), and STAGES /
+///   STAGE_NAMES / TARGET_REFERENCES (Table 12-80).
 /// - **Type-dependent** identifiers classify by `object_type`: ALARM_VALUES /
 ///   FAULT_VALUES are BACnetARRAY[N] on CharacterString Value (Table 12-44)
 ///   and BitString Value (Table 12-47) but BACnetLIST on the multi-state,
 ///   life-safety, and access families; LIST_OF_OBJECT_PROPERTY_REFERENCES is
 ///   BACnetARRAY[N] on Channel (Table 12-62) but BACnetLIST on Schedule
-///   (Table 12-28) and Lighting Output (Table 12-64); PRESENT_VALUE is
+///   (Table 12-28) and Timer (Table 12-75); PRESENT_VALUE is
 ///   BACnetARRAY[N] of BACnetPropertyAccessResult on Global Group
 ///   (Table 12-57) but scalar elsewhere.
 /// - **Everything else** — scalars and the identifier-stable BACnetLIST
@@ -268,7 +269,10 @@ pub trait BACnetObject: Send + Sync {
 ///   (Table 12-17), RECIPIENT_LIST (Table 12-24), LOG_BUFFER
 ///   (Tables 12-29/12-31), DEVICE_ADDRESS_BINDING and
 ///   ACTIVE_COV_SUBSCRIPTIONS (Table 12-13) — takes no index: Clause 12.1.5.2
-///   makes ReadRange the only positional access to a BACnetLIST.
+///   makes ReadRange the only positional access to a BACnetLIST. Array-typed
+///   identifiers whose object types are not modeled in-tree (e.g.
+///   ACTION_TEXT, EVENT_MESSAGE_TEXTS_CONFIG, VALUE_SOURCE_ARRAY) stay
+///   rejected until their object-side modeling lands.
 ///
 /// Like [`historical_writable_default`] this is a free function (not a
 /// per-object override) so the default trait method can delegate to it
@@ -293,7 +297,11 @@ pub(crate) fn array_property_default(
         | PropertyIdentifier::SUBORDINATE_LIST
         | PropertyIdentifier::SUBORDINATE_ANNOTATIONS
         | PropertyIdentifier::GROUP_MEMBERS
-        | PropertyIdentifier::GROUP_MEMBER_NAMES => true,
+        | PropertyIdentifier::GROUP_MEMBER_NAMES
+        | PropertyIdentifier::ACTION
+        | PropertyIdentifier::STAGES
+        | PropertyIdentifier::STAGE_NAMES
+        | PropertyIdentifier::TARGET_REFERENCES => true,
         PropertyIdentifier::ALARM_VALUES | PropertyIdentifier::FAULT_VALUES => matches!(
             object_type,
             ObjectType::CHARACTERSTRING_VALUE | ObjectType::BITSTRING_VALUE

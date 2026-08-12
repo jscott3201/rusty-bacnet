@@ -10,6 +10,7 @@
 
 use super::*;
 use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject};
+use bacnet_objects::command::CommandObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::event_log::EventLogObject;
 use bacnet_objects::group::{GlobalGroupObject, GroupObject, StructuredViewObject};
@@ -17,6 +18,7 @@ use bacnet_objects::lighting::ChannelObject;
 use bacnet_objects::multistate::MultiStateInputObject;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::schedule::{CalendarObject, ScheduleObject};
+use bacnet_objects::staging::StagingObject;
 use bacnet_objects::value_types::CharacterStringValueObject;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::WriteAccessSpecification;
@@ -69,6 +71,11 @@ fn gating_db() -> ObjectDatabase {
     db.add(Box::new(GlobalGroupObject::new(1, "GG-1").unwrap()))
         .unwrap();
     db.add(Box::new(StructuredViewObject::new(1, "SV-1").unwrap()))
+        .unwrap();
+    let mut command = CommandObject::new(1, "CMD-1").unwrap();
+    command.set_action(vec![vec![1, 2, 3]]);
+    db.add(Box::new(command)).unwrap();
+    db.add(Box::new(StagingObject::new(1, "STG-1", 3).unwrap()))
         .unwrap();
     db
 }
@@ -369,6 +376,28 @@ fn true_arrays_pass_the_gate_on_read_property() {
 }
 
 #[test]
+fn modeled_arrays_on_command_and_staging_pass_the_gate() {
+    // Review FIX 1: ACTION (Table 12-12) and STAGES / STAGE_NAMES /
+    // TARGET_REFERENCES (Table 12-80) are BACnetARRAY[N]. The objects still
+    // return the whole value for any index (same documented residue as
+    // Global Group / Structured View) — the pin is that the gate ADMITS the
+    // index instead of rejecting PROPERTY_IS_NOT_AN_ARRAY.
+    let db = gating_db();
+    for &(property, object_type) in &[
+        (PropertyIdentifier::ACTION, ObjectType::COMMAND),
+        (PropertyIdentifier::STAGES, ObjectType::STAGING),
+        (PropertyIdentifier::STAGE_NAMES, ObjectType::STAGING),
+        (PropertyIdentifier::TARGET_REFERENCES, ObjectType::STAGING),
+    ] {
+        for index in [0, 1] {
+            read_indexed(&db, oid(object_type, 1), property, index).unwrap_or_else(|e| {
+                panic!("{object_type:?}.{property:?} index {index} must pass the gate: {e:?}")
+            });
+        }
+    }
+}
+
+#[test]
 fn event_time_stamps_accepts_index_range_via_event_history() {
     // EVENT_TIME_STAMPS is BACnetARRAY[3]; element semantics delegate to
     // EventHistory::read (#171 owns the remaining integration — only the
@@ -430,7 +459,7 @@ fn alarm_values_gate_varies_by_object_type() {
 }
 
 #[test]
-fn schedule_list_of_object_property_references_rejects_index_on_all_services() {
+fn schedule_list_of_object_property_references_rejects_indexed_read_and_write() {
     let db = gating_db();
     let sched = oid(ObjectType::SCHEDULE, 1);
 
@@ -510,6 +539,21 @@ fn object_level_classification_matrix() {
     let ao = AnalogOutputObject::new(9, "AO-9", 62).unwrap();
     assert!(ao.is_array_property(PropertyIdentifier::PRIORITY_ARRAY));
     assert!(!ao.is_array_property(PropertyIdentifier::PRESENT_VALUE));
+
+    let cmd = CommandObject::new(9, "CMD-9").unwrap();
+    // Command (Table 12-12): ACTION is BACnetARRAY[N]; ACTION_TEXT is an
+    // array in the standard but not modeled in-tree, so it stays rejected
+    // until its object-side modeling lands.
+    assert!(cmd.is_array_property(PropertyIdentifier::ACTION));
+    assert!(!cmd.is_array_property(PropertyIdentifier::ACTION_TEXT));
+    assert!(!cmd.is_array_property(PropertyIdentifier::PRESENT_VALUE));
+
+    let stg = StagingObject::new(9, "STG-9", 3).unwrap();
+    // Staging (Table 12-80): all three collection properties are arrays.
+    assert!(stg.is_array_property(PropertyIdentifier::STAGES));
+    assert!(stg.is_array_property(PropertyIdentifier::STAGE_NAMES));
+    assert!(stg.is_array_property(PropertyIdentifier::TARGET_REFERENCES));
+    assert!(!stg.is_array_property(PropertyIdentifier::PRESENT_STAGE));
 }
 
 // ── #266: omitted-index PRIORITY_ARRAY writes are protocol errors ─────────
@@ -612,4 +656,83 @@ fn indexed_access_to_recipient_list_rejected_with_not_an_array() {
         framed.to_vec(),
     )
     .unwrap();
+}
+
+#[test]
+fn notification_class_priority_accepts_index_range() {
+    // PRIORITY is BACnetARRAY[3] of Unsigned (Table 12-24). The old
+    // identifier whitelist wrongly rejected it; the trait gate must admit
+    // index 0 (count) and 1..=3 (elements).
+    let db = gating_db();
+    let nc = oid(ObjectType::NOTIFICATION_CLASS, 1);
+
+    let mut buf = BytesMut::new();
+    ReadPropertyRequest {
+        object_identifier: nc,
+        property_identifier: PropertyIdentifier::PRIORITY,
+        property_array_index: Some(0),
+    }
+    .encode(&mut buf);
+    let mut ack_buf = BytesMut::new();
+    handle_read_property(&db, &buf, &mut ack_buf).unwrap();
+    let ack = ReadPropertyACK::decode(&ack_buf.to_vec()).unwrap();
+    assert_eq!(ack.property_array_index, Some(0));
+    let (count, _) =
+        bacnet_encoding::primitives::decode_application_value(&ack.property_value, 0).unwrap();
+    assert_eq!(count, PropertyValue::Unsigned(3));
+
+    for index in 1..=3 {
+        read_indexed(&db, nc, PropertyIdentifier::PRIORITY, index).unwrap();
+    }
+}
+
+#[test]
+fn wpm_gate_rejection_commits_nothing() {
+    // Atomicity proof: one request carrying a valid write plus a gated
+    // indexed write fails as a whole with PROPERTY_IS_NOT_AN_ARRAY, and the
+    // valid property is untouched — the validation-phase gate fires before
+    // the commit loop starts (§19.1.2-level atomicity).
+    let mut db = gating_db();
+    let nc = oid(ObjectType::NOTIFICATION_CLASS, 1);
+    let original = db
+        .get(&nc)
+        .unwrap()
+        .read_property(PropertyIdentifier::DESCRIPTION, None)
+        .unwrap();
+
+    let request = WritePropertyMultipleRequest {
+        list_of_write_access_specs: vec![WriteAccessSpecification {
+            object_identifier: nc,
+            list_of_properties: vec![
+                BACnetPropertyValue {
+                    property_identifier: PropertyIdentifier::DESCRIPTION,
+                    property_array_index: None,
+                    value: encode_value(PropertyValue::CharacterString("MUTATED".into())),
+                    priority: None,
+                },
+                BACnetPropertyValue {
+                    property_identifier: PropertyIdentifier::RECIPIENT_LIST,
+                    property_array_index: Some(1),
+                    value: encode_value(PropertyValue::OctetString(vec![0])),
+                    priority: None,
+                },
+            ],
+        }],
+    };
+    let mut buf = BytesMut::new();
+    request.encode(&mut buf);
+    assert_not_an_array(
+        handle_write_property_multiple(&mut db, &buf).map(|_| ()),
+        "WPM with one gated reference",
+    );
+
+    // The preceding valid write in the same request left no trace.
+    assert_eq!(
+        db.get(&nc)
+            .unwrap()
+            .read_property(PropertyIdentifier::DESCRIPTION, None)
+            .unwrap(),
+        original,
+        "the valid reference must NOT be applied when a sibling hits the gate"
+    );
 }
