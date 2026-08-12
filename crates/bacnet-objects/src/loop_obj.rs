@@ -145,16 +145,12 @@ impl BACnetObject for LoopObject {
             p if p == PropertyIdentifier::OUT_OF_SERVICE => {
                 Ok(PropertyValue::Boolean(self.out_of_service))
             }
-            p if p == PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE => {
-                Ok(crate::reference::reference_read_value(
-                    &self.controlled_variable_reference,
-                ))
-            }
-            p if p == PropertyIdentifier::MANIPULATED_VARIABLE_REFERENCE => {
-                Ok(crate::reference::reference_read_value(
-                    &self.manipulated_variable_reference,
-                ))
-            }
+            p if p == PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE => Ok(
+                crate::reference::reference_read_value(&self.controlled_variable_reference),
+            ),
+            p if p == PropertyIdentifier::MANIPULATED_VARIABLE_REFERENCE => Ok(
+                crate::reference::reference_read_value(&self.manipulated_variable_reference),
+            ),
             p if p == PropertyIdentifier::SETPOINT_REFERENCE => Ok(
                 crate::reference::reference_read_value(&self.setpoint_reference),
             ),

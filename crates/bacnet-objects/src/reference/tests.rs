@@ -85,7 +85,9 @@ fn legacy_local_list_form_round_trips_with_and_without_index() {
         PropertyValue::Enumerated(87),
         PropertyValue::Unsigned(3),
     ]);
-    let decoded = decode_reference_write(&indexed, ReferenceFrame::Setpoint).unwrap().unwrap();
+    let decoded = decode_reference_write(&indexed, ReferenceFrame::Setpoint)
+        .unwrap()
+        .unwrap();
     assert_eq!(decoded.property_array_index, Some(3));
 }
 
@@ -99,7 +101,11 @@ fn legacy_list_shape_violations_are_invalid_data_type() {
             "property id not Enumerated",
         ),
         (
-            vec![oid.clone(), PropertyValue::Enumerated(85), PropertyValue::Real(1.0)],
+            vec![
+                oid.clone(),
+                PropertyValue::Enumerated(85),
+                PropertyValue::Real(1.0),
+            ],
             "index not Unsigned",
         ),
         (
@@ -112,7 +118,9 @@ fn legacy_list_shape_violations_are_invalid_data_type() {
             "four members",
         ),
         (
-            vec![PropertyValue::ObjectIdentifier(ai_ref(5, 85).object_identifier)],
+            vec![PropertyValue::ObjectIdentifier(
+                ai_ref(5, 85).object_identifier,
+            )],
             "repeat guard",
         ),
     ] {
@@ -126,11 +134,8 @@ fn legacy_list_shape_violations_are_invalid_data_type() {
 
 #[test]
 fn framed_form_decodes_from_one_or_split_application_data() {
-    let reference = BACnetObjectPropertyReference::new_indexed(
-        ai_ref(7, 88).object_identifier,
-        88,
-        12,
-    );
+    let reference =
+        BACnetObjectPropertyReference::new_indexed(ai_ref(7, 88).object_identifier, 88, 12);
     // Whole frame in one element (an in-process framed write).
     assert_eq!(
         decode_reference_write(
@@ -154,26 +159,38 @@ fn framed_malformed_is_invalid_data_encoding() {
         (Vec::new(), "empty frame"),
         (good[..5].to_vec(), "object id only (partial members)"),
         (good[5..].to_vec(), "property id only (object id missing)"),
-        ({
-            let mut b = good.clone();
-            b.extend_from_slice(&[0x29, 0x02]); // indexed → fine; then:
-            b.extend_from_slice(&[0x3C, 0x00, 0x00, 0x00, 0x4D]); // + [3] device 77
-            b
-        }, "device-qualified member [3]"),
-        ({
-            let mut b = good.clone();
-            b.extend_from_slice(&[0x49, 0x01]); // unknown context tag [4]
-            b
-        }, "unknown trailing context tag [4]"),
-        ({
-            let mut b = good.clone();
-            b.extend_from_slice(&[0x21, 0x00]); // application tag after members
-            b
-        }, "application tag trailing the members"),
+        (
+            {
+                let mut b = good.clone();
+                b.extend_from_slice(&[0x29, 0x02]); // indexed → fine; then:
+                b.extend_from_slice(&[0x3C, 0x00, 0x00, 0x00, 0x4D]); // + [3] device 77
+                b
+            },
+            "device-qualified member [3]",
+        ),
+        (
+            {
+                let mut b = good.clone();
+                b.extend_from_slice(&[0x49, 0x01]); // unknown context tag [4]
+                b
+            },
+            "unknown trailing context tag [4]",
+        ),
+        (
+            {
+                let mut b = good.clone();
+                b.extend_from_slice(&[0x21, 0x00]); // application tag after members
+                b
+            },
+            "application tag trailing the members",
+        ),
     ];
     for (bytes, context) in cases {
         expect_protocol(
-            decode_reference_write(&PropertyValue::ApplicationData(bytes.clone()), ReferenceFrame::Bare),
+            decode_reference_write(
+                &PropertyValue::ApplicationData(bytes.clone()),
+                ReferenceFrame::Bare,
+            ),
             ErrorCode::INVALID_DATA_ENCODING,
             context,
         );
@@ -189,7 +206,10 @@ fn framed_malformed_is_invalid_data_encoding() {
                 Err(_) => break,
             }
         }
-        if values.len() > 1 && values.iter().all(|v| matches!(v, PropertyValue::ApplicationData(_)))
+        if values.len() > 1
+            && values
+                .iter()
+                .all(|v| matches!(v, PropertyValue::ApplicationData(_)))
         {
             expect_protocol(
                 decode_reference_write(&PropertyValue::List(values), ReferenceFrame::Bare),
@@ -256,7 +276,10 @@ fn setpoint_frame_acceptance_is_scoped_to_the_setpoint_property() {
     );
     let unbalanced = framed_wrapped(&reference)[..framed_wrapped(&reference).len() - 1].to_vec();
     expect_protocol(
-        decode_reference_write(&PropertyValue::ApplicationData(unbalanced), ReferenceFrame::Setpoint),
+        decode_reference_write(
+            &PropertyValue::ApplicationData(unbalanced),
+            ReferenceFrame::Setpoint,
+        ),
         ErrorCode::INVALID_DATA_ENCODING,
         "unbalanced setpoint frame",
     );

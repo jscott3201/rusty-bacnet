@@ -81,9 +81,7 @@ pub(crate) fn decode_reference_write(
 ) -> Result<Option<BACnetObjectPropertyReference>, Error> {
     match value {
         PropertyValue::Null => Ok(None),
-        PropertyValue::ApplicationData(bytes) => {
-            decode_framed(bytes, frame).map(Some)
-        }
+        PropertyValue::ApplicationData(bytes) => decode_framed(bytes, frame).map(Some),
         PropertyValue::List(items) => match items.first() {
             Some(PropertyValue::ObjectIdentifier(_)) => decode_legacy_list(items).map(Some),
             Some(PropertyValue::ApplicationData(_)) => {
@@ -121,9 +119,9 @@ fn decode_legacy_list(items: &[PropertyValue]) -> Result<BACnetObjectPropertyRef
     };
     let property_array_index = match items.get(2) {
         None => None,
-        Some(PropertyValue::Unsigned(index)) => Some(
-            u32::try_from(*index).map_err(|_| common::invalid_data_type_error())?,
-        ),
+        Some(PropertyValue::Unsigned(index)) => {
+            Some(u32::try_from(*index).map_err(|_| common::invalid_data_type_error())?)
+        }
         Some(_) => return Err(common::invalid_data_type_error()),
     };
     if items.len() > 3 {
@@ -143,7 +141,10 @@ fn decode_legacy_list(items: &[PropertyValue]) -> Result<BACnetObjectPropertyRef
 /// reference always opens with *primitive* context tag [0], the frame with
 /// *opening* tag [0]), and the bare form is what a peer handling the
 /// reference generically — and this stack's own test tooling — may send.
-fn decode_framed(bytes: &[u8], frame: ReferenceFrame) -> Result<BACnetObjectPropertyReference, Error> {
+fn decode_framed(
+    bytes: &[u8],
+    frame: ReferenceFrame,
+) -> Result<BACnetObjectPropertyReference, Error> {
     let bare = bacnet_encoding::constructed::decode_object_property_reference(bytes);
     match (bare, frame) {
         (Ok(reference), _) => Ok(reference),

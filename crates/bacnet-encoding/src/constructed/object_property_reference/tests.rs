@@ -1,8 +1,8 @@
 //! Golden + negative vectors for the reference codecs (Clause 21).
 
 use super::*;
-use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::enums::ObjectType;
+use bacnet_types::primitives::ObjectIdentifier;
 
 fn ai_ref(instance: u32, property: u32) -> BACnetObjectPropertyReference {
     BACnetObjectPropertyReference::new(
@@ -17,10 +17,7 @@ fn golden_vector_unindexed() {
     // tag [0]; present-value (85) as one-octet unsigned under [1].
     let mut buf = BytesMut::new();
     encode_object_property_reference(&mut buf, &ai_ref(5, 85));
-    assert_eq!(
-        buf.as_ref(),
-        &[0x0C, 0x00, 0x00, 0x00, 0x05, 0x19, 0x55]
-    );
+    assert_eq!(buf.as_ref(), &[0x0C, 0x00, 0x00, 0x00, 0x05, 0x19, 0x55]);
     let decoded = decode_object_property_reference(&buf).unwrap();
     assert_eq!(decoded, ai_ref(5, 85));
 }

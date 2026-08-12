@@ -38,10 +38,7 @@ const WHAT: &str = "BACnetObjectPropertyReference";
 
 /// Encode the bare `BACnetObjectPropertyReference` member sequence:
 /// context-tagged [0]/[1] plus [2] when the reference is indexed.
-pub fn encode_object_property_reference(
-    buf: &mut BytesMut,
-    r: &BACnetObjectPropertyReference,
-) {
+pub fn encode_object_property_reference(buf: &mut BytesMut, r: &BACnetObjectPropertyReference) {
     primitives::encode_ctx_object_id(buf, 0, &r.object_identifier);
     primitives::encode_ctx_unsigned(buf, 1, r.property_identifier as u64);
     if let Some(index) = r.property_array_index {
