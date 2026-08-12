@@ -1,9 +1,9 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
   "reviewed_at": "2026-08-12",
-  "repo_sha": "265b267390a6df3812e80650a33f379236533012",
-  "review_scope": "Clause 20/21 ASN.1 framing tranche: a single shared BACnetTimeStamp codec (bare CHOICE + wrapped forms, sequence-number range enforced in both directions), full Clause 21 framing of BACnetEventParameter, BACnetFaultParameter, BACnetPropertyStates, BACnetDeviceObjectPropertyReference, BACnetRecipient, and BACnetAddress driving Event_Parameters/Fault_Parameters/Recipient_List property reads and writes, the GetEventInformation-ACK bare-timestamp migration, plus review hardening (trailing-bytes rejection, fixed-width bit-string validation, strict stored-list routing). Conventions unchanged: `repo_sha` names the tip of the PR branch `codex/encoding-asn1-framing` at the time of writing (the last code commit; this docs-refresh commit lands after it), matching how `e6be3eac` was recorded for the previous tranche.",
-  "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for the Clause 20.2.1 tag-form rules, the cited Clause 21 productions, Clause 12.12/12.21 + Table 12-25, and Annex K.2.25. No external addenda/errata check was performed for this tranche; per-row scope is recorded in each row's notes.",
+  "repo_sha": "6c3d6a8aca95f7c54399fbb48b65dc74039ae537",
+  "review_scope": "Clause 12.1.5 / 15.5.1.3 / 15.9.1.3 array-index gating tranche: a per-object `BACnetObject::is_array_property` classification replaces ReadProperty's identifier-static whitelist, all four object-access services (ReadProperty, ReadPropertyMultiple, WriteProperty, WritePropertyMultiple) reject an array index on a BACnetLIST property with PROPERTY / PROPERTY_IS_NOT_AN_ARRAY, indexed Notification Class Recipient_List access moved from the INVALID_DATA_TYPE stopgap to the same classification, and omitted-index Priority_Array writes surface PROPERTY / WRITE_ACCESS_DENIED instead of an unmappable Error::Encoding. Conventions unchanged: `repo_sha` names the tip of the PR branch `codex/array-index-gates` at the time of writing (the last code commit; this docs-refresh commit lands after it), matching how `265b2673` was recorded for the previous tranche.",
+  "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Clauses 12.1.5.1/12.1.5.2, the Clause 15.5.1.3/15.9.1.3 error tables, and the Clause 12 property tables cited in the new row and its notes. No external addenda/errata check was performed for this tranche; per-row scope is recorded in each row's notes.",
   "status_taxonomy": [
     "in-progress",
     "implementation-present-needs-conformance-tests",
@@ -280,6 +280,43 @@
       "benchmarks": [],
       "public_claims": [],
       "notes": "Issue #82 evidence adds post-acceptance initial notifications for SubscribeCOV and SubscribeCOVProperty, COVNotificationMultiple APDUs with the multiple service choices for SubscribeCOVPropertyMultiple initial and later-change notifications, property-validation and subscription-capacity atomicity, routed subscriber endpoint preservation for SimpleAck, notification sends, and segmented ComplexAck responses, subscriber COV increment precedence, and server TSM invoke-ID collision avoidance for routed/confirmed notifications. Issue #83 evidence adds SubscribeCOVPropertyMultiple request lifetime encoding/decoding in the standard field order, mandatory issue-confirmed validation, paired lifetime/max-delay validation, cancellation handling for empty contexts and listed property specs, context lifetime refresh, and server-side subscription expiration from the decoded lifetime. This row remains below supported status until fuller BIBB/PICS and clause-level conformance evidence exists, including first-failed-subscription response shape, complete Device active-COV property synchronization, context-level Active_COV_Multiple_Subscriptions evidence, and fuller clause-level evidence."
+    },
+    {
+      "id": "BACNET-15-ARRAY-INDEX-GATING",
+      "standard_anchor": "Clause 15.5.1.3, Clause 15.9.1.3 (with Clause 12.1.5)",
+      "priority": "P1",
+      "requirement_summary": "ReadProperty, ReadPropertyMultiple, WriteProperty, and WritePropertyMultiple reject an array index supplied for a property that is not a BACnetARRAY with PROPERTY / PROPERTY_IS_NOT_AN_ARRAY, applying the per-object BACnetARRAY/BACnetLIST classification of Clause 12.1.5 (a BACnetLIST admits positional access only through ReadRange, Clause 12.1.5.2); true BACnetARRAY properties keep their index semantics.",
+      "status": "supported-with-clause-evidence",
+      "code_anchors": [
+        "crates/bacnet-objects/src/traits.rs",
+        "crates/bacnet-server/src/handlers/read_property.rs",
+        "crates/bacnet-server/src/handlers/write_property.rs",
+        "crates/bacnet-objects/src/notification_class/mod.rs",
+        "crates/bacnet-objects/src/common.rs",
+        "crates/bacnet-objects/src/value_types/mod.rs"
+      ],
+      "positive_tests": [
+        "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::true_arrays_pass_the_gate_on_read_property",
+        "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::event_time_stamps_accepts_index_range_via_event_history",
+        "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::object_level_classification_matrix",
+        "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::alarm_values_gate_varies_by_object_type"
+      ],
+      "negative_tests": [
+        "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::list_properties_reject_indexed_read_property",
+        "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::list_properties_reject_indexed_read_property_multiple_inline",
+        "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::list_properties_reject_indexed_write_property_and_write_property_multiple",
+        "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::schedule_list_of_object_property_references_rejects_index_on_all_services",
+        "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::indexed_access_to_recipient_list_rejected_with_not_an_array",
+        "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::wpm_omitted_index_priority_array_write_is_write_access_denied",
+        "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::write_property_omitted_index_priority_array_is_write_access_denied",
+        "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::priority_array_out_of_range_index_stays_invalid_array_index",
+        "crates/bacnet-objects/src/notification_class/tests/recipient_list.rs::recipient_list_indexed_write_rejected_list_unchanged",
+        "crates/bacnet-objects/src/analog/tests/input_output.rs::ao_direct_priority_array_no_index_error",
+        "crates/bacnet-objects/src/value_types/tests/strings.rs::characterstring_value_priority_array_omitted_index_is_write_access_denied"
+      ],
+      "benchmarks": [],
+      "public_claims": [],
+      "notes": "Split child of BACNET-12-OBJECT-MODEL (#190, #260, #266). The gate is one query on the object (BACnetObject::is_array_property, default keyed by the Clause 12 object tables) so the classification cannot drift between services: identifier-stable BACnetARRAY properties (OBJECT_LIST Table 12-13, PROPERTY_LIST, STATE_TEXT Tables 12-21/12-22/12-23, PRIORITY Table 12-24, WEEKLY_SCHEDULE/EXCEPTION_SCHEDULE Table 12-28, EVENT_TIME_STAMPS/EVENT_MESSAGE_TEXTS Table 12-2 family, PRIORITY_ARRAY, TAGS Annex Y, SUBORDINATE_LIST/SUBORDINATE_ANNOTATIONS Table 12-34, GROUP_MEMBERS/GROUP_MEMBER_NAMES Table 12-57) admit an index; identifier-stable BACnetLIST properties (DATE_LIST Table 12-11, LIST_OF_GROUP_MEMBERS Table 12-17, RECIPIENT_LIST Table 12-24, LOG_BUFFER Tables 12-29/12-31, DEVICE_ADDRESS_BINDING and ACTIVE_COV_SUBSCRIPTIONS Table 12-13) and all scalars reject it; the type-dependent identifiers classify by object type (ALARM_VALUES/FAULT_VALUES array on CharacterString/BitString Value per Tables 12-44/12-47 but list on the multi-state/life-safety/access families, LIST_OF_OBJECT_PROPERTY_REFERENCES array on Channel per Table 12-62 but list on Schedule/Lighting Output per Tables 12-28/12-64, PRESENT_VALUE BACnetARRAY on Global Group per Table 12-57). The RP whitelist that admitted six always-list identifiers is gone; RPM gates per reference with inline error elements while siblings succeed; WP gates before decode/mutation; WPM gates in the validation phase so the commit loop never starts. Indexed Recipient_List reads and writes now fail with the same gate classification — mirrored at the object layer for direct calls — replacing the tranche-J INVALID_DATA_TYPE stopgap. #266: omitted-index (whole-array, Clause 12.1.5.1) Priority_Array writes are PROPERTY / WRITE_ACCESS_DENIED (a mappable Result(-)) while indexes 0 and 17 stay INVALID_ARRAY_INDEX; pinned at both macro sites and over the network WP/WPM paths. Limitations: the gate controls index admissibility only — object-side element semantics for Global Group / Channel / Structured View arrays still return whole values (#171-family residue), and CharacterString/BitString Value ALARM_VALUES/FAULT_VALUES are gate-classified as arrays but not yet modeled (an accepted index surfaces UNKNOWN_PROPERTY). Refs #171: its service-gating half landed; the TimeStamp CHOICE and element-datatype residue stays open."
     },
     {
       "id": "BACNET-20-ENCODING",

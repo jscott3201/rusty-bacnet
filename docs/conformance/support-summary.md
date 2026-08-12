@@ -4,16 +4,16 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-08-12
-- Implementation evidence SHA reviewed: `265b267390a6df3812e80650a33f379236533012`
-- Scope: Clause 20/21 ASN.1 framing tranche: a single shared BACnetTimeStamp codec (bare CHOICE + wrapped forms, sequence-number range enforced in both directions), full Clause 21 framing of BACnetEventParameter, BACnetFaultParameter, BACnetPropertyStates, BACnetDeviceObjectPropertyReference, BACnetRecipient, and BACnetAddress driving Event_Parameters/Fault_Parameters/Recipient_List property reads and writes, the GetEventInformation-ACK bare-timestamp migration, plus review hardening (trailing-bytes rejection, fixed-width bit-string validation, strict stored-list routing). Conventions unchanged: `repo_sha` names the tip of the PR branch `codex/encoding-asn1-framing` at the time of writing (the last code commit; this docs-refresh commit lands after it), matching how `e6be3eac` was recorded for the previous tranche.
-- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for the Clause 20.2.1 tag-form rules, the cited Clause 21 productions, Clause 12.12/12.21 + Table 12-25, and Annex K.2.25. No external addenda/errata check was performed for this tranche; per-row scope is recorded in each row's notes.
+- Implementation evidence SHA reviewed: `6c3d6a8aca95f7c54399fbb48b65dc74039ae537`
+- Scope: Clause 12.1.5 / 15.5.1.3 / 15.9.1.3 array-index gating tranche: a per-object `BACnetObject::is_array_property` classification replaces ReadProperty's identifier-static whitelist, all four object-access services (ReadProperty, ReadPropertyMultiple, WriteProperty, WritePropertyMultiple) reject an array index on a BACnetLIST property with PROPERTY / PROPERTY_IS_NOT_AN_ARRAY, indexed Notification Class Recipient_List access moved from the INVALID_DATA_TYPE stopgap to the same classification, and omitted-index Priority_Array writes surface PROPERTY / WRITE_ACCESS_DENIED instead of an unmappable Error::Encoding. Conventions unchanged: `repo_sha` names the tip of the PR branch `codex/array-index-gates` at the time of writing (the last code commit; this docs-refresh commit lands after it), matching how `265b2673` was recorded for the previous tranche.
+- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Clauses 12.1.5.1/12.1.5.2, the Clause 15.5.1.3/15.9.1.3 error tables, and the Clause 12 property tables cited in the new row and its notes. No external addenda/errata check was performed for this tranche; per-row scope is recorded in each row's notes.
 
 ## Counts
 
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 15 |
-| Priority | P1 | 14 |
+| Priority | P1 | 15 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
@@ -26,7 +26,7 @@
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
 | Status | in-progress | 3 |
-| Status | supported-with-clause-evidence | 4 |
+| Status | supported-with-clause-evidence | 5 |
 | Status | unknown-pending-source-review | 4 |
 
 ## Ledger Rows
@@ -48,6 +48,7 @@
 | `BACNET-12-RECIPIENT-LIST-FRAMING` | Clause 12.21, Clause 21 | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-12-EVENT-PARAMETERS-FRAMING` | Clause 12.12, Clause 21 | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-13-COV-SUBSCRIPTIONS` | Clauses 13.14-13.18 | P1 | implementation-present-needs-conformance-tests | 0 |
+| `BACNET-15-ARRAY-INDEX-GATING` | Clause 15.5.1.3, Clause 15.9.1.3 (with Clause 12.1.5) | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-20-ENCODING` | Clause 20 | P1 | implementation-present-needs-negative-tests | 2 |
 | `BACNET-21-FORMAL-APDUS` | Clause 21 | P1 | implementation-present-needs-conformance-tests | 2 |
 | `BACNET-21-TIMESTAMP-CHOICE` | Clause 21 (BACnetTimeStamp), Clause 20.2.1.5 | P1 | supported-with-clause-evidence | 1 |
