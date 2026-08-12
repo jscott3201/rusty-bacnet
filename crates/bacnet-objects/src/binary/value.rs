@@ -68,6 +68,20 @@ impl BinaryValueObject {
         self.present_value =
             common::recalculate_from_priority_array(&self.priority_array, self.relinquish_default);
     }
+
+    /// Set the Relinquish_Default (#270).
+    ///
+    /// Validated the same way a commanded Present_Value is (BinaryPV 0 or 1);
+    /// after the store, Present_Value is resolved anew from the priority
+    /// array so an empty array falls back to the new default immediately.
+    pub fn set_relinquish_default(&mut self, value: u32) -> Result<(), Error> {
+        if value > 1 {
+            return Err(common::value_out_of_range_error());
+        }
+        self.relinquish_default = value;
+        self.recalculate_present_value();
+        Ok(())
+    }
 }
 
 impl BACnetObject for BinaryValueObject {
@@ -227,6 +241,12 @@ impl BACnetObject for BinaryValueObject {
                     self.event_history.reset();
                 }
                 return Ok(());
+            }
+            return Err(common::invalid_data_type_error());
+        }
+        if property == PropertyIdentifier::RELINQUISH_DEFAULT {
+            if let PropertyValue::Enumerated(e) = value {
+                return self.set_relinquish_default(e);
             }
             return Err(common::invalid_data_type_error());
         }

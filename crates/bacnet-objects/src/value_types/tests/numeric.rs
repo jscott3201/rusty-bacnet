@@ -170,3 +170,119 @@ fn large_analog_value_object_type() {
 }
 
 // -----------------------------------------------------------------------
+
+// -----------------------------------------------------------------------
+// #270 — writable Relinquish_Default on the commandable scalar values
+// -----------------------------------------------------------------------
+
+/// Integer / PositiveInteger / LargeAnalog: a validated Relinquish_Default
+/// write arm; with an all-NULL priority array Present_Value immediately
+/// resolves to the written default, and a live command still outranks it.
+#[test]
+fn scalar_value_relinquish_default_write_recaptures_present_value() {
+    // IntegerValue (i32 bounds via Signed extraction)
+    let mut iv = IntegerValueObject::new(1, "IV-1").unwrap();
+    assert!(iv.is_writable_property(PropertyIdentifier::RELINQUISH_DEFAULT));
+    iv.write_property(
+        PropertyIdentifier::RELINQUISH_DEFAULT,
+        None,
+        PropertyValue::Signed(-42),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        iv.read_property(PropertyIdentifier::RELINQUISH_DEFAULT, None)
+            .unwrap(),
+        PropertyValue::Signed(-42)
+    );
+    assert_eq!(
+        iv.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Signed(-42),
+        "with an empty priority array, PV must resolve to the written default"
+    );
+    // Wrong type refuses with state untouched.
+    assert!(iv
+        .write_property(
+            PropertyIdentifier::RELINQUISH_DEFAULT,
+            None,
+            PropertyValue::Unsigned(42),
+            None,
+        )
+        .is_err());
+    assert_eq!(
+        iv.read_property(PropertyIdentifier::RELINQUISH_DEFAULT, None)
+            .unwrap(),
+        PropertyValue::Signed(-42)
+    );
+    // Local setter shares the extraction path is n/a here; direct store works.
+    iv.set_relinquish_default(7).unwrap();
+    assert_eq!(
+        iv.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Signed(7)
+    );
+
+    // PositiveIntegerValue (u64 bounds via Unsigned extraction)
+    let mut piv = PositiveIntegerValueObject::new(1, "PIV-1").unwrap();
+    assert!(piv.is_writable_property(PropertyIdentifier::RELINQUISH_DEFAULT));
+    piv.write_property(
+        PropertyIdentifier::RELINQUISH_DEFAULT,
+        None,
+        PropertyValue::Unsigned(9),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        piv.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Unsigned(9)
+    );
+
+    // LargeAnalogValue: Double, non-finite refused as VALUE_OUT_OF_RANGE.
+    let mut lav = LargeAnalogValueObject::new(1, "LAV-1").unwrap();
+    assert!(lav.is_writable_property(PropertyIdentifier::RELINQUISH_DEFAULT));
+    lav.write_property(
+        PropertyIdentifier::RELINQUISH_DEFAULT,
+        None,
+        PropertyValue::Double(1.5e300),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        lav.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Double(1.5e300)
+    );
+    for bad in [f64::NAN, f64::INFINITY] {
+        match lav
+            .write_property(
+                PropertyIdentifier::RELINQUISH_DEFAULT,
+                None,
+                PropertyValue::Double(bad),
+                None,
+            )
+            .expect_err("non-finite Relinquish_Default must refuse")
+        {
+            Error::Protocol { class, code } => {
+                assert_eq!(
+                    class,
+                    bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
+                );
+                assert_eq!(
+                    code,
+                    bacnet_types::enums::ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32
+                );
+            }
+            other => panic!("expected PROPERTY / VALUE_OUT_OF_RANGE, got {other:?}"),
+        }
+        assert_eq!(
+            lav.read_property(PropertyIdentifier::RELINQUISH_DEFAULT, None)
+                .unwrap(),
+            PropertyValue::Double(1.5e300),
+            "a refused write must leave Relinquish_Default untouched"
+        );
+    }
+    // The local setter enforces the same finiteness rule.
+    assert!(lav.set_relinquish_default(f64::NAN).is_err());
+}

@@ -478,6 +478,108 @@ fn ao_is_writable_property_mirrors_write_property() {
     assert!(ao.is_writable_property(PropertyIdentifier::NOTIFY_TYPE));
     assert!(ao.is_writable_property(PropertyIdentifier::TIME_DELAY));
     assert!(ao.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
-    // RELINQUISH_DEFAULT has no write arm.
-    assert!(!ao.is_writable_property(PropertyIdentifier::RELINQUISH_DEFAULT));
+    // #270: RELINQUISH_DEFAULT grew a validated write arm.
+    assert!(ao.is_writable_property(PropertyIdentifier::RELINQUISH_DEFAULT));
+}
+
+/// #270: a Relinquish_Default write is validated like a commanded
+/// Present_Value (finite Real) and — with an all-NULL priority array —
+/// Present_Value immediately resolves to the written default.
+#[test]
+fn ao_relinquish_default_write_recaptures_present_value() {
+    let mut ao = AnalogOutputObject::new(1, "ao-1", 95).unwrap();
+    assert_eq!(
+        ao.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Real(0.0)
+    );
+
+    ao.write_property(
+        PropertyIdentifier::RELINQUISH_DEFAULT,
+        None,
+        PropertyValue::Real(72.5),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        ao.read_property(PropertyIdentifier::RELINQUISH_DEFAULT, None)
+            .unwrap(),
+        PropertyValue::Real(72.5)
+    );
+    assert_eq!(
+        ao.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Real(72.5),
+        "with an empty priority array, PV must resolve to the written default"
+    );
+
+    // A live command still outranks the default, and relinquishing it falls
+    // back to the new default.
+    ao.write_property(
+        PropertyIdentifier::PRESENT_VALUE,
+        None,
+        PropertyValue::Real(55.0),
+        Some(8),
+    )
+    .unwrap();
+    assert_eq!(
+        ao.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Real(55.0)
+    );
+    ao.write_property(
+        PropertyIdentifier::PRESENT_VALUE,
+        None,
+        PropertyValue::Null,
+        Some(8),
+    )
+    .unwrap();
+    assert_eq!(
+        ao.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Real(72.5)
+    );
+
+    // Non-finite and wrong-typed writes refuse with the property untouched.
+    for (value, code) in [
+        (PropertyValue::Real(f32::NAN), "VALUE_OUT_OF_RANGE"),
+        (PropertyValue::Real(f32::INFINITY), "VALUE_OUT_OF_RANGE"),
+        (PropertyValue::Unsigned(72), "INVALID_DATA_TYPE"),
+    ] {
+        match ao
+            .write_property(PropertyIdentifier::RELINQUISH_DEFAULT, None, value, None)
+            .expect_err("{code}: invalid Relinquish_Default write must refuse")
+        {
+            Error::Protocol { class, code: c } => {
+                assert_eq!(
+                    class,
+                    bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
+                );
+                assert_eq!(
+                    c,
+                    match code {
+                        "VALUE_OUT_OF_RANGE" =>
+                            bacnet_types::enums::ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32,
+                        _ => bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
+                    }
+                );
+            }
+            other => panic!("expected protocol error, got {other:?}"),
+        }
+        assert_eq!(
+            ao.read_property(PropertyIdentifier::RELINQUISH_DEFAULT, None)
+                .unwrap(),
+            PropertyValue::Real(72.5),
+            "a refused write must leave Relinquish_Default untouched"
+        );
+    }
+
+    // The local setter shares the validation.
+    assert!(ao.set_relinquish_default(f32::NAN).is_err());
+    ao.set_relinquish_default(10.0).unwrap();
+    assert_eq!(
+        ao.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Real(10.0)
+    );
 }

@@ -9,7 +9,7 @@
 //! property's datatype is PROPERTY / INVALID_DATA_ENCODING.
 
 use super::*;
-use bacnet_objects::analog::AnalogInputObject;
+use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject};
 use bacnet_objects::binary::BinaryValueObject;
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::loop_obj::LoopObject;
@@ -369,4 +369,79 @@ fn event_enrollment_writes_are_validated_over_write_property() {
 
     assert_notify_type_validated(&mut db, ee_oid, PropertyValue::Enumerated(0), "EE");
     assert_event_enable_validated(&mut db, ee_oid, "EE");
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// #270 — Relinquish_Default is writable on commandable objects (permitted,
+// not required, writability), validated like a Present_Value write, and the
+// Present_Value resolves to it once the priority array is empty.
+// ──────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn relinquish_default_write_recaptures_present_value_over_write_property() {
+    let mut db = ObjectDatabase::new();
+    let ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let ao_oid = ao.object_identifier();
+    db.add(Box::new(ao)).unwrap();
+
+    // Occupy priority 8 so PV tracks the command, not the default.
+    let slot = WritePropertyRequest {
+        object_identifier: ao_oid,
+        property_identifier: PropertyIdentifier::PRIORITY_ARRAY,
+        property_array_index: Some(8),
+        property_value: encode_value(PropertyValue::Real(55.0)),
+        priority: None,
+    };
+    let mut buf = BytesMut::new();
+    slot.encode(&mut buf);
+    handle_write_property(&mut db, &buf).unwrap();
+    assert_eq!(
+        read_wire(&mut db, ao_oid, PropertyIdentifier::PRESENT_VALUE),
+        PropertyValue::Real(55.0)
+    );
+
+    write_wire(
+        &mut db,
+        ao_oid,
+        PropertyIdentifier::RELINQUISH_DEFAULT,
+        PropertyValue::Real(12.5),
+    )
+    .expect("Relinquish_Default must be writable");
+    assert_eq!(
+        read_wire(&mut db, ao_oid, PropertyIdentifier::RELINQUISH_DEFAULT),
+        PropertyValue::Real(12.5)
+    );
+    assert_eq!(
+        read_wire(&mut db, ao_oid, PropertyIdentifier::PRESENT_VALUE),
+        PropertyValue::Real(55.0),
+        "a live command must still outrank the new default"
+    );
+
+    // Non-finite is rejected with no state change.
+    assert_refused(
+        &mut db,
+        ao_oid,
+        PropertyIdentifier::RELINQUISH_DEFAULT,
+        PropertyValue::Real(f32::NAN),
+        ErrorCode::VALUE_OUT_OF_RANGE,
+        PropertyValue::Real(12.5),
+        "AO NaN Relinquish_Default",
+    );
+
+    // Relinquish priority 8: PV falls back to the new default.
+    let slot = WritePropertyRequest {
+        object_identifier: ao_oid,
+        property_identifier: PropertyIdentifier::PRIORITY_ARRAY,
+        property_array_index: Some(8),
+        property_value: encode_value(PropertyValue::Null),
+        priority: None,
+    };
+    let mut buf = BytesMut::new();
+    slot.encode(&mut buf);
+    handle_write_property(&mut db, &buf).unwrap();
+    assert_eq!(
+        read_wire(&mut db, ao_oid, PropertyIdentifier::PRESENT_VALUE),
+        PropertyValue::Real(12.5),
+        "with an empty priority array, PV must resolve to the written default"
+    );
 }

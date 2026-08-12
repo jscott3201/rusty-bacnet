@@ -587,8 +587,8 @@ fn pics_priority_array_writable_on_commandable_types() {
     let pics = generate_pics(&db, &ServerConfig::default(), &make_pics_config());
 
     // Commandable types accept PRIORITY_ARRAY (direct) and PRESENT_VALUE
-    // (via the priority array). RELINQUISH_DEFAULT is read-only on these
-    // implementations (no write arm), so it must NOT be writable.
+    // (via the priority array). RELINQUISH_DEFAULT grew a validated write arm
+    // in #270 (the standard permits writability), so the PICS advertises it.
     for ot in [
         ObjectType::ANALOG_OUTPUT,
         ObjectType::ANALOG_VALUE,
@@ -605,10 +605,9 @@ fn pics_priority_array_writable_on_commandable_types() {
             pics_writable(&pics, ot, PropertyIdentifier::PRESENT_VALUE),
             "{ot:?}: PRESENT_VALUE should be writable"
         );
-        // RELINQUISH_DEFAULT has no write arm in these implementations.
         assert!(
-            !pics_writable(&pics, ot, PropertyIdentifier::RELINQUISH_DEFAULT),
-            "{ot:?}: RELINQUISH_DEFAULT should NOT be writable (no write arm)"
+            pics_writable(&pics, ot, PropertyIdentifier::RELINQUISH_DEFAULT),
+            "{ot:?}: RELINQUISH_DEFAULT should be writable (#270)"
         );
     }
 }

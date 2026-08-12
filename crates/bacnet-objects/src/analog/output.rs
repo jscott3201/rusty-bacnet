@@ -82,6 +82,18 @@ impl AnalogOutputObject {
         self.present_value =
             common::recalculate_from_priority_array(&self.priority_array, self.relinquish_default);
     }
+
+    /// Set the Relinquish_Default (#270).
+    ///
+    /// Validated the same way a commanded Present_Value is (finite Real);
+    /// after the store, Present_Value is resolved anew from the priority
+    /// array so an empty array falls back to the new default immediately.
+    pub fn set_relinquish_default(&mut self, value: f32) -> Result<(), Error> {
+        common::reject_non_finite(value)?;
+        self.relinquish_default = value;
+        self.recalculate_present_value();
+        Ok(())
+    }
 }
 
 impl BACnetObject for AnalogOutputObject {
@@ -221,6 +233,12 @@ impl BACnetObject for AnalogOutputObject {
                 }
                 self.reliability = v;
                 return Ok(());
+            }
+            return Err(common::invalid_data_type_error());
+        }
+        if property == PropertyIdentifier::RELINQUISH_DEFAULT {
+            if let PropertyValue::Real(v) = value {
+                return self.set_relinquish_default(v);
             }
             return Err(common::invalid_data_type_error());
         }

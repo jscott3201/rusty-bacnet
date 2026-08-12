@@ -501,3 +501,95 @@ fn channel_write_pv_default_priority() {
         .unwrap();
     assert_eq!(lp, PropertyValue::Unsigned(16));
 }
+
+// ---------------------------------------------------------------------------
+// #270 — writable Relinquish_Default (Lighting Output + Binary Lighting Output)
+// ---------------------------------------------------------------------------
+
+/// Lighting Output: Relinquish_Default is validated like a commanded
+/// Present_Value (finite Real within the 0..=100 light level) and — with an
+/// all-NULL priority array — Present_Value immediately resolves to it.
+#[test]
+fn lighting_output_relinquish_default_write_recaptures_present_value() {
+    let mut lo = LightingOutputObject::new(1, "LO-1").unwrap();
+    assert!(lo.is_writable_property(PropertyIdentifier::RELINQUISH_DEFAULT));
+
+    lo.write_property(
+        PropertyIdentifier::RELINQUISH_DEFAULT,
+        None,
+        PropertyValue::Real(75.0),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        lo.read_property(PropertyIdentifier::RELINQUISH_DEFAULT, None)
+            .unwrap(),
+        PropertyValue::Real(75.0)
+    );
+    assert_eq!(
+        lo.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Real(75.0),
+        "with an empty priority array, PV must resolve to the written default"
+    );
+
+    for value in [
+        PropertyValue::Real(-1.0),     // below the light level range
+        PropertyValue::Real(100.5),    // above it
+        PropertyValue::Real(f32::NAN), // non-finite
+        PropertyValue::Enumerated(1),  // wrong type
+    ] {
+        assert!(lo
+            .write_property(PropertyIdentifier::RELINQUISH_DEFAULT, None, value, None)
+            .is_err());
+        assert_eq!(
+            lo.read_property(PropertyIdentifier::RELINQUISH_DEFAULT, None)
+                .unwrap(),
+            PropertyValue::Real(75.0),
+            "refused writes must leave Relinquish_Default untouched"
+        );
+    }
+    assert_eq!(
+        lo.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Real(75.0)
+    );
+}
+
+/// Binary Lighting Output: Relinquish_Default is validated like a commanded
+/// Present_Value (BinaryLightingPV 0..=4) and recaptures Present_Value on an
+/// empty priority array.
+#[test]
+fn binary_lighting_output_relinquish_default_write_recaptures_present_value() {
+    let mut blo = BinaryLightingOutputObject::new(1, "BLO-1").unwrap();
+    assert!(blo.is_writable_property(PropertyIdentifier::RELINQUISH_DEFAULT));
+
+    blo.write_property(
+        PropertyIdentifier::RELINQUISH_DEFAULT,
+        None,
+        PropertyValue::Enumerated(1), // on
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        blo.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(1),
+        "with an empty priority array, PV must resolve to the written default"
+    );
+
+    for value in [
+        PropertyValue::Enumerated(5), // past BinaryLightingPV
+        PropertyValue::Unsigned(1),   // wrong type
+    ] {
+        assert!(blo
+            .write_property(PropertyIdentifier::RELINQUISH_DEFAULT, None, value, None)
+            .is_err());
+        assert_eq!(
+            blo.read_property(PropertyIdentifier::RELINQUISH_DEFAULT, None)
+                .unwrap(),
+            PropertyValue::Enumerated(1),
+            "refused writes must leave Relinquish_Default untouched"
+        );
+    }
+}

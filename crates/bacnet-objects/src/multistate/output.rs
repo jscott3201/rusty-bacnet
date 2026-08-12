@@ -72,6 +72,29 @@ impl MultiStateOutputObject {
         self.present_value =
             common::recalculate_from_priority_array(&self.priority_array, self.relinquish_default);
     }
+
+    /// Set the Relinquish_Default (#270).
+    ///
+    /// Validated the same way a commanded Present_Value is (Unsigned
+    /// 1..=Number_Of_States); after the store, Present_Value is resolved anew
+    /// from the priority array so an empty array falls back to the new
+    /// default immediately.
+    ///
+    /// Number_Of_States shrink interplay: if the state count ever shrinks
+    /// below this value, the standard leaves adjustment of Priority_Array,
+    /// Relinquish_Default, Present_Value, and Feedback_Value "a local matter"
+    /// (Clause 12.19/12.22 Number_Of_States text). This implementation does
+    /// NOT auto-adjust: out-of-range stored values are a configuration
+    /// decision for the application to resolve (Reliability
+    /// CONFIGURATION_ERROR reporting for that condition tracks #226).
+    pub fn set_relinquish_default(&mut self, value: u32) -> Result<(), Error> {
+        if value < 1 || value > self.number_of_states {
+            return Err(common::value_out_of_range_error());
+        }
+        self.relinquish_default = value;
+        self.recalculate_present_value();
+        Ok(())
+    }
 }
 
 impl BACnetObject for MultiStateOutputObject {
@@ -288,6 +311,13 @@ impl BACnetObject for MultiStateOutputObject {
                 }
                 self.reliability = v;
                 return Ok(());
+            }
+            return Err(common::invalid_data_type_error());
+        }
+        if property == PropertyIdentifier::RELINQUISH_DEFAULT {
+            if let PropertyValue::Unsigned(u) = value {
+                let v = common::u64_to_u32(u)?;
+                return self.set_relinquish_default(v);
             }
             return Err(common::invalid_data_type_error());
         }

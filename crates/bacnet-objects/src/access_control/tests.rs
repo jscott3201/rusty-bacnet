@@ -515,3 +515,59 @@ fn credential_data_input_write_denied() {
     );
     assert!(result.is_err());
 }
+
+// ---------------------------------------------------------------------------
+// #270 — writable Relinquish_Default (Access Door)
+// ---------------------------------------------------------------------------
+
+/// Access Door: Relinquish_Default carries R in Table 12-30 and writability
+/// is permitted; the write is validated against the DoorValue set the object
+/// models (0=closed, 1=opened, 2=unknown) and — with an all-NULL priority
+/// array — Present_Value immediately resolves to the written default.
+#[test]
+fn access_door_relinquish_default_write_recaptures_present_value() {
+    let mut door = AccessDoorObject::new(1, "DOOR-1").unwrap();
+    assert!(door.is_writable_property(PropertyIdentifier::RELINQUISH_DEFAULT));
+
+    door.write_property(
+        PropertyIdentifier::RELINQUISH_DEFAULT,
+        None,
+        PropertyValue::Enumerated(1), // opened
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        door.read_property(PropertyIdentifier::RELINQUISH_DEFAULT, None)
+            .unwrap(),
+        PropertyValue::Enumerated(1)
+    );
+    assert_eq!(
+        door.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(1),
+        "with an empty priority array, PV must resolve to the written default"
+    );
+
+    // Values past the modeled DoorValue set and wrong types refuse; neither
+    // touches the stored default.
+    for value in [PropertyValue::Enumerated(3), PropertyValue::Real(1.0)] {
+        assert!(door
+            .write_property(PropertyIdentifier::RELINQUISH_DEFAULT, None, value, None)
+            .is_err());
+        assert_eq!(
+            door.read_property(PropertyIdentifier::RELINQUISH_DEFAULT, None)
+                .unwrap(),
+            PropertyValue::Enumerated(1),
+            "refused writes must leave Relinquish_Default untouched"
+        );
+    }
+
+    // The local setter shares the validation.
+    assert!(door.set_relinquish_default(3).is_err());
+    door.set_relinquish_default(0).unwrap();
+    assert_eq!(
+        door.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(0)
+    );
+}

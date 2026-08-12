@@ -570,3 +570,74 @@ fn bo_is_writable_property_mirrors_write_property() {
     // other commissioning path.
     assert!(bo.is_writable_property(PropertyIdentifier::EVENT_ENABLE));
 }
+
+/// #270: a BinaryOutput Relinquish_Default write is validated like a
+/// commanded Present_Value (BinaryPV 0/1) and — with an all-NULL priority
+/// array — Present_Value immediately resolves to the written default.
+#[test]
+fn bo_relinquish_default_write_recaptures_present_value() {
+    let bo = BinaryOutputObject::new(1, "BO-1");
+    let mut bo = bo.unwrap();
+    assert!(bo.is_writable_property(PropertyIdentifier::RELINQUISH_DEFAULT));
+
+    bo.write_property(
+        PropertyIdentifier::RELINQUISH_DEFAULT,
+        None,
+        PropertyValue::Enumerated(1),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        bo.read_property(PropertyIdentifier::RELINQUISH_DEFAULT, None)
+            .unwrap(),
+        PropertyValue::Enumerated(1)
+    );
+    assert_eq!(
+        bo.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(1),
+        "with an empty priority array, PV must resolve to the written default"
+    );
+
+    // A live command still outranks the default; relinquishing falls back to
+    // the written default.
+    bo.write_property(
+        PropertyIdentifier::PRESENT_VALUE,
+        None,
+        PropertyValue::Enumerated(0),
+        Some(8),
+    )
+    .unwrap();
+    assert_eq!(
+        bo.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(0)
+    );
+    bo.write_property(
+        PropertyIdentifier::PRESENT_VALUE,
+        None,
+        PropertyValue::Null,
+        Some(8),
+    )
+    .unwrap();
+    assert_eq!(
+        bo.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(1)
+    );
+
+    for value in [PropertyValue::Enumerated(5), PropertyValue::Unsigned(1)] {
+        assert!(bo
+            .write_property(PropertyIdentifier::RELINQUISH_DEFAULT, None, value, None)
+            .is_err());
+        assert_eq!(
+            bo.read_property(PropertyIdentifier::RELINQUISH_DEFAULT, None)
+                .unwrap(),
+            PropertyValue::Enumerated(1)
+        );
+    }
+
+    // The local setter shares the validation.
+    assert!(bo.set_relinquish_default(2).is_err());
+    bo.set_relinquish_default(1).unwrap();
+}

@@ -22,6 +22,13 @@ use crate::traits::BACnetObject;
 /// Copy types use the existing `recalculate_from_priority_array` helper;
 /// non-Copy types (String, Vec, tuples containing Vec) use a Clone-based
 /// inline recalculation.
+///
+/// `rd_validate` performs any post-extraction validation for a
+/// Relinquish_Default value (#270); `rd_access` selects whether the
+/// `RELINQUISH_DEFAULT` network write arm exists (`writable`) or remains
+/// denied (`readonly` — used for the datetime-paired types, whose wire form
+/// needs multi-element decode that is not available yet: follow-up #182).
+/// The local `set_relinquish_default` setter is generated either way.
 macro_rules! define_value_object_commandable {
     (
         name: $struct_name:ident,
@@ -33,6 +40,8 @@ macro_rules! define_value_object_commandable {
         property_to_pv: $prop_to_pv:expr,
         pa_wrap: $pa_wrap:expr,
         rd_wrap: $rd_wrap:expr,
+        rd_validate: $rd_validate:expr,
+        rd_access: $rd_access:ident,
         copy_type: $is_copy:tt
         $(,)?
     ) => {
@@ -70,6 +79,21 @@ macro_rules! define_value_object_commandable {
             /// Recalculate present_value from the priority array.
             fn recalculate_present_value(&mut self) {
                 define_value_object_commandable!(@recalc self, $is_copy);
+            }
+
+            /// Set the Relinquish_Default (#270).
+            ///
+            /// Validated the same way a commanded Present_Value is, then
+            /// Present_Value is resolved anew from the priority array so an
+            /// empty array falls back to the new default immediately. The
+            /// standard permits Relinquish_Default writability on commandable
+            /// types; for the datetime-paired types the value stays local-only
+            /// until the wire decode generalizes (#182).
+            pub fn set_relinquish_default(&mut self, value: $val_type) -> Result<(), Error> {
+                ($rd_validate)(&value)?;
+                self.relinquish_default = value;
+                self.recalculate_present_value();
+                Ok(())
             }
         }
 
@@ -155,6 +179,9 @@ macro_rules! define_value_object_commandable {
                     self.recalculate_present_value();
                     return Ok(());
                 }
+                // RELINQUISH_DEFAULT — network-writable only for the types
+                // that select `rd_access: writable` (#270).
+                define_value_object_commandable!(@rd_write self, property, value, $prop_to_pv, $rd_access);
                 if let Some(result) =
                     common::write_out_of_service(&mut self.out_of_service, property, &value)
                 {
@@ -192,6 +219,38 @@ macro_rules! define_value_object_commandable {
             fn supports_cov(&self) -> bool {
                 true
             }
+
+            define_value_object_commandable!(@is_writable $rd_access);
+        }
+    };
+
+    // RELINQUISH_DEFAULT write arm for `rd_access: writable`: extract through
+    // the shared closure, then reuse the validated setter (#270).
+    (@rd_write $self:ident, $property:ident, $value:ident, $prop_to_pv:expr, writable) => {
+        if $property == PropertyIdentifier::RELINQUISH_DEFAULT {
+            let extracted = ($prop_to_pv)($value)?;
+            return $self.set_relinquish_default(extracted);
+        }
+    };
+    // `rd_access: readonly`: no arm — the default WRITE_ACCESS_DENIED at the
+    // end of write_property stands (datetime-paired types, follow-up #182).
+    (@rd_write $self:ident, $property:ident, $value:ident, $prop_to_pv:expr, readonly) => {};
+
+    // PICS writability mirrors the arms: common + commandable for every
+    // commandable value type, RELINQUISH_DEFAULT only when the arm exists.
+    (@is_writable writable) => {
+        fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+            common::is_common_writable(property)
+                || property == PropertyIdentifier::PRESENT_VALUE
+                || property == PropertyIdentifier::PRIORITY_ARRAY
+                || property == PropertyIdentifier::RELINQUISH_DEFAULT
+        }
+    };
+    (@is_writable readonly) => {
+        fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+            common::is_common_writable(property)
+                || property == PropertyIdentifier::PRESENT_VALUE
+                || property == PropertyIdentifier::PRIORITY_ARRAY
         }
     };
 
@@ -448,6 +507,8 @@ define_value_object_commandable! {
     }),
     pa_wrap: PropertyValue::Signed,
     rd_wrap: (|v: &i32| PropertyValue::Signed(*v)),
+    rd_validate: (|_: &i32| -> Result<(), Error> { Ok(()) }),
+    rd_access: writable,
     copy_type: copy,
 }
 
@@ -464,6 +525,8 @@ define_value_object_commandable! {
     }),
     pa_wrap: PropertyValue::Unsigned,
     rd_wrap: (|v: &u64| PropertyValue::Unsigned(*v)),
+    rd_validate: (|_: &u64| -> Result<(), Error> { Ok(()) }),
+    rd_access: writable,
     copy_type: copy,
 }
 
@@ -480,6 +543,14 @@ define_value_object_commandable! {
     }),
     pa_wrap: PropertyValue::Double,
     rd_wrap: (|v: &f64| PropertyValue::Double(*v)),
+    rd_validate: (|v: &f64| -> Result<(), Error> {
+        if v.is_finite() {
+            Ok(())
+        } else {
+            Err(common::value_out_of_range_error())
+        }
+    }),
+    rd_access: writable,
     copy_type: copy,
 }
 
@@ -496,6 +567,8 @@ define_value_object_commandable! {
     }),
     pa_wrap: clone_string_to_pv,
     rd_wrap: (|v: &String| PropertyValue::CharacterString(v.clone())),
+    rd_validate: (|_: &String| -> Result<(), Error> { Ok(()) }),
+    rd_access: writable,
     copy_type: clone,
 }
 
@@ -512,6 +585,8 @@ define_value_object_commandable! {
     }),
     pa_wrap: clone_octetstring_to_pv,
     rd_wrap: (|v: &Vec<u8>| PropertyValue::OctetString(v.clone())),
+    rd_validate: (|_: &Vec<u8>| -> Result<(), Error> { Ok(()) }),
+    rd_access: writable,
     copy_type: clone,
 }
 
@@ -534,6 +609,8 @@ define_value_object_commandable! {
         unused_bits: v.0,
         data: v.1.clone(),
     }),
+    rd_validate: (|_: &(u8, Vec<u8>)| -> Result<(), Error> { Ok(()) }),
+    rd_access: writable,
     copy_type: clone,
 }
 
@@ -547,6 +624,8 @@ define_value_object_commandable! {
     property_to_pv: pv_to_date,
     pa_wrap: PropertyValue::Date,
     rd_wrap: (|v: &Date| PropertyValue::Date(*v)),
+    rd_validate: (|_: &Date| -> Result<(), Error> { Ok(()) }),
+    rd_access: writable,
     copy_type: copy,
 }
 
@@ -560,6 +639,8 @@ define_value_object_commandable! {
     property_to_pv: pv_to_time,
     pa_wrap: PropertyValue::Time,
     rd_wrap: (|v: &Time| PropertyValue::Time(*v)),
+    rd_validate: (|_: &Time| -> Result<(), Error> { Ok(()) }),
+    rd_access: writable,
     copy_type: copy,
 }
 
@@ -576,6 +657,8 @@ define_value_object_commandable! {
     property_to_pv: pv_to_datetime,
     pa_wrap: datetime_copy_to_pv,
     rd_wrap: (|v: &(Date, Time)| datetime_to_pv(v)),
+    rd_validate: (|_: &(Date, Time)| -> Result<(), Error> { Ok(()) }),
+    rd_access: readonly,
     copy_type: copy,
 }
 
@@ -593,6 +676,8 @@ define_value_object_commandable! {
     property_to_pv: pv_to_date,
     pa_wrap: PropertyValue::Date,
     rd_wrap: (|v: &Date| PropertyValue::Date(*v)),
+    rd_validate: (|_: &Date| -> Result<(), Error> { Ok(()) }),
+    rd_access: writable,
     copy_type: copy,
 }
 
@@ -606,6 +691,8 @@ define_value_object_commandable! {
     property_to_pv: pv_to_time,
     pa_wrap: PropertyValue::Time,
     rd_wrap: (|v: &Time| PropertyValue::Time(*v)),
+    rd_validate: (|_: &Time| -> Result<(), Error> { Ok(()) }),
+    rd_access: writable,
     copy_type: copy,
 }
 
@@ -622,6 +709,8 @@ define_value_object_commandable! {
     property_to_pv: pv_to_datetime,
     pa_wrap: datetime_copy_to_pv,
     rd_wrap: (|v: &(Date, Time)| datetime_to_pv(v)),
+    rd_validate: (|_: &(Date, Time)| -> Result<(), Error> { Ok(()) }),
+    rd_access: readonly,
     copy_type: copy,
 }
 

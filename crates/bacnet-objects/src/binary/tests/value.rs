@@ -565,3 +565,53 @@ fn bv_active_text_wrong_type_rejected() {
         )
         .is_err());
 }
+
+/// #270: a BinaryValue Relinquish_Default write is validated like a commanded
+/// Present_Value (BinaryPV 0/1) and — with an all-NULL priority array —
+/// Present_Value immediately resolves to the written default.
+#[test]
+fn bv_relinquish_default_write_recaptures_present_value() {
+    let mut bv = BinaryValueObject::new(1, "BV-1").unwrap();
+    assert!(bv.is_writable_property(PropertyIdentifier::RELINQUISH_DEFAULT));
+
+    bv.write_property(
+        PropertyIdentifier::RELINQUISH_DEFAULT,
+        None,
+        PropertyValue::Enumerated(1),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        bv.read_property(PropertyIdentifier::RELINQUISH_DEFAULT, None)
+            .unwrap(),
+        PropertyValue::Enumerated(1)
+    );
+    assert_eq!(
+        bv.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(1),
+        "with an empty priority array, PV must resolve to the written default"
+    );
+
+    // 2 is outside BinaryPV; a wrong type is refused the same way; neither
+    // touches the stored default.
+    for value in [PropertyValue::Enumerated(2), PropertyValue::Real(1.0)] {
+        assert!(bv
+            .write_property(PropertyIdentifier::RELINQUISH_DEFAULT, None, value, None)
+            .is_err());
+        assert_eq!(
+            bv.read_property(PropertyIdentifier::RELINQUISH_DEFAULT, None)
+                .unwrap(),
+            PropertyValue::Enumerated(1)
+        );
+    }
+
+    // The local setter shares the validation.
+    assert!(bv.set_relinquish_default(2).is_err());
+    bv.set_relinquish_default(0).unwrap();
+    assert_eq!(
+        bv.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(0)
+    );
+}

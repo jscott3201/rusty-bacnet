@@ -863,14 +863,14 @@ pub(crate) fn is_event_property_writable(
 
 /// Writable commandable-object properties shared by all commandable types
 /// (AnalogOutput, AnalogValue, BinaryOutput, BinaryValue, MultiStateOutput,
-/// MultiStateValue): `PRIORITY_ARRAY` direct writes and commandable
-/// `PRESENT_VALUE` writes.
+/// MultiStateValue): `PRIORITY_ARRAY` direct writes, commandable
+/// `PRESENT_VALUE` writes, and the validated `RELINQUISH_DEFAULT` write arm
+/// (#270 — the standard permits Relinquish_Default to be writable; the
+/// conformance tables carry it R or O, and the writability implemented here
+/// is permitted, not required).
 ///
-/// Returns `true` for `PRIORITY_ARRAY` and `PRESENT_VALUE` only.
-/// `RELINQUISH_DEFAULT` and `CURRENT_COMMAND_PRIORITY` are read-only in every
-/// current implementation (no `write_property` arm accepts either) and are
-/// intentionally not included here; if a future type grows a write arm for
-/// either, add it in that type's `is_writable_property` override.
+/// `CURRENT_COMMAND_PRIORITY` stays read-only: it is derived from the
+/// priority array, so no `write_property` arm accepts it.
 #[inline]
 pub(crate) fn is_commandable_property_writable(
     property: bacnet_types::enums::PropertyIdentifier,
@@ -879,6 +879,7 @@ pub(crate) fn is_commandable_property_writable(
         property,
         bacnet_types::enums::PropertyIdentifier::PRIORITY_ARRAY
             | bacnet_types::enums::PropertyIdentifier::PRESENT_VALUE
+            | bacnet_types::enums::PropertyIdentifier::RELINQUISH_DEFAULT
     )
 }
 
