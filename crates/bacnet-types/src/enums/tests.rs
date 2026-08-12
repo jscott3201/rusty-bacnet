@@ -170,7 +170,10 @@ macro_rules! assert_production_values {
 /// File object on the wire (#273).
 #[test]
 fn file_access_method_values_match_clause_21() {
-    assert_production_values!(FileAccessMethod, [("RECORD_ACCESS", 0), ("STREAM_ACCESS", 1)]);
+    assert_production_values!(
+        FileAccessMethod,
+        [("RECORD_ACCESS", 0), ("STREAM_ACCESS", 1)]
+    );
 
     // file-access-method (41) resolves by name with the corrected values.
     assert_eq!(

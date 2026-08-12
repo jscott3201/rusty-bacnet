@@ -269,10 +269,12 @@ fn app_enumerated_round_trip() {
 fn file_access_method_wire_values_match_clause_21() {
     use bacnet_types::enums::FileAccessMethod;
 
-    let bytes = encode_to_vec(|buf| encode_app_enumerated(buf, FileAccessMethod::RECORD_ACCESS.to_raw()));
+    let bytes =
+        encode_to_vec(|buf| encode_app_enumerated(buf, FileAccessMethod::RECORD_ACCESS.to_raw()));
     assert_eq!(bytes, [0x91, 0x00], "record-access encodes to value 0");
 
-    let bytes = encode_to_vec(|buf| encode_app_enumerated(buf, FileAccessMethod::STREAM_ACCESS.to_raw()));
+    let bytes =
+        encode_to_vec(|buf| encode_app_enumerated(buf, FileAccessMethod::STREAM_ACCESS.to_raw()));
     assert_eq!(bytes, [0x91, 0x01], "stream-access encodes to value 1");
 }
 
