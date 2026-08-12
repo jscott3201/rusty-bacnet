@@ -166,6 +166,111 @@ fn recipient_list_indexed_write_rejected_list_unchanged() {
 }
 
 #[test]
+fn recipient_list_malformed_tail_fails_whole_decode_no_prefix_delivery() {
+    // Review blocker: previously decode stopped at the first malformed
+    // destination and silently kept the valid PREFIX — routing would then
+    // notify only part of the configured list. Strict now: the whole decode
+    // fails and the filter yields NOTHING.
+    let good = make_dest_device(10);
+    let mut bytes = bytes::BytesMut::new();
+    bacnet_encoding::constructed::encode_destination_list(&mut bytes, &[good]);
+    // Trailing garbage: an opening tag [5] with no closing.
+    let mut framed = bytes.to_vec();
+    framed.push(0x5E);
+    let val = PropertyValue::ApplicationData(framed);
+    assert!(decode_destination_list_pv(&val).is_err());
+    let hits = filter_recipient_list(&val, EventTransition::ToOffnormal, 0x01, &make_time(12, 0));
+    assert!(
+        hits.is_empty(),
+        "malformed list must NOT deliver to the valid prefix"
+    );
+}
+
+#[test]
+fn routing_skips_delivery_when_stored_recipient_list_is_malformed() {
+    // End-to-end fail-closed: a NotificationClass whose stored Recipient_List
+    // is undecodable yields None from the strict lookup (the router skips
+    // the notification) rather than delivering to a decodable prefix.
+    use std::borrow::Cow;
+
+    struct MalformedListObject {
+        oid: ObjectIdentifier,
+    }
+
+    impl BACnetObject for MalformedListObject {
+        fn object_identifier(&self) -> ObjectIdentifier {
+            self.oid
+        }
+        fn object_name(&self) -> &str {
+            "malformed-nc"
+        }
+        fn read_property(
+            &self,
+            property: PropertyIdentifier,
+            _array_index: Option<u32>,
+        ) -> Result<PropertyValue, Error> {
+            if property == PropertyIdentifier::NOTIFICATION_CLASS {
+                Ok(PropertyValue::Unsigned(1))
+            } else if property == PropertyIdentifier::RECIPIENT_LIST {
+                // One fully-valid destination followed by a truncated one.
+                let mut framed = bytes::BytesMut::new();
+                bacnet_encoding::constructed::encode_destination_list(
+                    &mut framed,
+                    &[make_dest_device(10)],
+                );
+                let mut bytes = framed.to_vec();
+                bytes.push(0x5E); // opening [5], never closed
+                Ok(PropertyValue::ApplicationData(bytes))
+            } else {
+                Err(Error::Protocol {
+                    class: bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32,
+                    code: bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                })
+            }
+        }
+        fn write_property(
+            &mut self,
+            _property: PropertyIdentifier,
+            _array_index: Option<u32>,
+            _value: PropertyValue,
+            _priority: Option<u8>,
+        ) -> Result<(), Error> {
+            Err(Error::Protocol {
+                class: bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32,
+                code: bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+            })
+        }
+        fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
+            Cow::Borrowed(&[PropertyIdentifier::NOTIFICATION_CLASS])
+        }
+    }
+
+    let oid = ObjectIdentifier::new(ObjectType::NOTIFICATION_CLASS, 1).unwrap();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(MalformedListObject { oid })).unwrap();
+
+    let None = get_notification_recipients_strict(
+        &db,
+        1,
+        EventTransition::ToOffnormal,
+        0x01,
+        &make_time(12, 0),
+    ) else {
+        panic!("undecodable Recipient_List must fail closed with None");
+    };
+
+    // A missing class is the legacy empty case (Some([])), NOT None.
+    let empty = get_notification_recipients_strict(
+        &db,
+        99,
+        EventTransition::ToOffnormal,
+        0x01,
+        &make_time(12, 0),
+    );
+    assert_eq!(empty, Some(Vec::new()));
+}
+
+#[test]
 fn recipient_list_framed_eight_entry_write_round_trip() {
     // Annex K.2.25 (AE-CRL-B) requires at least 8 writable Recipient_List
     // entries: write a framed 8-entry BACnetLIST, read it back.

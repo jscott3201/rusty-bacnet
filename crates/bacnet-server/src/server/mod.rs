@@ -30,7 +30,7 @@ use bacnet_network::layer::NetworkLayer;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::event::EventStateChange;
 use bacnet_objects::notification_class::{
-    get_notification_recipients, local_day_and_time, resolve_transition_priority_ack,
+    get_notification_recipients_strict, local_day_and_time, resolve_transition_priority_ack,
 };
 use bacnet_services::alarm_event::EventNotificationRequest;
 use bacnet_services::common::BACnetPropertyValue;

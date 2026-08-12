@@ -421,6 +421,9 @@ pub fn resolve_transition_priority_ack(
 ///
 /// Returns `(recipient, process_identifier, issue_confirmed_notifications)` tuples.
 /// Returns an empty `Vec` if no matching NotificationClass is found or no recipients match.
+/// Compatibility wrapper: a `Recipient_List` that fails to decode yields an
+/// empty list here; routing that must distinguish "no recipients" from
+/// "undecodable list" uses [`get_notification_recipients_strict`].
 pub fn get_notification_recipients(
     db: &ObjectDatabase,
     notification_class: u32,
@@ -428,14 +431,40 @@ pub fn get_notification_recipients(
     today_bit: u8,
     current_time: &Time,
 ) -> Vec<(BACnetRecipient, u32, bool)> {
+    get_notification_recipients_strict(db, notification_class, transition, today_bit, current_time)
+        .unwrap_or_default()
+}
+
+/// Strict variant of [`get_notification_recipients`] for fail-closed routing.
+///
+/// - `Some(list)` — no class matched (value `[]`, as before), or the class
+///   was found and its `Recipient_List` decoded; `list` may be empty after
+///   filtering (no recipient viable right now).
+/// - `None` — a NotificationClass matched but its stored `Recipient_List`
+///   FAILED to decode: the configured recipients are unknown, and
+///   delivering to a decodable prefix (or falling back to the
+///   no-recipients broadcast path) would notify the wrong set of devices.
+pub fn get_notification_recipients_strict(
+    db: &ObjectDatabase,
+    notification_class: u32,
+    transition: EventTransition,
+    today_bit: u8,
+    current_time: &Time,
+) -> Option<Vec<(BACnetRecipient, u32, bool)>> {
     let Some(nc) = find_notification_class(db, notification_class) else {
-        return Vec::new();
+        return Some(Vec::new());
     };
-    let recipient_list_val = match nc.read_property(PropertyIdentifier::RECIPIENT_LIST, None) {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
+    let Ok(recipient_list_val) = nc.read_property(PropertyIdentifier::RECIPIENT_LIST, None)
+    else {
+        return Some(Vec::new());
     };
-    filter_recipient_list(&recipient_list_val, transition, today_bit, current_time)
+    let destinations = decode_destination_list_pv(&recipient_list_val).ok()?;
+    Some(filter_destinations(
+        destinations,
+        transition,
+        today_bit,
+        current_time,
+    ))
 }
 
 /// Decode ONE legacy flat `Recipient_List` entry (the pre-#152
@@ -515,53 +544,48 @@ fn destination_from_flat_fields(fields: &[PropertyValue]) -> Option<BACnetDestin
     })
 }
 
-/// Decode a `RECIPIENT_LIST` property value into its destinations.
+/// Strictly decode a `RECIPIENT_LIST` property value into its destinations.
 ///
-/// Framed wire form ([`PropertyValue::ApplicationData`]): parses the
-/// `BACnetLIST of BACnetDestination` concatenation — an unparseable entry
-/// stops the walk, keeping the entries before it (read path stays
-/// best-effort). Legacy flat form ([`PropertyValue::List`]):
-/// [`destination_from_flat_fields`], skipping malformed entries.
-fn decode_destination_list_pv(value: &PropertyValue) -> Vec<BACnetDestination> {
+/// Framed wire form ([`PropertyValue::ApplicationData`]): the strict
+/// `BACnetLIST of BACnetDestination` codec. Legacy flat form
+/// ([`PropertyValue::List`]): [`destination_from_flat_fields`]. Either way,
+/// the FIRST malformed destination (or trailing bytes) fails the whole
+/// decode — a prefix-tolerant walk would silently route notifications to
+/// only a subset of the configured recipients (review blocker).
+fn decode_destination_list_pv(value: &PropertyValue) -> Result<Vec<BACnetDestination>, Error> {
     match value {
         PropertyValue::ApplicationData(bytes) => {
-            let mut destinations = Vec::new();
-            let mut pos = 0;
-            while pos < bytes.len() {
-                match bacnet_encoding::constructed::decode_destination(bytes, pos) {
-                    Ok((dest, new_pos)) => {
-                        destinations.push(dest);
-                        pos = new_pos;
-                    }
-                    Err(_) => break,
-                }
-            }
-            destinations
+            bacnet_encoding::constructed::decode_destination_list(bytes)
         }
         PropertyValue::List(entries) => entries
             .iter()
-            .filter_map(|entry| match entry {
-                PropertyValue::List(fields) => destination_from_flat_fields(fields),
-                _ => None,
+            .map(|entry| match entry {
+                PropertyValue::List(fields) => destination_from_flat_fields(fields)
+                    .ok_or_else(|| Error::decoding(0, "Recipient_List: malformed legacy entry")),
+                _ => Err(Error::decoding(
+                    0,
+                    "Recipient_List: entry is not a field list",
+                )),
             })
             .collect(),
-        _ => Vec::new(),
+        _ => Err(Error::decoding(
+            0,
+            "Recipient_List: expected framed application data or a legacy list",
+        )),
     }
 }
 
-/// Filter an encoded `RECIPIENT_LIST` property value by day, time, and transition.
-///
-/// Parses the value as returned by `read_property(RECIPIENT_LIST)` — the
-/// framed `BACnetLIST of BACnetDestination` form, or the legacy flat form —
-/// and returns only those recipients matching the given filters.
-pub fn filter_recipient_list(
-    recipient_list_value: &PropertyValue,
+/// Filter decoded destinations by day, time, and transition — the shared
+/// selection step of [`filter_recipient_list`] and
+/// [`get_notification_recipients_strict`].
+fn filter_destinations(
+    destinations: Vec<BACnetDestination>,
     transition: EventTransition,
     today_bit: u8,
     current_time: &Time,
 ) -> Vec<(BACnetRecipient, u32, bool)> {
     let transition_mask = transition.bit_mask();
-    decode_destination_list_pv(recipient_list_value)
+    destinations
         .into_iter()
         .filter(|dest| dest.valid_days & today_bit != 0)
         .filter(|dest| time_in_window(current_time, &dest.from_time, &dest.to_time))
@@ -574,6 +598,26 @@ pub fn filter_recipient_list(
             )
         })
         .collect()
+}
+
+/// Filter an encoded `RECIPIENT_LIST` property value by day, time, and transition.
+///
+/// Parses the value as returned by `read_property(RECIPIENT_LIST)` — the
+/// framed `BACnetLIST of BACnetDestination` form, or the legacy flat form —
+/// and returns only those recipients matching the given filters. A list
+/// that fails to decode (even partially) yields NO recipients: routing
+/// fails closed rather than notifying a silently-truncated prefix of the
+/// configured destinations.
+pub fn filter_recipient_list(
+    recipient_list_value: &PropertyValue,
+    transition: EventTransition,
+    today_bit: u8,
+    current_time: &Time,
+) -> Vec<(BACnetRecipient, u32, bool)> {
+    let Ok(destinations) = decode_destination_list_pv(recipient_list_value) else {
+        return Vec::new();
+    };
+    filter_destinations(destinations, transition, today_bit, current_time)
 }
 
 #[cfg(test)]

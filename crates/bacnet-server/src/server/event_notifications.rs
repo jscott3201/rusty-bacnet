@@ -183,13 +183,28 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 event_values: None,
             };
 
-            let recipients = get_notification_recipients(
+            let recipients = match get_notification_recipients_strict(
                 &db,
                 notification_class,
                 transition,
                 today_bit,
                 &current_time,
-            );
+            ) {
+                Some(recipients) => recipients,
+                None => {
+                    // The NotificationClass's Recipient_List failed to
+                    // decode — its configured recipients are UNKNOWN. Fail
+                    // closed (consistent with the encode-failure branches
+                    // below): deliver this notification to NO ONE rather
+                    // than to a silently-truncated prefix of the configured
+                    // destinations or the no-recipients broadcast fallback.
+                    warn!(
+                        notification_class,
+                        "Recipient_List failed to decode; skipping event notification delivery"
+                    );
+                    return;
+                }
+            };
 
             (base_notification, recipients)
         };
