@@ -33,6 +33,7 @@ fn make_db_with_device_and_ai() -> ObjectDatabase {
     db
 }
 
+mod array_index_gating;
 mod async_dcc;
 mod detection_enable_summary;
 mod device_event;

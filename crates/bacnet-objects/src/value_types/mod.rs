@@ -114,16 +114,15 @@ macro_rules! define_value_object_commandable {
                 value: PropertyValue,
                 priority: Option<u8>,
             ) -> Result<(), Error> {
-                // Handle PRIORITY_ARRAY direct writes
+                // Handle PRIORITY_ARRAY direct writes. Index validation
+                // follows Clause 12.1.5.1: an omitted index means whole-array
+                // access, and whole-array writes are not supported here, so
+                // it is PROPERTY / WRITE_ACCESS_DENIED (Clause 15.9.1.3).
                 if property == PropertyIdentifier::PRIORITY_ARRAY {
                     let idx = match array_index {
                         Some(n) if (1..=16).contains(&n) => (n - 1) as usize,
                         Some(_) => return Err(common::invalid_array_index_error()),
-                        None => {
-                            return Err(Error::Encoding(
-                                "PRIORITY_ARRAY requires array_index (1-16)".into(),
-                            ))
-                        }
+                        None => return Err(common::write_access_denied_error()),
                     };
                     match value {
                         PropertyValue::Null => {

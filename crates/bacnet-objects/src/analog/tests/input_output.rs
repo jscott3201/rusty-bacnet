@@ -666,39 +666,86 @@ fn ao_direct_priority_array_relinquish() {
 
 #[test]
 fn ao_direct_priority_array_no_index_error() {
+    // #266: an omitted array index means whole-array access (Clause 12.1.5.1);
+    // whole-array writes are unsupported here, so the object must surface a
+    // mappable PROPERTY / WRITE_ACCESS_DENIED protocol error (Result(-),
+    // Clause 15.9.1.3), not an opaque Error::Encoding.
     let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
-    // Writing PRIORITY_ARRAY without array_index should error
-    let result = ao.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        None,
-        PropertyValue::Real(42.0),
-        None,
-    );
-    assert!(result.is_err());
+    match ao
+        .write_property(
+            PropertyIdentifier::PRIORITY_ARRAY,
+            None,
+            PropertyValue::Real(42.0),
+            None,
+        )
+        .unwrap_err()
+    {
+        Error::Protocol { class, code } => {
+            assert_eq!(
+                class,
+                bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
+            );
+            assert_eq!(
+                code,
+                bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32
+            );
+        }
+        other => panic!("expected PROPERTY/WRITE_ACCESS_DENIED, got {other:?}"),
+    }
 }
 
 #[test]
 fn ao_direct_priority_array_index_zero_error() {
+    // Element 0 is the read-only array size: outside the writable 1..=16
+    // slots → INVALID_ARRAY_INDEX.
     let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
-    let result = ao.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(0),
-        PropertyValue::Real(42.0),
-        None,
-    );
-    assert!(result.is_err());
+    match ao
+        .write_property(
+            PropertyIdentifier::PRIORITY_ARRAY,
+            Some(0),
+            PropertyValue::Real(42.0),
+            None,
+        )
+        .unwrap_err()
+    {
+        Error::Protocol { class, code } => {
+            assert_eq!(
+                class,
+                bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
+            );
+            assert_eq!(
+                code,
+                bacnet_types::enums::ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32
+            );
+        }
+        other => panic!("expected PROPERTY/INVALID_ARRAY_INDEX, got {other:?}"),
+    }
 }
 
 #[test]
 fn ao_direct_priority_array_index_17_error() {
     let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
-    let result = ao.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(17),
-        PropertyValue::Real(42.0),
-        None,
-    );
-    assert!(result.is_err());
+    match ao
+        .write_property(
+            PropertyIdentifier::PRIORITY_ARRAY,
+            Some(17),
+            PropertyValue::Real(42.0),
+            None,
+        )
+        .unwrap_err()
+    {
+        Error::Protocol { class, code } => {
+            assert_eq!(
+                class,
+                bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
+            );
+            assert_eq!(
+                code,
+                bacnet_types::enums::ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32
+            );
+        }
+        other => panic!("expected PROPERTY/INVALID_ARRAY_INDEX, got {other:?}"),
+    }
 }
 
 // ── Trait capability method tests (issue #115 shared truth source) ──────────

@@ -77,6 +77,18 @@ pub fn handle_write_property_multiple(
             });
         }
         for prop in &spec.list_of_properties {
+            // Clause 15.9.1.3: an array index on a non-array property fails
+            // the request. Gating in the validation phase keeps the request
+            // atomic — the commit loop never starts for a rejected index.
+            let object = db.get(&oid).expect("existence checked above");
+            if prop.property_array_index.is_some()
+                && !object.is_array_property(prop.property_identifier)
+            {
+                return Err(Error::Protocol {
+                    class: ErrorClass::PROPERTY.to_raw() as u32,
+                    code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32,
+                });
+            }
             let value = decode_write_property_value(prop.property_identifier, &prop.value)?;
             decoded_writes.push((
                 oid,
@@ -259,6 +271,21 @@ pub fn handle_write_property(
         return Err(Error::Protocol {
             class: ErrorClass::OBJECT.to_raw() as u32,
             code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+        });
+    }
+
+    // Clause 15.9.1.3: an array index on a non-array property is rejected
+    // with PROPERTY / PROPERTY_IS_NOT_AN_ARRAY before any decoding or
+    // mutation. The array/list decision belongs to the object.
+    if request.property_array_index.is_some()
+        && !db
+            .get(&oid)
+            .expect("existence checked above")
+            .is_array_property(request.property_identifier)
+    {
+        return Err(Error::Protocol {
+            class: ErrorClass::PROPERTY.to_raw() as u32,
+            code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32,
         });
     }
 

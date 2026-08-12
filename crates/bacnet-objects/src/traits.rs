@@ -56,6 +56,27 @@ pub trait BACnetObject: Send + Sync {
         historical_writable_default(self.object_identifier().object_type(), property)
     }
 
+    /// Whether `property` accepts an array index on this object.
+    ///
+    /// Per Clause 12.1.5.1, only BACnetARRAY (and BACnetARRAY of BACnetLIST)
+    /// properties accept an array index; Clause 12.1.5.2 makes ReadRange the
+    /// only positional access to a BACnetLIST. The RP/RPM/WP/WPM service
+    /// handlers gate the request's array index on this query and reject a
+    /// supplied index on a non-array property with PROPERTY /
+    /// PROPERTY_IS_NOT_AN_ARRAY (Clause 15.5.1.3, Clause 15.9.1.3).
+    ///
+    /// The default reproduces the standard's classification (see
+    /// [`array_property_default`]): identifier-stable arrays are admitted
+    /// without consulting the object type, the identifiers whose datatype
+    /// changes with the object type (ALARM_VALUES / FAULT_VALUES,
+    /// LIST_OF_OBJECT_PROPERTY_REFERENCES, PRESENT_VALUE) classify by
+    /// `object_identifier().object_type()`, and everything else — scalars and
+    /// BACnetLIST properties — rejects the index. Object implementations with
+    /// vendor or per-instance array properties override.
+    fn is_array_property(&self, property: PropertyIdentifier) -> bool {
+        array_property_default(self.object_identifier().object_type(), property)
+    }
+
     /// Whether this object type can be created at runtime via CreateObject.
     ///
     /// Default `false`; override `true` only for types the network factory
@@ -219,6 +240,70 @@ pub trait BACnetObject: Send + Sync {
     ///
     /// Default is a no-op. TrendLog objects override to append to their buffer.
     fn add_trend_record(&mut self, _record: BACnetLogRecord) {}
+}
+
+/// The default array/list classification behind
+/// [`BACnetObject::is_array_property`], keyed by the Clause 12 property
+/// tables. Three identifier classes:
+///
+/// - **Identifier-stable BACnetARRAY** properties admit an index on every
+///   object type that defines them: OBJECT_LIST (Table 12-13), PROPERTY_LIST
+///   (every table), STATE_TEXT (Tables 12-21/12-22/12-23), PRIORITY
+///   (Table 12-24), WEEKLY_SCHEDULE / EXCEPTION_SCHEDULE (Table 12-28),
+///   EVENT_TIME_STAMPS / EVENT_MESSAGE_TEXTS (Table 12-2 family),
+///   PRIORITY_ARRAY (the commandable family), TAGS (Annex Y),
+///   SUBORDINATE_LIST / SUBORDINATE_ANNOTATIONS (Table 12-34), and
+///   GROUP_MEMBERS / GROUP_MEMBER_NAMES (Table 12-57; Elevator/Lift also type
+///   GROUP_MEMBERS BACnetARRAY).
+/// - **Type-dependent** identifiers classify by `object_type`: ALARM_VALUES /
+///   FAULT_VALUES are BACnetARRAY[N] on CharacterString Value (Table 12-44)
+///   and BitString Value (Table 12-47) but BACnetLIST on the multi-state,
+///   life-safety, and access families; LIST_OF_OBJECT_PROPERTY_REFERENCES is
+///   BACnetARRAY[N] on Channel (Table 12-62) but BACnetLIST on Schedule
+///   (Table 12-28) and Lighting Output (Table 12-64); PRESENT_VALUE is
+///   BACnetARRAY[N] of BACnetPropertyAccessResult on Global Group
+///   (Table 12-57) but scalar elsewhere.
+/// - **Everything else** — scalars and the identifier-stable BACnetLIST
+///   properties DATE_LIST (Table 12-11), LIST_OF_GROUP_MEMBERS
+///   (Table 12-17), RECIPIENT_LIST (Table 12-24), LOG_BUFFER
+///   (Tables 12-29/12-31), DEVICE_ADDRESS_BINDING and
+///   ACTIVE_COV_SUBSCRIPTIONS (Table 12-13) — takes no index: Clause 12.1.5.2
+///   makes ReadRange the only positional access to a BACnetLIST.
+///
+/// Like [`historical_writable_default`] this is a free function (not a
+/// per-object override) so the default trait method can delegate to it
+/// without requiring `Self: Sized` (which would break `dyn BACnetObject`
+/// dispatch).
+#[inline]
+pub(crate) fn array_property_default(
+    object_type: ObjectType,
+    property: PropertyIdentifier,
+) -> bool {
+    match property {
+        PropertyIdentifier::OBJECT_LIST
+        | PropertyIdentifier::PROPERTY_LIST
+        | PropertyIdentifier::STATE_TEXT
+        | PropertyIdentifier::PRIORITY
+        | PropertyIdentifier::WEEKLY_SCHEDULE
+        | PropertyIdentifier::EXCEPTION_SCHEDULE
+        | PropertyIdentifier::EVENT_TIME_STAMPS
+        | PropertyIdentifier::EVENT_MESSAGE_TEXTS
+        | PropertyIdentifier::PRIORITY_ARRAY
+        | PropertyIdentifier::TAGS
+        | PropertyIdentifier::SUBORDINATE_LIST
+        | PropertyIdentifier::SUBORDINATE_ANNOTATIONS
+        | PropertyIdentifier::GROUP_MEMBERS
+        | PropertyIdentifier::GROUP_MEMBER_NAMES => true,
+        PropertyIdentifier::ALARM_VALUES | PropertyIdentifier::FAULT_VALUES => matches!(
+            object_type,
+            ObjectType::CHARACTERSTRING_VALUE | ObjectType::BITSTRING_VALUE
+        ),
+        PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES => {
+            object_type == ObjectType::CHANNEL
+        }
+        PropertyIdentifier::PRESENT_VALUE => object_type == ObjectType::GLOBAL_GROUP,
+        _ => false,
+    }
 }
 
 /// The historical PICS writable-property heuristic, used by the default

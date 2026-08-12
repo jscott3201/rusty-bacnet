@@ -307,6 +307,20 @@ pub(crate) fn invalid_array_index_error() -> bacnet_types::error::Error {
     )
 }
 
+/// Return the property-is-not-an-array protocol error.
+///
+/// Clause 15.5.1.3 / 15.9.1.3: an array index was provided but the property
+/// is not an array. The RP/RPM/WP/WPM service handlers gate on
+/// [`crate::traits::BACnetObject::is_array_property`]; object arms mirror the
+/// classification for direct (non-service) calls.
+#[inline]
+pub(crate) fn property_is_not_an_array_error() -> bacnet_types::error::Error {
+    protocol_error(
+        bacnet_types::enums::ErrorClass::PROPERTY,
+        bacnet_types::enums::ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+    )
+}
+
 /// Reject NaN and Infinity float values. Returns `Err(VALUE_OUT_OF_RANGE)` if not finite.
 #[inline]
 pub(crate) fn reject_non_finite(v: f32) -> Result<(), bacnet_types::error::Error> {
@@ -676,6 +690,12 @@ pub(crate) use write_priority_array;
 /// writes to that priority slot. Null relinquishes; otherwise `$extract`
 /// converts the value. Calls `recalculate_present_value()` after write.
 ///
+/// Index validation follows Clause 12.1.5.1: an out-of-range index is
+/// PROPERTY / INVALID_ARRAY_INDEX; an omitted index means whole-array
+/// access, and whole-array writes are not supported on commandable objects,
+/// so it is PROPERTY / WRITE_ACCESS_DENIED — a protocol error that the
+/// service layer can return as Result(-) (Clause 15.9.1.3).
+///
 /// Returns early with `Ok(())` or `Err(...)` if the property is PRIORITY_ARRAY.
 /// Falls through (does nothing) if the property is not PRIORITY_ARRAY.
 macro_rules! write_priority_array_direct {
@@ -684,11 +704,7 @@ macro_rules! write_priority_array_direct {
             let idx = match $array_index {
                 Some(n) if (1..=16).contains(&n) => (n - 1) as usize,
                 Some(_) => return Err($crate::common::invalid_array_index_error()),
-                None => {
-                    return Err(bacnet_types::error::Error::Encoding(
-                        "PRIORITY_ARRAY requires array_index (1-16)".into(),
-                    ))
-                }
+                None => return Err($crate::common::write_access_denied_error()),
             };
             match $value {
                 bacnet_types::primitives::PropertyValue::Null => {

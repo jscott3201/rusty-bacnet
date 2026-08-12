@@ -65,6 +65,67 @@ fn characterstring_value_priority_array() {
     assert_eq!(pv, PropertyValue::CharacterString("low".into()));
 }
 
+#[test]
+fn characterstring_value_priority_array_omitted_index_is_write_access_denied() {
+    // #266: an omitted array index means whole-array access (Clause 12.1.5.1);
+    // whole-array writes of PRIORITY_ARRAY are unsupported, so the object
+    // surfaces PROPERTY / WRITE_ACCESS_DENIED (a protocol error the service
+    // layer can return as Result(-) per Clause 15.9.1.3) rather than an
+    // unmappable Error::Encoding.
+    let mut obj = CharacterStringValueObject::new(1, "CSV-1").unwrap();
+    match obj
+        .write_property(
+            PropertyIdentifier::PRIORITY_ARRAY,
+            None,
+            PropertyValue::CharacterString("cmd".into()),
+            None,
+        )
+        .unwrap_err()
+    {
+        Error::Protocol { class, code } => {
+            assert_eq!(
+                class,
+                bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
+            );
+            assert_eq!(
+                code,
+                bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32
+            );
+        }
+        other => panic!("expected PROPERTY/WRITE_ACCESS_DENIED, got {other:?}"),
+    }
+
+    // In-range stays valid, and out-of-range stays INVALID_ARRAY_INDEX.
+    obj.write_property(
+        PropertyIdentifier::PRIORITY_ARRAY,
+        Some(3),
+        PropertyValue::CharacterString("cmd".into()),
+        None,
+    )
+    .unwrap();
+    match obj
+        .write_property(
+            PropertyIdentifier::PRIORITY_ARRAY,
+            Some(17),
+            PropertyValue::CharacterString("cmd".into()),
+            None,
+        )
+        .unwrap_err()
+    {
+        Error::Protocol { class, code } => {
+            assert_eq!(
+                class,
+                bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
+            );
+            assert_eq!(
+                code,
+                bacnet_types::enums::ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32
+            );
+        }
+        other => panic!("expected PROPERTY/INVALID_ARRAY_INDEX, got {other:?}"),
+    }
+}
+
 // -----------------------------------------------------------------------
 // OctetStringValueObject
 // -----------------------------------------------------------------------

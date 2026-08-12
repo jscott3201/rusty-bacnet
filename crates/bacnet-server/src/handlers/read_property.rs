@@ -18,34 +18,18 @@ pub fn handle_read_property(
         code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
     })?;
 
-    if request.property_array_index.is_some() {
-        let is_array_property = matches!(
-            request.property_identifier,
-            p if p == PropertyIdentifier::PRIORITY_ARRAY
-                || p == PropertyIdentifier::OBJECT_LIST
-                || p == PropertyIdentifier::PROPERTY_LIST
-                || p == PropertyIdentifier::WEEKLY_SCHEDULE
-                || p == PropertyIdentifier::EXCEPTION_SCHEDULE
-                || p == PropertyIdentifier::DATE_LIST
-                || p == PropertyIdentifier::LIST_OF_GROUP_MEMBERS
-                || p == PropertyIdentifier::RECIPIENT_LIST
-                || p == PropertyIdentifier::LOG_BUFFER
-                || p == PropertyIdentifier::STATE_TEXT
-                || p == PropertyIdentifier::ALARM_VALUES
-                || p == PropertyIdentifier::FAULT_VALUES
-                || p == PropertyIdentifier::EVENT_TIME_STAMPS
-                || p == PropertyIdentifier::EVENT_MESSAGE_TEXTS
-                || p == PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES
-                || p == PropertyIdentifier::DEVICE_ADDRESS_BINDING
-                || p == PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS
-                || p == PropertyIdentifier::TAGS
-        );
-        if !is_array_property {
-            return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32,
-            });
-        }
+    // Clause 15.5.1.3: an array index on a non-array property is rejected
+    // with PROPERTY / PROPERTY_IS_NOT_AN_ARRAY. The array/list decision
+    // belongs to the object (identifier-static whitelists cannot express the
+    // type-dependent identifiers, e.g. ALARM_VALUES), so the handler defers
+    // to the trait query.
+    if request.property_array_index.is_some()
+        && !object.is_array_property(request.property_identifier)
+    {
+        return Err(Error::Protocol {
+            class: ErrorClass::PROPERTY.to_raw() as u32,
+            code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32,
+        });
     }
 
     let value = object.read_property(request.property_identifier, request.property_array_index)?;
@@ -116,6 +100,23 @@ pub fn handle_read_property_multiple(
                         } else {
                             None
                         };
+                        // Same gate as ReadProperty (Clause 15.5.1.3): an
+                        // array index on a non-array property fails this
+                        // reference inline; sibling references still run.
+                        // ALL/REQUIRED/OPTIONAL expansions attach no index,
+                        // so they pass through untouched.
+                        if array_index.is_some() && !object.is_array_property(prop_id) {
+                            elements.push(ReadResultElement {
+                                property_identifier: prop_id,
+                                property_array_index: array_index,
+                                property_value: None,
+                                error: Some((
+                                    ErrorClass::PROPERTY,
+                                    ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+                                )),
+                            });
+                            continue;
+                        }
                         match object.read_property(prop_id, array_index) {
                             Ok(value) => {
                                 let mut value_buf = BytesMut::new();

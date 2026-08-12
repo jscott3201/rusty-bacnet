@@ -173,15 +173,14 @@ impl BACnetObject for NotificationClass {
             return Err(common::invalid_data_type_error());
         }
         if property == PropertyIdentifier::RECIPIENT_LIST {
-            // Indexed (array-element) writes: Clause 15.5 permits an array
-            // index only with array datatypes and Recipient_List is a
-            // BACnetLIST, not an array. Dev rejected indexed network writes
-            // with PROPERTY/INVALID_DATA_TYPE (the panel's baseline) — keep
-            // rejecting them instead of "replacing the list with the single
-            // written destination". Indexed-array Recipient_List semantics
-            // belong to the #260 family (Tranche K).
+            // Indexed (array-element) access: Recipient_List is a BACnetLIST
+            // (Table 12-24), not an array, so Clause 12.1.5.2 makes ReadRange
+            // the only positional access. The RP/RPM/WP/WPM handlers gate
+            // indexed access to PROPERTY / PROPERTY_IS_NOT_AN_ARRAY
+            // (Clause 15.5.1.3 / 15.9.1.3) via `is_array_property`; mirror
+            // the same classification here for direct object-layer calls.
             if array_index.is_some() {
-                return Err(common::invalid_data_type_error());
+                return Err(common::property_is_not_an_array_error());
             }
             self.recipient_list = match &value {
                 // Framed wire form (Clause 12.21 BACnetLIST of
