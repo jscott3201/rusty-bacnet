@@ -1,9 +1,9 @@
 {
   "standard": "ANSI/ASHRAE Standard 135-2020",
   "reviewed_at": "2026-08-12",
-  "repo_sha": "db070989ce6af0a1866d2f76b7923ab62bde338a",
-  "review_scope": "Clause 12.1.5 / 15.5.1.3 / 15.9.1.3 array-index gating tranche: a per-object `BACnetObject::is_array_property` classification replaces ReadProperty's identifier-static whitelist, all four object-access services (ReadProperty, ReadPropertyMultiple, WriteProperty, WritePropertyMultiple) reject an array index on a BACnetLIST property with PROPERTY / PROPERTY_IS_NOT_AN_ARRAY, indexed Notification Class Recipient_List access moved from the INVALID_DATA_TYPE stopgap to the same classification, and omitted-index Priority_Array writes surface PROPERTY / WRITE_ACCESS_DENIED instead of an unmappable Error::Encoding. Conventions unchanged: `repo_sha` names the tip of the PR branch `codex/array-index-gates` at the time of writing (the last code commit; this docs-refresh commit lands after it), matching how `265b2673` was recorded for the previous tranche.",
-  "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Clauses 12.1.5.1/12.1.5.2, the Clause 15.5.1.3/15.9.1.3 error tables, and the Clause 12 property tables cited in the new row and its notes. No external addenda/errata check was performed for this tranche; per-row scope is recorded in each row's notes.",
+  "repo_sha": "6fac224f69ebd6dfb8a5a05f6b7f8a515936c2af",
+  "review_scope": "Objects-layer write-path validation tranche (branch codex/write-path-validation; issues #252, #240, #255, #270): the Reliability write-path validity predicate derives from Reliability::ALL_NAMED plus the explicit 64..=65535 vendor range (#252); Loop, Schedule, and the nine intrinsic-reporting carriers gate in-service Reliability writes while Trend Log / Trend Log Multiple refuse them after their Clause 12 tables showed no writability grant (#240); Notify_Type writes validate against the three-value production and Event_Enable/Limit_Enable writes require the canonical fixed-width bit-string encoding (#255); and Relinquish_Default is network-writable and locally settable, with per-type validation, on the commandable object types (#270). Conventions unchanged: `repo_sha` names the last code commit of the PR branch (this docs-refresh commit lands after it), matching how the previous tranches recorded their reviewed SHA.",
+  "addenda_errata_status": "Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for the Clause 12.17 Loop table and footnotes (Table 12-20), the Clause 12.24/12.25 Schedule/Trend Log tables and Reliability_Evaluation_Inhibit texts, the Clause 12.30 Trend Log Multiple table, the Clause 21 BACnetNotifyType / BACnetEventTransitionBits / BACnetLimitEnable / BACnetReliability productions, the Clause 15.9.1.3 error table, and the Clause 12 commandable-type tables cited by the Relinquish_Default row (Tables 12-3, 12-8, 12-10, 12-22, 12-23, 12-30, 12-64, 12-69 and the Clause 12.41+ value object tables). No external addenda/errata check was performed for this tranche; per-row scope is recorded in each row's notes.",
   "status_taxonomy": [
     "in-progress",
     "implementation-present-needs-conformance-tests",
@@ -239,6 +239,75 @@
       "notes": "Split child of BACNET-12-OBJECT-MODEL. Evidence covers the modeled alternatives (change-of-bitstring/change-of-state/change-of-value/floating-limit/out-of-range/extended; all eight fault parameters) with golden vectors and round-trips, Opaque preservation of unmodeled alternatives (byte-for-byte for constructed forms; none [20] NULL decodes to Opaque{20, []} and re-encodes constructed), rejection of omitted/deprecated/reserved tags 6/7/12/19, rejection of trailing garbage after a framed element, property-state goldens, and the legacy flat + OctetString-to-Opaque write fallback retained per #129; unmodeled Opaques never reach the legacy little-endian evaluator. The framed property-state codec uses 135-2020 CHOICE tags which correct invented pre-2020 tags for door/timer/lift variants; the older BACnetNotificationParameters codec in bacnet-services still uses the old tags for those variants -- reconciling it is follow-up work with its own wire change (out of this row's scope)."
     },
     {
+      "id": "BACNET-12-OOS-RELIABILITY-WRITABILITY",
+      "standard_anchor": "Clause 12.17 Table 12-20 footnote 7 (Loop); Clause 12 Out_Of_Service property texts (12.2/12.3/12.4/12.6/12.7/12.8/12.19/12.21/12.22 families); Clause 12.24 Schedule Reliability_Evaluation_Inhibit text; Clause 12.25 Table 12-29 and Clause 12.30 Table 12-35 (Trend Log / Trend Log Multiple); Clause 21 BACnetReliability",
+      "priority": "P1",
+      "requirement_summary": "On object types carrying Out_Of_Service and Reliability, Reliability is network-writable exactly when Out_Of_Service is TRUE (the simulation grant quoted in each carrier's Out_Of_Service property text), and the written value is validated against the BACnetReliability production: the named set derived from Reliability::ALL_NAMED (enumerated 0..=25 with 11 reserved for a future addendum) plus the vendor-proprietary range 64..=65535, refusing anything else with PROPERTY / VALUE_OUT_OF_RANGE. In-service writes refuse PROPERTY / WRITE_ACCESS_DENIED (Clause 15.9.1.3 row: the property is currently not writable by the requestor). The evaluated value is saved on the FALSE-to-TRUE edge and restored on the TRUE-to-FALSE edge; the internal set_reliability_internal route carries the complementary ownership guard (refused while Out_Of_Service is TRUE). Trend Log and Trend Log Multiple, whose Reliability_Evaluation_Inhibit paragraphs end at 'shall have the value NO_FAULT_DETECTED.' without the out-of-service write provision, refuse all network Reliability writes.",
+      "status": "supported-with-clause-evidence",
+      "code_anchors": [
+        "crates/bacnet-objects/src/common.rs",
+        "crates/bacnet-objects/src/loop_obj.rs",
+        "crates/bacnet-objects/src/schedule/mod.rs",
+        "crates/bacnet-objects/src/trend/mod.rs",
+        "crates/bacnet-types/src/enums/object_level.rs"
+      ],
+      "positive_tests": [
+        "crates/bacnet-objects/src/reliability_writability_tests.rs::loop_reliability_requires_out_of_service",
+        "crates/bacnet-objects/src/reliability_writability_tests.rs::schedule_reliability_requires_out_of_service",
+        "crates/bacnet-objects/src/reliability_writability_tests.rs::reliability_predicate_tracks_all_named_plus_vendor_range",
+        "crates/bacnet-server/src/handlers/tests/write_validation.rs::loop_reliability_gate_holds_over_write_property",
+        "crates/bacnet-server/src/handlers/tests/write_validation.rs::schedule_reliability_gate_holds_over_write_property"
+      ],
+      "negative_tests": [
+        "crates/bacnet-objects/src/trend/tests.rs::trendlog_reliability_is_not_network_writable",
+        "crates/bacnet-objects/src/trend/tests.rs::trendlog_multiple_reliability_is_not_network_writable",
+        "crates/bacnet-server/src/handlers/tests/write_validation.rs::trend_log_reliability_write_is_denied_over_write_property",
+        "crates/bacnet-objects/src/reliability_writability_tests.rs::reliability_value_boundaries_match_asn1"
+      ],
+      "benchmarks": [],
+      "public_claims": [],
+      "notes": "Split child of BACNET-12-OBJECT-MODEL (#240, #252). The nine intrinsic-reporting carriers were proven by #218/#239; this tranche added Loop as the tenth reliability_gate_test! carrier and Schedule as the eleventh, extended the predicate from a restated literal to a derivation from Reliability::ALL_NAMED (exhaustive 0..=65536 equivalence sweep; the value past the enum ceiling flips to accepted exactly when its addendum constant lands), and ran the sweep over the remaining OOS+Reliability carriers per #240: Schedule's Reliability_Evaluation_Inhibit text anticipates the out-of-service client write ('...unless Out_Of_Service is TRUE and an alternate value has been written to the Reliability property') so the gate applies with an internal route reserved for its CONFIGURATION_ERROR evaluation; Trend Log (Reliability O, Table 12-29) and Trend Log Multiple (Reliability O, Table 12-35) carry no writability footnote and no simulation-write provision, so the previously-accepting Trend Log arm now refuses PROPERTY / WRITE_ACCESS_DENIED (behavior change) and Trend Log Multiple's default denial is pinned as deliberate. Loop and Schedule also gained is_writable_property overrides mirroring their write arms so the PICS and runtime dispatch share one truth source. Residue: carriers that never grew a write arm (Lighting Output family, elevator/access-zone family) deny by default; whether each one's Clause 12 Out_Of_Service text obliges the writability half of its footnote is untriaged and tracked separately from this gate."
+    },
+    {
+      "id": "BACNET-12-RELINQUISH-DEFAULT-WRITABILITY",
+      "standard_anchor": "Clause 12.3 Table 12-3 (Analog Output), Clause 12.7 Table 12-8 (Binary Output), Clause 12.8 Table 12-10 (Binary Value), Clause 12.19 Table 12-22 (Multi-state Output), Clause 12.20 Table 12-23 (Multi-state Value), Clause 12.26 Table 12-30 (Access Door), Clause 12.54 Table 12-64 (Lighting Output), Clause 12.55 Table 12-69 (Binary Lighting Output), Clause 12 value object tables; Clause 19 command prioritization",
+      "priority": "P1",
+      "requirement_summary": "Relinquish_Default is network-writable and locally settable on the commandable object types, where the conformance tables carry it R or O and writability is permitted, not required - this row records permitted writability implemented, not a conformance upgrade. Each arm routes through a validated local set_relinquish_default and re-resolves Present_Value from the priority array afterward, so an all-NULL array falls back to the new default immediately while a live command still outranks it. Validation mirrors the Present_Value path per type: finite Real (AO/AV), BinaryPV 0/1 (BO/BV), Unsigned 1..=Number_Of_States (MSO/MSV), finite Real in 0..=100 (Lighting Output), BinaryLightingPV 0..=4 (Binary Lighting Output), the modeled DoorValue set 0..=2 (Access Door), and per-type extraction bounds plus a finite check for the Large Analog Value (Double). The datetime-paired value types (DateTime Value, DateTime Pattern Value) stay network-read-only: their BACnetDateTime wire form needs multi-element decode the service layer does not have yet (follow-up #182), while the local setter exists uniformly.",
+      "status": "supported-with-clause-evidence",
+      "code_anchors": [
+        "crates/bacnet-objects/src/common.rs",
+        "crates/bacnet-objects/src/analog/output.rs",
+        "crates/bacnet-objects/src/analog/value.rs",
+        "crates/bacnet-objects/src/binary/output.rs",
+        "crates/bacnet-objects/src/binary/value.rs",
+        "crates/bacnet-objects/src/multistate/output.rs",
+        "crates/bacnet-objects/src/multistate/value.rs",
+        "crates/bacnet-objects/src/lighting/mod.rs",
+        "crates/bacnet-objects/src/access_control/door.rs",
+        "crates/bacnet-objects/src/value_types/mod.rs"
+      ],
+      "positive_tests": [
+        "crates/bacnet-server/src/handlers/tests/write_validation.rs::relinquish_default_write_recaptures_present_value_over_write_property",
+        "crates/bacnet-objects/src/analog/tests/output.rs::ao_relinquish_default_write_recaptures_present_value",
+        "crates/bacnet-objects/src/analog/tests/value.rs::av_relinquish_default_write_recaptures_present_value",
+        "crates/bacnet-objects/src/binary/tests/input_output.rs::bo_relinquish_default_write_recaptures_present_value",
+        "crates/bacnet-objects/src/binary/tests/value.rs::bv_relinquish_default_write_recaptures_present_value",
+        "crates/bacnet-objects/src/multistate/tests/relinquish_default.rs::mso_msv_relinquish_default_write_recaptures_present_value",
+        "crates/bacnet-objects/src/lighting/tests.rs::lighting_output_relinquish_default_write_recaptures_present_value",
+        "crates/bacnet-objects/src/lighting/tests.rs::binary_lighting_output_relinquish_default_write_recaptures_present_value",
+        "crates/bacnet-objects/src/access_control/tests.rs::access_door_relinquish_default_write_recaptures_present_value",
+        "crates/bacnet-objects/src/value_types/tests/numeric.rs::scalar_value_relinquish_default_write_recaptures_present_value",
+        "crates/bacnet-objects/src/value_types/tests/temporal.rs::date_value_relinquish_default_write_recaptures_present_value"
+      ],
+      "negative_tests": [
+        "crates/bacnet-objects/src/value_types/tests/temporal.rs::datetime_value_relinquish_default_is_not_network_writable",
+        "crates/bacnet-objects/src/multistate/tests/relinquish_default.rs::mso_relinquish_default_is_not_range_locked_after_store"
+      ],
+      "benchmarks": [],
+      "public_claims": [],
+      "notes": "Split child of BACNET-12-OBJECT-MODEL (#270). is_commandable_property_writable now advertises RELINQUISH_DEFAULT for the six core commandable types (its doc no longer claims universal read-only); Lighting Output, Binary Lighting Output, Access Door, and the define_value_object_commandable! macro gained is_writable_property overrides mirroring their write arms - the macro override also corrects the PRIORITY_ARRAY writability advertising for all twelve commandable value types (previously reported read-only by the historical default while the arm accepted writes). Invalid writes refuse with the Present_Value arm's pairings (VALUE_OUT_OF_RANGE for range/finiteness, INVALID_DATA_TYPE for a wrong BACnet datatype) and leave both Relinquish_Default and Present_Value untouched. Number_Of_States shrink interplay on MSO/MSV: Clause 12.19/12.22 leave stored-value adjustment a local matter and this implementation does not auto-adjust - pinned in a test comment, with CONFIGURATION_ERROR reporting for the condition tracked under #226. CURRENT_COMMAND_PRIORITY stays read-only (derived). The pre-existing unvalidated Present_Value arm on Access Door (any Enumerated accepted) is a separate defect noted for follow-up, as is the door property_list omitting PRIORITY_ARRAY/RELINQUISH_DEFAULT while both are readable."
+    },
+    {
       "id": "BACNET-13-COV-SUBSCRIPTIONS",
       "standard_anchor": "Clauses 13.14-13.18",
       "priority": "P1",
@@ -320,6 +389,38 @@
       "benchmarks": [],
       "public_claims": [],
       "notes": "Split child of BACNET-12-OBJECT-MODEL (#190, #260, #266). The gate is one query on the object (BACnetObject::is_array_property, default keyed by the Clause 12 object tables) so the classification cannot drift between services: identifier-stable BACnetARRAY properties modeled in-tree (OBJECT_LIST Table 12-13, PROPERTY_LIST, STATE_TEXT Tables 12-21/12-22/12-23, PRIORITY Table 12-24, WEEKLY_SCHEDULE/EXCEPTION_SCHEDULE Table 12-28, EVENT_TIME_STAMPS/EVENT_MESSAGE_TEXTS Table 12-2 family, PRIORITY_ARRAY, TAGS Annex Y, SUBORDINATE_LIST/SUBORDINATE_ANNOTATIONS Table 12-34, GROUP_MEMBERS/GROUP_MEMBER_NAMES Table 12-57, ACTION Table 12-12, STAGES/STAGE_NAMES/TARGET_REFERENCES Table 12-80) admit an index; identifier-stable BACnetLIST properties (DATE_LIST Table 12-11, LIST_OF_GROUP_MEMBERS Table 12-17, RECIPIENT_LIST Table 12-24, LOG_BUFFER Tables 12-29/12-31, DEVICE_ADDRESS_BINDING and ACTIVE_COV_SUBSCRIPTIONS Table 12-13) and all scalars reject it; the type-dependent identifiers classify by object type (ALARM_VALUES/FAULT_VALUES array on CharacterString/BitString Value per Tables 12-44/12-47 but list on the multi-state/life-safety/access families, LIST_OF_OBJECT_PROPERTY_REFERENCES array on Channel per Table 12-62 but list on Schedule/Timer per Tables 12-28/12-75, PRESENT_VALUE BACnetARRAY on Global Group per Table 12-57). Array-typed identifiers whose object types are not modeled in-tree (ACTION_TEXT, EVENT_MESSAGE_TEXTS_CONFIG, VALUE_SOURCE_ARRAY, ...) stay rejected until their object-side modeling lands, so coverage is complete for the modeled set rather than for every array in the standard. The RP whitelist that admitted six always-list identifiers is gone; RPM gates per reference with inline error elements while siblings succeed; WP gates before decode/mutation; WPM gates in the validation phase so the commit loop never starts (mixed valid+gated requests commit nothing, proven by test). Indexed Recipient_List reads and writes fail with the same gate classification — mirrored at the object layer for direct calls — replacing the tranche-J INVALID_DATA_TYPE stopgap. #266: omitted-index (whole-array, Clause 12.1.5.1) Priority_Array writes are PROPERTY / WRITE_ACCESS_DENIED (a mappable Result(-)) while indexes 0 and 17 stay INVALID_ARRAY_INDEX; pinned at both macro sites and over the network WP/WPM paths. Limitations: the gate controls index admissibility only — object-side element semantics for Global Group / Channel / Structured View / Command / Staging arrays still return whole values (#171-family residue), and CharacterString/BitString Value ALARM_VALUES/FAULT_VALUES are gate-classified as arrays but not yet modeled (an accepted index surfaces UNKNOWN_PROPERTY). Refs #171: its service-gating half landed; the TimeStamp CHOICE and element-datatype residue stays open."
+    },
+    {
+      "id": "BACNET-15-WP-EVENT-FIELD-VALIDATION",
+      "standard_anchor": "Clause 15.9.1.3 (WriteProperty error table) with Clause 21 BACnetNotifyType / BACnetEventTransitionBits / BACnetLimitEnable productions",
+      "priority": "P1",
+      "requirement_summary": "WriteProperty validation of the shared intrinsic-reporting event properties matches the Clause 15.9.1.3 error semantics: Notify_Type (BACnetNotifyType, a closed {alarm, event, ack-notification} production) refuses out-of-production values with PROPERTY / VALUE_OUT_OF_RANGE ('The value provided is outside the range of values that the property can take on'), and Event_Enable / Limit_Enable (BACnetEventTransitionBits = 3 bits, BACnetLimitEnable = 2 bits) require the canonical encoding of their fixed-width production - exactly one content octet with 8-N declared unused bits, the form the read path emits - refusing any other shape with PROPERTY / INVALID_DATA_ENCODING ('The encoding is not valid for the datatype of the property'). A previously-silent normalization of an over-long bit string (masking its first octet and dropping the declared count) is now a refusal, as is an empty content (previously INVALID_DATA_TYPE). Notify_Type membership derives from NotifyType::ALL_NAMED so a future addendum constant widens the gate without a second edit.",
+      "status": "supported-with-clause-evidence",
+      "code_anchors": [
+        "crates/bacnet-objects/src/common.rs",
+        "crates/bacnet-objects/src/event_enrollment/mod.rs"
+      ],
+      "positive_tests": [
+        "crates/bacnet-server/src/handlers/tests/write_validation.rs::analog_event_property_writes_are_validated_over_write_property",
+        "crates/bacnet-server/src/handlers/tests/write_validation.rs::binary_event_property_writes_are_validated_over_write_property",
+        "crates/bacnet-server/src/handlers/tests/write_validation.rs::multistate_event_property_writes_are_validated_over_write_property",
+        "crates/bacnet-server/src/handlers/tests/write_validation.rs::event_enrollment_writes_are_validated_over_write_property",
+        "crates/bacnet-objects/src/analog/tests/input.rs::ai_notify_type_rejects_out_of_production_values",
+        "crates/bacnet-objects/src/binary/tests/generic_event_properties.rs::bi_notify_type_rejects_out_of_production_values",
+        "crates/bacnet-objects/src/multistate/tests/generic_event_properties.rs::mso_notify_type_rejects_out_of_production_values",
+        "crates/bacnet-objects/src/event_enrollment/tests/enrollment.rs::ee_notify_type_rejects_out_of_production_values"
+      ],
+      "negative_tests": [
+        "crates/bacnet-objects/src/analog/tests/input.rs::ai_event_enable_rejects_noncanonical_bit_strings",
+        "crates/bacnet-objects/src/analog/tests/input.rs::ai_limit_enable_rejects_noncanonical_bit_strings",
+        "crates/bacnet-objects/src/binary/tests/generic_event_properties.rs::bi_event_enable_rejects_noncanonical_bit_strings",
+        "crates/bacnet-objects/src/multistate/tests/generic_event_properties.rs::mso_event_enable_rejects_noncanonical_bit_strings",
+        "crates/bacnet-objects/src/event_enrollment/tests/enrollment.rs::ee_event_enable_rejects_noncanonical_bit_strings",
+        "crates/bacnet-objects/src/event_enrollment/tests/enrollment.rs::alert_enrollment_event_enable_rejects_noncanonical_bit_strings"
+      ],
+      "benchmarks": [],
+      "public_claims": [],
+      "notes": "Split child of BACNET-12-OBJECT-MODEL (#255; behavior change - previously-accepted invalid writes now fail). The generic macro arms cover AI/AO/AV/BI/BO/BV/MSI/MSO/MSV, the analog macro arm adds Limit_Enable, and the EventEnrollment and AlertEnrollment objects carry their own arms with identical validation. A shared objects-layer helper (common::check_fixed_width_bit_string) shapes the PROPERTY-class error; the decoding-layer sibling in bacnet-encoding is intentionally not reused across layers. Covered shapes: out-of-production Notify_Type (3, 99, u32::MAX), an 8-bit string where the production defines fewer bits, extra or missing content octets, a half-octet string, and - for Limit_Enable - the valid Event_Enable 3-bit shape, which must not cross-apply. Related unaddressed family: the Notification Class recipient-list decoder still masks transition/day bit strings without consulting declared counts - noted as a follow-up rather than folded into this tranche."
     },
     {
       "id": "BACNET-20-ENCODING",

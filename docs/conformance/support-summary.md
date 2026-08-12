@@ -4,16 +4,16 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-08-12
-- Implementation evidence SHA reviewed: `db070989ce6af0a1866d2f76b7923ab62bde338a`
-- Scope: Clause 12.1.5 / 15.5.1.3 / 15.9.1.3 array-index gating tranche: a per-object `BACnetObject::is_array_property` classification replaces ReadProperty's identifier-static whitelist, all four object-access services (ReadProperty, ReadPropertyMultiple, WriteProperty, WritePropertyMultiple) reject an array index on a BACnetLIST property with PROPERTY / PROPERTY_IS_NOT_AN_ARRAY, indexed Notification Class Recipient_List access moved from the INVALID_DATA_TYPE stopgap to the same classification, and omitted-index Priority_Array writes surface PROPERTY / WRITE_ACCESS_DENIED instead of an unmappable Error::Encoding. Conventions unchanged: `repo_sha` names the tip of the PR branch `codex/array-index-gates` at the time of writing (the last code commit; this docs-refresh commit lands after it), matching how `265b2673` was recorded for the previous tranche.
-- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for Clauses 12.1.5.1/12.1.5.2, the Clause 15.5.1.3/15.9.1.3 error tables, and the Clause 12 property tables cited in the new row and its notes. No external addenda/errata check was performed for this tranche; per-row scope is recorded in each row's notes.
+- Implementation evidence SHA reviewed: `6fac224f69ebd6dfb8a5a05f6b7f8a515936c2af`
+- Scope: Objects-layer write-path validation tranche (branch codex/write-path-validation; issues #252, #240, #255, #270): the Reliability write-path validity predicate derives from Reliability::ALL_NAMED plus the explicit 64..=65535 vendor range (#252); Loop, Schedule, and the nine intrinsic-reporting carriers gate in-service Reliability writes while Trend Log / Trend Log Multiple refuse them after their Clause 12 tables showed no writability grant (#240); Notify_Type writes validate against the three-value production and Event_Enable/Limit_Enable writes require the canonical fixed-width bit-string encoding (#255); and Relinquish_Default is network-writable and locally settable, with per-type validation, on the commandable object types (#270). Conventions unchanged: `repo_sha` names the last code commit of the PR branch (this docs-refresh commit lands after it), matching how the previous tranches recorded their reviewed SHA.
+- Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` was reviewed for the Clause 12.17 Loop table and footnotes (Table 12-20), the Clause 12.24/12.25 Schedule/Trend Log tables and Reliability_Evaluation_Inhibit texts, the Clause 12.30 Trend Log Multiple table, the Clause 21 BACnetNotifyType / BACnetEventTransitionBits / BACnetLimitEnable / BACnetReliability productions, the Clause 15.9.1.3 error table, and the Clause 12 commandable-type tables cited by the Relinquish_Default row (Tables 12-3, 12-8, 12-10, 12-22, 12-23, 12-30, 12-64, 12-69 and the Clause 12.41+ value object tables). No external addenda/errata check was performed for this tranche; per-row scope is recorded in each row's notes.
 
 ## Counts
 
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 15 |
-| Priority | P1 | 15 |
+| Priority | P1 | 18 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
@@ -26,7 +26,7 @@
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
 | Status | in-progress | 3 |
-| Status | supported-with-clause-evidence | 5 |
+| Status | supported-with-clause-evidence | 8 |
 | Status | unknown-pending-source-review | 4 |
 
 ## Ledger Rows
@@ -47,8 +47,11 @@
 | `BACNET-12-OBJECT-MODEL` | Clauses 12-19 | P1 | implementation-present-needs-conformance-tests | 3 |
 | `BACNET-12-RECIPIENT-LIST-FRAMING` | Clause 12.21, Clause 21 | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-12-EVENT-PARAMETERS-FRAMING` | Clause 12.12, Clause 21 | P1 | supported-with-clause-evidence | 1 |
+| `BACNET-12-OOS-RELIABILITY-WRITABILITY` | Clause 12.17 Table 12-20 footnote 7 (Loop); Clause 12 Out_Of_Service property texts (12.2/12.3/12.4/12.6/12.7/12.8/12.19/12.21/12.22 families); Clause 12.24 Schedule Reliability_Evaluation_Inhibit text; Clause 12.25 Table 12-29 and Clause 12.30 Table 12-35 (Trend Log / Trend Log Multiple); Clause 21 BACnetReliability | P1 | supported-with-clause-evidence | 0 |
+| `BACNET-12-RELINQUISH-DEFAULT-WRITABILITY` | Clause 12.3 Table 12-3 (Analog Output), Clause 12.7 Table 12-8 (Binary Output), Clause 12.8 Table 12-10 (Binary Value), Clause 12.19 Table 12-22 (Multi-state Output), Clause 12.20 Table 12-23 (Multi-state Value), Clause 12.26 Table 12-30 (Access Door), Clause 12.54 Table 12-64 (Lighting Output), Clause 12.55 Table 12-69 (Binary Lighting Output), Clause 12 value object tables; Clause 19 command prioritization | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-13-COV-SUBSCRIPTIONS` | Clauses 13.14-13.18 | P1 | implementation-present-needs-conformance-tests | 0 |
 | `BACNET-15-ARRAY-INDEX-GATING` | Clause 15.5.1.3, Clause 15.9.1.3 (with Clause 12.1.5) | P1 | supported-with-clause-evidence | 0 |
+| `BACNET-15-WP-EVENT-FIELD-VALIDATION` | Clause 15.9.1.3 (WriteProperty error table) with Clause 21 BACnetNotifyType / BACnetEventTransitionBits / BACnetLimitEnable productions | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-20-ENCODING` | Clause 20 | P1 | implementation-present-needs-negative-tests | 2 |
 | `BACNET-21-FORMAL-APDUS` | Clause 21 | P1 | implementation-present-needs-conformance-tests | 2 |
 | `BACNET-21-TIMESTAMP-CHOICE` | Clause 21 (BACnetTimeStamp), Clause 20.2.1.5 | P1 | supported-with-clause-evidence | 1 |
