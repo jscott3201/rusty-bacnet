@@ -145,6 +145,42 @@ fn reliability_multi_state_out_of_range() {
     );
 }
 
+/// 135-2020 Clause 21 (`BACnetLifeSafetyState ::= ENUMERATED`) runs through
+/// test-oeo-unaffected (34): the eleven values past test-supervisory (23)
+/// must exist without renumbering anything below them.
+#[test]
+fn life_safety_state_tail_values_match_clause_21() {
+    // Existing numbering is untouched.
+    assert_eq!(LifeSafetyState::TEST_SUPERVISORY.to_raw(), 23);
+    let tail = [
+        (LifeSafetyState::NON_DEFAULT_MODE, 24),
+        (LifeSafetyState::OEO_UNAVAILABLE, 25),
+        (LifeSafetyState::OEO_ALARM, 26),
+        (LifeSafetyState::OEO_PHASE1_RECALL, 27),
+        (LifeSafetyState::OEO_EVACUATE, 28),
+        (LifeSafetyState::OEO_UNAFFECTED, 29),
+        (LifeSafetyState::TEST_OEO_UNAVAILABLE, 30),
+        (LifeSafetyState::TEST_OEO_ALARM, 31),
+        (LifeSafetyState::TEST_OEO_PHASE1_RECALL, 32),
+        (LifeSafetyState::TEST_OEO_EVACUATE, 33),
+        (LifeSafetyState::TEST_OEO_UNAFFECTED, 34),
+    ];
+    for (state, raw) in tail {
+        assert_eq!(state.to_raw(), raw);
+        assert_eq!(LifeSafetyState::from_raw(raw), state);
+        assert_eq!(LifeSafetyState::ALL_NAMED[raw as usize].1, state);
+    }
+    assert_eq!(LifeSafetyState::ALL_NAMED.len(), 35);
+    assert_eq!(
+        format!("{}", LifeSafetyState::OEO_PHASE1_RECALL),
+        "OEO_PHASE1_RECALL"
+    );
+    assert_eq!(
+        format!("{}", LifeSafetyState::TEST_OEO_UNAFFECTED),
+        "TEST_OEO_UNAFFECTED"
+    );
+}
+
 #[test]
 fn backup_and_restore_state_failure_values() {
     // A device reporting either failure state during a Clause 19.1
