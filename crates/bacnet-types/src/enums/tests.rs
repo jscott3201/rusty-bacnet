@@ -204,6 +204,44 @@ fn escalator_operation_direction_values_match_clause_21() {
     }
 }
 
+/// 135-2020 Clause 21 (`BACnetBinaryLightingPV ::= ENUMERATED`): the set is
+/// off/on/warn/warn-off/warn-relinquish/stop. There is no "fade-on" value —
+/// 4 is warn-relinquish and 5 is stop — and both reserved-value comments and
+/// object-code caps that assumed otherwise were wrong.
+#[test]
+fn binary_lighting_pv_values_match_clause_21() {
+    let all = [
+        ("OFF", 0),
+        ("ON", 1),
+        ("WARN", 2),
+        ("WARN_OFF", 3),
+        ("WARN_RELINQUISH", 4),
+        ("STOP", 5),
+    ];
+    assert_eq!(BinaryLightingPV::ALL_NAMED.len(), all.len());
+    for (i, &(name, raw)) in all.iter().enumerate() {
+        let (named_name, value) = BinaryLightingPV::ALL_NAMED[i];
+        assert_eq!(named_name, name);
+        assert_eq!(value.to_raw(), raw);
+        assert_eq!(BinaryLightingPV::from_raw(raw), value);
+        assert_eq!(format!("{value}"), name);
+    }
+}
+
+/// 135-2020 Clause 21 (`BACnetLightingTransition ::= ENUMERATED`).
+#[test]
+fn lighting_transition_values_match_clause_21() {
+    let all = [("NONE", 0), ("FADE", 1), ("RAMP", 2)];
+    assert_eq!(LightingTransition::ALL_NAMED.len(), all.len());
+    for (i, &(name, raw)) in all.iter().enumerate() {
+        let (named_name, value) = LightingTransition::ALL_NAMED[i];
+        assert_eq!(named_name, name);
+        assert_eq!(value.to_raw(), raw);
+        assert_eq!(LightingTransition::from_raw(raw), value);
+        assert_eq!(format!("{value}"), name);
+    }
+}
+
 #[test]
 fn backup_and_restore_state_failure_values() {
     // A device reporting either failure state during a Clause 19.1

@@ -1,6 +1,18 @@
 // ===========================================================================
-// Lighting enums (Clause 12.54)
+// Lighting enums (Clause 12.54, 12.55)
 // ===========================================================================
+
+bacnet_enum! {
+    /// BACnet binary lighting present value (Clause 21).
+    pub struct BinaryLightingPV(u32);
+
+    const OFF = 0;
+    const ON = 1;
+    const WARN = 2;
+    const WARN_OFF = 3;
+    const WARN_RELINQUISH = 4;
+    const STOP = 5;
+}
 
 bacnet_enum! {
     /// BACnet lighting operation (Clause 12.54).
@@ -28,4 +40,13 @@ bacnet_enum! {
     const RAMP_ACTIVE = 2;
     const NOT_CONTROLLED = 3;
     const OTHER = 4;
+}
+
+bacnet_enum! {
+    /// BACnet lighting transition kind (Clause 21).
+    pub struct LightingTransition(u32);
+
+    const NONE = 0;
+    const FADE = 1;
+    const RAMP = 2;
 }

@@ -362,7 +362,7 @@ fn binary_lighting_output_priority_array_direct_write() {
     obj.write_property(
         PropertyIdentifier::PRIORITY_ARRAY,
         Some(3),
-        PropertyValue::Enumerated(4), // fade-on
+        PropertyValue::Enumerated(4), // warn-relinquish
         None,
     )
     .unwrap();
@@ -594,14 +594,15 @@ fn binary_lighting_output_relinquish_default_write_recaptures_present_value() {
     }
 }
 
-/// Binary Lighting Output: `Enumerated(5)` is past the BinaryLightingPV set
-/// (Table 12-69 types Relinquish_Default as BACnetBinaryLightingPV); the
-/// refuse carries PROPERTY / VALUE_OUT_OF_RANGE and the stored default is
-/// byte-identical afterward.
+/// Binary Lighting Output: `Enumerated(5)` is `stop` — inside the Clause 21
+/// BinaryLightingPV production (Table 12-69 types Relinquish_Default that
+/// way) but past the 0..=4 domain this object accepts; the refuse carries
+/// PROPERTY / VALUE_OUT_OF_RANGE and the stored default is byte-identical
+/// afterward.
 #[test]
 fn blo_relinquish_default_rejects_values_past_binary_lighting_pv() {
     let mut blo = BinaryLightingOutputObject::new(1, "BLO-1").unwrap();
-    blo.set_relinquish_default(4).unwrap(); // fade-on: the production ceiling
+    blo.set_relinquish_default(4).unwrap(); // warn-relinquish: the accepted-write ceiling
 
     for value in [
         PropertyValue::Enumerated(5),
