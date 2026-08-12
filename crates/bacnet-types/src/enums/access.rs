@@ -151,7 +151,8 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
-    /// BACnet authentication status for Credential Data Input (Clause 21).
+    /// BACnet authentication status: the Access Point object's
+    /// Authentication_Status property (Table 12-36; Clause 21 production).
     pub struct AuthenticationStatus(u32);
 
     const NOT_READY = 0;
