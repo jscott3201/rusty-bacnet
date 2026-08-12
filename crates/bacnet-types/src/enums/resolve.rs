@@ -73,14 +73,17 @@ resolved_enum! {
     BinaryPV(BinaryPV),
     ProgramState(ProgramState),
     ProgramChange(ProgramChange),
+    ProgramError(ProgramError),
     NodeType(NodeType),
     LoggingType(LoggingType),
     FileAccessMethod(FileAccessMethod),
     BackupAndRestoreState(BackupAndRestoreState),
+    RestartReason(RestartReason),
     LifeSafetyMode(LifeSafetyMode),
     LifeSafetyState(LifeSafetyState),
     LifeSafetyOperation(LifeSafetyOperation),
     SilencedState(SilencedState),
+    Maintenance(Maintenance),
     DoorStatus(DoorStatus),
     DoorAlarmState(DoorAlarmState),
     DoorSecuredStatus(DoorSecuredStatus),
@@ -91,18 +94,24 @@ resolved_enum! {
     AccessUserType(AccessUserType),
     AccessCredentialDisable(AccessCredentialDisable),
     AccessCredentialDisableReason(AccessCredentialDisableReason),
+    AuthenticationStatus(AuthenticationStatus),
+    AuthorizationExemption(AuthorizationExemption),
+    AccessZoneOccupancyState(AccessZoneOccupancyState),
+    Relationship(Relationship),
     NetworkType(NetworkType),
     NetworkNumberQuality(NetworkNumberQuality),
     IPMode(IPMode),
     NetworkPortCommand(NetworkPortCommand),
     ProtocolLevel(ProtocolLevel),
     LightingInProgress(LightingInProgress),
+    LightingTransition(LightingTransition),
     TimerState(TimerState),
     TimerTransition(TimerTransition),
     WriteStatus(WriteStatus),
     LiftCarMode(LiftCarMode),
     LiftGroupMode(LiftGroupMode),
     EscalatorMode(EscalatorMode),
+    EscalatorOperationDirection(EscalatorOperationDirection),
     LiftCarDriveStatus(LiftCarDriveStatus),
     LiftCarDirection(LiftCarDirection),
     LiftCarDoorCommand(LiftCarDoorCommand),
@@ -142,10 +151,12 @@ impl ResolvedEnum {
             6 => Self::BinaryPV(BinaryPV::from_raw(value)),
             92 => Self::ProgramState(ProgramState::from_raw(value)), // program-state
             90 => Self::ProgramChange(ProgramChange::from_raw(value)), // program-change
+            100 => Self::ProgramError(ProgramError::from_raw(value)), // reason-for-halt
             208 => Self::NodeType(NodeType::from_raw(value)),        // node-type
             197 => Self::LoggingType(LoggingType::from_raw(value)),  // logging-type
             41 => Self::FileAccessMethod(FileAccessMethod::from_raw(value)), // file-access-method
             338 => Self::BackupAndRestoreState(BackupAndRestoreState::from_raw(value)), // backup-and-restore-state
+            196 => Self::RestartReason(RestartReason::from_raw(value)), // last-restart-reason
 
             // Life safety.
             160 | 175 => Self::LifeSafetyMode(LifeSafetyMode::from_raw(value)), // mode / accepted-modes
@@ -154,6 +165,9 @@ impl ResolvedEnum {
             164 => Self::LifeSafetyState(LifeSafetyState::from_raw(value)),
             161 => Self::LifeSafetyOperation(LifeSafetyOperation::from_raw(value)), // operation-expected
             163 => Self::SilencedState(SilencedState::from_raw(value)),             // silenced
+            // maintenance-required: BACnetMaintenance on life safety
+            // point/zone (12.15/12.16) and access door (12.26).
+            158 => Self::Maintenance(Maintenance::from_raw(value)),
 
             // Access door.
             231 => Self::DoorStatus(DoorStatus::from_raw(value)), // door-status
@@ -170,6 +184,11 @@ impl ResolvedEnum {
             303 => {
                 Self::AccessCredentialDisableReason(AccessCredentialDisableReason::from_raw(value))
             } // reason-for-disable
+            260 => Self::AuthenticationStatus(AuthenticationStatus::from_raw(value)), // authentication-status
+            296 => Self::AccessZoneOccupancyState(AccessZoneOccupancyState::from_raw(value)), // occupancy-state
+            // authorization-exemptions is BACnetLIST of the exemption type;
+            // resolve_value recurses into list elements with the same arm.
+            364 => Self::AuthorizationExemption(AuthorizationExemption::from_raw(value)),
 
             // Network port.
             427 => Self::NetworkType(NetworkType::from_raw(value)), // network-type
@@ -178,8 +197,16 @@ impl ResolvedEnum {
             417 => Self::NetworkPortCommand(NetworkPortCommand::from_raw(value)), // command
             482 => Self::ProtocolLevel(ProtocolLevel::from_raw(value)), // protocol-level
 
+            // Structured view (12.29): subordinate-relationships is
+            // BACnetARRAY[N] of BACnetRelationship (resolve_value recurses
+            // into elements); default-subordinate-relationship is the scalar
+            // companion. Represents (491) is BACnetDeviceObjectReference, so
+            // it has no enumerating arm here.
+            489 | 490 => Self::Relationship(Relationship::from_raw(value)),
+
             // Lighting / timer / channel.
             378 => Self::LightingInProgress(LightingInProgress::from_raw(value)), // in-progress
+            385 => Self::LightingTransition(LightingTransition::from_raw(value)), // transition
             398 => Self::TimerState(TimerState::from_raw(value)),                 // timer-state
             395 => Self::TimerTransition(TimerTransition::from_raw(value)), // last-state-change
             370 => Self::WriteStatus(WriteStatus::from_raw(value)),         // write-status
@@ -188,6 +215,7 @@ impl ResolvedEnum {
             456 => Self::LiftCarMode(LiftCarMode::from_raw(value)), // car-mode
             467 => Self::LiftGroupMode(LiftGroupMode::from_raw(value)), // group-mode
             462 => Self::EscalatorMode(EscalatorMode::from_raw(value)), // escalator-mode
+            477 => Self::EscalatorOperationDirection(EscalatorOperationDirection::from_raw(value)), // operation-direction
             453 => Self::LiftCarDriveStatus(LiftCarDriveStatus::from_raw(value)), // car-drive-status
             448 | 457 => Self::LiftCarDirection(LiftCarDirection::from_raw(value)), // car-assigned/moving-direction
             449 => Self::LiftCarDoorCommand(LiftCarDoorCommand::from_raw(value)), // car-door-command

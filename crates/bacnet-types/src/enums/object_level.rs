@@ -174,7 +174,10 @@ bacnet_enum! {
     const COMMAND_FAILURE = 3;
     const FLOATING_LIMIT = 4;
     const OUT_OF_RANGE = 5;
-    // 6-7: reserved
+    // 6: kept clear for proprietary event types — the parameters ride the
+    //    complex-event-type CHOICE [6] of BACnetNotificationParameters, so
+    //    the enumeration itself assigns no tag-6 enumerand (Clause 21).
+    // 7: context tag 7 is deprecated (Clause 21 production comment).
     const CHANGE_OF_LIFE_SAFETY = 8;
     const EXTENDED = 9;
     const BUFFER_READY = 10;
