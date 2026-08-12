@@ -2,7 +2,7 @@
 //! properties (Clause 21 production): Loop `Controlled_Variable_Reference`,
 //! `Manipulated_Variable_Reference`, `Setpoint_Reference` (Clause 12.17, the
 //! last as the optional member of `BACnetSetpointReference`) and Pulse
-//! Converter `Input_Reference` (Clause 12.10).
+//! Converter `Input_Reference` (Clause 12.23).
 //!
 //! Three input shapes are accepted, and nothing else:
 //!

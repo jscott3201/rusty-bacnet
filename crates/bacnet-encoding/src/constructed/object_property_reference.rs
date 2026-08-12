@@ -1,6 +1,6 @@
 //! `BACnetObjectPropertyReference` and its `BACnetSetpointReference` wrapper
 //! (ASHRAE 135-2020 Clause 21) — wire codecs for the object-reference
-//! properties of the Loop (Clause 12.17) and Pulse Converter (Clause 12.10)
+//! properties of the Loop (Clause 12.17) and Pulse Converter (Clause 12.23)
 //! objects.
 //!
 //! ```text

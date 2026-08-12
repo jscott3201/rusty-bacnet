@@ -359,7 +359,7 @@ impl BACnetObject for PulseConverterObject {
                     Err(common::invalid_data_type_error())
                 }
             }
-            // Clause 12.10 Input_Reference (BACnetObjectPropertyReference):
+            // Clause 12.23 Input_Reference (BACnetObjectPropertyReference):
             // shared arm decode — legacy local List and framed network forms.
             p if p == PropertyIdentifier::INPUT_REFERENCE => {
                 self.input_reference = crate::reference::decode_reference_write(

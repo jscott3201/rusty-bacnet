@@ -94,7 +94,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Network-writable structured reference properties: Loop
   `Controlled_Variable_Reference` / `Manipulated_Variable_Reference` /
   `Setpoint_Reference` (Clause 12.17) and Pulse Converter `Input_Reference`
-  (Clause 12.10) accept their Clause 21 wire forms through a new strict
+  (Clause 12.23) accept their Clause 21 wire forms through a new strict
   `BACnetObjectPropertyReference` codec in bacnet-encoding
   (`constructed::object_property_reference`: bare `[0]`/`[1]`/`[2]`
   context-tagged members with full consumption, device-qualifying member

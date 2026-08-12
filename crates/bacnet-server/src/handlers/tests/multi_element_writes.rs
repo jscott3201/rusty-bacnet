@@ -259,7 +259,7 @@ fn empty_property_value_is_refused() {
 
 // ---------------------------------------------------------------------------
 // Structured reference properties (#182): the Loop references (Clause 12.17)
-// and Pulse Converter Input_Reference (Clause 12.10) are
+// and Pulse Converter Input_Reference (Clause 12.23) are
 // BACnetObjectPropertyReference — primitive context-tagged members [0]/[1]/[2]
 // that the generic decode hands to the arm as `ApplicationData` element(s).
 // ---------------------------------------------------------------------------
