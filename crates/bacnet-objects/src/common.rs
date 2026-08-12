@@ -291,6 +291,45 @@ pub(crate) fn value_out_of_range_error() -> bacnet_types::error::Error {
     )
 }
 
+/// Return the invalid-data-encoding protocol error.
+///
+/// Clause 15.9.1.3: "The encoding is not valid for the datatype of the
+/// property" — the value is of the right BACnet datatype but its declared
+/// shape does not match the property's production.
+#[inline]
+pub(crate) fn invalid_data_encoding_error() -> bacnet_types::error::Error {
+    protocol_error(
+        bacnet_types::enums::ErrorClass::PROPERTY,
+        bacnet_types::enums::ErrorCode::INVALID_DATA_ENCODING,
+    )
+}
+
+/// Validate a wire `BitString` value against a fixed-width bit-string
+/// production and return its single content octet (MSB-first).
+///
+/// A production with `named_bits` defined bits (e.g.
+/// BACnetEventTransitionBits = 3, BACnetLimitEnable = 2, Clause 21) has
+/// exactly one canonical shape: one content octet carrying the bits in its
+/// high positions with `8 - named_bits` declared unused — the same form the
+/// read path emits. A write declaring any other shape (full-octet bit string,
+/// extra content octets, no content, a different unused-bit count) is refused
+/// PROPERTY / INVALID_DATA_ENCODING rather than silently masked and
+/// normalized. Objects-layer sibling of the decoding-layer checks in
+/// `bacnet-encoding` (e.g. `check_fixed_bit_string`); kept here because this
+/// layer reports protocol errors, not decoding errors.
+#[inline]
+pub(crate) fn check_fixed_width_bit_string(
+    unused_bits: u8,
+    data: &[u8],
+    named_bits: u8,
+) -> Result<u8, bacnet_types::error::Error> {
+    if data.len() == 1 && unused_bits == 8 - named_bits {
+        Ok(data[0])
+    } else {
+        Err(invalid_data_encoding_error())
+    }
+}
+
 /// Return whether a raw BACnetReliability value is defined by ASHRAE or lies
 /// in the vendor-proprietary range.
 ///
@@ -539,13 +578,18 @@ macro_rules! write_analog_event_properties {
                 }
             }
             p if p == bacnet_types::enums::PropertyIdentifier::LIMIT_ENABLE => {
-                if let bacnet_types::primitives::PropertyValue::BitString { data, .. } = &$value {
-                    if let Some(&byte) = data.first() {
-                        $self.event_detector.limit_enable =
-                            $crate::event::LimitEnable::from_bits(byte);
-                        Some(Ok(()))
-                    } else {
-                        Some(Err($crate::common::invalid_data_type_error()))
+                // BACnetLimitEnable is a 2-bit production (Clause 21): the
+                // written BitString must declare its canonical shape.
+                if let bacnet_types::primitives::PropertyValue::BitString { unused_bits, data } =
+                    &$value
+                {
+                    match $crate::common::check_fixed_width_bit_string(*unused_bits, data, 2) {
+                        Ok(byte) => {
+                            $self.event_detector.limit_enable =
+                                $crate::event::LimitEnable::from_bits(byte);
+                            Some(Ok(()))
+                        }
+                        Err(e) => Some(Err(e)),
                     }
                 } else {
                     Some(Err($crate::common::invalid_data_type_error()))
@@ -562,13 +606,18 @@ macro_rules! write_generic_event_properties {
     ($self:expr, $property:expr, $value:expr) => {
         match $property {
             p if p == bacnet_types::enums::PropertyIdentifier::EVENT_ENABLE => {
-                if let bacnet_types::primitives::PropertyValue::BitString { data, .. } = &$value {
-                    if let Some(&byte) = data.first() {
-                        $self.event_detector.event_enable =
-                            bacnet_types::bitstring::unpack_octet(&[byte], 3);
-                        Some(Ok(()))
-                    } else {
-                        Some(Err($crate::common::invalid_data_type_error()))
+                // BACnetEventTransitionBits is a 3-bit production (Clause 21):
+                // the written BitString must declare its canonical shape.
+                if let bacnet_types::primitives::PropertyValue::BitString { unused_bits, data } =
+                    &$value
+                {
+                    match $crate::common::check_fixed_width_bit_string(*unused_bits, data, 3) {
+                        Ok(byte) => {
+                            $self.event_detector.event_enable =
+                                bacnet_types::bitstring::unpack_octet(&[byte], 3);
+                            Some(Ok(()))
+                        }
+                        Err(e) => Some(Err(e)),
                     }
                 } else {
                     Some(Err($crate::common::invalid_data_type_error()))
@@ -588,9 +637,20 @@ macro_rules! write_generic_event_properties {
                 }
             }
             p if p == bacnet_types::enums::PropertyIdentifier::NOTIFY_TYPE => {
+                // BACnetNotifyType is a closed three-value production
+                // {alarm, event, ack-notification} (Clause 21); membership is
+                // derived from NotifyType::ALL_NAMED so a future addendum
+                // constant widens the gate without a second edit.
                 if let bacnet_types::primitives::PropertyValue::Enumerated(v) = $value {
-                    $self.event_detector.notify_type = v;
-                    Some(Ok(()))
+                    let named = bacnet_types::enums::NotifyType::ALL_NAMED
+                        .iter()
+                        .any(|&(_, n)| n.to_raw() == v);
+                    if !named {
+                        Some(Err($crate::common::value_out_of_range_error()))
+                    } else {
+                        $self.event_detector.notify_type = v;
+                        Some(Ok(()))
+                    }
                 } else {
                     Some(Err($crate::common::invalid_data_type_error()))
                 }

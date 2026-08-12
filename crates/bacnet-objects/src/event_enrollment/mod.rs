@@ -234,7 +234,16 @@ impl BACnetObject for EventEnrollmentObject {
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         if property == PropertyIdentifier::NOTIFY_TYPE {
+            // BACnetNotifyType is a closed three-value production {alarm,
+            // event, ack-notification} (Clause 21); out-of-production values
+            // are PROPERTY / VALUE_OUT_OF_RANGE (Clause 15.9.1.3).
             if let PropertyValue::Enumerated(v) = value {
+                let named = bacnet_types::enums::NotifyType::ALL_NAMED
+                    .iter()
+                    .any(|&(_, n)| n.to_raw() == v);
+                if !named {
+                    return Err(common::value_out_of_range_error());
+                }
                 self.notify_type = v;
                 return Ok(());
             }
@@ -248,12 +257,12 @@ impl BACnetObject for EventEnrollmentObject {
             return Err(common::invalid_data_type_error());
         }
         if property == PropertyIdentifier::EVENT_ENABLE {
-            if let PropertyValue::BitString { data, .. } = &value {
-                if let Some(&byte) = data.first() {
-                    self.event_enable = bacnet_types::bitstring::unpack_octet(&[byte], 3);
-                    return Ok(());
-                }
-                return Err(common::invalid_data_type_error());
+            // BACnetEventTransitionBits is a 3-bit production (Clause 21):
+            // the written BitString must declare its canonical shape.
+            if let PropertyValue::BitString { unused_bits, data } = &value {
+                let byte = common::check_fixed_width_bit_string(*unused_bits, data, 3)?;
+                self.event_enable = bacnet_types::bitstring::unpack_octet(&[byte], 3);
+                return Ok(());
             }
             return Err(common::invalid_data_type_error());
         }
@@ -523,12 +532,12 @@ impl BACnetObject for AlertEnrollmentObject {
             return Err(common::invalid_data_type_error());
         }
         if property == PropertyIdentifier::EVENT_ENABLE {
-            if let PropertyValue::BitString { data, .. } = &value {
-                if let Some(&byte) = data.first() {
-                    self.event_enable = bacnet_types::bitstring::unpack_octet(&[byte], 3);
-                    return Ok(());
-                }
-                return Err(common::invalid_data_type_error());
+            // BACnetEventTransitionBits is a 3-bit production (Clause 21):
+            // the written BitString must declare its canonical shape.
+            if let PropertyValue::BitString { unused_bits, data } = &value {
+                let byte = common::check_fixed_width_bit_string(*unused_bits, data, 3)?;
+                self.event_enable = bacnet_types::bitstring::unpack_octet(&[byte], 3);
+                return Ok(());
             }
             return Err(common::invalid_data_type_error());
         }

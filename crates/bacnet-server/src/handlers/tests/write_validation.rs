@@ -9,7 +9,11 @@
 //! property's datatype is PROPERTY / INVALID_DATA_ENCODING.
 
 use super::*;
+use bacnet_objects::analog::AnalogInputObject;
+use bacnet_objects::binary::BinaryValueObject;
+use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::loop_obj::LoopObject;
+use bacnet_objects::multistate::MultiStateOutputObject;
 use bacnet_objects::schedule::ScheduleObject;
 use bacnet_objects::trend::TrendLogObject;
 
@@ -208,4 +212,161 @@ fn trend_log_reliability_write_is_denied_over_write_property() {
         PropertyValue::Enumerated(0),
         "TL out-of-service Reliability",
     );
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// #255 — Notify_Type rejects values outside the three-value production;
+// Event_Enable / Limit_Enable reject a BitString whose declared shape does
+// not match its fixed-width production.
+// ──────────────────────────────────────────────────────────────────────────
+
+/// BACnetNotifyType is a closed production {alarm(0), event(1),
+/// ack-notification(2)} (Clause 21): an out-of-production write is
+/// PROPERTY / VALUE_OUT_OF_RANGE per Clause 15.9.1.3.
+fn assert_notify_type_validated(
+    db: &mut ObjectDatabase,
+    target_oid: ObjectIdentifier,
+    baseline: PropertyValue,
+    context: &str,
+) {
+    for out_of_production in [3u32, 99, u32::MAX] {
+        assert_refused(
+            db,
+            target_oid,
+            PropertyIdentifier::NOTIFY_TYPE,
+            PropertyValue::Enumerated(out_of_production),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+            baseline.clone(),
+            &format!("{context} Notify_Type={out_of_production}"),
+        );
+    }
+    for in_production in [0u32, 1, 2] {
+        write_wire(
+            db,
+            target_oid,
+            PropertyIdentifier::NOTIFY_TYPE,
+            PropertyValue::Enumerated(in_production),
+        )
+        .expect("named Notify_Type values must be accepted");
+    }
+}
+
+/// A fixed N-bit production has exactly one canonical encoding: one content
+/// octet whose high N bits are content (8-N unused). Any other shape is
+/// PROPERTY / INVALID_DATA_ENCODING per Clause 15.9.1.3.
+fn assert_event_enable_validated(
+    db: &mut ObjectDatabase,
+    target_oid: ObjectIdentifier,
+    context: &str,
+) {
+    let baseline = read_wire(db, target_oid, PropertyIdentifier::EVENT_ENABLE);
+    for (unused_bits, data, label) in [
+        (0u8, vec![0xFFu8], "8-bit string where 3 are defined"),
+        (5u8, vec![0xFFu8, 0xFF], "two content octets"),
+        (4u8, vec![0xF0u8], "half-octet string"),
+        (5u8, vec![], "no content octet"),
+    ] {
+        assert_refused(
+            db,
+            target_oid,
+            PropertyIdentifier::EVENT_ENABLE,
+            PropertyValue::BitString { unused_bits, data },
+            ErrorCode::INVALID_DATA_ENCODING,
+            baseline.clone(),
+            &format!("{context} Event_Enable {label}"),
+        );
+    }
+
+    // The canonical full-width encoding stays accepted.
+    write_wire(
+        db,
+        target_oid,
+        PropertyIdentifier::EVENT_ENABLE,
+        PropertyValue::BitString {
+            unused_bits: 5,
+            data: vec![0xA0], // to-offnormal + to-normal, MSB-first
+        },
+    )
+    .expect("canonical 3-bit encoding must be accepted");
+    assert_eq!(
+        read_wire(db, target_oid, PropertyIdentifier::EVENT_ENABLE),
+        PropertyValue::BitString {
+            unused_bits: 5,
+            data: vec![0xA0],
+        },
+        "{context}: accepted Event_Enable must read back"
+    );
+}
+
+#[test]
+fn analog_event_property_writes_are_validated_over_write_property() {
+    let mut db = ObjectDatabase::new();
+    let ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let ai_oid = ai.object_identifier();
+    db.add(Box::new(ai)).unwrap();
+
+    assert_notify_type_validated(&mut db, ai_oid, PropertyValue::Enumerated(0), "AI");
+    assert_event_enable_validated(&mut db, ai_oid, "AI");
+
+    // Limit_Enable is a 2-bit production (BACnetLimitEnable): unused_bits must
+    // be 6; the 3-bit Event_Enable shape must not be accepted here.
+    let baseline = read_wire(&mut db, ai_oid, PropertyIdentifier::LIMIT_ENABLE);
+    for (unused_bits, data, label) in [
+        (0u8, vec![0xFFu8], "8-bit string where 2 are defined"),
+        (5u8, vec![0xE0u8], "Event_Enable's 3-bit shape"),
+        (6u8, vec![0xC0u8, 0x00], "extra content octet"),
+    ] {
+        assert_refused(
+            &mut db,
+            ai_oid,
+            PropertyIdentifier::LIMIT_ENABLE,
+            PropertyValue::BitString { unused_bits, data },
+            ErrorCode::INVALID_DATA_ENCODING,
+            baseline.clone(),
+            &format!("AI Limit_Enable {label}"),
+        );
+    }
+    write_wire(
+        &mut db,
+        ai_oid,
+        PropertyIdentifier::LIMIT_ENABLE,
+        PropertyValue::BitString {
+            unused_bits: 6,
+            data: vec![0xC0], // both limits enabled, MSB-first
+        },
+    )
+    .expect("canonical 2-bit encoding must be accepted");
+}
+
+#[test]
+fn binary_event_property_writes_are_validated_over_write_property() {
+    let mut db = ObjectDatabase::new();
+    let bv = BinaryValueObject::new(1, "BV-1").unwrap();
+    let bv_oid = bv.object_identifier();
+    db.add(Box::new(bv)).unwrap();
+
+    assert_notify_type_validated(&mut db, bv_oid, PropertyValue::Enumerated(0), "BV");
+    assert_event_enable_validated(&mut db, bv_oid, "BV");
+}
+
+#[test]
+fn multistate_event_property_writes_are_validated_over_write_property() {
+    let mut db = ObjectDatabase::new();
+    let mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
+    let mso_oid = mso.object_identifier();
+    db.add(Box::new(mso)).unwrap();
+
+    assert_notify_type_validated(&mut db, mso_oid, PropertyValue::Enumerated(0), "MSO");
+    assert_event_enable_validated(&mut db, mso_oid, "MSO");
+}
+
+#[test]
+fn event_enrollment_writes_are_validated_over_write_property() {
+    let mut db = ObjectDatabase::new();
+    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let ee_oid = ee.object_identifier();
+    db.add(Box::new(ee)).unwrap();
+
+    assert_notify_type_validated(&mut db, ee_oid, PropertyValue::Enumerated(0), "EE");
+    assert_event_enable_validated(&mut db, ee_oid, "EE");
 }

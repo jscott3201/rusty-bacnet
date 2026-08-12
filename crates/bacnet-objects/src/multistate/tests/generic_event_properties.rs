@@ -525,3 +525,107 @@ fn recommissioning_alarm_values_while_offnormal_returns_to_normal() {
     assert_eq!(returned.change.from, EventState::OFFNORMAL);
     assert_eq!(returned.change.to, EventState::NORMAL);
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// #255 — Notify_Type production validation and Event_Enable bit-string
+// width validation on the shared write macro.
+// ──────────────────────────────────────────────────────────────────────────
+
+/// BACnetNotifyType is a closed {alarm(0), event(1), ack-notification(2)}
+/// production (Clause 21). An out-of-production write is PROPERTY /
+/// VALUE_OUT_OF_RANGE (Clause 15.9.1.3: "The value provided is outside the
+/// range of values that the property can take on") and leaves the stored
+/// value untouched.
+#[test]
+fn mso_notify_type_rejects_out_of_production_values() {
+    let mut mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
+    assert_eq!(
+        mso.read_property(PropertyIdentifier::NOTIFY_TYPE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(0)
+    );
+
+    for out_of_production in [3u32, 99, u32::MAX] {
+        assert_property_error(
+            mso.write_property(
+                PropertyIdentifier::NOTIFY_TYPE,
+                None,
+                PropertyValue::Enumerated(out_of_production),
+                None,
+            ),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        );
+        assert_eq!(
+            mso.read_property(PropertyIdentifier::NOTIFY_TYPE, None)
+                .unwrap(),
+            PropertyValue::Enumerated(0),
+            "a refused Notify_Type write must leave the value untouched ({out_of_production})"
+        );
+    }
+    for in_production in [0u32, 1, 2] {
+        mso.write_property(
+            PropertyIdentifier::NOTIFY_TYPE,
+            None,
+            PropertyValue::Enumerated(in_production),
+            None,
+        )
+        .expect("named Notify_Type values must be accepted");
+    }
+}
+
+/// BACnetEventTransitionBits is a 3-bit production (Clause 21); its canonical
+/// encoding is one content octet with 5 unused bits, which is what the read
+/// path emits. A write declaring any other shape is PROPERTY /
+/// INVALID_DATA_ENCODING (Clause 15.9.1.3: "The encoding is not valid for the
+/// datatype of the property") — including an 8-bit string that would
+/// previously have been silently masked to three bits.
+#[test]
+fn mso_event_enable_rejects_noncanonical_bit_strings() {
+    let mut mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
+    let canonical = mso
+        .read_property(PropertyIdentifier::EVENT_ENABLE, None)
+        .unwrap();
+
+    for (unused_bits, data) in [
+        (0u8, vec![0xFFu8]),     // 8-bit string where the production defines 3
+        (5u8, vec![0xFF, 0xFF]), // two content octets
+        (4u8, vec![0xF0u8]),     // half-octet string
+        (5u8, vec![]),           // no content octet
+    ] {
+        assert_property_error(
+            mso.write_property(
+                PropertyIdentifier::EVENT_ENABLE,
+                None,
+                PropertyValue::BitString { unused_bits, data },
+                None,
+            ),
+            ErrorCode::INVALID_DATA_ENCODING,
+        );
+        assert_eq!(
+            mso.read_property(PropertyIdentifier::EVENT_ENABLE, None)
+                .unwrap(),
+            canonical,
+            "a refused Event_Enable write must leave the value untouched"
+        );
+    }
+
+    // The canonical full-width shape stays accepted.
+    mso.write_property(
+        PropertyIdentifier::EVENT_ENABLE,
+        None,
+        PropertyValue::BitString {
+            unused_bits: 5,
+            data: vec![0xA0], // to-offnormal + to-normal, MSB-first
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        mso.read_property(PropertyIdentifier::EVENT_ENABLE, None)
+            .unwrap(),
+        PropertyValue::BitString {
+            unused_bits: 5,
+            data: vec![0xA0],
+        }
+    );
+}

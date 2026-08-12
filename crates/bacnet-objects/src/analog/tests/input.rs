@@ -339,3 +339,173 @@ fn ai_is_writable_property_mirrors_write_property() {
     assert!(!ai.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
     assert!(!ai.is_writable_property(PropertyIdentifier::RELINQUISH_DEFAULT));
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// #255 — Notify_Type production validation and Event_Enable / Limit_Enable
+// bit-string width validation on the shared write macros.
+// ──────────────────────────────────────────────────────────────────────────
+
+fn assert_property_error_code(result: Result<(), Error>, code: bacnet_types::enums::ErrorCode) {
+    match result.unwrap_err() {
+        Error::Protocol {
+            class,
+            code: actual,
+        } => {
+            assert_eq!(
+                class,
+                bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
+            );
+            assert_eq!(actual, code.to_raw() as u32);
+        }
+        other => panic!("expected protocol error, got {other:?}"),
+    }
+}
+
+/// BACnetNotifyType is a closed {alarm(0), event(1), ack-notification(2)}
+/// production (Clause 21). An out-of-production write is PROPERTY /
+/// VALUE_OUT_OF_RANGE (Clause 15.9.1.3) and leaves the stored value untouched.
+#[test]
+fn ai_notify_type_rejects_out_of_production_values() {
+    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    assert_eq!(
+        ai.read_property(PropertyIdentifier::NOTIFY_TYPE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(0)
+    );
+
+    for out_of_production in [3u32, 99, u32::MAX] {
+        assert_property_error_code(
+            ai.write_property(
+                PropertyIdentifier::NOTIFY_TYPE,
+                None,
+                PropertyValue::Enumerated(out_of_production),
+                None,
+            ),
+            bacnet_types::enums::ErrorCode::VALUE_OUT_OF_RANGE,
+        );
+        assert_eq!(
+            ai.read_property(PropertyIdentifier::NOTIFY_TYPE, None)
+                .unwrap(),
+            PropertyValue::Enumerated(0),
+            "a refused Notify_Type write must leave the value untouched ({out_of_production})"
+        );
+    }
+    for in_production in [0u32, 1, 2] {
+        ai.write_property(
+            PropertyIdentifier::NOTIFY_TYPE,
+            None,
+            PropertyValue::Enumerated(in_production),
+            None,
+        )
+        .expect("named Notify_Type values must be accepted");
+    }
+}
+
+/// BACnetEventTransitionBits is a 3-bit production (Clause 21); its canonical
+/// encoding is one content octet with 5 unused bits. A write declaring any
+/// other shape is PROPERTY / INVALID_DATA_ENCODING (Clause 15.9.1.3), not a
+/// value to mask and normalize.
+#[test]
+fn ai_event_enable_rejects_noncanonical_bit_strings() {
+    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let canonical = ai
+        .read_property(PropertyIdentifier::EVENT_ENABLE, None)
+        .unwrap();
+
+    for (unused_bits, data) in [
+        (0u8, vec![0xFFu8]),     // 8-bit string where the production defines 3
+        (5u8, vec![0xFF, 0xFF]), // two content octets
+        (4u8, vec![0xF0u8]),     // half-octet string
+        (5u8, vec![]),           // no content octet
+    ] {
+        assert_property_error_code(
+            ai.write_property(
+                PropertyIdentifier::EVENT_ENABLE,
+                None,
+                PropertyValue::BitString { unused_bits, data },
+                None,
+            ),
+            bacnet_types::enums::ErrorCode::INVALID_DATA_ENCODING,
+        );
+        assert_eq!(
+            ai.read_property(PropertyIdentifier::EVENT_ENABLE, None)
+                .unwrap(),
+            canonical,
+            "a refused Event_Enable write must leave the value untouched"
+        );
+    }
+
+    // The canonical full-width shape stays accepted.
+    ai.write_property(
+        PropertyIdentifier::EVENT_ENABLE,
+        None,
+        PropertyValue::BitString {
+            unused_bits: 5,
+            data: vec![0xA0], // to-offnormal + to-normal, MSB-first
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        ai.read_property(PropertyIdentifier::EVENT_ENABLE, None)
+            .unwrap(),
+        PropertyValue::BitString {
+            unused_bits: 5,
+            data: vec![0xA0],
+        }
+    );
+}
+
+/// BACnetLimitEnable is a 2-bit production (Clause 21): its canonical encoding
+/// declares 6 unused bits, so even Event_Enable's valid 3-bit shape must be
+/// refused here as PROPERTY / INVALID_DATA_ENCODING.
+#[test]
+fn ai_limit_enable_rejects_noncanonical_bit_strings() {
+    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let canonical = ai
+        .read_property(PropertyIdentifier::LIMIT_ENABLE, None)
+        .unwrap();
+
+    for (unused_bits, data) in [
+        (0u8, vec![0xFFu8]),     // 8-bit string where the production defines 2
+        (5u8, vec![0xE0u8]),     // Event_Enable's 3-bit shape must not pass
+        (6u8, vec![0xC0, 0x00]), // extra content octet
+        (6u8, vec![]),           // no content octet
+    ] {
+        assert_property_error_code(
+            ai.write_property(
+                PropertyIdentifier::LIMIT_ENABLE,
+                None,
+                PropertyValue::BitString { unused_bits, data },
+                None,
+            ),
+            bacnet_types::enums::ErrorCode::INVALID_DATA_ENCODING,
+        );
+        assert_eq!(
+            ai.read_property(PropertyIdentifier::LIMIT_ENABLE, None)
+                .unwrap(),
+            canonical,
+            "a refused Limit_Enable write must leave the value untouched"
+        );
+    }
+
+    // The canonical 2-bit shape stays accepted and lands MSB-first.
+    ai.write_property(
+        PropertyIdentifier::LIMIT_ENABLE,
+        None,
+        PropertyValue::BitString {
+            unused_bits: 6,
+            data: vec![0xC0], // both limits enabled
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        ai.read_property(PropertyIdentifier::LIMIT_ENABLE, None)
+            .unwrap(),
+        PropertyValue::BitString {
+            unused_bits: 6,
+            data: vec![LimitEnable::BOTH.to_bits()],
+        }
+    );
+}

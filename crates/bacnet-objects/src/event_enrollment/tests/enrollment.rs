@@ -529,3 +529,151 @@ fn write_unknown_property_denied() {
 }
 
 // -----------------------------------------------------------------------
+// ──────────────────────────────────────────────────────────────────────────
+// #255 — Notify_Type production validation and Event_Enable bit-string
+// width validation on the enrollment objects' own write arms.
+// ──────────────────────────────────────────────────────────────────────────
+
+use bacnet_types::enums::{ErrorClass, ErrorCode};
+
+/// BACnetNotifyType is a closed {alarm(0), event(1), ack-notification(2)}
+/// production (Clause 21). An out-of-production write is PROPERTY /
+/// VALUE_OUT_OF_RANGE (Clause 15.9.1.3) and leaves the stored value untouched.
+#[test]
+fn ee_notify_type_rejects_out_of_production_values() {
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    assert_eq!(
+        ee.read_property(PropertyIdentifier::NOTIFY_TYPE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(0)
+    );
+
+    for out_of_production in [3u32, 99, u32::MAX] {
+        match ee
+            .write_property(
+                PropertyIdentifier::NOTIFY_TYPE,
+                None,
+                PropertyValue::Enumerated(out_of_production),
+                None,
+            )
+            .expect_err("an out-of-production Notify_Type write must be refused")
+        {
+            Error::Protocol { class, code } => {
+                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+                assert_eq!(code, ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32);
+            }
+            other => panic!("expected PROPERTY / VALUE_OUT_OF_RANGE, got {other:?}"),
+        }
+        assert_eq!(
+            ee.read_property(PropertyIdentifier::NOTIFY_TYPE, None)
+                .unwrap(),
+            PropertyValue::Enumerated(0),
+            "a refused Notify_Type write must leave the value untouched ({out_of_production})"
+        );
+    }
+    for in_production in [0u32, 1, 2] {
+        ee.write_property(
+            PropertyIdentifier::NOTIFY_TYPE,
+            None,
+            PropertyValue::Enumerated(in_production),
+            None,
+        )
+        .expect("named Notify_Type values must be accepted");
+    }
+}
+
+/// BACnetEventTransitionBits is a 3-bit production (Clause 21); its canonical
+/// encoding is one content octet with 5 unused bits. A write declaring any
+/// other shape is PROPERTY / INVALID_DATA_ENCODING (Clause 15.9.1.3), not a
+/// value to mask and normalize.
+#[test]
+fn ee_event_enable_rejects_noncanonical_bit_strings() {
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let canonical = ee
+        .read_property(PropertyIdentifier::EVENT_ENABLE, None)
+        .unwrap();
+
+    for (unused_bits, data) in [
+        (0u8, vec![0xFFu8]),     // 8-bit string where the production defines 3
+        (5u8, vec![0xFF, 0xFF]), // two content octets
+        (4u8, vec![0xF0u8]),     // half-octet string
+        (5u8, vec![]),           // no content octet
+    ] {
+        match ee
+            .write_property(
+                PropertyIdentifier::EVENT_ENABLE,
+                None,
+                PropertyValue::BitString { unused_bits, data },
+                None,
+            )
+            .expect_err("a noncanonical Event_Enable shape must be refused")
+        {
+            Error::Protocol { class, code } => {
+                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+                assert_eq!(code, ErrorCode::INVALID_DATA_ENCODING.to_raw() as u32);
+            }
+            other => panic!("expected PROPERTY / INVALID_DATA_ENCODING, got {other:?}"),
+        }
+        assert_eq!(
+            ee.read_property(PropertyIdentifier::EVENT_ENABLE, None)
+                .unwrap(),
+            canonical,
+            "a refused Event_Enable write must leave the value untouched"
+        );
+    }
+
+    // The canonical full-width shape stays accepted.
+    ee.write_property(
+        PropertyIdentifier::EVENT_ENABLE,
+        None,
+        PropertyValue::BitString {
+            unused_bits: 5,
+            data: vec![0xA0], // to-offnormal + to-normal, MSB-first
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        ee.read_property(PropertyIdentifier::EVENT_ENABLE, None)
+            .unwrap(),
+        PropertyValue::BitString {
+            unused_bits: 5,
+            data: vec![0xA0],
+        }
+    );
+}
+
+/// AlertEnrollment shares the family defect by way of its own EVENT_ENABLE
+/// arm; it honors the same 3-bit production, so it enforces the same shape.
+#[test]
+fn alert_enrollment_event_enable_rejects_noncanonical_bit_strings() {
+    let mut ae = AlertEnrollmentObject::new(1, "AE-1").unwrap();
+    let canonical = ae
+        .read_property(PropertyIdentifier::EVENT_ENABLE, None)
+        .unwrap();
+
+    match ae
+        .write_property(
+            PropertyIdentifier::EVENT_ENABLE,
+            None,
+            PropertyValue::BitString {
+                unused_bits: 0,
+                data: vec![0xFF],
+            },
+            None,
+        )
+        .expect_err("an 8-bit string must be refused where 3 bits are defined")
+    {
+        Error::Protocol { class, code } => {
+            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+            assert_eq!(code, ErrorCode::INVALID_DATA_ENCODING.to_raw() as u32);
+        }
+        other => panic!("expected PROPERTY / INVALID_DATA_ENCODING, got {other:?}"),
+    }
+    assert_eq!(
+        ae.read_property(PropertyIdentifier::EVENT_ENABLE, None)
+            .unwrap(),
+        canonical,
+        "a refused Event_Enable write must leave the value untouched"
+    );
+}
