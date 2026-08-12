@@ -54,6 +54,16 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
+    /// BACnet door command for Access Door present values (Clause 21).
+    pub struct DoorValue(u32);
+
+    const LOCK = 0;
+    const UNLOCK = 1;
+    const PULSE_UNLOCK = 2;
+    const EXTENDED_PULSE_UNLOCK = 3;
+}
+
+bacnet_enum! {
     /// BACnet access event (Clause 12.33).
     pub struct AccessEvent(u32);
 
@@ -141,6 +151,19 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
+    /// BACnet authentication status for Credential Data Input (Clause 21).
+    pub struct AuthenticationStatus(u32);
+
+    const NOT_READY = 0;
+    const READY = 1;
+    const DISABLED = 2;
+    const WAITING_FOR_AUTHENTICATION_FACTOR = 3;
+    const WAITING_FOR_ACCOMPANIMENT = 4;
+    const WAITING_FOR_VERIFICATION = 5;
+    const IN_PROGRESS = 6;
+}
+
+bacnet_enum! {
     /// BACnet access user type (Clause 12.35).
     pub struct AccessUserType(u32);
 
@@ -162,10 +185,36 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
+    /// BACnet authorization check a credential is exempt from (Clause 21).
+    pub struct AuthorizationExemption(u32);
+
+    const PASSBACK = 0;
+    const OCCUPANCY_CHECK = 1;
+    const ACCESS_RIGHTS = 2;
+    const LOCKOUT = 3;
+    const DENY = 4;
+    const VERIFICATION = 5;
+    const AUTHORIZATION_DELAY = 6;
+}
+
+bacnet_enum! {
     /// BACnet access passback mode (Clause 12.32).
     pub struct AccessPassbackMode(u32);
 
     const PASSBACK_OFF = 0;
     const HARD_PASSBACK = 1;
     const SOFT_PASSBACK = 2;
+}
+
+bacnet_enum! {
+    /// BACnet access zone occupancy state (Clause 21).
+    pub struct AccessZoneOccupancyState(u32);
+
+    const NORMAL = 0;
+    const BELOW_LOWER_LIMIT = 1;
+    const AT_LOWER_LIMIT = 2;
+    const AT_UPPER_LIMIT = 3;
+    const ABOVE_UPPER_LIMIT = 4;
+    const DISABLED = 5;
+    const NOT_SUPPORTED = 6;
 }

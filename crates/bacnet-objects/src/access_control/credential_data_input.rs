@@ -11,7 +11,7 @@ pub struct CredentialDataInputObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    present_value: u32,              // AuthenticationStatus: 0=notReady, 1=waiting
+    present_value: u32,              // AuthenticationStatus: 0=not-ready, 1=ready
     update_time: ([u8; 4], [u8; 4]), // (Date, Time) as raw bytes
     supported_formats: Vec<u64>,
     supported_format_classes: Vec<u64>,

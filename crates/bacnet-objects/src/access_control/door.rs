@@ -54,13 +54,13 @@ impl AccessDoorObject {
     ///
     /// Table 12-30 types both Present_Value and Relinquish_Default as
     /// BACnetDoorValue, whose Clause 21 production is a closed set of four:
-    /// lock(0), unlock(1), pulse-unlock(2), extended-pulse-unlock(3) — so the
-    /// valid domain is 0..=3, matching what the priority-slot Present_Value
-    /// arm accepts for value 3. After the store, Present_Value is resolved
-    /// anew from the priority array so an empty array falls back to the new
-    /// default immediately.
+    /// the accepted domain is `DoorValue::LOCK..=DoorValue::EXTENDED_PULSE_UNLOCK`
+    /// (0..=3), matching what the priority-slot Present_Value arm accepts
+    /// for value 3. After the store, Present_Value is resolved anew from the
+    /// priority array so an empty array falls back to the new default
+    /// immediately.
     pub fn set_relinquish_default(&mut self, value: u32) -> Result<(), Error> {
-        if value > 3 {
+        if value > DoorValue::EXTENDED_PULSE_UNLOCK.to_raw() {
             return Err(common::value_out_of_range_error());
         }
         self.relinquish_default = value;

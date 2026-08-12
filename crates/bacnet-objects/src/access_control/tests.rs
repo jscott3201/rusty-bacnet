@@ -552,7 +552,8 @@ fn access_door_relinquish_default_write_recaptures_present_value() {
 
     // Every named BACnetDoorValue is accepted, including
     // extended-pulse-unlock (3) — matching the priority-slot PV arm.
-    for named in [0u32, 2, 3] {
+    for &(_, value) in DoorValue::ALL_NAMED {
+        let named = value.to_raw();
         door.write_property(
             PropertyIdentifier::RELINQUISH_DEFAULT,
             None,

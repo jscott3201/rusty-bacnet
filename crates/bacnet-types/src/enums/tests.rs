@@ -242,6 +242,93 @@ fn lighting_transition_values_match_clause_21() {
     }
 }
 
+/// 135-2020 Clause 21 (`BACnetDoorValue ::= ENUMERATED`): a closed set of
+/// four, exactly matching the domain Access Door writes validate against.
+#[test]
+fn door_value_values_match_clause_21() {
+    let all = [
+        ("LOCK", 0),
+        ("UNLOCK", 1),
+        ("PULSE_UNLOCK", 2),
+        ("EXTENDED_PULSE_UNLOCK", 3),
+    ];
+    assert_eq!(DoorValue::ALL_NAMED.len(), all.len());
+    for (i, &(name, raw)) in all.iter().enumerate() {
+        let (named_name, value) = DoorValue::ALL_NAMED[i];
+        assert_eq!(named_name, name);
+        assert_eq!(value.to_raw(), raw);
+        assert_eq!(DoorValue::from_raw(raw), value);
+        assert_eq!(format!("{value}"), name);
+    }
+}
+
+/// 135-2020 Clause 21 (`BACnetAuthenticationStatus ::= ENUMERATED`): 1 is
+/// ready, *not* "waiting" — the wait-for-* states start at 3.
+#[test]
+fn authentication_status_values_match_clause_21() {
+    let all = [
+        ("NOT_READY", 0),
+        ("READY", 1),
+        ("DISABLED", 2),
+        ("WAITING_FOR_AUTHENTICATION_FACTOR", 3),
+        ("WAITING_FOR_ACCOMPANIMENT", 4),
+        ("WAITING_FOR_VERIFICATION", 5),
+        ("IN_PROGRESS", 6),
+    ];
+    assert_eq!(AuthenticationStatus::ALL_NAMED.len(), all.len());
+    for (i, &(name, raw)) in all.iter().enumerate() {
+        let (named_name, value) = AuthenticationStatus::ALL_NAMED[i];
+        assert_eq!(named_name, name);
+        assert_eq!(value.to_raw(), raw);
+        assert_eq!(AuthenticationStatus::from_raw(raw), value);
+        assert_eq!(format!("{value}"), name);
+    }
+}
+
+/// 135-2020 Clause 21 (`BACnetAuthorizationExemption ::= ENUMERATED`).
+#[test]
+fn authorization_exemption_values_match_clause_21() {
+    let all = [
+        ("PASSBACK", 0),
+        ("OCCUPANCY_CHECK", 1),
+        ("ACCESS_RIGHTS", 2),
+        ("LOCKOUT", 3),
+        ("DENY", 4),
+        ("VERIFICATION", 5),
+        ("AUTHORIZATION_DELAY", 6),
+    ];
+    assert_eq!(AuthorizationExemption::ALL_NAMED.len(), all.len());
+    for (i, &(name, raw)) in all.iter().enumerate() {
+        let (named_name, value) = AuthorizationExemption::ALL_NAMED[i];
+        assert_eq!(named_name, name);
+        assert_eq!(value.to_raw(), raw);
+        assert_eq!(AuthorizationExemption::from_raw(raw), value);
+        assert_eq!(format!("{value}"), name);
+    }
+}
+
+/// 135-2020 Clause 21 (`BACnetAccessZoneOccupancyState ::= ENUMERATED`).
+#[test]
+fn access_zone_occupancy_state_values_match_clause_21() {
+    let all = [
+        ("NORMAL", 0),
+        ("BELOW_LOWER_LIMIT", 1),
+        ("AT_LOWER_LIMIT", 2),
+        ("AT_UPPER_LIMIT", 3),
+        ("ABOVE_UPPER_LIMIT", 4),
+        ("DISABLED", 5),
+        ("NOT_SUPPORTED", 6),
+    ];
+    assert_eq!(AccessZoneOccupancyState::ALL_NAMED.len(), all.len());
+    for (i, &(name, raw)) in all.iter().enumerate() {
+        let (named_name, value) = AccessZoneOccupancyState::ALL_NAMED[i];
+        assert_eq!(named_name, name);
+        assert_eq!(value.to_raw(), raw);
+        assert_eq!(AccessZoneOccupancyState::from_raw(raw), value);
+        assert_eq!(format!("{value}"), name);
+    }
+}
+
 #[test]
 fn backup_and_restore_state_failure_values() {
     // A device reporting either failure state during a Clause 19.1
