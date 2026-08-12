@@ -286,6 +286,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Breaking (wire format):** `FileAccessMethod`'s enumeration values were
+  swapped: the stack defined `STREAM_ACCESS = 0` / `RECORD_ACCESS = 1`, but
+  the Clause 21 production is `record-access (0), stream-access (1)` (#273,
+  Tranche Q audit). Every File object in a running server therefore
+  reported the *other* access method in `File_Access_Method` — a
+  stream-backed object read back as record-access and vice versa — and
+  `ResolvedEnum` mislabeled both values for clients. The constants are now
+  `RECORD_ACCESS = 0` / `STREAM_ACCESS = 1`; the `bacnet-objects` File
+  object stops restating the numbers as literals and derives them from the
+  enum. Consumer audit: no compensating swaps existed elsewhere — the
+  service layer (`bacnet-services::file::{FileAccessMethod,
+  FileWriteAccessMethod}`) selects stream vs record by the
+  AtomicReadFile/AtomicWriteFile access-method CHOICE tags (`[0]`/`[1]`),
+  Clause 21 ASN.1 productions for the Clause 14.1/14.2 services, so those
+  bytes are unchanged; server handlers, clients, and the CLI pass them
+  through. **Migration:** any peer, configuration, or stored record that
+  persisted the raw property value must be remapped (old 0 → 1, old 1 →
+  0); reads of `File_Access_Method` by value and
+  `FileAccessMethod::from_raw` consumers must switch to the corrected
+  assignments.
+
+- **Breaking (API):** `DoorAlarmState::LOCK_FAULT` is renamed
+  `DoorAlarmState::LOCK_DOWN`: the Clause 21 `BACnetDoorAlarmState`
+  production names value 6 `lock-down` and has no `lock-fault` member
+  (#274, Tranche Q audit). The wire value (6) is unchanged; what changes is
+  the constant name, the `Display`/`FromStr` text
+  (`LOCK_FAULT`/`lock-fault` → `LOCK_DOWN`/`lock-down`), and every decode or
+  display of Access Door `Door_Alarm_State` value 6. The neighbouring
+  `LockStatus::LOCK_FAULT` is a member of a different, correctly named
+  production and is untouched — code that conflated the two must now name
+  each correctly.
+
+- **Breaking (API):** the invented `StagingState` enumeration
+  (`NOT_STAGED`/`STAGING`/`STAGED`/`COMMITTING`/`COMMITTED`/`ABANDONING`/
+  `ABANDONED`) is deleted from `bacnet-types` (#275, Tranche Q audit): no
+  such production exists anywhere in 135-2020. The Staging object's
+  `Present_Stage` is an Unsigned array index into the `Stages` array
+  (Clause 12.62, Table 12-80), which is how the object model already
+  carried it — no object, resolve arm, or test referenced the enum, so
+  the removal is source-local. Downstream users must treat staging state
+  as a raw Unsigned index; per-stage meaning comes from `Stage_Names`.
+
 - Harden the Averaging `Object_Property_Reference` write arm, reachable
   over the network for the first time via the #182 multi-element decode:
   its `items.len() >= 2` acceptance silently dropped fourth-and-later
@@ -891,48 +933,7 @@ Deep-dive review of encoding, types, services, objects, client, server, and netw
 ## [0.7.1]
 
 ### Fixed
-
-- **Breaking (wire format):** `FileAccessMethod`'s enumeration values were
-  swapped: the stack defined `STREAM_ACCESS = 0` / `RECORD_ACCESS = 1`, but
-  the Clause 21 production is `record-access (0), stream-access (1)` (#273,
-  Tranche Q audit). Every File object in a running server therefore
-  reported the *other* access method in `File_Access_Method` — a
-  stream-backed object read back as record-access and vice versa — and
-  `ResolvedEnum` mislabeled both values for clients. The constants are now
-  `RECORD_ACCESS = 0` / `STREAM_ACCESS = 1`; the `bacnet-objects` File
-  object stops restating the numbers as literals and derives them from the
-  enum. Consumer audit: no compensating swaps existed elsewhere — the
-  service layer (`bacnet-services::file::{FileAccessMethod,
-  FileWriteAccessMethod}`) selects stream vs record by the
-  AtomicReadFile/AtomicWriteFile CHOICE tags (`[0]`/`[1]`), which are a
-  separate Clause 15.6/15.7 production and are unchanged; server handlers,
-  clients, and the CLI pass those through. **Migration:** any peer,
-  configuration, or stored record that persisted the raw property value
-  must be remapped (old 0 → 1, old 1 → 0); reads of
-  `File_Access_Method` by value and `FileAccessMethod::from_raw`
-  consumers must switch to the corrected assignments.
-
-- **Breaking (API):** `DoorAlarmState::LOCK_FAULT` is renamed
-  `DoorAlarmState::LOCK_DOWN`: the Clause 21 `BACnetDoorAlarmState`
-  production names value 6 `lock-down` and has no `lock-fault` member
-  (#274, Tranche Q audit). The wire value (6) is unchanged; what changes is
-  the constant name, the `Display`/`FromStr` text
-  (`LOCK_FAULT`/`lock-fault` → `LOCK_DOWN`/`lock-down`), and every decode or
-  display of Access Door `Door_Alarm_State` value 6. The neighbouring
-  `LockStatus::LOCK_FAULT` is a member of a different, correctly named
-  production and is untouched — code that conflated the two must now name
-  each correctly.
-
-- **Breaking (API):** the invented `StagingState` enumeration
-  (`NOT_STAGED`/`STAGING`/`STAGED`/`COMMITTING`/`COMMITTED`/`ABANDONING`/
-  `ABANDONED`) is deleted from `bacnet-types` (#275, Tranche Q audit): no
-  such production exists anywhere in 135-2020. The Staging object's
-  `Present_Stage` is an Unsigned array index into the `Stages` array
-  (Clause 12.62, Table 12-80), which is how the object model already
-  carried it — no object, resolve arm, or test referenced the enum, so
-  the removal is source-local. Downstream users must treat staging state
-  as a raw Unsigned index; per-stage meaning comes from `Stage_Names`.
-
+- **Fixed** maturin wheel build — removed invalid `python-source` setting from pyproject.toml that broke wheel builds for pure Rust extension module
 
 ## [0.7.0]
 
