@@ -74,7 +74,8 @@ fn sample_cov_multiple_notification() -> COVNotificationMultipleRequest {
 #[test]
 fn unconfirmed_cov_multiple_apdu_uses_multiple_service_choice() {
     let notification = sample_cov_multiple_notification();
-    let buf = BACnetServer::<BipTransport>::encode_unconfirmed_cov_multiple_apdu(&notification);
+    let buf =
+        BACnetServer::<BipTransport>::encode_unconfirmed_cov_multiple_apdu(&notification).unwrap();
 
     match decode_apdu(buf.freeze()).unwrap() {
         Apdu::UnconfirmedRequest(req) => {
@@ -93,7 +94,8 @@ fn unconfirmed_cov_multiple_apdu_uses_multiple_service_choice() {
 fn confirmed_cov_multiple_apdu_uses_multiple_service_choice() {
     let notification = sample_cov_multiple_notification();
     let buf =
-        BACnetServer::<BipTransport>::encode_confirmed_cov_multiple_apdu(&notification, 9, 1476);
+        BACnetServer::<BipTransport>::encode_confirmed_cov_multiple_apdu(&notification, 9, 1476)
+            .unwrap();
 
     match decode_apdu(buf.freeze()).unwrap() {
         Apdu::ConfirmedRequest(req) => {

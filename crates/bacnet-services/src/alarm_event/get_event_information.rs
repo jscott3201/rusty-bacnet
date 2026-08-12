@@ -130,54 +130,12 @@ impl GetEventInformationAck {
                 BACnetTimeStamp::SequenceNumber(0),
             ];
             for ts in &mut event_timestamps {
-                let (inner_tag, inner_pos) = tags::decode_tag(data, offset)?;
-                if inner_tag.is_opening_tag(0) {
-                    // Time choice [0] { application Time }
-                    offset = inner_pos;
-                    let (app_tag, app_pos) = tags::decode_tag(data, offset)?;
-                    let end = app_pos + app_tag.length as usize;
-                    if end > data.len() {
-                        return Err(Error::decoding(app_pos, "truncated timestamp time"));
-                    }
-                    *ts = BACnetTimeStamp::Time(Time::decode(&data[app_pos..end])?);
-                    offset = end;
-                    // closing tag [0]
-                    let (_, close_pos) = tags::decode_tag(data, offset)?;
-                    offset = close_pos;
-                } else if inner_tag.is_context(1) {
-                    // SequenceNumber choice [1]
-                    let end = inner_pos + inner_tag.length as usize;
-                    if end > data.len() {
-                        return Err(Error::decoding(inner_pos, "truncated timestamp seqnum"));
-                    }
-                    *ts = BACnetTimeStamp::SequenceNumber(primitives::decode_unsigned(
-                        &data[inner_pos..end],
-                    )?);
-                    offset = end;
-                } else if inner_tag.is_opening_tag(2) {
-                    // DateTime choice [2] { Date, Time }
-                    offset = inner_pos;
-                    let (d_tag, d_pos) = tags::decode_tag(data, offset)?;
-                    let d_end = d_pos + d_tag.length as usize;
-                    if d_end > data.len() {
-                        return Err(Error::decoding(d_pos, "truncated datetime date"));
-                    }
-                    let date = Date::decode(&data[d_pos..d_end])?;
-                    offset = d_end;
-                    let (t_tag, t_pos) = tags::decode_tag(data, offset)?;
-                    let t_end = t_pos + t_tag.length as usize;
-                    if t_end > data.len() {
-                        return Err(Error::decoding(t_pos, "truncated datetime time"));
-                    }
-                    let time = Time::decode(&data[t_pos..t_end])?;
-                    offset = t_end;
-                    *ts = BACnetTimeStamp::DateTime { date, time };
-                    // closing tag [2]
-                    let (_, close_pos) = tags::decode_tag(data, offset)?;
-                    offset = close_pos;
-                } else {
-                    return Err(Error::decoding(offset, "unexpected timestamp choice"));
-                }
+                // Each BACnetTimeStamp is a bare CHOICE item of the
+                // SEQUENCE OF — the shared primitives codec owns the one
+                // conformant encoding (time [0] as a primitive ctx tag 0).
+                let (decoded_ts, new_offset) = primitives::decode_timestamp_choice(data, offset)?;
+                *ts = decoded_ts;
+                offset = new_offset;
             }
             // closing tag [3]
             let (tag, _) = tags::decode_tag(data, offset)?;
@@ -259,7 +217,7 @@ impl GetEventInformationAck {
         })
     }
 
-    pub fn encode(&self, buf: &mut BytesMut) {
+    pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         // [0] listOfEventSummaries
         tags::encode_opening_tag(buf, 0);
         for summary in &self.list_of_event_summaries {
@@ -279,24 +237,11 @@ impl GetEventInformationAck {
             // [3] eventTimeStamps (SEQUENCE OF 3 BACnetTimeStamp)
             tags::encode_opening_tag(buf, 3);
             for ts in &summary.event_timestamps {
-                // Each timestamp is encoded as a bare CHOICE (no extra wrapping)
-                // within the SEQUENCE OF
-                match ts {
-                    BACnetTimeStamp::Time(t) => {
-                        tags::encode_opening_tag(buf, 0);
-                        primitives::encode_app_time(buf, t);
-                        tags::encode_closing_tag(buf, 0);
-                    }
-                    BACnetTimeStamp::SequenceNumber(n) => {
-                        primitives::encode_ctx_unsigned(buf, 1, *n);
-                    }
-                    BACnetTimeStamp::DateTime { date, time } => {
-                        tags::encode_opening_tag(buf, 2);
-                        primitives::encode_app_date(buf, date);
-                        primitives::encode_app_time(buf, time);
-                        tags::encode_closing_tag(buf, 2);
-                    }
-                }
+                // Each timestamp is a bare CHOICE item of the SEQUENCE OF
+                // (no extra wrapping) — encoded by the shared primitives
+                // codec so this service and every other timestamp producer
+                // agree on the wire bytes.
+                primitives::encode_timestamp_choice(buf, ts)?;
             }
             tags::encode_closing_tag(buf, 3);
             // [4] notifyType
@@ -318,5 +263,6 @@ impl GetEventInformationAck {
         tags::encode_closing_tag(buf, 0);
         // [1] moreEvents
         primitives::encode_ctx_boolean(buf, 1, self.more_events);
+        Ok(())
     }
 }

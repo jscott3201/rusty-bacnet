@@ -179,7 +179,7 @@ impl NotificationParameters {
                         date: access_event_time.0,
                         time: access_event_time.1,
                     },
-                );
+                )?;
                 // [4] access-credential: BACnetDeviceObjectPropertyReference
                 tags::encode_opening_tag(buf, 4);
                 primitives::encode_ctx_object_id(buf, 0, &access_credential.object_identifier);

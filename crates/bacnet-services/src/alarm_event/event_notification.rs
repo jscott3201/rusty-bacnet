@@ -44,7 +44,7 @@ impl EventNotificationRequest {
         // [2] eventObjectIdentifier
         primitives::encode_ctx_object_id(buf, 2, &self.event_object_identifier);
         // [3] timeStamp
-        primitives::encode_timestamp(buf, 3, &self.timestamp);
+        primitives::encode_timestamp(buf, 3, &self.timestamp)?;
         // [4] notificationClass
         primitives::encode_ctx_unsigned(buf, 4, self.notification_class as u64);
         // [5] priority

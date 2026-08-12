@@ -25,11 +25,11 @@ impl AcknowledgeAlarmRequest {
         // [2] eventStateAcknowledged
         primitives::encode_ctx_enumerated(buf, 2, self.event_state_acknowledged);
         // [3] timestamp
-        primitives::encode_timestamp(buf, 3, &self.timestamp);
+        primitives::encode_timestamp(buf, 3, &self.timestamp)?;
         // [4] acknowledgmentSource
         primitives::encode_ctx_character_string(buf, 4, &self.acknowledgment_source)?;
         // [5] timeOfAcknowledgment
-        primitives::encode_timestamp(buf, 5, &self.time_of_acknowledgment);
+        primitives::encode_timestamp(buf, 5, &self.time_of_acknowledgment)?;
         Ok(())
     }
 

@@ -302,7 +302,7 @@ pub struct COVNotificationMultipleRequest {
 }
 
 impl COVNotificationMultipleRequest {
-    pub fn encode(&self, buf: &mut BytesMut) {
+    pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         // [0] subscriberProcessIdentifier
         primitives::encode_ctx_unsigned(buf, 0, self.subscriber_process_identifier as u64);
         // [1] initiatingDeviceIdentifier
@@ -310,7 +310,7 @@ impl COVNotificationMultipleRequest {
         // [2] timeRemaining
         primitives::encode_ctx_unsigned(buf, 2, self.time_remaining as u64);
         // [3] timestamp
-        primitives::encode_timestamp(buf, 3, &self.timestamp);
+        primitives::encode_timestamp(buf, 3, &self.timestamp)?;
         // [4] listOfCovNotifications
         tags::encode_opening_tag(buf, 4);
         for item in &self.list_of_cov_notifications {
@@ -339,6 +339,7 @@ impl COVNotificationMultipleRequest {
             tags::encode_closing_tag(buf, 1);
         }
         tags::encode_closing_tag(buf, 4);
+        Ok(())
     }
 
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
@@ -667,7 +668,7 @@ mod tests {
             }],
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let decoded = COVNotificationMultipleRequest::decode(&buf).unwrap();
         assert_eq!(req, decoded);
     }
@@ -696,7 +697,7 @@ mod tests {
             }],
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let decoded = COVNotificationMultipleRequest::decode(&buf).unwrap();
         assert_eq!(req, decoded);
     }

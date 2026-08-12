@@ -160,7 +160,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 process_identifier: 0,
                 initiating_device_identifier: device_oid,
                 event_object_identifier: *oid,
-                timestamp: BACnetTimeStamp::SequenceNumber(utc_secs),
+                // Clause 21 constrains sequence-number to Unsigned (0..65535),
+                // enforced by the shared timestamp codec on encode; wrap
+                // seconds-of-epoch into the valid window.
+                timestamp: BACnetTimeStamp::SequenceNumber(utc_secs % 65_536),
                 notification_class,
                 priority,
                 event_type: event_type.to_raw(),

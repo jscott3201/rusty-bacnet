@@ -387,7 +387,7 @@ fn ctx_object_id_encoding() {
 fn timestamp_sequence_number_round_trip() {
     let ts = BACnetTimeStamp::SequenceNumber(42);
     let mut buf = BytesMut::new();
-    encode_timestamp(&mut buf, 3, &ts);
+    encode_timestamp(&mut buf, 3, &ts).unwrap();
     let (decoded, end) = decode_timestamp(&buf, 0, 3).unwrap();
     assert_eq!(decoded, ts);
     assert_eq!(end, buf.len());
@@ -402,7 +402,7 @@ fn timestamp_time_round_trip() {
         hundredths: 50,
     });
     let mut buf = BytesMut::new();
-    encode_timestamp(&mut buf, 3, &ts);
+    encode_timestamp(&mut buf, 3, &ts).unwrap();
     let (decoded, end) = decode_timestamp(&buf, 0, 3).unwrap();
     assert_eq!(decoded, ts);
     assert_eq!(end, buf.len());
@@ -425,10 +425,171 @@ fn timestamp_datetime_round_trip() {
         },
     };
     let mut buf = BytesMut::new();
-    encode_timestamp(&mut buf, 5, &ts);
+    encode_timestamp(&mut buf, 5, &ts).unwrap();
     let (decoded, end) = decode_timestamp(&buf, 0, 5).unwrap();
     assert_eq!(decoded, ts);
     assert_eq!(end, buf.len());
+}
+
+// --- BACnetTimeStamp golden wire vectors (Clause 20.2.1.5 + Clause 21) ---
+
+#[test]
+fn timestamp_time_choice_golden_primitive_context_tag() {
+    // time [0] tags the PRIMITIVE base type Time: a context-specific
+    // PRIMITIVE tag 0 of length 4 holding the raw Time octets —
+    // (0<<4)|(1<<3)|4 = 0x0C. An opening-tag-0 wrapper around an
+    // application-tagged Time is NOT conformant.
+    let ts = BACnetTimeStamp::Time(Time {
+        hour: 14,
+        minute: 30,
+        second: 45,
+        hundredths: 50,
+    });
+    let mut buf = BytesMut::new();
+    encode_timestamp_choice(&mut buf, &ts).unwrap();
+    assert_eq!(buf.as_ref(), &[0x0C, 14, 30, 45, 50]);
+    // The wrapped form adds the enclosing field's opening/closing pair.
+    let mut wrapped = BytesMut::new();
+    encode_timestamp(&mut wrapped, 3, &ts).unwrap();
+    assert_eq!(wrapped.as_ref(), &[0x3E, 0x0C, 14, 30, 45, 50, 0x3F]);
+    // And the bare decoder reads both forms' inner content identically.
+    let (decoded, end) = decode_timestamp_choice(&wrapped, 1).unwrap();
+    assert_eq!(decoded, ts);
+    assert_eq!(end, 6);
+}
+
+#[test]
+fn timestamp_sequence_number_choice_golden() {
+    // sequence-number [1]: context tag 1, minimal big-endian contents.
+    let ts = BACnetTimeStamp::SequenceNumber(42);
+    let mut buf = BytesMut::new();
+    encode_timestamp_choice(&mut buf, &ts).unwrap();
+    // (1<<4)|(1<<3)|1 = 0x19
+    assert_eq!(buf.as_ref(), &[0x19, 42]);
+    let (decoded, end) = decode_timestamp_choice(&buf, 0).unwrap();
+    assert_eq!(decoded, ts);
+    assert_eq!(end, buf.len());
+}
+
+#[test]
+fn timestamp_datetime_choice_golden() {
+    // datetime [2] tags the CONSTRUCTED BACnetDateTime: opening tag 2 /
+    // application-tagged Date / application-tagged Time / closing tag 2.
+    let ts = BACnetTimeStamp::DateTime {
+        date: Date {
+            year: 126, // 2026
+            month: 2,
+            day: 28,
+            day_of_week: 6,
+        },
+        time: Time {
+            hour: 10,
+            minute: 15,
+            second: 0,
+            hundredths: 0,
+        },
+    };
+    let mut buf = BytesMut::new();
+    encode_timestamp_choice(&mut buf, &ts).unwrap();
+    assert_eq!(
+        buf.as_ref(),
+        &[
+            0x2E, // opening tag 2
+            0xA4, 126, 2, 28, 6, // application Date (tag 10, len 4)
+            0xB4, 10, 15, 0, 0,    // application Time (tag 11, len 4)
+            0x2F, // closing tag 2
+        ]
+    );
+    let (decoded, end) = decode_timestamp_choice(&buf, 0).unwrap();
+    assert_eq!(decoded, ts);
+    assert_eq!(end, buf.len());
+}
+
+#[test]
+fn timestamp_sequence_number_boundaries() {
+    // Clause 21: sequence-number is Unsigned (0..65535).
+    for n in [0u64, 65535] {
+        let ts = BACnetTimeStamp::SequenceNumber(n);
+        let mut buf = BytesMut::new();
+        encode_timestamp_choice(&mut buf, &ts).unwrap();
+        let (decoded, _) = decode_timestamp_choice(&buf, 0).unwrap();
+        assert_eq!(decoded, ts);
+        let mut wrapped = BytesMut::new();
+        encode_timestamp(&mut wrapped, 3, &ts).unwrap();
+        let (decoded, _) = decode_timestamp(&wrapped, 0, 3).unwrap();
+        assert_eq!(decoded, ts);
+    }
+    // 65535 encodes in exactly two content octets, 0 in one.
+    let mut buf = BytesMut::new();
+    encode_timestamp_choice(&mut buf, &BACnetTimeStamp::SequenceNumber(65535)).unwrap();
+    assert_eq!(buf.as_ref(), &[0x1A, 0xFF, 0xFF]);
+}
+
+#[test]
+fn timestamp_sequence_number_over_65535_rejected() {
+    // Encode side: out of the Unsigned (0..65535) range is an error.
+    let mut buf = BytesMut::new();
+    assert!(
+        encode_timestamp_choice(&mut buf, &BACnetTimeStamp::SequenceNumber(65536)).is_err(),
+        "encode of 65536 must fail"
+    );
+    let mut wrapped = BytesMut::new();
+    assert!(
+        encode_timestamp(&mut wrapped, 3, &BACnetTimeStamp::SequenceNumber(u64::MAX)).is_err(),
+        "wrapped encode of u64::MAX must fail"
+    );
+    // Decode side: the 3-content-octet form (65536) inside a wrapped timestamp.
+    let data = [0x3E, 0x1B, 0x01, 0x00, 0x00, 0x3F];
+    assert!(
+        decode_timestamp(&data, 0, 3).is_err(),
+        "decode of 65536 must fail"
+    );
+    assert!(decode_timestamp_choice(&data, 1).is_err());
+}
+
+#[test]
+fn timestamp_decode_rejects_non_conformant_time_form() {
+    // The non-canonical time [0] encoding (opening tag 0 / application Time /
+    // closing tag 0) must be rejected: neither bare nor wrapped decode
+    // accepts it.
+    let non_conformant = [0x3E, 0x0E, 0xB4, 14, 30, 45, 50, 0x0F, 0x3F];
+    assert!(decode_timestamp(&non_conformant, 0, 3).is_err());
+    assert!(decode_timestamp_choice(&non_conformant, 1).is_err());
+}
+
+#[test]
+fn timestamp_decode_wrong_outer_tag_rejected() {
+    let ts = BACnetTimeStamp::SequenceNumber(42);
+    let mut buf = BytesMut::new();
+    encode_timestamp(&mut buf, 3, &ts).unwrap();
+    assert!(
+        decode_timestamp(&buf, 0, 4).is_err(),
+        "outer tag [4] != [3]"
+    );
+}
+
+#[test]
+fn timestamp_decode_truncated_rejected() {
+    let ts = BACnetTimeStamp::SequenceNumber(42);
+    let mut buf = BytesMut::new();
+    encode_timestamp(&mut buf, 3, &ts).unwrap();
+    for cut in 1..buf.len() {
+        assert!(
+            decode_timestamp(&buf[..cut], 0, 3).is_err(),
+            "truncated at {cut} bytes must fail"
+        );
+    }
+}
+
+#[test]
+fn timestamp_decode_wrong_class_bit_rejected() {
+    // Application-tagged content where the CHOICE's context tags belong:
+    // app Unsigned (0x21) instead of ctx 1 (0x19) for sequence-number.
+    let data = [0x3E, 0x21, 42, 0x3F];
+    assert!(decode_timestamp(&data, 0, 3).is_err());
+    assert!(decode_timestamp_choice(&data, 1).is_err());
+    // Bare decode likewise refuses an application tag outright.
+    assert!(decode_timestamp_choice(&[0x21, 42], 0).is_err());
 }
 
 #[test]

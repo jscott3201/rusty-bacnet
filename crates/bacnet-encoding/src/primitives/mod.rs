@@ -545,19 +545,41 @@ pub fn encode_property_value(buf: &mut BytesMut, value: &PropertyValue) -> Resul
 // BACnetTimeStamp encode/decode
 // ===========================================================================
 
-/// Encode a BACnetTimeStamp wrapped in a context opening/closing tag pair.
+/// Largest encodable `sequence-number` value: the production constrains it to
+/// `Unsigned (0..65535)`.
 ///
-/// The outer `tag_number` is the context tag of the enclosing field.
-/// Inside, the CHOICE variant uses its own context tag (0=Time,
-/// 1=SequenceNumber, 2=DateTime).
-pub fn encode_timestamp(buf: &mut BytesMut, tag_number: u8, ts: &BACnetTimeStamp) {
-    tags::encode_opening_tag(buf, tag_number);
+/// `BACnetTimeStamp ::= CHOICE { time [0] Time, sequence-number [1] Unsigned
+/// (0..65535), datetime [2] BACnetDateTime }` (ASHRAE 135-2020 Clause 21).
+pub const MAX_TIMESTAMP_SEQUENCE_NUMBER: u64 = 65535;
+
+/// Encode a `BACnetTimeStamp` as a bare CHOICE element (no enclosing field
+/// tag).
+///
+/// Used where a production lists `BACnetTimeStamp` as a bare CHOICE item —
+/// e.g. the `eventTimeStamps [3] SEQUENCE OF BACnetTimeStamp` inside
+/// GetEventInformation-ACK (Clause 13.9). [`encode_timestamp`] wraps this in
+/// the enclosing field's context tag pair instead.
+///
+/// Tag forms per Clause 20.2.1.5: `time [0]` is the CHOICE's only alternative
+/// over a *primitive* base type, so it encodes as a context-specific
+/// *primitive* tag 0 of length 4 holding the raw `Time` octets (the
+/// opening-tag-0 wrapper around an application-tagged `Time` is NOT
+/// conformant); `sequence-number [1]` is a primitive context tag 1 (contents
+/// constrained to `0..=65535`, enforced on encode); `datetime [2]` tags the
+/// *constructed* `BACnetDateTime`, so it encodes as opening tag 2 /
+/// application-tagged `Date` / application-tagged `Time` / closing tag 2.
+pub fn encode_timestamp_choice(buf: &mut BytesMut, ts: &BACnetTimeStamp) -> Result<(), Error> {
     match ts {
         BACnetTimeStamp::Time(t) => {
             tags::encode_tag(buf, 0, TagClass::Context, 4);
             buf.put_slice(&t.encode());
         }
         BACnetTimeStamp::SequenceNumber(n) => {
+            if *n > MAX_TIMESTAMP_SEQUENCE_NUMBER {
+                return Err(Error::OutOfRange(format!(
+                    "BACnetTimeStamp sequence-number {n} exceeds 65535"
+                )));
+            }
             encode_ctx_unsigned(buf, 1, *n);
         }
         BACnetTimeStamp::DateTime { date, time } => {
@@ -567,27 +589,20 @@ pub fn encode_timestamp(buf: &mut BytesMut, tag_number: u8, ts: &BACnetTimeStamp
             tags::encode_closing_tag(buf, 2);
         }
     }
-    tags::encode_closing_tag(buf, tag_number);
+    Ok(())
 }
 
-/// Decode a BACnetTimeStamp from inside a context opening/closing tag pair.
+/// Decode a bare-CHOICE `BACnetTimeStamp` starting at `offset`.
 ///
-/// `data` should point to the start of the outer opening tag for `tag_number`.
-/// Returns the decoded timestamp and the new offset past the outer closing tag.
-pub fn decode_timestamp(
+/// Returns the decoded timestamp and the new offset past its encoding. Only
+/// the Clause 20.2.1.5-conformant tag forms described on
+/// [`encode_timestamp_choice`] are accepted; `sequence-number` contents
+/// beyond `0..=65535` are rejected.
+pub fn decode_timestamp_choice(
     data: &[u8],
     offset: usize,
-    tag_number: u8,
 ) -> Result<(BACnetTimeStamp, usize), Error> {
-    let (tag, pos) = tags::decode_tag(data, offset)?;
-    if !tag.is_opening_tag(tag_number) {
-        return Err(Error::decoding(
-            offset,
-            format!("expected opening tag {tag_number} for BACnetTimeStamp"),
-        ));
-    }
-
-    let (inner_tag, inner_pos) = tags::decode_tag(data, pos)?;
+    let (inner_tag, inner_pos) = tags::decode_tag(data, offset)?;
 
     let (ts, after_inner) = if inner_tag.is_context(0) {
         let end = inner_pos
@@ -611,6 +626,12 @@ pub fn decode_timestamp(
             ));
         }
         let n = decode_unsigned(&data[inner_pos..end])?;
+        if n > MAX_TIMESTAMP_SEQUENCE_NUMBER {
+            return Err(Error::decoding(
+                inner_pos,
+                format!("BACnetTimeStamp sequence-number {n} exceeds 65535"),
+            ));
+        }
         (BACnetTimeStamp::SequenceNumber(n), end)
     } else if inner_tag.is_opening_tag(2) {
         let (date_tag, date_pos) = tags::decode_tag(data, inner_pos)?;
@@ -663,10 +684,48 @@ pub fn decode_timestamp(
         (BACnetTimeStamp::DateTime { date, time }, close_pos)
     } else {
         return Err(Error::decoding(
-            pos,
+            offset,
             "BACnetTimeStamp: unexpected inner choice tag",
         ));
     };
+
+    Ok((ts, after_inner))
+}
+
+/// Encode a BACnetTimeStamp wrapped in a context opening/closing tag pair.
+///
+/// The outer `tag_number` is the context tag of the enclosing field.
+/// Inside, the CHOICE variant uses its own context tag (0=Time,
+/// 1=SequenceNumber, 2=DateTime) via [`encode_timestamp_choice`].
+pub fn encode_timestamp(
+    buf: &mut BytesMut,
+    tag_number: u8,
+    ts: &BACnetTimeStamp,
+) -> Result<(), Error> {
+    tags::encode_opening_tag(buf, tag_number);
+    encode_timestamp_choice(buf, ts)?;
+    tags::encode_closing_tag(buf, tag_number);
+    Ok(())
+}
+
+/// Decode a BACnetTimeStamp from inside a context opening/closing tag pair.
+///
+/// `data` should point to the start of the outer opening tag for `tag_number`.
+/// Returns the decoded timestamp and the new offset past the outer closing tag.
+pub fn decode_timestamp(
+    data: &[u8],
+    offset: usize,
+    tag_number: u8,
+) -> Result<(BACnetTimeStamp, usize), Error> {
+    let (tag, pos) = tags::decode_tag(data, offset)?;
+    if !tag.is_opening_tag(tag_number) {
+        return Err(Error::decoding(
+            offset,
+            format!("expected opening tag {tag_number} for BACnetTimeStamp"),
+        ));
+    }
+
+    let (ts, after_inner) = decode_timestamp_choice(data, pos)?;
 
     let (close, final_pos) = tags::decode_tag(data, after_inner)?;
     if !close.is_closing_tag(tag_number) {

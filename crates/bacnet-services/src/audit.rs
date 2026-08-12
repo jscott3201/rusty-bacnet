@@ -60,10 +60,10 @@ pub struct AuditNotificationRequest {
 impl AuditNotificationRequest {
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         // [0] sourceTimestamp
-        primitives::encode_timestamp(buf, 0, &self.source_timestamp);
+        primitives::encode_timestamp(buf, 0, &self.source_timestamp)?;
         // [1] targetTimestamp OPTIONAL
         if let Some(ref ts) = self.target_timestamp {
-            primitives::encode_timestamp(buf, 1, ts);
+            primitives::encode_timestamp(buf, 1, ts)?;
         }
         // [2] sourceDevice (raw BACnetRecipient)
         tags::encode_opening_tag(buf, 2);

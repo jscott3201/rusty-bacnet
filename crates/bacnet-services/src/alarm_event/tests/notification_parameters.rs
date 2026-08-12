@@ -217,7 +217,7 @@ fn get_event_information_ack_round_trip() {
         more_events: true,
     };
     let mut buf = BytesMut::new();
-    ack.encode(&mut buf);
+    ack.encode(&mut buf).unwrap();
     // Wire-byte check, not just a round trip: internal 0b101 must appear as
     // its MSB-first octet 0xA0 (a symmetric encode/decode inversion would
     // still round-trip, so the raw byte is the only witness — Clause 20.2.10).
@@ -686,7 +686,7 @@ fn get_event_information_ack_empty_list() {
         more_events: false,
     };
     let mut buf = BytesMut::new();
-    ack.encode(&mut buf);
+    ack.encode(&mut buf).unwrap();
     let decoded = GetEventInformationAck::decode(&buf).unwrap();
     assert!(decoded.list_of_event_summaries.is_empty());
     assert!(!decoded.more_events);

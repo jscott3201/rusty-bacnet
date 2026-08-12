@@ -135,6 +135,6 @@ pub fn handle_get_event_information(
         more_events,
     };
 
-    ack.encode(buf);
+    ack.encode(buf)?;
     Ok(())
 }
