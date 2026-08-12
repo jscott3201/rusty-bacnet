@@ -43,6 +43,59 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
+    /// BACnet maintenance type (Clause 21); used by life safety point/zone
+    /// and access door Maintenance_Required.
+    pub struct Maintenance(u32);
+
+    const NONE = 0;
+    const PERIODIC_TEST = 1;
+    const NEED_SERVICE_OPERATIONAL = 2;
+    const NEED_SERVICE_INOPERATIVE = 3;
+}
+
+bacnet_enum! {
+    /// BACnet subordinate/parent relationship for Structured View
+    /// (Clause 21).
+    ///
+    /// Values above `DEFAULT` come in even/odd forward/reverse pairs
+    /// (e.g. `CONTAINS`(2) / `CONTAINED_BY`(3)); proprietary extensions
+    /// follow the same pairing so the opposite of a relationship `n > 1` is
+    /// always `n ^ 1`.
+    pub struct Relationship(u32);
+
+    const UNKNOWN = 0;
+    const DEFAULT = 1;
+    const CONTAINS = 2;
+    const CONTAINED_BY = 3;
+    const USES = 4;
+    const USED_BY = 5;
+    const COMMANDS = 6;
+    const COMMANDED_BY = 7;
+    const ADJUSTS = 8;
+    const ADJUSTED_BY = 9;
+    const INGRESS = 10;
+    const EGRESS = 11;
+    const SUPPLIES_AIR = 12;
+    const RECEIVES_AIR = 13;
+    const SUPPLIES_HOT_AIR = 14;
+    const RECEIVES_HOT_AIR = 15;
+    const SUPPLIES_COOL_AIR = 16;
+    const RECEIVES_COOL_AIR = 17;
+    const SUPPLIES_POWER = 18;
+    const RECEIVES_POWER = 19;
+    const SUPPLIES_GAS = 20;
+    const RECEIVES_GAS = 21;
+    const SUPPLIES_WATER = 22;
+    const RECEIVES_WATER = 23;
+    const SUPPLIES_HOT_WATER = 24;
+    const RECEIVES_HOT_WATER = 25;
+    const SUPPLIES_COOL_WATER = 26;
+    const RECEIVES_COOL_WATER = 27;
+    const SUPPLIES_STEAM = 28;
+    const RECEIVES_STEAM = 29;
+}
+
+bacnet_enum! {
     /// BACnet acknowledgment filter for GetEnrollmentSummary (Clause 13.7.1).
     pub struct AcknowledgmentFilter(u32);
 

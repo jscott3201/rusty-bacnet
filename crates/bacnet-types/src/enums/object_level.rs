@@ -75,6 +75,21 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
+    /// BACnet restart reason for a Device's Last_Restart_Reason (Clause 12.11).
+    pub struct RestartReason(u32);
+
+    const UNKNOWN = 0;
+    const COLDSTART = 1;
+    const WARMSTART = 2;
+    const DETECTED_POWER_LOST = 3;
+    const DETECTED_POWERED_OFF = 4;
+    const HARDWARE_WATCHDOG = 5;
+    const SOFTWARE_WATCHDOG = 6;
+    const SUSPENDED = 7;
+    const ACTIVATE_CHANGES = 8;
+}
+
+bacnet_enum! {
     /// BACnet enable/disable (Clause 16.4).
     pub struct EnableDisable(u32);
 
@@ -128,6 +143,17 @@ bacnet_enum! {
     const HALT = 3;
     const RESTART = 4;
     const UNLOAD = 5;
+}
+
+bacnet_enum! {
+    /// BACnet program error for Reason_For_Halt (Clause 12.22).
+    pub struct ProgramError(u32);
+
+    const NORMAL = 0;
+    const LOAD_FAILED = 1;
+    const INTERNAL = 2;
+    const PROGRAM = 3;
+    const OTHER = 4;
 }
 
 bacnet_enum! {

@@ -329,6 +329,125 @@ fn access_zone_occupancy_state_values_match_clause_21() {
     }
 }
 
+/// 135-2020 Clause 21 (`BACnetProgramError ::= ENUMERATED`), the type of the
+/// Program object's Reason_For_Halt.
+#[test]
+fn program_error_values_match_clause_21() {
+    let all = [
+        ("NORMAL", 0),
+        ("LOAD_FAILED", 1),
+        ("INTERNAL", 2),
+        ("PROGRAM", 3),
+        ("OTHER", 4),
+    ];
+    assert_eq!(ProgramError::ALL_NAMED.len(), all.len());
+    for (i, &(name, raw)) in all.iter().enumerate() {
+        let (named_name, value) = ProgramError::ALL_NAMED[i];
+        assert_eq!(named_name, name);
+        assert_eq!(value.to_raw(), raw);
+        assert_eq!(ProgramError::from_raw(raw), value);
+        assert_eq!(format!("{value}"), name);
+    }
+}
+
+/// 135-2020 Clause 21 (`BACnetRestartReason ::= ENUMERATED`), the type of the
+/// Device object's Last_Restart_Reason.
+#[test]
+fn restart_reason_values_match_clause_21() {
+    let all = [
+        ("UNKNOWN", 0),
+        ("COLDSTART", 1),
+        ("WARMSTART", 2),
+        ("DETECTED_POWER_LOST", 3),
+        ("DETECTED_POWERED_OFF", 4),
+        ("HARDWARE_WATCHDOG", 5),
+        ("SOFTWARE_WATCHDOG", 6),
+        ("SUSPENDED", 7),
+        ("ACTIVATE_CHANGES", 8),
+    ];
+    assert_eq!(RestartReason::ALL_NAMED.len(), all.len());
+    for (i, &(name, raw)) in all.iter().enumerate() {
+        let (named_name, value) = RestartReason::ALL_NAMED[i];
+        assert_eq!(named_name, name);
+        assert_eq!(value.to_raw(), raw);
+        assert_eq!(RestartReason::from_raw(raw), value);
+        assert_eq!(format!("{value}"), name);
+    }
+}
+
+/// 135-2020 Clause 21 (`BACnetMaintenance ::= ENUMERATED`).
+#[test]
+fn maintenance_values_match_clause_21() {
+    let all = [
+        ("NONE", 0),
+        ("PERIODIC_TEST", 1),
+        ("NEED_SERVICE_OPERATIONAL", 2),
+        ("NEED_SERVICE_INOPERATIVE", 3),
+    ];
+    assert_eq!(Maintenance::ALL_NAMED.len(), all.len());
+    for (i, &(name, raw)) in all.iter().enumerate() {
+        let (named_name, value) = Maintenance::ALL_NAMED[i];
+        assert_eq!(named_name, name);
+        assert_eq!(value.to_raw(), raw);
+        assert_eq!(Maintenance::from_raw(raw), value);
+        assert_eq!(format!("{value}"), name);
+    }
+}
+
+/// 135-2020 Clause 21 (`BACnetRelationship ::= ENUMERATED`): after
+/// unknown/default, every value is one half of an even/odd forward/reverse
+/// pair, so `n ^ 1` must always name the opposite relationship.
+#[test]
+fn relationship_values_match_clause_21() {
+    let all = [
+        ("UNKNOWN", 0),
+        ("DEFAULT", 1),
+        ("CONTAINS", 2),
+        ("CONTAINED_BY", 3),
+        ("USES", 4),
+        ("USED_BY", 5),
+        ("COMMANDS", 6),
+        ("COMMANDED_BY", 7),
+        ("ADJUSTS", 8),
+        ("ADJUSTED_BY", 9),
+        ("INGRESS", 10),
+        ("EGRESS", 11),
+        ("SUPPLIES_AIR", 12),
+        ("RECEIVES_AIR", 13),
+        ("SUPPLIES_HOT_AIR", 14),
+        ("RECEIVES_HOT_AIR", 15),
+        ("SUPPLIES_COOL_AIR", 16),
+        ("RECEIVES_COOL_AIR", 17),
+        ("SUPPLIES_POWER", 18),
+        ("RECEIVES_POWER", 19),
+        ("SUPPLIES_GAS", 20),
+        ("RECEIVES_GAS", 21),
+        ("SUPPLIES_WATER", 22),
+        ("RECEIVES_WATER", 23),
+        ("SUPPLIES_HOT_WATER", 24),
+        ("RECEIVES_HOT_WATER", 25),
+        ("SUPPLIES_COOL_WATER", 26),
+        ("RECEIVES_COOL_WATER", 27),
+        ("SUPPLIES_STEAM", 28),
+        ("RECEIVES_STEAM", 29),
+    ];
+    assert_eq!(Relationship::ALL_NAMED.len(), all.len());
+    for (i, &(name, raw)) in all.iter().enumerate() {
+        let (named_name, value) = Relationship::ALL_NAMED[i];
+        assert_eq!(named_name, name);
+        assert_eq!(value.to_raw(), raw);
+        assert_eq!(Relationship::from_raw(raw), value);
+        assert_eq!(format!("{value}"), name);
+    }
+    // The forward/reverse pairing is structural in the production.
+    for pair in all[2..].chunks_exact(2) {
+        let (fwd_name, fwd) = pair[0];
+        let (rev_name, rev) = pair[1];
+        assert_eq!(fwd ^ 1, rev, "{fwd_name} / {rev_name}");
+        assert!(fwd_name.starts_with("SUPPLIES") || rev_name.ends_with("_BY") || rev_name == "EGRESS");
+    }
+}
+
 #[test]
 fn backup_and_restore_state_failure_values() {
     // A device reporting either failure state during a Clause 19.1
@@ -399,6 +518,17 @@ fn from_str_round_trips_display_for_all_named() {
         Reliability,
         BackupAndRestoreState,
         LifeSafetyState,
+        EscalatorOperationDirection,
+        BinaryLightingPV,
+        LightingTransition,
+        DoorValue,
+        AuthenticationStatus,
+        AuthorizationExemption,
+        AccessZoneOccupancyState,
+        ProgramError,
+        RestartReason,
+        Maintenance,
+        Relationship,
     );
 }
 
