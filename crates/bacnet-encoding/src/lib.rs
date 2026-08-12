@@ -7,6 +7,7 @@
 //! - NPDU encode/decode (Clause 6)
 
 pub mod apdu;
+pub mod constructed;
 pub mod npdu;
 pub mod primitives;
 pub mod segmentation;

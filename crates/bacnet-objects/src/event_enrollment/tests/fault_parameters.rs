@@ -4,6 +4,16 @@
 
 use super::super::*;
 
+/// Decode the read arm's framed wire form back to a structured value.
+fn decode_framed(val: PropertyValue) -> FaultParameters {
+    let PropertyValue::ApplicationData(bytes) = val else {
+        panic!("expected framed ApplicationData, got {val:?}");
+    };
+    bacnet_encoding::constructed::decode_fault_parameters(&bytes, 0)
+        .unwrap()
+        .0
+}
+
 // FaultParameters tests
 // -----------------------------------------------------------------------
 
@@ -24,7 +34,7 @@ fn fault_parameters_none_variant() {
     let val = ee
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
-    assert_eq!(FaultParameters::decode_property_value(&val).unwrap(), fp);
+    assert_eq!(decode_framed(val), fp);
 }
 
 #[test]
@@ -37,7 +47,7 @@ fn fault_parameters_character_string() {
     let val = ee
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
-    assert_eq!(FaultParameters::decode_property_value(&val).unwrap(), fp);
+    assert_eq!(decode_framed(val), fp);
 }
 
 #[test]
@@ -52,7 +62,7 @@ fn fault_parameters_extended() {
     let val = ee
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
-    assert_eq!(FaultParameters::decode_property_value(&val).unwrap(), fp);
+    assert_eq!(decode_framed(val), fp);
 }
 
 #[test]
@@ -72,7 +82,7 @@ fn fault_parameters_life_safety() {
     let val = ee
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
-    assert_eq!(FaultParameters::decode_property_value(&val).unwrap(), fp);
+    assert_eq!(decode_framed(val), fp);
 }
 
 #[test]
@@ -86,7 +96,7 @@ fn fault_parameters_state() {
     let val = ee
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
-    assert_eq!(FaultParameters::decode_property_value(&val).unwrap(), fp);
+    assert_eq!(decode_framed(val), fp);
 }
 
 #[test]
@@ -105,7 +115,7 @@ fn fault_parameters_status_flags() {
     let val = ee
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
-    assert_eq!(FaultParameters::decode_property_value(&val).unwrap(), fp);
+    assert_eq!(decode_framed(val), fp);
 }
 
 #[test]
@@ -119,7 +129,7 @@ fn fault_parameters_out_of_range() {
     let val = ee
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
-    assert_eq!(FaultParameters::decode_property_value(&val).unwrap(), fp);
+    assert_eq!(decode_framed(val), fp);
 }
 
 #[test]
@@ -138,7 +148,7 @@ fn fault_parameters_listed() {
     let val = ee
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
-    assert_eq!(FaultParameters::decode_property_value(&val).unwrap(), fp);
+    assert_eq!(decode_framed(val), fp);
 }
 
 #[test]
@@ -165,7 +175,48 @@ fn fault_parameters_write_round_trip() {
     let val = ee
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
-    assert_eq!(FaultParameters::decode_property_value(&val).unwrap(), fp);
+    assert_eq!(decode_framed(val), fp);
+}
+
+#[test]
+fn fault_parameters_framed_write_round_trip() {
+    // Framed wire form write: exactly what a conformant peer sends, and the
+    // read arm's bytes come back byte-identical.
+    let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+    let fp = FaultParameters::FaultOutOfRange {
+        min_normal: -5.0,
+        max_normal: 55.0,
+    };
+    let mut buf = bytes::BytesMut::new();
+    bacnet_encoding::constructed::encode_fault_parameters(&mut buf, &fp).unwrap();
+    ee.write_property(
+        PropertyIdentifier::FAULT_PARAMETERS,
+        None,
+        PropertyValue::ApplicationData(buf.to_vec()),
+        None,
+    )
+    .unwrap();
+    let val = ee
+        .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
+        .unwrap();
+    let PropertyValue::ApplicationData(bytes) = &val else {
+        panic!("expected ApplicationData");
+    };
+    assert_eq!(bytes.as_slice(), buf.as_ref());
+    assert_eq!(decode_framed(val), fp);
+}
+
+#[test]
+fn fault_parameters_framed_malformed_rejected() {
+    let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+    // opening [6] with no closing.
+    let result = ee.write_property(
+        PropertyIdentifier::FAULT_PARAMETERS,
+        None,
+        PropertyValue::ApplicationData(vec![0x6E, 0x0E]),
+        None,
+    );
+    assert!(result.is_err());
 }
 
 #[test]
@@ -192,10 +243,7 @@ fn fault_parameters_clear() {
     let val = ee
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
-    assert_eq!(
-        FaultParameters::decode_property_value(&val).unwrap(),
-        FaultParameters::FaultNone
-    );
+    assert_eq!(decode_framed(val), FaultParameters::FaultNone);
 
     // Clear back to None
     ee.set_fault_parameters(None);

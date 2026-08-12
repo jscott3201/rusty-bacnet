@@ -405,6 +405,21 @@ pub enum PropertyValue {
     /// (Clause 15.5.1). Each element is encoded as its own application-tagged
     /// value, concatenated in order.
     List(Vec<PropertyValue>),
+    /// Raw, already-encoded application-layer bytes for a property whose wire
+    /// form is a context-tagged (CHOICE/SEQUENCE) production that the flat
+    /// application-tagged model above cannot express — e.g. a framed
+    /// `BACnetEventParameter` or a `Recipient_List` of `BACnetDestination`.
+    ///
+    /// The bytes are emitted verbatim by
+    /// `bacnet_encoding::primitives::encode_property_value` and are produced
+    /// by `decode_application_value` when it encounters a context-tagged
+    /// element; they always span exactly one complete tagged element,
+    /// including its context tag header(s). The same convention as
+    /// [`crate::constructed::BACnetTimeValue::value`]'s raw bytes. Objects
+    /// that serve structured properties decode these with the matching
+    /// framed codec in `bacnet-encoding`; a property writer that is not
+    /// expecting this variant should reject it as `INVALID_DATA_TYPE`.
+    ApplicationData(Vec<u8>),
 }
 
 // ---------------------------------------------------------------------------

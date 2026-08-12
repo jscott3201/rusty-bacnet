@@ -334,6 +334,61 @@ pub fn extract_context_value(
     ))
 }
 
+/// Extract raw bytes enclosed by a context opening/closing tag pair WITHOUT
+/// parsing the enclosed content as BACnet tags.
+///
+/// [`extract_context_value`] walks the content as well-formed TLVs, which is
+/// the correct way to skip an unknown *conformant* constructed value (Clause
+/// 20.2.1.6 rule (d)); but some fields hold payloads that are not guaranteed
+/// to be well-formed TLVs at all — vendor-defined `parameters [2]` bodies and
+/// `Opaque`-preserved legacy payloads are stored and re-emitted verbatim.
+/// Those are walked here by scanning for the closing tag's raw octet(s) of
+/// `tag_number`, balancing nested opening octet(s) of the same tag number.
+///
+/// `offset` points just past the opening tag for `tag_number`. Returns the
+/// enclosed bytes and the offset past the closing tag octet(s).
+///
+/// Known limitation: a payload that itself contains the target tag's opening
+/// or closing octet pattern (e.g. as unrelated content bytes) unbalances the
+/// walk; such payloads cannot round-trip through this path.
+pub fn extract_raw_context<'a>(
+    data: &'a [u8],
+    offset: usize,
+    tag_number: u8,
+) -> Result<(&'a [u8], usize), Error> {
+    let wide = tag_number > 14;
+    let open_first = if wide { 0xFE } else { (tag_number << 4) | 0x0E };
+    let close_first = if wide { 0xFF } else { (tag_number << 4) | 0x0F };
+    let width = if wide { 2 } else { 1 };
+
+    let value_start = offset;
+    let mut pos = offset;
+    let mut depth: usize = 1;
+
+    while pos < data.len() {
+        let b = data[pos];
+        if b == open_first && (!wide || data.get(pos + 1) == Some(&tag_number)) {
+            depth += 1;
+            pos += width;
+            continue;
+        }
+        if b == close_first && (!wide || data.get(pos + 1) == Some(&tag_number)) {
+            depth -= 1;
+            if depth == 0 {
+                return Ok((&data[value_start..pos], pos + width));
+            }
+            pos += width;
+            continue;
+        }
+        pos += 1;
+    }
+
+    Err(Error::decoding(
+        value_start,
+        format!("missing closing tag {tag_number}"),
+    ))
+}
+
 /// Try to decode an optional context-tagged primitive value.
 ///
 /// Peeks at the next tag; if it matches the expected context tag number,
@@ -603,6 +658,49 @@ mod tests {
         let (value, pos) = extract_context_value(&data, 1, 0).unwrap();
         assert_eq!(value, &[0x21, 42]);
         assert_eq!(pos, 4);
+    }
+
+    // --- extract_raw_context ---
+
+    #[test]
+    fn extract_raw_context_non_tlv_payload() {
+        // Payload bytes that are NOT well-formed TLVs must pass through
+        // verbatim (this is the whole point of the raw scanner).
+        let data = [0x9E, 0xDE, 0xAD, 0xBE, 0xEF, 0x9F];
+        let (value, pos) = extract_raw_context(&data, 1, 9).unwrap();
+        assert_eq!(value, &[0xDE, 0xAD, 0xBE, 0xEF]);
+        assert_eq!(pos, 6);
+    }
+
+    #[test]
+    fn extract_raw_context_nested_same_tag() {
+        // opening 2, opening 2, payload, closing 2, more payload, closing 2
+        let data = [0x2E, 0x2E, 0x01, 0x2F, 0x02, 0x2F];
+        let (value, pos) = extract_raw_context(&data, 1, 2).unwrap();
+        assert_eq!(value, &[0x2E, 0x01, 0x2F, 0x02]);
+        assert_eq!(pos, 6);
+    }
+
+    #[test]
+    fn extract_raw_context_extended_tag() {
+        // Extended tag 200: 0xFE 0xC8 ... 0xFF 0xC8.
+        let data = [0xFE, 200, 0x01, 0x02, 0xFF, 200];
+        let (value, pos) = extract_raw_context(&data, 2, 200).unwrap();
+        assert_eq!(value, &[0x01, 0x02]);
+        assert_eq!(pos, 6);
+    }
+
+    #[test]
+    fn extract_raw_context_missing_closing() {
+        let data = [0x9E, 0xDE, 0xAD];
+        assert!(extract_raw_context(&data, 1, 9).is_err());
+    }
+
+    #[test]
+    fn extract_raw_context_truncated_extended_closing() {
+        // 0xFF at the very end with no tag-number octet — not a closing.
+        let data = [0xFE, 200, 0x01, 0x02, 0xFF];
+        assert!(extract_raw_context(&data, 2, 200).is_err());
     }
 
     #[test]

@@ -172,7 +172,14 @@ impl BACnetObject for EventEnrollmentObject {
             p if p == PropertyIdentifier::NOTIFY_TYPE => {
                 Ok(PropertyValue::Enumerated(self.notify_type))
             }
-            p if p == PropertyIdentifier::EVENT_PARAMETERS => Ok(self.event_parameters.encode()),
+            p if p == PropertyIdentifier::EVENT_PARAMETERS => {
+                let mut buf = bytes::BytesMut::new();
+                bacnet_encoding::constructed::encode_event_parameter(
+                    &mut buf,
+                    &self.event_parameters,
+                );
+                Ok(PropertyValue::ApplicationData(buf.to_vec()))
+            }
             p if p == PropertyIdentifier::OBJECT_PROPERTY_REFERENCE => {
                 match &self.object_property_reference {
                     None => Ok(PropertyValue::Null),
@@ -209,7 +216,11 @@ impl BACnetObject for EventEnrollmentObject {
             }
             p if p == PropertyIdentifier::FAULT_PARAMETERS => match &self.fault_parameters {
                 None => Ok(PropertyValue::Null),
-                Some(fp) => Ok(fp.encode_property_value()),
+                Some(fp) => {
+                    let mut buf = bytes::BytesMut::new();
+                    bacnet_encoding::constructed::encode_fault_parameters(&mut buf, fp)?;
+                    Ok(PropertyValue::ApplicationData(buf.to_vec()))
+                }
             },
             _ => Err(common::unknown_property_error()),
         }
@@ -277,6 +288,15 @@ impl BACnetObject for EventEnrollmentObject {
                     tag: 0xFF,
                     data: bytes,
                 },
+                // Framed wire form: full ASN.1 CHOICE framing per Clause 21.
+                PropertyValue::ApplicationData(bytes) => {
+                    match bacnet_encoding::constructed::decode_event_parameter(&bytes, 0) {
+                        Ok((ep, _)) => ep,
+                        Err(_) => return Err(common::invalid_data_type_error()),
+                    }
+                }
+                // Legacy flat application-tagged form (pre-framing layout):
+                // still accepted so older internal clients keep working.
                 other => match BACnetEventParameter::decode(&other) {
                     Ok(ep) => ep,
                     Err(_) => return Err(common::invalid_data_type_error()),
@@ -287,6 +307,13 @@ impl BACnetObject for EventEnrollmentObject {
         if property == PropertyIdentifier::FAULT_PARAMETERS {
             self.fault_parameters = match value {
                 PropertyValue::Null => None,
+                PropertyValue::ApplicationData(bytes) => {
+                    match bacnet_encoding::constructed::decode_fault_parameters(&bytes, 0) {
+                        Ok((fp, _)) => Some(fp),
+                        Err(_) => return Err(common::invalid_data_type_error()),
+                    }
+                }
+                // Legacy flat application-tagged form (pre-framing layout).
                 _ => match FaultParameters::decode_property_value(&value) {
                     Ok(fp) => Some(fp),
                     Err(_) => return Err(common::invalid_data_type_error()),

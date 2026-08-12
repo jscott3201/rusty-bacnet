@@ -25,8 +25,10 @@ impl crate::constructed::FaultParameters {
     ///
     /// The first element is the variant tag as [`PropertyValue::Unsigned`],
     /// followed by the variant's fields in declaration order. This is the
-    /// on-the-wire representation used by an EventEnrollment object's
-    /// `Fault_Parameters` property; see [`Self::decode_property_value`].
+    /// LEGACY pre-framing layout (see #154); the wire form is the full ASN.1
+    /// framing from
+    /// `bacnet_encoding::constructed::encode_fault_parameters`. See
+    /// [`Self::decode_property_value`] for the inverse.
     pub fn encode_property_value(&self) -> PropertyValue {
         use crate::constructed::FaultParameters as F;
         match self {

@@ -75,6 +75,9 @@ fn property_value_to_py(py: Python<'_>, value: &primitives::PropertyValue) -> Py
             }
             list.into_any().unbind()
         }
+        primitives::PropertyValue::ApplicationData(bytes) => {
+            PyBytes::new(py, bytes).into_any().unbind()
+        }
     })
 }
 
@@ -207,6 +210,16 @@ impl PyPropertyValue {
         }
     }
 
+    /// Create an ApplicationData value from pre-encoded application-layer
+    /// bytes (a context-tagged CHOICE/SEQUENCE production, e.g. a framed
+    /// BACnetEventParameter). The bytes are emitted verbatim on the wire.
+    #[staticmethod]
+    fn application_data(bytes: Vec<u8>) -> Self {
+        Self {
+            inner: primitives::PropertyValue::ApplicationData(bytes),
+        }
+    }
+
     // -- Accessors -----------------------------------------------------------
 
     /// The BACnet type tag (e.g. "real", "unsigned", "boolean").
@@ -227,6 +240,7 @@ impl PyPropertyValue {
             primitives::PropertyValue::Time(_) => "time",
             primitives::PropertyValue::ObjectIdentifier(_) => "object_identifier",
             primitives::PropertyValue::List(_) => "list",
+            primitives::PropertyValue::ApplicationData(_) => "application_data",
         }
     }
 
@@ -269,6 +283,9 @@ impl PyPropertyValue {
             }
             primitives::PropertyValue::List(elements) => {
                 format!("PropertyValue.list(<{} elements>)", elements.len())
+            }
+            primitives::PropertyValue::ApplicationData(bytes) => {
+                format!("PropertyValue.application_data(<{} bytes>)", bytes.len())
             }
         }
     }

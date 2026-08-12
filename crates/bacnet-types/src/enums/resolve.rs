@@ -363,6 +363,11 @@ pub enum ResolvedValue {
     ObjectIdentifier(ObjectIdentifier),
     /// A sequence (array) of resolved values.
     List(Vec<ResolvedValue>),
+    /// Raw, already-encoded application-layer bytes (see
+    /// [`crate::primitives::PropertyValue::ApplicationData`]) — there is no
+    /// enum/bit-string naming for opaque context-tagged content, so it
+    /// carries through unchanged.
+    ApplicationData(Vec<u8>),
 }
 
 /// Finish the job `decode_application_value` starts: take its decoded
@@ -413,6 +418,7 @@ pub fn resolve_value(property: PropertyIdentifier, value: PropertyValue) -> Reso
                 .map(|v| resolve_value(property, v))
                 .collect(),
         ),
+        PropertyValue::ApplicationData(bytes) => ResolvedValue::ApplicationData(bytes),
     }
 }
 

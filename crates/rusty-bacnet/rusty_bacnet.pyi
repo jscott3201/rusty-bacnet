@@ -639,6 +639,10 @@ class PropertyValue:
     def list(items: list[PropertyValue]) -> PropertyValue:
         """Create a List (array) value from a list of PropertyValue items."""
         ...
+    @staticmethod
+    def application_data(bytes: bytes) -> PropertyValue:
+        """Create an ApplicationData value from pre-encoded application-layer bytes (e.g. a framed BACnetEventParameter)."""
+        ...
 
     @property
     def tag(self) -> str:

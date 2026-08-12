@@ -592,6 +592,80 @@ fn timestamp_decode_wrong_class_bit_rejected() {
     assert!(decode_timestamp_choice(&[0x21, 42], 0).is_err());
 }
 
+// --- PropertyValue::ApplicationData (context-tagged content) ---
+
+#[test]
+fn application_data_decode_primitive_context_tag() {
+    // A primitive context-tagged element is preserved verbatim, tag header
+    // included, so the property-level framed codec can interpret it.
+    // e.g. FaultNone: ctx 0, no contents.
+    let data = [0x08];
+    let (val, end) = decode_application_value(&data, 0).unwrap();
+    assert_eq!(val, PropertyValue::ApplicationData(vec![0x08]));
+    assert_eq!(end, 1);
+
+    // ctx tag 0, len 4 (a Time content under [0]).
+    let data = [0x0C, 14, 30, 45, 50];
+    let (val, end) = decode_application_value(&data, 0).unwrap();
+    assert_eq!(val, PropertyValue::ApplicationData(data.to_vec()));
+    assert_eq!(end, data.len());
+}
+
+#[test]
+fn application_data_decode_constructed_spans_closing_tag() {
+    // opening [5], REAL, closing [5] — preserved whole.
+    let data = [0x5E, 0x44, 0x42, 0x90, 0x00, 0x00, 0x5F];
+    let (val, end) = decode_application_value(&data, 0).unwrap();
+    assert_eq!(val, PropertyValue::ApplicationData(data.to_vec()));
+    assert_eq!(end, data.len());
+}
+
+#[test]
+fn application_data_decode_nested_constructed() {
+    // Nested same-tag pairs balance: open 5, open 5, close 5, close 5.
+    let data = [0x5E, 0x5E, 0x5F, 0x5F];
+    let (val, end) = decode_application_value(&data, 0).unwrap();
+    assert_eq!(val, PropertyValue::ApplicationData(data.to_vec()));
+    assert_eq!(end, data.len());
+    // Trailing application-tagged items decode independently after it.
+    let data = [0x5E, 0x5F, 0x21, 0x2A];
+    let (val, end) = decode_application_value(&data, 0).unwrap();
+    assert_eq!(val, PropertyValue::ApplicationData(vec![0x5E, 0x5F]));
+    assert_eq!(end, 2);
+    let (val2, end2) = decode_application_value(&data, end).unwrap();
+    assert_eq!(val2, PropertyValue::Unsigned(42));
+    assert_eq!(end2, data.len());
+}
+
+#[test]
+fn application_data_decode_unbalanced_constructed_rejected() {
+    // opening without closing.
+    assert!(decode_application_value(&[0x5E, 0x21, 0x01], 0).is_err());
+    // closing tag alone.
+    assert!(decode_application_value(&[0x5F], 0).is_err());
+}
+
+#[test]
+fn application_data_encode_verbatim() {
+    let bytes = vec![0x5E, 0x5F];
+    let encoded = encode_to_vec(|buf| {
+        encode_property_value(buf, &PropertyValue::ApplicationData(bytes.clone())).unwrap()
+    });
+    assert_eq!(encoded, bytes);
+    // Inside a List it concatenates like any other value.
+    let encoded = encode_to_vec(|buf| {
+        encode_property_value(
+            buf,
+            &PropertyValue::List(vec![
+                PropertyValue::Unsigned(1),
+                PropertyValue::ApplicationData(bytes.clone()),
+            ]),
+        )
+        .unwrap()
+    });
+    assert_eq!(encoded, vec![0x21, 0x01, 0x5E, 0x5F]);
+}
+
 #[test]
 fn ucs2_decode_ascii() {
     // UCS-2 BE for "AB": 0x00 0x41 0x00 0x42

@@ -62,10 +62,17 @@ pub enum ChangeOfValueCriteria {
 /// `CHOICE` (ASHRAE 135-2020 Clause 13.5) that this library can evaluate.
 /// Unknown or vendor-defined alternatives are preserved verbatim via
 /// [`BACnetEventParameter::Opaque`] so that values written by a remote client
-/// are never silently discarded. The type is encoded/decoded as a flat
-/// [`PropertyValue::List`] whose first element is the algorithm tag
-/// ([`PropertyValue::Unsigned`]); see [`BACnetEventParameter::encode`] and
-/// [`BACnetEventParameter::decode`].
+/// are never silently discarded.
+///
+/// The wire form is the full ASN.1 CHOICE framing of the Clause 21
+/// production, produced by
+/// `bacnet_encoding::constructed::encode_event_parameter` /
+/// `decode_event_parameter` and carried in
+/// [`PropertyValue::ApplicationData`]. The [`PropertyValue::List`] form here
+/// (leading algorithm tag as [`PropertyValue::Unsigned`]; see
+/// [`BACnetEventParameter::encode`] and [`BACnetEventParameter::decode`]) is
+/// the LEGACY pre-framing layout, kept for compatibility with values written
+/// before the framing migration (#154).
 #[derive(Debug, Clone, PartialEq)]
 pub enum BACnetEventParameter {
     /// `change-of-bitstring [0]`: report when masked bits match a value.
@@ -157,9 +164,10 @@ impl BACnetEventParameter {
     /// Encode this parameter set as a flat [`PropertyValue::List`].
     ///
     /// The first element is the algorithm tag as [`PropertyValue::Unsigned`],
-    /// followed by the variant's fields in declaration order. This shape is
-    /// the on-the-wire representation used by an EventEnrollment object's
-    /// `Event_Parameters` property; see [`Self::decode`] for the inverse.
+    /// followed by the variant's fields in declaration order. This is the
+    /// LEGACY pre-framing layout (see #154); the wire form is the full ASN.1
+    /// framing from `bacnet_encoding::constructed::encode_event_parameter`.
+    /// See [`Self::decode`] for the inverse.
     pub fn encode(&self) -> PropertyValue {
         let tag = PropertyValue::Unsigned(self.tag() as u64);
         match self {

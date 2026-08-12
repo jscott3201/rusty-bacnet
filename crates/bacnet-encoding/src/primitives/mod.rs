@@ -448,16 +448,40 @@ pub fn encode_ctx_bit_string(buf: &mut BytesMut, tag: u8, unused_bits: u8, data:
 
 /// Decode a single application-tagged value from `data` at `offset`.
 ///
+/// A leading **context-tagged** element decodes to
+/// [`PropertyValue::ApplicationData`] holding the complete tagged element
+/// verbatim (tag header(s) through the matching closing tag for constructed
+/// elements) — such bytes belong to a context-tagged ASN.1 production
+/// (e.g. `BACnetEventParameter`) whose property-level framed codec must
+/// interpret them. Application-tagged content is decoded into the typed
+/// variants as before.
+///
 /// Returns the decoded `PropertyValue` and the new offset past the consumed bytes.
 pub fn decode_application_value(
     data: &[u8],
     offset: usize,
 ) -> Result<(PropertyValue, usize), Error> {
     let (tag, new_offset) = tags::decode_tag(data, offset)?;
-    if tag.class != TagClass::Application {
-        return Err(Error::decoding(
-            offset,
-            format!("expected application tag, got context tag {}", tag.number),
+    if tag.class == TagClass::Context {
+        if tag.is_opening {
+            let (_content, after) = tags::extract_context_value(data, new_offset, tag.number)?;
+            return Ok((
+                PropertyValue::ApplicationData(data[offset..after].to_vec()),
+                after,
+            ));
+        }
+        if tag.is_closing {
+            return Err(Error::decoding(offset, "unexpected closing tag"));
+        }
+        let content_end = new_offset
+            .checked_add(tag.length as usize)
+            .ok_or_else(|| Error::decoding(new_offset, "length overflow"))?;
+        if data.len() < content_end {
+            return Err(Error::buffer_too_short(content_end, data.len()));
+        }
+        return Ok((
+            PropertyValue::ApplicationData(data[offset..content_end].to_vec()),
+            content_end,
         ));
     }
     if tag.is_opening || tag.is_closing {
@@ -536,6 +560,11 @@ pub fn encode_property_value(buf: &mut BytesMut, value: &PropertyValue) -> Resul
             for v in values {
                 encode_property_value(buf, v)?;
             }
+        }
+        PropertyValue::ApplicationData(bytes) => {
+            // Already-encoded application-layer content (a context-tagged
+            // CHOICE/SEQUENCE production) is emitted verbatim.
+            buf.put_slice(bytes);
         }
     }
     Ok(())

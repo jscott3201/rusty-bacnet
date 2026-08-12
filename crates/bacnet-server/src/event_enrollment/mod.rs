@@ -567,6 +567,17 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
         };
 
         let params = match enrollment.read_property(PropertyIdentifier::EVENT_PARAMETERS, None) {
+            // Framed wire form (the EventEnrollment object's read arm emits
+            // full ASN.1 CHOICE framing).
+            Ok(PropertyValue::ApplicationData(bytes)) => {
+                match bacnet_encoding::constructed::decode_event_parameter(&bytes, 0) {
+                    Ok((ep, _)) => ep,
+                    // Malformed framed value: nothing to evaluate.
+                    Err(_) => continue,
+                }
+            }
+            // Legacy flat application-tagged form (downstream/custom object
+            // types that have not migrated to the framed read arm).
             Ok(v) => match BACnetEventParameter::decode(&v) {
                 Ok(ep) => ep,
                 // Malformed structured value: nothing to evaluate.
