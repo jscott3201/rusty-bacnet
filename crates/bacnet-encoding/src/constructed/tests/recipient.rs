@@ -125,7 +125,7 @@ fn destination_broadcast_address_golden() {
 
 #[test]
 fn destination_list_eight_entries_round_trip() {
-    // Annex K.2.15 (AE-N-A) requires at least 8 writable Recipient_List
+    // Annex K.2.25 (AE-CRL-B) requires at least 8 writable Recipient_List
     // entries; encode/decode a full 8-entry list as concatenation.
     let entries: Vec<BACnetDestination> = (0..8u32)
         .map(|i| {

@@ -93,7 +93,7 @@ fn recipient_address_preserves_network_number_all_forms() {
 
 #[test]
 fn recipient_list_framed_eight_entry_write_round_trip() {
-    // Annex K.2.25 (AE-N-A BIBB) requires at least 8 writable Recipient_List
+    // Annex K.2.25 (AE-CRL-B) requires at least 8 writable Recipient_List
     // entries: write a framed 8-entry BACnetLIST, read it back.
     let mut nc = NotificationClass::new(9, "NC-9").unwrap();
     let entries: Vec<BACnetDestination> = (0..8u32)

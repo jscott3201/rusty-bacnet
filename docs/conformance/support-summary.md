@@ -13,7 +13,7 @@
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 15 |
-| Priority | P1 | 11 |
+| Priority | P1 | 14 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
@@ -26,7 +26,7 @@
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
 | Status | in-progress | 3 |
-| Status | supported-with-clause-evidence | 1 |
+| Status | supported-with-clause-evidence | 4 |
 | Status | unknown-pending-source-review | 4 |
 
 ## Ledger Rows
@@ -45,9 +45,12 @@
 | `BACNET-10-PTP` | Clause 10 | P3 | unknown-pending-source-review | 0 |
 | `BACNET-11-LONTALK` | Clause 11 | P3 | unknown-pending-source-review | 0 |
 | `BACNET-12-OBJECT-MODEL` | Clauses 12-19 | P1 | implementation-present-needs-conformance-tests | 3 |
+| `BACNET-12-RECIPIENT-LIST-FRAMING` | Clause 12.21, Clause 21 | P1 | supported-with-clause-evidence | 1 |
+| `BACNET-12-EVENT-PARAMETERS-FRAMING` | Clause 12.12, Clause 21 | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-13-COV-SUBSCRIPTIONS` | Clauses 13.14-13.18 | P1 | implementation-present-needs-conformance-tests | 0 |
 | `BACNET-20-ENCODING` | Clause 20 | P1 | implementation-present-needs-negative-tests | 2 |
 | `BACNET-21-FORMAL-APDUS` | Clause 21 | P1 | implementation-present-needs-conformance-tests | 2 |
+| `BACNET-21-TIMESTAMP-CHOICE` | Clause 21 (BACnetTimeStamp), Clause 20.2.1.5 | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-A-PICS` | Annex A | P1 | in-progress | 2 |
 | `BACNET-J-BVLC-FUNCTION-CODES` | Annex J.2 | P0 | implementation-present-needs-conformance-tests | 2 |
 | `BACNET-J-ORIGINAL-UNICAST-NPDU` | Annex J | P0 | implementation-present-needs-negative-tests | 1 |

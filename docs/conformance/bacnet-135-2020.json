@@ -213,6 +213,32 @@
       "notes": "Initial family row only; later work should split high-claim services and object families into detailed rows."
     },
     {
+      "id": "BACNET-12-RECIPIENT-LIST-FRAMING",
+      "standard_anchor": "Clause 12.21, Clause 21",
+      "priority": "P1",
+      "requirement_summary": "Recipient_List reads and writes use the Clause 21 BACnetDestination framing: seven application-tagged members in order (valid-days BACnetDaysOfWeek, from-time, to-time, recipient, process-identifier, issue-confirmed-notifications, transitions) concatenated as a BACnetLIST, with BACnetRecipient discriminated by context tag (device [0] primitive ObjectIdentifier, address [1] constructed BACnetAddress of application Unsigned16 + OCTET STRING).",
+      "status": "supported-with-clause-evidence",
+      "code_anchors": ["crates/bacnet-encoding/src/constructed/recipient.rs", "crates/bacnet-objects/src/notification_class/mod.rs"],
+      "positive_tests": ["crates/bacnet-encoding/src/constructed/tests/recipient.rs", "crates/bacnet-objects/src/notification_class/tests/properties.rs", "crates/bacnet-objects/src/notification_class/tests/recipient_list.rs", "crates/bacnet-objects/src/notification_class/tests/recipients.rs"],
+      "negative_tests": ["crates/bacnet-encoding/src/constructed/tests/recipient.rs", "crates/bacnet-objects/src/notification_class/tests/recipient_list.rs"],
+      "benchmarks": [],
+      "public_claims": ["README BACnet object implementations feature"],
+      "notes": "Split child of BACNET-12-OBJECT-MODEL. Golden vectors cover the device, address (nonzero network), and broadcast (zero-length MAC) forms; the 8-entry list round-trip covers the Annex K.2.25 AE-CRL-B minimum-entries posture; the write path and the routing filter share one flat-entry decoder, and the pre-#152 flat application-tagged form remains accepted there as a compatibility fallback. Remaining work: interop evidence against a second implementation and NotificationForwarder Recipient_List modeling (its property is a stub today)."
+    },
+    {
+      "id": "BACNET-12-EVENT-PARAMETERS-FRAMING",
+      "standard_anchor": "Clause 12.12, Clause 21",
+      "priority": "P1",
+      "requirement_summary": "Event_Parameters and Fault_Parameters read/write use the full Clause 21 ASN.1 CHOICE framing of BACnetEventParameter and BACnetFaultParameter: alternatives over SEQUENCEs as opening/closing context tag pairs with context-tagged members, explicitly tagged inner CHOICEs, fault-out-of-range inner CHOICEs discovered by application tag, and BACnetPropertyStates elements with the 135-2020 CHOICE tags.",
+      "status": "supported-with-clause-evidence",
+      "code_anchors": ["crates/bacnet-encoding/src/constructed/event_parameter.rs", "crates/bacnet-encoding/src/constructed/fault_parameter.rs", "crates/bacnet-encoding/src/constructed/mod.rs", "crates/bacnet-objects/src/event_enrollment/mod.rs", "crates/bacnet-server/src/event_enrollment/mod.rs"],
+      "positive_tests": ["crates/bacnet-encoding/src/constructed/tests/event_parameter.rs", "crates/bacnet-encoding/src/constructed/tests/fault_parameter.rs", "crates/bacnet-encoding/src/constructed/tests/mod.rs", "crates/bacnet-objects/src/event_enrollment/tests", "crates/bacnet-server/src/event_enrollment/tests"],
+      "negative_tests": ["crates/bacnet-encoding/src/constructed/tests/event_parameter.rs", "crates/bacnet-encoding/src/constructed/tests/fault_parameter.rs", "crates/bacnet-objects/src/event_enrollment/tests"],
+      "benchmarks": [],
+      "public_claims": ["README BACnet object implementations feature"],
+      "notes": "Split child of BACNET-12-OBJECT-MODEL. Evidence covers the modeled alternatives (change-of-bitstring/change-of-state/change-of-value/floating-limit/out-of-range/extended; all eight fault parameters) with golden vectors and round-trips, Opaque byte-for-byte preservation of unmodeled alternatives, rejection of omitted/deprecated/reserved tags 6/7/12/19, property-state goldens, and the legacy flat + OctetString-to-Opaque write fallback retained per #129. The framed property-state codec uses 135-2020 CHOICE tags which correct invented pre-2020 tags for door/timer/lift variants; the older BACnetNotificationParameters codec in bacnet-services still uses the old tags for those variants -- reconciling it is follow-up work with its own wire change (out of this row's scope)."
+    },
+    {
       "id": "BACNET-13-COV-SUBSCRIPTIONS",
       "standard_anchor": "Clauses 13.14-13.18",
       "priority": "P1",
@@ -280,6 +306,19 @@
       "benchmarks": ["benchmarks/benches/encoding.rs"],
       "public_claims": ["README supported services", "docs/python-api.md service APIs"],
       "notes": "Needs service-by-service fixture coverage in later PRs."
+    },
+    {
+      "id": "BACNET-21-TIMESTAMP-CHOICE",
+      "standard_anchor": "Clause 21 (BACnetTimeStamp), Clause 20.2.1.5",
+      "priority": "P1",
+      "requirement_summary": "All BACnetTimeStamp producers and consumers share one codec: time [0] as a primitive context tag 0 of length 4 holding raw Time octets, sequence-number [1] constrained to Unsigned (0..65535) and enforced on encode and decode, datetime [2] as an opening/closing tag 2 pair around application-tagged Date and Time, in both bare-CHOICE (SEQUENCE OF member) and field-wrapped forms.",
+      "status": "supported-with-clause-evidence",
+      "code_anchors": ["crates/bacnet-encoding/src/primitives/mod.rs", "crates/bacnet-services/src/alarm_event/get_event_information.rs"],
+      "positive_tests": ["crates/bacnet-encoding/src/primitives/tests.rs", "crates/bacnet-services/src/alarm_event/tests/get_event_information_timestamps.rs"],
+      "negative_tests": ["crates/bacnet-encoding/src/primitives/tests.rs", "crates/bacnet-services/src/alarm_event/tests/get_event_information_timestamps.rs"],
+      "benchmarks": [],
+      "public_claims": ["README supported services table (AcknowledgeAlarm, GetEventInformation)"],
+      "notes": "Split child of BACNET-21-FORMAL-APDUS. Resolves the divergent dual-codec defect from #259 per the Clause 20.2.1 tag-form rules: time [0] tags the primitive base type Time, so the primitives codec's primitive-tag form is conformant and the GetEventInformationAck opening-tag-0 form was removed. Golden vectors, 0/65535 boundary acceptance, 65536 and 3-octet overflow rejection, and a cross-call-site primitives<->GetEventInformationAck matrix all run in-tree."
     },
     {
       "id": "BACNET-A-PICS",
