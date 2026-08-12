@@ -92,6 +92,80 @@ fn recipient_address_preserves_network_number_all_forms() {
 }
 
 #[test]
+fn recipient_list_indexed_write_rejected_list_unchanged() {
+    // Regression (review blocker): an indexed Recipient_List write silently
+    // replaced the whole list with the written destination after the framing
+    // migration. Dev @ 6b9ac4f rejects such writes with
+    // PROPERTY/INVALID_DATA_TYPE; Recipient_List is a BACnetLIST, not an
+    // array (Clause 15.5) — restore the rejection.
+    let mut nc = NotificationClass::new(1, "NC-1").unwrap();
+    nc.add_destination(make_dest_device(10));
+    nc.add_destination(make_dest_device(20));
+    nc.add_destination(make_dest_device(30));
+
+    // Framed single destination at an index.
+    let mut framed = bytes::BytesMut::new();
+    bacnet_encoding::constructed::encode_destination_list(&mut framed, &[make_dest_device(99)]);
+    let result = nc.write_property(
+        PropertyIdentifier::RECIPIENT_LIST,
+        Some(2),
+        PropertyValue::ApplicationData(framed.to_vec()),
+        None,
+    );
+    match result.unwrap_err() {
+        Error::Protocol { class, code } => {
+            assert_eq!(
+                class,
+                bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
+            );
+            assert_eq!(
+                code,
+                bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE.to_raw() as u32
+            );
+        }
+        other => panic!("expected PROPERTY/INVALID_DATA_TYPE, got {other:?}"),
+    }
+
+    // Legacy flat single-entry shape (what an indexed network write decodes
+    // to) — rejected too.
+    let flat_single = PropertyValue::List(vec![
+        PropertyValue::BitString {
+            unused_bits: 1,
+            data: vec![0xFE],
+        },
+        PropertyValue::Time(make_time(0, 0)),
+        PropertyValue::Time(make_time(23, 59)),
+        PropertyValue::ObjectIdentifier(ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap()),
+        PropertyValue::Unsigned(1),
+        PropertyValue::Boolean(false),
+        PropertyValue::BitString {
+            unused_bits: 5,
+            data: vec![0xE0],
+        },
+    ]);
+    assert!(nc
+        .write_property(
+            PropertyIdentifier::RECIPIENT_LIST,
+            Some(1),
+            flat_single,
+            None
+        )
+        .is_err());
+
+    // The whole list is untouched.
+    assert_eq!(nc.recipient_list.len(), 3);
+    let instances: Vec<u32> = nc
+        .recipient_list
+        .iter()
+        .map(|d| match &d.recipient {
+            BACnetRecipient::Device(oid) => oid.instance_number(),
+            other => panic!("expected Device recipient, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(instances, vec![10, 20, 30]);
+}
+
+#[test]
 fn recipient_list_framed_eight_entry_write_round_trip() {
     // Annex K.2.25 (AE-CRL-B) requires at least 8 writable Recipient_List
     // entries: write a framed 8-entry BACnetLIST, read it back.

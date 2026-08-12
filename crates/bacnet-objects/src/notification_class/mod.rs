@@ -161,7 +161,7 @@ impl BACnetObject for NotificationClass {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
@@ -173,6 +173,16 @@ impl BACnetObject for NotificationClass {
             return Err(common::invalid_data_type_error());
         }
         if property == PropertyIdentifier::RECIPIENT_LIST {
+            // Indexed (array-element) writes: Clause 15.5 permits an array
+            // index only with array datatypes and Recipient_List is a
+            // BACnetLIST, not an array. Dev rejected indexed network writes
+            // with PROPERTY/INVALID_DATA_TYPE (the panel's baseline) — keep
+            // rejecting them instead of "replacing the list with the single
+            // written destination". Indexed-array Recipient_List semantics
+            // belong to the #260 family (Tranche K).
+            if array_index.is_some() {
+                return Err(common::invalid_data_type_error());
+            }
             self.recipient_list = match &value {
                 // Framed wire form (Clause 12.21 BACnetLIST of
                 // BACnetDestination): strict — one malformed entry rejects
