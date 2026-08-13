@@ -14,10 +14,11 @@ use crate::event_enrollment::EventEnrollmentEvalState;
 /// Object-owned state that cannot be reconstructed from property readback.
 ///
 /// This token supports the server's stronger-than-Clause-15.10 rollback policy
-/// for WritePropertyMultiple. Most properties need no token: reading the old
-/// value and writing it back is sufficient. Event-detection resets and an
-/// unconfigured `Time_Delay_Normal` are exceptions because their reads omit
-/// private state or return an effective fallback value.
+/// for WritePropertyMultiple. The server still snapshots readable property
+/// values when a token exists; the token supplements that snapshot with state
+/// hidden by readback. Event-detection resets and an unconfigured
+/// `Time_Delay_Normal` need this because their reads omit private state or
+/// return an effective fallback value.
 #[doc(hidden)]
 pub struct WritePropertyRollback(Box<dyn Any + Send + Sync>);
 
@@ -110,6 +111,7 @@ pub trait BACnetObject: Send + Sync {
     /// The default returns `None`; the server then snapshots the readable
     /// property value as before. Implementations may return a token for writes
     /// whose side effects or fallback-backed storage make that replay lossy.
+    /// The token is restored after readable property snapshots are replayed.
     #[doc(hidden)]
     fn capture_write_property_rollback(
         &self,

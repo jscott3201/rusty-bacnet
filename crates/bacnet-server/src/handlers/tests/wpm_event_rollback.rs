@@ -338,14 +338,18 @@ fn wpm_reports_object_state_rollback_failure() {
     let mut request_bytes = BytesMut::new();
     request.encode(&mut request_bytes);
 
-    let error = handle_write_property_multiple(&mut db, &request_bytes).unwrap_err();
+    let (result, residual_oids) =
+        handle_write_property_multiple_with_residuals(&mut db, &request_bytes);
+    let error = result.unwrap_err();
     assert!(error.to_string().contains("rollback failed"));
+    assert_eq!(residual_oids, vec![oid]);
     assert_eq!(
         db.get(&oid)
             .unwrap()
             .read_property(PropertyIdentifier::DESCRIPTION, None)
             .unwrap(),
-        PropertyValue::CharacterString("changed".into())
+        PropertyValue::CharacterString("before".into()),
+        "the readable property snapshot is independent of the failed private-state token"
     );
 }
 

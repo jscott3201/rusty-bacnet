@@ -132,10 +132,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
             s if s == ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE => {
-                let result = {
+                let (result, residual_oids) = {
                     let mut db = db.write().await;
-                    handlers::handle_write_property_multiple(&mut db, &req.service_request)
+                    handlers::handle_write_property_multiple_with_residuals(
+                        &mut db,
+                        &req.service_request,
+                    )
                 };
+                written_oids = residual_oids;
                 match result {
                     Ok(oids) => {
                         written_oids = oids;
