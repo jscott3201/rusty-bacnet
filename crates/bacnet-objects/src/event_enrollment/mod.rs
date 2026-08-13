@@ -540,6 +540,27 @@ impl BACnetObject for EventEnrollmentObject {
         Ok(())
     }
 
+    /// Acknowledge an alarm transition (the AcknowledgeAlarm service route,
+    /// Clause 13.9): Clause 13.2.3 sets the bit on the acknowledgment
+    /// indication — unconditional and idempotent, so a repeated ack succeeds
+    /// again. A detection-DISABLED enrollment instead refuses with
+    /// OBJECT/NO_ALARM_CONFIGURED, Table 13-10's "The object exists but does
+    /// not support or is not configured for event generation": it can
+    /// generate nothing, and Clause 12.12 keeps its `Acked_Transitions` at
+    /// the initial condition, which an accepted ack would break.
+    /// Out_Of_Service does not gate the ack: no clause bars acknowledging a
+    /// notification already issued while the object is out of service.
+    fn acknowledge_alarm(&mut self, transition_bit: u8) -> Result<(), bacnet_types::error::Error> {
+        if !self.event_detection_enable {
+            return Err(bacnet_types::error::Error::Protocol {
+                class: bacnet_types::enums::ErrorClass::OBJECT.to_raw() as u32,
+                code: bacnet_types::enums::ErrorCode::NO_ALARM_CONFIGURED.to_raw() as u32,
+            });
+        }
+        self.acked_transitions |= transition_bit & 0x07;
+        Ok(())
+    }
+
     /// Clause 13.2.3's transition-received maintenance of `Acked_Transitions`:
     /// the evaluator resolves `Ack_Required` from the referenced Notification
     /// Class object and this call applies the outcome — clear the bit when

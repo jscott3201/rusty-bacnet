@@ -384,3 +384,81 @@ fn event_enable_suppresses_distribution_not_same_state_actions() {
     assert_eq!(transitions[0].change.from, EventState::OFFNORMAL);
     assert_eq!(transitions[0].change.to, EventState::OFFNORMAL);
 }
+
+/// The ack maintenace is direction-complete: a recovery (OFFNORMAL -> NORMAL)
+/// whose Notification Class requires TO_NORMAL acknowledgment clears the
+/// TO_NORMAL bit — the evaluator does not privilege the offnormal direction.
+#[test]
+fn acked_transitions_to_normal_clear_with_ack_required() {
+    let (mut db, ee_oid, bi_oid) = setup_cos(1, &[1], 0);
+
+    let mut nc = NotificationClass::new(9, "NC-9").unwrap();
+    nc.ack_required = [false, false, true]; // TO_NORMAL
+    db.add(Box::new(nc)).unwrap();
+    db.get_mut(&ee_oid)
+        .unwrap()
+        .write_property(
+            PropertyIdentifier::NOTIFICATION_CLASS,
+            None,
+            PropertyValue::Unsigned(9),
+            None,
+        )
+        .unwrap();
+
+    // NORMAL -> OFFNORMAL (not ack-required): TO_OFFNORMAL bit stays set.
+    assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
+    assert_eq!(acked_transitions(&db, &ee_oid), 0b111);
+
+    // OFFNORMAL -> NORMAL with TO_NORMAL ack required: bit 2 clears.
+    set_monitored(&mut db, &bi_oid, 0);
+    assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
+    assert_eq!(
+        acked_transitions(&db, &ee_oid),
+        0b011,
+        "TO_NORMAL ack owed -> bit 2 cleared (13.2.3 is direction-complete)"
+    );
+}
+
+/// 13.2.3 gates the bit on Ack_Required, NEVER on Event_Enable (Clause
+/// 12.12 scopes Event_Enable to external distribution): a transition with
+/// distribution suppressed still clears its ack-owed bit.
+#[test]
+fn ack_bit_maintenance_is_independent_of_event_enable() {
+    let (mut db, ee_oid, _bi_oid) = setup_cos(1, &[1], 0);
+
+    let mut nc = NotificationClass::new(11, "NC-11").unwrap();
+    nc.ack_required = [true, false, false];
+    db.add(Box::new(nc)).unwrap();
+    {
+        let obj = db.get_mut(&ee_oid).unwrap();
+        obj.write_property(
+            PropertyIdentifier::NOTIFICATION_CLASS,
+            None,
+            PropertyValue::Unsigned(11),
+            None,
+        )
+        .unwrap();
+        obj.write_property(
+            PropertyIdentifier::EVENT_ENABLE,
+            None,
+            PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![0x60], // TO_FAULT + TO_NORMAL only; TO_OFFNORMAL not distributed
+            },
+            None,
+        )
+        .unwrap();
+    }
+
+    let transitions = evaluate_event_enrollments(&mut db, 1);
+    assert_eq!(transitions.len(), 1);
+    assert!(
+        !transitions[0].distribute,
+        "TO_OFFNORMAL distribution is suppressed"
+    );
+    assert_eq!(
+        acked_transitions(&db, &ee_oid),
+        0b110,
+        "...while the ack-owed bit STILL clears — Event_Enable never scopes it"
+    );
+}
