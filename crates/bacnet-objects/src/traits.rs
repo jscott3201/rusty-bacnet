@@ -223,9 +223,11 @@ pub trait BACnetObject: Send + Sync {
     /// This is the read half of the internal channel the server's Event
     /// Enrollment evaluator uses to persist per-enrollment algorithm state
     /// across evaluation cycles — the pending (delayed) transition countdown
-    /// (#163). Like [`set_event_state_internal`](Self::set_event_state_internal)
-    /// it deliberately bypasses the network property model: the countdown is
-    /// not a BACnet property, and 135-2020 assigns its existence to local
+    /// (#163) and the value that caused the last transition to OFFNORMAL
+    /// (Clause 13.3.2 condition (c)). Like
+    /// [`set_event_state_internal`](Self::set_event_state_internal) it
+    /// deliberately bypasses the network property model: neither slot is a
+    /// BACnet property, and 135-2020 assigns their initialization to local
     /// matters.
     ///
     /// The default returns `None` — objects without algorithmic event
@@ -252,6 +254,41 @@ pub trait BACnetObject: Send + Sync {
     fn set_enrollment_eval_state_internal(
         &mut self,
         _state: EventEnrollmentEvalState,
+    ) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
+    /// Set or clear one `Acked_Transitions` bit on a received event-state
+    /// transition.
+    ///
+    /// Implements the alarm-acknowledgment half of Clause 13.2.2.1.4's fourth
+    /// transition action ("indicate the transition to the Alarm-Acknowledgment
+    /// process"), per Clause 13.2.3: "When an event state transition is
+    /// received, the corresponding bit in Acked_Transitions is either set or
+    /// cleared. If the corresponding bit in Ack_Required is set, then the bit
+    /// in Acked_Transitions is cleared, otherwise it is set." The caller (the
+    /// server evaluator) resolves `Ack_Required` from the referenced
+    /// Notification Class object and passes the outcome as `acknowledged`;
+    /// this method performs only the bit maintenance.
+    ///
+    /// `transition_bit` is the transition direction's bit mask in
+    /// `Acked_Transitions`' internal bit0-first form (`0x01` TO_OFFNORMAL,
+    /// `0x02` TO_FAULT, `0x04` TO_NORMAL). The set half overlaps the
+    /// network-reachable [`acknowledge_alarm`](Self::acknowledge_alarm), which
+    /// also ORs the bit in per Clause 13.2.3's acknowledgment-indication
+    /// paragraph; the clear half has no network route by design (a property
+    /// write could fabricate or erase acknowledgments — see the
+    /// `write_generic_event_properties!` denial comment).
+    ///
+    /// The **default** returns `Err`, so objects without an algorithmic
+    /// `Acked_Transitions` opt out.
+    fn set_acked_transitions_internal(
+        &mut self,
+        _transition_bit: u8,
+        _acknowledged: bool,
     ) -> Result<(), Error> {
         Err(Error::Protocol {
             class: ErrorClass::OBJECT.to_raw() as u32,

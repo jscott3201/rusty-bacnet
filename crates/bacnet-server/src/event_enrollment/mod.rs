@@ -20,11 +20,19 @@
 //! target never restarts, changed target re-seeds — without sharing code
 //! across the objects/server boundary.
 //!
-//! Known limitation (#166): an indicated transition identical to the current
-//! state is still dropped — Clause 13.2.2.1.4's same-state transition actions
-//! and the CHANGE_OF_VALUE baseline (#137) are follow-on work; likewise no
-//! notification is sent here (#127, tranche E) and `Event_Time_Stamps` /
-//! `Event_Message_Texts` stay unmodeled (#264).
+//! Transition actions (#166): an *indicated* transition executes Clause
+//! 13.2.2.1.4's actions even when it does not change the event state — the
+//! specific returned state is stored in `Event_State`, the corresponding
+//! `Acked_Transitions` bit is set/cleared per the referenced Notification
+//! Class's `Ack_Required` (Clause 13.2.3), and the transition is emitted with
+//! its `Event_Enable`-scoped `distribute` flag. Which algorithms can actually
+//! indicate a same-state transition: CHANGE_OF_STATE condition (c)
+//! (implemented) and CHANGE_OF_VALUE (follow-on #137, with the detection
+//! baseline it needs); OUT_OF_RANGE / FLOATING_LIMIT define none.
+//! What is NOT here, by design: `Event_Time_Stamps` / `Event_Message_Texts`
+//! are not modeled on the EE object (tranche E, #264), and no notification
+//! is sent (#127, tranche E) — the lifecycle task only logs the returned
+//! transitions.
 
 mod algorithms;
 
@@ -54,7 +62,9 @@ pub struct EventEnrollmentTransition {
     pub enrollment_oid: ObjectIdentifier,
     /// The monitored object whose property triggered the transition.
     pub monitored_oid: ObjectIdentifier,
-    /// The detected state change.
+    /// The detected state change. `from == to` is a genuine same-state
+    /// transition (Clause 13.2.2.1.4) — e.g. CHANGE_OF_STATE condition (c)'s
+    /// OFFNORMAL→OFFNORMAL re-indication.
     pub change: EventStateChange,
     /// The event type that was evaluated.
     pub event_type: EventType,
@@ -133,6 +143,43 @@ fn params_fingerprint(
     h
 }
 
+/// Resolve whether the Notification Class referenced by an enrollment
+/// requires acknowledgment of `transition_bit`.
+///
+/// Clause 13.2.3: "Whether or not an acknowledgment is required is determined
+/// by the Ack_Required property from the referenced Notification Class
+/// object." A missing or unreadable Notification Class resolves to
+/// not-required — the standard's fallback for an absent parameter is the
+/// "otherwise it is set" half of the same sentence, which leaves
+/// `Acked_Transitions` alone-equals-acknowledged rather than stranding a
+/// transition permanently unacknowledged for want of a class object.
+fn ack_required_for_transition(
+    db: &ObjectDatabase,
+    enrollment: &dyn BACnetObject,
+    transition_bit: u8,
+) -> bool {
+    let Ok(PropertyValue::Unsigned(nc_instance)) =
+        enrollment.read_property(PropertyIdentifier::NOTIFICATION_CLASS, None)
+    else {
+        return false;
+    };
+    let Ok(nc_oid) = ObjectIdentifier::new(
+        ObjectType::NOTIFICATION_CLASS,
+        u32::try_from(nc_instance).unwrap_or(u32::MAX),
+    ) else {
+        return false;
+    };
+    let Some(nc) = db.get(&nc_oid) else {
+        return false;
+    };
+    match nc.read_property(PropertyIdentifier::ACK_REQUIRED, None) {
+        Ok(PropertyValue::BitString { data, .. }) => {
+            bacnet_types::bitstring::unpack_octet(&data, 3) & transition_bit != 0
+        }
+        _ => false,
+    }
+}
+
 /// What phase 1 decided for one enrollment, applied under a mutable borrow in
 /// phase 2 (phase 1 holds immutable database borrows to read monitored
 /// objects, so all mutation is deferred).
@@ -150,6 +197,8 @@ struct FiredTransition {
     from: EventState,
     to: EventState,
     distribute: bool,
+    transition_bit: u8,
+    ack_required: bool,
 }
 
 impl EnrollmentUpdate {
@@ -344,7 +393,12 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
                 };
                 (
                     *time_delay,
-                    eval_change_of_state_struct(list_of_values, val, current_state),
+                    eval_change_of_state_struct(
+                        list_of_values,
+                        val,
+                        current_state,
+                        eval_state.last_offnormal_value,
+                    ),
                 )
             }
             BACnetEventParameter::ChangeOfBitstring {
@@ -459,11 +513,20 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
             continue;
         };
 
+        // The transition fired. Its causal record lands now: a fired
+        // OFFNORMAL stores the value that caused it, for CHANGE_OF_STATE
+        // condition (c) on later passes.
+        if let Some(causing) = fired.offnormal_value {
+            eval_state.last_offnormal_value = Some(causing);
+            eval_state_dirty = true;
+        }
+
         // `Event_Enable` governs distribution only (Clause 12.12). The
         // transition is recorded either way; the flag rides along so the
         // notification pipeline can suppress the send (#127).
         let transition_bit = EventTransition::for_target_state(fired.target).bit_mask();
         let distribute = event_enable & transition_bit != 0;
+        let ack_required = ack_required_for_transition(db, enrollment, transition_bit);
 
         updates.push((
             *oid,
@@ -475,6 +538,8 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
                     from: current_state,
                     to: fired.target,
                     distribute,
+                    transition_bit,
+                    ack_required,
                 }),
             },
         ));
@@ -490,10 +555,18 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
             // the network `write_property(EVENT_STATE, …)` route. `Event_State`
             // is algorithmically derived (ASHRAE 135-2020 Clause 12.12) and
             // read-only over the network, so the evaluator reaches the field
-            // via `set_event_state_internal` (issue #130).
+            // via `set_event_state_internal` (issue #130). The SPECIFIC
+            // returned state is stored — 13.2.2.1.4 forbids collapsing
+            // HIGH_LIMIT/LOW_LIMIT to OFFNORMAL — and the actions run for
+            // same-state transitions too (`from == to`).
             if obj.set_event_state_internal(fired.to).is_err() {
                 continue;
             }
+            // 13.2.2.1.4's fourth action, alarm-acknowledgment half (13.2.3):
+            // with the transition's Ack_Required bit set, the corresponding
+            // Acked_Transitions bit is cleared (ack now owed); otherwise it is
+            // set. The notification-distribution half is tranche E's #127.
+            let _ = obj.set_acked_transitions_internal(fired.transition_bit, !fired.ack_required);
             if let Some(state) = update.eval_state {
                 let _ = obj.set_enrollment_eval_state_internal(state);
             }

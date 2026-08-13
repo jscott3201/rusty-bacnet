@@ -29,14 +29,26 @@ pub(crate) struct Indication {
     pub target: EventState,
     /// Identity of the indicating condition, consumed by the driver's pending
     /// countdown — see `EventEnrollmentPending::condition` in bacnet-objects.
-    /// The current arms all indicate on thresholds/criteria alone, so the
-    /// target identifies the condition and this stays `0`.
+    /// CHANGE_OF_STATE discriminates by matched alarm value (Clause 13.3.2
+    /// keys its delays on *which* value is equal: "remains equal to that
+    /// value for pTimeDelay"); CHANGE_OF_BITSTRING by a hash of the masked
+    /// monitored bytes; algorithms whose delay gates a threshold condition
+    /// (OUT_OF_RANGE, FLOATING_LIMIT, CHANGE_OF_VALUE) use `0`.
     pub condition: u64,
+    /// CHANGE_OF_STATE only: the matched alarm value, recorded as the value
+    /// that caused the transition to OFFNORMAL when the transition *fires*
+    /// (drives condition (c) on later passes).
+    pub offnormal_value: Option<u32>,
 }
 
 impl Indication {
+    /// An indication carrying only a target and condition identity.
     pub(crate) fn plain(target: EventState, condition: u64) -> Self {
-        Self { target, condition }
+        Self {
+            target,
+            condition,
+            offnormal_value: None,
+        }
     }
 }
 
@@ -335,32 +347,69 @@ fn property_state_matches(state: &BACnetPropertyStates, value: u32) -> bool {
 
 /// Structured CHANGE_OF_STATE evaluation against a list of alarm values.
 ///
-/// Clause 13.3.2 conditions (a) and (b): NORMAL + value equals an alarm
-/// value → OFFNORMAL; OFFNORMAL + value equals none → NORMAL. Condition (c)
-/// is marked "Optional:" in the standard and is NOT implemented yet — see
-/// the tracked limitation in the conformance ledger.
+/// Implements Clause 13.3.2's conditions in the presented order:
+/// (a) NORMAL + monitored value equals an alarm value → OFFNORMAL;
+/// (b) OFFNORMAL + value equals no alarm value → NORMAL;
+/// (c) OFFNORMAL + value equals a *different* alarm value than the one that
+///     caused the last OFFNORMAL transition → re-indicate OFFNORMAL.
+///
+/// Condition (c) is marked "Optional:" in the standard. It is implemented
+/// here because without it an enrollment whose monitored value moves
+/// between listed alarm values would sit silently OFFNORMAL — and Clause
+/// 13.2.2.1.4 requires the transition actions even for an
+/// OFFNORMAL→OFFNORMAL result (issue #166). `last_offnormal_value` is what
+/// distinguishes (c) from an unchanged alarm condition; when it is unknown
+/// (an `Event_State` seeded by the test/setup helper rather than by
+/// evaluation), (c) declines to indicate rather than fabricating a re-entry
+/// every pass.
 pub(crate) fn eval_change_of_state_struct(
     alarm_values: &[BACnetPropertyStates],
     value: u32,
     current: EventState,
+    last_offnormal_value: Option<u32>,
 ) -> Option<Indication> {
     let matched = alarm_values
         .iter()
         .any(|s| property_state_matches(s, value));
+    let offnormal = || Indication {
+        target: EventState::OFFNORMAL,
+        condition: value as u64,
+        offnormal_value: Some(value),
+    };
     if current == EventState::NORMAL && matched {
-        Some(Indication::plain(EventState::OFFNORMAL, 0))
+        Some(offnormal())
     } else if current == EventState::OFFNORMAL && !matched {
         Some(Indication::plain(EventState::NORMAL, 0))
+    } else if current == EventState::OFFNORMAL
+        && matched
+        && last_offnormal_value.is_some_and(|caused| caused != value)
+    {
+        Some(offnormal())
     } else {
         None
     }
+}
+
+/// FNV-1a over the masked monitored bytes — the condition identity for a
+/// CHANGE_OF_BITSTRING (a) indication.
+fn masked_value_hash(mask: &[u8], value_bits: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for (i, &m) in mask.iter().enumerate() {
+        let b = value_bits.get(i).copied().unwrap_or(0) & m;
+        h = (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
 }
 
 /// Structured CHANGE_OF_BITSTRING evaluation against a bitmask and alarm values.
 ///
 /// Clause 13.3.1 conditions (a) and (b): NORMAL + masked value equals an
 /// alarm value → OFFNORMAL; OFFNORMAL + masked value equals none → NORMAL.
-/// Condition (c) ("Optional:") is NOT implemented.
+/// Condition (c) ("Optional:") is deliberately NOT implemented: it keys on a
+/// masked value "different from the value that caused the last transition to
+/// OFFNORMAL", no such baseline is retained for bitstrings, and guessing
+/// would re-indicate on every poll while a value sits unchanged in an alarm
+/// pattern — the failure mode issue #166 documented for an unguarded pass.
 pub(crate) fn eval_change_of_bitstring_struct(
     bitmask: &(u8, Vec<u8>),
     list_of_values: &[(u8, Vec<u8>)],
@@ -386,7 +435,10 @@ pub(crate) fn eval_change_of_bitstring_struct(
         }
     }
     if current == EventState::NORMAL && matched {
-        Some(Indication::plain(EventState::OFFNORMAL, 0))
+        Some(Indication::plain(
+            EventState::OFFNORMAL,
+            masked_value_hash(mask, value_bits),
+        ))
     } else if current == EventState::OFFNORMAL && !matched {
         Some(Indication::plain(EventState::NORMAL, 0))
     } else {

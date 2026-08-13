@@ -55,10 +55,10 @@ pub struct EventEnrollmentPending {
 
 /// Algorithm-side evaluation state owned by an Event Enrollment object.
 ///
-/// Not a BACnet property: the pending countdown maps to no Clause 12.12
-/// property (nor to the Table 12-14 `Time_Delay_Normal`, which is
-/// configuration and lives on the object directly). Clause 13.2.4/13.3
-/// assign the countdown's existence to local matters, so it is reachable
+/// Neither slot is a BACnet property: they map to no Clause 12.12 property
+/// (nor to the Table 12-14 `Time_Delay_Normal`, which is configuration and
+/// lives on the object directly). Clauses 13.2.4/13.3 assign the countdown's
+/// and the causal value's existence to local matters, so they are reachable
 /// only through the internal trait channel
 /// ([`BACnetObject::enrollment_eval_state_internal`] /
 /// [`BACnetObject::set_enrollment_eval_state_internal`]), mirroring the
@@ -67,6 +67,12 @@ pub struct EventEnrollmentPending {
 pub struct EventEnrollmentEvalState {
     /// Delayed transition in flight, if any.
     pub pending: Option<EventEnrollmentPending>,
+    /// The monitored value that caused the last transition to OFFNORMAL, for
+    /// CHANGE_OF_STATE condition (c) (Clause 13.3.2: a re-indication is
+    /// indicated only when the monitored value equals an alarm value
+    /// "different from the value that caused the last transition to
+    /// OFFNORMAL").
+    pub last_offnormal_value: Option<u32>,
 }
 
 /// BACnet EventEnrollment object.
@@ -102,6 +108,9 @@ pub struct EventEnrollmentObject {
     time_delay_normal: Option<u32>,
     /// Delayed transition counting down, if any. In-memory only.
     pending: Option<EventEnrollmentPending>,
+    /// Monitored value that caused the last OFFNORMAL transition (Clause
+    /// 13.3.2 condition (c)). In-memory only.
+    last_offnormal_value: Option<u32>,
 }
 
 impl EventEnrollmentObject {
@@ -139,6 +148,7 @@ impl EventEnrollmentObject {
             // never a zero.
             time_delay_normal: None,
             pending: None,
+            last_offnormal_value: None,
         })
     }
 
@@ -157,17 +167,19 @@ impl EventEnrollmentObject {
     /// object yet (#123); when they are, their initial conditions belong here
     /// — X'FF' octets / sequence number 0, and the empty string respectively.
     ///
-    /// The pending countdown is cleared too: it is an extension of the same
-    /// event-state-detection state machine the clause freezes ("this state
-    /// machine is not evaluated"), so a stale countdown must not survive
-    /// into the next enabled period and fire against a condition the object
-    /// no longer observes. The intrinsic types make the same choice for
-    /// their detectors (`analog/input.rs` clears `detector.pending` on the
+    /// The pending countdown and the last offnormal-causing value are
+    /// cleared too: they are extensions of the same event-state-detection
+    /// state machine the clause freezes ("this state machine is not
+    /// evaluated"), so a stale countdown must not survive into the next
+    /// enabled period and fire against a condition the object no longer
+    /// observes. The intrinsic types make the same choice for their
+    /// detectors (`analog/input.rs` clears `detector.pending` on the
     /// identical write).
     fn apply_detection_disabled_reset(&mut self) {
         self.event_state = EventState::NORMAL.to_raw();
         self.acked_transitions = Self::RESET_ACKED_TRANSITIONS;
         self.pending = None;
+        self.last_offnormal_value = None;
     }
 
     /// Set the description string.
@@ -486,11 +498,12 @@ impl BACnetObject for EventEnrollmentObject {
         Ok(())
     }
 
-    /// Snapshot the enrollment evaluation state (the pending countdown) for
-    /// the server evaluator.
+    /// Snapshot the enrollment evaluation state (the pending countdown and
+    /// the last offnormal-causing value) for the server evaluator.
     fn enrollment_eval_state_internal(&self) -> Option<EventEnrollmentEvalState> {
         Some(EventEnrollmentEvalState {
             pending: self.pending.clone(),
+            last_offnormal_value: self.last_offnormal_value,
         })
     }
 
@@ -507,6 +520,29 @@ impl BACnetObject for EventEnrollmentObject {
             return Err(common::write_access_denied_error());
         }
         self.pending = state.pending;
+        self.last_offnormal_value = state.last_offnormal_value;
+        Ok(())
+    }
+
+    /// Clause 13.2.3's transition-received maintenance of `Acked_Transitions`:
+    /// the evaluator resolves `Ack_Required` from the referenced Notification
+    /// Class object and this call applies the outcome — clear the bit when
+    /// ack is required, set it otherwise. Refused while detection is
+    /// disabled, the same invariant as above: "Acked_Transitions shall be
+    /// equal to [its] initial condition" while FALSE.
+    fn set_acked_transitions_internal(
+        &mut self,
+        transition_bit: u8,
+        acknowledged: bool,
+    ) -> Result<(), Error> {
+        if !self.event_detection_enable {
+            return Err(common::write_access_denied_error());
+        }
+        if acknowledged {
+            self.acked_transitions |= transition_bit & 0x07;
+        } else {
+            self.acked_transitions &= !(transition_bit & 0x07);
+        }
         Ok(())
     }
 

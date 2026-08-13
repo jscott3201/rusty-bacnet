@@ -149,6 +149,7 @@ fn enrollment_eval_state_round_trip() {
             condition: 0,
             params_fingerprint: 0xDEAD_BEEF,
         }),
+        last_offnormal_value: Some(7),
     };
     ee.set_enrollment_eval_state_internal(state.clone())
         .unwrap();
@@ -176,6 +177,7 @@ fn disabling_detection_clears_eval_state_and_refuses_writes() {
             condition: 3,
             params_fingerprint: 1,
         }),
+        last_offnormal_value: Some(3),
     })
     .unwrap();
 
@@ -192,7 +194,7 @@ fn disabling_detection_clears_eval_state_and_refuses_writes() {
         "the disable reset clears the evaluation state"
     );
 
-    // And while disabled the internal write path refuses — the invariant
+    // And while disabled the internal write paths refuse — the invariant
     // holds by construction, as with set_event_state_internal (#130).
     assert!(ee
         .set_enrollment_eval_state_internal(EventEnrollmentEvalState {
@@ -202,8 +204,10 @@ fn disabling_detection_clears_eval_state_and_refuses_writes() {
                 condition: 0,
                 params_fingerprint: 0,
             }),
+            last_offnormal_value: Some(3),
         })
         .is_err());
+    assert!(ee.set_acked_transitions_internal(0x01, false).is_err());
 
     // Re-enabling reopens the channel.
     ee.write_property(
@@ -220,20 +224,40 @@ fn disabling_detection_clears_eval_state_and_refuses_writes() {
             condition: 0,
             params_fingerprint: 9,
         }),
+        last_offnormal_value: Some(4),
     })
     .unwrap();
-    assert_eq!(
-        ee.enrollment_eval_state_internal()
-            .unwrap()
-            .pending
-            .map(|p| p.remaining),
-        Some(2)
-    );
+    let state = ee.enrollment_eval_state_internal().unwrap();
+    assert_eq!(state.pending.map(|p| p.remaining), Some(2));
+    assert_eq!(state.last_offnormal_value, Some(4));
+}
+
+/// Clause 13.2.3's bit maintenance through the internal channel: set and
+/// clear per direction, never touching the other bits.
+#[test]
+fn acked_transitions_internal_set_and_clear() {
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let read = |ee: &EventEnrollmentObject| match ee
+        .read_property(PropertyIdentifier::ACKED_TRANSITIONS, None)
+        .unwrap()
+    {
+        PropertyValue::BitString { data, .. } => bacnet_types::bitstring::unpack_octet(&data, 3),
+        other => panic!("BitString expected, got {other:?}"),
+    };
+
+    assert_eq!(read(&ee), 0b111);
+    ee.set_acked_transitions_internal(0x01, false).unwrap();
+    assert_eq!(read(&ee), 0b110, "TO_OFFNORMAL cleared (ack owed)");
+    ee.set_acked_transitions_internal(0x04, false).unwrap();
+    assert_eq!(read(&ee), 0b010, "TO_NORMAL cleared");
+    ee.set_acked_transitions_internal(0x01, true).unwrap();
+    assert_eq!(read(&ee), 0b011, "TO_OFFNORMAL re-set (acknowledged)");
 }
 
 /// The trait defaults keep custom downstream objects out of the channel:
-/// evaluation-state writes fail closed (`OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`),
-/// like `set_event_state_internal` (#130).
+/// evaluation-state writes and ack maintenance fail closed
+/// (`OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`), like `set_event_state_internal`
+/// (#130).
 #[test]
 fn eval_state_trait_defaults_reject() {
     let mut ae = AlertEnrollmentObject::new(1, "AE-1").unwrap();
@@ -241,4 +265,5 @@ fn eval_state_trait_defaults_reject() {
     assert!(ae
         .set_enrollment_eval_state_internal(EventEnrollmentEvalState::default())
         .is_err());
+    assert!(ae.set_acked_transitions_internal(0x01, false).is_err());
 }

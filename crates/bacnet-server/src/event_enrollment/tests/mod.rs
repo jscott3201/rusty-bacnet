@@ -7,6 +7,7 @@ mod detection_enable;
 mod floating_limit;
 mod integration;
 mod out_of_range;
+mod same_state;
 
 use super::*;
 use bacnet_objects::analog::AnalogInputObject;
