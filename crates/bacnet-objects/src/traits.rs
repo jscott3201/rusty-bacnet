@@ -222,18 +222,19 @@ pub trait BACnetObject: Send + Sync {
     ///
     /// This is the read half of the internal channel the server's Event
     /// Enrollment evaluator uses to persist per-enrollment algorithm state
-    /// across evaluation cycles — the pending (delayed) transition countdown
-    /// (#163) and the value that caused the last transition to OFFNORMAL
-    /// (Clause 13.3.2 condition (c)). Like
-    /// [`set_event_state_internal`](Self::set_event_state_internal) it
-    /// deliberately bypasses the network property model: neither slot is a
-    /// BACnet property, and 135-2020 assigns their initialization to local
-    /// matters.
+    /// across evaluation cycles: the pending (delayed) transition countdown,
+    /// the CHANGE_OF_VALUE detection baseline (Clause 13.3.3: "the value of
+    /// the monitored value when a transition to NORMAL is indicated"), and
+    /// the value that caused the last transition to OFFNORMAL (Clause 13.3.2
+    /// condition (c)). Like [`set_event_state_internal`](Self::set_event_state_internal)
+    /// it deliberately bypasses the network property model: none of the three
+    /// slots is a BACnet property, and 135-2020 assigns their initialization
+    /// to local matters.
     ///
     /// The default returns `None` — objects without algorithmic event
     /// detection carry no such state, and the evaluator treats `None` as an
-    /// empty state it cannot write back (delay honoring then stays
-    /// unavailable, matching this crate's pre-delay behavior).
+    /// empty state it cannot write back (delay honoring and the COV baseline
+    /// then stay unavailable, matching this crate's pre-delay behavior).
     fn enrollment_eval_state_internal(&self) -> Option<EventEnrollmentEvalState> {
         None
     }

@@ -4,17 +4,44 @@
 //! holds the pure evaluation functions — the byte-layout evaluators retained
 //! for the legacy `Opaque` path, and the structured evaluators that consume
 //! [`BACnetEventParameter`] fields directly — while `mod.rs` holds the
-//! database driver and delay gating.
+//! database driver, delay gating, and transition actions.
 //!
-//! Every structured evaluator returns an `Option<`[`Indication`]`>`: either
-//! the algorithm *indicated a transition*, or it did not ("If no condition
-//! evaluates to true, then no transition shall be indicated", Clause 13.3's
-//! common introduction). The pre-#163 code folded both into one `EventState`
-//! return and discarded each algorithm's `time_delay` entirely.
+//! Every structured evaluator returns an [`ArmEvaluation`]: either the
+//! algorithm *indicated a transition* (possibly to the state the enrollment
+//! already holds — Clause 13.2.2.1.4's same-state case), or it did not
+//! ("If no condition evaluates to true, then no transition shall be
+//! indicated", Clause 13.3's common introduction). The pre-#166 code folded
+//! both into one `EventState` return and dropped every same-state result,
+//! which made a genuine same-state indication (CHANGE_OF_VALUE's only
+//! transition kind, Figure 13-10) indistinguishable from "nothing changed".
 
 use bacnet_types::constructed::{BACnetPropertyStates, ChangeOfValueCriteria};
 use bacnet_types::enums::{EventState, EventType};
 use bacnet_types::primitives::PropertyValue;
+
+/// The outcome of one algorithm evaluation pass.
+pub(crate) struct ArmEvaluation {
+    /// The transition the algorithm indicated, if any condition was true.
+    pub indication: Option<Indication>,
+    /// A CHANGE_OF_VALUE baseline to install *this cycle, without indicating
+    /// a transition*: the first observed sample (Clause 13.3.3 leaves
+    /// pre-first-indication initialization to local matters — the policy here
+    /// is that the first sample becomes the baseline and never indicates), or
+    /// a replacement when the stored baseline no longer matches the
+    /// criterion's datatype (criteria rewritten mid-run).
+    pub establish_baseline: Option<PropertyValue>,
+}
+
+impl ArmEvaluation {
+    /// An evaluation with only an indication (or none) and no baseline
+    /// side-effect: the shape every algorithm except CHANGE_OF_VALUE has.
+    fn simple(indication: Option<Indication>) -> Self {
+        Self {
+            indication,
+            establish_baseline: None,
+        }
+    }
+}
 
 /// A transition the event algorithm indicated on this pass.
 ///
@@ -39,15 +66,22 @@ pub(crate) struct Indication {
     /// that caused the transition to OFFNORMAL when the transition *fires*
     /// (drives condition (c) on later passes).
     pub offnormal_value: Option<u32>,
+    /// CHANGE_OF_VALUE only: the sample installed as the new detection
+    /// baseline when the transition *fires* — Clause 13.3.3: "the value of
+    /// the monitored value when a transition to NORMAL is indicated shall be
+    /// used in evaluation of the conditions until the next transition to
+    /// NORMAL is indicated".
+    pub new_baseline: Option<PropertyValue>,
 }
 
 impl Indication {
     /// An indication carrying only a target and condition identity.
-    pub(crate) fn plain(target: EventState, condition: u64) -> Self {
+    fn plain(target: EventState, condition: u64) -> Self {
         Self {
             target,
             condition,
             offnormal_value: None,
+            new_baseline: None,
         }
     }
 }
@@ -254,7 +288,7 @@ fn eval_change_of_bitstring(params: &[u8], value_bits: &[u8], _current: EventSta
 ///
 /// OFFNORMAL if |current_value| >= increment, otherwise NORMAL. Retained
 /// verbatim for `Opaque` event parameters written by pre-structured clients;
-/// the structured arm has its own implementation.
+/// the structured arm uses the Clause 13.3.3 baseline semantics instead.
 fn eval_change_of_value(params: &[u8], value: f32, _current: EventState) -> EventState {
     if params.len() < 4 {
         return EventState::NORMAL;
@@ -284,13 +318,13 @@ pub(crate) fn eval_out_of_range_struct(
     deadband: f32,
     value: f32,
     current: EventState,
-) -> Option<Indication> {
+) -> ArmEvaluation {
     let new_state = eval_out_of_range(
         &encode_out_of_range_params(high_limit, low_limit, deadband),
         value,
         current,
     );
-    (new_state != current).then(|| Indication::plain(new_state, 0))
+    ArmEvaluation::simple((new_state != current).then(|| Indication::plain(new_state, 0)))
 }
 
 /// Structured FLOATING_LIMIT evaluation with an explicit setpoint.
@@ -304,13 +338,13 @@ pub(crate) fn eval_floating_limit_struct(
     deadband: f32,
     value: f32,
     current: EventState,
-) -> Option<Indication> {
+) -> ArmEvaluation {
     let new_state = eval_floating_limit(
         &encode_floating_limit_params(setpoint, high_diff_limit, low_diff_limit, deadband),
         value,
         current,
     );
-    (new_state != current).then(|| Indication::plain(new_state, 0))
+    ArmEvaluation::simple((new_state != current).then(|| Indication::plain(new_state, 0)))
 }
 
 /// Whether a [`BACnetPropertyStates`] payload equals the monitored discrete
@@ -354,20 +388,19 @@ fn property_state_matches(state: &BACnetPropertyStates, value: u32) -> bool {
 ///     caused the last OFFNORMAL transition → re-indicate OFFNORMAL.
 ///
 /// Condition (c) is marked "Optional:" in the standard. It is implemented
-/// here because without it an enrollment whose monitored value moves
-/// between listed alarm values would sit silently OFFNORMAL — and Clause
-/// 13.2.2.1.4 requires the transition actions even for an
-/// OFFNORMAL→OFFNORMAL result (issue #166). `last_offnormal_value` is what
-/// distinguishes (c) from an unchanged alarm condition; when it is unknown
-/// (an `Event_State` seeded by the test/setup helper rather than by
-/// evaluation), (c) declines to indicate rather than fabricating a re-entry
-/// every pass.
+/// here because without it an enrollment whose monitored value moves between
+/// listed alarm values would sit silently OFFNORMAL — and Clause 13.2.2.1.4
+/// requires the transition actions even for an OFFNORMAL→OFFNORMAL result
+/// (issue #166). `last_offnormal_value` is what distinguishes (c) from an
+/// unchanged alarm condition; when it is unknown (an `Event_State` seeded by
+/// the test/setup helper rather than by evaluation), (c) declines to
+/// indicate rather than fabricating a re-entry every pass.
 pub(crate) fn eval_change_of_state_struct(
     alarm_values: &[BACnetPropertyStates],
     value: u32,
     current: EventState,
     last_offnormal_value: Option<u32>,
-) -> Option<Indication> {
+) -> ArmEvaluation {
     let matched = alarm_values
         .iter()
         .any(|s| property_state_matches(s, value));
@@ -375,8 +408,9 @@ pub(crate) fn eval_change_of_state_struct(
         target: EventState::OFFNORMAL,
         condition: value as u64,
         offnormal_value: Some(value),
+        new_baseline: None,
     };
-    if current == EventState::NORMAL && matched {
+    let indication = if current == EventState::NORMAL && matched {
         Some(offnormal())
     } else if current == EventState::OFFNORMAL && !matched {
         Some(Indication::plain(EventState::NORMAL, 0))
@@ -387,7 +421,8 @@ pub(crate) fn eval_change_of_state_struct(
         Some(offnormal())
     } else {
         None
-    }
+    };
+    ArmEvaluation::simple(indication)
 }
 
 /// FNV-1a over the masked monitored bytes — the condition identity for a
@@ -403,8 +438,8 @@ fn masked_value_hash(mask: &[u8], value_bits: &[u8]) -> u64 {
 
 /// Structured CHANGE_OF_BITSTRING evaluation against a bitmask and alarm values.
 ///
-/// Clause 13.3.1 conditions (a) and (b): NORMAL + masked value equals an
-/// alarm value → OFFNORMAL; OFFNORMAL + masked value equals none → NORMAL.
+/// Clause 13.3.1 conditions: (a) NORMAL + masked value equals an alarm value
+/// → OFFNORMAL; (b) OFFNORMAL + masked value equals none → NORMAL.
 /// Condition (c) ("Optional:") is deliberately NOT implemented: it keys on a
 /// masked value "different from the value that caused the last transition to
 /// OFFNORMAL", no such baseline is retained for bitstrings, and guessing
@@ -415,7 +450,7 @@ pub(crate) fn eval_change_of_bitstring_struct(
     list_of_values: &[(u8, Vec<u8>)],
     value_bits: &[u8],
     current: EventState,
-) -> Option<Indication> {
+) -> ArmEvaluation {
     // OFFNORMAL if the masked monitored bits match any alarm pattern.
     let mask = &bitmask.1;
     let mut matched = false;
@@ -434,7 +469,7 @@ pub(crate) fn eval_change_of_bitstring_struct(
             break;
         }
     }
-    if current == EventState::NORMAL && matched {
+    let indication = if current == EventState::NORMAL && matched {
         Some(Indication::plain(
             EventState::OFFNORMAL,
             masked_value_hash(mask, value_bits),
@@ -443,45 +478,86 @@ pub(crate) fn eval_change_of_bitstring_struct(
         Some(Indication::plain(EventState::NORMAL, 0))
     } else {
         None
-    }
+    };
+    ArmEvaluation::simple(indication)
 }
 
-/// Structured CHANGE_OF_VALUE evaluation against a `cov-criteria`.
+/// Structured CHANGE_OF_VALUE evaluation against a `cov-criteria`, with the
+/// detection baseline from Clause 13.3.3.
 ///
-/// For a `bitmask` criterion the monitored value is a bitstring and the
-/// algorithm reports OFFNORMAL when any masked bit is set; for a
-/// `referenced-property-increment` criterion the monitored value is a real
-/// and the algorithm reports OFFNORMAL when `|value| >= increment`. Returns
-/// `None` when the monitored value is the wrong type for the criterion, so
-/// the caller can skip the enrollment rather than spuriously transitioning
-/// to `NORMAL`.
+/// The Figure 13-10 state machine inducts *only* transitions to NORMAL: for a
+/// REAL monitored value, "(a) If pCurrentState is NORMAL, and the absolute
+/// value of pMonitoredValue changes by an amount equal to or greater than
+/// pIncrement for pTimeDelayNormal, then indicate a transition to the NORMAL
+/// event state"; for a BIT STRING monitored value the significant (masked)
+/// bits change. This arm therefore never returns OFFNORMAL — the pre-#137
+/// implementation answered OFFNORMAL whenever `|value| >= increment`, a
+/// transition the algorithm cannot indicate, with no baseline at all.
 ///
-/// Known limitation (#137): the comparison has no change *baseline*, so a
-/// stable large magnitude keeps indicating OFFNORMAL — and Clause 13.3.3's
-/// only true condition (change against the value at the last NORMAL
-/// indication, targeting NORMAL per Figure 13-10) is unimplemented.
+/// Returns `None` when the monitored value is the wrong type for the
+/// criterion, so the caller can skip the enrollment rather than spuriously
+/// transitioning to `NORMAL`.
 pub(crate) fn eval_change_of_value_struct(
     criteria: &ChangeOfValueCriteria,
     monitored_value: &PropertyValue,
+    baseline: Option<&PropertyValue>,
     current: EventState,
-) -> Option<Option<Indication>> {
-    use bacnet_types::constructed::ChangeOfValueCriteria as C;
+) -> Option<ArmEvaluation> {
     match criteria {
-        C::Bitmask { data, .. } => {
-            let bits = extract_bitstring(monitored_value)?;
-            let mut state = EventState::NORMAL;
-            for i in 0..data.len().min(bits.len()) {
-                if (bits[i] & data[i]) != 0 {
-                    state = EventState::OFFNORMAL;
-                    break;
-                }
-            }
-            Some((state != current).then(|| Indication::plain(state, 0)))
+        ChangeOfValueCriteria::Bitmask { data: mask, .. } => {
+            let current_bits = extract_bitstring(monitored_value)?;
+            let masked_changed = |base: &[u8]| {
+                (0..mask.len()).any(|i| {
+                    let now = current_bits.get(i).copied().unwrap_or(0) & mask[i];
+                    let then = base.get(i).copied().unwrap_or(0) & mask[i];
+                    now != then
+                })
+            };
+            let eval = match baseline.and_then(extract_bitstring) {
+                // First sample (or the baseline predates a criteria-type
+                // change): establish, never indicate.
+                None => ArmEvaluation {
+                    indication: None,
+                    establish_baseline: Some(monitored_value.clone()),
+                },
+                Some(base_bits) => ArmEvaluation::simple(
+                    (masked_changed(&base_bits) && current == EventState::NORMAL).then(|| {
+                        Indication {
+                            target: EventState::NORMAL,
+                            condition: 0,
+                            offnormal_value: None,
+                            new_baseline: Some(monitored_value.clone()),
+                        }
+                    }),
+                ),
+            };
+            Some(eval)
         }
-        C::ReferencedPropertyIncrement(increment) => extract_real(monitored_value).map(|v| {
-            let state = eval_change_of_value(&increment.to_le_bytes(), v, EventState::NORMAL);
-            (state != current).then(|| Indication::plain(state, 0))
-        }),
+        ChangeOfValueCriteria::ReferencedPropertyIncrement(increment) => {
+            let value = extract_real(monitored_value)?;
+            let eval = match baseline.and_then(extract_real) {
+                None => ArmEvaluation {
+                    indication: None,
+                    establish_baseline: Some(monitored_value.clone()),
+                },
+                // pIncrement "shall provide" a positive increment; a
+                // non-positive or non-finite configuration never indicates.
+                Some(_) if !increment.is_finite() || *increment <= 0.0 => {
+                    ArmEvaluation::simple(None)
+                }
+                Some(base) => ArmEvaluation::simple(
+                    ((value - base).abs() >= *increment && current == EventState::NORMAL).then(
+                        || Indication {
+                            target: EventState::NORMAL,
+                            condition: 0,
+                            offnormal_value: None,
+                            new_baseline: Some(monitored_value.clone()),
+                        },
+                    ),
+                ),
+            };
+            Some(eval)
+        }
     }
 }
 
@@ -531,16 +607,16 @@ fn eval_legacy_le(
 
 /// Route the legacy `Opaque` path through the indication model: the byte
 /// evaluators return a bare state, so "result differs from current" is the
-/// only indication signal available — identical to the pre-#163 transition
+/// only indication signal available — identical to the pre-#166 transition
 /// predicate, so legacy configurations behave exactly as before.
 pub(crate) fn eval_legacy_le_arm(
     data: &[u8],
     monitored_value: &PropertyValue,
     current: EventState,
     event_type: EventType,
-) -> Option<Indication> {
+) -> ArmEvaluation {
     let new_state = eval_legacy_le(data, monitored_value, current, event_type);
-    (new_state != current).then(|| Indication::plain(new_state, 0))
+    ArmEvaluation::simple((new_state != current).then(|| Indication::plain(new_state, 0)))
 }
 
 /// Extract a real (f32) value from a PropertyValue.

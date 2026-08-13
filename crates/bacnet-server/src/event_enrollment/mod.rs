@@ -25,14 +25,10 @@
 //! specific returned state is stored in `Event_State`, the corresponding
 //! `Acked_Transitions` bit is set/cleared per the referenced Notification
 //! Class's `Ack_Required` (Clause 13.2.3), and the transition is emitted with
-//! its `Event_Enable`-scoped `distribute` flag. Which algorithms can actually
-//! indicate a same-state transition: CHANGE_OF_STATE condition (c)
-//! (implemented) and CHANGE_OF_VALUE (follow-on #137, with the detection
-//! baseline it needs); OUT_OF_RANGE / FLOATING_LIMIT define none.
-//! What is NOT here, by design: `Event_Time_Stamps` / `Event_Message_Texts`
-//! are not modeled on the EE object (tranche E, #264), and no notification
-//! is sent (#127, tranche E) — the lifecycle task only logs the returned
-//! transitions.
+//! its `Event_Enable`-scoped `distribute` flag. What is NOT here, by design:
+//! `Event_Time_Stamps` / `Event_Message_Texts` are not modeled on the EE
+//! object (tranche E, #264), and no notification is sent (#127, tranche E) —
+//! the lifecycle task only logs the returned transitions.
 
 mod algorithms;
 
@@ -44,12 +40,12 @@ pub use algorithms::{
 use algorithms::{
     eval_change_of_bitstring_struct, eval_change_of_state_struct, eval_change_of_value_struct,
     eval_floating_limit_struct, eval_legacy_le_arm, eval_out_of_range_struct, extract_bitstring,
-    extract_enumerated, extract_real, Indication,
+    extract_enumerated, extract_real, ArmEvaluation,
 };
 
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::event::{EventStateChange, EventTransition};
-use bacnet_objects::event_enrollment::EventEnrollmentPending;
+use bacnet_objects::event_enrollment::{EventEnrollmentEvalState, EventEnrollmentPending};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::BACnetEventParameter;
 use bacnet_types::enums::{EventState, EventType, ObjectType, PropertyIdentifier};
@@ -63,8 +59,8 @@ pub struct EventEnrollmentTransition {
     /// The monitored object whose property triggered the transition.
     pub monitored_oid: ObjectIdentifier,
     /// The detected state change. `from == to` is a genuine same-state
-    /// transition (Clause 13.2.2.1.4) — e.g. CHANGE_OF_STATE condition (c)'s
-    /// OFFNORMAL→OFFNORMAL re-indication.
+    /// transition (Clause 13.2.2.1.4), emitted by CHANGE_OF_VALUE (Figure
+    /// 13-10's NORMAL→NORMAL) and CHANGE_OF_STATE condition (c).
     pub change: EventStateChange,
     /// The event type that was evaluated.
     pub event_type: EventType,
@@ -184,10 +180,11 @@ fn ack_required_for_transition(
 /// phase 2 (phase 1 holds immutable database borrows to read monitored
 /// objects, so all mutation is deferred).
 struct EnrollmentUpdate {
-    /// Evaluation state to write back — the pending countdown — when it
-    /// changed this pass, even with no transition.
-    eval_state: Option<bacnet_objects::event_enrollment::EventEnrollmentEvalState>,
-    /// A transition that fired this pass.
+    /// Evaluation state to write back — pending countdown and/or baselines —
+    /// when it changed this pass, even with no transition.
+    eval_state: Option<EventEnrollmentEvalState>,
+    /// A transition that fired this pass, with everything the transition
+    /// actions need.
     fired: Option<FiredTransition>,
 }
 
@@ -202,9 +199,7 @@ struct FiredTransition {
 }
 
 impl EnrollmentUpdate {
-    fn eval_state_only(
-        eval_state: bacnet_objects::event_enrollment::EventEnrollmentEvalState,
-    ) -> Self {
+    fn eval_state_only(eval_state: EventEnrollmentEvalState) -> Self {
         Self {
             eval_state: Some(eval_state),
             fired: None,
@@ -216,7 +211,9 @@ impl EnrollmentUpdate {
 ///
 /// For each active enrollment, reads the monitored property, evaluates the
 /// configured algorithm, applies the Time_Delay / Time_Delay_Normal
-/// countdown, and returns the transitions that fired.
+/// countdown, executes the Clause 13.2.2.1.4 transition actions for every
+/// indicated transition that fires — same-state included — and returns the
+/// fired transitions.
 pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmentTransition> {
     let oids = db.find_by_type(ObjectType::EVENT_ENROLLMENT);
 
@@ -304,9 +301,9 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
         // Per-enrollment evaluation state owned by the object. An object whose
         // trait impl predates the channel (a downstream custom EE type)
         // reports `None`: evaluation still runs, but with no durable pending
-        // countdown — a nonzero delay then re-seeds every pass and never
-        // fires, so delays are effectively unsupported for such objects
-        // (TD=0 configurations behave exactly as before for them).
+        // countdown (a nonzero delay then re-seeds every pass and never
+        // fires — delays are effectively unsupported for such objects) and no
+        // COV baseline (every pass is a first sample, so COV never indicates).
         let eval_state_supported = enrollment.enrollment_eval_state_internal().is_some();
         let mut eval_state = enrollment
             .enrollment_eval_state_internal()
@@ -338,7 +335,7 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
         };
 
         let event_type = EventType::from_raw(event_type_raw);
-        let (time_delay, indication) = match &params {
+        let (time_delay, arm) = match &params {
             BACnetEventParameter::OutOfRange {
                 high_limit,
                 low_limit,
@@ -418,12 +415,15 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
                 criteria,
                 time_delay,
             } => {
-                let Some(ind) =
-                    eval_change_of_value_struct(criteria, &monitored_value, current_state)
-                else {
+                let Some(eval) = eval_change_of_value_struct(
+                    criteria,
+                    &monitored_value,
+                    eval_state.cov_baseline.as_ref(),
+                    current_state,
+                ) else {
                     continue;
                 };
-                (*time_delay, ind)
+                (*time_delay, eval)
             }
             // Legacy raw-octet writes are stored under the sentinel tag 0xFF
             // with the private little-endian payload — only those route to
@@ -446,6 +446,15 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
             // alternatives produce no transition here.
             _ => continue,
         };
+
+        let ArmEvaluation {
+            indication,
+            establish_baseline,
+        } = arm;
+        if let Some(baseline) = establish_baseline {
+            eval_state.cov_baseline = Some(baseline);
+            eval_state_dirty = true;
+        }
 
         let Some(ind) = indication else {
             // No condition true — or the condition that seeded the countdown
@@ -470,7 +479,7 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
             time_delay
         };
 
-        let fired: Option<Indication> = if delay == 0 {
+        let fired = if delay == 0 {
             Some(ind)
         } else {
             let mut fire = None;
@@ -513,9 +522,14 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
             continue;
         };
 
-        // The transition fired. Its causal record lands now: a fired
-        // OFFNORMAL stores the value that caused it, for CHANGE_OF_STATE
-        // condition (c) on later passes.
+        // The transition fired. Its side-effect state lands now: the COV
+        // baseline becomes the value at the indicated NORMAL transition
+        // (Clause 13.3.3), and a fired OFFNORMAL records its causing value
+        // for CHANGE_OF_STATE condition (c).
+        if let Some(baseline) = fired.new_baseline {
+            eval_state.cov_baseline = Some(baseline);
+            eval_state_dirty = true;
+        }
         if let Some(causing) = fired.offnormal_value {
             eval_state.last_offnormal_value = Some(causing);
             eval_state_dirty = true;

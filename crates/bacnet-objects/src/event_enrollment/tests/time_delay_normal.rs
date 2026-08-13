@@ -1,6 +1,6 @@
 //! `Time_Delay_Normal` on EventEnrollment (property 356, Table 12-14
 //! conformance O) and the internal evaluation-state channel the server
-//! evaluator drives (#163; ASHRAE 135-2020 Clauses 12.12, 13.3).
+//! evaluator drives (#163/#137/#166; ASHRAE 135-2020 Clauses 12.12, 13.3).
 
 use super::super::*;
 
@@ -131,8 +131,9 @@ fn time_delay_normal_write_validation() {
     );
 }
 
-/// The evaluation-state round trip: the pending countdown is owned by the
-/// object and reachable only through the internal channel.
+/// The evaluation-state round trip: pending countdown, COV baseline, and the
+/// last offnormal-causing value are owned by the object and reachable only
+/// through the internal channel.
 #[test]
 fn enrollment_eval_state_round_trip() {
     let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
@@ -149,6 +150,7 @@ fn enrollment_eval_state_round_trip() {
             condition: 0,
             params_fingerprint: 0xDEAD_BEEF,
         }),
+        cov_baseline: Some(PropertyValue::Real(2.5)),
         last_offnormal_value: Some(7),
     };
     ee.set_enrollment_eval_state_internal(state.clone())
@@ -165,8 +167,8 @@ fn enrollment_eval_state_round_trip() {
 }
 
 /// Clause 13.2.2.1's disable reset covers the evaluation state: "this state
-/// machine is not evaluated" — a stale countdown must not survive into the
-/// next enabled period.
+/// machine is not evaluated" — a stale countdown or baseline must not
+/// survive into the next enabled period.
 #[test]
 fn disabling_detection_clears_eval_state_and_refuses_writes() {
     let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
@@ -177,6 +179,7 @@ fn disabling_detection_clears_eval_state_and_refuses_writes() {
             condition: 3,
             params_fingerprint: 1,
         }),
+        cov_baseline: Some(PropertyValue::Real(1.0)),
         last_offnormal_value: Some(3),
     })
     .unwrap();
@@ -204,12 +207,13 @@ fn disabling_detection_clears_eval_state_and_refuses_writes() {
                 condition: 0,
                 params_fingerprint: 0,
             }),
-            last_offnormal_value: Some(3),
+            ..EventEnrollmentEvalState::default()
         })
         .is_err());
     assert!(ee.set_acked_transitions_internal(0x01, false).is_err());
 
-    // Re-enabling reopens the channel.
+    // Re-enabling both reopens the channel and evaluates afresh (the first
+    // COV sample after re-enable seeds a new baseline, not a transition).
     ee.write_property(
         PropertyIdentifier::EVENT_DETECTION_ENABLE,
         None,
@@ -218,18 +222,16 @@ fn disabling_detection_clears_eval_state_and_refuses_writes() {
     )
     .unwrap();
     ee.set_enrollment_eval_state_internal(EventEnrollmentEvalState {
-        pending: Some(EventEnrollmentPending {
-            state: EventState::HIGH_LIMIT,
-            remaining: 2,
-            condition: 0,
-            params_fingerprint: 9,
-        }),
-        last_offnormal_value: Some(4),
+        last_offnormal_value: Some(3),
+        ..EventEnrollmentEvalState::default()
     })
     .unwrap();
-    let state = ee.enrollment_eval_state_internal().unwrap();
-    assert_eq!(state.pending.map(|p| p.remaining), Some(2));
-    assert_eq!(state.last_offnormal_value, Some(4));
+    assert_eq!(
+        ee.enrollment_eval_state_internal()
+            .unwrap()
+            .last_offnormal_value,
+        Some(3)
+    );
 }
 
 /// Clause 13.2.3's bit maintenance through the internal channel: set and
@@ -260,10 +262,10 @@ fn acked_transitions_internal_set_and_clear() {
 /// (#130).
 #[test]
 fn eval_state_trait_defaults_reject() {
-    let mut ae = AlertEnrollmentObject::new(1, "AE-1").unwrap();
-    assert!(ae.enrollment_eval_state_internal().is_none());
-    assert!(ae
+    let mut ee = AlertEnrollmentObject::new(1, "AE-1").unwrap();
+    assert!(ee.enrollment_eval_state_internal().is_none());
+    assert!(ee
         .set_enrollment_eval_state_internal(EventEnrollmentEvalState::default())
         .is_err());
-    assert!(ae.set_acked_transitions_internal(0x01, false).is_err());
+    assert!(ee.set_acked_transitions_internal(0x01, false).is_err());
 }

@@ -55,11 +55,11 @@ pub struct EventEnrollmentPending {
 
 /// Algorithm-side evaluation state owned by an Event Enrollment object.
 ///
-/// Neither slot is a BACnet property: they map to no Clause 12.12 property
-/// (nor to the Table 12-14 `Time_Delay_Normal`, which is configuration and
-/// lives on the object directly). Clauses 13.2.4/13.3 assign the countdown's
-/// and the causal value's existence to local matters, so they are reachable
-/// only through the internal trait channel
+/// Not BACnet properties: none of the three slots maps to a Clause 12.12
+/// property (nor to the Table 12-14 `Time_Delay_Normal`, which is
+/// configuration and lives on the object directly). Clause 13.3 assigns the
+/// baseline's initialization and the countdown's existence to local matters,
+/// so they are reachable only through the internal trait channel
 /// ([`BACnetObject::enrollment_eval_state_internal`] /
 /// [`BACnetObject::set_enrollment_eval_state_internal`]), mirroring the
 /// `set_event_state_internal` precedent (issue #130).
@@ -67,6 +67,14 @@ pub struct EventEnrollmentPending {
 pub struct EventEnrollmentEvalState {
     /// Delayed transition in flight, if any.
     pub pending: Option<EventEnrollmentPending>,
+    /// CHANGE_OF_VALUE detection baseline (Clause 13.3.3: "the value of the
+    /// monitored value when a transition to NORMAL is indicated shall be used
+    /// in evaluation of the conditions until the next transition to NORMAL is
+    /// indicated"). `None` before the first sample; the first observed value
+    /// initializes it without indicating a transition ("the initialization of
+    /// the value used in evaluation before the first transition to NORMAL is
+    /// indicated is a local matter" — the policy chosen here).
+    pub cov_baseline: Option<PropertyValue>,
     /// The monitored value that caused the last transition to OFFNORMAL, for
     /// CHANGE_OF_STATE condition (c) (Clause 13.3.2: a re-indication is
     /// indicated only when the monitored value equals an alarm value
@@ -108,6 +116,8 @@ pub struct EventEnrollmentObject {
     time_delay_normal: Option<u32>,
     /// Delayed transition counting down, if any. In-memory only.
     pending: Option<EventEnrollmentPending>,
+    /// CHANGE_OF_VALUE detection baseline (Clause 13.3.3). In-memory only.
+    cov_baseline: Option<PropertyValue>,
     /// Monitored value that caused the last OFFNORMAL transition (Clause
     /// 13.3.2 condition (c)). In-memory only.
     last_offnormal_value: Option<u32>,
@@ -148,6 +158,7 @@ impl EventEnrollmentObject {
             // never a zero.
             time_delay_normal: None,
             pending: None,
+            cov_baseline: None,
             last_offnormal_value: None,
         })
     }
@@ -167,18 +178,20 @@ impl EventEnrollmentObject {
     /// object yet (#123); when they are, their initial conditions belong here
     /// — X'FF' octets / sequence number 0, and the empty string respectively.
     ///
-    /// The pending countdown and the last offnormal-causing value are
-    /// cleared too: they are extensions of the same event-state-detection
-    /// state machine the clause freezes ("this state machine is not
-    /// evaluated"), so a stale countdown must not survive into the next
-    /// enabled period and fire against a condition the object no longer
-    /// observes. The intrinsic types make the same choice for their
-    /// detectors (`analog/input.rs` clears `detector.pending` on the
-    /// identical write).
+    /// The pending countdown and both baselines are cleared too: they are
+    /// extensions of the same event-state-detection state machine the clause
+    /// freezes ("this state machine is not evaluated"), so a stale countdown
+    /// must not survive into the next enabled period and fire against a
+    /// condition the object no longer observes. The intrinsic types make the
+    /// same choice for their detectors (`analog/input.rs` clears
+    /// `detector.pending` on the identical write). The COV baseline's
+    /// initialization on re-enable is the local matter Clause 13.3.3 assigns
+    /// it; clearing is consistent with the first-sample policy.
     fn apply_detection_disabled_reset(&mut self) {
         self.event_state = EventState::NORMAL.to_raw();
         self.acked_transitions = Self::RESET_ACKED_TRANSITIONS;
         self.pending = None;
+        self.cov_baseline = None;
         self.last_offnormal_value = None;
     }
 
@@ -498,11 +511,12 @@ impl BACnetObject for EventEnrollmentObject {
         Ok(())
     }
 
-    /// Snapshot the enrollment evaluation state (the pending countdown and
-    /// the last offnormal-causing value) for the server evaluator.
+    /// Snapshot the enrollment evaluation state (pending countdown, COV
+    /// baseline, last offnormal-causing value) for the server evaluator.
     fn enrollment_eval_state_internal(&self) -> Option<EventEnrollmentEvalState> {
         Some(EventEnrollmentEvalState {
             pending: self.pending.clone(),
+            cov_baseline: self.cov_baseline.clone(),
             last_offnormal_value: self.last_offnormal_value,
         })
     }
@@ -520,6 +534,7 @@ impl BACnetObject for EventEnrollmentObject {
             return Err(common::write_access_denied_error());
         }
         self.pending = state.pending;
+        self.cov_baseline = state.cov_baseline;
         self.last_offnormal_value = state.last_offnormal_value;
         Ok(())
     }
