@@ -9,7 +9,23 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
-use crate::traits::BACnetObject;
+use crate::traits::{BACnetObject, WritePropertyRollback};
+
+enum EventEnrollmentWriteRollback {
+    Detection {
+        enabled: bool,
+        event_state: u32,
+        acked_transitions: u8,
+        evaluation: EventEnrollmentEvalState,
+    },
+    TimeDelayNormal(Option<u32>),
+}
+
+struct AlertEnrollmentWriteRollback {
+    enabled: bool,
+    event_state: u32,
+    acked_transitions: u8,
+}
 
 /// A delayed Event Enrollment transition, counting down its delay.
 ///
@@ -176,7 +192,7 @@ impl EventEnrollmentObject {
     /// respective initial conditions."
     ///
     /// `Event_Time_Stamps` and `Event_Message_Texts` are not modeled on this
-    /// object yet (#123); when they are, their initial conditions belong here
+    /// object yet (#264); when they are, their initial conditions belong here
     /// — X'FF' octets / sequence number 0, and the empty string respectively.
     ///
     /// The pending countdown and both baselines are cleared too: they are
@@ -583,6 +599,56 @@ impl BACnetObject for EventEnrollmentObject {
         Ok(())
     }
 
+    fn capture_write_property_rollback(
+        &self,
+        property: PropertyIdentifier,
+    ) -> Option<WritePropertyRollback> {
+        match property {
+            PropertyIdentifier::EVENT_DETECTION_ENABLE => Some(WritePropertyRollback::new(
+                EventEnrollmentWriteRollback::Detection {
+                    enabled: self.event_detection_enable,
+                    event_state: self.event_state,
+                    acked_transitions: self.acked_transitions,
+                    evaluation: EventEnrollmentEvalState {
+                        pending: self.pending.clone(),
+                        cov_baseline: self.cov_baseline.clone(),
+                        last_offnormal_value: self.last_offnormal_value,
+                    },
+                },
+            )),
+            PropertyIdentifier::TIME_DELAY_NORMAL => Some(WritePropertyRollback::new(
+                EventEnrollmentWriteRollback::TimeDelayNormal(self.time_delay_normal),
+            )),
+            _ => None,
+        }
+    }
+
+    fn restore_write_property_rollback(
+        &mut self,
+        rollback: WritePropertyRollback,
+    ) -> Result<(), Error> {
+        match rollback.downcast::<EventEnrollmentWriteRollback>()? {
+            EventEnrollmentWriteRollback::Detection {
+                enabled,
+                event_state,
+                acked_transitions,
+                evaluation,
+            } => {
+                self.event_detection_enable = enabled;
+                self.event_state = event_state;
+                self.acked_transitions = acked_transitions;
+                self.pending = evaluation.pending;
+                self.cov_baseline = evaluation.cov_baseline;
+                self.last_offnormal_value = evaluation.last_offnormal_value;
+                Ok(())
+            }
+            EventEnrollmentWriteRollback::TimeDelayNormal(value) => {
+                self.time_delay_normal = value;
+                Ok(())
+            }
+        }
+    }
+
     /// Mirrors the `write_property` arms above, so PICS reports what dispatch
     /// actually accepts — with one known exception, `OBJECT_NAME`.
     ///
@@ -658,8 +724,8 @@ impl BACnetObject for EventEnrollmentObject {
 /// BACnet AlertEnrollment object (type 52).
 ///
 /// Provides alert-based event enrollment. The PRESENT_VALUE is an enumerated
-/// AlertState. Supports EVENT_DETECTION_ENABLE, EVENT_ENABLE (3-bit),
-/// and NOTIFICATION_CLASS.
+/// AlertState. Supports EVENT_STATE, ACKED_TRANSITIONS,
+/// EVENT_DETECTION_ENABLE, EVENT_ENABLE (3-bit), and NOTIFICATION_CLASS.
 pub struct AlertEnrollmentObject {
     oid: ObjectIdentifier,
     name: String,
@@ -672,7 +738,16 @@ pub struct AlertEnrollmentObject {
     /// Present value — AlertState enumeration.
     pub present_value: u32,
     /// Whether event detection is enabled.
+    ///
+    /// Prefer [`Self::set_event_detection_enable`] so disabling also clears
+    /// stored event state. This field remains public for compatibility;
+    /// property reads and internal transition hooks still enforce the
+    /// disabled-state invariant after a direct assignment. Re-enable through
+    /// the setter as well: a direct FALSE-to-TRUE assignment cannot run the
+    /// reset and may expose state stored before the direct disable.
     pub event_detection_enable: bool,
+    /// Acknowledged transitions in TO_OFFNORMAL, TO_FAULT, TO_NORMAL order.
+    acked_transitions: u8,
     /// Event enable bits: 3-bit (TO_OFFNORMAL, TO_FAULT, TO_NORMAL).
     pub event_enable: u8,
     /// Notification class number.
@@ -693,9 +768,21 @@ impl AlertEnrollmentObject {
             reliability: 0,
             present_value: 0,
             event_detection_enable: true,
+            acked_transitions: 0b111,
             event_enable: 0b111,
             notification_class: 0,
         })
+    }
+
+    /// Enable or disable event detection.
+    ///
+    /// Disabling applies the Clause 13.2.2.1 initial conditions immediately.
+    pub fn set_event_detection_enable(&mut self, enabled: bool) {
+        if !enabled || !self.event_detection_enable {
+            self.event_state = EventState::NORMAL.to_raw();
+            self.acked_transitions = 0b111;
+        }
+        self.event_detection_enable = enabled;
     }
 }
 
@@ -713,6 +800,18 @@ impl BACnetObject for AlertEnrollmentObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        if property == PropertyIdentifier::STATUS_FLAGS {
+            return Ok(common::compute_status_flags(
+                self.status_flags,
+                self.reliability,
+                self.out_of_service,
+                if self.event_detection_enable {
+                    self.event_state
+                } else {
+                    EventState::NORMAL.to_raw()
+                },
+            ));
+        }
         if let Some(result) = read_common_properties!(self, property, array_index) {
             return result;
         }
@@ -734,8 +833,22 @@ impl BACnetObject for AlertEnrollmentObject {
                 Ok(PropertyValue::Unsigned(self.notification_class as u64))
             }
             p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(self.event_state))
+                Ok(PropertyValue::Enumerated(if self.event_detection_enable {
+                    self.event_state
+                } else {
+                    EventState::NORMAL.to_raw()
+                }))
             }
+            p if p == PropertyIdentifier::ACKED_TRANSITIONS => Ok(PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![bacnet_types::bitstring::pack_octet(
+                    if self.event_detection_enable {
+                        self.acked_transitions
+                    } else {
+                        0b111
+                    },
+                )],
+            }),
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -749,7 +862,7 @@ impl BACnetObject for AlertEnrollmentObject {
     ) -> Result<(), Error> {
         if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {
             if let PropertyValue::Boolean(v) = value {
-                self.event_detection_enable = v;
+                self.set_event_detection_enable(v);
                 return Ok(());
             }
             return Err(common::invalid_data_type_error());
@@ -782,6 +895,69 @@ impl BACnetObject for AlertEnrollmentObject {
         Err(common::write_access_denied_error())
     }
 
+    fn capture_write_property_rollback(
+        &self,
+        property: PropertyIdentifier,
+    ) -> Option<WritePropertyRollback> {
+        (property == PropertyIdentifier::EVENT_DETECTION_ENABLE).then(|| {
+            WritePropertyRollback::new(AlertEnrollmentWriteRollback {
+                enabled: self.event_detection_enable,
+                event_state: self.event_state,
+                acked_transitions: self.acked_transitions,
+            })
+        })
+    }
+
+    fn restore_write_property_rollback(
+        &mut self,
+        rollback: WritePropertyRollback,
+    ) -> Result<(), Error> {
+        let AlertEnrollmentWriteRollback {
+            enabled,
+            event_state,
+            acked_transitions,
+        } = rollback.downcast::<AlertEnrollmentWriteRollback>()?;
+        self.event_detection_enable = enabled;
+        self.event_state = event_state;
+        self.acked_transitions = acked_transitions;
+        Ok(())
+    }
+
+    fn set_event_state_internal(&mut self, state: EventState) -> Result<(), Error> {
+        if !self.event_detection_enable && state != EventState::NORMAL {
+            return Err(common::write_access_denied_error());
+        }
+        self.event_state = state.to_raw();
+        Ok(())
+    }
+
+    fn set_acked_transitions_internal(
+        &mut self,
+        transition_bit: u8,
+        acknowledged: bool,
+    ) -> Result<(), Error> {
+        if !self.event_detection_enable {
+            return Err(common::write_access_denied_error());
+        }
+        if acknowledged {
+            self.acked_transitions |= transition_bit & 0x07;
+        } else {
+            self.acked_transitions &= !(transition_bit & 0x07);
+        }
+        Ok(())
+    }
+
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        matches!(
+            property,
+            PropertyIdentifier::DESCRIPTION
+                | PropertyIdentifier::OUT_OF_SERVICE
+                | PropertyIdentifier::EVENT_DETECTION_ENABLE
+                | PropertyIdentifier::EVENT_ENABLE
+                | PropertyIdentifier::NOTIFICATION_CLASS
+        )
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         static PROPS: &[PropertyIdentifier] = &[
             PropertyIdentifier::OBJECT_IDENTIFIER,
@@ -789,8 +965,10 @@ impl BACnetObject for AlertEnrollmentObject {
             PropertyIdentifier::DESCRIPTION,
             PropertyIdentifier::OBJECT_TYPE,
             PropertyIdentifier::PRESENT_VALUE,
+            PropertyIdentifier::EVENT_STATE,
             PropertyIdentifier::EVENT_DETECTION_ENABLE,
             PropertyIdentifier::EVENT_ENABLE,
+            PropertyIdentifier::ACKED_TRANSITIONS,
             PropertyIdentifier::NOTIFICATION_CLASS,
             PropertyIdentifier::STATUS_FLAGS,
             PropertyIdentifier::OUT_OF_SERVICE,

@@ -540,7 +540,7 @@ fn wpm_rollback_restores_relinquished_priority_slot() {
 /// a non-commandable object; the snapshot then falls back to reading
 /// `PRESENT_VALUE` directly so the write is restored. Without that fallback a
 /// failed multi-write would leave the non-commandable `PRESENT_VALUE` changed
-/// despite reporting failure (ASHRAE 135-2020 §19.1.2).
+/// despite this implementation's all-or-nothing WPM policy.
 ///
 /// `AnalogInput` is writable only while out-of-service, so place it OOS first.
 #[test]

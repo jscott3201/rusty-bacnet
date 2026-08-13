@@ -262,10 +262,10 @@ fn acked_transitions_internal_set_and_clear() {
 /// (#130).
 #[test]
 fn eval_state_trait_defaults_reject() {
-    let mut ee = AlertEnrollmentObject::new(1, "AE-1").unwrap();
-    assert!(ee.enrollment_eval_state_internal().is_none());
-    assert!(ee
+    let mut object = crate::averaging::AveragingObject::new(1, "AVG-1").unwrap();
+    assert!(object.enrollment_eval_state_internal().is_none());
+    assert!(object
         .set_enrollment_eval_state_internal(EventEnrollmentEvalState::default())
         .is_err());
-    assert!(ee.set_acked_transitions_internal(0x01, false).is_err());
+    assert!(object.set_acked_transitions_internal(0x01, false).is_err());
 }

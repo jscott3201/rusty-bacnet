@@ -27,6 +27,7 @@ pub mod network_port;
 pub mod notification_class;
 pub mod program;
 pub(crate) mod reference;
+pub(crate) mod rollback;
 pub mod schedule;
 pub mod staging;
 pub mod timer;

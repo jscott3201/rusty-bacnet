@@ -17,11 +17,9 @@ use super::*;
 /// `UNKNOWN_PROPERTY` here — which must read as *enabled*, not as disabled, or
 /// every object lacking the property would vanish from these services.
 ///
-/// This is checked directly rather than inferred from `Event_State == NORMAL`.
-/// The two are equivalent only for objects that actually apply the
-/// Clause 13.2.2.1 reset, and `AlertEnrollmentObject` currently does not
-/// (tracked as #205), so inferring it would leak a disabled object into these
-/// responses.
+/// This is checked directly rather than inferred from `Event_State == NORMAL`:
+/// GetEnrollmentSummary has no default Event_State filter, and the standard
+/// defines the exclusion independently for each service.
 pub(crate) fn event_detection_enabled(object: &dyn bacnet_objects::traits::BACnetObject) -> bool {
     !matches!(
         object.read_property(PropertyIdentifier::EVENT_DETECTION_ENABLE, None),

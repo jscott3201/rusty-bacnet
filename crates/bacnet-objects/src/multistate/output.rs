@@ -117,6 +117,7 @@ impl BACnetObject for MultiStateOutputObject {
         reliability,
         event_detection_enable
     );
+    impl_intrinsic_write_rollback!(event_detector, event_detection_enable, event_history);
 
     fn read_property(
         &self,

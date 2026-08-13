@@ -328,6 +328,7 @@ impl BACnetObject for AnalogValueObject {
         reliability,
         event_detection_enable
     );
+    impl_intrinsic_write_rollback!(event_detector, event_detection_enable, event_history);
 
     fn acknowledge_alarm(&mut self, transition_bit: u8) -> Result<(), bacnet_types::error::Error> {
         self.event_detector.acked_transitions |= transition_bit & 0x07;

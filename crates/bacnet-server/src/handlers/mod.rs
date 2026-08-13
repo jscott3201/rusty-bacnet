@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_objects::database::ObjectDatabase;
+use bacnet_objects::traits::WritePropertyRollback;
 use bacnet_services::alarm_event::{
     AcknowledgeAlarmRequest, EventSummary, GetEventInformationAck, GetEventInformationRequest,
 };

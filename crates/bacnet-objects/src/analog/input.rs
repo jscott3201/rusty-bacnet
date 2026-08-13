@@ -264,6 +264,7 @@ impl BACnetObject for AnalogInputObject {
         reliability,
         event_detection_enable
     );
+    impl_intrinsic_write_rollback!(event_detector, event_detection_enable, event_history);
 
     fn acknowledge_alarm(&mut self, transition_bit: u8) -> Result<(), bacnet_types::error::Error> {
         self.event_detector.acked_transitions |= transition_bit & 0x07;
@@ -356,5 +357,45 @@ mod detection_enable_reset_tests {
             ai.event_history.message_texts,
             [String::new(), String::new(), String::new()]
         );
+    }
+
+    #[test]
+    fn ai_write_rollback_restores_detection_state() {
+        let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+        ai.event_detector.event_state = bacnet_types::enums::EventState::HIGH_LIMIT;
+        ai.event_detector.acked_transitions = 0b010;
+        ai.event_detector.pending = Some(crate::event::PendingTransition {
+            state: bacnet_types::enums::EventState::NORMAL,
+            remaining: 2,
+        });
+        ai.event_detector.fault_reliability = Some(1);
+        ai.event_history.time_stamps[0] = BACnetTimeStamp::SequenceNumber(7);
+        ai.event_history.message_texts[0] = "offnormal".into();
+        let rollback = ai
+            .capture_write_property_rollback(PropertyIdentifier::EVENT_DETECTION_ENABLE)
+            .unwrap();
+
+        ai.write_property(
+            PropertyIdentifier::EVENT_DETECTION_ENABLE,
+            None,
+            PropertyValue::Boolean(false),
+            None,
+        )
+        .unwrap();
+        ai.restore_write_property_rollback(rollback).unwrap();
+
+        assert!(ai.event_detection_enable);
+        assert_eq!(
+            ai.event_detector.event_state,
+            bacnet_types::enums::EventState::HIGH_LIMIT
+        );
+        assert_eq!(ai.event_detector.acked_transitions, 0b010);
+        assert_eq!(ai.event_detector.pending.unwrap().remaining, 2);
+        assert_eq!(ai.event_detector.fault_reliability, Some(1));
+        assert_eq!(
+            ai.event_history.time_stamps[0],
+            BACnetTimeStamp::SequenceNumber(7)
+        );
+        assert_eq!(ai.event_history.message_texts[0], "offnormal");
     }
 }

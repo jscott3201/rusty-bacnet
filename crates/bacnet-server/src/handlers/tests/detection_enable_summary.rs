@@ -23,11 +23,10 @@ use bacnet_objects::traits::BACnetObject;
 /// *cannot* reach this state, and a fixture built from it would prove only that
 /// the reset works, not that these services filter on the property.
 ///
-/// The state is still reachable in the wild: `AlertEnrollmentObject` exposes
-/// `Event_Detection_Enable` and applies no reset (#205), and the standard states
-/// the exclusion independently in each of the three Service Procedures rather
-/// than deriving it from `Event_State`. So the filter must be tested directly,
-/// against an object that can actually be inconsistent.
+/// A mock can still represent persisted or third-party object implementations
+/// that violate the invariant. The standard states the exclusion independently
+/// in each Service Procedure, so the filter must be tested directly rather than
+/// derived from `Event_State`.
 struct DisabledAlarmingObject {
     oid: ObjectIdentifier,
     detection_enable: Option<bool>,

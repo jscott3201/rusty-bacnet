@@ -691,7 +691,7 @@ fn wpm_gate_rejection_commits_nothing() {
     // Atomicity proof: one request carrying a valid write plus a gated
     // indexed write fails as a whole with PROPERTY_IS_NOT_AN_ARRAY, and the
     // valid property is untouched — the validation-phase gate fires before
-    // the commit loop starts (§19.1.2-level atomicity).
+    // the commit loop starts (the repository's all-or-nothing WPM policy).
     let mut db = gating_db();
     let nc = oid(ObjectType::NOTIFICATION_CLASS, 1);
     let original = db
