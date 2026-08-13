@@ -20,6 +20,25 @@ use bacnet_types::enums::{EventState, EventType};
 use bacnet_types::primitives::PropertyValue;
 
 /// The outcome of one algorithm evaluation pass.
+///
+/// # Foreign-state recovery
+///
+/// Every algorithm's conditions key on `pCurrentState`, and each arm has a
+/// *reachable set*: OUT_OF_RANGE / FLOATING_LIMIT indicate from and into
+/// {NORMAL, HIGH_LIMIT, LOW_LIMIT}, CHANGE_OF_STATE / CHANGE_OF_BITSTRING
+/// {NORMAL, OFFNORMAL}, CHANGE_OF_VALUE {NORMAL}. An enrollment whose
+/// `Event_Parameters` are rewritten to a different algorithm can hold a state
+/// outside the new arm's set (a HIGH_LIMIT left by OUT_OF_RANGE under new
+/// CHANGE_OF_STATE parameters, say): per the standard's letter no condition
+/// matches a state the algorithm never names, but leaving it would wedge the
+/// enrollment in a ghost state forever. Each arm therefore recovers: with
+/// `current` OUTSIDE the reachable set, the arm evaluates as from NORMAL and
+/// *indicates* the computed state — since the computed state is reachable and
+/// `current` is not, the two differ, so the driver's normal actions path
+/// (including the direction rule's delay gating — a NORMAL target waits
+/// pTimeDelayNormal) carries the enrollment back into the algorithm's state
+/// space. A rewriting client observing pCurrentState in-event gets exactly
+/// the fresh-evaluation view the standard assumes.
 pub(crate) struct ArmEvaluation {
     /// The transition the algorithm indicated, if any condition was true.
     pub indication: Option<Indication>,
@@ -56,10 +75,12 @@ pub(crate) struct Indication {
     pub target: EventState,
     /// Identity of the indicating condition, consumed by the driver's pending
     /// countdown — see `EventEnrollmentPending::condition` in bacnet-objects.
-    /// CHANGE_OF_STATE discriminates by matched alarm value (Clause 13.3.2
-    /// keys its delays on *which* value is equal: "remains equal to that
-    /// value for pTimeDelay"); CHANGE_OF_BITSTRING by a hash of the masked
-    /// monitored bytes; algorithms whose delay gates a threshold condition
+    /// CHANGE_OF_STATE discriminates by matched alarm value: condition (c)'s
+    /// text requires it ("remains equal to THAT value for pTimeDelay");
+    /// applying it to (a) — which says "ANY of the values" — is the stricter
+    /// deliberate choice documented at
+    /// [`eval_change_of_state_struct`]. CHANGE_OF_BITSTRING hashes the masked
+    /// monitored bytes. Algorithms whose delay gates a threshold condition
     /// (OUT_OF_RANGE, FLOATING_LIMIT, CHANGE_OF_VALUE) use `0`.
     pub condition: u64,
     /// CHANGE_OF_STATE only: the matched alarm value, recorded as the value
@@ -141,13 +162,35 @@ pub fn encode_change_of_bitstring_params(mask: &[u8], alarm_bits: &[u8]) -> Vec<
 
 // ---- Algorithm evaluation (byte layout; also the legacy Opaque path) ----
 
+/// Normalize a foreign `pCurrentState` (see [`ArmEvaluation`]'s
+/// foreign-state note): the algorithm's conditions only name `$reachable`
+/// states, so anything else is treated as NORMAL's perspective — the
+/// computed state then necessarily differs from the foreign `current`, and
+/// the driver turns it into a (delay-gated) recovery transition.
+fn reachable_or_normal(current: EventState, reachable: &[EventState]) -> EventState {
+    if reachable.contains(&current) {
+        current
+    } else {
+        EventState::NORMAL
+    }
+}
+
 /// Evaluate the OUT_OF_RANGE algorithm.
 ///
 /// Compares a real present_value against high/low limits with deadband hysteresis.
+/// Reachable set: {NORMAL, HIGH_LIMIT, LOW_LIMIT}.
 fn eval_out_of_range(params: &[u8], value: f32, current: EventState) -> EventState {
     if params.len() < 12 {
         return current;
     }
+    let current = reachable_or_normal(
+        current,
+        &[
+            EventState::NORMAL,
+            EventState::HIGH_LIMIT,
+            EventState::LOW_LIMIT,
+        ],
+    );
     let high_limit = f32::from_le_bytes([params[0], params[1], params[2], params[3]]);
     let low_limit = f32::from_le_bytes([params[4], params[5], params[6], params[7]]);
     let deadband = f32::from_le_bytes([params[8], params[9], params[10], params[11]]);
@@ -187,11 +230,19 @@ fn eval_out_of_range(params: &[u8], value: f32, current: EventState) -> EventSta
 /// Evaluate the FLOATING_LIMIT algorithm.
 ///
 /// Compares a real present_value against a setpoint +/- differential limits
-/// with deadband hysteresis.
+/// with deadband hysteresis. Reachable set: {NORMAL, HIGH_LIMIT, LOW_LIMIT}.
 fn eval_floating_limit(params: &[u8], value: f32, current: EventState) -> EventState {
     if params.len() < 16 {
         return current;
     }
+    let current = reachable_or_normal(
+        current,
+        &[
+            EventState::NORMAL,
+            EventState::HIGH_LIMIT,
+            EventState::LOW_LIMIT,
+        ],
+    );
     let setpoint = f32::from_le_bytes([params[0], params[1], params[2], params[3]]);
     let high_diff = f32::from_le_bytes([params[4], params[5], params[6], params[7]]);
     let low_diff = f32::from_le_bytes([params[8], params[9], params[10], params[11]]);
@@ -395,6 +446,14 @@ fn property_state_matches(state: &BACnetPropertyStates, value: u32) -> bool {
 /// unchanged alarm condition; when it is unknown (an `Event_State` seeded by
 /// the test/setup helper rather than by evaluation), (c) declines to
 /// indicate rather than fabricating a re-entry every pass.
+///
+/// The pending-condition identity discriminates by matched value. The driver
+/// for that strictness is (c)'s text — "remains equal to THAT value for
+/// pTimeDelay"; (a) says only "equal to ANY of the values contained in
+/// pAlarmValues for pTimeDelay" and does not, by its letter, require the same
+/// value to persist. Applying the identity to (a) too is the deliberate
+/// stricter-than-required choice: a value flapping between listed alarm
+/// values restarts its countdown instead of accumulating one.
 pub(crate) fn eval_change_of_state_struct(
     alarm_values: &[BACnetPropertyStates],
     value: u32,
@@ -410,6 +469,16 @@ pub(crate) fn eval_change_of_state_struct(
         offnormal_value: Some(value),
         new_baseline: None,
     };
+    // Foreign-state recovery (see ArmEvaluation's note): NORMAL's view of
+    // the arm — matched means condition (a) would indicate OFFNORMAL;
+    // otherwise the algorithm settles at NORMAL.
+    if reachable_or_normal(current, &[EventState::NORMAL, EventState::OFFNORMAL]) != current {
+        return ArmEvaluation::simple(Some(if matched {
+            offnormal()
+        } else {
+            Indication::plain(EventState::NORMAL, 0)
+        }));
+    }
     let indication = if current == EventState::NORMAL && matched {
         Some(offnormal())
     } else if current == EventState::OFFNORMAL && !matched {
@@ -445,21 +514,36 @@ fn masked_value_hash(mask: &[u8], value_bits: &[u8]) -> u64 {
 /// OFFNORMAL", no such baseline is retained for bitstrings, and guessing
 /// would re-indicate on every poll while a value sits unchanged in an alarm
 /// pattern — the failure mode issue #166 documented for an unguarded pass.
+///
+/// Comparison width: `max(mask, value)` with missing bytes zero-filled —
+/// "equals a listed alarm value" requires the whole significant width to
+/// agree, so a mask wider than the monitored bitstring covers bytes the
+/// value does not have (zero) and an alarm pattern set there does NOT match
+/// (the previous `min(mask, alarm, value)` truncation could report OFFNORMAL
+/// on a prefix match). This is the same zero-fill the pending-condition hash
+/// ([`masked_value_hash`]) and the legacy byte evaluator apply.
 pub(crate) fn eval_change_of_bitstring_struct(
     bitmask: &(u8, Vec<u8>),
     list_of_values: &[(u8, Vec<u8>)],
     value_bits: &[u8],
     current: EventState,
 ) -> ArmEvaluation {
-    // OFFNORMAL if the masked monitored bits match any alarm pattern.
+    // OFFNORMAL if the masked monitored bits match any alarm pattern over
+    // the full mask width.
     let mask = &bitmask.1;
+    let width = mask.len().max(value_bits.len());
     let mut matched = false;
     for alarm in list_of_values {
         let alarm_bits = &alarm.1;
-        let len = mask.len().min(alarm_bits.len()).min(value_bits.len());
-        let mut this_matches = len > 0;
-        for i in 0..len {
-            if (value_bits[i] & mask[i]) != (alarm_bits[i] & mask[i]) {
+        if width == 0 {
+            continue;
+        }
+        let mut this_matches = true;
+        for i in 0..width {
+            let m = mask.get(i).copied().unwrap_or(0);
+            let v = value_bits.get(i).copied().unwrap_or(0) & m;
+            let a = alarm_bits.get(i).copied().unwrap_or(0) & m;
+            if v != a {
                 this_matches = false;
                 break;
             }
@@ -468,6 +552,14 @@ pub(crate) fn eval_change_of_bitstring_struct(
             matched = true;
             break;
         }
+    }
+    // Foreign-state recovery: see ArmEvaluation's note and the COS arm.
+    if reachable_or_normal(current, &[EventState::NORMAL, EventState::OFFNORMAL]) != current {
+        return ArmEvaluation::simple(Some(if matched {
+            Indication::plain(EventState::OFFNORMAL, masked_value_hash(mask, value_bits))
+        } else {
+            Indication::plain(EventState::NORMAL, 0)
+        }));
     }
     let indication = if current == EventState::NORMAL && matched {
         Some(Indication::plain(
@@ -497,15 +589,38 @@ pub(crate) fn eval_change_of_bitstring_struct(
 /// Returns `None` when the monitored value is the wrong type for the
 /// criterion, so the caller can skip the enrollment rather than spuriously
 /// transitioning to `NORMAL`.
+///
+/// Foreign-state recovery (see [`ArmEvaluation`]'s note): NORMAL is the
+/// algorithm's only target, so a foreign recovery *is* an ordinary
+/// indication — target NORMAL, with the current sample installed as the
+/// detection baseline when the transition fires (exactly the 13.3.3 rule
+/// for "the value ... when a transition to NORMAL is indicated").
 pub(crate) fn eval_change_of_value_struct(
     criteria: &ChangeOfValueCriteria,
     monitored_value: &PropertyValue,
     baseline: Option<&PropertyValue>,
     current: EventState,
 ) -> Option<ArmEvaluation> {
+    // Note the reachable check runs AFTER extraction per criterion: a
+    // monitored value unreadable for the criterion still skips the
+    // enrollment entirely rather than fabricating a recovery.
+    let foreign_recovery = || {
+        (current != EventState::NORMAL).then(|| ArmEvaluation {
+            indication: Some(Indication {
+                target: EventState::NORMAL,
+                condition: 0,
+                offnormal_value: None,
+                new_baseline: Some(monitored_value.clone()),
+            }),
+            establish_baseline: None,
+        })
+    };
     match criteria {
         ChangeOfValueCriteria::Bitmask { data: mask, .. } => {
             let current_bits = extract_bitstring(monitored_value)?;
+            if let Some(recovery) = foreign_recovery() {
+                return Some(recovery);
+            }
             let masked_changed = |base: &[u8]| {
                 (0..mask.len()).any(|i| {
                     let now = current_bits.get(i).copied().unwrap_or(0) & mask[i];
@@ -535,6 +650,9 @@ pub(crate) fn eval_change_of_value_struct(
         }
         ChangeOfValueCriteria::ReferencedPropertyIncrement(increment) => {
             let value = extract_real(monitored_value)?;
+            if let Some(recovery) = foreign_recovery() {
+                return Some(recovery);
+            }
             let eval = match baseline.and_then(extract_real) {
                 None => ArmEvaluation {
                     indication: None,
