@@ -6,7 +6,7 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020.
 - Reviewed at: 2026-08-13.
-- Implementation evidence SHA reviewed: `c314a1a539202fcbcd9d16e272e87c30e761294e`.
+- Implementation evidence SHA reviewed: `98e8170cdc4c55225a665bda02a3c75c7105b242`.
 - Machine-readable source: `docs/conformance/bacnet-135-2020.json`.
 - Current scope: Tranche C3 (#205, #209, #289). Alert Enrollment now exposes `Event_State` and `Acked_Transitions` and applies their Clause 13.2.2.1 initial conditions while `Event_Detection_Enable` is FALSE. This is partial Alert Enrollment evidence; #264 and #291 track the remaining Table 12-61 property-model gaps. WritePropertyMultiple uses object-owned rollback tokens for non-injective property reads: detection-disable writes restore private detector/evaluator state and event history, while an unset `Time_Delay_Normal` restores as unset rather than as its effective `Time_Delay` fallback. Restoration failures are returned instead of hidden in tracing. Clause 15.10 permits preceding successful writes to remain applied; rollback is project policy, not a conformance claim. Fences: no Alert Enrollment evaluator, notification sending (#127), Event Enrollment history properties (#264), complete Alert Enrollment property model (#291), or DCC behavior (#220).
 - Addenda/errata status: No external addenda/errata check was performed. The local Standard 135-2020 source was reviewed for Alert Enrollment Table 12-61, Clause 13.2.2.1 disabled-state initial conditions, the Clause 13.3 pTimeDelayNormal fallback, and Clause 15.10's ordered partial-success procedure.
@@ -81,7 +81,7 @@
 
 | Row ID | Anchor | Priority | Status | Evidence |
 |---|---|---|---|---|
-| `BACNET-13-EVENT-DISABLE-WPM-ROLLBACK` | Clause 12.52 Table 12-61; Clause 13.2.2.1; Clause 13.3 pTimeDelayNormal fallback; Clause 15.10 | P1 | `implementation-present-needs-conformance-tests` | Alert Enrollment applies the modeled disabled-state initial conditions. Object-owned WPM rollback tokens preserve event state and raw fallback-backed `Time_Delay_Normal`; restoration failures are returned. Clause 15.10 does not require rollback. Alert Enrollment remains partial: #264 and #291 track the remaining Table 12-61 model gaps. |
+| `BACNET-13-EVENT-DISABLE-WPM-ROLLBACK` | Clause 12.52 Table 12-61; Clause 13.2.2.1; Clause 13.3 pTimeDelayNormal fallback; Clause 15.10 | P1 | `implementation-present-needs-conformance-tests` | Alert Enrollment applies the modeled disabled-state initial conditions. Object-owned WPM rollback tokens supplement readable property snapshots and preserve event state plus raw fallback-backed `Time_Delay_Normal`; restoration failures are returned and affected objects still run event/COV reconciliation. Clause 15.10 does not require rollback. Alert Enrollment remains partial: #264 and #291 track the remaining Table 12-61 model gaps. |
 
 ## Clauses 20-21 Encoding And Formal APDUs
 
