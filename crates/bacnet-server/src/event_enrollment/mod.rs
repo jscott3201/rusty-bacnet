@@ -157,7 +157,7 @@ fn params_fingerprint(
         .chain(normal_delay.to_le_bytes())
         .chain(event_type_raw.to_le_bytes())
         .chain(monitored_oid.encode())
-        .chain((monitored_prop.to_raw() as u32).to_le_bytes())
+        .chain(monitored_prop.to_raw().to_le_bytes())
     {
         h = (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
     }
