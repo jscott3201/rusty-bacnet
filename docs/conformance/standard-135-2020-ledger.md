@@ -81,7 +81,7 @@
 
 | Row ID | Anchor | Priority | Status | Evidence |
 |---|---|---|---|---|
-| `BACNET-13-EVENT-DISABLE-WPM-ROLLBACK` | Clause 12.52 Table 12-61; Clause 13.2.2.1; Clause 13.3 pTimeDelayNormal fallback; Clause 15.10 | P1 | `implementation-present-needs-conformance-tests` | Alert Enrollment applies the modeled disabled-state initial conditions. Object-owned WPM rollback tokens supplement readable property snapshots and preserve event state plus raw fallback-backed `Time_Delay_Normal`; restoration failures are returned and affected objects still run event/COV reconciliation. Clause 15.10 does not require rollback. Alert Enrollment remains partial: #264 and #291 track the remaining Table 12-61 model gaps. |
+| `BACNET-13-EVENT-DISABLE-WPM-ROLLBACK` | Clause 12.52 Table 12-61; Clause 13.2.2.1; Clause 13.3 pTimeDelayNormal fallback; Clause 15.10 | P1 | `implementation-present-needs-conformance-tests` | Alert Enrollment applies the modeled disabled-state initial conditions. Object-owned WPM rollback tokens supplement readable property snapshots and preserve event state plus raw fallback-backed `Time_Delay_Normal`; restoration failures are returned, and only objects whose own rollback failed run event/COV reconciliation. Clause 15.10 does not require rollback. Alert Enrollment remains partial: #264 and #291 track the remaining Table 12-61 model gaps. |
 
 ## Clauses 20-21 Encoding And Formal APDUs
 
