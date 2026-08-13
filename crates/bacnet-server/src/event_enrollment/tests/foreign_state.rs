@@ -363,3 +363,130 @@ fn out_of_service_skips_evaluation_even_for_a_wedged_state() {
     );
     assert_eq!(event_state(&db, &ee_oid), EventState::OFFNORMAL);
 }
+
+/// FLOATING_LIMIT's reachable set is the same {NORMAL, HIGH_LIMIT,
+/// LOW_LIMIT} triple, and its normalization is shared with OUT_OF_RANGE —
+/// pin it independently anyway: a HIGH_LIMIT left under FL parameters whose
+/// band (setpoint ± diffs) CONTAINS the value recovers to NORMAL.
+#[test]
+fn foreign_high_limit_recovers_under_floating_limit_params() {
+    // Start OOR-typed so the wedge state (HIGH_LIMIT) is produced
+    // organically: NC=90 > 80.
+    let (mut db, ee_oid) = setup_on_notification_class(
+        EventType::OUT_OF_RANGE,
+        BACnetEventParameter::OutOfRange {
+            time_delay: 0,
+            low_limit: 20.0,
+            high_limit: 80.0,
+            deadband: 2.0,
+        },
+        90,
+    );
+    assert_eq!(
+        evaluate_event_enrollments(&mut db, 1)[0].change.to,
+        EventState::HIGH_LIMIT
+    );
+
+    // Rewrite to FLOATING_LIMIT with the setpoint reference pointing at the
+    // monitored object's own PRESENT_VALUE (50.0): band = 50 ± (high_diff 60,
+    // low_diff 60) = [-10, 110] contains NC=90 -> settles NORMAL. TD=0 keeps
+    // the recovery immediate per the test-speed convention.
+    let ai_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    db.get_mut(&ai_oid)
+        .unwrap()
+        .write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(true),
+            None,
+        )
+        .unwrap();
+    db.get_mut(&ai_oid)
+        .unwrap()
+        .write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(50.0),
+            None,
+        )
+        .unwrap();
+    rewrite_params(
+        &mut db,
+        &ee_oid,
+        BACnetEventParameter::FloatingLimit {
+            time_delay: 0,
+            setpoint_reference: BACnetDeviceObjectPropertyReference::new_local(
+                ai_oid,
+                PropertyIdentifier::PRESENT_VALUE.to_raw(),
+            ),
+            low_diff_limit: 60.0,
+            high_diff_limit: 60.0,
+            deadband: 0.5,
+        },
+    );
+
+    let transitions = evaluate_event_enrollments(&mut db, 1);
+    assert_eq!(transitions.len(), 1);
+    assert_eq!(transitions[0].change.from, EventState::HIGH_LIMIT);
+    assert_eq!(
+        transitions[0].change.to,
+        EventState::NORMAL,
+        "FL from a foreign HIGH_LIMIT: value inside the band -> NORMAL"
+    );
+    assert_eq!(event_state(&db, &ee_oid), EventState::NORMAL);
+}
+
+/// Foreign state AND the monitored value IS in the alarm list: the COS
+/// arm's foreign-recovery branch indicates OFFNORMAL — through the actions
+/// path (Event_State stored as OFFNORMAL, delay gated by Time_Delay since
+/// the target is offnormal) — rather than sitting silent. This pins the
+/// `matched` half of the branch the other recovery tests leave unlit.
+#[test]
+fn foreign_high_limit_with_matching_alarm_indicates_offnormal() {
+    // Produce the foreign state organically: OOR-typed, NC=90 > high_limit.
+    let (mut db, ee_oid) = setup_on_notification_class(
+        EventType::OUT_OF_RANGE,
+        BACnetEventParameter::OutOfRange {
+            time_delay: 0,
+            low_limit: 20.0,
+            high_limit: 80.0,
+            deadband: 2.0,
+        },
+        90,
+    );
+    assert_eq!(
+        evaluate_event_enrollments(&mut db, 1)[0].change.to,
+        EventState::HIGH_LIMIT
+    );
+
+    // Rewrite to COS whose alarm list CONTAINS the monitored value (90).
+    // TD=2: the offnormal-direction delay gates the recovery.
+    rewrite_params(
+        &mut db,
+        &ee_oid,
+        BACnetEventParameter::ChangeOfState {
+            time_delay: 2,
+            list_of_values: vec![BACnetPropertyStates::UnsignedValue(90)],
+        },
+    );
+    for pass in 1..=2 {
+        assert!(
+            evaluate_event_enrollments(&mut db, 1).is_empty(),
+            "recovery-to-OFFNORMAL pass {pass}: gated by pTimeDelay"
+        );
+        assert_eq!(
+            event_state(&db, &ee_oid),
+            EventState::HIGH_LIMIT,
+            "the ghost state persists until the delay elapses"
+        );
+    }
+    let transitions = evaluate_event_enrollments(&mut db, 1);
+    assert_eq!(transitions.len(), 1);
+    assert_eq!(transitions[0].change.from, EventState::HIGH_LIMIT);
+    assert_eq!(transitions[0].change.to, EventState::OFFNORMAL);
+    assert_eq!(
+        event_state(&db, &ee_oid),
+        EventState::OFFNORMAL,
+        "the SPECIFIC indicated state is stored (13.2.2.1.4), not left at the ghost"
+    );
+}
