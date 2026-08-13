@@ -95,15 +95,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pTimeDelay` (`Event_Parameters.Time_Delay`, Table 12-15's mapping for
   every evaluated algorithm); transitions to NORMAL wait
   `pTimeDelayNormal` (the property above, falling back to
-  `Time_Delay`). The countdown advances once per evaluation pass of the
-  `event_enrollment_task` interval — one tick per
-  `event_enrollment_interval_secs` (#133) — with the intrinsic
-  detectors' semantics: a reverted condition cancels, a redundant
-  qualifying observation never re-seeds, a changed target re-seeds with
-  the new target's direction delay, and a parameter change mid-pending
-  (parameters and effective TDN are re-read every pass) cancels and
-  re-gates from the current parameters. The legacy `Opaque` octet
-  layouts carry no delay slot and keep their immediate transitions.
+  `Time_Delay`). Both delays are seconds in Clause 13.3, and the
+  countdown honors that in wall time: it is seeded with
+  `ceil(delay_secs / interval_secs)` — never-fire-early ceiling
+  semantics against the actual (≥1s-clamped)
+  `event_enrollment_interval_secs` (#133) — and advances once per
+  evaluation pass. With the intrinsic detectors' semantics: a reverted
+  condition cancels, a redundant qualifying observation never re-seeds,
+  a changed target re-seeds with the new target's direction delay, and a
+  mid-pending change to parameters OR the monitored reference
+  (both are re-read and fingerprinted every pass, and the cancellation
+  is persisted immediately) cancels and re-gates from the current
+  configuration. The interval is builder configuration and the countdown
+  is in-memory, so no runtime rescale exists; a restart re-evaluates
+  with a fresh conversion. The legacy `Opaque` octet layouts carry no
+  delay slot and keep their immediate transitions.
 
 - Event Enrollment same-state transitions execute their Clause
   13.2.2.1.4 actions (#166). The evaluator previously dropped any
@@ -140,6 +146,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than the increment. Two pre-existing tests pinned the removed
   absolute-magnitude behavior and were rewritten to the conformant
   semantics. The legacy `Opaque` path is unchanged by design.
+
+- Event Enrollment algorithm arms recover from a foreign `Event_State`
+  instead of wedging: `Event_Parameters` rewritten to a different
+  algorithm can leave the enrollment holding a state the new algorithm's
+  conditions never name (e.g. HIGH_LIMIT under CHANGE_OF_STATE
+  parameters), and the condition keying then matched nothing forever.
+  Each arm names its reachable set (OUT_OF_RANGE/FLOATING_LIMIT
+  {NORMAL, HIGH_LIMIT, LOW_LIMIT}; CHANGE_OF_STATE/CHANGE_OF_BITSTRING
+  {NORMAL, OFFNORMAL}; CHANGE_OF_VALUE {NORMAL}); outside it, the arm
+  evaluates as from NORMAL and indicates the computed state through the
+  ordinary actions path, including the direction rule's delay gating.
+  CHANGE_OF_VALUE's recovery installs the current sample as the
+  detection baseline, per Clause 13.3.3.
+
+- Event Enrollment CHANGE_OF_BITSTRING no longer reports OFFNORMAL on a
+  prefix match: the masked comparison now spans `max(mask, value)` with
+  zero-filled missing bytes, so an alarm bit set beyond the monitored
+  bitstring's width correctly counts as NOT equal (the structured
+  matcher previously truncated to `min(mask, alarm, value)` while the
+  legacy path and the pending-condition hash zero-padded).
+
+- EventEnrollment alarms are acknowledgeable: `AcknowledgeAlarm` on an EE
+  previously failed unconditionally (the trait default rejected it), so
+  a Clause 13.2.3 ack-owed bit could never be acknowledged. The object
+  now implements the acknowledgment indication (unconditional,
+  idempotent bit set per 13.2.3); a detection-disabled EE refuses with
+  OBJECT/NO_ALARM_CONFIGURED per Table 13-10 ("the object exists but
+  does not support or is not configured for event generation"), which
+  also keeps Clause 12.12's initial-condition `Acked_Transitions`
+  invariant while disabled.
 
 - WriteProperty and WritePropertyMultiple now decode the ENTIRE
   `propertyValue` payload instead of exactly one application-tagged
