@@ -104,8 +104,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   An unset `Time_Delay_Normal` also restores as unset instead of replaying
   its effective `Time_Delay` fallback as a configured value. This keeps the
   repository's WPM rollback policy for these writes. Restoration failures
-  are returned instead of being hidden in tracing, and affected objects
-  still run event/COV reconciliation. Opaque rollback tokens supplement
+  are returned instead of being hidden in tracing, and only objects whose
+  own rollback failed run event/COV reconciliation. Opaque rollback tokens supplement
   readable property snapshots rather than replacing them. Clause 15.10
   permits earlier successful writes to remain applied and is not cited as
   requiring rollback.

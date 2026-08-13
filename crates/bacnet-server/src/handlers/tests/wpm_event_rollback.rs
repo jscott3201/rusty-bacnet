@@ -354,6 +354,73 @@ fn wpm_reports_object_state_rollback_failure() {
 }
 
 #[test]
+fn rollback_failure_reports_only_the_object_that_failed_restoration() {
+    let mut db = ObjectDatabase::new();
+    let mut enrollment = AlertEnrollmentObject::new(1, "AE-1").unwrap();
+    enrollment
+        .set_event_state_internal(EventState::OFFNORMAL)
+        .unwrap();
+    let enrollment_oid = enrollment.object_identifier();
+    db.add(Box::new(enrollment)).unwrap();
+    let failing = FailingRollbackObject::new();
+    let failing_oid = failing.object_identifier();
+    db.add(Box::new(failing)).unwrap();
+
+    let mut disabled = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_boolean(&mut disabled, false);
+    let mut changed = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_character_string(&mut changed, "changed").unwrap();
+    let mut read_only = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_enumerated(&mut read_only, 0);
+    let request = WritePropertyMultipleRequest {
+        list_of_write_access_specs: vec![
+            WriteAccessSpecification {
+                object_identifier: enrollment_oid,
+                list_of_properties: vec![BACnetPropertyValue {
+                    property_identifier: PropertyIdentifier::EVENT_DETECTION_ENABLE,
+                    property_array_index: None,
+                    value: disabled.to_vec(),
+                    priority: None,
+                }],
+            },
+            WriteAccessSpecification {
+                object_identifier: failing_oid,
+                list_of_properties: vec![
+                    BACnetPropertyValue {
+                        property_identifier: PropertyIdentifier::DESCRIPTION,
+                        property_array_index: None,
+                        value: changed.to_vec(),
+                        priority: None,
+                    },
+                    BACnetPropertyValue {
+                        property_identifier: PropertyIdentifier::OBJECT_TYPE,
+                        property_array_index: None,
+                        value: read_only.to_vec(),
+                        priority: None,
+                    },
+                ],
+            },
+        ],
+    };
+    let mut request_bytes = BytesMut::new();
+    request.encode(&mut request_bytes);
+
+    let (result, residual_oids) =
+        handle_write_property_multiple_with_residuals(&mut db, &request_bytes);
+
+    assert!(result.unwrap_err().to_string().contains("rollback failed"));
+    assert_eq!(residual_oids, vec![failing_oid]);
+    assert_eq!(
+        db.get(&enrollment_oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::EVENT_STATE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(EventState::OFFNORMAL.to_raw()),
+        "a successfully restored object must not be re-evaluated as residual"
+    );
+}
+
+#[test]
 fn wpm_entering_out_of_service_rolls_back_without_masking_write_error() {
     let mut db = ObjectDatabase::new();
     let mut input = AnalogInputObject::new(1, "AI-1", 62).unwrap();

@@ -57,6 +57,10 @@ pub trait BACnetObject: Send + Sync {
     ) -> Result<PropertyValue, Error>;
 
     /// Write a property value.
+    ///
+    /// Returning `Err` MUST leave the object unchanged. WritePropertyMultiple
+    /// can restore earlier successful writes, but it cannot reconstruct a
+    /// write-only property that mutates before rejecting its own write.
     fn write_property(
         &mut self,
         property: PropertyIdentifier,

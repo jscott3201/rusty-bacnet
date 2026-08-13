@@ -149,7 +149,7 @@ fn token_backed_name_rollback_restores_property_and_database_index() {
 }
 
 #[test]
-fn unreadable_write_reports_failed_rollback_and_residual_object() {
+fn unreadable_successful_write_reports_failed_rollback_and_residual_object() {
     let mut db = ObjectDatabase::new();
     let object = TokenBackedNameObject::new();
     let oid = object.object_identifier();

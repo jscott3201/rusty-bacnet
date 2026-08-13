@@ -38,8 +38,31 @@ struct RollbackRecord {
     object_state: Option<WritePropertyRollback>,
 }
 
-fn rollback_writes(db: &mut ObjectDatabase, applied: Vec<RollbackRecord>) -> Result<(), Error> {
+struct RollbackFailure {
+    error: Error,
+    residual_oids: Vec<ObjectIdentifier>,
+}
+
+fn record_rollback_failure(
+    first_error: &mut Option<Error>,
+    residual_oids: &mut Vec<ObjectIdentifier>,
+    oid: ObjectIdentifier,
+    error: Error,
+) {
+    if first_error.is_none() {
+        *first_error = Some(error);
+    }
+    if !residual_oids.contains(&oid) {
+        residual_oids.push(oid);
+    }
+}
+
+fn rollback_writes(
+    db: &mut ObjectDatabase,
+    applied: Vec<RollbackRecord>,
+) -> Result<(), RollbackFailure> {
     let mut first_error = None;
+    let mut residual_oids = Vec::new();
     for rollback in applied.into_iter().rev() {
         let RollbackRecord {
             oid,
@@ -57,9 +80,7 @@ fn rollback_writes(db: &mut ObjectDatabase, applied: Vec<RollbackRecord>) -> Res
                 property = written_property.to_raw(),
                 "WPM rollback snapshot unavailable"
             );
-            if first_error.is_none() {
-                first_error = Some(error);
-            }
+            record_rollback_failure(&mut first_error, &mut residual_oids, oid, error);
             if written_property == PropertyIdentifier::OBJECT_NAME {
                 db.update_name_index(&oid);
             }
@@ -90,9 +111,7 @@ fn rollback_writes(db: &mut ObjectDatabase, applied: Vec<RollbackRecord>) -> Res
                         %error,
                         "WPM object-state rollback failed"
                     );
-                    if first_error.is_none() {
-                        first_error = Some(error);
-                    }
+                    record_rollback_failure(&mut first_error, &mut residual_oids, oid, error);
                 }
             }
             for (property, array_index, value, error) in rejected_properties {
@@ -109,9 +128,7 @@ fn rollback_writes(db: &mut ObjectDatabase, applied: Vec<RollbackRecord>) -> Res
                         %error,
                         "WPM property rollback failed"
                     );
-                    if first_error.is_none() {
-                        first_error = Some(error);
-                    }
+                    record_rollback_failure(&mut first_error, &mut residual_oids, oid, error);
                 }
             }
         }
@@ -122,7 +139,13 @@ fn rollback_writes(db: &mut ObjectDatabase, applied: Vec<RollbackRecord>) -> Res
         }
     }
 
-    first_error.map_or(Ok(()), Err)
+    match first_error {
+        Some(error) => Err(RollbackFailure {
+            error,
+            residual_oids,
+        }),
+        None => Ok(()),
+    }
 }
 
 fn error_after_rollback(
@@ -131,17 +154,17 @@ fn error_after_rollback(
     write_error: Error,
     residual_oids: &mut Vec<ObjectIdentifier>,
 ) -> Error {
-    let affected_oids = applied.iter().map(|record| record.oid).collect::<Vec<_>>();
     match rollback_writes(db, applied) {
         Ok(()) => write_error,
-        Err(rollback_error) => {
-            for oid in affected_oids {
+        Err(rollback_failure) => {
+            for oid in rollback_failure.residual_oids {
                 if !residual_oids.contains(&oid) {
                     residual_oids.push(oid);
                 }
             }
             Error::Encoding(format!(
-                "WritePropertyMultiple failed ({write_error}); rollback failed ({rollback_error})"
+                "WritePropertyMultiple failed ({write_error}); rollback failed ({})",
+                rollback_failure.error
             ))
         }
     }
@@ -365,9 +388,9 @@ fn handle_write_property_multiple_inner(
                 });
             }
             Err(e) => {
-                // Object implementations should not mutate on error, but a
-                // captured snapshot lets rollback contain a partial write from
-                // a custom implementation rather than trusting that contract.
+                // `BACnetObject::write_property` requires errors to be
+                // side-effect-free. A snapshot still lets rollback defend
+                // against a custom implementation that violates the contract.
                 if has_rollback {
                     applied.push(RollbackRecord {
                         oid: *oid,
