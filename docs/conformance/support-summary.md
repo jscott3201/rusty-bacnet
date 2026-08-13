@@ -4,8 +4,8 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-08-12
-- Implementation evidence SHA reviewed: `53dd962c7a85e2fe8a16b1dc6f1e836d47f864f0`
-- Scope: Time_Delay_Normal tranche (branch codex/event-evaluator, tranche C1; issue #225): the Clause 13.3 pTimeDelayNormal parameter now exists as the Time_Delay_Normal property (identifier 356) on the nine intrinsic-reporting object types (AI/AO/AV/BI/BO/BV/MSI/MSO/MSV), and all three intrinsic event detectors (OutOfRange/ChangeOfState/CommandFailure, Clause 13.3.6/13.3.2/13.3.4) select the delay by transition direction: every indication into an OFFNORMAL state (including offnormal→offnormal re-indication) waits pTimeDelay; the sustained-condition return to NORMAL waits pTimeDelayNormal; an unwritten Time_Delay_Normal takes on Time_Delay's value per the parameter's fallback text, so absent behavior is byte-identical to the pre-tranche single-delay behavior. The property reads back the effective delay, is writable as Unsigned within the u32 span (every table carries it O-coded, so writability is permitted and mirrors Time_Delay - the #229 commissioning rationale), and is advertised in Property_List and the PICS writability truth source. FAULT transitions carry no delay (Clause 13.2.2 fault precedence, unchanged). Conventions unchanged: `repo_sha` names the last code commit of the PR branch (this docs-refresh commit lands after it), matching how the previous tranches recorded their reviewed SHA.
+- Implementation evidence SHA reviewed: `8680203e8cb986afb58d0ad53b84eb75aec0959a`
+- Scope: Event Enrollment evaluator tranche (branch codex/ee-evaluator-delays, tranche C2; issues #163, #166, #137): the EE evaluator honors Time_Delay / Time_Delay_Normal per Clause 13.3's direction split and Table 12-15's pTimeDelay mapping (with the EE object gaining the optional Table 12-14 Time_Delay_Normal property), executes Clause 13.2.2.1.4's transition actions for same-state transitions too (specific Event_State stored; Acked_Transitions maintained per Clause 13.2.3 from the referenced Notification Class's Ack_Required; Event_Enable stays distribution-scoped), and tracks the Clause 13.3.3 CHANGE_OF_VALUE detection baseline (first-sample initialization is the clause's local matter and never indicates; the only indication is NORMAL->NORMAL per Figure 13-10). CHANGE_OF_STATE condition (c) is implemented (last-offnormal-causing value retained per enrollment); CHANGE_OF_BITSTRING condition (c) deliberately not. Object-owned in-memory evaluation state (pending countdown, baseline, causal value) sits behind guarded internal trait methods; the detection-disabled reset clears it. Fences: no notification sending (#127), no Event_Time_Stamps/Event_Message_Texts (#264), no Status_Flags algorithm input (Table 12-15.1, follow-up), no intrinsic-detector changes. Conventions unchanged: repo_sha names the last code commit of the PR branch (this docs-refresh commit lands after it), matching the previous tranches.
 - Addenda/errata: Local source `_spec/2020_ASHRAE_Standard-135-BACnet-Data-Communication-Protocol.pdf` (text extract) was reviewed for the pTimeDelayNormal definitions and condition letters of Clause 13.3.1/13.3.2 (CHANGE_OF_BITSTRING/CHANGE_OF_STATE) and 13.3.4/13.3.6 (COMMAND_FAILURE/OUT_OF_RANGE), and for the Time_Delay_Normal rows - conformance code AND writability - of all nine intrinsic object tables (12-2/12-3/12-4/12-6/12-8/12-10/12-21/12-22/12-23), with the extract's two-column page-break interleave handled by count-based alignment (each table's property/datatype pair count equals its conformance-code count) plus footnote-body adjacency checks; see the new row's notes. No external addenda/errata check was performed for this tranche.
 
 ## Counts
@@ -13,7 +13,7 @@
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 15 |
-| Priority | P1 | 21 |
+| Priority | P1 | 22 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
@@ -26,7 +26,7 @@
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
 | Status | in-progress | 3 |
-| Status | supported-with-clause-evidence | 11 |
+| Status | supported-with-clause-evidence | 12 |
 | Status | unknown-pending-source-review | 4 |
 
 ## Ledger Rows
@@ -78,6 +78,7 @@
 | `BACNET-AB-SC-HUB-CONNECTOR` | Annex AB.5 | P0 | supported-with-clause-evidence | 2 |
 | `BACNET-AB-SC-WEBSOCKET-TLS` | Annex AB.7 | P0 | implementation-present-needs-security-tests | 2 |
 | `BACNET-AB-SC-HEARTBEAT` | Annex AB.6.3 | P0 | implementation-present-needs-timeout-tests | 2 |
+| `BACNET-13-EVENT-ENROLLMENT-EVALUATOR` | Clause 12.12 with Table 12-14 (Event Enrollment Object Type; Time_Delay_Normal Unsigned, conformance O, extract 16444-16446, property text 16887-16889); Clause 12.12 Table 12-15 (Time_Delay -> pTimeDelay mapping for CHANGE_OF_BITSTRING / CHANGE_OF_STATE / CHANGE_OF_VALUE / FLOATING_LIMIT / OUT_OF_RANGE, 16530-16679); Clause 13.2.2.1.4 transition actions incl. the same-state rule and the specific-state requirement (45051-45062); Clause 13.2.3 Acked_Transitions on a received transition (45140-45141); Clause 13.3 common introduction (condition ordering, no-condition -> no transition, 45610-45613); Clause 13.3.1 / 13.3.2 / 13.3.3 / 13.3.5 / 13.3.6 (per-algorithm pTimeDelay / pTimeDelayNormal direction rules and the fallback text, e.g. 45663-45667; CHANGE_OF_STATE conditions (a)-(c) 45749-45758; CHANGE_OF_VALUE baseline and Figure 13-10, 45797-45885; OUT_OF_RANGE conditions (a)-(h), 46133-46215) | P1 | supported-with-clause-evidence | 0 |
 
 ## Follow-Up Source
 
