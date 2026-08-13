@@ -779,6 +779,8 @@ mod cov_notifications_tests;
 #[cfg(test)]
 mod event_enable_distribution_tests;
 #[cfg(test)]
+mod event_enrollment_task_tests;
+#[cfg(test)]
 mod event_notifications_tests;
 #[cfg(test)]
 mod segmentation_tests;
