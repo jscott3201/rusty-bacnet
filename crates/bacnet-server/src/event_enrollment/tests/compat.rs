@@ -37,7 +37,7 @@ fn extended_algorithm_produces_no_transition() {
     ee.set_event_enable(0x07);
     db.add(Box::new(ee)).unwrap();
 
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert!(
         transitions.is_empty(),
         "Extended algorithm is not evaluated"
@@ -73,7 +73,7 @@ fn legacy_le_out_of_range_fallback_round_trip() {
     ee.set_event_enable(0x07);
     db.add(Box::new(ee)).unwrap();
 
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].change.to, EventState::HIGH_LIMIT);
 }
@@ -102,7 +102,7 @@ fn legacy_le_change_of_state_fallback() {
     ee.set_event_enable(0x07);
     db.add(Box::new(ee)).unwrap();
 
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].change.to, EventState::OFFNORMAL);
 }
@@ -165,7 +165,7 @@ fn framed_unmodeled_alternative_is_never_le_evaluated() {
     );
 
     // …but produces NO event transition: it is not evaluated as LE limits.
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert!(
         transitions.is_empty(),
         "unmodeled spec alternative must not be fed to eval_legacy_le: {transitions:?}"
@@ -207,7 +207,7 @@ fn change_of_value_bitmask_criteria() {
     // is indicated even though the significant bit is set — COV detects
     // CHANGE, not state.
     assert!(
-        evaluate_event_enrollments(&mut db).is_empty(),
+        evaluate_event_enrollments(&mut db, 1).is_empty(),
         "first sample initializes the baseline; it must not indicate"
     );
 
@@ -226,7 +226,7 @@ fn change_of_value_bitmask_criteria() {
         )
         .unwrap();
     assert!(
-        evaluate_event_enrollments(&mut db).is_empty(),
+        evaluate_event_enrollments(&mut db, 1).is_empty(),
         "only masked bits are significant (13.3.3: 'changes in any of the bits \
          specified by a bitmask')"
     );
@@ -244,13 +244,13 @@ fn change_of_value_bitmask_criteria() {
             None,
         )
         .unwrap();
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].change.from, EventState::NORMAL);
     assert_eq!(transitions[0].change.to, EventState::NORMAL);
 
     // Baseline advanced: holding the new masked value indicates nothing.
-    assert!(evaluate_event_enrollments(&mut db).is_empty());
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
 }
 
 /// A CHANGE_OF_VALUE enrollment whose monitored value is the wrong type for
@@ -284,7 +284,7 @@ fn change_of_value_wrong_type_monitored_value_skips() {
     ee.set_event_state(EventState::OFFNORMAL.to_raw());
     db.add(Box::new(ee)).unwrap();
 
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     // Wrong-type monitored value → skip, no transition to NORMAL.
     assert!(
         transitions.is_empty(),
@@ -299,7 +299,7 @@ fn no_reference_is_skipped() {
     let ee = EventEnrollmentObject::new(91, "EE-noref", EventType::OUT_OF_RANGE.to_raw()).unwrap();
     db.add(Box::new(ee)).unwrap();
 
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert!(transitions.is_empty());
 }
 
@@ -322,7 +322,7 @@ fn empty_parameters_is_skipped() {
     ee.set_event_enable(0x07);
     db.add(Box::new(ee)).unwrap();
 
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert!(transitions.is_empty());
 }
 
@@ -359,7 +359,7 @@ fn evaluation_does_not_use_network_write_route() {
     db.add(Box::new(ee)).unwrap();
 
     // 1) Evaluation drives a transition and persists the new Event_State.
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].change.to, EventState::HIGH_LIMIT);
     let obj = db.get(&ee_oid).unwrap();

@@ -11,14 +11,22 @@
 //! gates every indicated transition into an OFFNORMAL state; the EE object's
 //! optional `Time_Delay_Normal` property (pTimeDelayNormal, Table 12-14 O —
 //! falling back to pTimeDelay per Clause 13.3) gates transitions to NORMAL.
-//! The pending countdown lives in the EE object (in-memory only) and advances
-//! once per evaluation pass of this evaluator — a "tick" is one
-//! `event_enrollment_task` interval (`event_enrollment_interval_secs`, 10s by
-//! default), so a delay of N suppresses the transition for N evaluation
-//! passes. This mirrors the intrinsic detectors' probe/tick semantics
-//! (`bacnet_objects::event`, #120/#225) — condition reverted cancels, same
-//! target never restarts, changed target re-seeds — without sharing code
-//! across the objects/server boundary.
+//! Both delays are SECONDS in the standard (e.g. 13.3.1: "the time, in
+//! seconds, that the offnormal conditions must exist"), and this evaluator
+//! keeps them in seconds: the pending countdown (owned by the EE object,
+//! in-memory only) is seeded with `ceil(delay_secs / interval_secs)` —
+//! never-fire-early ceiling semantics, so at the default 10s
+//! `event_enrollment_interval_secs` a 5s delay fires on the second pass
+//! (~10s elapsed), not after five passes (~50s) — and advances once per
+//! evaluation pass. Semantics otherwise mirror the intrinsic detectors'
+//! probe/tick (`bacnet_objects::event`, #120/#225) — condition reverted
+//! cancels, same target never restarts, changed target re-seeds — without
+//! sharing code across the objects/server boundary.
+//!
+//! Residual countdown behavior: the interval is builder configuration, not
+//! runtime-mutable, and the countdown is in-memory, so no mid-run rescale
+//! exists; a restart re-evaluates from the confirmed `Event_State` and a
+//! fresh `ceil` conversion, like the intrinsic detectors.
 //!
 //! Transition actions (#166): an *indicated* transition executes Clause
 //! 13.2.2.1.4's actions even when it does not change the event state — the
@@ -113,26 +121,43 @@ fn read_object_property_ref(
     }
 }
 
+/// Convert a seconds delay to pending passes with never-fire-early ceiling
+/// semantics: `ceil(delay_secs / interval_secs)`. At the default 10s
+/// interval a 5s delay seeds 1 pass (fires when that pass elapses, ~10s
+/// later); a 15s delay seeds 2 (~20s). Callers never pass `delay_secs == 0`
+/// — a zero delay fires without seeding.
+fn passes_for_delay(delay_secs: u32, interval_secs: u64) -> u32 {
+    let passes = (delay_secs as u64).div_ceil(interval_secs.max(1));
+    u32::try_from(passes).unwrap_or(u32::MAX)
+}
+
 /// Fingerprint the configuration a pending countdown was gated under: the
-/// framed `Event_Parameters` encoding, the effective normal-direction delay,
-/// and the configured event type. A mismatch with
-/// [`EventEnrollmentPending::params_fingerprint`] cancels the in-flight
-/// countdown and re-gates from the current parameters — the pinned behavior
-/// for a mid-pending parameter change (the evaluator re-reads parameters
-/// every pass, so the change is observed on the pass after the write).
+/// framed `Event_Parameters` encoding (which includes any algorithm-carried
+/// references, e.g. FLOATING_LIMIT's `setpoint_reference`), the effective
+/// normal-direction delay, the configured event type, and the monitored
+/// object+property the enrollment's `Object_Property_Reference` resolves to.
+/// A mismatch with [`EventEnrollmentPending::params_fingerprint`] cancels
+/// the in-flight countdown and re-gates from the current parameters — the
+/// pinned behavior for a mid-pending retarget or parameter change (the
+/// evaluator re-reads them every pass, so the change is observed on the pass
+/// after the write).
 fn params_fingerprint(
     params: &BACnetEventParameter,
     normal_delay: u64,
     event_type_raw: u32,
+    monitored: &(ObjectIdentifier, PropertyIdentifier),
 ) -> u64 {
     let mut buf = bytes::BytesMut::new();
     bacnet_encoding::constructed::encode_event_parameter(&mut buf, params);
+    let (monitored_oid, monitored_prop) = monitored;
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in buf
         .iter()
         .copied()
         .chain(normal_delay.to_le_bytes())
         .chain(event_type_raw.to_le_bytes())
+        .chain(monitored_oid.encode())
+        .chain((monitored_prop.to_raw() as u32).to_le_bytes())
     {
         h = (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
     }
@@ -211,10 +236,20 @@ impl EnrollmentUpdate {
 ///
 /// For each active enrollment, reads the monitored property, evaluates the
 /// configured algorithm, applies the Time_Delay / Time_Delay_Normal
-/// countdown, executes the Clause 13.2.2.1.4 transition actions for every
-/// indicated transition that fires — same-state included — and returns the
-/// fired transitions.
-pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmentTransition> {
+/// countdown (seconds, converted with [`passes_for_delay`]), executes the
+/// Clause 13.2.2.1.4 transition actions for every indicated transition that
+/// fires — same-state included — and returns the fired transitions.
+///
+/// `interval_secs` is the driving task's evaluation period in wall-clock
+/// seconds; the lifecycle passes its (clamped to >= 1)
+/// `event_enrollment_interval_secs`. The conversion is never-fire-early, and
+/// the pending countdown retains no residual seconds: in-memory state plus
+/// builder-config interval means no mid-run rescale exists.
+pub fn evaluate_event_enrollments(
+    db: &mut ObjectDatabase,
+    interval_secs: u64,
+) -> Vec<EventEnrollmentTransition> {
+    let interval_secs = interval_secs.max(1);
     let oids = db.find_by_type(ObjectType::EVENT_ENROLLMENT);
 
     let mut updates: Vec<(ObjectIdentifier, EnrollmentUpdate)> = Vec::new();
@@ -310,21 +345,37 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
             .unwrap_or_default();
         let mut eval_state_dirty = false;
 
-        // A parameter change mid-pending cancels the countdown and re-gates
-        // from the current parameters; no partial countdown is resumed.
-        let fingerprint = params_fingerprint(&params, normal_delay as u64, event_type_raw);
+        // The reference is folded into the fingerprint, so it is read BEFORE
+        // the check. An unreadable reference exits here — before the cancel —
+        // deliberately: a transiently unreadable reference retains the
+        // countdown, whereas every failure AFTER this point leaves the
+        // cancellation persisted (see the flush below).
+        let Some((monitored_oid, monitored_prop)) = read_object_property_ref(enrollment) else {
+            continue;
+        };
+
+        // A parameter (or reference) change mid-pending cancels the countdown
+        // and re-gates from the current parameters; no partial countdown is
+        // resumed. The cancellation is flushed BEFORE any later exit — a
+        // dropped write-back here is what let a params round-trip A→B→A
+        // resume a stale countdown.
+        let fingerprint = params_fingerprint(
+            &params,
+            normal_delay as u64,
+            event_type_raw,
+            &(monitored_oid, monitored_prop),
+        );
         if eval_state
             .pending
             .as_ref()
             .is_some_and(|p| p.params_fingerprint != fingerprint)
         {
             eval_state.pending = None;
-            eval_state_dirty = true;
+            eval_state_dirty = false;
+            if eval_state_supported {
+                updates.push((*oid, EnrollmentUpdate::eval_state_only(eval_state.clone())));
+            }
         }
-
-        let Some((monitored_oid, monitored_prop)) = read_object_property_ref(enrollment) else {
-            continue;
-        };
 
         let Some(monitored_obj) = db.get(&monitored_oid) else {
             continue;
@@ -498,11 +549,12 @@ pub fn evaluate_event_enrollments(db: &mut ObjectDatabase) -> Vec<EventEnrollmen
                 }
                 // No countdown, or the condition's target changed mid-delay:
                 // (re-)seed with the current target's direction-appropriate
-                // delay.
+                // delay, converted from seconds with never-fire-early ceiling
+                // semantics.
                 _ => {
                     eval_state.pending = Some(EventEnrollmentPending {
                         state: ind.target,
-                        remaining: delay,
+                        remaining: passes_for_delay(delay, interval_secs),
                         condition: ind.condition,
                         params_fingerprint: fingerprint,
                     });

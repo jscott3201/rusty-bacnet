@@ -84,7 +84,7 @@ fn set_monitored(db: &mut ObjectDatabase, ai_oid: &ObjectIdentifier, value: f32)
 fn change_of_value_first_sample_establishes_baseline_without_transition() {
     let (mut db, ee_oid, _ai_oid) = setup_cov(10.0, 5.0, 0);
 
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert!(
         transitions.is_empty(),
         "first sample initializes the baseline; it must not indicate: {transitions:?}"
@@ -102,11 +102,11 @@ fn change_of_value_first_sample_establishes_baseline_without_transition() {
 #[test]
 fn change_of_value_within_increment_indicates_nothing() {
     let (mut db, _ee_oid, ai_oid) = setup_cov(3.0, 5.0, 0);
-    assert!(evaluate_event_enrollments(&mut db).is_empty()); // baseline = 3.0
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty()); // baseline = 3.0
 
     set_monitored(&mut db, &ai_oid, 7.9); // |7.9 - 3.0| = 4.9 < 5.0
     assert!(
-        evaluate_event_enrollments(&mut db).is_empty(),
+        evaluate_event_enrollments(&mut db, 1).is_empty(),
         "a sub-increment change against the baseline indicates no transition"
     );
 }
@@ -120,10 +120,10 @@ fn change_of_value_within_increment_indicates_nothing() {
 #[test]
 fn change_of_value_threshold_crossing_indicates_normal_to_normal() {
     let (mut db, ee_oid, ai_oid) = setup_cov(3.0, 5.0, 0);
-    assert!(evaluate_event_enrollments(&mut db).is_empty()); // baseline = 3.0
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty()); // baseline = 3.0
 
     set_monitored(&mut db, &ai_oid, 8.0); // |8.0 - 3.0| = 5.0 >= 5.0
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].event_type, EventType::CHANGE_OF_VALUE);
     assert_eq!(transitions[0].change.from, EventState::NORMAL);
@@ -135,7 +135,7 @@ fn change_of_value_threshold_crossing_indicates_normal_to_normal() {
 
     // Baseline advanced to 8.0: holding at 8.0 indicates nothing further...
     assert!(
-        evaluate_event_enrollments(&mut db).is_empty(),
+        evaluate_event_enrollments(&mut db, 1).is_empty(),
         "no re-fire while the value holds at the new baseline"
     );
 
@@ -145,14 +145,14 @@ fn change_of_value_threshold_crossing_indicates_normal_to_normal() {
     // pass — it moves only when a transition to NORMAL is indicated.
     set_monitored(&mut db, &ai_oid, 12.9); // |12.9 - 8.0| = 4.9 < 5.0
     assert!(
-        evaluate_event_enrollments(&mut db).is_empty(),
+        evaluate_event_enrollments(&mut db, 1).is_empty(),
         "the baseline advances at each indicated NORMAL transition"
     );
 
     // Recovery across the increment from the STILL-CURRENT baseline (8.0,
     // not the unindicated 12.9) indicates again.
     set_monitored(&mut db, &ai_oid, 2.9); // |2.9 - 8.0| = 5.1 >= 5.0
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].change.from, EventState::NORMAL);
     assert_eq!(transitions[0].change.to, EventState::NORMAL);
@@ -172,11 +172,11 @@ fn change_of_value_threshold_crossing_indicates_normal_to_normal() {
 #[test]
 fn change_of_value_repeated_changes_each_indicate() {
     let (mut db, _ee_oid, ai_oid) = setup_cov(0.0, 5.0, 0);
-    assert!(evaluate_event_enrollments(&mut db).is_empty()); // baseline = 0.0
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty()); // baseline = 0.0
 
     for (from_label, to) in [("first", 6.0), ("second", 11.0), ("third", 16.0)] {
         set_monitored(&mut db, &ai_oid, to);
-        let transitions = evaluate_event_enrollments(&mut db);
+        let transitions = evaluate_event_enrollments(&mut db, 1);
         assert_eq!(
             transitions.len(),
             1,
@@ -184,7 +184,7 @@ fn change_of_value_repeated_changes_each_indicate() {
         );
         assert_eq!(transitions[0].change.to, EventState::NORMAL);
         assert!(
-            evaluate_event_enrollments(&mut db).is_empty(),
+            evaluate_event_enrollments(&mut db, 1).is_empty(),
             "holding at the new baseline must not re-indicate"
         );
     }
@@ -195,10 +195,10 @@ fn change_of_value_repeated_changes_each_indicate() {
 #[test]
 fn change_of_value_nonpositive_increment_never_indicates() {
     let (mut db, _ee_oid, ai_oid) = setup_cov(0.0, 0.0, 0);
-    assert!(evaluate_event_enrollments(&mut db).is_empty()); // baseline = 0.0
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty()); // baseline = 0.0
     set_monitored(&mut db, &ai_oid, 1000.0);
     assert!(
-        evaluate_event_enrollments(&mut db).is_empty(),
+        evaluate_event_enrollments(&mut db, 1).is_empty(),
         "non-positive pIncrement can never indicate (13.3.3)"
     );
 }
@@ -209,18 +209,18 @@ fn change_of_value_nonpositive_increment_never_indicates() {
 #[test]
 fn change_of_value_change_is_gated_by_the_normal_direction_delay() {
     let (mut db, _ee_oid, ai_oid) = setup_cov(0.0, 5.0, 2);
-    assert!(evaluate_event_enrollments(&mut db).is_empty()); // baseline = 0.0
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty()); // baseline = 0.0
 
     set_monitored(&mut db, &ai_oid, 10.0); // changed by 10 >= 5
     assert!(
-        evaluate_event_enrollments(&mut db).is_empty(),
+        evaluate_event_enrollments(&mut db, 1).is_empty(),
         "pass 1 of the changed condition: countdown seeded, not fired"
     );
     assert!(
-        evaluate_event_enrollments(&mut db).is_empty(),
+        evaluate_event_enrollments(&mut db, 1).is_empty(),
         "pass 2: still counting down"
     );
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(
         transitions.len(),
         1,

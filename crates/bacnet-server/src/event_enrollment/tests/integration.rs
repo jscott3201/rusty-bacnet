@@ -56,7 +56,7 @@ fn evaluates_multiple_enrollments() {
     ee2.set_event_enable(0x07);
     db.add(Box::new(ee2)).unwrap();
 
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     // Only AI-80 triggers (90 > 80)
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].monitored_oid, ai1_oid);
@@ -83,6 +83,6 @@ fn missing_monitored_object_is_skipped() {
     db.add(Box::new(ee)).unwrap();
 
     // Should not panic or return transitions
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert!(transitions.is_empty());
 }

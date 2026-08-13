@@ -143,3 +143,144 @@ async fn spawned_task_advances_and_fires_the_time_delay_countdown() {
         "the EE path still does not emit notifications (#127)"
     );
 }
+
+// ---- Wall-clock pinned delays at the DEFAULT 10s interval (PR-#290 blocker 1) ----
+//
+// The countdown converts seconds to passes with ceil(delay / interval), so at
+// the default event_enrollment_interval_secs=10 a delay of 5s fires on the t≈10s
+// tick — never "N passes of 10s each". Ticks land at t=0 (immediate first
+// tick), 10, 20, ...; assertions leave margins around the boundaries.
+
+/// One server at the DEFAULT interval with one OOR enrollment (present value
+/// already above the high limit) using the given Time_Delay.
+async fn default_interval_server(
+    time_delay: u32,
+) -> (
+    BACnetServer<RecordingTransport>,
+    ObjectIdentifier,
+    StdArc<StdMutex<Vec<bytes::Bytes>>>,
+) {
+    let transport = RecordingTransport::default();
+    let sent = StdArc::clone(&transport.sent_broadcast);
+
+    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    ai.set_present_value(85.0);
+    let ai_oid = ai.object_identifier();
+
+    let mut ee = EventEnrollmentObject::new(1, "EE-OOR", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+        ai_oid,
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+    )));
+    ee.set_event_parameters(BACnetEventParameter::OutOfRange {
+        time_delay,
+        low_limit: 20.0,
+        high_limit: 80.0,
+        deadband: 2.0,
+    });
+    ee.set_event_enable(0x07);
+    let ee_oid = ee.object_identifier();
+
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(ai)).unwrap();
+    db.add(Box::new(ee)).unwrap();
+    db.add(Box::new(
+        DeviceObject::new(DeviceConfig {
+            instance: 1,
+            name: "Dev".into(),
+            ..DeviceConfig::default()
+        })
+        .unwrap(),
+    ))
+    .unwrap();
+
+    let server = BACnetServer::start(ServerConfig::default(), db, transport)
+        .await
+        .expect("server should start");
+    (server, ee_oid, sent)
+}
+
+fn ee_event_state(db: &ObjectDatabase, ee_oid: &ObjectIdentifier) -> EventState {
+    match db
+        .get(ee_oid)
+        .unwrap()
+        .read_property(PropertyIdentifier::EVENT_STATE, None)
+        .unwrap()
+    {
+        PropertyValue::Enumerated(v) => EventState::from_raw(v),
+        other => panic!("EVENT_STATE must read Enumerated, got {other:?}"),
+    }
+}
+
+/// Time_Delay=5 at the default 10s interval: ceil(5/10) = 1 pass — fires on
+/// the SECOND task tick (t≈10s), not the fifth.
+#[tokio::test(start_paused = true)]
+async fn delay_5s_fires_on_second_default_interval_tick() {
+    let (server, ee_oid, _sent) = default_interval_server(5).await;
+
+    tokio::time::sleep(Duration::from_millis(100)).await; // first tick t≈0: seed
+    tokio::time::sleep(Duration::from_millis(8900)).await; // t≈9s
+    assert_eq!(
+        ee_event_state(&*server.database().read().await, &ee_oid),
+        EventState::NORMAL,
+        "one seeded pass still counting at t≈9s"
+    );
+
+    tokio::time::sleep(Duration::from_millis(2000)).await; // t≈11s: second tick fired
+    assert_eq!(
+        ee_event_state(&*server.database().read().await, &ee_oid),
+        EventState::HIGH_LIMIT,
+        "ceil(5s/10s)=1 pass: fired by the t=10s tick — under the old \
+         per-pass misreading this would have taken ~50s"
+    );
+}
+
+/// Time_Delay=15: ceil(15/10) = 2 passes — fires on the t≈20s tick.
+#[tokio::test(start_paused = true)]
+async fn delay_15s_fires_on_third_default_interval_tick() {
+    let (server, ee_oid, _sent) = default_interval_server(15).await;
+
+    tokio::time::sleep(Duration::from_secs(19)).await; // t=0 seed, t=10 ->1
+    assert_eq!(
+        ee_event_state(&*server.database().read().await, &ee_oid),
+        EventState::NORMAL,
+        "t≈19s: still counting (second seeded pass)"
+    );
+    tokio::time::sleep(Duration::from_secs(2)).await; // t≈21s
+    assert_eq!(
+        ee_event_state(&*server.database().read().await, &ee_oid),
+        EventState::HIGH_LIMIT,
+        "ceil(15/10)=2 passes: fired by the t=20s tick"
+    );
+}
+
+/// Time_Delay=25: ceil(25/10) = 3 passes — fires on the t≈30s tick.
+#[tokio::test(start_paused = true)]
+async fn delay_25s_fires_on_fourth_default_interval_tick() {
+    let (server, ee_oid, _sent) = default_interval_server(25).await;
+
+    tokio::time::sleep(Duration::from_secs(29)).await;
+    assert_eq!(
+        ee_event_state(&*server.database().read().await, &ee_oid),
+        EventState::NORMAL,
+        "t≈29s: three seeded passes not yet elapsed"
+    );
+    tokio::time::sleep(Duration::from_secs(2)).await; // t≈31s
+    assert_eq!(
+        ee_event_state(&*server.database().read().await, &ee_oid),
+        EventState::HIGH_LIMIT,
+        "ceil(25/10)=3 passes: fired by the t=30s tick"
+    );
+}
+
+/// Time_Delay=0 keeps immediate transitions: the very first tick fires.
+#[tokio::test(start_paused = true)]
+async fn zero_delay_fires_on_the_first_tick() {
+    let (server, ee_oid, _sent) = default_interval_server(0).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        ee_event_state(&*server.database().read().await, &ee_oid),
+        EventState::HIGH_LIMIT,
+        "TD=0: the first (immediate) tick transitions without any countdown"
+    );
+}

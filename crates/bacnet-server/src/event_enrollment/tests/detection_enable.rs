@@ -63,7 +63,7 @@ fn setup(detection_enabled: bool) -> (ObjectDatabase, ObjectIdentifier) {
 #[test]
 fn detection_enabled_evaluates_normally() {
     let (mut db, _ee_oid) = setup(true);
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].change.to, EventState::HIGH_LIMIT);
 }
@@ -74,7 +74,7 @@ fn detection_enabled_evaluates_normally() {
 fn detection_disabled_yields_no_transitions() {
     let (mut db, _ee_oid) = setup(false);
     assert!(
-        evaluate_event_enrollments(&mut db).is_empty(),
+        evaluate_event_enrollments(&mut db, 1).is_empty(),
         "no transition may occur while Event_Detection_Enable is FALSE"
     );
 }
@@ -86,7 +86,7 @@ fn detection_disabled_yields_no_transitions() {
 #[test]
 fn detection_disabled_holds_event_state_at_normal() {
     let (mut db, ee_oid) = setup(false);
-    evaluate_event_enrollments(&mut db);
+    evaluate_event_enrollments(&mut db, 1);
 
     let obj = db.get(&ee_oid).unwrap();
     assert_eq!(
@@ -107,7 +107,7 @@ fn detection_disabled_holds_event_state_at_normal() {
 #[test]
 fn re_enabling_detection_resumes_evaluation() {
     let (mut db, ee_oid) = setup(false);
-    assert!(evaluate_event_enrollments(&mut db).is_empty());
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
 
     db.get_mut(&ee_oid)
         .unwrap()
@@ -119,7 +119,7 @@ fn re_enabling_detection_resumes_evaluation() {
         )
         .unwrap();
 
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(transitions.len(), 1, "detection resumes once re-enabled");
     assert_eq!(transitions[0].change.from, EventState::NORMAL);
     assert_eq!(transitions[0].change.to, EventState::HIGH_LIMIT);

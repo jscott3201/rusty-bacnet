@@ -35,7 +35,8 @@ pub struct EventEnrollmentPending {
     pub state: EventState,
     /// Evaluation passes remaining before the transition fires; seeded with
     /// the direction-appropriate delay (pTimeDelay for offnormal targets,
-    /// pTimeDelayNormal — else pTimeDelay — for NORMAL).
+    /// pTimeDelayNormal — else pTimeDelay — for NORMAL), converted from
+    /// seconds by the evaluator as `ceil(delay_secs / interval_secs)`.
     pub remaining: u32,
     /// Identity of the indicating condition, per algorithm. CHANGE_OF_STATE
     /// discriminates by the matched alarm value because Clause 13.3.2

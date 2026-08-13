@@ -117,20 +117,20 @@ fn cos_moving_between_alarm_values_reindicates_offnormal() {
     let (mut db, ee_oid, _bi_oid) = setup_cos(1, &[1, 0], 0);
 
     // Value 1 is an alarm value: NORMAL -> OFFNORMAL (condition (a)).
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].change.from, EventState::NORMAL);
     assert_eq!(transitions[0].change.to, EventState::OFFNORMAL);
 
     // Holding at the SAME alarm value satisfies no condition: silence.
     assert!(
-        evaluate_event_enrollments(&mut db).is_empty(),
+        evaluate_event_enrollments(&mut db, 1).is_empty(),
         "value unchanged at the causing alarm value: no condition true, no transition"
     );
 
     // Moving to a DIFFERENT alarm value re-indicates OFFNORMAL (condition (c)).
     set_monitored(&mut db, &_bi_oid, 0);
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(
         transitions.len(),
         1,
@@ -148,12 +148,12 @@ fn cos_moving_between_alarm_values_reindicates_offnormal() {
     // And the new causing value silences further passes until the value moves
     // again.
     assert!(
-        evaluate_event_enrollments(&mut db).is_empty(),
+        evaluate_event_enrollments(&mut db, 1).is_empty(),
         "no re-fire while holding the NEW causing value"
     );
     set_monitored(&mut db, &_bi_oid, 1);
     assert_eq!(
-        evaluate_event_enrollments(&mut db).len(),
+        evaluate_event_enrollments(&mut db, 1).len(),
         1,
         "moving back re-indicates again (causing value tracked per fire, not per config)"
     );
@@ -167,10 +167,10 @@ fn cos_moving_between_alarm_values_reindicates_offnormal() {
 fn cos_same_state_reindication_is_delayed_and_value_discriminated() {
     let (mut db, _ee_oid, bi_oid) = setup_cos(1, &[1, 0], 3);
     for _ in 0..3 {
-        assert!(evaluate_event_enrollments(&mut db).is_empty());
+        assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
     }
     assert_eq!(
-        evaluate_event_enrollments(&mut db)[0].change.to,
+        evaluate_event_enrollments(&mut db, 1)[0].change.to,
         EventState::OFFNORMAL,
         "condition (a) fires after Time_Delay"
     );
@@ -180,22 +180,22 @@ fn cos_same_state_reindication_is_delayed_and_value_discriminated() {
     set_monitored(&mut db, &bi_oid, 0);
     for pass in 1..=2 {
         assert!(
-            evaluate_event_enrollments(&mut db).is_empty(),
+            evaluate_event_enrollments(&mut db, 1).is_empty(),
             "(c) pass {pass}: pTimeDelay countdown must gate the same-state re-indication"
         );
     }
     // Flip back mid-countdown: re-seed (condition identity changed), still no
     // premature fire.
     set_monitored(&mut db, &bi_oid, 1);
-    assert!(evaluate_event_enrollments(&mut db).is_empty());
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
     set_monitored(&mut db, &bi_oid, 0);
     for pass in 1..=3 {
         assert!(
-            evaluate_event_enrollments(&mut db).is_empty(),
+            evaluate_event_enrollments(&mut db, 1).is_empty(),
             "re-seeded (c) pass {pass}"
         );
     }
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].change.from, EventState::OFFNORMAL);
     assert_eq!(transitions[0].change.to, EventState::OFFNORMAL);
@@ -209,10 +209,10 @@ fn cos_same_state_reindication_is_delayed_and_value_discriminated() {
 #[test]
 fn oor_persisting_offnormal_emits_nothing() {
     let (mut db, ee_oid, _ai_oid) = setup_out_of_range(85.0, 80.0, 20.0, 2.0);
-    assert_eq!(evaluate_event_enrollments(&mut db).len(), 1);
+    assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
     for pass in 1..=5 {
         assert!(
-            evaluate_event_enrollments(&mut db).is_empty(),
+            evaluate_event_enrollments(&mut db, 1).is_empty(),
             "pass {pass}: persisting HIGH_LIMIT satisfies no condition \
              (Clause 13.3 introduction) — nothing may be emitted"
         );
@@ -225,7 +225,7 @@ fn oor_persisting_offnormal_emits_nothing() {
 #[test]
 fn oor_across_band_stores_the_specific_state() {
     let (mut db, ee_oid, ai_oid) = setup_out_of_range(85.0, 80.0, 20.0, 2.0);
-    assert_eq!(evaluate_event_enrollments(&mut db).len(), 1);
+    assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
 
     let ai = db.get_mut(&ai_oid).unwrap();
     ai.write_property(
@@ -243,7 +243,7 @@ fn oor_across_band_stores_the_specific_state() {
     )
     .unwrap();
 
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].change.from, EventState::HIGH_LIMIT);
     assert_eq!(
@@ -284,7 +284,7 @@ fn acked_transitions_bit_clears_when_notification_class_requires_ack() {
     );
 
     // NORMAL -> OFFNORMAL with ack required: bit 0 clears.
-    assert_eq!(evaluate_event_enrollments(&mut db).len(), 1);
+    assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
     assert_eq!(
         acked_transitions(&db, &ee_oid),
         0b110,
@@ -295,7 +295,7 @@ fn acked_transitions_bit_clears_when_notification_class_requires_ack() {
     // the bit is cleared again (it starts cleared; the assertion that matters
     // is it does not SET).
     set_monitored(&mut db, &bi_oid, 0);
-    assert_eq!(evaluate_event_enrollments(&mut db).len(), 1);
+    assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
     assert_eq!(acked_transitions(&db, &ee_oid), 0b110);
 }
 
@@ -307,7 +307,7 @@ fn acked_transitions_bit_clears_when_notification_class_requires_ack() {
 fn acked_transitions_bit_sets_when_no_ack_required() {
     let (mut db, ee_oid, _bi_oid) = setup_cos(1, &[1], 0);
     // No Notification Class object exists at all.
-    assert_eq!(evaluate_event_enrollments(&mut db).len(), 1);
+    assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
     assert_eq!(
         acked_transitions(&db, &ee_oid),
         0b111,
@@ -337,7 +337,7 @@ fn acked_transitions_bit_sets_when_no_ack_required() {
     set_monitored(&mut db, &_bi_oid, 0);
     // Value 0 is not in the alarm list [1]: OFFNORMAL -> NORMAL, TO_NORMAL
     // is not ack-required, so its bit is SET by the transition.
-    assert_eq!(evaluate_event_enrollments(&mut db).len(), 1);
+    assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
     assert_eq!(
         acked_transitions(&db, &ee_oid),
         0b111,
@@ -365,7 +365,7 @@ fn event_enable_suppresses_distribution_not_same_state_actions() {
         )
         .unwrap();
 
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(transitions.len(), 1);
     assert!(
         !transitions[0].distribute,
@@ -374,7 +374,7 @@ fn event_enable_suppresses_distribution_not_same_state_actions() {
     assert_eq!(event_state(&db, &ee_oid), EventState::OFFNORMAL);
 
     set_monitored(&mut db, &bi_oid, 0);
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(
         transitions.len(),
         1,

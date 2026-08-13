@@ -14,14 +14,14 @@ use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetEvent
 #[test]
 fn out_of_range_normal_stays_normal() {
     let (mut db, _ee_oid, _ai_oid) = setup_out_of_range(50.0, 80.0, 20.0, 2.0);
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert!(transitions.is_empty());
 }
 
 #[test]
 fn out_of_range_normal_to_high_limit() {
     let (mut db, ee_oid, ai_oid) = setup_out_of_range(85.0, 80.0, 20.0, 2.0);
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].enrollment_oid, ee_oid);
     assert_eq!(transitions[0].monitored_oid, ai_oid);
@@ -41,7 +41,7 @@ fn out_of_range_normal_to_high_limit() {
 #[test]
 fn out_of_range_normal_to_low_limit() {
     let (mut db, ee_oid, _ai_oid) = setup_out_of_range(15.0, 80.0, 20.0, 2.0);
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].change.from, EventState::NORMAL);
     assert_eq!(transitions[0].change.to, EventState::LOW_LIMIT);
@@ -59,7 +59,7 @@ fn out_of_range_normal_to_low_limit() {
 fn out_of_range_high_to_normal_with_deadband() {
     let (mut db, ee_oid, ai_oid) = setup_out_of_range(85.0, 80.0, 20.0, 2.0);
     // First: go to HIGH_LIMIT
-    evaluate_event_enrollments(&mut db);
+    evaluate_event_enrollments(&mut db, 1);
 
     // Update monitored value — still within deadband (80 - 2 = 78)
     let ai = db.get_mut(&ai_oid).unwrap();
@@ -78,7 +78,7 @@ fn out_of_range_high_to_normal_with_deadband() {
     )
     .unwrap();
 
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert!(transitions.is_empty(), "within deadband — no transition");
 
     // Drop below deadband
@@ -91,7 +91,7 @@ fn out_of_range_high_to_normal_with_deadband() {
     )
     .unwrap();
 
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].change.from, EventState::HIGH_LIMIT);
     assert_eq!(transitions[0].change.to, EventState::NORMAL);
@@ -107,11 +107,11 @@ fn out_of_range_high_to_normal_with_deadband() {
 #[test]
 fn out_of_range_no_change_when_already_faulted() {
     let (mut db, _ee_oid, _ai_oid) = setup_out_of_range(85.0, 80.0, 20.0, 2.0);
-    let t1 = evaluate_event_enrollments(&mut db);
+    let t1 = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(t1.len(), 1);
 
     // Second evaluation: same state, no new transition
-    let t2 = evaluate_event_enrollments(&mut db);
+    let t2 = evaluate_event_enrollments(&mut db, 1);
     assert!(t2.is_empty());
 }
 
@@ -143,7 +143,7 @@ fn out_of_range_event_enable_suppresses_distribution_not_the_transition() {
     // TO_OFFNORMAL is not enabled, so the notification must be suppressed —
     // but the transition itself is still detected and reported. Clause 12.12
     // scopes Event_Enable to distribution alone.
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(transitions.len(), 1);
     assert!(
         !transitions[0].distribute,
@@ -201,7 +201,7 @@ fn out_of_range_suppressed_offnormal_still_yields_enabled_return_to_normal() {
     db.add(Box::new(ee)).unwrap();
 
     // Out of range: detected, state advances, notification suppressed.
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(transitions.len(), 1);
     assert!(!transitions[0].distribute);
 
@@ -222,7 +222,7 @@ fn out_of_range_suppressed_offnormal_still_yields_enabled_return_to_normal() {
     )
     .unwrap();
 
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(
         transitions.len(),
         1,
@@ -273,7 +273,7 @@ fn out_of_range_event_enable_zero_still_tracks_event_state() {
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].change.to, EventState::LOW_LIMIT);
     assert!(!transitions[0].distribute);
@@ -302,6 +302,6 @@ fn out_of_range_skips_out_of_service() {
     )
     .unwrap();
 
-    let transitions = evaluate_event_enrollments(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
     assert!(transitions.is_empty());
 }

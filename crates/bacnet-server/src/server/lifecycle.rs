@@ -404,6 +404,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let event_enrollment_task = if config.enable_event_enrollment {
             let db_ee = Arc::clone(&db);
             let ee_period = event_enrollment_period(config.event_enrollment_interval_secs);
+            // The delay countdown converts seconds to passes with
+            // `ceil(delay / period)`, so the evaluator needs the actual,
+            // clamped interval — not the raw config value.
+            let ee_interval_secs = ee_period.as_secs().max(1);
             Some(tokio::spawn(async move {
                 let mut interval = tokio::time::interval(ee_period);
                 // A stalled runtime must not fire a burst of catch-up passes; the
@@ -412,8 +416,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 loop {
                     interval.tick().await;
                     let mut db_guard = db_ee.write().await;
-                    let transitions =
-                        crate::event_enrollment::evaluate_event_enrollments(&mut db_guard);
+                    let transitions = crate::event_enrollment::evaluate_event_enrollments(
+                        &mut db_guard,
+                        ee_interval_secs,
+                    );
                     for t in &transitions {
                         // `distribute` is logged rather than acted on: this task
                         // records Event_State but does not yet emit
