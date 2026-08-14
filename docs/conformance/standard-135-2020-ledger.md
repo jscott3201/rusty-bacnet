@@ -6,7 +6,7 @@
 
 - Standard: ANSI/ASHRAE Standard 135-2020.
 - Reviewed at: 2026-08-13.
-- Implementation evidence SHA reviewed: `272f86680f7de884dfd5928aa62682516bc6cdda`.
+- Implementation evidence SHA reviewed: `f485021f5cd7058ac406d57d3d317936cbe7b361`.
 - Machine-readable source: `docs/conformance/bacnet-135-2020.json`.
 - Current scope: Tranche C3 (#205, #209, #289). Alert Enrollment now exposes `Event_State` and `Acked_Transitions` and applies their Clause 13.2.2.1 initial conditions while `Event_Detection_Enable` is FALSE. This is partial Alert Enrollment evidence; #264 and #291 track the remaining Table 12-61 property-model gaps. WritePropertyMultiple uses object-owned rollback tokens when property readback is not state-equivalent. Covered state includes event detection and history, raw `Time_Delay_Normal` storage, Channel `Last_Priority`, Network Port `Changes_Pending`, Access Door command slots, and log buffers cleared through `Record_Count`. Restoration failures are returned instead of hidden in tracing. Clause 15.10 permits preceding successful writes to remain applied; rollback is project policy, not a conformance claim. Fences: no Alert Enrollment evaluator, notification sending (#127), Event Enrollment history properties (#264), complete Alert Enrollment property model (#291), or DCC behavior (#220).
 - Addenda/errata status: No external addenda/errata check was performed. The local Standard 135-2020 source was reviewed for Alert Enrollment Table 12-61, Clause 13.2.2.1 disabled-state initial conditions, the Clause 13.3 pTimeDelayNormal fallback, and Clause 15.10's ordered partial-success procedure.
