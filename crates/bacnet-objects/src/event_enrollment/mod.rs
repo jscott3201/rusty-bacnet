@@ -284,6 +284,12 @@ impl EventEnrollmentObject {
             _ => 0,
         }
     }
+
+    fn effective_fault_parameters(&self) -> &FaultParameters {
+        self.fault_parameters
+            .as_ref()
+            .unwrap_or(&FaultParameters::FaultNone)
+    }
 }
 
 impl BACnetObject for EventEnrollmentObject {
@@ -365,14 +371,17 @@ impl BACnetObject for EventEnrollmentObject {
             p if p == PropertyIdentifier::NOTIFICATION_CLASS => {
                 Ok(PropertyValue::Unsigned(self.notification_class as u64))
             }
-            p if p == PropertyIdentifier::FAULT_PARAMETERS => match &self.fault_parameters {
-                None => Ok(PropertyValue::Null),
-                Some(fp) => {
-                    let mut buf = bytes::BytesMut::new();
-                    bacnet_encoding::constructed::encode_fault_parameters(&mut buf, fp)?;
-                    Ok(PropertyValue::ApplicationData(buf.to_vec()))
-                }
-            },
+            p if p == PropertyIdentifier::FAULT_TYPE => Ok(PropertyValue::Enumerated(
+                self.effective_fault_parameters().fault_type().to_raw(),
+            )),
+            p if p == PropertyIdentifier::FAULT_PARAMETERS => {
+                let mut buf = bytes::BytesMut::new();
+                bacnet_encoding::constructed::encode_fault_parameters(
+                    &mut buf,
+                    self.effective_fault_parameters(),
+                )?;
+                Ok(PropertyValue::ApplicationData(buf.to_vec()))
+            }
             p if p == PropertyIdentifier::TIME_DELAY_NORMAL => {
                 // Clause 13.3: "If no value is available for this parameter,
                 // then it takes on the value of the pTimeDelay parameter" —
@@ -712,6 +721,7 @@ impl BACnetObject for EventEnrollmentObject {
             PropertyIdentifier::ACKED_TRANSITIONS,
             PropertyIdentifier::EVENT_DETECTION_ENABLE,
             PropertyIdentifier::NOTIFICATION_CLASS,
+            PropertyIdentifier::FAULT_TYPE,
             PropertyIdentifier::FAULT_PARAMETERS,
             PropertyIdentifier::TIME_DELAY_NORMAL,
             PropertyIdentifier::STATUS_FLAGS,

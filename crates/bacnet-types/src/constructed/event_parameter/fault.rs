@@ -3,6 +3,7 @@
 //! Split out of `mod.rs` to keep every file under the 700-LOC cap.
 
 use super::*;
+use crate::enums::FaultType;
 
 // ---------------------------------------------------------------------------
 // FaultParameters structured round trip (Clause 12.12.50 -- Fault_Parameters)
@@ -21,6 +22,21 @@ mod fault_parameter_tag {
 }
 
 impl crate::constructed::FaultParameters {
+    /// Return the fault algorithm selected by this parameter alternative.
+    pub const fn fault_type(&self) -> FaultType {
+        use crate::constructed::FaultParameters as F;
+        match self {
+            F::FaultNone => FaultType::NONE,
+            F::FaultCharacterString { .. } => FaultType::FAULT_CHARACTERSTRING,
+            F::FaultExtended { .. } => FaultType::FAULT_EXTENDED,
+            F::FaultLifeSafety { .. } => FaultType::FAULT_LIFE_SAFETY,
+            F::FaultState { .. } => FaultType::FAULT_STATE,
+            F::FaultStatusFlags { .. } => FaultType::FAULT_STATUS_FLAGS,
+            F::FaultOutOfRange { .. } => FaultType::FAULT_OUT_OF_RANGE,
+            F::FaultListed { .. } => FaultType::FAULT_LISTED,
+        }
+    }
+
     /// Encode this fault-parameter set as a flat [`PropertyValue::List`].
     ///
     /// The first element is the variant tag as [`PropertyValue::Unsigned`],

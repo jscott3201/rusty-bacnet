@@ -581,6 +581,27 @@ fn resolves_253_properties_by_name() {
     }
 }
 
+#[test]
+fn resolves_fault_type_by_name() {
+    let resolved = ResolvedEnum::from_property(PropertyIdentifier::FAULT_TYPE, 6);
+    assert_eq!(
+        resolved,
+        ResolvedEnum::FaultType(FaultType::FAULT_OUT_OF_RANGE)
+    );
+    assert_eq!(resolved.to_string(), "FAULT_OUT_OF_RANGE");
+}
+
+#[test]
+fn fault_type_codes_match_clause_21_6() {
+    assert_eq!(
+        FaultType::ALL_NAMED
+            .iter()
+            .map(|(_, value)| value.to_raw())
+            .collect::<Vec<_>>(),
+        (0..=7).collect::<Vec<_>>()
+    );
+}
+
 /// Out-of-production values stay named-but-numeric through the arms (the
 /// newtype keeps the raw number; Display falls back to it).
 #[test]
@@ -688,6 +709,7 @@ fn from_str_round_trips_display_for_all_named() {
         EngineeringUnits,
         EventState,
         EventType,
+        FaultType,
         Reliability,
         BackupAndRestoreState,
         LifeSafetyState,

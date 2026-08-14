@@ -64,6 +64,7 @@ resolved_enum! {
     ObjectType(ObjectType),
     EventState(EventState),
     EventType(EventType),
+    FaultType(FaultType),
     NotifyType(NotifyType),
     Reliability(Reliability),
     DeviceStatus(DeviceStatus),
@@ -131,6 +132,7 @@ impl ResolvedEnum {
             79 => Self::ObjectType(ObjectType::from_raw(value)), // object-type
             36 => Self::EventState(EventState::from_raw(value)), // event-state
             37 => Self::EventType(EventType::from_raw(value)),   // event-type
+            359 => Self::FaultType(FaultType::from_raw(value)),  // fault-type
             72 => Self::NotifyType(NotifyType::from_raw(value)), // notify-type
             103 => Self::Reliability(Reliability::from_raw(value)), // reliability
             112 => Self::DeviceStatus(DeviceStatus::from_raw(value)), // system-status

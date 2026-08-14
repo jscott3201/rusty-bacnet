@@ -3,6 +3,7 @@
 //! Split out to keep every file under the 700-LOC cap.
 
 use super::super::*;
+use bacnet_types::enums::FaultType;
 
 /// Decode the read arm's framed wire form back to a structured value.
 fn decode_framed(val: PropertyValue) -> FaultParameters {
@@ -14,16 +15,92 @@ fn decode_framed(val: PropertyValue) -> FaultParameters {
         .0
 }
 
+fn read_fault_type(ee: &EventEnrollmentObject) -> u32 {
+    let PropertyValue::Enumerated(value) = ee
+        .read_property(PropertyIdentifier::FAULT_TYPE, None)
+        .unwrap()
+    else {
+        panic!("Fault_Type must be Enumerated");
+    };
+    value
+}
+
 // FaultParameters tests
 // -----------------------------------------------------------------------
 
 #[test]
-fn fault_parameters_default_none() {
+fn fault_parameters_default_to_none_choice() {
     let ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
     let val = ee
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
-    assert_eq!(val, PropertyValue::Null);
+    assert_eq!(decode_framed(val), FaultParameters::FaultNone);
+    assert_eq!(read_fault_type(&ee), FaultType::NONE.to_raw());
+}
+
+#[test]
+fn fault_type_tracks_each_fault_parameters_alternative() {
+    use bacnet_types::constructed::BACnetPropertyStates;
+
+    let reference = BACnetDeviceObjectPropertyReference {
+        object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
+        property_identifier: PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        property_array_index: None,
+        device_identifier: None,
+    };
+    let cases = vec![
+        (FaultParameters::FaultNone, FaultType::NONE),
+        (
+            FaultParameters::FaultCharacterString {
+                fault_values: vec!["fault".to_string()],
+            },
+            FaultType::FAULT_CHARACTERSTRING,
+        ),
+        (
+            FaultParameters::FaultExtended {
+                vendor_id: 1,
+                extended_fault_type: 2,
+                parameters: vec![],
+            },
+            FaultType::FAULT_EXTENDED,
+        ),
+        (
+            FaultParameters::FaultLifeSafety {
+                fault_values: vec![1],
+                mode_for_reference: reference.clone(),
+            },
+            FaultType::FAULT_LIFE_SAFETY,
+        ),
+        (
+            FaultParameters::FaultState {
+                fault_values: vec![BACnetPropertyStates::BooleanValue(true)],
+            },
+            FaultType::FAULT_STATE,
+        ),
+        (
+            FaultParameters::FaultStatusFlags {
+                reference: reference.clone(),
+            },
+            FaultType::FAULT_STATUS_FLAGS,
+        ),
+        (
+            FaultParameters::FaultOutOfRange {
+                min_normal: 0.0,
+                max_normal: 1.0,
+            },
+            FaultType::FAULT_OUT_OF_RANGE,
+        ),
+        (
+            FaultParameters::FaultListed { reference },
+            FaultType::FAULT_LISTED,
+        ),
+    ];
+    let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+
+    for (parameters, expected) in cases {
+        ee.set_fault_parameters(Some(parameters));
+        assert_eq!(read_fault_type(&ee), expected.to_raw());
+    }
 }
 
 #[test]
@@ -152,10 +229,20 @@ fn fault_parameters_listed() {
 }
 
 #[test]
-fn fault_parameters_in_property_list() {
-    let ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
+fn fault_properties_are_advertised_together() {
+    let mut ee = EventEnrollmentObject::new(1, "EE-FP", 0).unwrap();
     let props = ee.property_list();
+    assert!(props.contains(&PropertyIdentifier::FAULT_TYPE));
     assert!(props.contains(&PropertyIdentifier::FAULT_PARAMETERS));
+    assert!(!ee.is_writable_property(PropertyIdentifier::FAULT_TYPE));
+    assert!(ee
+        .write_property(
+            PropertyIdentifier::FAULT_TYPE,
+            None,
+            PropertyValue::Enumerated(FaultType::FAULT_LISTED.to_raw()),
+            None,
+        )
+        .is_err());
 }
 
 #[test]
@@ -225,11 +312,11 @@ fn fault_parameters_framed_trailing_garbage_rejected() {
             None,
         );
         assert!(result.is_err(), "trailing {extra} byte(s) must be rejected");
-        // Untouched: Fault_Parameters still reads as Null (never set).
+        // Untouched: the effective choice remains FaultNone.
         let val = ee
             .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
             .unwrap();
-        assert_eq!(val, PropertyValue::Null);
+        assert_eq!(decode_framed(val), FaultParameters::FaultNone);
     }
 }
 
@@ -260,7 +347,8 @@ fn fault_parameters_write_clear_to_null() {
     let val = ee
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
-    assert_eq!(val, PropertyValue::Null);
+    assert_eq!(decode_framed(val), FaultParameters::FaultNone);
+    assert_eq!(read_fault_type(&ee), FaultType::NONE.to_raw());
 }
 
 #[test]
@@ -272,12 +360,13 @@ fn fault_parameters_clear() {
         .unwrap();
     assert_eq!(decode_framed(val), FaultParameters::FaultNone);
 
-    // Clear back to None
+    // Clear back to the effective NONE alternative.
     ee.set_fault_parameters(None);
     let val = ee
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
-    assert_eq!(val, PropertyValue::Null);
+    assert_eq!(decode_framed(val), FaultParameters::FaultNone);
+    assert_eq!(read_fault_type(&ee), FaultType::NONE.to_raw());
 }
 
 // -----------------------------------------------------------------------

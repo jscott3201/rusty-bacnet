@@ -198,6 +198,20 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
+    /// BACnet fault algorithm type (Clause 21.6).
+    pub struct FaultType(u32);
+
+    const NONE = 0;
+    const FAULT_CHARACTERSTRING = 1;
+    const FAULT_EXTENDED = 2;
+    const FAULT_LIFE_SAFETY = 3;
+    const FAULT_STATE = 4;
+    const FAULT_STATUS_FLAGS = 5;
+    const FAULT_OUT_OF_RANGE = 6;
+    const FAULT_LISTED = 7;
+}
+
+bacnet_enum! {
     /// BACnet notify type (Clause 12.21).
     pub struct NotifyType(u32);
 
