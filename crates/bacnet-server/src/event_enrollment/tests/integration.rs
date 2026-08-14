@@ -220,6 +220,7 @@ pub(super) struct ReferenceValueObject {
     pub(super) source_supported: bool,
     pub(super) source_writable: Arc<AtomicBool>,
     pub(super) normal_event_state_writable: bool,
+    pub(super) event_state_error_after_write: bool,
 }
 
 impl ReferenceValueObject {
@@ -248,6 +249,7 @@ impl ReferenceValueObject {
             source_supported: true,
             source_writable: Arc::new(AtomicBool::new(true)),
             normal_event_state_writable: true,
+            event_state_error_after_write: false,
         }
     }
 }
@@ -347,7 +349,14 @@ impl BACnetObject for ReferenceValueObject {
                 "event state write failed".into(),
             ));
         }
-        self.inner.set_event_state_internal(state)
+        self.inner.set_event_state_internal(state)?;
+        if self.event_state_error_after_write {
+            Err(bacnet_types::error::Error::Encoding(
+                "event state write reported failure".into(),
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     fn set_acked_transitions_internal(

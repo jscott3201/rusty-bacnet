@@ -73,7 +73,6 @@ impl ObjectDatabase {
 
         self.name_index.insert(name, oid);
         let is_new = !self.objects.contains_key(&oid);
-        self.invalid_enrollment_eval_state.remove(&oid);
         self.enrollment_eval_sources.remove(&oid);
         self.objects.insert(oid, object);
         if is_new {
@@ -197,9 +196,21 @@ impl ObjectDatabase {
         if self.objects.contains_key(oid) {
             self.invalidate_enrollments_monitoring(oid);
         }
-        if let Some(obj) = self.objects.remove(oid) {
-            self.invalid_enrollment_eval_state.remove(oid);
+        if let Some(mut obj) = self.objects.remove(oid) {
             self.enrollment_eval_sources.remove(oid);
+            if obj.enrollment_eval_state_internal().is_some() {
+                if obj
+                    .set_enrollment_eval_state_internal(Default::default())
+                    .is_err()
+                {
+                    self.invalid_enrollment_eval_state.insert(*oid);
+                } else {
+                    self.invalid_enrollment_eval_state.remove(oid);
+                }
+                let _ = obj.set_enrollment_eval_source_internal(None);
+            } else {
+                self.invalid_enrollment_eval_state.remove(oid);
+            }
             self.name_index.remove(obj.object_name());
             if let Some(type_set) = self.type_index.get_mut(&oid.object_type()) {
                 type_set.retain(|o| o != oid);

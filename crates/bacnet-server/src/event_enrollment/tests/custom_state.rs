@@ -419,3 +419,121 @@ fn failed_eval_state_write_cannot_leak_an_unreported_event_state() {
         PropertyValue::Enumerated(EventState::NORMAL.to_raw())
     );
 }
+
+#[test]
+fn same_state_transition_does_not_depend_on_rewriting_event_state() {
+    let mut db = ObjectDatabase::new();
+    let mut target = AnalogValueObject::new(111, "AV-same-state-write", 62).unwrap();
+    target
+        .write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(10.0),
+            Some(1),
+        )
+        .unwrap();
+    let target_oid = target.object_identifier();
+    db.add(Box::new(target)).unwrap();
+
+    let mut enrollment = ReferenceValueObject::new_for_event_type(
+        Some(indexed_reference_value(target_oid, 1)),
+        EventType::CHANGE_OF_VALUE,
+    );
+    enrollment
+        .inner
+        .set_event_parameters(BACnetEventParameter::ChangeOfValue {
+            time_delay: 0,
+            criteria: ChangeOfValueCriteria::ReferencedPropertyIncrement(5.0),
+        });
+    enrollment.normal_event_state_writable = false;
+    db.add(Box::new(enrollment)).unwrap();
+
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    db.get_mut(&target_oid)
+        .unwrap()
+        .write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(20.0),
+            Some(1),
+        )
+        .unwrap();
+    assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
+}
+
+#[test]
+fn landed_event_state_is_reported_when_its_setter_returns_error() {
+    let mut db = ObjectDatabase::new();
+    let mut target = AnalogValueObject::new(112, "AV-landed-error", 62).unwrap();
+    target
+        .write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(90.0),
+            Some(1),
+        )
+        .unwrap();
+    let target_oid = target.object_identifier();
+    db.add(Box::new(target)).unwrap();
+
+    let mut enrollment = ReferenceValueObject::new(Some(indexed_reference_value(target_oid, 1)));
+    enrollment
+        .inner
+        .set_event_parameters(BACnetEventParameter::OutOfRange {
+            time_delay: 0,
+            low_limit: 20.0,
+            high_limit: 80.0,
+            deadband: 2.0,
+        });
+    enrollment.event_state_error_after_write = true;
+    let enrollment_oid = enrollment.object_identifier();
+    db.add(Box::new(enrollment)).unwrap();
+
+    assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
+    assert_eq!(
+        db.get(&enrollment_oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::EVENT_STATE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(EventState::HIGH_LIMIT.to_raw())
+    );
+}
+
+#[test]
+fn detached_enrollment_does_not_resume_state_after_target_replacement() {
+    let mut db = ObjectDatabase::new();
+    let mut target = AnalogValueObject::new(113, "AV-detached-source", 62).unwrap();
+    target
+        .write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(90.0),
+            Some(1),
+        )
+        .unwrap();
+    let target_oid = target.object_identifier();
+    db.add(Box::new(target)).unwrap();
+
+    let enrollment = ReferenceValueObject::new(Some(indexed_reference_value(target_oid, 1)));
+    let enrollment_oid = enrollment.object_identifier();
+    db.add(Box::new(enrollment)).unwrap();
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+
+    let enrollment = db.remove(&enrollment_oid).unwrap();
+    db.remove(&target_oid).unwrap();
+    let mut replacement = AnalogValueObject::new(113, "AV-detached-replacement", 62).unwrap();
+    replacement
+        .write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(90.0),
+            Some(1),
+        )
+        .unwrap();
+    db.add(Box::new(replacement)).unwrap();
+    db.add(enrollment).unwrap();
+
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
+}

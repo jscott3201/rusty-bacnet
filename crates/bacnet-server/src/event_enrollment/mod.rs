@@ -809,7 +809,13 @@ pub fn evaluate_event_enrollments(
                     persisted_eval_state = true;
                 }
             }
-            if obj.set_event_state_internal(fired.to).is_err() {
+            let event_state_landed = fired.from == fired.to
+                || obj.set_event_state_internal(fired.to).is_ok()
+                || matches!(
+                    obj.read_property(PropertyIdentifier::EVENT_STATE, None),
+                    Ok(PropertyValue::Enumerated(state)) if state == fired.to.to_raw()
+                );
+            if !event_state_landed {
                 if persisted_eval_state {
                     if obj
                         .set_enrollment_eval_state_internal(EventEnrollmentEvalState::default())

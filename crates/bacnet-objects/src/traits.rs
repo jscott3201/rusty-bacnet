@@ -270,7 +270,8 @@ pub trait BACnetObject: Send + Sync {
     /// [`EventState`], mirroring the inherent `set_event_state` builder and
     /// the existing read arm. Network-facing validation — rejecting all
     /// `Event_State` writes — lives in [`write_property`](Self::write_property),
-    /// not here.
+    /// not here. Implementations must leave `Event_State` unchanged when they
+    /// return `Err`.
     fn set_event_state_internal(&mut self, _state: EventState) -> Result<(), Error> {
         Err(Error::Protocol {
             class: ErrorClass::OBJECT.to_raw() as u32,
