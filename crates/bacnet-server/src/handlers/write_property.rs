@@ -201,12 +201,12 @@ fn error_after_rollback(
 /// state and the object's private saved-value slot.
 ///
 /// Objects may also supply an opaque rollback token when property readback is
-/// not state-equivalent. Event-detection disable writes clear transition and
-/// evaluator state, while `Time_Delay_Normal` readback substitutes its
-/// effective `Time_Delay` fallback for an unset backing value. Replaying those
-/// reads would not restore the pre-request state. This rollback is repository
-/// policy; Clause 15.10 itself permits preceding writes to remain applied when
-/// a later write fails.
+/// not state-equivalent. Tokens cover reset side effects, derived properties,
+/// destructive log writes, command slots that cannot be written directly, and
+/// fallback-backed storage. Replaying the readable value alone would not
+/// restore the pre-request state. This rollback is repository policy; Clause
+/// 15.10 itself permits preceding writes to remain applied when a later write
+/// fails.
 pub fn handle_write_property_multiple(
     db: &mut ObjectDatabase,
     service_data: &[u8],

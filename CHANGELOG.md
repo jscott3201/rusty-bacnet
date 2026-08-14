@@ -97,18 +97,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   complete the Alert Enrollment property model; #264 and #291 track the
   remaining Table 12-61 gaps.
 
-- WritePropertyMultiple rollback now preserves object-private event state
-  that property readback cannot reconstruct (#209, #289). Event-detection
-  disable writes restore detector/enrollment countdowns, acknowledgment
-  state, fault state, and modeled event history when a later write fails.
-  An unset `Time_Delay_Normal` also restores as unset instead of replaying
-  its effective `Time_Delay` fallback as a configured value. This keeps the
-  repository's WPM rollback policy for these writes. Restoration failures
-  are returned instead of being hidden in tracing, and only objects whose
-  own rollback failed run event/COV reconciliation. Opaque rollback tokens supplement
-  readable property snapshots rather than replacing them. Clause 15.10
-  permits earlier successful writes to remain applied and is not cited as
-  requiring rollback.
+- WritePropertyMultiple rollback now preserves object-private and derived
+  state that property readback cannot reconstruct (#209, #289).
+  Event-detection writes restore detector state and event history, while an
+  unset `Time_Delay_Normal` restores as unset rather than as its effective
+  fallback. The same object-owned snapshots preserve Channel `Last_Priority`,
+  Network Port `Changes_Pending`, Access Door command slots, and log records
+  cleared through `Record_Count`. Restoration failures are returned instead
+  of being hidden in tracing, and only objects whose own rollback failed run
+  event/COV reconciliation. Opaque rollback tokens supplement readable
+  property snapshots rather than replacing them. Clause 15.10 permits earlier
+  successful writes to remain applied and is not cited as requiring rollback.
 
 - The Event Enrollment evaluator honors `Time_Delay` and
   `Time_Delay_Normal` (#163). Every algorithm arm previously discarded

@@ -9,7 +9,15 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
 use crate::common::{self, read_property_list_property};
-use crate::traits::BACnetObject;
+use crate::traits::{BACnetObject, WritePropertyRollback};
+
+struct TrendLogWriteRollback {
+    buffer: VecDeque<BACnetLogRecord>,
+}
+
+struct TrendLogMultipleWriteRollback {
+    buffer: VecDeque<BACnetLogRecord>,
+}
 
 /// BACnet TrendLog object.
 ///
@@ -330,6 +338,25 @@ impl BACnetObject for TrendLogObject {
         Cow::Borrowed(PROPS)
     }
 
+    fn capture_write_property_rollback(
+        &self,
+        property: PropertyIdentifier,
+    ) -> Option<WritePropertyRollback> {
+        (property == PropertyIdentifier::RECORD_COUNT).then(|| {
+            WritePropertyRollback::new(TrendLogWriteRollback {
+                buffer: self.buffer.clone(),
+            })
+        })
+    }
+
+    fn restore_write_property_rollback(
+        &mut self,
+        rollback: WritePropertyRollback,
+    ) -> Result<(), Error> {
+        self.buffer = rollback.downcast::<TrendLogWriteRollback>()?.buffer;
+        Ok(())
+    }
+
     fn add_trend_record(&mut self, record: BACnetLogRecord) {
         self.add_record(record);
     }
@@ -634,6 +661,25 @@ impl BACnetObject for TrendLogMultipleObject {
             PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY,
         ];
         Cow::Borrowed(PROPS)
+    }
+
+    fn capture_write_property_rollback(
+        &self,
+        property: PropertyIdentifier,
+    ) -> Option<WritePropertyRollback> {
+        (property == PropertyIdentifier::RECORD_COUNT).then(|| {
+            WritePropertyRollback::new(TrendLogMultipleWriteRollback {
+                buffer: self.buffer.clone(),
+            })
+        })
+    }
+
+    fn restore_write_property_rollback(
+        &mut self,
+        rollback: WritePropertyRollback,
+    ) -> Result<(), Error> {
+        self.buffer = rollback.downcast::<TrendLogMultipleWriteRollback>()?.buffer;
+        Ok(())
     }
 
     fn add_trend_record(&mut self, record: BACnetLogRecord) {

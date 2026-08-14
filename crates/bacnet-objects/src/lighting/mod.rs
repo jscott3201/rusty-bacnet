@@ -10,7 +10,7 @@ use crate::common::{
     self, read_common_properties, read_priority_array, write_priority_array,
     write_priority_array_direct,
 };
-use crate::traits::BACnetObject;
+use crate::traits::{BACnetObject, WritePropertyRollback};
 
 // ---------------------------------------------------------------------------
 // LightingOutput (type 54)
@@ -553,6 +553,10 @@ pub struct ChannelObject {
     reliability: u32,
 }
 
+struct ChannelWriteRollback {
+    last_priority: u32,
+}
+
 impl ChannelObject {
     /// Create a new Channel object.
     pub fn new(instance: u32, name: impl Into<String>, channel_number: u32) -> Result<Self, Error> {
@@ -671,6 +675,25 @@ impl BACnetObject for ChannelObject {
             PropertyIdentifier::RELIABILITY,
         ];
         Cow::Borrowed(PROPS)
+    }
+
+    fn capture_write_property_rollback(
+        &self,
+        property: PropertyIdentifier,
+    ) -> Option<WritePropertyRollback> {
+        (property == PropertyIdentifier::PRESENT_VALUE).then(|| {
+            WritePropertyRollback::new(ChannelWriteRollback {
+                last_priority: self.last_priority,
+            })
+        })
+    }
+
+    fn restore_write_property_rollback(
+        &mut self,
+        rollback: WritePropertyRollback,
+    ) -> Result<(), Error> {
+        self.last_priority = rollback.downcast::<ChannelWriteRollback>()?.last_priority;
+        Ok(())
     }
 }
 
