@@ -91,8 +91,9 @@ impl BACnetObject for TokenBackedNameObject {
     }
 
     fn capture_write_property_rollback(
-        &self,
+        &mut self,
         property: PropertyIdentifier,
+        _value: &PropertyValue,
     ) -> Option<WritePropertyRollback> {
         (property == PropertyIdentifier::OBJECT_NAME)
             .then(|| WritePropertyRollback::new(self.name.clone()))
@@ -133,6 +134,28 @@ fn failed_wpm(
                     priority: None,
                 },
             ],
+        }],
+    };
+    let mut request_bytes = BytesMut::new();
+    request.encode(&mut request_bytes);
+    handle_write_property_multiple_with_residuals(db, &request_bytes)
+}
+
+fn successful_wpm(
+    db: &mut ObjectDatabase,
+    oid: ObjectIdentifier,
+    property: PropertyIdentifier,
+    value: Vec<u8>,
+) -> (Result<Vec<ObjectIdentifier>, Error>, Vec<ObjectIdentifier>) {
+    let request = WritePropertyMultipleRequest {
+        list_of_write_access_specs: vec![WriteAccessSpecification {
+            object_identifier: oid,
+            list_of_properties: vec![BACnetPropertyValue {
+                property_identifier: property,
+                property_array_index: None,
+                value,
+                priority: None,
+            }],
         }],
     };
     let mut request_bytes = BytesMut::new();
@@ -453,6 +476,45 @@ fn log_record_count_rollback_restores_cleared_buffers() {
                 .read_property(PropertyIdentifier::TOTAL_RECORD_COUNT, None)
                 .unwrap(),
             before_total,
+            "{oid:?}"
+        );
+
+        let mut invalid = BytesMut::new();
+        bacnet_encoding::primitives::encode_app_unsigned(&mut invalid, 1);
+        let (invalid_result, invalid_residual_oids) = failed_wpm(
+            &mut db,
+            oid,
+            PropertyIdentifier::RECORD_COUNT,
+            invalid.to_vec(),
+            None,
+        );
+        assert!(invalid_result.is_err(), "{oid:?}");
+        assert!(invalid_residual_oids.is_empty(), "{oid:?}");
+        assert_eq!(
+            db.get(&oid)
+                .unwrap()
+                .read_property(PropertyIdentifier::RECORD_COUNT, None)
+                .unwrap(),
+            before,
+            "{oid:?}"
+        );
+
+        let mut clear = BytesMut::new();
+        bacnet_encoding::primitives::encode_app_unsigned(&mut clear, 0);
+        let (success, residual_oids) = successful_wpm(
+            &mut db,
+            oid,
+            PropertyIdentifier::RECORD_COUNT,
+            clear.to_vec(),
+        );
+        assert_eq!(success.unwrap(), vec![oid]);
+        assert!(residual_oids.is_empty());
+        assert_eq!(
+            db.get(&oid)
+                .unwrap()
+                .read_property(PropertyIdentifier::RECORD_COUNT, None)
+                .unwrap(),
+            PropertyValue::Unsigned(0),
             "{oid:?}"
         );
     }

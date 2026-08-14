@@ -274,8 +274,9 @@ impl BACnetObject for NetworkPortObject {
     }
 
     fn capture_write_property_rollback(
-        &self,
+        &mut self,
         property: PropertyIdentifier,
+        _value: &PropertyValue,
     ) -> Option<WritePropertyRollback> {
         matches!(
             property,

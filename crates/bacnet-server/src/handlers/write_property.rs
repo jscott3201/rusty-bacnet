@@ -284,7 +284,6 @@ fn handle_write_property_multiple_inner(
             }
         }
         let object = db.get_mut(oid).unwrap();
-        let object_rollback = object.capture_write_property_rollback(*prop_id);
         // Capture a state-equivalent snapshot for rollback. For a commandable
         // PRESENT_VALUE the readable value is the resolved priority-array
         // output, not the slot being written, so snapshot the priority-array
@@ -372,6 +371,9 @@ fn handle_write_property_multiple_inner(
                 value,
             })
             .collect::<Vec<_>>();
+        // Readable snapshots must be captured before this hook: destructive
+        // writes may move private state into their rollback token.
+        let object_rollback = object.capture_write_property_rollback(*prop_id, value);
         let has_rollback = !properties.is_empty() || object_rollback.is_some();
         match object.write_property(*prop_id, *array_index, value.clone(), *priority) {
             Ok(()) => {

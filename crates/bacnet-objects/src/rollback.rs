@@ -23,8 +23,9 @@ pub(crate) enum IntrinsicWriteRollback {
 macro_rules! impl_intrinsic_write_rollback {
     ($detector_field:ident, $detection_enable_field:ident, $history_field:ident) => {
         fn capture_write_property_rollback(
-            &self,
+            &mut self,
             property: bacnet_types::enums::PropertyIdentifier,
+            _value: &bacnet_types::primitives::PropertyValue,
         ) -> Option<$crate::traits::WritePropertyRollback> {
             match property {
                 bacnet_types::enums::PropertyIdentifier::EVENT_DETECTION_ENABLE => {

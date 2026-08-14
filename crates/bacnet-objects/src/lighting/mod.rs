@@ -678,8 +678,9 @@ impl BACnetObject for ChannelObject {
     }
 
     fn capture_write_property_rollback(
-        &self,
+        &mut self,
         property: PropertyIdentifier,
+        _value: &PropertyValue,
     ) -> Option<WritePropertyRollback> {
         (property == PropertyIdentifier::PRESENT_VALUE).then(|| {
             WritePropertyRollback::new(ChannelWriteRollback {

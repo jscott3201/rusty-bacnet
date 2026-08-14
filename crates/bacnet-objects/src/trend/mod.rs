@@ -339,12 +339,15 @@ impl BACnetObject for TrendLogObject {
     }
 
     fn capture_write_property_rollback(
-        &self,
+        &mut self,
         property: PropertyIdentifier,
+        value: &PropertyValue,
     ) -> Option<WritePropertyRollback> {
-        (property == PropertyIdentifier::RECORD_COUNT).then(|| {
+        (property == PropertyIdentifier::RECORD_COUNT
+            && matches!(value, PropertyValue::Unsigned(0)))
+        .then(|| {
             WritePropertyRollback::new(TrendLogWriteRollback {
-                buffer: self.buffer.clone(),
+                buffer: std::mem::take(&mut self.buffer),
             })
         })
     }
@@ -664,12 +667,15 @@ impl BACnetObject for TrendLogMultipleObject {
     }
 
     fn capture_write_property_rollback(
-        &self,
+        &mut self,
         property: PropertyIdentifier,
+        value: &PropertyValue,
     ) -> Option<WritePropertyRollback> {
-        (property == PropertyIdentifier::RECORD_COUNT).then(|| {
+        (property == PropertyIdentifier::RECORD_COUNT
+            && matches!(value, PropertyValue::Unsigned(0)))
+        .then(|| {
             WritePropertyRollback::new(TrendLogMultipleWriteRollback {
-                buffer: self.buffer.clone(),
+                buffer: std::mem::take(&mut self.buffer),
             })
         })
     }

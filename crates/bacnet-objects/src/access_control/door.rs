@@ -210,8 +210,9 @@ impl BACnetObject for AccessDoorObject {
     }
 
     fn capture_write_property_rollback(
-        &self,
+        &mut self,
         property: PropertyIdentifier,
+        _value: &PropertyValue,
     ) -> Option<crate::traits::WritePropertyRollback> {
         (property == PropertyIdentifier::PRESENT_VALUE).then(|| {
             crate::traits::WritePropertyRollback::new(AccessDoorWriteRollback {

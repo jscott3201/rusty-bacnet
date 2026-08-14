@@ -86,8 +86,9 @@ impl BACnetObject for FailingRollbackObject {
     }
 
     fn capture_write_property_rollback(
-        &self,
+        &mut self,
         property: PropertyIdentifier,
+        _value: &PropertyValue,
     ) -> Option<WritePropertyRollback> {
         (property == PropertyIdentifier::DESCRIPTION).then(|| WritePropertyRollback::new(()))
     }

@@ -372,7 +372,10 @@ mod detection_enable_reset_tests {
         ai.event_history.time_stamps[0] = BACnetTimeStamp::SequenceNumber(7);
         ai.event_history.message_texts[0] = "offnormal".into();
         let rollback = ai
-            .capture_write_property_rollback(PropertyIdentifier::EVENT_DETECTION_ENABLE)
+            .capture_write_property_rollback(
+                PropertyIdentifier::EVENT_DETECTION_ENABLE,
+                &PropertyValue::Boolean(false),
+            )
             .unwrap();
 
         ai.write_property(

@@ -111,15 +111,18 @@ pub trait BACnetObject: Send + Sync {
 
     /// Capture state that property readback cannot preserve during rollback.
     ///
-    /// The default returns `None`; the server then snapshots the readable
-    /// property value as before. Implementations may return a token for writes
-    /// whose side effects, destructive behavior, or fallback-backed storage
-    /// make that replay lossy.
-    /// The token is restored after readable property snapshots are replayed.
+    /// The default returns `None`; the server snapshots readable property
+    /// values before calling this hook. Implementations may return a token for
+    /// writes whose side effects, destructive behavior, or fallback-backed
+    /// storage make replay lossy. A destructive write may move state into the
+    /// token when `value` is valid; the token is restored if the write or a
+    /// later write fails, and dropped when the WPM request succeeds. Returning
+    /// `None` MUST leave the object unchanged.
     #[doc(hidden)]
     fn capture_write_property_rollback(
-        &self,
+        &mut self,
         _property: PropertyIdentifier,
+        _value: &PropertyValue,
     ) -> Option<WritePropertyRollback> {
         None
     }

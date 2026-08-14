@@ -600,8 +600,9 @@ impl BACnetObject for EventEnrollmentObject {
     }
 
     fn capture_write_property_rollback(
-        &self,
+        &mut self,
         property: PropertyIdentifier,
+        _value: &PropertyValue,
     ) -> Option<WritePropertyRollback> {
         match property {
             PropertyIdentifier::EVENT_DETECTION_ENABLE => Some(WritePropertyRollback::new(
@@ -896,8 +897,9 @@ impl BACnetObject for AlertEnrollmentObject {
     }
 
     fn capture_write_property_rollback(
-        &self,
+        &mut self,
         property: PropertyIdentifier,
+        _value: &PropertyValue,
     ) -> Option<WritePropertyRollback> {
         (property == PropertyIdentifier::EVENT_DETECTION_ENABLE).then(|| {
             WritePropertyRollback::new(AlertEnrollmentWriteRollback {
