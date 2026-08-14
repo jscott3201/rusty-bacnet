@@ -327,8 +327,8 @@ pub trait BACnetObject: Send + Sync {
     /// The outer `Option` indicates whether the object supports this channel;
     /// the inner `Option` is empty before a source has been established.
     /// Objects that implement the evaluation-state channel must also implement
-    /// this channel to retain countdowns and baselines across evaluations.
-    /// Without source storage, the evaluator runs statelessly.
+    /// this channel to retain countdowns and baselines for indexed references.
+    /// Indexed evaluation runs statelessly without source storage.
     fn enrollment_eval_source_internal(&self) -> Option<Option<EventEnrollmentMonitoredSource>> {
         None
     }

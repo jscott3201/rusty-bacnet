@@ -454,10 +454,11 @@ pub fn evaluate_event_enrollments(
                 continue;
             }
         };
-        // Evaluation state without its owning source cannot survive a
-        // reference change safely. Keep immediate evaluation available for
-        // older custom objects, but do not retain countdowns or baselines.
-        if eval_state_supported && eval_source.is_none() {
+        // Indexed evaluation state without its owning source cannot survive
+        // an index change safely. Keep immediate evaluation available for
+        // older custom objects, but do not retain indexed countdowns or
+        // baselines unless they implement the paired source channel.
+        if eval_state_supported && eval_source.is_none() && monitored.array_index.is_some() {
             queue_eval_state_reset(&mut updates, *oid, true, &eval_state);
             eval_state = EventEnrollmentEvalState::default();
             eval_state_supported = false;
@@ -738,8 +739,12 @@ pub fn evaluate_event_enrollments(
 
     let mut transitions = Vec::new();
     let mut source_failures = HashSet::new();
+    let mut state_failures = HashSet::new();
     for (oid, update) in updates {
-        if source_failures.contains(&oid) {
+        if state_failures.contains(&oid)
+            || (source_failures.contains(&oid)
+                && (update.eval_source.is_some() || update.eval_state.is_some()))
+        {
             continue;
         }
         let Some(obj) = db.get_mut(&oid) else {
@@ -748,8 +753,14 @@ pub fn evaluate_event_enrollments(
         if let Some(source) = update.eval_source {
             if obj.set_enrollment_eval_source_internal(source).is_err() {
                 // State written later in this pass would have no reliable
-                // owner. Clear it and suppress the remaining updates.
-                let _ = obj.set_enrollment_eval_state_internal(EventEnrollmentEvalState::default());
+                // owner. Clear it and suppress dependent state updates, while
+                // allowing an immediate stateless transition to proceed.
+                if obj
+                    .set_enrollment_eval_state_internal(EventEnrollmentEvalState::default())
+                    .is_err()
+                {
+                    state_failures.insert(oid);
+                }
                 source_failures.insert(oid);
                 continue;
             }
@@ -766,14 +777,20 @@ pub fn evaluate_event_enrollments(
             if obj.set_event_state_internal(fired.to).is_err() {
                 continue;
             }
+            if let Some(state) = update.eval_state {
+                if obj.set_enrollment_eval_state_internal(state).is_err() {
+                    // Do not expose a transition whose baseline or countdown
+                    // update could not be stored.
+                    let _ = obj.set_event_state_internal(fired.from);
+                    state_failures.insert(oid);
+                    continue;
+                }
+            }
             // 13.2.2.1.4's fourth action, alarm-acknowledgment half (13.2.3):
             // with the transition's Ack_Required bit set, the corresponding
             // Acked_Transitions bit is cleared (ack now owed); otherwise it is
             // set. The notification-distribution half is tranche E's #127.
             let _ = obj.set_acked_transitions_internal(fired.transition_bit, !fired.ack_required);
-            if let Some(state) = update.eval_state {
-                let _ = obj.set_enrollment_eval_state_internal(state);
-            }
             transitions.push(EventEnrollmentTransition {
                 enrollment_oid: oid,
                 monitored_oid: fired.monitored_oid,
@@ -785,7 +802,11 @@ pub fn evaluate_event_enrollments(
                 distribute: fired.distribute,
             });
         } else if let Some(state) = update.eval_state {
-            let _ = obj.set_enrollment_eval_state_internal(state);
+            if obj.set_enrollment_eval_state_internal(state).is_err() {
+                // A later source write must not claim state that failed to
+                // reset.
+                state_failures.insert(oid);
+            }
         }
     }
 
