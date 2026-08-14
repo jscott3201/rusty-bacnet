@@ -1,6 +1,6 @@
-//! Wire-level integration for the ASN.1-framed properties (#154, #152):
-//! a conformant peer's framed WriteProperty must land and a ReadProperty
-//! must return the identical framed bytes.
+//! Wire-level integration for structured properties (#154, #152): conformant
+//! framed writes round-trip identically, while retained legacy flat forms are
+//! validated before mutation.
 
 use super::*;
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
@@ -145,6 +145,49 @@ fn fault_parameters_framed_wire_round_trip() {
     assert_eq!(
         read_raw(&db, oid, PropertyIdentifier::FAULT_PARAMETERS),
         framed
+    );
+}
+
+#[test]
+fn malformed_legacy_fault_parameters_preserve_existing_value() {
+    let mut db = ObjectDatabase::new();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    ee.set_fault_parameters(Some(FaultParameters::FaultOutOfRange {
+        min_normal: 0.0,
+        max_normal: 100.0,
+    }));
+    let oid = ee.object_identifier();
+    db.add(Box::new(ee)).unwrap();
+    let before = read_raw(&db, oid, PropertyIdentifier::FAULT_PARAMETERS);
+
+    let mut oversized_tag = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_unsigned(&mut oversized_tag, 256);
+    bacnet_encoding::primitives::encode_app_unsigned(&mut oversized_tag, 1);
+    assert!(write_framed(
+        &mut db,
+        oid,
+        PropertyIdentifier::FAULT_PARAMETERS,
+        oversized_tag.to_vec(),
+    )
+    .is_err());
+    assert_eq!(
+        read_raw(&db, oid, PropertyIdentifier::FAULT_PARAMETERS),
+        before
+    );
+
+    let mut trailing_value = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_unsigned(&mut trailing_value, 0);
+    bacnet_encoding::primitives::encode_app_boolean(&mut trailing_value, true);
+    assert!(write_framed(
+        &mut db,
+        oid,
+        PropertyIdentifier::FAULT_PARAMETERS,
+        trailing_value.to_vec(),
+    )
+    .is_err());
+    assert_eq!(
+        read_raw(&db, oid, PropertyIdentifier::FAULT_PARAMETERS),
+        before
     );
 }
 

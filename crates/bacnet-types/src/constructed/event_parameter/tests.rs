@@ -151,3 +151,60 @@ fn fault_parameters_none_round_trip() {
         fp
     );
 }
+
+#[test]
+fn fault_parameters_reject_out_of_range_legacy_tags() {
+    for tag in [8, 255, 256, u64::MAX] {
+        assert!(
+            FaultParameters::decode_property_value(&PropertyValue::List(vec![
+                PropertyValue::Unsigned(tag),
+            ]))
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn fault_parameters_legacy_alternatives_require_exact_members() {
+    let reference = dopr(1);
+    let alternatives = vec![
+        FaultParameters::FaultNone,
+        FaultParameters::FaultCharacterString {
+            fault_values: vec!["fault".to_string()],
+        },
+        FaultParameters::FaultExtended {
+            vendor_id: 1,
+            extended_fault_type: 2,
+            parameters: vec![3],
+        },
+        FaultParameters::FaultLifeSafety {
+            fault_values: vec![1],
+            mode_for_reference: reference.clone(),
+        },
+        FaultParameters::FaultState {
+            fault_values: vec![BACnetPropertyStates::BooleanValue(true)],
+        },
+        FaultParameters::FaultStatusFlags {
+            reference: reference.clone(),
+        },
+        FaultParameters::FaultOutOfRange {
+            min_normal: 0.0,
+            max_normal: 1.0,
+        },
+        FaultParameters::FaultListed { reference },
+    ];
+
+    for parameters in alternatives {
+        let encoded = parameters.encode_property_value();
+        assert_eq!(
+            FaultParameters::decode_property_value(&encoded).unwrap(),
+            parameters
+        );
+
+        let PropertyValue::List(mut items) = encoded else {
+            unreachable!();
+        };
+        items.push(PropertyValue::Boolean(true));
+        assert!(FaultParameters::decode_property_value(&PropertyValue::List(items)).is_err());
+    }
+}

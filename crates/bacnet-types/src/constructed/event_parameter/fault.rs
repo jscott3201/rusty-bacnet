@@ -11,14 +11,14 @@ use crate::enums::FaultType;
 
 /// Variant tag carried as the leading element of the flat-`List` encoding.
 mod fault_parameter_tag {
-    pub const NONE: u8 = 0;
-    pub const CHARACTER_STRING: u8 = 1;
-    pub const EXTENDED: u8 = 2;
-    pub const LIFE_SAFETY: u8 = 3;
-    pub const STATE: u8 = 4;
-    pub const STATUS_FLAGS: u8 = 5;
-    pub const OUT_OF_RANGE: u8 = 6;
-    pub const LISTED: u8 = 7;
+    pub const NONE: u64 = 0;
+    pub const CHARACTER_STRING: u64 = 1;
+    pub const EXTENDED: u64 = 2;
+    pub const LIFE_SAFETY: u64 = 3;
+    pub const STATE: u64 = 4;
+    pub const STATUS_FLAGS: u64 = 5;
+    pub const OUT_OF_RANGE: u64 = 6;
+    pub const LISTED: u64 = 7;
 }
 
 impl crate::constructed::FaultParameters {
@@ -48,11 +48,11 @@ impl crate::constructed::FaultParameters {
     pub fn encode_property_value(&self) -> PropertyValue {
         use crate::constructed::FaultParameters as F;
         match self {
-            F::FaultNone => PropertyValue::List(vec![PropertyValue::Unsigned(
-                fault_parameter_tag::NONE as u64,
-            )]),
+            F::FaultNone => {
+                PropertyValue::List(vec![PropertyValue::Unsigned(fault_parameter_tag::NONE)])
+            }
             F::FaultCharacterString { fault_values } => PropertyValue::List(vec![
-                PropertyValue::Unsigned(fault_parameter_tag::CHARACTER_STRING as u64),
+                PropertyValue::Unsigned(fault_parameter_tag::CHARACTER_STRING),
                 PropertyValue::List(
                     fault_values
                         .iter()
@@ -65,7 +65,7 @@ impl crate::constructed::FaultParameters {
                 extended_fault_type,
                 parameters,
             } => PropertyValue::List(vec![
-                PropertyValue::Unsigned(fault_parameter_tag::EXTENDED as u64),
+                PropertyValue::Unsigned(fault_parameter_tag::EXTENDED),
                 PropertyValue::Unsigned(*vendor_id as u64),
                 PropertyValue::Unsigned(*extended_fault_type as u64),
                 PropertyValue::OctetString(parameters.clone()),
@@ -74,7 +74,7 @@ impl crate::constructed::FaultParameters {
                 fault_values,
                 mode_for_reference,
             } => PropertyValue::List(vec![
-                PropertyValue::Unsigned(fault_parameter_tag::LIFE_SAFETY as u64),
+                PropertyValue::Unsigned(fault_parameter_tag::LIFE_SAFETY),
                 PropertyValue::List(
                     fault_values
                         .iter()
@@ -84,23 +84,23 @@ impl crate::constructed::FaultParameters {
                 device_object_property_reference_pv(mode_for_reference),
             ]),
             F::FaultState { fault_values } => PropertyValue::List(vec![
-                PropertyValue::Unsigned(fault_parameter_tag::STATE as u64),
+                PropertyValue::Unsigned(fault_parameter_tag::STATE),
                 PropertyValue::List(fault_values.iter().map(property_state_pv).collect()),
             ]),
             F::FaultStatusFlags { reference } => PropertyValue::List(vec![
-                PropertyValue::Unsigned(fault_parameter_tag::STATUS_FLAGS as u64),
+                PropertyValue::Unsigned(fault_parameter_tag::STATUS_FLAGS),
                 device_object_property_reference_pv(reference),
             ]),
             F::FaultOutOfRange {
                 min_normal,
                 max_normal,
             } => PropertyValue::List(vec![
-                PropertyValue::Unsigned(fault_parameter_tag::OUT_OF_RANGE as u64),
+                PropertyValue::Unsigned(fault_parameter_tag::OUT_OF_RANGE),
                 PropertyValue::Double(*min_normal),
                 PropertyValue::Double(*max_normal),
             ]),
             F::FaultListed { reference } => PropertyValue::List(vec![
-                PropertyValue::Unsigned(fault_parameter_tag::LISTED as u64),
+                PropertyValue::Unsigned(fault_parameter_tag::LISTED),
                 device_object_property_reference_pv(reference),
             ]),
         }
@@ -120,7 +120,7 @@ impl crate::constructed::FaultParameters {
             return Err(Error::decoding(0, "Fault_Parameters tag is not Unsigned"));
         };
         let mut idx = 0;
-        Ok(match *tag as u8 {
+        let decoded = match *tag {
             fault_parameter_tag::NONE => F::FaultNone,
             fault_parameter_tag::CHARACTER_STRING => {
                 let Some(PropertyValue::List(inner)) = rest.get(idx) else {
@@ -198,6 +198,13 @@ impl crate::constructed::FaultParameters {
                 F::FaultListed { reference }
             }
             other => return Err(Error::decoding(0, format!("unknown fault tag {other}"))),
-        })
+        };
+        if idx != rest.len() {
+            return Err(Error::decoding(
+                idx + 1,
+                "Fault_Parameters has trailing values",
+            ));
+        }
+        Ok(decoded)
     }
 }
