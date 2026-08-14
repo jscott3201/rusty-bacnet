@@ -1,3 +1,4 @@
+mod array_index;
 mod change_of_bitstring;
 mod change_of_state;
 mod change_of_value;

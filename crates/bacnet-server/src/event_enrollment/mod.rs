@@ -39,6 +39,7 @@
 //! the lifecycle task only logs the returned transitions.
 
 mod algorithms;
+mod reference;
 
 pub use algorithms::{
     encode_change_of_bitstring_params, encode_change_of_state_params,
@@ -50,6 +51,9 @@ use algorithms::{
     eval_floating_limit_struct, eval_legacy_le_arm, eval_out_of_range_struct, extract_bitstring,
     extract_enumerated, extract_real, ArmEvaluation,
 };
+#[cfg(test)]
+use reference::MonitoredReference;
+use reference::{params_fingerprint, read_object_property_ref};
 
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::event::{EventStateChange, EventTransition};
@@ -99,51 +103,6 @@ fn read_setpoint(
     )
 }
 
-/// Read the object_property_reference from an EventEnrollment object.
-///
-/// Returns the monitored object, property, and optional device qualifier.
-fn read_object_property_ref(
-    enrollment: &dyn BACnetObject,
-) -> Result<
-    Option<(
-        ObjectIdentifier,
-        PropertyIdentifier,
-        Option<ObjectIdentifier>,
-    )>,
-    (),
-> {
-    match enrollment.read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None) {
-        Ok(PropertyValue::List(ref items)) if (2..=4).contains(&items.len()) => {
-            let obj_id = match &items[0] {
-                PropertyValue::ObjectIdentifier(oid) => *oid,
-                _ => return Ok(None),
-            };
-            let PropertyValue::Unsigned(prop_id) = &items[1] else {
-                return Ok(None);
-            };
-            let Ok(prop_id) = u32::try_from(*prop_id) else {
-                return Ok(None);
-            };
-            if prop_id > 0x3F_FFFF {
-                return Ok(None);
-            }
-            let prop_id = PropertyIdentifier::from_raw(prop_id);
-            match items.get(2) {
-                None | Some(PropertyValue::Null | PropertyValue::Unsigned(_)) => {}
-                Some(_) => return Ok(None),
-            }
-            let device_id = match items.get(3) {
-                None | Some(PropertyValue::Null) => None,
-                Some(PropertyValue::ObjectIdentifier(oid)) => Some(*oid),
-                Some(_) => return Ok(None),
-            };
-            Ok(Some((obj_id, prop_id, device_id)))
-        }
-        Ok(_) => Ok(None),
-        Err(_) => Err(()),
-    }
-}
-
 /// Convert a seconds delay to pending passes with never-fire-early ceiling
 /// semantics: `ceil(delay_secs / interval_secs)`. At the default 10s
 /// interval a 5s delay seeds 1 pass (fires when that pass elapses, ~10s
@@ -152,39 +111,6 @@ fn read_object_property_ref(
 fn passes_for_delay(delay_secs: u32, interval_secs: u64) -> u32 {
     let passes = (delay_secs as u64).div_ceil(interval_secs.max(1));
     u32::try_from(passes).unwrap_or(u32::MAX)
-}
-
-/// Fingerprint the configuration a pending countdown was gated under: the
-/// framed `Event_Parameters` encoding (which includes any algorithm-carried
-/// references, e.g. FLOATING_LIMIT's `setpoint_reference`), the effective
-/// normal-direction delay, the configured event type, and the monitored
-/// object+property the enrollment's `Object_Property_Reference` resolves to.
-/// A mismatch with [`EventEnrollmentPending::params_fingerprint`] cancels
-/// the in-flight countdown and re-gates from the current parameters — the
-/// pinned behavior for a mid-pending retarget or parameter change (the
-/// evaluator re-reads them every pass, so the change is observed on the pass
-/// after the write).
-fn params_fingerprint(
-    params: &BACnetEventParameter,
-    normal_delay: u64,
-    event_type_raw: u32,
-    monitored: &(ObjectIdentifier, PropertyIdentifier),
-) -> u64 {
-    let mut buf = bytes::BytesMut::new();
-    bacnet_encoding::constructed::encode_event_parameter(&mut buf, params);
-    let (monitored_oid, monitored_prop) = monitored;
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in buf
-        .iter()
-        .copied()
-        .chain(normal_delay.to_le_bytes())
-        .chain(event_type_raw.to_le_bytes())
-        .chain(monitored_oid.encode())
-        .chain(monitored_prop.to_raw().to_le_bytes())
-    {
-        h = (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    h
 }
 
 /// Resolve whether the Notification Class referenced by an enrollment
@@ -255,6 +181,20 @@ impl EnrollmentUpdate {
     }
 }
 
+fn queue_eval_state_reset(
+    updates: &mut Vec<(ObjectIdentifier, EnrollmentUpdate)>,
+    oid: ObjectIdentifier,
+    supported: bool,
+    state: &EventEnrollmentEvalState,
+) {
+    if supported && *state != EventEnrollmentEvalState::default() {
+        updates.push((
+            oid,
+            EnrollmentUpdate::eval_state_only(EventEnrollmentEvalState::default()),
+        ));
+    }
+}
+
 /// Evaluate all EventEnrollment objects in the database.
 ///
 /// For each active enrollment, reads the monitored property, evaluates the
@@ -290,8 +230,8 @@ pub fn evaluate_event_enrollments(
         };
 
         // A property read failure is transient and retains evaluation state.
-        // Any successfully read invalid or unsupported-device reference clears
-        // state before unrelated properties can short-circuit this pass.
+        // An invalid reference shape or unsupported device clears state before
+        // unrelated properties can short-circuit this pass.
         let eval_state_supported = enrollment.enrollment_eval_state_internal().is_some();
         let mut eval_state = enrollment
             .enrollment_eval_state_internal()
@@ -300,17 +240,16 @@ pub fn evaluate_event_enrollments(
             Ok(reference) => reference,
             Err(()) => continue,
         };
-        let Some((monitored_oid, monitored_prop, _)) = reference.filter(|(_, _, device_oid)| {
-            device_oid.is_none_or(|oid| Some(oid) == local_device_oid)
+        let Some(monitored) = reference.filter(|reference| {
+            reference
+                .device_identifier
+                .is_none_or(|oid| Some(oid) == local_device_oid)
         }) else {
-            if eval_state_supported && eval_state != EventEnrollmentEvalState::default() {
-                updates.push((
-                    *oid,
-                    EnrollmentUpdate::eval_state_only(EventEnrollmentEvalState::default()),
-                ));
-            }
+            queue_eval_state_reset(&mut updates, *oid, eval_state_supported, &eval_state);
             continue;
         };
+        let monitored_oid = monitored.object_identifier;
+        let monitored_prop = monitored.property_identifier;
 
         if let Ok(PropertyValue::Boolean(true)) =
             enrollment.read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
@@ -395,12 +334,8 @@ pub fn evaluate_event_enrollments(
         // resumed. The cancellation is flushed BEFORE any later exit — a
         // dropped write-back here is what let a params round-trip A→B→A
         // resume a stale countdown.
-        let fingerprint = params_fingerprint(
-            &params,
-            normal_delay as u64,
-            event_type_raw,
-            &(monitored_oid, monitored_prop),
-        );
+        let fingerprint =
+            params_fingerprint(&params, normal_delay as u64, event_type_raw, &monitored);
         if eval_state
             .pending
             .as_ref()
@@ -416,9 +351,22 @@ pub fn evaluate_event_enrollments(
         let Some(monitored_obj) = db.get(&monitored_oid) else {
             continue;
         };
-        let monitored_value = match monitored_obj.read_property(monitored_prop, None) {
+        if monitored.array_index.is_some() && !monitored_obj.is_array_property(monitored_prop) {
+            queue_eval_state_reset(&mut updates, *oid, eval_state_supported, &eval_state);
+            continue;
+        }
+        let monitored_value = match monitored_obj
+            .read_property(monitored_prop, monitored.array_index)
+        {
             Ok(v) => v,
-            Err(_) => continue,
+            Err(_) => {
+                if monitored.array_index.is_some() {
+                    // An invalid element is an invalid target, not a request to
+                    // retry the whole property.
+                    queue_eval_state_reset(&mut updates, *oid, eval_state_supported, &eval_state);
+                }
+                continue;
+            }
         };
 
         let event_type = EventType::from_raw(event_type_raw);

@@ -347,6 +347,11 @@ fn malformed_reference_shapes_do_not_become_local() {
             PropertyValue::ObjectIdentifier(target),
             PropertyValue::Unsigned(u32::MAX as u64 + 1 + property.to_raw() as u64),
         ],
+        vec![
+            PropertyValue::ObjectIdentifier(target),
+            PropertyValue::Unsigned(property.to_raw() as u64),
+            PropertyValue::Unsigned(u32::MAX as u64 + 1),
+        ],
     ];
 
     for items in malformed {
@@ -363,7 +368,9 @@ fn malformed_reference_shapes_do_not_become_local() {
     ])));
     assert_eq!(
         super::super::read_object_property_ref(&legacy),
-        Ok(Some((target, property, None)))
+        Ok(Some(super::super::MonitoredReference::local(
+            target, property, None
+        )))
     );
 }
 

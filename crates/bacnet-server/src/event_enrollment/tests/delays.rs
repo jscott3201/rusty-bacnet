@@ -534,8 +534,8 @@ fn set_oor_params(
         .unwrap();
 }
 
-/// The monitored object+property is folded into the pending-condition
-/// fingerprint: a retarget must be observed as a parameter change.
+/// The monitored object, property, and array index are folded into the
+/// pending-condition fingerprint.
 #[test]
 fn fingerprint_covers_monitored_reference() {
     let params = BACnetEventParameter::OutOfRange {
@@ -548,21 +548,67 @@ fn fingerprint_covers_monitored_reference() {
     let ai2 = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 2).unwrap();
     let pv = PropertyIdentifier::PRESENT_VALUE;
     let cf = PropertyIdentifier::COV_INCREMENT;
-    let base =
-        super::super::params_fingerprint(&params, 2, EventType::OUT_OF_RANGE.to_raw(), &(ai1, pv));
+    let monitored =
+        |oid, property, index| super::super::MonitoredReference::local(oid, property, index);
+    let base = super::super::params_fingerprint(
+        &params,
+        2,
+        EventType::OUT_OF_RANGE.to_raw(),
+        &monitored(ai1, pv, None),
+    );
     assert_ne!(
         base,
-        super::super::params_fingerprint(&params, 2, EventType::OUT_OF_RANGE.to_raw(), &(ai2, pv)),
+        super::super::params_fingerprint(
+            &params,
+            2,
+            EventType::OUT_OF_RANGE.to_raw(),
+            &monitored(ai2, pv, None),
+        ),
         "different monitored object must fingerprint differently"
     );
     assert_ne!(
         base,
-        super::super::params_fingerprint(&params, 2, EventType::OUT_OF_RANGE.to_raw(), &(ai1, cf)),
+        super::super::params_fingerprint(
+            &params,
+            2,
+            EventType::OUT_OF_RANGE.to_raw(),
+            &monitored(ai1, cf, None),
+        ),
         "different monitored property must fingerprint differently"
+    );
+    assert_ne!(
+        base,
+        super::super::params_fingerprint(
+            &params,
+            2,
+            EventType::OUT_OF_RANGE.to_raw(),
+            &monitored(ai1, pv, Some(0)),
+        ),
+        "an omitted index must differ from index zero"
+    );
+    assert_ne!(
+        super::super::params_fingerprint(
+            &params,
+            2,
+            EventType::OUT_OF_RANGE.to_raw(),
+            &monitored(ai1, pv, Some(0)),
+        ),
+        super::super::params_fingerprint(
+            &params,
+            2,
+            EventType::OUT_OF_RANGE.to_raw(),
+            &monitored(ai1, pv, Some(1)),
+        ),
+        "different array indexes must fingerprint differently"
     );
     assert_eq!(
         base,
-        super::super::params_fingerprint(&params, 2, EventType::OUT_OF_RANGE.to_raw(), &(ai1, pv)),
+        super::super::params_fingerprint(
+            &params,
+            2,
+            EventType::OUT_OF_RANGE.to_raw(),
+            &monitored(ai1, pv, None),
+        ),
         "same configuration fingerprints stably"
     );
 }
