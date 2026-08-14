@@ -212,7 +212,15 @@ pub(super) async fn relay_result(
     })
     .await;
     if let Ok(disposition) = send {
-        return disposition;
+        if disposition == ResultRelayDisposition::CloseSource
+            || close_requested.load(Ordering::Acquire)
+        {
+            return ResultRelayDisposition::CloseSource;
+        }
+        return ResultRelayDisposition::Continue;
+    }
+    if close_requested.load(Ordering::Acquire) {
+        return ResultRelayDisposition::CloseSource;
     }
     warn!("Hub: Result relay timed out to {destination:02x?}");
     ResultRelayDisposition::Continue
