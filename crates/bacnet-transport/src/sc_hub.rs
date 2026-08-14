@@ -34,8 +34,10 @@ use client::HubClient;
 use connection::accept_loop;
 use helpers::*;
 
+#[cfg(test)]
+use relay::build_hub_relay_message;
 use relay::{
-    build_hub_relay_message, hub_relay_recipient_vmacs, hub_relay_target, relay_result,
+    encode_hub_relay_frame, hub_relay_recipient_vmacs, hub_relay_target, relay_result,
     HubRelayReject, HubRelayTarget, ResultRelayDisposition,
 };
 
@@ -481,7 +483,15 @@ async fn handle_client(
                     debug!("Hub: Result before ConnectRequest from {peer_addr}, dropping");
                     continue;
                 };
-                if relay_result(&sc_msg, registered_vmac, &clients, &write, &close_requested).await
+                if relay_result(
+                    &data,
+                    &sc_msg,
+                    registered_vmac,
+                    &clients,
+                    &write,
+                    &close_requested,
+                )
+                .await
                     == ResultRelayDisposition::CloseSource
                 {
                     break;
@@ -522,9 +532,12 @@ async fn handle_client(
 
                 let npdu_len = sc_msg.payload.len();
 
-                let relay_msg = build_hub_relay_message(&sc_msg, registered_vmac, relay_target);
-                let mut relay_buf = BytesMut::new();
-                encode_sc_message(&mut relay_buf, &relay_msg);
+                let Some(relay_buf) =
+                    encode_hub_relay_frame(&data, &sc_msg, registered_vmac, relay_target)
+                else {
+                    warn!("Hub: failed to preserve EncapsulatedNpdu frame from {peer_addr}");
+                    continue;
+                };
                 let relay_bytes: Vec<u8> = relay_buf.to_vec();
                 let relay_len = relay_bytes.len();
 

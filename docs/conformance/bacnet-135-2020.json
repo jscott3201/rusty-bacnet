@@ -1134,7 +1134,8 @@
    "positive_tests": [
     "crates/bacnet-transport/src/sc_frame.rs::tests::sc_options_decode_marker_fields_and_payload_split",
     "crates/bacnet-transport/src/sc_frame.rs::tests::wire_format_check_both_vmacs",
-    "crates/bacnet-transport/src/sc/data_attribute_tests.rs::non_must_understand_destination_option_allows_delivery"
+    "crates/bacnet-transport/src/sc/data_attribute_tests.rs::non_must_understand_destination_option_allows_delivery",
+    "crates/bacnet-transport/src/sc_hub/tests.rs::hub_relay_wire_preserves_empty_header_data_marker"
    ],
    "negative_tests": [
     "crates/bacnet-transport/src/sc_frame.rs::tests::decode_rejects_reserved_control_bits",
@@ -1144,7 +1145,8 @@
     "crates/bacnet-transport/src/sc_frame.rs::tests::sc_options_reject_unterminated_chain",
     "crates/bacnet-transport/src/sc/data_attribute_tests.rs::unsupported_must_understand_destination_option_unicast_returns_nak",
     "crates/bacnet-transport/src/sc/data_attribute_tests.rs::unsupported_destination_option_preserves_empty_header_data_marker",
-    "crates/bacnet-transport/src/sc/data_attribute_tests.rs::unsupported_must_understand_destination_option_broadcast_drops_without_nak"
+    "crates/bacnet-transport/src/sc/data_attribute_tests.rs::unsupported_must_understand_destination_option_broadcast_drops_without_nak",
+    "benchmarks/tests/sc_websocket.rs::sc_websocket_routes_destination_option_nak_to_originating_node"
    ],
    "benchmarks": [
     "benchmarks/benches/sc_latency.rs"
@@ -1152,7 +1154,7 @@
    "public_claims": [
     "README BACnet/SC transport"
    ],
-   "notes": "AB-01 adds transport codec evidence for Annex AB.2 control flag bits 7..4 rejection, Header Option Type 1..31 enforcement, AB.2.17 destination/data option marker decoding, VMAC field ordering, option count cap enforcement, option length truncation, option data truncation, and unterminated option-chain rejection. Received Encapsulated-NPDUs enforce Destination Option Must Understand semantics: an unsupported Must Understand option returns BVLC-Result NAK COMMUNICATION/HEADER_NOT_UNDERSTOOD for unicast, echoes the complete offending marker including More Options and an empty Header Data field, routes the Result to the source through the hub, and drops broadcast without a result. Must Understand clear does not block delivery. Addenda 135-2020cf/cp were checked for this row: cf renames Data Options bit 6 to Every Segment without changing the marker bit position, and cp adds standard header option types 2..5 that remain accepted by the generic 1..31 parser. Must Understand processing for other BVLC-SC functions, broader non-Result function-specific payload semantics, Every Segment segmentation behavior, and direct-connection behavior remain for later Annex AB work."
+   "notes": "AB-01 adds transport codec evidence for Annex AB.2 control flag bits 7..4 rejection, Header Option Type 1..31 enforcement, AB.2.17 destination/data option marker decoding, VMAC field ordering, option count cap enforcement, option length truncation, option data truncation, and unterminated option-chain rejection. Received Encapsulated-NPDUs enforce Destination Option Must Understand semantics: an unsupported Must Understand option returns BVLC-Result NAK COMMUNICATION/HEADER_NOT_UNDERSTOOD for unicast, echoes the complete offending marker including More Options and an empty Header Data field, routes the Result to the source through the hub, and drops broadcast without a result. The hub applies its VMAC transformation while copying the validated option and payload bytes, avoiding marker normalization before the destination processes the frame. Must Understand clear does not block delivery. Addenda 135-2020cf/cp were checked for this row: cf renames Data Options bit 6 to Every Segment without changing the marker bit position, and cp adds standard header option types 2..5 that remain accepted by the generic 1..31 parser. Must Understand processing for other BVLC-SC functions, broader non-Result function-specific payload semantics, Every Segment segmentation behavior, and direct-connection behavior remain for later Annex AB work."
   },
   {
    "id": "BACNET-AB-SC-BVLC-RESULT",
@@ -1179,7 +1181,7 @@
     "crates/bacnet-transport/src/sc/result_tests.rs::bvlc_result_success_no_disconnect",
     "crates/bacnet-transport/src/sc/result_tests.rs::bvlc_result_ack_with_payload_no_disconnect",
     "crates/bacnet-transport/src/sc/result_tests.rs::encapsulated_npdu_result_nak_keeps_connection_open",
-    "benchmarks/tests/sc_websocket.rs::sc_websocket_hub_relays_unicast_result_to_originating_node"
+    "benchmarks/tests/sc_websocket.rs::sc_websocket_routes_destination_option_nak_to_originating_node"
    ],
    "negative_tests": [
     "crates/bacnet-transport/src/sc_frame/result.rs::tests::bvlc_result_rejects_malformed_payloads",
@@ -1190,7 +1192,8 @@
     "crates/bacnet-transport/src/sc/result_tests.rs::encapsulated_npdu_result_nak_keeps_receive_loop_open",
     "crates/bacnet-transport/src/sc/result_tests.rs::malformed_wire_bvlc_result_closes_receive_loop",
     "crates/bacnet-transport/src/sc/data_attribute_tests.rs::unsupported_must_understand_destination_option_unicast_returns_nak",
-    "crates/bacnet-transport/src/sc/data_attribute_tests.rs::unsupported_destination_option_preserves_empty_header_data_marker"
+    "crates/bacnet-transport/src/sc/data_attribute_tests.rs::unsupported_destination_option_preserves_empty_header_data_marker",
+    "benchmarks/tests/sc_websocket.rs::sc_websocket_hub_drops_peer_result_for_other_function"
    ],
    "benchmarks": [
     "benchmarks/benches/sc_latency.rs"
@@ -1198,7 +1201,7 @@
    "public_claims": [
     "README BACnet/SC transport"
    ],
-   "notes": "AB-02 adds typed BVLC-Result ACK/NAK payload parsing for transport. ACK fixtures use the Proprietary-Message function per addendum 135-2020ci, while NAK fixtures mirror AB.2.17 examples with and without UTF-8 Error Details, including the Figure AB-6 multibyte UTF-8 details bytes. Negative evidence covers ACK trailing fields, short NAKs, unknown result codes, invalid UTF-8 details, malformed empty payloads, Data Options absence, Connect-Request NAK failing before timeout, fatal Result NAK closing the receive loop before further heartbeats, malformed wire-level Result decode failures closing without a Result response, and unicast Destination Option Must Understand failures returning COMMUNICATION/HEADER_NOT_UNDERSTOOD with the complete offending option marker. The hub relays a source-addressed Result back to the originating node. Transport connection handling keeps ACK and Encapsulated-NPDU NAK messages nonfatal, disconnects on other NAKs, and disconnects on malformed Result without generating a Result response. Negotiated Max-BVLC-Length resource-limit evidence is tracked under BACNET-AB-SC-CONNECTION-STATE. Remaining work includes request correlation, Error Details resource limits, standard-function ACK diagnostic policy, BVLC-Result generation for every AB.3.1.5 error situation, and direct-connection response routing."
+   "notes": "AB-02 adds typed BVLC-Result ACK/NAK payload parsing for transport. ACK fixtures use the Proprietary-Message function per addendum 135-2020ci, while NAK fixtures mirror AB.2.17 examples with and without UTF-8 Error Details, including the Figure AB-6 multibyte UTF-8 details bytes. Negative evidence covers ACK trailing fields, short NAKs, unknown result codes, invalid UTF-8 details, malformed empty payloads, Data Options absence, Connect-Request NAK failing before timeout, fatal Result NAK closing the receive loop before further heartbeats, malformed wire-level Result decode failures closing without a Result response, and unicast Destination Option Must Understand failures returning COMMUNICATION/HEADER_NOT_UNDERSTOOD with the complete offending option marker. The hub relays a source-addressed, syntactically valid Encapsulated-NPDU Result to the originating node and drops peer Results for other functions so they cannot trigger the recipient's fatal Result handling. Transport connection handling keeps ACK and Encapsulated-NPDU NAK messages nonfatal, disconnects on other NAKs, and disconnects on malformed Result without generating a Result response. Negotiated Max-BVLC-Length resource-limit evidence is tracked under BACNET-AB-SC-CONNECTION-STATE. Remaining work includes request correlation for the permitted Encapsulated-NPDU Results, Error Details resource limits, standard-function ACK diagnostic policy, BVLC-Result generation for every AB.3.1.5 error situation, and direct-connection response routing."
   },
   {
    "id": "BACNET-AB-SC-DATA-ATTRIBUTES",
