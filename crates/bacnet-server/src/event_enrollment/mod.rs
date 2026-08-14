@@ -41,6 +41,8 @@
 mod algorithms;
 mod reference;
 
+use std::collections::HashSet;
+
 pub use algorithms::{
     encode_change_of_bitstring_params, encode_change_of_state_params,
     encode_change_of_value_params, encode_floating_limit_params, encode_out_of_range_params,
@@ -297,7 +299,7 @@ pub fn evaluate_event_enrollments(
         // A property read failure is transient and retains evaluation state.
         // An invalid reference shape or unsupported device clears state before
         // unrelated properties can short-circuit this pass.
-        let eval_state_supported = enrollment.enrollment_eval_state_internal().is_some();
+        let mut eval_state_supported = enrollment.enrollment_eval_state_internal().is_some();
         let mut eval_state = enrollment
             .enrollment_eval_state_internal()
             .unwrap_or_default();
@@ -452,6 +454,14 @@ pub fn evaluate_event_enrollments(
                 continue;
             }
         };
+        // Evaluation state without its owning source cannot survive a
+        // reference change safely. Keep immediate evaluation available for
+        // older custom objects, but do not retain countdowns or baselines.
+        if eval_state_supported && eval_source.is_none() {
+            queue_eval_state_reset(&mut updates, *oid, true, &eval_state);
+            eval_state = EventEnrollmentEvalState::default();
+            eval_state_supported = false;
+        }
         if eval_source.is_some_and(|current| current != Some(monitored_reference)) {
             updates.push((
                 *oid,
@@ -727,10 +737,23 @@ pub fn evaluate_event_enrollments(
     }
 
     let mut transitions = Vec::new();
+    let mut source_failures = HashSet::new();
     for (oid, update) in updates {
+        if source_failures.contains(&oid) {
+            continue;
+        }
         let Some(obj) = db.get_mut(&oid) else {
             continue;
         };
+        if let Some(source) = update.eval_source {
+            if obj.set_enrollment_eval_source_internal(source).is_err() {
+                // State written later in this pass would have no reliable
+                // owner. Clear it and suppress the remaining updates.
+                let _ = obj.set_enrollment_eval_state_internal(EventEnrollmentEvalState::default());
+                source_failures.insert(oid);
+                continue;
+            }
+        }
         if let Some(fired) = update.fired {
             // Persist the transition through the internal lifecycle path, not
             // the network `write_property(EVENT_STATE, …)` route. `Event_State`
@@ -763,9 +786,6 @@ pub fn evaluate_event_enrollments(
             });
         } else if let Some(state) = update.eval_state {
             let _ = obj.set_enrollment_eval_state_internal(state);
-        }
-        if let Some(source) = update.eval_source {
-            let _ = obj.set_enrollment_eval_source_internal(source);
         }
     }
 

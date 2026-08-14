@@ -3,7 +3,7 @@
 //! Split out of `tests.rs` to keep every file under the 700-LOC cap.
 
 use super::super::*;
-use bacnet_objects::analog::AnalogInputObject;
+use bacnet_objects::analog::{AnalogInputObject, AnalogValueObject};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::traits::BACnetObject;
@@ -214,13 +214,18 @@ struct ReferenceValueObject {
     inner: EventEnrollmentObject,
     reference: Option<PropertyValue>,
     event_parameters_readable: bool,
+    source_supported: bool,
+    source_writable: bool,
 }
 
 impl ReferenceValueObject {
     fn new(reference: Option<PropertyValue>) -> Self {
+        Self::new_for_event_type(reference, EventType::OUT_OF_RANGE)
+    }
+
+    fn new_for_event_type(reference: Option<PropertyValue>, event_type: EventType) -> Self {
         let mut inner =
-            EventEnrollmentObject::new(999, "reference-value", EventType::OUT_OF_RANGE.to_raw())
-                .unwrap();
+            EventEnrollmentObject::new(999, "reference-value", event_type.to_raw()).unwrap();
         inner.set_event_parameters(BACnetEventParameter::OutOfRange {
             time_delay: 2,
             low_limit: 20.0,
@@ -232,6 +237,8 @@ impl ReferenceValueObject {
             inner,
             reference,
             event_parameters_readable: true,
+            source_supported: true,
+            source_writable: true,
         }
     }
 }
@@ -298,6 +305,25 @@ impl BACnetObject for ReferenceValueObject {
         self.inner.set_enrollment_eval_state_internal(state)
     }
 
+    fn enrollment_eval_source_internal(
+        &self,
+    ) -> Option<Option<bacnet_objects::event_enrollment::EventEnrollmentMonitoredSource>> {
+        self.source_supported
+            .then(|| self.inner.enrollment_eval_source_internal().flatten())
+    }
+
+    fn set_enrollment_eval_source_internal(
+        &mut self,
+        source: Option<bacnet_objects::event_enrollment::EventEnrollmentMonitoredSource>,
+    ) -> Result<(), bacnet_types::error::Error> {
+        if !self.source_writable {
+            return Err(bacnet_types::error::Error::Encoding(
+                "source write failed".into(),
+            ));
+        }
+        self.inner.set_enrollment_eval_source_internal(source)
+    }
+
     fn set_event_state_internal(
         &mut self,
         state: EventState,
@@ -312,6 +338,104 @@ impl BACnetObject for ReferenceValueObject {
     ) -> Result<(), bacnet_types::error::Error> {
         self.inner
             .set_acked_transitions_internal(transition_bit, acknowledged)
+    }
+}
+
+fn indexed_reference_value(target: ObjectIdentifier, index: u32) -> PropertyValue {
+    PropertyValue::List(vec![
+        PropertyValue::ObjectIdentifier(target),
+        PropertyValue::Unsigned(PropertyIdentifier::PRIORITY_ARRAY.to_raw() as u64),
+        PropertyValue::Unsigned(index as u64),
+    ])
+}
+
+#[test]
+fn stateful_custom_enrollment_without_source_channel_runs_statelessly() {
+    let mut db = ObjectDatabase::new();
+    let mut target = AnalogValueObject::new(98, "AV-custom-source", 62).unwrap();
+    target
+        .write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(10.0),
+            Some(1),
+        )
+        .unwrap();
+    target
+        .write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(90.0),
+            Some(2),
+        )
+        .unwrap();
+    let target_oid = target.object_identifier();
+    db.add(Box::new(target)).unwrap();
+
+    let mut enrollment = ReferenceValueObject::new_for_event_type(
+        Some(indexed_reference_value(target_oid, 1)),
+        EventType::CHANGE_OF_VALUE,
+    );
+    enrollment
+        .inner
+        .set_event_parameters(BACnetEventParameter::ChangeOfValue {
+            time_delay: 0,
+            criteria: bacnet_types::constructed::ChangeOfValueCriteria::ReferencedPropertyIncrement(
+                5.0,
+            ),
+        });
+    enrollment.source_supported = false;
+    let enrollment_oid = enrollment.object_identifier();
+    db.add(Box::new(enrollment)).unwrap();
+
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert_eq!(
+        db.get(&enrollment_oid)
+            .unwrap()
+            .enrollment_eval_state_internal(),
+        Some(bacnet_objects::event_enrollment::EventEnrollmentEvalState::default())
+    );
+
+    db.get_mut(&enrollment_oid)
+        .unwrap()
+        .write_property(
+            PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
+            None,
+            indexed_reference_value(target_oid, 2),
+            None,
+        )
+        .unwrap();
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+}
+
+#[test]
+fn failed_source_write_does_not_persist_dependent_state() {
+    let mut db = ObjectDatabase::new();
+    let mut target = AnalogValueObject::new(99, "AV-failed-source", 62).unwrap();
+    target
+        .write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(90.0),
+            Some(1),
+        )
+        .unwrap();
+    let target_oid = target.object_identifier();
+    db.add(Box::new(target)).unwrap();
+
+    let mut enrollment = ReferenceValueObject::new(Some(indexed_reference_value(target_oid, 1)));
+    enrollment.source_writable = false;
+    let enrollment_oid = enrollment.object_identifier();
+    db.add(Box::new(enrollment)).unwrap();
+
+    for _ in 0..4 {
+        assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+        assert_eq!(
+            db.get(&enrollment_oid)
+                .unwrap()
+                .enrollment_eval_state_internal(),
+            Some(bacnet_objects::event_enrollment::EventEnrollmentEvalState::default())
+        );
     }
 }
 

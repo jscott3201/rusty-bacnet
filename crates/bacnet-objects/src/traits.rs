@@ -325,8 +325,10 @@ pub trait BACnetObject: Send + Sync {
     /// Snapshot the monitored source that owns Event Enrollment private state.
     ///
     /// The outer `Option` indicates whether the object supports this channel;
-    /// the inner `Option` is empty before a source has been established. The
-    /// default opts out so existing custom objects retain their prior behavior.
+    /// the inner `Option` is empty before a source has been established.
+    /// Objects that implement the evaluation-state channel must also implement
+    /// this channel to retain countdowns and baselines across evaluations.
+    /// Without source storage, the evaluator runs statelessly.
     fn enrollment_eval_source_internal(&self) -> Option<Option<EventEnrollmentMonitoredSource>> {
         None
     }
