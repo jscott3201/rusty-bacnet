@@ -113,7 +113,7 @@ fn request_enrollment_filter_uses_standard_recipient_process_framing() {
     let request = GetEnrollmentSummaryRequest {
         acknowledgment_filter: 0,
         enrollment_filter: Some(RecipientProcess {
-            device,
+            device: Some(device),
             process_identifier: 7,
         }),
         event_state_filter: None,
@@ -145,6 +145,29 @@ fn request_enrollment_filter_uses_standard_recipient_process_framing() {
     let (process_tag, _) = tags::decode_tag(&encoded, recipient_pos + 4).unwrap();
     assert_eq!(process_tag.class, tags::TagClass::Application);
     assert_eq!(process_tag.number, tags::app_tag::UNSIGNED);
+}
+
+#[test]
+fn request_omits_unrepresentable_device_less_filter() {
+    let request = GetEnrollmentSummaryRequest {
+        acknowledgment_filter: 0,
+        enrollment_filter: Some(RecipientProcess {
+            device: None,
+            process_identifier: 7,
+        }),
+        event_state_filter: None,
+        event_type_filter: None,
+        priority_filter: None,
+        notification_class_filter: None,
+    };
+    let mut encoded = BytesMut::new();
+    request.encode(&mut encoded);
+    assert_eq!(
+        GetEnrollmentSummaryRequest::decode(&encoded)
+            .unwrap()
+            .enrollment_filter,
+        None
+    );
 }
 
 #[test]

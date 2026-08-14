@@ -31,7 +31,8 @@ pub struct PriorityFilter {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecipientProcess {
     /// Device object identifier (from BACnetRecipient CHOICE [0] device).
-    pub device: ObjectIdentifier,
+    /// A filter with no device is omitted because this type does not represent the address choice.
+    pub device: Option<ObjectIdentifier>,
     /// Process identifier.
     pub process_identifier: u32,
 }
@@ -59,10 +60,12 @@ impl GetEnrollmentSummaryRequest {
         primitives::encode_ctx_enumerated(buf, 0, self.acknowledgment_filter);
         // [1] enrollmentFilter (optional, constructed)
         if let Some(ref ef) = self.enrollment_filter {
-            tags::encode_opening_tag(buf, 1);
-            primitives::encode_ctx_object_id(buf, 0, &ef.device);
-            primitives::encode_app_unsigned(buf, ef.process_identifier as u64);
-            tags::encode_closing_tag(buf, 1);
+            if let Some(ref device) = ef.device {
+                tags::encode_opening_tag(buf, 1);
+                primitives::encode_ctx_object_id(buf, 0, device);
+                primitives::encode_app_unsigned(buf, ef.process_identifier as u64);
+                tags::encode_closing_tag(buf, 1);
+            }
         }
         // [2] eventStateFilter (optional)
         if let Some(es) = self.event_state_filter {
@@ -159,7 +162,7 @@ impl GetEnrollmentSummaryRequest {
                     ));
                 }
                 enrollment_filter = Some(RecipientProcess {
-                    device,
+                    device: Some(device),
                     process_identifier: process_id,
                 });
                 offset = new_offset;
