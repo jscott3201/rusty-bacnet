@@ -300,6 +300,16 @@ impl BACnetObject for EventEnrollmentObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        if property == PropertyIdentifier::STATUS_FLAGS {
+            // Clause 12.12 fixes OVERRIDDEN and OUT_OF_SERVICE at FALSE;
+            // IN_ALARM follows Event_State and FAULT follows Reliability.
+            return Ok(common::compute_status_flags(
+                StatusFlags::empty(),
+                self.reliability,
+                false,
+                self.event_state,
+            ));
+        }
         if let Some(result) = read_common_properties!(self, property, array_index) {
             return result;
         }
