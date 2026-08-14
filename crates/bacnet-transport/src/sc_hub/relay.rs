@@ -193,20 +193,27 @@ pub(super) async fn relay_result(
         return ResultRelayDisposition::Continue;
     }
 
-    let mut target = sink.lock().await;
-    if close_requested.load(Ordering::Acquire) {
-        return ResultRelayDisposition::CloseSource;
-    }
-    if target_closed.load(Ordering::Acquire) {
-        return ResultRelayDisposition::Continue;
-    }
-    let send = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        target.send(Message::Binary(relay_buf.to_vec().into())),
-    )
+    let send = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut target = sink.lock().await;
+        if close_requested.load(Ordering::Acquire) {
+            return ResultRelayDisposition::CloseSource;
+        }
+        if target_closed.load(Ordering::Acquire) {
+            return ResultRelayDisposition::Continue;
+        }
+        if target
+            .send(Message::Binary(relay_buf.to_vec().into()))
+            .await
+            .is_err()
+        {
+            warn!("Hub: Result relay failed to {destination:02x?}");
+        }
+        ResultRelayDisposition::Continue
+    })
     .await;
-    if let Err(_) | Ok(Err(_)) = send {
-        warn!("Hub: Result relay failed to {destination:02x?}");
+    if let Ok(disposition) = send {
+        return disposition;
     }
+    warn!("Hub: Result relay timed out to {destination:02x?}");
     ResultRelayDisposition::Continue
 }
