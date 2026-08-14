@@ -9,6 +9,10 @@ use bytes::BytesMut;
 
 use crate::common::MAX_DECODED_ITEMS;
 
+fn is_application_tag(tag: &tags::Tag, header: u8, number: u8) -> bool {
+    tag.class == tags::TagClass::Application && tag.number == number && header & 0x07 <= 5
+}
+
 // ---------------------------------------------------------------------------
 // GetEnrollmentSummaryRequest
 // ---------------------------------------------------------------------------
@@ -92,6 +96,12 @@ impl GetEnrollmentSummaryRequest {
 
         // [0] acknowledgmentFilter
         let (tag, pos) = tags::decode_tag(data, offset)?;
+        if !tag.is_context(0) {
+            return Err(Error::decoding(
+                offset,
+                "EnrollmentSummary expected context tag 0",
+            ));
+        }
         let end = pos + tag.length as usize;
         if end > data.len() {
             return Err(Error::decoding(
@@ -99,7 +109,10 @@ impl GetEnrollmentSummaryRequest {
                 "EnrollmentSummary truncated at acknowledgmentFilter",
             ));
         }
-        let acknowledgment_filter = primitives::decode_unsigned(&data[pos..end])? as u32;
+        let acknowledgment_filter = primitives::decode_unsigned(&data[pos..end])?;
+        let acknowledgment_filter = u32::try_from(acknowledgment_filter).map_err(|_| {
+            Error::decoding(pos, "EnrollmentSummary acknowledgmentFilter exceeds u32")
+        })?;
         offset = end;
 
         // [1] enrollmentFilter (optional, constructed)
@@ -107,39 +120,68 @@ impl GetEnrollmentSummaryRequest {
         if offset < data.len() {
             let (tag, tag_end) = tags::decode_tag(data, offset)?;
             if tag.is_opening_tag(1) {
-                // Parse BACnetRecipientProcess
                 let mut device = None;
-                let mut process_id = 0u32;
                 let (content, new_offset) = tags::extract_context_value(data, tag_end, 1)?;
                 let mut inner_offset = 0;
-                while inner_offset < content.len() {
+
+                if inner_offset < content.len() {
                     let (inner_tag, inner_pos) = tags::decode_tag(content, inner_offset)?;
                     if inner_tag.is_opening_tag(0) {
-                        // recipient CHOICE — parse device [0]
                         let (recipient_content, recipient_end) =
                             tags::extract_context_value(content, inner_pos, 0)?;
-                        if !recipient_content.is_empty() {
-                            let (dev_tag, dev_pos) = tags::decode_tag(recipient_content, 0)?;
-                            if dev_tag.is_context(0) {
-                                let dev_end = dev_pos + dev_tag.length as usize;
-                                if dev_end <= recipient_content.len() {
-                                    device = Some(ObjectIdentifier::decode(
-                                        &recipient_content[dev_pos..dev_end],
-                                    )?);
-                                }
-                            }
+                        let (dev_tag, dev_pos) = tags::decode_tag(recipient_content, 0)?;
+                        if !dev_tag.is_context(0) {
+                            return Err(Error::decoding(
+                                tag_end + inner_pos,
+                                "EnrollmentSummary expected recipient device tag 0",
+                            ));
                         }
+                        let dev_end = dev_pos + dev_tag.length as usize;
+                        if dev_end > recipient_content.len() {
+                            return Err(Error::decoding(
+                                tag_end + dev_pos,
+                                "EnrollmentSummary truncated at recipient device",
+                            ));
+                        }
+                        if dev_end != recipient_content.len() {
+                            return Err(Error::decoding(
+                                tag_end + dev_end,
+                                "EnrollmentSummary recipient has trailing data",
+                            ));
+                        }
+                        device = Some(ObjectIdentifier::decode(
+                            &recipient_content[dev_pos..dev_end],
+                        )?);
                         inner_offset = recipient_end;
-                    } else if inner_tag.is_context(1) {
-                        let inner_end = inner_pos + inner_tag.length as usize;
-                        if inner_end <= content.len() {
-                            process_id =
-                                primitives::decode_unsigned(&content[inner_pos..inner_end])? as u32;
-                        }
-                        inner_offset = inner_end;
-                    } else {
-                        inner_offset = inner_pos + inner_tag.length as usize;
                     }
+                }
+
+                let (process_tag, process_pos) = tags::decode_tag(content, inner_offset)?;
+                if !process_tag.is_context(1) {
+                    return Err(Error::decoding(
+                        tag_end + inner_offset,
+                        "EnrollmentSummary expected processIdentifier tag 1",
+                    ));
+                }
+                let process_end = process_pos + process_tag.length as usize;
+                if process_end > content.len() {
+                    return Err(Error::decoding(
+                        tag_end + process_pos,
+                        "EnrollmentSummary truncated at processIdentifier",
+                    ));
+                }
+                let process_id = primitives::decode_unsigned(&content[process_pos..process_end])?;
+                let process_id = u32::try_from(process_id).map_err(|_| {
+                    Error::decoding(
+                        tag_end + process_pos,
+                        "EnrollmentSummary processIdentifier exceeds u32",
+                    )
+                })?;
+                if process_end != content.len() {
+                    return Err(Error::decoding(
+                        tag_end + process_end,
+                        "EnrollmentSummary enrollmentFilter has trailing data",
+                    ));
                 }
                 enrollment_filter = Some(RecipientProcess {
                     device,
@@ -153,9 +195,10 @@ impl GetEnrollmentSummaryRequest {
         let mut event_state_filter = None;
         let (opt_data, new_offset) = tags::decode_optional_context(data, offset, 2)?;
         if let Some(content) = opt_data {
-            event_state_filter = Some(EventState::from_raw(
-                primitives::decode_unsigned(content)? as u32
-            ));
+            let value = primitives::decode_unsigned(content)?;
+            event_state_filter = Some(EventState::from_raw(u32::try_from(value).map_err(
+                |_| Error::decoding(offset, "EnrollmentSummary eventStateFilter exceeds u32"),
+            )?));
             offset = new_offset;
         }
 
@@ -163,9 +206,10 @@ impl GetEnrollmentSummaryRequest {
         let mut event_type_filter = None;
         let (opt_data, new_offset) = tags::decode_optional_context(data, offset, 3)?;
         if let Some(content) = opt_data {
-            event_type_filter = Some(EventType::from_raw(
-                primitives::decode_unsigned(content)? as u32
-            ));
+            let value = primitives::decode_unsigned(content)?;
+            event_type_filter = Some(EventType::from_raw(u32::try_from(value).map_err(|_| {
+                Error::decoding(offset, "EnrollmentSummary eventTypeFilter exceeds u32")
+            })?));
             offset = new_offset;
         }
 
@@ -174,51 +218,93 @@ impl GetEnrollmentSummaryRequest {
         if offset < data.len() {
             let (tag, tag_end) = tags::decode_tag(data, offset)?;
             if tag.is_opening_tag(4) {
+                let (content, new_offset) = tags::extract_context_value(data, tag_end, 4)?;
+
                 // [0] minPriority
-                let (inner_tag, inner_pos) = tags::decode_tag(data, tag_end)?;
-                let inner_end = inner_pos + inner_tag.length as usize;
-                if inner_end > data.len() {
+                let (inner_tag, inner_pos) = tags::decode_tag(content, 0)?;
+                if !inner_tag.is_context(0) {
                     return Err(Error::decoding(
-                        inner_pos,
+                        tag_end,
+                        "EnrollmentSummary expected minPriority tag 0",
+                    ));
+                }
+                let inner_end = inner_pos + inner_tag.length as usize;
+                if inner_end > content.len() {
+                    return Err(Error::decoding(
+                        tag_end + inner_pos,
                         "EnrollmentSummary truncated at minPriority",
                     ));
                 }
-                let min_priority = primitives::decode_unsigned(&data[inner_pos..inner_end])? as u8;
+                let min_priority = primitives::decode_unsigned(&content[inner_pos..inner_end])?;
+                let min_priority = u8::try_from(min_priority).map_err(|_| {
+                    Error::decoding(
+                        tag_end + inner_pos,
+                        "EnrollmentSummary minPriority exceeds u8",
+                    )
+                })?;
 
                 // [1] maxPriority
-                let (inner_tag, inner_pos) = tags::decode_tag(data, inner_end)?;
-                let inner_end = inner_pos + inner_tag.length as usize;
-                if inner_end > data.len() {
+                let (inner_tag, inner_pos) = tags::decode_tag(content, inner_end)?;
+                if !inner_tag.is_context(1) {
                     return Err(Error::decoding(
-                        inner_pos,
+                        tag_end + inner_end,
+                        "EnrollmentSummary expected maxPriority tag 1",
+                    ));
+                }
+                let priority_end = inner_pos + inner_tag.length as usize;
+                if priority_end > content.len() {
+                    return Err(Error::decoding(
+                        tag_end + inner_pos,
                         "EnrollmentSummary truncated at maxPriority",
                     ));
                 }
-                let max_priority = primitives::decode_unsigned(&data[inner_pos..inner_end])? as u8;
-
-                // closing tag 4
-                let (close_tag, close_end) = tags::decode_tag(data, inner_end)?;
-                if !close_tag.is_closing_tag(4) {
+                let max_priority = primitives::decode_unsigned(&content[inner_pos..priority_end])?;
+                let max_priority = u8::try_from(max_priority).map_err(|_| {
+                    Error::decoding(
+                        tag_end + inner_pos,
+                        "EnrollmentSummary maxPriority exceeds u8",
+                    )
+                })?;
+                if priority_end != content.len() {
                     return Err(Error::decoding(
-                        inner_end,
-                        "EnrollmentSummary expected closing tag 4",
+                        tag_end + priority_end,
+                        "EnrollmentSummary priorityFilter has trailing data",
+                    ));
+                }
+                if min_priority > max_priority {
+                    return Err(Error::decoding(
+                        tag_end + inner_pos,
+                        "EnrollmentSummary minPriority exceeds maxPriority",
                     ));
                 }
                 priority_filter = Some(PriorityFilter {
                     min_priority,
                     max_priority,
                 });
-                offset = close_end;
+                offset = new_offset;
             }
         }
 
         // [5] notificationClassFilter (optional)
         let mut notification_class_filter = None;
         if offset < data.len() {
-            let (opt_data, _new_offset) = tags::decode_optional_context(data, offset, 5)?;
+            let (opt_data, new_offset) = tags::decode_optional_context(data, offset, 5)?;
             if let Some(content) = opt_data {
-                notification_class_filter = Some(primitives::decode_unsigned(content)? as u16);
+                let value = primitives::decode_unsigned(content)?;
+                notification_class_filter = Some(u16::try_from(value).map_err(|_| {
+                    Error::decoding(
+                        offset,
+                        "EnrollmentSummary notificationClassFilter exceeds u16",
+                    )
+                })?);
+                offset = new_offset;
             }
+        }
+        if offset != data.len() {
+            return Err(Error::decoding(
+                offset,
+                "EnrollmentSummary has unexpected or trailing data",
+            ));
         }
 
         Ok(Self {
@@ -277,6 +363,12 @@ impl GetEnrollmentSummaryAck {
 
             // objectIdentifier (app)
             let (tag, pos) = tags::decode_tag(data, offset)?;
+            if !is_application_tag(&tag, data[offset], tags::app_tag::OBJECT_IDENTIFIER) {
+                return Err(Error::decoding(
+                    offset,
+                    "EnrollmentSummaryAck expected object-id application tag",
+                ));
+            }
             let end = pos + tag.length as usize;
             if end > data.len() {
                 return Err(Error::decoding(
@@ -289,6 +381,12 @@ impl GetEnrollmentSummaryAck {
 
             // eventType (app enumerated)
             let (tag, pos) = tags::decode_tag(data, offset)?;
+            if !is_application_tag(&tag, data[offset], tags::app_tag::ENUMERATED) {
+                return Err(Error::decoding(
+                    offset,
+                    "EnrollmentSummaryAck expected eventType enumerated tag",
+                ));
+            }
             let end = pos + tag.length as usize;
             if end > data.len() {
                 return Err(Error::decoding(
@@ -296,12 +394,20 @@ impl GetEnrollmentSummaryAck {
                     "EnrollmentSummaryAck truncated at eventType",
                 ));
             }
-            let event_type =
-                EventType::from_raw(primitives::decode_unsigned(&data[pos..end])? as u32);
+            let event_type = primitives::decode_unsigned(&data[pos..end])?;
+            let event_type = u32::try_from(event_type)
+                .map(EventType::from_raw)
+                .map_err(|_| Error::decoding(pos, "EnrollmentSummaryAck eventType exceeds u32"))?;
             offset = end;
 
             // eventState (app enumerated)
             let (tag, pos) = tags::decode_tag(data, offset)?;
+            if !is_application_tag(&tag, data[offset], tags::app_tag::ENUMERATED) {
+                return Err(Error::decoding(
+                    offset,
+                    "EnrollmentSummaryAck expected eventState enumerated tag",
+                ));
+            }
             let end = pos + tag.length as usize;
             if end > data.len() {
                 return Err(Error::decoding(
@@ -309,12 +415,20 @@ impl GetEnrollmentSummaryAck {
                     "EnrollmentSummaryAck truncated at eventState",
                 ));
             }
-            let event_state =
-                EventState::from_raw(primitives::decode_unsigned(&data[pos..end])? as u32);
+            let event_state = primitives::decode_unsigned(&data[pos..end])?;
+            let event_state = u32::try_from(event_state)
+                .map(EventState::from_raw)
+                .map_err(|_| Error::decoding(pos, "EnrollmentSummaryAck eventState exceeds u32"))?;
             offset = end;
 
             // priority (app unsigned)
             let (tag, pos) = tags::decode_tag(data, offset)?;
+            if !is_application_tag(&tag, data[offset], tags::app_tag::UNSIGNED) {
+                return Err(Error::decoding(
+                    offset,
+                    "EnrollmentSummaryAck expected priority unsigned tag",
+                ));
+            }
             let end = pos + tag.length as usize;
             if end > data.len() {
                 return Err(Error::decoding(
@@ -322,11 +436,19 @@ impl GetEnrollmentSummaryAck {
                     "EnrollmentSummaryAck truncated at priority",
                 ));
             }
-            let priority = primitives::decode_unsigned(&data[pos..end])? as u8;
+            let priority = primitives::decode_unsigned(&data[pos..end])?;
+            let priority = u8::try_from(priority)
+                .map_err(|_| Error::decoding(pos, "EnrollmentSummaryAck priority exceeds u8"))?;
             offset = end;
 
             // notificationClass (app unsigned)
             let (tag, pos) = tags::decode_tag(data, offset)?;
+            if !is_application_tag(&tag, data[offset], tags::app_tag::UNSIGNED) {
+                return Err(Error::decoding(
+                    offset,
+                    "EnrollmentSummaryAck expected notificationClass unsigned tag",
+                ));
+            }
             let end = pos + tag.length as usize;
             if end > data.len() {
                 return Err(Error::decoding(
@@ -334,7 +456,10 @@ impl GetEnrollmentSummaryAck {
                     "EnrollmentSummaryAck truncated at notificationClass",
                 ));
             }
-            let notification_class = primitives::decode_unsigned(&data[pos..end])? as u16;
+            let notification_class = primitives::decode_unsigned(&data[pos..end])?;
+            let notification_class = u16::try_from(notification_class).map_err(|_| {
+                Error::decoding(pos, "EnrollmentSummaryAck notificationClass exceeds u16")
+            })?;
             offset = end;
 
             entries.push(EnrollmentSummaryEntry {
@@ -349,6 +474,10 @@ impl GetEnrollmentSummaryAck {
         Ok(Self { entries })
     }
 }
+
+#[cfg(test)]
+#[path = "enrollment_summary_width_tests.rs"]
+mod width_tests;
 
 #[cfg(test)]
 mod tests {
