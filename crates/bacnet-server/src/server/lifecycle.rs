@@ -482,12 +482,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // Reliability is *derived* from limits, never whether a Reliability that
         // exists is honored.
         //
-        // Two caveats, both pre-existing and tracked rather than fixed here. The
-        // loop below bails while DeviceCommunicationControl is active, so
-        // detection is suspended for the duration even though confirmed writes
-        // still execute (#220). And six of the nine wired object types have no
-        // route that can set Reliability at all, so the fault path is correct but
-        // inert on them (#218).
+        // Six of the nine wired object types have no route that can set
+        // Reliability, so the fault path is correct but inert on them (#218).
         let db_intrinsic = Arc::clone(&db);
         let network_intrinsic = Arc::clone(&network);
         let comm_state_intrinsic = Arc::clone(&comm_state);
@@ -503,9 +499,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 interval.tick().await;
-                if comm_state_intrinsic.load(Ordering::Acquire) >= 1 {
-                    continue;
-                }
+                // DCC gates the outbound sender, not event-state detection or
+                // the local transition actions in Clause 13.2.2.1.4.
                 // Collect confirmed transitions under a brief write lock, then
                 // drop it before sending (never hold the db lock across a
                 // network send — matches the per-write notification path).

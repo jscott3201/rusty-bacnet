@@ -15,7 +15,9 @@ impl From<(EventStateChange, EventType)> for NotificationTransition {
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Evaluate intrinsic reporting on an object and send event notifications
     /// to NotificationClass recipients (or broadcast if none configured).
-    /// Skipped when DCC is active (comm_state >= 1).
+    /// DCC gates network-message initiation (Clause 16.1), not the local
+    /// transition actions in Clause 13.2.2.1.4. The outbound sender below
+    /// suppresses distribution while communications are disabled.
     ///
     /// This is the per-write entry point: it probes the detector, which fires
     /// immediately only when `Time_Delay == 0`. For a nonzero delay the probe
@@ -30,10 +32,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         oid: &ObjectIdentifier,
         retry_timeout_ms: u64,
     ) {
-        if comm_state.load(Ordering::Acquire) >= 1 {
-            return;
-        }
-
         let outcome = {
             let mut db = db.write().await;
             match db.get_mut(oid) {

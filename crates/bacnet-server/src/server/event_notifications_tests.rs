@@ -13,9 +13,9 @@ use tokio::sync::mpsc;
 /// discards unicasts. Used to capture the EventNotification a server
 /// actually puts on the wire.
 #[derive(Clone, Default)]
-struct RecordingTransport {
-    sent_broadcast: StdArc<StdMutex<Vec<Bytes>>>,
-    local_mac: Vec<u8>,
+pub(super) struct RecordingTransport {
+    pub(super) sent_broadcast: StdArc<StdMutex<Vec<Bytes>>>,
+    pub(super) local_mac: Vec<u8>,
 }
 impl TransportPort for RecordingTransport {
     async fn start(
@@ -448,7 +448,7 @@ async fn event_notification_event_notify_type_honors_class_ack_required() {
 /// `Event_Enable` is written through `write_property` rather than an internal
 /// setter, so these tests cover the same path a network client takes. Bytes
 /// are the Clause 20.2.10 wire encoding: MSB-first, TO_OFFNORMAL at `0x80`.
-fn db_with_high_limit_transition(
+pub(super) fn db_with_high_limit_transition(
     event_enable_byte: u8,
 ) -> Arc<tokio::sync::RwLock<ObjectDatabase>> {
     let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
@@ -497,8 +497,9 @@ fn db_with_high_limit_transition(
 }
 
 /// Drive the per-write path once and return the broadcasts it produced.
-async fn broadcasts_from_per_write_path(
+pub(super) async fn broadcasts_from_per_write_path(
     db: &Arc<tokio::sync::RwLock<ObjectDatabase>>,
+    comm_state_value: u8,
 ) -> Vec<Bytes> {
     let sent = StdArc::new(StdMutex::new(Vec::new()));
     let transport = RecordingTransport {
@@ -506,12 +507,12 @@ async fn broadcasts_from_per_write_path(
         local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
     };
     let network = Arc::new(NetworkLayer::new(transport));
-    let comm_state = Arc::new(AtomicU8::new(0)); // DCC not blocking
+    let comm_state = Arc::new(AtomicU8::new(comm_state_value));
     let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
 
     BACnetServer::<RecordingTransport>::fire_event_notifications(
-        &db,
+        db,
         &network,
         &comm_state,
         &server_tsm,
@@ -534,7 +535,7 @@ async fn broadcasts_from_per_write_path(
 #[tokio::test]
 async fn event_enable_cleared_suppresses_per_write_send() {
     let db = db_with_high_limit_transition(0x00); // no transition distributable
-    let sent = broadcasts_from_per_write_path(&db).await;
+    let sent = broadcasts_from_per_write_path(&db, 0).await;
 
     assert!(
         sent.is_empty(),
@@ -564,7 +565,7 @@ async fn event_enable_cleared_suppresses_per_write_send() {
 async fn event_enable_set_permits_per_write_send() {
     // TO_OFFNORMAL only: wire bit 0 = 0x80 (Clause 20.2.10).
     let db = db_with_high_limit_transition(0x80);
-    let sent = broadcasts_from_per_write_path(&db).await;
+    let sent = broadcasts_from_per_write_path(&db, 0).await;
 
     assert_eq!(
         sent.len(),
