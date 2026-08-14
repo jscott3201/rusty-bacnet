@@ -1,6 +1,13 @@
 use super::*;
 use bacnet_objects::traits::BACnetObject;
 
+fn invalid_data_type() -> Error {
+    Error::Protocol {
+        class: ErrorClass::PROPERTY.to_raw() as u32,
+        code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
+    }
+}
+
 /// Apply an AddListElement/RemoveListElement edit to a property whose wire
 /// form is a framed `BACnetLIST of BACnetDestination` (NotificationClass
 /// `Recipient_List`): it reads back as [`PropertyValue::ApplicationData`]
@@ -20,10 +27,6 @@ fn framed_destination_list_edit(
     edit_bytes: &[u8],
     remove: bool,
 ) -> Result<(), Error> {
-    let invalid_data_type = || Error::Protocol {
-        class: ErrorClass::PROPERTY.to_raw() as u32,
-        code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
-    };
     let mut destinations = bacnet_encoding::constructed::decode_destination_list(current_bytes)
         .map_err(|_| invalid_data_type())?;
     let edits = bacnet_encoding::constructed::decode_destination_list(edit_bytes)
@@ -93,13 +96,10 @@ pub fn handle_add_list_element(db: &mut ObjectDatabase, service_data: &[u8]) -> 
     let mut offset = 0;
     let data = &request.list_of_elements;
     while offset < data.len() {
-        match decode_application_value(data, offset) {
-            Ok((val, new_offset)) => {
-                items.push(val);
-                offset = new_offset;
-            }
-            Err(_) => break,
-        }
+        let (val, new_offset) =
+            decode_application_value(data, offset).map_err(|_| invalid_data_type())?;
+        items.push(val);
+        offset = new_offset;
     }
 
     object
@@ -167,13 +167,10 @@ pub fn handle_remove_list_element(
     let mut offset = 0;
     let data = &request.list_of_elements;
     while offset < data.len() {
-        match decode_application_value(data, offset) {
-            Ok((val, new_offset)) => {
-                to_remove.push(val);
-                offset = new_offset;
-            }
-            Err(_) => break,
-        }
+        let (val, new_offset) =
+            decode_application_value(data, offset).map_err(|_| invalid_data_type())?;
+        to_remove.push(val);
+        offset = new_offset;
     }
 
     // Remove matching elements
@@ -198,12 +195,20 @@ mod tests {
     use bytes::BytesMut;
 
     fn request(oid: ObjectIdentifier, element: u8, array_index: Option<u32>) -> BytesMut {
+        request_with_elements(oid, vec![0x21, element], array_index)
+    }
+
+    fn request_with_elements(
+        oid: ObjectIdentifier,
+        list_of_elements: Vec<u8>,
+        array_index: Option<u32>,
+    ) -> BytesMut {
         let mut encoded = BytesMut::new();
         ListElementRequest {
             object_identifier: oid,
             property_identifier: PropertyIdentifier::ALARM_VALUES,
             property_array_index: array_index,
-            list_of_elements: vec![0x21, element],
+            list_of_elements,
         }
         .encode(&mut encoded);
         encoded
@@ -232,6 +237,56 @@ mod tests {
                 .read_property(PropertyIdentifier::ALARM_VALUES, None)
                 .unwrap(),
             PropertyValue::List(vec![])
+        );
+    }
+
+    #[test]
+    fn add_list_element_malformed_tail_errors_without_partial_commit() {
+        let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
+        let mut msi = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();
+        msi.set_alarm_values(vec![1]);
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(msi)).unwrap();
+
+        let encoded = request_with_elements(oid, vec![0x21, 2, 0xD1, 0], None);
+        match handle_add_list_element(&mut db, &encoded).unwrap_err() {
+            Error::Protocol { class, code } => {
+                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+                assert_eq!(code, ErrorCode::INVALID_DATA_TYPE.to_raw() as u32);
+            }
+            other => panic!("expected PROPERTY/INVALID_DATA_TYPE, got {other:?}"),
+        }
+        assert_eq!(
+            db.get(&oid)
+                .unwrap()
+                .read_property(PropertyIdentifier::ALARM_VALUES, None)
+                .unwrap(),
+            PropertyValue::List(vec![PropertyValue::Unsigned(1)])
+        );
+    }
+
+    #[test]
+    fn remove_list_element_malformed_tail_errors_without_partial_commit() {
+        let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
+        let mut msi = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();
+        msi.set_alarm_values(vec![2, 3]);
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(msi)).unwrap();
+
+        let encoded = request_with_elements(oid, vec![0x21, 2, 0xD1, 0], None);
+        match handle_remove_list_element(&mut db, &encoded).unwrap_err() {
+            Error::Protocol { class, code } => {
+                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+                assert_eq!(code, ErrorCode::INVALID_DATA_TYPE.to_raw() as u32);
+            }
+            other => panic!("expected PROPERTY/INVALID_DATA_TYPE, got {other:?}"),
+        }
+        assert_eq!(
+            db.get(&oid)
+                .unwrap()
+                .read_property(PropertyIdentifier::ALARM_VALUES, None)
+                .unwrap(),
+            PropertyValue::List(vec![PropertyValue::Unsigned(2), PropertyValue::Unsigned(3)])
         );
     }
 
