@@ -173,6 +173,12 @@ fn qualified_reference_requires_one_containing_device() {
 
     let (mut ambiguous, _, _) = setup_qualified_reference(&[100, 200], 100);
     assert!(evaluate_event_enrollments(&mut ambiguous, 1).is_empty());
+
+    let (mut wildcard, _, _) = setup_qualified_reference(
+        &[ObjectIdentifier::WILDCARD_INSTANCE],
+        ObjectIdentifier::WILDCARD_INSTANCE,
+    );
+    assert!(evaluate_event_enrollments(&mut wildcard, 1).is_empty());
 }
 
 #[test]

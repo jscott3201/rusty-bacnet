@@ -268,7 +268,7 @@ pub fn evaluate_event_enrollments(
     // object is unambiguous. Unqualified references remain local regardless.
     let device_oids = db.find_by_type(ObjectType::DEVICE);
     let local_device_oid = match device_oids.as_slice() {
-        [oid] => Some(*oid),
+        [oid] if oid.instance_number() != ObjectIdentifier::WILDCARD_INSTANCE => Some(*oid),
         _ => None,
     };
 
