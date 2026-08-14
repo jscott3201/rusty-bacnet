@@ -8,6 +8,7 @@ use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetEventParameter};
+use std::borrow::Cow;
 
 // ---- Integration: multiple enrollments ----
 
@@ -200,5 +201,88 @@ fn unresolvable_reference_clears_private_evaluator_state() {
             .enrollment_eval_state_internal()
             .unwrap(),
         bacnet_objects::event_enrollment::EventEnrollmentEvalState::default()
+    );
+}
+
+struct ReferenceValueObject(PropertyValue);
+
+impl BACnetObject for ReferenceValueObject {
+    fn object_identifier(&self) -> ObjectIdentifier {
+        ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, 999).unwrap()
+    }
+
+    fn object_name(&self) -> &str {
+        "reference-value"
+    }
+
+    fn read_property(
+        &self,
+        property: PropertyIdentifier,
+        _array_index: Option<u32>,
+    ) -> Result<PropertyValue, bacnet_types::error::Error> {
+        if property == PropertyIdentifier::OBJECT_PROPERTY_REFERENCE {
+            Ok(self.0.clone())
+        } else {
+            Err(bacnet_types::error::Error::Encoding(
+                "unsupported test property".into(),
+            ))
+        }
+    }
+
+    fn write_property(
+        &mut self,
+        _property: PropertyIdentifier,
+        _array_index: Option<u32>,
+        _value: PropertyValue,
+        _priority: Option<u8>,
+    ) -> Result<(), bacnet_types::error::Error> {
+        Err(bacnet_types::error::Error::Encoding(
+            "test object is read-only".into(),
+        ))
+    }
+
+    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
+        Cow::Borrowed(&[])
+    }
+}
+
+#[test]
+fn malformed_reference_shapes_do_not_become_local() {
+    let target = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 3).unwrap();
+    let foreign_device = ObjectIdentifier::new(ObjectType::DEVICE, 200).unwrap();
+    let property = PropertyIdentifier::PRESENT_VALUE;
+    let malformed = [
+        vec![
+            PropertyValue::ObjectIdentifier(target),
+            PropertyValue::Unsigned(property.to_raw() as u64),
+            PropertyValue::ObjectIdentifier(foreign_device),
+        ],
+        vec![
+            PropertyValue::ObjectIdentifier(target),
+            PropertyValue::Unsigned(property.to_raw() as u64),
+            PropertyValue::Null,
+            PropertyValue::Null,
+            PropertyValue::ObjectIdentifier(foreign_device),
+        ],
+        vec![
+            PropertyValue::ObjectIdentifier(target),
+            PropertyValue::Unsigned(property.to_raw() as u64),
+            PropertyValue::Boolean(false),
+            PropertyValue::Null,
+        ],
+    ];
+
+    for items in malformed {
+        let enrollment = ReferenceValueObject(PropertyValue::List(items));
+        assert!(super::super::read_object_property_ref(&enrollment).is_none());
+    }
+
+    let legacy = ReferenceValueObject(PropertyValue::List(vec![
+        PropertyValue::ObjectIdentifier(target),
+        PropertyValue::Unsigned(property.to_raw() as u64),
+    ]));
+    assert_eq!(
+        super::super::read_object_property_ref(&legacy),
+        Some((target, property, None))
     );
 }

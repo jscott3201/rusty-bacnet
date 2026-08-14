@@ -110,7 +110,7 @@ fn read_object_property_ref(
     Option<ObjectIdentifier>,
 )> {
     match enrollment.read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None) {
-        Ok(PropertyValue::List(ref items)) if items.len() >= 2 => {
+        Ok(PropertyValue::List(ref items)) if (2..=4).contains(&items.len()) => {
             let obj_id = match &items[0] {
                 PropertyValue::ObjectIdentifier(oid) => *oid,
                 _ => return None,
@@ -119,6 +119,10 @@ fn read_object_property_ref(
                 PropertyValue::Unsigned(v) => PropertyIdentifier::from_raw(*v as u32),
                 _ => return None,
             };
+            match items.get(2) {
+                None | Some(PropertyValue::Null | PropertyValue::Unsigned(_)) => {}
+                Some(_) => return None,
+            }
             let device_id = match items.get(3) {
                 None | Some(PropertyValue::Null) => None,
                 Some(PropertyValue::ObjectIdentifier(oid)) => Some(*oid),
