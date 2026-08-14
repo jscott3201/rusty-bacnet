@@ -1122,18 +1122,24 @@
    "requirement_summary": "BACnet/SC BVLC-SC frame function, control, options, VMAC, and payload validation.",
    "status": "implementation-present-needs-negative-tests",
    "code_anchors": [
-    "crates/bacnet-transport/src/sc_frame.rs"
+    "crates/bacnet-transport/src/sc_frame.rs",
+    "crates/bacnet-transport/src/sc/data_attributes.rs",
+    "crates/bacnet-transport/src/sc/data_attribute_tests.rs",
+    "crates/bacnet-transport/src/sc/mod.rs"
    ],
    "positive_tests": [
     "crates/bacnet-transport/src/sc_frame.rs::tests::sc_options_decode_marker_fields_and_payload_split",
-    "crates/bacnet-transport/src/sc_frame.rs::tests::wire_format_check_both_vmacs"
+    "crates/bacnet-transport/src/sc_frame.rs::tests::wire_format_check_both_vmacs",
+    "crates/bacnet-transport/src/sc/data_attribute_tests.rs::non_must_understand_destination_option_allows_delivery"
    ],
    "negative_tests": [
     "crates/bacnet-transport/src/sc_frame.rs::tests::decode_rejects_reserved_control_bits",
     "crates/bacnet-transport/src/sc_frame.rs::tests::sc_options_reject_option_type_zero",
     "crates/bacnet-transport/src/sc_frame.rs::tests::sc_options_reject_option_count_exhaustion",
     "crates/bacnet-transport/src/sc_frame.rs::tests::sc_options_reject_truncated_length_and_data",
-    "crates/bacnet-transport/src/sc_frame.rs::tests::sc_options_reject_unterminated_chain"
+    "crates/bacnet-transport/src/sc_frame.rs::tests::sc_options_reject_unterminated_chain",
+    "crates/bacnet-transport/src/sc/data_attribute_tests.rs::unsupported_must_understand_destination_option_unicast_returns_nak",
+    "crates/bacnet-transport/src/sc/data_attribute_tests.rs::unsupported_must_understand_destination_option_broadcast_drops_without_nak"
    ],
    "benchmarks": [
     "benchmarks/benches/sc_latency.rs"
@@ -1141,7 +1147,7 @@
    "public_claims": [
     "README BACnet/SC transport"
    ],
-   "notes": "AB-01 adds transport codec evidence for Annex AB.2 control flag bits 7..4 rejection, Header Option Type 1..31 enforcement, AB.2.17 destination/data option marker decoding, VMAC field ordering, option count cap enforcement, option length truncation, option data truncation, and unterminated option-chain rejection. Addenda 135-2020cf/cp were checked for this row: cf renames Data Options bit 6 to Every Segment without changing the marker bit position, and cp adds standard header option types 2..5 that remain accepted by the generic 1..31 parser. Broader non-Result BVLC-SC function-specific payload semantics, destination-option Must Understand NAK behavior, Every Segment segmentation behavior, and hub/direct-connection behavior remain for later Annex AB work."
+   "notes": "AB-01 adds transport codec evidence for Annex AB.2 control flag bits 7..4 rejection, Header Option Type 1..31 enforcement, AB.2.17 destination/data option marker decoding, VMAC field ordering, option count cap enforcement, option length truncation, option data truncation, and unterminated option-chain rejection. Received Encapsulated-NPDUs now enforce Destination Option Must Understand semantics: an unsupported Must Understand option returns BVLC-Result NAK COMMUNICATION/HEADER_NOT_UNDERSTOOD for unicast, drops broadcast without a result, and does not block delivery when Must Understand is clear. Addenda 135-2020cf/cp were checked for this row: cf renames Data Options bit 6 to Every Segment without changing the marker bit position, and cp adds standard header option types 2..5 that remain accepted by the generic 1..31 parser. Broader non-Result BVLC-SC function-specific payload semantics, Every Segment segmentation behavior, and hub/direct-connection behavior remain for later Annex AB work."
   },
   {
    "id": "BACNET-AB-SC-BVLC-RESULT",
@@ -1152,6 +1158,8 @@
    "code_anchors": [
     "crates/bacnet-transport/src/sc_frame.rs",
     "crates/bacnet-transport/src/sc_frame/result.rs",
+    "crates/bacnet-transport/src/sc/data_attributes.rs",
+    "crates/bacnet-transport/src/sc/data_attribute_tests.rs",
     "crates/bacnet-transport/src/sc/mod.rs",
     "crates/bacnet-transport/src/sc/result_tests.rs"
    ],
@@ -1168,7 +1176,8 @@
     "crates/bacnet-transport/src/sc/result_tests.rs::malformed_bvlc_result_disconnects",
     "crates/bacnet-transport/src/sc/result_tests.rs::sc_connect_result_nak_fails_without_timeout",
     "crates/bacnet-transport/src/sc/result_tests.rs::sc_result_nak_closes_receive_loop_before_heartbeat",
-    "crates/bacnet-transport/src/sc/result_tests.rs::malformed_wire_bvlc_result_closes_receive_loop"
+    "crates/bacnet-transport/src/sc/result_tests.rs::malformed_wire_bvlc_result_closes_receive_loop",
+    "crates/bacnet-transport/src/sc/data_attribute_tests.rs::unsupported_must_understand_destination_option_unicast_returns_nak"
    ],
    "benchmarks": [
     "benchmarks/benches/sc_latency.rs"
@@ -1176,7 +1185,7 @@
    "public_claims": [
     "README BACnet/SC transport"
    ],
-   "notes": "AB-02 adds typed BVLC-Result ACK/NAK payload parsing for transport. ACK fixtures use the Proprietary-Message function per addendum 135-2020ci, while NAK fixtures mirror AB.2.17 examples with and without UTF-8 Error Details, including the Figure AB-6 multibyte UTF-8 details bytes. Negative evidence covers ACK trailing fields, short NAKs, unknown result codes, invalid UTF-8 details, malformed empty payloads, Data Options absence, Connect-Request NAK failing before timeout, fatal Result NAK closing the receive loop before further heartbeats, and malformed wire-level Result decode failures closing without a Result response. Transport connection handling now keeps ACK benign, disconnects on NAK, and disconnects on malformed Result without generating a Result response. Negotiated Max-BVLC-Length resource-limit evidence is tracked under BACNET-AB-SC-CONNECTION-STATE. Remaining work includes request correlation, Error Details resource limits, standard-function ACK diagnostic policy, BVLC-Result generation for every AB.3.1.5 error situation, destination-option Must Understand NAK behavior, and hub/direct response-routing behavior."
+   "notes": "AB-02 adds typed BVLC-Result ACK/NAK payload parsing for transport. ACK fixtures use the Proprietary-Message function per addendum 135-2020ci, while NAK fixtures mirror AB.2.17 examples with and without UTF-8 Error Details, including the Figure AB-6 multibyte UTF-8 details bytes. Negative evidence covers ACK trailing fields, short NAKs, unknown result codes, invalid UTF-8 details, malformed empty payloads, Data Options absence, Connect-Request NAK failing before timeout, fatal Result NAK closing the receive loop before further heartbeats, malformed wire-level Result decode failures closing without a Result response, and unicast Destination Option Must Understand failures returning COMMUNICATION/HEADER_NOT_UNDERSTOOD with the offending option marker. Transport connection handling now keeps ACK benign, disconnects on NAK, and disconnects on malformed Result without generating a Result response. Negotiated Max-BVLC-Length resource-limit evidence is tracked under BACNET-AB-SC-CONNECTION-STATE. Remaining work includes request correlation, Error Details resource limits, standard-function ACK diagnostic policy, BVLC-Result generation for every AB.3.1.5 error situation, and hub/direct response-routing behavior."
   },
   {
    "id": "BACNET-AB-SC-DATA-ATTRIBUTES",
@@ -1199,7 +1208,7 @@
    "positive_tests": [
     "crates/bacnet-transport/src/sc/tests.rs::transport_receive_preserves_data_options_as_attributes",
     "crates/bacnet-transport/src/sc/tests.rs::transport_send_unicast_encodes_data_attributes_as_options",
-    "crates/bacnet-transport/src/sc/data_attribute_tests.rs::unsupported_non_must_understand_data_option_is_preserved",
+    "crates/bacnet-transport/src/sc/data_attribute_tests.rs::must_understand_data_option_is_preserved",
     "crates/bacnet-network/src/layer.rs::tests::sc_data_options_reach_received_apdu_data_attributes",
     "crates/bacnet-network/src/layer.rs::tests::send_apdu_data_attributes_reach_sc_data_options",
     "crates/bacnet-network/src/router/tests/data_attributes.rs::forward_unicast_preserves_data_attributes",
@@ -1209,13 +1218,11 @@
    "negative_tests": [
     "crates/bacnet-transport/src/sc/tests.rs::transport_send_unicast_rejects_invalid_data_attribute_type",
     "crates/bacnet-transport/src/sc/tests.rs::connection_rejects_too_many_data_attributes_on_encode",
-    "crates/bacnet-transport/src/sc/tests.rs::connection_rejects_oversize_data_attribute_payload_on_encode",
-    "crates/bacnet-transport/src/sc/data_attribute_tests.rs::unsupported_must_understand_data_option_unicast_returns_nak",
-    "crates/bacnet-transport/src/sc/data_attribute_tests.rs::unsupported_must_understand_data_option_broadcast_drops_without_nak"
+    "crates/bacnet-transport/src/sc/tests.rs::connection_rejects_oversize_data_attribute_payload_on_encode"
    ],
    "benchmarks": [],
    "public_claims": [],
-   "notes": "This row now has native receive-side, outbound send, router local-delivery, router forwarding, and unsupported Must Understand fail-closed evidence for BACnet/SC Encapsulated-NPDU Data Options. Receive paths convert supported or non-Must-Understand Data Options into generic transport DataAttribute values, preserving option type, Must Understand flag, and option data on ReceivedNpdu; NetworkLayer exposes those attributes on ReceivedApdu after NPDU decode; router local-delivery paths retain inbound attributes; router forwarding attaches inbound attributes to forwarded unicast and broadcast SendRequest values; and non-SC transports emit empty data_attributes on receive. Native SC treats valid Secure Path Data Option type 1 as understood, rejects other Must Understand Data Options before NPDU delivery, returns BVLC-Result NAK COMMUNICATION/HEADER_NOT_UNDERSTOOD with the offending option marker for non-broadcast traffic, drops broadcast traffic without a result, and preserves unsupported non-Must-Understand Data Options as DataAttribute values. Outbound paths add attribute-aware TransportPort and NetworkLayer send helpers, keep non-SC transports on default ignore-on-send behavior, and encode SC DataAttribute values as Data Options while validating option type 1..31, the 64-option cap, and u16 option-data lengths before writing the BVLC-SC frame. Router tests cover forwarded unicast, forwarded broadcast, and loopback SC-to-SC forwarding preserving Data Options on the outbound SC frame. Remaining work is native send-path enforcement of the Secure Path type-1 marker constraints (to_data_options accepts a type-1 option without Must Understand and with a payload; the only prior evidence for those constraints was a removed non-native build path), high-level helper address-resolution/target-VMAC behavior, and formal conformance-test evidence."
+   "notes": "This row has native receive-side, outbound send, router local-delivery, and router forwarding evidence for BACnet/SC Encapsulated-NPDU Data Options. Receive paths convert every Data Option, including unknown options with bit 6 set, into generic transport DataAttribute values, preserving option type, the stored bit-6 flag, and option data on ReceivedNpdu; NetworkLayer exposes those attributes on ReceivedApdu after NPDU decode; router local-delivery paths retain inbound attributes; router forwarding attaches inbound attributes to forwarded unicast and broadcast SendRequest values; and non-SC transports emit empty data_attributes on receive. Native SC no longer applies Destination Option Must Understand rejection rules to Data Options. Destination Option rejection and BVLC-Result evidence is tracked under BACNET-AB-SC-FRAME and BACNET-AB-SC-BVLC-RESULT. Outbound paths add attribute-aware TransportPort and NetworkLayer send helpers, keep non-SC transports on default ignore-on-send behavior, and encode SC DataAttribute values as Data Options while validating option type 1..31, the 64-option cap, and u16 option-data lengths before writing the BVLC-SC frame. Router tests cover forwarded unicast, forwarded broadcast, and loopback SC-to-SC forwarding preserving Data Options on the outbound SC frame. Remaining work includes Addendum 135-2020cf Every Segment semantics and a context-specific name for the stored Data Option bit-6 flag, native send-path enforcement of the Secure Path type-1 marker constraints, high-level helper address-resolution/target-VMAC behavior, and formal conformance-test evidence."
   },
   {
    "id": "BACNET-AB-SC-CONNECTION-STATE",

@@ -28,18 +28,19 @@ async fn hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
     ws_hub.send(&buf).await.unwrap();
 }
 
-fn encapsulated_npdu_with_data_option(
+fn encapsulated_npdu_with_options(
     message_id: u16,
     destination_vmac: Option<Vmac>,
-    option: ScOption,
+    dest_options: Vec<ScOption>,
+    data_options: Vec<ScOption>,
 ) -> ScMessage {
     ScMessage {
         function: ScFunction::EncapsulatedNpdu,
         message_id,
         originating_vmac: Some([0x10; 6]),
         destination_vmac,
-        dest_options: Vec::new(),
-        data_options: vec![option],
+        dest_options,
+        data_options,
         payload: Bytes::from_static(&[0x01, 0x00, 0x30]),
     }
 }
@@ -62,14 +63,14 @@ async fn start_transport() -> (
 }
 
 #[tokio::test]
-async fn unsupported_must_understand_data_option_unicast_returns_nak() {
+async fn unsupported_must_understand_destination_option_unicast_returns_nak() {
     let (mut transport, mut rx, ws_hub) = start_transport().await;
     let option = ScOption {
         option_type: 2,
         must_understand: true,
         data: Vec::new(),
     };
-    let msg = encapsulated_npdu_with_data_option(0x2233, None, option);
+    let msg = encapsulated_npdu_with_options(0x2233, None, vec![option], Vec::new());
     let mut buf = BytesMut::new();
     encode_sc_message(&mut buf, &msg);
     ws_hub.send(&buf).await.unwrap();
@@ -99,14 +100,15 @@ async fn unsupported_must_understand_data_option_unicast_returns_nak() {
 }
 
 #[tokio::test]
-async fn unsupported_must_understand_data_option_broadcast_drops_without_nak() {
+async fn unsupported_must_understand_destination_option_broadcast_drops_without_nak() {
     let (mut transport, mut rx, ws_hub) = start_transport().await;
     let option = ScOption {
         option_type: 31,
         must_understand: true,
         data: vec![0x12, 0x34, 0x56],
     };
-    let msg = encapsulated_npdu_with_data_option(0x3344, Some(BROADCAST_VMAC), option);
+    let msg =
+        encapsulated_npdu_with_options(0x3344, Some(BROADCAST_VMAC), vec![option], Vec::new());
     let mut buf = BytesMut::new();
     encode_sc_message(&mut buf, &msg);
     ws_hub.send(&buf).await.unwrap();
@@ -122,14 +124,14 @@ async fn unsupported_must_understand_data_option_broadcast_drops_without_nak() {
 }
 
 #[tokio::test]
-async fn unsupported_non_must_understand_data_option_is_preserved() {
+async fn must_understand_data_option_is_preserved() {
     let (mut transport, mut rx, ws_hub) = start_transport().await;
     let option = ScOption {
         option_type: 2,
-        must_understand: false,
+        must_understand: true,
         data: vec![0xAA],
     };
-    let msg = encapsulated_npdu_with_data_option(0x4455, None, option.clone());
+    let msg = encapsulated_npdu_with_options(0x4455, None, Vec::new(), vec![option.clone()]);
     let mut buf = BytesMut::new();
     encode_sc_message(&mut buf, &msg);
     ws_hub.send(&buf).await.unwrap();
@@ -146,6 +148,32 @@ async fn unsupported_non_must_understand_data_option_is_preserved() {
         option.must_understand
     );
     assert_eq!(received.data_attributes[0].data, option.data);
+    assert!(timeout(Duration::from_millis(50), ws_hub.recv())
+        .await
+        .is_err());
+
+    transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn non_must_understand_destination_option_allows_delivery() {
+    let (mut transport, mut rx, ws_hub) = start_transport().await;
+    let option = ScOption {
+        option_type: 31,
+        must_understand: false,
+        data: vec![0x12, 0x34],
+    };
+    let msg = encapsulated_npdu_with_options(0x5566, None, vec![option], Vec::new());
+    let mut buf = BytesMut::new();
+    encode_sc_message(&mut buf, &msg);
+    ws_hub.send(&buf).await.unwrap();
+
+    let received = timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .expect("timed out waiting for SC NPDU")
+        .expect("SC NPDU channel closed");
+    assert_eq!(received.npdu, msg.payload);
+    assert!(received.data_attributes.is_empty());
     assert!(timeout(Duration::from_millis(50), ws_hub.recv())
         .await
         .is_err());

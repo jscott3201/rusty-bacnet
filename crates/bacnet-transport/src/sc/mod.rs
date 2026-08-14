@@ -412,9 +412,8 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                     last_bvlc_received = Instant::now();
                                     pending_heartbeat_id = None;
 
-                                    if data_attributes::reject_unsupported_must_understand_data_option(
-                                        &msg,
-                                        &*ws_clone,
+                                    if data_attributes::reject_unsupported_must_understand_destination_option(
+                                        &msg, &*ws_clone,
                                     )
                                     .await
                                     {

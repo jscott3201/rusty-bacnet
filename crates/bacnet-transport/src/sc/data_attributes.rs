@@ -8,7 +8,6 @@ use tracing::warn;
 use super::WebSocketPort;
 
 const MAX_SC_DATA_ATTRIBUTES: usize = 64;
-const SECURE_PATH_OPTION_TYPE: u8 = 1;
 
 pub(super) fn from_data_options(msg: &ScMessage) -> Vec<DataAttribute> {
     msg.data_options
@@ -21,14 +20,14 @@ pub(super) fn from_data_options(msg: &ScMessage) -> Vec<DataAttribute> {
         .collect()
 }
 
-pub(super) fn unsupported_must_understand_data_option(msg: &ScMessage) -> Option<&ScOption> {
+pub(super) fn unsupported_must_understand_destination_option(msg: &ScMessage) -> Option<&ScOption> {
     if msg.function != ScFunction::EncapsulatedNpdu {
         return None;
     }
 
-    msg.data_options
+    msg.dest_options
         .iter()
-        .find(|option| option.must_understand && !is_understood_data_option(option))
+        .find(|option| option.must_understand)
 }
 
 pub(super) fn option_header_marker(option: &ScOption) -> u8 {
@@ -42,18 +41,18 @@ pub(super) fn option_header_marker(option: &ScOption) -> u8 {
     marker
 }
 
-pub(super) async fn reject_unsupported_must_understand_data_option<W: WebSocketPort>(
+pub(super) async fn reject_unsupported_must_understand_destination_option<W: WebSocketPort>(
     msg: &ScMessage,
     ws: &W,
 ) -> bool {
-    let Some(option) = unsupported_must_understand_data_option(msg) else {
+    let Some(option) = unsupported_must_understand_destination_option(msg) else {
         return false;
     };
 
     let marker = option_header_marker(option);
     warn!(
         option_type = option.option_type,
-        marker, "BACnet/SC unsupported Must Understand Data Option"
+        marker, "BACnet/SC unsupported Must Understand Destination Option"
     );
 
     if msg.destination_vmac != Some(BROADCAST_VMAC) {
@@ -67,7 +66,7 @@ pub(super) async fn reject_unsupported_must_understand_data_option<W: WebSocketP
         let mut nak_buf = BytesMut::new();
         encode_sc_message(&mut nak_buf, &nak);
         if let Err(e) = ws.send(&nak_buf).await {
-            warn!("BACnet/SC data option NAK send error: {}", e);
+            warn!("BACnet/SC destination option NAK send error: {}", e);
         }
     }
 
@@ -100,10 +99,6 @@ fn build_bvlc_result_nak(
             error_code[1],
         ]),
     }
-}
-
-fn is_understood_data_option(option: &ScOption) -> bool {
-    option.option_type == SECURE_PATH_OPTION_TYPE
 }
 
 pub(super) fn to_data_options(data_attributes: &[DataAttribute]) -> Result<Vec<ScOption>, Error> {
