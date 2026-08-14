@@ -13,6 +13,7 @@
 
 use super::*;
 use bacnet_objects::binary::BinaryValueObject;
+use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_types::primitives::PropertyValue;
 
 /// Build a `WritePropertyRequest` body for `OBJECT_NAME` on `oid` set to `name`.
@@ -83,6 +84,37 @@ fn write_object_name_rename_refreshes_index() {
 
     // B was untouched by the rename.
     assert_eq!(db.get(&oid_b).unwrap().object_name(), "BV-B");
+}
+
+#[test]
+fn event_enrollment_name_write_refreshes_index_and_rejects_duplicate() {
+    let mut db = ObjectDatabase::new();
+    let enrollment = EventEnrollmentObject::new(1, "EE-A", 0).unwrap();
+    let occupied = BinaryValueObject::new(1, "Occupied").unwrap();
+    let oid = enrollment.object_identifier();
+    db.add(Box::new(enrollment)).unwrap();
+    db.add(Box::new(occupied)).unwrap();
+
+    handle_write_property(&mut db, &encode_name_write(oid, "EE-Renamed")).unwrap();
+
+    assert!(db.find_by_name("EE-A").is_none());
+    assert_eq!(
+        db.find_by_name("EE-Renamed").unwrap().object_identifier(),
+        oid
+    );
+
+    match handle_write_property(&mut db, &encode_name_write(oid, "Occupied")) {
+        Err(Error::Protocol { class, code }) => {
+            assert_eq!(class, ErrorClass::OBJECT.to_raw() as u32);
+            assert_eq!(code, ErrorCode::DUPLICATE_NAME.to_raw() as u32);
+        }
+        other => panic!("expected DUPLICATE_NAME, got {other:?}"),
+    }
+    assert_eq!(db.get(&oid).unwrap().object_name(), "EE-Renamed");
+    assert_eq!(
+        db.find_by_name("EE-Renamed").unwrap().object_identifier(),
+        oid
+    );
 }
 
 #[test]

@@ -512,6 +512,9 @@ impl BACnetObject for EventEnrollmentObject {
         {
             return result;
         }
+        if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
+            return result;
+        }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
@@ -661,16 +664,7 @@ impl BACnetObject for EventEnrollmentObject {
     }
 
     /// Mirrors the `write_property` arms above, so PICS reports what dispatch
-    /// actually accepts — with one known exception, `OBJECT_NAME`.
-    ///
-    /// `common::is_common_writable` includes `OBJECT_NAME`, but this object's
-    /// `write_property` has no arm for it and returns `WRITE_ACCESS_DENIED`, so
-    /// an Event Enrollment cannot be renamed while every core I/O/V type can
-    /// (they route it through `common::write_object_name`). That is a
-    /// pre-existing gap, not one this override introduces: the inherited
-    /// `historical_writable_default` already returned `true` for `OBJECT_NAME`,
-    /// so PICS reported the same thing before. Kept as-is to avoid a silent
-    /// PICS change here; the missing rename support is tracked separately.
+    /// actually accepts.
     ///
     /// Enumerated rather than reusing `common::is_event_property_writable`:
     /// that helper covers the intrinsic-reporting objects and includes
