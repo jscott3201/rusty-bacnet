@@ -109,14 +109,16 @@ impl WritePropertyRequest {
                 if end > data.len() {
                     return Err(Error::decoding(pos, "WriteProperty truncated at priority"));
                 }
-                let prio = primitives::decode_unsigned(&data[pos..end])? as u8;
+                let prio = primitives::decode_unsigned(&data[pos..end])?;
                 if !(1..=16).contains(&prio) {
                     return Err(Error::decoding(
                         pos,
                         format!("WriteProperty priority {prio} out of range 1-16"),
                     ));
                 }
-                priority = Some(prio);
+                priority = Some(u8::try_from(prio).map_err(|_| {
+                    Error::decoding(pos, "WriteProperty priority conversion failed")
+                })?);
             }
         }
 
@@ -178,6 +180,44 @@ mod tests {
         req.encode(&mut buf);
         let decoded = WritePropertyRequest::decode(&buf).unwrap();
         assert_eq!(decoded.priority, Some(16));
+
+        for content in [
+            &[0x00][..],
+            &[0x11][..],
+            &[0x01, 0x01][..],
+            &[0x01, 0x10][..],
+        ] {
+            let mut buf = BytesMut::new();
+            WritePropertyRequest {
+                priority: None,
+                ..req.clone()
+            }
+            .encode(&mut buf);
+            tags::encode_tag(
+                &mut buf,
+                4,
+                TagClass::Context,
+                u32::try_from(content.len()).unwrap(),
+            );
+            buf.extend_from_slice(content);
+            assert!(
+                WritePropertyRequest::decode(&buf).is_err(),
+                "priority content {content:02X?} must be rejected"
+            );
+        }
+
+        let mut buf = BytesMut::new();
+        WritePropertyRequest {
+            priority: None,
+            ..req
+        }
+        .encode(&mut buf);
+        tags::encode_tag(&mut buf, 4, TagClass::Context, 2);
+        buf.extend_from_slice(&[0x00, 0x01]);
+        assert_eq!(
+            WritePropertyRequest::decode(&buf).unwrap().priority,
+            Some(1)
+        );
     }
 
     // -----------------------------------------------------------------------
