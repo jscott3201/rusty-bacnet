@@ -30,26 +30,22 @@ pub(super) fn unsupported_must_understand_destination_option(msg: &ScMessage) ->
         .find(|option| option.must_understand)
 }
 
-pub(super) fn option_header_marker(option: &ScOption) -> u8 {
-    let mut marker = option.option_type & 0x1F;
-    if option.must_understand {
-        marker |= 0x40;
-    }
-    if !option.data.is_empty() {
-        marker |= 0x20;
-    }
-    marker
-}
-
 pub(super) async fn reject_unsupported_must_understand_destination_option<W: WebSocketPort>(
     msg: &ScMessage,
+    error_header_marker: Option<u8>,
     ws: &W,
 ) -> bool {
     let Some(option) = unsupported_must_understand_destination_option(msg) else {
         return false;
     };
 
-    let marker = option_header_marker(option);
+    let Some(marker) = error_header_marker else {
+        warn!(
+            option_type = option.option_type,
+            "BACnet/SC failed to recover unsupported Destination Option marker"
+        );
+        return true;
+    };
     warn!(
         option_type = option.option_type,
         marker, "BACnet/SC unsupported Must Understand Destination Option"
@@ -60,6 +56,7 @@ pub(super) async fn reject_unsupported_must_understand_destination_option<W: Web
             msg.message_id,
             msg.function,
             marker,
+            msg.originating_vmac,
             ErrorClass::COMMUNICATION,
             ErrorCode::HEADER_NOT_UNDERSTOOD,
         );
@@ -77,6 +74,7 @@ fn build_bvlc_result_nak(
     message_id: u16,
     result_for: ScFunction,
     error_header_marker: u8,
+    destination_vmac: Option<crate::sc_frame::Vmac>,
     error_class: ErrorClass,
     error_code: ErrorCode,
 ) -> ScMessage {
@@ -86,7 +84,7 @@ fn build_bvlc_result_nak(
         function: ScFunction::Result,
         message_id,
         originating_vmac: None,
-        destination_vmac: None,
+        destination_vmac,
         dest_options: Vec::new(),
         data_options: Vec::new(),
         payload: Bytes::from(vec![

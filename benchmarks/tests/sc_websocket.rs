@@ -180,6 +180,50 @@ async fn sc_websocket_hub_relays_unicast_unknown_and_broadcast_with_vmac_rules()
 }
 
 #[tokio::test]
+async fn sc_websocket_hub_relays_unicast_result_to_originating_node() {
+    let certs = generate_test_certs();
+    let (mut hub, url) = start_sc_hub(&certs, [0x10; 6]).await;
+
+    let vmac_a = [0xA5; 6];
+    let vmac_b = [0xB5; 6];
+    let mut ws_a = connect_sc_client(&url, &certs, vmac_a).await;
+    let mut ws_b = connect_sc_client(&url, &certs, vmac_b).await;
+
+    let request = ScMessage {
+        function: ScFunction::EncapsulatedNpdu,
+        message_id: 0x2201,
+        originating_vmac: None,
+        destination_vmac: Some(vmac_b),
+        dest_options: Vec::new(),
+        data_options: Vec::new(),
+        payload: Bytes::from_static(&[0x01, 0x20, 0x30]),
+    };
+    send_sc_message(&mut ws_a, &request).await;
+    let relayed_request = recv_sc_message(&mut ws_b).await;
+
+    let result = ScMessage {
+        function: ScFunction::Result,
+        message_id: relayed_request.message_id,
+        originating_vmac: None,
+        destination_vmac: relayed_request.originating_vmac,
+        dest_options: Vec::new(),
+        data_options: Vec::new(),
+        payload: Bytes::from_static(&[0x01, 0x01, 0x42, 0x00, 0x07, 0x01, 0x17]),
+    };
+    send_sc_message(&mut ws_b, &result).await;
+
+    let relayed_result = recv_sc_message(&mut ws_a).await;
+    assert_eq!(relayed_result.function, ScFunction::Result);
+    assert_eq!(relayed_result.message_id, request.message_id);
+    assert_eq!(relayed_result.originating_vmac, Some(vmac_b));
+    assert_eq!(relayed_result.destination_vmac, None);
+    assert_eq!(relayed_result.payload, result.payload);
+    assert_no_sc_message(&mut ws_b).await;
+
+    hub.stop().await;
+}
+
+#[tokio::test]
 async fn sc_websocket_hub_preserves_large_minimum_size_option_chains() {
     let certs = generate_test_certs();
     let (mut hub, url) = start_sc_hub(&certs, [0x10; 6]).await;

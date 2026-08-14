@@ -38,6 +38,18 @@ fn bvlc_result_nak(message_id: u16) -> ScMessage {
     }
 }
 
+fn encapsulated_npdu_result_nak(message_id: u16) -> ScMessage {
+    ScMessage {
+        function: ScFunction::Result,
+        message_id,
+        originating_vmac: Some([0x10; 6]),
+        destination_vmac: None,
+        dest_options: Vec::new(),
+        data_options: Vec::new(),
+        payload: Bytes::from_static(&[0x01, 0x01, 0x42, 0x00, 0x07, 0x01, 0x17]),
+    }
+}
+
 fn connect_result_nak(message_id: u16, error_code: u16) -> ScMessage {
     let mut payload = Vec::from([
         ScFunction::ConnectRequest.to_raw(),
@@ -93,6 +105,16 @@ fn bvlc_result_nak_disconnects() {
     let result = conn.handle_received(&msg);
     assert!(result.is_none());
     assert_eq!(conn.state, ScConnectionState::Disconnected);
+}
+
+#[test]
+fn encapsulated_npdu_result_nak_keeps_connection_open() {
+    let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
+    conn.state = ScConnectionState::Connected;
+    let msg = encapsulated_npdu_result_nak(1);
+
+    assert!(conn.handle_received(&msg).is_none());
+    assert_eq!(conn.state, ScConnectionState::Connected);
 }
 
 #[test]
@@ -516,6 +538,46 @@ async fn sc_result_nak_closes_receive_loop_before_heartbeat() {
             .await
             .is_err(),
         "receive loop should close before sending another heartbeat"
+    );
+
+    transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn encapsulated_npdu_result_nak_keeps_receive_loop_open() {
+    let (ws_client, ws_hub) = LoopbackWebSocket::pair();
+    let client_vmac = [0x01; 6];
+    let hub_vmac = [0x10; 6];
+    let mut transport = ScTransport::new(ws_client, client_vmac);
+
+    let hub_task = tokio::spawn(async move {
+        hub_accept(&ws_hub, hub_vmac).await;
+        ws_hub
+    });
+
+    let mut rx = transport.start().await.unwrap();
+    let ws_hub = hub_task.await.unwrap();
+    send_message(&ws_hub, &encapsulated_npdu_result_nak(0x3344)).await;
+
+    let npdu = ScMessage {
+        function: ScFunction::EncapsulatedNpdu,
+        message_id: 0x3345,
+        originating_vmac: Some([0x20; 6]),
+        destination_vmac: None,
+        dest_options: Vec::new(),
+        data_options: Vec::new(),
+        payload: Bytes::from_static(&[0x01, 0x00, 0x30]),
+    };
+    send_message(&ws_hub, &npdu).await;
+
+    let received = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .expect("receive loop stopped after Encapsulated-NPDU Result NAK")
+        .expect("NPDU channel closed after Encapsulated-NPDU Result NAK");
+    assert_eq!(received.npdu, npdu.payload);
+    assert_eq!(
+        transport.connection().unwrap().lock().await.state,
+        ScConnectionState::Connected
     );
 
     transport.stop().await.unwrap();

@@ -20,7 +20,10 @@ use tracing::{debug, info, warn};
 use crate::port::{DataAttribute, ReceivedNpdu, TransportPort};
 #[cfg(test)]
 use crate::sc_frame::{decode_sc_bvlc_result, ScMessage};
-use crate::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, Vmac, BROADCAST_VMAC};
+use crate::sc_frame::{
+    decode_sc_message, encode_sc_message, first_must_understand_destination_option_marker,
+    ScFunction, Vmac, BROADCAST_VMAC,
+};
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 
@@ -413,7 +416,9 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                     pending_heartbeat_id = None;
 
                                     if data_attributes::reject_unsupported_must_understand_destination_option(
-                                        &msg, &*ws_clone,
+                                        &msg,
+                                        first_must_understand_destination_option_marker(&data),
+                                        &*ws_clone,
                                     )
                                     .await
                                     {

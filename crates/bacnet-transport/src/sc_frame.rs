@@ -380,6 +380,51 @@ fn decode_sc_options(data: &[u8], offset: &mut usize) -> Result<Vec<ScOption>, E
     Ok(options)
 }
 
+/// Reads the wire marker because [`ScOption`] does not retain chain position or
+/// an empty Header Data field after decoding.
+pub(crate) fn first_must_understand_destination_option_marker(data: &[u8]) -> Option<u8> {
+    if data.len() < SC_MIN_HEADER || !ScControl::has_valid_reserved_bits(data[1]) {
+        return None;
+    }
+
+    let control = ScControl::from_byte(data[1]);
+    if !control.has_dest_options {
+        return None;
+    }
+
+    let mut offset = SC_MIN_HEADER;
+    if control.has_originating_vmac {
+        offset = offset.checked_add(6)?;
+    }
+    if control.has_destination_vmac {
+        offset = offset.checked_add(6)?;
+    }
+
+    loop {
+        let marker = *data.get(offset)?;
+        if !is_valid_sc_option_type(marker & 0x1F) {
+            return None;
+        }
+        offset = offset.checked_add(1)?;
+
+        if marker & 0x20 != 0 {
+            let length_bytes = data.get(offset..offset.checked_add(2)?)?;
+            let length = u16::from_be_bytes([length_bytes[0], length_bytes[1]]) as usize;
+            offset = offset.checked_add(2)?.checked_add(length)?;
+            if offset > data.len() {
+                return None;
+            }
+        }
+
+        if marker & 0x40 != 0 {
+            return Some(marker);
+        }
+        if marker & 0x80 == 0 {
+            return None;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

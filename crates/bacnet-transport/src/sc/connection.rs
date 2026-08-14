@@ -285,7 +285,9 @@ impl ScConnection {
                             error_class,
                             error_code
                         );
-                        self.state = ScConnectionState::Disconnected;
+                        if result_for != ScFunction::EncapsulatedNpdu {
+                            self.state = ScConnectionState::Disconnected;
+                        }
                     }
                     Err(e) => {
                         warn!("Malformed BACnet/SC BVLC-Result: {e}");

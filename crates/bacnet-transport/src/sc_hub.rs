@@ -3,8 +3,8 @@
 //!
 //! The hub performs three duties:
 //! 1. **Connection handshake** — responds to `ConnectRequest` with `ConnectAccept`.
-//! 2. **Message relay** — forwards `EncapsulatedNpdu` to the destination VMAC
-//!    (unicast) or to all connected nodes (broadcast).
+//! 2. **Message relay** — forwards `EncapsulatedNpdu` and routed `Result`
+//!    messages to the destination VMAC.
 //! 3. **Heartbeat** — responds to `HeartbeatRequest` with `HeartbeatAck`.
 
 use std::collections::HashMap;
@@ -35,8 +35,8 @@ use connection::accept_loop;
 use helpers::*;
 
 use relay::{
-    build_hub_relay_message, hub_relay_recipient_vmacs, hub_relay_target, HubRelayReject,
-    HubRelayTarget,
+    build_hub_relay_message, hub_relay_recipient_vmacs, hub_relay_target, relay_result,
+    HubRelayReject, HubRelayTarget, ResultRelayDisposition,
 };
 
 use crate::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, ScMessage, Vmac};
@@ -82,8 +82,8 @@ type Clients = Arc<Mutex<HashMap<Vmac, HubClient>>>;
 /// A minimal BACnet/SC hub.
 ///
 /// Listens on a TLS WebSocket port, accepts SC node connections, performs the
-/// Connect-Request/Connect-Accept handshake, and relays `EncapsulatedNpdu`
-/// messages between connected nodes.
+/// Connect-Request/Connect-Accept handshake, and relays messages between
+/// connected nodes.
 pub struct ScHub {
     hub_vmac: Vmac,
     /// Device UUID (16 bytes, RFC 4122).
@@ -474,6 +474,18 @@ async fn handle_client(
                 let mut w = write.lock().await;
                 let _ = w.send(Message::Binary(buf.to_vec().into())).await;
                 break;
+            }
+
+            ScFunction::Result => {
+                let Some(registered_vmac) = client_vmac else {
+                    debug!("Hub: Result before ConnectRequest from {peer_addr}, dropping");
+                    continue;
+                };
+                if relay_result(&sc_msg, registered_vmac, &clients, &write, &close_requested).await
+                    == ResultRelayDisposition::CloseSource
+                {
+                    break;
+                }
             }
 
             ScFunction::EncapsulatedNpdu => {

@@ -70,7 +70,13 @@ async fn unsupported_must_understand_destination_option_unicast_returns_nak() {
         must_understand: true,
         data: Vec::new(),
     };
-    let msg = encapsulated_npdu_with_options(0x2233, None, vec![option], Vec::new());
+    let trailing_option = ScOption {
+        option_type: 31,
+        must_understand: false,
+        data: Vec::new(),
+    };
+    let msg =
+        encapsulated_npdu_with_options(0x2233, None, vec![option, trailing_option], Vec::new());
     let mut buf = BytesMut::new();
     encode_sc_message(&mut buf, &msg);
     ws_hub.send(&buf).await.unwrap();
@@ -81,12 +87,14 @@ async fn unsupported_must_understand_destination_option_unicast_returns_nak() {
         .unwrap();
     let nak = decode_sc_message(&nak_data).unwrap();
     assert_eq!(nak.message_id, msg.message_id);
+    assert_eq!(nak.originating_vmac, None);
+    assert_eq!(nak.destination_vmac, msg.originating_vmac);
     assert_eq!(nak.data_options.len(), 0);
     assert_eq!(
         decode_sc_bvlc_result(&nak).unwrap(),
         ScBvlcResult::Nak {
             result_for: ScFunction::EncapsulatedNpdu,
-            error_header_marker: 0x42,
+            error_header_marker: 0xC2,
             error_class: ErrorClass::COMMUNICATION.to_raw(),
             error_code: ErrorCode::HEADER_NOT_UNDERSTOOD.to_raw(),
             error_details: String::new(),
@@ -96,6 +104,48 @@ async fn unsupported_must_understand_destination_option_unicast_returns_nak() {
 
     let state = transport.connection().unwrap().lock().await.state;
     assert_eq!(state, ScConnectionState::Connected);
+    transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn unsupported_destination_option_preserves_empty_header_data_marker() {
+    let (mut transport, mut rx, ws_hub) = start_transport().await;
+    let msg = encapsulated_npdu_with_options(
+        0x2244,
+        None,
+        vec![ScOption {
+            option_type: 2,
+            must_understand: true,
+            data: Vec::new(),
+        }],
+        Vec::new(),
+    );
+    let mut buf = BytesMut::new();
+    encode_sc_message(&mut buf, &msg);
+
+    let mut wire = buf.to_vec();
+    assert_eq!(wire[10], 0x42);
+    wire[10] |= 0x20;
+    wire.splice(11..11, [0, 0]);
+    ws_hub.send(&wire).await.unwrap();
+
+    let nak_data = timeout(Duration::from_secs(1), ws_hub.recv())
+        .await
+        .expect("timed out waiting for BVLC-Result NAK")
+        .unwrap();
+    let nak = decode_sc_message(&nak_data).unwrap();
+    assert_eq!(
+        decode_sc_bvlc_result(&nak).unwrap(),
+        ScBvlcResult::Nak {
+            result_for: ScFunction::EncapsulatedNpdu,
+            error_header_marker: 0x62,
+            error_class: ErrorClass::COMMUNICATION.to_raw(),
+            error_code: ErrorCode::HEADER_NOT_UNDERSTOOD.to_raw(),
+            error_details: String::new(),
+        }
+    );
+    assert!(timeout(Duration::from_millis(50), rx.recv()).await.is_err());
+
     transport.stop().await.unwrap();
 }
 
