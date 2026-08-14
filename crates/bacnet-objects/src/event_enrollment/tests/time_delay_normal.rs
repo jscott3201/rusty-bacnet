@@ -144,6 +144,11 @@ fn enrollment_eval_state_round_trip() {
     );
 
     let state = EventEnrollmentEvalState {
+        monitored_reference: Some((
+            ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
+            PropertyIdentifier::PRESENT_VALUE,
+            Some(2),
+        )),
         pending: Some(EventEnrollmentPending {
             state: EventState::HIGH_LIMIT,
             remaining: 4,
@@ -173,6 +178,7 @@ fn enrollment_eval_state_round_trip() {
 fn disabling_detection_clears_eval_state_and_refuses_writes() {
     let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
     ee.set_enrollment_eval_state_internal(EventEnrollmentEvalState {
+        monitored_reference: None,
         pending: Some(EventEnrollmentPending {
             state: EventState::OFFNORMAL,
             remaining: 1,

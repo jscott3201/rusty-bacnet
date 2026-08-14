@@ -151,6 +151,11 @@ fn wpm_rollback_restores_event_enrollment_detection_state() {
         .set_acked_transitions_internal(0x01, false)
         .unwrap();
     let evaluation = EventEnrollmentEvalState {
+        monitored_reference: Some((
+            ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
+            PropertyIdentifier::PRESENT_VALUE,
+            Some(2),
+        )),
         pending: Some(EventEnrollmentPending {
             state: EventState::NORMAL,
             remaining: 4,

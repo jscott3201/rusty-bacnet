@@ -188,6 +188,7 @@ fn unresolvable_reference_clears_private_evaluator_state() {
         .unwrap()
         .set_enrollment_eval_state_internal(
             bacnet_objects::event_enrollment::EventEnrollmentEvalState {
+                monitored_reference: None,
                 pending: Some(bacnet_objects::event_enrollment::EventEnrollmentPending {
                     state: EventState::HIGH_LIMIT,
                     remaining: 1,
@@ -376,6 +377,7 @@ fn malformed_reference_shapes_do_not_become_local() {
 
 fn stale_eval_state() -> bacnet_objects::event_enrollment::EventEnrollmentEvalState {
     bacnet_objects::event_enrollment::EventEnrollmentEvalState {
+        monitored_reference: None,
         pending: Some(bacnet_objects::event_enrollment::EventEnrollmentPending {
             state: EventState::HIGH_LIMIT,
             remaining: 1,

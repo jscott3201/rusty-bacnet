@@ -60,7 +60,10 @@ use bacnet_objects::event::{EventStateChange, EventTransition};
 use bacnet_objects::event_enrollment::{EventEnrollmentEvalState, EventEnrollmentPending};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::BACnetEventParameter;
-use bacnet_types::enums::{EventState, EventType, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    ErrorClass, ErrorCode, EventState, EventType, ObjectType, PropertyIdentifier,
+};
+use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 /// A state transition detected during event enrollment evaluation.
@@ -195,6 +198,31 @@ fn queue_eval_state_reset(
     }
 }
 
+fn queue_pending_cancellation(
+    updates: &mut Vec<(ObjectIdentifier, EnrollmentUpdate)>,
+    oid: ObjectIdentifier,
+    supported: bool,
+    state: &mut EventEnrollmentEvalState,
+) {
+    if state.pending.take().is_some() && supported {
+        updates.push((oid, EnrollmentUpdate::eval_state_only(state.clone())));
+    }
+}
+
+fn invalid_indexed_target_error(error: &Error) -> bool {
+    matches!(
+        error,
+        Error::Protocol { class, code }
+            if *class == ErrorClass::PROPERTY.to_raw() as u32
+                && matches!(
+                    *code,
+                    code if code == ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32
+                        || code == ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32
+                        || code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32
+                )
+    )
+}
+
 /// Evaluate all EventEnrollment objects in the database.
 ///
 /// For each active enrollment, reads the monitored property, evaluates the
@@ -250,6 +278,20 @@ pub fn evaluate_event_enrollments(
         };
         let monitored_oid = monitored.object_identifier;
         let monitored_prop = monitored.property_identifier;
+        let monitored_reference = (monitored_oid, monitored_prop, monitored.array_index);
+        // Pending and baseline state belongs to one exact monitored source.
+        if eval_state
+            .monitored_reference
+            .is_some_and(|current| current != monitored_reference)
+        {
+            eval_state = EventEnrollmentEvalState::default();
+            eval_state.monitored_reference = Some(monitored_reference);
+            if eval_state_supported {
+                updates.push((*oid, EnrollmentUpdate::eval_state_only(eval_state.clone())));
+            }
+        } else {
+            eval_state.monitored_reference = Some(monitored_reference);
+        }
 
         if let Ok(PropertyValue::Boolean(true)) =
             enrollment.read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
@@ -359,9 +401,9 @@ pub fn evaluate_event_enrollments(
             .read_property(monitored_prop, monitored.array_index)
         {
             Ok(v) => v,
-            Err(_) => {
-                if monitored.array_index.is_some() {
-                    // An invalid element is an invalid target, not a request to
+            Err(error) => {
+                if monitored.array_index.is_some() && invalid_indexed_target_error(&error) {
+                    // A definitive indexed-target error is not a request to
                     // retry the whole property.
                     queue_eval_state_reset(&mut updates, *oid, eval_state_supported, &eval_state);
                 }
@@ -378,6 +420,12 @@ pub fn evaluate_event_enrollments(
                 time_delay,
             } => {
                 let Some(val) = extract_real(&monitored_value) else {
+                    queue_pending_cancellation(
+                        &mut updates,
+                        *oid,
+                        eval_state_supported,
+                        &mut eval_state,
+                    );
                     continue;
                 };
                 (
@@ -402,6 +450,12 @@ pub fn evaluate_event_enrollments(
                     continue;
                 };
                 let Some(val) = extract_real(&monitored_value) else {
+                    queue_pending_cancellation(
+                        &mut updates,
+                        *oid,
+                        eval_state_supported,
+                        &mut eval_state,
+                    );
                     continue;
                 };
                 (
@@ -421,6 +475,12 @@ pub fn evaluate_event_enrollments(
                 time_delay,
             } => {
                 let Some(val) = extract_enumerated(&monitored_value) else {
+                    queue_pending_cancellation(
+                        &mut updates,
+                        *oid,
+                        eval_state_supported,
+                        &mut eval_state,
+                    );
                     continue;
                 };
                 (
@@ -439,6 +499,12 @@ pub fn evaluate_event_enrollments(
                 time_delay,
             } => {
                 let Some(bits) = extract_bitstring(&monitored_value) else {
+                    queue_pending_cancellation(
+                        &mut updates,
+                        *oid,
+                        eval_state_supported,
+                        &mut eval_state,
+                    );
                     continue;
                 };
                 (
@@ -456,6 +522,12 @@ pub fn evaluate_event_enrollments(
                     eval_state.cov_baseline.as_ref(),
                     current_state,
                 ) else {
+                    queue_pending_cancellation(
+                        &mut updates,
+                        *oid,
+                        eval_state_supported,
+                        &mut eval_state,
+                    );
                     continue;
                 };
                 (*time_delay, eval)
