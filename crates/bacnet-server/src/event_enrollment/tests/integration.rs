@@ -9,6 +9,8 @@ use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetEventParameter};
 use std::borrow::Cow;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 // ---- Integration: multiple enrollments ----
 
@@ -210,21 +212,24 @@ fn unresolvable_reference_clears_private_evaluator_state() {
     );
 }
 
-struct ReferenceValueObject {
-    inner: EventEnrollmentObject,
+pub(super) struct ReferenceValueObject {
+    pub(super) inner: EventEnrollmentObject,
     reference: Option<PropertyValue>,
     event_parameters_readable: bool,
-    state_writable: bool,
-    source_supported: bool,
-    source_writable: bool,
+    pub(super) state_writable: Arc<AtomicBool>,
+    pub(super) source_supported: bool,
+    pub(super) source_writable: bool,
 }
 
 impl ReferenceValueObject {
-    fn new(reference: Option<PropertyValue>) -> Self {
+    pub(super) fn new(reference: Option<PropertyValue>) -> Self {
         Self::new_for_event_type(reference, EventType::OUT_OF_RANGE)
     }
 
-    fn new_for_event_type(reference: Option<PropertyValue>, event_type: EventType) -> Self {
+    pub(super) fn new_for_event_type(
+        reference: Option<PropertyValue>,
+        event_type: EventType,
+    ) -> Self {
         let mut inner =
             EventEnrollmentObject::new(999, "reference-value", event_type.to_raw()).unwrap();
         inner.set_event_parameters(BACnetEventParameter::OutOfRange {
@@ -238,7 +243,7 @@ impl ReferenceValueObject {
             inner,
             reference,
             event_parameters_readable: true,
-            state_writable: true,
+            state_writable: Arc::new(AtomicBool::new(true)),
             source_supported: true,
             source_writable: true,
         }
@@ -304,7 +309,7 @@ impl BACnetObject for ReferenceValueObject {
         &mut self,
         state: bacnet_objects::event_enrollment::EventEnrollmentEvalState,
     ) -> Result<(), bacnet_types::error::Error> {
-        if !self.state_writable {
+        if !self.state_writable.load(Ordering::SeqCst) {
             return Err(bacnet_types::error::Error::Encoding(
                 "evaluation state write failed".into(),
             ));
@@ -348,71 +353,12 @@ impl BACnetObject for ReferenceValueObject {
     }
 }
 
-fn indexed_reference_value(target: ObjectIdentifier, index: u32) -> PropertyValue {
+pub(super) fn indexed_reference_value(target: ObjectIdentifier, index: u32) -> PropertyValue {
     PropertyValue::List(vec![
         PropertyValue::ObjectIdentifier(target),
         PropertyValue::Unsigned(PropertyIdentifier::PRIORITY_ARRAY.to_raw() as u64),
         PropertyValue::Unsigned(index as u64),
     ])
-}
-
-#[test]
-fn stateful_custom_enrollment_without_source_channel_runs_statelessly() {
-    let mut db = ObjectDatabase::new();
-    let mut target = AnalogValueObject::new(98, "AV-custom-source", 62).unwrap();
-    target
-        .write_property(
-            PropertyIdentifier::PRESENT_VALUE,
-            None,
-            PropertyValue::Real(10.0),
-            Some(1),
-        )
-        .unwrap();
-    target
-        .write_property(
-            PropertyIdentifier::PRESENT_VALUE,
-            None,
-            PropertyValue::Real(90.0),
-            Some(2),
-        )
-        .unwrap();
-    let target_oid = target.object_identifier();
-    db.add(Box::new(target)).unwrap();
-
-    let mut enrollment = ReferenceValueObject::new_for_event_type(
-        Some(indexed_reference_value(target_oid, 1)),
-        EventType::CHANGE_OF_VALUE,
-    );
-    enrollment
-        .inner
-        .set_event_parameters(BACnetEventParameter::ChangeOfValue {
-            time_delay: 0,
-            criteria: bacnet_types::constructed::ChangeOfValueCriteria::ReferencedPropertyIncrement(
-                5.0,
-            ),
-        });
-    enrollment.source_supported = false;
-    let enrollment_oid = enrollment.object_identifier();
-    db.add(Box::new(enrollment)).unwrap();
-
-    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
-    assert_eq!(
-        db.get(&enrollment_oid)
-            .unwrap()
-            .enrollment_eval_state_internal(),
-        Some(bacnet_objects::event_enrollment::EventEnrollmentEvalState::default())
-    );
-
-    db.get_mut(&enrollment_oid)
-        .unwrap()
-        .write_property(
-            PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
-            None,
-            indexed_reference_value(target_oid, 2),
-            None,
-        )
-        .unwrap();
-    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
 }
 
 #[test]
@@ -485,7 +431,7 @@ fn source_write_failure_still_allows_an_immediate_stateless_transition() {
 }
 
 #[test]
-fn failed_state_reset_does_not_advance_source_ownership() {
+fn failed_state_reset_clears_source_ownership() {
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(101, "AV-state-reset", 62).unwrap();
     target
@@ -534,7 +480,7 @@ fn failed_state_reset_does_not_advance_source_ownership() {
         .inner
         .set_enrollment_eval_source_internal(Some(old_source))
         .unwrap();
-    enrollment.state_writable = false;
+    enrollment.state_writable.store(false, Ordering::SeqCst);
     let enrollment_oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
 
@@ -543,30 +489,9 @@ fn failed_state_reset_does_not_advance_source_ownership() {
         db.get(&enrollment_oid)
             .unwrap()
             .enrollment_eval_source_internal(),
-        Some(Some(old_source))
+        Some(None)
     );
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
-}
-
-#[test]
-fn source_less_custom_enrollment_retains_unindexed_delay_behavior() {
-    let mut db = ObjectDatabase::new();
-    let mut target = AnalogInputObject::new(102, "AI-unindexed-source", 62).unwrap();
-    target.set_present_value(90.0);
-    let target_oid = target.object_identifier();
-    db.add(Box::new(target)).unwrap();
-
-    let reference = PropertyValue::List(vec![
-        PropertyValue::ObjectIdentifier(target_oid),
-        PropertyValue::Unsigned(PropertyIdentifier::PRESENT_VALUE.to_raw() as u64),
-    ]);
-    let mut enrollment = ReferenceValueObject::new(Some(reference));
-    enrollment.source_supported = false;
-    db.add(Box::new(enrollment)).unwrap();
-
-    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
-    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
-    assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
 }
 
 #[test]

@@ -454,11 +454,18 @@ pub fn evaluate_event_enrollments(
                 continue;
             }
         };
-        // Indexed evaluation state without its owning source cannot survive
-        // an index change safely. Keep immediate evaluation available for
-        // older custom objects, but do not retain indexed countdowns or
-        // baselines unless they implement the paired source channel.
-        if eval_state_supported && eval_source.is_none() && monitored.array_index.is_some() {
+        let event_type = EventType::from_raw(event_type_raw);
+        // Indexed state and algorithm baselines cannot survive a source
+        // change without owner storage. Pending-only threshold algorithms are
+        // still safe because their fingerprint includes the full reference.
+        let stateless_source_state = eval_state_supported
+            && eval_source.is_none()
+            && (monitored.array_index.is_some()
+                || matches!(
+                    event_type,
+                    EventType::CHANGE_OF_VALUE | EventType::CHANGE_OF_STATE
+                ));
+        if stateless_source_state {
             queue_eval_state_reset(&mut updates, *oid, true, &eval_state);
             eval_state = EventEnrollmentEvalState::default();
             eval_state_supported = false;
@@ -470,7 +477,6 @@ pub fn evaluate_event_enrollments(
             ));
         }
 
-        let event_type = EventType::from_raw(event_type_raw);
         let (time_delay, arm) = match &params {
             BACnetEventParameter::OutOfRange {
                 high_limit,
@@ -644,6 +650,11 @@ pub fn evaluate_event_enrollments(
             }
             continue;
         };
+        if stateless_source_state && ind.target == current_state {
+            // CHANGE_OF_STATE needs its stored causing value to distinguish a
+            // real same-state re-indication from the same alarm value.
+            continue;
+        }
 
         // Direction-selected delay: pTimeDelay toward OFFNORMAL states,
         // pTimeDelayNormal (already the fallback-composed effective value)
@@ -741,9 +752,10 @@ pub fn evaluate_event_enrollments(
     let mut source_failures = HashSet::new();
     let mut state_failures = HashSet::new();
     for (oid, update) in updates {
+        let source_failed = source_failures.contains(&oid);
         if state_failures.contains(&oid)
-            || (source_failures.contains(&oid)
-                && (update.eval_source.is_some() || update.eval_state.is_some()))
+            || (source_failed && update.eval_source.is_some())
+            || (source_failed && update.fired.is_none() && update.eval_state.is_some())
         {
             continue;
         }
@@ -774,16 +786,22 @@ pub fn evaluate_event_enrollments(
             // returned state is stored — 13.2.2.1.4 forbids collapsing
             // HIGH_LIMIT/LOW_LIMIT to OFFNORMAL — and the actions run for
             // same-state transitions too (`from == to`).
+            if source_failed && fired.from == fired.to {
+                continue;
+            }
             if obj.set_event_state_internal(fired.to).is_err() {
                 continue;
             }
-            if let Some(state) = update.eval_state {
-                if obj.set_enrollment_eval_state_internal(state).is_err() {
-                    // Do not expose a transition whose baseline or countdown
-                    // update could not be stored.
-                    let _ = obj.set_event_state_internal(fired.from);
-                    state_failures.insert(oid);
-                    continue;
+            if !source_failed {
+                if let Some(state) = update.eval_state {
+                    if obj.set_enrollment_eval_state_internal(state).is_err() {
+                        // Do not expose a transition whose baseline or
+                        // countdown update could not be stored.
+                        let _ = obj.set_event_state_internal(fired.from);
+                        let _ = obj.set_enrollment_eval_source_internal(None);
+                        state_failures.insert(oid);
+                        continue;
+                    }
                 }
             }
             // 13.2.2.1.4's fourth action, alarm-acknowledgment half (13.2.3):
@@ -805,6 +823,7 @@ pub fn evaluate_event_enrollments(
             if obj.set_enrollment_eval_state_internal(state).is_err() {
                 // A later source write must not claim state that failed to
                 // reset.
+                let _ = obj.set_enrollment_eval_source_internal(None);
                 state_failures.insert(oid);
             }
         }
