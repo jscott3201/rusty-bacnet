@@ -189,11 +189,64 @@ fn source_write_failure_allows_one_immediate_change_of_state_transition() {
             time_delay: 0,
             list_of_values: vec![BACnetPropertyStates::UnsignedValue(1)],
         });
-    enrollment.source_writable = false;
+    enrollment.source_writable.store(false, Ordering::SeqCst);
     db.add(Box::new(enrollment)).unwrap();
 
     assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+}
+
+#[test]
+fn invalidation_survives_failed_state_and_source_writes() {
+    let mut db = ObjectDatabase::new();
+    let mut target = AnalogValueObject::new(107, "AV-double-failure", 62).unwrap();
+    target
+        .write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(90.0),
+            Some(1),
+        )
+        .unwrap();
+    let target_oid = target.object_identifier();
+    db.add(Box::new(target)).unwrap();
+
+    let enrollment = ReferenceValueObject::new(Some(indexed_reference_value(target_oid, 1)));
+    let state_writable = Arc::clone(&enrollment.state_writable);
+    let source_writable = Arc::clone(&enrollment.source_writable);
+    let enrollment_oid = enrollment.object_identifier();
+    db.add(Box::new(enrollment)).unwrap();
+
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    state_writable.store(false, Ordering::SeqCst);
+    source_writable.store(false, Ordering::SeqCst);
+    db.get_mut(&enrollment_oid)
+        .unwrap()
+        .write_property(
+            PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
+            None,
+            indexed_reference_value(target_oid, 17),
+            None,
+        )
+        .unwrap();
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert!(db.enrollment_eval_state_invalidated(&enrollment_oid));
+
+    db.get_mut(&enrollment_oid)
+        .unwrap()
+        .write_property(
+            PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
+            None,
+            indexed_reference_value(target_oid, 1),
+            None,
+        )
+        .unwrap();
+    state_writable.store(true, Ordering::SeqCst);
+    source_writable.store(true, Ordering::SeqCst);
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert!(!db.enrollment_eval_state_invalidated(&enrollment_oid));
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
 }
 
 #[test]

@@ -180,6 +180,8 @@ struct EnrollmentUpdate {
     eval_state: Option<EventEnrollmentEvalState>,
     /// Monitored-source ownership update for objects that support the channel.
     eval_source: Option<Option<EventEnrollmentMonitoredSource>>,
+    /// Clear the database-level reset requirement if this state write lands.
+    clears_invalidation: bool,
     /// A transition that fired this pass, with everything the transition
     /// actions need.
     fired: Option<FiredTransition>,
@@ -200,6 +202,7 @@ impl EnrollmentUpdate {
         Self {
             eval_state: Some(eval_state),
             eval_source: None,
+            clears_invalidation: false,
             fired: None,
         }
     }
@@ -208,6 +211,16 @@ impl EnrollmentUpdate {
         Self {
             eval_state: None,
             eval_source: Some(source),
+            clears_invalidation: false,
+            fired: None,
+        }
+    }
+
+    fn eval_state_reset() -> Self {
+        Self {
+            eval_state: Some(EventEnrollmentEvalState::default()),
+            eval_source: None,
+            clears_invalidation: true,
             fired: None,
         }
     }
@@ -220,10 +233,7 @@ fn queue_eval_state_reset(
     state: &EventEnrollmentEvalState,
 ) {
     if supported && *state != EventEnrollmentEvalState::default() {
-        updates.push((
-            oid,
-            EnrollmentUpdate::eval_state_only(EventEnrollmentEvalState::default()),
-        ));
+        updates.push((oid, EnrollmentUpdate::eval_state_reset()));
     }
 }
 
@@ -304,6 +314,7 @@ pub fn evaluate_event_enrollments(
             .enrollment_eval_state_internal()
             .unwrap_or_default();
         let eval_source = enrollment.enrollment_eval_source_internal();
+        let force_state_reset = db.enrollment_eval_state_invalidated(oid);
         let reference = match read_object_property_ref(enrollment) {
             Ok(reference) => reference,
             Err(()) => continue,
@@ -327,11 +338,11 @@ pub fn evaluate_event_enrollments(
             Some(None) => eval_state != EventEnrollmentEvalState::default(),
             None => false,
         };
-        if source_changed {
+        if source_changed || force_state_reset {
             let had_private_state = eval_state != EventEnrollmentEvalState::default();
             eval_state = EventEnrollmentEvalState::default();
-            if eval_state_supported && had_private_state {
-                updates.push((*oid, EnrollmentUpdate::eval_state_only(eval_state.clone())));
+            if eval_state_supported && (had_private_state || force_state_reset) {
+                updates.push((*oid, EnrollmentUpdate::eval_state_reset()));
             }
         }
 
@@ -735,6 +746,7 @@ pub fn evaluate_event_enrollments(
             EnrollmentUpdate {
                 eval_state: (eval_state_dirty && eval_state_supported).then_some(eval_state),
                 eval_source: None,
+                clears_invalidation: false,
                 fired: Some(FiredTransition {
                     monitored_oid,
                     event_type_raw,
@@ -751,6 +763,7 @@ pub fn evaluate_event_enrollments(
     let mut transitions = Vec::new();
     let mut source_failures = HashSet::new();
     let mut state_failures = HashSet::new();
+    let mut invalidation_changes = Vec::new();
     for (oid, update) in updates {
         let source_failed = source_failures.contains(&oid);
         if state_failures.contains(&oid)
@@ -772,6 +785,7 @@ pub fn evaluate_event_enrollments(
                     .is_err()
                 {
                     state_failures.insert(oid);
+                    invalidation_changes.push((oid, true));
                 }
                 source_failures.insert(oid);
                 continue;
@@ -800,6 +814,7 @@ pub fn evaluate_event_enrollments(
                         let _ = obj.set_event_state_internal(fired.from);
                         let _ = obj.set_enrollment_eval_source_internal(None);
                         state_failures.insert(oid);
+                        invalidation_changes.push((oid, true));
                         continue;
                     }
                 }
@@ -825,8 +840,15 @@ pub fn evaluate_event_enrollments(
                 // reset.
                 let _ = obj.set_enrollment_eval_source_internal(None);
                 state_failures.insert(oid);
+                invalidation_changes.push((oid, true));
+            } else if update.clears_invalidation {
+                invalidation_changes.push((oid, false));
             }
         }
+    }
+
+    for (oid, invalidated) in invalidation_changes {
+        db.set_enrollment_eval_state_invalidated(oid, invalidated);
     }
 
     transitions

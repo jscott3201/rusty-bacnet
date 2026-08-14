@@ -218,7 +218,7 @@ pub(super) struct ReferenceValueObject {
     event_parameters_readable: bool,
     pub(super) state_writable: Arc<AtomicBool>,
     pub(super) source_supported: bool,
-    pub(super) source_writable: bool,
+    pub(super) source_writable: Arc<AtomicBool>,
 }
 
 impl ReferenceValueObject {
@@ -245,7 +245,7 @@ impl ReferenceValueObject {
             event_parameters_readable: true,
             state_writable: Arc::new(AtomicBool::new(true)),
             source_supported: true,
-            source_writable: true,
+            source_writable: Arc::new(AtomicBool::new(true)),
         }
     }
 }
@@ -328,7 +328,7 @@ impl BACnetObject for ReferenceValueObject {
         &mut self,
         source: Option<bacnet_objects::event_enrollment::EventEnrollmentMonitoredSource>,
     ) -> Result<(), bacnet_types::error::Error> {
-        if !self.source_writable {
+        if !self.source_writable.load(Ordering::SeqCst) {
             return Err(bacnet_types::error::Error::Encoding(
                 "source write failed".into(),
             ));
@@ -376,8 +376,8 @@ fn failed_source_write_does_not_persist_dependent_state() {
     let target_oid = target.object_identifier();
     db.add(Box::new(target)).unwrap();
 
-    let mut enrollment = ReferenceValueObject::new(Some(indexed_reference_value(target_oid, 1)));
-    enrollment.source_writable = false;
+    let enrollment = ReferenceValueObject::new(Some(indexed_reference_value(target_oid, 1)));
+    enrollment.source_writable.store(false, Ordering::SeqCst);
     let enrollment_oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
 
@@ -416,7 +416,7 @@ fn source_write_failure_still_allows_an_immediate_stateless_transition() {
             high_limit: 80.0,
             deadband: 2.0,
         });
-    enrollment.source_writable = false;
+    enrollment.source_writable.store(false, Ordering::SeqCst);
     let enrollment_oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
 

@@ -1,6 +1,6 @@
 //! ObjectDatabase — stores and retrieves BACnet objects by identifier.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
 use bacnet_types::error::Error;
@@ -18,6 +18,9 @@ pub struct ObjectDatabase {
     name_index: HashMap<String, ObjectIdentifier>,
     /// Type index: object type → set of ObjectIdentifiers for fast enumeration.
     type_index: HashMap<ObjectType, Vec<ObjectIdentifier>>,
+    /// Event Enrollment objects whose private evaluator state must be reset
+    /// before it can be used again.
+    invalid_enrollment_eval_state: HashSet<ObjectIdentifier>,
 }
 
 impl Default for ObjectDatabase {
@@ -33,6 +36,7 @@ impl ObjectDatabase {
             objects: HashMap::new(),
             name_index: HashMap::new(),
             type_index: HashMap::new(),
+            invalid_enrollment_eval_state: HashSet::new(),
         }
     }
 
@@ -62,6 +66,7 @@ impl ObjectDatabase {
 
         self.name_index.insert(name, oid);
         let is_new = !self.objects.contains_key(&oid);
+        self.invalid_enrollment_eval_state.remove(&oid);
         self.objects.insert(oid, object);
         if is_new {
             self.type_index
@@ -120,9 +125,29 @@ impl ObjectDatabase {
         self.objects.get_mut(oid)
     }
 
+    /// Whether an Event Enrollment object's private evaluator state requires a
+    /// successful reset before reuse.
+    pub fn enrollment_eval_state_invalidated(&self, oid: &ObjectIdentifier) -> bool {
+        self.invalid_enrollment_eval_state.contains(oid)
+    }
+
+    /// Mark or clear the reset requirement for Event Enrollment private state.
+    pub fn set_enrollment_eval_state_invalidated(
+        &mut self,
+        oid: ObjectIdentifier,
+        invalidated: bool,
+    ) {
+        if invalidated {
+            self.invalid_enrollment_eval_state.insert(oid);
+        } else {
+            self.invalid_enrollment_eval_state.remove(&oid);
+        }
+    }
+
     /// Remove an object by identifier.
     pub fn remove(&mut self, oid: &ObjectIdentifier) -> Option<Box<dyn BACnetObject>> {
         if let Some(obj) = self.objects.remove(oid) {
+            self.invalid_enrollment_eval_state.remove(oid);
             self.name_index.remove(obj.object_name());
             if let Some(type_set) = self.type_index.get_mut(&oid.object_type()) {
                 type_set.retain(|o| o != oid);
