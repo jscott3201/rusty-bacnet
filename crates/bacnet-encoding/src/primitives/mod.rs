@@ -521,7 +521,11 @@ pub fn decode_application_value(
                 data: bits,
             }
         }
-        app_tag::ENUMERATED => PropertyValue::Enumerated(decode_unsigned(content)? as u32),
+        app_tag::ENUMERATED => {
+            let value = u32::try_from(decode_unsigned(content)?)
+                .map_err(|_| Error::decoding(content_start, "ENUMERATED exceeds u32"))?;
+            PropertyValue::Enumerated(value)
+        }
         app_tag::DATE => PropertyValue::Date(Date::decode(content)?),
         app_tag::TIME => PropertyValue::Time(Time::decode(content)?),
         app_tag::OBJECT_IDENTIFIER => {

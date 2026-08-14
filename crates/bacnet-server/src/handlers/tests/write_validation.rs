@@ -249,6 +249,45 @@ fn assert_notify_type_validated(
     }
 }
 
+#[test]
+fn enumerated_overflow_is_invalid_data_encoding_without_mutation() {
+    let mut db = ObjectDatabase::new();
+    let ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let ai_oid = ai.object_identifier();
+    db.add(Box::new(ai)).unwrap();
+    let baseline = read_wire(&db, ai_oid, PropertyIdentifier::NOTIFY_TYPE);
+
+    let mut property_value = BytesMut::new();
+    bacnet_encoding::tags::encode_tag(
+        &mut property_value,
+        bacnet_encoding::tags::app_tag::ENUMERATED,
+        bacnet_encoding::tags::TagClass::Application,
+        8,
+    );
+    property_value.extend_from_slice(&[0, 0, 0, 1, 0, 0, 0, 2]);
+    let request = WritePropertyRequest {
+        object_identifier: ai_oid,
+        property_identifier: PropertyIdentifier::NOTIFY_TYPE,
+        property_array_index: None,
+        property_value: property_value.to_vec(),
+        priority: None,
+    };
+    let mut request_bytes = BytesMut::new();
+    request.encode(&mut request_bytes);
+
+    match handle_write_property(&mut db, &request_bytes).unwrap_err() {
+        Error::Protocol { class, code } => {
+            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+            assert_eq!(code, ErrorCode::INVALID_DATA_ENCODING.to_raw() as u32);
+        }
+        other => panic!("expected PROPERTY/INVALID_DATA_ENCODING, got {other:?}"),
+    }
+    assert_eq!(
+        read_wire(&db, ai_oid, PropertyIdentifier::NOTIFY_TYPE),
+        baseline
+    );
+}
+
 /// A fixed N-bit production has exactly one canonical encoding: one content
 /// octet whose high N bits are content (8-N unused). Any other shape is
 /// PROPERTY / INVALID_DATA_ENCODING per Clause 15.9.1.3.

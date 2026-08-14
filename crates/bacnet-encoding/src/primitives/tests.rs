@@ -261,6 +261,49 @@ fn app_enumerated_round_trip() {
     assert_eq!(end, bytes.len());
 }
 
+#[test]
+fn app_enumerated_rejects_values_exceeding_u32() {
+    for content in [
+        &[0x01, 0x00, 0x00, 0x00, 0x00][..],
+        &[0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02][..],
+    ] {
+        let mut bytes = BytesMut::new();
+        tags::encode_tag(
+            &mut bytes,
+            app_tag::ENUMERATED,
+            TagClass::Application,
+            u32::try_from(content.len()).unwrap(),
+        );
+        bytes.extend_from_slice(content);
+
+        assert!(decode_application_value(&bytes, 0).is_err());
+    }
+}
+
+#[test]
+fn app_enumerated_accepts_representable_values_with_leading_zeroes() {
+    for content in [
+        &[0x00, 0xFF, 0xFF, 0xFF, 0xFF][..],
+        &[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08][..],
+    ] {
+        let mut bytes = BytesMut::new();
+        tags::encode_tag(
+            &mut bytes,
+            app_tag::ENUMERATED,
+            TagClass::Application,
+            u32::try_from(content.len()).unwrap(),
+        );
+        bytes.extend_from_slice(content);
+
+        let (value, end) = decode_application_value(&bytes, 0).unwrap();
+        assert_eq!(
+            value,
+            PropertyValue::Enumerated(u32::try_from(decode_unsigned(content).unwrap()).unwrap())
+        );
+        assert_eq!(end, bytes.len());
+    }
+}
+
 /// Standard 135-2020 Clause 21 pins `record-access (0)` / `stream-access (1)`
 /// for `BACnetFileAccessMethod`; on the wire the enumerated application tag
 /// is 0x91 with the value octet after it (Clause 20.2.4). Guard against the
