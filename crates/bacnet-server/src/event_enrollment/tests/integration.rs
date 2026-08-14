@@ -210,45 +210,97 @@ fn unresolvable_reference_clears_private_evaluator_state() {
     );
 }
 
-struct ReferenceValueObject(PropertyValue);
+struct ReferenceValueObject {
+    inner: EventEnrollmentObject,
+    reference: Option<PropertyValue>,
+}
+
+impl ReferenceValueObject {
+    fn new(reference: Option<PropertyValue>) -> Self {
+        let mut inner =
+            EventEnrollmentObject::new(999, "reference-value", EventType::OUT_OF_RANGE.to_raw())
+                .unwrap();
+        inner.set_event_parameters(BACnetEventParameter::OutOfRange {
+            time_delay: 2,
+            low_limit: 20.0,
+            high_limit: 80.0,
+            deadband: 2.0,
+        });
+        inner.set_event_enable(0x07);
+        Self { inner, reference }
+    }
+}
 
 impl BACnetObject for ReferenceValueObject {
     fn object_identifier(&self) -> ObjectIdentifier {
-        ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, 999).unwrap()
+        self.inner.object_identifier()
     }
 
     fn object_name(&self) -> &str {
-        "reference-value"
+        self.inner.object_name()
     }
 
     fn read_property(
         &self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
     ) -> Result<PropertyValue, bacnet_types::error::Error> {
         if property == PropertyIdentifier::OBJECT_PROPERTY_REFERENCE {
-            Ok(self.0.clone())
+            self.reference
+                .clone()
+                .ok_or_else(|| bacnet_types::error::Error::Encoding("reference read failed".into()))
         } else {
-            Err(bacnet_types::error::Error::Encoding(
-                "unsupported test property".into(),
-            ))
+            self.inner.read_property(property, array_index)
         }
     }
 
     fn write_property(
         &mut self,
-        _property: PropertyIdentifier,
-        _array_index: Option<u32>,
-        _value: PropertyValue,
-        _priority: Option<u8>,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+        value: PropertyValue,
+        priority: Option<u8>,
     ) -> Result<(), bacnet_types::error::Error> {
-        Err(bacnet_types::error::Error::Encoding(
-            "test object is read-only".into(),
-        ))
+        if property == PropertyIdentifier::OBJECT_PROPERTY_REFERENCE {
+            self.reference = Some(value);
+            Ok(())
+        } else {
+            self.inner
+                .write_property(property, array_index, value, priority)
+        }
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[])
+        self.inner.property_list()
+    }
+
+    fn enrollment_eval_state_internal(
+        &self,
+    ) -> Option<bacnet_objects::event_enrollment::EventEnrollmentEvalState> {
+        self.inner.enrollment_eval_state_internal()
+    }
+
+    fn set_enrollment_eval_state_internal(
+        &mut self,
+        state: bacnet_objects::event_enrollment::EventEnrollmentEvalState,
+    ) -> Result<(), bacnet_types::error::Error> {
+        self.inner.set_enrollment_eval_state_internal(state)
+    }
+
+    fn set_event_state_internal(
+        &mut self,
+        state: EventState,
+    ) -> Result<(), bacnet_types::error::Error> {
+        self.inner.set_event_state_internal(state)
+    }
+
+    fn set_acked_transitions_internal(
+        &mut self,
+        transition_bit: u8,
+        acknowledged: bool,
+    ) -> Result<(), bacnet_types::error::Error> {
+        self.inner
+            .set_acked_transitions_internal(transition_bit, acknowledged)
     }
 }
 
@@ -279,16 +331,109 @@ fn malformed_reference_shapes_do_not_become_local() {
     ];
 
     for items in malformed {
-        let enrollment = ReferenceValueObject(PropertyValue::List(items));
-        assert!(super::super::read_object_property_ref(&enrollment).is_none());
+        let enrollment = ReferenceValueObject::new(Some(PropertyValue::List(items)));
+        assert!(matches!(
+            super::super::read_object_property_ref(&enrollment),
+            Ok(None)
+        ));
     }
 
-    let legacy = ReferenceValueObject(PropertyValue::List(vec![
+    let legacy = ReferenceValueObject::new(Some(PropertyValue::List(vec![
         PropertyValue::ObjectIdentifier(target),
         PropertyValue::Unsigned(property.to_raw() as u64),
-    ]));
+    ])));
     assert_eq!(
         super::super::read_object_property_ref(&legacy),
-        Some((target, property, None))
+        Ok(Some((target, property, None)))
+    );
+}
+
+#[test]
+fn malformed_retarget_does_not_resume_stale_countdown() {
+    let mut db = ObjectDatabase::new();
+    let mut ai = AnalogInputObject::new(3, "AI-3", 62).unwrap();
+    ai.set_present_value(90.0);
+    let target = ai.object_identifier();
+    db.add(Box::new(ai)).unwrap();
+
+    let property = PropertyIdentifier::PRESENT_VALUE;
+    let valid = PropertyValue::List(vec![
+        PropertyValue::ObjectIdentifier(target),
+        PropertyValue::Unsigned(property.to_raw() as u64),
+    ]);
+    let enrollment = ReferenceValueObject::new(Some(valid.clone()));
+    let enrollment_oid = enrollment.object_identifier();
+    db.add(Box::new(enrollment)).unwrap();
+
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+
+    let malformed = PropertyValue::List(vec![
+        PropertyValue::ObjectIdentifier(target),
+        PropertyValue::Unsigned(property.to_raw() as u64),
+        PropertyValue::ObjectIdentifier(ObjectIdentifier::new(ObjectType::DEVICE, 200).unwrap()),
+    ]);
+    db.get_mut(&enrollment_oid)
+        .unwrap()
+        .write_property(
+            PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
+            None,
+            malformed,
+            None,
+        )
+        .unwrap();
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert_eq!(
+        db.get(&enrollment_oid)
+            .unwrap()
+            .enrollment_eval_state_internal()
+            .unwrap(),
+        bacnet_objects::event_enrollment::EventEnrollmentEvalState::default()
+    );
+
+    db.get_mut(&enrollment_oid)
+        .unwrap()
+        .write_property(
+            PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
+            None,
+            valid,
+            None,
+        )
+        .unwrap();
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert_eq!(
+        evaluate_event_enrollments(&mut db, 1)[0].change.to,
+        EventState::HIGH_LIMIT
+    );
+}
+
+#[test]
+fn unreadable_reference_retains_private_evaluator_state() {
+    let mut enrollment = ReferenceValueObject::new(None);
+    let state = bacnet_objects::event_enrollment::EventEnrollmentEvalState {
+        pending: Some(bacnet_objects::event_enrollment::EventEnrollmentPending {
+            state: EventState::HIGH_LIMIT,
+            remaining: 1,
+            condition: 0,
+            params_fingerprint: 1,
+        }),
+        cov_baseline: Some(PropertyValue::Real(90.0)),
+        last_offnormal_value: Some(1),
+    };
+    enrollment
+        .set_enrollment_eval_state_internal(state.clone())
+        .unwrap();
+    let enrollment_oid = enrollment.object_identifier();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(enrollment)).unwrap();
+
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert_eq!(
+        db.get(&enrollment_oid)
+            .unwrap()
+            .enrollment_eval_state_internal()
+            .unwrap(),
+        state
     );
 }

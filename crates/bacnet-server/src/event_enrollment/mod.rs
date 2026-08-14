@@ -104,33 +104,37 @@ fn read_setpoint(
 /// Returns the monitored object, property, and optional device qualifier.
 fn read_object_property_ref(
     enrollment: &dyn BACnetObject,
-) -> Option<(
-    ObjectIdentifier,
-    PropertyIdentifier,
-    Option<ObjectIdentifier>,
-)> {
+) -> Result<
+    Option<(
+        ObjectIdentifier,
+        PropertyIdentifier,
+        Option<ObjectIdentifier>,
+    )>,
+    (),
+> {
     match enrollment.read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None) {
         Ok(PropertyValue::List(ref items)) if (2..=4).contains(&items.len()) => {
             let obj_id = match &items[0] {
                 PropertyValue::ObjectIdentifier(oid) => *oid,
-                _ => return None,
+                _ => return Ok(None),
             };
             let prop_id = match &items[1] {
                 PropertyValue::Unsigned(v) => PropertyIdentifier::from_raw(*v as u32),
-                _ => return None,
+                _ => return Ok(None),
             };
             match items.get(2) {
                 None | Some(PropertyValue::Null | PropertyValue::Unsigned(_)) => {}
-                Some(_) => return None,
+                Some(_) => return Ok(None),
             }
             let device_id = match items.get(3) {
                 None | Some(PropertyValue::Null) => None,
                 Some(PropertyValue::ObjectIdentifier(oid)) => Some(*oid),
-                Some(_) => return None,
+                Some(_) => return Ok(None),
             };
-            Some((obj_id, prop_id, device_id))
+            Ok(Some((obj_id, prop_id, device_id)))
         }
-        _ => None,
+        Ok(_) => Ok(None),
+        Err(_) => Err(()),
     }
 }
 
@@ -365,17 +369,16 @@ pub fn evaluate_event_enrollments(
             .unwrap_or_default();
         let mut eval_state_dirty = false;
 
-        // The reference is folded into the fingerprint, so it is read before
-        // the check. A malformed or unreadable value retains evaluation state
-        // as a transient failure. A valid but unresolvable device qualifier is
-        // configured state, so it clears state rather than resuming stale work
-        // if the enrollment is later retargeted locally.
-        let Some((monitored_oid, monitored_prop, reference_device_oid)) =
-            read_object_property_ref(enrollment)
-        else {
-            continue;
+        // A property read failure is transient and retains evaluation state.
+        // Any successfully read invalid or unresolvable configuration clears
+        // state so a later local retarget cannot resume stale work.
+        let reference = match read_object_property_ref(enrollment) {
+            Ok(reference) => reference,
+            Err(()) => continue,
         };
-        if reference_device_oid.is_some_and(|device_oid| Some(device_oid) != local_device_oid) {
+        let Some((monitored_oid, monitored_prop, _)) = reference.filter(|(_, _, device_oid)| {
+            device_oid.is_none_or(|oid| Some(oid) == local_device_oid)
+        }) else {
             if eval_state_supported && eval_state != EventEnrollmentEvalState::default() {
                 updates.push((
                     *oid,
@@ -383,7 +386,7 @@ pub fn evaluate_event_enrollments(
                 ));
             }
             continue;
-        }
+        };
 
         // A parameter (or reference) change mid-pending cancels the countdown
         // and re-gates from the current parameters; no partial countdown is
