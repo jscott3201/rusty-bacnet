@@ -213,6 +213,7 @@ fn unresolvable_reference_clears_private_evaluator_state() {
 struct ReferenceValueObject {
     inner: EventEnrollmentObject,
     reference: Option<PropertyValue>,
+    event_parameters_readable: bool,
 }
 
 impl ReferenceValueObject {
@@ -227,7 +228,11 @@ impl ReferenceValueObject {
             deadband: 2.0,
         });
         inner.set_event_enable(0x07);
-        Self { inner, reference }
+        Self {
+            inner,
+            reference,
+            event_parameters_readable: true,
+        }
     }
 }
 
@@ -249,6 +254,12 @@ impl BACnetObject for ReferenceValueObject {
             self.reference
                 .clone()
                 .ok_or_else(|| bacnet_types::error::Error::Encoding("reference read failed".into()))
+        } else if property == PropertyIdentifier::EVENT_PARAMETERS
+            && !self.event_parameters_readable
+        {
+            Err(bacnet_types::error::Error::Encoding(
+                "event parameters read failed".into(),
+            ))
         } else {
             self.inner.read_property(property, array_index)
         }
@@ -328,6 +339,10 @@ fn malformed_reference_shapes_do_not_become_local() {
             PropertyValue::Boolean(false),
             PropertyValue::Null,
         ],
+        vec![
+            PropertyValue::ObjectIdentifier(target),
+            PropertyValue::Unsigned(u32::MAX as u64 + 1 + property.to_raw() as u64),
+        ],
     ];
 
     for items in malformed {
@@ -346,6 +361,19 @@ fn malformed_reference_shapes_do_not_become_local() {
         super::super::read_object_property_ref(&legacy),
         Ok(Some((target, property, None)))
     );
+}
+
+fn stale_eval_state() -> bacnet_objects::event_enrollment::EventEnrollmentEvalState {
+    bacnet_objects::event_enrollment::EventEnrollmentEvalState {
+        pending: Some(bacnet_objects::event_enrollment::EventEnrollmentPending {
+            state: EventState::HIGH_LIMIT,
+            remaining: 1,
+            condition: 0,
+            params_fingerprint: 1,
+        }),
+        cov_baseline: Some(PropertyValue::Real(90.0)),
+        last_offnormal_value: Some(1),
+    }
 }
 
 #[test]
@@ -411,16 +439,7 @@ fn malformed_retarget_does_not_resume_stale_countdown() {
 #[test]
 fn unreadable_reference_retains_private_evaluator_state() {
     let mut enrollment = ReferenceValueObject::new(None);
-    let state = bacnet_objects::event_enrollment::EventEnrollmentEvalState {
-        pending: Some(bacnet_objects::event_enrollment::EventEnrollmentPending {
-            state: EventState::HIGH_LIMIT,
-            remaining: 1,
-            condition: 0,
-            params_fingerprint: 1,
-        }),
-        cov_baseline: Some(PropertyValue::Real(90.0)),
-        last_offnormal_value: Some(1),
-    };
+    let state = stale_eval_state();
     enrollment
         .set_enrollment_eval_state_internal(state.clone())
         .unwrap();
@@ -435,5 +454,31 @@ fn unreadable_reference_retains_private_evaluator_state() {
             .enrollment_eval_state_internal()
             .unwrap(),
         state
+    );
+}
+
+#[test]
+fn invalid_reference_clears_before_other_property_failure() {
+    let target = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 3).unwrap();
+    let mut enrollment = ReferenceValueObject::new(Some(PropertyValue::List(vec![
+        PropertyValue::ObjectIdentifier(target),
+        PropertyValue::Unsigned(PropertyIdentifier::PRESENT_VALUE.to_raw() as u64),
+        PropertyValue::ObjectIdentifier(ObjectIdentifier::new(ObjectType::DEVICE, 200).unwrap()),
+    ])));
+    enrollment.event_parameters_readable = false;
+    enrollment
+        .set_enrollment_eval_state_internal(stale_eval_state())
+        .unwrap();
+    let enrollment_oid = enrollment.object_identifier();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(enrollment)).unwrap();
+
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert_eq!(
+        db.get(&enrollment_oid)
+            .unwrap()
+            .enrollment_eval_state_internal()
+            .unwrap(),
+        bacnet_objects::event_enrollment::EventEnrollmentEvalState::default()
     );
 }

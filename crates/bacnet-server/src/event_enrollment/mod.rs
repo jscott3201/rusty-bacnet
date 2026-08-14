@@ -118,10 +118,13 @@ fn read_object_property_ref(
                 PropertyValue::ObjectIdentifier(oid) => *oid,
                 _ => return Ok(None),
             };
-            let prop_id = match &items[1] {
-                PropertyValue::Unsigned(v) => PropertyIdentifier::from_raw(*v as u32),
-                _ => return Ok(None),
+            let PropertyValue::Unsigned(prop_id) = &items[1] else {
+                return Ok(None);
             };
+            let Ok(prop_id) = u32::try_from(*prop_id) else {
+                return Ok(None);
+            };
+            let prop_id = PropertyIdentifier::from_raw(prop_id);
             match items.get(2) {
                 None | Some(PropertyValue::Null | PropertyValue::Unsigned(_)) => {}
                 Some(_) => return Ok(None),
@@ -283,6 +286,29 @@ pub fn evaluate_event_enrollments(
             continue;
         };
 
+        // A property read failure is transient and retains evaluation state.
+        // Any successfully read invalid or unresolvable configuration clears
+        // state before unrelated properties can short-circuit this pass.
+        let eval_state_supported = enrollment.enrollment_eval_state_internal().is_some();
+        let mut eval_state = enrollment
+            .enrollment_eval_state_internal()
+            .unwrap_or_default();
+        let reference = match read_object_property_ref(enrollment) {
+            Ok(reference) => reference,
+            Err(()) => continue,
+        };
+        let Some((monitored_oid, monitored_prop, _)) = reference.filter(|(_, _, device_oid)| {
+            device_oid.is_none_or(|oid| Some(oid) == local_device_oid)
+        }) else {
+            if eval_state_supported && eval_state != EventEnrollmentEvalState::default() {
+                updates.push((
+                    *oid,
+                    EnrollmentUpdate::eval_state_only(EventEnrollmentEvalState::default()),
+                ));
+            }
+            continue;
+        };
+
         if let Ok(PropertyValue::Boolean(true)) =
             enrollment.read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
         {
@@ -357,36 +383,9 @@ pub fn evaluate_event_enrollments(
                 _ => 0,
             };
 
-        // Per-enrollment evaluation state owned by the object. An object whose
-        // trait impl predates the channel (a downstream custom EE type)
-        // reports `None`: evaluation still runs, but with no durable pending
-        // countdown (a nonzero delay then re-seeds every pass and never
-        // fires — delays are effectively unsupported for such objects) and no
-        // COV baseline (every pass is a first sample, so COV never indicates).
-        let eval_state_supported = enrollment.enrollment_eval_state_internal().is_some();
-        let mut eval_state = enrollment
-            .enrollment_eval_state_internal()
-            .unwrap_or_default();
+        // An object whose trait implementation predates the private state
+        // channel evaluates without a durable countdown or COV baseline.
         let mut eval_state_dirty = false;
-
-        // A property read failure is transient and retains evaluation state.
-        // Any successfully read invalid or unresolvable configuration clears
-        // state so a later local retarget cannot resume stale work.
-        let reference = match read_object_property_ref(enrollment) {
-            Ok(reference) => reference,
-            Err(()) => continue,
-        };
-        let Some((monitored_oid, monitored_prop, _)) = reference.filter(|(_, _, device_oid)| {
-            device_oid.is_none_or(|oid| Some(oid) == local_device_oid)
-        }) else {
-            if eval_state_supported && eval_state != EventEnrollmentEvalState::default() {
-                updates.push((
-                    *oid,
-                    EnrollmentUpdate::eval_state_only(EventEnrollmentEvalState::default()),
-                ));
-            }
-            continue;
-        };
 
         // A parameter (or reference) change mid-pending cancels the countdown
         // and re-gates from the current parameters; no partial countdown is
