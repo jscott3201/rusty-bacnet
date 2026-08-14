@@ -124,6 +124,9 @@ fn read_object_property_ref(
             let Ok(prop_id) = u32::try_from(*prop_id) else {
                 return Ok(None);
             };
+            if prop_id > 0x3F_FFFF {
+                return Ok(None);
+            }
             let prop_id = PropertyIdentifier::from_raw(prop_id);
             match items.get(2) {
                 None | Some(PropertyValue::Null | PropertyValue::Unsigned(_)) => {}
@@ -287,7 +290,7 @@ pub fn evaluate_event_enrollments(
         };
 
         // A property read failure is transient and retains evaluation state.
-        // Any successfully read invalid or unresolvable configuration clears
+        // Any successfully read invalid or unsupported-device reference clears
         // state before unrelated properties can short-circuit this pass.
         let eval_state_supported = enrollment.enrollment_eval_state_internal().is_some();
         let mut eval_state = enrollment

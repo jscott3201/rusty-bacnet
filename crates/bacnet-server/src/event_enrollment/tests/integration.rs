@@ -341,6 +341,10 @@ fn malformed_reference_shapes_do_not_become_local() {
         ],
         vec![
             PropertyValue::ObjectIdentifier(target),
+            PropertyValue::Unsigned(4_194_304),
+        ],
+        vec![
+            PropertyValue::ObjectIdentifier(target),
             PropertyValue::Unsigned(u32::MAX as u64 + 1 + property.to_raw() as u64),
         ],
     ];
@@ -462,8 +466,7 @@ fn invalid_reference_clears_before_other_property_failure() {
     let target = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 3).unwrap();
     let mut enrollment = ReferenceValueObject::new(Some(PropertyValue::List(vec![
         PropertyValue::ObjectIdentifier(target),
-        PropertyValue::Unsigned(PropertyIdentifier::PRESENT_VALUE.to_raw() as u64),
-        PropertyValue::ObjectIdentifier(ObjectIdentifier::new(ObjectType::DEVICE, 200).unwrap()),
+        PropertyValue::Unsigned(4_194_304),
     ])));
     enrollment.event_parameters_readable = false;
     enrollment
