@@ -101,10 +101,14 @@ fn read_setpoint(
 
 /// Read the object_property_reference from an EventEnrollment object.
 ///
-/// Returns (monitored_object_id, monitored_property_id) if valid.
+/// Returns the monitored object, property, and optional device qualifier.
 fn read_object_property_ref(
     enrollment: &dyn BACnetObject,
-) -> Option<(ObjectIdentifier, PropertyIdentifier)> {
+) -> Option<(
+    ObjectIdentifier,
+    PropertyIdentifier,
+    Option<ObjectIdentifier>,
+)> {
     match enrollment.read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None) {
         Ok(PropertyValue::List(ref items)) if items.len() >= 2 => {
             let obj_id = match &items[0] {
@@ -115,7 +119,12 @@ fn read_object_property_ref(
                 PropertyValue::Unsigned(v) => PropertyIdentifier::from_raw(*v as u32),
                 _ => return None,
             };
-            Some((obj_id, prop_id))
+            let device_id = match items.get(3) {
+                None | Some(PropertyValue::Null) => None,
+                Some(PropertyValue::ObjectIdentifier(oid)) => Some(*oid),
+                Some(_) => return None,
+            };
+            Some((obj_id, prop_id, device_id))
         }
         _ => None,
     }
@@ -251,6 +260,13 @@ pub fn evaluate_event_enrollments(
 ) -> Vec<EventEnrollmentTransition> {
     let interval_secs = interval_secs.max(1);
     let oids = db.find_by_type(ObjectType::EVENT_ENROLLMENT);
+    // A qualified reference can identify self only when the containing Device
+    // object is unambiguous. Unqualified references remain local regardless.
+    let device_oids = db.find_by_type(ObjectType::DEVICE);
+    let local_device_oid = match device_oids.as_slice() {
+        [oid] => Some(*oid),
+        _ => None,
+    };
 
     let mut updates: Vec<(ObjectIdentifier, EnrollmentUpdate)> = Vec::new();
 
@@ -345,14 +361,25 @@ pub fn evaluate_event_enrollments(
             .unwrap_or_default();
         let mut eval_state_dirty = false;
 
-        // The reference is folded into the fingerprint, so it is read BEFORE
-        // the check. An unreadable reference exits here — before the cancel —
-        // deliberately: a transiently unreadable reference retains the
-        // countdown, whereas every failure AFTER this point leaves the
-        // cancellation persisted (see the flush below).
-        let Some((monitored_oid, monitored_prop)) = read_object_property_ref(enrollment) else {
+        // The reference is folded into the fingerprint, so it is read before
+        // the check. A malformed or unreadable value retains evaluation state
+        // as a transient failure. A valid but unresolvable device qualifier is
+        // configured state, so it clears state rather than resuming stale work
+        // if the enrollment is later retargeted locally.
+        let Some((monitored_oid, monitored_prop, reference_device_oid)) =
+            read_object_property_ref(enrollment)
+        else {
             continue;
         };
+        if reference_device_oid.is_some_and(|device_oid| Some(device_oid) != local_device_oid) {
+            if eval_state_supported && eval_state != EventEnrollmentEvalState::default() {
+                updates.push((
+                    *oid,
+                    EnrollmentUpdate::eval_state_only(EventEnrollmentEvalState::default()),
+                ));
+            }
+            continue;
+        }
 
         // A parameter (or reference) change mid-pending cancels the countdown
         // and re-gates from the current parameters; no partial countdown is
