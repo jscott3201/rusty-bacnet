@@ -1,6 +1,10 @@
 use bacnet_types::enums::{EventState, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
+/// Effective object, property, and optional array index that own an Event
+/// Enrollment object's private evaluation state.
+pub type EventEnrollmentMonitoredSource = (ObjectIdentifier, PropertyIdentifier, Option<u32>);
+
 /// A delayed Event Enrollment transition, counting down its delay.
 ///
 /// The enrollment counterpart of the intrinsic detectors'
@@ -46,7 +50,7 @@ pub struct EventEnrollmentPending {
 
 /// Algorithm-side evaluation state owned by an Event Enrollment object.
 ///
-/// Not BACnet properties: none of the four slots maps to a Clause 12.12
+/// Not BACnet properties: none of the three slots maps to a Clause 12.12
 /// property (nor to the Table 12-14 `Time_Delay_Normal`, which is
 /// configuration and lives on the object directly). Clause 13.3 assigns the
 /// baseline's initialization and the countdown's existence to local matters,
@@ -56,10 +60,6 @@ pub struct EventEnrollmentPending {
 /// mirroring the `set_event_state_internal` precedent (issue #130).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct EventEnrollmentEvalState {
-    /// Effective object, property, and optional array index that own the
-    /// countdown and algorithm baselines below. `None` means no monitored
-    /// source currently owns the private state.
-    pub monitored_reference: Option<(ObjectIdentifier, PropertyIdentifier, Option<u32>)>,
     /// Delayed transition in flight, if any.
     pub pending: Option<EventEnrollmentPending>,
     /// CHANGE_OF_VALUE detection baseline (Clause 13.3.3: "the value of the
@@ -76,4 +76,15 @@ pub struct EventEnrollmentEvalState {
     /// "different from the value that caused the last transition to
     /// OFFNORMAL").
     pub last_offnormal_value: Option<u32>,
+}
+
+pub(super) enum EventEnrollmentWriteRollback {
+    Detection {
+        enabled: bool,
+        event_state: u32,
+        acked_transitions: u8,
+        monitored_reference: Option<EventEnrollmentMonitoredSource>,
+        evaluation: EventEnrollmentEvalState,
+    },
+    TimeDelayNormal(Option<u32>),
 }

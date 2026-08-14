@@ -143,12 +143,12 @@ fn enrollment_eval_state_round_trip() {
         "construction starts empty"
     );
 
+    let source = (
+        ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
+        PropertyIdentifier::PRESENT_VALUE,
+        Some(2),
+    );
     let state = EventEnrollmentEvalState {
-        monitored_reference: Some((
-            ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
-            PropertyIdentifier::PRESENT_VALUE,
-            Some(2),
-        )),
         pending: Some(EventEnrollmentPending {
             state: EventState::HIGH_LIMIT,
             remaining: 4,
@@ -160,15 +160,20 @@ fn enrollment_eval_state_round_trip() {
     };
     ee.set_enrollment_eval_state_internal(state.clone())
         .unwrap();
+    ee.set_enrollment_eval_source_internal(Some(source))
+        .unwrap();
     assert_eq!(ee.enrollment_eval_state_internal(), Some(state));
+    assert_eq!(ee.enrollment_eval_source_internal(), Some(Some(source)));
 
     // Storing a cleared state clears.
     ee.set_enrollment_eval_state_internal(EventEnrollmentEvalState::default())
         .unwrap();
+    ee.set_enrollment_eval_source_internal(None).unwrap();
     assert_eq!(
         ee.enrollment_eval_state_internal(),
         Some(EventEnrollmentEvalState::default())
     );
+    assert_eq!(ee.enrollment_eval_source_internal(), Some(None));
 }
 
 /// Clause 13.2.2.1's disable reset covers the evaluation state: "this state
@@ -177,8 +182,14 @@ fn enrollment_eval_state_round_trip() {
 #[test]
 fn disabling_detection_clears_eval_state_and_refuses_writes() {
     let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let source = (
+        ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
+        PropertyIdentifier::PRESENT_VALUE,
+        Some(1),
+    );
+    ee.set_enrollment_eval_source_internal(Some(source))
+        .unwrap();
     ee.set_enrollment_eval_state_internal(EventEnrollmentEvalState {
-        monitored_reference: None,
         pending: Some(EventEnrollmentPending {
             state: EventState::OFFNORMAL,
             remaining: 1,
@@ -202,6 +213,7 @@ fn disabling_detection_clears_eval_state_and_refuses_writes() {
         Some(EventEnrollmentEvalState::default()),
         "the disable reset clears the evaluation state"
     );
+    assert_eq!(ee.enrollment_eval_source_internal(), Some(None));
 
     // And while disabled the internal write paths refuse — the invariant
     // holds by construction, as with set_event_state_internal (#130).
@@ -215,6 +227,9 @@ fn disabling_detection_clears_eval_state_and_refuses_writes() {
             }),
             ..EventEnrollmentEvalState::default()
         })
+        .is_err());
+    assert!(ee
+        .set_enrollment_eval_source_internal(Some(source))
         .is_err());
     assert!(ee.set_acked_transitions_internal(0x01, false).is_err());
 

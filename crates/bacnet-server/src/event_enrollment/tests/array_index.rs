@@ -212,7 +212,6 @@ fn out_of_range_index_clears_state_without_whole_property_fallback() {
         1,
     );
     let stale = EventEnrollmentEvalState {
-        monitored_reference: Some((value_oid, PropertyIdentifier::PRIORITY_ARRAY, Some(17))),
         pending: None,
         cov_baseline: Some(PropertyValue::Real(90.0)),
         last_offnormal_value: Some(1),
@@ -220,6 +219,14 @@ fn out_of_range_index_clears_state_without_whole_property_fallback() {
     db.get_mut(&enrollment_oid)
         .unwrap()
         .set_enrollment_eval_state_internal(stale)
+        .unwrap();
+    db.get_mut(&enrollment_oid)
+        .unwrap()
+        .set_enrollment_eval_source_internal(Some((
+            value_oid,
+            PropertyIdentifier::PRIORITY_ARRAY,
+            Some(17),
+        )))
         .unwrap();
 
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
@@ -229,6 +236,12 @@ fn out_of_range_index_clears_state_without_whole_property_fallback() {
             .unwrap()
             .enrollment_eval_state_internal(),
         Some(EventEnrollmentEvalState::default())
+    );
+    assert_eq!(
+        db.get(&enrollment_oid)
+            .unwrap()
+            .enrollment_eval_source_internal(),
+        Some(None)
     );
 }
 
@@ -357,8 +370,14 @@ fn index_change_discards_the_previous_element_baselines() {
     assert_eq!(state.cov_baseline, Some(PropertyValue::Real(90.0)));
     assert_eq!(state.last_offnormal_value, None);
     assert_eq!(
-        state.monitored_reference,
-        Some((value_oid, PropertyIdentifier::PRIORITY_ARRAY, Some(2)))
+        db.get(&enrollment_oid)
+            .unwrap()
+            .enrollment_eval_source_internal(),
+        Some(Some((
+            value_oid,
+            PropertyIdentifier::PRIORITY_ARRAY,
+            Some(2)
+        )))
     );
 }
 
@@ -457,4 +476,80 @@ fn transient_indexed_read_failure_retains_private_state() {
             .enrollment_eval_state_internal(),
         Some(expected)
     );
+}
+
+#[test]
+fn null_indexed_floating_setpoint_interrupts_the_pending_delay() {
+    let mut db = ObjectDatabase::new();
+    let mut monitored = AnalogValueObject::new(9, "AV-floating-monitored", 62).unwrap();
+    monitored.set_present_value(90.0);
+    let monitored_oid = monitored.object_identifier();
+    db.add(Box::new(monitored)).unwrap();
+
+    let mut setpoint = AnalogValueObject::new(10, "AV-floating-setpoint", 62).unwrap();
+    setpoint
+        .write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(50.0),
+            Some(1),
+        )
+        .unwrap();
+    let setpoint_oid = setpoint.object_identifier();
+    db.add(Box::new(setpoint)).unwrap();
+
+    let mut enrollment =
+        EventEnrollmentObject::new(9, "EE-indexed-setpoint", EventType::FLOATING_LIMIT.to_raw())
+            .unwrap();
+    enrollment.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+        monitored_oid,
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+    )));
+    enrollment.set_event_parameters(BACnetEventParameter::FloatingLimit {
+        time_delay: 2,
+        setpoint_reference: BACnetDeviceObjectPropertyReference::new_local(
+            setpoint_oid,
+            PropertyIdentifier::PRIORITY_ARRAY.to_raw(),
+        )
+        .with_index(1),
+        low_diff_limit: 10.0,
+        high_diff_limit: 10.0,
+        deadband: 1.0,
+    });
+    enrollment.set_event_enable(0x07);
+    let enrollment_oid = enrollment.object_identifier();
+    db.add(Box::new(enrollment)).unwrap();
+
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    db.get_mut(&setpoint_oid)
+        .unwrap()
+        .write_property(
+            PropertyIdentifier::PRIORITY_ARRAY,
+            Some(1),
+            PropertyValue::Null,
+            None,
+        )
+        .unwrap();
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert!(db
+        .get(&enrollment_oid)
+        .unwrap()
+        .enrollment_eval_state_internal()
+        .unwrap()
+        .pending
+        .is_none());
+
+    db.get_mut(&setpoint_oid)
+        .unwrap()
+        .write_property(
+            PropertyIdentifier::PRIORITY_ARRAY,
+            Some(1),
+            PropertyValue::Real(50.0),
+            None,
+        )
+        .unwrap();
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
 }

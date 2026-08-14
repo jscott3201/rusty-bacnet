@@ -57,7 +57,9 @@ use reference::{params_fingerprint, read_object_property_ref};
 
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::event::{EventStateChange, EventTransition};
-use bacnet_objects::event_enrollment::{EventEnrollmentEvalState, EventEnrollmentPending};
+use bacnet_objects::event_enrollment::{
+    EventEnrollmentEvalState, EventEnrollmentMonitoredSource, EventEnrollmentPending,
+};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::BACnetEventParameter;
 use bacnet_types::enums::{
@@ -86,24 +88,38 @@ pub struct EventEnrollmentTransition {
     pub distribute: bool,
 }
 
-/// Read the setpoint referenced by a FLOATING_LIMIT enrollment.
-///
-/// Returns the referenced property's real value, or `None` if the reference is
-/// remote or unreadable.
+enum SetpointRead {
+    Value(f32),
+    Unusable,
+    Transient,
+}
+
 fn read_setpoint(
     db: &ObjectDatabase,
     reference: &bacnet_types::constructed::BACnetDeviceObjectPropertyReference,
-) -> Option<f32> {
+) -> SetpointRead {
     // Remote-device setpoint references are not resolvable from a local DB.
     if reference.device_identifier.is_some() {
-        return None;
+        return SetpointRead::Transient;
     }
-    let obj = db.get(&reference.object_identifier)?;
+    let Some(obj) = db.get(&reference.object_identifier) else {
+        return SetpointRead::Transient;
+    };
     let prop = PropertyIdentifier::from_raw(reference.property_identifier);
-    extract_real(
-        &obj.read_property(prop, reference.property_array_index)
-            .ok()?,
-    )
+    if reference.property_array_index.is_some() && !obj.is_array_property(prop) {
+        return SetpointRead::Unusable;
+    }
+    match obj.read_property(prop, reference.property_array_index) {
+        Ok(value) => extract_real(&value)
+            .map(SetpointRead::Value)
+            .unwrap_or(SetpointRead::Unusable),
+        Err(error)
+            if reference.property_array_index.is_some() && invalid_indexed_target_error(&error) =>
+        {
+            SetpointRead::Unusable
+        }
+        Err(_) => SetpointRead::Transient,
+    }
 }
 
 /// Convert a seconds delay to pending passes with never-fire-early ceiling
@@ -160,6 +176,8 @@ struct EnrollmentUpdate {
     /// Evaluation state to write back — pending countdown and/or baselines —
     /// when it changed this pass, even with no transition.
     eval_state: Option<EventEnrollmentEvalState>,
+    /// Monitored-source ownership update for objects that support the channel.
+    eval_source: Option<Option<EventEnrollmentMonitoredSource>>,
     /// A transition that fired this pass, with everything the transition
     /// actions need.
     fired: Option<FiredTransition>,
@@ -179,6 +197,15 @@ impl EnrollmentUpdate {
     fn eval_state_only(eval_state: EventEnrollmentEvalState) -> Self {
         Self {
             eval_state: Some(eval_state),
+            eval_source: None,
+            fired: None,
+        }
+    }
+
+    fn eval_source_only(source: Option<EventEnrollmentMonitoredSource>) -> Self {
+        Self {
+            eval_state: None,
+            eval_source: Some(source),
             fired: None,
         }
     }
@@ -206,6 +233,16 @@ fn queue_pending_cancellation(
 ) {
     if state.pending.take().is_some() && supported {
         updates.push((oid, EnrollmentUpdate::eval_state_only(state.clone())));
+    }
+}
+
+fn queue_eval_source_reset(
+    updates: &mut Vec<(ObjectIdentifier, EnrollmentUpdate)>,
+    oid: ObjectIdentifier,
+    source: Option<Option<EventEnrollmentMonitoredSource>>,
+) {
+    if source.flatten().is_some() {
+        updates.push((oid, EnrollmentUpdate::eval_source_only(None)));
     }
 }
 
@@ -264,6 +301,7 @@ pub fn evaluate_event_enrollments(
         let mut eval_state = enrollment
             .enrollment_eval_state_internal()
             .unwrap_or_default();
+        let eval_source = enrollment.enrollment_eval_source_internal();
         let reference = match read_object_property_ref(enrollment) {
             Ok(reference) => reference,
             Err(()) => continue,
@@ -274,23 +312,25 @@ pub fn evaluate_event_enrollments(
                 .is_none_or(|oid| Some(oid) == local_device_oid)
         }) else {
             queue_eval_state_reset(&mut updates, *oid, eval_state_supported, &eval_state);
+            queue_eval_source_reset(&mut updates, *oid, eval_source);
             continue;
         };
         let monitored_oid = monitored.object_identifier;
         let monitored_prop = monitored.property_identifier;
         let monitored_reference = (monitored_oid, monitored_prop, monitored.array_index);
-        // Pending and baseline state belongs to one exact monitored source.
-        if eval_state
-            .monitored_reference
-            .is_some_and(|current| current != monitored_reference)
-        {
+        // Private evaluation state belongs to one exact monitored source. A
+        // nonempty ownerless state cannot be adopted safely.
+        let source_changed = match eval_source {
+            Some(Some(current)) => current != monitored_reference,
+            Some(None) => eval_state != EventEnrollmentEvalState::default(),
+            None => false,
+        };
+        if source_changed {
+            let had_private_state = eval_state != EventEnrollmentEvalState::default();
             eval_state = EventEnrollmentEvalState::default();
-            eval_state.monitored_reference = Some(monitored_reference);
-            if eval_state_supported {
+            if eval_state_supported && had_private_state {
                 updates.push((*oid, EnrollmentUpdate::eval_state_only(eval_state.clone())));
             }
-        } else {
-            eval_state.monitored_reference = Some(monitored_reference);
         }
 
         if let Ok(PropertyValue::Boolean(true)) =
@@ -395,6 +435,7 @@ pub fn evaluate_event_enrollments(
         };
         if monitored.array_index.is_some() && !monitored_obj.is_array_property(monitored_prop) {
             queue_eval_state_reset(&mut updates, *oid, eval_state_supported, &eval_state);
+            queue_eval_source_reset(&mut updates, *oid, eval_source);
             continue;
         }
         let monitored_value = match monitored_obj
@@ -406,10 +447,17 @@ pub fn evaluate_event_enrollments(
                     // A definitive indexed-target error is not a request to
                     // retry the whole property.
                     queue_eval_state_reset(&mut updates, *oid, eval_state_supported, &eval_state);
+                    queue_eval_source_reset(&mut updates, *oid, eval_source);
                 }
                 continue;
             }
         };
+        if eval_source.is_some_and(|current| current != Some(monitored_reference)) {
+            updates.push((
+                *oid,
+                EnrollmentUpdate::eval_source_only(Some(monitored_reference)),
+            ));
+        }
 
         let event_type = EventType::from_raw(event_type_raw);
         let (time_delay, arm) = match &params {
@@ -446,9 +494,6 @@ pub fn evaluate_event_enrollments(
                 deadband,
                 time_delay,
             } => {
-                let Some(setpoint) = read_setpoint(db, setpoint_reference) else {
-                    continue;
-                };
                 let Some(val) = extract_real(&monitored_value) else {
                     queue_pending_cancellation(
                         &mut updates,
@@ -457,6 +502,19 @@ pub fn evaluate_event_enrollments(
                         &mut eval_state,
                     );
                     continue;
+                };
+                let setpoint = match read_setpoint(db, setpoint_reference) {
+                    SetpointRead::Value(value) => value,
+                    SetpointRead::Unusable => {
+                        queue_pending_cancellation(
+                            &mut updates,
+                            *oid,
+                            eval_state_supported,
+                            &mut eval_state,
+                        );
+                        continue;
+                    }
+                    SetpointRead::Transient => continue,
                 };
                 (
                     *time_delay,
@@ -654,6 +712,7 @@ pub fn evaluate_event_enrollments(
             *oid,
             EnrollmentUpdate {
                 eval_state: (eval_state_dirty && eval_state_supported).then_some(eval_state),
+                eval_source: None,
                 fired: Some(FiredTransition {
                     monitored_oid,
                     event_type_raw,
@@ -704,6 +763,9 @@ pub fn evaluate_event_enrollments(
             });
         } else if let Some(state) = update.eval_state {
             let _ = obj.set_enrollment_eval_state_internal(state);
+        }
+        if let Some(source) = update.eval_source {
+            let _ = obj.set_enrollment_eval_source_internal(source);
         }
     }
 

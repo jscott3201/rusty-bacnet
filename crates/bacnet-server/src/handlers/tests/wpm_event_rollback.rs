@@ -150,12 +150,12 @@ fn wpm_rollback_restores_event_enrollment_detection_state() {
     enrollment
         .set_acked_transitions_internal(0x01, false)
         .unwrap();
+    let source = (
+        ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
+        PropertyIdentifier::PRESENT_VALUE,
+        Some(2),
+    );
     let evaluation = EventEnrollmentEvalState {
-        monitored_reference: Some((
-            ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
-            PropertyIdentifier::PRESENT_VALUE,
-            Some(2),
-        )),
         pending: Some(EventEnrollmentPending {
             state: EventState::NORMAL,
             remaining: 4,
@@ -167,6 +167,9 @@ fn wpm_rollback_restores_event_enrollment_detection_state() {
     };
     enrollment
         .set_enrollment_eval_state_internal(evaluation.clone())
+        .unwrap();
+    enrollment
+        .set_enrollment_eval_source_internal(Some(source))
         .unwrap();
     let oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
@@ -203,6 +206,7 @@ fn wpm_rollback_restores_event_enrollment_detection_state() {
         }
     );
     assert_eq!(object.enrollment_eval_state_internal(), Some(evaluation));
+    assert_eq!(object.enrollment_eval_source_internal(), Some(Some(source)));
 }
 
 #[test]

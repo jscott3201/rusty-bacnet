@@ -9,7 +9,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use crate::event::TransitionOutcome;
-use crate::event_enrollment::EventEnrollmentEvalState;
+use crate::event_enrollment::{EventEnrollmentEvalState, EventEnrollmentMonitoredSource};
 
 /// Object-owned state that cannot be reconstructed from property readback.
 ///
@@ -315,6 +315,26 @@ pub trait BACnetObject: Send + Sync {
     fn set_enrollment_eval_state_internal(
         &mut self,
         _state: EventEnrollmentEvalState,
+    ) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
+    /// Snapshot the monitored source that owns Event Enrollment private state.
+    ///
+    /// The outer `Option` indicates whether the object supports this channel;
+    /// the inner `Option` is empty before a source has been established. The
+    /// default opts out so existing custom objects retain their prior behavior.
+    fn enrollment_eval_source_internal(&self) -> Option<Option<EventEnrollmentMonitoredSource>> {
+        None
+    }
+
+    /// Store or clear the monitored source that owns Event Enrollment state.
+    fn set_enrollment_eval_source_internal(
+        &mut self,
+        _source: Option<EventEnrollmentMonitoredSource>,
     ) -> Result<(), Error> {
         Err(Error::Protocol {
             class: ErrorClass::OBJECT.to_raw() as u32,

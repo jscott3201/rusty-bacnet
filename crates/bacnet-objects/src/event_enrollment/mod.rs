@@ -12,17 +12,8 @@ use crate::common::{self, read_common_properties};
 use crate::traits::{BACnetObject, WritePropertyRollback};
 
 mod state;
-pub use state::{EventEnrollmentEvalState, EventEnrollmentPending};
-
-enum EventEnrollmentWriteRollback {
-    Detection {
-        enabled: bool,
-        event_state: u32,
-        acked_transitions: u8,
-        evaluation: EventEnrollmentEvalState,
-    },
-    TimeDelayNormal(Option<u32>),
-}
+use state::EventEnrollmentWriteRollback;
+pub use state::{EventEnrollmentEvalState, EventEnrollmentMonitoredSource, EventEnrollmentPending};
 
 struct AlertEnrollmentWriteRollback {
     enabled: bool,
@@ -64,7 +55,7 @@ pub struct EventEnrollmentObject {
     /// Delayed transition counting down, if any. In-memory only.
     pending: Option<EventEnrollmentPending>,
     /// Effective source of the private evaluation state. In-memory only.
-    monitored_reference: Option<(ObjectIdentifier, PropertyIdentifier, Option<u32>)>,
+    monitored_reference: Option<EventEnrollmentMonitoredSource>,
     /// CHANGE_OF_VALUE detection baseline (Clause 13.3.3). In-memory only.
     cov_baseline: Option<PropertyValue>,
     /// Monitored value that caused the last OFFNORMAL transition (Clause
@@ -485,11 +476,10 @@ impl BACnetObject for EventEnrollmentObject {
         Ok(())
     }
 
-    /// Snapshot the monitored source, pending countdown, and algorithm
-    /// baselines for the server evaluator.
+    /// Snapshot the pending countdown and algorithm baselines for the server
+    /// evaluator.
     fn enrollment_eval_state_internal(&self) -> Option<EventEnrollmentEvalState> {
         Some(EventEnrollmentEvalState {
-            monitored_reference: self.monitored_reference,
             pending: self.pending.clone(),
             cov_baseline: self.cov_baseline.clone(),
             last_offnormal_value: self.last_offnormal_value,
@@ -508,10 +498,24 @@ impl BACnetObject for EventEnrollmentObject {
         if !self.event_detection_enable {
             return Err(common::write_access_denied_error());
         }
-        self.monitored_reference = state.monitored_reference;
         self.pending = state.pending;
         self.cov_baseline = state.cov_baseline;
         self.last_offnormal_value = state.last_offnormal_value;
+        Ok(())
+    }
+
+    fn enrollment_eval_source_internal(&self) -> Option<Option<EventEnrollmentMonitoredSource>> {
+        Some(self.monitored_reference)
+    }
+
+    fn set_enrollment_eval_source_internal(
+        &mut self,
+        source: Option<EventEnrollmentMonitoredSource>,
+    ) -> Result<(), Error> {
+        if !self.event_detection_enable {
+            return Err(common::write_access_denied_error());
+        }
+        self.monitored_reference = source;
         Ok(())
     }
 
@@ -569,8 +573,8 @@ impl BACnetObject for EventEnrollmentObject {
                     enabled: self.event_detection_enable,
                     event_state: self.event_state,
                     acked_transitions: self.acked_transitions,
+                    monitored_reference: self.monitored_reference,
                     evaluation: EventEnrollmentEvalState {
-                        monitored_reference: self.monitored_reference,
                         pending: self.pending.clone(),
                         cov_baseline: self.cov_baseline.clone(),
                         last_offnormal_value: self.last_offnormal_value,
@@ -593,12 +597,13 @@ impl BACnetObject for EventEnrollmentObject {
                 enabled,
                 event_state,
                 acked_transitions,
+                monitored_reference,
                 evaluation,
             } => {
                 self.event_detection_enable = enabled;
                 self.event_state = event_state;
                 self.acked_transitions = acked_transitions;
-                self.monitored_reference = evaluation.monitored_reference;
+                self.monitored_reference = monitored_reference;
                 self.pending = evaluation.pending;
                 self.cov_baseline = evaluation.cov_baseline;
                 self.last_offnormal_value = evaluation.last_offnormal_value;
