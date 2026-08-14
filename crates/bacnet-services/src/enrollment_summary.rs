@@ -31,7 +31,7 @@ pub struct PriorityFilter {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecipientProcess {
     /// Device object identifier (from BACnetRecipient CHOICE [0] device).
-    pub device: Option<ObjectIdentifier>,
+    pub device: ObjectIdentifier,
     /// Process identifier.
     pub process_identifier: u32,
 }
@@ -60,14 +60,8 @@ impl GetEnrollmentSummaryRequest {
         // [1] enrollmentFilter (optional, constructed)
         if let Some(ref ef) = self.enrollment_filter {
             tags::encode_opening_tag(buf, 1);
-            // recipient CHOICE: [0] device
-            if let Some(ref device) = ef.device {
-                tags::encode_opening_tag(buf, 0);
-                primitives::encode_ctx_object_id(buf, 0, device);
-                tags::encode_closing_tag(buf, 0);
-            }
-            // processIdentifier
-            primitives::encode_ctx_unsigned(buf, 1, ef.process_identifier as u64);
+            primitives::encode_ctx_object_id(buf, 0, &ef.device);
+            primitives::encode_app_unsigned(buf, ef.process_identifier as u64);
             tags::encode_closing_tag(buf, 1);
         }
         // [2] eventStateFilter (optional)
@@ -120,47 +114,28 @@ impl GetEnrollmentSummaryRequest {
         if offset < data.len() {
             let (tag, tag_end) = tags::decode_tag(data, offset)?;
             if tag.is_opening_tag(1) {
-                let mut device = None;
                 let (content, new_offset) = tags::extract_context_value(data, tag_end, 1)?;
-                let mut inner_offset = 0;
-
-                if inner_offset < content.len() {
-                    let (inner_tag, inner_pos) = tags::decode_tag(content, inner_offset)?;
-                    if inner_tag.is_opening_tag(0) {
-                        let (recipient_content, recipient_end) =
-                            tags::extract_context_value(content, inner_pos, 0)?;
-                        let (dev_tag, dev_pos) = tags::decode_tag(recipient_content, 0)?;
-                        if !dev_tag.is_context(0) {
-                            return Err(Error::decoding(
-                                tag_end + inner_pos,
-                                "EnrollmentSummary expected recipient device tag 0",
-                            ));
-                        }
-                        let dev_end = dev_pos + dev_tag.length as usize;
-                        if dev_end > recipient_content.len() {
-                            return Err(Error::decoding(
-                                tag_end + dev_pos,
-                                "EnrollmentSummary truncated at recipient device",
-                            ));
-                        }
-                        if dev_end != recipient_content.len() {
-                            return Err(Error::decoding(
-                                tag_end + dev_end,
-                                "EnrollmentSummary recipient has trailing data",
-                            ));
-                        }
-                        device = Some(ObjectIdentifier::decode(
-                            &recipient_content[dev_pos..dev_end],
-                        )?);
-                        inner_offset = recipient_end;
-                    }
-                }
-
-                let (process_tag, process_pos) = tags::decode_tag(content, inner_offset)?;
-                if !process_tag.is_context(1) {
+                let (device_tag, device_pos) = tags::decode_tag(content, 0)?;
+                if !device_tag.is_context(0) {
                     return Err(Error::decoding(
-                        tag_end + inner_offset,
-                        "EnrollmentSummary expected processIdentifier tag 1",
+                        tag_end,
+                        "EnrollmentSummary expected recipient device tag 0",
+                    ));
+                }
+                let device_end = device_pos + device_tag.length as usize;
+                if device_end > content.len() {
+                    return Err(Error::decoding(
+                        tag_end + device_pos,
+                        "EnrollmentSummary truncated at recipient device",
+                    ));
+                }
+                let device = ObjectIdentifier::decode(&content[device_pos..device_end])?;
+
+                let (process_tag, process_pos) = tags::decode_tag(content, device_end)?;
+                if !is_application_tag(&process_tag, content[device_end], tags::app_tag::UNSIGNED) {
+                    return Err(Error::decoding(
+                        tag_end + device_end,
+                        "EnrollmentSummary expected processIdentifier unsigned tag",
                     ));
                 }
                 let process_end = process_pos + process_tag.length as usize;

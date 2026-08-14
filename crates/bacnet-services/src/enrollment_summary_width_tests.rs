@@ -6,12 +6,16 @@ fn raw_request(fields: [&[u8]; 7], device: bool) -> BytesMut {
     primitives::encode_ctx_octet_string(&mut buf, 0, fields[0]);
     tags::encode_opening_tag(&mut buf, 1);
     if device {
-        tags::encode_opening_tag(&mut buf, 0);
         let object = ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap();
         primitives::encode_ctx_object_id(&mut buf, 0, &object);
-        tags::encode_closing_tag(&mut buf, 0);
     }
-    primitives::encode_ctx_octet_string(&mut buf, 1, fields[1]);
+    tags::encode_tag(
+        &mut buf,
+        tags::app_tag::UNSIGNED,
+        tags::TagClass::Application,
+        fields[1].len() as u32,
+    );
+    buf.extend_from_slice(fields[1]);
     tags::encode_closing_tag(&mut buf, 1);
     primitives::encode_ctx_octet_string(&mut buf, 2, fields[2]);
     primitives::encode_ctx_octet_string(&mut buf, 3, fields[3]);
@@ -104,11 +108,12 @@ fn request_values_must_fit_public_field_widths() {
 }
 
 #[test]
-fn request_enrollment_filter_round_trips_without_device() {
+fn request_enrollment_filter_uses_standard_recipient_process_framing() {
+    let device = ObjectIdentifier::new(ObjectType::DEVICE, 7).unwrap();
     let request = GetEnrollmentSummaryRequest {
         acknowledgment_filter: 0,
         enrollment_filter: Some(RecipientProcess {
-            device: None,
+            device,
             process_identifier: 7,
         }),
         event_state_filter: None,
@@ -122,6 +127,24 @@ fn request_enrollment_filter_round_trips_without_device() {
         GetEnrollmentSummaryRequest::decode(&encoded).unwrap(),
         request
     );
+    assert_eq!(
+        encoded.as_ref(),
+        &[0x09, 0, 0x1E, 0x0C, 0x02, 0, 0, 7, 0x21, 7, 0x1F]
+    );
+
+    let (acknowledgment_tag, acknowledgment_pos) = tags::decode_tag(&encoded, 0).unwrap();
+    let filter_offset = acknowledgment_pos + acknowledgment_tag.length as usize;
+    let (filter_tag, filter_start) = tags::decode_tag(&encoded, filter_offset).unwrap();
+    assert!(filter_tag.is_opening_tag(1));
+    let (recipient_tag, recipient_pos) = tags::decode_tag(&encoded, filter_start).unwrap();
+    assert!(recipient_tag.is_context(0));
+    assert_eq!(
+        ObjectIdentifier::decode(&encoded[recipient_pos..recipient_pos + 4]).unwrap(),
+        device
+    );
+    let (process_tag, _) = tags::decode_tag(&encoded, recipient_pos + 4).unwrap();
+    assert_eq!(process_tag.class, tags::TagClass::Application);
+    assert_eq!(process_tag.number, tags::app_tag::UNSIGNED);
 }
 
 #[test]
