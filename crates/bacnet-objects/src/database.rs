@@ -6,6 +6,7 @@ use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
+use crate::event_enrollment::EventEnrollmentMonitoredSource;
 use crate::traits::BACnetObject;
 
 /// A collection of BACnet objects, keyed by ObjectIdentifier.
@@ -21,6 +22,9 @@ pub struct ObjectDatabase {
     /// Event Enrollment objects whose private evaluator state must be reset
     /// before it can be used again.
     invalid_enrollment_eval_state: HashSet<ObjectIdentifier>,
+    /// Source ownership for custom Event Enrollment objects that implement
+    /// evaluation state but not the optional object-owned source channel.
+    enrollment_eval_sources: HashMap<ObjectIdentifier, EventEnrollmentMonitoredSource>,
 }
 
 impl Default for ObjectDatabase {
@@ -37,6 +41,7 @@ impl ObjectDatabase {
             name_index: HashMap::new(),
             type_index: HashMap::new(),
             invalid_enrollment_eval_state: HashSet::new(),
+            enrollment_eval_sources: HashMap::new(),
         }
     }
 
@@ -59,14 +64,17 @@ impl ObjectDatabase {
         }
 
         // If replacing an existing object, remove its old name from the index
+        // and invalidate state owned by enrollments that monitor it.
         if let Some(old) = self.objects.get(&oid) {
             let old_name = old.object_name().to_string();
             self.name_index.remove(&old_name);
+            self.invalidate_enrollments_monitoring(&oid);
         }
 
         self.name_index.insert(name, oid);
         let is_new = !self.objects.contains_key(&oid);
         self.invalid_enrollment_eval_state.remove(&oid);
+        self.enrollment_eval_sources.remove(&oid);
         self.objects.insert(oid, object);
         if is_new {
             self.type_index
@@ -144,10 +152,54 @@ impl ObjectDatabase {
         }
     }
 
+    /// Return database-owned monitored-source state for a custom Event
+    /// Enrollment object.
+    pub fn enrollment_eval_source(
+        &self,
+        oid: &ObjectIdentifier,
+    ) -> Option<EventEnrollmentMonitoredSource> {
+        self.enrollment_eval_sources.get(oid).copied()
+    }
+
+    /// Store database-owned monitored-source state for a custom Event
+    /// Enrollment object.
+    pub fn set_enrollment_eval_source(
+        &mut self,
+        oid: ObjectIdentifier,
+        source: Option<EventEnrollmentMonitoredSource>,
+    ) {
+        if let Some(source) = source {
+            self.enrollment_eval_sources.insert(oid, source);
+        } else {
+            self.enrollment_eval_sources.remove(&oid);
+        }
+    }
+
+    fn invalidate_enrollments_monitoring(&mut self, monitored_oid: &ObjectIdentifier) {
+        let affected = self
+            .objects
+            .iter()
+            .filter_map(|(oid, object)| {
+                let source = object
+                    .enrollment_eval_source_internal()
+                    .flatten()
+                    .or_else(|| self.enrollment_eval_sources.get(oid).copied());
+                source
+                    .is_some_and(|source| source.0 == *monitored_oid)
+                    .then_some(*oid)
+            })
+            .collect::<Vec<_>>();
+        self.invalid_enrollment_eval_state.extend(affected);
+    }
+
     /// Remove an object by identifier.
     pub fn remove(&mut self, oid: &ObjectIdentifier) -> Option<Box<dyn BACnetObject>> {
+        if self.objects.contains_key(oid) {
+            self.invalidate_enrollments_monitoring(oid);
+        }
         if let Some(obj) = self.objects.remove(oid) {
             self.invalid_enrollment_eval_state.remove(oid);
+            self.enrollment_eval_sources.remove(oid);
             self.name_index.remove(obj.object_name());
             if let Some(type_set) = self.type_index.get_mut(&oid.object_type()) {
                 type_set.retain(|o| o != oid);

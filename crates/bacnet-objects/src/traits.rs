@@ -326,9 +326,8 @@ pub trait BACnetObject: Send + Sync {
     ///
     /// The outer `Option` indicates whether the object supports this channel;
     /// the inner `Option` is empty before a source has been established.
-    /// Objects that implement the evaluation-state channel must also implement
-    /// this channel to retain indexed state or value-specific COV/COS
-    /// baselines. Those evaluations run statelessly without source storage.
+    /// The server stores source ownership in its object database when an
+    /// object implements evaluation state but leaves this channel unsupported.
     fn enrollment_eval_source_internal(&self) -> Option<Option<EventEnrollmentMonitoredSource>> {
         None
     }

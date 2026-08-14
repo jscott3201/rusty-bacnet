@@ -300,6 +300,7 @@ pub fn evaluate_event_enrollments(
     };
 
     let mut updates: Vec<(ObjectIdentifier, EnrollmentUpdate)> = Vec::new();
+    let mut database_eval_sources = HashSet::new();
 
     for oid in &oids {
         let Some(enrollment) = db.get(oid) else {
@@ -309,11 +310,18 @@ pub fn evaluate_event_enrollments(
         // A property read failure is transient and retains evaluation state.
         // An invalid reference shape or unsupported device clears state before
         // unrelated properties can short-circuit this pass.
-        let mut eval_state_supported = enrollment.enrollment_eval_state_internal().is_some();
+        let eval_state_supported = enrollment.enrollment_eval_state_internal().is_some();
         let mut eval_state = enrollment
             .enrollment_eval_state_internal()
             .unwrap_or_default();
-        let eval_source = enrollment.enrollment_eval_source_internal();
+        let eval_source = match enrollment.enrollment_eval_source_internal() {
+            Some(source) => Some(source),
+            None if eval_state_supported => {
+                database_eval_sources.insert(*oid);
+                Some(db.enrollment_eval_source(oid))
+            }
+            None => None,
+        };
         let force_state_reset = db.enrollment_eval_state_invalidated(oid);
         let reference = match read_object_property_ref(enrollment) {
             Ok(reference) => reference,
@@ -466,21 +474,6 @@ pub fn evaluate_event_enrollments(
             }
         };
         let event_type = EventType::from_raw(event_type_raw);
-        // Indexed state and algorithm baselines cannot survive a source
-        // change without owner storage. Pending-only threshold algorithms are
-        // still safe because their fingerprint includes the full reference.
-        let stateless_source_state = eval_state_supported
-            && eval_source.is_none()
-            && (monitored.array_index.is_some()
-                || matches!(
-                    event_type,
-                    EventType::CHANGE_OF_VALUE | EventType::CHANGE_OF_STATE
-                ));
-        if stateless_source_state {
-            queue_eval_state_reset(&mut updates, *oid, true, &eval_state);
-            eval_state = EventEnrollmentEvalState::default();
-            eval_state_supported = false;
-        }
         if eval_source.is_some_and(|current| current != Some(monitored_reference)) {
             updates.push((
                 *oid,
@@ -661,12 +654,6 @@ pub fn evaluate_event_enrollments(
             }
             continue;
         };
-        if stateless_source_state && ind.target == current_state {
-            // CHANGE_OF_STATE needs its stored causing value to distinguish a
-            // real same-state re-indication from the same alarm value.
-            continue;
-        }
-
         // Direction-selected delay: pTimeDelay toward OFFNORMAL states,
         // pTimeDelayNormal (already the fallback-composed effective value)
         // toward NORMAL — the Clause 13.3 split, mirroring the intrinsic
@@ -764,6 +751,7 @@ pub fn evaluate_event_enrollments(
     let mut source_failures = HashSet::new();
     let mut state_failures = HashSet::new();
     let mut invalidation_changes = Vec::new();
+    let mut database_source_changes = Vec::new();
     for (oid, update) in updates {
         let source_failed = source_failures.contains(&oid);
         if state_failures.contains(&oid)
@@ -776,7 +764,9 @@ pub fn evaluate_event_enrollments(
             continue;
         };
         if let Some(source) = update.eval_source {
-            if obj.set_enrollment_eval_source_internal(source).is_err() {
+            if database_eval_sources.contains(&oid) {
+                database_source_changes.push((oid, source));
+            } else if obj.set_enrollment_eval_source_internal(source).is_err() {
                 // State written later in this pass would have no reliable
                 // owner. Clear it and suppress dependent state updates, while
                 // allowing an immediate stateless transition to proceed.
@@ -803,21 +793,37 @@ pub fn evaluate_event_enrollments(
             if source_failed && fired.from == fired.to {
                 continue;
             }
-            if obj.set_event_state_internal(fired.to).is_err() {
-                continue;
-            }
+            let mut persisted_eval_state = false;
             if !source_failed {
                 if let Some(state) = update.eval_state {
                     if obj.set_enrollment_eval_state_internal(state).is_err() {
-                        // Do not expose a transition whose baseline or
-                        // countdown update could not be stored.
-                        let _ = obj.set_event_state_internal(fired.from);
-                        let _ = obj.set_enrollment_eval_source_internal(None);
+                        if database_eval_sources.contains(&oid) {
+                            database_source_changes.push((oid, None));
+                        } else {
+                            let _ = obj.set_enrollment_eval_source_internal(None);
+                        }
                         state_failures.insert(oid);
                         invalidation_changes.push((oid, true));
                         continue;
                     }
+                    persisted_eval_state = true;
                 }
+            }
+            if obj.set_event_state_internal(fired.to).is_err() {
+                if persisted_eval_state {
+                    if obj
+                        .set_enrollment_eval_state_internal(EventEnrollmentEvalState::default())
+                        .is_err()
+                    {
+                        invalidation_changes.push((oid, true));
+                    }
+                    if database_eval_sources.contains(&oid) {
+                        database_source_changes.push((oid, None));
+                    } else {
+                        let _ = obj.set_enrollment_eval_source_internal(None);
+                    }
+                }
+                continue;
             }
             // 13.2.2.1.4's fourth action, alarm-acknowledgment half (13.2.3):
             // with the transition's Ack_Required bit set, the corresponding
@@ -838,7 +844,11 @@ pub fn evaluate_event_enrollments(
             if obj.set_enrollment_eval_state_internal(state).is_err() {
                 // A later source write must not claim state that failed to
                 // reset.
-                let _ = obj.set_enrollment_eval_source_internal(None);
+                if database_eval_sources.contains(&oid) {
+                    database_source_changes.push((oid, None));
+                } else {
+                    let _ = obj.set_enrollment_eval_source_internal(None);
+                }
                 state_failures.insert(oid);
                 invalidation_changes.push((oid, true));
             } else if update.clears_invalidation {
@@ -847,6 +857,9 @@ pub fn evaluate_event_enrollments(
         }
     }
 
+    for (oid, source) in database_source_changes {
+        db.set_enrollment_eval_source(oid, source);
+    }
     for (oid, invalidated) in invalidation_changes {
         db.set_enrollment_eval_state_invalidated(oid, invalidated);
     }

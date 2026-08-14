@@ -10,7 +10,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 #[test]
-fn stateful_custom_enrollment_without_source_channel_runs_statelessly() {
+fn source_less_indexed_cov_retains_its_baseline_and_retargets_safely() {
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(98, "AV-custom-source", 62).unwrap();
     target
@@ -51,8 +51,23 @@ fn stateful_custom_enrollment_without_source_channel_runs_statelessly() {
         db.get(&enrollment_oid)
             .unwrap()
             .enrollment_eval_state_internal(),
-        Some(bacnet_objects::event_enrollment::EventEnrollmentEvalState::default())
+        Some(bacnet_objects::event_enrollment::EventEnrollmentEvalState {
+            pending: None,
+            cov_baseline: Some(PropertyValue::Real(10.0)),
+            last_offnormal_value: None,
+        })
     );
+
+    db.get_mut(&target_oid)
+        .unwrap()
+        .write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(20.0),
+            Some(1),
+        )
+        .unwrap();
+    assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
 
     db.get_mut(&enrollment_oid)
         .unwrap()
@@ -64,6 +79,17 @@ fn stateful_custom_enrollment_without_source_channel_runs_statelessly() {
         )
         .unwrap();
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+
+    db.get_mut(&target_oid)
+        .unwrap()
+        .write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(100.0),
+            Some(2),
+        )
+        .unwrap();
+    assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
 }
 
 #[test]
@@ -162,6 +188,35 @@ fn source_less_unindexed_cov_does_not_reuse_a_retargeted_baseline() {
         )
         .unwrap();
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+
+    db.get_mut(&second_oid)
+        .unwrap()
+        .write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(true),
+            None,
+        )
+        .unwrap();
+    db.get_mut(&second_oid)
+        .unwrap()
+        .write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(100.0),
+            None,
+        )
+        .unwrap();
+    db.get_mut(&second_oid)
+        .unwrap()
+        .write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(false),
+            None,
+        )
+        .unwrap();
+    assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
 }
 
 #[test]
@@ -268,4 +323,99 @@ fn source_less_custom_enrollment_retains_unindexed_delay_behavior() {
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
     assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
+}
+
+#[test]
+fn source_less_custom_enrollment_retains_indexed_delay_behavior() {
+    let mut db = ObjectDatabase::new();
+    let mut target = AnalogValueObject::new(108, "AV-indexed-source", 62).unwrap();
+    target
+        .write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(90.0),
+            Some(1),
+        )
+        .unwrap();
+    let target_oid = target.object_identifier();
+    db.add(Box::new(target)).unwrap();
+
+    let mut enrollment = ReferenceValueObject::new(Some(indexed_reference_value(target_oid, 1)));
+    enrollment.source_supported = false;
+    db.add(Box::new(enrollment)).unwrap();
+
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
+}
+
+#[test]
+fn replacing_the_monitored_object_restarts_an_indexed_delay() {
+    let mut db = ObjectDatabase::new();
+    let mut target = AnalogValueObject::new(109, "AV-replaced-source", 62).unwrap();
+    target
+        .write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(90.0),
+            Some(1),
+        )
+        .unwrap();
+    let target_oid = target.object_identifier();
+    db.add(Box::new(target)).unwrap();
+
+    let enrollment = ReferenceValueObject::new(Some(indexed_reference_value(target_oid, 1)));
+    let enrollment_oid = enrollment.object_identifier();
+    db.add(Box::new(enrollment)).unwrap();
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+
+    let mut replacement = AnalogValueObject::new(109, "AV-replacement", 62).unwrap();
+    replacement
+        .write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(90.0),
+            Some(1),
+        )
+        .unwrap();
+    db.add(Box::new(replacement)).unwrap();
+    assert!(db.enrollment_eval_state_invalidated(&enrollment_oid));
+
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
+}
+
+#[test]
+fn failed_eval_state_write_cannot_leak_an_unreported_event_state() {
+    let mut db = ObjectDatabase::new();
+    let mut target = AnalogValueObject::new(110, "AV-event-state-order", 62).unwrap();
+    target
+        .write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(90.0),
+            Some(1),
+        )
+        .unwrap();
+    let target_oid = target.object_identifier();
+    db.add(Box::new(target)).unwrap();
+
+    let mut enrollment = ReferenceValueObject::new(Some(indexed_reference_value(target_oid, 1)));
+    enrollment.normal_event_state_writable = false;
+    let state_writable = Arc::clone(&enrollment.state_writable);
+    let enrollment_oid = enrollment.object_identifier();
+    db.add(Box::new(enrollment)).unwrap();
+
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    state_writable.store(false, Ordering::SeqCst);
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
+    assert_eq!(
+        db.get(&enrollment_oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::EVENT_STATE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(EventState::NORMAL.to_raw())
+    );
 }
