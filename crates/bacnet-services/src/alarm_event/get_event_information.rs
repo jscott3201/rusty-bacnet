@@ -8,14 +8,13 @@ fn decode_event_transition_bits(
     field: &str,
 ) -> Result<(u8, usize), Error> {
     let (content, end) = decode_context(data, offset, expected_tag, field)?;
-    let (unused_bits, bits) = primitives::decode_bit_string(content)?;
-    if unused_bits != 5 || bits.len() != 1 || bits[0] & 0x1f != 0 {
+    if content.len() != 2 || content[0] != 5 || content[1] & 0x1f != 0 {
         return Err(Error::decoding(
             offset,
             format!("{field} must contain three bits with zero padding"),
         ));
     }
-    Ok((bacnet_types::bitstring::unpack_octet(&bits, 3), end))
+    Ok((bacnet_types::bitstring::unpack_octet(&content[1..], 3), end))
 }
 
 fn decode_application_u32(data: &[u8], offset: usize, field: &str) -> Result<(u32, usize), Error> {

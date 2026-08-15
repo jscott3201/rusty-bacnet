@@ -1,5 +1,104 @@
 use super::*;
 
+struct EventSummaryFixture {
+    oid: ObjectIdentifier,
+    name: String,
+    timestamps: [u64; 3],
+}
+
+impl BACnetObject for EventSummaryFixture {
+    fn object_identifier(&self) -> ObjectIdentifier {
+        self.oid
+    }
+
+    fn object_name(&self) -> &str {
+        &self.name
+    }
+
+    fn read_property(
+        &self,
+        property: PropertyIdentifier,
+        _array_index: Option<u32>,
+    ) -> Result<PropertyValue, Error> {
+        match property {
+            p if p == PropertyIdentifier::EVENT_DETECTION_ENABLE => {
+                Ok(PropertyValue::Boolean(true))
+            }
+            p if p == PropertyIdentifier::EVENT_STATE => {
+                Ok(PropertyValue::Enumerated(EventState::HIGH_LIMIT.to_raw()))
+            }
+            p if p == PropertyIdentifier::NOTIFICATION_CLASS => Ok(PropertyValue::Unsigned(0)),
+            p if p == PropertyIdentifier::EVENT_ENABLE => Ok(PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![0xa0],
+            }),
+            p if p == PropertyIdentifier::NOTIFY_TYPE => Ok(PropertyValue::Enumerated(1)),
+            p if p == PropertyIdentifier::ACKED_TRANSITIONS => Ok(PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![0x40],
+            }),
+            p if p == PropertyIdentifier::EVENT_TIME_STAMPS => Ok(PropertyValue::List(
+                self.timestamps
+                    .into_iter()
+                    .map(PropertyValue::Unsigned)
+                    .collect(),
+            )),
+            _ => Err(Error::Protocol {
+                class: ErrorClass::PROPERTY.to_raw() as u32,
+                code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+            }),
+        }
+    }
+
+    fn write_property(
+        &mut self,
+        _property: PropertyIdentifier,
+        _array_index: Option<u32>,
+        _value: PropertyValue,
+        _priority: Option<u8>,
+    ) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::PROPERTY.to_raw() as u32,
+            code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+        })
+    }
+
+    fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
+        static PROPERTIES: &[PropertyIdentifier] = &[
+            PropertyIdentifier::EVENT_DETECTION_ENABLE,
+            PropertyIdentifier::EVENT_STATE,
+            PropertyIdentifier::NOTIFICATION_CLASS,
+            PropertyIdentifier::EVENT_ENABLE,
+            PropertyIdentifier::NOTIFY_TYPE,
+            PropertyIdentifier::ACKED_TRANSITIONS,
+            PropertyIdentifier::EVENT_TIME_STAMPS,
+        ];
+        std::borrow::Cow::Borrowed(PROPERTIES)
+    }
+}
+
+fn event_summary_fixture(instance: u32, timestamps: [u64; 3]) -> EventSummaryFixture {
+    EventSummaryFixture {
+        oid: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance).unwrap(),
+        name: format!("AI-{instance}"),
+        timestamps,
+    }
+}
+
+fn get_event_information_ack(
+    db: &ObjectDatabase,
+    cursor: Option<ObjectIdentifier>,
+) -> GetEventInformationAck {
+    let request = GetEventInformationRequest {
+        last_received_object_identifier: cursor,
+    };
+    let mut request_buf = BytesMut::new();
+    request.encode(&mut request_buf);
+    let mut ack_buf = BytesMut::new();
+    handle_get_event_information(db, &request_buf, &mut ack_buf).unwrap();
+    GetEventInformationAck::decode(&ack_buf).unwrap()
+}
+
 #[test]
 fn device_communication_control_handler() {
     let comm_state = AtomicU8::new(0);
@@ -145,7 +244,7 @@ fn get_event_information_reports_non_normal_objects() {
 }
 
 #[test]
-fn get_event_information_reads_event_enable_and_notify_type() {
+fn get_event_information_reads_event_enable_notify_type_and_priorities() {
     use bacnet_objects::event::LimitEnable;
     use bacnet_objects::notification_class::NotificationClass;
 
@@ -226,34 +325,55 @@ fn get_event_information_reads_event_enable_and_notify_type() {
 
     let mut ack_buf = BytesMut::new();
     handle_get_event_information(&db, &buf, &mut ack_buf).unwrap();
-    let ack_bytes = ack_buf.to_vec();
-    assert!(
-        ack_bytes.len() > 10,
-        "ACK should contain event summary data"
-    );
+    let ack = GetEventInformationAck::decode(&ack_buf).unwrap();
+    let summary = &ack.list_of_event_summaries[0];
+    assert_eq!(summary.event_enable, 0x05);
+    assert_eq!(summary.notify_type, 1);
+    assert_eq!(summary.event_priorities, [100, 150, 200]);
+}
 
-    // Verify the object reads EVENT_ENABLE=0x05 and NOTIFY_TYPE=1 (EVENT)
-    let ai_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-    let ai_ref = db.get(&ai_oid).unwrap();
-    let ev_enable = ai_ref
-        .read_property(PropertyIdentifier::EVENT_ENABLE, None)
+#[test]
+fn get_event_information_forwards_sequence_timestamps() {
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(event_summary_fixture(1, [11, 22, 33])))
         .unwrap();
-    match ev_enable {
-        PropertyValue::BitString { data, .. } => {
-            assert_eq!(
-                bacnet_types::bitstring::unpack_octet(&data, 3),
-                0x05,
-                "EVENT_ENABLE should be 0x05"
-            );
-        }
-        other => panic!("expected BitString, got {:?}", other),
-    }
-    let notify = ai_ref
-        .read_property(PropertyIdentifier::NOTIFY_TYPE, None)
-        .unwrap();
+
+    let ack = get_event_information_ack(&db, None);
     assert_eq!(
-        notify,
-        PropertyValue::Enumerated(1),
-        "NOTIFY_TYPE should be EVENT(1)"
+        ack.list_of_event_summaries[0].event_timestamps,
+        [
+            BACnetTimeStamp::SequenceNumber(11),
+            BACnetTimeStamp::SequenceNumber(22),
+            BACnetTimeStamp::SequenceNumber(33),
+        ]
     );
+}
+
+#[test]
+fn get_event_information_paginates_by_object_identifier_after_cursor_removal() {
+    let mut db = ObjectDatabase::new();
+    for instance in (1..=27).rev() {
+        db.add(Box::new(event_summary_fixture(instance, [0; 3])))
+            .unwrap();
+    }
+
+    let first_page = get_event_information_ack(&db, None);
+    let first_instances: Vec<_> = first_page
+        .list_of_event_summaries
+        .iter()
+        .map(|summary| summary.object_identifier.instance_number())
+        .collect();
+    assert_eq!(first_instances, (1..=25).collect::<Vec<_>>());
+    assert!(first_page.more_events);
+
+    let cursor = first_page.list_of_event_summaries[24].object_identifier;
+    db.remove(&cursor).unwrap();
+    let second_page = get_event_information_ack(&db, Some(cursor));
+    let second_instances: Vec<_> = second_page
+        .list_of_event_summaries
+        .iter()
+        .map(|summary| summary.object_identifier.instance_number())
+        .collect();
+    assert_eq!(second_instances, vec![26, 27]);
+    assert!(!second_page.more_events);
 }
