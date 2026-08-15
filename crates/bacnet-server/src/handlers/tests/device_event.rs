@@ -303,7 +303,7 @@ fn get_event_information_reads_event_enable_notify_type_and_priorities() {
     ai.write_property(
         PropertyIdentifier::NOTIFICATION_CLASS,
         None,
-        PropertyValue::Unsigned(5),
+        PropertyValue::Unsigned(7),
         None,
     )
     .unwrap();
@@ -314,6 +314,7 @@ fn get_event_information_reads_event_enable_notify_type_and_priorities() {
 
     // Add NotificationClass object with custom priorities
     let mut nc = NotificationClass::new(5, "NC-5").unwrap();
+    nc.notification_class = 7;
     nc.priority = [100, 150, 200];
     db.add(Box::new(nc)).unwrap();
 
@@ -333,9 +334,11 @@ fn get_event_information_reads_event_enable_notify_type_and_priorities() {
 }
 
 #[test]
-fn get_event_information_forwards_sequence_timestamps() {
+fn get_event_information_forwards_valid_sequence_timestamps_and_defaults_invalid_array() {
     let mut db = ObjectDatabase::new();
-    db.add(Box::new(event_summary_fixture(1, [11, 22, 33])))
+    db.add(Box::new(event_summary_fixture(1, [11, 65535, 33])))
+        .unwrap();
+    db.add(Box::new(event_summary_fixture(2, [65536, 44, 55])))
         .unwrap();
 
     let ack = get_event_information_ack(&db, None);
@@ -343,8 +346,16 @@ fn get_event_information_forwards_sequence_timestamps() {
         ack.list_of_event_summaries[0].event_timestamps,
         [
             BACnetTimeStamp::SequenceNumber(11),
-            BACnetTimeStamp::SequenceNumber(22),
+            BACnetTimeStamp::SequenceNumber(65535),
             BACnetTimeStamp::SequenceNumber(33),
+        ]
+    );
+    assert_eq!(
+        ack.list_of_event_summaries[1].event_timestamps,
+        [
+            BACnetTimeStamp::SequenceNumber(0),
+            BACnetTimeStamp::SequenceNumber(0),
+            BACnetTimeStamp::SequenceNumber(0),
         ]
     );
 }
