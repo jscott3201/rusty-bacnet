@@ -36,21 +36,15 @@ pub(super) fn closing_tag_start(
     Ok(start)
 }
 
-pub(super) fn extract_trailing_raw_context(
+pub(super) fn decode_context_value<T>(
     data: &[u8],
-    start: usize,
-    tag_number: u8,
-    variant_body_end: usize,
+    offset: usize,
+    expected_tag: u8,
     field: &str,
-) -> Result<(Vec<u8>, usize), Error> {
-    let closing = closing_tag_start(data, variant_body_end, tag_number, field)?;
-    if closing < start {
-        return Err(Error::decoding(
-            start,
-            format!("{field} has invalid bounds"),
-        ));
-    }
-    Ok((data[start..closing].to_vec(), variant_body_end))
+    decode: impl FnOnce(&[u8]) -> Result<T, Error>,
+) -> Result<(T, usize), Error> {
+    let (content, end) = decode_context(data, offset, expected_tag, field)?;
+    Ok((decode(content)?, end))
 }
 
 pub(super) fn decode_context_u16(

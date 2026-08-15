@@ -1,6 +1,5 @@
 use super::property_states::{
-    decode_device_obj_prop_ref, decode_property_states, decode_status_flags,
-    encode_property_states, extract_raw_context,
+    decode_device_obj_prop_ref, decode_property_states, encode_property_states, extract_raw_context,
 };
 use super::*;
 
@@ -31,7 +30,7 @@ pub enum NotificationParameters {
         new_value: ChangeOfValueChoice,
         status_flags: u8,
     },
-    /// [3] Command failure.
+    /// [3] Command failure. Value byte vectors contain encoded BACnet TLVs.
     CommandFailure {
         command_value: Vec<u8>,
         status_flags: u8,
@@ -58,7 +57,7 @@ pub enum NotificationParameters {
         status_flags: u8,
         operation_expected: u32,
     },
-    /// [9] Extended (vendor-defined).
+    /// [9] Extended (vendor-defined). `parameters` contains encoded BACnet TLVs.
     Extended {
         vendor_id: u16,
         extended_event_type: u32,
@@ -76,7 +75,7 @@ pub enum NotificationParameters {
         status_flags: u8,
         exceeded_limit: u64,
     },
-    /// [13] Access event.
+    /// [13] Access event. `authentication_factor` contains encoded BACnet TLVs.
     AccessEvent {
         access_event: u32,
         status_flags: u8,
@@ -112,12 +111,12 @@ pub enum NotificationParameters {
         status_flags: u8,
         alarm_value: String,
     },
-    /// [18] Change of status flags.
+    /// [18] Change of status flags. `present_value` contains encoded BACnet TLVs.
     ChangeOfStatusFlags {
         present_value: Vec<u8>,
         referenced_flags: u8,
     },
-    /// [19] Change of reliability.
+    /// [19] Change of reliability. `property_values` contains encoded BACnet TLVs.
     ChangeOfReliability {
         reliability: u32,
         status_flags: u8,
@@ -125,7 +124,7 @@ pub enum NotificationParameters {
     },
     /// [20] None.
     NoneParams,
-    /// [21] Change of discrete value.
+    /// [21] Change of discrete value. `new_value` contains encoded BACnet TLVs.
     ChangeOfDiscreteValue {
         new_value: Vec<u8>,
         status_flags: u8,

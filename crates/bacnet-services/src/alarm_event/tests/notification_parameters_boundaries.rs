@@ -5,6 +5,12 @@ fn raw_context_value(buf: &mut BytesMut, tag_number: u8, value: &[u8]) {
     buf.extend_from_slice(value);
 }
 
+fn encoded_octet_string(value: &[u8]) -> Vec<u8> {
+    let mut encoded = BytesMut::new();
+    primitives::encode_app_octet_string(&mut encoded, value);
+    encoded.to_vec()
+}
+
 fn raw_buffer_ready(values: [&[u8]; 4], field_tags: [u8; 4]) -> BytesMut {
     let mut buf = BytesMut::new();
     tags::encode_opening_tag(&mut buf, 10);
@@ -304,20 +310,20 @@ fn notification_parameter_fields_require_owned_tags_and_status_flags() {
 fn event_notification_preserves_trailing_opaque_payload_bytes() {
     let variants = [
         NotificationParameters::CommandFailure {
-            command_value: vec![0x01],
+            command_value: encoded_octet_string(&[0x01]),
             status_flags: 0b1000,
-            feedback_value: vec![0x2e, 0x2f, 0xcf, 0x3f],
+            feedback_value: encoded_octet_string(&[0x2e, 0x2f, 0xcf, 0x3f]),
         },
         NotificationParameters::Extended {
             vendor_id: 42,
             extended_event_type: 7,
-            parameters: vec![0x2e, 0x2f, 0xcf, 0x9f],
+            parameters: encoded_octet_string(&[0x2e, 0x2f, 0xcf, 0x9f]),
         },
-        access_event(vec![0x5e, 0x5f, 0xcf, 0xdf]),
+        access_event(encoded_octet_string(&[0x5e, 0x5f, 0xcf, 0xdf])),
         NotificationParameters::ChangeOfReliability {
             reliability: 7,
             status_flags: 0b1000,
-            property_values: vec![0x2e, 0x2f, 0xcf, 0xff],
+            property_values: encoded_octet_string(&[0x2e, 0x2f, 0xcf, 0xff]),
         },
     ];
 
@@ -342,9 +348,9 @@ fn event_notification_requires_exact_event_values_suffix() {
         NotificationParameters::Extended {
             vendor_id: 42,
             extended_event_type: 7,
-            parameters: vec![0x01, 0x02],
+            parameters: encoded_octet_string(&[0x01, 0x02]),
         },
-        access_event(vec![0xab, 0xcd]),
+        access_event(encoded_octet_string(&[0xab, 0xcd])),
         NotificationParameters::ChangeOfTimer {
             new_state: 1,
             status_flags: 0b1000,
@@ -433,9 +439,199 @@ fn public_notification_parameter_decode_preserves_opaque_delimiters() {
     let expected = NotificationParameters::Extended {
         vendor_id: 42,
         extended_event_type: 7,
-        parameters: vec![0x61, 0x2f, 0x9f, 0xcf],
+        parameters: encoded_octet_string(&[0x2f, 0x9f, 0xcf]),
     };
     let mut encoded = BytesMut::new();
     expected.encode(&mut encoded).unwrap();
     assert_eq!(decode_variant(&encoded).unwrap(), expected);
+}
+
+#[test]
+fn raw_fields_reject_same_tag_siblings_and_truncated_close_aliases() {
+    let raw = encoded_octet_string(&[0x2f, 0x9f, 0xcf]);
+    let variants = [
+        NotificationParameters::CommandFailure {
+            command_value: raw.clone(),
+            status_flags: 0b1000,
+            feedback_value: raw.clone(),
+        },
+        NotificationParameters::Extended {
+            vendor_id: 42,
+            extended_event_type: 7,
+            parameters: raw.clone(),
+        },
+        access_event(raw.clone()),
+        NotificationParameters::ChangeOfReliability {
+            reliability: 7,
+            status_flags: 0b1000,
+            property_values: raw,
+        },
+    ];
+
+    for variant in variants {
+        let mut siblings = encode_event(variant.clone());
+        siblings.truncate(siblings.len() - 1);
+        variant.encode(&mut siblings).unwrap();
+        tags::encode_closing_tag(&mut siblings, 12);
+        assert!(EventNotificationRequest::decode(&siblings).is_err());
+    }
+
+    let mut truncated = encode_event(NotificationParameters::Extended {
+        vendor_id: 42,
+        extended_event_type: 7,
+        parameters: encoded_octet_string(&[0x2f, 0x9f, 0xcf]),
+    });
+    truncated.truncate(truncated.len() - 3);
+    assert!(EventNotificationRequest::decode(&truncated).is_err());
+}
+
+#[test]
+fn non_trailing_raw_fields_preserve_delimiters_inside_values() {
+    let raw = encoded_octet_string(&[0x0e, 0x0f, 0x1e, 0x1f]);
+    let variants = [
+        NotificationParameters::CommandFailure {
+            command_value: raw.clone(),
+            status_flags: 0b1000,
+            feedback_value: raw.clone(),
+        },
+        NotificationParameters::ChangeOfStatusFlags {
+            present_value: raw.clone(),
+            referenced_flags: 0b1000,
+        },
+        NotificationParameters::ChangeOfDiscreteValue {
+            new_value: raw,
+            status_flags: 0b1000,
+        },
+    ];
+
+    for expected in variants {
+        let decoded = EventNotificationRequest::decode(&encode_event(expected.clone())).unwrap();
+        assert_eq!(decoded.event_values, Some(expected));
+    }
+}
+
+#[test]
+fn public_notification_parameter_decode_accepts_event_values_close() {
+    let expected = NotificationParameters::Extended {
+        vendor_id: 42,
+        extended_event_type: 7,
+        parameters: encoded_octet_string(&[0xcf]),
+    };
+    let mut wrapped = BytesMut::new();
+    tags::encode_opening_tag(&mut wrapped, 12);
+    expected.encode(&mut wrapped).unwrap();
+    tags::encode_closing_tag(&mut wrapped, 12);
+    assert_eq!(
+        NotificationParameters::decode(&wrapped, 1).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn raw_fields_require_encoded_bacnet_values() {
+    let invalid = NotificationParameters::Extended {
+        vendor_id: 42,
+        extended_event_type: 7,
+        parameters: vec![0x9f],
+    };
+    let mut encoded = BytesMut::new();
+    invalid.encode(&mut encoded).unwrap();
+    assert!(decode_variant(&encoded).is_err());
+}
+
+#[test]
+fn primitive_notification_fields_require_their_context_tags() {
+    let variants = [
+        (
+            NotificationParameters::ChangeOfBitstring {
+                referenced_bitstring: (0, vec![0x80]),
+                status_flags: 0b1000,
+            },
+            2,
+        ),
+        (
+            NotificationParameters::FloatingLimit {
+                reference_value: 1.0,
+                status_flags: 0b1000,
+                setpoint_value: 2.0,
+                error_limit: 3.0,
+            },
+            4,
+        ),
+        (
+            NotificationParameters::OutOfRange {
+                exceeding_value: 1.0,
+                status_flags: 0b1000,
+                deadband: 2.0,
+                exceeded_limit: 3.0,
+            },
+            4,
+        ),
+        (
+            NotificationParameters::UnsignedRange {
+                exceeding_value: 1,
+                status_flags: 0b1000,
+                exceeded_limit: 2,
+            },
+            3,
+        ),
+        (
+            NotificationParameters::DoubleOutOfRange {
+                exceeding_value: 1.0,
+                status_flags: 0b1000,
+                deadband: 2.0,
+                exceeded_limit: 3.0,
+            },
+            4,
+        ),
+        (
+            NotificationParameters::SignedOutOfRange {
+                exceeding_value: -1,
+                status_flags: 0b1000,
+                deadband: 2,
+                exceeded_limit: -3,
+            },
+            4,
+        ),
+        (
+            NotificationParameters::UnsignedOutOfRange {
+                exceeding_value: 1,
+                status_flags: 0b1000,
+                deadband: 2,
+                exceeded_limit: 3,
+            },
+            4,
+        ),
+        (
+            NotificationParameters::ChangeOfCharacterstring {
+                changed_value: "changed".into(),
+                status_flags: 0b1000,
+                alarm_value: "alarm".into(),
+            },
+            3,
+        ),
+        (
+            NotificationParameters::ChangeOfLifeSafety {
+                new_state: 1,
+                new_mode: 2,
+                status_flags: 0b1000,
+                operation_expected: 3,
+            },
+            4,
+        ),
+    ];
+
+    for (variant, field_count) in variants {
+        let mut encoded = BytesMut::new();
+        variant.encode(&mut encoded).unwrap();
+        let (_, mut field_start) = tags::decode_tag(&encoded, 0).unwrap();
+        for expected_tag in 0..field_count {
+            let (field, content_start) = tags::decode_tag(&encoded, field_start).unwrap();
+            assert!(field.is_context(expected_tag));
+            let mut wrong_tag = encoded.clone();
+            wrong_tag[field_start] = 0x70 | (wrong_tag[field_start] & 0x0f);
+            assert!(decode_variant(&wrong_tag).is_err());
+            field_start = content_start + field.length as usize;
+        }
+    }
 }

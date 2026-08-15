@@ -353,7 +353,7 @@ fn notification_params_extended_round_trip() {
     let params = NotificationParameters::Extended {
         vendor_id: 42,
         extended_event_type: 7,
-        parameters: vec![0x01, 0x02, 0x03],
+        parameters: vec![0x63, 0x01, 0x02, 0x03],
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
@@ -368,7 +368,7 @@ fn notification_params_extended_round_trip() {
         } => {
             assert_eq!(vendor_id, 42);
             assert_eq!(extended_event_type, 7);
-            assert_eq!(parameters, vec![0x01, 0x02, 0x03]);
+            assert_eq!(parameters, vec![0x63, 0x01, 0x02, 0x03]);
         }
         other => panic!("expected Extended, got {:?}", other),
     }
@@ -401,7 +401,7 @@ fn notification_params_access_event_round_trip() {
             },
         ),
         access_credential: cred.clone(),
-        authentication_factor: vec![0xAB, 0xCD],
+        authentication_factor: vec![0x62, 0xAB, 0xCD],
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
@@ -423,7 +423,7 @@ fn notification_params_access_event_round_trip() {
             assert_eq!(access_event_time.0.year, 124);
             assert_eq!(access_event_time.1.hour, 10);
             assert_eq!(access_credential, cred);
-            assert_eq!(authentication_factor, vec![0xAB, 0xCD]);
+            assert_eq!(authentication_factor, vec![0x62, 0xAB, 0xCD]);
         }
         other => panic!("expected AccessEvent, got {:?}", other),
     }

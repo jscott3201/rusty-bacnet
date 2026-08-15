@@ -219,35 +219,64 @@ pub(super) fn decode_device_obj_prop_ref(
     })
 }
 
-/// Extract raw bytes between an opening and its matching closing context tag.
-///
-/// `start` is the position just past the opening tag. The closing tag byte for
-/// context tags 0–14 is `(tag_number << 4) | 0x0F`. This scans byte-by-byte to
-/// find the matching close without parsing inner content as BACnet tags.
+/// Extract an encoded BACnet value sequence from a constructed context field.
 pub(super) fn extract_raw_context(
     data: &[u8],
     start: usize,
     tag_number: u8,
 ) -> Result<(Vec<u8>, usize), Error> {
-    // For context tags < 15 the opening/closing bytes are single-byte:
-    //   opening = (tag << 4) | 0x0E, closing = (tag << 4) | 0x0F
-    let open_byte = (tag_number << 4) | 0x0E;
-    let close_byte = (tag_number << 4) | 0x0F;
-    let mut depth: usize = 1;
+    let mut stack = [0; tags::MAX_CONTEXT_NESTING_DEPTH];
+    stack[0] = tag_number;
+    let mut depth = 1;
     let mut pos = start;
+
     while pos < data.len() {
-        let b = data[pos];
-        if b == open_byte {
+        let tag_start = pos;
+        let (tag, content_start) = tags::decode_tag(data, pos)?;
+        if tag.is_opening {
+            if depth == stack.len() {
+                return Err(Error::decoding(
+                    pos,
+                    format!(
+                        "context tag nesting depth exceeds maximum ({})",
+                        tags::MAX_CONTEXT_NESTING_DEPTH
+                    ),
+                ));
+            }
+            stack[depth] = tag.number;
             depth += 1;
-        } else if b == close_byte {
+            pos = content_start;
+        } else if tag.is_closing {
+            if tag.number != stack[depth - 1] {
+                return Err(Error::decoding(
+                    pos,
+                    format!(
+                        "closing tag {} does not match opening tag {}",
+                        tag.number,
+                        stack[depth - 1]
+                    ),
+                ));
+            }
             depth -= 1;
             if depth == 0 {
-                let raw = data[start..pos].to_vec();
-                return Ok((raw, pos + 1)); // past closing tag byte
+                return Ok((data[start..tag_start].to_vec(), content_start));
+            }
+            pos = content_start;
+        } else if tag.class == tags::TagClass::Application && tag.number == tags::app_tag::BOOLEAN {
+            pos = content_start;
+        } else {
+            pos = content_start
+                .checked_add(tag.length as usize)
+                .ok_or_else(|| Error::decoding(content_start, "tag length overflow"))?;
+            if pos > data.len() {
+                return Err(Error::decoding(
+                    content_start,
+                    format!("tag data overflows buffer: need {} bytes", tag.length),
+                ));
             }
         }
-        pos += 1;
     }
+
     Err(Error::decoding(
         start,
         format!("extract_raw_context: missing closing tag [{tag_number}]"),
