@@ -151,6 +151,10 @@ pub fn encode_event_parameter(buf: &mut BytesMut, value: &BACnetEventParameter) 
             tags::encode_closing_tag(buf, 2);
             tags::encode_closing_tag(buf, 9);
         }
+        BACnetEventParameter::Opaque { tag, data } if *tag == u8::MAX => {
+            // Legacy pre-framing EventEnrollment values used an Octet String.
+            primitives::encode_app_octet_string(buf, data);
+        }
         BACnetEventParameter::Opaque { tag, data } => {
             // Preserved alternative: its captured bytes are the complete
             // SEQUENCE body, re-emitted under its own opening/closing pair.
@@ -193,6 +197,22 @@ pub fn decode_event_parameter(
 
     let (tag, pos) = tags::decode_tag(data, offset)?;
     let what = "BACnetEventParameter";
+
+    if tag.class == tags::TagClass::Application && tag.number == tags::app_tag::OCTET_STRING {
+        let end = pos
+            .checked_add(tag.length as usize)
+            .ok_or_else(|| Error::decoding(pos, "BACnetEventParameter: length overflow"))?;
+        if end > data.len() {
+            return Err(Error::buffer_too_short(end, data.len()));
+        }
+        return Ok((
+            EP::Opaque {
+                tag: u8::MAX,
+                data: data[pos..end].to_vec(),
+            },
+            end,
+        ));
+    }
 
     if RESERVED_EVENT_TAGS.contains(&tag.number) {
         return Err(Error::decoding(

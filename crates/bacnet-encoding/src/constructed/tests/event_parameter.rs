@@ -276,10 +276,24 @@ fn legacy_opaque_sentinel_stays_local_to_event_parameters() {
     let mut encoded = BytesMut::new();
     encode_event_parameter(&mut encoded, &value);
 
-    assert!(tags::decode_tag(&encoded, 0).is_err());
+    let (tag, _) = tags::decode_tag(&encoded, 0).unwrap();
+    assert_eq!(tag.class, tags::TagClass::Application);
+    assert_eq!(tag.number, tags::app_tag::OCTET_STRING);
     let (decoded, end) = decode_event_parameter(&encoded, 0).unwrap();
     assert_eq!(decoded, value);
     assert_eq!(end, encoded.len());
+
+    let historical = [0xFE, 0xFF, 1, 2, 3, 0xFF, 0xFF];
+    assert!(tags::decode_tag(&historical, 0).is_err());
+    let (decoded, end) = decode_event_parameter(&historical, 0).unwrap();
+    assert_eq!(
+        decoded,
+        BACnetEventParameter::Opaque {
+            tag: u8::MAX,
+            data: vec![1, 2, 3],
+        }
+    );
+    assert_eq!(end, historical.len());
 }
 
 // --- Negatives ----------------------------------------------------------------

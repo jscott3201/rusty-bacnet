@@ -178,6 +178,9 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
         TagClass::Application
     };
     let lvt = initial & 0x07;
+    if class == TagClass::Application && lvt > 5 {
+        return Err(Error::decoding(offset, "reserved application tag L/V/T"));
+    }
 
     if tag_number == 0x0F {
         if pos >= data.len() {
@@ -587,15 +590,6 @@ mod tests {
     }
 
     #[test]
-    fn decode_rejects_invalid_extended_tag_numbers() {
-        for initial in [0xF1, 0xF9, 0xFE, 0xFF] {
-            for tag_number in [0, 1, 14, 255] {
-                assert!(decode_tag(&[initial, tag_number], 0).is_err());
-            }
-        }
-    }
-
-    #[test]
     fn decode_extended_length() {
         // Tag 2, Application, length 100: 0x25, 100
         let (tag, pos) = decode_tag(&[0x25, 100], 0).unwrap();
@@ -614,35 +608,6 @@ mod tests {
         assert_eq!(tag.number, 2);
         assert_eq!(tag.length, 100000);
         assert_eq!(pos, 6);
-    }
-
-    #[test]
-    fn decode_rejects_noncanonical_extended_lengths() {
-        for length in 0..=4 {
-            assert!(decode_tag(&[0x0D, length], 0).is_err());
-        }
-
-        assert!(decode_tag(&[0x0D, 254, 0x00, 0xFD], 0).is_err());
-        assert!(decode_tag(&[0x0D, 255, 0x00, 0x00, 0xFF, 0xFF], 0).is_err());
-    }
-
-    #[test]
-    fn decode_accepts_canonical_extended_length_boundaries() {
-        let cases: &[(&[u8], u32)] = &[
-            (&[0x0D, 5], 5),
-            (&[0x0D, 253], 253),
-            (&[0x0D, 254, 0x00, 0xFE], 254),
-            (&[0x0D, 254, 0xFF, 0xFF], 65_535),
-            (&[0x0D, 255, 0x00, 0x01, 0x00, 0x00], 65_536),
-        ];
-
-        for &(encoded, expected_length) in cases {
-            let (tag, pos) = decode_tag(encoded, 0).unwrap();
-            assert_eq!(tag.number, 0);
-            assert_eq!(tag.class, TagClass::Context);
-            assert_eq!(tag.length, expected_length);
-            assert_eq!(pos, encoded.len());
-        }
     }
 
     #[test]

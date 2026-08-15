@@ -318,6 +318,48 @@ mod tests {
     }
 
     #[test]
+    fn legacy_event_parameters_cross_property_framing() {
+        use crate::write_property::WritePropertyRequest;
+        use bacnet_types::constructed::BACnetEventParameter;
+
+        let value = BACnetEventParameter::Opaque {
+            tag: u8::MAX,
+            data: vec![0xff, 1, 2],
+        };
+        let mut property_value = BytesMut::new();
+        bacnet_encoding::constructed::encode_event_parameter(&mut property_value, &value);
+        let object_identifier = ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, 1).unwrap();
+
+        let ack = ReadPropertyACK {
+            object_identifier,
+            property_identifier: PropertyIdentifier::EVENT_PARAMETERS,
+            property_array_index: None,
+            property_value: property_value.to_vec(),
+        };
+        let mut encoded = BytesMut::new();
+        ack.encode(&mut encoded);
+        let decoded = ReadPropertyACK::decode(&encoded).unwrap();
+        assert_eq!(decoded, ack);
+
+        let request = WritePropertyRequest {
+            object_identifier,
+            property_identifier: PropertyIdentifier::EVENT_PARAMETERS,
+            property_array_index: None,
+            property_value: property_value.to_vec(),
+            priority: None,
+        };
+        encoded.clear();
+        request.encode(&mut encoded);
+        let decoded = WritePropertyRequest::decode(&encoded).unwrap();
+        assert_eq!(decoded, request);
+
+        let (decoded, end) =
+            bacnet_encoding::constructed::decode_event_parameter(&property_value, 0).unwrap();
+        assert_eq!(decoded, value);
+        assert_eq!(end, property_value.len());
+    }
+
+    #[test]
     fn read_property_values_must_fit_u32() {
         let maximum = u64::from(u32::MAX);
         let request = encode_fields(0, 1, maximum, Some((2, maximum)), false, true);
