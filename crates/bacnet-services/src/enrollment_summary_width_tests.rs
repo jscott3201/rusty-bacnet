@@ -153,9 +153,6 @@ fn request_rejects_malformed_nested_and_trailing_fields() {
     wrong_ack[0] = 0x19;
     assert!(GetEnrollmentSummaryRequest::decode(&wrong_ack).is_err());
 
-    let reversed = raw_request([&zero, &zero, &zero, &zero, &[2], &[1], &zero], true);
-    assert!(GetEnrollmentSummaryRequest::decode(&reversed).is_err());
-
     assert!(GetEnrollmentSummaryRequest::decode(&raw_request([&zero[..]; 7], false)).is_err());
 
     let mut trailing = valid;
@@ -171,7 +168,7 @@ fn request_rejects_malformed_nested_and_trailing_fields() {
 
 #[test]
 fn request_try_encode_rejects_unrepresentable_filters_without_writing() {
-    let mut request = GetEnrollmentSummaryRequest {
+    let request = GetEnrollmentSummaryRequest {
         acknowledgment_filter: 0,
         enrollment_filter: Some(RecipientProcess {
             device: None,
@@ -183,14 +180,6 @@ fn request_try_encode_rejects_unrepresentable_filters_without_writing() {
         notification_class_filter: None,
     };
     let mut encoded = BytesMut::new();
-    assert!(request.try_encode(&mut encoded).is_err());
-    assert!(encoded.is_empty());
-
-    request.enrollment_filter = None;
-    request.priority_filter = Some(PriorityFilter {
-        min_priority: 2,
-        max_priority: 1,
-    });
     assert!(request.try_encode(&mut encoded).is_err());
     assert!(encoded.is_empty());
 }

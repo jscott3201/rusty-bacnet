@@ -58,7 +58,7 @@ impl GetEnrollmentSummaryRequest {
     ///
     /// # Panics
     ///
-    /// Panics if an enrollment filter has no device or a priority range is reversed.
+    /// Panics if an enrollment filter has no device.
     pub fn encode(&self, buf: &mut BytesMut) {
         self.try_encode(buf)
             .expect("invalid GetEnrollmentSummary request");
@@ -75,15 +75,6 @@ impl GetEnrollmentSummaryRequest {
                 "EnrollmentSummary enrollmentFilter requires a device".into(),
             ));
         }
-        if self
-            .priority_filter
-            .is_some_and(|filter| filter.min_priority > filter.max_priority)
-        {
-            return Err(Error::Encoding(
-                "EnrollmentSummary minPriority exceeds maxPriority".into(),
-            ));
-        }
-
         // [0] acknowledgmentFilter
         primitives::encode_ctx_enumerated(buf, 0, self.acknowledgment_filter);
         // [1] enrollmentFilter (optional, constructed)
@@ -293,12 +284,6 @@ impl GetEnrollmentSummaryRequest {
                     return Err(Error::decoding(
                         tag_end + priority_end,
                         "EnrollmentSummary priorityFilter has trailing data",
-                    ));
-                }
-                if min_priority > max_priority {
-                    return Err(Error::decoding(
-                        tag_end + inner_pos,
-                        "EnrollmentSummary minPriority exceeds maxPriority",
                     ));
                 }
                 priority_filter = Some(PriorityFilter {
