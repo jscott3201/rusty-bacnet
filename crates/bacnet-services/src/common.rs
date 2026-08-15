@@ -9,12 +9,12 @@ use bytes::{BufMut, BytesMut};
 /// Safety limit for decoded sequences to prevent unbounded allocations.
 pub const MAX_DECODED_ITEMS: usize = 10_000;
 
-fn decode_context_u32(
-    data: &[u8],
+pub(crate) fn decode_context<'a>(
+    data: &'a [u8],
     offset: usize,
     expected_tag: u8,
     field: &str,
-) -> Result<(u32, usize), Error> {
+) -> Result<(&'a [u8], usize), Error> {
     let (tag, pos) = tags::decode_tag(data, offset)?;
     if !tag.is_context(expected_tag) {
         return Err(Error::decoding(
@@ -22,13 +22,25 @@ fn decode_context_u32(
             format!("{field} expected context tag {expected_tag}"),
         ));
     }
-    let end = pos + tag.length as usize;
+    let end = pos
+        .checked_add(tag.length as usize)
+        .ok_or_else(|| Error::decoding(pos, format!("{field} length overflow")))?;
     if end > data.len() {
         return Err(Error::decoding(pos, format!("{field} truncated")));
     }
-    let value = primitives::decode_unsigned(&data[pos..end])?;
-    let value =
-        u32::try_from(value).map_err(|_| Error::decoding(pos, format!("{field} exceeds u32")))?;
+    Ok((&data[pos..end], end))
+}
+
+pub(crate) fn decode_context_u32(
+    data: &[u8],
+    offset: usize,
+    expected_tag: u8,
+    field: &str,
+) -> Result<(u32, usize), Error> {
+    let (content, end) = decode_context(data, offset, expected_tag, field)?;
+    let value = primitives::decode_unsigned(content)?;
+    let value = u32::try_from(value)
+        .map_err(|_| Error::decoding(offset, format!("{field} exceeds u32")))?;
     Ok((value, end))
 }
 

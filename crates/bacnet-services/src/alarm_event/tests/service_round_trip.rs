@@ -1,5 +1,33 @@
 use super::*;
 
+fn raw_context_unsigned(buf: &mut BytesMut, tag_number: u8, value: &[u8]) {
+    bacnet_encoding::tags::encode_tag(
+        buf,
+        tag_number,
+        bacnet_encoding::tags::TagClass::Context,
+        value.len() as u32,
+    );
+    buf.extend_from_slice(value);
+}
+
+fn raw_acknowledge_alarm(process_id: &[u8], event_state: &[u8], field_tags: [u8; 6]) -> BytesMut {
+    let mut buf = BytesMut::new();
+    raw_context_unsigned(&mut buf, field_tags[0], process_id);
+    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    primitives::encode_ctx_object_id(&mut buf, field_tags[1], &oid);
+    raw_context_unsigned(&mut buf, field_tags[2], event_state);
+    primitives::encode_timestamp(
+        &mut buf,
+        field_tags[3],
+        &BACnetTimeStamp::SequenceNumber(42),
+    )
+    .unwrap();
+    primitives::encode_ctx_character_string(&mut buf, field_tags[4], "operator").unwrap();
+    primitives::encode_timestamp(&mut buf, field_tags[5], &BACnetTimeStamp::SequenceNumber(0))
+        .unwrap();
+    buf
+}
+
 #[test]
 fn acknowledge_alarm_round_trip() {
     let req = AcknowledgeAlarmRequest {
@@ -18,6 +46,56 @@ fn acknowledge_alarm_round_trip() {
     assert_eq!(decoded.event_state_acknowledged, 3);
     assert_eq!(decoded.timestamp, BACnetTimeStamp::SequenceNumber(42));
     assert_eq!(decoded.acknowledgment_source, "operator");
+}
+
+#[test]
+fn acknowledge_alarm_values_must_fit_u32() {
+    let max_with_leading_zero = [0, 0xff, 0xff, 0xff, 0xff];
+    let decoded = AcknowledgeAlarmRequest::decode(&raw_acknowledge_alarm(
+        &max_with_leading_zero,
+        &max_with_leading_zero,
+        [0, 1, 2, 3, 4, 5],
+    ))
+    .unwrap();
+    assert_eq!(decoded.acknowledging_process_identifier, u32::MAX);
+    assert_eq!(decoded.event_state_acknowledged, u32::MAX);
+
+    let too_wide = [1, 0, 0, 0, 0];
+    assert!(AcknowledgeAlarmRequest::decode(&raw_acknowledge_alarm(
+        &too_wide,
+        &[0],
+        [0, 1, 2, 3, 4, 5],
+    ))
+    .is_err());
+    assert!(AcknowledgeAlarmRequest::decode(&raw_acknowledge_alarm(
+        &[0],
+        &too_wide,
+        [0, 1, 2, 3, 4, 5],
+    ))
+    .is_err());
+}
+
+#[test]
+fn acknowledge_alarm_requires_owned_context_tags() {
+    for field in 0..6 {
+        let mut field_tags = [0, 1, 2, 3, 4, 5];
+        field_tags[field] = 6;
+        assert!(
+            AcknowledgeAlarmRequest::decode(&raw_acknowledge_alarm(&[1], &[1], field_tags))
+                .is_err()
+        );
+    }
+
+    let mut application_tagged = raw_acknowledge_alarm(&[1], &[1], [0, 1, 2, 3, 4, 5]);
+    application_tagged[0] &= !0x08;
+    assert!(AcknowledgeAlarmRequest::decode(&application_tagged).is_err());
+}
+
+#[test]
+fn acknowledge_alarm_rejects_trailing_data() {
+    let mut encoded = raw_acknowledge_alarm(&[1], &[1], [0, 1, 2, 3, 4, 5]);
+    primitives::encode_ctx_unsigned(&mut encoded, 6, 1);
+    assert!(AcknowledgeAlarmRequest::decode(&encoded).is_err());
 }
 
 #[test]
