@@ -671,7 +671,7 @@ result = await client.read_range(
 )
 ```
 
-Return dict keys: `"object_id"`, `"property_id"`, `"array_index"`, `"result_flags"` (tuple of 3 bools), `"item_count"` (int), `"item_data"` (bytes).
+Return dict keys: `"object_id"`, `"property_id"`, `"array_index"`, `"result_flags"` (tuple of 3 bools), `"item_count"` (int), `"item_data"` (bytes), and `"first_sequence_number"` (int or `None`).
 
 ---
 

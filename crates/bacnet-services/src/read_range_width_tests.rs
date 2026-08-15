@@ -81,6 +81,27 @@ fn encode_ack(
     item_count: &[u8],
     first_sequence_number: Option<&[u8]>,
 ) -> BytesMut {
+    let item_data = item_count
+        .iter()
+        .any(|octet| *octet != 0)
+        .then_some(&[0x00][..])
+        .unwrap_or_default();
+    encode_ack_with_item_data(
+        property,
+        array_index,
+        item_count,
+        item_data,
+        first_sequence_number,
+    )
+}
+
+fn encode_ack_with_item_data(
+    property: &[u8],
+    array_index: Option<&[u8]>,
+    item_count: &[u8],
+    item_data: &[u8],
+    first_sequence_number: Option<&[u8]>,
+) -> BytesMut {
     let mut buf = BytesMut::new();
     primitives::encode_ctx_object_id(&mut buf, 0, &object_identifier());
     encode_context_value(&mut buf, 1, property);
@@ -90,6 +111,7 @@ fn encode_ack(
     primitives::encode_ctx_bit_string(&mut buf, 3, 5, &[0xa0]);
     encode_context_value(&mut buf, 4, item_count);
     tags::encode_opening_tag(&mut buf, 5);
+    buf.extend_from_slice(item_data);
     tags::encode_closing_tag(&mut buf, 5);
     if let Some(sequence_number) = first_sequence_number {
         encode_context_value(&mut buf, 6, sequence_number);
@@ -367,6 +389,18 @@ fn acknowledgments_validate_flags_item_data_and_suffix() {
     let first_sequence_tag = wrong_first_sequence_tag.len() - 2;
     wrong_first_sequence_tag[first_sequence_tag] = 0x21;
     assert!(ReadRangeAck::decode(&wrong_first_sequence_tag).is_err());
+
+    assert!(
+        ReadRangeAck::decode(&encode_ack_with_item_data(&[0x83], None, &[1], &[], None,)).is_err()
+    );
+    assert!(ReadRangeAck::decode(&encode_ack_with_item_data(
+        &[0x83],
+        None,
+        &[0],
+        &[0x00],
+        None,
+    ))
+    .is_err());
 
     let mut trailing = encode_ack(&[0x83], None, &[1], None);
     encode_context_value(&mut trailing, 7, &[1]);

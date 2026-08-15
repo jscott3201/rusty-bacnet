@@ -291,6 +291,7 @@ impl BACnetClient {
                 dict.set_item("result_flags", ack.result_flags)?;
                 dict.set_item("item_count", ack.item_count)?;
                 dict.set_item("item_data", PyBytes::new(py, &ack.item_data))?;
+                dict.set_item("first_sequence_number", ack.first_sequence_number)?;
                 Ok(dict.into_any().unbind())
             })
         })

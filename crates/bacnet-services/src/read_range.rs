@@ -365,6 +365,12 @@ impl ReadRangeAck {
             ));
         }
         let (content, new_offset) = tags::extract_context_value(data, tag_end, 5)?;
+        if (item_count == 0) != content.is_empty() {
+            return Err(Error::decoding(
+                offset,
+                "ReadRange ACK item-count contradicts empty item-data",
+            ));
+        }
         let item_data = content.to_vec();
         offset = new_offset;
 
