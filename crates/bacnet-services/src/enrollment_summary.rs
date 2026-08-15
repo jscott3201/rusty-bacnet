@@ -54,7 +54,36 @@ pub struct GetEnrollmentSummaryRequest {
 }
 
 impl GetEnrollmentSummaryRequest {
+    /// Encode this request.
+    ///
+    /// # Panics
+    ///
+    /// Panics if an enrollment filter has no device or a priority range is reversed.
     pub fn encode(&self, buf: &mut BytesMut) {
+        self.try_encode(buf)
+            .expect("invalid GetEnrollmentSummary request");
+    }
+
+    /// Encode this request after validating representable filter invariants.
+    pub fn try_encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        if self
+            .enrollment_filter
+            .as_ref()
+            .is_some_and(|filter| filter.device.is_none())
+        {
+            return Err(Error::Encoding(
+                "EnrollmentSummary enrollmentFilter requires a device".into(),
+            ));
+        }
+        if self
+            .priority_filter
+            .is_some_and(|filter| filter.min_priority > filter.max_priority)
+        {
+            return Err(Error::Encoding(
+                "EnrollmentSummary minPriority exceeds maxPriority".into(),
+            ));
+        }
+
         // [0] acknowledgmentFilter
         primitives::encode_ctx_enumerated(buf, 0, self.acknowledgment_filter);
         // [1] enrollmentFilter (optional, constructed)
@@ -87,6 +116,7 @@ impl GetEnrollmentSummaryRequest {
         if let Some(nc) = self.notification_class_filter {
             primitives::encode_ctx_unsigned(buf, 5, nc as u64);
         }
+        Ok(())
     }
 
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
