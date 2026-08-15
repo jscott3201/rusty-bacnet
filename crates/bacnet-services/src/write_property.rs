@@ -120,7 +120,7 @@ impl WritePropertyRequest {
             property_identifier,
             &[
                 PropertyValueBoundary::End,
-                PropertyValueBoundary::Context(4),
+                PropertyValueBoundary::ContextToEnd(4),
             ],
         )?;
         let property_value = value_bytes.to_vec();

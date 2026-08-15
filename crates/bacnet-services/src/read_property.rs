@@ -377,7 +377,7 @@ mod tests {
     fn historical_event_parameters_cross_property_framing() {
         use crate::write_property::WritePropertyRequest;
 
-        let property_value = vec![0xfe, 0xff, 1, 0xff, 0xff, 0x3f, 2, 0xff, 0xff];
+        let property_value = vec![0xfe, 0xff, 1, 0xff, 0xff, 0x3f, 0x49, 8, 2, 0xff, 0xff];
         let object_identifier = ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, 1).unwrap();
         let ack = ReadPropertyACK {
             object_identifier,

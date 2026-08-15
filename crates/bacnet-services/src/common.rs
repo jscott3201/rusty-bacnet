@@ -48,6 +48,7 @@ pub(crate) fn decode_context_u32(
 pub(crate) enum PropertyValueBoundary {
     End,
     Context(u8),
+    ContextToEnd(u8),
     Closing(u8),
 }
 
@@ -56,6 +57,14 @@ fn matches_property_boundary(data: &[u8], offset: usize, boundary: PropertyValue
         PropertyValueBoundary::End => offset == data.len(),
         PropertyValueBoundary::Context(number) => {
             tags::decode_tag(data, offset).is_ok_and(|(tag, _)| tag.is_context(number))
+        }
+        PropertyValueBoundary::ContextToEnd(number) => {
+            tags::decode_tag(data, offset).is_ok_and(|(tag, content_start)| {
+                tag.is_context(number)
+                    && content_start
+                        .checked_add(tag.length as usize)
+                        .is_some_and(|end| end == data.len())
+            })
         }
         PropertyValueBoundary::Closing(number) => {
             tags::decode_tag(data, offset).is_ok_and(|(tag, _)| tag.is_closing_tag(number))
@@ -75,8 +84,10 @@ pub(crate) fn extract_property_value<'a>(
     {
         // Before EventParameter framing, tag 255 wrapped arbitrary octets. Use
         // the enclosing service grammar to distinguish a payload marker from
-        // the wrapper terminator without consuming a sibling property.
+        // the wrapper terminator without consuming a sibling property. Reject
+        // multiple valid boundaries because the old format cannot disambiguate them.
         let outer_close = (closing_tag << 4) | 0x0f;
+        let mut candidate = None;
         for pos in offset.saturating_add(4)..data.len() {
             let end = pos + 1;
             if data[pos] == outer_close
@@ -85,8 +96,17 @@ pub(crate) fn extract_property_value<'a>(
                     .iter()
                     .any(|boundary| matches_property_boundary(data, end, *boundary))
             {
-                return Ok((&data[offset..pos], end));
+                if candidate.is_some() {
+                    return Err(Error::decoding(
+                        offset,
+                        "legacy EventParameters value has ambiguous closing tags",
+                    ));
+                }
+                candidate = Some((pos, end));
             }
+        }
+        if let Some((pos, end)) = candidate {
+            return Ok((&data[offset..pos], end));
         }
         return Err(Error::decoding(
             offset,
@@ -199,7 +219,7 @@ impl BACnetPropertyValue {
             offset,
             &[
                 PropertyValueBoundary::End,
-                PropertyValueBoundary::Context(3),
+                PropertyValueBoundary::ContextToEnd(3),
             ],
         )
     }

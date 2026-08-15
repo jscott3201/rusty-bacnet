@@ -501,7 +501,7 @@ mod tests {
                     ReadResultElement {
                         property_identifier: PropertyIdentifier::NOTIFICATION_CLASS,
                         property_array_index: None,
-                        property_value: Some(vec![0x22, 0xff, 0xff]),
+                        property_value: Some(vec![0x21, 8]),
                         error: None,
                     },
                 ],
@@ -511,6 +511,28 @@ mod tests {
         ack.encode(&mut buf);
 
         assert_eq!(ReadPropertyMultipleACK::decode(&buf).unwrap(), ack);
+    }
+
+    #[test]
+    fn ambiguous_legacy_event_parameters_result_is_rejected() {
+        let ack = ReadPropertyMultipleACK {
+            list_of_read_access_results: vec![ReadAccessResult {
+                object_identifier: ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, 1).unwrap(),
+                list_of_results: vec![ReadResultElement {
+                    property_identifier: PropertyIdentifier::EVENT_PARAMETERS,
+                    property_array_index: None,
+                    property_value: Some(vec![
+                        0xfe, 0xff, 0xaa, 0xff, 0xff, 0x4f, 0x29, 0x53, 0x4e, 0xfe, 0xff, 0xbb,
+                        0xff, 0xff,
+                    ]),
+                    error: None,
+                }],
+            }],
+        };
+        let mut buf = BytesMut::new();
+        ack.encode(&mut buf);
+
+        assert!(ReadPropertyMultipleACK::decode(&buf).is_err());
     }
 
     #[test]
