@@ -1,6 +1,21 @@
 use super::*;
 use crate::common::decode_context;
 
+pub(super) fn finish_variant(
+    value: NotificationParameters,
+    consumed: usize,
+    body_end: usize,
+    variant_tag: u8,
+) -> Result<NotificationParameters, Error> {
+    if consumed != body_end {
+        return Err(Error::decoding(
+            consumed,
+            format!("NotificationParameters variant {variant_tag} has unexpected fields"),
+        ));
+    }
+    Ok(value)
+}
+
 pub(super) fn closing_tag_start(
     data: &[u8],
     end: usize,
@@ -25,20 +40,17 @@ pub(super) fn extract_trailing_raw_context(
     data: &[u8],
     start: usize,
     tag_number: u8,
-    variant_body_end: Option<usize>,
+    variant_body_end: usize,
     field: &str,
 ) -> Result<(Vec<u8>, usize), Error> {
-    let Some(end) = variant_body_end else {
-        return extract_raw_context(data, start, tag_number);
-    };
-    let closing = closing_tag_start(data, end, tag_number, field)?;
+    let closing = closing_tag_start(data, variant_body_end, tag_number, field)?;
     if closing < start {
         return Err(Error::decoding(
             start,
             format!("{field} has invalid bounds"),
         ));
     }
-    Ok((data[start..closing].to_vec(), end))
+    Ok((data[start..closing].to_vec(), variant_body_end))
 }
 
 pub(super) fn decode_context_u16(

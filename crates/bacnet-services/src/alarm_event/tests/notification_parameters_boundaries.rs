@@ -391,3 +391,51 @@ fn event_notification_requires_exact_event_values_suffix() {
         assert!(EventNotificationRequest::decode(&wrong_variant_close).is_err());
     }
 }
+
+#[test]
+fn notification_parameters_require_exact_variant_consumption() {
+    let buffer_ready = NotificationParameters::BufferReady {
+        buffer_property: BACnetDeviceObjectPropertyReference::new_local(
+            ObjectIdentifier::new(ObjectType::TREND_LOG, 1).unwrap(),
+            131,
+        ),
+        previous_notification: 1,
+        current_notification: 2,
+    };
+
+    let mut same_tag_sibling = encode_event(buffer_ready.clone());
+    same_tag_sibling.truncate(same_tag_sibling.len() - 1);
+    buffer_ready.encode(&mut same_tag_sibling).unwrap();
+    tags::encode_closing_tag(&mut same_tag_sibling, 12);
+    assert!(EventNotificationRequest::decode(&same_tag_sibling).is_err());
+
+    let mut extra_inner_field = encode_event(buffer_ready);
+    extra_inner_field.truncate(extra_inner_field.len() - 2);
+    primitives::encode_ctx_unsigned(&mut extra_inner_field, 13, 1);
+    tags::encode_closing_tag(&mut extra_inner_field, 10);
+    tags::encode_closing_tag(&mut extra_inner_field, 12);
+    assert!(EventNotificationRequest::decode(&extra_inner_field).is_err());
+
+    let mut close_in_field_content = raw_buffer_ready([&[1], &[2], &[3], &[0, 0xaf]], [1, 2, 1, 2]);
+    close_in_field_content.truncate(close_in_field_content.len() - 1);
+    assert!(decode_variant(&close_in_field_content).is_err());
+
+    let mut missing_discrete_status = BytesMut::new();
+    tags::encode_opening_tag(&mut missing_discrete_status, 21);
+    tags::encode_opening_tag(&mut missing_discrete_status, 0);
+    tags::encode_closing_tag(&mut missing_discrete_status, 0);
+    tags::encode_closing_tag(&mut missing_discrete_status, 21);
+    assert!(decode_variant(&missing_discrete_status).is_err());
+}
+
+#[test]
+fn public_notification_parameter_decode_preserves_opaque_delimiters() {
+    let expected = NotificationParameters::Extended {
+        vendor_id: 42,
+        extended_event_type: 7,
+        parameters: vec![0x61, 0x2f, 0x9f, 0xcf],
+    };
+    let mut encoded = BytesMut::new();
+    expected.encode(&mut encoded).unwrap();
+    assert_eq!(decode_variant(&encoded).unwrap(), expected);
+}

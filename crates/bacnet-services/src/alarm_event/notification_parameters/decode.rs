@@ -1,29 +1,25 @@
 use super::decode_helpers::{
     closing_tag_start, decode_context_status_flags, decode_context_u16,
-    extract_trailing_raw_context,
+    extract_trailing_raw_context, finish_variant as check_variant_end,
 };
 use super::decode_timer::{decode_change_of_discrete_value, decode_change_of_timer};
 use super::*;
 use crate::common::{decode_context, decode_context_u32};
 
 impl NotificationParameters {
-    /// Decode notification parameters from a position just past the opening
-    /// tag of the eventValues wrapper.
+    /// Decode one notification-parameter choice ending at the end of `data`.
     pub fn decode(data: &[u8], offset: usize) -> Result<Self, Error> {
-        Self::decode_impl(data, offset, None)
+        Self::decode_impl(data, offset, data.len())
     }
 
     pub(crate) fn decode_bounded(data: &[u8], offset: usize, end: usize) -> Result<Self, Error> {
-        Self::decode_impl(data, offset, Some(end))
+        Self::decode_impl(data, offset, end)
     }
 
-    fn decode_impl(data: &[u8], offset: usize, end: Option<usize>) -> Result<Self, Error> {
-        let data = match end {
-            Some(end) => data.get(..end).ok_or_else(|| {
-                Error::decoding(end, "NotificationParameters boundary exceeds input")
-            })?,
-            None => data,
-        };
+    fn decode_impl(data: &[u8], offset: usize, end: usize) -> Result<Self, Error> {
+        let data = data
+            .get(..end)
+            .ok_or_else(|| Error::decoding(end, "NotificationParameters boundary exceeds input"))?;
         // Peek the inner opening tag to determine the variant
         if offset >= data.len() {
             return Err(Error::decoding(
@@ -39,16 +35,14 @@ impl NotificationParameters {
             ));
         }
         let variant_tag = inner_tag.number;
-        let variant_body_end = end
-            .map(|_| {
-                closing_tag_start(
-                    data,
-                    data.len(),
-                    variant_tag,
-                    "NotificationParameters variant",
-                )
-            })
-            .transpose()?;
+        let variant_body_end = closing_tag_start(
+            data,
+            data.len(),
+            variant_tag,
+            "NotificationParameters variant",
+        )?;
+        let finish_variant =
+            |value, consumed| check_variant_end(value, consumed, variant_body_end, variant_tag);
 
         match variant_tag {
             // [1] Change of state
@@ -77,10 +71,13 @@ impl NotificationParameters {
                     return Err(Error::decoding(sf_pos, "ChangeOfState: truncated flags"));
                 }
                 let status_flags = decode_status_flags(&data[sf_pos..sf_end]);
-                Ok(Self::ChangeOfState {
-                    new_state,
-                    status_flags,
-                })
+                finish_variant(
+                    Self::ChangeOfState {
+                        new_state,
+                        status_flags,
+                    },
+                    sf_end,
+                )
             }
             // [2] Change of value
             2 => {
@@ -131,10 +128,13 @@ impl NotificationParameters {
                     return Err(Error::decoding(sf_pos, "ChangeOfValue: truncated flags"));
                 }
                 let status_flags = decode_status_flags(&data[sf_pos..sf_end]);
-                Ok(Self::ChangeOfValue {
-                    new_value,
-                    status_flags,
-                })
+                finish_variant(
+                    Self::ChangeOfValue {
+                        new_value,
+                        status_flags,
+                    },
+                    sf_end,
+                )
             }
             // [5] Out of range
             5 => {
@@ -170,13 +170,15 @@ impl NotificationParameters {
                     return Err(Error::decoding(p, "OutOfRange: truncated exceeded_limit"));
                 }
                 let exceeded_limit = primitives::decode_real(&data[p..end])?;
-                let _ = (pos, end);
-                Ok(Self::OutOfRange {
-                    exceeding_value,
-                    status_flags,
-                    deadband,
-                    exceeded_limit,
-                })
+                finish_variant(
+                    Self::OutOfRange {
+                        exceeding_value,
+                        status_flags,
+                        deadband,
+                        exceeded_limit,
+                    },
+                    end,
+                )
             }
             // [10] Buffer ready
             10 => {
@@ -201,13 +203,16 @@ impl NotificationParameters {
                 let (previous_notification, pos) =
                     decode_context_u32(data, pos, 1, "BufferReady previous-notification")?;
                 // [2] current-notification
-                let (current_notification, _) =
+                let (current_notification, end) =
                     decode_context_u32(data, pos, 2, "BufferReady current-notification")?;
-                Ok(Self::BufferReady {
-                    buffer_property,
-                    previous_notification,
-                    current_notification,
-                })
+                finish_variant(
+                    Self::BufferReady {
+                        buffer_property,
+                        previous_notification,
+                        current_notification,
+                    },
+                    end,
+                )
             }
             // [11] Unsigned range
             11 => {
@@ -241,12 +246,14 @@ impl NotificationParameters {
                     ));
                 }
                 let exceeded_limit = primitives::decode_unsigned(&data[p..end])?;
-                let _ = (pos, end);
-                Ok(Self::UnsignedRange {
-                    exceeding_value,
-                    status_flags,
-                    exceeded_limit,
-                })
+                finish_variant(
+                    Self::UnsignedRange {
+                        exceeding_value,
+                        status_flags,
+                        exceeded_limit,
+                    },
+                    end,
+                )
             }
             // [0] Change of bitstring
             0 => {
@@ -269,10 +276,13 @@ impl NotificationParameters {
                     ));
                 }
                 let status_flags = decode_status_flags(&data[sf_pos..sf_end]);
-                Ok(Self::ChangeOfBitstring {
-                    referenced_bitstring: (unused, bits),
-                    status_flags,
-                })
+                finish_variant(
+                    Self::ChangeOfBitstring {
+                        referenced_bitstring: (unused, bits),
+                        status_flags,
+                    },
+                    sf_end,
+                )
             }
             // [3] Command failure
             3 => {
@@ -297,18 +307,21 @@ impl NotificationParameters {
                 if !t.is_opening || t.number != 2 {
                     return Err(Error::decoding(pos, "CommandFailure: expected opening [2]"));
                 }
-                let (feedback_value, _after) = extract_trailing_raw_context(
+                let (feedback_value, after) = extract_trailing_raw_context(
                     data,
                     p,
                     2,
                     variant_body_end,
                     "CommandFailure feedback-value",
                 )?;
-                Ok(Self::CommandFailure {
-                    command_value,
-                    status_flags,
-                    feedback_value,
-                })
+                finish_variant(
+                    Self::CommandFailure {
+                        command_value,
+                        status_flags,
+                        feedback_value,
+                    },
+                    after,
+                )
             }
             // [4] Floating limit
             4 => {
@@ -350,13 +363,15 @@ impl NotificationParameters {
                     return Err(Error::decoding(p, "FloatingLimit: truncated error_limit"));
                 }
                 let error_limit = primitives::decode_real(&data[p..end])?;
-                let _ = (pos, end);
-                Ok(Self::FloatingLimit {
-                    reference_value,
-                    status_flags,
-                    setpoint_value,
-                    error_limit,
-                })
+                finish_variant(
+                    Self::FloatingLimit {
+                        reference_value,
+                        status_flags,
+                        setpoint_value,
+                        error_limit,
+                    },
+                    end,
+                )
             }
             // [8] Change of life safety
             8 => {
@@ -381,19 +396,15 @@ impl NotificationParameters {
                 let status_flags = bits >> 4;
                 let (operation_expected, pos) =
                     decode_context_u32(data, pos, 3, "ChangeOfLifeSafety operation-expected")?;
-                let (closing, _) = tags::decode_tag(data, pos)?;
-                if !closing.is_closing_tag(8) {
-                    return Err(Error::decoding(
-                        pos,
-                        "ChangeOfLifeSafety expected closing tag 8",
-                    ));
-                }
-                Ok(Self::ChangeOfLifeSafety {
-                    new_state,
-                    new_mode,
-                    status_flags,
-                    operation_expected,
-                })
+                finish_variant(
+                    Self::ChangeOfLifeSafety {
+                        new_state,
+                        new_mode,
+                        status_flags,
+                        operation_expected,
+                    },
+                    pos,
+                )
             }
             // [9] Extended
             9 => {
@@ -408,18 +419,21 @@ impl NotificationParameters {
                 if !t.is_opening_tag(2) {
                     return Err(Error::decoding(pos, "Extended: expected opening [2]"));
                 }
-                let (parameters, _after) = extract_trailing_raw_context(
+                let (parameters, after) = extract_trailing_raw_context(
                     data,
                     p,
                     2,
                     variant_body_end,
                     "Extended parameters",
                 )?;
-                Ok(Self::Extended {
-                    vendor_id,
-                    extended_event_type,
-                    parameters,
-                })
+                finish_variant(
+                    Self::Extended {
+                        vendor_id,
+                        extended_event_type,
+                        parameters,
+                    },
+                    after,
+                )
             }
             // [13] Access event
             13 => {
@@ -467,21 +481,24 @@ impl NotificationParameters {
                         "AccessEvent: expected opening [5] for authentication-factor",
                     ));
                 }
-                let (authentication_factor, _after) = extract_trailing_raw_context(
+                let (authentication_factor, after) = extract_trailing_raw_context(
                     data,
                     p,
                     5,
                     variant_body_end,
                     "AccessEvent authentication-factor",
                 )?;
-                Ok(Self::AccessEvent {
-                    access_event,
-                    status_flags,
-                    access_event_tag,
-                    access_event_time,
-                    access_credential,
-                    authentication_factor,
-                })
+                finish_variant(
+                    Self::AccessEvent {
+                        access_event,
+                        status_flags,
+                        access_event_tag,
+                        access_event_time,
+                        access_credential,
+                        authentication_factor,
+                    },
+                    after,
+                )
             }
             // [14] Double out of range
             14 => {
@@ -523,13 +540,15 @@ impl NotificationParameters {
                     ));
                 }
                 let exceeded_limit = primitives::decode_double(&data[p..end])?;
-                let _ = (pos, end);
-                Ok(Self::DoubleOutOfRange {
-                    exceeding_value,
-                    status_flags,
-                    deadband,
-                    exceeded_limit,
-                })
+                finish_variant(
+                    Self::DoubleOutOfRange {
+                        exceeding_value,
+                        status_flags,
+                        deadband,
+                        exceeded_limit,
+                    },
+                    end,
+                )
             }
             // [15] Signed out of range
             15 => {
@@ -571,13 +590,15 @@ impl NotificationParameters {
                     ));
                 }
                 let exceeded_limit = primitives::decode_signed(&data[p..end])?;
-                let _ = (pos, end);
-                Ok(Self::SignedOutOfRange {
-                    exceeding_value,
-                    status_flags,
-                    deadband,
-                    exceeded_limit,
-                })
+                finish_variant(
+                    Self::SignedOutOfRange {
+                        exceeding_value,
+                        status_flags,
+                        deadband,
+                        exceeded_limit,
+                    },
+                    end,
+                )
             }
             // [16] Unsigned out of range
             16 => {
@@ -622,13 +643,15 @@ impl NotificationParameters {
                     ));
                 }
                 let exceeded_limit = primitives::decode_unsigned(&data[p..end])?;
-                let _ = (pos, end);
-                Ok(Self::UnsignedOutOfRange {
-                    exceeding_value,
-                    status_flags,
-                    deadband,
-                    exceeded_limit,
-                })
+                finish_variant(
+                    Self::UnsignedOutOfRange {
+                        exceeding_value,
+                        status_flags,
+                        deadband,
+                        exceeded_limit,
+                    },
+                    end,
+                )
             }
             // [17] Change of characterstring
             17 => {
@@ -657,7 +680,7 @@ impl NotificationParameters {
                 let status_flags = decode_status_flags(&data[sf_pos..sf_end]);
                 pos = sf_end;
                 // [2] alarm-value
-                let (opt_data, _new_pos) = tags::decode_optional_context(data, pos, 2)?;
+                let (opt_data, new_pos) = tags::decode_optional_context(data, pos, 2)?;
                 let alarm_value = match opt_data {
                     Some(content) => primitives::decode_character_string(content)?,
                     None => {
@@ -667,11 +690,14 @@ impl NotificationParameters {
                         ))
                     }
                 };
-                Ok(Self::ChangeOfCharacterstring {
-                    changed_value,
-                    status_flags,
-                    alarm_value,
-                })
+                finish_variant(
+                    Self::ChangeOfCharacterstring {
+                        changed_value,
+                        status_flags,
+                        alarm_value,
+                    },
+                    new_pos,
+                )
             }
             // [18] Change of status flags
             18 => {
@@ -696,10 +722,13 @@ impl NotificationParameters {
                     ));
                 }
                 let referenced_flags = decode_status_flags(&data[sf_pos..sf_end]);
-                Ok(Self::ChangeOfStatusFlags {
-                    present_value,
-                    referenced_flags,
-                })
+                finish_variant(
+                    Self::ChangeOfStatusFlags {
+                        present_value,
+                        referenced_flags,
+                    },
+                    sf_end,
+                )
             }
             // [19] Change of reliability
             19 => {
@@ -717,23 +746,26 @@ impl NotificationParameters {
                         "ChangeOfReliability: expected opening [2]",
                     ));
                 }
-                let (property_values, _after) = extract_trailing_raw_context(
+                let (property_values, after) = extract_trailing_raw_context(
                     data,
                     p,
                     2,
                     variant_body_end,
                     "ChangeOfReliability property-values",
                 )?;
-                Ok(Self::ChangeOfReliability {
-                    reliability,
-                    status_flags,
-                    property_values,
-                })
+                finish_variant(
+                    Self::ChangeOfReliability {
+                        reliability,
+                        status_flags,
+                        property_values,
+                    },
+                    after,
+                )
             }
             // [20] None
-            20 => Ok(Self::NoneParams),
+            20 => finish_variant(Self::NoneParams, inner_start),
             // [21] Change of discrete value
-            21 => decode_change_of_discrete_value(data, inner_start),
+            21 => decode_change_of_discrete_value(data, inner_start, variant_body_end),
             // [22] Change of timer
             22 => decode_change_of_timer(data, inner_start, variant_body_end),
             other => Err(Error::decoding(

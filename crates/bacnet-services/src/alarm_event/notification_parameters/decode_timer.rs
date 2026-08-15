@@ -1,5 +1,6 @@
+use super::decode_helpers::decode_context_status_flags;
 use super::*;
-use crate::common::{decode_context, decode_context_u32};
+use crate::common::decode_context_u32;
 
 fn decode_date_time(
     data: &[u8],
@@ -51,32 +52,16 @@ fn decode_date_time(
     Ok(((date, time), next))
 }
 
-fn decode_timer_status_flags(data: &[u8], offset: usize) -> Result<(u8, usize), Error> {
-    let (content, end) = decode_context(data, offset, 1, "ChangeOfTimer status-flags")?;
-    let [4, bits] = content else {
-        return Err(Error::decoding(
-            offset,
-            "ChangeOfTimer status-flags must contain four bits",
-        ));
-    };
-    if bits & 0x0f != 0 {
-        return Err(Error::decoding(
-            offset,
-            "ChangeOfTimer status-flags must have zero padding",
-        ));
-    }
-    Ok((bits >> 4, end))
-}
-
 pub(super) fn decode_change_of_timer(
     data: &[u8],
     inner_start: usize,
-    variant_body_end: Option<usize>,
+    variant_body_end: usize,
 ) -> Result<NotificationParameters, Error> {
     // [0] new-state
     let (new_state, pos) = decode_context_u32(data, inner_start, 0, "ChangeOfTimer new-state")?;
     // [1] status-flags
-    let (status_flags, pos) = decode_timer_status_flags(data, pos)?;
+    let (status_flags, pos) =
+        decode_context_status_flags(data, pos, 1, "ChangeOfTimer status-flags")?;
     // [2] update-time: BACnetDateTime — opening/closing [2]
     let (update_time, pos) = decode_date_time(data, pos, 2, "ChangeOfTimer update-time")?;
     // [3] last-state-change
@@ -86,7 +71,7 @@ pub(super) fn decode_change_of_timer(
     let (initial_timeout, pos) = decode_context_u32(data, pos, 4, "ChangeOfTimer initial-timeout")?;
     // [5] expiration-time: BACnetDateTime — opening/closing [5]
     let (expiration_time, pos) = decode_date_time(data, pos, 5, "ChangeOfTimer expiration-time")?;
-    if variant_body_end.is_some_and(|end| pos != end) {
+    if pos != variant_body_end {
         return Err(Error::decoding(
             pos,
             "ChangeOfTimer unexpected fields before closing tag 22",
@@ -105,6 +90,7 @@ pub(super) fn decode_change_of_timer(
 pub(super) fn decode_change_of_discrete_value(
     data: &[u8],
     inner_start: usize,
+    variant_body_end: usize,
 ) -> Result<NotificationParameters, Error> {
     let mut pos = inner_start;
     // [0] new-value — opening/closing, raw
@@ -118,15 +104,14 @@ pub(super) fn decode_change_of_discrete_value(
     let (new_value, after) = extract_raw_context(data, p, 0)?;
     pos = after;
     // [1] status-flags
-    let (sf_tag, sf_pos) = tags::decode_tag(data, pos)?;
-    let sf_end = sf_pos + sf_tag.length as usize;
-    if sf_end > data.len() {
+    let (status_flags, pos) =
+        decode_context_status_flags(data, pos, 1, "ChangeOfDiscreteValue status-flags")?;
+    if pos != variant_body_end {
         return Err(Error::decoding(
-            sf_pos,
-            "ChangeOfDiscreteValue: truncated flags",
+            pos,
+            "ChangeOfDiscreteValue unexpected fields before closing tag 21",
         ));
     }
-    let status_flags = decode_status_flags(&data[sf_pos..sf_end]);
     Ok(NotificationParameters::ChangeOfDiscreteValue {
         new_value,
         status_flags,
