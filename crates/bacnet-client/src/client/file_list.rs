@@ -1,5 +1,46 @@
 use super::*;
 
+fn validate_read_range_ack(
+    request: &bacnet_services::read_range::ReadRangeRequest,
+    ack: &bacnet_services::read_range::ReadRangeAck,
+) -> Result<(), Error> {
+    if ack.object_identifier != request.object_identifier {
+        return Err(Error::decoding(
+            0,
+            "ReadRange ACK object identifier does not match the request",
+        ));
+    }
+    if ack.property_identifier != request.property_identifier {
+        return Err(Error::decoding(
+            0,
+            "ReadRange ACK property identifier does not match the request",
+        ));
+    }
+    if ack.property_array_index != request.property_array_index {
+        return Err(Error::decoding(
+            0,
+            "ReadRange ACK array index does not match the request",
+        ));
+    }
+
+    let sequence_range = matches!(
+        request.range.as_ref(),
+        Some(
+            bacnet_services::read_range::RangeSpec::BySequenceNumber { .. }
+                | bacnet_services::read_range::RangeSpec::ByTime { .. }
+        )
+    );
+    let permits_first_sequence_number = sequence_range && ack.item_count > 0;
+    if ack.first_sequence_number.is_some() && !permits_first_sequence_number {
+        return Err(Error::decoding(
+            0,
+            "ReadRange ACK first sequence number is invalid for the request range",
+        ));
+    }
+
+    Ok(())
+}
+
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Get event information from a remote device.
     pub async fn get_event_information(
@@ -80,7 +121,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .confirmed_request(destination_mac, ConfirmedServiceChoice::READ_RANGE, &buf)
             .await?;
 
-        ReadRangeAck::decode(&response_data)
+        let ack = ReadRangeAck::decode(&response_data)?;
+        validate_read_range_ack(&request, &ack)?;
+        Ok(ack)
     }
 
     /// Read file data from a remote device (stream or record access).
@@ -191,5 +234,93 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bacnet_services::read_range::{RangeSpec, ReadRangeAck, ReadRangeRequest};
+    use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+    use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
+
+    fn request(range: Option<RangeSpec>) -> ReadRangeRequest {
+        ReadRangeRequest {
+            object_identifier: ObjectIdentifier::new(ObjectType::TREND_LOG, 1).unwrap(),
+            property_identifier: PropertyIdentifier::LOG_BUFFER,
+            property_array_index: Some(1),
+            range,
+        }
+    }
+
+    fn ack(request: &ReadRangeRequest, item_count: u32, first: Option<u32>) -> ReadRangeAck {
+        ReadRangeAck {
+            object_identifier: request.object_identifier,
+            property_identifier: request.property_identifier,
+            property_array_index: request.property_array_index,
+            result_flags: (true, true, false),
+            item_count,
+            item_data: Vec::new(),
+            first_sequence_number: first,
+        }
+    }
+
+    #[test]
+    fn read_range_ack_must_echo_the_request() {
+        let request = request(Some(RangeSpec::ByPosition {
+            reference_index: 1,
+            count: 1,
+        }));
+        let valid = ack(&request, 1, None);
+        assert!(validate_read_range_ack(&request, &valid).is_ok());
+
+        let mut wrong_object = valid.clone();
+        wrong_object.object_identifier = ObjectIdentifier::new(ObjectType::TREND_LOG, 2).unwrap();
+        assert!(validate_read_range_ack(&request, &wrong_object).is_err());
+
+        let mut wrong_property = valid.clone();
+        wrong_property.property_identifier = PropertyIdentifier::PRESENT_VALUE;
+        assert!(validate_read_range_ack(&request, &wrong_property).is_err());
+
+        let mut wrong_index = valid;
+        wrong_index.property_array_index = Some(2);
+        assert!(validate_read_range_ack(&request, &wrong_index).is_err());
+    }
+
+    #[test]
+    fn first_sequence_number_must_match_the_requested_range() {
+        let by_sequence = request(Some(RangeSpec::BySequenceNumber {
+            reference_seq: 1,
+            count: 1,
+        }));
+        assert!(validate_read_range_ack(&by_sequence, &ack(&by_sequence, 1, Some(1))).is_ok());
+        assert!(validate_read_range_ack(&by_sequence, &ack(&by_sequence, 1, None)).is_ok());
+        assert!(validate_read_range_ack(&by_sequence, &ack(&by_sequence, 0, None)).is_ok());
+        assert!(validate_read_range_ack(&by_sequence, &ack(&by_sequence, 0, Some(1))).is_err());
+
+        let by_time = request(Some(RangeSpec::ByTime {
+            reference_time: (
+                Date {
+                    year: 126,
+                    month: 3,
+                    day: 1,
+                    day_of_week: 7,
+                },
+                Time {
+                    hour: 14,
+                    minute: 30,
+                    second: 0,
+                    hundredths: 0,
+                },
+            ),
+            count: 1,
+        }));
+        assert!(validate_read_range_ack(&by_time, &ack(&by_time, 1, Some(1))).is_ok());
+
+        let by_position = request(Some(RangeSpec::ByPosition {
+            reference_index: 1,
+            count: 1,
+        }));
+        assert!(validate_read_range_ack(&by_position, &ack(&by_position, 1, Some(1))).is_err());
     }
 }
