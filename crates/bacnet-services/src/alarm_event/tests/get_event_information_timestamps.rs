@@ -5,7 +5,7 @@
 //! `time [0]` as a primitive context tag 0 (length 4, raw Time octets),
 //! `sequence-number [1]` constrained to `0..=65535`, `datetime [2]` as an
 //! opening/closing tag 2 pair around the application-tagged Date and Time
-//! (ASHRAE 135-2020 Clauses 13.9, 20.2.1.5, 21).
+//! (ASHRAE 135-2020 Clauses 13.12, 20.2.1.5, 21).
 
 use super::*;
 
