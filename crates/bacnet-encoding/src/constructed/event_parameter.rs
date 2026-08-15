@@ -175,6 +175,22 @@ pub fn decode_event_parameter(
     offset: usize,
 ) -> Result<(BACnetEventParameter, usize), Error> {
     use BACnetEventParameter as EP;
+
+    // Pre-framing EventEnrollment writes use [255] as an internal wrapper.
+    // Keep this shipped compatibility form local so the generic tag parser
+    // can reject ASHRAE-reserved tag number 255 everywhere else.
+    if data.get(offset..offset.saturating_add(2)) == Some(&[0xFE, 0xFF]) {
+        let body_start = offset + 2;
+        let (body, end) = tags::extract_raw_context(data, body_start, u8::MAX)?;
+        return Ok((
+            EP::Opaque {
+                tag: u8::MAX,
+                data: body.to_vec(),
+            },
+            end,
+        ));
+    }
+
     let (tag, pos) = tags::decode_tag(data, offset)?;
     let what = "BACnetEventParameter";
 

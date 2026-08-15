@@ -184,6 +184,12 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
             return Err(Error::decoding(pos, "truncated extended tag number"));
         }
         tag_number = data[pos];
+        if !(15..=254).contains(&tag_number) {
+            return Err(Error::decoding(
+                pos,
+                format!("invalid extended tag number {tag_number}"),
+            ));
+        }
         pos += 1;
     }
 
@@ -224,12 +230,24 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
         pos += 1;
 
         match ext {
-            0..=253 => ext as u32,
+            0..=4 => {
+                return Err(Error::decoding(
+                    pos - 1,
+                    format!("non-canonical extended tag length {ext}"),
+                ));
+            }
+            5..=253 => ext as u32,
             254 => {
                 if pos + 2 > data.len() {
                     return Err(Error::decoding(pos, "truncated 2-byte extended length"));
                 }
                 let len = u16::from_be_bytes([data[pos], data[pos + 1]]) as u32;
+                if len < 254 {
+                    return Err(Error::decoding(
+                        pos,
+                        format!("non-canonical 2-byte extended tag length {len}"),
+                    ));
+                }
                 pos += 2;
                 len
             }
@@ -239,6 +257,12 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
                 }
                 let len =
                     u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+                if len < 65_536 {
+                    return Err(Error::decoding(
+                        pos,
+                        format!("non-canonical 4-byte extended tag length {len}"),
+                    ));
+                }
                 pos += 4;
                 len
             }
@@ -563,6 +587,15 @@ mod tests {
     }
 
     #[test]
+    fn decode_rejects_invalid_extended_tag_numbers() {
+        for initial in [0xF1, 0xF9, 0xFE, 0xFF] {
+            for tag_number in [0, 1, 14, 255] {
+                assert!(decode_tag(&[initial, tag_number], 0).is_err());
+            }
+        }
+    }
+
+    #[test]
     fn decode_extended_length() {
         // Tag 2, Application, length 100: 0x25, 100
         let (tag, pos) = decode_tag(&[0x25, 100], 0).unwrap();
@@ -581,6 +614,35 @@ mod tests {
         assert_eq!(tag.number, 2);
         assert_eq!(tag.length, 100000);
         assert_eq!(pos, 6);
+    }
+
+    #[test]
+    fn decode_rejects_noncanonical_extended_lengths() {
+        for length in 0..=4 {
+            assert!(decode_tag(&[0x0D, length], 0).is_err());
+        }
+
+        assert!(decode_tag(&[0x0D, 254, 0x00, 0xFD], 0).is_err());
+        assert!(decode_tag(&[0x0D, 255, 0x00, 0x00, 0xFF, 0xFF], 0).is_err());
+    }
+
+    #[test]
+    fn decode_accepts_canonical_extended_length_boundaries() {
+        let cases: &[(&[u8], u32)] = &[
+            (&[0x0D, 5], 5),
+            (&[0x0D, 253], 253),
+            (&[0x0D, 254, 0x00, 0xFE], 254),
+            (&[0x0D, 254, 0xFF, 0xFF], 65_535),
+            (&[0x0D, 255, 0x00, 0x01, 0x00, 0x00], 65_536),
+        ];
+
+        for &(encoded, expected_length) in cases {
+            let (tag, pos) = decode_tag(encoded, 0).unwrap();
+            assert_eq!(tag.number, 0);
+            assert_eq!(tag.class, TagClass::Context);
+            assert_eq!(tag.length, expected_length);
+            assert_eq!(pos, encoded.len());
+        }
     }
 
     #[test]

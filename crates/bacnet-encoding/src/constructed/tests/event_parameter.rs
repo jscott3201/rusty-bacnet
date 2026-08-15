@@ -267,6 +267,21 @@ fn opaque_unmodeled_alternatives_preserved() {
     }
 }
 
+#[test]
+fn legacy_opaque_sentinel_stays_local_to_event_parameters() {
+    let value = BACnetEventParameter::Opaque {
+        tag: u8::MAX,
+        data: vec![0xFF, 0x01, 0x02],
+    };
+    let mut encoded = BytesMut::new();
+    encode_event_parameter(&mut encoded, &value);
+
+    assert!(tags::decode_tag(&encoded, 0).is_err());
+    let (decoded, end) = decode_event_parameter(&encoded, 0).unwrap();
+    assert_eq!(decoded, value);
+    assert_eq!(end, encoded.len());
+}
+
 // --- Negatives ----------------------------------------------------------------
 
 #[test]

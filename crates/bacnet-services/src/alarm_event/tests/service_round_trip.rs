@@ -385,7 +385,7 @@ fn test_decode_event_notification_invalid_tag() {
 #[test]
 fn test_decode_get_event_info_invalid_tag() {
     // Non-matching context tag — decoder treats as no last_received (lenient)
-    let result = GetEventInformationRequest::decode(&[0xFF, 0xFF]).unwrap();
+    let result = GetEventInformationRequest::decode(&[0x19, 0]).unwrap();
     assert!(result.last_received_object_identifier.is_none());
 }
 
