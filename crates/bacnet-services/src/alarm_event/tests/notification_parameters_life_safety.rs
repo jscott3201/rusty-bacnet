@@ -27,7 +27,7 @@ fn decode_params(data: &[u8]) -> Result<NotificationParameters, Error> {
     NotificationParameters::decode(data, 0)
 }
 
-fn encoded_event_notification() -> BytesMut {
+fn encoded_event_notification() -> (BytesMut, usize) {
     let request = EventNotificationRequest {
         process_identifier: 1,
         initiating_device_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap(),
@@ -41,16 +41,22 @@ fn encoded_event_notification() -> BytesMut {
         ack_required: true,
         from_state: 0,
         to_state: 1,
-        event_values: Some(NotificationParameters::ChangeOfLifeSafety {
-            new_state: 1,
-            new_mode: 1,
-            status_flags: 8,
-            operation_expected: 1,
-        }),
+        event_values: None,
     };
     let mut buf = BytesMut::new();
     request.encode(&mut buf).unwrap();
-    buf
+    let event_values_offset = buf.len();
+    tags::encode_opening_tag(&mut buf, 12);
+    NotificationParameters::ChangeOfLifeSafety {
+        new_state: 1,
+        new_mode: 1,
+        status_flags: 8,
+        operation_expected: 1,
+    }
+    .encode(&mut buf)
+    .unwrap();
+    tags::encode_closing_tag(&mut buf, 12);
+    (buf, event_values_offset)
 }
 
 #[test]
@@ -170,8 +176,18 @@ fn change_of_life_safety_rejects_every_truncated_prefix() {
 
 #[test]
 fn event_notification_requires_event_values_outer_framing() {
-    let encoded = encoded_event_notification();
+    let (encoded, event_values_offset) = encoded_event_notification();
     assert!(EventNotificationRequest::decode(&encoded).is_ok());
+
+    let mut missing_opening = encoded.to_vec();
+    missing_opening.remove(event_values_offset);
+    assert!(EventNotificationRequest::decode(&missing_opening).is_err());
+
+    let mut wrong_opening = encoded.clone();
+    let mut tag = BytesMut::new();
+    tags::encode_opening_tag(&mut tag, 11);
+    wrong_opening[event_values_offset] = tag[0];
+    assert!(EventNotificationRequest::decode(&wrong_opening).is_err());
 
     let mut missing_closing = encoded.clone();
     missing_closing.truncate(missing_closing.len() - 1);
@@ -185,4 +201,8 @@ fn event_notification_requires_event_values_outer_framing() {
     raw_context_value(&mut extra_sibling, 4, &[1]);
     tags::encode_closing_tag(&mut extra_sibling, 12);
     assert!(EventNotificationRequest::decode(&extra_sibling).is_err());
+
+    let mut trailing_data = encoded;
+    raw_context_value(&mut trailing_data, 13, &[1]);
+    assert!(EventNotificationRequest::decode(&trailing_data).is_err());
 }
