@@ -1,6 +1,7 @@
 use super::*;
 use bacnet_types::enums::ObjectType;
 
+mod event_notification_decode;
 mod get_event_information_decode;
 mod get_event_information_timestamps;
 mod notification_parameters;

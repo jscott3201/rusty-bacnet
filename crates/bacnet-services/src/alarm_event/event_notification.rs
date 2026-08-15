@@ -1,4 +1,5 @@
 use super::*;
+use crate::common::{decode_context, decode_context_bool, decode_context_u32};
 
 // ---------------------------------------------------------------------------
 // EventNotification
@@ -75,147 +76,85 @@ impl EventNotificationRequest {
     }
 
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
-
-        // Helper: validate bounds after computing end from tag length
-        macro_rules! check_bounds {
-            ($pos:expr, $end:expr, $field:expr) => {
-                if $end > data.len() {
-                    return Err(Error::decoding(
-                        $pos,
-                        concat!("EventNotification truncated at ", $field),
-                    ));
-                }
-            };
-        }
-
         // [0] processIdentifier
-        let (_tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + _tag.length as usize;
-        check_bounds!(pos, end, "processIdentifier");
-        let process_identifier = primitives::decode_unsigned(&data[pos..end])? as u32;
-        offset = end;
+        let (process_identifier, mut offset) =
+            decode_context_u32(data, 0, 0, "EventNotification processIdentifier")?;
 
         // [1] initiatingDeviceIdentifier
-        let (_tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + _tag.length as usize;
-        check_bounds!(pos, end, "initiatingDeviceIdentifier");
-        let initiating_device_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-        offset = end;
+        let (content, new_offset) = decode_context(
+            data,
+            offset,
+            1,
+            "EventNotification initiatingDeviceIdentifier",
+        )?;
+        let initiating_device_identifier = ObjectIdentifier::decode(content)?;
+        offset = new_offset;
 
         // [2] eventObjectIdentifier
-        let (_tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + _tag.length as usize;
-        check_bounds!(pos, end, "eventObjectIdentifier");
-        let event_object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-        offset = end;
+        let (content, new_offset) =
+            decode_context(data, offset, 2, "EventNotification eventObjectIdentifier")?;
+        let event_object_identifier = ObjectIdentifier::decode(content)?;
+        offset = new_offset;
 
         // [3] timeStamp
         let (timestamp, new_offset) = primitives::decode_timestamp(data, offset, 3)?;
         offset = new_offset;
 
         // [4] notificationClass
-        let (_tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + _tag.length as usize;
-        check_bounds!(pos, end, "notificationClass");
-        let notification_class = primitives::decode_unsigned(&data[pos..end])? as u32;
-        offset = end;
+        let (notification_class, new_offset) =
+            decode_context_u32(data, offset, 4, "EventNotification notificationClass")?;
+        offset = new_offset;
 
         // [5] priority
-        let (_tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + _tag.length as usize;
-        check_bounds!(pos, end, "priority");
-        let priority = primitives::decode_unsigned(&data[pos..end])? as u8;
-        offset = end;
+        let priority_offset = offset;
+        let (content, new_offset) = decode_context(data, offset, 5, "EventNotification priority")?;
+        let priority = primitives::decode_unsigned(content)?;
+        let priority = u8::try_from(priority).map_err(|_| {
+            Error::decoding(priority_offset, "EventNotification priority exceeds u8")
+        })?;
+        offset = new_offset;
 
         // [6] eventType
-        let (_tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + _tag.length as usize;
-        check_bounds!(pos, end, "eventType");
-        let event_type = primitives::decode_unsigned(&data[pos..end])? as u32;
-        offset = end;
+        let (event_type, new_offset) =
+            decode_context_u32(data, offset, 6, "EventNotification eventType")?;
+        offset = new_offset;
 
         // [7] messageText (optional)
         let mut message_text = None;
         if offset < data.len() {
-            let (peek, peek_pos) = tags::decode_tag(data, offset)?;
+            let (peek, _) = tags::decode_tag(data, offset)?;
             if peek.is_context(7) {
-                let mt_end = peek_pos + peek.length as usize;
-                if mt_end <= data.len() {
-                    message_text = Some(primitives::decode_character_string(
-                        &data[peek_pos..mt_end],
-                    )?);
-                }
-                offset = mt_end;
-            }
-        }
-
-        // Skip any remaining tags before [8] notifyType
-        let mut skip_count = 0u32;
-        while offset < data.len() {
-            skip_count += 1;
-            if skip_count > MAX_DECODED_ITEMS as u32 {
-                return Err(Error::decoding(
-                    offset,
-                    "too many tags skipped looking for notification-parameters",
-                ));
-            }
-            let (peek, peek_pos) = tags::decode_tag(data, offset)?;
-            if peek.is_context(8) {
-                break;
-            }
-            if peek.is_opening {
-                let (_, new_offset) = tags::extract_context_value(data, peek_pos, peek.number)?;
+                let (content, new_offset) =
+                    decode_context(data, offset, 7, "EventNotification messageText")?;
+                message_text = Some(primitives::decode_character_string(content)?);
                 offset = new_offset;
-            } else if peek.is_closing {
-                return Err(Error::decoding(
-                    offset,
-                    "unexpected closing tag skipping to notification-parameters",
-                ));
-            } else {
-                let skip_end = peek_pos + peek.length as usize;
-                if skip_end > data.len() {
-                    return Err(Error::decoding(
-                        peek_pos,
-                        "EventNotification truncated skipping messageText",
-                    ));
-                }
-                offset = skip_end;
             }
         }
 
         // [8] notifyType
-        let (_tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + _tag.length as usize;
-        check_bounds!(pos, end, "notifyType");
-        let notify_type = primitives::decode_unsigned(&data[pos..end])? as u32;
-        offset = end;
+        let (notify_type, new_offset) =
+            decode_context_u32(data, offset, 8, "EventNotification notifyType")?;
+        offset = new_offset;
 
         // [9] ackRequired (optional — present for ALARM/EVENT)
         let mut ack_required = false;
         if offset < data.len() {
-            let (peek, peek_pos) = tags::decode_tag(data, offset)?;
+            let (peek, _) = tags::decode_tag(data, offset)?;
             if peek.is_context(9) {
-                let end = peek_pos + peek.length as usize;
-                check_bounds!(peek_pos, end, "ackRequired");
-                ack_required = data[peek_pos] != 0;
-                offset = end;
+                (ack_required, offset) =
+                    decode_context_bool(data, offset, 9, "EventNotification ackRequired")?;
             }
         }
 
         // [10] fromState
-        let (_tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + _tag.length as usize;
-        check_bounds!(pos, end, "fromState");
-        let from_state = primitives::decode_unsigned(&data[pos..end])? as u32;
-        offset = end;
+        let (from_state, new_offset) =
+            decode_context_u32(data, offset, 10, "EventNotification fromState")?;
+        offset = new_offset;
 
         // [11] toState
-        let (_tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + _tag.length as usize;
-        check_bounds!(pos, end, "toState");
-        let to_state = primitives::decode_unsigned(&data[pos..end])? as u32;
-        offset = end;
+        let (to_state, new_offset) =
+            decode_context_u32(data, offset, 11, "EventNotification toState")?;
+        offset = new_offset;
 
         // [12] eventValues — optional
         let mut event_values = None;
