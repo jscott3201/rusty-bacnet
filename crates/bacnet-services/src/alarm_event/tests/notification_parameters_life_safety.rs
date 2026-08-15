@@ -27,6 +27,32 @@ fn decode_params(data: &[u8]) -> Result<NotificationParameters, Error> {
     NotificationParameters::decode(data, 0)
 }
 
+fn encoded_event_notification() -> BytesMut {
+    let request = EventNotificationRequest {
+        process_identifier: 1,
+        initiating_device_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap(),
+        event_object_identifier: ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 1).unwrap(),
+        timestamp: BACnetTimeStamp::SequenceNumber(1),
+        notification_class: 1,
+        priority: 1,
+        event_type: 8,
+        message_text: None,
+        notify_type: 0,
+        ack_required: true,
+        from_state: 0,
+        to_state: 1,
+        event_values: Some(NotificationParameters::ChangeOfLifeSafety {
+            new_state: 1,
+            new_mode: 1,
+            status_flags: 8,
+            operation_expected: 1,
+        }),
+    };
+    let mut buf = BytesMut::new();
+    request.encode(&mut buf).unwrap();
+    buf
+}
+
 #[test]
 fn change_of_life_safety_accepts_u32_max_with_leading_zero() {
     let max = [0, 0xff, 0xff, 0xff, 0xff];
@@ -140,4 +166,23 @@ fn change_of_life_safety_rejects_every_truncated_prefix() {
     for end in 0..encoded.len() {
         assert!(decode_params(&encoded[..end]).is_err(), "prefix {end}");
     }
+}
+
+#[test]
+fn event_notification_requires_event_values_outer_framing() {
+    let encoded = encoded_event_notification();
+    assert!(EventNotificationRequest::decode(&encoded).is_ok());
+
+    let mut missing_closing = encoded.clone();
+    missing_closing.truncate(missing_closing.len() - 1);
+    assert!(EventNotificationRequest::decode(&missing_closing).is_err());
+
+    let mut wrong_closing = missing_closing.clone();
+    tags::encode_closing_tag(&mut wrong_closing, 9);
+    assert!(EventNotificationRequest::decode(&wrong_closing).is_err());
+
+    let mut extra_sibling = missing_closing;
+    raw_context_value(&mut extra_sibling, 4, &[1]);
+    tags::encode_closing_tag(&mut extra_sibling, 12);
+    assert!(EventNotificationRequest::decode(&extra_sibling).is_err());
 }
