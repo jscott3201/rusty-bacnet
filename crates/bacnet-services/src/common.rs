@@ -44,6 +44,26 @@ pub(crate) fn decode_context_u32(
     Ok((value, end))
 }
 
+pub(crate) fn decode_context_bool(
+    data: &[u8],
+    offset: usize,
+    expected_tag: u8,
+    field: &str,
+) -> Result<(bool, usize), Error> {
+    let (content, end) = decode_context(data, offset, expected_tag, field)?;
+    let value = match content {
+        [0] => false,
+        [1] => true,
+        _ => {
+            return Err(Error::decoding(
+                offset,
+                format!("{field} expected Boolean 0 or 1"),
+            ));
+        }
+    };
+    Ok((value, end))
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum PropertyValueBoundary {
     End,

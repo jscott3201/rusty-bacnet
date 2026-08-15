@@ -7,9 +7,10 @@ use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier};
 use bytes::BytesMut;
-use std::convert::TryFrom;
 
-use crate::common::{PropertyReference, MAX_DECODED_ITEMS};
+use crate::common::{
+    decode_context, decode_context_bool, decode_context_u32, PropertyReference, MAX_DECODED_ITEMS,
+};
 
 // ---------------------------------------------------------------------------
 // SubscribeCOVPropertyMultipleRequest
@@ -86,61 +87,51 @@ impl SubscribeCOVPropertyMultipleRequest {
         let mut offset = 0;
 
         // [0] subscriberProcessIdentifier
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(
-                pos,
-                "SubscribeCOVPropertyMultiple truncated at process-id",
-            ));
-        }
-        let subscriber_process_identifier = primitives::decode_unsigned(&data[pos..end])? as u32;
+        let (subscriber_process_identifier, end) =
+            decode_context_u32(data, offset, 0, "SubscribeCOVPropertyMultiple process-id")?;
         offset = end;
 
         // [1] issueConfirmedNotifications
         let mut issue_confirmed_notifications = None;
         if offset < data.len() {
-            let field_offset = offset;
-            let (opt, new_off) = tags::decode_optional_context(data, offset, 1)?;
-            if let Some(content) = opt {
-                if content.len() != 1 {
-                    return Err(Error::decoding(
-                        field_offset,
-                        "SubscribeCOVPropertyMultiple malformed issue-confirmed-notifications",
-                    ));
-                }
-                issue_confirmed_notifications = Some(content[0] != 0);
-                offset = new_off;
+            let (tag, _) = tags::decode_tag(data, offset)?;
+            if tag.is_context(1) {
+                let (value, end) = decode_context_bool(
+                    data,
+                    offset,
+                    1,
+                    "SubscribeCOVPropertyMultiple confirmed-notifications",
+                )?;
+                issue_confirmed_notifications = Some(value);
+                offset = end;
             }
         }
 
         // [2] lifetime OPTIONAL
         let mut lifetime = None;
         if offset < data.len() {
-            let field_offset = offset;
-            let (opt, new_off) = tags::decode_optional_context(data, offset, 2)?;
-            if let Some(content) = opt {
-                lifetime = Some(decode_u32_context(
-                    content,
-                    field_offset,
-                    "SubscribeCOVPropertyMultiple lifetime",
-                )?);
-                offset = new_off;
+            let (tag, _) = tags::decode_tag(data, offset)?;
+            if tag.is_context(2) {
+                let (value, end) =
+                    decode_context_u32(data, offset, 2, "SubscribeCOVPropertyMultiple lifetime")?;
+                lifetime = Some(value);
+                offset = end;
             }
         }
 
         // [3] maxNotificationDelay OPTIONAL
         let mut max_notification_delay = None;
         if offset < data.len() {
-            let field_offset = offset;
-            let (opt, new_off) = tags::decode_optional_context(data, offset, 3)?;
-            if let Some(content) = opt {
-                max_notification_delay = Some(decode_u32_context(
-                    content,
-                    field_offset,
+            let (tag, _) = tags::decode_tag(data, offset)?;
+            if tag.is_context(3) {
+                let (value, end) = decode_context_u32(
+                    data,
+                    offset,
+                    3,
                     "SubscribeCOVPropertyMultiple max-notification-delay",
-                )?);
-                offset = new_off;
+                )?;
+                max_notification_delay = Some(value);
+                offset = end;
             }
         }
 
@@ -172,14 +163,9 @@ impl SubscribeCOVPropertyMultipleRequest {
             }
 
             // [0] monitoredObjectIdentifier
-            let end = tag_end + tag.length as usize;
-            if end > data.len() {
-                return Err(Error::decoding(
-                    tag_end,
-                    "SubscribeCOVPropertyMultiple truncated at object-id",
-                ));
-            }
-            let oid = ObjectIdentifier::decode(&data[tag_end..end])?;
+            let (content, end) =
+                decode_context(data, offset, 0, "SubscribeCOVPropertyMultiple object-id")?;
+            let oid = ObjectIdentifier::decode(content)?;
             offset = end;
 
             // [1] listOfCovReferences — opening tag 1
@@ -218,7 +204,13 @@ impl SubscribeCOVPropertyMultipleRequest {
                 }
                 let (prop_ref, new_off) = PropertyReference::decode(data, tag_end)?;
                 offset = new_off;
-                let (_tag, tag_end) = tags::decode_tag(data, offset)?;
+                let (tag, tag_end) = tags::decode_tag(data, offset)?;
+                if !tag.is_closing_tag(0) {
+                    return Err(Error::decoding(
+                        offset,
+                        "SubscribeCOVPropertyMultiple expected closing tag 0",
+                    ));
+                }
                 offset = tag_end;
 
                 // [1] covIncrement OPTIONAL
@@ -234,10 +226,16 @@ impl SubscribeCOVPropertyMultipleRequest {
                 // [2] timestamped DEFAULT FALSE
                 let mut timestamped = false;
                 if offset < data.len() {
-                    let (opt, new_off) = tags::decode_optional_context(data, offset, 2)?;
-                    if let Some(content) = opt {
-                        timestamped = !content.is_empty() && content[0] != 0;
-                        offset = new_off;
+                    let (tag, _) = tags::decode_tag(data, offset)?;
+                    if tag.is_context(2) {
+                        let (value, end) = decode_context_bool(
+                            data,
+                            offset,
+                            2,
+                            "SubscribeCOVPropertyMultiple timestamped",
+                        )?;
+                        timestamped = value;
+                        offset = end;
                     }
                 }
 
@@ -253,7 +251,12 @@ impl SubscribeCOVPropertyMultipleRequest {
                 list_of_cov_references: refs,
             });
         }
-        let _ = offset;
+        if offset != data.len() {
+            return Err(Error::decoding(
+                offset,
+                "SubscribeCOVPropertyMultiple has trailing data",
+            ));
+        }
 
         Ok(Self {
             subscriber_process_identifier,
@@ -263,11 +266,6 @@ impl SubscribeCOVPropertyMultipleRequest {
             list_of_cov_subscription_specifications: specs,
         })
     }
-}
-
-fn decode_u32_context(content: &[u8], offset: usize, field: &str) -> Result<u32, Error> {
-    let value = primitives::decode_unsigned(content)?;
-    u32::try_from(value).map_err(|_| Error::decoding(offset, format!("{field} out of range")))
 }
 
 // ---------------------------------------------------------------------------
@@ -346,39 +344,18 @@ impl COVNotificationMultipleRequest {
         let mut offset = 0;
 
         // [0] subscriberProcessIdentifier
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(
-                pos,
-                "COVNotificationMultiple truncated at process-id",
-            ));
-        }
-        let subscriber_process_identifier = primitives::decode_unsigned(&data[pos..end])? as u32;
+        let (subscriber_process_identifier, end) =
+            decode_context_u32(data, offset, 0, "COVNotificationMultiple process-id")?;
         offset = end;
 
         // [1] initiatingDeviceIdentifier
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(
-                pos,
-                "COVNotificationMultiple truncated at device-id",
-            ));
-        }
-        let initiating_device_identifier = ObjectIdentifier::decode(&data[pos..end])?;
+        let (content, end) = decode_context(data, offset, 1, "COVNotificationMultiple device-id")?;
+        let initiating_device_identifier = ObjectIdentifier::decode(content)?;
         offset = end;
 
         // [2] timeRemaining
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(
-                pos,
-                "COVNotificationMultiple truncated at time-remaining",
-            ));
-        }
-        let time_remaining = primitives::decode_unsigned(&data[pos..end])? as u32;
+        let (time_remaining, end) =
+            decode_context_u32(data, offset, 2, "COVNotificationMultiple time-remaining")?;
         offset = end;
 
         // [3] timestamp
@@ -413,14 +390,9 @@ impl COVNotificationMultipleRequest {
             }
 
             // [0] monitoredObjectIdentifier
-            let end = tag_end + tag.length as usize;
-            if end > data.len() {
-                return Err(Error::decoding(
-                    tag_end,
-                    "COVNotificationMultiple truncated at monitored-id",
-                ));
-            }
-            let oid = ObjectIdentifier::decode(&data[tag_end..end])?;
+            let (content, end) =
+                decode_context(data, offset, 0, "COVNotificationMultiple monitored-id")?;
+            let oid = ObjectIdentifier::decode(content)?;
             offset = end;
 
             // [1] listOfValues — opening tag 1
@@ -451,23 +423,23 @@ impl COVNotificationMultipleRequest {
                 }
 
                 // [0] propertyIdentifier
-                let end = tag_end + tag.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        tag_end,
-                        "COVNotificationMultiple truncated at property-id",
-                    ));
-                }
-                let prop_id = primitives::decode_unsigned(&data[tag_end..end])? as u32;
+                let (prop_id, end) =
+                    decode_context_u32(data, offset, 0, "COVNotificationMultiple property-id")?;
                 offset = end;
 
                 // [1] propertyArrayIndex OPTIONAL
                 let mut array_index = None;
                 if offset < data.len() {
-                    let (opt, new_off) = tags::decode_optional_context(data, offset, 1)?;
-                    if let Some(content) = opt {
-                        array_index = Some(primitives::decode_unsigned(content)? as u32);
-                        offset = new_off;
+                    let (tag, _) = tags::decode_tag(data, offset)?;
+                    if tag.is_context(1) {
+                        let (value, end) = decode_context_u32(
+                            data,
+                            offset,
+                            1,
+                            "COVNotificationMultiple array-index",
+                        )?;
+                        array_index = Some(value);
+                        offset = end;
                     }
                 }
 
@@ -509,7 +481,12 @@ impl COVNotificationMultipleRequest {
                 list_of_values: values,
             });
         }
-        let _ = offset;
+        if offset != data.len() {
+            return Err(Error::decoding(
+                offset,
+                "COVNotificationMultiple has trailing data",
+            ));
+        }
 
         Ok(Self {
             subscriber_process_identifier,
@@ -520,6 +497,10 @@ impl COVNotificationMultipleRequest {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "cov_multiple_width_tests.rs"]
+mod width_tests;
 
 #[cfg(test)]
 mod tests {
