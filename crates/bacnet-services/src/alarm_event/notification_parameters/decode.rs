@@ -1,5 +1,6 @@
 use super::decode_timer::{decode_change_of_discrete_value, decode_change_of_timer};
 use super::*;
+use crate::common::{decode_context, decode_context_u32};
 
 impl NotificationParameters {
     /// Decode notification parameters from a position just past the opening
@@ -341,48 +342,34 @@ impl NotificationParameters {
             }
             // [8] Change of life safety
             8 => {
-                let mut pos = inner_start;
-                // [0] new-state
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
+                let (new_state, pos) =
+                    decode_context_u32(data, inner_start, 0, "ChangeOfLifeSafety new-state")?;
+                let (new_mode, pos) =
+                    decode_context_u32(data, pos, 1, "ChangeOfLifeSafety new-mode")?;
+                let flags_offset = pos;
+                let (flags, pos) = decode_context(data, pos, 2, "ChangeOfLifeSafety status-flags")?;
+                let [4, bits] = flags else {
                     return Err(Error::decoding(
-                        p,
-                        "ChangeOfLifeSafety: truncated new_state",
+                        flags_offset,
+                        "ChangeOfLifeSafety status-flags must contain four bits",
+                    ));
+                };
+                if bits & 0x0f != 0 {
+                    return Err(Error::decoding(
+                        flags_offset,
+                        "ChangeOfLifeSafety status-flags must have zero padding",
                     ));
                 }
-                let new_state = primitives::decode_unsigned(&data[p..end])? as u32;
-                pos = end;
-                // [1] new-mode
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(p, "ChangeOfLifeSafety: truncated new_mode"));
-                }
-                let new_mode = primitives::decode_unsigned(&data[p..end])? as u32;
-                pos = end;
-                // [2] status-flags
-                let (sf_tag, sf_pos) = tags::decode_tag(data, pos)?;
-                let sf_end = sf_pos + sf_tag.length as usize;
-                if sf_end > data.len() {
+                let status_flags = bits >> 4;
+                let (operation_expected, pos) =
+                    decode_context_u32(data, pos, 3, "ChangeOfLifeSafety operation-expected")?;
+                let (closing, _) = tags::decode_tag(data, pos)?;
+                if !closing.is_closing_tag(8) {
                     return Err(Error::decoding(
-                        sf_pos,
-                        "ChangeOfLifeSafety: truncated flags",
+                        pos,
+                        "ChangeOfLifeSafety expected closing tag 8",
                     ));
                 }
-                let status_flags = decode_status_flags(&data[sf_pos..sf_end]);
-                pos = sf_end;
-                // [3] operation-expected
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        p,
-                        "ChangeOfLifeSafety: truncated operation_expected",
-                    ));
-                }
-                let operation_expected = primitives::decode_unsigned(&data[p..end])? as u32;
-                let _ = (pos, end);
                 Ok(Self::ChangeOfLifeSafety {
                     new_state,
                     new_mode,
