@@ -6,16 +6,12 @@ fn raw_request(fields: [&[u8]; 7], device: bool) -> BytesMut {
     primitives::encode_ctx_octet_string(&mut buf, 0, fields[0]);
     tags::encode_opening_tag(&mut buf, 1);
     if device {
+        tags::encode_opening_tag(&mut buf, 0);
         let object = ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap();
         primitives::encode_ctx_object_id(&mut buf, 0, &object);
+        tags::encode_closing_tag(&mut buf, 0);
     }
-    tags::encode_tag(
-        &mut buf,
-        tags::app_tag::UNSIGNED,
-        tags::TagClass::Application,
-        fields[1].len() as u32,
-    );
-    buf.extend_from_slice(fields[1]);
+    primitives::encode_ctx_octet_string(&mut buf, 1, fields[1]);
     tags::encode_closing_tag(&mut buf, 1);
     primitives::encode_ctx_octet_string(&mut buf, 2, fields[2]);
     primitives::encode_ctx_octet_string(&mut buf, 3, fields[3]);
@@ -129,7 +125,7 @@ fn request_enrollment_filter_uses_standard_recipient_process_framing() {
     );
     assert_eq!(
         encoded.as_ref(),
-        &[0x09, 0, 0x1E, 0x0C, 0x02, 0, 0, 7, 0x21, 7, 0x1F]
+        &[0x09, 0, 0x1E, 0x0E, 0x0C, 0x02, 0, 0, 7, 0x0F, 0x19, 7, 0x1F,]
     );
 
     let (acknowledgment_tag, acknowledgment_pos) = tags::decode_tag(&encoded, 0).unwrap();
@@ -137,37 +133,15 @@ fn request_enrollment_filter_uses_standard_recipient_process_framing() {
     let (filter_tag, filter_start) = tags::decode_tag(&encoded, filter_offset).unwrap();
     assert!(filter_tag.is_opening_tag(1));
     let (recipient_tag, recipient_pos) = tags::decode_tag(&encoded, filter_start).unwrap();
-    assert!(recipient_tag.is_context(0));
+    assert!(recipient_tag.is_opening_tag(0));
+    let (device_tag, device_pos) = tags::decode_tag(&encoded, recipient_pos).unwrap();
+    assert!(device_tag.is_context(0));
     assert_eq!(
-        ObjectIdentifier::decode(&encoded[recipient_pos..recipient_pos + 4]).unwrap(),
+        ObjectIdentifier::decode(&encoded[device_pos..device_pos + 4]).unwrap(),
         device
     );
-    let (process_tag, _) = tags::decode_tag(&encoded, recipient_pos + 4).unwrap();
-    assert_eq!(process_tag.class, tags::TagClass::Application);
-    assert_eq!(process_tag.number, tags::app_tag::UNSIGNED);
-}
-
-#[test]
-fn request_omits_unrepresentable_device_less_filter() {
-    let request = GetEnrollmentSummaryRequest {
-        acknowledgment_filter: 0,
-        enrollment_filter: Some(RecipientProcess {
-            device: None,
-            process_identifier: 7,
-        }),
-        event_state_filter: None,
-        event_type_filter: None,
-        priority_filter: None,
-        notification_class_filter: None,
-    };
-    let mut encoded = BytesMut::new();
-    request.encode(&mut encoded);
-    assert_eq!(
-        GetEnrollmentSummaryRequest::decode(&encoded)
-            .unwrap()
-            .enrollment_filter,
-        None
-    );
+    let (process_tag, _) = tags::decode_tag(&encoded, device_pos + 5).unwrap();
+    assert!(process_tag.is_context(1));
 }
 
 #[test]
@@ -181,6 +155,8 @@ fn request_rejects_malformed_nested_and_trailing_fields() {
 
     let reversed = raw_request([&zero, &zero, &zero, &zero, &[2], &[1], &zero], true);
     assert!(GetEnrollmentSummaryRequest::decode(&reversed).is_err());
+
+    assert!(GetEnrollmentSummaryRequest::decode(&raw_request([&zero[..]; 7], false)).is_err());
 
     let mut trailing = valid;
     primitives::encode_app_null(&mut trailing);
@@ -226,6 +202,26 @@ fn ack_values_must_fit_public_field_widths() {
         fields[field] = &max_u64;
         assert!(GetEnrollmentSummaryAck::decode(&raw_ack(fields)).is_err());
     }
+}
+
+#[test]
+fn ack_accepts_omitted_notification_class_between_entries() {
+    let zero = [0];
+    let encoded = raw_ack([&zero; 4]);
+    let notification_offset = field_offsets(&encoded, 5)[4];
+    let without_notification = &encoded[..notification_offset];
+
+    let decoded = GetEnrollmentSummaryAck::decode(without_notification).unwrap();
+    assert_eq!(decoded.entries[0].notification_class, 0);
+
+    let mut repeated = BytesMut::from(without_notification);
+    repeated.extend_from_slice(without_notification);
+    let decoded = GetEnrollmentSummaryAck::decode(&repeated).unwrap();
+    assert_eq!(decoded.entries.len(), 2);
+    assert!(decoded
+        .entries
+        .iter()
+        .all(|entry| entry.notification_class == 0));
 }
 
 #[test]
