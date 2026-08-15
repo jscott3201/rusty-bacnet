@@ -123,7 +123,7 @@ impl CreateObjectRequest {
                     if values.len() >= MAX_DECODED_ITEMS {
                         return Err(Error::decoding(offset, "CreateObject values exceeds max"));
                     }
-                    let (pv, new_offset) = BACnetPropertyValue::decode(data, offset)?;
+                    let (pv, new_offset) = BACnetPropertyValue::decode_in_list(data, offset, 1)?;
                     values.push(pv);
                     offset = new_offset;
                 }

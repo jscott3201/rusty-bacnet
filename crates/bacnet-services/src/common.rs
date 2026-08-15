@@ -44,22 +44,48 @@ pub(crate) fn decode_context_u32(
     Ok((value, end))
 }
 
-pub(crate) fn extract_property_value(
-    data: &[u8],
+#[derive(Clone, Copy)]
+pub(crate) enum PropertyValueBoundary {
+    End,
+    Context(u8),
+    Closing(u8),
+}
+
+fn matches_property_boundary(data: &[u8], offset: usize, boundary: PropertyValueBoundary) -> bool {
+    match boundary {
+        PropertyValueBoundary::End => offset == data.len(),
+        PropertyValueBoundary::Context(number) => {
+            tags::decode_tag(data, offset).is_ok_and(|(tag, _)| tag.is_context(number))
+        }
+        PropertyValueBoundary::Closing(number) => {
+            tags::decode_tag(data, offset).is_ok_and(|(tag, _)| tag.is_closing_tag(number))
+        }
+    }
+}
+
+pub(crate) fn extract_property_value<'a>(
+    data: &'a [u8],
     offset: usize,
     closing_tag: u8,
     property: PropertyIdentifier,
-) -> Result<(&[u8], usize), Error> {
+    boundaries: &[PropertyValueBoundary],
+) -> Result<(&'a [u8], usize), Error> {
     if property == PropertyIdentifier::EVENT_PARAMETERS
         && data.get(offset..offset.saturating_add(2)) == Some(&[0xfe, 0xff])
     {
-        // Before EventParameter framing, tag 255 wrapped arbitrary octets. Its
-        // closing marker is only unambiguous beside the enclosing property tag;
-        // taking the first such marker prevents one value consuming siblings.
+        // Before EventParameter framing, tag 255 wrapped arbitrary octets. Use
+        // the enclosing service grammar to distinguish a payload marker from
+        // the wrapper terminator without consuming a sibling property.
         let outer_close = (closing_tag << 4) | 0x0f;
         for pos in offset.saturating_add(4)..data.len() {
-            if data[pos] == outer_close && data.get(pos - 2..pos) == Some(&[0xff, 0xff]) {
-                return Ok((&data[offset..pos], pos + 1));
+            let end = pos + 1;
+            if data[pos] == outer_close
+                && data.get(pos - 2..pos) == Some(&[0xff, 0xff])
+                && boundaries
+                    .iter()
+                    .any(|boundary| matches_property_boundary(data, end, *boundary))
+            {
+                return Ok((&data[offset..pos], end));
             }
         }
         return Err(Error::decoding(
@@ -168,6 +194,37 @@ impl BACnetPropertyValue {
     }
 
     pub fn decode(data: &[u8], offset: usize) -> Result<(Self, usize), Error> {
+        Self::decode_with_boundaries(
+            data,
+            offset,
+            &[
+                PropertyValueBoundary::End,
+                PropertyValueBoundary::Context(3),
+            ],
+        )
+    }
+
+    pub(crate) fn decode_in_list(
+        data: &[u8],
+        offset: usize,
+        closing_tag: u8,
+    ) -> Result<(Self, usize), Error> {
+        Self::decode_with_boundaries(
+            data,
+            offset,
+            &[
+                PropertyValueBoundary::Context(3),
+                PropertyValueBoundary::Context(0),
+                PropertyValueBoundary::Closing(closing_tag),
+            ],
+        )
+    }
+
+    fn decode_with_boundaries(
+        data: &[u8],
+        offset: usize,
+        boundaries: &[PropertyValueBoundary],
+    ) -> Result<(Self, usize), Error> {
         // [0] propertyIdentifier
         let (prop_id, mut offset) =
             decode_context_u32(data, offset, 0, "BACnetPropertyValue property-id")?;
@@ -193,7 +250,8 @@ impl BACnetPropertyValue {
             ));
         }
         let property_identifier = PropertyIdentifier::from_raw(prop_id);
-        let (value_bytes, offset) = extract_property_value(data, tag_end, 2, property_identifier)?;
+        let (value_bytes, offset) =
+            extract_property_value(data, tag_end, 2, property_identifier, boundaries)?;
         let value = value_bytes.to_vec();
 
         // [3] priority (optional)
@@ -320,7 +378,7 @@ mod tests {
         let pv = BACnetPropertyValue {
             property_identifier: PropertyIdentifier::EVENT_PARAMETERS,
             property_array_index: None,
-            value: vec![0xfe, 0xff, 1, 0xff, 0xff, 2, 0xff, 0xff],
+            value: vec![0xfe, 0xff, 1, 0xff, 0xff, 0x2f, 2, 0xff, 0xff],
             priority: None,
         };
         let mut buf = BytesMut::new();

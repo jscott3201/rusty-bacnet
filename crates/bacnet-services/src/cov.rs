@@ -366,7 +366,7 @@ impl COVNotificationRequest {
                 offset = tag_end;
                 break;
             }
-            let (pv, new_offset) = BACnetPropertyValue::decode(data, offset)?;
+            let (pv, new_offset) = BACnetPropertyValue::decode_in_list(data, offset, 4)?;
             values.push(pv);
             offset = new_offset;
         }

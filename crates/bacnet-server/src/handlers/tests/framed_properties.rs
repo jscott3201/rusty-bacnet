@@ -134,7 +134,7 @@ fn legacy_event_parameters_wire_write_is_canonicalized() {
     let oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
-    let payload = vec![1, 0xff, 0xff, 2];
+    let payload = vec![1, 0xff, 0xff, 0x3f, 2];
     let mut historical = vec![0xfe, 0xff];
     historical.extend_from_slice(&payload);
     historical.extend_from_slice(&[0xff, 0xff]);

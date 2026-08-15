@@ -83,7 +83,7 @@ impl WritePropertyMultipleRequest {
                     offset = tag_end;
                     break;
                 }
-                let (pv, new_offset) = BACnetPropertyValue::decode(data, offset)?;
+                let (pv, new_offset) = BACnetPropertyValue::decode_in_list(data, offset, 1)?;
                 props.push(pv);
                 offset = new_offset;
             }
@@ -163,7 +163,7 @@ mod tests {
                     BACnetPropertyValue {
                         property_identifier: PropertyIdentifier::EVENT_PARAMETERS,
                         property_array_index: None,
-                        value: vec![0xfe, 0xff, 1, 0xff, 0xff, 2, 0xff, 0xff],
+                        value: vec![0xfe, 0xff, 1, 0xff, 0xff, 0x2f, 2, 0xff, 0xff],
                         priority: None,
                     },
                     BACnetPropertyValue {

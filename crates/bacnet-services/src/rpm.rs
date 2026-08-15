@@ -7,7 +7,9 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
-use crate::common::{extract_property_value, PropertyReference, MAX_DECODED_ITEMS};
+use crate::common::{
+    extract_property_value, PropertyReference, PropertyValueBoundary, MAX_DECODED_ITEMS,
+};
 
 // ---------------------------------------------------------------------------
 // ReadPropertyMultipleRequest
@@ -239,8 +241,16 @@ impl ReadPropertyMultipleACK {
                     offset = end;
                     let (tag, tag_end) = tags::decode_tag(data, offset)?;
                     if tag.is_opening_tag(4) {
-                        let (value_bytes, new_offset) =
-                            extract_property_value(data, tag_end, 4, property_identifier)?;
+                        let (value_bytes, new_offset) = extract_property_value(
+                            data,
+                            tag_end,
+                            4,
+                            property_identifier,
+                            &[
+                                PropertyValueBoundary::Context(2),
+                                PropertyValueBoundary::Closing(1),
+                            ],
+                        )?;
                         elements.push(ReadResultElement {
                             property_identifier,
                             property_array_index: array_index,
@@ -263,8 +273,16 @@ impl ReadPropertyMultipleACK {
                     }
                 } else if tag.is_opening_tag(4) {
                     // [4] property-value
-                    let (value_bytes, new_offset) =
-                        extract_property_value(data, tag_end, 4, property_identifier)?;
+                    let (value_bytes, new_offset) = extract_property_value(
+                        data,
+                        tag_end,
+                        4,
+                        property_identifier,
+                        &[
+                            PropertyValueBoundary::Context(2),
+                            PropertyValueBoundary::Closing(1),
+                        ],
+                    )?;
                     elements.push(ReadResultElement {
                         property_identifier,
                         property_array_index: array_index,
@@ -477,7 +495,7 @@ mod tests {
                     ReadResultElement {
                         property_identifier: PropertyIdentifier::EVENT_PARAMETERS,
                         property_array_index: None,
-                        property_value: Some(vec![0xfe, 0xff, 1, 0xff, 0xff, 2, 0xff, 0xff]),
+                        property_value: Some(vec![0xfe, 0xff, 1, 0xff, 0xff, 0x4f, 2, 0xff, 0xff]),
                         error: None,
                     },
                     ReadResultElement {

@@ -7,7 +7,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
-use crate::common::extract_property_value;
+use crate::common::{extract_property_value, PropertyValueBoundary};
 
 fn decode_context_u32(
     data: &[u8],
@@ -193,7 +193,13 @@ impl ReadPropertyACK {
                     "ReadPropertyACK expected opening tag 3",
                 ));
             }
-            let (value_bytes, end) = extract_property_value(data, tag_end, 3, property_identifier)?;
+            let (value_bytes, end) = extract_property_value(
+                data,
+                tag_end,
+                3,
+                property_identifier,
+                &[PropertyValueBoundary::End],
+            )?;
             if end != data.len() {
                 return Err(Error::decoding(end, "ReadPropertyACK has trailing data"));
             }
@@ -211,7 +217,13 @@ impl ReadPropertyACK {
                 "ReadPropertyACK expected opening tag 3",
             ));
         }
-        let (value_bytes, end) = extract_property_value(data, tag_end, 3, property_identifier)?;
+        let (value_bytes, end) = extract_property_value(
+            data,
+            tag_end,
+            3,
+            property_identifier,
+            &[PropertyValueBoundary::End],
+        )?;
         if end != data.len() {
             return Err(Error::decoding(end, "ReadPropertyACK has trailing data"));
         }
@@ -365,7 +377,7 @@ mod tests {
     fn historical_event_parameters_cross_property_framing() {
         use crate::write_property::WritePropertyRequest;
 
-        let property_value = vec![0xfe, 0xff, 1, 0xff, 0xff, 2, 0xff, 0xff];
+        let property_value = vec![0xfe, 0xff, 1, 0xff, 0xff, 0x3f, 2, 0xff, 0xff];
         let object_identifier = ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, 1).unwrap();
         let ack = ReadPropertyACK {
             object_identifier,
