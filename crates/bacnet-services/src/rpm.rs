@@ -7,7 +7,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
-use crate::common::{PropertyReference, MAX_DECODED_ITEMS};
+use crate::common::{extract_property_value, PropertyReference, MAX_DECODED_ITEMS};
 
 // ---------------------------------------------------------------------------
 // ReadPropertyMultipleRequest
@@ -240,7 +240,7 @@ impl ReadPropertyMultipleACK {
                     let (tag, tag_end) = tags::decode_tag(data, offset)?;
                     if tag.is_opening_tag(4) {
                         let (value_bytes, new_offset) =
-                            tags::extract_context_value(data, tag_end, 4)?;
+                            extract_property_value(data, tag_end, 4, property_identifier)?;
                         elements.push(ReadResultElement {
                             property_identifier,
                             property_array_index: array_index,
@@ -263,7 +263,8 @@ impl ReadPropertyMultipleACK {
                     }
                 } else if tag.is_opening_tag(4) {
                     // [4] property-value
-                    let (value_bytes, new_offset) = tags::extract_context_value(data, tag_end, 4)?;
+                    let (value_bytes, new_offset) =
+                        extract_property_value(data, tag_end, 4, property_identifier)?;
                     elements.push(ReadResultElement {
                         property_identifier,
                         property_array_index: array_index,
@@ -465,6 +466,33 @@ mod tests {
         ack.encode(&mut buf);
         let decoded = ReadPropertyMultipleACK::decode(&buf).unwrap();
         assert_eq!(ack, decoded);
+    }
+
+    #[test]
+    fn legacy_event_parameters_do_not_consume_the_next_result() {
+        let ack = ReadPropertyMultipleACK {
+            list_of_read_access_results: vec![ReadAccessResult {
+                object_identifier: ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, 1).unwrap(),
+                list_of_results: vec![
+                    ReadResultElement {
+                        property_identifier: PropertyIdentifier::EVENT_PARAMETERS,
+                        property_array_index: None,
+                        property_value: Some(vec![0xfe, 0xff, 1, 0xff, 0xff, 2, 0xff, 0xff]),
+                        error: None,
+                    },
+                    ReadResultElement {
+                        property_identifier: PropertyIdentifier::NOTIFICATION_CLASS,
+                        property_array_index: None,
+                        property_value: Some(vec![0x22, 0xff, 0xff]),
+                        error: None,
+                    },
+                ],
+            }],
+        };
+        let mut buf = BytesMut::new();
+        ack.encode(&mut buf);
+
+        assert_eq!(ReadPropertyMultipleACK::decode(&buf).unwrap(), ack);
     }
 
     #[test]

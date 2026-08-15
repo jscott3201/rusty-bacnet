@@ -53,11 +53,11 @@ pub(crate) fn extract_property_value(
     if property == PropertyIdentifier::EVENT_PARAMETERS
         && data.get(offset..offset.saturating_add(2)) == Some(&[0xfe, 0xff])
     {
-        // Before EventParameter framing, tag 255 wrapped arbitrary octets. Find
-        // its terminal marker next to the enclosing property tag so payload
-        // bytes that happen to contain FF FF remain opaque.
+        // Before EventParameter framing, tag 255 wrapped arbitrary octets. Its
+        // closing marker is only unambiguous beside the enclosing property tag;
+        // taking the first such marker prevents one value consuming siblings.
         let outer_close = (closing_tag << 4) | 0x0f;
-        for pos in (offset.saturating_add(4)..data.len()).rev() {
+        for pos in offset.saturating_add(4)..data.len() {
             if data[pos] == outer_close && data.get(pos - 2..pos) == Some(&[0xff, 0xff]) {
                 return Ok((&data[offset..pos], pos + 1));
             }

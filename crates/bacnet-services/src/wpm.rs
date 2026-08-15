@@ -154,6 +154,33 @@ mod tests {
         assert_eq!(req, decoded);
     }
 
+    #[test]
+    fn legacy_event_parameters_do_not_consume_the_next_property() {
+        let req = WritePropertyMultipleRequest {
+            list_of_write_access_specs: vec![WriteAccessSpecification {
+                object_identifier: ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, 1).unwrap(),
+                list_of_properties: vec![
+                    BACnetPropertyValue {
+                        property_identifier: PropertyIdentifier::EVENT_PARAMETERS,
+                        property_array_index: None,
+                        value: vec![0xfe, 0xff, 1, 0xff, 0xff, 2, 0xff, 0xff],
+                        priority: None,
+                    },
+                    BACnetPropertyValue {
+                        property_identifier: PropertyIdentifier::NOTIFICATION_CLASS,
+                        property_array_index: None,
+                        value: vec![0x22, 0xff, 0xff],
+                        priority: None,
+                    },
+                ],
+            }],
+        };
+        let mut buf = BytesMut::new();
+        req.encode(&mut buf);
+
+        assert_eq!(WritePropertyMultipleRequest::decode(&buf).unwrap(), req);
+    }
+
     // -----------------------------------------------------------------------
     // Malformed-input decode error tests
     // -----------------------------------------------------------------------
