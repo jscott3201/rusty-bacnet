@@ -9,6 +9,7 @@ Default behavior:
 - Use read-only exploration first.
 - Spawn subagents only for complex, parallel, or verification-heavy work.
 - Keep subagent prompts scoped and evidence-led.
+- Treat a READY review as final for that head SHA. If the head changes, rerun only review lanes affected by the new diff.
 - Synthesize findings into a single decision or plan.
 - Record commands, files, symbols, and sources used as evidence.
 - Keep PRs small: one BACnet layer, state-machine family, or measured hotspot per PR.
