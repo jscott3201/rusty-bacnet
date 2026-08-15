@@ -1,116 +1,97 @@
 use super::*;
+use crate::common::{decode_context, decode_context_u32};
+
+fn decode_date_time(
+    data: &[u8],
+    offset: usize,
+    context_tag: u8,
+    field: &str,
+) -> Result<((Date, Time), usize), Error> {
+    let (opening, mut pos) = tags::decode_tag(data, offset)?;
+    if !opening.is_opening_tag(context_tag) {
+        return Err(Error::decoding(
+            offset,
+            format!("{field} expected opening tag {context_tag}"),
+        ));
+    }
+
+    let (date_tag, content_start) = tags::decode_tag(data, pos)?;
+    if date_tag.class != tags::TagClass::Application || date_tag.number != tags::app_tag::DATE {
+        return Err(Error::decoding(pos, format!("{field} expected Date")));
+    }
+    let content_end = content_start
+        .checked_add(date_tag.length as usize)
+        .ok_or_else(|| Error::decoding(content_start, format!("{field} Date length overflow")))?;
+    let date = Date::decode(
+        data.get(content_start..content_end)
+            .ok_or_else(|| Error::decoding(content_start, format!("{field} truncated Date")))?,
+    )?;
+    pos = content_end;
+
+    let (time_tag, content_start) = tags::decode_tag(data, pos)?;
+    if time_tag.class != tags::TagClass::Application || time_tag.number != tags::app_tag::TIME {
+        return Err(Error::decoding(pos, format!("{field} expected Time")));
+    }
+    let content_end = content_start
+        .checked_add(time_tag.length as usize)
+        .ok_or_else(|| Error::decoding(content_start, format!("{field} Time length overflow")))?;
+    let time = Time::decode(
+        data.get(content_start..content_end)
+            .ok_or_else(|| Error::decoding(content_start, format!("{field} truncated Time")))?,
+    )?;
+    pos = content_end;
+
+    let (closing, next) = tags::decode_tag(data, pos)?;
+    if !closing.is_closing_tag(context_tag) {
+        return Err(Error::decoding(
+            pos,
+            format!("{field} expected closing tag {context_tag}"),
+        ));
+    }
+    Ok(((date, time), next))
+}
+
+fn decode_timer_status_flags(data: &[u8], offset: usize) -> Result<(u8, usize), Error> {
+    let (content, end) = decode_context(data, offset, 1, "ChangeOfTimer status-flags")?;
+    let [4, bits] = content else {
+        return Err(Error::decoding(
+            offset,
+            "ChangeOfTimer status-flags must contain four bits",
+        ));
+    };
+    if bits & 0x0f != 0 {
+        return Err(Error::decoding(
+            offset,
+            "ChangeOfTimer status-flags must have zero padding",
+        ));
+    }
+    Ok((bits >> 4, end))
+}
 
 pub(super) fn decode_change_of_timer(
     data: &[u8],
     inner_start: usize,
+    variant_body_end: Option<usize>,
 ) -> Result<NotificationParameters, Error> {
-    let mut pos = inner_start;
     // [0] new-state
-    let (t, p) = tags::decode_tag(data, pos)?;
-    let end = p + t.length as usize;
-    if end > data.len() {
-        return Err(Error::decoding(p, "ChangeOfTimer: truncated new_state"));
-    }
-    let new_state = primitives::decode_unsigned(&data[p..end])? as u32;
-    pos = end;
+    let (new_state, pos) = decode_context_u32(data, inner_start, 0, "ChangeOfTimer new-state")?;
     // [1] status-flags
-    let (sf_tag, sf_pos) = tags::decode_tag(data, pos)?;
-    let sf_end = sf_pos + sf_tag.length as usize;
-    if sf_end > data.len() {
-        return Err(Error::decoding(sf_pos, "ChangeOfTimer: truncated flags"));
-    }
-    let status_flags = decode_status_flags(&data[sf_pos..sf_end]);
-    pos = sf_end;
+    let (status_flags, pos) = decode_timer_status_flags(data, pos)?;
     // [2] update-time: BACnetDateTime — opening/closing [2]
-    let (t, p) = tags::decode_tag(data, pos)?;
-    if !t.is_opening || t.number != 2 {
-        return Err(Error::decoding(
-            pos,
-            "ChangeOfTimer: expected opening [2] for update-time",
-        ));
-    }
-    pos = p;
-    // Application-tagged Date
-    let (d_tag, d_pos) = tags::decode_tag(data, pos)?;
-    let d_end = d_pos + d_tag.length as usize;
-    if d_end > data.len() {
-        return Err(Error::decoding(
-            d_pos,
-            "ChangeOfTimer: truncated update date",
-        ));
-    }
-    let update_date = Date::decode(&data[d_pos..d_end])?;
-    pos = d_end;
-    // Application-tagged Time
-    let (t_tag, t_pos) = tags::decode_tag(data, pos)?;
-    let t_end = t_pos + t_tag.length as usize;
-    if t_end > data.len() {
-        return Err(Error::decoding(
-            t_pos,
-            "ChangeOfTimer: truncated update time",
-        ));
-    }
-    let update_time_val = Time::decode(&data[t_pos..t_end])?;
-    pos = t_end;
-    // Closing tag [2]
-    let (ct, cp) = tags::decode_tag(data, pos)?;
-    if !ct.is_closing || ct.number != 2 {
-        return Err(Error::decoding(pos, "ChangeOfTimer: expected closing [2]"));
-    }
-    pos = cp;
-    let update_time = (update_date, update_time_val);
+    let (update_time, pos) = decode_date_time(data, pos, 2, "ChangeOfTimer update-time")?;
     // [3] last-state-change
-    let (t, p) = tags::decode_tag(data, pos)?;
-    let end = p + t.length as usize;
-    if end > data.len() {
-        return Err(Error::decoding(
-            p,
-            "ChangeOfTimer: truncated last_state_change",
-        ));
-    }
-    let last_state_change = primitives::decode_unsigned(&data[p..end])? as u32;
-    pos = end;
+    let (last_state_change, pos) =
+        decode_context_u32(data, pos, 3, "ChangeOfTimer last-state-change")?;
     // [4] initial-timeout
-    let (t, p) = tags::decode_tag(data, pos)?;
-    let end = p + t.length as usize;
-    if end > data.len() {
-        return Err(Error::decoding(
-            p,
-            "ChangeOfTimer: truncated initial_timeout",
-        ));
-    }
-    let initial_timeout = primitives::decode_unsigned(&data[p..end])? as u32;
-    pos = end;
+    let (initial_timeout, pos) = decode_context_u32(data, pos, 4, "ChangeOfTimer initial-timeout")?;
     // [5] expiration-time: BACnetDateTime — opening/closing [5]
-    let (t, p) = tags::decode_tag(data, pos)?;
-    if !t.is_opening || t.number != 5 {
+    let (expiration_time, pos) = decode_date_time(data, pos, 5, "ChangeOfTimer expiration-time")?;
+    if variant_body_end.is_some_and(|end| pos != end) {
         return Err(Error::decoding(
             pos,
-            "ChangeOfTimer: expected opening [5] for expiration-time",
+            "ChangeOfTimer unexpected fields before closing tag 22",
         ));
     }
-    pos = p;
-    let (d_tag, d_pos) = tags::decode_tag(data, pos)?;
-    let d_end = d_pos + d_tag.length as usize;
-    if d_end > data.len() {
-        return Err(Error::decoding(
-            d_pos,
-            "ChangeOfTimer: truncated expiration date",
-        ));
-    }
-    let exp_date = Date::decode(&data[d_pos..d_end])?;
-    pos = d_end;
-    let (t_tag, t_pos) = tags::decode_tag(data, pos)?;
-    let t_end = t_pos + t_tag.length as usize;
-    if t_end > data.len() {
-        return Err(Error::decoding(
-            t_pos,
-            "ChangeOfTimer: truncated expiration time",
-        ));
-    }
-    let exp_time = Time::decode(&data[t_pos..t_end])?;
-    let _ = (pos, t_end);
-    let expiration_time = (exp_date, exp_time);
     Ok(NotificationParameters::ChangeOfTimer {
         new_state,
         status_flags,

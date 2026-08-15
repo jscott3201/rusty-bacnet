@@ -5,6 +5,7 @@ use super::property_states::{
 use super::*;
 
 mod decode;
+mod decode_helpers;
 mod decode_timer;
 mod encode;
 

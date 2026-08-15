@@ -159,62 +159,35 @@ impl EventNotificationRequest {
         // [12] eventValues — optional
         let mut event_values = None;
         if offset < data.len() {
-            let (peek, _) = tags::decode_tag(data, offset)?;
-            if !peek.is_opening || peek.number != 12 {
+            let (opening, inner_start) = tags::decode_tag(data, offset)?;
+            if !opening.is_opening_tag(12) {
                 return Err(Error::decoding(
                     offset,
                     "EventNotification expected opening tag 12 for eventValues",
                 ));
             }
-            // Skip opening tag [12]
-            let (_, inner_start) = tags::decode_tag(data, offset)?;
-            event_values = Some(NotificationParameters::decode(data, inner_start)?);
-            let (variant, variant_start) = tags::decode_tag(data, inner_start)?;
-            if variant.number == 8 {
-                let (_, variant_end) =
-                    tags::extract_context_value(data, variant_start, variant.number)?;
-                let (closing, next) = tags::decode_tag(data, variant_end)?;
-                if !closing.is_closing_tag(12) {
-                    return Err(Error::decoding(
-                        variant_end,
-                        "EventNotification expected closing tag 12 after eventValues",
-                    ));
-                }
-                if next != data.len() {
-                    return Err(Error::decoding(
-                        next,
-                        "EventNotification unexpected trailing data",
-                    ));
-                }
-                offset = next;
-            } else {
-                // Legacy variants may contain opaque bytes that cannot be scanned as tags.
-                let mut scan = inner_start;
-                let mut depth: usize = 1;
-                while depth > 0 && scan < data.len() {
-                    let (tag, next) = tags::decode_tag(data, scan)?;
-                    if tag.is_opening {
-                        depth += 1;
-                        scan = next;
-                    } else if tag.is_closing {
-                        depth -= 1;
-                        if depth == 0 {
-                            offset = next;
-                        } else {
-                            scan = next;
-                        }
-                    } else {
-                        let end = next.saturating_add(tag.length as usize);
-                        if end > data.len() {
-                            return Err(Error::decoding(
-                                next,
-                                "EventNotification: truncated tag in eventValues",
-                            ));
-                        }
-                        scan = end;
-                    }
-                }
+            let closing_offset = data.len().checked_sub(1).ok_or_else(|| {
+                Error::decoding(offset, "EventNotification missing closing tag 12")
+            })?;
+            if closing_offset < inner_start {
+                return Err(Error::decoding(
+                    inner_start,
+                    "EventNotification empty eventValues",
+                ));
             }
+            let (closing, next) = tags::decode_tag(data, closing_offset)?;
+            if !closing.is_closing_tag(12) || next != data.len() {
+                return Err(Error::decoding(
+                    closing_offset,
+                    "EventNotification expected closing tag 12 after eventValues",
+                ));
+            }
+            event_values = Some(NotificationParameters::decode_bounded(
+                data,
+                inner_start,
+                closing_offset,
+            )?);
+            offset = next;
         }
         let _ = offset;
 

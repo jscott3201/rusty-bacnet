@@ -1,3 +1,7 @@
+use super::decode_helpers::{
+    closing_tag_start, decode_context_status_flags, decode_context_u16,
+    extract_trailing_raw_context,
+};
 use super::decode_timer::{decode_change_of_discrete_value, decode_change_of_timer};
 use super::*;
 use crate::common::{decode_context, decode_context_u32};
@@ -6,6 +10,20 @@ impl NotificationParameters {
     /// Decode notification parameters from a position just past the opening
     /// tag of the eventValues wrapper.
     pub fn decode(data: &[u8], offset: usize) -> Result<Self, Error> {
+        Self::decode_impl(data, offset, None)
+    }
+
+    pub(crate) fn decode_bounded(data: &[u8], offset: usize, end: usize) -> Result<Self, Error> {
+        Self::decode_impl(data, offset, Some(end))
+    }
+
+    fn decode_impl(data: &[u8], offset: usize, end: Option<usize>) -> Result<Self, Error> {
+        let data = match end {
+            Some(end) => data.get(..end).ok_or_else(|| {
+                Error::decoding(end, "NotificationParameters boundary exceeds input")
+            })?,
+            None => data,
+        };
         // Peek the inner opening tag to determine the variant
         if offset >= data.len() {
             return Err(Error::decoding(
@@ -21,6 +39,16 @@ impl NotificationParameters {
             ));
         }
         let variant_tag = inner_tag.number;
+        let variant_body_end = end
+            .map(|_| {
+                closing_tag_start(
+                    data,
+                    data.len(),
+                    variant_tag,
+                    "NotificationParameters variant",
+                )
+            })
+            .transpose()?;
 
         match variant_tag {
             // [1] Change of state
@@ -170,27 +198,11 @@ impl NotificationParameters {
                 }
                 pos = cp;
                 // [1] previous-notification
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        p,
-                        "BufferReady: truncated previous_notification",
-                    ));
-                }
-                let previous_notification = primitives::decode_unsigned(&data[p..end])? as u32;
-                pos = end;
+                let (previous_notification, pos) =
+                    decode_context_u32(data, pos, 1, "BufferReady previous-notification")?;
                 // [2] current-notification
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        p,
-                        "BufferReady: truncated current_notification",
-                    ));
-                }
-                let current_notification = primitives::decode_unsigned(&data[p..end])? as u32;
-                let _ = (pos, end);
+                let (current_notification, _) =
+                    decode_context_u32(data, pos, 2, "BufferReady current-notification")?;
                 Ok(Self::BufferReady {
                     buffer_property,
                     previous_notification,
@@ -285,7 +297,13 @@ impl NotificationParameters {
                 if !t.is_opening || t.number != 2 {
                     return Err(Error::decoding(pos, "CommandFailure: expected opening [2]"));
                 }
-                let (feedback_value, _after) = extract_raw_context(data, p, 2)?;
+                let (feedback_value, _after) = extract_trailing_raw_context(
+                    data,
+                    p,
+                    2,
+                    variant_body_end,
+                    "CommandFailure feedback-value",
+                )?;
                 Ok(Self::CommandFailure {
                     command_value,
                     status_flags,
@@ -379,32 +397,24 @@ impl NotificationParameters {
             }
             // [9] Extended
             9 => {
-                let mut pos = inner_start;
                 // [0] vendor-id
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(p, "Extended: truncated vendor_id"));
-                }
-                let vendor_id = primitives::decode_unsigned(&data[p..end])? as u16;
-                pos = end;
+                let (vendor_id, pos) =
+                    decode_context_u16(data, inner_start, 0, "Extended vendor-id")?;
                 // [1] extended-event-type
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        p,
-                        "Extended: truncated extended_event_type",
-                    ));
-                }
-                let extended_event_type = primitives::decode_unsigned(&data[p..end])? as u32;
-                pos = end;
+                let (extended_event_type, pos) =
+                    decode_context_u32(data, pos, 1, "Extended extended-event-type")?;
                 // [2] parameters — opening/closing, raw
                 let (t, p) = tags::decode_tag(data, pos)?;
-                if !t.is_opening || t.number != 2 {
+                if !t.is_opening_tag(2) {
                     return Err(Error::decoding(pos, "Extended: expected opening [2]"));
                 }
-                let (parameters, _after) = extract_raw_context(data, p, 2)?;
+                let (parameters, _after) = extract_trailing_raw_context(
+                    data,
+                    p,
+                    2,
+                    variant_body_end,
+                    "Extended parameters",
+                )?;
                 Ok(Self::Extended {
                     vendor_id,
                     extended_event_type,
@@ -413,34 +423,15 @@ impl NotificationParameters {
             }
             // [13] Access event
             13 => {
-                let mut pos = inner_start;
                 // [0] access-event
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(p, "AccessEvent: truncated access_event"));
-                }
-                let access_event = primitives::decode_unsigned(&data[p..end])? as u32;
-                pos = end;
+                let (access_event, pos) =
+                    decode_context_u32(data, inner_start, 0, "AccessEvent access-event")?;
                 // [1] status-flags
-                let (sf_tag, sf_pos) = tags::decode_tag(data, pos)?;
-                let sf_end = sf_pos + sf_tag.length as usize;
-                if sf_end > data.len() {
-                    return Err(Error::decoding(sf_pos, "AccessEvent: truncated flags"));
-                }
-                let status_flags = decode_status_flags(&data[sf_pos..sf_end]);
-                pos = sf_end;
+                let (status_flags, pos) =
+                    decode_context_status_flags(data, pos, 1, "AccessEvent status-flags")?;
                 // [2] access-event-tag
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        p,
-                        "AccessEvent: truncated access_event_tag",
-                    ));
-                }
-                let access_event_tag = primitives::decode_unsigned(&data[p..end])? as u32;
-                pos = end;
+                let (access_event_tag, mut pos) =
+                    decode_context_u32(data, pos, 2, "AccessEvent access-event-tag")?;
                 // [3] access-event-time: BACnetTimeStamp (DateTime)
                 let (ts, new_pos) = primitives::decode_timestamp(data, pos, 3)?;
                 pos = new_pos;
@@ -470,13 +461,19 @@ impl NotificationParameters {
                 pos = cp;
                 // [5] authentication-factor — opening/closing, raw
                 let (t, p) = tags::decode_tag(data, pos)?;
-                if !t.is_opening || t.number != 5 {
+                if !t.is_opening_tag(5) {
                     return Err(Error::decoding(
                         pos,
                         "AccessEvent: expected opening [5] for authentication-factor",
                     ));
                 }
-                let (authentication_factor, _after) = extract_raw_context(data, p, 5)?;
+                let (authentication_factor, _after) = extract_trailing_raw_context(
+                    data,
+                    p,
+                    5,
+                    variant_body_end,
+                    "AccessEvent authentication-factor",
+                )?;
                 Ok(Self::AccessEvent {
                     access_event,
                     status_flags,
@@ -706,38 +703,27 @@ impl NotificationParameters {
             }
             // [19] Change of reliability
             19 => {
-                let mut pos = inner_start;
                 // [0] reliability
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        p,
-                        "ChangeOfReliability: truncated reliability",
-                    ));
-                }
-                let reliability = primitives::decode_unsigned(&data[p..end])? as u32;
-                pos = end;
+                let (reliability, pos) =
+                    decode_context_u32(data, inner_start, 0, "ChangeOfReliability reliability")?;
                 // [1] status-flags
-                let (sf_tag, sf_pos) = tags::decode_tag(data, pos)?;
-                let sf_end = sf_pos + sf_tag.length as usize;
-                if sf_end > data.len() {
-                    return Err(Error::decoding(
-                        sf_pos,
-                        "ChangeOfReliability: truncated flags",
-                    ));
-                }
-                let status_flags = decode_status_flags(&data[sf_pos..sf_end]);
-                pos = sf_end;
+                let (status_flags, pos) =
+                    decode_context_status_flags(data, pos, 1, "ChangeOfReliability status-flags")?;
                 // [2] property-values — opening/closing, raw
                 let (t, p) = tags::decode_tag(data, pos)?;
-                if !t.is_opening || t.number != 2 {
+                if !t.is_opening_tag(2) {
                     return Err(Error::decoding(
                         pos,
                         "ChangeOfReliability: expected opening [2]",
                     ));
                 }
-                let (property_values, _after) = extract_raw_context(data, p, 2)?;
+                let (property_values, _after) = extract_trailing_raw_context(
+                    data,
+                    p,
+                    2,
+                    variant_body_end,
+                    "ChangeOfReliability property-values",
+                )?;
                 Ok(Self::ChangeOfReliability {
                     reliability,
                     status_flags,
@@ -749,7 +735,7 @@ impl NotificationParameters {
             // [21] Change of discrete value
             21 => decode_change_of_discrete_value(data, inner_start),
             // [22] Change of timer
-            22 => decode_change_of_timer(data, inner_start),
+            22 => decode_change_of_timer(data, inner_start, variant_body_end),
             other => Err(Error::decoding(
                 offset,
                 format!("NotificationParameters variant [{other}] unknown"),

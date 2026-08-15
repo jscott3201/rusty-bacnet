@@ -1,4 +1,5 @@
 use super::*;
+use crate::common::{decode_context, decode_context_u32};
 
 /// Encode a BACnetPropertyStates value.
 pub(super) fn encode_property_states(buf: &mut BytesMut, state: &BACnetPropertyStates) {
@@ -177,42 +178,23 @@ pub(super) fn decode_device_obj_prop_ref(
     pos: &mut usize,
 ) -> Result<BACnetDeviceObjectPropertyReference, Error> {
     // [0] objectIdentifier
-    let (t, p) = tags::decode_tag(data, *pos)?;
-    let end = p + t.length as usize;
-    if end > data.len() {
-        return Err(Error::decoding(
-            p,
-            "DeviceObjectPropertyRef: truncated objectIdentifier",
-        ));
-    }
-    let object_identifier = ObjectIdentifier::decode(&data[p..end])?;
+    let (content, end) = decode_context(data, *pos, 0, "DeviceObjectPropertyRef objectIdentifier")?;
+    let object_identifier = ObjectIdentifier::decode(content)?;
     *pos = end;
 
     // [1] propertyIdentifier
-    let (t, p) = tags::decode_tag(data, *pos)?;
-    let end = p + t.length as usize;
-    if end > data.len() {
-        return Err(Error::decoding(
-            p,
-            "DeviceObjectPropertyRef: truncated propertyIdentifier",
-        ));
-    }
-    let property_identifier = primitives::decode_unsigned(&data[p..end])? as u32;
+    let (property_identifier, end) =
+        decode_context_u32(data, *pos, 1, "DeviceObjectPropertyRef propertyIdentifier")?;
     *pos = end;
 
     // [2] propertyArrayIndex — optional
     let mut property_array_index = None;
     if *pos < data.len() {
-        let (peek, peek_pos) = tags::decode_tag(data, *pos)?;
+        let (peek, _) = tags::decode_tag(data, *pos)?;
         if peek.is_context(2) {
-            let end = peek_pos + peek.length as usize;
-            if end > data.len() {
-                return Err(Error::decoding(
-                    peek_pos,
-                    "DeviceObjectPropertyRef: truncated propertyArrayIndex",
-                ));
-            }
-            property_array_index = Some(primitives::decode_unsigned(&data[peek_pos..end])? as u32);
+            let (value, end) =
+                decode_context_u32(data, *pos, 2, "DeviceObjectPropertyRef propertyArrayIndex")?;
+            property_array_index = Some(value);
             *pos = end;
         }
     }
@@ -220,16 +202,11 @@ pub(super) fn decode_device_obj_prop_ref(
     // [3] deviceIdentifier — optional
     let mut device_identifier = None;
     if *pos < data.len() {
-        let (peek, peek_pos) = tags::decode_tag(data, *pos)?;
+        let (peek, _) = tags::decode_tag(data, *pos)?;
         if peek.is_context(3) {
-            let end = peek_pos + peek.length as usize;
-            if end > data.len() {
-                return Err(Error::decoding(
-                    peek_pos,
-                    "DeviceObjectPropertyRef: truncated deviceIdentifier",
-                ));
-            }
-            device_identifier = Some(ObjectIdentifier::decode(&data[peek_pos..end])?);
+            let (content, end) =
+                decode_context(data, *pos, 3, "DeviceObjectPropertyRef deviceIdentifier")?;
+            device_identifier = Some(ObjectIdentifier::decode(content)?);
             *pos = end;
         }
     }
