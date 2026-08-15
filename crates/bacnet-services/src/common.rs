@@ -44,6 +44,33 @@ pub(crate) fn decode_context_u32(
     Ok((value, end))
 }
 
+pub(crate) fn extract_property_value(
+    data: &[u8],
+    offset: usize,
+    closing_tag: u8,
+    property: PropertyIdentifier,
+) -> Result<(&[u8], usize), Error> {
+    if property == PropertyIdentifier::EVENT_PARAMETERS
+        && data.get(offset..offset.saturating_add(2)) == Some(&[0xfe, 0xff])
+    {
+        // Before EventParameter framing, tag 255 wrapped arbitrary octets. Find
+        // its terminal marker next to the enclosing property tag so payload
+        // bytes that happen to contain FF FF remain opaque.
+        let outer_close = (closing_tag << 4) | 0x0f;
+        for pos in (offset.saturating_add(4)..data.len()).rev() {
+            if data[pos] == outer_close && data.get(pos - 2..pos) == Some(&[0xff, 0xff]) {
+                return Ok((&data[offset..pos], pos + 1));
+            }
+        }
+        return Err(Error::decoding(
+            offset,
+            "legacy EventParameters value is missing its closing tags",
+        ));
+    }
+
+    tags::extract_context_value(data, offset, closing_tag)
+}
+
 // ---------------------------------------------------------------------------
 // PropertyReference
 // ---------------------------------------------------------------------------
@@ -165,7 +192,8 @@ impl BACnetPropertyValue {
                 "BACnetPropertyValue expected opening tag 2",
             ));
         }
-        let (value_bytes, offset) = tags::extract_context_value(data, tag_end, 2)?;
+        let property_identifier = PropertyIdentifier::from_raw(prop_id);
+        let (value_bytes, offset) = extract_property_value(data, tag_end, 2, property_identifier)?;
         let value = value_bytes.to_vec();
 
         // [3] priority (optional)
@@ -192,7 +220,7 @@ impl BACnetPropertyValue {
                 })?);
                 return Ok((
                     Self {
-                        property_identifier: PropertyIdentifier::from_raw(prop_id),
+                        property_identifier,
                         property_array_index: array_index,
                         value,
                         priority,
@@ -204,7 +232,7 @@ impl BACnetPropertyValue {
 
         Ok((
             Self {
-                property_identifier: PropertyIdentifier::from_raw(prop_id),
+                property_identifier,
                 property_array_index: array_index,
                 value,
                 priority,
@@ -285,6 +313,36 @@ mod tests {
         pv.encode(&mut buf);
         let (decoded, _) = BACnetPropertyValue::decode(&buf, 0).unwrap();
         assert_eq!(pv, decoded);
+    }
+
+    #[test]
+    fn bacnet_property_value_preserves_legacy_event_parameters() {
+        let pv = BACnetPropertyValue {
+            property_identifier: PropertyIdentifier::EVENT_PARAMETERS,
+            property_array_index: None,
+            value: vec![0xfe, 0xff, 1, 0xff, 0xff, 2, 0xff, 0xff],
+            priority: None,
+        };
+        let mut buf = BytesMut::new();
+        pv.encode(&mut buf);
+
+        let (decoded, consumed) = BACnetPropertyValue::decode(&buf, 0).unwrap();
+        assert_eq!(decoded, pv);
+        assert_eq!(consumed, buf.len());
+    }
+
+    #[test]
+    fn bacnet_property_value_rejects_unclosed_legacy_event_parameters() {
+        let pv = BACnetPropertyValue {
+            property_identifier: PropertyIdentifier::EVENT_PARAMETERS,
+            property_array_index: None,
+            value: vec![0xfe, 0xff, 1, 2],
+            priority: None,
+        };
+        let mut buf = BytesMut::new();
+        pv.encode(&mut buf);
+
+        assert!(BACnetPropertyValue::decode(&buf, 0).is_err());
     }
 
     #[test]

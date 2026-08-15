@@ -283,14 +283,14 @@ fn legacy_opaque_sentinel_stays_local_to_event_parameters() {
     assert_eq!(decoded, value);
     assert_eq!(end, encoded.len());
 
-    let historical = [0xFE, 0xFF, 1, 2, 3, 0xFF, 0xFF];
+    let historical = [0xFE, 0xFF, 1, 0xFF, 0xFF, 2, 0xFF, 0xFF];
     assert!(tags::decode_tag(&historical, 0).is_err());
     let (decoded, end) = decode_event_parameter(&historical, 0).unwrap();
     assert_eq!(
         decoded,
         BACnetEventParameter::Opaque {
             tag: u8::MAX,
-            data: vec![1, 2, 3],
+            data: vec![1, 0xFF, 0xFF, 2],
         }
     );
     assert_eq!(end, historical.len());

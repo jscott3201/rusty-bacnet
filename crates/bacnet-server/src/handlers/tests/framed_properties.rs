@@ -128,6 +128,33 @@ fn event_parameters_framed_wire_round_trip() {
 }
 
 #[test]
+fn legacy_event_parameters_wire_write_is_canonicalized() {
+    let mut db = ObjectDatabase::new();
+    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let oid = ee.object_identifier();
+    db.add(Box::new(ee)).unwrap();
+
+    let payload = vec![1, 0xff, 0xff, 2];
+    let mut historical = vec![0xfe, 0xff];
+    historical.extend_from_slice(&payload);
+    historical.extend_from_slice(&[0xff, 0xff]);
+    write_framed(
+        &mut db,
+        oid,
+        PropertyIdentifier::EVENT_PARAMETERS,
+        historical,
+    )
+    .unwrap();
+
+    let mut canonical = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_octet_string(&mut canonical, &payload);
+    assert_eq!(
+        read_raw(&db, oid, PropertyIdentifier::EVENT_PARAMETERS),
+        canonical.to_vec()
+    );
+}
+
+#[test]
 fn fault_parameters_framed_wire_round_trip() {
     let mut db = ObjectDatabase::new();
     let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();

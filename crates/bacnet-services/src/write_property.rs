@@ -7,6 +7,8 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
+use crate::common::extract_property_value;
+
 fn decode_context_u32(
     data: &[u8],
     offset: usize,
@@ -111,7 +113,8 @@ impl WritePropertyRequest {
                 "WriteProperty expected opening tag 3",
             ));
         }
-        let (value_bytes, new_offset) = tags::extract_context_value(data, tag_end, 3)?;
+        let (value_bytes, new_offset) =
+            extract_property_value(data, tag_end, 3, property_identifier)?;
         let property_value = value_bytes.to_vec();
         offset = new_offset;
 

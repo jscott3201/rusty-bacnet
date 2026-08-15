@@ -401,9 +401,9 @@ pub fn evaluate_event_enrollments(
             // full ASN.1 CHOICE framing).
             Ok(PropertyValue::ApplicationData(bytes)) => {
                 match bacnet_encoding::constructed::decode_event_parameter(&bytes, 0) {
-                    Ok((ep, _)) => ep,
+                    Ok((ep, consumed)) if consumed == bytes.len() => ep,
                     // Malformed framed value: nothing to evaluate.
-                    Err(_) => continue,
+                    _ => continue,
                 }
             }
             // Legacy flat application-tagged form (downstream/custom object

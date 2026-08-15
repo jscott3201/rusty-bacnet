@@ -456,6 +456,18 @@ pub(crate) fn decode_write_property_value(
     property: PropertyIdentifier,
     bytes: &[u8],
 ) -> Result<PropertyValue, Error> {
+    if property == PropertyIdentifier::EVENT_PARAMETERS && bytes.starts_with(&[0xfe, 0xff]) {
+        use bacnet_types::constructed::BACnetEventParameter;
+
+        return match bacnet_encoding::constructed::decode_event_parameter(bytes, 0) {
+            Ok((BACnetEventParameter::Opaque { tag, data }, consumed))
+                if tag == u8::MAX && consumed == bytes.len() =>
+            {
+                Ok(PropertyValue::OctetString(data))
+            }
+            _ => Err(invalid_data_encoding_error()),
+        };
+    }
     if property == PropertyIdentifier::RECIPIENT_LIST {
         return Ok(PropertyValue::ApplicationData(bytes.to_vec()));
     }
