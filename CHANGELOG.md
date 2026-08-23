@@ -101,6 +101,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Confirmed client requests now stop RequestTimer after accepting segment zero
+  of a segmented ComplexACK (Clause 5.4.4.3). Both unsegmented and segmented
+  outgoing request paths switch to SEGMENTED_CONF for such responses, using an
+  activity-reset receive timer of four APDU segment timeouts so request retries
+  cannot cancel a progressing response. Receive timeout returns a local
+  `Error::Timeout` without adding a peer Abort; the separate inbound reassembly
+  reaper remains unchanged (#380).
+
 - Device objects configured for segmented transmit now advertise
   `Max_Segments_Accepted` as 1 instead of 65; receive-capable modes retain 65
   (Clause 12.11, #379).

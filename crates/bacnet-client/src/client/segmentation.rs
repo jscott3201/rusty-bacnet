@@ -218,6 +218,24 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             });
 
         state.last_activity = Instant::now();
+        if state.accepted_segments > 0
+            && tsm
+                .lock()
+                .await
+                .record_segmented_response_activity(&tsm_mac, ack.invoke_id)
+                .is_none()
+        {
+            seg_state.remove(&key);
+            Self::send_client_abort(
+                network,
+                source_mac,
+                source_network,
+                ack.invoke_id,
+                bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
+            )
+            .await;
+            return;
+        }
 
         if seq != state.expected_next_seq {
             let is_duplicate = duplicate_in_window(
@@ -298,6 +316,32 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             return;
         }
 
+        let first_accepted_segment = state.accepted_segments == 0;
+        // Save segment zero and enter SEGMENTED_CONF while holding the same
+        // TSM lock used by RequestTimer expiry. This makes acceptance itself
+        // the serialized transition: timeout cannot slip between the save and
+        // the phase change to retransmit or cancel the request.
+        let mut admission_tsm = if first_accepted_segment {
+            Some(tsm.lock().await)
+        } else {
+            None
+        };
+        if admission_tsm.as_ref().is_some_and(|tsm| {
+            tsm.expected_service_choice(&tsm_mac, ack.invoke_id)
+                .is_none()
+        }) {
+            drop(admission_tsm);
+            seg_state.remove(&key);
+            Self::send_client_abort(
+                network,
+                source_mac,
+                source_network,
+                ack.invoke_id,
+                bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
+            )
+            .await;
+            return;
+        }
         if let Err(e) = state.receiver.receive(seq, ack.service_ack) {
             // Also "the segment cannot be saved due to local conditions", so
             // Clause 5.4.4.4 wants the same Abort rather than leaving the
@@ -305,6 +349,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             warn!(error = %e, "Rejecting oversized segment");
             let reply_mac = state.reply_mac.clone();
             let reply_network = state.reply_network.clone();
+            drop(admission_tsm);
             seg_state.remove(&key);
             Self::abort_reassembly(
                 tsm,
@@ -318,6 +363,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await;
             return;
         }
+        if let Some(tsm) = admission_tsm.as_mut() {
+            let generation = tsm.begin_segmented_response(&tsm_mac, ack.invoke_id);
+            debug_assert!(
+                generation.is_some(),
+                "pending transaction disappeared while its TSM lock was held"
+            );
+        }
+        drop(admission_tsm);
         state.accepted_segments += 1;
         state.expected_next_seq = seq.wrapping_add(1);
         state.last_sequence_number = seq;
@@ -369,6 +422,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     );
                     if let CompletionOutcome::ServiceChoiceMismatch { expected, observed } = outcome
                     {
+                        tsm.reset_segmented_response(&tsm_mac, ack.invoke_id);
                         warn!(
                             invoke_id = ack.invoke_id,
                             expected = expected.to_raw(),
@@ -378,6 +432,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     }
                 }
                 Err(e) => {
+                    tsm.lock()
+                        .await
+                        .reset_segmented_response(&tsm_mac, ack.invoke_id);
                     warn!(error = %e, "Failed to reassemble segmented ComplexAck");
                 }
             }
@@ -414,13 +471,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             "Starting segmented confirmed request"
         );
 
-        let (invoke_id, rx) = {
+        let (invoke_id, registration) = {
             let mut tsm = self.tsm.lock().await;
             let invoke_id = tsm.allocate_invoke_id(&tsm_mac).ok_or_else(|| {
                 Error::Encoding("all invoke IDs exhausted for destination".into())
             })?;
-            let rx = tsm.register_transaction(tsm_mac.clone(), invoke_id, service_choice);
-            (invoke_id, rx)
+            let registration =
+                tsm.register_transaction_with_progress(tsm_mac.clone(), invoke_id, service_choice);
+            (invoke_id, registration)
         };
 
         let (seg_ack_tx, mut seg_ack_rx) = mpsc::channel(16);
@@ -597,10 +655,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 next_seq = ack_seq + 1;
             }
 
-            timeout(timeout_duration, rx)
-                .await
-                .map_err(|_| Error::Timeout(timeout_duration))?
-                .map_err(|_| Error::Encoding("TSM response channel closed".into()))
+            self.wait_for_confirmed_response(
+                target,
+                &tsm_mac,
+                invoke_id,
+                registration.response,
+                registration.progress,
+                None,
+            )
+            .await
         }
         .await;
 
@@ -618,12 +681,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             }
         };
 
-        match response {
-            TsmResponse::SimpleAck => Ok(Bytes::new()),
-            TsmResponse::ComplexAck { service_data } => Ok(service_data),
-            TsmResponse::Error { class, code } => Err(Error::Protocol { class, code }),
-            TsmResponse::Reject { reason } => Err(Error::Reject { reason }),
-            TsmResponse::Abort { reason } => Err(Error::Abort { reason }),
-        }
+        Self::confirmed_response_result(response)
     }
 }

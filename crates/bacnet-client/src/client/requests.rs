@@ -248,13 +248,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
 
         let advertised_max_apdu = self.advertised_max_apdu_length_for_target(target)?;
-        let (invoke_id, rx) = {
+        let (invoke_id, registration) = {
             let mut tsm = self.tsm.lock().await;
             let invoke_id = tsm.allocate_invoke_id(&tsm_mac).ok_or_else(|| {
                 Error::Encoding("all invoke IDs exhausted for destination".into())
             })?;
-            let rx = tsm.register_transaction(tsm_mac.clone(), invoke_id, service_choice);
-            (invoke_id, rx)
+            let registration =
+                tsm.register_transaction_with_progress(tsm_mac.clone(), invoke_id, service_choice);
+            (invoke_id, registration)
         };
 
         // Guard cleans up invoke ID if this task is cancelled/aborted
@@ -277,73 +278,163 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut buf = BytesMut::with_capacity(6 + service_data.len());
         encode_apdu(&mut buf, &pdu)?;
 
-        let timeout_duration = Duration::from_millis(self.config.apdu_timeout_ms);
-        let max_retries = self.config.apdu_retries;
-        let mut attempts: u8 = 0;
-        let mut rx = rx;
+        if let Err(e) = self.send_confirmed_target_apdu(target, &buf).await {
+            guard.mark_completed();
+            let mut tsm = self.tsm.lock().await;
+            tsm.cancel_transaction(&tsm_mac, invoke_id);
+            return Err(e);
+        }
+
+        let response = self
+            .wait_for_confirmed_response(
+                target,
+                &tsm_mac,
+                invoke_id,
+                registration.response,
+                registration.progress,
+                Some(&buf),
+            )
+            .await;
+        guard.mark_completed();
+        response.and_then(Self::confirmed_response_result)
+    }
+
+    /// Wait through AWAIT_CONFIRMATION and SEGMENTED_CONF without allowing
+    /// their timers to cancel each other's phase.
+    pub(super) async fn wait_for_confirmed_response(
+        &self,
+        target: ConfirmedTarget<'_>,
+        tsm_mac: &MacAddr,
+        invoke_id: u8,
+        mut response_rx: oneshot::Receiver<TsmResponse>,
+        mut progress_rx: tokio::sync::watch::Receiver<TransactionProgress>,
+        retry_apdu: Option<&[u8]>,
+    ) -> Result<TsmResponse, Error> {
+        let (request_timeout, segment_timeout, max_retries) = {
+            let tsm = self.tsm.lock().await;
+            let config = tsm.config();
+            (
+                Duration::from_millis(config.apdu_timeout_ms),
+                Duration::from_millis(config.apdu_segment_timeout_ms.saturating_mul(4)),
+                config.apdu_retries,
+            )
+        };
+        let mut retries_sent = 0u16;
+        let mut progress = *progress_rx.borrow_and_update();
 
         loop {
-            let send_result = match &target {
-                ConfirmedTarget::Local { mac } => {
-                    self.network
-                        .send_apdu(&buf, mac, true, NetworkPriority::NORMAL)
-                        .await
-                }
-                ConfirmedTarget::Routed {
-                    router_mac,
-                    dest_network,
-                    dest_mac,
-                } => {
-                    self.network
-                        .send_apdu_routed(
-                            &buf,
-                            *dest_network,
-                            dest_mac,
-                            router_mac,
-                            true,
-                            NetworkPriority::NORMAL,
-                        )
-                        .await
-                }
+            let wait = match progress {
+                TransactionProgress::AwaitingResponse => request_timeout,
+                TransactionProgress::SegmentedResponse { .. } => segment_timeout,
             };
-            if let Err(e) = send_result {
-                guard.mark_completed();
-                let mut tsm = self.tsm.lock().await;
-                tsm.cancel_transaction(&tsm_mac, invoke_id);
-                return Err(e);
-            }
+            let timer = tokio::time::sleep(wait);
+            tokio::pin!(timer);
 
-            match timeout(timeout_duration, &mut rx).await {
-                Ok(Ok(response)) => {
-                    guard.mark_completed();
-                    return match response {
-                        TsmResponse::SimpleAck => Ok(Bytes::new()),
-                        TsmResponse::ComplexAck { service_data } => Ok(service_data),
-                        TsmResponse::Error { class, code } => Err(Error::Protocol { class, code }),
-                        TsmResponse::Reject { reason } => Err(Error::Reject { reason }),
-                        TsmResponse::Abort { reason } => Err(Error::Abort { reason }),
-                    };
+            tokio::select! {
+                response = &mut response_rx => {
+                    return response.map_err(|_| Error::Encoding("TSM response channel closed".into()));
                 }
-                Ok(Err(_)) => {
-                    guard.mark_completed();
-                    return Err(Error::Encoding("TSM response channel closed".into()));
-                }
-                Err(_timeout) => {
-                    attempts += 1;
-                    if attempts > max_retries {
-                        guard.mark_completed();
-                        let mut tsm = self.tsm.lock().await;
-                        tsm.cancel_transaction(&tsm_mac, invoke_id);
-                        return Err(Error::Timeout(timeout_duration));
+                changed = progress_rx.changed() => {
+                    if changed.is_err() {
+                        return (&mut response_rx)
+                            .await
+                            .map_err(|_| Error::Encoding("TSM response channel closed".into()));
                     }
-                    debug!(
-                        invoke_id,
-                        attempt = attempts,
-                        max_retries,
-                        "APDU timeout, retrying confirmed request"
-                    );
+                    progress = *progress_rx.borrow_and_update();
+                }
+                _ = &mut timer => {
+                    match progress {
+                        TransactionProgress::AwaitingResponse => {
+                            let retry = retry_apdu.is_some()
+                                && retries_sent < u16::from(max_retries);
+                            let mut tsm = self.tsm.lock().await;
+                            match tsm.expire_request_timer(tsm_mac, invoke_id, !retry) {
+                                RequestTimerExpiration::Retry => {
+                                    // Authorization and segment admission use the TSM lock,
+                                    // but transport I/O must not. Once authorized, this retry
+                                    // may finish even if segment zero is admitted meanwhile.
+                                    let Some(retry_apdu) = retry_apdu else {
+                                        tsm.cancel_transaction(tsm_mac, invoke_id);
+                                        return Err(Error::Timeout(request_timeout));
+                                    };
+                                    retries_sent += 1;
+                                    drop(tsm);
+                                    let send_result = self
+                                        .send_confirmed_target_apdu(target, retry_apdu)
+                                        .await;
+                                    if let Err(error) = send_result {
+                                        let mut tsm = self.tsm.lock().await;
+                                        match tsm.expire_request_timer(tsm_mac, invoke_id, true) {
+                                            RequestTimerExpiration::SegmentedResponse { generation } => {
+                                                progress = TransactionProgress::SegmentedResponse { generation };
+                                                continue;
+                                            }
+                                            RequestTimerExpiration::NoTransaction => {
+                                                drop(tsm);
+                                                return (&mut response_rx)
+                                                    .await
+                                                    .map_err(|_| Error::Encoding("TSM response channel closed".into()));
+                                            }
+                                            RequestTimerExpiration::TimedOut => return Err(error),
+                                            RequestTimerExpiration::Retry => unreachable!(
+                                                "final retry-send failure disposition cannot authorize another retry"
+                                            ),
+                                        }
+                                    }
+                                    debug!(
+                                        invoke_id,
+                                        attempt = retries_sent,
+                                        max_retries,
+                                        "APDU timeout, retrying confirmed request"
+                                    );
+                                }
+                                RequestTimerExpiration::SegmentedResponse { generation } => {
+                                    progress = TransactionProgress::SegmentedResponse { generation };
+                                }
+                                RequestTimerExpiration::TimedOut => {
+                                    return Err(Error::Timeout(request_timeout));
+                                }
+                                RequestTimerExpiration::NoTransaction => {
+                                    drop(tsm);
+                                    return (&mut response_rx)
+                                        .await
+                                        .map_err(|_| Error::Encoding("TSM response channel closed".into()));
+                                }
+                            }
+                        }
+                        TransactionProgress::SegmentedResponse { generation } => {
+                            let mut tsm = self.tsm.lock().await;
+                            match tsm.expire_segment_timer(tsm_mac, invoke_id, generation) {
+                                SegmentTimerExpiration::Activity { generation } => {
+                                    progress = TransactionProgress::SegmentedResponse { generation };
+                                }
+                                SegmentTimerExpiration::AwaitingResponse => {
+                                    progress = TransactionProgress::AwaitingResponse;
+                                }
+                                SegmentTimerExpiration::TimedOut => {
+                                    return Err(Error::Timeout(segment_timeout));
+                                }
+                                SegmentTimerExpiration::NoTransaction => {
+                                    drop(tsm);
+                                    return (&mut response_rx)
+                                        .await
+                                        .map_err(|_| Error::Encoding("TSM response channel closed".into()));
+                                }
+                            }
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    pub(super) fn confirmed_response_result(response: TsmResponse) -> Result<Bytes, Error> {
+        match response {
+            TsmResponse::SimpleAck => Ok(Bytes::new()),
+            TsmResponse::ComplexAck { service_data } => Ok(service_data),
+            TsmResponse::Error { class, code } => Err(Error::Protocol { class, code }),
+            TsmResponse::Reject { reason } => Err(Error::Reject { reason }),
+            TsmResponse::Abort { reason } => Err(Error::Abort { reason }),
         }
     }
 

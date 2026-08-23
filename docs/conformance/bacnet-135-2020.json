@@ -48,19 +48,30 @@
    "requirement_summary": "Client transaction state machine behavior, timeouts, retries, aborts, and segmented response handling.",
    "status": "implementation-present-needs-state-machine-audit",
    "code_anchors": [
-    "crates/bacnet-client/src/client",
+    "crates/bacnet-client/src/tsm.rs",
+    "crates/bacnet-client/src/client/requests.rs",
     "crates/bacnet-client/src/client/segmentation.rs"
    ],
    "positive_tests": [
-    "crates/bacnet-integration-tests/tests/server/segmentation_tx.rs"
+    "crates/bacnet-integration-tests/tests/server/segmentation_tx.rs",
+    "crates/bacnet-client/src/tsm.rs::tests::segmented_admission_and_request_timeout_are_serialized",
+    "crates/bacnet-client/src/tsm.rs::tests::retry_send_failure_recheck_preserves_later_segmented_admission",
+    "crates/bacnet-client/src/tsm.rs::tests::stale_segment_timer_generation_cannot_cancel_new_activity",
+    "crates/bacnet-client/src/client/request_timer_tests.rs::max_retry_budget_sends_exactly_255_retransmissions",
+    "crates/bacnet-client/src/client/request_timer_tests.rs::blocked_retry_does_not_block_segment_admission_or_cancel_on_send_failure",
+    "crates/bacnet-client/src/client/segmented_receive_lifecycle_tests.rs::segmented_response_stops_request_timer_and_completes",
+    "crates/bacnet-client/src/client/segmented_receive_lifecycle_tests.rs::segment_activity_restarts_the_receive_timer",
+    "crates/bacnet-client/src/client/segmented_receive_lifecycle_tests.rs::segmented_request_response_stops_its_request_timer"
    ],
-   "negative_tests": [],
+   "negative_tests": [
+    "crates/bacnet-client/src/client/segmented_receive_lifecycle_tests.rs::segment_timer_timeout_ends_the_reassembly_session"
+   ],
    "benchmarks": [],
    "public_claims": [
     "README supported services",
     "docs/python-api.md transport examples"
    ],
-   "notes": "Requires explicit Clause 5 transition and timeout matrix."
+   "notes": "Clause 5.4.4.3 segmented ComplexACK admission stops RequestTimer after segment zero is saved. TSM-owned phase and generation transitions serialize request retry authorization/cancel against admission without holding the TSM lock across transport I/O, and reject stale SegmentTimer expiry after new, duplicate, or out-of-order activity. Clause 5.4.4.4 receive timeout uses four APDU segment timeouts, completes locally without a peer Abort, and covers both unsegmented and segmented outgoing request response waits. Residual: the inbound-only reassembly reaper in client/lifecycle.rs still uses its fixed four-second interval, sends a peer TSM_TIMEOUT Abort, and does not complete TSM; the broader Clause 5.4.4 transition matrix still needs audit."
   },
   {
    "id": "BACNET-5-TSM-SERVER",

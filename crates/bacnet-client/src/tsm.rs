@@ -8,7 +8,7 @@ use bacnet_types::MacAddr;
 use bytes::Bytes;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 
 /// TSM configuration.
 #[derive(Debug, Clone)]
@@ -111,9 +111,48 @@ pub enum CompletionOutcome {
     },
 }
 
+/// Request-side timer state delivered to the task waiting for a response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TransactionProgress {
+    AwaitingResponse,
+    SegmentedResponse { generation: u64 },
+}
+
+pub(crate) struct TransactionRegistration {
+    pub(crate) response: oneshot::Receiver<TsmResponse>,
+    pub(crate) progress: watch::Receiver<TransactionProgress>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RequestTimerExpiration {
+    Retry,
+    SegmentedResponse { generation: u64 },
+    TimedOut,
+    NoTransaction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SegmentTimerExpiration {
+    Activity { generation: u64 },
+    AwaitingResponse,
+    TimedOut,
+    NoTransaction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransactionPhase {
+    AwaitingResponse,
+    SegmentedResponse,
+}
+
 /// A confirmed request awaiting its response.
 struct PendingTransaction {
     responder: oneshot::Sender<TsmResponse>,
+    progress: watch::Sender<TransactionProgress>,
+    phase: TransactionPhase,
+    /// Monotonic token used to reject a SegmentTimer expiry observed before
+    /// newer segment activity acquired the TSM lock.
+    segment_generation: u64,
     /// The service this request asked for. Clause 20.1.4.2 and 20.1.5.6 both
     /// require an acknowledgment's service-ack-choice to "contain the value of
     /// the BACnetConfirmedServiceChoice corresponding to the service contained
@@ -185,7 +224,18 @@ impl Tsm {
         invoke_id: u8,
         service_choice: ConfirmedServiceChoice,
     ) -> oneshot::Receiver<TsmResponse> {
+        self.register_transaction_with_progress(destination_mac, invoke_id, service_choice)
+            .response
+    }
+
+    pub(crate) fn register_transaction_with_progress(
+        &mut self,
+        destination_mac: MacAddr,
+        invoke_id: u8,
+        service_choice: ConfirmedServiceChoice,
+    ) -> TransactionRegistration {
         let (tx, rx) = oneshot::channel();
+        let (progress_tx, progress_rx) = watch::channel(TransactionProgress::AwaitingResponse);
         debug_assert!(
             !self
                 .pending
@@ -197,10 +247,125 @@ impl Tsm {
             (destination_mac, invoke_id),
             PendingTransaction {
                 responder: tx,
+                progress: progress_tx,
+                phase: TransactionPhase::AwaitingResponse,
+                segment_generation: 0,
                 expected_service_choice: service_choice,
             },
         );
-        rx
+        TransactionRegistration {
+            response: rx,
+            progress: progress_rx,
+        }
+    }
+
+    /// Enter SEGMENTED_CONF after the first segment has been saved.
+    ///
+    /// The transition and RequestTimer retry authorization use the same TSM
+    /// lock. Whichever changes or observes the phase first wins that decision;
+    /// an authorized retry performs transport I/O only after releasing it.
+    pub(crate) fn begin_segmented_response(
+        &mut self,
+        source_mac: &[u8],
+        invoke_id: u8,
+    ) -> Option<u64> {
+        let key = (MacAddr::from_slice(source_mac), invoke_id);
+        let pending = self.pending.get_mut(&key)?;
+        pending.segment_generation = pending.segment_generation.wrapping_add(1);
+        pending.phase = TransactionPhase::SegmentedResponse;
+        let generation = pending.segment_generation;
+        pending
+            .progress
+            .send_replace(TransactionProgress::SegmentedResponse { generation });
+        Some(generation)
+    }
+
+    /// Restart SegmentTimer for a segment handled in SEGMENTED_CONF.
+    pub(crate) fn record_segmented_response_activity(
+        &mut self,
+        source_mac: &[u8],
+        invoke_id: u8,
+    ) -> Option<u64> {
+        let key = (MacAddr::from_slice(source_mac), invoke_id);
+        let pending = self.pending.get_mut(&key)?;
+        if pending.phase != TransactionPhase::SegmentedResponse {
+            return None;
+        }
+        pending.segment_generation = pending.segment_generation.wrapping_add(1);
+        let generation = pending.segment_generation;
+        pending
+            .progress
+            .send_replace(TransactionProgress::SegmentedResponse { generation });
+        Some(generation)
+    }
+
+    /// Resume AWAIT_CONFIRMATION when a completed reassembly is not this
+    /// transaction's response or cannot be delivered.
+    pub(crate) fn reset_segmented_response(&mut self, source_mac: &[u8], invoke_id: u8) -> bool {
+        let key = (MacAddr::from_slice(source_mac), invoke_id);
+        let Some(pending) = self.pending.get_mut(&key) else {
+            return false;
+        };
+        if pending.phase != TransactionPhase::SegmentedResponse {
+            return false;
+        }
+        pending.phase = TransactionPhase::AwaitingResponse;
+        pending
+            .progress
+            .send_replace(TransactionProgress::AwaitingResponse);
+        true
+    }
+
+    /// Arbitrate RequestTimer against the receive-side phase transition.
+    ///
+    /// Returning [`RequestTimerExpiration::Retry`] authorizes one retry. The
+    /// caller then releases the enclosing TSM lock before transport I/O; a
+    /// segmented-response transition that follows does not revoke that send.
+    pub(crate) fn expire_request_timer(
+        &mut self,
+        destination_mac: &[u8],
+        invoke_id: u8,
+        final_timeout: bool,
+    ) -> RequestTimerExpiration {
+        let key = (MacAddr::from_slice(destination_mac), invoke_id);
+        let Some(pending) = self.pending.get(&key) else {
+            return RequestTimerExpiration::NoTransaction;
+        };
+        if pending.phase == TransactionPhase::SegmentedResponse {
+            return RequestTimerExpiration::SegmentedResponse {
+                generation: pending.segment_generation,
+            };
+        }
+        if !final_timeout {
+            return RequestTimerExpiration::Retry;
+        }
+        self.pending.remove(&key);
+        self.release_invoke_id(destination_mac, invoke_id);
+        RequestTimerExpiration::TimedOut
+    }
+
+    /// Cancel only if no segment activity has advanced past `generation`.
+    pub(crate) fn expire_segment_timer(
+        &mut self,
+        destination_mac: &[u8],
+        invoke_id: u8,
+        generation: u64,
+    ) -> SegmentTimerExpiration {
+        let key = (MacAddr::from_slice(destination_mac), invoke_id);
+        let Some(pending) = self.pending.get(&key) else {
+            return SegmentTimerExpiration::NoTransaction;
+        };
+        if pending.phase == TransactionPhase::AwaitingResponse {
+            return SegmentTimerExpiration::AwaitingResponse;
+        }
+        if pending.segment_generation != generation {
+            return SegmentTimerExpiration::Activity {
+                generation: pending.segment_generation,
+            };
+        }
+        self.pending.remove(&key);
+        self.release_invoke_id(destination_mac, invoke_id);
+        SegmentTimerExpiration::TimedOut
     }
 
     /// The confirmed service a pending transaction is waiting on, if any.
@@ -497,5 +662,108 @@ mod tests {
         let cancelled = tsm.cancel_transaction(&mac, invoke_id);
         assert!(cancelled);
         assert_eq!(tsm.pending_count(), 0);
+    }
+
+    #[test]
+    fn segmented_admission_and_request_timeout_are_serialized() {
+        let mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]);
+
+        let mut admitted_first = Tsm::new(TsmConfig::default());
+        let invoke_id = admitted_first.allocate_invoke_id(&mac).unwrap();
+        let registration = admitted_first.register_transaction_with_progress(
+            mac.clone(),
+            invoke_id,
+            ConfirmedServiceChoice::READ_PROPERTY,
+        );
+        let generation = admitted_first
+            .begin_segmented_response(&mac, invoke_id)
+            .unwrap();
+        assert_eq!(
+            *registration.progress.borrow(),
+            TransactionProgress::SegmentedResponse { generation }
+        );
+        assert_eq!(
+            admitted_first.expire_request_timer(&mac, invoke_id, true),
+            RequestTimerExpiration::SegmentedResponse { generation }
+        );
+        assert_eq!(admitted_first.pending_count(), 1);
+
+        let mut timeout_first = Tsm::new(TsmConfig::default());
+        let invoke_id = timeout_first.allocate_invoke_id(&mac).unwrap();
+        let _registration = timeout_first.register_transaction_with_progress(
+            mac.clone(),
+            invoke_id,
+            ConfirmedServiceChoice::READ_PROPERTY,
+        );
+        assert_eq!(
+            timeout_first.expire_request_timer(&mac, invoke_id, true),
+            RequestTimerExpiration::TimedOut
+        );
+        assert_eq!(
+            timeout_first.begin_segmented_response(&mac, invoke_id),
+            None
+        );
+        assert_eq!(timeout_first.pending_count(), 0);
+    }
+
+    #[test]
+    fn retry_send_failure_recheck_preserves_later_segmented_admission() {
+        let mut tsm = Tsm::new(TsmConfig::default());
+        let mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]);
+        let invoke_id = tsm.allocate_invoke_id(&mac).unwrap();
+        let _registration = tsm.register_transaction_with_progress(
+            mac.clone(),
+            invoke_id,
+            ConfirmedServiceChoice::READ_PROPERTY,
+        );
+
+        assert_eq!(
+            tsm.expire_request_timer(&mac, invoke_id, false),
+            RequestTimerExpiration::Retry
+        );
+        let generation = tsm.begin_segmented_response(&mac, invoke_id).unwrap();
+        assert_eq!(
+            tsm.expire_request_timer(&mac, invoke_id, true),
+            RequestTimerExpiration::SegmentedResponse { generation }
+        );
+        assert_eq!(tsm.pending_count(), 1);
+    }
+
+    #[test]
+    fn stale_segment_timer_generation_cannot_cancel_new_activity() {
+        let mut tsm = Tsm::new(TsmConfig::default());
+        let mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]);
+        let invoke_id = tsm.allocate_invoke_id(&mac).unwrap();
+        let registration = tsm.register_transaction_with_progress(
+            mac.clone(),
+            invoke_id,
+            ConfirmedServiceChoice::READ_PROPERTY,
+        );
+
+        let stale_generation = tsm.begin_segmented_response(&mac, invoke_id).unwrap();
+        let current_generation = tsm
+            .record_segmented_response_activity(&mac, invoke_id)
+            .unwrap();
+        assert_ne!(stale_generation, current_generation);
+        assert_eq!(
+            tsm.expire_segment_timer(&mac, invoke_id, stale_generation),
+            SegmentTimerExpiration::Activity {
+                generation: current_generation
+            }
+        );
+        assert_eq!(tsm.pending_count(), 1);
+        assert_eq!(
+            *registration.progress.borrow(),
+            TransactionProgress::SegmentedResponse {
+                generation: current_generation
+            }
+        );
+
+        assert_eq!(
+            tsm.expire_segment_timer(&mac, invoke_id, current_generation),
+            SegmentTimerExpiration::TimedOut
+        );
+        assert_eq!(tsm.pending_count(), 0);
+        assert_eq!(tsm.allocate_invoke_id(&mac), Some(0));
     }
 }

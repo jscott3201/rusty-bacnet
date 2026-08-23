@@ -37,7 +37,10 @@ use crate::discovery::{DeviceTable, DeviceUpsertResult, DiscoveredDevice, Routed
 use crate::segmentation::{
     duplicate_in_window, max_segment_payload, split_payload, SegmentReceiver, SegmentedPduType,
 };
-use crate::tsm::{Tsm, TsmConfig, TsmResponse};
+use crate::tsm::{
+    RequestTimerExpiration, SegmentTimerExpiration, TransactionProgress, Tsm, TsmConfig,
+    TsmResponse,
+};
 
 /// Default COV notification broadcast channel capacity.
 pub const DEFAULT_COV_CHANNEL_CAPACITY: usize = 64;
@@ -806,6 +809,8 @@ mod device_events_tests;
 mod peer_max_apdu_tests;
 #[cfg(test)]
 mod peer_segmentation_tests;
+#[cfg(test)]
+mod request_timer_tests;
 #[cfg(test)]
 mod response_correlation_tests;
 #[cfg(test)]

@@ -8,11 +8,11 @@
 //! the client kept acking segments of a transaction that no longer existed.
 //!
 //! The tests run a real client over a loopback pair; the test plays the
-//! server. Wall-clock discipline: each test finishes well inside the 4 s
-//! reassembly reaper, and the caller-timeout test asserts the Abort reason so
-//! a reaper eviction (TSM_TIMEOUT) cannot satisfy it for the wrong cause.
+//! server. Their receive timers finish well inside the separate 4 s reaper.
 
-use bacnet_encoding::apdu::{self, encode_apdu, AbortPdu, Apdu, ComplexAck, ErrorPdu, RejectPdu};
+use bacnet_encoding::apdu::{
+    self, encode_apdu, AbortPdu, Apdu, ComplexAck, ErrorPdu, RejectPdu, SegmentAck,
+};
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
@@ -76,7 +76,7 @@ async fn start_reassembly(
     let (client_transport, mut server_transport) =
         LoopbackTransport::pair(CLIENT_MAC.to_vec(), SERVER_MAC.to_vec());
     let mut server_rx = server_transport.start().await.unwrap();
-    let mut client = BACnetClient::start(config, client_transport).await.unwrap();
+    let client = BACnetClient::start(config, client_transport).await.unwrap();
 
     // The client rides along in the task's return value: several tests need
     // it alive (and its dispatch loop running) after the caller has already
@@ -320,16 +320,14 @@ async fn error_and_reject_without_a_session_surface_as_themselves() {
     client.stop().await.unwrap();
 }
 
-/// The caller giving up is the fourth way a transaction ends. After
-/// `cancel_transaction`, the next segment must find no pending transaction
-/// and draw the 5.4.4.1 Abort. The reason assertion matters: a reaper
-/// eviction would answer TSM_TIMEOUT, and the whole test stays far under the
-/// reaper's 4 s so only the transaction gate can produce this Abort.
+/// SEGMENTED_CONF times out after four APDU segment timeouts without sending
+/// a peer Abort. The next segment then reaches the existing IDLE gate and
+/// draws INVALID_APDU_IN_THIS_STATE.
 #[tokio::test]
-async fn caller_timeout_ends_the_reassembly_session() {
+async fn segment_timer_timeout_ends_the_reassembly_session() {
     let config = ClientConfig {
-        apdu_timeout_ms: 300,
-        apdu_retries: 0,
+        apdu_timeout_ms: 100,
+        apdu_retries: 3,
         ..ClientConfig::default()
     };
     let (task, server, mut rx, invoke_id) = start_reassembly(config).await;
@@ -337,20 +335,160 @@ async fn caller_timeout_ends_the_reassembly_session() {
     send_to_client(&server, &response_segment(invoke_id, 0, true, &[0x01; 8])).await;
     expect_segment_ack(&mut rx, invoke_id, 0).await;
 
-    // Past the caller's 300 ms timeout; it cancels the transaction. The
-    // client itself stays up — the session must be ended by the transaction
-    // gate, not by the client shutting down.
     let (mut client, result) = timeout(Duration::from_secs(2), task)
         .await
         .unwrap()
         .unwrap();
     match result {
-        Err(Error::Timeout(_)) => {}
+        Err(Error::Timeout(duration)) => assert_eq!(duration, Duration::from_millis(400)),
         other => panic!("expected Err(Timeout), got {other:?}"),
     }
 
+    assert!(
+        timeout(Duration::from_millis(50), rx.recv()).await.is_err(),
+        "receive SegmentTimer expiry must not send a peer Abort"
+    );
+
     send_to_client(&server, &response_segment(invoke_id, 1, true, &[0x02; 8])).await;
-    expect_client_abort(&mut rx, invoke_id, "a segment after the caller timed out").await;
+    expect_client_abort(&mut rx, invoke_id, "a segment after SegmentTimer expired").await;
+    client.stop().await.unwrap();
+}
+
+/// Clause 5.4.4.3 stops RequestTimer when segment zero moves the transaction
+/// into SEGMENTED_CONF. A response may therefore cross the original request
+/// timeout without replaying the ConfirmedRequest or losing its invoke ID.
+#[tokio::test]
+async fn segmented_response_stops_request_timer_and_completes() {
+    let config = ClientConfig {
+        apdu_timeout_ms: 150,
+        apdu_retries: 1,
+        ..ClientConfig::default()
+    };
+    let (task, server, mut rx, invoke_id) = start_reassembly(config).await;
+
+    send_to_client(&server, &response_segment(invoke_id, 0, true, &[0x01; 8])).await;
+    expect_segment_ack(&mut rx, invoke_id, 0).await;
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    if let Ok(Some(received)) = timeout(Duration::from_millis(50), rx.recv()).await {
+        let npdu = decode_npdu(received.npdu).unwrap();
+        let pdu = apdu::decode_apdu(npdu.payload).unwrap();
+        panic!("RequestTimer remained active during reassembly: {pdu:?}");
+    }
+
+    send_to_client(&server, &response_segment(invoke_id, 1, false, &[0x02; 8])).await;
+    expect_segment_ack(&mut rx, invoke_id, 1).await;
+
+    let (mut client, result) = timeout(Duration::from_secs(2), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        result.unwrap().as_ref(),
+        &[[0x01u8; 8].as_slice(), &[0x02; 8]].concat()
+    );
+    client.stop().await.unwrap();
+}
+
+/// Each accepted segment restarts the receive timer. The complete response
+/// may take longer than four Tseg as long as no individual gap does.
+#[tokio::test]
+async fn segment_activity_restarts_the_receive_timer() {
+    let config = ClientConfig {
+        apdu_timeout_ms: 100,
+        apdu_retries: 0,
+        ..ClientConfig::default()
+    };
+    let (task, server, mut rx, invoke_id) = start_reassembly(config).await;
+
+    send_to_client(&server, &response_segment(invoke_id, 0, true, &[0x01; 8])).await;
+    expect_segment_ack(&mut rx, invoke_id, 0).await;
+    tokio::time::sleep(Duration::from_millis(250)).await;
+
+    send_to_client(&server, &response_segment(invoke_id, 1, true, &[0x02; 8])).await;
+    expect_segment_ack(&mut rx, invoke_id, 1).await;
+    tokio::time::sleep(Duration::from_millis(250)).await;
+
+    send_to_client(&server, &response_segment(invoke_id, 2, false, &[0x03; 8])).await;
+    expect_segment_ack(&mut rx, invoke_id, 2).await;
+    let (mut client, result) = timeout(Duration::from_secs(2), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        result.unwrap().as_ref(),
+        &[[0x01u8; 8].as_slice(), &[0x02; 8], &[0x03; 8]].concat()
+    );
+    client.stop().await.unwrap();
+}
+
+/// The response wait after the final outgoing request SegmentACK uses the
+/// same receive-side phase transition as an unsegmented outgoing request.
+#[tokio::test]
+async fn segmented_request_response_stops_its_request_timer() {
+    let config = ClientConfig {
+        apdu_timeout_ms: 150,
+        apdu_retries: 0,
+        max_apdu_length: 50,
+        proposed_window_size: 1,
+        ..ClientConfig::default()
+    };
+    let (client_transport, mut server) =
+        LoopbackTransport::pair(CLIENT_MAC.to_vec(), SERVER_MAC.to_vec());
+    let mut rx = server.start().await.unwrap();
+    let client = BACnetClient::start(config, client_transport).await.unwrap();
+    let task = tokio::spawn(async move {
+        let result = client
+            .confirmed_request(
+                SERVER_MAC,
+                ConfirmedServiceChoice::READ_PROPERTY,
+                &[0x0C; 100],
+            )
+            .await;
+        (client, result)
+    });
+
+    let invoke_id = loop {
+        let request = match recv_apdu(&mut rx, "an outgoing request segment").await {
+            Apdu::ConfirmedRequest(request) => request,
+            other => panic!("expected ConfirmedRequest segment, got {other:?}"),
+        };
+        assert!(request.segmented);
+        let sequence_number = request.sequence_number.unwrap();
+        send_to_client(
+            &server,
+            &Apdu::SegmentAck(SegmentAck {
+                negative_ack: false,
+                sent_by_server: true,
+                invoke_id: request.invoke_id,
+                sequence_number,
+                actual_window_size: 1,
+            }),
+        )
+        .await;
+        if !request.more_follows {
+            break request.invoke_id;
+        }
+    };
+
+    send_to_client(&server, &response_segment(invoke_id, 0, true, &[0x01; 8])).await;
+    expect_segment_ack(&mut rx, invoke_id, 0).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        timeout(Duration::from_millis(50), rx.recv()).await.is_err(),
+        "the response RequestTimer remained active after segment zero"
+    );
+
+    send_to_client(&server, &response_segment(invoke_id, 1, false, &[0x02; 8])).await;
+    expect_segment_ack(&mut rx, invoke_id, 1).await;
+    let (mut client, result) = timeout(Duration::from_secs(2), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        result.unwrap().as_ref(),
+        &[[0x01u8; 8].as_slice(), &[0x02; 8]].concat()
+    );
     client.stop().await.unwrap();
 }
 
