@@ -61,7 +61,8 @@
     "crates/bacnet-client/src/client/request_timer_tests.rs::blocked_retry_does_not_block_segment_admission_or_cancel_on_send_failure",
     "crates/bacnet-client/src/client/segmented_receive_lifecycle_tests.rs::segmented_response_stops_request_timer_and_completes",
     "crates/bacnet-client/src/client/segmented_receive_lifecycle_tests.rs::segment_activity_restarts_the_receive_timer",
-    "crates/bacnet-client/src/client/segmented_receive_lifecycle_tests.rs::segmented_request_response_stops_its_request_timer"
+    "crates/bacnet-client/src/client/segmented_receive_lifecycle_tests.rs::segmented_request_response_stops_its_request_timer",
+    "crates/bacnet-client/src/client/segmented_receive_lifecycle_tests.rs::segmented_request_timeout_cleanup_does_not_cancel_reused_invoke_id"
    ],
    "negative_tests": [
     "crates/bacnet-client/src/client/segmented_receive_lifecycle_tests.rs::segment_timer_timeout_ends_the_reassembly_session"

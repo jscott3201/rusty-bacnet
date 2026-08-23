@@ -7,10 +7,14 @@ use std::collections::HashMap;
 use std::net::Ipv4Addr;
 #[cfg(feature = "ipv6")]
 use std::net::Ipv6Addr;
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
 use bytes::{Bytes, BytesMut};
+#[cfg(test)]
+use tokio::sync::Notify;
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
@@ -375,6 +379,36 @@ const SEG_RECEIVER_TIMEOUT: Duration = Duration::from_secs(4);
 /// Key for tracking in-progress segmented receives: (correlation_mac, invoke_id).
 type SegKey = (MacAddr, u8);
 
+#[cfg(test)]
+#[derive(Default)]
+struct SegmentedPostWaitCleanupHook {
+    enabled: AtomicBool,
+    reached: Notify,
+    release: Notify,
+}
+
+#[cfg(test)]
+impl SegmentedPostWaitCleanupHook {
+    fn enable(&self) {
+        self.enabled.store(true, Ordering::SeqCst);
+    }
+
+    async fn wait_until_reached(&self) {
+        self.reached.notified().await;
+    }
+
+    fn release(&self) {
+        self.release.notify_one();
+    }
+
+    async fn pause_if_enabled(&self) {
+        if self.enabled.swap(false, Ordering::SeqCst) {
+            self.reached.notify_one();
+            self.release.notified().await;
+        }
+    }
+}
+
 /// BACnet client with low-level and high-level request APIs.
 pub struct BACnetClient<T: TransportPort> {
     config: ClientConfig,
@@ -392,6 +426,8 @@ pub struct BACnetClient<T: TransportPort> {
     /// dispatch go the other way — so the pair is deadlock-free only because
     /// neither is ever held across the other's acquisition.
     seg_ack_senders: Arc<Mutex<HashMap<SegKey, mpsc::Sender<SegmentAckPdu>>>>,
+    #[cfg(test)]
+    segmented_post_wait_cleanup: Arc<SegmentedPostWaitCleanupHook>,
     local_mac: MacAddr,
 }
 

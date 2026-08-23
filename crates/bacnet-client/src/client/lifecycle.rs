@@ -167,6 +167,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             device_tx,
             dispatch_task: Some(dispatch_task),
             seg_ack_senders,
+            #[cfg(test)]
+            segmented_post_wait_cleanup: Arc::new(SegmentedPostWaitCleanupHook::default()),
             local_mac,
         })
     }

@@ -499,6 +499,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         // row means a peer that keeps asking for the same window; cutting the
         // transfer off is a local matter, like every bounded resource here.
         const MAX_NEG_ACK_RETRIES: u32 = 10;
+        let mut owns_tsm_cleanup = true;
 
         let result = async {
             while next_seq < total_segments {
@@ -655,6 +656,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 next_seq = ack_seq + 1;
             }
 
+            // Once entered, the phase-aware waiter owns terminal TSM removal.
+            // A later key-only cancellation could target a reused invoke ID.
+            owns_tsm_cleanup = false;
             self.wait_for_confirmed_response(
                 target,
                 &tsm_mac,
@@ -667,6 +671,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
         .await;
 
+        #[cfg(test)]
+        self.segmented_post_wait_cleanup.pause_if_enabled().await;
+
         {
             let key = (tsm_mac.clone(), invoke_id);
             self.seg_ack_senders.lock().await.remove(&key);
@@ -675,8 +682,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let response = match result {
             Ok(response) => response,
             Err(e) => {
-                let mut tsm = self.tsm.lock().await;
-                tsm.cancel_transaction(&tsm_mac, invoke_id);
+                if owns_tsm_cleanup {
+                    let mut tsm = self.tsm.lock().await;
+                    tsm.cancel_transaction(&tsm_mac, invoke_id);
+                }
                 return Err(e);
             }
         };

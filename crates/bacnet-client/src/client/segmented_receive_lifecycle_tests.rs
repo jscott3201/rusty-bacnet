@@ -10,6 +10,8 @@
 //! The tests run a real client over a loopback pair; the test plays the
 //! server. Their receive timers finish well inside the separate 4 s reaper.
 
+use std::sync::Arc;
+
 use bacnet_encoding::apdu::{
     self, encode_apdu, AbortPdu, Apdu, ComplexAck, ErrorPdu, RejectPdu, SegmentAck,
 };
@@ -490,6 +492,121 @@ async fn segmented_request_response_stops_its_request_timer() {
         &[[0x01u8; 8].as_slice(), &[0x02; 8]].concat()
     );
     client.stop().await.unwrap();
+}
+
+/// Cleanup after a completed response wait must not cancel a newer request
+/// that reused the released invoke ID.
+#[tokio::test]
+async fn segmented_request_timeout_cleanup_does_not_cancel_reused_invoke_id() {
+    let config = ClientConfig {
+        apdu_timeout_ms: 100,
+        apdu_retries: 0,
+        max_apdu_length: 50,
+        proposed_window_size: 1,
+        ..ClientConfig::default()
+    };
+    let (client_transport, mut server) =
+        LoopbackTransport::pair(CLIENT_MAC.to_vec(), SERVER_MAC.to_vec());
+    let mut rx = server.start().await.unwrap();
+    let client = Arc::new(BACnetClient::start(config, client_transport).await.unwrap());
+    client.segmented_post_wait_cleanup.enable();
+
+    let first_client = Arc::clone(&client);
+    let first = tokio::spawn(async move {
+        first_client
+            .confirmed_request(
+                SERVER_MAC,
+                ConfirmedServiceChoice::READ_PROPERTY,
+                &[0x0C; 100],
+            )
+            .await
+    });
+
+    let first_invoke_id = loop {
+        let request = match recv_apdu(&mut rx, "an outgoing request segment").await {
+            Apdu::ConfirmedRequest(request) => request,
+            other => panic!("expected ConfirmedRequest segment, got {other:?}"),
+        };
+        assert!(request.segmented);
+        let sequence_number = request.sequence_number.unwrap();
+        send_to_client(
+            &server,
+            &Apdu::SegmentAck(SegmentAck {
+                negative_ack: false,
+                sent_by_server: true,
+                invoke_id: request.invoke_id,
+                sequence_number,
+                actual_window_size: 1,
+            }),
+        )
+        .await;
+        if !request.more_follows {
+            break request.invoke_id;
+        }
+    };
+
+    timeout(
+        Duration::from_secs(2),
+        client.segmented_post_wait_cleanup.wait_until_reached(),
+    )
+    .await
+    .expect("timed-out request did not reach delayed cleanup");
+
+    let second_client = Arc::clone(&client);
+    let second = tokio::spawn(async move {
+        second_client
+            .confirmed_request(SERVER_MAC, ConfirmedServiceChoice::READ_PROPERTY, &[0x0C])
+            .await
+    });
+    let second_invoke_id = match recv_apdu(&mut rx, "the replacement request").await {
+        Apdu::ConfirmedRequest(request) => {
+            assert!(!request.segmented);
+            request.invoke_id
+        }
+        other => panic!("expected replacement ConfirmedRequest, got {other:?}"),
+    };
+    assert_eq!(second_invoke_id, first_invoke_id);
+
+    client.segmented_post_wait_cleanup.release();
+    assert!(matches!(
+        timeout(Duration::from_secs(2), first)
+            .await
+            .unwrap()
+            .unwrap(),
+        Err(Error::Timeout(_))
+    ));
+    assert_eq!(
+        client.tsm.lock().await.pending_count(),
+        1,
+        "stale cleanup cancelled the replacement request"
+    );
+
+    send_to_client(
+        &server,
+        &Apdu::ComplexAck(ComplexAck {
+            segmented: false,
+            more_follows: false,
+            invoke_id: second_invoke_id,
+            sequence_number: None,
+            proposed_window_size: None,
+            service_choice: ConfirmedServiceChoice::READ_PROPERTY,
+            service_ack: Bytes::from_static(b"replacement"),
+        }),
+    )
+    .await;
+    let result = timeout(Duration::from_secs(2), second)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(result.as_ref(), b"replacement");
+
+    let mut client = match Arc::try_unwrap(client) {
+        Ok(client) => client,
+        Err(_) => panic!("request tasks retained the client"),
+    };
+    client.stop().await.unwrap();
+    server.stop().await.unwrap();
 }
 
 /// A SimpleAck mid-reassembly is in the same Clause 5.4.4.4
