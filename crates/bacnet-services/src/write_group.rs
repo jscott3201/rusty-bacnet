@@ -1,4 +1,4 @@
-//! WriteGroup service per ASHRAE 135-2020 Clause 16.10.8.
+//! WriteGroup service per ASHRAE 135-2020 Clause 15.11.
 
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;

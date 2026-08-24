@@ -14,7 +14,6 @@ use bacnet_objects::command::CommandObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::event_log::EventLogObject;
 use bacnet_objects::group::{GlobalGroupObject, GroupObject, StructuredViewObject};
-use bacnet_objects::lighting::ChannelObject;
 use bacnet_objects::multistate::MultiStateInputObject;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::schedule::{CalendarObject, ScheduleObject};
@@ -66,8 +65,6 @@ fn gating_db() -> ObjectDatabase {
         CharacterStringValueObject::new(1, "CSV-1").unwrap(),
     ))
     .unwrap();
-    db.add(Box::new(ChannelObject::new(1, "CH-1", 7).unwrap()))
-        .unwrap();
     db.add(Box::new(GlobalGroupObject::new(1, "GG-1").unwrap()))
         .unwrap();
     db.add(Box::new(StructuredViewObject::new(1, "SV-1").unwrap()))
@@ -499,11 +496,8 @@ fn object_level_classification_matrix() {
     assert!(!nc.is_array_property(PropertyIdentifier::RECIPIENT_LIST));
     assert!(!nc.is_array_property(PropertyIdentifier::ACK_REQUIRED));
 
-    let channel = ChannelObject::new(9, "CH-9", 7).unwrap();
-    // LIST_OF_OBJECT_PROPERTY_REFERENCES: array on Channel (Table 12-62)…
-    assert!(channel.is_array_property(PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES));
     let schedule = ScheduleObject::new(9, "SCH-9", PropertyValue::Unsigned(0)).unwrap();
-    // …but a BACnetLIST on Schedule (Table 12-28).
+    // LIST_OF_OBJECT_PROPERTY_REFERENCES is a BACnetLIST on Schedule (Table 12-28).
     assert!(!schedule.is_array_property(PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES));
     assert!(schedule.is_array_property(PropertyIdentifier::WEEKLY_SCHEDULE));
     assert!(schedule.is_array_property(PropertyIdentifier::EXCEPTION_SCHEDULE));

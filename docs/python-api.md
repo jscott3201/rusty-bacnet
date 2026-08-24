@@ -1083,7 +1083,6 @@ server.add_timer(instance=1, name="Timer")
 server.add_load_control(instance=1, name="Load Control")
 server.add_program(instance=1, name="Program")
 server.add_averaging(instance=1, name="Averaging")
-server.add_channel(instance=1, name="Channel", channel_number=1)
 server.add_staging(instance=1, name="Staging", num_stages=4)
 ```
 

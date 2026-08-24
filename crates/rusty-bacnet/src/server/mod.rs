@@ -26,7 +26,7 @@ use bacnet_objects::event_log::EventLogObject;
 use bacnet_objects::file::FileObject;
 use bacnet_objects::group::{GlobalGroupObject, GroupObject, StructuredViewObject};
 use bacnet_objects::life_safety::{LifeSafetyPointObject, LifeSafetyZoneObject};
-use bacnet_objects::lighting::{BinaryLightingOutputObject, ChannelObject, LightingOutputObject};
+use bacnet_objects::lighting::{BinaryLightingOutputObject, LightingOutputObject};
 use bacnet_objects::load_control::LoadControlObject;
 use bacnet_objects::loop_obj::LoopObject;
 use bacnet_objects::multistate::{

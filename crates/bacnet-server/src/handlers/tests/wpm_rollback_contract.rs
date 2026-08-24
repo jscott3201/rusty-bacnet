@@ -3,7 +3,6 @@ use bacnet_objects::access_control::AccessDoorObject;
 use bacnet_objects::audit::{AuditLogObject, AuditRecord};
 use bacnet_objects::binary::BinaryValueObject;
 use bacnet_objects::event_log::EventLogObject;
-use bacnet_objects::lighting::ChannelObject;
 use bacnet_objects::network_port::NetworkPortObject;
 use bacnet_objects::traits::WritePropertyRollback;
 use bacnet_objects::trend::{TrendLogMultipleObject, TrendLogObject};
@@ -274,48 +273,6 @@ fn unreadable_successful_write_reports_failed_rollback_and_residual_object() {
             .read_property(PropertyIdentifier::PRESENT_VALUE, None)
             .unwrap(),
         PropertyValue::CharacterString("changed".into())
-    );
-}
-
-#[test]
-fn channel_rollback_restores_last_priority() {
-    let mut db = ObjectDatabase::new();
-    let mut channel = ChannelObject::new(1, "CH-1", 7).unwrap();
-    channel
-        .write_property(
-            PropertyIdentifier::PRESENT_VALUE,
-            None,
-            PropertyValue::Unsigned(10),
-            Some(3),
-        )
-        .unwrap();
-    let oid = channel.object_identifier();
-    db.add(Box::new(channel)).unwrap();
-
-    let mut changed = BytesMut::new();
-    bacnet_encoding::primitives::encode_app_unsigned(&mut changed, 20);
-    let (result, residual_oids) = failed_wpm(
-        &mut db,
-        oid,
-        PropertyIdentifier::PRESENT_VALUE,
-        changed.to_vec(),
-        Some(8),
-    );
-
-    assert!(result.is_err());
-    assert!(residual_oids.is_empty());
-    let object = db.get(&oid).unwrap();
-    assert_eq!(
-        object
-            .read_property(PropertyIdentifier::PRESENT_VALUE, None)
-            .unwrap(),
-        PropertyValue::Unsigned(10)
-    );
-    assert_eq!(
-        object
-            .read_property(PropertyIdentifier::LAST_PRIORITY, None)
-            .unwrap(),
-        PropertyValue::Unsigned(3)
     );
 }
 

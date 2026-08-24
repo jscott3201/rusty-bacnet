@@ -42,7 +42,6 @@ mod file;
 mod list;
 mod object_mgmt;
 mod read_property;
-mod write_group;
 mod write_property;
 
 pub use alarm_event::*;
@@ -52,7 +51,6 @@ pub use file::*;
 pub use list::*;
 pub use object_mgmt::*;
 pub use read_property::*;
-pub use write_group::*;
 pub use write_property::*;
 
 #[cfg(test)]

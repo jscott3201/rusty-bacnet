@@ -491,13 +491,6 @@ impl BACnetServer {
         self.push_pending(Box::new(obj))
     }
 
-    /// Add a Channel object to the server (before starting).
-    #[pyo3(signature = (instance, name, channel_number))]
-    fn add_channel(&self, instance: u32, name: &str, channel_number: u32) -> PyResult<()> {
-        let obj = ChannelObject::new(instance, name, channel_number).map_err(to_py_err)?;
-        self.push_pending(Box::new(obj))
-    }
-
     /// Add a Staging object to the server (before starting).
     #[pyo3(signature = (instance, name, num_stages))]
     fn add_staging(&self, instance: u32, name: &str, num_stages: usize) -> PyResult<()> {

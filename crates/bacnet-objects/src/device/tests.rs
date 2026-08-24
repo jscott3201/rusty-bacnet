@@ -263,8 +263,8 @@ fn read_protocol_object_types_supported() {
             assert_eq!(unused_bits, 7);
             assert_eq!(
                 data,
-                vec![0xFF, 0xFF, 0xFF, 0xFF, 0xFD, 0xFF, 0xEF, 0xFF, 0x80],
-                "type 51 must stay clear while types 50, 52, and 64 remain set"
+                vec![0xFF, 0xFF, 0xFF, 0xFF, 0xFD, 0xFF, 0xEB, 0xFF, 0x80],
+                "types 51 and 53 must stay clear while types 50, 52, 54, and 64 remain set"
             );
         }
         _ => panic!("Expected BitString"),
@@ -301,6 +301,7 @@ fn read_protocol_services_supported() {
             assert!(ss.contains(ServiceSupported::WHO_IS));
             assert!(ss.contains(ServiceSupported::READ_RANGE));
             assert!(ss.contains(ServiceSupported::SUBSCRIBE_COV_PROPERTY_MULTIPLE));
+            assert!(!ss.contains(ServiceSupported::WRITE_GROUP));
             // …and initiate-only services are not declared as executed.
             assert!(!ss.contains(ServiceSupported::I_AM));
             assert!(!ss.contains(ServiceSupported::I_HAVE));

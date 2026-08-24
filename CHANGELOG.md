@@ -1161,6 +1161,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Protocol_Object_Types_Supported`. `ObjectType::NOTIFICATION_FORWARDER`, the
   Python enum constant, CLI remote-identifier parsing, and generic recipient
   codecs remain as wire-level interoperability vocabulary. (#188)
+- Withdraw public `bacnet_objects::lighting::ChannelObject` and Python
+  `BACnetServer.add_channel` construction (**breaking**), remove Channel and
+  WriteGroup from bundled Device support bits, and remove the inbound
+  WriteGroup decode-and-drop path. The placeholder had no member propagation,
+  coercion, write-status lifecycle, or applicable delay behavior, so received
+  WriteGroup requests could not perform Clause 15.11 state changes. Channel/WriteGroup
+  enums, property identifiers, the wire codec, and Rust/Python client APIs
+  remain as protocol vocabulary. (#248)
 - Remove the public `bacnet_server::intrinsic_reporting` module —
   `IntrinsicReportingEngine` and `IntrinsicEvent` (**breaking**: public API
   removal). The engine was a second, uncalled intrinsic-reporting evaluator

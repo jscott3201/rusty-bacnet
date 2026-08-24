@@ -321,6 +321,10 @@ fn services_match_implementation() {
     assert!(service_names.contains(&"CreateObject"));
     assert!(service_names.contains(&"DeleteObject"));
     assert!(service_names.contains(&"WhoIs"));
+    assert!(
+        !service_names.contains(&"WriteGroup"),
+        "server PICS must not list unsupported inbound WriteGroup"
+    );
 
     // Initiator services
     assert!(service_names.contains(&"I-Am"));
@@ -770,7 +774,12 @@ fn executed_services_match_dispatch_table() {
     // Protocol_Services_Supported and the PICS executor column. If a dispatch
     // arm is added or removed without updating the choice const or the device
     // constant, this test fails.
-    use bacnet_types::enums::ServiceSupported;
+    use bacnet_types::enums::{ServiceSupported, UnconfirmedServiceChoice};
+
+    assert!(
+        !crate::server::EXECUTED_UNCONFIRMED.contains(&UnconfirmedServiceChoice::WRITE_GROUP),
+        "inbound WriteGroup has no execution path"
+    );
 
     let mut from_dispatch: Vec<u8> = crate::server::EXECUTED_CONFIRMED
         .iter()

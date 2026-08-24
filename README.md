@@ -300,7 +300,7 @@ docs/                 API documentation and design plans
 | AddListElement / RemoveListElement | ✓ | ✓ |
 | ConfirmedPrivateTransfer / UnconfirmedPrivateTransfer | ✓ | — |
 | ConfirmedTextMessage / UnconfirmedTextMessage | ✓ | ✓ |
-| WriteGroup | ✓ | ✓ |
+| WriteGroup | ✓ | — |
 | VTOpen / VTClose / VTData | ✓ | — |
 | AuditNotification (confirmed + unconfirmed) | ✓ | — |
 | AuditLogQuery | ✓ | — |

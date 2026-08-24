@@ -515,8 +515,8 @@ fn read_property_serves_derived_services_supported() {
     // End-to-end pin for #192: the wire-level BitString a client receives for
     // Protocol_Services_Supported, through the real ReadProperty handler path.
     // Expected bytes derive from device::EXECUTED_SERVICES bits
-    // {0,3-12,14-17,19,20,31-41} packed MSB-first over the full production
-    // (49 defined bits, 7 octets, 7 unused).
+    // {0,3-12,14-17,19,20,31-39,41} packed MSB-first over the full production
+    // range (49 defined bits, 7 octets, 7 unused).
     let db = make_db_with_device_and_ai();
     let oid = ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap();
 
@@ -538,7 +538,7 @@ fn read_property_serves_derived_services_supported() {
         val,
         bacnet_types::primitives::PropertyValue::BitString {
             unused_bits: 7,
-            data: vec![0x9F, 0xFB, 0xD8, 0x01, 0xFF, 0xC0, 0x00],
+            data: vec![0x9F, 0xFB, 0xD8, 0x01, 0xFF, 0x40, 0x00],
         }
     );
 

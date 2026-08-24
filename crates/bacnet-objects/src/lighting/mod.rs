@@ -1,5 +1,5 @@
-//! Lighting Output (type 54), Binary Lighting Output (type 55), and Channel
-//! (type 53) objects per ASHRAE 135-2020 Clauses 12.55, 12.56, and 12.53.
+//! Lighting Output (type 54) and Binary Lighting Output (type 55) objects per
+//! ASHRAE 135-2020 Clauses 12.54 and 12.55.
 
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
@@ -10,7 +10,7 @@ use crate::common::{
     self, read_common_properties, read_priority_array, write_priority_array,
     write_priority_array_direct,
 };
-use crate::traits::{BACnetObject, WritePropertyRollback};
+use crate::traits::BACnetObject;
 
 // ---------------------------------------------------------------------------
 // LightingOutput (type 54)
@@ -522,179 +522,6 @@ impl BACnetObject for BinaryLightingOutputObject {
                 | PropertyIdentifier::OUT_OF_SERVICE
                 | PropertyIdentifier::DESCRIPTION
         )
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Channel (type 53)
-// ---------------------------------------------------------------------------
-
-/// BACnet Channel object.
-///
-/// A channel aggregates multiple objects for group control. The present-value
-/// represents the current channel value, and writes propagate to members.
-pub struct ChannelObject {
-    oid: ObjectIdentifier,
-    name: String,
-    description: String,
-    /// Present value — the current channel value (Unsigned).
-    present_value: u32,
-    /// Last priority used for the most recent write (Unsigned).
-    last_priority: u32,
-    /// Write status: 0=idle, 1=inProgress, 2=successful, 3=failed.
-    write_status: u32,
-    /// Channel number (Unsigned).
-    channel_number: u32,
-    /// Count of object-property references in this channel's member list.
-    list_of_object_property_references_count: u32,
-    out_of_service: bool,
-    status_flags: StatusFlags,
-    /// Reliability: 0 = NO_FAULT_DETECTED.
-    reliability: u32,
-}
-
-struct ChannelWriteRollback {
-    last_priority: u32,
-}
-
-impl ChannelObject {
-    /// Create a new Channel object.
-    pub fn new(instance: u32, name: impl Into<String>, channel_number: u32) -> Result<Self, Error> {
-        let oid = ObjectIdentifier::new(ObjectType::CHANNEL, instance)?;
-        Ok(Self {
-            oid,
-            name: name.into(),
-            description: String::new(),
-            present_value: 0,
-            last_priority: 16,
-            write_status: 0, // idle
-            channel_number,
-            list_of_object_property_references_count: 0,
-            out_of_service: false,
-            status_flags: StatusFlags::empty(),
-            reliability: 0,
-        })
-    }
-
-    /// Set the description string.
-    pub fn set_description(&mut self, desc: impl Into<String>) {
-        self.description = desc.into();
-    }
-}
-
-impl BACnetObject for ChannelObject {
-    fn object_identifier(&self) -> ObjectIdentifier {
-        self.oid
-    }
-
-    fn object_name(&self) -> &str {
-        &self.name
-    }
-
-    fn read_property(
-        &self,
-        property: PropertyIdentifier,
-        array_index: Option<u32>,
-    ) -> Result<PropertyValue, Error> {
-        if let Some(result) = read_common_properties!(self, property, array_index) {
-            return result;
-        }
-        match property {
-            p if p == PropertyIdentifier::OBJECT_TYPE => {
-                Ok(PropertyValue::Enumerated(ObjectType::CHANNEL.to_raw()))
-            }
-            p if p == PropertyIdentifier::PRESENT_VALUE => {
-                Ok(PropertyValue::Unsigned(self.present_value as u64))
-            }
-            p if p == PropertyIdentifier::LAST_PRIORITY => {
-                Ok(PropertyValue::Unsigned(self.last_priority as u64))
-            }
-            p if p == PropertyIdentifier::WRITE_STATUS => {
-                Ok(PropertyValue::Enumerated(self.write_status))
-            }
-            p if p == PropertyIdentifier::CHANNEL_NUMBER => {
-                Ok(PropertyValue::Unsigned(self.channel_number as u64))
-            }
-            p if p == PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES => Ok(
-                PropertyValue::Unsigned(self.list_of_object_property_references_count as u64),
-            ),
-            _ => Err(common::unknown_property_error()),
-        }
-    }
-
-    fn write_property(
-        &mut self,
-        property: PropertyIdentifier,
-        _array_index: Option<u32>,
-        value: PropertyValue,
-        priority: Option<u8>,
-    ) -> Result<(), Error> {
-        // PRESENT_VALUE — write the channel value and update last_priority
-        if property == PropertyIdentifier::PRESENT_VALUE {
-            if let PropertyValue::Unsigned(v) = value {
-                self.present_value = common::u64_to_u32(v)?;
-                self.last_priority = priority.unwrap_or(16) as u32;
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
-        }
-
-        // CHANNEL_NUMBER
-        if property == PropertyIdentifier::CHANNEL_NUMBER {
-            if let PropertyValue::Unsigned(v) = value {
-                self.channel_number = common::u64_to_u32(v)?;
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
-        }
-
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
-            return result;
-        }
-        if let Some(result) = common::write_description(&mut self.description, property, &value) {
-            return result;
-        }
-        Err(common::write_access_denied_error())
-    }
-
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::LAST_PRIORITY,
-            PropertyIdentifier::WRITE_STATUS,
-            PropertyIdentifier::CHANNEL_NUMBER,
-            PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ];
-        Cow::Borrowed(PROPS)
-    }
-
-    fn capture_write_property_rollback(
-        &mut self,
-        property: PropertyIdentifier,
-        _value: &PropertyValue,
-    ) -> Option<WritePropertyRollback> {
-        (property == PropertyIdentifier::PRESENT_VALUE).then(|| {
-            WritePropertyRollback::new(ChannelWriteRollback {
-                last_priority: self.last_priority,
-            })
-        })
-    }
-
-    fn restore_write_property_rollback(
-        &mut self,
-        rollback: WritePropertyRollback,
-    ) -> Result<(), Error> {
-        self.last_priority = rollback.downcast::<ChannelWriteRollback>()?.last_priority;
-        Ok(())
     }
 }
 

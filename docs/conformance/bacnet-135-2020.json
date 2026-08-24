@@ -3,7 +3,7 @@
  "reviewed_at": "2026-08-13",
  "repo_sha": "f485021f5cd7058ac406d57d3d317936cbe7b361",
  "row_evidence_policy": "repo_sha identifies the last repository-wide review; individual rows may cite later PR reviews for narrower evidence updates",
- "review_scope": "Event-state disabled reset and lossless WPM rollback tranche (branch codex/c3-event-reset-rollback, tranche C3; issues #205, #209, #289): Alert Enrollment now exposes Event_State and Acked_Transitions and applies their Clause 13.2.2.1 initial conditions while Event_Detection_Enable is FALSE, including guarded internal updates and projection after direct assignment to the existing public flag. This is partial Alert Enrollment evidence, not a complete Table 12-61 claim; #264 and #291 track the remaining property-model gaps. The repository's WPM rollback policy now uses object-owned tokens when property readback is not state-equivalent. Covered state includes event detection and history, raw Time_Delay_Normal storage, Channel Last_Priority, Network Port Changes_Pending, Access Door command slots, and log buffers cleared through Record_Count. Restoration failures are returned instead of being hidden in tracing. Clause 15.10 permits preceding successful writes to remain applied and does not require this policy. Fences: no Alert Enrollment evaluator, notification sending (#127), Event Enrollment history properties (#264), complete Alert Enrollment property model (#291), or DCC behavior (#220).",
+ "review_scope": "Event-state disabled reset and lossless WPM rollback tranche (branch codex/c3-event-reset-rollback, tranche C3; issues #205, #209, #289): Alert Enrollment now exposes Event_State and Acked_Transitions and applies their Clause 13.2.2.1 initial conditions while Event_Detection_Enable is FALSE, including guarded internal updates and projection after direct assignment to the existing public flag. This is partial Alert Enrollment evidence, not a complete Table 12-61 claim; #264 and #291 track the remaining property-model gaps. The repository's WPM rollback policy now uses object-owned tokens when property readback is not state-equivalent. Covered state includes event detection and history, raw Time_Delay_Normal storage, Network Port Changes_Pending, Access Door command slots, and log buffers cleared through Record_Count. Restoration failures are returned instead of being hidden in tracing. Clause 15.10 permits preceding successful writes to remain applied and does not require this policy. Fences: no Alert Enrollment evaluator, notification sending (#127), Event Enrollment history properties (#264), complete Alert Enrollment property model (#291), or DCC behavior (#220).",
  "addenda_errata_status": "No external addenda/errata check was performed for this tranche. The local Standard 135-2020 source was reviewed for Clause 13.2.2.1's disabled-state initial conditions, the Clause 13.3 pTimeDelayNormal fallback, Alert Enrollment Table 12-61's required event-state properties, and Clause 15.10's ordered partial-success procedure. The rollback behavior is identified as repository policy, not a conformance requirement.",
  "status_taxonomy": [
   "in-progress",
@@ -403,6 +403,49 @@
    "benchmarks": [],
    "public_claims": [],
    "notes": "Type 51 is absent from bundled Device Protocol_Object_Types_Supported values, and the public Rust placeholder plus Python registration method are removed because they provided no forwarding behavior. ObjectType::NOTIFICATION_FORWARDER, the Python enum constant, CLI remote-identifier parsing, and generic recipient codecs remain as wire-level interoperability vocabulary rather than public support claims. Reintroduction requires full Clause 12.51 forwarding, subscription, filtering, and anti-loop/port/network behavior."
+  },
+  {
+   "id": "BACNET-12-CHANNEL-WITHDRAWAL",
+   "standard_anchor": "Clause 12.53 (pp. 508-517), Table 12-62 (pp. 509-510)",
+   "priority": "P1",
+   "requirement_summary": "Bundled devices do not advertise or expose Channel object support until the object provides the required typed value model, member and control-group data, propagation, coercion, and write-status lifecycle, plus applicable delay behavior.",
+   "status": "unsupported-by-design",
+   "code_anchors": [
+    "crates/bacnet-objects/src/device/mod.rs::DeviceObject::new",
+    "crates/bacnet-objects/src/lighting/mod.rs",
+    "crates/rusty-bacnet/src/server/mod.rs",
+    "crates/rusty-bacnet/src/server/server_methods/registration.rs",
+    "crates/rusty-bacnet/rusty_bacnet.pyi"
+   ],
+   "positive_tests": [],
+   "negative_tests": [
+    "crates/bacnet-objects/src/device/tests.rs::read_protocol_object_types_supported"
+   ],
+   "benchmarks": [],
+   "public_claims": [],
+   "notes": "Type 53 is absent from bundled Device Protocol_Object_Types_Supported values, and the public Rust placeholder plus Python add_channel method are removed. ObjectType::CHANNEL, Channel property identifiers, and the BACnetObject array-property classification remain wire-level protocol metadata rather than support claims. Reintroduction requires full member/control-group, propagation, coercion, write-status, and applicable delay behavior."
+  },
+  {
+   "id": "BACNET-15-WRITEGROUP-SERVER-WITHDRAWAL",
+   "standard_anchor": "Clause 15.11 (pp. 757-758); Clause 19.2.1.6 (p. 809)",
+   "priority": "P1",
+   "requirement_summary": "The inbound WriteGroup service is not advertised or executed until matching Channel objects apply eligible change-list values with the supplied priority and applicable delay behavior.",
+   "status": "unsupported-by-design",
+   "code_anchors": [
+    "crates/bacnet-objects/src/device/mod.rs::EXECUTED_SERVICES",
+    "crates/bacnet-server/src/server/requests/unconfirmed.rs::EXECUTED_UNCONFIRMED",
+    "crates/bacnet-server/src/pics/tests.rs",
+    "crates/bacnet-services/src/write_group.rs"
+   ],
+   "positive_tests": [],
+   "negative_tests": [
+    "crates/bacnet-objects/src/device/tests.rs::read_protocol_services_supported",
+    "crates/bacnet-server/src/pics/tests.rs::executed_services_match_dispatch_table",
+    "crates/bacnet-server/src/pics/tests.rs::services_match_implementation"
+   ],
+   "benchmarks": [],
+   "public_claims": [],
+   "notes": "Bundled Device Protocol_Services_Supported values omit bit 40, and the server has no inbound WriteGroup dispatch arm or handler. ServiceSupported::WRITE_GROUP, UnconfirmedServiceChoice::WRITE_GROUP, the codec, and Rust/Python client initiation remain protocol vocabulary. Reintroduction requires matching and group-zero behavior plus priority, supported Inhibit Delay behavior, and state-mutation integration evidence."
   },
   {
    "id": "BACNET-12-RECIPIENT-LIST-FRAMING",
@@ -1657,7 +1700,7 @@
     "crates/bacnet-objects/src/event_enrollment/tests/alert.rs (disabled-state reset/projection, guarded internal updates, Status_Flags, writability)",
     "crates/bacnet-objects/src/analog/input.rs::detection_enable_reset_tests::ai_write_rollback_restores_detection_state",
     "crates/bacnet-server/src/handlers/tests/wpm_event_rollback.rs (Event/Alert/intrinsic state rollback, raw Time_Delay_Normal fallback, duplicate-name failure, OOS ordering, per-object rollback-error reconciliation)",
-    "crates/bacnet-server/src/handlers/tests/wpm_rollback_contract.rs (token-backed Object_Name/index restoration, unreadable-property rollback failure reporting, Channel Last_Priority, Network Port Changes_Pending, Access Door command slots, and destructive log clear rollback)"
+    "crates/bacnet-server/src/handlers/tests/wpm_rollback_contract.rs (token-backed Object_Name/index restoration, unreadable-property rollback failure reporting, Network Port Changes_Pending, Access Door command slots, and destructive log clear rollback)"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/event_enrollment/tests/alert.rs::alert_enrollment_disabled_state_rejects_internal_transition_updates",

@@ -1,4 +1,4 @@
-//! Unconfirmed-service dispatch (Who-Is, Who-Has, time sync, WriteGroup,
+//! Unconfirmed-service dispatch (Who-Is, Who-Has, time sync, and
 //! UnconfirmedTextMessage) — see `EXECUTED_UNCONFIRMED`.
 //!
 //! Split out of `requests.rs` to keep every file under the 700-LOC cap.
@@ -15,7 +15,6 @@ pub(crate) const EXECUTED_UNCONFIRMED: &[UnconfirmedServiceChoice] = &[
     UnconfirmedServiceChoice::WHO_HAS,
     UnconfirmedServiceChoice::TIME_SYNCHRONIZATION,
     UnconfirmedServiceChoice::UTC_TIME_SYNCHRONIZATION,
-    UnconfirmedServiceChoice::WRITE_GROUP,
     UnconfirmedServiceChoice::UNCONFIRMED_TEXT_MESSAGE,
 ];
 
@@ -146,20 +145,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         == UnconfirmedServiceChoice::UTC_TIME_SYNCHRONIZATION,
                 };
                 callback(data);
-            }
-        } else if req.service_choice == UnconfirmedServiceChoice::WRITE_GROUP {
-            match handlers::handle_write_group(&req.service_request) {
-                Ok(write_group) => {
-                    debug!(
-                        group = write_group.group_number,
-                        priority = write_group.write_priority,
-                        values = write_group.change_list.len(),
-                        "WriteGroup received"
-                    );
-                }
-                Err(e) => {
-                    debug!(error = %e, "WriteGroup decode failed");
-                }
             }
         } else if req.service_choice == UnconfirmedServiceChoice::UNCONFIRMED_TEXT_MESSAGE {
             match handlers::handle_text_message(&req.service_request) {

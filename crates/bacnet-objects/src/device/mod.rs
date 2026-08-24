@@ -55,7 +55,6 @@ pub const EXECUTED_SERVICES: &[ServiceSupported] = &[
     ServiceSupported::LIFE_SAFETY_OPERATION,
     ServiceSupported::SUBSCRIBE_COV_PROPERTY,
     ServiceSupported::GET_EVENT_INFORMATION,
-    ServiceSupported::WRITE_GROUP,
     ServiceSupported::SUBSCRIBE_COV_PROPERTY_MULTIPLE,
 ];
 
@@ -341,7 +340,6 @@ impl DeviceObject {
             ObjectType::TIMEPATTERN_VALUE.to_raw(),
             ObjectType::TIME_VALUE.to_raw(),
             ObjectType::ALERT_ENROLLMENT.to_raw(),
-            ObjectType::CHANNEL.to_raw(),
             ObjectType::LIGHTING_OUTPUT.to_raw(),
             ObjectType::BINARY_LIGHTING_OUTPUT.to_raw(),
             ObjectType::NETWORK_PORT.to_raw(),

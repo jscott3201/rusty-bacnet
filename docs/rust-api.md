@@ -491,7 +491,7 @@ let obj = db.get(&oid);                // Option<&dyn BACnetObject>
 let obj = db.get_mut(&oid);            // Option<&mut Box<dyn BACnetObject>>
 ```
 
-### Object Types (63)
+### Object Types (62)
 
 #### Core I/O (9)
 
@@ -527,7 +527,7 @@ let obj = db.get_mut(&oid);            // Option<&mut Box<dyn BACnetObject>>
 | `AuditLogObject` | `::new(instance, name, buffer_size)` |
 | `AuditReporterObject` | `::new(instance, name)` |
 
-#### Building Control (8)
+#### Building Control (7)
 
 | Type | Constructor |
 |------|-------------|
@@ -537,7 +537,6 @@ let obj = db.get_mut(&oid);            // Option<&mut Box<dyn BACnetObject>>
 | `LoadControlObject` | `::new(instance, name)` |
 | `ProgramObject` | `::new(instance, name)` |
 | `AveragingObject` | `::new(instance, name)` |
-| `ChannelObject` | `::new(instance, name, channel_number)` |
 | `StagingObject` | `::new(instance, name, num_stages)` |
 
 #### Lighting & Color (4)
@@ -931,7 +930,6 @@ The server automatically dispatches:
 - WhoIs / IAm
 - WhoHas / IHave
 - TimeSynchronization, UTCTimeSynchronization
-- WriteGroup
 - UnconfirmedTextMessage
 
 **Outgoing (server-initiated):**
