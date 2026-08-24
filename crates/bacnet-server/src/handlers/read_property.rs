@@ -60,6 +60,58 @@ fn resolve_device_wildcard(db: &ObjectDatabase, oid: &ObjectIdentifier) -> Objec
     *oid
 }
 
+fn expand_property_reference(
+    object: &dyn bacnet_objects::traits::BACnetObject,
+    property_identifier: PropertyIdentifier,
+) -> Vec<PropertyIdentifier> {
+    use bacnet_objects::property_metadata::PropertyConformance;
+
+    let metadata = object.property_metadata();
+    if !metadata.is_empty() {
+        return match property_identifier {
+            PropertyIdentifier::ALL => metadata
+                .iter()
+                .filter_map(|row| {
+                    (row.property_identifier != PropertyIdentifier::PROPERTY_LIST)
+                        .then_some(row.property_identifier)
+                })
+                .collect(),
+            PropertyIdentifier::REQUIRED => metadata
+                .iter()
+                .filter_map(|row| {
+                    (row.property_identifier != PropertyIdentifier::PROPERTY_LIST
+                        && row.conformance.is_required())
+                    .then_some(row.property_identifier)
+                })
+                .collect(),
+            PropertyIdentifier::OPTIONAL => metadata
+                .iter()
+                .filter_map(|row| {
+                    (row.conformance == PropertyConformance::Optional)
+                        .then_some(row.property_identifier)
+                })
+                .collect(),
+            other => vec![other],
+        };
+    }
+
+    match property_identifier {
+        PropertyIdentifier::ALL => object.property_list().to_vec(),
+        PropertyIdentifier::REQUIRED => object.required_properties().to_vec(),
+        PropertyIdentifier::OPTIONAL => {
+            let required: std::collections::HashSet<PropertyIdentifier> =
+                object.required_properties().iter().copied().collect();
+            object
+                .property_list()
+                .iter()
+                .copied()
+                .filter(|property| !required.contains(property))
+                .collect()
+        }
+        other => vec![other],
+    }
+}
+
 /// Handle a ReadPropertyMultiple request.
 ///
 /// Per-property errors are returned inline rather than failing the entire request.
@@ -78,21 +130,7 @@ pub fn handle_read_property_multiple(
         match db.get(&lookup_oid) {
             Some(object) => {
                 for prop_ref in &spec.list_of_property_references {
-                    let prop_ids: Vec<PropertyIdentifier> = match prop_ref.property_identifier {
-                        PropertyIdentifier::ALL => object.property_list().to_vec(),
-                        PropertyIdentifier::REQUIRED => object.required_properties().to_vec(),
-                        PropertyIdentifier::OPTIONAL => {
-                            let required: std::collections::HashSet<PropertyIdentifier> =
-                                object.required_properties().iter().copied().collect();
-                            object
-                                .property_list()
-                                .iter()
-                                .copied()
-                                .filter(|p| !required.contains(p))
-                                .collect()
-                        }
-                        other => vec![other],
-                    };
+                    let prop_ids = expand_property_reference(object, prop_ref.property_identifier);
 
                     for prop_id in prop_ids {
                         let array_index = if prop_ref.property_identifier == prop_id {

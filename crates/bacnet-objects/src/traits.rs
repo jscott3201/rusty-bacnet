@@ -80,7 +80,21 @@ pub trait BACnetObject: Send + Sync {
         priority: Option<u8>,
     ) -> Result<(), Error>;
 
-    /// List all properties this object supports.
+    /// Return canonical metadata for this object's effective property rows.
+    ///
+    /// Migrated implementations return every supported standard row for the
+    /// current instance, including `PROPERTY_LIST`. Borrowed rows cover static
+    /// or object-owned metadata; owned rows support dynamically assembled
+    /// per-instance sets. An empty borrowed default marks an object as unmigrated.
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        Cow::Borrowed(&[])
+    }
+
+    /// List all properties this object supports in the legacy projection.
+    ///
+    /// For migrated objects this includes Object_Identifier, Object_Name, and
+    /// Object_Type but omits Property_List. Reading the BACnet Property_List
+    /// property applies the additional wire-level universal-property filter.
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]>;
 
     /// Whether `write_property` accepts `property` for this object.
@@ -97,7 +111,12 @@ pub trait BACnetObject: Send + Sync {
     /// `PROPERTY_LIST`, `STATUS_FLAGS`) are always non-writable and are
     /// excluded by the default; overrides should preserve that invariant.
     fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        historical_writable_default(self.object_identifier().object_type(), property)
+        let metadata = self.property_metadata();
+        if metadata.is_empty() {
+            historical_writable_default(self.object_identifier().object_type(), property)
+        } else {
+            crate::property_metadata::is_writable_in_metadata(metadata.as_ref(), property)
+        }
     }
 
     /// Whether `property` accepts an array index on this object.
@@ -169,9 +188,15 @@ pub trait BACnetObject: Send + Sync {
 
     /// List the REQUIRED properties for this object type.
     ///
-    /// Default returns the four universal required properties.
-    /// Object implementations may override to include type-specific required properties.
+    /// Migrated objects derive this set from canonical `R` and `W` rows,
+    /// including Property_List. Unmigrated objects retain the historical four
+    /// universal properties. Service-specific consumers may exclude
+    /// Property_List where their protocol contract requires it.
     fn required_properties(&self) -> Cow<'static, [PropertyIdentifier]> {
+        let metadata = self.property_metadata();
+        if !metadata.is_empty() {
+            return crate::property_metadata::required_properties_from_metadata(metadata.as_ref());
+        }
         static UNIVERSAL: [PropertyIdentifier; 4] = [
             PropertyIdentifier::OBJECT_IDENTIFIER,
             PropertyIdentifier::OBJECT_NAME,

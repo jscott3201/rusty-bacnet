@@ -433,6 +433,10 @@ fn rpm_explicit_index_returns_one_multistate_event_message() {
 fn rpm_handler_required_vs_optional() {
     let db = make_db_with_ai();
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    assert!(
+        db.get(&oid).unwrap().property_metadata().is_empty(),
+        "Analog Input intentionally exercises the legacy RPM fallback"
+    );
 
     use bacnet_services::common::PropertyReference;
     use bacnet_services::rpm::ReadAccessSpecification;

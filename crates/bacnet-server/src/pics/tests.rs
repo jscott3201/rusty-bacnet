@@ -235,6 +235,16 @@ fn all_object_types_listed() {
 #[test]
 fn object_type_properties_populated() {
     let db = make_test_db();
+    let unmigrated = db
+        .iter_objects()
+        .find_map(|(_, object)| {
+            (object.object_identifier().object_type() == ObjectType::ANALOG_INPUT).then_some(object)
+        })
+        .unwrap();
+    assert!(
+        unmigrated.property_metadata().is_empty(),
+        "the test fixture must exercise the legacy PICS fallback"
+    );
     let server_config = ServerConfig::default();
     let pics_config = make_pics_config();
     let pics = generate_pics(&db, &server_config, &pics_config);

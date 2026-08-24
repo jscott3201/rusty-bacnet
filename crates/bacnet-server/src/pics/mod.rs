@@ -8,6 +8,7 @@ use std::fmt;
 
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device::EXECUTED_SERVICES;
+use bacnet_objects::property_metadata::PropertyConformance;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier, ServiceSupported};
 
 use crate::server::ServerConfig;
@@ -275,24 +276,37 @@ impl<'a> PicsGenerator<'a> {
         for (raw_type, objects) in &by_type {
             let object_type = ObjectType::from_raw(*raw_type);
             let representative = objects[0];
-            let all_props = representative.property_list();
-            let required = representative.required_properties();
-
-            let supported_properties = all_props
-                .iter()
-                .map(|&pid| {
-                    let is_required = required.contains(&pid);
-                    let writable = representative.is_writable_property(pid);
-                    PropertySupport {
-                        property_id: pid,
+            let metadata = representative.property_metadata();
+            let supported_properties = if metadata.is_empty() {
+                let all_props = representative.property_list();
+                let required = representative.required_properties();
+                all_props
+                    .iter()
+                    .map(|&property_id| {
+                        let is_required = required.contains(&property_id);
+                        PropertySupport {
+                            property_id,
+                            access: PropertyAccess {
+                                readable: true,
+                                writable: representative.is_writable_property(property_id),
+                                optional: !is_required,
+                            },
+                        }
+                    })
+                    .collect()
+            } else {
+                metadata
+                    .iter()
+                    .map(|row| PropertySupport {
+                        property_id: row.property_identifier,
                         access: PropertyAccess {
                             readable: true,
-                            writable,
-                            optional: !is_required,
+                            writable: row.write_capability.is_writable(),
+                            optional: row.conformance == PropertyConformance::Optional,
                         },
-                    }
-                })
-                .collect();
+                    })
+                    .collect()
+            };
 
             let createable = representative.is_createable();
             let deleteable = representative.is_deleteable();
@@ -629,6 +643,9 @@ fn service_display_name(service: ServiceSupported) -> &'static str {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod property_metadata_tests;
 
 #[cfg(test)]
 mod truth_source_tests;

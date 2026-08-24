@@ -1,4 +1,148 @@
 use super::*;
+use crate::property_metadata::{
+    PropertyConformance, PropertyMetadata, PropertyPresenceCondition, PropertyWriteCapability,
+};
+
+const BINARY_INPUT_PROPERTY_METADATA: &[PropertyMetadata] = &[
+    PropertyMetadata::new(
+        PropertyIdentifier::OBJECT_IDENTIFIER,
+        PropertyConformance::RequiredRead,
+        None,
+        PropertyWriteCapability::ReadOnly,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::OBJECT_NAME,
+        PropertyConformance::RequiredRead,
+        None,
+        PropertyWriteCapability::Always,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::DESCRIPTION,
+        PropertyConformance::Optional,
+        None,
+        PropertyWriteCapability::Always,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::OBJECT_TYPE,
+        PropertyConformance::RequiredRead,
+        None,
+        PropertyWriteCapability::ReadOnly,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::PRESENT_VALUE,
+        PropertyConformance::RequiredRead,
+        None,
+        PropertyWriteCapability::WhenOutOfService,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::STATUS_FLAGS,
+        PropertyConformance::RequiredRead,
+        None,
+        PropertyWriteCapability::ReadOnly,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::EVENT_STATE,
+        PropertyConformance::RequiredRead,
+        None,
+        PropertyWriteCapability::ReadOnly,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::EVENT_DETECTION_ENABLE,
+        PropertyConformance::Optional,
+        Some(PropertyPresenceCondition::IntrinsicReporting),
+        PropertyWriteCapability::Always,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::EVENT_ENABLE,
+        PropertyConformance::Optional,
+        Some(PropertyPresenceCondition::IntrinsicReporting),
+        PropertyWriteCapability::Always,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::TIME_DELAY,
+        PropertyConformance::Optional,
+        Some(PropertyPresenceCondition::IntrinsicReporting),
+        PropertyWriteCapability::Always,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::TIME_DELAY_NORMAL,
+        PropertyConformance::Optional,
+        Some(PropertyPresenceCondition::IntrinsicReporting),
+        PropertyWriteCapability::Always,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::NOTIFY_TYPE,
+        PropertyConformance::Optional,
+        Some(PropertyPresenceCondition::IntrinsicReporting),
+        PropertyWriteCapability::Always,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::NOTIFICATION_CLASS,
+        PropertyConformance::Optional,
+        Some(PropertyPresenceCondition::IntrinsicReporting),
+        PropertyWriteCapability::Always,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::ACKED_TRANSITIONS,
+        PropertyConformance::Optional,
+        Some(PropertyPresenceCondition::IntrinsicReporting),
+        PropertyWriteCapability::ReadOnly,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::EVENT_TIME_STAMPS,
+        PropertyConformance::Optional,
+        Some(PropertyPresenceCondition::IntrinsicReporting),
+        PropertyWriteCapability::ReadOnly,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::EVENT_MESSAGE_TEXTS,
+        PropertyConformance::Optional,
+        Some(PropertyPresenceCondition::IntrinsicReporting),
+        PropertyWriteCapability::ReadOnly,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::OUT_OF_SERVICE,
+        PropertyConformance::RequiredRead,
+        None,
+        PropertyWriteCapability::Always,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::POLARITY,
+        PropertyConformance::RequiredRead,
+        None,
+        PropertyWriteCapability::ReadOnly,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::RELIABILITY,
+        PropertyConformance::Optional,
+        None,
+        PropertyWriteCapability::WhenOutOfService,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::ACTIVE_TEXT,
+        PropertyConformance::Optional,
+        Some(PropertyPresenceCondition::PairedText),
+        PropertyWriteCapability::Always,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::INACTIVE_TEXT,
+        PropertyConformance::Optional,
+        Some(PropertyPresenceCondition::PairedText),
+        PropertyWriteCapability::Always,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::ALARM_VALUE,
+        PropertyConformance::Optional,
+        Some(PropertyPresenceCondition::IntrinsicReporting),
+        PropertyWriteCapability::Always,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::PROPERTY_LIST,
+        PropertyConformance::RequiredRead,
+        None,
+        PropertyWriteCapability::ReadOnly,
+    ),
+];
 
 // ---------------------------------------------------------------------------
 // BinaryInput (type 3)
@@ -72,6 +216,10 @@ impl BACnetObject for BinaryInputObject {
 
     fn object_name(&self) -> &str {
         &self.name
+    }
+
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        Cow::Borrowed(BINARY_INPUT_PROPERTY_METADATA)
     }
 
     fn supports_cov(&self) -> bool {
@@ -233,31 +381,8 @@ impl BACnetObject for BinaryInputObject {
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::EVENT_DETECTION_ENABLE,
-            PropertyIdentifier::EVENT_ENABLE,
-            PropertyIdentifier::TIME_DELAY,
-            PropertyIdentifier::TIME_DELAY_NORMAL,
-            PropertyIdentifier::NOTIFY_TYPE,
-            PropertyIdentifier::NOTIFICATION_CLASS,
-            PropertyIdentifier::ACKED_TRANSITIONS,
-            PropertyIdentifier::EVENT_TIME_STAMPS,
-            PropertyIdentifier::EVENT_MESSAGE_TEXTS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::POLARITY,
-            PropertyIdentifier::RELIABILITY,
-            PropertyIdentifier::ACTIVE_TEXT,
-            PropertyIdentifier::INACTIVE_TEXT,
-            PropertyIdentifier::ALARM_VALUE,
-        ];
-        Cow::Borrowed(PROPS)
+        let metadata = self.property_metadata();
+        crate::property_metadata::property_list_from_metadata(metadata.as_ref())
     }
 
     fn is_createable(&self) -> bool {
@@ -273,23 +398,6 @@ impl BACnetObject for BinaryInputObject {
         }
         self.reliability = reliability;
         Ok(())
-    }
-
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        // Mirrors the BinaryInput `write_property` arms. The generic event set
-        // became writable with #229: Clause 12.6 requires the supported
-        // Event_Enable value set to include (T, T, T), and these detectors
-        // default to (F, F, F) with, previously, no commissioning path at all.
-        // ACKED_TRANSITIONS stays out — the alarm-acknowledgment process
-        // maintains it, so the generic write arm denies assignment.
-        common::is_common_writable(property)
-            || common::is_generic_event_property_writable(property)
-            || property == PropertyIdentifier::PRESENT_VALUE
-            || property == PropertyIdentifier::ACTIVE_TEXT
-            || property == PropertyIdentifier::INACTIVE_TEXT
-            || property == PropertyIdentifier::ALARM_VALUE
-            || property == PropertyIdentifier::EVENT_DETECTION_ENABLE
-            || property == PropertyIdentifier::RELIABILITY
     }
 }
 

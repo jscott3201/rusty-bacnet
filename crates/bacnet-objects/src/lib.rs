@@ -25,6 +25,7 @@ pub mod multistate;
 pub mod network_port;
 pub mod notification_class;
 pub mod program;
+pub mod property_metadata;
 pub(crate) mod reference;
 pub(crate) mod rollback;
 pub mod schedule;
@@ -33,6 +34,9 @@ pub mod timer;
 pub mod traits;
 pub mod trend;
 pub mod value_types;
+
+#[cfg(test)]
+mod property_metadata_tests;
 
 #[cfg(test)]
 mod reliability_writability_tests;

@@ -333,6 +333,41 @@
    "notes": "Initial family row only; later work should split high-claim services and object families into detailed rows."
   },
   {
+   "id": "BACNET-12-PROPERTY-METADATA-CORE",
+   "standard_anchor": "Clause 12.6, Table 12-6 (pp. 189-190); Clause 12.42, Table 12-49 (pp. 444-445); Clause 15.7.3.1 (p. 743); Annex A (pp. 964-965)",
+   "priority": "P1",
+   "requirement_summary": "Executable metadata classifies each effective standard property by base R, W, or O conformance, presence condition, and implemented write capability. Time Value and Binary Input use the metadata for property-list compatibility, ReadPropertyMultiple special selectors, and existing PICS flags; unmigrated object types retain the legacy fallback.",
+   "status": "in-progress",
+   "code_anchors": [
+    "crates/bacnet-objects/src/property_metadata.rs::PropertyMetadata",
+    "crates/bacnet-objects/src/traits.rs::BACnetObject::property_metadata",
+    "crates/bacnet-objects/src/value_types/mod.rs::TIME_VALUE_PROPERTY_METADATA",
+    "crates/bacnet-objects/src/binary/input.rs::BINARY_INPUT_PROPERTY_METADATA",
+    "crates/bacnet-server/src/handlers/read_property.rs::expand_property_reference",
+    "crates/bacnet-server/src/pics/mod.rs::PicsGenerator::build_object_types"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/property_metadata_tests.rs::property_metadata_contract_time_value",
+    "crates/bacnet-objects/src/property_metadata_tests.rs::property_metadata_contract_binary_input",
+     "crates/bacnet-objects/src/property_metadata_tests.rs::property_metadata_contract_property_list_projection_excludes_property_list",
+     "crates/bacnet-objects/src/property_metadata_tests.rs::property_metadata_contract_all_migrated_rows_are_readable",
+    "crates/bacnet-server/src/handlers/tests/property_metadata.rs::rpm_metadata_selectors_are_exact_for_time_value",
+    "crates/bacnet-server/src/handlers/tests/property_metadata.rs::rpm_metadata_selectors_are_exact_for_binary_input",
+    "crates/bacnet-server/src/pics/property_metadata_tests.rs::pics_projects_migrated_property_metadata"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/property_metadata_tests.rs::property_metadata_contract_macro_opt_in_and_legacy_default",
+    "crates/bacnet-objects/src/property_metadata_tests.rs::property_metadata_contract_write_capabilities_match_dispatch",
+    "crates/bacnet-server/src/handlers/tests/read_rpm.rs::rpm_handler_required_vs_optional",
+    "crates/bacnet-server/src/pics/tests.rs::object_type_properties_populated"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "CHANGELOG Unreleased property-metadata core"
+   ],
+   "notes": "This is a qualifying slice of #261, not an all-object conformance claim. Canonical metadata includes Property_List; the legacy property_list projection and RPM ALL/REQUIRED omit it, while wire Property_List also omits Object_Identifier, Object_Name, and Object_Type. Conditional rows record why a present property exists, and conditional write capability contributes to the existing PICS writable flag. Date Value and every object type other than Time Value and Binary Input remain on the explicit legacy fallback."
+  },
+  {
    "id": "BACNET-12-ESCALATOR-STATUS-WRITABILITY",
    "standard_anchor": "Clause 12 general property conformance rules; Clause 12.60 Table 12-78 and Out_Of_Service; Clause 15.9.1.3; Clause 21 BACnetEscalatorMode, BACnetEscalatorOperationDirection, and BACnetEscalatorFault; Clause 23.1",
    "priority": "P1",

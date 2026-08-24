@@ -104,6 +104,7 @@ def pics_draft(data: dict) -> str:
             "BACNET-A-PICS",
             "BACNET-L-PROFILES",
             "BACNET-12-OBJECT-MODEL",
+            "BACNET-12-PROPERTY-METADATA-CORE",
         }:
             lines.append(f"| `{row['id']}` | {row['standard_anchor']} | {row['status']} | {row['notes']} |")
     lines.append("")

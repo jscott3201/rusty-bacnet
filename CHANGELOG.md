@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add executable `PropertyMetadata` rows and the defaulted
+  `BACnetObject::property_metadata` hook (#261). Time Value and Binary Input
+  now derive property-list, required/optional, and writability classifications
+  from one canonical row set; ReadPropertyMultiple special selectors and PICS
+  generation consume those rows. Other bundled object types return empty
+  metadata and retain the legacy behavior while their migration remains open.
+
 - `bacnet_objects::file::FileStorage`, the internal channel AtomicReadFile
   and AtomicWriteFile use to reach a File object's contents (#397). Table
   12-16 defines no File Data property, so the trait is reached through two

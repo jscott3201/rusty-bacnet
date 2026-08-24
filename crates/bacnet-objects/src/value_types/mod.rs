@@ -11,6 +11,9 @@ use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlag
 use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
+use crate::property_metadata::{
+    PropertyConformance, PropertyMetadata, PropertyPresenceCondition, PropertyWriteCapability,
+};
 use crate::traits::BACnetObject;
 
 // ---------------------------------------------------------------------------
@@ -43,6 +46,7 @@ macro_rules! define_value_object_commandable {
         rd_validate: $rd_validate:expr,
         rd_access: $rd_access:ident,
         copy_type: $is_copy:tt
+        $(, property_metadata: $property_metadata:expr)?
         $(,)?
     ) => {
         #[doc = $doc]
@@ -105,6 +109,10 @@ macro_rules! define_value_object_commandable {
 
             fn object_name(&self) -> &str {
                 &self.name
+            }
+
+            fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+                define_value_object_commandable!(@property_metadata $($property_metadata)?)
             }
 
             fn read_property(
@@ -214,15 +222,27 @@ macro_rules! define_value_object_commandable {
                     PropertyIdentifier::PRIORITY_ARRAY,
                     PropertyIdentifier::RELINQUISH_DEFAULT,
                 ];
-                Cow::Borrowed(PROPS)
+                let metadata = self.property_metadata();
+                if metadata.is_empty() {
+                    Cow::Borrowed(PROPS)
+                } else {
+                    crate::property_metadata::property_list_from_metadata(metadata.as_ref())
+                }
             }
 
             fn supports_cov(&self) -> bool {
                 true
             }
 
-            define_value_object_commandable!(@is_writable $rd_access);
+            define_value_object_commandable!(@is_writable $rd_access, $($property_metadata)?);
         }
+    };
+
+    (@property_metadata) => {
+        Cow::Borrowed(&[])
+    };
+    (@property_metadata $metadata:expr) => {
+        Cow::Borrowed($metadata)
     };
 
     // RELINQUISH_DEFAULT write arm for `rd_access: writable`: extract through
@@ -239,7 +259,7 @@ macro_rules! define_value_object_commandable {
 
     // PICS writability mirrors the arms: common + commandable for every
     // commandable value type, RELINQUISH_DEFAULT only when the arm exists.
-    (@is_writable writable) => {
+    (@is_writable writable,) => {
         fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
             common::is_common_writable(property)
                 || property == PropertyIdentifier::PRESENT_VALUE
@@ -247,11 +267,16 @@ macro_rules! define_value_object_commandable {
                 || property == PropertyIdentifier::RELINQUISH_DEFAULT
         }
     };
-    (@is_writable readonly) => {
+    (@is_writable readonly,) => {
         fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
             common::is_common_writable(property)
                 || property == PropertyIdentifier::PRESENT_VALUE
                 || property == PropertyIdentifier::PRIORITY_ARRAY
+        }
+    };
+    (@is_writable $rd_access:ident, $metadata:expr) => {
+        fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+            crate::property_metadata::is_writable_in_metadata($metadata, property)
         }
     };
 
@@ -630,6 +655,75 @@ define_value_object_commandable! {
     copy_type: copy,
 }
 
+const TIME_VALUE_PROPERTY_METADATA: &[PropertyMetadata] = &[
+    PropertyMetadata::new(
+        PropertyIdentifier::OBJECT_IDENTIFIER,
+        PropertyConformance::RequiredRead,
+        None,
+        PropertyWriteCapability::ReadOnly,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::OBJECT_NAME,
+        PropertyConformance::RequiredRead,
+        None,
+        PropertyWriteCapability::Always,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::DESCRIPTION,
+        PropertyConformance::Optional,
+        None,
+        PropertyWriteCapability::Always,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::OBJECT_TYPE,
+        PropertyConformance::RequiredRead,
+        None,
+        PropertyWriteCapability::ReadOnly,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::PRESENT_VALUE,
+        PropertyConformance::RequiredRead,
+        None,
+        PropertyWriteCapability::Always,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::STATUS_FLAGS,
+        PropertyConformance::RequiredRead,
+        None,
+        PropertyWriteCapability::ReadOnly,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::OUT_OF_SERVICE,
+        PropertyConformance::Optional,
+        None,
+        PropertyWriteCapability::Always,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::RELIABILITY,
+        PropertyConformance::Optional,
+        None,
+        PropertyWriteCapability::ReadOnly,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::PRIORITY_ARRAY,
+        PropertyConformance::Optional,
+        Some(PropertyPresenceCondition::Commandable),
+        PropertyWriteCapability::Always,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::RELINQUISH_DEFAULT,
+        PropertyConformance::Optional,
+        Some(PropertyPresenceCondition::Commandable),
+        PropertyWriteCapability::Always,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::PROPERTY_LIST,
+        PropertyConformance::RequiredRead,
+        None,
+        PropertyWriteCapability::ReadOnly,
+    ),
+];
+
 define_value_object_commandable! {
     name: TimeValueObject,
     doc: "BACnet Time Value object (type 50).",
@@ -643,6 +737,7 @@ define_value_object_commandable! {
     rd_validate: (|_: &Time| -> Result<(), Error> { Ok(()) }),
     rd_access: writable,
     copy_type: copy,
+    property_metadata: TIME_VALUE_PROPERTY_METADATA,
 }
 
 define_value_object_commandable! {
