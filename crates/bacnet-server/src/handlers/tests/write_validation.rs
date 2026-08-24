@@ -11,6 +11,7 @@
 use super::*;
 use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject};
 use bacnet_objects::binary::BinaryValueObject;
+use bacnet_objects::color::ColorTemperatureObject;
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::loop_obj::LoopObject;
 use bacnet_objects::multistate::MultiStateOutputObject;
@@ -551,4 +552,56 @@ fn time_delay_normal_round_trips_over_write_property_and_read_property() {
         PropertyValue::Unsigned(9),
         "AI oversized Time_Delay_Normal",
     );
+}
+
+#[test]
+fn write_property_rejects_overwide_color_temperature_without_mutation() {
+    const HOSTILE: u64 = 0x1_0000_03E8;
+
+    let mut db = ObjectDatabase::new();
+    let object = ColorTemperatureObject::new(1, "CT-1").unwrap();
+    let oid = object.object_identifier();
+    db.add(Box::new(object)).unwrap();
+
+    let property_value = encode_value(PropertyValue::Unsigned(HOSTILE));
+    assert_eq!(property_value[0], 0x25);
+    let (tag, content_start) = bacnet_encoding::tags::decode_tag(&property_value, 0).unwrap();
+    assert_eq!(tag.class, bacnet_encoding::tags::TagClass::Application);
+    assert_eq!(tag.number, bacnet_encoding::tags::app_tag::UNSIGNED);
+    assert_eq!(tag.length, 5);
+    assert_eq!(
+        &property_value[content_start..],
+        &[0x01, 0x00, 0x00, 0x03, 0xE8]
+    );
+
+    let request = WritePropertyRequest {
+        object_identifier: oid,
+        property_identifier: PropertyIdentifier::PRESENT_VALUE,
+        property_array_index: None,
+        property_value,
+        priority: None,
+    };
+    let mut request_bytes = BytesMut::new();
+    request.encode(&mut request_bytes);
+
+    match handle_write_property(&mut db, &request_bytes)
+        .expect_err("over-wide Color Temperature Present_Value must be rejected")
+    {
+        Error::Protocol { class, code } => {
+            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+            assert_eq!(code, ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32);
+        }
+        other => panic!("expected PROPERTY/VALUE_OUT_OF_RANGE, got {other:?}"),
+    }
+
+    for property in [
+        PropertyIdentifier::PRESENT_VALUE,
+        PropertyIdentifier::TRACKING_VALUE,
+    ] {
+        assert_eq!(
+            read_wire(&db, oid, property),
+            PropertyValue::Unsigned(4000),
+            "refused write must leave {property:?} unchanged"
+        );
+    }
 }

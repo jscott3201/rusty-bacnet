@@ -366,7 +366,7 @@ impl BACnetObject for ColorTemperatureObject {
         match property {
             p if p == PropertyIdentifier::PRESENT_VALUE => {
                 if let PropertyValue::Unsigned(v) = value {
-                    let v32 = v as u32;
+                    let v32 = common::u64_to_u32(v)?;
                     // Clamp to min/max if supported
                     if let Some(min) = self.min_pres_value {
                         if v32 < min {
@@ -424,5 +424,92 @@ impl BACnetObject for ColorTemperatureObject {
 
     fn supports_cov(&self) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bacnet_types::enums::{ErrorClass, ErrorCode};
+
+    fn assert_property_error(error: Error, expected_code: ErrorCode) {
+        match error {
+            Error::Protocol { class, code } => {
+                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+                assert_eq!(code, expected_code.to_raw() as u32);
+            }
+            other => panic!("expected PROPERTY/{expected_code:?}, got {other:?}"),
+        }
+    }
+
+    fn assert_present_and_tracking(object: &ColorTemperatureObject, expected: u64) {
+        assert_eq!(
+            object
+                .read_property(PropertyIdentifier::PRESENT_VALUE, None)
+                .unwrap(),
+            PropertyValue::Unsigned(expected)
+        );
+        assert_eq!(
+            object
+                .read_property(PropertyIdentifier::TRACKING_VALUE, None)
+                .unwrap(),
+            PropertyValue::Unsigned(expected)
+        );
+    }
+
+    #[test]
+    fn color_temperature_rejects_overwide_present_value_without_mutation() {
+        let mut object = ColorTemperatureObject::new(1, "CT-1").unwrap();
+
+        let error = object
+            .write_property(
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+                PropertyValue::Unsigned(0x1_0000_03E8),
+                None,
+            )
+            .expect_err("over-wide Present_Value must be rejected");
+
+        assert_property_error(error, ErrorCode::VALUE_OUT_OF_RANGE);
+        assert_present_and_tracking(&object, 4000);
+    }
+
+    #[test]
+    fn color_temperature_preserves_present_value_boundaries() {
+        let mut object = ColorTemperatureObject::new(1, "CT-1").unwrap();
+
+        for value in [1000, 30000] {
+            object
+                .write_property(
+                    PropertyIdentifier::PRESENT_VALUE,
+                    None,
+                    PropertyValue::Unsigned(value),
+                    None,
+                )
+                .unwrap();
+            assert_present_and_tracking(&object, value);
+        }
+
+        let error = object
+            .write_property(
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+                PropertyValue::Unsigned(u32::MAX as u64),
+                None,
+            )
+            .expect_err("u32::MAX remains outside the configured range");
+        assert_property_error(error, ErrorCode::VALUE_OUT_OF_RANGE);
+        assert_present_and_tracking(&object, 30000);
+
+        let error = object
+            .write_property(
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+                PropertyValue::Real(1000.0),
+                None,
+            )
+            .expect_err("wrong datatype must be rejected");
+        assert_property_error(error, ErrorCode::INVALID_DATA_TYPE);
+        assert_present_and_tracking(&object, 30000);
     }
 }
