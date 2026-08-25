@@ -1,6 +1,26 @@
 use super::*;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
+    async fn admit_notification_terminal(
+        server_tsm: &Arc<Mutex<ServerTsm>>,
+        notification_transactions: &Arc<NotificationTransactions>,
+        source_mac: &[u8],
+        source_network: Option<&NpduAddress>,
+        apdu: &Apdu,
+    ) -> bool {
+        if !notification_transactions.admit_terminal(source_mac, source_network, apdu) {
+            return false;
+        }
+
+        if let Some(source) = source_network.filter(|source| !source.mac_address.is_empty()) {
+            server_tsm
+                .lock()
+                .await
+                .learn_router(source.network, &MacAddr::from_slice(source_mac));
+        }
+        true
+    }
+
     async fn route_segmented_send_event(
         seg_ack_senders: &Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>>,
         key: SegKey,
@@ -67,6 +87,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         seg_send_permits: &Arc<Semaphore>,
         cov_in_flight: &Arc<Semaphore>,
         server_tsm: &Arc<Mutex<ServerTsm>>,
+        notification_transactions: &Arc<NotificationTransactions>,
         comm_state: &Arc<AtomicU8>,
         dcc_timer: &Arc<Mutex<Option<JoinHandle<()>>>>,
         config: &Arc<ServerConfig>,
@@ -84,6 +105,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let seg_send_permits = Arc::clone(seg_send_permits);
                 let cov_in_flight = Arc::clone(cov_in_flight);
                 let server_tsm = Arc::clone(server_tsm);
+                let notification_transactions = Arc::clone(notification_transactions);
                 let comm_state = Arc::clone(comm_state);
                 let dcc_timer = Arc::clone(dcc_timer);
                 let config = Arc::clone(config);
@@ -98,6 +120,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         &seg_send_permits,
                         &cov_in_flight,
                         &server_tsm,
+                        &notification_transactions,
                         &comm_state,
                         &dcc_timer,
                         &config,
@@ -126,75 +149,86 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     .await;
                 });
             }
-            // Fast paths — remain inline (sub-microsecond TSM lookups)
+            // Fast paths — remain inline (bounded synchronous admission)
             Apdu::SimpleAck(sa) => {
-                let mut tsm = server_tsm.lock().await;
-                let peer = MacAddr::from_slice(source_mac);
-                tsm.record_result_correlated(
-                    &peer,
+                let invoke_id = sa.invoke_id;
+                let admitted = Self::admit_notification_terminal(
+                    server_tsm,
+                    notification_transactions,
+                    source_mac,
                     received.source_network.as_ref(),
-                    sa.invoke_id,
-                    CovAckResult::Ack,
-                );
+                    &Apdu::SimpleAck(sa),
+                )
+                .await;
                 debug!(
-                    invoke_id = sa.invoke_id,
-                    "SimpleAck received for outgoing confirmed notification"
+                    invoke_id,
+                    admitted, "SimpleAck received for outgoing confirmed notification"
                 );
             }
             Apdu::Error(err) => {
-                let mut tsm = server_tsm.lock().await;
-                let peer = MacAddr::from_slice(source_mac);
-                tsm.record_result_correlated(
-                    &peer,
+                let invoke_id = err.invoke_id;
+                let error_class = err.error_class.to_raw();
+                let error_code = err.error_code.to_raw();
+                let admitted = Self::admit_notification_terminal(
+                    server_tsm,
+                    notification_transactions,
+                    source_mac,
                     received.source_network.as_ref(),
-                    err.invoke_id,
-                    CovAckResult::Error,
-                );
+                    &Apdu::Error(err),
+                )
+                .await;
                 debug!(
-                    invoke_id = err.invoke_id,
-                    error_class = err.error_class.to_raw(),
-                    error_code = err.error_code.to_raw(),
+                    invoke_id,
+                    error_class,
+                    error_code,
+                    admitted,
                     "Error received for outgoing confirmed notification"
                 );
             }
             Apdu::Reject(rej) => {
-                let mut tsm = server_tsm.lock().await;
-                let peer = MacAddr::from_slice(source_mac);
-                tsm.record_result_correlated(
-                    &peer,
-                    received.source_network.as_ref(),
-                    rej.invoke_id,
-                    CovAckResult::Error,
-                );
-                debug!(
-                    invoke_id = rej.invoke_id,
-                    "Reject received for outgoing confirmed notification"
-                );
-            }
-            Apdu::Abort(abort) if !abort.sent_by_server => {
-                let key = segmented_transaction_key(
+                let invoke_id = rej.invoke_id;
+                let admitted = Self::admit_notification_terminal(
+                    server_tsm,
+                    notification_transactions,
                     source_mac,
                     received.source_network.as_ref(),
-                    abort.invoke_id,
-                );
-                let routed_segmented = Self::route_segmented_send_event(
-                    seg_ack_senders,
-                    key,
-                    SegmentedSendEvent::Abort(abort.clone()),
+                    &Apdu::Reject(rej),
                 )
                 .await;
-
-                let mut tsm = server_tsm.lock().await;
-                let peer = MacAddr::from_slice(source_mac);
-                tsm.record_result_correlated(
-                    &peer,
-                    received.source_network.as_ref(),
-                    abort.invoke_id,
-                    CovAckResult::Error,
-                );
                 debug!(
-                    invoke_id = abort.invoke_id,
+                    invoke_id,
+                    admitted, "Reject received for outgoing confirmed notification"
+                );
+            }
+            Apdu::Abort(abort) => {
+                let invoke_id = abort.invoke_id;
+                let routed_segmented = if abort.sent_by_server {
+                    false
+                } else {
+                    let key = segmented_transaction_key(
+                        source_mac,
+                        received.source_network.as_ref(),
+                        invoke_id,
+                    );
+                    Self::route_segmented_send_event(
+                        seg_ack_senders,
+                        key,
+                        SegmentedSendEvent::Abort(abort.clone()),
+                    )
+                    .await
+                };
+                let admitted = Self::admit_notification_terminal(
+                    server_tsm,
+                    notification_transactions,
+                    source_mac,
+                    received.source_network.as_ref(),
+                    &Apdu::Abort(abort),
+                )
+                .await;
+                debug!(
+                    invoke_id,
                     routed_segmented,
+                    admitted,
                     "Abort received for outgoing confirmed notification or segmented response"
                 );
             }
@@ -227,8 +261,20 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     );
                 }
             }
-            _ => {
-                debug!("Server ignoring unhandled APDU type");
+            Apdu::ComplexAck(ack) => {
+                let invoke_id = ack.invoke_id;
+                let admitted = Self::admit_notification_terminal(
+                    server_tsm,
+                    notification_transactions,
+                    source_mac,
+                    received.source_network.as_ref(),
+                    &Apdu::ComplexAck(ack),
+                )
+                .await;
+                debug!(
+                    invoke_id,
+                    admitted, "Server ignoring ComplexAck for confirmed notification"
+                );
             }
         }
     }

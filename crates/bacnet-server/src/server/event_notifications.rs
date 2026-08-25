@@ -161,6 +161,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         network: &Arc<NetworkLayer<T>>,
         comm_state: &Arc<AtomicU8>,
         server_tsm: &Arc<Mutex<ServerTsm>>,
+        notification_transactions: &Arc<NotificationTransactions>,
         oid: &ObjectIdentifier,
         retry_timeout_ms: u64,
     ) {
@@ -193,6 +194,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     network,
                     comm_state,
                     server_tsm,
+                    notification_transactions,
                     oid,
                     (outcome.change, outcome.event_type),
                     retry_timeout_ms,
@@ -215,6 +217,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         network: &Arc<NetworkLayer<T>>,
         comm_state: &Arc<AtomicU8>,
         server_tsm: &Arc<Mutex<ServerTsm>>,
+        notification_transactions: &Arc<NotificationTransactions>,
         oid: &ObjectIdentifier,
         transition: impl Into<NotificationTransition>,
         retry_timeout_ms: u64,
@@ -395,21 +398,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 // learning the new route, fail loudly instead of dropping
                 // the notification with no diagnostic.
                 //
-                // A remote recipient's transaction is keyed by routed
-                // identity with an empty local half: the ack will arrive
-                // from whichever router delivers it, and that MAC is
-                // unknowable when the send goes out via the Clause 6.5.3
-                // broadcast DA (#375).
-                let (peer_key, remote): (TsmPeer, Option<(u16, MacAddr)>) = match &route {
-                    RecipientRoute::LocalUnicast(target_mac) => ((target_mac.clone(), None), None),
+                let (canonical_peer, local_target, remote) = match &route {
+                    RecipientRoute::LocalUnicast(target_mac) => (
+                        canonical_direct_peer(target_mac),
+                        Some(target_mac.clone()),
+                        None,
+                    ),
                     RecipientRoute::RemoteUnicast { network, mac } => (
-                        (
-                            MacAddr::new(),
-                            Some(NpduAddress {
-                                network: *network,
-                                mac_address: mac.clone(),
-                            }),
-                        ),
+                        canonical_routed_peer(*network, mac),
+                        None,
                         Some((*network, mac.clone())),
                     ),
                     _ => {
@@ -421,16 +418,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         continue;
                     }
                 };
-                let (id, result_rx) = match {
-                    let mut tsm = server_tsm.lock().await;
-                    tsm.allocate(peer_key.clone())
-                } {
-                    Some(allocated) => allocated,
-                    None => {
-                        warn!("No free invoke ID for confirmed EventNotification");
+                let (operation, result_rx) = match notification_transactions.reserve(
+                    canonical_peer,
+                    ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
+                ) {
+                    Ok(reservation) => reservation,
+                    Err(error) => {
+                        warn!(%error, "No free invoke ID for confirmed EventNotification");
                         continue;
                     }
                 };
+                let id = operation.invoke_id();
 
                 let pdu = Apdu::ConfirmedRequest(ConfirmedRequestPdu {
                     segmented: false,
@@ -453,108 +451,88 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let timeout = Duration::from_millis(retry_timeout_ms);
                 let apdu_retries = DEFAULT_APDU_RETRIES;
                 tokio::spawn(async move {
-                    let mut pending_rx: Option<oneshot::Receiver<CovAckResult>> = Some(result_rx);
-
-                    for attempt in 0..=apdu_retries {
-                        let send_result = match &remote {
-                            None => {
-                                // Local unicast: the peer key's MAC half is
-                                // the destination.
-                                network
-                                    .send_apdu(&buf, &peer_key.0, true, network_priority)
-                                    .await
-                            }
-                            Some((dnet, dadr)) => {
-                                // Clause 6.5.3 method 4: the first attempt
-                                // may unicast to a router learned from an
-                                // earlier response; a retry after silence
-                                // falls back to the broadcast DA in case
-                                // that router is gone. With nothing learned,
-                                // every attempt uses the broadcast form the
-                                // clause prescribes for an unknown router.
-                                let router = if attempt == 0 {
-                                    tsm.lock().await.cached_router(*dnet)
-                                } else {
-                                    None
+                    let result = run_notification_worker(
+                        operation,
+                        result_rx,
+                        timeout,
+                        apdu_retries,
+                        |attempt| {
+                            let network = Arc::clone(&network);
+                            let tsm = Arc::clone(&tsm);
+                            let buf = buf.clone();
+                            let local_target = local_target.clone();
+                            let remote = remote.clone();
+                            async move {
+                                let send_result = match (local_target, remote) {
+                                    (Some(target), None) => {
+                                        network
+                                            .send_apdu(&buf, &target, true, network_priority)
+                                            .await
+                                    }
+                                    (None, Some((dnet, dadr))) => {
+                                        // Retry through the local broadcast if a learned
+                                        // router stops answering.
+                                        let router = if attempt == 0 {
+                                            tsm.lock().await.cached_router(dnet)
+                                        } else {
+                                            None
+                                        };
+                                        match router {
+                                            Some(router_mac) => {
+                                                network
+                                                    .send_apdu_routed(
+                                                        &buf,
+                                                        dnet,
+                                                        &dadr,
+                                                        &router_mac,
+                                                        true,
+                                                        network_priority,
+                                                    )
+                                                    .await
+                                            }
+                                            None => {
+                                                network
+                                                    .send_apdu_routed_via_local_broadcast(
+                                                        &buf,
+                                                        dnet,
+                                                        &dadr,
+                                                        true,
+                                                        network_priority,
+                                                    )
+                                                    .await
+                                            }
+                                        }
+                                    }
+                                    _ => unreachable!("confirmed route validated before spawn"),
                                 };
-                                match router {
-                                    Some(router_mac) => {
-                                        network
-                                            .send_apdu_routed(
-                                                &buf,
-                                                *dnet,
-                                                dadr,
-                                                &router_mac,
-                                                true,
-                                                network_priority,
-                                            )
-                                            .await
-                                    }
-                                    None => {
-                                        network
-                                            .send_apdu_routed_via_local_broadcast(
-                                                &buf,
-                                                *dnet,
-                                                dadr,
-                                                true,
-                                                network_priority,
-                                            )
-                                            .await
-                                    }
-                                }
-                            }
-                        };
-
-                        if let Err(e) = send_result {
-                            warn!(error = %e, attempt, "Confirmed EventNotification send failed");
-                        } else {
-                            debug!(invoke_id = id, attempt, "Confirmed EventNotification sent");
-                        }
-
-                        let rx = pending_rx
-                            .take()
-                            .expect("receiver always set for each attempt");
-                        let result = match tokio::time::timeout(timeout, rx).await {
-                            Ok(Ok(r)) => Ok(r),
-                            Ok(Err(_)) => Err(()),
-                            Err(_) => Err(()),
-                        };
-
-                        if result.is_err() && attempt < apdu_retries {
-                            let new_rx = {
-                                let mut tsm = tsm.lock().await;
-                                tsm.register(peer_key.clone(), id)
-                            };
-                            pending_rx = Some(new_rx);
-                        }
-
-                        match result {
-                            Ok(CovAckResult::Ack) => {
-                                debug!(invoke_id = id, "EventNotification acknowledged");
-                                return;
-                            }
-                            Ok(CovAckResult::Error) => {
-                                warn!(invoke_id = id, "EventNotification rejected by recipient");
-                                return;
-                            }
-                            Err(_) => {
-                                if attempt < apdu_retries {
-                                    debug!(
+                                match &send_result {
+                                    Ok(()) => debug!(
                                         invoke_id = id,
-                                        attempt, "EventNotification timeout, retrying"
-                                    );
-                                } else {
-                                    warn!(
-                                        invoke_id = id,
-                                        "EventNotification failed after {} retries", apdu_retries
-                                    );
+                                        attempt, "Confirmed EventNotification sent"
+                                    ),
+                                    Err(error) => warn!(
+                                        %error,
+                                        attempt, "Confirmed EventNotification send failed"
+                                    ),
                                 }
+                                send_result
                             }
+                        },
+                    )
+                    .await;
+                    match result {
+                        NotificationWorkerResult::Ack => {
+                            debug!(invoke_id = id, "EventNotification acknowledged");
                         }
+                        NotificationWorkerResult::Error => {
+                            warn!(invoke_id = id, "EventNotification rejected by recipient");
+                        }
+                        NotificationWorkerResult::Exhausted => warn!(
+                            invoke_id = id,
+                            "EventNotification failed after {} retries", apdu_retries
+                        ),
+                        NotificationWorkerResult::Closed => {}
                     }
-
-                    let mut tsm = tsm.lock().await;
-                    tsm.remove(&peer_key, id);
                 });
             } else {
                 let pdu = Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {

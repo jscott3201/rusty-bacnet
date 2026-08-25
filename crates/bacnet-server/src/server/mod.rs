@@ -53,6 +53,10 @@ use bacnet_types::MacAddr;
 use crate::cov::{CovNotificationKind, CovSubscription, CovSubscriptionTable};
 use crate::handlers;
 use crate::life_safety::{LifeSafetyOperationAuthorizationContext, LifeSafetyOperationAuthorizer};
+use notification_transactions::{
+    canonical_direct_peer, canonical_routed_peer, run_notification_worker,
+    NotificationTransactions, NotificationWorkerResult,
+};
 
 /// Maximum number of concurrent segmented reassembly sessions.
 const MAX_SEG_RECEIVERS: usize = 128;
@@ -106,16 +110,17 @@ pub enum CovAckResult {
     Error,
 }
 
-/// Lightweight TSM for tracking outgoing confirmed COV notifications.
+/// Legacy server transaction state and learned-router cache.
 ///
-/// The server allocates an invoke ID for each confirmed notification and the
-/// dispatch loop writes the result into a shared map when a SimpleAck, Error,
-/// Reject, or Abort is received.  The per-subscriber retry task polls the map
-/// after each timeout to decide whether to resend.
+/// The allocation and pending-result methods remain available to existing
+/// server internals and tests. Standalone confirmed notification paths use the
+/// private endpoint-core adapter instead.
 pub struct ServerTsm {
+    #[allow(dead_code)]
     next_invoke_id: u8,
     /// Oneshot senders keyed by peer MAC and invoke ID. When a result arrives
     /// from the dispatch loop, we send it directly — no polling needed.
+    #[allow(dead_code)]
     pending: HashMap<TsmKey, oneshot::Sender<CovAckResult>>,
     /// Router MACs learned per remote network, Clause 6.5.3 method 4: "using
     /// the local broadcast MAC address in the initial transmission to a device
@@ -140,6 +145,7 @@ impl ServerTsm {
 
     /// Allocate the next invoke ID and register a oneshot channel for the result.
     /// Returns (invoke_id, receiver).
+    #[allow(dead_code)]
     fn allocate(&mut self, peer: TsmPeer) -> Option<(u8, oneshot::Receiver<CovAckResult>)> {
         for offset in 0..=u8::MAX {
             let id = self.next_invoke_id.wrapping_add(offset);
@@ -156,6 +162,7 @@ impl ServerTsm {
     }
 
     /// Register or replace the pending receiver for a peer/invoke-id pair.
+    #[allow(dead_code)]
     fn register(&mut self, peer: TsmPeer, invoke_id: u8) -> oneshot::Receiver<CovAckResult> {
         let (tx, rx) = oneshot::channel();
         self.pending.insert((peer.0, peer.1, invoke_id), tx);
@@ -164,6 +171,7 @@ impl ServerTsm {
 
     /// Record a result from the dispatch loop (SimpleAck, Error, etc.).
     /// Sends immediately through the oneshot channel.
+    #[allow(dead_code)]
     fn record_result(
         &mut self,
         peer: &MacAddr,
@@ -183,6 +191,7 @@ impl ServerTsm {
     }
 
     /// Remove a pending entry (cleanup on completion or exhaustion).
+    #[allow(dead_code)]
     fn remove(&mut self, peer: &TsmPeer, invoke_id: u8) {
         self.pending
             .remove(&(peer.0.clone(), peer.1.clone(), invoke_id));
@@ -203,6 +212,7 @@ impl ServerTsm {
     /// A hit that carries a routed identity also teaches the router cache:
     /// the response's immediate MAC is "the SA associated with [a] subsequent
     /// response from the remote device" (Clause 6.5.3 method 4).
+    #[allow(dead_code)]
     fn record_result_correlated(
         &mut self,
         source_mac: &MacAddr,
@@ -751,13 +761,13 @@ pub struct BACnetServer<T: TransportPort> {
     /// cancelled senders that have not yet exited a transport send.
     #[allow(dead_code)]
     seg_send_permits: Arc<Semaphore>,
-    /// Semaphore that caps confirmed COV notifications at 255 in-flight
-    /// to prevent invoke ID reuse (invoke IDs are u8 = 0..255). Read by
-    /// [`write_local`](Self::write_local).
+    /// Operational cap of 255 concurrent confirmed COV notification workers.
+    /// Invoke-ID ownership is handled by `notification_transactions`.
     cov_in_flight: Arc<Semaphore>,
-    /// Server-side TSM for outgoing confirmed COV notifications. Read by
-    /// [`write_local`](Self::write_local).
+    /// Legacy public TSM state and the learned DNET-to-router cache.
     server_tsm: Arc<Mutex<ServerTsm>>,
+    /// Invoke-ID ownership and terminal admission for confirmed notifications.
+    notification_transactions: Arc<NotificationTransactions>,
     /// Communication state: 0 = Enable, 1 = Disable, 2 = DisableInitiation.
     comm_state: Arc<AtomicU8>,
     /// Handle for the DCC auto-re-enable timer. A new DCC request aborts
@@ -984,12 +994,14 @@ mod cov_notifications;
 mod dispatch;
 mod event_notifications;
 mod lifecycle;
+mod notification_transactions;
 mod requests;
 #[cfg(test)]
 pub(crate) use requests::{EXECUTED_CONFIRMED, EXECUTED_UNCONFIRMED};
 mod responses;
 mod segmentation;
 mod segmented_receive;
+mod shutdown;
 
 #[cfg(test)]
 mod cov_notifications_tests;
@@ -1009,6 +1021,8 @@ mod event_notifications_tests;
 mod event_recipient_routing_tests;
 #[cfg(test)]
 mod life_safety_operation_tests;
+#[cfg(test)]
+mod notification_transactions_tests;
 #[cfg(test)]
 mod segmentation_tests;
 #[cfg(test)]

@@ -358,7 +358,7 @@ async fn cov_property_multiple_subscription_uses_multiple_notification_on_change
         &network,
         &cov_table,
         &Arc::new(Semaphore::new(255)),
-        &Arc::new(Mutex::new(ServerTsm::new())),
+        &NotificationTransactions::new(),
         &Arc::new(AtomicU8::new(0)),
         &ServerConfig::default(),
         &ao_oid,
@@ -433,7 +433,7 @@ async fn timestamped_cov_multiple_reports_datetime_and_remaining_lifetime() {
         &network,
         &cov_table,
         &Arc::new(Semaphore::new(255)),
-        &Arc::new(Mutex::new(ServerTsm::new())),
+        &NotificationTransactions::new(),
         &Arc::new(AtomicU8::new(0)),
         &ServerConfig::default(),
         &ao_oid,
@@ -455,4 +455,136 @@ async fn timestamped_cov_multiple_reports_datetime_and_remaining_lifetime() {
         notification.list_of_cov_notifications[0].list_of_values[0].time_of_change,
         Some(request_time)
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn confirmed_cov_single_and_multiple_retries_retain_their_leases() {
+    let sent = StdArc::new(StdMutex::new(Vec::new()));
+    let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
+        &sent,
+    ))));
+    let transactions = NotificationTransactions::new();
+    let ao_oid = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap();
+    let device_oid = ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap();
+    let single_mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC1]);
+    let multiple_mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC2]);
+
+    let mut db = ObjectDatabase::new();
+    let mut device = DeviceObject::new(DeviceConfig {
+        instance: 1234,
+        name: "Confirmed-COV-Retry-Test".into(),
+        ..DeviceConfig::default()
+    })
+    .unwrap();
+    device.set_object_list(vec![device_oid, ao_oid]);
+    db.add(Box::new(device)).unwrap();
+    db.add(Box::new(AnalogOutputObject::new(1, "AO-1", 62).unwrap()))
+        .unwrap();
+
+    let db = Arc::new(RwLock::new(db));
+    let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
+    {
+        let mut table = cov_table.write().await;
+        for (subscriber_mac, process_id, notification_kind) in [
+            (single_mac.clone(), 7, CovNotificationKind::Single),
+            (multiple_mac.clone(), 8, CovNotificationKind::Multiple),
+        ] {
+            table.subscribe(CovSubscription {
+                subscriber_mac,
+                subscriber_network: None,
+                subscriber_process_identifier: process_id,
+                monitored_object_identifier: ao_oid,
+                issue_confirmed_notifications: true,
+                expires_at: None,
+                last_notified_value: None,
+                monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
+                monitored_property_array_index: None,
+                cov_increment: None,
+                notification_kind,
+                timestamped: false,
+            });
+        }
+    }
+    let config = ServerConfig {
+        cov_retry_timeout_ms: 100,
+        ..ServerConfig::default()
+    };
+
+    BACnetServer::<RecordingTransport>::fire_cov_notifications(
+        &db,
+        &network,
+        &cov_table,
+        &Arc::new(Semaphore::new(255)),
+        &transactions,
+        &Arc::new(AtomicU8::new(0)),
+        &config,
+        &ao_oid,
+    )
+    .await;
+    for _ in 0..32 {
+        if sent.lock().unwrap().len() >= 2 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(sent.lock().unwrap().len(), 2);
+
+    let initial: Vec<(ConfirmedServiceChoice, u8)> = sent
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(frame, _)| {
+            let npdu = decode_npdu(frame.clone()).unwrap();
+            let Apdu::ConfirmedRequest(request) = decode_apdu(npdu.payload).unwrap() else {
+                panic!("expected confirmed COV notification");
+            };
+            (request.service_choice, request.invoke_id)
+        })
+        .collect();
+    assert_eq!(initial.len(), 2);
+    assert_ne!(initial[0].1, initial[1].1);
+    assert_eq!(transactions.active_count(), 2);
+
+    tokio::time::advance(Duration::from_millis(101)).await;
+    for _ in 0..32 {
+        if sent.lock().unwrap().len() >= 4 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(sent.lock().unwrap().len(), 4);
+    let retries: Vec<(ConfirmedServiceChoice, u8)> = sent
+        .lock()
+        .unwrap()
+        .iter()
+        .skip(2)
+        .map(|(frame, _)| {
+            let npdu = decode_npdu(frame.clone()).unwrap();
+            let Apdu::ConfirmedRequest(request) = decode_apdu(npdu.payload).unwrap() else {
+                panic!("expected confirmed COV retry");
+            };
+            (request.service_choice, request.invoke_id)
+        })
+        .collect();
+    for (service, invoke_id) in &initial {
+        assert!(retries.contains(&(*service, *invoke_id)));
+    }
+    assert_eq!(transactions.active_count(), 2);
+
+    for (service, invoke_id) in initial {
+        let source = if service == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION {
+            &single_mac
+        } else {
+            &multiple_mac
+        };
+        assert!(transactions.admit_terminal(
+            source,
+            None,
+            &Apdu::SimpleAck(SimpleAck {
+                invoke_id,
+                service_choice: service,
+            }),
+        ));
+    }
+    assert_eq!(transactions.active_count(), 0);
 }

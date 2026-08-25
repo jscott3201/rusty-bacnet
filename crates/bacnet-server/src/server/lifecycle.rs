@@ -52,6 +52,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         let cov_in_flight = Arc::new(Semaphore::new(255));
         let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+        let notification_transactions = NotificationTransactions::new();
         let comm_state = Arc::new(AtomicU8::new(0)); // 0 = Enable (default)
         let dcc_timer: Arc<Mutex<Option<JoinHandle<()>>>> = Arc::new(Mutex::new(None));
 
@@ -62,6 +63,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let seg_send_permits_dispatch = Arc::clone(&seg_send_permits);
         let cov_in_flight_dispatch = Arc::clone(&cov_in_flight);
         let server_tsm_dispatch = Arc::clone(&server_tsm);
+        let notification_transactions_dispatch = Arc::clone(&notification_transactions);
         let comm_state_dispatch = Arc::clone(&comm_state);
         let dcc_timer_dispatch = Arc::clone(&dcc_timer);
         let config_dispatch = Arc::new(config.clone());
@@ -393,6 +395,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     &seg_send_permits_dispatch,
                                     &cov_in_flight_dispatch,
                                     &server_tsm_dispatch,
+                                    &notification_transactions_dispatch,
 	                                                    &comm_state_dispatch,
 	                                                    &dcc_timer_dispatch,
 	                                                    &config_dispatch,
@@ -439,6 +442,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 &seg_send_permits_dispatch,
                                 &cov_in_flight_dispatch,
                                 &server_tsm_dispatch,
+                                &notification_transactions_dispatch,
                                 &comm_state_dispatch,
                                 &dcc_timer_dispatch,
                                 &config_dispatch,
@@ -589,6 +593,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let network_intrinsic = Arc::clone(&network);
         let comm_state_intrinsic = Arc::clone(&comm_state);
         let server_tsm_intrinsic = Arc::clone(&server_tsm);
+        let notification_transactions_intrinsic = Arc::clone(&notification_transactions);
         let intrinsic_retry_ms = config.cov_retry_timeout_ms;
         let intrinsic_reporting_task = Some(tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(1));
@@ -632,6 +637,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         &network_intrinsic,
                         &comm_state_intrinsic,
                         &server_tsm_intrinsic,
+                        &notification_transactions_intrinsic,
                         &oid,
                         (change, event_type),
                         intrinsic_retry_ms,
@@ -650,6 +656,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             seg_send_permits,
             cov_in_flight,
             server_tsm,
+            notification_transactions,
             comm_state,
             dcc_timer,
             dispatch_task: Some(dispatch_task),
@@ -788,6 +795,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             &self.network,
             &self.comm_state,
             &self.server_tsm,
+            &self.notification_transactions,
             oid,
             self.config.cov_retry_timeout_ms,
         )
@@ -797,7 +805,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             &self.network,
             &self.cov_table,
             &self.cov_in_flight,
-            &self.server_tsm,
+            &self.notification_transactions,
             &self.comm_state,
             &self.config,
             oid,
@@ -818,39 +826,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Broadcast an I-Am for this server's Device object using the bound transport socket.
     pub async fn broadcast_i_am(&self) -> Result<(), Error> {
         broadcast_i_am_from(&self.config, &self.db, &self.network).await
-    }
-
-    /// Stop the server.
-    pub async fn stop(&mut self) -> Result<(), Error> {
-        if let Some(task) = self.fault_detection_task.take() {
-            task.abort();
-            let _ = task.await;
-        }
-        if let Some(task) = self.event_enrollment_task.take() {
-            task.abort();
-            let _ = task.await;
-        }
-        if let Some(task) = self.trend_log_task.take() {
-            task.abort();
-            let _ = task.await;
-        }
-        if let Some(task) = self.schedule_tick_task.take() {
-            task.abort();
-            let _ = task.await;
-        }
-        if let Some(task) = self.intrinsic_reporting_task.take() {
-            task.abort();
-            let _ = task.await;
-        }
-        if let Some(task) = self.cov_purge_task.take() {
-            task.abort();
-            let _ = task.await;
-        }
-        if let Some(task) = self.dispatch_task.take() {
-            task.abort();
-            let _ = task.await;
-        }
-        Ok(())
     }
 }
 

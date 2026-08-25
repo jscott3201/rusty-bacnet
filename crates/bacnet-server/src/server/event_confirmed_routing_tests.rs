@@ -68,6 +68,7 @@ struct Harness {
     db: Arc<RwLock<ObjectDatabase>>,
     network: Arc<NetworkLayer<RecordingTransport>>,
     server_tsm: Arc<Mutex<ServerTsm>>,
+    notification_transactions: Arc<NotificationTransactions>,
     comm_state: Arc<AtomicU8>,
     broadcasts: StdArc<StdMutex<Vec<Bytes>>>,
     unicasts: StdArc<StdMutex<Vec<(Vec<u8>, Bytes)>>>,
@@ -82,6 +83,7 @@ impl Harness {
         let network = Arc::new(NetworkLayer::new(transport));
         let comm_state = Arc::new(AtomicU8::new(0));
         let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+        let notification_transactions = NotificationTransactions::new();
 
         let mut db = ObjectDatabase::new();
         let mut nc = NotificationClass::new(0, "NC-0").unwrap();
@@ -113,6 +115,7 @@ impl Harness {
             db: Arc::new(RwLock::new(db)),
             network,
             server_tsm,
+            notification_transactions,
             comm_state,
             broadcasts,
             unicasts,
@@ -127,6 +130,7 @@ impl Harness {
             &self.network,
             &self.comm_state,
             &self.server_tsm,
+            &self.notification_transactions,
             &oid,
             (
                 EventStateChange {
@@ -163,19 +167,55 @@ impl Harness {
         dadr: &[u8],
         invoke_id: u8,
     ) -> bool {
-        let hit = self.server_tsm.lock().await.record_result_correlated(
-            &MacAddr::from_slice(router_mac),
-            Some(&NpduAddress {
+        self.dispatch_terminal(
+            router_mac,
+            Some(NpduAddress {
                 network,
                 mac_address: MacAddr::from_slice(dadr),
             }),
-            invoke_id,
-            CovAckResult::Ack,
-        );
+            Apdu::SimpleAck(SimpleAck {
+                invoke_id,
+                service_choice: ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
+            }),
+        )
+        .await
+    }
+
+    async fn dispatch_terminal(
+        &self,
+        source_mac: &[u8],
+        source_network: Option<NpduAddress>,
+        apdu: Apdu,
+    ) -> bool {
+        let active_before = self.notification_transactions.active_count();
+        BACnetServer::<RecordingTransport>::dispatch(
+            &self.db,
+            &self.network,
+            &Arc::new(RwLock::new(CovSubscriptionTable::new())),
+            &Arc::new(Mutex::new(HashMap::new())),
+            &Arc::new(Semaphore::new(MAX_SEG_SENDERS)),
+            &Arc::new(Semaphore::new(255)),
+            &self.server_tsm,
+            &self.notification_transactions,
+            &self.comm_state,
+            &Arc::new(Mutex::new(None::<JoinHandle<()>>)),
+            &Arc::new(ServerConfig::default()),
+            source_mac,
+            apdu,
+            bacnet_network::layer::ReceivedApdu {
+                apdu: Bytes::new(),
+                source_mac: MacAddr::from_slice(source_mac),
+                source_network,
+                is_group: false,
+                data_attributes: Vec::new(),
+                reply_tx: None,
+            },
+        )
+        .await;
         for _ in 0..16 {
             tokio::task::yield_now().await;
         }
-        hit
+        self.notification_transactions.active_count() < active_before
     }
 }
 
@@ -309,6 +349,28 @@ async fn ack_with_wrong_routed_identity_does_not_complete() {
             .await,
         "wrong DADR must miss"
     );
+    assert_eq!(
+        harness.server_tsm.lock().await.cached_router(1000),
+        None,
+        "mismatched routed traffic must not teach the router cache"
+    );
+    assert!(
+        !harness
+            .dispatch_terminal(
+                ROUTER_A,
+                Some(NpduAddress {
+                    network: 1000,
+                    mac_address: MacAddr::from_slice(RECIPIENT),
+                }),
+                Apdu::SimpleAck(SimpleAck {
+                    invoke_id: req.invoke_id,
+                    service_choice: ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION,
+                }),
+            )
+            .await,
+        "wrong service must not complete"
+    );
+    assert_eq!(harness.server_tsm.lock().await.cached_router(1000), None);
     assert!(
         harness
             .ack_routed(ROUTER_A, 1000, RECIPIENT, req.invoke_id)
@@ -377,6 +439,7 @@ async fn retry_after_silent_router_falls_back_to_broadcast() {
     // stays silent; the retry must arrive as a broadcast-DA frame.
     harness.distribute().await;
     assert_eq!(harness.unicast_frames().len(), 1);
+    assert_eq!(harness.notification_transactions.active_count(), 1);
     let broadcasts_before = harness.broadcast_frames().len();
     tokio::time::sleep(Duration::from_millis(400)).await;
     let broadcasts = harness.broadcast_frames();
@@ -390,6 +453,11 @@ async fn retry_after_silent_router_falls_back_to_broadcast() {
     assert_eq!(
         req2.invoke_id,
         decode_confirmed(&harness.unicast_frames()[0].1).1.invoke_id
+    );
+    assert_eq!(
+        harness.notification_transactions.active_count(),
+        1,
+        "the retry must retain one active lease"
     );
 
     let _ = harness
@@ -427,10 +495,14 @@ async fn local_unicast_confirmed_recipient_still_unicasts() {
 }
 
 async fn self_ack_local(harness: &Harness, mac: &[u8], invoke_id: u8) -> bool {
-    harness.server_tsm.lock().await.record_result_correlated(
-        &MacAddr::from_slice(mac),
-        None,
-        invoke_id,
-        CovAckResult::Ack,
-    )
+    harness
+        .dispatch_terminal(
+            mac,
+            None,
+            Apdu::SimpleAck(SimpleAck {
+                invoke_id,
+                service_choice: ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
+            }),
+        )
+        .await
 }

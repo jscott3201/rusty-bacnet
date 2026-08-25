@@ -271,6 +271,7 @@ async fn dispatch_test_apdu_from_network<T: TransportPort + 'static>(
     let cov_in_flight = Arc::new(Semaphore::new(255));
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
     let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+    let notification_transactions = NotificationTransactions::new();
     let comm_state = Arc::new(AtomicU8::new(0));
     let dcc_timer = Arc::new(Mutex::new(None::<JoinHandle<()>>));
     let config = Arc::new(ServerConfig::default());
@@ -283,6 +284,7 @@ async fn dispatch_test_apdu_from_network<T: TransportPort + 'static>(
         &seg_send_permits,
         &cov_in_flight,
         &server_tsm,
+        &notification_transactions,
         &comm_state,
         &dcc_timer,
         &config,

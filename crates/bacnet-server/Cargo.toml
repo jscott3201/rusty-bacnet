@@ -12,6 +12,7 @@ categories = ["network-programming"]
 [dependencies]
 bacnet-types.workspace = true
 bacnet-encoding.workspace = true
+bacnet-endpoint-core.workspace = true
 bacnet-services.workspace = true
 bacnet-transport.workspace = true
 bacnet-network.workspace = true

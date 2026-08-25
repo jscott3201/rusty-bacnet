@@ -35,6 +35,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         (sub.subscriber_mac.clone(), sub.subscriber_network.clone())
     }
 
+    fn canonical_cov_peer(
+        sub: &CovSubscription,
+    ) -> bacnet_endpoint_core::coordinator::CanonicalPeer {
+        match &sub.subscriber_network {
+            Some(destination) => {
+                canonical_routed_peer(destination.network, &destination.mac_address)
+            }
+            None => canonical_direct_peer(&sub.subscriber_mac),
+        }
+    }
+
     /// Fire COV notifications for all active subscriptions on the given object.
     /// Skipped when DCC is active (comm_state >= 1).
     #[allow(clippy::too_many_arguments)]
@@ -43,7 +54,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         network: &Arc<NetworkLayer<T>>,
         cov_table: &Arc<RwLock<CovSubscriptionTable>>,
         cov_in_flight: &Arc<Semaphore>,
-        server_tsm: &Arc<Mutex<ServerTsm>>,
+        notification_transactions: &Arc<NotificationTransactions>,
         comm_state: &Arc<AtomicU8>,
         config: &ServerConfig,
         oid: &ObjectIdentifier,
@@ -69,7 +80,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             network,
             cov_table,
             cov_in_flight,
-            server_tsm,
+            notification_transactions,
             config,
             oid,
             &single_subs,
@@ -81,7 +92,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             network,
             cov_table,
             cov_in_flight,
-            server_tsm,
+            notification_transactions,
             comm_state,
             config,
             Some(oid),
@@ -98,7 +109,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         network: &Arc<NetworkLayer<T>>,
         cov_table: &Arc<RwLock<CovSubscriptionTable>>,
         cov_in_flight: &Arc<Semaphore>,
-        server_tsm: &Arc<Mutex<ServerTsm>>,
+        notification_transactions: &Arc<NotificationTransactions>,
         comm_state: &Arc<AtomicU8>,
         config: &ServerConfig,
         subscription: &CovSubscription,
@@ -112,7 +123,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             network,
             cov_table,
             cov_in_flight,
-            server_tsm,
+            notification_transactions,
             config,
             &subscription.monitored_object_identifier,
             std::slice::from_ref(subscription),
@@ -126,7 +137,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         network: &Arc<NetworkLayer<T>>,
         cov_table: &Arc<RwLock<CovSubscriptionTable>>,
         cov_in_flight: &Arc<Semaphore>,
-        server_tsm: &Arc<Mutex<ServerTsm>>,
+        notification_transactions: &Arc<NotificationTransactions>,
         comm_state: &Arc<AtomicU8>,
         config: &ServerConfig,
         changed_oid: Option<&ObjectIdentifier>,
@@ -190,7 +201,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 network,
                 cov_table,
                 cov_in_flight,
-                server_tsm,
+                notification_transactions,
                 config,
                 subs,
             )
@@ -248,7 +259,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         network: &Arc<NetworkLayer<T>>,
         cov_table: &Arc<RwLock<CovSubscriptionTable>>,
         cov_in_flight: &Arc<Semaphore>,
-        server_tsm: &Arc<Mutex<ServerTsm>>,
+        notification_transactions: &Arc<NotificationTransactions>,
         comm_state: &Arc<AtomicU8>,
         config: &ServerConfig,
         subscriptions: &[CovSubscription],
@@ -258,7 +269,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             network,
             cov_table,
             cov_in_flight,
-            server_tsm,
+            notification_transactions,
             comm_state,
             config,
             None,
@@ -273,7 +284,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         network: &Arc<NetworkLayer<T>>,
         cov_table: &Arc<RwLock<CovSubscriptionTable>>,
         cov_in_flight: &Arc<Semaphore>,
-        server_tsm: &Arc<Mutex<ServerTsm>>,
+        notification_transactions: &Arc<NotificationTransactions>,
         config: &ServerConfig,
         subscriptions: &[CovSubscription],
     ) {
@@ -385,17 +396,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             };
 
-            let peer = Self::cov_peer(representative);
-            let (id, result_rx) = match {
-                let mut tsm = server_tsm.lock().await;
-                tsm.allocate(peer.clone())
-            } {
-                Some(allocated) => allocated,
-                None => {
-                    warn!("No free invoke ID for confirmed COVNotificationMultiple");
+            let (operation, result_rx) = match notification_transactions.reserve(
+                Self::canonical_cov_peer(representative),
+                ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE,
+            ) {
+                Ok(reservation) => reservation,
+                Err(error) => {
+                    warn!(%error, "No free invoke ID for confirmed COVNotificationMultiple");
                     return;
                 }
             };
+            let id = operation.invoke_id();
 
             let buf = match Self::encode_confirmed_cov_multiple_apdu(
                 &notification,
@@ -426,69 +437,49 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let network = Arc::clone(network);
             let sub = representative.clone();
             let apdu_timeout = Duration::from_millis(config.cov_retry_timeout_ms);
-            let tsm = Arc::clone(server_tsm);
             let apdu_retries = DEFAULT_APDU_RETRIES;
             tokio::spawn(async move {
                 let _permit = permit;
-                let mut pending_rx: Option<oneshot::Receiver<CovAckResult>> = Some(result_rx);
-
-                for attempt in 0..=apdu_retries {
-                    if let Err(e) = Self::send_cov_apdu(&network, &buf, &sub, true).await {
-                        warn!(error = %e, attempt, "COVNotificationMultiple send failed");
-                    } else {
-                        debug!(
-                            invoke_id = id,
-                            attempt, "Confirmed COVNotificationMultiple sent"
-                        );
-                    }
-
-                    let rx = pending_rx
-                        .take()
-                        .expect("receiver always set for each attempt");
-                    let result = match tokio::time::timeout(apdu_timeout, rx).await {
-                        Ok(Ok(r)) => Ok(r),
-                        Ok(Err(_)) => Err(()),
-                        Err(_) => Err(()),
-                    };
-
-                    if result.is_err() && attempt < apdu_retries {
-                        let new_rx = {
-                            let mut tsm = tsm.lock().await;
-                            tsm.register(peer.clone(), id)
-                        };
-                        pending_rx = Some(new_rx);
-                    }
-
-                    match result {
-                        Ok(CovAckResult::Ack) => {
-                            debug!(invoke_id = id, "COVNotificationMultiple acknowledged");
-                            return;
-                        }
-                        Ok(CovAckResult::Error) => {
-                            warn!(
-                                invoke_id = id,
-                                "COVNotificationMultiple rejected by subscriber"
-                            );
-                            return;
-                        }
-                        Err(_) => {
-                            if attempt < apdu_retries {
-                                debug!(
+                let result = run_notification_worker(
+                    operation,
+                    result_rx,
+                    apdu_timeout,
+                    apdu_retries,
+                    |attempt| {
+                        let network = Arc::clone(&network);
+                        let buf = buf.clone();
+                        let sub = sub.clone();
+                        async move {
+                            let result = Self::send_cov_apdu(&network, &buf, &sub, true).await;
+                            match &result {
+                                Ok(()) => debug!(
                                     invoke_id = id,
-                                    attempt, "COVNotificationMultiple timeout, retrying"
-                                );
-                            } else {
-                                warn!(
-                                    invoke_id = id,
-                                    "COVNotificationMultiple failed after {} retries", apdu_retries
-                                );
+                                    attempt, "Confirmed COVNotificationMultiple sent"
+                                ),
+                                Err(error) => warn!(
+                                    %error,
+                                    attempt, "COVNotificationMultiple send failed"
+                                ),
                             }
+                            result
                         }
+                    },
+                )
+                .await;
+                match result {
+                    NotificationWorkerResult::Ack => {
+                        debug!(invoke_id = id, "COVNotificationMultiple acknowledged");
                     }
+                    NotificationWorkerResult::Error => warn!(
+                        invoke_id = id,
+                        "COVNotificationMultiple rejected by subscriber"
+                    ),
+                    NotificationWorkerResult::Exhausted => warn!(
+                        invoke_id = id,
+                        "COVNotificationMultiple failed after {} retries", apdu_retries
+                    ),
+                    NotificationWorkerResult::Closed => {}
                 }
-
-                let mut tsm = tsm.lock().await;
-                tsm.remove(&peer, id);
             });
         } else {
             let buf = match Self::encode_unconfirmed_cov_multiple_apdu(&notification) {
@@ -523,7 +514,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         network: &Arc<NetworkLayer<T>>,
         cov_table: &Arc<RwLock<CovSubscriptionTable>>,
         cov_in_flight: &Arc<Semaphore>,
-        server_tsm: &Arc<Mutex<ServerTsm>>,
+        notification_transactions: &Arc<NotificationTransactions>,
         config: &ServerConfig,
         oid: &ObjectIdentifier,
         subs: &[CovSubscription],
@@ -638,20 +629,21 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     }
                 };
 
-                let peer = Self::cov_peer(sub);
-                let (id, result_rx) = match {
-                    let mut tsm = server_tsm.lock().await;
-                    tsm.allocate(peer.clone())
-                } {
-                    Some(allocated) => allocated,
-                    None => {
+                let (operation, result_rx) = match notification_transactions.reserve(
+                    Self::canonical_cov_peer(sub),
+                    ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION,
+                ) {
+                    Ok(reservation) => reservation,
+                    Err(error) => {
                         warn!(
+                            %error,
                             object = ?oid,
                             "No free invoke ID for confirmed COV notification"
                         );
                         continue;
                     }
                 };
+                let id = operation.invoke_id();
 
                 let pdu = Apdu::ConfirmedRequest(ConfirmedRequestPdu {
                     segmented: false,
@@ -684,64 +676,48 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let network = Arc::clone(network);
                 let sub = sub.clone();
                 let apdu_timeout = Duration::from_millis(config.cov_retry_timeout_ms);
-                let tsm = Arc::clone(server_tsm);
                 let apdu_retries = DEFAULT_APDU_RETRIES;
-                let peer = peer.clone();
                 tokio::spawn(async move {
                     let _permit = permit;
-                    let mut pending_rx: Option<oneshot::Receiver<CovAckResult>> = Some(result_rx);
-
-                    for attempt in 0..=apdu_retries {
-                        if let Err(e) = Self::send_cov_apdu(&network, &buf, &sub, true).await {
-                            warn!(error = %e, attempt, "COV notification send failed");
-                        } else {
-                            debug!(invoke_id = id, attempt, "Confirmed COV notification sent");
-                        }
-
-                        let rx = pending_rx
-                            .take()
-                            .expect("receiver always set for each attempt");
-                        let result = match tokio::time::timeout(apdu_timeout, rx).await {
-                            Ok(Ok(r)) => Ok(r),
-                            Ok(Err(_)) => Err(()), // channel closed
-                            Err(_) => Err(()),     // timeout
-                        };
-
-                        if result.is_err() && attempt < apdu_retries {
-                            let new_rx = {
-                                let mut tsm = tsm.lock().await;
-                                tsm.register(peer.clone(), id)
-                            };
-                            pending_rx = Some(new_rx);
-                        }
-
-                        match result {
-                            Ok(CovAckResult::Ack) => {
-                                debug!(invoke_id = id, "COV notification acknowledged");
-                                return;
-                            }
-                            Ok(CovAckResult::Error) => {
-                                warn!(invoke_id = id, "COV notification rejected by subscriber");
-                                return;
-                            }
-                            Err(_) => {
-                                if attempt < apdu_retries {
-                                    debug!(
+                    let result = run_notification_worker(
+                        operation,
+                        result_rx,
+                        apdu_timeout,
+                        apdu_retries,
+                        |attempt| {
+                            let network = Arc::clone(&network);
+                            let buf = buf.clone();
+                            let sub = sub.clone();
+                            async move {
+                                let result = Self::send_cov_apdu(&network, &buf, &sub, true).await;
+                                match &result {
+                                    Ok(()) => debug!(
                                         invoke_id = id,
-                                        attempt, "COV notification timeout, retrying"
-                                    );
-                                } else {
-                                    warn!(
-                                        invoke_id = id,
-                                        "COV notification failed after {} retries", apdu_retries
-                                    );
+                                        attempt, "Confirmed COV notification sent"
+                                    ),
+                                    Err(error) => warn!(
+                                        %error,
+                                        attempt, "COV notification send failed"
+                                    ),
                                 }
+                                result
                             }
+                        },
+                    )
+                    .await;
+                    match result {
+                        NotificationWorkerResult::Ack => {
+                            debug!(invoke_id = id, "COV notification acknowledged");
                         }
+                        NotificationWorkerResult::Error => {
+                            warn!(invoke_id = id, "COV notification rejected by subscriber");
+                        }
+                        NotificationWorkerResult::Exhausted => warn!(
+                            invoke_id = id,
+                            "COV notification failed after {} retries", apdu_retries
+                        ),
+                        NotificationWorkerResult::Closed => {}
                     }
-
-                    let mut tsm = tsm.lock().await;
-                    tsm.remove(&peer, id);
                 });
             } else {
                 let pdu = Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {

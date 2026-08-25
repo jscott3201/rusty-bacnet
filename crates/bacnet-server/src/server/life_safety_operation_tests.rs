@@ -42,6 +42,7 @@ async fn dispatch_life_safety_operation(
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
     let cov_in_flight = Arc::new(Semaphore::new(1));
     let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+    let notification_transactions = NotificationTransactions::new();
     let comm_state = Arc::new(AtomicU8::new(0));
     let dcc_timer = Arc::new(Mutex::new(None::<JoinHandle<()>>));
     let mut service_request = BytesMut::new();
@@ -68,6 +69,7 @@ async fn dispatch_life_safety_operation(
         &seg_send_permits,
         &cov_in_flight,
         &server_tsm,
+        &notification_transactions,
         &comm_state,
         &dcc_timer,
         &config,

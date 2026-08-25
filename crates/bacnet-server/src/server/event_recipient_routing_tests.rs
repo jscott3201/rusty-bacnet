@@ -139,6 +139,7 @@ pub(super) async fn distribute_with_priority(
         &network,
         &comm_state,
         &server_tsm,
+        &NotificationTransactions::new(),
         &oid,
         (
             EventStateChange {

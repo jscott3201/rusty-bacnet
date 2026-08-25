@@ -70,6 +70,7 @@ struct Fixture {
     network: Arc<NetworkLayer<RecordingTransport>>,
     comm_state: Arc<AtomicU8>,
     server_tsm: Arc<Mutex<ServerTsm>>,
+    notification_transactions: Arc<NotificationTransactions>,
     sent: StdArc<StdMutex<Vec<Bytes>>>,
     oid: ObjectIdentifier,
 }
@@ -141,6 +142,7 @@ impl Fixture {
             })),
             comm_state: Arc::new(AtomicU8::new(0)), // DCC not blocking
             server_tsm: Arc::new(Mutex::new(ServerTsm::new())),
+            notification_transactions: NotificationTransactions::new(),
             sent,
             oid,
         }
@@ -167,6 +169,7 @@ impl Fixture {
             &self.network,
             &self.comm_state,
             &self.server_tsm,
+            &self.notification_transactions,
             &self.oid,
             1000,
         )
