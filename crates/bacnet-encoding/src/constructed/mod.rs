@@ -32,11 +32,13 @@ use bytes::BytesMut;
 use crate::primitives;
 use crate::tags::{self, TagClass};
 
+pub mod cov_subscription;
 pub mod event_parameter;
 pub mod fault_parameter;
 pub mod object_property_reference;
 pub mod recipient;
 
+pub use cov_subscription::{encode_cov_subscription, encode_cov_subscription_list};
 pub use event_parameter::{decode_event_parameter, encode_event_parameter};
 pub use fault_parameter::{decode_fault_parameters, encode_fault_parameters};
 pub use object_property_reference::{

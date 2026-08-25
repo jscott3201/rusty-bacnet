@@ -337,7 +337,7 @@ fn active_cov_subscriptions_default_empty() {
     let val = dev
         .read_property(PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS, None)
         .unwrap();
-    assert_eq!(val, PropertyValue::List(vec![]));
+    assert_eq!(val, PropertyValue::ApplicationData(Vec::new()));
 }
 
 #[test]
@@ -356,18 +356,15 @@ fn active_cov_subscriptions_after_add() {
     };
 
     let mut dev = make_device();
-    let dev_oid = ObjectIdentifier::new(ObjectType::DEVICE, 200).unwrap();
-    let ai_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    let dev_oid = ObjectIdentifier::new(ObjectType::DEVICE, 7).unwrap();
+    let ao_oid = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 3).unwrap();
 
     dev.add_cov_subscription(BACnetCOVSubscription {
         recipient: BACnetRecipientProcess {
             recipient: BACnetRecipient::Device(dev_oid),
             process_identifier: 7,
         },
-        monitored_property_reference: BACnetObjectPropertyReference::new(
-            ai_oid,
-            PropertyIdentifier::PRESENT_VALUE.to_raw(),
-        ),
+        monitored_property_reference: BACnetObjectPropertyReference::new_indexed(ao_oid, 87, 2),
         issue_confirmed_notifications: true,
         time_remaining: 300,
         cov_increment: Some(0.5),
@@ -376,23 +373,14 @@ fn active_cov_subscriptions_after_add() {
     let val = dev
         .read_property(PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS, None)
         .unwrap();
-    match val {
-        PropertyValue::List(subs) => {
-            assert_eq!(subs.len(), 1);
-            match &subs[0] {
-                PropertyValue::List(entry) => {
-                    assert_eq!(entry.len(), 5); // includes cov_increment
-                    assert_eq!(entry[0], PropertyValue::ObjectIdentifier(ai_oid));
-                    assert_eq!(entry[1], PropertyValue::Unsigned(7));
-                    assert_eq!(entry[2], PropertyValue::Boolean(true));
-                    assert_eq!(entry[3], PropertyValue::Unsigned(300));
-                    assert_eq!(entry[4], PropertyValue::Real(0.5));
-                }
-                _ => panic!("Expected List entry"),
-            }
-        }
-        _ => panic!("Expected List"),
-    }
+    assert_eq!(
+        val,
+        PropertyValue::ApplicationData(vec![
+            0x0E, 0x0E, 0x0C, 0x02, 0x00, 0x00, 0x07, 0x0F, 0x19, 0x07, 0x0F, 0x1E, 0x0C, 0x00,
+            0x40, 0x00, 0x03, 0x19, 0x57, 0x29, 0x02, 0x1F, 0x29, 0x01, 0x3A, 0x01, 0x2C, 0x4C,
+            0x3F, 0x00, 0x00, 0x00,
+        ])
+    );
 }
 
 #[test]
@@ -403,17 +391,19 @@ fn active_cov_subscriptions_without_increment() {
     };
 
     let mut dev = make_device();
-    let dev_oid = ObjectIdentifier::new(ObjectType::DEVICE, 50).unwrap();
     let bv_oid = ObjectIdentifier::new(ObjectType::BINARY_VALUE, 3).unwrap();
 
     dev.add_cov_subscription(BACnetCOVSubscription {
         recipient: BACnetRecipientProcess {
-            recipient: BACnetRecipient::Device(dev_oid),
-            process_identifier: 1,
+            recipient: BACnetRecipient::Address(bacnet_types::constructed::BACnetAddress {
+                network_number: 0x1234,
+                mac_address: bacnet_types::MacAddr::from_slice(&[0xAA, 0xBB]),
+            }),
+            process_identifier: 9,
         },
         monitored_property_reference: BACnetObjectPropertyReference::new(
             bv_oid,
-            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+            PropertyIdentifier::STATUS_FLAGS.to_raw(),
         ),
         issue_confirmed_notifications: false,
         time_remaining: 0,
@@ -423,19 +413,13 @@ fn active_cov_subscriptions_without_increment() {
     let val = dev
         .read_property(PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS, None)
         .unwrap();
-    match val {
-        PropertyValue::List(subs) => {
-            assert_eq!(subs.len(), 1);
-            match &subs[0] {
-                PropertyValue::List(entry) => {
-                    assert_eq!(entry.len(), 4); // no cov_increment
-                    assert_eq!(entry[2], PropertyValue::Boolean(false));
-                }
-                _ => panic!("Expected List entry"),
-            }
-        }
-        _ => panic!("Expected List"),
-    }
+    assert_eq!(
+        val,
+        PropertyValue::ApplicationData(vec![
+            0x0E, 0x0E, 0x1E, 0x22, 0x12, 0x34, 0x62, 0xAA, 0xBB, 0x1F, 0x0F, 0x19, 0x09, 0x0F,
+            0x1E, 0x0C, 0x01, 0x40, 0x00, 0x03, 0x19, 0x6F, 0x1F, 0x29, 0x00, 0x39, 0x00,
+        ])
+    );
 }
 
 #[test]
@@ -444,7 +428,7 @@ fn active_cov_subscriptions_write_denied() {
     let result = dev.write_property(
         PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS,
         None,
-        PropertyValue::List(vec![]),
+        PropertyValue::ApplicationData(Vec::new()),
         None,
     );
     assert!(result.is_err());
@@ -489,22 +473,22 @@ fn set_active_cov_subscriptions_replaces() {
         time_remaining: 200,
         cov_increment: Some(1.0),
     };
-    dev.set_active_cov_subscriptions(vec![sub1, sub2]);
+    let subscriptions = vec![sub1, sub2];
+    let mut expected = bytes::BytesMut::new();
+    bacnet_encoding::constructed::encode_cov_subscription_list(&mut expected, &subscriptions);
+    dev.set_active_cov_subscriptions(subscriptions);
 
     let val = dev
         .read_property(PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS, None)
         .unwrap();
-    match val {
-        PropertyValue::List(subs) => assert_eq!(subs.len(), 2),
-        _ => panic!("Expected List"),
-    }
+    assert_eq!(val, PropertyValue::ApplicationData(expected.to_vec()));
 
     // Replace with empty
     dev.set_active_cov_subscriptions(vec![]);
     let val = dev
         .read_property(PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS, None)
         .unwrap();
-    assert_eq!(val, PropertyValue::List(vec![]));
+    assert_eq!(val, PropertyValue::ApplicationData(Vec::new()));
 }
 
 #[test]

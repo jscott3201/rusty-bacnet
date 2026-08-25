@@ -7,6 +7,7 @@ use bacnet_types::constructed::{
 };
 use bacnet_types::enums::ObjectType;
 
+mod cov_subscription;
 mod event_parameter;
 mod fault_parameter;
 mod recipient;

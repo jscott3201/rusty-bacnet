@@ -123,6 +123,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Device `Active_COV_Subscriptions` reads now return one constructed
+  `ApplicationData` value containing every field stored in each
+  `BACnetCOVSubscription` (#183). This replaces the previous lossy nested
+  `List` projection for direct Rust `read_property` consumers; runtime server
+  COV-table synchronization remains outside this change.
+
 - Escalator `Power_Mode`, `Operation_Direction`, `Escalator_Mode`,
   `Energy_Meter`, `Fault_Signals`, and `Passenger_Alarm` now accept validated
   writes both in service and while `Out_Of_Service` is TRUE (#401).

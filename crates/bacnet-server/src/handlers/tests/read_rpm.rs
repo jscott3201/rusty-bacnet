@@ -26,6 +26,99 @@ fn read_property_handler_success() {
     assert_eq!(val, bacnet_types::primitives::PropertyValue::Real(72.5));
 }
 
+fn active_cov_subscription_db() -> (ObjectDatabase, ObjectIdentifier, Vec<u8>) {
+    use bacnet_objects::device::{DeviceConfig, DeviceObject};
+    use bacnet_types::constructed::{
+        BACnetCOVSubscription, BACnetObjectPropertyReference, BACnetRecipient,
+        BACnetRecipientProcess,
+    };
+
+    let oid = ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap();
+    let mut device = DeviceObject::new(DeviceConfig {
+        instance: 1,
+        name: "COV Device".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let subscription = BACnetCOVSubscription {
+        recipient: BACnetRecipientProcess {
+            recipient: BACnetRecipient::Device(
+                ObjectIdentifier::new(ObjectType::DEVICE, 7).unwrap(),
+            ),
+            process_identifier: 7,
+        },
+        monitored_property_reference: BACnetObjectPropertyReference::new_indexed(
+            ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 3).unwrap(),
+            87,
+            2,
+        ),
+        issue_confirmed_notifications: true,
+        time_remaining: 300,
+        cov_increment: Some(0.5),
+    };
+
+    let expected = vec![
+        0x0E, 0x0E, 0x0C, 0x02, 0x00, 0x00, 0x07, 0x0F, 0x19, 0x07, 0x0F, 0x1E, 0x0C, 0x00, 0x40,
+        0x00, 0x03, 0x19, 0x57, 0x29, 0x02, 0x1F, 0x29, 0x01, 0x3A, 0x01, 0x2C, 0x4C, 0x3F, 0x00,
+        0x00, 0x00,
+    ];
+    let mut encoded = BytesMut::new();
+    bacnet_encoding::constructed::encode_cov_subscription_list(
+        &mut encoded,
+        std::slice::from_ref(&subscription),
+    );
+    assert_eq!(encoded.as_ref(), expected);
+    device.add_cov_subscription(subscription);
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(device)).unwrap();
+    (db, oid, expected)
+}
+
+#[test]
+fn active_cov_subscriptions_read_property_preserves_constructed_bytes() {
+    let (db, oid, expected) = active_cov_subscription_db();
+    let request = ReadPropertyRequest {
+        object_identifier: oid,
+        property_identifier: PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS,
+        property_array_index: None,
+    };
+    let mut request_buf = BytesMut::new();
+    request.encode(&mut request_buf);
+
+    let mut response_buf = BytesMut::new();
+    handle_read_property(&db, &request_buf, &mut response_buf).unwrap();
+    let ack = ReadPropertyACK::decode(&response_buf).unwrap();
+
+    assert_eq!(ack.property_value, expected);
+}
+
+#[test]
+fn active_cov_subscriptions_read_property_multiple_preserves_constructed_bytes() {
+    use bacnet_services::common::PropertyReference;
+    use bacnet_services::rpm::{ReadAccessSpecification, ReadPropertyMultipleRequest};
+
+    let (db, oid, expected) = active_cov_subscription_db();
+    let request = ReadPropertyMultipleRequest {
+        list_of_read_access_specs: vec![ReadAccessSpecification {
+            object_identifier: oid,
+            list_of_property_references: vec![PropertyReference {
+                property_identifier: PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS,
+                property_array_index: None,
+            }],
+        }],
+    };
+    let mut request_buf = BytesMut::new();
+    request.encode(&mut request_buf);
+
+    let mut response_buf = BytesMut::new();
+    handle_read_property_multiple(&db, &request_buf, &mut response_buf).unwrap();
+    let ack = ReadPropertyMultipleACK::decode(&response_buf).unwrap();
+    let result = &ack.list_of_read_access_results[0].list_of_results[0];
+
+    assert_eq!(result.property_value.as_deref(), Some(expected.as_slice()));
+    assert!(result.error.is_none());
+}
+
 #[test]
 fn read_property_handler_serves_multistate_event_time_stamps() {
     let db = make_db_with_msi();

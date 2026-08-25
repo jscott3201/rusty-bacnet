@@ -483,25 +483,12 @@ impl BACnetObject for DeviceObject {
         }
 
         if property == PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS {
-            let elements: Vec<PropertyValue> = self
-                .active_cov_subscriptions
-                .iter()
-                .map(|sub| {
-                    let mut entry = vec![
-                        PropertyValue::ObjectIdentifier(
-                            sub.monitored_property_reference.object_identifier,
-                        ),
-                        PropertyValue::Unsigned(sub.recipient.process_identifier as u64),
-                        PropertyValue::Boolean(sub.issue_confirmed_notifications),
-                        PropertyValue::Unsigned(sub.time_remaining as u64),
-                    ];
-                    if let Some(inc) = sub.cov_increment {
-                        entry.push(PropertyValue::Real(inc));
-                    }
-                    PropertyValue::List(entry)
-                })
-                .collect();
-            return Ok(PropertyValue::List(elements));
+            let mut buf = bytes::BytesMut::new();
+            bacnet_encoding::constructed::encode_cov_subscription_list(
+                &mut buf,
+                &self.active_cov_subscriptions,
+            );
+            return Ok(PropertyValue::ApplicationData(buf.to_vec()));
         }
 
         self.properties

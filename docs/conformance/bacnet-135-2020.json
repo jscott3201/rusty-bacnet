@@ -419,6 +419,39 @@
    "notes": "Split child of BACNET-12-OBJECT-MODEL (#379). DeviceObject omits Max_Segments_Accepted for NO_SEGMENTATION, derives 1 for exact SEGMENTED_TRANSMIT, and retains 65 for SEGMENTED_RECEIVE, SEGMENTED_BOTH, and unknown non-NONE raw values. DeviceConfig and ServerConfig remain independent; this slice neither changes nor adds enforcement for the server's 256-segment sequence-space limit. Client timers are excluded."
   },
   {
+   "id": "BACNET-12-DEVICE-ACTIVE-COV-SUBSCRIPTIONS",
+   "standard_anchor": "Clause 12.11, Table 12-13 and 12.11.31; Clause 12.1.5.2; Clauses 20 and 21 BACnetCOVSubscription, BACnetRecipientProcess, BACnetRecipient, BACnetObjectPropertyReference, ReadProperty-ACK, and ReadAccessResult productions",
+   "priority": "P1",
+   "requirement_summary": "Device Active_COV_Subscriptions reads encode every field of each subscription already stored in the object as an ordered BACnetLIST of complete BACnetCOVSubscription sequences.",
+   "status": "in-progress",
+   "code_anchors": [
+    "crates/bacnet-encoding/src/constructed/cov_subscription.rs::encode_cov_subscription",
+    "crates/bacnet-encoding/src/constructed/cov_subscription.rs::encode_cov_subscription_list",
+    "crates/bacnet-objects/src/device/mod.rs::DeviceObject::read_property",
+    "crates/bacnet-server/src/handlers/read_property.rs::handle_read_property",
+    "crates/bacnet-server/src/handlers/read_property.rs::handle_read_property_multiple"
+   ],
+   "positive_tests": [
+    "crates/bacnet-encoding/src/constructed/tests/cov_subscription.rs::cov_subscription_device_recipient_golden",
+    "crates/bacnet-encoding/src/constructed/tests/cov_subscription.rs::cov_subscription_address_recipient_golden",
+    "crates/bacnet-encoding/src/constructed/tests/cov_subscription.rs::cov_subscription_list_is_bare_concatenation",
+    "crates/bacnet-encoding/src/constructed/tests/cov_subscription.rs::cov_subscription_list_empty_encodes_to_nothing",
+    "crates/bacnet-objects/src/device/tests.rs::active_cov_subscriptions_after_add",
+    "crates/bacnet-objects/src/device/tests.rs::active_cov_subscriptions_without_increment",
+    "crates/bacnet-server/src/handlers/tests/read_rpm.rs::active_cov_subscriptions_read_property_preserves_constructed_bytes",
+    "crates/bacnet-server/src/handlers/tests/read_rpm.rs::active_cov_subscriptions_read_property_multiple_preserves_constructed_bytes"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/device/tests.rs::active_cov_subscriptions_write_denied",
+    "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::list_properties_reject_indexed_read_property",
+    "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::list_properties_reject_indexed_read_property_multiple_inline",
+    "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::list_properties_reject_indexed_write_property_and_write_property_multiple"
+   ],
+   "benchmarks": [],
+   "public_claims": [],
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#183). The encode-only codec emits each untagged subscription sequence in model order and concatenates list entries without list or per-entry wrappers. Device and address recipients, optional array index, confirmed and unconfirmed forms, multi-octet and zero time values, optional increment, list order, and the empty list are covered by independent golden vectors. DeviceObject reads return one ApplicationData payload, and ReadProperty plus ReadPropertyMultiple preserve those bytes without additional framing. This row covers only lossless projection of subscriptions already stored in DeviceObject. The server runtime COV table is not synchronized with that storage, so this is not complete Active_COV_Subscriptions runtime conformance. The property remains read-only and non-array-indexable."
+  },
+  {
    "id": "BACNET-12-NOTIFICATION-FORWARDER-WITHDRAWAL",
    "standard_anchor": "Clause 12.51 (pp. 497-503), Table 12-58 (p. 500); Clause 13.2.5.1 (p. 643); Clause 21 BACnetEventNotificationSubscription and BACnetProcessIdSelection productions (pp. 904, 924)",
    "priority": "P1",
