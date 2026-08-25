@@ -7,6 +7,7 @@ mod decode;
 mod decode_helpers;
 mod decode_timer;
 mod encode;
+mod structured;
 
 // ---------------------------------------------------------------------------
 // NotificationParameters
@@ -50,6 +51,10 @@ pub enum NotificationParameters {
         deadband: f32,
         exceeded_limit: f32,
     },
+    /// [6] Complex event type.
+    ComplexEventType {
+        property_values: Vec<BACnetPropertyValue>,
+    },
     /// [8] Change of life safety.
     ChangeOfLifeSafety {
         new_state: u32,
@@ -75,13 +80,13 @@ pub enum NotificationParameters {
         status_flags: u8,
         exceeded_limit: u64,
     },
-    /// [13] Access event. `authentication_factor` is `None` when context [5] is absent.
+    /// [13] Access event. Authentication-factor bytes contain its three inner context fields.
     AccessEvent {
         access_event: u32,
         status_flags: u8,
         access_event_tag: u32,
         access_event_time: (Date, Time),
-        access_credential: BACnetDeviceObjectPropertyReference,
+        access_credential: BACnetDeviceObjectReference,
         authentication_factor: Option<Vec<u8>>,
     },
     /// [14] Double out of range.
@@ -122,8 +127,6 @@ pub enum NotificationParameters {
         status_flags: u8,
         property_values: Vec<u8>,
     },
-    /// [20] None.
-    NoneParams,
     /// [21] Change of discrete value. `new_value` contains encoded BACnet TLVs.
     ChangeOfDiscreteValue {
         new_value: Vec<u8>,
@@ -134,9 +137,9 @@ pub enum NotificationParameters {
         new_state: u32,
         status_flags: u8,
         update_time: (Date, Time),
-        last_state_change: u32,
-        initial_timeout: u32,
-        expiration_time: (Date, Time),
+        last_state_change: Option<u32>,
+        initial_timeout: Option<u32>,
+        expiration_time: Option<(Date, Time)>,
     },
 }
 

@@ -147,19 +147,6 @@ fn notification_params_buffer_ready_round_trip() {
 }
 
 #[test]
-fn notification_params_none_round_trip() {
-    let params = NotificationParameters::NoneParams;
-    let req = make_event_req(Some(params));
-    let mut buf = BytesMut::new();
-    req.encode(&mut buf).unwrap();
-    let decoded = EventNotificationRequest::decode(&buf).unwrap();
-    assert_eq!(
-        decoded.event_values,
-        Some(NotificationParameters::NoneParams)
-    );
-}
-
-#[test]
 fn notification_params_unsigned_range_round_trip() {
     let params = NotificationParameters::UnsignedRange {
         exceeding_value: 500,
@@ -378,10 +365,10 @@ fn notification_params_extended_round_trip() {
 fn notification_params_access_event_round_trip() {
     use bacnet_types::primitives::{Date, Time};
 
-    let cred = BACnetDeviceObjectPropertyReference::new_local(
-        ObjectIdentifier::new(ObjectType::ACCESS_CREDENTIAL, 1).unwrap(),
-        85, // PRESENT_VALUE
-    );
+    let cred = BACnetDeviceObjectReference {
+        device_identifier: None,
+        object_identifier: ObjectIdentifier::new(ObjectType::ACCESS_CREDENTIAL, 1).unwrap(),
+    };
     let params = NotificationParameters::AccessEvent {
         access_event: 5,
         status_flags: 0b1000,
@@ -401,7 +388,7 @@ fn notification_params_access_event_round_trip() {
             },
         ),
         access_credential: cred.clone(),
-        authentication_factor: Some(vec![0x62, 0xAB, 0xCD]),
+        authentication_factor: Some(vec![0x09, 0x01, 0x19, 0x02, 0x2a, 0xab, 0xcd]),
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
@@ -423,7 +410,10 @@ fn notification_params_access_event_round_trip() {
             assert_eq!(access_event_time.0.year, 124);
             assert_eq!(access_event_time.1.hour, 10);
             assert_eq!(access_credential, cred);
-            assert_eq!(authentication_factor, Some(vec![0x62, 0xAB, 0xCD]));
+            assert_eq!(
+                authentication_factor,
+                Some(vec![0x09, 0x01, 0x19, 0x02, 0x2a, 0xab, 0xcd])
+            );
         }
         other => panic!("expected AccessEvent, got {:?}", other),
     }
@@ -635,9 +625,9 @@ fn notification_params_change_of_timer_round_trip() {
                 hundredths: 0,
             },
         ),
-        last_state_change: 0,
-        initial_timeout: 300,
-        expiration_time: (
+        last_state_change: Some(0),
+        initial_timeout: Some(300),
+        expiration_time: Some((
             Date {
                 year: 124,
                 month: 3,
@@ -650,7 +640,7 @@ fn notification_params_change_of_timer_round_trip() {
                 second: 0,
                 hundredths: 0,
             },
-        ),
+        )),
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
@@ -670,8 +660,9 @@ fn notification_params_change_of_timer_round_trip() {
             assert_eq!(status_flags, 0b1000);
             assert_eq!(update_time.0.year, 124);
             assert_eq!(update_time.1.hour, 8);
-            assert_eq!(last_state_change, 0);
-            assert_eq!(initial_timeout, 300);
+            assert_eq!(last_state_change, Some(0));
+            assert_eq!(initial_timeout, Some(300));
+            let expiration_time = expiration_time.unwrap();
             assert_eq!(expiration_time.0.year, 124);
             assert_eq!(expiration_time.1.minute, 5);
         }

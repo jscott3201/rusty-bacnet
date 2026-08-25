@@ -20,6 +20,12 @@ fn decode_date_time(
     if date_tag.class != tags::TagClass::Application || date_tag.number != tags::app_tag::DATE {
         return Err(Error::decoding(pos, format!("{field} expected Date")));
     }
+    if date_tag.length != 4 {
+        return Err(Error::decoding(
+            pos,
+            format!("{field} Date must be four octets"),
+        ));
+    }
     let content_end = content_start
         .checked_add(date_tag.length as usize)
         .ok_or_else(|| Error::decoding(content_start, format!("{field} Date length overflow")))?;
@@ -32,6 +38,12 @@ fn decode_date_time(
     let (time_tag, content_start) = tags::decode_tag(data, pos)?;
     if time_tag.class != tags::TagClass::Application || time_tag.number != tags::app_tag::TIME {
         return Err(Error::decoding(pos, format!("{field} expected Time")));
+    }
+    if time_tag.length != 4 {
+        return Err(Error::decoding(
+            pos,
+            format!("{field} Time must be four octets"),
+        ));
     }
     let content_end = content_start
         .checked_add(time_tag.length as usize)
@@ -64,13 +76,32 @@ pub(super) fn decode_change_of_timer(
         decode_context_status_flags(data, pos, 1, "ChangeOfTimer status-flags")?;
     // [2] update-time: BACnetDateTime — opening/closing [2]
     let (update_time, pos) = decode_date_time(data, pos, 2, "ChangeOfTimer update-time")?;
-    // [3] last-state-change
-    let (last_state_change, pos) =
-        decode_context_u32(data, pos, 3, "ChangeOfTimer last-state-change")?;
-    // [4] initial-timeout
-    let (initial_timeout, pos) = decode_context_u32(data, pos, 4, "ChangeOfTimer initial-timeout")?;
-    // [5] expiration-time: BACnetDateTime — opening/closing [5]
-    let (expiration_time, pos) = decode_date_time(data, pos, 5, "ChangeOfTimer expiration-time")?;
+    let mut pos = pos;
+    let last_state_change = if pos < variant_body_end
+        && tags::decode_tag(data, pos)?.0.is_context(3)
+    {
+        let (value, next) = decode_context_u32(data, pos, 3, "ChangeOfTimer last-state-change")?;
+        pos = next;
+        Some(value)
+    } else {
+        None
+    };
+    let initial_timeout = if pos < variant_body_end && tags::decode_tag(data, pos)?.0.is_context(4)
+    {
+        let (value, next) = decode_context_u32(data, pos, 4, "ChangeOfTimer initial-timeout")?;
+        pos = next;
+        Some(value)
+    } else {
+        None
+    };
+    let expiration_time =
+        if pos < variant_body_end && tags::decode_tag(data, pos)?.0.is_opening_tag(5) {
+            let (value, next) = decode_date_time(data, pos, 5, "ChangeOfTimer expiration-time")?;
+            pos = next;
+            Some(value)
+        } else {
+            None
+        };
     if pos != variant_body_end {
         return Err(Error::decoding(
             pos,

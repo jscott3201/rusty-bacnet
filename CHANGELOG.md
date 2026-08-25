@@ -123,6 +123,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Correct `NotificationParameters` codecs for complex event values `[6]`,
+  AccessEvent credentials and authentication factors `[13]`, rejection of the
+  omitted choice `[20]`, and independently optional ChangeOfTimer fields `[22]`
+  (#351). The Rust API adds `ComplexEventType`, changes the AccessEvent
+  credential type and ChangeOfTimer suffix fields, and removes `NoneParams`;
+  runtime event-value projection and support claims are unchanged.
+
 - Device `Active_COV_Subscriptions` reads now return one constructed
   `ApplicationData` value containing every field stored in each
   `BACnetCOVSubscription` (#183). This replaces the previous lossy nested

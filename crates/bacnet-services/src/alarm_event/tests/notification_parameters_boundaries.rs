@@ -54,12 +54,18 @@ fn test_date_time() -> (Date, Time) {
     )
 }
 
-fn encode_device_property_reference(buf: &mut BytesMut) {
+fn encode_device_object_reference(buf: &mut BytesMut) {
     tags::encode_opening_tag(buf, 4);
     let object = ObjectIdentifier::new(ObjectType::ACCESS_CREDENTIAL, 1).unwrap();
-    primitives::encode_ctx_object_id(buf, 0, &object);
-    primitives::encode_ctx_unsigned(buf, 1, 85);
+    primitives::encode_ctx_object_id(buf, 1, &object);
     tags::encode_closing_tag(buf, 4);
+}
+
+fn authentication_factor(value: &[u8]) -> Vec<u8> {
+    let mut factor = BytesMut::from(&[0x09, 0x01, 0x19, 0x02][..]);
+    tags::encode_tag(&mut factor, 2, tags::TagClass::Context, value.len() as u32);
+    factor.extend_from_slice(value);
+    factor.to_vec()
 }
 
 fn raw_access_event(values: [&[u8]; 2], field_tags: [u8; 2], flags: &[u8]) -> BytesMut {
@@ -77,8 +83,9 @@ fn raw_access_event(values: [&[u8]; 2], field_tags: [u8; 2], flags: &[u8]) -> By
         },
     )
     .unwrap();
-    encode_device_property_reference(&mut buf);
+    encode_device_object_reference(&mut buf);
     tags::encode_opening_tag(&mut buf, 5);
+    buf.extend_from_slice(&[0x09, 0x01, 0x19, 0x02, 0x28]);
     tags::encode_closing_tag(&mut buf, 5);
     tags::encode_closing_tag(&mut buf, 13);
     buf
@@ -148,10 +155,10 @@ fn access_event(authentication_factor: Option<Vec<u8>>) -> NotificationParameter
         status_flags: 0b1000,
         access_event_tag: 10,
         access_event_time: test_date_time(),
-        access_credential: BACnetDeviceObjectPropertyReference::new_local(
-            ObjectIdentifier::new(ObjectType::ACCESS_CREDENTIAL, 1).unwrap(),
-            85,
-        ),
+        access_credential: BACnetDeviceObjectReference {
+            device_identifier: None,
+            object_identifier: ObjectIdentifier::new(ObjectType::ACCESS_CREDENTIAL, 1).unwrap(),
+        },
         authentication_factor,
     }
 }
@@ -249,8 +256,8 @@ fn notification_parameter_values_accept_fitting_leading_zero() {
         )),
         Ok(NotificationParameters::ChangeOfTimer {
             new_state: u32::MAX,
-            last_state_change: u32::MAX,
-            initial_timeout: u32::MAX,
+            last_state_change: Some(u32::MAX),
+            initial_timeout: Some(u32::MAX),
             ..
         })
     ));
@@ -319,7 +326,7 @@ fn event_notification_preserves_trailing_opaque_payload_bytes() {
             extended_event_type: 7,
             parameters: encoded_octet_string(&[0x2e, 0x2f, 0xcf, 0x9f]),
         },
-        access_event(Some(encoded_octet_string(&[0x5e, 0x5f, 0xcf, 0xdf]))),
+        access_event(Some(authentication_factor(&[0x5e, 0x5f, 0xcf, 0xdf]))),
         NotificationParameters::ChangeOfReliability {
             reliability: 7,
             status_flags: 0b1000,
@@ -350,14 +357,14 @@ fn event_notification_requires_exact_event_values_suffix() {
             extended_event_type: 7,
             parameters: encoded_octet_string(&[0x01, 0x02]),
         },
-        access_event(Some(encoded_octet_string(&[0xab, 0xcd]))),
+        access_event(Some(authentication_factor(&[0xab, 0xcd]))),
         NotificationParameters::ChangeOfTimer {
             new_state: 1,
             status_flags: 0b1000,
             update_time: test_date_time(),
-            last_state_change: 2,
-            initial_timeout: 3,
-            expiration_time: test_date_time(),
+            last_state_change: Some(2),
+            initial_timeout: Some(3),
+            expiration_time: Some(test_date_time()),
         },
     ];
 
@@ -460,7 +467,7 @@ fn raw_fields_reject_same_tag_siblings_and_truncated_close_aliases() {
             extended_event_type: 7,
             parameters: raw.clone(),
         },
-        access_event(Some(raw.clone())),
+        access_event(Some(authentication_factor(&raw))),
         NotificationParameters::ChangeOfReliability {
             reliability: 7,
             status_flags: 0b1000,

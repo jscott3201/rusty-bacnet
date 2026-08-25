@@ -5,12 +5,14 @@
 //! - GetEventInformation (Clause 13.12)
 
 use bacnet_encoding::{primitives, tags};
-use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetPropertyStates};
+use bacnet_types::constructed::{
+    BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference, BACnetPropertyStates,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, Time};
 use bytes::BytesMut;
 
-use crate::common::MAX_DECODED_ITEMS;
+use crate::common::{BACnetPropertyValue, MAX_DECODED_ITEMS};
 
 mod acknowledge_alarm;
 mod event_notification;

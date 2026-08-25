@@ -9,8 +9,25 @@ impl NotificationParameters {
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         let mut encoded = BytesMut::new();
         self.encode_into(&mut encoded)?;
-        validate_tlv_sequence(&encoded, "NotificationParameters")
-            .map_err(|error| Error::Encoding(error.to_string()))?;
+        if matches!(self, Self::ComplexEventType { .. }) {
+            let (opening, content_start) = tags::decode_tag(&encoded, 0)
+                .map_err(|error| Error::Encoding(error.to_string()))?;
+            if !opening.is_opening_tag(6) {
+                return Err(Error::Encoding(
+                    "ComplexEventType missing opening tag [6]".into(),
+                ));
+            }
+            let (_, next) = tags::extract_context_value(&encoded, content_start, 6)
+                .map_err(|error| Error::Encoding(error.to_string()))?;
+            if next != encoded.len() {
+                return Err(Error::Encoding(
+                    "ComplexEventType has trailing encoded fields".into(),
+                ));
+            }
+        } else {
+            validate_tlv_sequence(&encoded, "NotificationParameters")
+                .map_err(|error| Error::Encoding(error.to_string()))?;
+        }
         buf.extend_from_slice(&encoded);
         Ok(())
     }
@@ -108,6 +125,28 @@ impl NotificationParameters {
                 primitives::encode_ctx_real(buf, 3, *exceeded_limit);
                 tags::encode_closing_tag(buf, 5);
             }
+            Self::ComplexEventType { property_values } => {
+                if property_values.len() > MAX_DECODED_ITEMS {
+                    return Err(Error::Encoding(format!(
+                        "ComplexEventType exceeds {MAX_DECODED_ITEMS} property values"
+                    )));
+                }
+                tags::encode_opening_tag(buf, 6);
+                for property_value in property_values {
+                    if property_value
+                        .priority
+                        .is_some_and(|priority| !(1..=16).contains(&priority))
+                    {
+                        return Err(Error::Encoding(
+                            "ComplexEventType property priority must be in 1..=16".into(),
+                        ));
+                    }
+                    validate_tlv_sequence(&property_value.value, "ComplexEventType property value")
+                        .map_err(|error| Error::Encoding(error.to_string()))?;
+                    property_value.encode(buf);
+                }
+                tags::encode_closing_tag(buf, 6);
+            }
             Self::ChangeOfLifeSafety {
                 new_state,
                 new_mode,
@@ -177,6 +216,10 @@ impl NotificationParameters {
                 access_credential,
                 authentication_factor,
             } => {
+                if let Some(authentication_factor) = authentication_factor {
+                    structured::validate_authentication_factor(authentication_factor)
+                        .map_err(|error| Error::Encoding(error.to_string()))?;
+                }
                 tags::encode_opening_tag(buf, 13);
                 primitives::encode_ctx_enumerated(buf, 0, *access_event);
                 primitives::encode_ctx_bit_string(buf, 1, 4, &[*status_flags << 4]);
@@ -190,20 +233,12 @@ impl NotificationParameters {
                         time: access_event_time.1,
                     },
                 )?;
-                // [4] access-credential: BACnetDeviceObjectPropertyReference
+                // [4] access-credential: BACnetDeviceObjectReference
                 tags::encode_opening_tag(buf, 4);
-                primitives::encode_ctx_object_id(buf, 0, &access_credential.object_identifier);
-                primitives::encode_ctx_unsigned(
-                    buf,
-                    1,
-                    access_credential.property_identifier as u64,
-                );
-                if let Some(idx) = access_credential.property_array_index {
-                    primitives::encode_ctx_unsigned(buf, 2, idx as u64);
-                }
                 if let Some(ref dev) = access_credential.device_identifier {
-                    primitives::encode_ctx_object_id(buf, 3, dev);
+                    primitives::encode_ctx_object_id(buf, 0, dev);
                 }
+                primitives::encode_ctx_object_id(buf, 1, &access_credential.object_identifier);
                 tags::encode_closing_tag(buf, 4);
                 if let Some(authentication_factor) = authentication_factor {
                     // [5] authentication-factor — raw, optional
@@ -292,10 +327,6 @@ impl NotificationParameters {
                 tags::encode_closing_tag(buf, 2);
                 tags::encode_closing_tag(buf, 19);
             }
-            Self::NoneParams => {
-                tags::encode_opening_tag(buf, 20);
-                tags::encode_closing_tag(buf, 20);
-            }
             Self::ChangeOfDiscreteValue {
                 new_value,
                 status_flags,
@@ -325,15 +356,18 @@ impl NotificationParameters {
                 primitives::encode_app_date(buf, &update_time.0);
                 primitives::encode_app_time(buf, &update_time.1);
                 tags::encode_closing_tag(buf, 2);
-                // [3] last-state-change (optional enumerated — always encode)
-                primitives::encode_ctx_enumerated(buf, 3, *last_state_change);
-                // [4] initial-timeout (optional unsigned — always encode)
-                primitives::encode_ctx_unsigned(buf, 4, *initial_timeout as u64);
-                // [5] expiration-time: BACnetDateTime
-                tags::encode_opening_tag(buf, 5);
-                primitives::encode_app_date(buf, &expiration_time.0);
-                primitives::encode_app_time(buf, &expiration_time.1);
-                tags::encode_closing_tag(buf, 5);
+                if let Some(last_state_change) = last_state_change {
+                    primitives::encode_ctx_enumerated(buf, 3, *last_state_change);
+                }
+                if let Some(initial_timeout) = initial_timeout {
+                    primitives::encode_ctx_unsigned(buf, 4, *initial_timeout as u64);
+                }
+                if let Some(expiration_time) = expiration_time {
+                    tags::encode_opening_tag(buf, 5);
+                    primitives::encode_app_date(buf, &expiration_time.0);
+                    primitives::encode_app_time(buf, &expiration_time.1);
+                    tags::encode_closing_tag(buf, 5);
+                }
                 tags::encode_closing_tag(buf, 22);
             }
         }

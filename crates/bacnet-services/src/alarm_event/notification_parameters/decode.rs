@@ -3,6 +3,7 @@ use super::decode_helpers::{
     finish_variant as check_variant_end,
 };
 use super::decode_timer::{decode_change_of_discrete_value, decode_change_of_timer};
+use super::structured::{decode_access_event, decode_complex_event_type};
 use super::*;
 use crate::common::{decode_context, decode_context_u32};
 use bacnet_encoding::constructed::validate_tlv_sequence;
@@ -26,7 +27,6 @@ impl NotificationParameters {
         let framed = data.get(offset..).ok_or_else(|| {
             Error::decoding(offset, "NotificationParameters offset exceeds input")
         })?;
-        validate_tlv_sequence(framed, "NotificationParameters")?;
         // Peek the inner opening tag to determine the variant
         if offset >= data.len() {
             return Err(Error::decoding(
@@ -42,6 +42,17 @@ impl NotificationParameters {
             ));
         }
         let variant_tag = inner_tag.number;
+        if variant_tag == 6 {
+            let (_, next) = tags::extract_context_value(data, inner_start, 6)?;
+            if next != data.len() {
+                return Err(Error::decoding(
+                    next,
+                    "ComplexEventType has trailing encoded fields",
+                ));
+            }
+        } else {
+            validate_tlv_sequence(framed, "NotificationParameters")?;
+        }
         let variant_body_end = closing_tag_start(
             data,
             data.len(),
@@ -182,6 +193,8 @@ impl NotificationParameters {
                     pos,
                 )
             }
+            // [6] Complex event type
+            6 => decode_complex_event_type(data, inner_start, variant_body_end),
             // [10] Buffer ready
             10 => {
                 let mut pos = inner_start;
@@ -391,69 +404,7 @@ impl NotificationParameters {
                 )
             }
             // [13] Access event
-            13 => {
-                // [0] access-event
-                let (access_event, pos) =
-                    decode_context_u32(data, inner_start, 0, "AccessEvent access-event")?;
-                // [1] status-flags
-                let (status_flags, pos) =
-                    decode_context_status_flags(data, pos, 1, "AccessEvent status-flags")?;
-                // [2] access-event-tag
-                let (access_event_tag, mut pos) =
-                    decode_context_u32(data, pos, 2, "AccessEvent access-event-tag")?;
-                // [3] access-event-time: BACnetTimeStamp (DateTime)
-                let (ts, new_pos) = primitives::decode_timestamp(data, pos, 3)?;
-                pos = new_pos;
-                let access_event_time = match ts {
-                    BACnetTimeStamp::DateTime { date, time } => (date, time),
-                    _ => {
-                        return Err(Error::decoding(
-                            pos,
-                            "AccessEvent: expected DateTime timestamp",
-                        ))
-                    }
-                };
-                // [4] access-credential: BACnetDeviceObjectPropertyReference
-                let (t, p) = tags::decode_tag(data, pos)?;
-                if !t.is_opening || t.number != 4 {
-                    return Err(Error::decoding(
-                        pos,
-                        "AccessEvent: expected opening [4] for access-credential",
-                    ));
-                }
-                pos = p;
-                let access_credential = decode_device_obj_prop_ref(data, &mut pos)?;
-                let (ct, cp) = tags::decode_tag(data, pos)?;
-                if !ct.is_closing || ct.number != 4 {
-                    return Err(Error::decoding(pos, "AccessEvent: expected closing [4]"));
-                }
-                pos = cp;
-                // [5] authentication-factor — opening/closing, raw, optional
-                let (authentication_factor, after) = if pos < variant_body_end {
-                    let (t, p) = tags::decode_tag(data, pos)?;
-                    if !t.is_opening_tag(5) {
-                        return Err(Error::decoding(
-                            pos,
-                            "AccessEvent: expected opening [5] for authentication-factor",
-                        ));
-                    }
-                    let (value, after) = extract_raw_context(data, p, 5)?;
-                    (Some(value), after)
-                } else {
-                    (None, pos)
-                };
-                finish_variant(
-                    Self::AccessEvent {
-                        access_event,
-                        status_flags,
-                        access_event_tag,
-                        access_event_time,
-                        access_credential,
-                        authentication_factor,
-                    },
-                    after,
-                )
-            }
+            13 => decode_access_event(data, inner_start, variant_body_end),
             // [14] Double out of range
             14 => {
                 // [0] exceeding-value
@@ -666,8 +617,6 @@ impl NotificationParameters {
                     after,
                 )
             }
-            // [20] None
-            20 => finish_variant(Self::NoneParams, inner_start),
             // [21] Change of discrete value
             21 => decode_change_of_discrete_value(data, inner_start, variant_body_end),
             // [22] Change of timer
