@@ -2,6 +2,12 @@
 // EngineeringUnits (Clause 21) — large enum, grouped by category
 // ===========================================================================
 
+#[cfg(all(feature = "serde", not(feature = "std")))]
+use alloc::string::String;
+
+#[cfg(feature = "serde")]
+use serde::Deserialize;
+
 bacnet_enum! {
     /// BACnet engineering units (Clause 21).
     ///
@@ -301,4 +307,63 @@ bacnet_enum! {
     const DEGREES_PLATO = 47820;
     const SPECIFIC_GRAVITY = 47821;
     const EUROPEAN_BREWING_CONVENTION = 47822;
+}
+
+#[cfg(feature = "serde")]
+impl<'de> Deserialize<'de> for EngineeringUnits {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let string: String = Deserialize::deserialize(deserializer)?;
+        string.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod serde_tests {
+    use super::EngineeringUnits;
+
+    fn parse(input: &str) -> EngineeringUnits {
+        serde_json::from_str(&format!("\"{input}\"")).expect("deserializes")
+    }
+
+    #[test]
+    fn accepts_every_supported_case_style() {
+        for input in [
+            "degreescelsius",
+            "DEGREESCELSIUS",
+            "DegreesCelsius",
+            "degreesCelsius",
+            "degrees_celsius",
+            "DEGREES_CELSIUS",
+            "degrees-celsius",
+            "DEGREES-CELSIUS",
+        ] {
+            assert_eq!(
+                parse(input),
+                EngineeringUnits::DEGREES_CELSIUS,
+                "input: {input}"
+            );
+        }
+    }
+
+    #[test]
+    fn covers_the_full_standard_range() {
+        assert_eq!(parse("square_meters"), EngineeringUnits::SQUARE_METERS);
+        assert_eq!(
+            parse("european-brewing-convention"),
+            EngineeringUnits::EUROPEAN_BREWING_CONVENTION
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_names() {
+        assert!(serde_json::from_str::<EngineeringUnits>("\"not-a-unit\"").is_err());
+    }
+
+    #[test]
+    fn rejects_non_string_input() {
+        assert!(serde_json::from_str::<EngineeringUnits>("126").is_err());
+    }
 }
