@@ -1,4 +1,4 @@
-//! Private shared endpoint primitives for workspace role crates.
+//! BACnet endpoint ownership and transaction coordination primitives.
 
 /// Device-wide outbound invoke-ID leasing and response admission.
 pub mod coordinator;

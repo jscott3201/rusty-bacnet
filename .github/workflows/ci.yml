@@ -283,6 +283,12 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - run: sleep 30
 
+      - name: Publish bacnet-endpoint-core
+        run: cargo publish -p bacnet-endpoint-core --no-verify
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - run: sleep 30
+
       - name: Publish bacnet-server
         run: cargo publish -p bacnet-server --no-verify
         env:

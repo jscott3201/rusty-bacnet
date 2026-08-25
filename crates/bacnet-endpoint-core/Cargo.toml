@@ -5,8 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish = false
-description = "Private shared BACnet endpoint ownership and transaction coordination"
+description = "Shared BACnet endpoint ownership and transaction coordination"
 
 [dependencies]
 bacnet-types.workspace = true

@@ -61,6 +61,18 @@ pub enum TerminalPolicy {
     SimpleAck,
     /// The service completes with an unsegmented or reassembled ComplexACK.
     ComplexAck,
+    /// The service may complete with either a SimpleACK or ComplexACK.
+    EitherAck,
+}
+
+impl TerminalPolicy {
+    fn accepts_simple_ack(self) -> bool {
+        matches!(self, Self::SimpleAck | Self::EitherAck)
+    }
+
+    fn accepts_complex_ack(self) -> bool {
+        matches!(self, Self::ComplexAck | Self::EitherAck)
+    }
 }
 
 /// Correlation and response policy retained for one active invoke ID.
@@ -133,7 +145,7 @@ impl LeaseMetadata {
         self.service_choice
     }
 
-    /// Returns the accepted successful acknowledgment shape.
+    /// Returns the accepted successful acknowledgment policy.
     pub fn terminal_policy(&self) -> TerminalPolicy {
         self.terminal_policy
     }
@@ -258,7 +270,7 @@ pub enum AdmissionOutcome {
     PeerMismatch,
     /// The APDU is not valid for the role or request segmentation mode.
     OwnerMismatch,
-    /// A service-labelled response named a different confirmed service.
+    /// An unsegmented successful acknowledgment named a different service.
     ServiceMismatch {
         /// Service retained by the active lease.
         expected: ConfirmedServiceChoice,
@@ -461,17 +473,19 @@ fn validate_apdu(metadata: &LeaseMetadata, apdu: &Apdu) -> Result<AdmissionKind,
     match apdu {
         Apdu::SimpleAck(pdu) => {
             validate_service(metadata, pdu.service_choice)?;
-            if metadata.terminal_policy != TerminalPolicy::SimpleAck {
+            if !metadata.terminal_policy.accepts_simple_ack() {
                 return Err(AdmissionOutcome::PolicyMismatch);
             }
             Ok(AdmissionKind::Terminal)
         }
         Apdu::ComplexAck(pdu) => {
-            validate_service(metadata, pdu.service_choice)?;
+            if !pdu.segmented {
+                validate_service(metadata, pdu.service_choice)?;
+            }
             if metadata.owner != LeaseOwner::Requester {
                 return Err(AdmissionOutcome::OwnerMismatch);
             }
-            if metadata.terminal_policy != TerminalPolicy::ComplexAck {
+            if !metadata.terminal_policy.accepts_complex_ack() {
                 return Err(AdmissionOutcome::PolicyMismatch);
             }
             if pdu.segmented {
@@ -480,10 +494,7 @@ fn validate_apdu(metadata: &LeaseMetadata, apdu: &Apdu) -> Result<AdmissionKind,
                 Ok(AdmissionKind::Terminal)
             }
         }
-        Apdu::Error(pdu) => {
-            validate_service(metadata, pdu.service_choice)?;
-            Ok(AdmissionKind::Terminal)
-        }
+        Apdu::Error(_) => Ok(AdmissionKind::Terminal),
         Apdu::Reject(_) => Ok(AdmissionKind::Terminal),
         Apdu::Abort(pdu) => {
             let expected_server_bit = match metadata.owner {

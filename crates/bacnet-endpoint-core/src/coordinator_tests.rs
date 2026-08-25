@@ -207,6 +207,115 @@ fn simple_ack_claims_once_and_completion_is_idempotent() {
 }
 
 #[test]
+fn either_ack_requester_accepts_matching_simple_and_unsegmented_complex_ack() {
+    let coordinator = OutboundTransactionCoordinator::new();
+    let expected_peer = peer(2);
+    let simple_token = coordinator
+        .reserve(requester(expected_peer.clone(), TerminalPolicy::EitherAck))
+        .unwrap();
+    let complex_token = coordinator
+        .reserve(requester(expected_peer.clone(), TerminalPolicy::EitherAck))
+        .unwrap();
+
+    assert_admitted_kind(
+        coordinator
+            .admit(
+                &expected_peer,
+                &simple_ack(simple_token.invoke_id(), SERVICE),
+            )
+            .unwrap(),
+        AdmissionKind::Terminal,
+    );
+    assert_admitted_kind(
+        coordinator
+            .admit(
+                &expected_peer,
+                &complex_ack(complex_token.invoke_id(), SERVICE, false),
+            )
+            .unwrap(),
+        AdmissionKind::Terminal,
+    );
+}
+
+#[test]
+fn strict_ack_policies_reject_opposite_ack_without_mutation() {
+    let coordinator = OutboundTransactionCoordinator::new();
+    let expected_peer = peer(3);
+    let simple_token = coordinator
+        .reserve(requester(expected_peer.clone(), TerminalPolicy::SimpleAck))
+        .unwrap();
+    let complex_token = coordinator
+        .reserve(requester(expected_peer.clone(), TerminalPolicy::ComplexAck))
+        .unwrap();
+
+    assert_eq!(
+        coordinator.admit(
+            &expected_peer,
+            &complex_ack(simple_token.invoke_id(), SERVICE, false)
+        ),
+        Ok(AdmissionOutcome::PolicyMismatch)
+    );
+    assert_eq!(
+        coordinator.admit(
+            &expected_peer,
+            &simple_ack(complex_token.invoke_id(), SERVICE)
+        ),
+        Ok(AdmissionOutcome::PolicyMismatch)
+    );
+    assert_eq!(coordinator.active_count(), Ok(2));
+    assert_admitted_kind(
+        coordinator
+            .admit(
+                &expected_peer,
+                &simple_ack(simple_token.invoke_id(), SERVICE),
+            )
+            .unwrap(),
+        AdmissionKind::Terminal,
+    );
+    assert_admitted_kind(
+        coordinator
+            .admit(
+                &expected_peer,
+                &complex_ack(complex_token.invoke_id(), SERVICE, false),
+            )
+            .unwrap(),
+        AdmissionKind::Terminal,
+    );
+}
+
+#[test]
+fn unsegmented_ack_requires_matching_service_under_either_policy() {
+    let coordinator = OutboundTransactionCoordinator::new();
+    let expected_peer = peer(4);
+    let simple_token = coordinator
+        .reserve(requester(expected_peer.clone(), TerminalPolicy::EitherAck))
+        .unwrap();
+    let complex_token = coordinator
+        .reserve(requester(expected_peer.clone(), TerminalPolicy::EitherAck))
+        .unwrap();
+    let mismatch = AdmissionOutcome::ServiceMismatch {
+        expected: SERVICE,
+        observed: OTHER_SERVICE,
+    };
+
+    assert_eq!(
+        coordinator.admit(
+            &expected_peer,
+            &simple_ack(simple_token.invoke_id(), OTHER_SERVICE)
+        ),
+        Ok(mismatch.clone())
+    );
+    assert_eq!(
+        coordinator.admit(
+            &expected_peer,
+            &complex_ack(complex_token.invoke_id(), OTHER_SERVICE, false)
+        ),
+        Ok(mismatch)
+    );
+    assert_eq!(coordinator.active_count(), Ok(2));
+}
+
+#[test]
 fn segmented_complex_ack_and_segment_ack_remain_non_terminal() {
     let coordinator = OutboundTransactionCoordinator::new();
     let expected_peer = peer(2);
@@ -241,6 +350,69 @@ fn segmented_complex_ack_and_segment_ack_remain_non_terminal() {
 }
 
 #[test]
+fn segmented_complex_ack_defers_service_validation_and_completion_is_generation_safe() {
+    let coordinator = OutboundTransactionCoordinator::new();
+    let expected_peer = peer(3);
+    let strict = coordinator
+        .reserve(requester(expected_peer.clone(), TerminalPolicy::SimpleAck))
+        .unwrap();
+    assert_eq!(
+        coordinator.admit(
+            &expected_peer,
+            &complex_ack(strict.invoke_id(), OTHER_SERVICE, true)
+        ),
+        Ok(AdmissionOutcome::PolicyMismatch)
+    );
+    assert_eq!(coordinator.release(strict), Ok(ReleaseOutcome::Released));
+
+    let original = coordinator
+        .reserve(requester(expected_peer.clone(), TerminalPolicy::EitherAck))
+        .unwrap();
+
+    let admission = assert_admitted_kind(
+        coordinator
+            .admit(
+                &expected_peer,
+                &complex_ack(original.invoke_id(), OTHER_SERVICE, true),
+            )
+            .unwrap(),
+        AdmissionKind::NonTerminal,
+    );
+    assert_eq!(admission.token(), original);
+    assert_eq!(
+        coordinator.complete(admission.token()),
+        Ok(ReleaseOutcome::Released)
+    );
+    assert_eq!(
+        coordinator.complete(original),
+        Ok(ReleaseOutcome::AlreadyReleased)
+    );
+
+    let mut active = Vec::new();
+    for index in 0..INVOKE_ID_COUNT {
+        active.push(
+            coordinator
+                .reserve(requester(peer(index as u8), TerminalPolicy::SimpleAck))
+                .unwrap(),
+        );
+    }
+    let replacement = *active
+        .iter()
+        .find(|token| token.invoke_id() == original.invoke_id())
+        .unwrap();
+    assert_ne!(replacement.generation, original.generation);
+    assert_eq!(
+        coordinator.complete(original),
+        Ok(ReleaseOutcome::StaleToken)
+    );
+    assert_eq!(coordinator.active_count(), Ok(INVOKE_ID_COUNT));
+    assert_eq!(
+        coordinator.complete(replacement),
+        Ok(ReleaseOutcome::Released)
+    );
+}
+
+#[test]
 fn server_notification_accepts_simple_ack_but_never_complex_ack() {
     let coordinator = OutboundTransactionCoordinator::new();
     let expected_peer = peer(3);
@@ -266,58 +438,36 @@ fn server_notification_accepts_simple_ack_but_never_complex_ack() {
         AdmissionKind::Terminal,
     );
     assert_eq!(coordinator.complete(token), Ok(ReleaseOutcome::Released));
+}
 
-    let complex_token = coordinator
+#[test]
+fn error_is_terminal_without_service_validation_and_claims_once() {
+    let coordinator = OutboundTransactionCoordinator::new();
+    let expected_peer = peer(4);
+    let error_token = coordinator
         .reserve(requester(expected_peer.clone(), TerminalPolicy::ComplexAck))
         .unwrap();
-    assert_eq!(
-        coordinator.admit(
-            &expected_peer,
-            &simple_ack(complex_token.invoke_id(), SERVICE)
-        ),
-        Ok(AdmissionOutcome::PolicyMismatch)
-    );
-    assert_eq!(coordinator.active_count(), Ok(1));
+
     assert_admitted_kind(
         coordinator
             .admit(
                 &expected_peer,
-                &complex_ack(complex_token.invoke_id(), SERVICE, false),
+                &error_pdu(error_token.invoke_id(), OTHER_SERVICE),
             )
             .unwrap(),
         AdmissionKind::Terminal,
     );
     assert_eq!(
-        coordinator.complete(complex_token),
-        Ok(ReleaseOutcome::Released)
+        coordinator.admit(&expected_peer, &error_pdu(error_token.invoke_id(), SERVICE)),
+        Ok(AdmissionOutcome::DuplicateTerminal)
     );
+    coordinator.complete(error_token).unwrap();
 }
 
 #[test]
-fn error_reject_and_requester_abort_are_terminal_with_required_checks() {
+fn reject_and_requester_abort_are_terminal_with_required_checks() {
     let coordinator = OutboundTransactionCoordinator::new();
     let expected_peer = peer(4);
-
-    let error_token = coordinator
-        .reserve(requester(expected_peer.clone(), TerminalPolicy::ComplexAck))
-        .unwrap();
-    assert_eq!(
-        coordinator.admit(
-            &expected_peer,
-            &error_pdu(error_token.invoke_id(), OTHER_SERVICE)
-        ),
-        Ok(AdmissionOutcome::ServiceMismatch {
-            expected: SERVICE,
-            observed: OTHER_SERVICE,
-        })
-    );
-    assert_admitted_kind(
-        coordinator
-            .admit(&expected_peer, &error_pdu(error_token.invoke_id(), SERVICE))
-            .unwrap(),
-        AdmissionKind::Terminal,
-    );
-    coordinator.complete(error_token).unwrap();
 
     let reject_token = coordinator
         .reserve(requester(expected_peer.clone(), TerminalPolicy::SimpleAck))
