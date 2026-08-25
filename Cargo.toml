@@ -6,6 +6,7 @@ members = [
     "crates/bacnet-services",
     "crates/bacnet-transport",
     "crates/bacnet-network",
+    "crates/bacnet-endpoint-core",
     "crates/bacnet-client",
     "crates/bacnet-objects",
     "crates/bacnet-server",
@@ -32,6 +33,7 @@ default-members = [
     "crates/bacnet-services",
     "crates/bacnet-transport",
     "crates/bacnet-network",
+    "crates/bacnet-endpoint-core",
     "crates/bacnet-client",
     "crates/bacnet-objects",
     "crates/bacnet-server",
@@ -56,6 +58,7 @@ bacnet-encoding = { version = "0.10.1", path = "crates/bacnet-encoding" }
 bacnet-services = { version = "0.10.1", path = "crates/bacnet-services" }
 bacnet-transport = { version = "0.10.1", path = "crates/bacnet-transport" }
 bacnet-network = { version = "0.10.1", path = "crates/bacnet-network" }
+bacnet-endpoint-core = { version = "0.10.1", path = "crates/bacnet-endpoint-core" }
 bacnet-client = { version = "0.10.1", path = "crates/bacnet-client" }
 bacnet-objects = { version = "0.10.1", path = "crates/bacnet-objects" }
 bacnet-server = { version = "0.10.1", path = "crates/bacnet-server" }

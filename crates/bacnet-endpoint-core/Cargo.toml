@@ -1,0 +1,22 @@
+[package]
+name = "bacnet-endpoint-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Private shared BACnet endpoint ownership and transaction coordination"
+
+[dependencies]
+bacnet-types.workspace = true
+bacnet-encoding.workspace = true
+bacnet-transport.workspace = true
+bacnet-network.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "macros", "time"] }
+
+[dev-dependencies]
+bytes.workspace = true
+
+[lints]
+workspace = true

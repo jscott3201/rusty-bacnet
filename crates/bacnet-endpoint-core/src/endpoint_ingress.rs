@@ -1,42 +1,61 @@
 use bacnet_encoding::apdu::{decode_apdu, Apdu};
+use bacnet_network::layer::{NetworkLayer, ReceivedApdu};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::error::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
-use crate::layer::{NetworkLayer, ReceivedApdu};
-
+/// Destination selected for one decoded APDU.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum IngressRoute {
+pub enum IngressRoute {
+    /// Confirmed and unconfirmed requests.
     InboundRequest,
+    /// Acknowledgments, errors, rejects, aborts, and segment acknowledgments.
     TerminalOrSegment,
 }
 
+/// Why an APDU could not be delivered to a role queue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PolicyReason {
+pub enum PolicyReason {
+    /// APDU decoding failed.
     MalformedApdu,
+    /// The APDU type nibble is outside the Standard-defined range.
     UnsupportedPduType(u8),
+    /// The selected bounded role queue was full.
     RouteFull(IngressRoute),
+    /// The selected role queue had no receiver.
     RouteClosed(IngressRoute),
 }
 
+/// An APDU returned to the endpoint policy owner instead of a role queue.
 #[derive(Debug)]
-pub(crate) struct PolicyOutcome {
-    pub(crate) reason: PolicyReason,
-    pub(crate) received: ReceivedApdu,
+pub struct PolicyOutcome {
+    /// Classification or delivery failure.
+    pub reason: PolicyReason,
+    /// Complete received envelope, including any reply sender.
+    pub received: ReceivedApdu,
 }
 
-pub(crate) struct IngressReceivers {
-    pub(crate) inbound_requests: mpsc::Receiver<ReceivedApdu>,
-    pub(crate) terminal_or_segment: mpsc::Receiver<ReceivedApdu>,
-    pub(crate) policy_outcomes: mpsc::Receiver<PolicyOutcome>,
+/// Single-consumer queues produced when endpoint ingress starts.
+pub struct IngressReceivers {
+    /// Confirmed and unconfirmed request traffic.
+    pub inbound_requests: mpsc::Receiver<ReceivedApdu>,
+    /// Terminal response and segmentation traffic.
+    pub terminal_or_segment: mpsc::Receiver<ReceivedApdu>,
+    /// Traffic that endpoint policy must handle or reclaim.
+    pub policy_outcomes: mpsc::Receiver<PolicyOutcome>,
 }
 
+/// Terminal state reported by the classifier task.
 #[derive(Debug)]
-pub(crate) enum ClassifierExit {
+pub enum ClassifierExit {
+    /// Explicit endpoint cancellation won the receive race.
     Cancelled,
+    /// The network layer closed its APDU stream.
     InputClosed,
+    /// A full policy queue prevented lossless reclamation.
     PolicyRouteFull(PolicyOutcome),
+    /// The policy queue was closed.
     PolicyRouteClosed(PolicyOutcome),
 }
 
@@ -47,7 +66,8 @@ enum Lifecycle {
     Stopped,
 }
 
-pub(crate) struct EndpointIngress<T: TransportPort> {
+/// Owns one network layer and classifies each received APDU exactly once.
+pub struct EndpointIngress<T: TransportPort> {
     network: NetworkLayer<T>,
     queue_capacity: usize,
     lifecycle: Lifecycle,
@@ -56,7 +76,8 @@ pub(crate) struct EndpointIngress<T: TransportPort> {
 }
 
 impl<T: TransportPort + 'static> EndpointIngress<T> {
-    pub(crate) fn new(transport: T, queue_capacity: usize) -> Self {
+    /// Creates ingress with the same capacity for each bounded output queue.
+    pub fn new(transport: T, queue_capacity: usize) -> Self {
         Self {
             network: NetworkLayer::new(transport),
             queue_capacity,
@@ -66,7 +87,8 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         }
     }
 
-    pub(crate) async fn start(&mut self) -> Result<IngressReceivers, Error> {
+    /// Starts the transport, network layer, and classifier task once.
+    pub async fn start(&mut self) -> Result<IngressReceivers, Error> {
         if self.lifecycle != Lifecycle::Ready {
             return Err(Error::Encoding(
                 "endpoint ingress cannot be started more than once".into(),
@@ -101,7 +123,8 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         })
     }
 
-    pub(crate) async fn stop(&mut self) -> Result<ClassifierExit, Error> {
+    /// Cancels classification, stops the network layer, and reports classifier exit.
+    pub async fn stop(&mut self) -> Result<ClassifierExit, Error> {
         if self.lifecycle != Lifecycle::Running {
             return Err(Error::Encoding("endpoint ingress is not running".into()));
         }
