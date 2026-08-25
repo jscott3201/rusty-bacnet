@@ -108,12 +108,33 @@ fn global_pool_exhausts_across_peers_and_roles_without_duplicate_ids() {
 }
 
 #[test]
-fn reuse_changes_generation_and_stale_cleanup_cannot_release_replacement() {
+fn notification_abort_releases_for_reuse_and_stale_cleanup_cannot_release_replacement() {
     let coordinator = OutboundTransactionCoordinator::new();
+    let expected_peer = peer(1);
     let original = coordinator
-        .reserve(requester(peer(1), TerminalPolicy::SimpleAck))
+        .reserve(LeaseMetadata::server_notification(
+            expected_peer.clone(),
+            SERVICE,
+        ))
         .unwrap();
-    assert_eq!(coordinator.release(original), Ok(ReleaseOutcome::Released));
+    assert_eq!(
+        coordinator.admit(&expected_peer, &abort(original.invoke_id(), true)),
+        Ok(AdmissionOutcome::DirectionMismatch)
+    );
+    assert_eq!(coordinator.active_count(), Ok(1));
+    assert_admitted_kind(
+        coordinator
+            .admit(&expected_peer, &abort(original.invoke_id(), false))
+            .unwrap(),
+        AdmissionKind::Terminal,
+    );
+    assert_eq!(coordinator.active_count(), Ok(1));
+    assert_eq!(coordinator.complete(original), Ok(ReleaseOutcome::Released));
+    assert_eq!(
+        coordinator.complete(original),
+        Ok(ReleaseOutcome::AlreadyReleased)
+    );
+    assert_eq!(coordinator.active_count(), Ok(0));
 
     let mut active = Vec::new();
     for index in 0..INVOKE_ID_COUNT {
@@ -273,7 +294,7 @@ fn server_notification_accepts_simple_ack_but_never_complex_ack() {
 }
 
 #[test]
-fn error_reject_and_server_abort_are_terminal_with_required_checks() {
+fn error_reject_and_requester_abort_are_terminal_with_required_checks() {
     let coordinator = OutboundTransactionCoordinator::new();
     let expected_peer = peer(4);
 
@@ -316,6 +337,7 @@ fn error_reject_and_server_abort_are_terminal_with_required_checks() {
         coordinator.admit(&expected_peer, &abort(abort_token.invoke_id(), false)),
         Ok(AdmissionOutcome::DirectionMismatch)
     );
+    assert_eq!(coordinator.active_count(), Ok(1));
     assert_admitted_kind(
         coordinator
             .admit(&expected_peer, &abort(abort_token.invoke_id(), true))

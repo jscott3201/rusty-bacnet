@@ -486,7 +486,11 @@ fn validate_apdu(metadata: &LeaseMetadata, apdu: &Apdu) -> Result<AdmissionKind,
         }
         Apdu::Reject(_) => Ok(AdmissionKind::Terminal),
         Apdu::Abort(pdu) => {
-            if !pdu.sent_by_server {
+            let expected_server_bit = match metadata.owner {
+                LeaseOwner::Requester => true,
+                LeaseOwner::ServerNotification => false,
+            };
+            if pdu.sent_by_server != expected_server_bit {
                 return Err(AdmissionOutcome::DirectionMismatch);
             }
             Ok(AdmissionKind::Terminal)
