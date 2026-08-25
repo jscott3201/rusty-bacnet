@@ -595,7 +595,7 @@ async fn stale_segment_ack_after_terminal_completion_is_not_routed() {
         Apdu::ConfirmedRequest(request) => request,
         other => panic!("expected ConfirmedRequest, got {other:?}"),
     };
-    assert_eq!(replacement.invoke_id, invoke_id);
+    assert_ne!(replacement.invoke_id, invoke_id);
     assert!(!replacement.segmented);
 
     send_to_client(
@@ -603,19 +603,19 @@ async fn stale_segment_ack_after_terminal_completion_is_not_routed() {
         Apdu::SegmentAck(SegmentAck {
             negative_ack: false,
             sent_by_server: true,
-            invoke_id,
+            invoke_id: replacement.invoke_id,
             sequence_number: 2,
             actual_window_size: 1,
         }),
     )
     .await;
-    expect_silence(&mut rx, "stale SegmentACK after invoke-ID reuse").await;
+    expect_silence(&mut rx, "SegmentACK during replacement request").await;
     send_to_client(
         &server,
         Apdu::ComplexAck(ComplexAck {
             segmented: false,
             more_follows: false,
-            invoke_id,
+            invoke_id: replacement.invoke_id,
             sequence_number: None,
             proposed_window_size: None,
             service_choice: replacement.service_choice,

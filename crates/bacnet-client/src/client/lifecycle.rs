@@ -56,7 +56,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             apdu_segment_timeout_ms: config.apdu_timeout_ms,
             apdu_retries: config.apdu_retries,
         };
-        let tsm = Arc::new(Mutex::new(Tsm::new(tsm_config)));
+        let coordinator = Arc::new(OutboundTransactionCoordinator::new());
+        let tsm = Arc::new(Mutex::new(Tsm::new_coordinated(tsm_config, coordinator)));
         let tsm_dispatch = Arc::clone(&tsm);
         let device_table = Arc::new(Mutex::new(DeviceTable::new()));
         let device_table_dispatch = Arc::clone(&device_table);
@@ -214,6 +215,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         if let Some(task) = self.abort_dispatch_task() {
             let _ = task.await;
         }
+        self.tsm.lock().await.cancel_all_transactions();
         let network = Arc::get_mut(&mut self.network).ok_or_else(|| {
             Error::Encoding("cannot stop BACnetClient while network references remain".into())
         })?;
@@ -225,5 +227,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 impl<T: TransportPort> Drop for BACnetClient<T> {
     fn drop(&mut self) {
         let _ = self.abort_dispatch_task();
+        if let Ok(mut tsm) = self.tsm.try_lock() {
+            tsm.cancel_all_transactions();
+        }
     }
 }

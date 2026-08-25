@@ -282,6 +282,7 @@ name = "bacnet-client"
 version = "0.10.1"
 dependencies = [
  "bacnet-encoding",
+ "bacnet-endpoint-core",
  "bacnet-network",
  "bacnet-objects",
  "bacnet-services",

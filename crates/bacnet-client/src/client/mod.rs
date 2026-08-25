@@ -24,6 +24,7 @@ use bacnet_encoding::apdu::{
     ConfirmedRequest as ConfirmedRequestPdu, RejectPdu, SegmentAck as SegmentAckPdu, SimpleAck,
 };
 use bacnet_encoding::npdu::{encode_npdu, Npdu, NpduAddress};
+use bacnet_endpoint_core::coordinator::{CanonicalPeer, OutboundTransactionCoordinator};
 use bacnet_network::layer::NetworkLayer;
 use bacnet_services::cov::COVNotificationRequest;
 use bacnet_transport::bip::BipTransport;
@@ -42,7 +43,7 @@ use crate::segmentation::{
 };
 use crate::tsm::{
     RequestTimerExpiration, SegmentAckPhase, SegmentTimerExpiration, SegmentedResponseAdmission,
-    TerminalResponseAdmission, TransactionOwner, TransactionProgress, Tsm, TsmConfig, TsmResponse,
+    TransactionOwner, TransactionProgress, Tsm, TsmConfig, TsmResponse,
 };
 #[cfg(test)]
 use transaction_cleanup::{SegmentedCleanupHook, SegmentedPostWaitCleanupHook};
@@ -723,18 +724,6 @@ enum ConfirmedTarget<'a> {
 }
 
 impl<'a> ConfirmedTarget<'a> {
-    /// The key used for TSM transaction matching.
-    fn tsm_mac(&self) -> MacAddr {
-        match self {
-            Self::Local { mac } => MacAddr::from_slice(mac),
-            Self::Routed {
-                dest_network,
-                dest_mac,
-                ..
-            } => routed_tsm_mac(*dest_network, dest_mac),
-        }
-    }
-
     fn additional_npdu_header_len(&self) -> u16 {
         match self {
             Self::Local { .. } => 0,
@@ -762,24 +751,6 @@ fn cap_max_apdu_to_transport(configured: u16, transport_limit: u16) -> Result<u1
     })
 }
 
-fn routed_tsm_mac(network: u16, mac: &[u8]) -> MacAddr {
-    let mut key = MacAddr::new();
-    key.extend_from_slice(&[0xFF, b'R']);
-    key.extend_from_slice(&network.to_be_bytes());
-    key.push(mac.len() as u8);
-    key.extend_from_slice(mac);
-    key
-}
-
-fn response_tsm_mac(source_mac: &[u8], source_network: &Option<NpduAddress>) -> MacAddr {
-    match source_network {
-        Some(address) if !address.mac_address.is_empty() => {
-            routed_tsm_mac(address.network, &address.mac_address)
-        }
-        _ => MacAddr::from_slice(source_mac),
-    }
-}
-
 mod builder_options;
 mod cov;
 mod cov_notifications;
@@ -793,9 +764,12 @@ mod lifecycle;
 mod object_mgmt;
 mod property;
 mod requests;
+mod response_admission;
 mod segmentation;
 mod segmented_request;
 mod transaction_cleanup;
+mod transaction_peer;
+use transaction_peer::response_transaction_peer;
 
 pub use cov_notifications::{
     COVNotificationDelivery, ConfirmedCOVNotificationAckPolicy, ConfirmedCOVNotificationResponse,
@@ -809,6 +783,8 @@ pub use cov_renewal::{
 mod builder_options_tests;
 #[cfg(test)]
 mod confirmed_request_dispatch_tests;
+#[cfg(test)]
+mod coordinator_tests;
 #[cfg(test)]
 mod cov_notification_tests;
 #[cfg(test)]

@@ -499,7 +499,7 @@ async fn segmented_request_response_stops_its_request_timer() {
 }
 
 /// Cleanup after a completed response wait must preserve a newer segmented
-/// request that reused the released invoke ID.
+/// request, regardless of invoke-ID reuse.
 #[tokio::test]
 async fn segmented_request_timeout_cleanup_preserves_replacement_sender() {
     let config = ClientConfig {
@@ -560,7 +560,7 @@ async fn segmented_request_timeout_cleanup_preserves_replacement_sender() {
         other => panic!("expected replacement ConfirmedRequest, got {other:?}"),
     };
     assert!(replacement_first_segment.segmented);
-    assert_eq!(replacement_first_segment.invoke_id, first_invoke_id);
+    assert_ne!(replacement_first_segment.invoke_id, first_invoke_id);
 
     client.segmented_post_wait_cleanup.release();
     assert!(matches!(

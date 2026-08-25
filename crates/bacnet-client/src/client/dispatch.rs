@@ -1,65 +1,9 @@
+use super::response_admission::{
+    admit_terminal_during_reassembly, complete_terminal_response, current_reassembly_owner,
+    log_coordinated_mismatch, take_current_reassembly, TerminalDispatchOutcome,
+};
 use super::*;
-use crate::tsm::CompletionOutcome;
-
-/// Report an acknowledgment that named a different confirmed service.
-///
-/// Clauses 20.1.4.2 and 20.1.5.6 both require an acknowledgment's
-/// service-ack-choice to carry "the value of the BACnetConfirmedServiceChoice
-/// corresponding to the service contained in the previous
-/// BACnet-Confirmed-Service-Request that has resulted in this
-/// acknowledgment", so a mismatch means the peer is not answering this
-/// request. The transaction stays pending; nothing else is needed here beyond
-/// making the peer's misbehavior visible.
-fn log_mismatch(outcome: CompletionOutcome, invoke_id: u8, pdu: &str) {
-    if let CompletionOutcome::ServiceChoiceMismatch { expected, observed } = outcome {
-        warn!(
-            invoke_id,
-            pdu,
-            expected = expected.to_raw(),
-            observed = observed.to_raw(),
-            "Ignoring acknowledgment labelled for a different confirmed service"
-        );
-    }
-}
-
-async fn take_current_reassembly(
-    tsm: &Arc<Mutex<Tsm>>,
-    seg_state: &mut HashMap<SegKey, SegmentedReceiveState>,
-    key: &SegKey,
-) -> Option<SegmentedReceiveState> {
-    let state = seg_state.remove(key)?;
-    if tsm
-        .lock()
-        .await
-        .owner_is_current(&key.0, key.1, &state.owner)
-    {
-        Some(state)
-    } else {
-        debug!(invoke_id = key.1, "Reclaimed stale segmented receive state");
-        None
-    }
-}
-
-async fn admit_terminal_response(
-    tsm: &Arc<Mutex<Tsm>>,
-    tsm_mac: &MacAddr,
-    invoke_id: u8,
-) -> TerminalResponseAdmission {
-    let mut expected_owner = None;
-    loop {
-        let admission =
-            tsm.lock()
-                .await
-                .admit_terminal_response(tsm_mac, invoke_id, expected_owner.as_ref());
-        match admission {
-            TerminalResponseAdmission::FinalSegmentSendPolling { owner, issue } => {
-                issue.wait_until_polled().await;
-                expected_owner = Some(owner);
-            }
-            admission => return admission,
-        }
-    }
-}
+use crate::tsm::{CompletionOutcome, CoordinatedCompletion};
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Dispatch a received APDU to the appropriate handler.
@@ -80,7 +24,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         apdu: Apdu,
         limits: ResponseLimits,
     ) {
-        let tsm_mac = response_tsm_mac(source_mac, source_network);
+        let transaction_peer = response_transaction_peer(source_mac, source_network);
+        let tsm_mac = transaction_peer.tsm_mac;
+        let canonical_peer = transaction_peer.canonical;
         match apdu {
             Apdu::SimpleAck(ack) => {
                 // Mid-reassembly, a SimpleACK is in Clause 5.4.4.4
@@ -90,6 +36,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // second one is not answering it. Checked before the TSM
                 // lock: `abort_reassembly` takes that lock itself (#367).
                 let key = (tsm_mac.clone(), ack.invoke_id);
+                let coordinator_apdu = Apdu::SimpleAck(ack.clone());
+                admit_terminal_during_reassembly(
+                    tsm,
+                    seg_state,
+                    &key,
+                    &canonical_peer,
+                    &coordinator_apdu,
+                )
+                .await;
                 if let Some(state) = take_current_reassembly(tsm, seg_state, &key).await {
                     debug!(
                         invoke_id = ack.invoke_id,
@@ -109,18 +64,22 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     return;
                 }
                 debug!(invoke_id = ack.invoke_id, "Received SimpleAck");
-                match admit_terminal_response(tsm, &tsm_mac, ack.invoke_id).await {
-                    TerminalResponseAdmission::Active(owner) => {
-                        let outcome = tsm.lock().await.complete_transaction_for_owner(
-                            &tsm_mac,
-                            ack.invoke_id,
-                            &owner,
-                            Some(ack.service_choice),
-                            TsmResponse::SimpleAck,
-                        );
-                        log_mismatch(outcome, ack.invoke_id, "SimpleAck");
+                match complete_terminal_response(
+                    tsm,
+                    &tsm_mac,
+                    ack.invoke_id,
+                    &canonical_peer,
+                    &coordinator_apdu,
+                    TsmResponse::SimpleAck,
+                    true,
+                    None,
+                )
+                .await
+                {
+                    TerminalDispatchOutcome::Completion(outcome) => {
+                        log_coordinated_mismatch(&outcome, ack.invoke_id, "SimpleAck");
                     }
-                    TerminalResponseAdmission::PrematureSegmentedRequestAborted => {
+                    TerminalDispatchOutcome::PrematureSegmentedRequestAborted => {
                         Self::send_client_abort(
                             network,
                             source_mac,
@@ -130,8 +89,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         )
                         .await;
                     }
-                    TerminalResponseAdmission::NoTransaction => {}
-                    TerminalResponseAdmission::FinalSegmentSendPolling { .. } => unreachable!(),
                 }
             }
             Apdu::ComplexAck(ack) => {
@@ -152,6 +109,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     // UnexpectedPDU_Received list: the transaction's answer
                     // is the segmented ComplexACK already under reassembly.
                     let key = (tsm_mac.clone(), ack.invoke_id);
+                    let coordinator_apdu = Apdu::ComplexAck(ack.clone());
+                    admit_terminal_during_reassembly(
+                        tsm,
+                        seg_state,
+                        &key,
+                        &canonical_peer,
+                        &coordinator_apdu,
+                    )
+                    .await;
                     if let Some(state) = take_current_reassembly(tsm, seg_state, &key).await {
                         debug!(
                             invoke_id = ack.invoke_id,
@@ -171,20 +137,24 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         return;
                     }
                     debug!(invoke_id = ack.invoke_id, "Received ComplexAck");
-                    match admit_terminal_response(tsm, &tsm_mac, ack.invoke_id).await {
-                        TerminalResponseAdmission::Active(owner) => {
-                            let outcome = tsm.lock().await.complete_transaction_for_owner(
-                                &tsm_mac,
-                                ack.invoke_id,
-                                &owner,
-                                Some(ack.service_choice),
-                                TsmResponse::ComplexAck {
-                                    service_data: ack.service_ack,
-                                },
-                            );
-                            log_mismatch(outcome, ack.invoke_id, "ComplexAck");
+                    match complete_terminal_response(
+                        tsm,
+                        &tsm_mac,
+                        ack.invoke_id,
+                        &canonical_peer,
+                        &coordinator_apdu,
+                        TsmResponse::ComplexAck {
+                            service_data: ack.service_ack,
+                        },
+                        true,
+                        None,
+                    )
+                    .await
+                    {
+                        TerminalDispatchOutcome::Completion(outcome) => {
+                            log_coordinated_mismatch(&outcome, ack.invoke_id, "ComplexAck");
                         }
-                        TerminalResponseAdmission::PrematureSegmentedRequestAborted => {
+                        TerminalDispatchOutcome::PrematureSegmentedRequestAborted => {
                             Self::send_client_abort(
                                 network,
                                 source_mac,
@@ -194,8 +164,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                             )
                             .await;
                         }
-                        TerminalResponseAdmission::NoTransaction => {}
-                        TerminalResponseAdmission::FinalSegmentSendPolling { .. } => unreachable!(),
                     }
                 }
             }
@@ -207,6 +175,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // Checked before the TSM lock below: `abort_reassembly` takes
                 // that lock itself, and tokio's Mutex is not reentrant.
                 let key = (tsm_mac.clone(), err.invoke_id);
+                let coordinator_apdu = Apdu::Error(err.clone());
+                admit_terminal_during_reassembly(
+                    tsm,
+                    seg_state,
+                    &key,
+                    &canonical_peer,
+                    &coordinator_apdu,
+                )
+                .await;
                 if let Some(state) = take_current_reassembly(tsm, seg_state, &key).await {
                     debug!(
                         invoke_id = err.invoke_id,
@@ -233,20 +210,23 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // `other [127] Error`. Nothing in the Standard forbids a peer
                 // from answering through that tag, so an exact-match gate here
                 // would reject conformant responses.
-                match admit_terminal_response(tsm, &tsm_mac, err.invoke_id).await {
-                    TerminalResponseAdmission::Active(owner) => {
-                        tsm.lock().await.complete_transaction_for_owner(
-                            &tsm_mac,
-                            err.invoke_id,
-                            &owner,
-                            None,
-                            TsmResponse::Error {
-                                class: err.error_class.to_raw() as u32,
-                                code: err.error_code.to_raw() as u32,
-                            },
-                        );
-                    }
-                    TerminalResponseAdmission::PrematureSegmentedRequestAborted => {
+                match complete_terminal_response(
+                    tsm,
+                    &tsm_mac,
+                    err.invoke_id,
+                    &canonical_peer,
+                    &coordinator_apdu,
+                    TsmResponse::Error {
+                        class: err.error_class.to_raw() as u32,
+                        code: err.error_code.to_raw() as u32,
+                    },
+                    true,
+                    None,
+                )
+                .await
+                {
+                    TerminalDispatchOutcome::Completion(_) => {}
+                    TerminalDispatchOutcome::PrematureSegmentedRequestAborted => {
                         Self::send_client_abort(
                             network,
                             source_mac,
@@ -256,8 +236,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         )
                         .await;
                     }
-                    TerminalResponseAdmission::NoTransaction => {}
-                    TerminalResponseAdmission::FinalSegmentSendPolling { .. } => unreachable!(),
                 }
             }
             Apdu::Reject(rej) => {
@@ -265,6 +243,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // Error arm above ("BACnet-Reject-PDU" is in the same list),
                 // with the same lock-ordering constraint (#367).
                 let key = (tsm_mac.clone(), rej.invoke_id);
+                let coordinator_apdu = Apdu::Reject(rej.clone());
+                admit_terminal_during_reassembly(
+                    tsm,
+                    seg_state,
+                    &key,
+                    &canonical_peer,
+                    &coordinator_apdu,
+                )
+                .await;
                 if let Some(state) = take_current_reassembly(tsm, seg_state, &key).await {
                     debug!(
                         invoke_id = rej.invoke_id,
@@ -284,17 +271,21 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     return;
                 }
                 debug!(invoke_id = rej.invoke_id, "Received Reject PDU");
-                let mut tsm = tsm.lock().await;
                 // Carries no service choice (Clause 20.1.8); invoke ID is the
                 // only correlation the Standard provides.
-                tsm.complete_transaction(
+                let _ = complete_terminal_response(
+                    tsm,
                     &tsm_mac,
                     rej.invoke_id,
-                    None,
+                    &canonical_peer,
+                    &coordinator_apdu,
                     TsmResponse::Reject {
                         reason: rej.reject_reason.to_raw(),
                     },
-                );
+                    false,
+                    None,
+                )
+                .await;
             }
             Apdu::Abort(abt) => {
                 // Clause 5.4.4.3 AbortPDU_Received fires only for an Abort
@@ -321,23 +312,38 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // anyway — so no test can pin this line alone; it is kept so
                 // the slot frees at the Abort, not at the peer's next move.
                 let key = (tsm_mac.clone(), abt.invoke_id);
-                let state = take_current_reassembly(tsm, seg_state, &key).await;
+                let reassembly_owner = current_reassembly_owner(tsm, seg_state, &key).await;
                 debug!(invoke_id = abt.invoke_id, "Received Abort PDU");
-                let mut tsm = tsm.lock().await;
                 // Carries no service choice (Clause 20.1.9).
                 let response = TsmResponse::Abort {
                     reason: abt.abort_reason.to_raw(),
                 };
-                if let Some(state) = state {
-                    tsm.complete_transaction_for_owner(
-                        &tsm_mac,
-                        abt.invoke_id,
-                        &state.owner,
-                        None,
-                        response,
-                    );
-                } else {
-                    tsm.complete_transaction(&tsm_mac, abt.invoke_id, None, response);
+                let coordinator_apdu = Apdu::Abort(abt.clone());
+                let outcome = complete_terminal_response(
+                    tsm,
+                    &tsm_mac,
+                    abt.invoke_id,
+                    &canonical_peer,
+                    &coordinator_apdu,
+                    response,
+                    false,
+                    reassembly_owner.clone(),
+                )
+                .await;
+                if matches!(
+                    outcome,
+                    TerminalDispatchOutcome::Completion(CoordinatedCompletion::Completed(
+                        CompletionOutcome::Delivered
+                    ))
+                ) {
+                    if let Some(owner) = reassembly_owner {
+                        if seg_state
+                            .get(&key)
+                            .is_some_and(|state| state.owner.same_as(&owner))
+                        {
+                            seg_state.remove(&key);
+                        }
+                    }
                 }
             }
             Apdu::ConfirmedRequest(req) => {
@@ -546,7 +552,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // Terminal completion uses this same lock, so a raw sender
                 // entry cannot outlive the authoritative phase for delivery.
                 let tsm_guard = tsm.lock().await;
-                match tsm_guard.segment_ack_phase(&tsm_mac, invoke_id) {
+                let coordinator_apdu = Apdu::SegmentAck(sa.clone());
+                match tsm_guard.coordinated_segment_ack_phase(
+                    &tsm_mac,
+                    invoke_id,
+                    &canonical_peer,
+                    &coordinator_apdu,
+                ) {
                     SegmentAckPhase::SegmentedRequest(owner) => {
                         // Lock order is TSM then SegmentACK routes. Setup and
                         // cleanup never hold both locks.
@@ -566,6 +578,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         );
                         return;
                     }
+                    SegmentAckPhase::CoordinatorRejected => return,
                     SegmentAckPhase::Idle => {}
                 }
                 drop(tsm_guard);

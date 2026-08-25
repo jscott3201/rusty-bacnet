@@ -175,7 +175,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         service_choice: ConfirmedServiceChoice,
         service_data: &[u8],
     ) -> Result<Bytes, Error> {
-        let tsm_mac = target.tsm_mac();
+        let transaction_peer = target.transaction_peer();
+        let tsm_mac = transaction_peer.tsm_mac;
         let unsegmented_apdu_size = 4 + service_data.len();
         let target_transport_max_apdu = self.target_transport_max_apdu_length(target);
 
@@ -250,12 +251,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let advertised_max_apdu = self.advertised_max_apdu_length_for_target(target)?;
         let (invoke_id, registration) = {
             let mut tsm = self.tsm.lock().await;
-            let invoke_id = tsm.allocate_invoke_id(&tsm_mac).ok_or_else(|| {
-                Error::Encoding("all invoke IDs exhausted for destination".into())
-            })?;
-            let registration =
-                tsm.register_transaction_with_progress(tsm_mac.clone(), invoke_id, service_choice);
-            (invoke_id, registration)
+            tsm.register_coordinated_transaction_with_progress(
+                tsm_mac.clone(),
+                transaction_peer.canonical,
+                service_choice,
+                false,
+            )
+            .map_err(|error| Error::Encoding(error.to_string()))?
         };
 
         let owner = registration.owner.clone();

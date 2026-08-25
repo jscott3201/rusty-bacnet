@@ -34,6 +34,7 @@ async fn segment_timer_timeout_ends_the_reassembly_session() {
         Err(Error::Abort { reason }) if reason == AbortReason::TSM_TIMEOUT.to_raw()
     ));
     assert_eq!(client.tsm.lock().await.pending_count(), 0);
+    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
     assert!(
         timeout(
             Duration::from_secs(2),
@@ -105,6 +106,7 @@ async fn segmented_request_without_segment_ack_returns_local_tsm_timeout() {
         Err(Error::Abort { reason }) if reason == AbortReason::TSM_TIMEOUT.to_raw()
     ));
     assert_eq!(client.tsm.lock().await.pending_count(), 0);
+    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
     assert!(
         !client
             .seg_ack_senders
@@ -125,7 +127,7 @@ async fn segmented_request_without_segment_ack_returns_local_tsm_timeout() {
 }
 
 #[tokio::test]
-async fn delayed_timeout_cleanup_preserves_reused_segmented_response() {
+async fn delayed_timeout_cleanup_preserves_newer_segmented_response() {
     let config = ClientConfig {
         apdu_timeout_ms: 100,
         apdu_retries: 0,
@@ -166,7 +168,7 @@ async fn delayed_timeout_cleanup_preserves_reused_segmented_response() {
         Apdu::ConfirmedRequest(request) => request.invoke_id,
         other => panic!("expected ConfirmedRequest, got {other:?}"),
     };
-    assert_eq!(second_invoke_id, first_invoke_id);
+    assert_ne!(second_invoke_id, first_invoke_id);
     send_to_client(
         &server,
         &response_segment(second_invoke_id, 0, true, b"new-"),
@@ -183,15 +185,16 @@ async fn delayed_timeout_cleanup_preserves_reused_segmented_response() {
         Err(Error::Abort { reason }) if reason == AbortReason::TSM_TIMEOUT.to_raw()
     ));
     assert!(
-        !timeout(
+        timeout(
             Duration::from_secs(2),
             client.segmented_cleanup.wait_processed()
         )
         .await
         .expect("dispatch did not process delayed cleanup"),
-        "owner A cleanup removed owner B reassembly state"
+        "owner A cleanup did not reclaim its stale reassembly state"
     );
     assert_eq!(client.tsm.lock().await.pending_count(), 1);
+    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 1);
 
     send_to_client(
         &server,
@@ -257,6 +260,7 @@ async fn caller_cancellation_reclaims_reassembly_after_tsm_lock_contention() {
         "cancellation cleanup did not remove the matching reassembly"
     );
     assert_eq!(client.tsm.lock().await.pending_count(), 0);
+    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
     assert!(
         timeout(Duration::from_millis(50), rx.recv()).await.is_err(),
         "cancellation cleanup sent an unexpected peer PDU"
@@ -311,6 +315,7 @@ async fn caller_cancellation_reclaims_segmented_request_sender() {
         "outgoing request unexpectedly owned receive reassembly state"
     );
     assert_eq!(client.tsm.lock().await.pending_count(), 0);
+    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
     assert!(
         !client
             .seg_ack_senders

@@ -17,6 +17,9 @@ pub(crate) use final_segment::{
 };
 mod segmented_response;
 pub(crate) use segmented_response::SegmentedResponseAdmission;
+mod coordinated;
+pub(crate) use coordinated::{CoordinatedCompletion, CoordinatedTerminalPhase};
+use coordinated::{PendingLease, PendingRelease};
 
 /// TSM configuration.
 #[derive(Debug, Clone)]
@@ -123,6 +126,7 @@ pub enum CompletionOutcome {
 pub(crate) enum SegmentAckPhase {
     SegmentedRequest(TransactionOwner),
     Outstanding,
+    CoordinatorRejected,
     Idle,
 }
 
@@ -197,6 +201,7 @@ struct PendingTransaction {
     /// this acknowledgment", so anything else is not this transaction's
     /// response.
     expected_service_choice: ConfirmedServiceChoice,
+    lease: PendingLease,
 }
 
 /// Transaction State Machine.
@@ -208,6 +213,7 @@ pub struct Tsm {
     config: TsmConfig,
     allocators: HashMap<MacAddr, InvokeIdAllocator>,
     pending: HashMap<(MacAddr, u8), PendingTransaction>,
+    coordinator: Option<Arc<bacnet_endpoint_core::coordinator::OutboundTransactionCoordinator>>,
 }
 
 impl Tsm {
@@ -216,6 +222,7 @@ impl Tsm {
             config,
             allocators: HashMap::new(),
             pending: HashMap::new(),
+            coordinator: None,
         }
     }
 
@@ -276,6 +283,7 @@ impl Tsm {
             invoke_id,
             service_choice,
             TransactionPhase::AwaitingResponse,
+            PendingLease::Legacy,
         )
     }
 
@@ -292,6 +300,7 @@ impl Tsm {
             TransactionPhase::SegmentedRequest {
                 sent_all_segments: false,
             },
+            PendingLease::Legacy,
         )
     }
 
@@ -301,12 +310,9 @@ impl Tsm {
         invoke_id: u8,
         service_choice: ConfirmedServiceChoice,
         phase: TransactionPhase,
+        lease: PendingLease,
     ) -> TransactionRegistration {
-        let (tx, rx) = oneshot::channel();
-        let (progress_tx, progress_rx) = watch::channel(TransactionProgress::AwaitingResponse);
-        let owner = TransactionOwner::new();
-        let final_segment_issue =
-            matches!(phase, TransactionPhase::SegmentedRequest { .. }).then(FinalSegmentIssue::new);
+        let (pending, registration) = Self::new_pending_transaction(service_choice, phase, lease);
         debug_assert!(
             !self
                 .pending
@@ -314,8 +320,21 @@ impl Tsm {
             "duplicate TSM registration for invoke_id {}",
             invoke_id
         );
-        self.pending.insert(
-            (destination_mac, invoke_id),
+        self.pending.insert((destination_mac, invoke_id), pending);
+        registration
+    }
+
+    fn new_pending_transaction(
+        service_choice: ConfirmedServiceChoice,
+        phase: TransactionPhase,
+        lease: PendingLease,
+    ) -> (PendingTransaction, TransactionRegistration) {
+        let (tx, rx) = oneshot::channel();
+        let (progress_tx, progress_rx) = watch::channel(TransactionProgress::AwaitingResponse);
+        let owner = TransactionOwner::new();
+        let final_segment_issue =
+            matches!(phase, TransactionPhase::SegmentedRequest { .. }).then(FinalSegmentIssue::new);
+        (
             PendingTransaction {
                 responder: tx,
                 progress: progress_tx,
@@ -324,13 +343,14 @@ impl Tsm {
                 final_segment_issue,
                 segment_generation: 0,
                 expected_service_choice: service_choice,
+                lease,
             },
-        );
-        TransactionRegistration {
-            response: rx,
-            progress: progress_rx,
-            owner,
-        }
+            TransactionRegistration {
+                response: rx,
+                progress: progress_rx,
+                owner,
+            },
+        )
     }
 
     /// Reserve the first poll of the final N-UNITDATA.request. A terminal PDU
@@ -570,8 +590,11 @@ impl Tsm {
         if !final_timeout {
             return RequestTimerExpiration::Retry;
         }
-        self.pending.remove(&key);
-        self.release_invoke_id(destination_mac, invoke_id);
+        let pending = self
+            .pending
+            .remove(&key)
+            .expect("pending transaction exists");
+        self.release_pending(destination_mac, invoke_id, pending, PendingRelease::Release);
         RequestTimerExpiration::TimedOut
     }
 
@@ -598,8 +621,11 @@ impl Tsm {
                 generation: pending.segment_generation,
             };
         }
-        self.pending.remove(&key);
-        self.release_invoke_id(destination_mac, invoke_id);
+        let pending = self
+            .pending
+            .remove(&key)
+            .expect("pending transaction exists");
+        self.release_pending(destination_mac, invoke_id, pending, PendingRelease::Release);
         SegmentTimerExpiration::TimedOut
     }
 
@@ -653,6 +679,7 @@ impl Tsm {
             None,
             observed_service_choice,
             response,
+            PendingRelease::Complete,
         )
     }
 
@@ -670,6 +697,25 @@ impl Tsm {
             Some(owner),
             observed_service_choice,
             response,
+            PendingRelease::Release,
+        )
+    }
+
+    pub(crate) fn complete_admitted_transaction_for_owner(
+        &mut self,
+        source_mac: &[u8],
+        invoke_id: u8,
+        owner: &TransactionOwner,
+        observed_service_choice: Option<ConfirmedServiceChoice>,
+        response: TsmResponse,
+    ) -> CompletionOutcome {
+        self.complete_transaction_inner(
+            source_mac,
+            invoke_id,
+            Some(owner),
+            observed_service_choice,
+            response,
+            PendingRelease::Complete,
         )
     }
 
@@ -680,6 +726,7 @@ impl Tsm {
         owner: Option<&TransactionOwner>,
         observed_service_choice: Option<ConfirmedServiceChoice>,
         response: TsmResponse,
+        release: PendingRelease,
     ) -> CompletionOutcome {
         let key = (MacAddr::from_slice(source_mac), invoke_id);
         let Entry::Occupied(entry) = self.pending.entry(key) else {
@@ -701,10 +748,7 @@ impl Tsm {
             )
         {
             let pending = entry.remove();
-            self.release_invoke_id(source_mac, invoke_id);
-            let _ = pending.responder.send(TsmResponse::Abort {
-                reason: AbortReason::INVALID_APDU_IN_THIS_STATE.to_raw(),
-            });
+            self.abort_pending_invalid_state(source_mac, invoke_id, pending);
             return CompletionOutcome::Delivered;
         }
         let expected = entry.get().expected_service_choice;
@@ -713,12 +757,29 @@ impl Tsm {
                 return CompletionOutcome::ServiceChoiceMismatch { expected, observed };
             }
         }
-        // Taking the entry ends the borrow of `pending`, so the invoke ID can
-        // be released without a second lookup that would have to be `expect`ed.
         let pending = entry.remove();
-        self.release_invoke_id(source_mac, invoke_id);
-        let _ = pending.responder.send(response);
+        let responder = pending.responder;
+        self.release_pending_lease(source_mac, invoke_id, pending.lease, release);
+        let _ = responder.send(response);
         CompletionOutcome::Delivered
+    }
+
+    fn abort_pending_invalid_state(
+        &mut self,
+        source_mac: &[u8],
+        invoke_id: u8,
+        pending: PendingTransaction,
+    ) {
+        let responder = pending.responder;
+        self.release_pending_lease(
+            source_mac,
+            invoke_id,
+            pending.lease,
+            PendingRelease::Release,
+        );
+        let _ = responder.send(TsmResponse::Abort {
+            reason: AbortReason::INVALID_APDU_IN_THIS_STATE.to_raw(),
+        });
     }
 
     fn abort_invalid_apdu_in_current_state(
@@ -766,8 +827,8 @@ impl Tsm {
         }) {
             return false;
         }
-        if self.pending.remove(&key).is_some() {
-            self.release_invoke_id(destination_mac, invoke_id);
+        if let Some(pending) = self.pending.remove(&key) {
+            self.release_pending(destination_mac, invoke_id, pending, PendingRelease::Cancel);
             true
         } else {
             false
@@ -779,5 +840,8 @@ impl Tsm {
     }
 }
 
+#[cfg(test)]
+#[path = "tsm/coordinated_tests.rs"]
+mod coordinated_tests;
 #[cfg(test)]
 mod tests;

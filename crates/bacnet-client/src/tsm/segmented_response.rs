@@ -13,6 +13,7 @@ pub(crate) enum SegmentedResponseAdmission {
     InitialResponseAborted {
         wire_reason: AbortReason,
     },
+    CoordinatorRejected,
     NoTransaction,
 }
 

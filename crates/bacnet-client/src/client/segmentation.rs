@@ -116,7 +116,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         limits: ResponseLimits,
     ) {
         let seq = ack.sequence_number.unwrap_or(0);
-        let tsm_mac = response_tsm_mac(source_mac, source_network);
+        let transaction_peer = response_transaction_peer(source_mac, source_network);
+        let tsm_mac = transaction_peer.tsm_mac;
+        let canonical_peer = transaction_peer.canonical;
+        let coordinator_apdu = Apdu::ComplexAck(ack.clone());
         let key = (tsm_mac.clone(), ack.invoke_id);
 
         let mut deferred_owner = None;
@@ -124,19 +127,23 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             let admission = {
                 let mut tsm = tsm.lock().await;
                 if let Some(owner) = deferred_owner.as_ref() {
-                    tsm.admit_segmented_complex_ack_for_owner(
+                    tsm.coordinated_admit_segmented_complex_ack_for_owner(
                         &tsm_mac,
                         ack.invoke_id,
                         seq,
                         limits.segmented_response_accepted,
                         owner,
+                        &canonical_peer,
+                        &coordinator_apdu,
                     )
                 } else {
-                    tsm.admit_segmented_complex_ack(
+                    tsm.coordinated_admit_segmented_complex_ack(
                         &tsm_mac,
                         ack.invoke_id,
                         seq,
                         limits.segmented_response_accepted,
+                        &canonical_peer,
+                        &coordinator_apdu,
                     )
                 }
             };
@@ -158,6 +165,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     .await;
                     return;
                 }
+                SegmentedResponseAdmission::CoordinatorRejected => return,
                 SegmentedResponseAdmission::NoTransaction => {
                     seg_state.remove(&key);
                     Self::send_client_abort(
@@ -427,7 +435,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         "Reassembled segmented ComplexAck"
                     );
                     let mut tsm = tsm.lock().await;
-                    let outcome = tsm.complete_transaction_for_owner(
+                    let outcome = tsm.complete_admitted_transaction_for_owner(
                         &tsm_mac,
                         ack.invoke_id,
                         &state.owner,
@@ -468,7 +476,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         remote_max_apdu: u16,
         remote_max_segments: Option<u32>,
     ) -> Result<Bytes, Error> {
-        let tsm_mac = target.tsm_mac();
+        let transaction_peer = target.transaction_peer();
+        let tsm_mac = transaction_peer.tsm_mac;
         let advertised_max_apdu = self.advertised_max_apdu_length_for_target(target)?;
         let max_seg_size = max_segment_payload(remote_max_apdu, SegmentedPduType::ConfirmedRequest);
         let segments = split_payload(service_data, max_seg_size)?;
@@ -493,15 +502,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let (seg_ack_tx, mut seg_ack_rx) = mpsc::channel(16);
         let (invoke_id, registration) = {
             let mut tsm = self.tsm.lock().await;
-            let invoke_id = tsm.allocate_invoke_id(&tsm_mac).ok_or_else(|| {
-                Error::Encoding("all invoke IDs exhausted for destination".into())
-            })?;
-            let registration = tsm.register_segmented_transaction_with_progress(
+            tsm.register_coordinated_transaction_with_progress(
                 tsm_mac.clone(),
-                invoke_id,
+                transaction_peer.canonical,
                 service_choice,
-            );
-            (invoke_id, registration)
+                true,
+            )
+            .map_err(|error| Error::Encoding(error.to_string()))?
         };
 
         let owner = registration.owner.clone();

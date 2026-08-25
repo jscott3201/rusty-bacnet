@@ -414,6 +414,7 @@ async fn confirmed_request_timeout() {
         .confirmed_request(&fake_mac, ConfirmedServiceChoice::READ_PROPERTY, &[0x01])
         .await;
     assert!(result.is_err());
+    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
     client.stop().await.unwrap();
 }
 

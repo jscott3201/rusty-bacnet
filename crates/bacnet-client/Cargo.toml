@@ -15,6 +15,7 @@ bacnet-encoding.workspace = true
 bacnet-services.workspace = true
 bacnet-transport.workspace = true
 bacnet-network.workspace = true
+bacnet-endpoint-core.workspace = true
 bytes.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["net", "rt", "sync", "macros", "time"] }
