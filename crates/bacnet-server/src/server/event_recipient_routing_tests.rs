@@ -99,6 +99,14 @@ pub(super) async fn distribute_with_priority(
     priority: [u8; 3],
     destinations: Vec<BACnetDestination>,
 ) -> (Vec<Bytes>, Vec<(Vec<u8>, Bytes)>) {
+    distribute_with_clock_mode(priority, destinations, true).await
+}
+
+async fn distribute_with_clock_mode(
+    priority: [u8; 3],
+    destinations: Vec<BACnetDestination>,
+    clocked: bool,
+) -> (Vec<Bytes>, Vec<(Vec<u8>, Bytes)>) {
     let transport = RoutingTransport::default();
     let broadcasts = StdArc::clone(&transport.broadcasts);
     let unicasts = StdArc::clone(&transport.unicasts);
@@ -106,7 +114,11 @@ pub(super) async fn distribute_with_priority(
     let comm_state = Arc::new(AtomicU8::new(0));
     let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
 
-    let mut db = clocked_test_database();
+    let mut db = if clocked {
+        clocked_test_database()
+    } else {
+        ObjectDatabase::new()
+    };
     let mut nc = NotificationClass::new(0, "NC-0").unwrap();
     nc.priority = priority;
     for destination in destinations {
@@ -162,6 +174,19 @@ pub(super) async fn distribute_with_priority(
     let broadcasts = broadcasts.lock().unwrap().clone();
     let unicasts = unicasts.lock().unwrap().clone();
     (broadcasts, unicasts)
+}
+
+#[tokio::test]
+async fn clockless_all_day_recipient_uses_system_utc_filter_fallback() {
+    let (broadcasts, unicasts) = distribute_with_clock_mode(
+        [255; 3],
+        vec![destination_for(address_recipient(0, &[]), false)],
+        false,
+    )
+    .await;
+
+    assert_eq!(broadcasts.len(), 1, "clockless mode preserves delivery");
+    assert!(unicasts.is_empty());
 }
 
 /// The NPDU destination (DNET/DADR) of a captured frame, or `None` when the

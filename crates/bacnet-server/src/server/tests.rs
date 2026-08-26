@@ -62,6 +62,18 @@ async fn default_and_clockless_start_bind_truthful_device_clock() {
             !clockless
         );
         drop(db);
+
+        let pics = server
+            .generate_pics(&crate::pics::PicsConfig::default())
+            .await;
+        for service_name in ["TimeSynchronization", "UTCTimeSynchronization"] {
+            let executed = pics
+                .supported_services
+                .iter()
+                .find(|service| service.service_name == service_name)
+                .is_some_and(|service| service.executor);
+            assert_eq!(executed, !clockless, "PICS service {service_name}");
+        }
         server.stop().await.unwrap();
     }
 

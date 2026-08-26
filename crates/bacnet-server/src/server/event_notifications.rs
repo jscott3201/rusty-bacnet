@@ -1,6 +1,8 @@
 use super::*;
+use bacnet_objects::notification_class::local_day_and_time;
 use bacnet_types::constructed::BACnetRecipient;
 use bacnet_types::enums::EventType;
+use bacnet_types::primitives::Time;
 
 pub(super) struct NotificationTransition {
     change: EventStateChange,
@@ -29,6 +31,17 @@ pub(super) fn network_priority_for_event(priority: u8) -> NetworkPriority {
         128..=191 => NetworkPriority::URGENT,
         192..=255 => NetworkPriority::NORMAL,
     }
+}
+
+/// Operational fallback for recipient-window filtering in clockless mode.
+///
+/// This uses system UTC only to avoid dropping an alarm while no Device clock
+/// is advertised; it does not create a Device DateTime or change wire
+/// timestamp selection.
+fn system_utc_recipient_filter_time(now: Duration) -> (u8, Time) {
+    let (today_bit, mut current_time) = local_day_and_time(now.as_secs(), 0);
+    current_time.hundredths = (now.subsec_millis() / 10) as u8;
+    (today_bit, current_time)
 }
 
 /// The network destination a Notification Class recipient resolves to.
@@ -227,10 +240,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
 
         let NotificationTransition { change, event_type } = transition.into();
-        let utc_secs = std::time::SystemTime::now()
+        let system_utc = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+            .unwrap_or_default();
+        let utc_secs = system_utc.as_secs();
         let (notification, recipients) = {
             let mut db = db.write().await;
 
@@ -240,15 +253,21 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .find(|o| o.object_type() == ObjectType::DEVICE)
                 .unwrap_or_else(|| ObjectIdentifier::new(ObjectType::DEVICE, 0).unwrap());
 
-            let Some(clock_frame) = db.clock_frame() else {
-                debug!("Skipping recipient-window evaluation without a Device clock");
-                return;
+            let (today_bit, current_time) = match db.clock_frame() {
+                Some(clock_frame) => {
+                    let Some(today_bit) = clock_frame.day_of_week_bit() else {
+                        debug!(
+                            "Skipping recipient-window evaluation for an invalid Device clock frame"
+                        );
+                        return;
+                    };
+                    (today_bit, clock_frame.local_time)
+                }
+                None => {
+                    debug!("Using system UTC to filter recipients without a Device clock");
+                    system_utc_recipient_filter_time(system_utc)
+                }
             };
-            let Some(today_bit) = clock_frame.day_of_week_bit() else {
-                debug!("Skipping recipient-window evaluation for an invalid Device clock frame");
-                return;
-            };
-            let current_time = clock_frame.local_time;
 
             let object = match db.get_mut(oid) {
                 Some(o) => o,

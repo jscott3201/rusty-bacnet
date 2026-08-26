@@ -301,11 +301,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .find(|o| o.object_type() == ObjectType::DEVICE)
                 .unwrap_or_else(|| ObjectIdentifier::new(ObjectType::DEVICE, 0).unwrap());
             let timestamp = if subscriptions.iter().any(|sub| sub.timestamped) {
-                let Some(clock_frame) = db.clock_frame() else {
-                    debug!("Skipping timestamped COVNotificationMultiple without a Device clock");
-                    return;
-                };
-                Some(cov_multiple_datetime(clock_frame))
+                match db.clock_frame() {
+                    Some(clock_frame) => Some(cov_multiple_datetime(clock_frame)),
+                    None => {
+                        // A timestamp request cannot manufacture a Device
+                        // DateTime in clockless mode. Preserve delivery while
+                        // omitting both request and value timestamps.
+                        debug!("Delivering clockless COVNotificationMultiple without timestamps");
+                        None
+                    }
+                }
             } else {
                 None
             };

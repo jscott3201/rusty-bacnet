@@ -341,8 +341,7 @@ async fn cov_property_multiple_subscription_uses_multiple_notification_on_change
     }
 }
 
-#[tokio::test]
-async fn timestamped_cov_multiple_reports_datetime_and_remaining_lifetime() {
+async fn capture_timestamped_cov_multiple(clocked: bool) -> COVNotificationMultipleRequest {
     let sent = StdArc::new(StdMutex::new(Vec::new()));
     let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
         &sent,
@@ -350,7 +349,11 @@ async fn timestamped_cov_multiple_reports_datetime_and_remaining_lifetime() {
 
     let ao_oid = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap();
     let device_oid = ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap();
-    let mut db = clocked_test_database();
+    let mut db = if clocked {
+        clocked_test_database()
+    } else {
+        ObjectDatabase::new()
+    };
     let mut device = DeviceObject::new(DeviceConfig {
         instance: 1234,
         name: "Timestamped-COV-Multiple-Test".into(),
@@ -400,7 +403,12 @@ async fn timestamped_cov_multiple_reports_datetime_and_remaining_lifetime() {
     let Apdu::UnconfirmedRequest(request) = decode_apdu(npdu.payload).unwrap() else {
         panic!("expected unconfirmed COVNotificationMultiple");
     };
-    let notification = COVNotificationMultipleRequest::decode(&request.service_request).unwrap();
+    COVNotificationMultipleRequest::decode(&request.service_request).unwrap()
+}
+
+#[tokio::test]
+async fn timestamped_cov_multiple_reports_datetime_and_remaining_lifetime() {
+    let notification = capture_timestamped_cov_multiple(true).await;
     assert!((298..=300).contains(&notification.time_remaining));
     let (_, request_time) = notification
         .timestamp
@@ -408,6 +416,16 @@ async fn timestamped_cov_multiple_reports_datetime_and_remaining_lifetime() {
     assert_eq!(
         notification.list_of_cov_notifications[0].list_of_values[0].time_of_change,
         Some(request_time)
+    );
+}
+
+#[tokio::test]
+async fn clockless_timestamped_cov_multiple_delivers_without_timestamps() {
+    let notification = capture_timestamped_cov_multiple(false).await;
+    assert!(notification.timestamp.is_none());
+    assert_eq!(
+        notification.list_of_cov_notifications[0].list_of_values[0].time_of_change,
+        None
     );
 }
 

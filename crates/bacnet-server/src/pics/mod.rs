@@ -9,7 +9,9 @@ use std::fmt;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device::EXECUTED_SERVICES;
 use bacnet_objects::property_metadata::PropertyConformance;
+use bacnet_types::bitstring::ServicesSupported;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier, ServiceSupported};
+use bacnet_types::primitives::PropertyValue;
 
 use crate::server::ServerConfig;
 
@@ -337,14 +339,38 @@ impl<'a> PicsGenerator<'a> {
     ];
 
     fn build_services(&self) -> Vec<ServiceSupport> {
-        // Executor column comes from the same constant the Device object's
-        // Protocol_Services_Supported is built from, so the PICS cannot drift
-        // from the property (both are cross-checked against the dispatch
-        // table by `executed_services_match_dispatch_table`).
+        // Prefer the effective Device bit string so runtime modes such as an
+        // explicitly clockless server cannot drift from generated PICS. The
+        // static dispatch contract remains the fallback for databases without
+        // a readable Device service property, filtered by database clock mode.
+        let effective_executed = self
+            .db
+            .iter_objects()
+            .filter(|(oid, _)| oid.object_type() == ObjectType::DEVICE)
+            .find_map(|(_, device)| {
+                match device
+                    .read_property(PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED, None)
+                    .ok()?
+                {
+                    PropertyValue::BitString { data, .. } => {
+                        Some(ServicesSupported::from_bacnet(&data))
+                    }
+                    _ => None,
+                }
+            });
         let mut service_map: BTreeMap<&'static str, (bool, bool)> = BTreeMap::new();
-        for service in EXECUTED_SERVICES {
+        let clock_available = self.db.clock_frame().is_some();
+        let executed: Box<dyn Iterator<Item = ServiceSupported> + '_> = match &effective_executed {
+            Some(services) => Box::new(services.iter()),
+            None => Box::new(EXECUTED_SERVICES.iter().copied().filter(move |service| {
+                clock_available
+                    || (*service != ServiceSupported::TIME_SYNCHRONIZATION
+                        && *service != ServiceSupported::UTC_TIME_SYNCHRONIZATION)
+            })),
+        };
+        for service in executed {
             service_map
-                .entry(service_display_name(*service))
+                .entry(service_display_name(service))
                 .or_default()
                 .1 = true;
         }
