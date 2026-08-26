@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use bacnet_encoding::apdu::Apdu;
 use bacnet_endpoint_core::coordinator::{
-    AdmissionKind, AdmissionOutcome, CanonicalPeer, LeaseMetadata, LeaseToken,
-    OutboundTransactionCoordinator, ReserveError, TerminalPolicy,
+    Admission, AdmissionKind, AdmissionOutcome, CanonicalPeer, LeaseMetadata, LeaseOwner,
+    LeaseToken, OutboundTransactionCoordinator, ReserveError, TerminalPolicy,
 };
 use bacnet_types::enums::ConfirmedServiceChoice;
 use bacnet_types::MacAddr;
@@ -103,14 +103,31 @@ impl Tsm {
         service_choice: ConfirmedServiceChoice,
         segmented: bool,
     ) -> Result<(u8, TransactionRegistration), CoordinatedRegistrationError> {
+        self.register_coordinated_transaction_with_policy(
+            destination_mac,
+            peer,
+            service_choice,
+            segmented,
+            TerminalPolicy::EitherAck,
+        )
+    }
+
+    pub(crate) fn register_coordinated_transaction_with_policy(
+        &mut self,
+        destination_mac: MacAddr,
+        peer: CanonicalPeer,
+        service_choice: ConfirmedServiceChoice,
+        segmented: bool,
+        terminal_policy: TerminalPolicy,
+    ) -> Result<(u8, TransactionRegistration), CoordinatedRegistrationError> {
         let coordinator = self
             .coordinator
             .as_ref()
             .ok_or(CoordinatedRegistrationError::CoordinatorUnavailable)?;
         let metadata = if segmented {
-            LeaseMetadata::segmented_requester(peer, service_choice, TerminalPolicy::EitherAck)
+            LeaseMetadata::segmented_requester(peer, service_choice, terminal_policy)
         } else {
-            LeaseMetadata::requester(peer, service_choice, TerminalPolicy::EitherAck)
+            LeaseMetadata::requester(peer, service_choice, terminal_policy)
         };
         let token = coordinator
             .reserve(metadata)
@@ -136,6 +153,66 @@ impl Tsm {
                 Err(CoordinatedRegistrationError::DuplicateInvokeId)
             }
         }
+    }
+
+    pub(crate) fn complete_pre_admitted_terminal_response(
+        &mut self,
+        source_mac: &[u8],
+        admission: &Admission,
+        apdu: &Apdu,
+        response: TsmResponse,
+    ) -> CoordinatedCompletion {
+        if admission.kind() != AdmissionKind::Terminal
+            || admission.metadata().owner() != LeaseOwner::Requester
+            || admission.metadata().peer() != &CanonicalPeer::direct(source_mac)
+        {
+            return CoordinatedCompletion::Rejected;
+        }
+
+        let invoke_id = admission.token().invoke_id();
+        let key = (MacAddr::from_slice(source_mac), invoke_id);
+        let Some(pending) = self.pending.get(&key) else {
+            return CoordinatedCompletion::Rejected;
+        };
+        if pending.lease != PendingLease::Coordinated(admission.token())
+            || pending.expected_service_choice != admission.metadata().service_choice()
+            || !matches!(pending.phase, TransactionPhase::AwaitingResponse)
+        {
+            return CoordinatedCompletion::Rejected;
+        }
+        let owner = pending.owner.clone();
+
+        let observed_service_choice = match (apdu, &response) {
+            (Apdu::SimpleAck(pdu), TsmResponse::SimpleAck) if pdu.invoke_id == invoke_id => {
+                Some(pdu.service_choice)
+            }
+            (Apdu::ComplexAck(pdu), TsmResponse::ComplexAck { .. })
+                if !pdu.segmented && pdu.invoke_id == invoke_id =>
+            {
+                Some(pdu.service_choice)
+            }
+            (Apdu::Error(pdu), TsmResponse::Error { .. }) if pdu.invoke_id == invoke_id => None,
+            (Apdu::Reject(pdu), TsmResponse::Reject { .. }) if pdu.invoke_id == invoke_id => None,
+            (Apdu::Abort(pdu), TsmResponse::Abort { .. }) if pdu.invoke_id == invoke_id => None,
+            _ => return CoordinatedCompletion::Rejected,
+        };
+        if observed_service_choice
+            .is_some_and(|observed| observed != admission.metadata().service_choice())
+        {
+            return CoordinatedCompletion::ServiceChoiceMismatch {
+                expected: admission.metadata().service_choice(),
+                observed: observed_service_choice.expect("observed service exists"),
+            };
+        }
+
+        CoordinatedCompletion::Completed(self.complete_transaction_inner(
+            source_mac,
+            invoke_id,
+            Some(&owner),
+            observed_service_choice,
+            response,
+            PendingRelease::Complete,
+        ))
     }
 
     pub(crate) fn complete_coordinated_terminal_response(

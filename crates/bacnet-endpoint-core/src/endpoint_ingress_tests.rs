@@ -1,14 +1,14 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use bacnet_encoding::npdu::{encode_npdu, Npdu, NpduAddress};
+use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::{DataAttribute, ReceivedNpdu, TransportPort};
 use bacnet_types::enums::NetworkPriority;
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Notify};
 use tokio::time::{timeout, Duration};
 
 use super::*;
@@ -17,6 +17,7 @@ const WAIT: Duration = Duration::from_secs(1);
 
 struct TestTransport {
     receiver: Option<mpsc::Receiver<ReceivedNpdu>>,
+    sent: mpsc::Sender<(Vec<u8>, Vec<u8>)>,
     starts: Arc<AtomicUsize>,
     stops: Arc<AtomicUsize>,
     local_mac: MacAddr,
@@ -24,23 +25,27 @@ struct TestTransport {
 
 struct TestTransportHandle {
     sender: mpsc::Sender<ReceivedNpdu>,
+    sent: mpsc::Receiver<(Vec<u8>, Vec<u8>)>,
     starts: Arc<AtomicUsize>,
     stops: Arc<AtomicUsize>,
 }
 
 fn test_transport() -> (TestTransport, TestTransportHandle) {
     let (sender, receiver) = mpsc::channel(32);
+    let (sent_tx, sent_rx) = mpsc::channel(32);
     let starts = Arc::new(AtomicUsize::new(0));
     let stops = Arc::new(AtomicUsize::new(0));
     (
         TestTransport {
             receiver: Some(receiver),
+            sent: sent_tx,
             starts: Arc::clone(&starts),
             stops: Arc::clone(&stops),
             local_mac: MacAddr::from_slice(&[0xaa]),
         },
         TestTransportHandle {
             sender,
+            sent: sent_rx,
             starts,
             stops,
         },
@@ -60,8 +65,70 @@ impl TransportPort for TestTransport {
         Ok(())
     }
 
-    async fn send_unicast(&self, _npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
+    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
+        self.sent
+            .send((npdu.to_vec(), mac.to_vec()))
+            .await
+            .map_err(|_| Error::Encoding("test sent-frame receiver closed".into()))
+    }
+
+    async fn send_broadcast(&self, _npdu: &[u8]) -> Result<(), Error> {
         Ok(())
+    }
+
+    fn local_mac(&self) -> &[u8] {
+        &self.local_mac
+    }
+}
+
+struct BlockingTransport {
+    receiver: Option<mpsc::Receiver<ReceivedNpdu>>,
+    entered_send: Arc<Notify>,
+    stops: Arc<AtomicUsize>,
+    local_mac: MacAddr,
+}
+
+struct BlockingTransportHandle {
+    _sender: mpsc::Sender<ReceivedNpdu>,
+    entered_send: Arc<Notify>,
+    stops: Arc<AtomicUsize>,
+}
+
+fn blocking_transport() -> (BlockingTransport, BlockingTransportHandle) {
+    let (sender, receiver) = mpsc::channel(1);
+    let entered_send = Arc::new(Notify::new());
+    let stops = Arc::new(AtomicUsize::new(0));
+    (
+        BlockingTransport {
+            receiver: Some(receiver),
+            entered_send: Arc::clone(&entered_send),
+            stops: Arc::clone(&stops),
+            local_mac: MacAddr::from_slice(&[0xaa]),
+        },
+        BlockingTransportHandle {
+            _sender: sender,
+            entered_send,
+            stops,
+        },
+    )
+}
+
+impl TransportPort for BlockingTransport {
+    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
+        self.receiver
+            .take()
+            .ok_or_else(|| Error::Encoding("blocking transport already started".into()))
+    }
+
+    async fn stop(&mut self) -> Result<(), Error> {
+        self.stops.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    async fn send_unicast(&self, _npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
+        self.entered_send.notify_one();
+        std::future::pending::<()>().await;
+        unreachable!("blocking test send is cancelled by endpoint stop")
     }
 
     async fn send_broadcast(&self, _npdu: &[u8]) -> Result<(), Error> {
@@ -145,6 +212,102 @@ async fn loopback_routes_all_apdu_classes_once_and_in_order() {
         endpoint.stop().await.unwrap(),
         ClassifierExit::Cancelled
     ));
+}
+
+#[tokio::test]
+async fn direct_egress_preserves_npdu_flags_priority_and_destination() {
+    let (transport, mut handle) = test_transport();
+    let mut endpoint = EndpointIngress::new(transport, 2);
+    let ingress = endpoint.start().await.unwrap();
+    let egress = ingress.egress.clone();
+
+    egress
+        .send_direct(
+            vec![0x20, 0x2a, 0x0c],
+            MacAddr::from_slice(&[0x44, 0x55]),
+            true,
+            NetworkPriority::URGENT,
+        )
+        .await
+        .unwrap();
+
+    let (npdu, destination) = timeout(WAIT, handle.sent.recv()).await.unwrap().unwrap();
+    let decoded = decode_npdu(Bytes::from(npdu)).unwrap();
+    assert_eq!(destination, [0x44, 0x55]);
+    assert!(decoded.expecting_reply);
+    assert_eq!(decoded.priority, NetworkPriority::URGENT);
+    assert_eq!(decoded.payload.as_ref(), &[0x20, 0x2a, 0x0c]);
+
+    endpoint.stop().await.unwrap();
+    assert!(matches!(
+        egress
+            .send_direct(
+                vec![0x20, 0x2b, 0x0c],
+                MacAddr::from_slice(&[0x44]),
+                false,
+                NetworkPriority::NORMAL,
+            )
+            .await,
+        Err(Error::Encoding(message)) if message == "endpoint shutdown"
+    ));
+}
+
+#[tokio::test]
+async fn saturated_egress_is_bounded_and_stop_cancels_accepted_commands() {
+    let (transport, handle) = blocking_transport();
+    let mut endpoint = EndpointIngress::new(transport, 1);
+    let ingress = endpoint.start().await.unwrap();
+    let egress = ingress.egress.clone();
+
+    let first_egress = egress.clone();
+    let first = tokio::spawn(async move {
+        first_egress
+            .send_direct(
+                vec![0x20, 0x01, 0x0c],
+                MacAddr::from_slice(&[0x01]),
+                false,
+                NetworkPriority::NORMAL,
+            )
+            .await
+    });
+    timeout(WAIT, handle.entered_send.notified()).await.unwrap();
+
+    let second_egress = egress.clone();
+    let second = tokio::spawn(async move {
+        second_egress
+            .send_direct(
+                vec![0x20, 0x02, 0x0c],
+                MacAddr::from_slice(&[0x01]),
+                false,
+                NetworkPriority::NORMAL,
+            )
+            .await
+    });
+    tokio::task::yield_now().await;
+
+    assert!(matches!(
+        egress
+            .send_direct(
+                vec![0x20, 0x03, 0x0c],
+                MacAddr::from_slice(&[0x01]),
+                false,
+                NetworkPriority::NORMAL,
+            )
+            .await,
+        Err(Error::Encoding(message)) if message == "endpoint egress queue is full"
+    ));
+
+    assert!(matches!(
+        timeout(WAIT, endpoint.stop()).await.unwrap().unwrap(),
+        ClassifierExit::Cancelled
+    ));
+    assert_eq!(handle.stops.load(Ordering::SeqCst), 1);
+    for result in [first.await.unwrap(), second.await.unwrap()] {
+        assert!(matches!(
+            result,
+            Err(Error::Encoding(message)) if message == "endpoint shutdown"
+        ));
+    }
 }
 
 #[tokio::test]

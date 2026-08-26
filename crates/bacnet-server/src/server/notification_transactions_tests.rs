@@ -2,7 +2,9 @@ use std::collections::HashSet;
 use std::sync::{Arc as StdArc, Mutex as StdMutex};
 
 use bacnet_encoding::apdu::{AbortPdu, ComplexAck, ErrorPdu, RejectPdu, SegmentAck};
-use bacnet_endpoint_core::coordinator::ReserveError;
+use bacnet_endpoint_core::coordinator::{
+    AdmissionOutcome, OutboundTransactionCoordinator, ReserveError,
+};
 use bacnet_types::enums::{AbortReason, ErrorClass, ErrorCode, RejectReason};
 use bytes::Bytes;
 use tokio::sync::{mpsc, Notify};
@@ -161,6 +163,25 @@ async fn notification_terminals_complete_exactly_once() {
         assert!(!transactions.admit_terminal(&direct_mac, None, &pdu));
         drop(operation);
     }
+}
+
+#[tokio::test]
+async fn injected_coordinator_terminal_is_completed_from_exact_pre_admission() {
+    let coordinator = StdArc::new(OutboundTransactionCoordinator::new());
+    let transactions = NotificationTransactions::with_coordinator(StdArc::clone(&coordinator));
+    let peer = direct_peer(1);
+    let (operation, receiver) = transactions.reserve(peer.clone(), COV_SERVICE).unwrap();
+    let apdu = simple_ack(operation.invoke_id(), COV_SERVICE);
+    let admission = match coordinator.admit(&peer, &apdu).unwrap() {
+        AdmissionOutcome::Admitted(admission) => admission,
+        other => panic!("expected notification admission, got {other:?}"),
+    };
+
+    assert!(transactions.complete_pre_admitted(admission.clone(), &apdu));
+    assert_eq!(receiver.await.unwrap(), CovAckResult::Ack);
+    assert_eq!(coordinator.active_count().unwrap(), 0);
+    assert!(!transactions.complete_pre_admitted(admission, &apdu));
+    drop(operation);
 }
 
 #[tokio::test]

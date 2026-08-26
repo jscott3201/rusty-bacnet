@@ -144,6 +144,30 @@ impl Default for ClientOptions {
     }
 }
 
+pub(crate) fn new_coordinated_tsm(
+    config: &ClientConfig,
+    coordinator: Arc<OutboundTransactionCoordinator>,
+) -> Tsm {
+    Tsm::new_coordinated(
+        TsmConfig {
+            apdu_timeout_ms: config.apdu_timeout_ms,
+            apdu_segment_timeout_ms: config.apdu_timeout_ms,
+            apdu_retries: config.apdu_retries,
+        },
+        coordinator,
+    )
+}
+
+pub(crate) fn confirmed_response_result(response: TsmResponse) -> Result<Bytes, Error> {
+    match response {
+        TsmResponse::SimpleAck => Ok(Bytes::new()),
+        TsmResponse::ComplexAck { service_data } => Ok(service_data),
+        TsmResponse::Error { class, code } => Err(Error::Protocol { class, code }),
+        TsmResponse::Reject { reason } => Err(Error::Reject { reason }),
+        TsmResponse::Abort { reason } => Err(Error::Abort { reason }),
+    }
+}
+
 impl ClientOptions {
     /// Set the COV notification broadcast channel capacity.
     pub fn with_cov_channel_capacity(mut self, capacity: usize) -> Self {

@@ -51,13 +51,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
         let network = Arc::new(network);
 
-        let tsm_config = TsmConfig {
-            apdu_timeout_ms: config.apdu_timeout_ms,
-            apdu_segment_timeout_ms: config.apdu_timeout_ms,
-            apdu_retries: config.apdu_retries,
-        };
         let coordinator = Arc::new(OutboundTransactionCoordinator::new());
-        let tsm = Arc::new(Mutex::new(Tsm::new_coordinated(tsm_config, coordinator)));
+        let tsm = Arc::new(Mutex::new(new_coordinated_tsm(&config, coordinator)));
         let tsm_dispatch = Arc::clone(&tsm);
         let device_table = Arc::new(Mutex::new(DeviceTable::new()));
         let device_table_dispatch = Arc::clone(&device_table);

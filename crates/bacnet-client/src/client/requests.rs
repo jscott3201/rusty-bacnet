@@ -499,13 +499,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 
     pub(super) fn confirmed_response_result(response: TsmResponse) -> Result<Bytes, Error> {
-        match response {
-            TsmResponse::SimpleAck => Ok(Bytes::new()),
-            TsmResponse::ComplexAck { service_data } => Ok(service_data),
-            TsmResponse::Error { class, code } => Err(Error::Protocol { class, code }),
-            TsmResponse::Reject { reason } => Err(Error::Reject { reason }),
-            TsmResponse::Abort { reason } => Err(Error::Abort { reason }),
-        }
+        super::confirmed_response_result(response)
     }
 
     pub(super) async fn send_confirmed_target_apdu(

@@ -1,9 +1,71 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use bacnet_encoding::apdu::{decode_apdu, Apdu};
 use bacnet_network::layer::{NetworkLayer, ReceivedApdu};
 use bacnet_transport::port::TransportPort;
+use bacnet_types::enums::NetworkPriority;
 use bacnet_types::error::Error;
+use bacnet_types::MacAddr;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
+
+fn shutdown_error() -> Error {
+    Error::Encoding("endpoint shutdown".into())
+}
+
+struct DirectEgress {
+    apdu: Vec<u8>,
+    destination_mac: MacAddr,
+    expecting_reply: bool,
+    priority: NetworkPriority,
+    completion: oneshot::Sender<Result<(), Error>>,
+}
+
+/// Bounded direct-APDU sender for roles attached to an endpoint session.
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct EndpointEgress {
+    commands: mpsc::Sender<DirectEgress>,
+    open: Arc<AtomicBool>,
+}
+
+impl EndpointEgress {
+    /// Sends one direct unicast APDU without granting network lifecycle access.
+    #[doc(hidden)]
+    pub async fn send_direct(
+        &self,
+        apdu: Vec<u8>,
+        destination_mac: MacAddr,
+        expecting_reply: bool,
+        priority: NetworkPriority,
+    ) -> Result<(), Error> {
+        if !self.open.load(Ordering::Acquire) {
+            return Err(shutdown_error());
+        }
+
+        let (completion, result) = oneshot::channel();
+        let command = DirectEgress {
+            apdu,
+            destination_mac,
+            expecting_reply,
+            priority,
+            completion,
+        };
+        match self.commands.try_send(command) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Closed(_)) => return Err(shutdown_error()),
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                if !self.open.load(Ordering::Acquire) {
+                    return Err(shutdown_error());
+                }
+                return Err(Error::Encoding("endpoint egress queue is full".into()));
+            }
+        }
+
+        result.await.unwrap_or_else(|_| Err(shutdown_error()))
+    }
+}
 
 /// Destination selected for one decoded APDU.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +106,9 @@ pub struct IngressReceivers {
     pub terminal_or_segment: mpsc::Receiver<ReceivedApdu>,
     /// Traffic that endpoint policy must handle or reclaim.
     pub policy_outcomes: mpsc::Receiver<PolicyOutcome>,
+    /// Direct egress for endpoint role adapters.
+    #[doc(hidden)]
+    pub egress: EndpointEgress,
 }
 
 /// Terminal state reported by the classifier task.
@@ -68,22 +133,24 @@ enum Lifecycle {
 
 /// Owns one network layer and classifies each received APDU exactly once.
 pub struct EndpointIngress<T: TransportPort> {
-    network: NetworkLayer<T>,
+    network: Option<NetworkLayer<T>>,
     queue_capacity: usize,
     lifecycle: Lifecycle,
     cancel_tx: Option<oneshot::Sender<()>>,
-    classifier_task: Option<JoinHandle<ClassifierExit>>,
+    session_task: Option<JoinHandle<Result<ClassifierExit, Error>>>,
+    egress_open: Option<Arc<AtomicBool>>,
 }
 
 impl<T: TransportPort + 'static> EndpointIngress<T> {
     /// Creates ingress with the same capacity for each bounded output queue.
     pub fn new(transport: T, queue_capacity: usize) -> Self {
         Self {
-            network: NetworkLayer::new(transport),
+            network: Some(NetworkLayer::new(transport)),
             queue_capacity,
             lifecycle: Lifecycle::Ready,
             cancel_tx: None,
-            classifier_task: None,
+            session_task: None,
+            egress_open: None,
         }
     }
 
@@ -100,26 +167,45 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             ));
         }
 
-        let apdu_rx = self.network.start().await?;
+        let network = self
+            .network
+            .as_mut()
+            .ok_or_else(|| Error::Encoding("endpoint ingress network owner is missing".into()))?;
+        let apdu_rx = network.start().await?;
         let (inbound_tx, inbound_requests) = mpsc::channel(self.queue_capacity);
         let (terminal_tx, terminal_or_segment) = mpsc::channel(self.queue_capacity);
         let (policy_tx, policy_outcomes) = mpsc::channel(self.queue_capacity);
+        let (egress_tx, egress_rx) = mpsc::channel(self.queue_capacity);
         let (cancel_tx, cancel_rx) = oneshot::channel();
+        let egress_open = Arc::new(AtomicBool::new(true));
+        let egress = EndpointEgress {
+            commands: egress_tx,
+            open: Arc::clone(&egress_open),
+        };
+        let network = self
+            .network
+            .take()
+            .ok_or_else(|| Error::Encoding("endpoint ingress network owner is missing".into()))?;
 
-        self.classifier_task = Some(tokio::spawn(classifier_task(
+        self.session_task = Some(tokio::spawn(session_task(
+            network,
             apdu_rx,
             inbound_tx,
             terminal_tx,
             policy_tx,
+            egress_rx,
             cancel_rx,
+            Arc::clone(&egress_open),
         )));
         self.cancel_tx = Some(cancel_tx);
+        self.egress_open = Some(egress_open);
         self.lifecycle = Lifecycle::Running;
 
         Ok(IngressReceivers {
             inbound_requests,
             terminal_or_segment,
             policy_outcomes,
+            egress,
         })
     }
 
@@ -130,82 +216,123 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         }
 
         self.lifecycle = Lifecycle::Stopped;
+        if let Some(open) = self.egress_open.take() {
+            open.store(false, Ordering::Release);
+        }
         if let Some(cancel_tx) = self.cancel_tx.take() {
             let _ = cancel_tx.send(());
         }
 
-        let classifier_result = match self.classifier_task.take() {
+        match self.session_task.take() {
             Some(task) => task.await.map_err(|error| {
-                Error::Encoding(format!("endpoint ingress classifier failed: {error}"))
-            }),
+                Error::Encoding(format!("endpoint ingress session failed: {error}"))
+            })?,
             None => Err(Error::Encoding(
-                "endpoint ingress classifier task is missing".into(),
+                "endpoint ingress session task is missing".into(),
             )),
-        };
-        let stop_result = self.network.stop().await;
-
-        stop_result?;
-        classifier_result
+        }
     }
 }
 
 impl<T: TransportPort> Drop for EndpointIngress<T> {
     fn drop(&mut self) {
+        if let Some(open) = self.egress_open.take() {
+            open.store(false, Ordering::Release);
+        }
         if let Some(cancel_tx) = self.cancel_tx.take() {
             let _ = cancel_tx.send(());
         }
-        if let Some(task) = self.classifier_task.take() {
+        if let Some(task) = self.session_task.take() {
             task.abort();
         }
     }
 }
 
-async fn classifier_task(
+#[allow(clippy::too_many_arguments)]
+async fn session_task<T: TransportPort + 'static>(
+    mut network: NetworkLayer<T>,
     mut apdu_rx: mpsc::Receiver<ReceivedApdu>,
     inbound_tx: mpsc::Sender<ReceivedApdu>,
     terminal_tx: mpsc::Sender<ReceivedApdu>,
     policy_tx: mpsc::Sender<PolicyOutcome>,
+    mut egress_rx: mpsc::Receiver<DirectEgress>,
     mut cancel_rx: oneshot::Receiver<()>,
-) -> ClassifierExit {
-    loop {
-        let received = tokio::select! {
+    egress_open: Arc<AtomicBool>,
+) -> Result<ClassifierExit, Error> {
+    let mut receive_egress = true;
+    let exit = loop {
+        tokio::select! {
             biased;
-            _ = &mut cancel_rx => return ClassifierExit::Cancelled,
-            received = apdu_rx.recv() => match received {
-                Some(received) => received,
-                None => return ClassifierExit::InputClosed,
-            },
-        };
-
-        let route = match classify(&received) {
-            Ok(route) => route,
-            Err(reason) => {
-                let outcome = PolicyOutcome { reason, received };
-                if let Some(exit) = send_policy(&policy_tx, outcome) {
-                    return exit;
+            _ = &mut cancel_rx => break ClassifierExit::Cancelled,
+            command = egress_rx.recv(), if receive_egress => {
+                let Some(command) = command else {
+                    receive_egress = false;
+                    continue;
+                };
+                let send = network.send_apdu(
+                    &command.apdu,
+                    &command.destination_mac,
+                    command.expecting_reply,
+                    command.priority,
+                );
+                tokio::pin!(send);
+                tokio::select! {
+                    biased;
+                    _ = &mut cancel_rx => {
+                        let _ = command.completion.send(Err(shutdown_error()));
+                        break ClassifierExit::Cancelled;
+                    }
+                    result = &mut send => {
+                        let _ = command.completion.send(result);
+                    }
                 }
-                continue;
             }
-        };
-
-        let send_result = match route {
-            IngressRoute::InboundRequest => inbound_tx.try_send(received),
-            IngressRoute::TerminalOrSegment => terminal_tx.try_send(received),
-        };
-        if let Err(error) = send_result {
-            let (reason, received) = match error {
-                mpsc::error::TrySendError::Full(received) => {
-                    (PolicyReason::RouteFull(route), received)
+            received = apdu_rx.recv() => {
+                let Some(received) = received else {
+                    break ClassifierExit::InputClosed;
+                };
+                if let Some(exit) = route_received(
+                    received,
+                    &inbound_tx,
+                    &terminal_tx,
+                    &policy_tx,
+                ) {
+                    break exit;
                 }
-                mpsc::error::TrySendError::Closed(received) => {
-                    (PolicyReason::RouteClosed(route), received)
-                }
-            };
-            if let Some(exit) = send_policy(&policy_tx, PolicyOutcome { reason, received }) {
-                return exit;
             }
         }
+    };
+
+    egress_open.store(false, Ordering::Release);
+    network.stop().await?;
+    Ok(exit)
+}
+
+fn route_received(
+    received: ReceivedApdu,
+    inbound_tx: &mpsc::Sender<ReceivedApdu>,
+    terminal_tx: &mpsc::Sender<ReceivedApdu>,
+    policy_tx: &mpsc::Sender<PolicyOutcome>,
+) -> Option<ClassifierExit> {
+    let route = match classify(&received) {
+        Ok(route) => route,
+        Err(reason) => return send_policy(policy_tx, PolicyOutcome { reason, received }),
+    };
+
+    let send_result = match route {
+        IngressRoute::InboundRequest => inbound_tx.try_send(received),
+        IngressRoute::TerminalOrSegment => terminal_tx.try_send(received),
+    };
+    if let Err(error) = send_result {
+        let (reason, received) = match error {
+            mpsc::error::TrySendError::Full(received) => (PolicyReason::RouteFull(route), received),
+            mpsc::error::TrySendError::Closed(received) => {
+                (PolicyReason::RouteClosed(route), received)
+            }
+        };
+        return send_policy(policy_tx, PolicyOutcome { reason, received });
     }
+    None
 }
 
 fn classify(received: &ReceivedApdu) -> Result<IngressRoute, PolicyReason> {

@@ -1,5 +1,10 @@
 use super::*;
 
+mod confirmed_response;
+mod endpoint_responder;
+#[cfg(test)]
+#[path = "endpoint_shared_runtime_tests.rs"]
+mod endpoint_shared_runtime_tests;
 mod unconfirmed;
 #[cfg(test)]
 pub(crate) use unconfirmed::EXECUTED_UNCONFIRMED;
@@ -104,11 +109,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let mut ack_buf = BytesMut::with_capacity(512);
         let response = match service_choice {
             s if s == ConfirmedServiceChoice::READ_PROPERTY => {
-                let db = db.read().await;
-                match handlers::handle_read_property(&db, &req.service_request, &mut ack_buf) {
-                    Ok(()) => complex_ack(ack_buf),
-                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
-                }
+                confirmed_response::read_property_response(db, &req).await
             }
             s if s == ConfirmedServiceChoice::WRITE_PROPERTY => {
                 let result = {
@@ -662,25 +663,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         service_choice: ConfirmedServiceChoice,
         error: &Error,
     ) -> Apdu {
-        if let Error::Reject { reason } = error {
-            return Apdu::Reject(RejectPdu {
-                invoke_id,
-                reject_reason: RejectReason::from_raw(*reason),
-            });
-        }
-        let (class, code) = match error {
-            Error::Protocol { class, code } => (*class, *code),
-            _ => (
-                ErrorClass::SERVICES.to_raw() as u32,
-                ErrorCode::OTHER.to_raw() as u32,
-            ),
-        };
-        Apdu::Error(ErrorPdu {
-            invoke_id,
-            service_choice,
-            error_class: ErrorClass::from_raw(class as u16),
-            error_code: ErrorCode::from_raw(code as u16),
-            error_data: Bytes::new(),
-        })
+        confirmed_response::error_apdu_from_error(invoke_id, service_choice, error)
     }
 }

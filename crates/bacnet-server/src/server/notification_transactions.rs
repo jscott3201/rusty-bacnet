@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use bacnet_encoding::apdu::Apdu;
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_endpoint_core::coordinator::{
-    AdmissionKind, AdmissionOutcome, CanonicalPeer, LeaseMetadata, LeaseToken,
-    OutboundTransactionCoordinator, ReserveError,
+    Admission, AdmissionKind, AdmissionOutcome, CanonicalPeer, LeaseMetadata, LeaseOwner,
+    LeaseToken, OutboundTransactionCoordinator, ReserveError,
 };
 use bacnet_types::enums::ConfirmedServiceChoice;
 use tokio::sync::oneshot;
@@ -54,8 +54,12 @@ pub(super) struct NotificationTransactions {
 
 impl NotificationTransactions {
     pub(super) fn new() -> Arc<Self> {
+        Self::with_coordinator(Arc::new(OutboundTransactionCoordinator::new()))
+    }
+
+    pub(super) fn with_coordinator(coordinator: Arc<OutboundTransactionCoordinator>) -> Arc<Self> {
         Arc::new(Self {
-            coordinator: Arc::new(OutboundTransactionCoordinator::new()),
+            coordinator,
             state: Mutex::new(NotificationState {
                 closed: false,
                 pending: HashMap::new(),
@@ -116,12 +120,28 @@ impl NotificationTransactions {
             Ok(_) | Err(_) => return false,
         };
 
+        self.complete_pre_admitted(admission, apdu)
+    }
+
+    pub(super) fn complete_pre_admitted(&self, admission: Admission, apdu: &Apdu) -> bool {
+        if admission.kind() != AdmissionKind::Terminal
+            || admission.metadata().owner() != LeaseOwner::ServerNotification
+        {
+            return false;
+        }
+        let token = admission.token();
         let result = match apdu {
-            Apdu::SimpleAck(_) => CovAckResult::Ack,
-            Apdu::Error(_) | Apdu::Reject(_) | Apdu::Abort(_) => CovAckResult::Error,
+            Apdu::SimpleAck(pdu)
+                if pdu.invoke_id == token.invoke_id()
+                    && pdu.service_choice == admission.metadata().service_choice() =>
+            {
+                CovAckResult::Ack
+            }
+            Apdu::Error(pdu) if pdu.invoke_id == token.invoke_id() => CovAckResult::Error,
+            Apdu::Reject(pdu) if pdu.invoke_id == token.invoke_id() => CovAckResult::Error,
+            Apdu::Abort(pdu) if pdu.invoke_id == token.invoke_id() => CovAckResult::Error,
             _ => return false,
         };
-        let token = admission.token();
         let sender = match self.state.lock() {
             Ok(mut state) => state.pending.remove(&token),
             Err(_) => None,

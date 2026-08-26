@@ -359,6 +359,7 @@ dependencies = [
 name = "bacnet-server"
 version = "0.10.1"
 dependencies = [
+ "bacnet-client",
  "bacnet-encoding",
  "bacnet-endpoint-core",
  "bacnet-network",
