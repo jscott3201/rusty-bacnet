@@ -89,7 +89,7 @@ struct BlockingTransport {
 }
 
 struct BlockingTransportHandle {
-    _sender: mpsc::Sender<ReceivedNpdu>,
+    sender: mpsc::Sender<ReceivedNpdu>,
     entered_send: Arc<Notify>,
     stops: Arc<AtomicUsize>,
 }
@@ -106,7 +106,7 @@ fn blocking_transport() -> (BlockingTransport, BlockingTransportHandle) {
             local_mac: MacAddr::from_slice(&[0xaa]),
         },
         BlockingTransportHandle {
-            _sender: sender,
+            sender,
             entered_send,
             stops,
         },
@@ -256,7 +256,7 @@ async fn direct_egress_preserves_npdu_flags_priority_and_destination() {
 async fn saturated_egress_is_bounded_and_stop_cancels_accepted_commands() {
     let (transport, handle) = blocking_transport();
     let mut endpoint = EndpointIngress::new(transport, 1);
-    let ingress = endpoint.start().await.unwrap();
+    let mut ingress = endpoint.start().await.unwrap();
     let egress = ingress.egress.clone();
 
     let first_egress = egress.clone();
@@ -296,6 +296,17 @@ async fn saturated_egress_is_bounded_and_stop_cancels_accepted_commands() {
             .await,
         Err(Error::Encoding(message)) if message == "endpoint egress queue is full"
     ));
+
+    handle
+        .sender
+        .send(received_npdu(&[0x20, 0x44, 0x0c]))
+        .await
+        .unwrap();
+    let terminal = timeout(WAIT, ingress.terminal_or_segment.recv())
+        .await
+        .expect("blocked egress starved terminal classification")
+        .expect("terminal route closed while egress was blocked");
+    assert_eq!(terminal.apdu.as_ref(), &[0x20, 0x44, 0x0c]);
 
     assert!(matches!(
         timeout(WAIT, endpoint.stop()).await.unwrap().unwrap(),

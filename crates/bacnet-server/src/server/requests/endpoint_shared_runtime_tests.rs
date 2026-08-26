@@ -149,7 +149,9 @@ async fn loopback_shared_runtime_routes_same_invoke_id_by_admitted_role() {
             match coordinator.admit(&peer, &decoded).unwrap() {
                 AdmissionOutcome::Admitted(admission) => match admission.metadata().owner() {
                     LeaseOwner::Requester => {
-                        requester.complete_pre_admitted(admission, decoded, received)
+                        requester
+                            .complete_pre_admitted(admission, decoded, received)
+                            .await
                     }
                     LeaseOwner::ServerNotification => {
                         notification_transactions.complete_pre_admitted(admission, &decoded)

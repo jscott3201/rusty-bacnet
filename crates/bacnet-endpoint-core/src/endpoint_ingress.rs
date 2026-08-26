@@ -260,52 +260,145 @@ async fn session_task<T: TransportPort + 'static>(
     egress_open: Arc<AtomicBool>,
 ) -> Result<ClassifierExit, Error> {
     let mut receive_egress = true;
+    let mut prefer_ingress = true;
     let exit = loop {
-        tokio::select! {
-            biased;
-            _ = &mut cancel_rx => break ClassifierExit::Cancelled,
-            command = egress_rx.recv(), if receive_egress => {
-                let Some(command) = command else {
-                    receive_egress = false;
-                    continue;
-                };
-                let send = network.send_apdu(
-                    &command.apdu,
-                    &command.destination_mac,
-                    command.expecting_reply,
-                    command.priority,
-                );
-                tokio::pin!(send);
-                tokio::select! {
-                    biased;
-                    _ = &mut cancel_rx => {
-                        let _ = command.completion.send(Err(shutdown_error()));
-                        break ClassifierExit::Cancelled;
-                    }
-                    result = &mut send => {
-                        let _ = command.completion.send(result);
-                    }
+        let event = if prefer_ingress {
+            tokio::select! {
+                biased;
+                _ = &mut cancel_rx => SessionEvent::Cancelled,
+                received = apdu_rx.recv() => SessionEvent::Received(received),
+                command = egress_rx.recv(), if receive_egress => SessionEvent::Egress(command),
+            }
+        } else {
+            tokio::select! {
+                biased;
+                _ = &mut cancel_rx => SessionEvent::Cancelled,
+                command = egress_rx.recv(), if receive_egress => SessionEvent::Egress(command),
+                received = apdu_rx.recv() => SessionEvent::Received(received),
+            }
+        };
+
+        match event {
+            SessionEvent::Cancelled => break ClassifierExit::Cancelled,
+            SessionEvent::Received(Some(received)) => {
+                prefer_ingress = !prefer_ingress;
+                if let Some(exit) = route_received(received, &inbound_tx, &terminal_tx, &policy_tx)
+                {
+                    break exit;
                 }
             }
-            received = apdu_rx.recv() => {
-                let Some(received) = received else {
-                    break ClassifierExit::InputClosed;
-                };
-                if let Some(exit) = route_received(
-                    received,
+            SessionEvent::Received(None) => break ClassifierExit::InputClosed,
+            SessionEvent::Egress(Some(command)) => {
+                prefer_ingress = !prefer_ingress;
+                match drive_direct_egress(
+                    &network,
+                    command,
+                    &mut apdu_rx,
                     &inbound_tx,
                     &terminal_tx,
                     &policy_tx,
-                ) {
-                    break exit;
+                    &mut cancel_rx,
+                    &mut prefer_ingress,
+                )
+                .await
+                {
+                    EgressDrive::Complete => {}
+                    EgressDrive::Cancelled => break ClassifierExit::Cancelled,
+                    EgressDrive::Exit(exit) => break exit,
+                }
+            }
+            SessionEvent::Egress(None) => receive_egress = false,
+        }
+    };
+
+    egress_open.store(false, Ordering::Release);
+    egress_rx.close();
+    while let Ok(command) = egress_rx.try_recv() {
+        let _ = command.completion.send(Err(shutdown_error()));
+    }
+    network.stop().await?;
+    Ok(exit)
+}
+
+enum SessionEvent {
+    Cancelled,
+    Received(Option<ReceivedApdu>),
+    Egress(Option<DirectEgress>),
+}
+
+enum EgressDrive {
+    Complete,
+    Cancelled,
+    Exit(ClassifierExit),
+}
+
+enum PendingEvent {
+    Cancelled,
+    Received(Option<ReceivedApdu>),
+    Sent(Result<(), Error>),
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn drive_direct_egress<T: TransportPort + 'static>(
+    network: &NetworkLayer<T>,
+    command: DirectEgress,
+    apdu_rx: &mut mpsc::Receiver<ReceivedApdu>,
+    inbound_tx: &mpsc::Sender<ReceivedApdu>,
+    terminal_tx: &mpsc::Sender<ReceivedApdu>,
+    policy_tx: &mpsc::Sender<PolicyOutcome>,
+    cancel_rx: &mut oneshot::Receiver<()>,
+    prefer_ingress: &mut bool,
+) -> EgressDrive {
+    let DirectEgress {
+        apdu,
+        destination_mac,
+        expecting_reply,
+        priority,
+        completion,
+    } = command;
+    let outcome = {
+        let send = network.send_apdu(&apdu, &destination_mac, expecting_reply, priority);
+        tokio::pin!(send);
+        loop {
+            let event = if *prefer_ingress {
+                tokio::select! {
+                    biased;
+                    _ = &mut *cancel_rx => PendingEvent::Cancelled,
+                    received = apdu_rx.recv() => PendingEvent::Received(received),
+                    result = &mut send => PendingEvent::Sent(result),
+                }
+            } else {
+                tokio::select! {
+                    biased;
+                    _ = &mut *cancel_rx => PendingEvent::Cancelled,
+                    result = &mut send => PendingEvent::Sent(result),
+                    received = apdu_rx.recv() => PendingEvent::Received(received),
+                }
+            };
+
+            match event {
+                PendingEvent::Cancelled => break EgressDrive::Cancelled,
+                PendingEvent::Received(Some(received)) => {
+                    *prefer_ingress = !*prefer_ingress;
+                    if let Some(exit) = route_received(received, inbound_tx, terminal_tx, policy_tx)
+                    {
+                        break EgressDrive::Exit(exit);
+                    }
+                }
+                PendingEvent::Received(None) => {
+                    break EgressDrive::Exit(ClassifierExit::InputClosed);
+                }
+                PendingEvent::Sent(result) => {
+                    *prefer_ingress = !*prefer_ingress;
+                    let _ = completion.send(result);
+                    return EgressDrive::Complete;
                 }
             }
         }
     };
 
-    egress_open.store(false, Ordering::Release);
-    network.stop().await?;
-    Ok(exit)
+    let _ = completion.send(Err(shutdown_error()));
+    outcome
 }
 
 fn route_received(

@@ -3,15 +3,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bacnet_encoding::apdu::{
-    encode_apdu, validate_max_apdu_length, Apdu, ConfirmedRequest as ConfirmedRequestPdu,
+    encode_apdu, validate_max_apdu_length, AbortPdu, Apdu, ConfirmedRequest as ConfirmedRequestPdu,
 };
 use bacnet_endpoint_core::coordinator::{
-    Admission, CanonicalPeer, OutboundTransactionCoordinator, TerminalPolicy,
+    Admission, AdmissionKind, CanonicalPeer, OutboundTransactionCoordinator, TerminalPolicy,
 };
 use bacnet_endpoint_core::endpoint_ingress::EndpointEgress;
 use bacnet_network::layer::ReceivedApdu;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
-use bacnet_types::enums::{ConfirmedServiceChoice, NetworkPriority, PropertyIdentifier};
+use bacnet_types::enums::{
+    AbortReason, ConfirmedServiceChoice, NetworkPriority, PropertyIdentifier,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
@@ -179,9 +181,9 @@ impl EndpointRequester {
         unreachable!("the inclusive retry loop always returns")
     }
 
-    /// Delivers a terminal already admitted by the shared coordinator.
+    /// Handles a response already admitted by the shared coordinator.
     #[doc(hidden)]
-    pub fn complete_pre_admitted(
+    pub async fn complete_pre_admitted(
         &self,
         admission: Admission,
         apdu: Apdu,
@@ -190,41 +192,76 @@ impl EndpointRequester {
         if !self.inner.open.load(Ordering::Acquire) || received.source_network.is_some() {
             return false;
         }
-        let response = match &apdu {
-            Apdu::SimpleAck(_) => TsmResponse::SimpleAck,
-            Apdu::ComplexAck(ack) if !ack.segmented => TsmResponse::ComplexAck {
-                service_data: ack.service_ack.clone(),
-            },
-            Apdu::Error(error) => TsmResponse::Error {
-                class: error.error_class.to_raw() as u32,
-                code: error.error_code.to_raw() as u32,
-            },
-            Apdu::Reject(reject) => TsmResponse::Reject {
-                reason: reject.reject_reason.to_raw(),
-            },
-            Apdu::Abort(abort) => TsmResponse::Abort {
-                reason: abort.abort_reason.to_raw(),
-            },
-            Apdu::SegmentAck(_)
-            | Apdu::ConfirmedRequest(_)
-            | Apdu::UnconfirmedRequest(_)
-            | Apdu::ComplexAck(_) => return false,
-        };
+        match admission.kind() {
+            AdmissionKind::Terminal => {
+                let response = match &apdu {
+                    Apdu::SimpleAck(_) => TsmResponse::SimpleAck,
+                    Apdu::ComplexAck(ack) if !ack.segmented => TsmResponse::ComplexAck {
+                        service_data: ack.service_ack.clone(),
+                    },
+                    Apdu::Error(error) => TsmResponse::Error {
+                        class: error.error_class.to_raw() as u32,
+                        code: error.error_code.to_raw() as u32,
+                    },
+                    Apdu::Reject(reject) => TsmResponse::Reject {
+                        reason: reject.reject_reason.to_raw(),
+                    },
+                    Apdu::Abort(abort) => TsmResponse::Abort {
+                        reason: abort.abort_reason.to_raw(),
+                    },
+                    Apdu::SegmentAck(_)
+                    | Apdu::ConfirmedRequest(_)
+                    | Apdu::UnconfirmedRequest(_)
+                    | Apdu::ComplexAck(_) => return false,
+                };
+                let completion = self.inner.tsm.lock().ok().map(|mut tsm| {
+                    tsm.complete_pre_admitted_terminal_response(
+                        &received.source_mac,
+                        &admission,
+                        &apdu,
+                        response,
+                    )
+                });
+                matches!(
+                    completion,
+                    Some(CoordinatedCompletion::Completed(
+                        CompletionOutcome::Delivered
+                    ))
+                )
+            }
+            AdmissionKind::NonTerminal => {
+                let rejected = self.inner.tsm.lock().is_ok_and(|mut tsm| {
+                    tsm.reject_pre_admitted_segmented_response(
+                        &received.source_mac,
+                        &admission,
+                        &apdu,
+                    )
+                });
+                if !rejected {
+                    return false;
+                }
 
-        let completion = self.inner.tsm.lock().ok().map(|mut tsm| {
-            tsm.complete_pre_admitted_terminal_response(
-                &received.source_mac,
-                &admission,
-                &apdu,
-                response,
-            )
-        });
-        matches!(
-            completion,
-            Some(CoordinatedCompletion::Completed(
-                CompletionOutcome::Delivered
-            ))
-        )
+                let abort = Apdu::Abort(AbortPdu {
+                    sent_by_server: false,
+                    invoke_id: admission.token().invoke_id(),
+                    abort_reason: AbortReason::SEGMENTATION_NOT_SUPPORTED,
+                });
+                let mut encoded = BytesMut::new();
+                if encode_apdu(&mut encoded, &abort).is_err() {
+                    return false;
+                }
+                self.inner
+                    .egress
+                    .send_direct(
+                        encoded.to_vec(),
+                        received.source_mac,
+                        false,
+                        NetworkPriority::NORMAL,
+                    )
+                    .await
+                    .is_ok()
+            }
+        }
     }
 
     /// Cancels exact pending leases and rejects later requester work.

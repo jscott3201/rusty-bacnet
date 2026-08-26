@@ -215,6 +215,46 @@ impl Tsm {
         ))
     }
 
+    pub(crate) fn reject_pre_admitted_segmented_response(
+        &mut self,
+        source_mac: &[u8],
+        admission: &Admission,
+        apdu: &Apdu,
+    ) -> bool {
+        if admission.kind() != AdmissionKind::NonTerminal
+            || admission.metadata().owner() != LeaseOwner::Requester
+            || admission.metadata().peer() != &CanonicalPeer::direct(source_mac)
+        {
+            return false;
+        }
+
+        let Apdu::ComplexAck(ack) = apdu else {
+            return false;
+        };
+        let invoke_id = admission.token().invoke_id();
+        if !ack.segmented
+            || ack.invoke_id != invoke_id
+            || ack.sequence_number != Some(0)
+            || ack.service_choice != admission.metadata().service_choice()
+        {
+            return false;
+        }
+
+        let key = (MacAddr::from_slice(source_mac), invoke_id);
+        let Some(pending) = self.pending.get(&key) else {
+            return false;
+        };
+        if pending.lease != PendingLease::Coordinated(admission.token())
+            || pending.expected_service_choice != admission.metadata().service_choice()
+            || !matches!(pending.phase, TransactionPhase::AwaitingResponse)
+        {
+            return false;
+        }
+        let owner = pending.owner.clone();
+        self.abort_invalid_apdu_in_current_state(source_mac, invoke_id, &owner);
+        true
+    }
+
     pub(crate) fn complete_coordinated_terminal_response(
         &mut self,
         source_mac: &[u8],
