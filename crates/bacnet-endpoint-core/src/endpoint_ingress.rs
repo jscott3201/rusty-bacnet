@@ -14,6 +14,9 @@ fn shutdown_error() -> Error {
     Error::Encoding("endpoint shutdown".into())
 }
 
+const EFFECTIVE_GROUP_APDU_ERROR: &str =
+    "effective group destination requires a valid unconfirmed request APDU";
+
 /// Network-layer destination for one hidden endpoint APDU send.
 #[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -475,6 +478,7 @@ async fn send_network_service_apdu<T: TransportPort + 'static>(
     priority: NetworkPriority,
     data_attributes: &[DataAttribute],
 ) -> Result<(), Error> {
+    validate_effective_group_apdu(apdu, destination)?;
     match destination {
         EndpointApduDestination::Direct { destination_mac } => {
             network
@@ -552,6 +556,25 @@ async fn send_network_service_apdu<T: TransportPort + 'static>(
                 )
                 .await
         }
+    }
+}
+
+fn validate_effective_group_apdu(
+    apdu: &[u8],
+    destination: &EndpointApduDestination,
+) -> Result<(), Error> {
+    if !matches!(
+        destination,
+        EndpointApduDestination::LocalBroadcast
+            | EndpointApduDestination::RemoteBroadcast { .. }
+            | EndpointApduDestination::GlobalBroadcast
+    ) {
+        return Ok(());
+    }
+
+    match decode_apdu(apdu.to_vec().into()) {
+        Ok(Apdu::UnconfirmedRequest(_)) => Ok(()),
+        _ => Err(Error::Encoding(EFFECTIVE_GROUP_APDU_ERROR.into())),
     }
 }
 
