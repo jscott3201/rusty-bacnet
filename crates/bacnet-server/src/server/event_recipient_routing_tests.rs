@@ -106,7 +106,7 @@ pub(super) async fn distribute_with_priority(
     let comm_state = Arc::new(AtomicU8::new(0));
     let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
 
-    let mut db = ObjectDatabase::new();
+    let mut db = clocked_test_database();
     let mut nc = NotificationClass::new(0, "NC-0").unwrap();
     nc.priority = priority;
     for destination in destinations {

@@ -116,7 +116,7 @@ impl Fixture {
     async fn from_object(object: Box<dyn BACnetObject>) -> Self {
         let oid = object.object_identifier();
 
-        let mut db = ObjectDatabase::new();
+        let mut db = clocked_test_database();
         db.add(object).unwrap();
         db.add(Box::new(
             DeviceObject::new(DeviceConfig {

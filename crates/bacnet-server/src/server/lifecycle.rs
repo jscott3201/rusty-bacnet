@@ -20,10 +20,11 @@ pub(super) fn event_enrollment_period(secs: u64) -> Duration {
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
-    pub async fn start(
+    pub(super) async fn start_with_clock_mode(
         mut config: ServerConfig,
-        db: ObjectDatabase,
+        mut db: ObjectDatabase,
         transport: T,
+        clock_config: Option<ClockConfig>,
     ) -> Result<Self, Error> {
         let transport_max = transport.max_apdu_length() as u32;
         config.max_apdu_length = config.max_apdu_length.min(transport_max);
@@ -38,6 +39,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         if config.vendor_id == 0 {
             warn!("vendor_id is 0 (ASHRAE reserved); set a valid vendor ID for production use");
         }
+
+        let clock = clock_config.map(|config| Arc::new(ServerClock::new(config)));
+        let reader = clock
+            .as_ref()
+            .map(|clock| Arc::clone(clock) as Arc<dyn bacnet_objects::clock::ClockReader>);
+        db.set_clock_reader(reader);
 
         let mut network = NetworkLayer::new(transport);
         let apdu_rx = network.start().await?;
@@ -67,6 +74,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let comm_state_dispatch = Arc::clone(&comm_state);
         let dcc_timer_dispatch = Arc::clone(&dcc_timer);
         let config_dispatch = Arc::new(config.clone());
+        let clock_dispatch = clock.clone();
 
         let dispatch_task = tokio::spawn(async move {
             let mut apdu_rx = apdu_rx;
@@ -399,6 +407,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 	                                                    &comm_state_dispatch,
 	                                                    &dcc_timer_dispatch,
 	                                                    &config_dispatch,
+	                                                    &clock_dispatch,
 	                                                    &source_mac,
 	                                                    Apdu::ConfirmedRequest(reassembled),
 	                                                    received.take().unwrap_or_else(|| {
@@ -447,6 +456,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 &comm_state_dispatch,
                                 &dcc_timer_dispatch,
                                 &config_dispatch,
+                                &clock_dispatch,
                                 &source_mac,
                                 decoded,
                                 received.take().unwrap_or_else(|| {
@@ -565,7 +575,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
             loop {
                 interval.tick().await;
-                // TODO: Read UTC_Offset from Device object for local time
                 crate::schedule::tick_schedules(&db_schedule, 0).await;
             }
         }));
@@ -651,6 +660,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         Ok(Self {
             config,
+            _clock: clock,
             network,
             db,
             cov_table,

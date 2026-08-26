@@ -57,7 +57,7 @@ async fn dcc_suppresses_periodic_event_send() {
     let comm_state = Arc::new(AtomicU8::new(1)); // DCC disabled
     let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
 
-    let mut db = ObjectDatabase::new();
+    let mut db = clocked_test_database();
     db.add(Box::new(AnalogInputObject::new(1, "AI-1", 0).unwrap()))
         .unwrap();
     db.add(Box::new(
@@ -199,7 +199,7 @@ async fn fixture_with_commanded_nc(
     let comm_state = Arc::new(AtomicU8::new(0)); // DCC enabled
     let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
 
-    let mut db = ObjectDatabase::new();
+    let mut db = clocked_test_database();
     // NotificationClass with the configured per-transition arrays and a single
     // local-broadcast recipient, so the notification lands on the broadcast wire.
     let mut notification_class =
@@ -406,7 +406,7 @@ async fn event_notification_missing_class_distributes_nothing() {
     let comm_state = Arc::new(AtomicU8::new(0));
     let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
 
-    let mut db = ObjectDatabase::new();
+    let mut db = clocked_test_database();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
             instance: 1,
@@ -546,7 +546,7 @@ pub(super) fn db_with_high_limit_transition(
     .unwrap();
     ai.set_present_value(81.0); // above high_limit -> NORMAL -> HIGH_LIMIT
 
-    let mut db = ObjectDatabase::new();
+    let mut db = clocked_test_database();
     db.add(Box::new(ai)).unwrap();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
@@ -707,7 +707,7 @@ async fn event_enable_cleared_suppresses_periodic_time_delay_send() {
     ai.set_present_value(81.0); // already above high_limit
     let oid = ai.object_identifier();
 
-    let mut db = ObjectDatabase::new();
+    let mut db = clocked_test_database();
     db.add(Box::new(ai)).unwrap();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
@@ -812,7 +812,7 @@ async fn periodic_time_delay_carries_detector_event_type_to_wire() {
     ai.set_present_value(81.0);
     let oid = ai.object_identifier();
 
-    let mut db = ObjectDatabase::new();
+    let mut db = clocked_test_database();
     db.add(Box::new(ai)).unwrap();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {

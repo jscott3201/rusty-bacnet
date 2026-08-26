@@ -91,6 +91,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         comm_state: &Arc<AtomicU8>,
         dcc_timer: &Arc<Mutex<Option<JoinHandle<()>>>>,
         config: &Arc<ServerConfig>,
+        clock: &Option<Arc<ServerClock>>,
         source_mac: &[u8],
         apdu: Apdu,
         mut received: bacnet_network::layer::ReceivedApdu,
@@ -136,12 +137,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let db = Arc::clone(db);
                 let network = Arc::clone(network);
                 let config = Arc::clone(config);
+                let clock = clock.clone();
                 let comm_state = Arc::clone(comm_state);
                 tokio::spawn(async move {
                     Self::handle_unconfirmed_request(
                         &db,
                         &network,
                         &config,
+                        clock.as_ref(),
                         &comm_state,
                         req,
                         &received,

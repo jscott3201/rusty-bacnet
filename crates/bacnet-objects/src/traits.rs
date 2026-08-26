@@ -2,6 +2,7 @@
 
 use std::any::Any;
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use bacnet_types::constructed::BACnetLogRecord;
 use bacnet_types::enums::{
@@ -10,6 +11,7 @@ use bacnet_types::enums::{
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
+use crate::clock::ClockReader;
 use crate::event::TransitionOutcome;
 use crate::event_enrollment::{EventEnrollmentEvalState, EventEnrollmentMonitoredSource};
 use crate::file::FileStorage;
@@ -96,6 +98,13 @@ pub trait BACnetObject: Send + Sync {
     /// Object_Type but omits Property_List. Reading the BACnet Property_List
     /// property applies the additional wire-level universal-property filter.
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]>;
+
+    /// Bind or remove the database's shared wall-clock reader.
+    ///
+    /// Objects that do not expose clock-derived state ignore this internal
+    /// lifecycle hook.
+    #[doc(hidden)]
+    fn bind_clock_internal(&mut self, _clock: Option<Arc<dyn ClockReader>>) {}
 
     /// Whether `write_property` accepts `property` for this object.
     ///

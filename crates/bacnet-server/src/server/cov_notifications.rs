@@ -1,4 +1,4 @@
-use super::cov_clock::{cov_multiple_datetime, cov_multiple_time_remaining, device_utc_offset};
+use super::cov_clock::{cov_multiple_datetime, cov_multiple_time_remaining};
 use super::*;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
@@ -293,18 +293,22 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
 
         let representative = &subscriptions[0];
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default();
-        let (device_oid, items, last_notified, timestamp_date, timestamp_time) = {
+        let (device_oid, items, last_notified, timestamp) = {
             let db = db.read().await;
             let device_oid = db
                 .list_objects()
                 .into_iter()
                 .find(|o| o.object_type() == ObjectType::DEVICE)
                 .unwrap_or_else(|| ObjectIdentifier::new(ObjectType::DEVICE, 0).unwrap());
-            let utc_offset_minutes = device_utc_offset(&db, &device_oid);
-            let (timestamp_date, timestamp_time) = cov_multiple_datetime(now, utc_offset_minutes);
+            let timestamp = if subscriptions.iter().any(|sub| sub.timestamped) {
+                let Some(clock_frame) = db.clock_frame() else {
+                    debug!("Skipping timestamped COVNotificationMultiple without a Device clock");
+                    return;
+                };
+                Some(cov_multiple_datetime(clock_frame))
+            } else {
+                None
+            };
 
             let mut items: Vec<COVNotificationItem> = Vec::new();
             let mut last_notified = Vec::new();
@@ -344,7 +348,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     property_identifier,
                     property_array_index: sub.monitored_property_array_index,
                     value: value_buf.to_vec(),
-                    time_of_change: sub.timestamped.then_some(timestamp_time),
+                    time_of_change: if sub.timestamped {
+                        timestamp.map(|(_, time)| time)
+                    } else {
+                        None
+                    },
                 };
 
                 if let Some(item) = items.iter_mut().find(|item| {
@@ -359,24 +367,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
 
-            (
-                device_oid,
-                items,
-                last_notified,
-                timestamp_date,
-                timestamp_time,
-            )
+            (device_oid, items, last_notified, timestamp)
         };
 
         if items.is_empty() {
             return;
         }
 
-        let timestamp = items
-            .iter()
-            .flat_map(|item| &item.list_of_values)
-            .any(|value| value.time_of_change.is_some())
-            .then_some((timestamp_date, timestamp_time));
         let time_remaining = cov_multiple_time_remaining(representative.expires_at);
 
         let notification = COVNotificationMultipleRequest {

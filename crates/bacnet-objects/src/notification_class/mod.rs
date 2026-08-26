@@ -293,17 +293,15 @@ fn time_in_window(current: &Time, from: &Time, to: &Time) -> bool {
 ///
 /// `utc_secs` is seconds since the Unix epoch (1970-01-01, a Thursday).
 /// `utc_offset_minutes` is the Device object's `UTC_Offset` (signed minutes
-/// east of UTC, Clause 12.32); 0 keeps UTC. The day-of-week follows
+/// west of UTC); 0 keeps UTC. The day-of-week follows
 /// `BACnetDaysOfWeek` (monday(0)..sunday(6), Clause 21): the `+3` makes
 /// Monday=0 because the epoch was a Thursday, and `today_bit = 1 << dow`
 /// uses the same convention as `valid_days`. The returned `Time` is the
 /// local time of day (hundredths are supplied by the caller via `subsec`).
 pub fn local_day_and_time(utc_secs: u64, utc_offset_minutes: i32) -> (u8, Time) {
-    // Shift to local seconds. `saturating_add_signed` clamps to 0 if a negative
-    // offset would cross below the Unix epoch; this only matters for timestamps
-    // in the first ~24h of 1970 and is otherwise a no-op. The offset is bounded
-    // by ±24*60 minutes in practice.
-    let local_secs = utc_secs.saturating_add_signed((utc_offset_minutes as i64) * 60);
+    // BACnet UTC_Offset is signed minutes west of UTC, so local standard time
+    // subtracts it. Saturation only affects values close to the Unix epoch.
+    let local_secs = utc_secs.saturating_add_signed(-i64::from(utc_offset_minutes) * 60);
     let dow = ((local_secs / 86400 + 3) % 7) as u8;
     let today_bit = 1u8 << dow;
     let day_secs = (local_secs % 86400) as u32;

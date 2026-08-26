@@ -6,14 +6,16 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use bacnet_types::constructed::BACnetCOVSubscription;
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, ObjectType, PropertyIdentifier, Segmentation, ServiceSupported,
 };
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
+use crate::clock::{ClockFrame, ClockReader};
 use crate::common::read_property_list_property;
 use crate::traits::BACnetObject;
 
@@ -145,9 +147,10 @@ pub struct DeviceObject {
     /// Protocol_Object_Types_Supported — bitstring indicating which object
     /// types this device supports (one bit per type, MSB-first within each byte).
     protocol_object_types_supported: Vec<u8>,
-    /// Protocol_Services_Supported — bitstring indicating which services
-    /// this device supports (one bit per service, MSB-first within each byte).
-    protocol_services_supported: Vec<u8>,
+    /// Configured executed services before clock-availability filtering.
+    configured_services_supported: Vec<ServiceSupported>,
+    /// Shared dynamic clock sample source. `None` is explicitly clockless.
+    clock: Option<Arc<dyn ClockReader>>,
     /// Active COV subscriptions maintained by the server.
     active_cov_subscriptions: Vec<BACnetCOVSubscription>,
 }
@@ -231,33 +234,6 @@ impl DeviceObject {
         properties.insert(
             PropertyIdentifier::DEVICE_ADDRESS_BINDING,
             PropertyValue::List(Vec::new()),
-        );
-
-        // Placeholder values updated by the server's time sync or system clock.
-        properties.insert(
-            PropertyIdentifier::LOCAL_DATE,
-            PropertyValue::Date(Date {
-                year: 126, // 2026 - 1900
-                month: 3,
-                day: 18,
-                day_of_week: 3, // Wednesday
-            }),
-        );
-        properties.insert(
-            PropertyIdentifier::LOCAL_TIME,
-            PropertyValue::Time(Time {
-                hour: 12,
-                minute: 0,
-                second: 0,
-                hundredths: 0,
-            }),
-        );
-
-        // UTC_Offset: minutes west of UTC (e.g., +300 for EST); subtract it
-        // from UTC to obtain local standard time.
-        properties.insert(
-            PropertyIdentifier::UTC_OFFSET,
-            PropertyValue::Signed(0), // UTC
         );
 
         // Last_Restart_Reason: 0=unknown, 1=coldstart, 2=warmstart, etc.
@@ -353,14 +329,13 @@ impl DeviceObject {
             ObjectType::COLOR_TEMPERATURE.to_raw(),
         ]);
 
-        let protocol_services_supported = compute_services_supported(EXECUTED_SERVICES);
-
         Ok(Self {
             oid,
             properties,
             object_list: vec![oid], // Device itself is always in the list
             protocol_object_types_supported,
-            protocol_services_supported,
+            configured_services_supported: EXECUTED_SERVICES.to_vec(),
+            clock: None,
             active_cov_subscriptions: Vec::new(),
         })
     }
@@ -377,7 +352,7 @@ impl DeviceObject {
     /// The production is closed at you-Are (bit 48); values past it are not
     /// representable and are dropped.
     pub fn set_services_supported(&mut self, services: &[ServiceSupported]) {
-        self.protocol_services_supported = compute_services_supported(services);
+        self.configured_services_supported = services.to_vec();
     }
 
     /// Get the device instance number.
@@ -401,6 +376,25 @@ impl DeviceObject {
     /// Add a single COV subscription.
     pub fn add_cov_subscription(&mut self, sub: BACnetCOVSubscription) {
         self.active_cov_subscriptions.push(sub);
+    }
+
+    fn clock_frame(&self) -> Option<ClockFrame> {
+        self.clock.as_ref()?.read_clock()
+    }
+
+    fn services_supported(&self) -> Vec<u8> {
+        let clock_available = self.clock_frame().is_some();
+        let services = self
+            .configured_services_supported
+            .iter()
+            .copied()
+            .filter(|service| {
+                clock_available
+                    || (*service != ServiceSupported::TIME_SYNCHRONIZATION
+                        && *service != ServiceSupported::UTC_TIME_SYNCHRONIZATION)
+            })
+            .collect::<Vec<_>>();
+        compute_services_supported(&services)
     }
 }
 
@@ -453,6 +447,30 @@ impl BACnetObject for DeviceObject {
             return read_property_list_property(&self.property_list(), array_index);
         }
 
+        if matches!(
+            property,
+            PropertyIdentifier::LOCAL_DATE
+                | PropertyIdentifier::LOCAL_TIME
+                | PropertyIdentifier::UTC_OFFSET
+                | PropertyIdentifier::DAYLIGHT_SAVINGS_STATUS
+        ) {
+            let frame = self.clock_frame().ok_or(Error::Protocol {
+                class: ErrorClass::PROPERTY.to_raw() as u32,
+                code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+            })?;
+            return Ok(match property {
+                PropertyIdentifier::LOCAL_DATE => PropertyValue::Date(frame.local_date),
+                PropertyIdentifier::LOCAL_TIME => PropertyValue::Time(frame.local_time),
+                PropertyIdentifier::UTC_OFFSET => {
+                    PropertyValue::Signed(i32::from(frame.utc_offset))
+                }
+                PropertyIdentifier::DAYLIGHT_SAVINGS_STATUS => {
+                    PropertyValue::Boolean(frame.daylight_savings_status)
+                }
+                _ => unreachable!(),
+            });
+        }
+
         if property == PropertyIdentifier::PROTOCOL_OBJECT_TYPES_SUPPORTED {
             let num_bytes = self.protocol_object_types_supported.len();
             let total_bits = num_bytes * 8;
@@ -474,11 +492,11 @@ impl BACnetObject for DeviceObject {
         }
 
         if property == PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED {
-            let unused =
-                (self.protocol_services_supported.len() * 8 - SERVICES_SUPPORTED_BITS) as u8;
+            let services_supported = self.services_supported();
+            let unused = (services_supported.len() * 8 - SERVICES_SUPPORTED_BITS) as u8;
             return Ok(PropertyValue::BitString {
                 unused_bits: unused,
-                data: self.protocol_services_supported.clone(),
+                data: services_supported,
             });
         }
 
@@ -530,6 +548,14 @@ impl BACnetObject for DeviceObject {
         props.push(PropertyIdentifier::PROTOCOL_OBJECT_TYPES_SUPPORTED);
         props.push(PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED);
         props.push(PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS);
+        if self.clock_frame().is_some() {
+            props.extend([
+                PropertyIdentifier::LOCAL_DATE,
+                PropertyIdentifier::LOCAL_TIME,
+                PropertyIdentifier::UTC_OFFSET,
+                PropertyIdentifier::DAYLIGHT_SAVINGS_STATUS,
+            ]);
+        }
         props.sort_by_key(|p| p.to_raw());
         Cow::Owned(props)
     }
@@ -540,6 +566,10 @@ impl BACnetObject for DeviceObject {
     }
     fn is_deleteable(&self) -> bool {
         false
+    }
+
+    fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
+        self.clock = clock;
     }
 }
 

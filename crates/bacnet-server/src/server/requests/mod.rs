@@ -7,6 +7,8 @@ mod endpoint_responder;
 mod endpoint_shared_runtime_tests;
 mod unconfirmed;
 #[cfg(test)]
+mod unconfirmed_tests;
+#[cfg(test)]
 pub(crate) use unconfirmed::EXECUTED_UNCONFIRMED;
 
 #[cfg(test)]

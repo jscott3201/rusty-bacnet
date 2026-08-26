@@ -4,6 +4,7 @@
 //! Split out of `requests.rs` to keep every file under the 700-LOC cap.
 
 use super::super::*;
+use bacnet_services::device_mgmt::TimeSynchronizationRequest;
 
 #[cfg(test)]
 /// Every unconfirmed service choice with an inbound execution arm in
@@ -24,6 +25,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         db: &Arc<RwLock<ObjectDatabase>>,
         network: &Arc<NetworkLayer<T>>,
         config: &ServerConfig,
+        clock: Option<&Arc<ServerClock>>,
         comm_state: &Arc<AtomicU8>,
         req: UnconfirmedRequestPdu,
         received: &bacnet_network::layer::ReceivedApdu,
@@ -138,13 +140,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             || req.service_choice == UnconfirmedServiceChoice::UTC_TIME_SYNCHRONIZATION
         {
             debug!("Received time synchronization request");
-            if let Some(ref callback) = config.on_time_sync {
-                let data = TimeSyncData {
-                    raw_service_data: req.service_request.clone(),
-                    is_utc: req.service_choice
-                        == UnconfirmedServiceChoice::UTC_TIME_SYNCHRONIZATION,
-                };
-                callback(data);
+            let is_utc = req.service_choice == UnconfirmedServiceChoice::UTC_TIME_SYNCHRONIZATION;
+            if let Err(error) = apply_time_sync_request(
+                clock.map(Arc::as_ref),
+                config,
+                req.service_request.clone(),
+                is_utc,
+            ) {
+                debug!(%error, is_utc, "Ignoring time synchronization request");
             }
         } else if req.service_choice == UnconfirmedServiceChoice::UNCONFIRMED_TEXT_MESSAGE {
             match handlers::handle_text_message(&req.service_request) {
@@ -167,4 +170,23 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             );
         }
     }
+}
+
+pub(super) fn apply_time_sync_request(
+    clock: Option<&ServerClock>,
+    config: &ServerConfig,
+    raw_service_data: Bytes,
+    is_utc: bool,
+) -> Result<(), Error> {
+    let clock = clock.ok_or_else(|| Error::Encoding("Device clock is disabled".into()))?;
+    let request = TimeSynchronizationRequest::decode(&raw_service_data)?;
+    clock.synchronize(request.date, request.time, is_utc)?;
+
+    if let Some(callback) = &config.on_time_sync {
+        callback(TimeSyncData {
+            raw_service_data,
+            is_utc,
+        });
+    }
+    Ok(())
 }

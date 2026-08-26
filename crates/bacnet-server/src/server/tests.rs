@@ -13,6 +13,62 @@ fn server_config_time_sync_callback_default_is_none() {
     assert!(config.life_safety_operation_authorizer.is_none());
 }
 
+#[tokio::test]
+async fn default_and_clockless_start_bind_truthful_device_clock() {
+    use bacnet_objects::device::{DeviceConfig, DeviceObject};
+    use bacnet_objects::traits::BACnetObject;
+    use bacnet_types::bitstring::ServicesSupported;
+    use bacnet_types::enums::ServiceSupported;
+
+    async fn assert_mode(clockless: bool) {
+        let device = DeviceObject::new(DeviceConfig::default()).unwrap();
+        let oid = device.object_identifier();
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(device)).unwrap();
+        let transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+        let mut server = if clockless {
+            BACnetServer::start_clockless(ServerConfig::default(), db, transport)
+                .await
+                .unwrap()
+        } else {
+            BACnetServer::start(ServerConfig::default(), db, transport)
+                .await
+                .unwrap()
+        };
+
+        let db = server.db.read().await;
+        let device = db.get(&oid).unwrap();
+        for property in [
+            PropertyIdentifier::LOCAL_DATE,
+            PropertyIdentifier::LOCAL_TIME,
+            PropertyIdentifier::UTC_OFFSET,
+            PropertyIdentifier::DAYLIGHT_SAVINGS_STATUS,
+        ] {
+            assert_eq!(device.read_property(property, None).is_ok(), !clockless);
+        }
+        let PropertyValue::BitString { data, .. } = device
+            .read_property(PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED, None)
+            .unwrap()
+        else {
+            panic!("expected services bit string");
+        };
+        let services = ServicesSupported::from_bacnet(&data);
+        assert_eq!(
+            services.contains(ServiceSupported::TIME_SYNCHRONIZATION),
+            !clockless
+        );
+        assert_eq!(
+            services.contains(ServiceSupported::UTC_TIME_SYNCHRONIZATION),
+            !clockless
+        );
+        drop(db);
+        server.stop().await.unwrap();
+    }
+
+    assert_mode(false).await;
+    assert_mode(true).await;
+}
+
 #[test]
 fn all_builders_assign_life_safety_operation_authorizer() {
     let generic =

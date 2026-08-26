@@ -3,6 +3,7 @@ use super::*;
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_objects::analog::AnalogOutputObject;
+use bacnet_objects::clock::ClockFrame;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::{Date, Time};
@@ -133,73 +134,26 @@ fn confirmed_cov_multiple_apdu_uses_multiple_service_choice() {
 
 #[test]
 fn cov_multiple_timestamp_uses_device_local_bacnet_date_and_time() {
-    let (date, time) = cov_multiple_datetime(Duration::ZERO, 0);
-    assert_eq!(
-        date,
-        Date {
-            year: 70,
-            month: 1,
-            day: 1,
-            day_of_week: 4,
-        }
-    );
-    assert_eq!(
-        time,
-        Time {
-            hour: 0,
-            minute: 0,
-            second: 0,
-            hundredths: 0,
-        }
-    );
-
-    // 2024-02-29T12:34:56.780Z exercises leap-day and hundredths handling.
-    let (date, time) = cov_multiple_datetime(Duration::new(1_709_210_096, 780_000_000), 0);
-    assert_eq!(
-        date,
-        Date {
+    let frame = ClockFrame {
+        local_date: Date {
             year: 124,
             month: 2,
             day: 29,
             day_of_week: 4,
-        }
-    );
-    assert_eq!(
-        time,
-        Time {
+        },
+        local_time: Time {
             hour: 12,
             minute: 34,
             second: 56,
             hundredths: 78,
-        }
-    );
-
-    // BACnet UTC_Offset is positive west of UTC and is subtracted. At +60,
-    // 1970-01-02T00:00Z is still 1970-01-01 locally.
-    let (date, time) = cov_multiple_datetime(Duration::new(86_400, 0), 60);
+        },
+        utc_offset: 300,
+        daylight_savings_status: true,
+    };
     assert_eq!(
-        date,
-        Date {
-            year: 70,
-            month: 1,
-            day: 1,
-            day_of_week: 4,
-        }
+        cov_multiple_datetime(frame),
+        (frame.local_date, frame.local_time)
     );
-    assert_eq!(time.hour, 23);
-
-    // A negative (east-of-UTC) offset advances the local civil day.
-    let (date, time) = cov_multiple_datetime(Duration::new(86_399, 0), -60);
-    assert_eq!(
-        date,
-        Date {
-            year: 70,
-            month: 1,
-            day: 2,
-            day_of_week: 5,
-        }
-    );
-    assert_eq!(time.hour, 0);
 }
 
 #[tokio::test]
@@ -396,7 +350,7 @@ async fn timestamped_cov_multiple_reports_datetime_and_remaining_lifetime() {
 
     let ao_oid = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap();
     let device_oid = ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap();
-    let mut db = ObjectDatabase::new();
+    let mut db = clocked_test_database();
     let mut device = DeviceObject::new(DeviceConfig {
         instance: 1234,
         name: "Timestamped-COV-Multiple-Test".into(),
@@ -469,7 +423,7 @@ async fn confirmed_cov_single_and_multiple_retries_retain_their_leases() {
     let single_mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC1]);
     let multiple_mac = MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC2]);
 
-    let mut db = ObjectDatabase::new();
+    let mut db = clocked_test_database();
     let mut device = DeviceObject::new(DeviceConfig {
         instance: 1234,
         name: "Confirmed-COV-Retry-Test".into(),

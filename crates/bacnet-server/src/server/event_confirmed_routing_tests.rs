@@ -85,7 +85,7 @@ impl Harness {
         let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
         let notification_transactions = NotificationTransactions::new();
 
-        let mut db = ObjectDatabase::new();
+        let mut db = clocked_test_database();
         let mut nc = NotificationClass::new(0, "NC-0").unwrap();
         nc.priority = [255, 255, 255];
         for destination in destinations {
@@ -200,6 +200,7 @@ impl Harness {
             &self.comm_state,
             &Arc::new(Mutex::new(None::<JoinHandle<()>>)),
             &Arc::new(ServerConfig::default()),
+            &None,
             source_mac,
             apdu,
             bacnet_network::layer::ReceivedApdu {

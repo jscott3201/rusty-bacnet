@@ -320,12 +320,12 @@ fn local_day_and_time_day_bits_match_bacnet_days_of_week() {
 
 #[test]
 fn local_day_and_time_offset_shifts_day_and_time() {
-    // +60 min: UTC 23:00 Thu -> Fri 00:00 local (bit 4 = 0x10).
-    let (bit, t) = local_day_and_time(23 * 3600, 60);
+    // -60 min (east): UTC 23:00 Thu -> Fri 00:00 local (bit 4 = 0x10).
+    let (bit, t) = local_day_and_time(23 * 3600, -60);
     assert_eq!(bit, 0x10, "UTC 23:00 Thu +60min rolls to Friday bit 4");
     assert_eq!((t.hour, t.minute, t.second), (0, 0, 0));
-    // -60 min: UTC 00:30 Fri (86400+30*60) -> Thu 23:30 local (bit 3 = 0x08).
-    let (bit, t) = local_day_and_time(86400 + 30 * 60, -60);
+    // +60 min (west): UTC 00:30 Fri -> Thu 23:30 local (bit 3 = 0x08).
+    let (bit, t) = local_day_and_time(86400 + 30 * 60, 60);
     assert_eq!(
         bit, 0x08,
         "UTC 00:30 next day -60min rolls back to Thursday"

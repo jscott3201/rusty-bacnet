@@ -2,8 +2,8 @@
 //!
 //! - DeviceCommunicationControl (Clause 15.4)
 //! - ReinitializeDevice (Clause 15.4)
-//! - TimeSynchronization (Clause 16.10)
-//! - UTCTimeSynchronization (Clause 16.10)
+//! - TimeSynchronization (§16.7)
+//! - UTCTimeSynchronization (§16.8)
 
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
@@ -189,6 +189,15 @@ impl TimeSynchronizationRequest {
         let mut offset = 0;
 
         let (tag, pos) = tags::decode_tag(data, offset)?;
+        if tag.class != tags::TagClass::Application
+            || tag.number != tags::app_tag::DATE
+            || tag.length != 4
+        {
+            return Err(Error::decoding(
+                offset,
+                "TimeSync expected application Date",
+            ));
+        }
         let end = pos + tag.length as usize;
         if end > data.len() {
             return Err(Error::decoding(pos, "TimeSync truncated at date"));
@@ -197,11 +206,23 @@ impl TimeSynchronizationRequest {
         offset = end;
 
         let (tag, pos) = tags::decode_tag(data, offset)?;
+        if tag.class != tags::TagClass::Application
+            || tag.number != tags::app_tag::TIME
+            || tag.length != 4
+        {
+            return Err(Error::decoding(
+                offset,
+                "TimeSync expected application Time",
+            ));
+        }
         let end = pos + tag.length as usize;
         if end > data.len() {
             return Err(Error::decoding(pos, "TimeSync truncated at time"));
         }
         let time = Time::decode(&data[pos..end])?;
+        if end != data.len() {
+            return Err(Error::decoding(end, "TimeSync contains trailing data"));
+        }
 
         Ok(Self { date, time })
     }
@@ -352,6 +373,49 @@ mod tests {
         req.encode(&mut buf);
         let decoded = TimeSynchronizationRequest::decode(&buf).unwrap();
         assert_eq!(req, decoded);
+    }
+
+    #[test]
+    fn time_sync_requires_exact_application_tags_and_no_trailing_data() {
+        let mut wrong_date = BytesMut::new();
+        primitives::encode_app_time(
+            &mut wrong_date,
+            &Time {
+                hour: 1,
+                minute: 2,
+                second: 3,
+                hundredths: 4,
+            },
+        );
+        primitives::encode_app_time(
+            &mut wrong_date,
+            &Time {
+                hour: 1,
+                minute: 2,
+                second: 3,
+                hundredths: 4,
+            },
+        );
+        assert!(TimeSynchronizationRequest::decode(&wrong_date).is_err());
+
+        let request = TimeSynchronizationRequest {
+            date: Date {
+                year: 124,
+                month: 7,
+                day: 4,
+                day_of_week: 4,
+            },
+            time: Time {
+                hour: 9,
+                minute: 15,
+                second: 0,
+                hundredths: 0,
+            },
+        };
+        let mut trailing = BytesMut::new();
+        request.encode(&mut trailing);
+        trailing.extend_from_slice(&[0]);
+        assert!(TimeSynchronizationRequest::decode(&trailing).is_err());
     }
 
     // -----------------------------------------------------------------------

@@ -1,4 +1,49 @@
 use super::*;
+use crate::clock::{ClockFrame, ClockReader};
+use bacnet_types::primitives::{Date, Time};
+use std::sync::{Arc, Mutex};
+
+#[derive(Clone)]
+struct FakeClock(Arc<Mutex<Option<ClockFrame>>>);
+
+impl FakeClock {
+    fn new(frame: ClockFrame) -> Self {
+        Self(Arc::new(Mutex::new(Some(frame))))
+    }
+
+    fn set(&self, frame: ClockFrame) {
+        *self.0.lock().unwrap() = Some(frame);
+    }
+}
+
+impl ClockReader for FakeClock {
+    fn read_clock(&self) -> Option<ClockFrame> {
+        *self.0.lock().ok()?
+    }
+}
+
+fn clock_frame(hour: u8, minute: u8) -> ClockFrame {
+    ClockFrame {
+        local_date: Date {
+            year: 126,
+            month: 8,
+            day: 26,
+            day_of_week: 3,
+        },
+        local_time: Time {
+            hour,
+            minute,
+            second: 30,
+            hundredths: 25,
+        },
+        utc_offset: 300,
+        daylight_savings_status: true,
+    }
+}
+
+fn bind_clock(device: &mut DeviceObject, clock: FakeClock) {
+    device.bind_clock_internal(Some(Arc::new(clock)));
+}
 
 fn make_device() -> DeviceObject {
     DeviceObject::new(DeviceConfig {
@@ -276,7 +321,8 @@ fn read_protocol_services_supported() {
     use bacnet_types::bitstring::ServicesSupported;
     use bacnet_types::enums::ServiceSupported;
 
-    let dev = make_device();
+    let mut dev = make_device();
+    bind_clock(&mut dev, FakeClock::new(clock_frame(12, 0)));
     let val = dev
         .read_property(PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED, None)
         .unwrap();
@@ -309,6 +355,76 @@ fn read_protocol_services_supported() {
             assert!(!ss.contains(ServiceSupported::UNCONFIRMED_COV_NOTIFICATION));
         }
         _ => panic!("Expected BitString"),
+    }
+}
+
+#[test]
+fn clockless_device_omits_clock_properties_and_sync_services() {
+    use bacnet_types::bitstring::ServicesSupported;
+
+    let dev = make_device();
+    let props = dev.property_list();
+    for property in [
+        PropertyIdentifier::LOCAL_DATE,
+        PropertyIdentifier::LOCAL_TIME,
+        PropertyIdentifier::UTC_OFFSET,
+        PropertyIdentifier::DAYLIGHT_SAVINGS_STATUS,
+    ] {
+        assert!(!props.contains(&property));
+        assert!(matches!(
+            dev.read_property(property, None),
+            Err(Error::Protocol { class, code })
+                if class == ErrorClass::PROPERTY.to_raw() as u32
+                    && code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32
+        ));
+    }
+
+    let PropertyValue::BitString { data, .. } = dev
+        .read_property(PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED, None)
+        .unwrap()
+    else {
+        panic!("Expected BitString");
+    };
+    let services = ServicesSupported::from_bacnet(&data);
+    assert!(!services.contains(ServiceSupported::TIME_SYNCHRONIZATION));
+    assert!(!services.contains(ServiceSupported::UTC_TIME_SYNCHRONIZATION));
+}
+
+#[test]
+fn bound_device_reads_one_advancing_clock_source() {
+    let mut dev = make_device();
+    let clock = FakeClock::new(clock_frame(9, 15));
+    bind_clock(&mut dev, clock.clone());
+
+    assert_eq!(
+        dev.read_property(PropertyIdentifier::LOCAL_TIME, None)
+            .unwrap(),
+        PropertyValue::Time(clock_frame(9, 15).local_time)
+    );
+    assert_eq!(
+        dev.read_property(PropertyIdentifier::UTC_OFFSET, None)
+            .unwrap(),
+        PropertyValue::Signed(300)
+    );
+    assert_eq!(
+        dev.read_property(PropertyIdentifier::DAYLIGHT_SAVINGS_STATUS, None)
+            .unwrap(),
+        PropertyValue::Boolean(true)
+    );
+
+    clock.set(clock_frame(9, 16));
+    assert_eq!(
+        dev.read_property(PropertyIdentifier::LOCAL_TIME, None)
+            .unwrap(),
+        PropertyValue::Time(clock_frame(9, 16).local_time)
+    );
+    for property in [
+        PropertyIdentifier::LOCAL_DATE,
+        PropertyIdentifier::LOCAL_TIME,
+        PropertyIdentifier::UTC_OFFSET,
+        PropertyIdentifier::DAYLIGHT_SAVINGS_STATUS,
+    ] {
+        assert!(dev.property_list().contains(&property));
     }
 }
 

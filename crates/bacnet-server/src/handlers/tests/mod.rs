@@ -20,7 +20,7 @@ fn make_db_with_msi() -> ObjectDatabase {
 }
 
 fn make_db_with_device_and_ai() -> ObjectDatabase {
-    let mut db = ObjectDatabase::new();
+    let mut db = crate::server::clocked_test_database();
     let device = bacnet_objects::device::DeviceObject::new(bacnet_objects::device::DeviceConfig {
         instance: 1,
         name: "TestDevice".into(),

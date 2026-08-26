@@ -30,7 +30,7 @@ use bacnet_network::layer::NetworkLayer;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::event::EventStateChange;
 use bacnet_objects::notification_class::{
-    get_notification_recipients_strict, local_day_and_time, resolve_transition_priority_ack,
+    get_notification_recipients_strict, resolve_transition_priority_ack,
 };
 use bacnet_services::alarm_event::EventNotificationRequest;
 use bacnet_services::common::BACnetPropertyValue;
@@ -284,7 +284,7 @@ pub struct ServerConfig {
     pub vendor_id: u16,
     /// Timeout in ms before retrying a failed confirmed COV notification send (default 3000ms).
     pub cov_retry_timeout_ms: u64,
-    /// Optional callback invoked when a TimeSynchronization request is received.
+    /// Optional observer invoked after a time-synchronization request is accepted.
     pub on_time_sync: Option<Arc<dyn Fn(TimeSyncData) + Send + Sync>>,
     /// Optional LifeSafetyOperation authorization policy.
     ///
@@ -746,6 +746,8 @@ struct SegmentedRequestState {
 /// BACnet server with APDU dispatch and service handling.
 pub struct BACnetServer<T: TransportPort> {
     config: ServerConfig,
+    /// Server-owned clock controller; absent in explicit clockless mode.
+    _clock: Option<Arc<ServerClock>>,
     /// Shared network layer (also held by dispatch task; read by
     /// [`write_local`](Self::write_local) for post-write COV/event sends).
     network: Arc<NetworkLayer<T>>,
@@ -989,6 +991,11 @@ impl ScServerBuilder {
     }
 }
 
+mod clock;
+#[cfg(test)]
+pub(crate) use clock::clocked_test_database;
+pub use clock::ClockConfig;
+use clock::ServerClock;
 mod cov_clock;
 mod cov_notifications;
 mod dispatch;

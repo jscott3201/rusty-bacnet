@@ -1,11 +1,13 @@
 //! ObjectDatabase — stores and retrieves BACnet objects by identifier.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
+use crate::clock::{ClockFrame, ClockReader};
 use crate::event_enrollment::EventEnrollmentMonitoredSource;
 use crate::traits::BACnetObject;
 
@@ -15,6 +17,8 @@ use crate::traits::BACnetObject;
 /// Maintains secondary indexes for O(1) name lookup and O(1) type lookup.
 pub struct ObjectDatabase {
     objects: HashMap<ObjectIdentifier, Box<dyn BACnetObject>>,
+    /// Shared Device clock reader. `None` is an explicit clockless database.
+    clock: Option<Arc<dyn ClockReader>>,
     /// Reverse index: object name → ObjectIdentifier for uniqueness enforcement.
     name_index: HashMap<String, ObjectIdentifier>,
     /// Type index: object type → set of ObjectIdentifiers for fast enumeration.
@@ -38,6 +42,7 @@ impl ObjectDatabase {
     pub fn new() -> Self {
         Self {
             objects: HashMap::new(),
+            clock: None,
             name_index: HashMap::new(),
             type_index: HashMap::new(),
             invalid_enrollment_eval_state: HashSet::new(),
@@ -49,7 +54,8 @@ impl ObjectDatabase {
     ///
     /// Returns `Err` if another object already has the same `object_name()`.
     /// Replacing an object with the same OID is allowed (the old object is removed).
-    pub fn add(&mut self, object: Box<dyn BACnetObject>) -> Result<(), Error> {
+    pub fn add(&mut self, mut object: Box<dyn BACnetObject>) -> Result<(), Error> {
+        object.bind_clock_internal(self.clock.clone());
         let oid = object.object_identifier();
         let name = object.object_name().to_string();
 
@@ -242,6 +248,21 @@ impl ObjectDatabase {
     /// Avoids the double-lookup pattern of `list_objects()` followed by `get()`.
     pub fn iter_objects(&self) -> impl Iterator<Item = (ObjectIdentifier, &dyn BACnetObject)> {
         self.objects.iter().map(|(&oid, obj)| (oid, obj.as_ref()))
+    }
+
+    /// Bind one clock reader to the database and every object it contains.
+    ///
+    /// Devices added after this call receive the same reader in [`add`](Self::add).
+    pub fn set_clock_reader(&mut self, clock: Option<Arc<dyn ClockReader>>) {
+        self.clock = clock;
+        for object in self.objects.values_mut() {
+            object.bind_clock_internal(self.clock.clone());
+        }
+    }
+
+    /// Read one coherent sample from the database's shared clock.
+    pub fn clock_frame(&self) -> Option<ClockFrame> {
+        self.clock.as_ref()?.read_clock()
     }
 
     /// Visit every `(ObjectIdentifier, &mut dyn BACnetObject)` pair.
