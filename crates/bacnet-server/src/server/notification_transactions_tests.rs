@@ -405,6 +405,7 @@ async fn dispatch_keeps_segment_and_complex_acks_out_of_notification_completion(
                 apdu: Bytes::new(),
                 source_mac: source_mac.clone(),
                 source_network: None,
+                link_layer_group: false,
                 is_group: false,
                 data_attributes: Vec::new(),
                 reply_tx: None,

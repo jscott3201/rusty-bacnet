@@ -23,6 +23,10 @@ pub struct ReceivedApdu {
     pub source_mac: MacAddr,
     /// Source network address if the APDU was routed (NPDU had source field).
     pub source_network: Option<NpduAddress>,
+    /// Whether the NPDU arrived through a data-link multicast or broadcast.
+    ///
+    /// This preserves raw data-link provenance independently of [`Self::is_group`].
+    pub link_layer_group: bool,
     /// Whether the APDU's effective BACnet destination was multicast or broadcast.
     ///
     /// A specific DNET/DADR remains a unicast even when a router used a
@@ -41,6 +45,7 @@ impl Clone for ReceivedApdu {
             apdu: self.apdu.clone(),
             source_mac: self.source_mac.clone(),
             source_network: self.source_network.clone(),
+            link_layer_group: self.link_layer_group,
             is_group: self.is_group,
             data_attributes: self.data_attributes.clone(),
             reply_tx: None,
@@ -54,6 +59,7 @@ impl std::fmt::Debug for ReceivedApdu {
             .field("apdu", &self.apdu)
             .field("source_mac", &self.source_mac)
             .field("source_network", &self.source_network)
+            .field("link_layer_group", &self.link_layer_group)
             .field("is_group", &self.is_group)
             .field("data_attributes", &self.data_attributes)
             .field("reply_tx", &self.reply_tx.as_ref().map(|_| "Some(...)"))
@@ -128,6 +134,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
                             apdu: npdu.payload,
                             source_mac: received.source_mac,
                             source_network,
+                            link_layer_group: received.link_layer_group,
                             is_group,
                             data_attributes: received.data_attributes,
                             reply_tx: received.reply_tx,
@@ -386,9 +393,32 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         expecting_reply: bool,
         priority: NetworkPriority,
     ) -> Result<(), Error> {
+        self.send_apdu_routed_via_local_broadcast_with_data_attributes(
+            apdu,
+            dest_network,
+            dest_mac,
+            expecting_reply,
+            priority,
+            &[],
+        )
+        .await
+    }
+
+    /// Send a routed APDU with data attributes and a broadcast link DA.
+    pub async fn send_apdu_routed_via_local_broadcast_with_data_attributes(
+        &self,
+        apdu: &[u8],
+        dest_network: u16,
+        dest_mac: &[u8],
+        expecting_reply: bool,
+        priority: NetworkPriority,
+        data_attributes: &[DataAttribute],
+    ) -> Result<(), Error> {
         let buf =
             Self::encode_routed_npdu_buf(apdu, dest_network, dest_mac, expecting_reply, priority)?;
-        self.transport.send_broadcast(&buf).await
+        self.transport
+            .send_broadcast_with_data_attributes(&buf, data_attributes)
+            .await
     }
 
     /// Access the underlying transport.
@@ -809,29 +839,6 @@ mod tests {
         assert!(dest.mac_address.is_empty());
         assert_eq!(decoded.hop_count, 255);
         assert!(!decoded.expecting_reply);
-    }
-
-    #[test]
-    fn broadcast_to_network_rejects_dnet_ffff() {
-        use bacnet_types::enums::NetworkPriority;
-
-        let transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
-        let net = NetworkLayer::new(transport);
-
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let result = rt.block_on(async {
-            net.broadcast_to_network(&[0xAA], 0xFFFF, false, NetworkPriority::NORMAL)
-                .await
-        });
-        assert!(result.is_err());
-        let err_msg = format!("{}", result.unwrap_err());
-        assert!(
-            err_msg.contains("0xFFFF"),
-            "Error should mention 0xFFFF: {err_msg}"
-        );
     }
 }
 

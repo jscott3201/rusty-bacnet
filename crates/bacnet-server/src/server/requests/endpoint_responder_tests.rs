@@ -34,7 +34,8 @@ fn read_property_request(invoke_id: u8) -> Bytes {
 
 #[tokio::test]
 async fn responder_moves_reply_sender_once_and_preserves_routed_destination() {
-    let (endpoint_transport, _peer_transport) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+    let (endpoint_transport, mut peer_transport) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+    let mut peer_rx = peer_transport.start().await.unwrap();
     let mut endpoint = EndpointIngress::new(endpoint_transport, 2);
     let ingress = endpoint.start().await.unwrap();
     let mut db = ObjectDatabase::new();
@@ -51,6 +52,7 @@ async fn responder_moves_reply_sender_once_and_preserves_routed_destination() {
         apdu: read_property_request(0x31),
         source_mac: MacAddr::from_slice(&[0x02]),
         source_network: Some(routed_source.clone()),
+        link_layer_group: false,
         is_group: false,
         data_attributes: Vec::new(),
         reply_tx: Some(reply_tx),
@@ -71,6 +73,10 @@ async fn responder_moves_reply_sender_once_and_preserves_routed_destination() {
     bacnet_encoding::primitives::encode_property_value(&mut expected, &PropertyValue::Real(42.0))
         .unwrap();
     assert_eq!(ack.property_value, expected.to_vec());
+    assert!(matches!(
+        peer_rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
 
     responder.close();
     assert!(matches!(
@@ -79,6 +85,7 @@ async fn responder_moves_reply_sender_once_and_preserves_routed_destination() {
                 apdu: read_property_request(0x32),
                 source_mac: MacAddr::from_slice(&[0x02]),
                 source_network: None,
+                link_layer_group: false,
                 is_group: false,
                 data_attributes: Vec::new(),
                 reply_tx: None,
@@ -87,4 +94,53 @@ async fn responder_moves_reply_sender_once_and_preserves_routed_destination() {
         Err(Error::Encoding(message)) if message == "endpoint shutdown"
     ));
     endpoint.stop().await.unwrap();
+    peer_transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn responder_routes_reply_to_original_source_via_immediate_router() {
+    let (endpoint_transport, mut router_transport) =
+        LoopbackTransport::pair(vec![0x01], vec![0x02]);
+    let mut router_rx = router_transport.start().await.unwrap();
+    let mut endpoint = EndpointIngress::new(endpoint_transport, 2);
+    let ingress = endpoint.start().await.unwrap();
+    let mut db = ObjectDatabase::new();
+    let mut analog = AnalogInputObject::new(7, "routed-input", 0).unwrap();
+    analog.set_present_value(42.0);
+    db.add(Box::new(analog)).unwrap();
+    let responder = EndpointResponder::new(Arc::new(RwLock::new(db)), ingress.egress);
+    let routed_source = NpduAddress {
+        network: 77,
+        mac_address: MacAddr::from_slice(&[0x44, 0x55]),
+    };
+
+    assert!(responder
+        .handle(ReceivedApdu {
+            apdu: read_property_request(0x41),
+            source_mac: MacAddr::from_slice(&[0x02]),
+            source_network: Some(routed_source.clone()),
+            link_layer_group: false,
+            is_group: false,
+            data_attributes: Vec::new(),
+            reply_tx: None,
+        })
+        .await
+        .unwrap());
+
+    let sent = tokio::time::timeout(std::time::Duration::from_secs(1), router_rx.recv())
+        .await
+        .expect("routed response timed out")
+        .expect("router link closed");
+    assert_eq!(sent.source_mac.as_slice(), &[0x01]);
+    let npdu = decode_npdu(sent.npdu).unwrap();
+    assert_eq!(npdu.destination, Some(routed_source));
+    assert!(!npdu.expecting_reply);
+    assert_eq!(npdu.priority, NetworkPriority::NORMAL);
+    match decode_apdu(npdu.payload).unwrap() {
+        Apdu::ComplexAck(ack) => assert_eq!(ack.invoke_id, 0x41),
+        other => panic!("expected ComplexAck, got {other:?}"),
+    }
+
+    endpoint.stop().await.unwrap();
+    router_transport.stop().await.unwrap();
 }

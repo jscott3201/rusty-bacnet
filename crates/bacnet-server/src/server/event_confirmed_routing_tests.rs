@@ -206,6 +206,7 @@ impl Harness {
                 apdu: Bytes::new(),
                 source_mac: MacAddr::from_slice(source_mac),
                 source_network,
+                link_layer_group: false,
                 is_group: false,
                 data_attributes: Vec::new(),
                 reply_tx: None,

@@ -68,6 +68,7 @@ fn received(apdu: Bytes, source: &[u8]) -> ReceivedApdu {
         apdu,
         source_mac: MacAddr::from_slice(source),
         source_network: None,
+        link_layer_group: false,
         is_group: false,
         data_attributes: Vec::new(),
         reply_tx: None,

@@ -390,6 +390,7 @@ async fn request_route_preserves_the_complete_envelope_and_reply_sender() {
     assert_eq!(received.apdu.as_ref(), apdu);
     assert_eq!(received.source_mac.as_slice(), &[0xde, 0xad]);
     assert_eq!(received.source_network, Some(source_network));
+    assert!(received.link_layer_group);
     assert!(received.is_group);
     assert_eq!(received.data_attributes, attributes);
     received

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use bacnet_encoding::apdu::{decode_apdu, Apdu};
 use bacnet_network::layer::{NetworkLayer, ReceivedApdu};
-use bacnet_transport::port::TransportPort;
+use bacnet_transport::port::{DataAttribute, TransportPort};
 use bacnet_types::enums::NetworkPriority;
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
@@ -14,42 +14,81 @@ fn shutdown_error() -> Error {
     Error::Encoding("endpoint shutdown".into())
 }
 
-struct DirectEgress {
+/// Network-layer destination for one hidden endpoint APDU send.
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EndpointApduDestination {
+    /// Direct unicast on the local data link.
+    Direct {
+        /// Destination MAC on the local data link.
+        destination_mac: MacAddr,
+    },
+    /// Routed unicast through a known next-hop router.
+    Routed {
+        /// Ultimate BACnet network number.
+        destination_network: u16,
+        /// Ultimate BACnet MAC address.
+        destination_mac: MacAddr,
+        /// Immediate router MAC on the local data link.
+        router_mac: MacAddr,
+    },
+    /// Routed unicast using a local broadcast because the router MAC is unknown.
+    RoutedViaLocalBroadcast {
+        /// Ultimate BACnet network number.
+        destination_network: u16,
+        /// Ultimate BACnet MAC address.
+        destination_mac: MacAddr,
+    },
+    /// Broadcast on only the local BACnet network.
+    LocalBroadcast,
+    /// Broadcast to one remote BACnet network.
+    RemoteBroadcast {
+        /// Ultimate BACnet network number.
+        destination_network: u16,
+    },
+    /// Broadcast to all reachable BACnet networks.
+    GlobalBroadcast,
+}
+
+struct NetworkServiceCommand {
     apdu: Vec<u8>,
-    destination_mac: MacAddr,
+    destination: EndpointApduDestination,
     expecting_reply: bool,
     priority: NetworkPriority,
+    data_attributes: Vec<DataAttribute>,
     completion: oneshot::Sender<Result<(), Error>>,
 }
 
-/// Bounded direct-APDU sender for roles attached to an endpoint session.
+/// Bounded APDU network-service sender for roles attached to an endpoint session.
 #[doc(hidden)]
 #[derive(Clone)]
 pub struct EndpointEgress {
-    commands: mpsc::Sender<DirectEgress>,
+    commands: mpsc::Sender<NetworkServiceCommand>,
     open: Arc<AtomicBool>,
 }
 
 impl EndpointEgress {
-    /// Sends one direct unicast APDU without granting network lifecycle access.
+    /// Sends one APDU without granting network lifecycle access.
     #[doc(hidden)]
-    pub async fn send_direct(
+    pub async fn send_apdu(
         &self,
         apdu: Vec<u8>,
-        destination_mac: MacAddr,
+        destination: EndpointApduDestination,
         expecting_reply: bool,
         priority: NetworkPriority,
+        data_attributes: Vec<DataAttribute>,
     ) -> Result<(), Error> {
         if !self.open.load(Ordering::Acquire) {
             return Err(shutdown_error());
         }
 
         let (completion, result) = oneshot::channel();
-        let command = DirectEgress {
+        let command = NetworkServiceCommand {
             apdu,
-            destination_mac,
+            destination,
             expecting_reply,
             priority,
+            data_attributes,
             completion,
         };
         match self.commands.try_send(command) {
@@ -64,6 +103,25 @@ impl EndpointEgress {
         }
 
         result.await.unwrap_or_else(|_| Err(shutdown_error()))
+    }
+
+    /// Sends one direct unicast APDU without granting network lifecycle access.
+    #[doc(hidden)]
+    pub async fn send_direct(
+        &self,
+        apdu: Vec<u8>,
+        destination_mac: MacAddr,
+        expecting_reply: bool,
+        priority: NetworkPriority,
+    ) -> Result<(), Error> {
+        self.send_apdu(
+            apdu,
+            EndpointApduDestination::Direct { destination_mac },
+            expecting_reply,
+            priority,
+            Vec::new(),
+        )
+        .await
     }
 }
 
@@ -106,7 +164,7 @@ pub struct IngressReceivers {
     pub terminal_or_segment: mpsc::Receiver<ReceivedApdu>,
     /// Traffic that endpoint policy must handle or reclaim.
     pub policy_outcomes: mpsc::Receiver<PolicyOutcome>,
-    /// Direct egress for endpoint role adapters.
+    /// Bounded network-service egress for endpoint role adapters.
     #[doc(hidden)]
     pub egress: EndpointEgress,
 }
@@ -255,7 +313,7 @@ async fn session_task<T: TransportPort + 'static>(
     inbound_tx: mpsc::Sender<ReceivedApdu>,
     terminal_tx: mpsc::Sender<ReceivedApdu>,
     policy_tx: mpsc::Sender<PolicyOutcome>,
-    mut egress_rx: mpsc::Receiver<DirectEgress>,
+    mut egress_rx: mpsc::Receiver<NetworkServiceCommand>,
     mut cancel_rx: oneshot::Receiver<()>,
     egress_open: Arc<AtomicBool>,
 ) -> Result<ClassifierExit, Error> {
@@ -290,7 +348,7 @@ async fn session_task<T: TransportPort + 'static>(
             SessionEvent::Received(None) => break ClassifierExit::InputClosed,
             SessionEvent::Egress(Some(command)) => {
                 prefer_ingress = !prefer_ingress;
-                match drive_direct_egress(
+                match drive_network_service(
                     &network,
                     command,
                     &mut apdu_rx,
@@ -323,7 +381,7 @@ async fn session_task<T: TransportPort + 'static>(
 enum SessionEvent {
     Cancelled,
     Received(Option<ReceivedApdu>),
-    Egress(Option<DirectEgress>),
+    Egress(Option<NetworkServiceCommand>),
 }
 
 enum EgressDrive {
@@ -339,9 +397,9 @@ enum PendingEvent {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn drive_direct_egress<T: TransportPort + 'static>(
+async fn drive_network_service<T: TransportPort + 'static>(
     network: &NetworkLayer<T>,
-    command: DirectEgress,
+    command: NetworkServiceCommand,
     apdu_rx: &mut mpsc::Receiver<ReceivedApdu>,
     inbound_tx: &mpsc::Sender<ReceivedApdu>,
     terminal_tx: &mpsc::Sender<ReceivedApdu>,
@@ -349,15 +407,23 @@ async fn drive_direct_egress<T: TransportPort + 'static>(
     cancel_rx: &mut oneshot::Receiver<()>,
     prefer_ingress: &mut bool,
 ) -> EgressDrive {
-    let DirectEgress {
+    let NetworkServiceCommand {
         apdu,
-        destination_mac,
+        destination,
         expecting_reply,
         priority,
+        data_attributes,
         completion,
     } = command;
     let outcome = {
-        let send = network.send_apdu(&apdu, &destination_mac, expecting_reply, priority);
+        let send = send_network_service_apdu(
+            network,
+            &apdu,
+            &destination,
+            expecting_reply,
+            priority,
+            &data_attributes,
+        );
         tokio::pin!(send);
         loop {
             let event = if *prefer_ingress {
@@ -399,6 +465,94 @@ async fn drive_direct_egress<T: TransportPort + 'static>(
 
     let _ = completion.send(Err(shutdown_error()));
     outcome
+}
+
+async fn send_network_service_apdu<T: TransportPort + 'static>(
+    network: &NetworkLayer<T>,
+    apdu: &[u8],
+    destination: &EndpointApduDestination,
+    expecting_reply: bool,
+    priority: NetworkPriority,
+    data_attributes: &[DataAttribute],
+) -> Result<(), Error> {
+    match destination {
+        EndpointApduDestination::Direct { destination_mac } => {
+            network
+                .send_apdu_with_data_attributes(
+                    apdu,
+                    destination_mac,
+                    expecting_reply,
+                    priority,
+                    data_attributes,
+                )
+                .await
+        }
+        EndpointApduDestination::Routed {
+            destination_network,
+            destination_mac,
+            router_mac,
+        } => {
+            network
+                .send_apdu_routed_with_data_attributes(
+                    apdu,
+                    *destination_network,
+                    destination_mac,
+                    router_mac,
+                    expecting_reply,
+                    priority,
+                    data_attributes,
+                )
+                .await
+        }
+        EndpointApduDestination::RoutedViaLocalBroadcast {
+            destination_network,
+            destination_mac,
+        } => {
+            network
+                .send_apdu_routed_via_local_broadcast_with_data_attributes(
+                    apdu,
+                    *destination_network,
+                    destination_mac,
+                    expecting_reply,
+                    priority,
+                    data_attributes,
+                )
+                .await
+        }
+        EndpointApduDestination::LocalBroadcast => {
+            network
+                .broadcast_apdu_with_data_attributes(
+                    apdu,
+                    expecting_reply,
+                    priority,
+                    data_attributes,
+                )
+                .await
+        }
+        EndpointApduDestination::RemoteBroadcast {
+            destination_network,
+        } => {
+            network
+                .broadcast_to_network_with_data_attributes(
+                    apdu,
+                    *destination_network,
+                    expecting_reply,
+                    priority,
+                    data_attributes,
+                )
+                .await
+        }
+        EndpointApduDestination::GlobalBroadcast => {
+            network
+                .broadcast_global_apdu_with_data_attributes(
+                    apdu,
+                    expecting_reply,
+                    priority,
+                    data_attributes,
+                )
+                .await
+        }
+    }
 }
 
 fn route_received(
@@ -471,3 +625,7 @@ fn send_policy(
 #[cfg(test)]
 #[path = "endpoint_ingress_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "endpoint_network_service_tests.rs"]
+mod network_service_tests;

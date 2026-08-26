@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use bacnet_encoding::apdu::{decode_apdu, encode_apdu};
 use bacnet_encoding::npdu::{encode_npdu, Npdu};
-use bacnet_endpoint_core::endpoint_ingress::EndpointEgress;
+use bacnet_endpoint_core::endpoint_ingress::{EndpointApduDestination, EndpointEgress};
 use bacnet_network::layer::ReceivedApdu;
 
 use super::confirmed_response;
@@ -89,10 +89,21 @@ impl EndpointResponder {
             return Ok(true);
         }
 
-        if received.source_network.is_some() {
-            return Err(Error::Encoding(
-                "endpoint responder does not support routed replies".into(),
-            ));
+        if let Some(source_network) = received.source_network {
+            self.egress
+                .send_apdu(
+                    encoded.to_vec(),
+                    EndpointApduDestination::Routed {
+                        destination_network: source_network.network,
+                        destination_mac: source_network.mac_address,
+                        router_mac: received.source_mac,
+                    },
+                    false,
+                    NetworkPriority::NORMAL,
+                    Vec::new(),
+                )
+                .await?;
+            return Ok(true);
         }
         self.egress
             .send_direct(

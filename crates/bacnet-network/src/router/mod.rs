@@ -267,6 +267,7 @@ impl BACnetRouter {
                                         apdu: npdu.payload,
                                         source_mac: received.source_mac,
                                         source_network: npdu.source,
+                                        link_layer_group: received.link_layer_group,
                                         is_group: true,
                                         data_attributes: received.data_attributes,
                                         reply_tx: received.reply_tx,
@@ -321,6 +322,7 @@ impl BACnetRouter {
                                                 apdu: npdu.payload,
                                                 source_mac: received.source_mac,
                                                 source_network: npdu.source,
+                                                link_layer_group: received.link_layer_group,
                                                 is_group: false,
                                                 data_attributes: received.data_attributes,
                                                 reply_tx: received.reply_tx,
@@ -334,6 +336,7 @@ impl BACnetRouter {
                                                     apdu: npdu.payload.clone(),
                                                     source_mac: received.source_mac.clone(),
                                                     source_network: npdu.source.clone(),
+                                                    link_layer_group: received.link_layer_group,
                                                     is_group: true,
                                                     data_attributes: received
                                                         .data_attributes
@@ -377,6 +380,7 @@ impl BACnetRouter {
                                     apdu: npdu.payload,
                                     source_mac: received.source_mac,
                                     source_network: npdu.source,
+                                    link_layer_group: received.link_layer_group,
                                     is_group: is_group_delivery(received.link_layer_group, None),
                                     data_attributes: received.data_attributes,
                                     reply_tx: received.reply_tx,
