@@ -687,8 +687,8 @@ pub const MAX_TIMESTAMP_SEQUENCE_NUMBER: u64 = 65535;
 /// *primitive* tag 0 of length 4 holding the raw `Time` octets (the
 /// opening-tag-0 wrapper around an application-tagged `Time` is NOT
 /// conformant); `sequence-number [1]` is a primitive context tag 1 (contents
-/// constrained to `0..=65535`, enforced on encode); `datetime [2]` tags the
-/// *constructed* `BACnetDateTime`, so it encodes as opening tag 2 /
+/// constrained to `0..=65535` by the public variant's `u16` payload);
+/// `datetime [2]` tags the *constructed* `BACnetDateTime`, so it encodes as opening tag 2 /
 /// application-tagged `Date` / application-tagged `Time` / closing tag 2.
 pub fn encode_timestamp_choice(buf: &mut BytesMut, ts: &BACnetTimeStamp) -> Result<(), Error> {
     match ts {
@@ -697,12 +697,7 @@ pub fn encode_timestamp_choice(buf: &mut BytesMut, ts: &BACnetTimeStamp) -> Resu
             buf.put_slice(&t.encode());
         }
         BACnetTimeStamp::SequenceNumber(n) => {
-            if *n > MAX_TIMESTAMP_SEQUENCE_NUMBER {
-                return Err(Error::OutOfRange(format!(
-                    "BACnetTimeStamp sequence-number {n} exceeds 65535"
-                )));
-            }
-            encode_ctx_unsigned(buf, 1, *n);
+            encode_ctx_unsigned(buf, 1, u64::from(*n));
         }
         BACnetTimeStamp::DateTime { date, time } => {
             tags::encode_opening_tag(buf, 2);
@@ -754,7 +749,12 @@ pub fn decode_timestamp_choice(
                 format!("BACnetTimeStamp sequence-number {n} exceeds 65535"),
             ));
         }
-        (BACnetTimeStamp::SequenceNumber(n), end)
+        (
+            BACnetTimeStamp::SequenceNumber(
+                u16::try_from(n).expect("BACnetTimeStamp sequence range checked above"),
+            ),
+            end,
+        )
     } else if inner_tag.is_opening_tag(2) {
         let (date_tag, date_pos) = tags::decode_tag(data, inner_pos)?;
         if date_tag.class != TagClass::Application || date_tag.number != app_tag::DATE {

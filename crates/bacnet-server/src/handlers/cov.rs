@@ -293,6 +293,22 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
         return Ok(Vec::new());
     }
 
+    let timestamped = request
+        .list_of_cov_subscription_specifications
+        .iter()
+        .flat_map(|spec| &spec.list_of_cov_references)
+        .any(|cov_ref| cov_ref.timestamped);
+    if timestamped
+        && !db
+            .clock_frame()
+            .is_some_and(|frame| frame.is_valid_actual_datetime())
+    {
+        return Err(Error::Protocol {
+            class: ErrorClass::SERVICES.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        });
+    }
+
     let lifetime = request.lifetime.expect("validated COV-multiple lifetime");
     let max_notification_delay = request
         .max_notification_delay

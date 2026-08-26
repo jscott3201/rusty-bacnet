@@ -86,3 +86,73 @@ fn subscribe_cov_property_multiple_rejects_invalid_service_parameters() {
         assert!(table.is_empty());
     }
 }
+
+#[test]
+fn clockless_timestamped_cov_multiple_rejects_atomically_but_can_cancel() {
+    use bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleRequest;
+
+    let db = make_db_with_ai();
+    let mut table = CovSubscriptionTable::new();
+    let mac = vec![192, 168, 1, 1, 0xBA, 0xC0];
+    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    let specifications = vec![COVSubscriptionSpecification {
+        monitored_object_identifier: oid,
+        list_of_cov_references: vec![COVReference {
+            monitored_property: PropertyReference {
+                property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                property_array_index: None,
+            },
+            cov_increment: Some(0.5),
+            timestamped: true,
+        }],
+    }];
+
+    let subscribe = SubscribeCOVPropertyMultipleRequest {
+        subscriber_process_identifier: 1,
+        issue_confirmed_notifications: false,
+        lifetime: Some(300),
+        max_notification_delay: Some(10),
+        list_of_cov_subscription_specifications: specifications.clone(),
+    };
+    let mut buf = BytesMut::new();
+    subscribe.encode(&mut buf);
+
+    let err = handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::Protocol { class, code }
+            if class == ErrorClass::SERVICES.to_raw() as u32
+                && code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32
+    ));
+    assert!(table.is_empty(), "rejection must precede table mutation");
+
+    table.subscribe(CovSubscription {
+        subscriber_mac: MacAddr::from_slice(&mac),
+        subscriber_network: None,
+        subscriber_process_identifier: 1,
+        monitored_object_identifier: oid,
+        issue_confirmed_notifications: false,
+        expires_at: None,
+        last_notified_value: None,
+        monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
+        monitored_property_array_index: None,
+        cov_increment: Some(0.5),
+        notification_kind: CovNotificationKind::Multiple,
+        timestamped: true,
+    });
+
+    let cancel = SubscribeCOVPropertyMultipleRequest {
+        subscriber_process_identifier: 1,
+        issue_confirmed_notifications: false,
+        lifetime: None,
+        max_notification_delay: None,
+        list_of_cov_subscription_specifications: specifications,
+    };
+    let mut buf = BytesMut::new();
+    cancel.encode(&mut buf);
+    let initial =
+        handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf).unwrap();
+    assert!(initial.is_empty());
+    assert!(table.is_empty(), "clockless cancellation remains usable");
+}

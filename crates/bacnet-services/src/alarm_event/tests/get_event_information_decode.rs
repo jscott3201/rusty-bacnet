@@ -90,8 +90,11 @@ fn encode_summary(buf: &mut BytesMut, wire: &SummaryWire<'_>) {
     );
     tags::encode_opening_tag(buf, wire.tags.timestamps_open);
     for value in 0..wire.timestamp_count {
-        primitives::encode_timestamp_choice(buf, &BACnetTimeStamp::SequenceNumber(value as u64))
-            .unwrap();
+        primitives::encode_timestamp_choice(
+            buf,
+            &BACnetTimeStamp::SequenceNumber(u16::try_from(value).unwrap()),
+        )
+        .unwrap();
     }
     tags::encode_closing_tag(buf, wire.tags.timestamps_close);
     encode_value(

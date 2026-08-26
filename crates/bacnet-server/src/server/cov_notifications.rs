@@ -302,13 +302,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .unwrap_or_else(|| ObjectIdentifier::new(ObjectType::DEVICE, 0).unwrap());
             let timestamp = if subscriptions.iter().any(|sub| sub.timestamped) {
                 match db.clock_frame() {
-                    Some(clock_frame) => Some(cov_multiple_datetime(clock_frame)),
-                    None => {
-                        // A timestamp request cannot manufacture a Device
-                        // DateTime in clockless mode. Preserve delivery while
-                        // omitting both request and value timestamps.
-                        debug!("Delivering clockless COVNotificationMultiple without timestamps");
-                        None
+                    Some(clock_frame) if clock_frame.is_valid_actual_datetime() => {
+                        Some(cov_multiple_datetime(clock_frame))
+                    }
+                    _ => {
+                        warn!(
+                            "Skipping timestamped COVNotificationMultiple without a valid Device clock"
+                        );
+                        return;
                     }
                 }
             } else {

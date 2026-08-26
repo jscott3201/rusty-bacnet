@@ -209,7 +209,7 @@ fn subscribe_cov_property_multiple_deduplicates_initial_subscriptions() {
         COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
     };
 
-    let db = make_db_with_ai();
+    let db = make_db_with_device_and_ai();
     let mut table = CovSubscriptionTable::new();
     let mac = vec![192, 168, 1, 1, 0xBA, 0xC0];
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();

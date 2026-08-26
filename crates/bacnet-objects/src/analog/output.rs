@@ -155,7 +155,7 @@ impl BACnetObject for AnalogOutputObject {
             }
             p if p == PropertyIdentifier::LAST_COMMAND_TIME => Ok(PropertyValue::Unsigned(
                 match self.value_source.last_command_time {
-                    BACnetTimeStamp::SequenceNumber(n) => n,
+                    BACnetTimeStamp::SequenceNumber(n) => u64::from(n),
                     _ => 0,
                 },
             )),

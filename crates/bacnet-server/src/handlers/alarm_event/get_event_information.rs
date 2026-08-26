@@ -144,9 +144,9 @@ pub fn handle_get_event_information(
                             let fault = u16::try_from(*fault).ok()?;
                             let normal = u16::try_from(*normal).ok()?;
                             Some([
-                                BACnetTimeStamp::SequenceNumber(offnormal.into()),
-                                BACnetTimeStamp::SequenceNumber(fault.into()),
-                                BACnetTimeStamp::SequenceNumber(normal.into()),
+                                BACnetTimeStamp::SequenceNumber(offnormal),
+                                BACnetTimeStamp::SequenceNumber(fault),
+                                BACnetTimeStamp::SequenceNumber(normal),
                             ])
                         }
                         _ => None,

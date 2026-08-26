@@ -295,8 +295,8 @@ impl Time {
 pub enum BACnetTimeStamp {
     /// Context tag 0: Time
     Time(Time),
-    /// Context tag 1: Unsigned (sequence number)
-    SequenceNumber(u64),
+    /// Context tag 1: Unsigned sequence number in the required 0..=65535 range.
+    SequenceNumber(u16),
     /// Context tag 2: BACnetDateTime (Date + Time)
     DateTime { date: Date, time: Time },
 }

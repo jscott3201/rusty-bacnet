@@ -583,7 +583,7 @@ fn timestamp_datetime_choice_golden() {
 #[test]
 fn timestamp_sequence_number_boundaries() {
     // Clause 21: sequence-number is Unsigned (0..65535).
-    for n in [0u64, 65535] {
+    for n in [0u16, u16::MAX] {
         let ts = BACnetTimeStamp::SequenceNumber(n);
         let mut buf = BytesMut::new();
         encode_timestamp_choice(&mut buf, &ts).unwrap();
@@ -601,19 +601,9 @@ fn timestamp_sequence_number_boundaries() {
 }
 
 #[test]
-fn timestamp_sequence_number_over_65535_rejected() {
-    // Encode side: out of the Unsigned (0..65535) range is an error.
-    let mut buf = BytesMut::new();
-    assert!(
-        encode_timestamp_choice(&mut buf, &BACnetTimeStamp::SequenceNumber(65536)).is_err(),
-        "encode of 65536 must fail"
-    );
-    let mut wrapped = BytesMut::new();
-    assert!(
-        encode_timestamp(&mut wrapped, 3, &BACnetTimeStamp::SequenceNumber(u64::MAX)).is_err(),
-        "wrapped encode of u64::MAX must fail"
-    );
-    // Decode side: the 3-content-octet form (65536) inside a wrapped timestamp.
+fn timestamp_sequence_number_over_65535_rejected_from_wire() {
+    // The public enum carries u16, so local construction cannot exceed the
+    // production's range. Hostile wire input still must be rejected.
     let data = [0x3E, 0x1B, 0x01, 0x00, 0x00, 0x3F];
     assert!(
         decode_timestamp(&data, 0, 3).is_err(),

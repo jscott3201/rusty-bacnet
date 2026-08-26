@@ -3,7 +3,7 @@ use super::*;
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_objects::analog::AnalogOutputObject;
-use bacnet_objects::clock::ClockFrame;
+use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::{Date, Time};
@@ -341,7 +341,37 @@ async fn cov_property_multiple_subscription_uses_multiple_notification_on_change
     }
 }
 
-async fn capture_timestamped_cov_multiple(clocked: bool) -> COVNotificationMultipleRequest {
+struct FixedClock(ClockFrame);
+
+impl ClockReader for FixedClock {
+    fn read_clock(&self) -> Option<ClockFrame> {
+        Some(self.0)
+    }
+}
+
+fn fixed_clock_frame() -> ClockFrame {
+    ClockFrame {
+        local_date: Date {
+            year: 124,
+            month: 2,
+            day: 29,
+            day_of_week: 4,
+        },
+        local_time: Time {
+            hour: 12,
+            minute: 34,
+            second: 56,
+            hundredths: 78,
+        },
+        utc_offset: 300,
+        daylight_savings_status: true,
+    }
+}
+
+async fn capture_timestamped_cov_multiple(
+    clock_frame: Option<ClockFrame>,
+    include_untimestamped: bool,
+) -> Vec<COVNotificationMultipleRequest> {
     let sent = StdArc::new(StdMutex::new(Vec::new()));
     let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
         &sent,
@@ -349,11 +379,10 @@ async fn capture_timestamped_cov_multiple(clocked: bool) -> COVNotificationMulti
 
     let ao_oid = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap();
     let device_oid = ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap();
-    let mut db = if clocked {
-        clocked_test_database()
-    } else {
-        ObjectDatabase::new()
-    };
+    let mut db = ObjectDatabase::new();
+    if let Some(frame) = clock_frame {
+        db.set_clock_reader(Some(StdArc::new(FixedClock(frame))));
+    }
     let mut device = DeviceObject::new(DeviceConfig {
         instance: 1234,
         name: "Timestamped-COV-Multiple-Test".into(),
@@ -383,6 +412,22 @@ async fn capture_timestamped_cov_multiple(clocked: bool) -> COVNotificationMulti
             notification_kind: CovNotificationKind::Multiple,
             timestamped: true,
         });
+        if include_untimestamped {
+            table.subscribe(CovSubscription {
+                subscriber_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC1]),
+                subscriber_network: None,
+                subscriber_process_identifier: 7,
+                monitored_object_identifier: ao_oid,
+                issue_confirmed_notifications: false,
+                expires_at: Some(Instant::now() + Duration::from_secs(300)),
+                last_notified_value: None,
+                monitored_property: Some(PropertyIdentifier::STATUS_FLAGS),
+                monitored_property_array_index: None,
+                cov_increment: None,
+                notification_kind: CovNotificationKind::Multiple,
+                timestamped: false,
+            });
+        }
     }
 
     BACnetServer::<RecordingTransport>::fire_cov_notifications(
@@ -398,35 +443,49 @@ async fn capture_timestamped_cov_multiple(clocked: bool) -> COVNotificationMulti
     .await;
 
     let sent = sent.lock().unwrap();
-    assert_eq!(sent.len(), 1);
-    let npdu = decode_npdu(sent[0].0.clone()).unwrap();
-    let Apdu::UnconfirmedRequest(request) = decode_apdu(npdu.payload).unwrap() else {
-        panic!("expected unconfirmed COVNotificationMultiple");
-    };
-    COVNotificationMultipleRequest::decode(&request.service_request).unwrap()
+    sent.iter()
+        .map(|(frame, _)| {
+            let npdu = decode_npdu(frame.clone()).unwrap();
+            let Apdu::UnconfirmedRequest(request) = decode_apdu(npdu.payload).unwrap() else {
+                panic!("expected unconfirmed COVNotificationMultiple");
+            };
+            COVNotificationMultipleRequest::decode(&request.service_request).unwrap()
+        })
+        .collect()
 }
 
 #[tokio::test]
-async fn timestamped_cov_multiple_reports_datetime_and_remaining_lifetime() {
-    let notification = capture_timestamped_cov_multiple(true).await;
+async fn timestamped_cov_multiple_uses_one_frame_and_exact_per_value_optionality() {
+    let frame = fixed_clock_frame();
+    let notifications = capture_timestamped_cov_multiple(Some(frame), true).await;
+    assert_eq!(notifications.len(), 1);
+    let notification = &notifications[0];
     assert!((298..=300).contains(&notification.time_remaining));
-    let (_, request_time) = notification
-        .timestamp
-        .expect("timestamped values require request BACnetDateTime");
     assert_eq!(
-        notification.list_of_cov_notifications[0].list_of_values[0].time_of_change,
-        Some(request_time)
+        notification.timestamp,
+        Some((frame.local_date, frame.local_time))
     );
+    let values = &notification.list_of_cov_notifications[0].list_of_values;
+    let timestamped = values
+        .iter()
+        .find(|value| value.property_identifier == PropertyIdentifier::PRESENT_VALUE)
+        .unwrap();
+    let untimestamped = values
+        .iter()
+        .find(|value| value.property_identifier == PropertyIdentifier::STATUS_FLAGS)
+        .unwrap();
+    assert_eq!(
+        timestamped.time_of_change,
+        Some(frame.local_time),
+        "request and per-value timestamps originate from the same frame"
+    );
+    assert_eq!(untimestamped.time_of_change, None);
 }
 
 #[tokio::test]
-async fn clockless_timestamped_cov_multiple_delivers_without_timestamps() {
-    let notification = capture_timestamped_cov_multiple(false).await;
-    assert!(notification.timestamp.is_none());
-    assert_eq!(
-        notification.list_of_cov_notifications[0].list_of_values[0].time_of_change,
-        None
-    );
+async fn clockless_legacy_timestamped_cov_multiple_fails_closed() {
+    let notifications = capture_timestamped_cov_multiple(None, false).await;
+    assert!(notifications.is_empty());
 }
 
 #[tokio::test(start_paused = true)]

@@ -47,7 +47,7 @@ use bacnet_types::enums::{
     UnconfirmedServiceChoice,
 };
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bacnet_types::MacAddr;
 
 use crate::cov::{CovNotificationKind, CovSubscription, CovSubscriptionTable};
@@ -1000,6 +1000,7 @@ mod cov_clock;
 mod cov_notifications;
 mod dispatch;
 mod event_notifications;
+mod event_timestamp;
 mod lifecycle;
 mod notification_transactions;
 mod requests;

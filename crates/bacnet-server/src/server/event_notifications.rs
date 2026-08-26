@@ -1,3 +1,4 @@
+use super::event_timestamp::{sample_event_timestamp, SampledEventClock};
 use super::*;
 use bacnet_objects::notification_class::local_day_and_time;
 use bacnet_types::constructed::BACnetRecipient;
@@ -243,9 +244,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let system_utc = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default();
-        let utc_secs = system_utc.as_secs();
         let (notification, recipients) = {
             let mut db = db.write().await;
+
+            let timestamp_sample = sample_event_timestamp(&mut db);
 
             let device_oid = db
                 .list_objects()
@@ -253,18 +255,21 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .find(|o| o.object_type() == ObjectType::DEVICE)
                 .unwrap_or_else(|| ObjectIdentifier::new(ObjectType::DEVICE, 0).unwrap());
 
-            let (today_bit, current_time) = match db.clock_frame() {
-                Some(clock_frame) => {
-                    let Some(today_bit) = clock_frame.day_of_week_bit() else {
-                        debug!(
-                            "Skipping recipient-window evaluation for an invalid Device clock frame"
-                        );
-                        return;
-                    };
-                    (today_bit, clock_frame.local_time)
-                }
-                None => {
+            let (today_bit, current_time) = match timestamp_sample.clock {
+                SampledEventClock::Valid(clock_frame) => (
+                    clock_frame
+                        .day_of_week_bit()
+                        .expect("validated ClockFrame has a day of week"),
+                    clock_frame.local_time,
+                ),
+                SampledEventClock::Unavailable => {
                     debug!("Using system UTC to filter recipients without a Device clock");
+                    system_utc_recipient_filter_time(system_utc)
+                }
+                SampledEventClock::Invalid => {
+                    debug!(
+                        "Using system UTC to filter recipients with an invalid Device clock frame"
+                    );
                     system_utc_recipient_filter_time(system_utc)
                 }
             };
@@ -305,10 +310,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 process_identifier: 0,
                 initiating_device_identifier: device_oid,
                 event_object_identifier: *oid,
-                // Clause 21 constrains sequence-number to Unsigned (0..65535),
-                // enforced by the shared timestamp codec on encode; wrap
-                // seconds-of-epoch into the valid window.
-                timestamp: BACnetTimeStamp::SequenceNumber(utc_secs % 65_536),
+                timestamp: timestamp_sample.timestamp,
                 notification_class,
                 priority,
                 event_type: event_type.to_raw(),

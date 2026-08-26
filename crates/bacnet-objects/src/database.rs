@@ -19,6 +19,8 @@ pub struct ObjectDatabase {
     objects: HashMap<ObjectIdentifier, Box<dyn BACnetObject>>,
     /// Shared Device clock reader. `None` is an explicit clockless database.
     clock: Option<Arc<dyn ClockReader>>,
+    /// Device-local EventNotification ordering source for clockless operation.
+    event_sequence_number: u16,
     /// Reverse index: object name → ObjectIdentifier for uniqueness enforcement.
     name_index: HashMap<String, ObjectIdentifier>,
     /// Type index: object type → set of ObjectIdentifiers for fast enumeration.
@@ -43,6 +45,7 @@ impl ObjectDatabase {
         Self {
             objects: HashMap::new(),
             clock: None,
+            event_sequence_number: 0,
             name_index: HashMap::new(),
             type_index: HashMap::new(),
             invalid_enrollment_eval_state: HashSet::new(),
@@ -265,6 +268,16 @@ impl ObjectDatabase {
         self.clock.as_ref()?.read_clock()
     }
 
+    /// Consume the next Device-local EventNotification sequence number.
+    ///
+    /// The counter wraps modulo 65536 as required by the timestamp production.
+    #[doc(hidden)]
+    pub fn next_event_sequence_number(&mut self) -> u16 {
+        let current = self.event_sequence_number;
+        self.event_sequence_number = self.event_sequence_number.wrapping_add(1);
+        current
+    }
+
     /// Visit every `(ObjectIdentifier, &mut dyn BACnetObject)` pair.
     ///
     /// Mutable counterpart to [`iter_objects`](Self::iter_objects), used by
@@ -299,6 +312,21 @@ mod tests {
     use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
     use bacnet_types::error::Error;
     use bacnet_types::primitives::PropertyValue;
+
+    #[test]
+    fn event_sequence_wraps_and_is_database_local() {
+        let mut first = ObjectDatabase::new();
+        let mut second = ObjectDatabase::new();
+
+        assert_eq!(first.next_event_sequence_number(), 0);
+        assert_eq!(first.next_event_sequence_number(), 1);
+        assert_eq!(second.next_event_sequence_number(), 0);
+
+        first.event_sequence_number = u16::MAX;
+        assert_eq!(first.next_event_sequence_number(), u16::MAX);
+        assert_eq!(first.next_event_sequence_number(), 0);
+        assert_eq!(second.next_event_sequence_number(), 1);
+    }
 
     /// Minimal test object.
     struct TestObject {

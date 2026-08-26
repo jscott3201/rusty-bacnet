@@ -71,7 +71,7 @@ impl EventHistory {
 
 fn timestamp_value(stamp: &BACnetTimeStamp) -> PropertyValue {
     PropertyValue::Unsigned(match stamp {
-        BACnetTimeStamp::SequenceNumber(n) => *n,
+        BACnetTimeStamp::SequenceNumber(n) => u64::from(*n),
         _ => 0,
     })
 }
