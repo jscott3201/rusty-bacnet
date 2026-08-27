@@ -356,7 +356,9 @@ fn av_intrinsic_reporting_normal_to_high_limit_to_normal() {
 
     // Go above high limit
     av.set_present_value(81.0);
-    let change = av.evaluate_intrinsic_reporting().unwrap().change;
+    let proposal = av.evaluate_intrinsic_reporting().unwrap();
+    let outcome = crate::event::commit_test_proposal(&mut av, proposal);
+    let change = outcome.change;
     assert_eq!(change.from, EventState::NORMAL);
     assert_eq!(change.to, EventState::HIGH_LIMIT);
 

@@ -213,7 +213,9 @@ fn ai_intrinsic_reporting_triggers_on_present_value_change() {
 
     // Go above high limit
     ai.set_present_value(81.0);
-    let change = ai.evaluate_intrinsic_reporting().unwrap().change;
+    let proposal = ai.evaluate_intrinsic_reporting().unwrap();
+    let outcome = crate::event::commit_test_proposal(&mut ai, proposal);
+    let change = outcome.change;
     assert_eq!(change.from, EventState::NORMAL);
     assert_eq!(change.to, EventState::HIGH_LIMIT);
 
@@ -694,7 +696,8 @@ fn ai_time_delay_normal_gates_the_return_to_normal() {
     ai.set_present_value(81.0);
     assert_eq!(ai.evaluate_intrinsic_reporting(), None);
     assert_eq!(ai.tick_intrinsic_reporting(), None);
-    let outcome = ai.tick_intrinsic_reporting().unwrap();
+    let proposal = ai.tick_intrinsic_reporting().unwrap();
+    let outcome = crate::event::commit_test_proposal(&mut ai, proposal);
     assert_eq!(
         outcome.change.to,
         EventState::HIGH_LIMIT,

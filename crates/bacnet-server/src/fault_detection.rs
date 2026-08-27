@@ -224,6 +224,22 @@ mod tests {
     use bacnet_types::enums::{ErrorClass, ErrorCode, EventState};
     use bacnet_types::error::Error;
 
+    fn commit_test_proposal(
+        object: &mut dyn bacnet_objects::traits::BACnetObject,
+        outcome: bacnet_objects::event::TransitionOutcome,
+    ) -> bacnet_objects::event::TransitionOutcome {
+        object
+            .commit_event_transition_internal(bacnet_objects::event::EventTransitionCommit {
+                coordinate: outcome.change.transition(),
+                change: outcome.change.clone(),
+                ack_required: false,
+                timestamp: bacnet_types::primitives::BACnetTimeStamp::SequenceNumber(0),
+                message_text: None,
+            })
+            .expect("built-in test proposal must commit");
+        outcome
+    }
+
     /// Helper: build an ObjectDatabase with a single AI that has min/max limits.
     fn db_with_analog_input(
         present_value: f32,
@@ -299,9 +315,10 @@ mod tests {
         assert_eq!(changes[0].new_reliability, Reliability::OVER_RANGE.to_raw());
 
         let obj = db.get_mut(&oid).unwrap();
-        let real_fault = obj
+        let proposal = obj
             .evaluate_intrinsic_reporting()
             .expect("derived Reliability must enter FAULT");
+        let real_fault = commit_test_proposal(obj.as_mut(), proposal);
         assert_eq!(real_fault.change.to, EventState::FAULT);
 
         obj.write_property(
@@ -318,9 +335,10 @@ mod tests {
             None,
         )
         .unwrap();
-        let simulated_fault = obj
+        let proposal = obj
             .evaluate_intrinsic_reporting()
             .expect("different simulated fault must re-enter FAULT");
+        let simulated_fault = commit_test_proposal(obj.as_mut(), proposal);
         assert_eq!(simulated_fault.change.to, EventState::FAULT);
 
         obj.write_property(
@@ -341,9 +359,10 @@ mod tests {
             PropertyValue::Enumerated(EventState::FAULT.to_raw())
         );
 
-        let restored_fault = obj
+        let proposal = obj
             .evaluate_intrinsic_reporting()
             .expect("restored real fault must re-enter FAULT");
+        let restored_fault = commit_test_proposal(obj.as_mut(), proposal);
         assert_eq!(restored_fault.change.to, EventState::FAULT);
         assert_eq!(
             obj.read_property(PropertyIdentifier::EVENT_STATE, None)

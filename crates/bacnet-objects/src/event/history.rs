@@ -21,14 +21,12 @@ pub(crate) struct EventHistory {
 /// This aggregate is staged for object-family adoption: it keeps the generic
 /// commit policy centralized while each object remains responsible for
 /// lending its own three property stores through its trait hook.
-#[allow(dead_code)]
 pub(crate) struct EventTransitionState<'a> {
     event_state: &'a mut EventState,
     acked_transitions: &'a mut u8,
     history: &'a mut EventHistory,
 }
 
-#[allow(dead_code)]
 impl<'a> EventTransitionState<'a> {
     pub(crate) fn new(
         event_state: &'a mut EventState,
@@ -79,6 +77,127 @@ impl<'a> EventTransitionState<'a> {
 
         Ok(())
     }
+}
+
+/// Implement proposal-and-commit intrinsic reporting for built-in object families.
+///
+/// The evaluation hooks only propose transitions. The commit hook lends the
+/// detector and object history to the shared kernel and finalizes private
+/// detector state only after that kernel succeeds. The gated arms enforce
+/// Clause 13.2.2.1's Event_Detection_Enable state-machine gate.
+macro_rules! impl_builtin_intrinsic_reporting {
+    (
+        $detector_field:ident,
+        $history_field:ident,
+        $present_value_field:ident,
+        $feedback_value_field:ident,
+        $reliability_field:ident,
+        $event_detection_enable_field:ident
+    ) => {
+        fn evaluate_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
+            if !self.$event_detection_enable_field {
+                return None;
+            }
+            self.$detector_field.propose(
+                self.$present_value_field,
+                self.$feedback_value_field,
+                self.$reliability_field,
+            )
+        }
+
+        fn tick_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
+            if !self.$event_detection_enable_field {
+                return None;
+            }
+            self.$detector_field.tick_proposal(
+                self.$present_value_field,
+                self.$feedback_value_field,
+                self.$reliability_field,
+            )
+        }
+
+        fn commit_event_transition_internal(
+            &mut self,
+            commit: $crate::event::EventTransitionCommit,
+        ) -> Result<(), $crate::event::EventTransitionCommitError> {
+            let change = commit.change.clone();
+            $crate::event::history::EventTransitionState::new(
+                &mut self.$detector_field.event_state,
+                &mut self.$detector_field.acked_transitions,
+                &mut self.$history_field,
+            )
+            .commit(commit)?;
+            self.$detector_field
+                .confirm_transition(&change, self.$reliability_field);
+            Ok(())
+        }
+    };
+    (
+        $detector_field:ident,
+        $history_field:ident,
+        $present_value_field:ident,
+        $reliability_field:ident,
+        $event_detection_enable_field:ident
+    ) => {
+        fn evaluate_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
+            if !self.$event_detection_enable_field {
+                return None;
+            }
+            self.$detector_field
+                .propose(self.$present_value_field, self.$reliability_field)
+        }
+
+        fn tick_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
+            if !self.$event_detection_enable_field {
+                return None;
+            }
+            self.$detector_field
+                .tick_proposal(self.$present_value_field, self.$reliability_field)
+        }
+
+        fn commit_event_transition_internal(
+            &mut self,
+            commit: $crate::event::EventTransitionCommit,
+        ) -> Result<(), $crate::event::EventTransitionCommitError> {
+            let change = commit.change.clone();
+            $crate::event::history::EventTransitionState::new(
+                &mut self.$detector_field.event_state,
+                &mut self.$detector_field.acked_transitions,
+                &mut self.$history_field,
+            )
+            .commit(commit)?;
+            self.$detector_field
+                .confirm_transition(&change, self.$reliability_field);
+            Ok(())
+        }
+    };
+}
+
+pub(crate) use impl_builtin_intrinsic_reporting;
+
+/// Commit a built-in proposal with fixed, explicit test policy.
+///
+/// Object-level tests that need a later state transition use no-acknowledgment
+/// policy and sequence timestamp zero. Production resolves both values from
+/// the Notification Class and database-local timestamp source instead.
+#[cfg(test)]
+pub(crate) fn commit_test_proposal<O>(
+    object: &mut O,
+    outcome: super::TransitionOutcome,
+) -> super::TransitionOutcome
+where
+    O: crate::traits::BACnetObject + ?Sized,
+{
+    object
+        .commit_event_transition_internal(EventTransitionCommit {
+            coordinate: outcome.change.transition(),
+            change: outcome.change.clone(),
+            ack_required: false,
+            timestamp: BACnetTimeStamp::SequenceNumber(0),
+            message_text: None,
+        })
+        .expect("built-in test proposal must commit");
+    outcome
 }
 
 impl Default for EventHistory {

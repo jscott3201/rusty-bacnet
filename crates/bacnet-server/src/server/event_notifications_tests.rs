@@ -9,6 +9,9 @@ use bytes::Bytes;
 use std::sync::{Arc as StdArc, Mutex as StdMutex};
 use tokio::sync::mpsc;
 
+#[path = "event_notifications_commit_tests.rs"]
+mod commit_tests;
+
 /// A transport that records every broadcast NPDU it is asked to send and
 /// discards unicasts. Used to capture the EventNotification a server
 /// actually puts on the wire.
@@ -17,6 +20,7 @@ pub(super) struct RecordingTransport {
     pub(super) sent_broadcast: StdArc<StdMutex<Vec<Bytes>>>,
     pub(super) local_mac: Vec<u8>,
 }
+
 impl TransportPort for RecordingTransport {
     async fn start(
         &mut self,

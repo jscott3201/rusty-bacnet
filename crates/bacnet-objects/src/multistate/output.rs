@@ -110,8 +110,9 @@ impl BACnetObject for MultiStateOutputObject {
         true
     }
 
-    crate::impl_intrinsic_reporting!(
+    crate::event::impl_builtin_intrinsic_reporting!(
         event_detector,
+        event_history,
         present_value,
         feedback_value,
         reliability,
@@ -510,7 +511,8 @@ mod command_failure_tests {
         set_detection_enabled(&mut mso, true);
         write_unsigned(&mut mso, PropertyIdentifier::PRESENT_VALUE, 2);
 
-        let outcome = mso.evaluate_intrinsic_reporting().unwrap();
+        let proposal = mso.evaluate_intrinsic_reporting().unwrap();
+        let outcome = crate::event::commit_test_proposal(&mut mso, proposal);
         assert_eq!(outcome.change.to, EventState::OFFNORMAL);
         assert_eq!(outcome.event_type, EventType::COMMAND_FAILURE);
 

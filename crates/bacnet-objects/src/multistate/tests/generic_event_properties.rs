@@ -86,9 +86,10 @@ fn msi_event_enable_bit_selects_whether_the_return_to_normal_distributes() {
         write_event_enable(&mut msi, bits);
 
         msi.set_present_value(2);
-        let entry = msi
+        let proposal = msi
             .evaluate_intrinsic_reporting()
             .expect("an alarm value must report the entry into OFFNORMAL");
+        let entry = crate::event::commit_test_proposal(&mut msi, proposal);
         assert_eq!(entry.change.to, EventState::OFFNORMAL);
 
         msi.set_present_value(1);
@@ -610,10 +611,9 @@ fn recommissioning_alarm_values_while_offnormal_returns_to_normal() {
     let mut msi = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();
     msi.set_alarm_values(vec![2]);
     msi.set_present_value(2);
-    assert_eq!(
-        msi.evaluate_intrinsic_reporting().unwrap().change.to,
-        EventState::OFFNORMAL
-    );
+    let proposal = msi.evaluate_intrinsic_reporting().unwrap();
+    let entry = crate::event::commit_test_proposal(&mut msi, proposal);
+    assert_eq!(entry.change.to, EventState::OFFNORMAL);
     msi.write_property(
         PropertyIdentifier::ALARM_VALUES,
         None,

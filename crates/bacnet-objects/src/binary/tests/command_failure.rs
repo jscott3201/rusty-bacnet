@@ -185,7 +185,8 @@ fn bo_time_delay_gates_command_failure() {
 
     assert_eq!(bo.evaluate_intrinsic_reporting(), None);
     assert_eq!(bo.tick_intrinsic_reporting(), None);
-    let outcome = bo.tick_intrinsic_reporting().unwrap();
+    let proposal = bo.tick_intrinsic_reporting().unwrap();
+    let outcome = crate::event::commit_test_proposal(&mut bo, proposal);
     assert_eq!(outcome.change.to, EventState::OFFNORMAL);
     assert_eq!(outcome.event_type, EventType::COMMAND_FAILURE);
 }
@@ -217,7 +218,8 @@ fn bo_time_delay_normal_selects_the_return_to_normal_delay() {
 
     assert_eq!(bo.evaluate_intrinsic_reporting(), None);
     assert_eq!(bo.tick_intrinsic_reporting(), None);
-    let outcome = bo.tick_intrinsic_reporting().unwrap();
+    let proposal = bo.tick_intrinsic_reporting().unwrap();
+    let outcome = crate::event::commit_test_proposal(&mut bo, proposal);
     assert_eq!(
         outcome.change.to,
         EventState::OFFNORMAL,

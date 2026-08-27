@@ -97,6 +97,21 @@ fn timestamp_value(timestamp: &BACnetTimeStamp) -> PropertyValue {
     PropertyValue::ApplicationData(encoded.to_vec())
 }
 
+fn commit_test_proposal(
+    object: &mut dyn BACnetObject,
+    outcome: bacnet_objects::event::TransitionOutcome,
+) {
+    object
+        .commit_event_transition_internal(bacnet_objects::event::EventTransitionCommit {
+            coordinate: outcome.change.transition(),
+            change: outcome.change,
+            ack_required: false,
+            timestamp: BACnetTimeStamp::SequenceNumber(0),
+            message_text: None,
+        })
+        .expect("built-in test proposal must commit");
+}
+
 fn get_event_information_ack(
     db: &ObjectDatabase,
     cursor: Option<ObjectIdentifier>,
@@ -239,7 +254,10 @@ fn get_event_information_reports_non_normal_objects() {
     .unwrap();
     // Push value above high limit and evaluate
     ai.set_present_value(85.0);
-    ai.evaluate_intrinsic_reporting(); // → HIGH_LIMIT
+    let proposal = ai
+        .evaluate_intrinsic_reporting()
+        .expect("out-of-range value must propose HIGH_LIMIT");
+    commit_test_proposal(&mut ai, proposal);
     db.add(Box::new(ai)).unwrap();
 
     let request = bacnet_services::alarm_event::GetEventInformationRequest {
@@ -321,7 +339,10 @@ fn get_event_information_reads_event_enable_notify_type_and_priorities() {
     .unwrap();
     // Push above high limit and evaluate to trigger alarm
     ai.set_present_value(85.0);
-    ai.evaluate_intrinsic_reporting();
+    let proposal = ai
+        .evaluate_intrinsic_reporting()
+        .expect("out-of-range value must propose HIGH_LIMIT");
+    commit_test_proposal(&mut ai, proposal);
     db.add(Box::new(ai)).unwrap();
 
     // Add NotificationClass object with custom priorities

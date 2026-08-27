@@ -1,5 +1,9 @@
-use super::event_timestamp::{sample_event_timestamp, SampledEventClock};
+use super::event_timestamp::{
+    confirm_event_timestamp, sample_event_timestamp, stage_event_timestamp, EventTimestampSample,
+    SampledEventClock,
+};
 use super::*;
+use bacnet_objects::event::{EventTransitionCommit, TransitionOutcome};
 use bacnet_objects::notification_class::local_day_and_time;
 use bacnet_types::constructed::BACnetRecipient;
 use bacnet_types::enums::EventType;
@@ -8,11 +12,34 @@ use bacnet_types::primitives::Time;
 pub(super) struct NotificationTransition {
     change: EventStateChange,
     event_type: EventType,
+    timestamp_sample: Option<EventTimestampSample>,
 }
 
 impl From<(EventStateChange, EventType)> for NotificationTransition {
     fn from((change, event_type): (EventStateChange, EventType)) -> Self {
-        Self { change, event_type }
+        Self {
+            change,
+            event_type,
+            timestamp_sample: None,
+        }
+    }
+}
+
+/// One built-in intrinsic transition committed under the database write guard.
+pub(super) struct CommittedIntrinsicTransition {
+    pub(super) change: EventStateChange,
+    pub(super) event_type: EventType,
+    pub(super) distribute: bool,
+    timestamp_sample: EventTimestampSample,
+}
+
+impl From<CommittedIntrinsicTransition> for NotificationTransition {
+    fn from(committed: CommittedIntrinsicTransition) -> Self {
+        Self {
+            change: committed.change,
+            event_type: committed.event_type,
+            timestamp_sample: Some(committed.timestamp_sample),
+        }
     }
 }
 
@@ -159,6 +186,46 @@ impl RecipientRoute {
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
+    /// Resolve policy and atomically commit one intrinsic proposal.
+    pub(super) fn commit_intrinsic_transition(
+        db: &mut ObjectDatabase,
+        oid: &ObjectIdentifier,
+        outcome: TransitionOutcome,
+    ) -> Option<CommittedIntrinsicTransition> {
+        let coordinate = outcome.change.transition();
+        let notification_class = db
+            .get(oid)?
+            .read_property(PropertyIdentifier::NOTIFICATION_CLASS, None)
+            .ok()
+            .and_then(|value| match value {
+                PropertyValue::Unsigned(number) => Some(number as u32),
+                _ => None,
+            })
+            .unwrap_or(0);
+        let (_, ack_required) = resolve_transition_priority_ack(db, notification_class, coordinate);
+        let staged_timestamp = stage_event_timestamp(db);
+        let commit = EventTransitionCommit {
+            change: outcome.change.clone(),
+            coordinate,
+            ack_required,
+            timestamp: staged_timestamp.sample.timestamp.clone(),
+            message_text: None,
+        };
+
+        if let Err(error) = db.get_mut(oid)?.commit_event_transition_internal(commit) {
+            debug!(%oid, ?error, "Intrinsic transition commit rejected");
+            return None;
+        }
+
+        let timestamp_sample = confirm_event_timestamp(db, staged_timestamp);
+        Some(CommittedIntrinsicTransition {
+            change: outcome.change,
+            event_type: outcome.event_type,
+            distribute: outcome.distribute,
+            timestamp_sample,
+        })
+    }
+
     /// Evaluate intrinsic reporting on an object and send event notifications
     /// to the recipients the object's NotificationClass names.
     /// DCC gates network-message initiation (Clause 16.1), not the local
@@ -179,30 +246,27 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         oid: &ObjectIdentifier,
         retry_timeout_ms: u64,
     ) {
-        let outcome = {
+        let committed = {
             let mut db = db.write().await;
-            match db.get_mut(oid) {
+            let outcome = match db.get_mut(oid) {
                 Some(object) => object.evaluate_intrinsic_reporting(),
                 None => return,
-            }
+            };
+            outcome.and_then(|outcome| Self::commit_intrinsic_transition(&mut db, oid, outcome))
         };
 
-        // The transition is already stored in Event_State by the detector,
+        // A successful commit has already applied the local transition actions,
         // whatever Event_Enable says. Only external distribution is gated here:
         // Clause 12.12 defines Event_Enable as enabling and disabling the
         // distribution of notifications, and Clause 13.2.5 places that gate
         // inside the notification-distribution process — downstream of the
         // transition actions, none of which it governs.
         //
-        // Three of Clause 13.2.2.1.4's transition actions are still missing and
-        // hook this same point, ahead of the `distribute` check: the
-        // Event_Time_Stamps write, the Event_Message_Texts write (only "if
-        // present"), and the indication to the alarm-acknowledgment process.
-        // The first two are independent actions, not consequences of the third;
-        // the third is what maintains Acked_Transitions, and Clause 13.2.3 gates
-        // that on Ack_Required, never on Event_Enable. All tracked as #123.
-        if let Some(outcome) = outcome {
-            if outcome.distribute {
+        // The shared commit kernel has also stored the selected timestamp and
+        // updated Acked_Transitions from the Notification Class policy. Message
+        // text is intentionally absent for this built-in path.
+        if let Some(committed) = committed {
+            if committed.distribute {
                 Self::build_and_send_event_notification(
                     db,
                     network,
@@ -210,7 +274,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     server_tsm,
                     notification_transactions,
                     oid,
-                    (outcome.change, outcome.event_type),
+                    committed,
                     retry_timeout_ms,
                 )
                 .await;
@@ -240,14 +304,19 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return;
         }
 
-        let NotificationTransition { change, event_type } = transition.into();
+        let NotificationTransition {
+            change,
+            event_type,
+            timestamp_sample,
+        } = transition.into();
         let system_utc = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default();
         let (notification, recipients) = {
             let mut db = db.write().await;
 
-            let timestamp_sample = sample_event_timestamp(&mut db);
+            let timestamp_sample =
+                timestamp_sample.unwrap_or_else(|| sample_event_timestamp(&mut db));
 
             let device_oid = db
                 .list_objects()

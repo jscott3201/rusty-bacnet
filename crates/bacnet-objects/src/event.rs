@@ -279,10 +279,10 @@ fn delay_toward(time_delay: u32, time_delay_normal: Option<u32>, target: EventSt
 /// the current value alone. That is what `fault_reliability` stores: the value in
 /// force at the last entry to FAULT, and nothing else.
 ///
-/// The distinction matters because `fault_step` runs at the head of both `probe`
-/// and `tick`, and the server drives `tick` once per second. Deciding re-entry
-/// from the standing condition rather than the edge would emit a notification
-/// every second for as long as any object stayed faulted.
+/// The distinction matters because the fault proposal runs at the head of both
+/// detector paths, and the server drives the periodic path once per second.
+/// Deciding re-entry from the standing condition rather than the edge would
+/// emit a notification every second for as long as any object stayed faulted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FaultPrecedence {
     /// Reliability is bad and FAULT does not hold yet: transition immediately.
@@ -445,56 +445,18 @@ impl OutOfRangeDetector {
     /// hands the decision to the algorithm.
     ///
     /// Each detector carries its own copy because each reaches its own
-    /// `event_state`, `pending` and `fire`; the clause interpretation they share
-    /// lives once, in [`fault_precedence`].
-    fn fault_step(&mut self, reliability: u32) -> ControlFlow<Option<TransitionOutcome>> {
+    /// `event_state`, `pending`, and confirmation; the clause interpretation
+    /// they share lives once, in [`fault_precedence`].
+    fn fault_proposal(&self, reliability: u32) -> ControlFlow<Option<TransitionOutcome>> {
         match fault_precedence(reliability, self.fault_reliability, self.event_state) {
-            FaultPrecedence::EnterFault => {
-                // Drop any in-flight countdown. The standard does not say what
-                // becomes of one (Clauses 13.2.2, 13.2.2.1 and 13.3 are all
-                // silent), and this is the project's ruled choice rather than a
-                // quotation: on recovery the machine re-enters NORMAL, so a
-                // countdown seeded before the fault targets a transition out of
-                // a state the machine no longer occupies. The nearest analogous
-                // rule agrees — Clause 13.2.2.1.5 restarts the *full* delay when
-                // Event_Algorithm_Inhibit clears rather than resuming a partial
-                // one — but it is scoped to inhibition, not faults.
-                self.pending = None;
-                self.fault_reliability = Some(reliability);
-                ControlFlow::Break(self.fire(EventState::FAULT))
-            }
-            FaultPrecedence::ReenterFault => {
-                // `pending = None` is unreachable today for the same reason it is
-                // in `RecoverToNormal` below — nothing can be in flight while
-                // FAULT holds — and mutation testing confirms no test fails when
-                // it is removed. It stays as the invariant this arm relies on,
-                // matching the treatment of the identical statement there.
-                self.pending = None;
-                self.fault_reliability = Some(reliability);
-                ControlFlow::Break(self.fire(EventState::FAULT))
+            FaultPrecedence::EnterFault | FaultPrecedence::ReenterFault => {
+                ControlFlow::Break(self.proposal(EventState::FAULT))
             }
             FaultPrecedence::HoldFault => ControlFlow::Break(None),
             FaultPrecedence::RecoverToNormal => {
-                // Unreachable today, and kept deliberately: `EnterFault` above
-                // already cleared `pending`, and `HoldFault` returns before the
-                // algorithm can seed a new one, so nothing can be in flight
-                // while FAULT holds. Mutation testing confirms no test fails
-                // when this line is removed. It stays because it is the
-                // invariant this arm relies on rather than dead weight — were
-                // `HoldFault` ever to let the algorithm run, its absence would
-                // silently resurrect a stale countdown across the fault.
-                self.pending = None;
-                self.fault_reliability = None;
-                ControlFlow::Break(self.fire(EventState::NORMAL))
+                ControlFlow::Break(self.proposal(EventState::NORMAL))
             }
-            FaultPrecedence::RunAlgorithm => {
-                // Also unreachable today and also kept: this arm requires
-                // `!faulted`, and the invariant means the field is already `None`
-                // whenever FAULT does not hold. Removing it leaves the suite
-                // green. It stays as the statement of that invariant.
-                self.fault_reliability = None;
-                ControlFlow::Continue(())
-            }
+            FaultPrecedence::RunAlgorithm => ControlFlow::Continue(()),
         }
     }
 
@@ -507,7 +469,20 @@ impl OutOfRangeDetector {
     /// reverted) and `None` is returned; the periodic [`Self::tick`]
     /// advances and eventually confirms it.
     pub fn probe(&mut self, present_value: f32, reliability: u32) -> Option<TransitionOutcome> {
-        if let ControlFlow::Break(result) = self.fault_step(reliability) {
+        let outcome = self.propose(present_value, reliability);
+        if let Some(ref outcome) = outcome {
+            self.confirm_transition(&outcome.change, reliability);
+        }
+        outcome
+    }
+
+    /// Stage a per-write transition without confirming any transition-owned state.
+    pub(crate) fn propose(
+        &mut self,
+        present_value: f32,
+        reliability: u32,
+    ) -> Option<TransitionOutcome> {
+        if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
         }
         let desired = self.compute_new_state(present_value);
@@ -519,7 +494,7 @@ impl OutOfRangeDetector {
         }
         let delay = delay_toward(self.time_delay, self.time_delay_normal, desired);
         if delay == 0 {
-            return self.fire(desired);
+            return self.proposal(desired);
         }
         // Nonzero delay: seed a pending transition only when there is none to
         // the same target. A redundant write of the same qualifying value must
@@ -538,7 +513,20 @@ impl OutOfRangeDetector {
     /// elapses this tick, or `None` if still counting down / no pending
     /// transition / the condition reverted (which cancels the pending).
     pub fn tick(&mut self, present_value: f32, reliability: u32) -> Option<TransitionOutcome> {
-        if let ControlFlow::Break(result) = self.fault_step(reliability) {
+        let outcome = self.tick_proposal(present_value, reliability);
+        if let Some(ref outcome) = outcome {
+            self.confirm_transition(&outcome.change, reliability);
+        }
+        outcome
+    }
+
+    /// Advance a pending countdown, leaving a fire-ready transition retryable.
+    pub(crate) fn tick_proposal(
+        &mut self,
+        present_value: f32,
+        reliability: u32,
+    ) -> Option<TransitionOutcome> {
+        if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
         }
         let desired = self.compute_new_state(present_value);
@@ -548,14 +536,11 @@ impl OutOfRangeDetector {
         }
         match &mut self.pending {
             Some(p) if p.state == desired => {
-                if p.remaining > 0 {
+                if p.remaining > 1 {
                     p.remaining -= 1;
+                    return None;
                 }
-                if p.remaining == 0 {
-                    self.pending = None;
-                    return self.fire(desired);
-                }
-                None
+                self.proposal(desired)
             }
             _ => {
                 // Condition changed target mid-delay, or no pending yet: re-seed
@@ -576,12 +561,11 @@ impl OutOfRangeDetector {
     /// — the property disables external distribution downstream, inside the
     /// event-notification-distribution process (Clause 13.2.5, and Clause 12.12
     /// which defines the property in those terms).
-    fn fire(&mut self, new_state: EventState) -> Option<TransitionOutcome> {
+    fn proposal(&self, new_state: EventState) -> Option<TransitionOutcome> {
         let change = EventStateChange {
             from: self.event_state,
             to: new_state,
         };
-        self.event_state = new_state;
         let transition_bit = EventTransition::for_target_state(new_state).bit_mask();
         let distribute = self.event_enable & transition_bit != 0;
         let event_type = change.event_type(Self::ALGORITHM);
@@ -590,6 +574,17 @@ impl OutOfRangeDetector {
             event_type,
             distribute,
         })
+    }
+
+    /// Finalize detector-local state only after the object commit kernel succeeds.
+    pub(crate) fn confirm_transition(&mut self, change: &EventStateChange, reliability: u32) {
+        self.event_state = change.to;
+        self.pending = None;
+        self.fault_reliability = if change.to == EventState::FAULT {
+            Some(reliability)
+        } else {
+            None
+        };
     }
 
     fn compute_new_state(&self, pv: f32) -> EventState {
@@ -694,44 +689,36 @@ impl ChangeOfStateDetector {
         self.probe(present_value, reliability)
     }
 
-    /// Clause 13.2.2 fault precedence; see [`OutOfRangeDetector::fault_step`].
-    fn fault_step(&mut self, reliability: u32) -> ControlFlow<Option<TransitionOutcome>> {
+    /// Clause 13.2.2 fault precedence; see [`OutOfRangeDetector::fault_proposal`].
+    fn fault_proposal(&self, reliability: u32) -> ControlFlow<Option<TransitionOutcome>> {
         match fault_precedence(reliability, self.fault_reliability, self.event_state) {
-            FaultPrecedence::EnterFault => {
-                self.pending = None;
-                self.fault_reliability = Some(reliability);
-                ControlFlow::Break(self.fire(EventState::FAULT))
-            }
-            FaultPrecedence::ReenterFault => {
-                // `pending = None` is unreachable today for the same reason it is
-                // in `RecoverToNormal` below — nothing can be in flight while
-                // FAULT holds — and mutation testing confirms no test fails when
-                // it is removed. It stays as the invariant this arm relies on,
-                // matching the treatment of the identical statement there.
-                self.pending = None;
-                self.fault_reliability = Some(reliability);
-                ControlFlow::Break(self.fire(EventState::FAULT))
+            FaultPrecedence::EnterFault | FaultPrecedence::ReenterFault => {
+                ControlFlow::Break(self.proposal(EventState::FAULT))
             }
             FaultPrecedence::HoldFault => ControlFlow::Break(None),
             FaultPrecedence::RecoverToNormal => {
-                self.pending = None;
-                self.fault_reliability = None;
-                ControlFlow::Break(self.fire(EventState::NORMAL))
+                ControlFlow::Break(self.proposal(EventState::NORMAL))
             }
-            FaultPrecedence::RunAlgorithm => {
-                // Also unreachable today and also kept: this arm requires
-                // `!faulted`, and the invariant means the field is already `None`
-                // whenever FAULT does not hold. Removing it leaves the suite
-                // green. It stays as the statement of that invariant.
-                self.fault_reliability = None;
-                ControlFlow::Continue(())
-            }
+            FaultPrecedence::RunAlgorithm => ControlFlow::Continue(()),
         }
     }
 
     /// Per-write probe: seed or cancel a pending transition, fire on zero delay.
     pub fn probe(&mut self, present_value: u32, reliability: u32) -> Option<TransitionOutcome> {
-        if let ControlFlow::Break(result) = self.fault_step(reliability) {
+        let outcome = self.propose(present_value, reliability);
+        if let Some(ref outcome) = outcome {
+            self.confirm_transition(&outcome.change, reliability);
+        }
+        outcome
+    }
+
+    /// Stage a per-write transition without confirming any transition-owned state.
+    pub(crate) fn propose(
+        &mut self,
+        present_value: u32,
+        reliability: u32,
+    ) -> Option<TransitionOutcome> {
+        if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
         }
         let desired = self.compute_new_state(present_value);
@@ -741,7 +728,7 @@ impl ChangeOfStateDetector {
         }
         let delay = delay_toward(self.time_delay, self.time_delay_normal, desired);
         if delay == 0 {
-            return self.fire(desired);
+            return self.proposal(desired);
         }
         // See [`OutOfRangeDetector::probe`]: do not restart an in-flight
         // countdown to the same target on a redundant qualifying write.
@@ -753,7 +740,20 @@ impl ChangeOfStateDetector {
 
     /// Periodic tick: advance the countdown and fire on expiry.
     pub fn tick(&mut self, present_value: u32, reliability: u32) -> Option<TransitionOutcome> {
-        if let ControlFlow::Break(result) = self.fault_step(reliability) {
+        let outcome = self.tick_proposal(present_value, reliability);
+        if let Some(ref outcome) = outcome {
+            self.confirm_transition(&outcome.change, reliability);
+        }
+        outcome
+    }
+
+    /// Advance a pending countdown, leaving a fire-ready transition retryable.
+    pub(crate) fn tick_proposal(
+        &mut self,
+        present_value: u32,
+        reliability: u32,
+    ) -> Option<TransitionOutcome> {
+        if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
         }
         let desired = self.compute_new_state(present_value);
@@ -763,14 +763,11 @@ impl ChangeOfStateDetector {
         }
         match &mut self.pending {
             Some(p) if p.state == desired => {
-                if p.remaining > 0 {
+                if p.remaining > 1 {
                     p.remaining -= 1;
+                    return None;
                 }
-                if p.remaining == 0 {
-                    self.pending = None;
-                    return self.fire(desired);
-                }
-                None
+                self.proposal(desired)
             }
             _ => {
                 // Re-seed with the delay for the CURRENT target's direction.
@@ -784,12 +781,11 @@ impl ChangeOfStateDetector {
     /// Confirm a transition to `new_state`, reporting whether `Event_Enable`
     /// permits distributing it. The transition itself is always reported; see
     /// [`TransitionOutcome`].
-    fn fire(&mut self, new_state: EventState) -> Option<TransitionOutcome> {
+    fn proposal(&self, new_state: EventState) -> Option<TransitionOutcome> {
         let change = EventStateChange {
             from: self.event_state,
             to: new_state,
         };
-        self.event_state = new_state;
         let transition_bit = EventTransition::for_target_state(new_state).bit_mask();
         let distribute = self.event_enable & transition_bit != 0;
         let event_type = change.event_type(Self::ALGORITHM);
@@ -798,6 +794,17 @@ impl ChangeOfStateDetector {
             event_type,
             distribute,
         })
+    }
+
+    /// Finalize detector-local state only after the object commit kernel succeeds.
+    pub(crate) fn confirm_transition(&mut self, change: &EventStateChange, reliability: u32) {
+        self.event_state = change.to;
+        self.pending = None;
+        self.fault_reliability = if change.to == EventState::FAULT {
+            Some(reliability)
+        } else {
+            None
+        };
     }
 
     fn compute_new_state(&self, present_value: u32) -> EventState {
@@ -866,38 +873,17 @@ impl CommandFailureDetector {
         self.probe(present_value, feedback_value, reliability)
     }
 
-    /// Clause 13.2.2 fault precedence; see [`OutOfRangeDetector::fault_step`].
-    fn fault_step(&mut self, reliability: u32) -> ControlFlow<Option<TransitionOutcome>> {
+    /// Clause 13.2.2 fault precedence; see [`OutOfRangeDetector::fault_proposal`].
+    fn fault_proposal(&self, reliability: u32) -> ControlFlow<Option<TransitionOutcome>> {
         match fault_precedence(reliability, self.fault_reliability, self.event_state) {
-            FaultPrecedence::EnterFault => {
-                self.pending = None;
-                self.fault_reliability = Some(reliability);
-                ControlFlow::Break(self.fire(EventState::FAULT))
-            }
-            FaultPrecedence::ReenterFault => {
-                // `pending = None` is unreachable today for the same reason it is
-                // in `RecoverToNormal` below — nothing can be in flight while
-                // FAULT holds — and mutation testing confirms no test fails when
-                // it is removed. It stays as the invariant this arm relies on,
-                // matching the treatment of the identical statement there.
-                self.pending = None;
-                self.fault_reliability = Some(reliability);
-                ControlFlow::Break(self.fire(EventState::FAULT))
+            FaultPrecedence::EnterFault | FaultPrecedence::ReenterFault => {
+                ControlFlow::Break(self.proposal(EventState::FAULT))
             }
             FaultPrecedence::HoldFault => ControlFlow::Break(None),
             FaultPrecedence::RecoverToNormal => {
-                self.pending = None;
-                self.fault_reliability = None;
-                ControlFlow::Break(self.fire(EventState::NORMAL))
+                ControlFlow::Break(self.proposal(EventState::NORMAL))
             }
-            FaultPrecedence::RunAlgorithm => {
-                // Also unreachable today and also kept: this arm requires
-                // `!faulted`, and the invariant means the field is already `None`
-                // whenever FAULT does not hold. Removing it leaves the suite
-                // green. It stays as the statement of that invariant.
-                self.fault_reliability = None;
-                ControlFlow::Continue(())
-            }
+            FaultPrecedence::RunAlgorithm => ControlFlow::Continue(()),
         }
     }
 
@@ -908,7 +894,21 @@ impl CommandFailureDetector {
         feedback_value: u32,
         reliability: u32,
     ) -> Option<TransitionOutcome> {
-        if let ControlFlow::Break(result) = self.fault_step(reliability) {
+        let outcome = self.propose(present_value, feedback_value, reliability);
+        if let Some(ref outcome) = outcome {
+            self.confirm_transition(&outcome.change, reliability);
+        }
+        outcome
+    }
+
+    /// Stage a per-write transition without confirming any transition-owned state.
+    pub(crate) fn propose(
+        &mut self,
+        present_value: u32,
+        feedback_value: u32,
+        reliability: u32,
+    ) -> Option<TransitionOutcome> {
+        if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
         }
         let desired = self.compute_new_state(present_value, feedback_value);
@@ -918,7 +918,7 @@ impl CommandFailureDetector {
         }
         let delay = delay_toward(self.time_delay, self.time_delay_normal, desired);
         if delay == 0 {
-            return self.fire(desired);
+            return self.proposal(desired);
         }
         // See [`OutOfRangeDetector::probe`]: do not restart an in-flight
         // countdown to the same target on a redundant qualifying write.
@@ -935,7 +935,21 @@ impl CommandFailureDetector {
         feedback_value: u32,
         reliability: u32,
     ) -> Option<TransitionOutcome> {
-        if let ControlFlow::Break(result) = self.fault_step(reliability) {
+        let outcome = self.tick_proposal(present_value, feedback_value, reliability);
+        if let Some(ref outcome) = outcome {
+            self.confirm_transition(&outcome.change, reliability);
+        }
+        outcome
+    }
+
+    /// Advance a pending countdown, leaving a fire-ready transition retryable.
+    pub(crate) fn tick_proposal(
+        &mut self,
+        present_value: u32,
+        feedback_value: u32,
+        reliability: u32,
+    ) -> Option<TransitionOutcome> {
+        if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
         }
         let desired = self.compute_new_state(present_value, feedback_value);
@@ -945,14 +959,11 @@ impl CommandFailureDetector {
         }
         match &mut self.pending {
             Some(p) if p.state == desired => {
-                if p.remaining > 0 {
+                if p.remaining > 1 {
                     p.remaining -= 1;
+                    return None;
                 }
-                if p.remaining == 0 {
-                    self.pending = None;
-                    return self.fire(desired);
-                }
-                None
+                self.proposal(desired)
             }
             _ => {
                 // Re-seed with the delay for the CURRENT target's direction.
@@ -966,12 +977,11 @@ impl CommandFailureDetector {
     /// Confirm a transition to `new_state`, reporting whether `Event_Enable`
     /// permits distributing it. The transition itself is always reported; see
     /// [`TransitionOutcome`].
-    fn fire(&mut self, new_state: EventState) -> Option<TransitionOutcome> {
+    fn proposal(&self, new_state: EventState) -> Option<TransitionOutcome> {
         let change = EventStateChange {
             from: self.event_state,
             to: new_state,
         };
-        self.event_state = new_state;
         // The FAULT arm reads `Event_Enable` like the other two. It previously
         // hardcoded `false`, which was unobservable only because no reliability
         // ever reached a detector (#200); Clause 13.2.5 scopes `Event_Enable` to
@@ -987,6 +997,17 @@ impl CommandFailureDetector {
         })
     }
 
+    /// Finalize detector-local state only after the object commit kernel succeeds.
+    pub(crate) fn confirm_transition(&mut self, change: &EventStateChange, reliability: u32) {
+        self.event_state = change.to;
+        self.pending = None;
+        self.fault_reliability = if change.to == EventState::FAULT {
+            Some(reliability)
+        } else {
+            None
+        };
+    }
+
     fn compute_new_state(&self, present_value: u32, feedback_value: u32) -> EventState {
         if present_value != feedback_value {
             EventState::OFFNORMAL
@@ -996,24 +1017,14 @@ impl CommandFailureDetector {
     }
 }
 
-/// Implement the `BACnetObject` intrinsic-reporting trait methods for an
-/// object whose detector is exposed as a field, with object fields supplying
-/// the detector inputs.
+#[cfg(test)]
+pub(crate) use history::commit_test_proposal;
+pub(crate) use history::impl_builtin_intrinsic_reporting;
+
+/// Implement legacy immediate intrinsic-reporting detector delegation.
 ///
-/// This wires both the per-write [`evaluate_intrinsic_reporting`](crate::traits::BACnetObject::evaluate_intrinsic_reporting)
-/// probe and the periodic [`tick_intrinsic_reporting`](crate::traits::BACnetObject::tick_intrinsic_reporting)
-/// tick to the detector's split `probe` / `tick` entry points, honoring
-/// `Time_Delay` without the object types repeating the delegation.
-///
-/// Reliability is passed on every call rather than only when it changes: per
-/// ASHRAE 135-2020 Clause 13.2.2 the FAULT determination is a standing
-/// condition, so the detector re-derives it each evaluation. That also means a
-/// Reliability written by any route — the server's fault detector, a local
-/// write, or a network write — reaches event-state-detection without each route
-/// needing to notify it.
-///
-/// The gated arms enforce ASHRAE 135-2020 Clause 13.2.2.1: "If the
-/// Event_Detection_Enable property is FALSE, then this state machine is not evaluated."
+/// This exported macro preserves the downstream behavior in which detector
+/// `probe` and `tick` calls immediately update detector-local state.
 #[macro_export]
 macro_rules! impl_intrinsic_reporting {
     (

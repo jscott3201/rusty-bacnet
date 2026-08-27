@@ -622,27 +622,27 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 // drop it before sending (never hold the db lock across a
                 // network send — matches the per-write notification path).
                 //
-                // Event_Enable gates distribution only (Clause 12.12), so a
-                // suppressed transition is dropped here rather than at
-                // detection — its Event_State write already happened inside
-                // the detector.
-                let fired: Vec<(
-                    ObjectIdentifier,
-                    bacnet_objects::event::EventStateChange,
-                    bacnet_types::enums::EventType,
-                )> = {
+                // Event_Enable gates distribution only (Clause 12.12), so every
+                // proposal is committed locally before a suppressed transition
+                // is omitted from the outbound work list.
+                let fired = {
                     let mut db = db_intrinsic.write().await;
                     let mut out = Vec::new();
-                    db.for_each_object_mut(|oid, object| {
-                        if let Some(outcome) = object.tick_intrinsic_reporting() {
-                            if outcome.distribute {
-                                out.push((oid, outcome.change, outcome.event_type));
+                    for oid in db.list_objects() {
+                        let outcome = db
+                            .get_mut(&oid)
+                            .and_then(|object| object.tick_intrinsic_reporting());
+                        if let Some(committed) = outcome.and_then(|outcome| {
+                            Self::commit_intrinsic_transition(&mut db, &oid, outcome)
+                        }) {
+                            if committed.distribute {
+                                out.push((oid, committed));
                             }
                         }
-                    });
+                    }
                     out
                 };
-                for (oid, change, event_type) in fired {
+                for (oid, committed) in fired {
                     Self::build_and_send_event_notification(
                         &db_intrinsic,
                         &network_intrinsic,
@@ -650,7 +650,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         &server_tsm_intrinsic,
                         &notification_transactions_intrinsic,
                         &oid,
-                        (change, event_type),
+                        committed,
                         intrinsic_retry_ms,
                     )
                     .await;

@@ -33,6 +33,21 @@ pub struct ObjectDatabase {
     enrollment_eval_sources: HashMap<ObjectIdentifier, EventEnrollmentMonitoredSource>,
 }
 
+/// A non-consuming reservation of the database-local event sequence source.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EventSequenceReservation {
+    number: u16,
+}
+
+impl EventSequenceReservation {
+    /// The sequence number selected by this reservation.
+    #[doc(hidden)]
+    pub fn number(self) -> u16 {
+        self.number
+    }
+}
+
 impl Default for ObjectDatabase {
     fn default() -> Self {
         Self::new()
@@ -273,9 +288,32 @@ impl ObjectDatabase {
     /// The counter wraps modulo 65536 as required by the timestamp production.
     #[doc(hidden)]
     pub fn next_event_sequence_number(&mut self) -> u16 {
-        let current = self.event_sequence_number;
+        let reservation = self.reserve_event_sequence_number();
+        let number = reservation.number();
+        let confirmed = self.confirm_event_sequence_number(reservation);
+        debug_assert!(
+            confirmed,
+            "a reservation cannot become stale without mutation"
+        );
+        number
+    }
+
+    /// Reserve the current sequence number without consuming it.
+    #[doc(hidden)]
+    pub fn reserve_event_sequence_number(&self) -> EventSequenceReservation {
+        EventSequenceReservation {
+            number: self.event_sequence_number,
+        }
+    }
+
+    /// Consume an exact reservation if it is still current.
+    #[doc(hidden)]
+    pub fn confirm_event_sequence_number(&mut self, reservation: EventSequenceReservation) -> bool {
+        if reservation.number != self.event_sequence_number {
+            return false;
+        }
         self.event_sequence_number = self.event_sequence_number.wrapping_add(1);
-        current
+        true
     }
 
     /// Visit every `(ObjectIdentifier, &mut dyn BACnetObject)` pair.
@@ -309,9 +347,68 @@ mod tests {
     use std::borrow::Cow;
 
     use super::*;
-    use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
+    use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
+    use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
+    use crate::event::{EventStateChange, EventTransition, EventTransitionCommit};
+    use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
+    use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier};
     use bacnet_types::error::Error;
-    use bacnet_types::primitives::PropertyValue;
+    use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
+
+    #[test]
+    fn all_nine_builtin_intrinsic_families_implement_atomic_commit() {
+        let mut objects: Vec<Box<dyn BACnetObject>> = vec![
+            Box::new(AnalogInputObject::new(1, "AI", 0).unwrap()),
+            Box::new(AnalogOutputObject::new(1, "AO", 0).unwrap()),
+            Box::new(AnalogValueObject::new(1, "AV", 0).unwrap()),
+            Box::new(BinaryInputObject::new(1, "BI").unwrap()),
+            Box::new(BinaryOutputObject::new(1, "BO").unwrap()),
+            Box::new(BinaryValueObject::new(1, "BV").unwrap()),
+            Box::new(MultiStateInputObject::new(1, "MSI", 3).unwrap()),
+            Box::new(MultiStateOutputObject::new(1, "MSO", 3).unwrap()),
+            Box::new(MultiStateValueObject::new(1, "MSV", 3).unwrap()),
+        ];
+
+        for object in &mut objects {
+            object
+                .commit_event_transition_internal(EventTransitionCommit {
+                    change: EventStateChange {
+                        from: EventState::NORMAL,
+                        to: EventState::OFFNORMAL,
+                    },
+                    coordinate: EventTransition::ToOffnormal,
+                    ack_required: true,
+                    timestamp: BACnetTimeStamp::SequenceNumber(73),
+                    message_text: None,
+                })
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "{} must implement the shared commit hook: {error:?}",
+                        object.object_name()
+                    )
+                });
+
+            assert_eq!(
+                object
+                    .read_property(PropertyIdentifier::EVENT_STATE, None)
+                    .unwrap(),
+                PropertyValue::Enumerated(EventState::OFFNORMAL.to_raw()),
+                "{} Event_State",
+                object.object_name()
+            );
+            assert_eq!(
+                object
+                    .read_property(PropertyIdentifier::ACKED_TRANSITIONS, None)
+                    .unwrap(),
+                PropertyValue::BitString {
+                    unused_bits: 5,
+                    data: vec![0x60],
+                },
+                "{} Acked_Transitions",
+                object.object_name()
+            );
+        }
+    }
 
     #[test]
     fn event_sequence_wraps_and_is_database_local() {
@@ -326,6 +423,17 @@ mod tests {
         assert_eq!(first.next_event_sequence_number(), u16::MAX);
         assert_eq!(first.next_event_sequence_number(), 0);
         assert_eq!(second.next_event_sequence_number(), 1);
+    }
+
+    #[test]
+    fn event_sequence_reservation_is_non_consuming_until_confirmed() {
+        let mut db = ObjectDatabase::new();
+
+        let reservation = db.reserve_event_sequence_number();
+        assert_eq!(reservation.number(), 0);
+        assert_eq!(db.reserve_event_sequence_number().number(), 0);
+        assert!(db.confirm_event_sequence_number(reservation));
+        assert_eq!(db.reserve_event_sequence_number().number(), 1);
     }
 
     /// Minimal test object.

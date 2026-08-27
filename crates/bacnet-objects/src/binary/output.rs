@@ -96,8 +96,9 @@ impl BACnetObject for BinaryOutputObject {
         true
     }
 
-    crate::impl_intrinsic_reporting!(
+    crate::event::impl_builtin_intrinsic_reporting!(
         event_detector,
+        event_history,
         present_value,
         feedback_value,
         reliability,

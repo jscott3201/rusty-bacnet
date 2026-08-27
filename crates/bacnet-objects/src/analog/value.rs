@@ -322,8 +322,9 @@ impl BACnetObject for AnalogValueObject {
         Some(self.cov_increment)
     }
 
-    crate::impl_intrinsic_reporting!(
+    crate::event::impl_builtin_intrinsic_reporting!(
         event_detector,
+        event_history,
         present_value,
         reliability,
         event_detection_enable

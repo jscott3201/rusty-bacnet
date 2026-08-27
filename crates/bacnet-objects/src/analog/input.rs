@@ -258,8 +258,9 @@ impl BACnetObject for AnalogInputObject {
         Some(self.cov_increment)
     }
 
-    crate::impl_intrinsic_reporting!(
+    crate::event::impl_builtin_intrinsic_reporting!(
         event_detector,
+        event_history,
         present_value,
         reliability,
         event_detection_enable
@@ -300,6 +301,126 @@ impl BACnetObject for AnalogInputObject {
 #[cfg(test)]
 mod detection_enable_reset_tests {
     use super::*;
+
+    #[test]
+    fn built_in_intrinsic_transition_is_a_proposal_until_committed() {
+        use crate::event::EventTransitionCommit;
+
+        let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+        ai.event_detector.high_limit = 80.0;
+        ai.event_detector.limit_enable = crate::event::LimitEnable::BOTH;
+        ai.event_detector.event_enable = 0x07;
+        ai.set_present_value(81.0);
+
+        let outcome = ai
+            .evaluate_intrinsic_reporting()
+            .expect("out-of-range value should propose TO_OFFNORMAL");
+        assert_eq!(
+            outcome.change.to,
+            bacnet_types::enums::EventState::HIGH_LIMIT
+        );
+        assert_eq!(
+            ai.event_detector.event_state,
+            bacnet_types::enums::EventState::NORMAL,
+            "built-in evaluation must not confirm its own proposal"
+        );
+        assert_eq!(ai.event_detector.acked_transitions, 0b111);
+        assert!(ai.event_detector.pending.is_none());
+
+        ai.commit_event_transition_internal(EventTransitionCommit {
+            coordinate: outcome.change.transition(),
+            change: outcome.change,
+            ack_required: true,
+            timestamp: BACnetTimeStamp::SequenceNumber(41),
+            message_text: None,
+        })
+        .expect("built-in object should lend all transition state to the kernel");
+
+        assert_eq!(
+            ai.event_detector.event_state,
+            bacnet_types::enums::EventState::HIGH_LIMIT
+        );
+        assert_eq!(ai.event_detector.acked_transitions, 0b110);
+        assert_eq!(
+            ai.event_history.time_stamps[0],
+            BACnetTimeStamp::SequenceNumber(41)
+        );
+    }
+
+    #[test]
+    fn rejected_delayed_and_fault_reindication_proposals_remain_retryable() {
+        use crate::event::{
+            EventStateChange, EventTransition, EventTransitionCommit, EventTransitionCommitError,
+        };
+        use bacnet_types::enums::{EventState, Reliability};
+
+        let mut delayed = AnalogInputObject::new(1, "AI-delayed", 62).unwrap();
+        delayed.event_detector.high_limit = 80.0;
+        delayed.event_detector.limit_enable = crate::event::LimitEnable::BOTH;
+        delayed.event_detector.time_delay = 1;
+        delayed.set_present_value(81.0);
+        assert_eq!(delayed.evaluate_intrinsic_reporting(), None);
+        let proposal = delayed.tick_intrinsic_reporting().unwrap();
+        assert_eq!(
+            delayed.event_detector.pending.as_ref().unwrap().remaining,
+            1
+        );
+
+        let stale = EventTransitionCommit {
+            change: EventStateChange {
+                from: EventState::FAULT,
+                to: proposal.change.to,
+            },
+            coordinate: proposal.change.transition(),
+            ack_required: false,
+            timestamp: BACnetTimeStamp::SequenceNumber(9),
+            message_text: None,
+        };
+        assert_eq!(
+            delayed.commit_event_transition_internal(stale),
+            Err(EventTransitionCommitError::CurrentStateMismatch {
+                expected: EventState::FAULT,
+                actual: EventState::NORMAL,
+            })
+        );
+        assert_eq!(
+            delayed.event_detector.pending.as_ref().unwrap().remaining,
+            1
+        );
+        assert_eq!(delayed.tick_intrinsic_reporting(), Some(proposal));
+
+        let mut faulted = AnalogInputObject::new(2, "AI-fault", 62).unwrap();
+        faulted.reliability = Reliability::OVER_RANGE.to_raw();
+        let entry = faulted.evaluate_intrinsic_reporting().unwrap();
+        crate::event::commit_test_proposal(&mut faulted, entry);
+        faulted.reliability = Reliability::NO_SENSOR.to_raw();
+        let reindication = faulted.evaluate_intrinsic_reporting().unwrap();
+        assert_eq!(
+            reindication.change,
+            EventStateChange {
+                from: EventState::FAULT,
+                to: EventState::FAULT,
+            }
+        );
+        assert_eq!(
+            faulted.commit_event_transition_internal(EventTransitionCommit {
+                change: reindication.change.clone(),
+                coordinate: EventTransition::ToNormal,
+                ack_required: false,
+                timestamp: BACnetTimeStamp::SequenceNumber(10),
+                message_text: None,
+            }),
+            Err(EventTransitionCommitError::CoordinateTargetMismatch {
+                coordinate: EventTransition::ToNormal,
+                target: EventState::FAULT,
+            })
+        );
+        assert_eq!(
+            faulted.event_detector.fault_reliability,
+            Some(Reliability::OVER_RANGE.to_raw())
+        );
+        assert_eq!(faulted.evaluate_intrinsic_reporting(), Some(reindication));
+    }
 
     /// Regression guard for issue #123: once transitions populate timestamps and messages,
     /// disabling event detection must still restore their Clause 13.2.2.1 initial conditions.

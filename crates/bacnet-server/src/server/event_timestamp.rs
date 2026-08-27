@@ -1,5 +1,5 @@
 use bacnet_objects::clock::ClockFrame;
-use bacnet_objects::database::ObjectDatabase;
+use bacnet_objects::database::{EventSequenceReservation, ObjectDatabase};
 use bacnet_types::primitives::BACnetTimeStamp;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,27 +15,62 @@ pub(super) struct EventTimestampSample {
     pub(super) clock: SampledEventClock,
 }
 
+/// A timestamp selected without consuming the clockless sequence source.
+pub(super) struct StagedEventTimestamp {
+    pub(super) sample: EventTimestampSample,
+    sequence: Option<EventSequenceReservation>,
+}
+
+/// Select a timestamp while leaving a clockless sequence retryable.
+pub(super) fn stage_event_timestamp(db: &ObjectDatabase) -> StagedEventTimestamp {
+    match db.clock_frame() {
+        Some(frame) if frame.is_valid_actual_datetime() => StagedEventTimestamp {
+            sample: EventTimestampSample {
+                timestamp: BACnetTimeStamp::DateTime {
+                    date: frame.local_date,
+                    time: frame.local_time,
+                },
+                clock: SampledEventClock::Valid(frame),
+            },
+            sequence: None,
+        },
+        frame => {
+            let reservation = db.reserve_event_sequence_number();
+            StagedEventTimestamp {
+                sample: EventTimestampSample {
+                    timestamp: BACnetTimeStamp::SequenceNumber(reservation.number()),
+                    clock: if frame.is_some() {
+                        SampledEventClock::Invalid
+                    } else {
+                        SampledEventClock::Unavailable
+                    },
+                },
+                sequence: Some(reservation),
+            }
+        }
+    }
+}
+
+/// Confirm staged sequence consumption after the transition commit succeeds.
+pub(super) fn confirm_event_timestamp(
+    db: &mut ObjectDatabase,
+    staged: StagedEventTimestamp,
+) -> EventTimestampSample {
+    if let Some(reservation) = staged.sequence {
+        assert!(
+            db.confirm_event_sequence_number(reservation),
+            "event sequence reservation changed while one database guard was held"
+        );
+    }
+    staged.sample
+}
+
 /// Sample the Device clock once and select one valid EventNotification
 /// timestamp. A missing or malformed wall clock consumes the database-local
 /// sequence source instead of inventing a DateTime.
 pub(super) fn sample_event_timestamp(db: &mut ObjectDatabase) -> EventTimestampSample {
-    match db.clock_frame() {
-        Some(frame) if frame.is_valid_actual_datetime() => EventTimestampSample {
-            timestamp: BACnetTimeStamp::DateTime {
-                date: frame.local_date,
-                time: frame.local_time,
-            },
-            clock: SampledEventClock::Valid(frame),
-        },
-        Some(_) => EventTimestampSample {
-            timestamp: BACnetTimeStamp::SequenceNumber(db.next_event_sequence_number()),
-            clock: SampledEventClock::Invalid,
-        },
-        None => EventTimestampSample {
-            timestamp: BACnetTimeStamp::SequenceNumber(db.next_event_sequence_number()),
-            clock: SampledEventClock::Unavailable,
-        },
-    }
+    let staged = stage_event_timestamp(db);
+    confirm_event_timestamp(db, staged)
 }
 
 #[cfg(test)]
@@ -124,6 +159,19 @@ mod tests {
             sample_event_timestamp(&mut second).timestamp,
             BACnetTimeStamp::SequenceNumber(0)
         );
+    }
+
+    #[test]
+    fn clockless_staging_does_not_consume_until_confirmed() {
+        let mut db = ObjectDatabase::new();
+
+        let staged = stage_event_timestamp(&db);
+        assert_eq!(staged.sample.timestamp, BACnetTimeStamp::SequenceNumber(0));
+        assert_eq!(db.reserve_event_sequence_number().number(), 0);
+
+        let sample = confirm_event_timestamp(&mut db, staged);
+        assert_eq!(sample.timestamp, BACnetTimeStamp::SequenceNumber(0));
+        assert_eq!(db.reserve_event_sequence_number().number(), 1);
     }
 
     #[test]
