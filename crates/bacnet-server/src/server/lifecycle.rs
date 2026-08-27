@@ -534,10 +534,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 loop {
                     interval.tick().await;
                     let mut db_guard = db_ee.write().await;
-                    let report = crate::event_enrollment::evaluate_event_enrollments_report(
-                        &mut db_guard,
-                        ee_interval_secs,
-                    );
+                    let report =
+                        crate::event_enrollment::evaluate_event_enrollments_detailed_report(
+                            &mut db_guard,
+                            ee_interval_secs,
+                        );
                     for t in &report.transitions {
                         // `distribute` is logged rather than acted on: this task
                         // records Event_State but does not yet emit

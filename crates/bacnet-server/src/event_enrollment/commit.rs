@@ -21,8 +21,6 @@ pub enum EventEnrollmentEvaluationStage {
     EvaluationSource,
     /// Private countdown or baseline state was being updated.
     EvaluationState,
-    /// Reliability observation or the combined Reliability transition hook ran.
-    Reliability,
     /// The atomic Event_State/Acked_Transitions/Event_Time_Stamps hook ran.
     EventTransition,
 }
@@ -34,10 +32,6 @@ pub enum EventEnrollmentEvaluationOutcome {
     NoTransition,
     /// A pending transition was canceled and its private state was stored.
     CancellationCommitted,
-    /// A required local or remote observation was temporarily unavailable.
-    ///
-    /// No Reliability, event, history, or private evaluator state is changed.
-    ObservationUnavailable,
     /// A required internal mutation was rejected.
     Rejected,
     /// A custom hook returned an error after the target Event_State landed.
@@ -64,6 +58,60 @@ pub struct EventEnrollmentEvaluationDiagnostic {
     pub stage: EventEnrollmentEvaluationStage,
     /// Observable stage outcome.
     pub outcome: EventEnrollmentEvaluationOutcome,
+}
+
+/// Stage exposed by the additive detailed Event Enrollment evaluator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventEnrollmentDetailedEvaluationStage {
+    /// The enrollment produced no mutation or transition proposal.
+    Evaluation,
+    /// Monitored-source ownership was being updated.
+    EvaluationSource,
+    /// Private countdown or baseline state was being updated.
+    EvaluationState,
+    /// Reliability observation or the combined Reliability transition hook ran.
+    Reliability,
+    /// The atomic Event_State/Acked_Transitions/Event_Time_Stamps hook ran.
+    EventTransition,
+}
+
+/// Outcome exposed by the additive detailed Event Enrollment evaluator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventEnrollmentDetailedEvaluationOutcome {
+    /// Evaluation completed without a transition.
+    NoTransition,
+    /// A pending transition was canceled and its private state was stored.
+    CancellationCommitted,
+    /// A required local or remote observation was temporarily unavailable.
+    ///
+    /// No Reliability, event, history, or private evaluator state is changed.
+    ObservationUnavailable,
+    /// A required internal mutation was rejected.
+    Rejected,
+    /// A custom hook returned an error after Reliability or Event_State landed.
+    ///
+    /// This violates the atomic hook contract. The evaluator suppresses the
+    /// result token, does not consume the staged clockless sequence number,
+    /// and invalidates private evaluation state for a later reset.
+    LandedAfterError,
+}
+
+impl EventEnrollmentDetailedEvaluationOutcome {
+    /// Whether this outcome represents a commit failure.
+    pub fn is_failure(self) -> bool {
+        matches!(self, Self::Rejected | Self::LandedAfterError)
+    }
+}
+
+/// One diagnostic from the additive detailed Event Enrollment evaluator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EventEnrollmentDetailedEvaluationDiagnostic {
+    /// Enrollment whose evaluation produced this diagnostic.
+    pub enrollment_oid: ObjectIdentifier,
+    /// Evaluation or commit stage that produced the outcome.
+    pub stage: EventEnrollmentDetailedEvaluationStage,
+    /// Observable stage outcome.
+    pub outcome: EventEnrollmentDetailedEvaluationOutcome,
 }
 
 /// Precedence source that selected a committed Event Enrollment Reliability.
@@ -96,18 +144,86 @@ pub struct EventEnrollmentReliabilityResult {
     pub cause: EventEnrollmentReliabilityCause,
 }
 
-/// Detailed result of one Event Enrollment evaluation pass.
+/// Legacy result of one Event Enrollment evaluation pass.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct EventEnrollmentEvaluationReport {
     /// Transitions whose complete atomic object commit succeeded.
     pub transitions: Vec<EventEnrollmentTransition>,
-    /// Reliability results whose complete combined object commit succeeded.
-    pub reliability_results: Vec<EventEnrollmentReliabilityResult>,
     /// Non-transition and failure diagnostics in enrollment evaluation order.
     pub diagnostics: Vec<EventEnrollmentEvaluationDiagnostic>,
 }
 
-pub(crate) fn log_evaluation_report(report: &EventEnrollmentEvaluationReport) {
+/// Additive detailed result of one Event Enrollment evaluation pass.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct EventEnrollmentDetailedEvaluationReport {
+    /// Transitions whose complete atomic object commit succeeded.
+    pub transitions: Vec<EventEnrollmentTransition>,
+    /// Reliability results whose complete combined object commit succeeded.
+    pub reliability_results: Vec<EventEnrollmentReliabilityResult>,
+    /// Every detailed evaluation, observation, and commit diagnostic.
+    pub diagnostics: Vec<EventEnrollmentDetailedEvaluationDiagnostic>,
+}
+
+impl EventEnrollmentDetailedEvaluationReport {
+    pub(super) fn into_legacy(self) -> EventEnrollmentEvaluationReport {
+        let diagnostics = self
+            .diagnostics
+            .into_iter()
+            .map(|diagnostic| {
+                let stage = match (diagnostic.stage, diagnostic.outcome) {
+                    (
+                        EventEnrollmentDetailedEvaluationStage::Reliability,
+                        EventEnrollmentDetailedEvaluationOutcome::ObservationUnavailable
+                        | EventEnrollmentDetailedEvaluationOutcome::NoTransition,
+                    ) => EventEnrollmentEvaluationStage::Evaluation,
+                    (EventEnrollmentDetailedEvaluationStage::Reliability, _) => {
+                        EventEnrollmentEvaluationStage::EventTransition
+                    }
+                    (EventEnrollmentDetailedEvaluationStage::Evaluation, _) => {
+                        EventEnrollmentEvaluationStage::Evaluation
+                    }
+                    (EventEnrollmentDetailedEvaluationStage::EvaluationSource, _) => {
+                        EventEnrollmentEvaluationStage::EvaluationSource
+                    }
+                    (EventEnrollmentDetailedEvaluationStage::EvaluationState, _) => {
+                        EventEnrollmentEvaluationStage::EvaluationState
+                    }
+                    (EventEnrollmentDetailedEvaluationStage::EventTransition, _) => {
+                        EventEnrollmentEvaluationStage::EventTransition
+                    }
+                };
+                let outcome = match diagnostic.outcome {
+                    EventEnrollmentDetailedEvaluationOutcome::ObservationUnavailable => {
+                        EventEnrollmentEvaluationOutcome::NoTransition
+                    }
+                    EventEnrollmentDetailedEvaluationOutcome::NoTransition => {
+                        EventEnrollmentEvaluationOutcome::NoTransition
+                    }
+                    EventEnrollmentDetailedEvaluationOutcome::CancellationCommitted => {
+                        EventEnrollmentEvaluationOutcome::CancellationCommitted
+                    }
+                    EventEnrollmentDetailedEvaluationOutcome::Rejected => {
+                        EventEnrollmentEvaluationOutcome::Rejected
+                    }
+                    EventEnrollmentDetailedEvaluationOutcome::LandedAfterError => {
+                        EventEnrollmentEvaluationOutcome::LandedAfterError
+                    }
+                };
+                EventEnrollmentEvaluationDiagnostic {
+                    enrollment_oid: diagnostic.enrollment_oid,
+                    stage,
+                    outcome,
+                }
+            })
+            .collect();
+        EventEnrollmentEvaluationReport {
+            transitions: self.transitions,
+            diagnostics,
+        }
+    }
+}
+
+pub(crate) fn log_evaluation_report(report: &EventEnrollmentDetailedEvaluationReport) {
     for result in &report.reliability_results {
         tracing::debug!(
             enrollment = %result.enrollment_oid,
@@ -211,10 +327,10 @@ impl EnrollmentUpdate {
 
 fn diagnostic(
     enrollment_oid: ObjectIdentifier,
-    stage: EventEnrollmentEvaluationStage,
-    outcome: EventEnrollmentEvaluationOutcome,
-) -> EventEnrollmentEvaluationDiagnostic {
-    EventEnrollmentEvaluationDiagnostic {
+    stage: EventEnrollmentDetailedEvaluationStage,
+    outcome: EventEnrollmentDetailedEvaluationOutcome,
+) -> EventEnrollmentDetailedEvaluationDiagnostic {
+    EventEnrollmentDetailedEvaluationDiagnostic {
         enrollment_oid,
         stage,
         outcome,
@@ -267,15 +383,15 @@ pub(super) fn apply_updates(
     oids: &[ObjectIdentifier],
     mut updates: HashMap<ObjectIdentifier, EnrollmentUpdate>,
     database_eval_sources: &HashSet<ObjectIdentifier>,
-) -> EventEnrollmentEvaluationReport {
-    let mut report = EventEnrollmentEvaluationReport::default();
+) -> EventEnrollmentDetailedEvaluationReport {
+    let mut report = EventEnrollmentDetailedEvaluationReport::default();
 
     for &oid in oids {
         let Some(update) = updates.remove(&oid) else {
             report.diagnostics.push(diagnostic(
                 oid,
-                EventEnrollmentEvaluationStage::Evaluation,
-                EventEnrollmentEvaluationOutcome::NoTransition,
+                EventEnrollmentDetailedEvaluationStage::Evaluation,
+                EventEnrollmentDetailedEvaluationOutcome::NoTransition,
             ));
             continue;
         };
@@ -283,8 +399,8 @@ pub(super) fn apply_updates(
         if update.observation_unavailable {
             report.diagnostics.push(diagnostic(
                 oid,
-                EventEnrollmentEvaluationStage::Reliability,
-                EventEnrollmentEvaluationOutcome::ObservationUnavailable,
+                EventEnrollmentDetailedEvaluationStage::Reliability,
+                EventEnrollmentDetailedEvaluationOutcome::ObservationUnavailable,
             ));
             continue;
         }
@@ -302,8 +418,8 @@ pub(super) fn apply_updates(
                     source_failed = true;
                     report.diagnostics.push(diagnostic(
                         oid,
-                        EventEnrollmentEvaluationStage::EvaluationSource,
-                        EventEnrollmentEvaluationOutcome::Rejected,
+                        EventEnrollmentDetailedEvaluationStage::EvaluationSource,
+                        EventEnrollmentDetailedEvaluationOutcome::Rejected,
                     ));
                 }
             }
@@ -322,8 +438,8 @@ pub(super) fn apply_updates(
                 db.set_enrollment_eval_state_invalidated(oid, true);
                 report.diagnostics.push(diagnostic(
                     oid,
-                    EventEnrollmentEvaluationStage::EvaluationState,
-                    EventEnrollmentEvaluationOutcome::Rejected,
+                    EventEnrollmentDetailedEvaluationStage::EvaluationState,
+                    EventEnrollmentDetailedEvaluationOutcome::Rejected,
                 ));
             } else {
                 state_committed = true;
@@ -337,8 +453,8 @@ pub(super) fn apply_updates(
                 db.set_enrollment_eval_state_invalidated(oid, true);
                 report.diagnostics.push(diagnostic(
                     oid,
-                    EventEnrollmentEvaluationStage::EvaluationState,
-                    EventEnrollmentEvaluationOutcome::Rejected,
+                    EventEnrollmentDetailedEvaluationStage::EvaluationState,
+                    EventEnrollmentDetailedEvaluationOutcome::Rejected,
                 ));
                 continue;
             }
@@ -349,7 +465,7 @@ pub(super) fn apply_updates(
         }
 
         if let Some(reliability) = update.reliability {
-            if state_failed || (source_failed && reliability.from == reliability.to) {
+            if state_failed {
                 continue;
             }
 
@@ -378,15 +494,15 @@ pub(super) fn apply_updates(
 
             if commit_result.is_err() {
                 let outcome = if reliability_or_state_landed(db, &oid, &reliability) {
-                    EventEnrollmentEvaluationOutcome::LandedAfterError
+                    EventEnrollmentDetailedEvaluationOutcome::LandedAfterError
                 } else {
-                    EventEnrollmentEvaluationOutcome::Rejected
+                    EventEnrollmentDetailedEvaluationOutcome::Rejected
                 };
                 clear_source_ownership(db, oid, database_eval_sources);
                 db.set_enrollment_eval_state_invalidated(oid, true);
                 report.diagnostics.push(diagnostic(
                     oid,
-                    EventEnrollmentEvaluationStage::Reliability,
+                    EventEnrollmentDetailedEvaluationStage::Reliability,
                     outcome,
                 ));
                 continue;
@@ -410,11 +526,11 @@ pub(super) fn apply_updates(
         let Some(fired) = update.fired else {
             report.diagnostics.push(diagnostic(
                 oid,
-                EventEnrollmentEvaluationStage::EvaluationState,
+                EventEnrollmentDetailedEvaluationStage::EvaluationState,
                 if update.canceled && state_committed {
-                    EventEnrollmentEvaluationOutcome::CancellationCommitted
+                    EventEnrollmentDetailedEvaluationOutcome::CancellationCommitted
                 } else {
-                    EventEnrollmentEvaluationOutcome::NoTransition
+                    EventEnrollmentDetailedEvaluationOutcome::NoTransition
                 },
             ));
             continue;
@@ -424,9 +540,10 @@ pub(super) fn apply_updates(
             continue;
         }
 
-        // A same-state transition depends on private state to distinguish the
-        // new indication from the previous one. Preserve the established
-        // stateless source-failure behavior only for a changing Event_State.
+        // A same-state normal-event transition depends on private source
+        // ownership to distinguish the new indication from the previous one.
+        // Reliability re-entry is independently distinguished by its changed
+        // Reliability value and therefore is not suppressed by source failure.
         if source_failed && fired.from == fired.to {
             continue;
         }
@@ -451,15 +568,15 @@ pub(super) fn apply_updates(
 
         if commit_result.is_err() {
             let outcome = if fired.from != fired.to && event_state_landed(db, &oid, fired.to) {
-                EventEnrollmentEvaluationOutcome::LandedAfterError
+                EventEnrollmentDetailedEvaluationOutcome::LandedAfterError
             } else {
-                EventEnrollmentEvaluationOutcome::Rejected
+                EventEnrollmentDetailedEvaluationOutcome::Rejected
             };
             clear_source_ownership(db, oid, database_eval_sources);
             db.set_enrollment_eval_state_invalidated(oid, true);
             report.diagnostics.push(diagnostic(
                 oid,
-                EventEnrollmentEvaluationStage::EventTransition,
+                EventEnrollmentDetailedEvaluationStage::EventTransition,
                 outcome,
             ));
             continue;

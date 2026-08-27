@@ -331,20 +331,20 @@ fn source_and_state_rejection_never_claims_cancellation_committed() {
     assert_eq!(state_write_count.load(Ordering::SeqCst), 1);
     assert!(report
         .diagnostics
-        .contains(&EventEnrollmentEvaluationDiagnostic {
+        .contains(&EventEnrollmentDetailedEvaluationDiagnostic {
             enrollment_oid,
-            stage: EventEnrollmentEvaluationStage::EvaluationSource,
-            outcome: EventEnrollmentEvaluationOutcome::Rejected,
+            stage: EventEnrollmentDetailedEvaluationStage::EvaluationSource,
+            outcome: EventEnrollmentDetailedEvaluationOutcome::Rejected,
         }));
     assert!(report
         .diagnostics
-        .contains(&EventEnrollmentEvaluationDiagnostic {
+        .contains(&EventEnrollmentDetailedEvaluationDiagnostic {
             enrollment_oid,
-            stage: EventEnrollmentEvaluationStage::EvaluationState,
-            outcome: EventEnrollmentEvaluationOutcome::Rejected,
+            stage: EventEnrollmentDetailedEvaluationStage::EvaluationState,
+            outcome: EventEnrollmentDetailedEvaluationOutcome::Rejected,
         }));
     assert!(!report.diagnostics.iter().any(|diagnostic| {
-        diagnostic.outcome == EventEnrollmentEvaluationOutcome::CancellationCommitted
+        diagnostic.outcome == EventEnrollmentDetailedEvaluationOutcome::CancellationCommitted
     }));
     assert!(db.enrollment_eval_state_invalidated(&enrollment_oid));
 }

@@ -52,6 +52,8 @@ pub use algorithms::{
     encode_change_of_value_params, encode_floating_limit_params, encode_out_of_range_params,
 };
 pub use commit::{
+    EventEnrollmentDetailedEvaluationDiagnostic, EventEnrollmentDetailedEvaluationOutcome,
+    EventEnrollmentDetailedEvaluationReport, EventEnrollmentDetailedEvaluationStage,
     EventEnrollmentEvaluationDiagnostic, EventEnrollmentEvaluationOutcome,
     EventEnrollmentEvaluationReport, EventEnrollmentEvaluationStage,
     EventEnrollmentReliabilityCause, EventEnrollmentReliabilityResult,
@@ -129,15 +131,28 @@ pub fn evaluate_event_enrollments(
     evaluate_event_enrollments_report(db, interval_secs).transitions
 }
 
-/// Evaluate all EventEnrollment objects and expose commit diagnostics.
+/// Evaluate all EventEnrollment objects and expose legacy commit diagnostics.
 ///
-/// Unlike [`evaluate_event_enrollments`], this detailed API makes rejected
-/// private-state and atomic transition commits observable. Only transitions
-/// whose complete object-owned commit succeeds appear in `transitions`.
+/// This preserves the original report shape. Reliability results and typed
+/// observation diagnostics are available from
+/// [`evaluate_event_enrollments_detailed_report`].
 pub fn evaluate_event_enrollments_report(
     db: &mut ObjectDatabase,
     interval_secs: u64,
 ) -> EventEnrollmentEvaluationReport {
+    evaluate_event_enrollments_detailed_report(db, interval_secs).into_legacy()
+}
+
+/// Evaluate all EventEnrollment objects and expose every detailed result.
+///
+/// Unlike [`evaluate_event_enrollments_report`], this additive API includes
+/// committed Reliability results plus typed Reliability and observation
+/// diagnostics. Only results whose complete object-owned commit succeeds
+/// appear in `transitions` or `reliability_results`.
+pub fn evaluate_event_enrollments_detailed_report(
+    db: &mut ObjectDatabase,
+    interval_secs: u64,
+) -> EventEnrollmentDetailedEvaluationReport {
     let interval_secs = interval_secs.max(1);
     let oids = db.find_by_type(ObjectType::EVENT_ENROLLMENT);
     // A qualified reference can identify self only when the containing Device

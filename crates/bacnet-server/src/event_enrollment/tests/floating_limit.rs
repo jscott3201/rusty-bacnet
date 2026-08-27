@@ -142,16 +142,16 @@ fn unavailable_setpoint_discards_queued_evaluator_ownership_atomically() {
         .unwrap();
     let before_sequence = db.reserve_event_sequence_number().number();
 
-    let report = evaluate_event_enrollments_report(&mut db, 1);
+    let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
 
     assert!(report.transitions.is_empty());
     assert!(report.reliability_results.is_empty());
     assert!(report
         .diagnostics
-        .contains(&EventEnrollmentEvaluationDiagnostic {
+        .contains(&EventEnrollmentDetailedEvaluationDiagnostic {
             enrollment_oid,
-            stage: EventEnrollmentEvaluationStage::Reliability,
-            outcome: EventEnrollmentEvaluationOutcome::ObservationUnavailable,
+            stage: EventEnrollmentDetailedEvaluationStage::Reliability,
+            outcome: EventEnrollmentDetailedEvaluationOutcome::ObservationUnavailable,
         }));
     let enrollment = db.get(&enrollment_oid).unwrap();
     assert_eq!(
