@@ -599,6 +599,55 @@ fn floating_setpoint_gap_overwrites_queued_ownership_and_resets_once() {
 }
 
 #[test]
+fn ownerless_floating_gap_discards_staged_ownership_without_source_write() {
+    let mut db = ObjectDatabase::new();
+    let mut monitored = AnalogInputObject::new(333, "AI-ownerless-floating-gap", 62).unwrap();
+    monitored.set_present_value(65.0);
+    let monitored_oid = monitored.object_identifier();
+    db.add(Box::new(monitored)).unwrap();
+    let missing_setpoint = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 334).unwrap();
+    let mut enrollment = ReferenceValueObject::new_for_event_type(
+        Some(reference_value(
+            monitored_oid,
+            PropertyIdentifier::PRESENT_VALUE,
+        )),
+        EventType::FLOATING_LIMIT,
+    );
+    enrollment
+        .inner
+        .set_event_parameters(BACnetEventParameter::FloatingLimit {
+            time_delay: 2,
+            setpoint_reference: BACnetDeviceObjectPropertyReference::new_local(
+                missing_setpoint,
+                PropertyIdentifier::PRESENT_VALUE.to_raw(),
+            ),
+            low_diff_limit: 10.0,
+            high_diff_limit: 10.0,
+            deadband: 2.0,
+        });
+    enrollment
+        .inner
+        .set_enrollment_eval_state_internal(stale_state())
+        .unwrap();
+    enrollment.source_writable.store(false, Ordering::SeqCst);
+    let writes = enrollment.state_write_count.clone();
+    let enrollment_oid = enrollment.object_identifier();
+    db.add(Box::new(enrollment)).unwrap();
+    let before = public_snapshot(&mut db, enrollment_oid);
+
+    let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    assert_observation_gap(&report, enrollment_oid);
+    assert_private_reset(&db, enrollment_oid);
+    assert!(!report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.stage == EventEnrollmentDetailedEvaluationStage::EvaluationSource
+            && diagnostic.outcome == EventEnrollmentDetailedEvaluationOutcome::Rejected
+    }));
+    assert_eq!(writes.load(Ordering::SeqCst), 1);
+    assert!(!db.enrollment_eval_state_invalidated(&enrollment_oid));
+    assert_eq!(public_snapshot(&mut db, enrollment_oid), before);
+}
+
+#[test]
 fn rejected_gap_resets_remain_visible_alongside_observation_diagnostic() {
     let mut db = ObjectDatabase::new();
     let mut enrollment = ReferenceValueObject::new(None);

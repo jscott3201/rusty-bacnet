@@ -212,9 +212,7 @@ pub(super) fn queue_observation_gap(
     if eval_state_supported {
         update.reset_eval_state();
     }
-    if eval_source.flatten().is_some() {
-        update.set_eval_source(None);
-    }
+    update.reset_eval_source_for_observation_gap(eval_source);
     update.observation_unavailable();
 }
 

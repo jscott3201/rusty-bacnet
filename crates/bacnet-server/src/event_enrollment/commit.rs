@@ -307,6 +307,18 @@ impl EnrollmentUpdate {
         self.eval_source = Some(source);
     }
 
+    /// Replace every source mutation staged earlier in this pass with the
+    /// minimal owner-clear required by the pre-pass source coordinate.
+    pub(super) fn reset_eval_source_for_observation_gap(
+        &mut self,
+        previous: Option<Option<EventEnrollmentMonitoredSource>>,
+    ) {
+        self.eval_source = match previous {
+            Some(Some(_)) => Some(None),
+            Some(None) | None => None,
+        };
+    }
+
     pub(super) fn fire(&mut self, fired: FiredTransition) {
         debug_assert!(
             self.fired.is_none(),
