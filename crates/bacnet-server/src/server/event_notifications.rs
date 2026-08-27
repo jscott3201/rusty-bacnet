@@ -1,18 +1,37 @@
 use super::event_timestamp::{
-    confirm_event_timestamp, sample_event_timestamp, stage_event_timestamp, EventTimestampSample,
-    SampledEventClock,
+    confirm_event_timestamp, sample_event_timestamp, stage_event_timestamp, SampledEventClock,
 };
 use super::*;
-use bacnet_objects::event::{EventTransitionCommit, TransitionOutcome};
+use bacnet_encoding::primitives::decode_timestamp_choice;
+use bacnet_objects::event::{EventTransition, EventTransitionCommit, TransitionOutcome};
 use bacnet_objects::notification_class::local_day_and_time;
+use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::BACnetRecipient;
 use bacnet_types::enums::EventType;
-use bacnet_types::primitives::Time;
+use bacnet_types::primitives::{BACnetTimeStamp, Time};
+
+/// One exact transition-coordinate projection from object-owned event history.
+#[derive(Debug, Clone, PartialEq)]
+struct CommittedHistorySnapshot {
+    timestamp: BACnetTimeStamp,
+    message_text: Option<String>,
+}
+
+/// The source boundary for the notification's timestamp and message.
+enum NotificationHistorySource {
+    /// Legacy/default objects sample their timestamp when distribution begins.
+    SendTime,
+    /// Atomic built-ins use the exact history coordinate read after commit.
+    Committed {
+        snapshot: CommittedHistorySnapshot,
+        recipient_clock: SampledEventClock,
+    },
+}
 
 pub(super) struct NotificationTransition {
     change: EventStateChange,
     event_type: EventType,
-    timestamp_sample: Option<EventTimestampSample>,
+    history_source: NotificationHistorySource,
     ack_required: Option<bool>,
 }
 
@@ -21,7 +40,7 @@ impl From<(EventStateChange, EventType)> for NotificationTransition {
         Self {
             change,
             event_type,
-            timestamp_sample: None,
+            history_source: NotificationHistorySource::SendTime,
             ack_required: None,
         }
     }
@@ -32,7 +51,8 @@ pub(super) struct CommittedIntrinsicTransition {
     pub(super) change: EventStateChange,
     pub(super) event_type: EventType,
     pub(super) distribute: bool,
-    timestamp_sample: EventTimestampSample,
+    history_snapshot: CommittedHistorySnapshot,
+    recipient_clock: SampledEventClock,
     ack_required: bool,
 }
 
@@ -41,7 +61,10 @@ impl From<CommittedIntrinsicTransition> for NotificationTransition {
         Self {
             change: committed.change,
             event_type: committed.event_type,
-            timestamp_sample: Some(committed.timestamp_sample),
+            history_source: NotificationHistorySource::Committed {
+                snapshot: committed.history_snapshot,
+                recipient_clock: committed.recipient_clock,
+            },
             ack_required: Some(committed.ack_required),
         }
     }
@@ -104,6 +127,42 @@ fn system_utc_recipient_filter_time(now: Duration) -> (u8, Time) {
     let (today_bit, mut current_time) = local_day_and_time(now.as_secs(), 0);
     current_time.hundredths = (now.subsec_millis() / 10) as u8;
     (today_bit, current_time)
+}
+
+/// Read one exact committed transition coordinate through the object contract.
+///
+/// Both properties are projected while the caller still owns the database
+/// write guard. A malformed or incomplete projection is not equivalent to a
+/// missing message/timestamp: the committed transition remains local, but no
+/// outward frame can be built from an unproven history snapshot.
+fn read_committed_history_snapshot(
+    object: &dyn BACnetObject,
+    coordinate: EventTransition,
+) -> Option<CommittedHistorySnapshot> {
+    let array_index = u32::try_from(coordinate.index() + 1)
+        .expect("three event transition coordinates fit in u32");
+    let PropertyValue::ApplicationData(encoded_timestamp) = object
+        .read_property(PropertyIdentifier::EVENT_TIME_STAMPS, Some(array_index))
+        .ok()?
+    else {
+        return None;
+    };
+    let (timestamp, consumed) = decode_timestamp_choice(&encoded_timestamp, 0).ok()?;
+    if consumed != encoded_timestamp.len() {
+        return None;
+    }
+
+    let PropertyValue::CharacterString(message_text) = object
+        .read_property(PropertyIdentifier::EVENT_MESSAGE_TEXTS, Some(array_index))
+        .ok()?
+    else {
+        return None;
+    };
+
+    Some(CommittedHistorySnapshot {
+        timestamp,
+        message_text: (!message_text.is_empty()).then_some(message_text),
+    })
 }
 
 /// The network destination a Notification Class recipient resolves to.
@@ -251,12 +310,27 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return None;
         }
 
-        let timestamp_sample = confirm_event_timestamp(db, staged_timestamp);
+        let recipient_clock = confirm_event_timestamp(db, staged_timestamp).clock;
+        let history_snapshot = match db
+            .get(oid)
+            .and_then(|object| read_committed_history_snapshot(object, coordinate))
+        {
+            Some(snapshot) => snapshot,
+            None => {
+                debug!(
+                    %oid,
+                    ?coordinate,
+                    "Committed intrinsic history projection rejected; suppressing distribution"
+                );
+                return None;
+            }
+        };
         Some(CommittedIntrinsicTransition {
             change: outcome.change,
             event_type: outcome.event_type,
             distribute: outcome.distribute,
-            timestamp_sample,
+            history_snapshot,
+            recipient_clock,
             ack_required,
         })
     }
@@ -353,7 +427,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let NotificationTransition {
             change,
             event_type,
-            timestamp_sample,
+            history_source,
             ack_required: ack_required_snapshot,
         } = transition.into();
         let system_utc = std::time::SystemTime::now()
@@ -362,8 +436,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let (notification, recipients) = {
             let mut db = db.write().await;
 
-            let timestamp_sample =
-                timestamp_sample.unwrap_or_else(|| sample_event_timestamp(&mut db));
+            let (timestamp, message_text, recipient_clock) = match history_source {
+                NotificationHistorySource::SendTime => {
+                    let sample = sample_event_timestamp(&mut db);
+                    (sample.timestamp, None, sample.clock)
+                }
+                NotificationHistorySource::Committed {
+                    snapshot,
+                    recipient_clock,
+                } => (snapshot.timestamp, snapshot.message_text, recipient_clock),
+            };
 
             let device_oid = db
                 .list_objects()
@@ -371,7 +453,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .find(|o| o.object_type() == ObjectType::DEVICE)
                 .unwrap_or_else(|| ObjectIdentifier::new(ObjectType::DEVICE, 0).unwrap());
 
-            let (today_bit, current_time) = match timestamp_sample.clock {
+            let (today_bit, current_time) = match recipient_clock {
                 SampledEventClock::Valid(clock_frame) => (
                     clock_frame
                         .day_of_week_bit()
@@ -427,11 +509,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 process_identifier: 0,
                 initiating_device_identifier: device_oid,
                 event_object_identifier: *oid,
-                timestamp: timestamp_sample.timestamp,
+                timestamp,
                 notification_class,
                 priority,
                 event_type: event_type.to_raw(),
-                message_text: None,
+                message_text,
                 notify_type,
                 // ack_required is only meaningful for ALARM/EVENT notify types
                 // (ACK_NOTIFICATION omits the field on the wire). Per §13.2.1 the

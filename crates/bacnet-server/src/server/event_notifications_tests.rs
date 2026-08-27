@@ -12,6 +12,9 @@ use tokio::sync::mpsc;
 #[path = "event_notifications_commit_tests.rs"]
 mod commit_tests;
 
+#[path = "event_notifications_history_tests.rs"]
+mod history_tests;
+
 /// A transport that records every broadcast NPDU it is asked to send and
 /// discards unicasts. Used to capture the EventNotification a server
 /// actually puts on the wire.
