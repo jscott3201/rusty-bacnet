@@ -370,6 +370,11 @@ mod tests {
         ];
 
         for object in &mut objects {
+            assert!(
+                object.intrinsic_reporting_requires_atomic_commit(),
+                "{} must opt into the atomic server path",
+                object.object_name()
+            );
             object
                 .commit_event_transition_internal(EventTransitionCommit {
                     change: EventStateChange {

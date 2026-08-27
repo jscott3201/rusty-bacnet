@@ -279,6 +279,20 @@ pub trait BACnetObject: Send + Sync {
         None
     }
 
+    /// Whether intrinsic-reporting outcomes require the atomic commit hook.
+    ///
+    /// The default preserves the legacy contract used by downstream objects
+    /// and [`crate::impl_intrinsic_reporting!`]: evaluation mutates detector
+    /// state immediately, so the server must distribute its outcome without
+    /// attempting another commit. Built-in proposal-based objects override
+    /// this to return `true`; their outcomes are uncommitted and must be
+    /// rejected unless [`commit_event_transition_internal`](Self::commit_event_transition_internal)
+    /// succeeds.
+    #[doc(hidden)]
+    fn intrinsic_reporting_requires_atomic_commit(&self) -> bool {
+        false
+    }
+
     /// Atomically commit all object-owned state for one event transition.
     ///
     /// The caller supplies an exact state change, its transition coordinate,

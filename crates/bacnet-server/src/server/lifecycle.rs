@@ -1,3 +1,4 @@
+use super::event_notifications::ResolvedIntrinsicTransition;
 use super::*;
 
 /// Resolve the configured Event Enrollment interval into a tick period.
@@ -618,31 +619,43 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 interval.tick().await;
                 // DCC gates the outbound sender, not event-state detection or
                 // the local transition actions in Clause 13.2.2.1.4.
-                // Collect confirmed transitions under a brief write lock, then
+                // Collect resolved transitions under a brief write lock, then
                 // drop it before sending (never hold the db lock across a
                 // network send — matches the per-write notification path).
                 //
                 // Event_Enable gates distribution only (Clause 12.12), so every
-                // proposal is committed locally before a suppressed transition
-                // is omitted from the outbound work list.
+                // built-in proposal is committed locally before a suppressed
+                // transition is omitted from the outbound work list. Legacy
+                // implementations already commit during their tick and bypass
+                // the atomic hook explicitly.
                 let fired = {
                     let mut db = db_intrinsic.write().await;
                     let mut out = Vec::new();
                     for oid in db.list_objects() {
-                        let outcome = db
-                            .get_mut(&oid)
-                            .and_then(|object| object.tick_intrinsic_reporting());
-                        if let Some(committed) = outcome.and_then(|outcome| {
-                            Self::commit_intrinsic_transition(&mut db, &oid, outcome)
-                        }) {
-                            if committed.distribute {
-                                out.push((oid, committed));
+                        let evaluated = db.get_mut(&oid).and_then(|object| {
+                            let requires_atomic_commit =
+                                object.intrinsic_reporting_requires_atomic_commit();
+                            object
+                                .tick_intrinsic_reporting()
+                                .map(|outcome| (requires_atomic_commit, outcome))
+                        });
+                        let resolved = evaluated.and_then(|(requires_atomic_commit, outcome)| {
+                            if requires_atomic_commit {
+                                Self::commit_intrinsic_transition(&mut db, &oid, outcome)
+                                    .map(ResolvedIntrinsicTransition::Committed)
+                            } else {
+                                Some(ResolvedIntrinsicTransition::Legacy(outcome))
+                            }
+                        });
+                        if let Some(resolved) = resolved {
+                            if resolved.distribute() {
+                                out.push((oid, resolved));
                             }
                         }
                     }
                     out
                 };
-                for (oid, committed) in fired {
+                for (oid, resolved) in fired {
                     Self::build_and_send_event_notification(
                         &db_intrinsic,
                         &network_intrinsic,
@@ -650,7 +663,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         &server_tsm_intrinsic,
                         &notification_transactions_intrinsic,
                         &oid,
-                        committed,
+                        resolved,
                         intrinsic_retry_ms,
                     )
                     .await;

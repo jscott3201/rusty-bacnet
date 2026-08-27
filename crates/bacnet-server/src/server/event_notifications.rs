@@ -13,6 +13,7 @@ pub(super) struct NotificationTransition {
     change: EventStateChange,
     event_type: EventType,
     timestamp_sample: Option<EventTimestampSample>,
+    ack_required: Option<bool>,
 }
 
 impl From<(EventStateChange, EventType)> for NotificationTransition {
@@ -21,6 +22,7 @@ impl From<(EventStateChange, EventType)> for NotificationTransition {
             change,
             event_type,
             timestamp_sample: None,
+            ack_required: None,
         }
     }
 }
@@ -31,6 +33,7 @@ pub(super) struct CommittedIntrinsicTransition {
     pub(super) event_type: EventType,
     pub(super) distribute: bool,
     timestamp_sample: EventTimestampSample,
+    ack_required: bool,
 }
 
 impl From<CommittedIntrinsicTransition> for NotificationTransition {
@@ -39,6 +42,37 @@ impl From<CommittedIntrinsicTransition> for NotificationTransition {
             change: committed.change,
             event_type: committed.event_type,
             timestamp_sample: Some(committed.timestamp_sample),
+            ack_required: Some(committed.ack_required),
+        }
+    }
+}
+
+/// A server-ready intrinsic outcome under its declared object contract.
+///
+/// Built-ins carry their atomic commit snapshot. Legacy implementations have
+/// already mutated state during evaluation and retain send-time policy and
+/// timestamp sampling.
+pub(super) enum ResolvedIntrinsicTransition {
+    Committed(CommittedIntrinsicTransition),
+    Legacy(TransitionOutcome),
+}
+
+impl ResolvedIntrinsicTransition {
+    pub(super) fn distribute(&self) -> bool {
+        match self {
+            Self::Committed(committed) => committed.distribute,
+            Self::Legacy(outcome) => outcome.distribute,
+        }
+    }
+}
+
+impl From<ResolvedIntrinsicTransition> for NotificationTransition {
+    fn from(transition: ResolvedIntrinsicTransition) -> Self {
+        match transition {
+            ResolvedIntrinsicTransition::Committed(committed) => committed.into(),
+            ResolvedIntrinsicTransition::Legacy(outcome) => {
+                (outcome.change, outcome.event_type).into()
+            }
         }
     }
 }
@@ -223,6 +257,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             event_type: outcome.event_type,
             distribute: outcome.distribute,
             timestamp_sample,
+            ack_required,
         })
     }
 
@@ -246,17 +281,28 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         oid: &ObjectIdentifier,
         retry_timeout_ms: u64,
     ) {
-        let committed = {
+        let resolved = {
             let mut db = db.write().await;
-            let outcome = match db.get_mut(oid) {
-                Some(object) => object.evaluate_intrinsic_reporting(),
+            let (requires_atomic_commit, outcome) = match db.get_mut(oid) {
+                Some(object) => (
+                    object.intrinsic_reporting_requires_atomic_commit(),
+                    object.evaluate_intrinsic_reporting(),
+                ),
                 None => return,
             };
-            outcome.and_then(|outcome| Self::commit_intrinsic_transition(&mut db, oid, outcome))
+            outcome.and_then(|outcome| {
+                if requires_atomic_commit {
+                    Self::commit_intrinsic_transition(&mut db, oid, outcome)
+                        .map(ResolvedIntrinsicTransition::Committed)
+                } else {
+                    Some(ResolvedIntrinsicTransition::Legacy(outcome))
+                }
+            })
         };
 
-        // A successful commit has already applied the local transition actions,
-        // whatever Event_Enable says. Only external distribution is gated here:
+        // A successful built-in commit has already applied the local transition
+        // actions; a legacy object applied them during evaluation. Whatever
+        // Event_Enable says, only external distribution is gated here:
         // Clause 12.12 defines Event_Enable as enabling and disabling the
         // distribution of notifications, and Clause 13.2.5 places that gate
         // inside the notification-distribution process — downstream of the
@@ -265,8 +311,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // The shared commit kernel has also stored the selected timestamp and
         // updated Acked_Transitions from the Notification Class policy. Message
         // text is intentionally absent for this built-in path.
-        if let Some(committed) = committed {
-            if committed.distribute {
+        if let Some(resolved) = resolved {
+            if resolved.distribute() {
                 Self::build_and_send_event_notification(
                     db,
                     network,
@@ -274,7 +320,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     server_tsm,
                     notification_transactions,
                     oid,
-                    committed,
+                    resolved,
                     retry_timeout_ms,
                 )
                 .await;
@@ -308,6 +354,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             change,
             event_type,
             timestamp_sample,
+            ack_required: ack_required_snapshot,
         } = transition.into();
         let system_utc = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -372,8 +419,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             // referenced NotificationClass (ASHRAE 135-2020 §13.2.1), falling
             // back to the BACnet defaults (Priority 255, no ack) when the
             // class is missing.
-            let (priority, ack_required) =
+            let (priority, resolved_ack_required) =
                 resolve_transition_priority_ack(&db, notification_class, transition);
+            let ack_required = ack_required_snapshot.unwrap_or(resolved_ack_required);
 
             let base_notification = EventNotificationRequest {
                 process_identifier: 0,
