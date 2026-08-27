@@ -1,9 +1,11 @@
 use super::*;
+use bacnet_encoding::primitives::encode_timestamp_choice;
+use bacnet_types::primitives::{Date, Time};
 
 struct EventSummaryFixture {
     oid: ObjectIdentifier,
     name: String,
-    timestamps: [u64; 3],
+    timestamps: [PropertyValue; 3],
 }
 
 impl BACnetObject for EventSummaryFixture {
@@ -37,12 +39,9 @@ impl BACnetObject for EventSummaryFixture {
                 unused_bits: 5,
                 data: vec![0x40],
             }),
-            p if p == PropertyIdentifier::EVENT_TIME_STAMPS => Ok(PropertyValue::List(
-                self.timestamps
-                    .into_iter()
-                    .map(PropertyValue::Unsigned)
-                    .collect(),
-            )),
+            p if p == PropertyIdentifier::EVENT_TIME_STAMPS => {
+                Ok(PropertyValue::List(self.timestamps.to_vec()))
+            }
             _ => Err(Error::Protocol {
                 class: ErrorClass::PROPERTY.to_raw() as u32,
                 code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
@@ -78,11 +77,24 @@ impl BACnetObject for EventSummaryFixture {
 }
 
 fn event_summary_fixture(instance: u32, timestamps: [u64; 3]) -> EventSummaryFixture {
+    event_summary_fixture_with_values(instance, timestamps.map(PropertyValue::Unsigned))
+}
+
+fn event_summary_fixture_with_values(
+    instance: u32,
+    timestamps: [PropertyValue; 3],
+) -> EventSummaryFixture {
     EventSummaryFixture {
         oid: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance).unwrap(),
         name: format!("AI-{instance}"),
         timestamps,
     }
+}
+
+fn timestamp_value(timestamp: &BACnetTimeStamp) -> PropertyValue {
+    let mut encoded = BytesMut::new();
+    encode_timestamp_choice(&mut encoded, timestamp).unwrap();
+    PropertyValue::ApplicationData(encoded.to_vec())
 }
 
 fn get_event_information_ack(
@@ -340,6 +352,20 @@ fn get_event_information_forwards_valid_sequence_timestamps_and_defaults_invalid
         .unwrap();
     db.add(Box::new(event_summary_fixture(2, [65536, 44, 55])))
         .unwrap();
+    let mut trailing_data = timestamp_value(&BACnetTimeStamp::SequenceNumber(66));
+    let PropertyValue::ApplicationData(encoded) = &mut trailing_data else {
+        unreachable!("timestamp helper must return ApplicationData")
+    };
+    encoded.push(0);
+    db.add(Box::new(event_summary_fixture_with_values(
+        3,
+        [
+            trailing_data,
+            timestamp_value(&BACnetTimeStamp::SequenceNumber(77)),
+            timestamp_value(&BACnetTimeStamp::SequenceNumber(88)),
+        ],
+    )))
+    .unwrap();
 
     let ack = get_event_information_ack(&db, None);
     assert_eq!(
@@ -358,6 +384,52 @@ fn get_event_information_forwards_valid_sequence_timestamps_and_defaults_invalid
             BACnetTimeStamp::SequenceNumber(0),
         ]
     );
+    assert_eq!(
+        ack.list_of_event_summaries[2].event_timestamps,
+        [
+            BACnetTimeStamp::SequenceNumber(0),
+            BACnetTimeStamp::SequenceNumber(0),
+            BACnetTimeStamp::SequenceNumber(0),
+        ]
+    );
+}
+
+#[test]
+fn get_event_information_preserves_timestamp_choices() {
+    let expected = [
+        BACnetTimeStamp::Time(Time {
+            hour: 1,
+            minute: 2,
+            second: 3,
+            hundredths: 4,
+        }),
+        BACnetTimeStamp::SequenceNumber(22),
+        BACnetTimeStamp::DateTime {
+            date: Date {
+                year: 126,
+                month: 7,
+                day: 30,
+                day_of_week: 4,
+            },
+            time: Time {
+                hour: 12,
+                minute: 34,
+                second: 56,
+                hundredths: 78,
+            },
+        },
+    ];
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(event_summary_fixture_with_values(
+        1,
+        expected
+            .clone()
+            .map(|timestamp| timestamp_value(&timestamp)),
+    )))
+    .unwrap();
+
+    let ack = get_event_information_ack(&db, None);
+    assert_eq!(ack.list_of_event_summaries[0].event_timestamps, expected);
 }
 
 #[test]

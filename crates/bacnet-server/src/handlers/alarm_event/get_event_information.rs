@@ -4,6 +4,7 @@
 //! on a single module.
 
 use super::super::*;
+use bacnet_encoding::primitives::decode_timestamp_choice;
 
 /// Handle a GetEventInformation request.
 ///
@@ -132,21 +133,13 @@ pub fn handle_get_event_information(
                     .ok()
                     .and_then(|v| match v {
                         PropertyValue::List(items) => {
-                            let [
-                                PropertyValue::Unsigned(offnormal),
-                                PropertyValue::Unsigned(fault),
-                                PropertyValue::Unsigned(normal),
-                            ] = items.as_slice()
-                            else {
+                            let [offnormal, fault, normal] = items.as_slice() else {
                                 return None;
                             };
-                            let offnormal = u16::try_from(*offnormal).ok()?;
-                            let fault = u16::try_from(*fault).ok()?;
-                            let normal = u16::try_from(*normal).ok()?;
                             Some([
-                                BACnetTimeStamp::SequenceNumber(offnormal),
-                                BACnetTimeStamp::SequenceNumber(fault),
-                                BACnetTimeStamp::SequenceNumber(normal),
+                                decode_event_timestamp(offnormal)?,
+                                decode_event_timestamp(fault)?,
+                                decode_event_timestamp(normal)?,
                             ])
                         }
                         _ => None,
@@ -178,4 +171,17 @@ pub fn handle_get_event_information(
 
     ack.encode(buf)?;
     Ok(())
+}
+
+fn decode_event_timestamp(value: &PropertyValue) -> Option<BACnetTimeStamp> {
+    match value {
+        PropertyValue::ApplicationData(encoded) => {
+            let (timestamp, consumed) = decode_timestamp_choice(encoded, 0).ok()?;
+            (consumed == encoded.len()).then_some(timestamp)
+        }
+        PropertyValue::Unsigned(sequence_number) => u16::try_from(*sequence_number)
+            .ok()
+            .map(BACnetTimeStamp::SequenceNumber),
+        _ => None,
+    }
 }
