@@ -1,8 +1,10 @@
 //! Shared storage for intrinsic-reporting event history properties.
 
+use bacnet_encoding::primitives::encode_timestamp_choice;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
+use bytes::BytesMut;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct EventHistory {
@@ -30,12 +32,7 @@ impl EventHistory {
         *self = Self::default();
     }
 
-    /// Reads the flattened representation used by the existing object API.
-    ///
-    /// Array-index behavior is implemented here; #171 owns the remaining array
-    /// integration. Timestamp projection is deliberately lossy: alternatives
-    /// other than `SequenceNumber` flatten to zero pending #171, while #259 owns
-    /// the timestamp choice wire representation.
+    /// Reads the fixed-size event arrays with their BACnet array semantics.
     pub(crate) fn read(
         &self,
         property: PropertyIdentifier,
@@ -70,10 +67,10 @@ impl EventHistory {
 }
 
 fn timestamp_value(stamp: &BACnetTimeStamp) -> PropertyValue {
-    PropertyValue::Unsigned(match stamp {
-        BACnetTimeStamp::SequenceNumber(n) => u64::from(*n),
-        _ => 0,
-    })
+    let mut encoded = BytesMut::new();
+    encode_timestamp_choice(&mut encoded, stamp)
+        .expect("BACnetTimeStamp CHOICE encoding is infallible");
+    PropertyValue::ApplicationData(encoded.to_vec())
 }
 
 #[cfg(test)]

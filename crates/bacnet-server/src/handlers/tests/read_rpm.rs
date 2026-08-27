@@ -120,36 +120,6 @@ fn active_cov_subscriptions_read_property_multiple_preserves_constructed_bytes()
 }
 
 #[test]
-fn read_property_handler_serves_multistate_event_time_stamps() {
-    let db = make_db_with_msi();
-    let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
-    let request = ReadPropertyRequest {
-        object_identifier: oid,
-        property_identifier: PropertyIdentifier::EVENT_TIME_STAMPS,
-        property_array_index: None,
-    };
-    let mut buf = BytesMut::new();
-    request.encode(&mut buf);
-
-    let mut ack_buf = BytesMut::new();
-    handle_read_property(&db, &buf, &mut ack_buf).unwrap();
-    let ack = ReadPropertyACK::decode(&ack_buf.to_vec()).unwrap();
-    assert_eq!(
-        ack.property_identifier,
-        PropertyIdentifier::EVENT_TIME_STAMPS
-    );
-    let mut offset = 0;
-    for _ in 0..3 {
-        let (value, next) =
-            bacnet_encoding::primitives::decode_application_value(&ack.property_value, offset)
-                .unwrap();
-        assert_eq!(value, bacnet_types::primitives::PropertyValue::Unsigned(0));
-        offset = next;
-    }
-    assert_eq!(offset, ack.property_value.len());
-}
-
-#[test]
 fn read_property_handler_serves_multistate_event_time_stamps_count() {
     let db = make_db_with_msi();
     let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
@@ -459,9 +429,9 @@ fn rpm_all_includes_multistate_event_history() {
         .expect("EVENT_TIME_STAMPS must succeed");
     let mut offset = 0;
     for _ in 0..3 {
-        let (value, next) =
-            bacnet_encoding::primitives::decode_application_value(timestamps, offset).unwrap();
-        assert_eq!(value, bacnet_types::primitives::PropertyValue::Unsigned(0));
+        let (decoded, next) =
+            bacnet_encoding::primitives::decode_timestamp_choice(timestamps, offset).unwrap();
+        assert_eq!(decoded, BACnetTimeStamp::SequenceNumber(0));
         offset = next;
     }
     assert_eq!(offset, timestamps.len());

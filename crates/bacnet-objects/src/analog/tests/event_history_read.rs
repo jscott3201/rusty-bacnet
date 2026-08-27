@@ -1,14 +1,40 @@
 //! Regression coverage for shared analog event-history reads (#235).
 
 use super::super::*;
+use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::primitives::{Date, Time};
+
+fn assert_timestamp_value(actual: PropertyValue, expected: &BACnetTimeStamp, context: &str) {
+    let PropertyValue::ApplicationData(bytes) = actual else {
+        panic!("{context}: expected timestamp ApplicationData");
+    };
+    let (decoded, end) = decode_timestamp_choice(&bytes, 0).unwrap();
+    assert_eq!(&decoded, expected, "{context}: timestamp choice");
+    assert_eq!(end, bytes.len(), "{context}: trailing timestamp bytes");
+}
+
+fn assert_timestamp_array(actual: PropertyValue, expected: &[BACnetTimeStamp; 3], context: &str) {
+    let PropertyValue::List(elements) = actual else {
+        panic!("{context}: expected timestamp list");
+    };
+    assert_eq!(elements.len(), expected.len(), "{context}: array length");
+    for (slot, (actual, expected)) in elements.into_iter().zip(expected).enumerate() {
+        assert_timestamp_value(actual, expected, &format!("{context} slot {}", slot + 1));
+    }
+}
 
 macro_rules! assert_seeded_event_history {
     ($object:expr, $label:literal) => {{
         let mut object = $object;
-        object.event_history.time_stamps = [
-            BACnetTimeStamp::SequenceNumber(11),
+        let expected_timestamps = [
+            BACnetTimeStamp::Time(Time {
+                hour: 1,
+                minute: 2,
+                second: 3,
+                hundredths: 4,
+            }),
+            BACnetTimeStamp::SequenceNumber(22),
             BACnetTimeStamp::DateTime {
                 date: Date {
                     year: 126,
@@ -23,21 +49,16 @@ macro_rules! assert_seeded_event_history {
                     hundredths: 78,
                 },
             },
-            BACnetTimeStamp::SequenceNumber(33),
         ];
+        object.event_history.time_stamps = expected_timestamps.clone();
         object.event_history.message_texts = ["offnormal".into(), "fault".into(), "normal".into()];
 
-        assert_eq!(
+        assert_timestamp_array(
             object
                 .read_property(PropertyIdentifier::EVENT_TIME_STAMPS, None)
                 .unwrap(),
-            PropertyValue::List(vec![
-                PropertyValue::Unsigned(11),
-                PropertyValue::Unsigned(0),
-                PropertyValue::Unsigned(33),
-            ]),
-            "{} timestamp projection",
-            $label
+            &expected_timestamps,
+            concat!($label, " timestamps"),
         );
         assert_eq!(
             object
@@ -51,58 +72,62 @@ macro_rules! assert_seeded_event_history {
             "{} messages",
             $label
         );
-        assert_eq!(
-            object
-                .read_property(PropertyIdentifier::EVENT_TIME_STAMPS, Some(0))
-                .unwrap(),
-            PropertyValue::Unsigned(3),
-            "{} timestamp count",
-            $label
-        );
-        assert_eq!(
-            object
-                .read_property(PropertyIdentifier::EVENT_TIME_STAMPS, Some(2))
-                .unwrap(),
-            PropertyValue::Unsigned(0),
-            "{} lossy indexed timestamp",
-            $label
-        );
-        assert_eq!(
-            object
-                .read_property(PropertyIdentifier::EVENT_MESSAGE_TEXTS, Some(2))
-                .unwrap(),
-            PropertyValue::CharacterString("fault".into()),
-            "{} indexed message",
-            $label
-        );
-        assert_eq!(
-            object
-                .read_property(PropertyIdentifier::EVENT_MESSAGE_TEXTS, Some(0))
-                .unwrap(),
-            PropertyValue::Unsigned(3),
-            "{} message count",
-            $label
-        );
         for property in [
             PropertyIdentifier::EVENT_TIME_STAMPS,
             PropertyIdentifier::EVENT_MESSAGE_TEXTS,
         ] {
-            match object.read_property(property, Some(4)).unwrap_err() {
-                Error::Protocol { class, code } => {
-                    assert_eq!(
-                        class,
-                        ErrorClass::PROPERTY.to_raw() as u32,
-                        "{} class",
-                        $label
-                    );
-                    assert_eq!(
-                        code,
-                        ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32,
-                        "{} code",
-                        $label
-                    );
+            assert_eq!(
+                object.read_property(property, Some(0)).unwrap(),
+                PropertyValue::Unsigned(3),
+                "{} {property:?} count",
+                $label
+            );
+        }
+        for (slot, expected) in expected_timestamps.iter().enumerate() {
+            assert_timestamp_value(
+                object
+                    .read_property(PropertyIdentifier::EVENT_TIME_STAMPS, Some(slot as u32 + 1))
+                    .unwrap(),
+                expected,
+                &format!("{} timestamp slot {}", $label, slot + 1),
+            );
+        }
+        for (slot, expected) in ["offnormal", "fault", "normal"].into_iter().enumerate() {
+            assert_eq!(
+                object
+                    .read_property(
+                        PropertyIdentifier::EVENT_MESSAGE_TEXTS,
+                        Some(slot as u32 + 1),
+                    )
+                    .unwrap(),
+                PropertyValue::CharacterString(expected.into()),
+                "{} message slot {}",
+                $label,
+                slot + 1
+            );
+        }
+        for property in [
+            PropertyIdentifier::EVENT_TIME_STAMPS,
+            PropertyIdentifier::EVENT_MESSAGE_TEXTS,
+        ] {
+            for index in [4, u32::MAX] {
+                match object.read_property(property, Some(index)).unwrap_err() {
+                    Error::Protocol { class, code } => {
+                        assert_eq!(
+                            class,
+                            ErrorClass::PROPERTY.to_raw() as u32,
+                            "{} class",
+                            $label
+                        );
+                        assert_eq!(
+                            code,
+                            ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32,
+                            "{} code",
+                            $label
+                        );
+                    }
+                    other => panic!("{} expected INVALID_ARRAY_INDEX, got {other:?}", $label),
                 }
-                other => panic!("{} expected INVALID_ARRAY_INDEX, got {other:?}", $label),
             }
         }
     }};

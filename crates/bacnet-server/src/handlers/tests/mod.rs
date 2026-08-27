@@ -49,6 +49,7 @@ mod life_safety_operation;
 mod multi_element_writes;
 mod passwords;
 mod property_metadata;
+mod read_event_arrays;
 mod read_rpm;
 mod reference_writes;
 mod wpm_create_alarm;

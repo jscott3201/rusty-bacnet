@@ -397,8 +397,8 @@ fn modeled_arrays_on_command_and_staging_pass_the_gate() {
 #[test]
 fn event_time_stamps_accepts_index_range_via_event_history() {
     // EVENT_TIME_STAMPS is BACnetARRAY[3]; element semantics delegate to
-    // EventHistory::read (#171 owns the remaining integration — only the
-    // gate pass-through is pinned here).
+    // EventHistory::read; this test pins the server gate pass-through while
+    // read_event_arrays pins the element payloads and CHOICE encoding.
     let db = gating_db();
     let msi = oid(ObjectType::MULTI_STATE_INPUT, 1);
 

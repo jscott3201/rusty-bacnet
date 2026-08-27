@@ -6,9 +6,17 @@
 //! `multistate/mod.rs` and already holds `objects.rs` and `state_text.rs`.
 
 use super::super::*;
+use bacnet_encoding::primitives::encode_timestamp_choice;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{ErrorClass, ErrorCode, EventState};
 use bacnet_types::error::Error;
+use bytes::BytesMut;
+
+fn timestamp_property_value(timestamp: &BACnetTimeStamp) -> PropertyValue {
+    let mut bytes = BytesMut::new();
+    encode_timestamp_choice(&mut bytes, timestamp).unwrap();
+    PropertyValue::ApplicationData(bytes.to_vec())
+}
 
 /// Commission `Event_Enable` the way a client does: a Clause 20.2.10 bit string
 /// through `write_property`, never a direct field assignment.
@@ -325,9 +333,9 @@ fn multistate_time_delay_normal_defaults_to_time_delay_when_unwritten() {
 #[test]
 fn multistate_event_history_is_listed_readable_and_read_only() {
     let timestamps = PropertyValue::List(vec![
-        PropertyValue::Unsigned(0),
-        PropertyValue::Unsigned(0),
-        PropertyValue::Unsigned(0),
+        timestamp_property_value(&BACnetTimeStamp::SequenceNumber(0)),
+        timestamp_property_value(&BACnetTimeStamp::SequenceNumber(0)),
+        timestamp_property_value(&BACnetTimeStamp::SequenceNumber(0)),
     ]);
     let messages = PropertyValue::List(vec![
         PropertyValue::CharacterString(String::new()),
@@ -359,7 +367,9 @@ fn multistate_event_history_is_listed_readable_and_read_only() {
                 PropertyValue::Unsigned(3)
             );
             let second = match property {
-                p if p == PropertyIdentifier::EVENT_TIME_STAMPS => PropertyValue::Unsigned(0),
+                p if p == PropertyIdentifier::EVENT_TIME_STAMPS => {
+                    timestamp_property_value(&BACnetTimeStamp::SequenceNumber(0))
+                }
                 _ => PropertyValue::CharacterString(String::new()),
             };
             assert_eq!(object.read_property(property, Some(2)).unwrap(), second);
@@ -394,7 +404,12 @@ macro_rules! assert_multistate_history_reset {
             object
                 .read_property(PropertyIdentifier::EVENT_TIME_STAMPS, None)
                 .unwrap(),
-            PropertyValue::List(vec![PropertyValue::Unsigned(0); 3]),
+            PropertyValue::List(vec![
+                timestamp_property_value(
+                    &BACnetTimeStamp::SequenceNumber(0)
+                );
+                3
+            ]),
             "{} timestamp reset",
             $label
         );

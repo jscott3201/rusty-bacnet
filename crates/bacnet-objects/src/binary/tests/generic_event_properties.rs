@@ -7,8 +7,36 @@
 //! writable, so the transition bits were stuck at (F, F, F).
 
 use super::*;
+use bacnet_encoding::primitives::{decode_timestamp_choice, encode_timestamp_choice};
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{ErrorClass, ErrorCode, EventState};
+use bacnet_types::primitives::{Date, Time};
+use bytes::BytesMut;
+
+fn timestamp_property_value(timestamp: &BACnetTimeStamp) -> PropertyValue {
+    let mut bytes = BytesMut::new();
+    encode_timestamp_choice(&mut bytes, timestamp).unwrap();
+    PropertyValue::ApplicationData(bytes.to_vec())
+}
+
+fn assert_timestamp_value(actual: PropertyValue, expected: &BACnetTimeStamp, context: &str) {
+    let PropertyValue::ApplicationData(bytes) = actual else {
+        panic!("{context}: expected timestamp ApplicationData");
+    };
+    let (decoded, end) = decode_timestamp_choice(&bytes, 0).unwrap();
+    assert_eq!(&decoded, expected, "{context}: timestamp choice");
+    assert_eq!(end, bytes.len(), "{context}: trailing timestamp bytes");
+}
+
+fn assert_timestamp_array(actual: PropertyValue, expected: &[BACnetTimeStamp; 3], context: &str) {
+    let PropertyValue::List(elements) = actual else {
+        panic!("{context}: expected timestamp list");
+    };
+    assert_eq!(elements.len(), expected.len(), "{context}: array length");
+    for (slot, (actual, expected)) in elements.into_iter().zip(expected).enumerate() {
+        assert_timestamp_value(actual, expected, &format!("{context} slot {}", slot + 1));
+    }
+}
 
 fn assert_protocol_error(result: Result<(), Error>, code: ErrorCode) {
     match result.unwrap_err() {
@@ -337,9 +365,9 @@ fn fresh_binary_input_is_default_armed_for_active() {
 #[test]
 fn binary_event_history_is_listed_readable_and_read_only() {
     let timestamps = PropertyValue::List(vec![
-        PropertyValue::Unsigned(0),
-        PropertyValue::Unsigned(0),
-        PropertyValue::Unsigned(0),
+        timestamp_property_value(&BACnetTimeStamp::SequenceNumber(0)),
+        timestamp_property_value(&BACnetTimeStamp::SequenceNumber(0)),
+        timestamp_property_value(&BACnetTimeStamp::SequenceNumber(0)),
     ]);
     let messages = PropertyValue::List(vec![
         PropertyValue::CharacterString(String::new()),
@@ -371,7 +399,9 @@ fn binary_event_history_is_listed_readable_and_read_only() {
                 PropertyValue::Unsigned(3)
             );
             let second = match property {
-                p if p == PropertyIdentifier::EVENT_TIME_STAMPS => PropertyValue::Unsigned(0),
+                p if p == PropertyIdentifier::EVENT_TIME_STAMPS => {
+                    timestamp_property_value(&BACnetTimeStamp::SequenceNumber(0))
+                }
                 _ => PropertyValue::CharacterString(String::new()),
             };
             assert_eq!(object.read_property(property, Some(2)).unwrap(), second);
@@ -387,6 +417,110 @@ fn binary_event_history_is_listed_readable_and_read_only() {
             assert!(!object.is_writable_property(property));
         }
     }
+}
+
+macro_rules! assert_seeded_binary_event_history {
+    ($object:expr, $label:literal) => {{
+        let mut object = $object;
+        let expected_timestamps = [
+            BACnetTimeStamp::Time(Time {
+                hour: 1,
+                minute: 2,
+                second: 3,
+                hundredths: 4,
+            }),
+            BACnetTimeStamp::SequenceNumber(22),
+            BACnetTimeStamp::DateTime {
+                date: Date {
+                    year: 126,
+                    month: 7,
+                    day: 30,
+                    day_of_week: 4,
+                },
+                time: Time {
+                    hour: 12,
+                    minute: 34,
+                    second: 56,
+                    hundredths: 78,
+                },
+            },
+        ];
+        object.event_history.time_stamps = expected_timestamps.clone();
+        object.event_history.message_texts = ["offnormal".into(), "fault".into(), "normal".into()];
+
+        assert_timestamp_array(
+            object
+                .read_property(PropertyIdentifier::EVENT_TIME_STAMPS, None)
+                .unwrap(),
+            &expected_timestamps,
+            concat!($label, " timestamps"),
+        );
+        assert_eq!(
+            object
+                .read_property(PropertyIdentifier::EVENT_MESSAGE_TEXTS, None)
+                .unwrap(),
+            PropertyValue::List(vec![
+                PropertyValue::CharacterString("offnormal".into()),
+                PropertyValue::CharacterString("fault".into()),
+                PropertyValue::CharacterString("normal".into()),
+            ]),
+            "{} messages",
+            $label
+        );
+
+        for property in [
+            PropertyIdentifier::EVENT_TIME_STAMPS,
+            PropertyIdentifier::EVENT_MESSAGE_TEXTS,
+        ] {
+            assert_eq!(
+                object.read_property(property, Some(0)).unwrap(),
+                PropertyValue::Unsigned(3),
+                "{} {property:?} count",
+                $label
+            );
+        }
+        for (slot, expected) in expected_timestamps.iter().enumerate() {
+            assert_timestamp_value(
+                object
+                    .read_property(PropertyIdentifier::EVENT_TIME_STAMPS, Some(slot as u32 + 1))
+                    .unwrap(),
+                expected,
+                &format!("{} timestamp slot {}", $label, slot + 1),
+            );
+        }
+        for (slot, expected) in ["offnormal", "fault", "normal"].into_iter().enumerate() {
+            assert_eq!(
+                object
+                    .read_property(
+                        PropertyIdentifier::EVENT_MESSAGE_TEXTS,
+                        Some(slot as u32 + 1),
+                    )
+                    .unwrap(),
+                PropertyValue::CharacterString(expected.into()),
+                "{} message slot {}",
+                $label,
+                slot + 1
+            );
+        }
+        for property in [
+            PropertyIdentifier::EVENT_TIME_STAMPS,
+            PropertyIdentifier::EVENT_MESSAGE_TEXTS,
+        ] {
+            for index in [4, u32::MAX] {
+                assert_property_read_error(
+                    object.read_property(property, Some(index)),
+                    ErrorCode::INVALID_ARRAY_INDEX,
+                );
+            }
+        }
+    }};
+}
+
+#[test]
+fn binary_seeded_event_history_preserves_array_order_and_timestamp_choices() {
+    assert_seeded_binary_event_history!(BinaryInputObject::new(1, "BI-1").unwrap(), "BI");
+    assert_seeded_binary_event_history!(BinaryOutputObject::new(1, "BO-1").unwrap(), "BO");
+    assert_seeded_binary_event_history!(BinaryValueObject::new(1, "BV-1").unwrap(), "BV");
 }
 
 macro_rules! assert_binary_history_reset {
@@ -406,7 +540,12 @@ macro_rules! assert_binary_history_reset {
             object
                 .read_property(PropertyIdentifier::EVENT_TIME_STAMPS, None)
                 .unwrap(),
-            PropertyValue::List(vec![PropertyValue::Unsigned(0); 3]),
+            PropertyValue::List(vec![
+                timestamp_property_value(
+                    &BACnetTimeStamp::SequenceNumber(0)
+                );
+                3
+            ]),
             "{} timestamp reset",
             $label
         );
