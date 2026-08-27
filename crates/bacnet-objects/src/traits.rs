@@ -12,7 +12,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use crate::clock::ClockReader;
-use crate::event::TransitionOutcome;
+use crate::event::{EventTransitionCommit, EventTransitionCommitError, TransitionOutcome};
 use crate::event_enrollment::{EventEnrollmentEvalState, EventEnrollmentMonitoredSource};
 use crate::file::FileStorage;
 
@@ -272,6 +272,27 @@ pub trait BACnetObject: Send + Sync {
     /// Objects without a delayed transition return `None`.
     fn tick_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
         None
+    }
+
+    /// Atomically commit all object-owned state for one event transition.
+    ///
+    /// The caller supplies an exact state change, its transition coordinate,
+    /// the resolved Notification Class `Ack_Required` value, a typed
+    /// timestamp, and an optional message. Implementations must validate the
+    /// coordinate and source state before changing `Event_State`,
+    /// `Acked_Transitions`, `Event_Time_Stamps`, or stored message state, and
+    /// must leave every value unchanged on error.
+    ///
+    /// This internal channel is deliberately separate from network property
+    /// writes and notification distribution. The default fails closed so an
+    /// object family participates only after it can lend all required state to
+    /// the shared commit kernel.
+    #[doc(hidden)]
+    fn commit_event_transition_internal(
+        &mut self,
+        _commit: EventTransitionCommit,
+    ) -> Result<(), EventTransitionCommitError> {
+        Err(EventTransitionCommitError::Unsupported)
     }
 
     /// Evaluate this object's schedule for the given time.

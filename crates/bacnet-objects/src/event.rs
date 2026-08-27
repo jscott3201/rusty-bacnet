@@ -7,6 +7,7 @@
 use core::ops::ControlFlow;
 
 use bacnet_types::enums::{EventState, EventType, Reliability};
+use bacnet_types::primitives::BACnetTimeStamp;
 
 pub(crate) mod history;
 
@@ -119,6 +120,46 @@ impl EventTransition {
             EventTransition::ToNormal => 2,
         }
     }
+}
+
+/// All object-owned values needed to commit one event-state transition.
+///
+/// Callers stage the timestamp and optional message before invoking an
+/// object's internal commit hook. The object then validates the transition
+/// coordinate and source state before changing any of its event properties.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EventTransitionCommit {
+    /// The expected source state and exact destination state.
+    pub change: EventStateChange,
+    /// The destination state's transition coordinate.
+    pub coordinate: EventTransition,
+    /// Whether the referenced Notification Class requires acknowledgment.
+    pub ack_required: bool,
+    /// The timestamp CHOICE to store for `coordinate`.
+    pub timestamp: BACnetTimeStamp,
+    /// Replacement message for `coordinate`, or `None` when the property is absent.
+    pub message_text: Option<String>,
+}
+
+/// Failure to atomically commit an event-state transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventTransitionCommitError {
+    /// The object does not implement the internal transition-commit channel.
+    Unsupported,
+    /// The supplied coordinate does not classify the exact destination state.
+    CoordinateTargetMismatch {
+        /// The coordinate supplied by the caller.
+        coordinate: EventTransition,
+        /// The exact destination state supplied by the caller.
+        target: EventState,
+    },
+    /// The object's current state no longer matches the staged source state.
+    CurrentStateMismatch {
+        /// The source state expected by the staged transition.
+        expected: EventState,
+        /// The object's current state when the commit was attempted.
+        actual: EventState,
+    },
 }
 
 /// Which limits are enabled.
