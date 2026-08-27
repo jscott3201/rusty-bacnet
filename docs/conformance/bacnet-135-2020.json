@@ -707,6 +707,37 @@
    "notes": "Split child of BACNET-12-OBJECT-MODEL (#182). The four arms share one objects-layer helper (reference.rs) so the local List form (in-process compatibility) and the framed ApplicationData form (network) converge on the same strict Clause 21 decode; error pairings follow Clause 15.9.1.3: wrong value datatype is PROPERTY / INVALID_DATA_TYPE, malformed framing / device qualification / unknown trailing context tag is PROPERTY / INVALID_DATA_ENCODING, and a mixed flat+framed element list is refused rather than reinterpreted. Null clears, and read arms carry the reference's optional array index as a third list element. Setpoint_Reference additionally accepts the BACnetSetpointReference opening/closing tag [0] frame (unambiguous against the bare form's leading primitive [0]) while refusing unbalanced frames. WritePropertyMultiple in-order commit and rollback are proven for a reference+setpoint request failing its second property. Review round: the adversary lane's blocker on the Averaging arm (silent member drop / member retype / as-u32 truncation, newly network-reachable) is fixed by routing it through the same shared decode; the runtime+dataflow empty-frame finding is fixed by the Option-returning decode_setpoint_reference; the dataflow PICS incoherence is fixed by exact is_writable_property overrides on Pulse Converter (PRESENT_VALUE / SCALE_FACTOR / ADJUST_VALUE / INPUT_REFERENCE + DESCRIPTION / OUT_OF_SERVICE / COV_INCREMENT) and Averaging (OBJECT_PROPERTY_REFERENCE + DESCRIPTION / OUT_OF_SERVICE), which also stop advertising OBJECT_NAME on both types (no arm routes it - a truth-toward-arms PICS correction). Limitation: reads still emit the flat application-tagged list form rather than re-framing context tags - the encode side is unchanged by this tranche; interop evidence against a second implementation remains open."
   },
   {
+   "id": "BACNET-12-ENROLLMENT-EVENT-TIME-STAMPS",
+   "standard_anchor": "Clause 12.12 Table 12-14; Clause 12.52 Table 12-61; Clause 12.1.5.1; Clause 13.2.2.1; Clause 21 BACnetTimeStamp",
+   "priority": "P1",
+   "requirement_summary": "Event Enrollment and Alert Enrollment expose required Event_Time_Stamps as a read-only BACnetARRAY[3] ordered TO_OFFNORMAL, TO_FAULT, TO_NORMAL. The initial condition is SequenceNumber(0) in every slot; omitted-index, count, element, invalid-index, detection-disabled reset, and lossless BACnetTimeStamp CHOICE reads are implemented. Complete property metadata drives Property_List, RPM ALL/REQUIRED/OPTIONAL, and generated PICS required/read-only truth for both object types.",
+   "status": "implementation-present-needs-state-machine-audit",
+   "code_anchors": [
+    "crates/bacnet-objects/src/event_enrollment/mod.rs",
+    "crates/bacnet-objects/src/event_enrollment/metadata.rs",
+    "crates/bacnet-objects/src/event_enrollment/state.rs",
+    "crates/bacnet-objects/src/event/history.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/event_enrollment/tests/timestamps.rs::enrollment_objects_default_event_time_stamps_are_three_zero_sequences",
+    "crates/bacnet-objects/src/event_enrollment/tests/timestamps.rs::enrollment_event_time_stamp_arrays_preserve_order_indexes_and_choices",
+    "crates/bacnet-objects/src/event_enrollment/tests/timestamps.rs::event_enrollment_detection_disable_resets_history_and_rollback_restores_it",
+    "crates/bacnet-objects/src/event_enrollment/tests/timestamps.rs::alert_enrollment_disable_projection_reset_and_rollback_cover_history",
+    "crates/bacnet-objects/src/event_enrollment/tests/timestamps.rs::enrollment_property_metadata_is_complete_and_pins_timestamp_requirements",
+    "crates/bacnet-objects/src/event_enrollment/tests/timestamps.rs::alert_to_normal_acknowledgment_cannot_be_cleared",
+    "crates/bacnet-server/src/handlers/tests/property_metadata.rs::rpm_metadata_selectors_are_exact_for_event_enrollment",
+    "crates/bacnet-server/src/handlers/tests/property_metadata.rs::rpm_metadata_selectors_are_exact_for_alert_enrollment",
+    "crates/bacnet-server/src/pics/property_metadata_tests.rs::pics_projects_migrated_property_metadata"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/event_enrollment/tests/timestamps.rs::enrollment_event_time_stamp_arrays_preserve_order_indexes_and_choices (invalid indexes, write denial, and Event_Message_Texts absence)",
+    "crates/bacnet-objects/src/event_enrollment/tests/timestamps.rs::enrollment_property_metadata_is_complete_and_pins_timestamp_requirements (Alert Enrollment Notify_Type limitation)"
+   ],
+   "benchmarks": [],
+   "public_claims": [],
+   "notes": "#264 property-surface slice. EventHistory is embedded privately, but only an exact Event_Time_Stamps match delegates to it; optional Event_Message_Texts remains unlisted and unreadable. Detection-disabled resets restore timestamp initial conditions, including projection after direct assignment to Alert Enrollment's compatibility-public Event_Detection_Enable field, and object-owned WPM rollback tokens restore seeded history atomically. Alert Enrollment's TO_NORMAL Acked_Transitions bit is held TRUE because Clause 12.52.8 makes that transition acknowledgment-not-required. This row does not claim complete transition maintenance: evaluator/lifecycle writes of each transition timestamp remain deferred to PR-0205/PR-0305, and notification transition-history sourcing remains deferred to PR-0207. Alert Enrollment remains a partial Table 12-61 model: required Notify_Type is still unimplemented and deliberately absent from metadata/PICS (#291); Event_Message_Texts is optional and remains absent."
+  },
+  {
    "id": "BACNET-12-TIME-DELAY-NORMAL",
    "standard_anchor": "Clause 13.3.2 CHANGE_OF_STATE, Clause 13.3.4 COMMAND_FAILURE, Clause 13.3.6 OUT_OF_RANGE (pTimeDelayNormal definitions and condition letters); Clause 12.2 Table 12-2 (Analog Input, O5), 12.3 Table 12-3 (Analog Output, O4), 12.4 Table 12-4 (Analog Value, O6), 12.6 Table 12-6 (Binary Input, O7), 12.7 Table 12-8 (Binary Output, O6), 12.8 Table 12-10 (Binary Value, O8), 12.18 Table 12-21 (Multi-state Input, O5), 12.19 Table 12-22 (Multi-state Output, O3), 12.20 Table 12-23 (Multi-state Value, O6)",
    "priority": "P1",

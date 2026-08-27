@@ -9,18 +9,15 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
+use crate::event::history::EventHistory;
+use crate::property_metadata::PropertyMetadata;
 use crate::traits::{BACnetObject, WritePropertyRollback};
 
+mod metadata;
 mod parameters;
 mod state;
-use state::EventEnrollmentWriteRollback;
+use state::{AlertEnrollmentWriteRollback, EventEnrollmentWriteRollback};
 pub use state::{EventEnrollmentEvalState, EventEnrollmentMonitoredSource, EventEnrollmentPending};
-
-struct AlertEnrollmentWriteRollback {
-    enabled: bool,
-    event_state: u32,
-    acked_transitions: u8,
-}
 
 /// BACnet EventEnrollment object.
 ///
@@ -39,6 +36,7 @@ pub struct EventEnrollmentObject {
     event_state: u32,
     event_enable: u8,
     acked_transitions: u8,
+    event_history: EventHistory,
     event_detection_enable: bool,
     notification_class: u32,
     fault_parameters: Option<FaultParameters>,
@@ -88,6 +86,7 @@ impl EventEnrollmentObject {
             // is also the initial condition the detection-disabled reset
             // restores, so `RESET_ACKED_TRANSITIONS` names it once.
             acked_transitions: Self::RESET_ACKED_TRANSITIONS,
+            event_history: EventHistory::default(),
             event_detection_enable: true,
             notification_class: 0,
             fault_parameters: None,
@@ -116,10 +115,6 @@ impl EventEnrollmentObject {
     /// Event_Message_Texts and Acked_Transitions shall be set to their
     /// respective initial conditions."
     ///
-    /// `Event_Time_Stamps` and `Event_Message_Texts` are not modeled on this
-    /// object yet (#264); when they are, their initial conditions belong here
-    /// — X'FF' octets / sequence number 0, and the empty string respectively.
-    ///
     /// The monitored-source identity, pending countdown, and both baselines
     /// are cleared too: they are extensions of the same event-state-detection
     /// state machine the clause freezes ("this state machine is not
@@ -133,6 +128,7 @@ impl EventEnrollmentObject {
     fn apply_detection_disabled_reset(&mut self) {
         self.event_state = EventState::NORMAL.to_raw();
         self.acked_transitions = Self::RESET_ACKED_TRANSITIONS;
+        self.event_history.reset();
         self.pending = None;
         self.monitored_reference = None;
         self.cov_baseline = None;
@@ -250,6 +246,10 @@ impl BACnetObject for EventEnrollmentObject {
             return result;
         }
         match property {
+            p if p == PropertyIdentifier::EVENT_TIME_STAMPS => self
+                .event_history
+                .read(p, array_index)
+                .expect("EventHistory handles Event_Time_Stamps"),
             p if p == PropertyIdentifier::OBJECT_TYPE => Ok(PropertyValue::Enumerated(
                 ObjectType::EVENT_ENROLLMENT.to_raw(),
             )),
@@ -540,6 +540,7 @@ impl BACnetObject for EventEnrollmentObject {
                     enabled: self.event_detection_enable,
                     event_state: self.event_state,
                     acked_transitions: self.acked_transitions,
+                    event_history: self.event_history.clone(),
                     monitored_reference: self.monitored_reference,
                     evaluation: EventEnrollmentEvalState {
                         pending: self.pending.clone(),
@@ -576,12 +577,14 @@ impl BACnetObject for EventEnrollmentObject {
                 enabled,
                 event_state,
                 acked_transitions,
+                event_history,
                 monitored_reference,
                 evaluation,
             } => {
                 self.event_detection_enable = enabled;
                 self.event_state = event_state;
                 self.acked_transitions = acked_transitions;
+                self.event_history = event_history;
                 self.monitored_reference = monitored_reference;
                 self.pending = evaluation.pending;
                 self.cov_baseline = evaluation.cov_baseline;
@@ -639,29 +642,12 @@ impl BACnetObject for EventEnrollmentObject {
             )
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        Cow::Borrowed(metadata::EVENT_ENROLLMENT_PROPERTIES)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::EVENT_TYPE,
-            PropertyIdentifier::NOTIFY_TYPE,
-            PropertyIdentifier::EVENT_PARAMETERS,
-            PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::EVENT_ENABLE,
-            PropertyIdentifier::ACKED_TRANSITIONS,
-            PropertyIdentifier::EVENT_DETECTION_ENABLE,
-            PropertyIdentifier::NOTIFICATION_CLASS,
-            PropertyIdentifier::FAULT_TYPE,
-            PropertyIdentifier::FAULT_PARAMETERS,
-            PropertyIdentifier::TIME_DELAY_NORMAL,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(metadata::EVENT_ENROLLMENT_PROPERTIES)
     }
 }
 
@@ -696,6 +682,7 @@ pub struct AlertEnrollmentObject {
     pub event_detection_enable: bool,
     /// Acknowledged transitions in TO_OFFNORMAL, TO_FAULT, TO_NORMAL order.
     acked_transitions: u8,
+    event_history: EventHistory,
     /// Event enable bits: 3-bit (TO_OFFNORMAL, TO_FAULT, TO_NORMAL).
     pub event_enable: u8,
     /// Notification class number.
@@ -717,6 +704,7 @@ impl AlertEnrollmentObject {
             present_value: 0,
             event_detection_enable: true,
             acked_transitions: 0b111,
+            event_history: EventHistory::default(),
             event_enable: 0b111,
             notification_class: 0,
         })
@@ -729,6 +717,7 @@ impl AlertEnrollmentObject {
         if !enabled || !self.event_detection_enable {
             self.event_state = EventState::NORMAL.to_raw();
             self.acked_transitions = 0b111;
+            self.event_history.reset();
         }
         self.event_detection_enable = enabled;
     }
@@ -748,6 +737,17 @@ impl BACnetObject for AlertEnrollmentObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        if property == PropertyIdentifier::EVENT_TIME_STAMPS {
+            if !self.event_detection_enable {
+                return EventHistory::default()
+                    .read(property, array_index)
+                    .expect("EventHistory handles Event_Time_Stamps");
+            }
+            return self
+                .event_history
+                .read(property, array_index)
+                .expect("EventHistory handles Event_Time_Stamps");
+        }
         if property == PropertyIdentifier::STATUS_FLAGS {
             return Ok(common::compute_status_flags(
                 self.status_flags,
@@ -853,6 +853,7 @@ impl BACnetObject for AlertEnrollmentObject {
                 enabled: self.event_detection_enable,
                 event_state: self.event_state,
                 acked_transitions: self.acked_transitions,
+                event_history: self.event_history.clone(),
             })
         })
     }
@@ -865,10 +866,12 @@ impl BACnetObject for AlertEnrollmentObject {
             enabled,
             event_state,
             acked_transitions,
+            event_history,
         } = rollback.downcast::<AlertEnrollmentWriteRollback>()?;
         self.event_detection_enable = enabled;
         self.event_state = event_state;
         self.acked_transitions = acked_transitions;
+        self.event_history = event_history;
         Ok(())
     }
 
@@ -888,11 +891,16 @@ impl BACnetObject for AlertEnrollmentObject {
         if !self.event_detection_enable {
             return Err(common::write_access_denied_error());
         }
+        let transition_bit = transition_bit & 0x07;
         if acknowledged {
-            self.acked_transitions |= transition_bit & 0x07;
+            self.acked_transitions |= transition_bit;
         } else {
-            self.acked_transitions &= !(transition_bit & 0x07);
+            // Alert Enrollment never requires acknowledgment for TO_NORMAL
+            // (Clause 12.52.8), so that bit cannot enter the unacknowledged
+            // state even if a generic transition hook asks to clear it.
+            self.acked_transitions &= !(transition_bit & 0x03);
         }
+        self.acked_transitions |= 0x04;
         Ok(())
     }
 
@@ -907,23 +915,12 @@ impl BACnetObject for AlertEnrollmentObject {
         )
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        Cow::Borrowed(metadata::ALERT_ENROLLMENT_PROPERTIES)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::EVENT_DETECTION_ENABLE,
-            PropertyIdentifier::EVENT_ENABLE,
-            PropertyIdentifier::ACKED_TRANSITIONS,
-            PropertyIdentifier::NOTIFICATION_CLASS,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(metadata::ALERT_ENROLLMENT_PROPERTIES)
     }
 }
 
