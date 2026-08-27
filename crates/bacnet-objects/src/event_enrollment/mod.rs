@@ -10,12 +10,14 @@ use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
 use crate::event::history::EventHistory;
+use crate::event::{EventTransitionCommit, EventTransitionCommitError};
 use crate::property_metadata::PropertyMetadata;
 use crate::traits::{BACnetObject, WritePropertyRollback};
 
 mod metadata;
 mod parameters;
 mod state;
+mod transition;
 use state::{AlertEnrollmentWriteRollback, EventEnrollmentWriteRollback};
 pub use state::{EventEnrollmentEvalState, EventEnrollmentMonitoredSource, EventEnrollmentPending};
 
@@ -528,6 +530,8 @@ impl BACnetObject for EventEnrollmentObject {
         }
         Ok(())
     }
+
+    transition::impl_event_enrollment_transition_commit!();
 
     fn capture_write_property_rollback(
         &mut self,

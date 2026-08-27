@@ -534,11 +534,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 loop {
                     interval.tick().await;
                     let mut db_guard = db_ee.write().await;
-                    let transitions = crate::event_enrollment::evaluate_event_enrollments(
+                    let report = crate::event_enrollment::evaluate_event_enrollments_report(
                         &mut db_guard,
                         ee_interval_secs,
                     );
-                    for t in &transitions {
+                    for t in &report.transitions {
                         // `distribute` is logged rather than acted on: this task
                         // records Event_State but does not yet emit
                         // EventNotifications (#127). Surfacing it keeps an
@@ -554,6 +554,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             "Event enrollment: state changed"
                         );
                     }
+                    crate::event_enrollment::log_evaluation_failures(&report);
                 }
             }))
         } else {

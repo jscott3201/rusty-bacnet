@@ -11,6 +11,7 @@ mod foreign_state;
 mod integration;
 mod out_of_range;
 mod same_state;
+mod transactional_commit;
 
 use super::*;
 use bacnet_objects::analog::AnalogInputObject;

@@ -34,18 +34,24 @@
 //! `Acked_Transitions` bit is set/cleared per the referenced Notification
 //! Class's `Ack_Required` (Clause 13.2.3), and the transition is emitted with
 //! its `Event_Enable`-scoped `distribute` flag. What is NOT here, by design:
-//! `Event_Time_Stamps` / `Event_Message_Texts` are not modeled on the EE
-//! object (tranche E, #264), and no notification is sent (#127, tranche E) —
-//! the lifecycle task only logs the returned transitions.
+//! `Event_Time_Stamps` is committed atomically with `Event_State` and
+//! `Acked_Transitions`; `Event_Message_Texts` remains absent, and no
+//! notification is sent (#127) — the lifecycle task logs committed
+//! transitions and internal commit failures.
 
 mod algorithms;
+mod commit;
 mod reference;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub use algorithms::{
     encode_change_of_bitstring_params, encode_change_of_state_params,
     encode_change_of_value_params, encode_floating_limit_params, encode_out_of_range_params,
+};
+pub use commit::{
+    EventEnrollmentEvaluationDiagnostic, EventEnrollmentEvaluationOutcome,
+    EventEnrollmentEvaluationReport, EventEnrollmentEvaluationStage,
 };
 
 use algorithms::{
@@ -53,6 +59,8 @@ use algorithms::{
     eval_floating_limit_struct, eval_legacy_le_arm, eval_out_of_range_struct, extract_bitstring,
     extract_property_state_value, extract_real, ArmEvaluation,
 };
+pub(crate) use commit::log_evaluation_failures;
+use commit::{apply_updates, EnrollmentUpdate, FiredTransition};
 #[cfg(test)]
 use reference::MonitoredReference;
 use reference::{params_fingerprint, read_object_property_ref};
@@ -171,90 +179,38 @@ fn ack_required_for_transition(
     }
 }
 
-/// What phase 1 decided for one enrollment, applied under a mutable borrow in
-/// phase 2 (phase 1 holds immutable database borrows to read monitored
-/// objects, so all mutation is deferred).
-struct EnrollmentUpdate {
-    /// Evaluation state to write back — pending countdown and/or baselines —
-    /// when it changed this pass, even with no transition.
-    eval_state: Option<EventEnrollmentEvalState>,
-    /// Monitored-source ownership update for objects that support the channel.
-    eval_source: Option<Option<EventEnrollmentMonitoredSource>>,
-    /// Clear the database-level reset requirement if this state write lands.
-    clears_invalidation: bool,
-    /// A transition that fired this pass, with everything the transition
-    /// actions need.
-    fired: Option<FiredTransition>,
-}
-
-struct FiredTransition {
-    monitored_oid: ObjectIdentifier,
-    event_type_raw: u32,
-    from: EventState,
-    to: EventState,
-    distribute: bool,
-    transition_bit: u8,
-    ack_required: bool,
-}
-
-impl EnrollmentUpdate {
-    fn eval_state_only(eval_state: EventEnrollmentEvalState) -> Self {
-        Self {
-            eval_state: Some(eval_state),
-            eval_source: None,
-            clears_invalidation: false,
-            fired: None,
-        }
-    }
-
-    fn eval_source_only(source: Option<EventEnrollmentMonitoredSource>) -> Self {
-        Self {
-            eval_state: None,
-            eval_source: Some(source),
-            clears_invalidation: false,
-            fired: None,
-        }
-    }
-
-    fn eval_state_reset() -> Self {
-        Self {
-            eval_state: Some(EventEnrollmentEvalState::default()),
-            eval_source: None,
-            clears_invalidation: true,
-            fired: None,
-        }
-    }
-}
-
 fn queue_eval_state_reset(
-    updates: &mut Vec<(ObjectIdentifier, EnrollmentUpdate)>,
+    updates: &mut HashMap<ObjectIdentifier, EnrollmentUpdate>,
     oid: ObjectIdentifier,
     supported: bool,
     state: &EventEnrollmentEvalState,
 ) {
     if supported && *state != EventEnrollmentEvalState::default() {
-        updates.push((oid, EnrollmentUpdate::eval_state_reset()));
+        updates.entry(oid).or_default().reset_eval_state();
     }
 }
 
 fn queue_pending_cancellation(
-    updates: &mut Vec<(ObjectIdentifier, EnrollmentUpdate)>,
+    updates: &mut HashMap<ObjectIdentifier, EnrollmentUpdate>,
     oid: ObjectIdentifier,
     supported: bool,
     state: &mut EventEnrollmentEvalState,
 ) {
     if state.pending.take().is_some() && supported {
-        updates.push((oid, EnrollmentUpdate::eval_state_only(state.clone())));
+        updates
+            .entry(oid)
+            .or_default()
+            .cancel_pending(state.clone());
     }
 }
 
 fn queue_eval_source_reset(
-    updates: &mut Vec<(ObjectIdentifier, EnrollmentUpdate)>,
+    updates: &mut HashMap<ObjectIdentifier, EnrollmentUpdate>,
     oid: ObjectIdentifier,
     source: Option<Option<EventEnrollmentMonitoredSource>>,
 ) {
     if source.flatten().is_some() {
-        updates.push((oid, EnrollmentUpdate::eval_source_only(None)));
+        updates.entry(oid).or_default().set_eval_source(None);
     }
 }
 
@@ -289,6 +245,18 @@ pub fn evaluate_event_enrollments(
     db: &mut ObjectDatabase,
     interval_secs: u64,
 ) -> Vec<EventEnrollmentTransition> {
+    evaluate_event_enrollments_report(db, interval_secs).transitions
+}
+
+/// Evaluate all EventEnrollment objects and expose commit diagnostics.
+///
+/// Unlike [`evaluate_event_enrollments`], this detailed API makes rejected
+/// private-state and atomic transition commits observable. Only transitions
+/// whose complete object-owned commit succeeds appear in `transitions`.
+pub fn evaluate_event_enrollments_report(
+    db: &mut ObjectDatabase,
+    interval_secs: u64,
+) -> EventEnrollmentEvaluationReport {
     let interval_secs = interval_secs.max(1);
     let oids = db.find_by_type(ObjectType::EVENT_ENROLLMENT);
     // A qualified reference can identify self only when the containing Device
@@ -299,7 +267,7 @@ pub fn evaluate_event_enrollments(
         _ => None,
     };
 
-    let mut updates: Vec<(ObjectIdentifier, EnrollmentUpdate)> = Vec::new();
+    let mut updates: HashMap<ObjectIdentifier, EnrollmentUpdate> = HashMap::new();
     let mut database_eval_sources = HashSet::new();
 
     for oid in &oids {
@@ -350,7 +318,7 @@ pub fn evaluate_event_enrollments(
             let had_private_state = eval_state != EventEnrollmentEvalState::default();
             eval_state = EventEnrollmentEvalState::default();
             if eval_state_supported && (had_private_state || force_state_reset) {
-                updates.push((*oid, EnrollmentUpdate::eval_state_reset()));
+                updates.entry(*oid).or_default().reset_eval_state();
             }
         }
 
@@ -472,7 +440,10 @@ pub fn evaluate_event_enrollments(
             eval_state.pending = None;
             eval_state_dirty = false;
             if eval_state_supported {
-                updates.push((*oid, EnrollmentUpdate::eval_state_only(eval_state.clone())));
+                updates
+                    .entry(*oid)
+                    .or_default()
+                    .set_eval_state(eval_state.clone());
             }
         }
 
@@ -500,10 +471,10 @@ pub fn evaluate_event_enrollments(
         };
         let event_type = EventType::from_raw(event_type_raw);
         if eval_source.is_some_and(|current| current != Some(monitored_reference)) {
-            updates.push((
-                *oid,
-                EnrollmentUpdate::eval_source_only(Some(monitored_reference)),
-            ));
+            updates
+                .entry(*oid)
+                .or_default()
+                .set_eval_source(Some(monitored_reference));
         }
 
         let (time_delay, arm) = match &params {
@@ -675,7 +646,7 @@ pub fn evaluate_event_enrollments(
                 eval_state_dirty = true;
             }
             if eval_state_dirty && eval_state_supported {
-                updates.push((*oid, EnrollmentUpdate::eval_state_only(eval_state)));
+                updates.entry(*oid).or_default().set_eval_state(eval_state);
             }
             continue;
         };
@@ -728,7 +699,7 @@ pub fn evaluate_event_enrollments(
 
         let Some(fired) = fired else {
             if eval_state_dirty && eval_state_supported {
-                updates.push((*oid, EnrollmentUpdate::eval_state_only(eval_state)));
+                updates.entry(*oid).or_default().set_eval_state(eval_state);
             }
             continue;
         };
@@ -753,149 +724,21 @@ pub fn evaluate_event_enrollments(
         let distribute = event_enable & transition_bit != 0;
         let ack_required = ack_required_for_transition(db, enrollment, transition_bit);
 
-        updates.push((
-            *oid,
-            EnrollmentUpdate {
-                eval_state: (eval_state_dirty && eval_state_supported).then_some(eval_state),
-                eval_source: None,
-                clears_invalidation: false,
-                fired: Some(FiredTransition {
-                    monitored_oid,
-                    event_type_raw,
-                    from: current_state,
-                    to: fired.target,
-                    distribute,
-                    transition_bit,
-                    ack_required,
-                }),
-            },
-        ));
+        let update = updates.entry(*oid).or_default();
+        if eval_state_dirty && eval_state_supported {
+            update.set_eval_state(eval_state);
+        }
+        update.fire(FiredTransition {
+            monitored_oid,
+            event_type_raw,
+            from: current_state,
+            to: fired.target,
+            distribute,
+            ack_required,
+        });
     }
 
-    let mut transitions = Vec::new();
-    let mut source_failures = HashSet::new();
-    let mut state_failures = HashSet::new();
-    let mut invalidation_changes = Vec::new();
-    let mut database_source_changes = Vec::new();
-    for (oid, update) in updates {
-        let source_failed = source_failures.contains(&oid);
-        if state_failures.contains(&oid)
-            || (source_failed && update.eval_source.is_some())
-            || (source_failed && update.fired.is_none() && update.eval_state.is_some())
-        {
-            continue;
-        }
-        let Some(obj) = db.get_mut(&oid) else {
-            continue;
-        };
-        if let Some(source) = update.eval_source {
-            if database_eval_sources.contains(&oid) {
-                database_source_changes.push((oid, source));
-            } else if obj.set_enrollment_eval_source_internal(source).is_err() {
-                // State written later in this pass would have no reliable
-                // owner. Clear it and suppress dependent state updates, while
-                // allowing an immediate stateless transition to proceed.
-                if obj
-                    .set_enrollment_eval_state_internal(EventEnrollmentEvalState::default())
-                    .is_err()
-                {
-                    state_failures.insert(oid);
-                    invalidation_changes.push((oid, true));
-                }
-                source_failures.insert(oid);
-                continue;
-            }
-        }
-        if let Some(fired) = update.fired {
-            // Persist the transition through the internal lifecycle path, not
-            // the network `write_property(EVENT_STATE, …)` route. `Event_State`
-            // is algorithmically derived (ASHRAE 135-2020 Clause 12.12) and
-            // read-only over the network, so the evaluator reaches the field
-            // via `set_event_state_internal` (issue #130). The SPECIFIC
-            // returned state is stored — 13.2.2.1.4 forbids collapsing
-            // HIGH_LIMIT/LOW_LIMIT to OFFNORMAL — and the actions run for
-            // same-state transitions too (`from == to`).
-            if source_failed && fired.from == fired.to {
-                continue;
-            }
-            let mut persisted_eval_state = false;
-            if !source_failed {
-                if let Some(state) = update.eval_state {
-                    if obj.set_enrollment_eval_state_internal(state).is_err() {
-                        if database_eval_sources.contains(&oid) {
-                            database_source_changes.push((oid, None));
-                        } else {
-                            let _ = obj.set_enrollment_eval_source_internal(None);
-                        }
-                        state_failures.insert(oid);
-                        invalidation_changes.push((oid, true));
-                        continue;
-                    }
-                    persisted_eval_state = true;
-                }
-            }
-            let event_state_landed = fired.from == fired.to
-                || obj.set_event_state_internal(fired.to).is_ok()
-                || matches!(
-                    obj.read_property(PropertyIdentifier::EVENT_STATE, None),
-                    Ok(PropertyValue::Enumerated(state)) if state == fired.to.to_raw()
-                );
-            if !event_state_landed {
-                if persisted_eval_state {
-                    if obj
-                        .set_enrollment_eval_state_internal(EventEnrollmentEvalState::default())
-                        .is_err()
-                    {
-                        invalidation_changes.push((oid, true));
-                    }
-                    if database_eval_sources.contains(&oid) {
-                        database_source_changes.push((oid, None));
-                    } else {
-                        let _ = obj.set_enrollment_eval_source_internal(None);
-                    }
-                }
-                continue;
-            }
-            // 13.2.2.1.4's fourth action, alarm-acknowledgment half (13.2.3):
-            // with the transition's Ack_Required bit set, the corresponding
-            // Acked_Transitions bit is cleared (ack now owed); otherwise it is
-            // set. The notification-distribution half is tranche E's #127.
-            let _ = obj.set_acked_transitions_internal(fired.transition_bit, !fired.ack_required);
-            transitions.push(EventEnrollmentTransition {
-                enrollment_oid: oid,
-                monitored_oid: fired.monitored_oid,
-                change: EventStateChange {
-                    from: fired.from,
-                    to: fired.to,
-                },
-                event_type: EventType::from_raw(fired.event_type_raw),
-                distribute: fired.distribute,
-            });
-        } else if let Some(state) = update.eval_state {
-            if obj.set_enrollment_eval_state_internal(state).is_err() {
-                // A later source write must not claim state that failed to
-                // reset.
-                if database_eval_sources.contains(&oid) {
-                    database_source_changes.push((oid, None));
-                } else {
-                    let _ = obj.set_enrollment_eval_source_internal(None);
-                }
-                state_failures.insert(oid);
-                invalidation_changes.push((oid, true));
-            } else if update.clears_invalidation {
-                invalidation_changes.push((oid, false));
-            }
-        }
-    }
-
-    for (oid, source) in database_source_changes {
-        db.set_enrollment_eval_source(oid, source);
-    }
-    for (oid, invalidated) in invalidation_changes {
-        db.set_enrollment_eval_state_invalidated(oid, invalidated);
-    }
-
-    transitions
+    apply_updates(db, &oids, updates, &database_eval_sources)
 }
 
 #[cfg(test)]

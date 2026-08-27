@@ -1000,7 +1000,7 @@ mod cov_clock;
 mod cov_notifications;
 mod dispatch;
 mod event_notifications;
-mod event_timestamp;
+pub(crate) mod event_timestamp;
 mod lifecycle;
 mod notification_transactions;
 mod requests;

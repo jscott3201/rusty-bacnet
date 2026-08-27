@@ -3,26 +3,26 @@ use bacnet_objects::database::{EventSequenceReservation, ObjectDatabase};
 use bacnet_types::primitives::BACnetTimeStamp;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SampledEventClock {
+pub(crate) enum SampledEventClock {
     Valid(ClockFrame),
     Unavailable,
     Invalid,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(super) struct EventTimestampSample {
-    pub(super) timestamp: BACnetTimeStamp,
-    pub(super) clock: SampledEventClock,
+pub(crate) struct EventTimestampSample {
+    pub(crate) timestamp: BACnetTimeStamp,
+    pub(crate) clock: SampledEventClock,
 }
 
 /// A timestamp selected without consuming the clockless sequence source.
-pub(super) struct StagedEventTimestamp {
-    pub(super) sample: EventTimestampSample,
+pub(crate) struct StagedEventTimestamp {
+    pub(crate) sample: EventTimestampSample,
     sequence: Option<EventSequenceReservation>,
 }
 
 /// Select a timestamp while leaving a clockless sequence retryable.
-pub(super) fn stage_event_timestamp(db: &ObjectDatabase) -> StagedEventTimestamp {
+pub(crate) fn stage_event_timestamp(db: &ObjectDatabase) -> StagedEventTimestamp {
     match db.clock_frame() {
         Some(frame) if frame.is_valid_actual_datetime() => StagedEventTimestamp {
             sample: EventTimestampSample {
@@ -52,7 +52,7 @@ pub(super) fn stage_event_timestamp(db: &ObjectDatabase) -> StagedEventTimestamp
 }
 
 /// Confirm staged sequence consumption after the transition commit succeeds.
-pub(super) fn confirm_event_timestamp(
+pub(crate) fn confirm_event_timestamp(
     db: &mut ObjectDatabase,
     staged: StagedEventTimestamp,
 ) -> EventTimestampSample {

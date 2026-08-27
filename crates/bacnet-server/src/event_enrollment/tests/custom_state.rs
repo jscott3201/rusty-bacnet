@@ -504,7 +504,7 @@ fn same_state_transition_does_not_depend_on_rewriting_event_state() {
 }
 
 #[test]
-fn landed_event_state_is_reported_when_its_setter_returns_error() {
+fn mutation_then_error_is_visible_but_never_reports_a_transition() {
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(112, "AV-landed-error", 62).unwrap();
     target
@@ -531,7 +531,17 @@ fn landed_event_state_is_reported_when_its_setter_returns_error() {
     let enrollment_oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
 
-    assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
+    let report = evaluate_event_enrollments_report(&mut db, 1);
+    assert!(report.transitions.is_empty());
+    assert!(report
+        .diagnostics
+        .contains(&EventEnrollmentEvaluationDiagnostic {
+            enrollment_oid,
+            stage: EventEnrollmentEvaluationStage::EventTransition,
+            outcome: EventEnrollmentEvaluationOutcome::LandedAfterError,
+        }));
+    assert!(db.enrollment_eval_state_invalidated(&enrollment_oid));
+    assert_eq!(db.reserve_event_sequence_number().number(), 0);
     assert_eq!(
         db.get(&enrollment_oid)
             .unwrap()

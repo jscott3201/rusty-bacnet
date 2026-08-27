@@ -9,7 +9,7 @@ use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetEventParameter};
 use std::borrow::Cow;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 // ---- Integration: multiple enrollments ----
@@ -217,10 +217,12 @@ pub(super) struct ReferenceValueObject {
     reference: Option<PropertyValue>,
     pub(super) event_parameters_readable: Arc<AtomicBool>,
     pub(super) state_writable: Arc<AtomicBool>,
+    pub(super) state_write_count: Arc<AtomicUsize>,
     pub(super) source_supported: bool,
     pub(super) source_writable: Arc<AtomicBool>,
     pub(super) normal_event_state_writable: bool,
     pub(super) event_state_error_after_write: bool,
+    pub(super) atomic_commit_supported: bool,
 }
 
 impl ReferenceValueObject {
@@ -246,10 +248,12 @@ impl ReferenceValueObject {
             reference,
             event_parameters_readable: Arc::new(AtomicBool::new(true)),
             state_writable: Arc::new(AtomicBool::new(true)),
+            state_write_count: Arc::new(AtomicUsize::new(0)),
             source_supported: true,
             source_writable: Arc::new(AtomicBool::new(true)),
             normal_event_state_writable: true,
             event_state_error_after_write: false,
+            atomic_commit_supported: true,
         }
     }
 }
@@ -313,6 +317,7 @@ impl BACnetObject for ReferenceValueObject {
         &mut self,
         state: bacnet_objects::event_enrollment::EventEnrollmentEvalState,
     ) -> Result<(), bacnet_types::error::Error> {
+        self.state_write_count.fetch_add(1, Ordering::SeqCst);
         if !self.state_writable.load(Ordering::SeqCst) {
             return Err(bacnet_types::error::Error::Encoding(
                 "evaluation state write failed".into(),
@@ -366,6 +371,21 @@ impl BACnetObject for ReferenceValueObject {
     ) -> Result<(), bacnet_types::error::Error> {
         self.inner
             .set_acked_transitions_internal(transition_bit, acknowledged)
+    }
+
+    fn commit_event_transition_internal(
+        &mut self,
+        commit: bacnet_objects::event::EventTransitionCommit,
+    ) -> Result<(), bacnet_objects::event::EventTransitionCommitError> {
+        if !self.atomic_commit_supported {
+            return Err(bacnet_objects::event::EventTransitionCommitError::Unsupported);
+        }
+        self.inner.commit_event_transition_internal(commit)?;
+        if self.event_state_error_after_write {
+            Err(bacnet_objects::event::EventTransitionCommitError::Unsupported)
+        } else {
+            Ok(())
+        }
     }
 }
 
