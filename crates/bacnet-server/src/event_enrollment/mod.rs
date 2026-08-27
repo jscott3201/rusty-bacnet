@@ -171,9 +171,9 @@ pub fn evaluate_event_enrollments_detailed_report(
             continue;
         };
 
-        // A property read failure is transient and retains evaluation state.
-        // An invalid reference shape or unsupported device clears state before
-        // unrelated properties can short-circuit this pass.
+        // Configuration-read exits are classified below. A valid monitored
+        // or supporting observation gap applies repository-local D4: private
+        // continuity is reset before its typed diagnostic is returned.
         let eval_state_supported = enrollment.enrollment_eval_state_internal().is_some();
         let mut eval_state = enrollment
             .enrollment_eval_state_internal()
@@ -280,7 +280,7 @@ pub fn evaluate_event_enrollments_detailed_report(
         }
 
         if matches!(reference, Err(LocalConfigurationReadError::Unavailable)) {
-            queue_observation_unavailable(&mut updates, *oid);
+            queue_observation_gap(&mut updates, *oid, eval_state_supported, eval_source);
             continue;
         }
         if matches!(params, Err(LocalConfigurationReadError::Unavailable)) {
@@ -300,13 +300,13 @@ pub fn evaluate_event_enrollments_detailed_report(
         let fault_algorithm = fault_algorithm.expect("validated Fault_Parameters");
 
         // A well-formed remote target is temporarily unobservable in this
-        // local-only slice. It is not rewritten into persistent target-loss
-        // policy; PR-0303 owns that behavior.
+        // local-only slice. D4 clears only private continuity; no persistent
+        // target-loss Reliability policy is inferred.
         if monitored
             .device_identifier
             .is_some_and(|device| Some(device) != local_device_oid)
         {
-            queue_observation_unavailable(&mut updates, *oid);
+            queue_observation_gap(&mut updates, *oid, eval_state_supported, eval_source);
             continue;
         }
 
@@ -314,9 +314,9 @@ pub fn evaluate_event_enrollments_detailed_report(
         let monitored_prop = monitored.property_identifier;
         let monitored_reference = (monitored_oid, monitored_prop, monitored.array_index);
         // Private evaluation state belongs to one exact monitored source. A
-        // nonempty ownerless state cannot be adopted safely. Defer the actual
-        // setter until all required observations succeed, so an unavailable
-        // observation mutates nothing.
+        // nonempty ownerless state cannot be adopted safely. Mutations remain
+        // staged until phase 2; a later observation gap overwrites them with
+        // the D4 ownerless default.
         let source_changed = match eval_source {
             Some(Some(current)) => current != monitored_reference,
             Some(None) => eval_state != EventEnrollmentEvalState::default(),
@@ -328,7 +328,7 @@ pub fn evaluate_event_enrollments_detailed_report(
         }
 
         let Some(monitored_obj) = db.get(&monitored_oid) else {
-            queue_observation_unavailable(&mut updates, *oid);
+            queue_observation_gap(&mut updates, *oid, eval_state_supported, eval_source);
             continue;
         };
         if monitored.array_index.is_some() && !monitored_obj.is_array_property(monitored_prop) {
@@ -373,7 +373,7 @@ pub fn evaluate_event_enrollments_detailed_report(
                 continue;
             }
             MonitoredReliability::ObservationUnavailable => {
-                queue_observation_unavailable(&mut updates, *oid);
+                queue_observation_gap(&mut updates, *oid, eval_state_supported, eval_source);
                 continue;
             }
             MonitoredReliability::Value(reliability)
@@ -427,7 +427,7 @@ pub fn evaluate_event_enrollments_detailed_report(
                     continue;
                 }
                 Err(_) => {
-                    queue_observation_unavailable(&mut updates, *oid);
+                    queue_observation_gap(&mut updates, *oid, eval_state_supported, eval_source);
                     continue;
                 }
             }
@@ -458,7 +458,7 @@ pub fn evaluate_event_enrollments_detailed_report(
                 continue;
             }
             FaultAlgorithmEvaluation::ObservationUnavailable => {
-                queue_observation_unavailable(&mut updates, *oid);
+                queue_observation_gap(&mut updates, *oid, eval_state_supported, eval_source);
                 continue;
             }
             FaultAlgorithmEvaluation::Fault(reliability) => {
@@ -544,7 +544,7 @@ pub fn evaluate_event_enrollments_detailed_report(
                     continue;
                 }
                 Err(_) => {
-                    queue_observation_unavailable(&mut updates, *oid);
+                    queue_observation_gap(&mut updates, *oid, eval_state_supported, eval_source);
                     continue;
                 }
             },
@@ -652,7 +652,12 @@ pub fn evaluate_event_enrollments_detailed_report(
                         continue;
                     }
                     SetpointRead::Transient => {
-                        queue_observation_unavailable(&mut updates, *oid);
+                        queue_observation_gap(
+                            &mut updates,
+                            *oid,
+                            eval_state_supported,
+                            eval_source,
+                        );
                         continue;
                     }
                 };

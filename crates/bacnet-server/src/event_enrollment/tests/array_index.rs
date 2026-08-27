@@ -439,7 +439,7 @@ fn null_indexed_element_interrupts_the_pending_delay() {
 }
 
 #[test]
-fn transient_indexed_read_failure_retains_private_state() {
+fn transient_indexed_read_failure_clears_private_continuity() {
     let mut db = ObjectDatabase::new();
     let (value, control) = IndexedReadProbe::new(8);
     let value_oid = value.object_identifier();
@@ -454,16 +454,16 @@ fn transient_indexed_read_failure_retains_private_state() {
     );
 
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
-    let mut expected = db
+    let mut stale = db
         .get(&enrollment_oid)
         .unwrap()
         .enrollment_eval_state_internal()
         .unwrap();
-    expected.cov_baseline = Some(PropertyValue::Real(42.0));
-    expected.last_offnormal_value = Some(3);
+    stale.cov_baseline = Some(PropertyValue::Real(42.0));
+    stale.last_offnormal_value = Some(3);
     db.get_mut(&enrollment_oid)
         .unwrap()
-        .set_enrollment_eval_state_internal(expected.clone())
+        .set_enrollment_eval_state_internal(stale)
         .unwrap();
     control.reads.lock().unwrap().clear();
     control.transient_failure.store(true, Ordering::SeqCst);
@@ -474,7 +474,13 @@ fn transient_indexed_read_failure_retains_private_state() {
         db.get(&enrollment_oid)
             .unwrap()
             .enrollment_eval_state_internal(),
-        Some(expected)
+        Some(EventEnrollmentEvalState::default())
+    );
+    assert_eq!(
+        db.get(&enrollment_oid)
+            .unwrap()
+            .enrollment_eval_source_internal(),
+        Some(None)
     );
 }
 

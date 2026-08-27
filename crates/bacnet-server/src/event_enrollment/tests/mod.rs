@@ -3,6 +3,7 @@ mod change_of_bitstring;
 mod change_of_state;
 mod change_of_value;
 mod compat;
+mod continuity;
 mod custom_state;
 mod delays;
 mod detection_enable;

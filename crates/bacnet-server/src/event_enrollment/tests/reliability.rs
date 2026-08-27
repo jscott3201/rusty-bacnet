@@ -521,7 +521,7 @@ fn normalized_out_of_range_holds_reindicates_changed_cause_and_recovers() {
 }
 
 #[test]
-fn missing_target_is_observation_unavailable_without_mutation() {
+fn missing_target_is_observation_unavailable_without_public_transition() {
     let mut db = ObjectDatabase::new();
     let missing_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 999).unwrap();
     let mut enrollment =

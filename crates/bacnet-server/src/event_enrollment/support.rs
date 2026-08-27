@@ -199,6 +199,25 @@ pub(super) fn queue_observation_unavailable(
     updates.entry(oid).or_default().observation_unavailable();
 }
 
+/// Apply the repository-local D4 continuity policy for a valid observation
+/// that is temporarily unavailable. Coalesce every private coordinate to its
+/// ownerless default before the typed terminal diagnostic is committed.
+pub(super) fn queue_observation_gap(
+    updates: &mut HashMap<ObjectIdentifier, EnrollmentUpdate>,
+    oid: ObjectIdentifier,
+    eval_state_supported: bool,
+    eval_source: Option<Option<EventEnrollmentMonitoredSource>>,
+) {
+    let update = updates.entry(oid).or_default();
+    if eval_state_supported {
+        update.reset_eval_state();
+    }
+    if eval_source.flatten().is_some() {
+        update.set_eval_source(None);
+    }
+    update.observation_unavailable();
+}
+
 pub(super) fn queue_evaluation_ownership(
     updates: &mut HashMap<ObjectIdentifier, EnrollmentUpdate>,
     oid: ObjectIdentifier,

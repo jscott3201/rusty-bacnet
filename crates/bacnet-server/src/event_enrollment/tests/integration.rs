@@ -91,7 +91,7 @@ fn missing_monitored_object_is_skipped() {
     assert!(transitions.is_empty());
 }
 
-fn setup_qualified_reference(
+pub(super) fn setup_qualified_reference(
     local_device_instances: &[u32],
     reference_device_instance: u32,
 ) -> (ObjectDatabase, ObjectIdentifier, ObjectIdentifier) {
@@ -181,34 +181,6 @@ fn qualified_reference_requires_one_containing_device() {
         ObjectIdentifier::WILDCARD_INSTANCE,
     );
     assert!(evaluate_event_enrollments(&mut wildcard, 1).is_empty());
-}
-
-#[test]
-fn remote_reference_is_unavailable_and_retains_private_evaluator_state() {
-    let (mut db, ee_oid, _) = setup_qualified_reference(&[100], 200);
-    let stale = bacnet_objects::event_enrollment::EventEnrollmentEvalState {
-        pending: Some(bacnet_objects::event_enrollment::EventEnrollmentPending {
-            state: EventState::HIGH_LIMIT,
-            remaining: 1,
-            condition: 0,
-            params_fingerprint: 1,
-        }),
-        cov_baseline: Some(PropertyValue::Real(90.0)),
-        last_offnormal_value: Some(1),
-    };
-    db.get_mut(&ee_oid)
-        .unwrap()
-        .set_enrollment_eval_state_internal(stale.clone())
-        .unwrap();
-
-    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
-    assert_eq!(
-        db.get(&ee_oid)
-            .unwrap()
-            .enrollment_eval_state_internal()
-            .unwrap(),
-        stale
-    );
 }
 
 pub(super) struct ReferenceValueObject {
@@ -688,27 +660,6 @@ fn malformed_retarget_does_not_resume_stale_countdown() {
     assert_eq!(
         evaluate_event_enrollments(&mut db, 1)[0].change.to,
         EventState::HIGH_LIMIT
-    );
-}
-
-#[test]
-fn unreadable_reference_retains_private_evaluator_state() {
-    let mut enrollment = ReferenceValueObject::new(None);
-    let state = stale_eval_state();
-    enrollment
-        .set_enrollment_eval_state_internal(state.clone())
-        .unwrap();
-    let enrollment_oid = enrollment.object_identifier();
-    let mut db = ObjectDatabase::new();
-    db.add(Box::new(enrollment)).unwrap();
-
-    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
-    assert_eq!(
-        db.get(&enrollment_oid)
-            .unwrap()
-            .enrollment_eval_state_internal()
-            .unwrap(),
-        state
     );
 }
 
