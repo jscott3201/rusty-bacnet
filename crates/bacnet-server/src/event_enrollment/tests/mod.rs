@@ -7,6 +7,7 @@ mod continuity;
 mod custom_state;
 mod delays;
 mod detection_enable;
+mod event_type;
 mod floating_limit;
 mod foreign_state;
 mod integration;

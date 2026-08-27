@@ -147,6 +147,18 @@ pub struct EventEnrollmentReliabilityResult {
     pub cause: EventEnrollmentReliabilityCause,
 }
 
+impl EventEnrollmentReliabilityResult {
+    /// Select the event type for this committed Reliability result.
+    ///
+    /// `configured_algorithm` is the Event Enrollment object's configured
+    /// Event_Type. `None` means that the result has no committed state change.
+    pub fn event_type(&self, configured_algorithm: EventType) -> Option<EventType> {
+        self.state_change
+            .as_ref()
+            .map(|change| change.event_type(configured_algorithm))
+    }
+}
+
 /// Legacy result of one Event Enrollment evaluation pass.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct EventEnrollmentEvaluationReport {
@@ -569,11 +581,12 @@ pub(super) fn apply_updates(
 
         let coordinate = EventTransition::for_target_state(fired.to);
         let staged_timestamp = stage_event_timestamp(db);
+        let change = EventStateChange {
+            from: fired.from,
+            to: fired.to,
+        };
         let commit = EventTransitionCommit {
-            change: EventStateChange {
-                from: fired.from,
-                to: fired.to,
-            },
+            change: change.clone(),
             coordinate,
             ack_required: fired.ack_required,
             timestamp: staged_timestamp.sample.timestamp.clone(),
@@ -602,14 +615,12 @@ pub(super) fn apply_updates(
         }
 
         confirm_event_timestamp(db, staged_timestamp);
+        let event_type = change.event_type(EventType::from_raw(fired.event_type_raw));
         report.transitions.push(EventEnrollmentTransition {
             enrollment_oid: oid,
             monitored_oid: fired.monitored_oid,
-            change: EventStateChange {
-                from: fired.from,
-                to: fired.to,
-            },
-            event_type: EventType::from_raw(fired.event_type_raw),
+            change,
+            event_type,
             distribute: fired.distribute,
         });
     }
