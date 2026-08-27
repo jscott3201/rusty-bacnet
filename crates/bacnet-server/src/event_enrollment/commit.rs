@@ -4,8 +4,9 @@ use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::event::{
     EventStateChange, EventTransition, EventTransitionCommit, EventTransitionCommitError,
 };
+use bacnet_objects::event_enrollment::EventEnrollmentReliabilityCommit;
 use bacnet_objects::event_enrollment::{EventEnrollmentEvalState, EventEnrollmentMonitoredSource};
-use bacnet_types::enums::{EventState, EventType, PropertyIdentifier};
+use bacnet_types::enums::{EventState, EventType, PropertyIdentifier, Reliability};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::EventEnrollmentTransition;
@@ -20,6 +21,8 @@ pub enum EventEnrollmentEvaluationStage {
     EvaluationSource,
     /// Private countdown or baseline state was being updated.
     EvaluationState,
+    /// Reliability observation or the combined Reliability transition hook ran.
+    Reliability,
     /// The atomic Event_State/Acked_Transitions/Event_Time_Stamps hook ran.
     EventTransition,
 }
@@ -31,6 +34,10 @@ pub enum EventEnrollmentEvaluationOutcome {
     NoTransition,
     /// A pending transition was canceled and its private state was stored.
     CancellationCommitted,
+    /// A required local or remote observation was temporarily unavailable.
+    ///
+    /// No Reliability, event, history, or private evaluator state is changed.
+    ObservationUnavailable,
     /// A required internal mutation was rejected.
     Rejected,
     /// A custom hook returned an error after the target Event_State landed.
@@ -59,16 +66,60 @@ pub struct EventEnrollmentEvaluationDiagnostic {
     pub outcome: EventEnrollmentEvaluationOutcome,
 }
 
+/// Precedence source that selected a committed Event Enrollment Reliability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventEnrollmentReliabilityCause {
+    /// A definitive local configuration defect selected CONFIGURATION_ERROR.
+    Configuration,
+    /// The monitored object's nonzero Reliability selected MONITORED_OBJECT_FAULT.
+    MonitoredObject,
+    /// A supported configured fault algorithm selected the value or recovery.
+    FaultAlgorithm,
+}
+
+/// One successfully committed Event Enrollment Reliability result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventEnrollmentReliabilityResult {
+    /// Event Enrollment object whose atomic commit succeeded.
+    pub enrollment_oid: ObjectIdentifier,
+    /// Configured monitored object, absent for a malformed/missing reference.
+    pub monitored_oid: Option<ObjectIdentifier>,
+    /// Reliability value read before the commit.
+    pub previous_reliability: Reliability,
+    /// Reliability value stored by the commit.
+    pub new_reliability: Reliability,
+    /// FAULT entry, re-entry, or recovery committed with Reliability.
+    pub state_change: Option<EventStateChange>,
+    /// Whether Event_Enable permits distribution for the transition coordinate.
+    pub distribute: bool,
+    /// Precedence source that selected `new_reliability`.
+    pub cause: EventEnrollmentReliabilityCause,
+}
+
 /// Detailed result of one Event Enrollment evaluation pass.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct EventEnrollmentEvaluationReport {
     /// Transitions whose complete atomic object commit succeeded.
     pub transitions: Vec<EventEnrollmentTransition>,
+    /// Reliability results whose complete combined object commit succeeded.
+    pub reliability_results: Vec<EventEnrollmentReliabilityResult>,
     /// Non-transition and failure diagnostics in enrollment evaluation order.
     pub diagnostics: Vec<EventEnrollmentEvaluationDiagnostic>,
 }
 
-pub(crate) fn log_evaluation_failures(report: &EventEnrollmentEvaluationReport) {
+pub(crate) fn log_evaluation_report(report: &EventEnrollmentEvaluationReport) {
+    for result in &report.reliability_results {
+        tracing::debug!(
+            enrollment = %result.enrollment_oid,
+            monitored = ?result.monitored_oid,
+            previous = ?result.previous_reliability,
+            new = ?result.new_reliability,
+            state_change = ?result.state_change,
+            distribute = result.distribute,
+            cause = ?result.cause,
+            "Event enrollment: reliability committed"
+        );
+    }
     for diagnostic in report
         .diagnostics
         .iter()
@@ -90,6 +141,8 @@ pub(super) struct EnrollmentUpdate {
     eval_source: Option<Option<EventEnrollmentMonitoredSource>>,
     clears_invalidation: bool,
     fired: Option<FiredTransition>,
+    reliability: Option<ReliabilityUpdate>,
+    observation_unavailable: bool,
     canceled: bool,
 }
 
@@ -100,6 +153,17 @@ pub(super) struct FiredTransition {
     pub(super) to: EventState,
     pub(super) distribute: bool,
     pub(super) ack_required: bool,
+}
+
+pub(super) struct ReliabilityUpdate {
+    pub(super) monitored_oid: Option<ObjectIdentifier>,
+    pub(super) previous: Reliability,
+    pub(super) desired: Reliability,
+    pub(super) from: EventState,
+    pub(super) to: EventState,
+    pub(super) distribute: bool,
+    pub(super) ack_required: bool,
+    pub(super) cause: EventEnrollmentReliabilityCause,
 }
 
 impl EnrollmentUpdate {
@@ -131,6 +195,18 @@ impl EnrollmentUpdate {
         );
         self.fired = Some(fired);
     }
+
+    pub(super) fn set_reliability(&mut self, reliability: ReliabilityUpdate) {
+        debug_assert!(
+            self.reliability.is_none() && self.fired.is_none(),
+            "one enrollment commits one transition family per pass"
+        );
+        self.reliability = Some(reliability);
+    }
+
+    pub(super) fn observation_unavailable(&mut self) {
+        self.observation_unavailable = true;
+    }
 }
 
 fn diagnostic(
@@ -151,6 +227,27 @@ fn event_state_landed(db: &ObjectDatabase, oid: &ObjectIdentifier, state: EventS
             .and_then(|object| object.read_property(PropertyIdentifier::EVENT_STATE, None).ok()),
         Some(PropertyValue::Enumerated(raw)) if raw == state.to_raw()
     )
+}
+
+fn reliability_or_state_landed(
+    db: &ObjectDatabase,
+    oid: &ObjectIdentifier,
+    update: &ReliabilityUpdate,
+) -> bool {
+    let Some(object) = db.get(oid) else {
+        return false;
+    };
+    let reliability_landed = update.previous != update.desired
+        && matches!(
+            object.read_property(PropertyIdentifier::RELIABILITY, None),
+            Ok(PropertyValue::Enumerated(raw)) if raw == update.desired.to_raw()
+        );
+    let state_landed = update.from != update.to
+        && matches!(
+            object.read_property(PropertyIdentifier::EVENT_STATE, None),
+            Ok(PropertyValue::Enumerated(raw)) if raw == update.to.to_raw()
+        );
+    reliability_landed || state_landed
 }
 
 fn clear_source_ownership(
@@ -182,6 +279,15 @@ pub(super) fn apply_updates(
             ));
             continue;
         };
+
+        if update.observation_unavailable {
+            report.diagnostics.push(diagnostic(
+                oid,
+                EventEnrollmentEvaluationStage::Reliability,
+                EventEnrollmentEvaluationOutcome::ObservationUnavailable,
+            ));
+            continue;
+        }
 
         let mut source_failed = false;
         let mut state_failed = false;
@@ -240,6 +346,65 @@ pub(super) fn apply_updates(
             if update.clears_invalidation {
                 db.set_enrollment_eval_state_invalidated(oid, false);
             }
+        }
+
+        if let Some(reliability) = update.reliability {
+            if state_failed || (source_failed && reliability.from == reliability.to) {
+                continue;
+            }
+
+            let coordinate = EventTransition::for_target_state(reliability.to);
+            let staged_timestamp = stage_event_timestamp(db);
+            let change = EventStateChange {
+                from: reliability.from,
+                to: reliability.to,
+            };
+            let transition = EventTransitionCommit {
+                change: change.clone(),
+                coordinate,
+                ack_required: reliability.ack_required,
+                timestamp: staged_timestamp.sample.timestamp.clone(),
+                message_text: None,
+            };
+            let commit = EventEnrollmentReliabilityCommit {
+                reliability: reliability.desired,
+                transition: Some(transition),
+            };
+            let commit_result = db
+                .get_mut(&oid)
+                .map_or(Err(EventTransitionCommitError::Unsupported), |object| {
+                    object.commit_event_enrollment_reliability_internal(commit)
+                });
+
+            if commit_result.is_err() {
+                let outcome = if reliability_or_state_landed(db, &oid, &reliability) {
+                    EventEnrollmentEvaluationOutcome::LandedAfterError
+                } else {
+                    EventEnrollmentEvaluationOutcome::Rejected
+                };
+                clear_source_ownership(db, oid, database_eval_sources);
+                db.set_enrollment_eval_state_invalidated(oid, true);
+                report.diagnostics.push(diagnostic(
+                    oid,
+                    EventEnrollmentEvaluationStage::Reliability,
+                    outcome,
+                ));
+                continue;
+            }
+
+            confirm_event_timestamp(db, staged_timestamp);
+            report
+                .reliability_results
+                .push(EventEnrollmentReliabilityResult {
+                    enrollment_oid: oid,
+                    monitored_oid: reliability.monitored_oid,
+                    previous_reliability: reliability.previous,
+                    new_reliability: reliability.desired,
+                    state_change: Some(change),
+                    distribute: reliability.distribute,
+                    cause: reliability.cause,
+                });
+            continue;
         }
 
         let Some(fired) = update.fired else {

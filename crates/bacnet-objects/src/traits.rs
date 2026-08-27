@@ -13,7 +13,9 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use crate::clock::ClockReader;
 use crate::event::{EventTransitionCommit, EventTransitionCommitError, TransitionOutcome};
-use crate::event_enrollment::{EventEnrollmentEvalState, EventEnrollmentMonitoredSource};
+use crate::event_enrollment::{
+    EventEnrollmentEvalState, EventEnrollmentMonitoredSource, EventEnrollmentReliabilityCommit,
+};
 use crate::file::FileStorage;
 
 /// Object-owned state that cannot be reconstructed from property readback.
@@ -312,6 +314,22 @@ pub trait BACnetObject: Send + Sync {
     fn commit_event_transition_internal(
         &mut self,
         _commit: EventTransitionCommit,
+    ) -> Result<(), EventTransitionCommitError> {
+        Err(EventTransitionCommitError::Unsupported)
+    }
+
+    /// Atomically commit Event Enrollment Reliability and transition state.
+    ///
+    /// This Event Enrollment-specific channel joins `Reliability` to the
+    /// existing atomic `Event_State`, `Acked_Transitions`, and
+    /// `Event_Time_Stamps` commit. Implementations must stage every supplied
+    /// value before assigning object-owned fields and leave them unchanged on
+    /// error. The default fails closed for custom objects that have not adopted
+    /// the stronger contract.
+    #[doc(hidden)]
+    fn commit_event_enrollment_reliability_internal(
+        &mut self,
+        _commit: EventEnrollmentReliabilityCommit,
     ) -> Result<(), EventTransitionCommitError> {
         Err(EventTransitionCommitError::Unsupported)
     }

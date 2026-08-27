@@ -184,6 +184,17 @@ fn change_of_value_bitmask_criteria() {
     let mut target = EventEnrollmentObject::new(96, "Tgt", EventType::NONE.to_raw()).unwrap();
     target.set_event_enable(0x07); // internal 0x07 -> wire 0xE0 (MSB-first)
     let target_oid = target.object_identifier();
+    // Keep this Event Enrollment target itself healthy now that Reliability
+    // evaluation applies to every Event Enrollment object in the database.
+    target.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+        target_oid,
+        PropertyIdentifier::EVENT_ENABLE.to_raw(),
+    )));
+    target.set_event_parameters(BACnetEventParameter::Extended {
+        vendor_id: 42,
+        extended_event_type: 1,
+        parameters: Vec::new(),
+    });
     db.add(Box::new(target)).unwrap();
 
     let mut ee =

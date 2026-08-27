@@ -20,6 +20,7 @@ mod state;
 mod transition;
 use state::{AlertEnrollmentWriteRollback, EventEnrollmentWriteRollback};
 pub use state::{EventEnrollmentEvalState, EventEnrollmentMonitoredSource, EventEnrollmentPending};
+pub use transition::EventEnrollmentReliabilityCommit;
 
 /// BACnet EventEnrollment object.
 ///

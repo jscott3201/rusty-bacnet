@@ -4,6 +4,7 @@ mod detection_enable;
 mod enrollment;
 mod fault_parameters;
 mod object_name;
+mod reliability_commit;
 mod status_flags;
 mod time_delay_normal;
 mod timestamps;

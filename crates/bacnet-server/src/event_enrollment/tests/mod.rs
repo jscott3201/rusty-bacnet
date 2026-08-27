@@ -10,6 +10,7 @@ mod floating_limit;
 mod foreign_state;
 mod integration;
 mod out_of_range;
+mod reliability;
 mod same_state;
 mod transactional_commit;
 

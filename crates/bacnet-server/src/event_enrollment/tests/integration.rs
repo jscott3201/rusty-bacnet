@@ -184,22 +184,21 @@ fn qualified_reference_requires_one_containing_device() {
 }
 
 #[test]
-fn unresolvable_reference_clears_private_evaluator_state() {
+fn remote_reference_is_unavailable_and_retains_private_evaluator_state() {
     let (mut db, ee_oid, _) = setup_qualified_reference(&[100], 200);
+    let stale = bacnet_objects::event_enrollment::EventEnrollmentEvalState {
+        pending: Some(bacnet_objects::event_enrollment::EventEnrollmentPending {
+            state: EventState::HIGH_LIMIT,
+            remaining: 1,
+            condition: 0,
+            params_fingerprint: 1,
+        }),
+        cov_baseline: Some(PropertyValue::Real(90.0)),
+        last_offnormal_value: Some(1),
+    };
     db.get_mut(&ee_oid)
         .unwrap()
-        .set_enrollment_eval_state_internal(
-            bacnet_objects::event_enrollment::EventEnrollmentEvalState {
-                pending: Some(bacnet_objects::event_enrollment::EventEnrollmentPending {
-                    state: EventState::HIGH_LIMIT,
-                    remaining: 1,
-                    condition: 0,
-                    params_fingerprint: 1,
-                }),
-                cov_baseline: Some(PropertyValue::Real(90.0)),
-                last_offnormal_value: Some(1),
-            },
-        )
+        .set_enrollment_eval_state_internal(stale.clone())
         .unwrap();
 
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
@@ -208,7 +207,7 @@ fn unresolvable_reference_clears_private_evaluator_state() {
             .unwrap()
             .enrollment_eval_state_internal()
             .unwrap(),
-        bacnet_objects::event_enrollment::EventEnrollmentEvalState::default()
+        stale
     );
 }
 
@@ -216,6 +215,7 @@ pub(super) struct ReferenceValueObject {
     pub(super) inner: EventEnrollmentObject,
     reference: Option<PropertyValue>,
     pub(super) event_parameters_readable: Arc<AtomicBool>,
+    pub(super) fault_parameters_supported: bool,
     pub(super) state_writable: Arc<AtomicBool>,
     pub(super) state_write_count: Arc<AtomicUsize>,
     pub(super) source_supported: bool,
@@ -223,6 +223,8 @@ pub(super) struct ReferenceValueObject {
     pub(super) normal_event_state_writable: bool,
     pub(super) event_state_error_after_write: bool,
     pub(super) atomic_commit_supported: bool,
+    pub(super) reliability_commit_supported: bool,
+    pub(super) reliability_error_after_write: bool,
 }
 
 impl ReferenceValueObject {
@@ -247,6 +249,7 @@ impl ReferenceValueObject {
             inner,
             reference,
             event_parameters_readable: Arc::new(AtomicBool::new(true)),
+            fault_parameters_supported: true,
             state_writable: Arc::new(AtomicBool::new(true)),
             state_write_count: Arc::new(AtomicUsize::new(0)),
             source_supported: true,
@@ -254,6 +257,8 @@ impl ReferenceValueObject {
             normal_event_state_writable: true,
             event_state_error_after_write: false,
             atomic_commit_supported: true,
+            reliability_commit_supported: true,
+            reliability_error_after_write: false,
         }
     }
 }
@@ -276,6 +281,13 @@ impl BACnetObject for ReferenceValueObject {
             self.reference
                 .clone()
                 .ok_or_else(|| bacnet_types::error::Error::Encoding("reference read failed".into()))
+        } else if property == PropertyIdentifier::FAULT_PARAMETERS
+            && !self.fault_parameters_supported
+        {
+            Err(bacnet_types::error::Error::Protocol {
+                class: bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32,
+                code: bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+            })
         } else if property == PropertyIdentifier::EVENT_PARAMETERS
             && !self.event_parameters_readable.load(Ordering::SeqCst)
         {
@@ -382,6 +394,22 @@ impl BACnetObject for ReferenceValueObject {
         }
         self.inner.commit_event_transition_internal(commit)?;
         if self.event_state_error_after_write {
+            Err(bacnet_objects::event::EventTransitionCommitError::Unsupported)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn commit_event_enrollment_reliability_internal(
+        &mut self,
+        commit: bacnet_objects::event_enrollment::EventEnrollmentReliabilityCommit,
+    ) -> Result<(), bacnet_objects::event::EventTransitionCommitError> {
+        if !self.reliability_commit_supported {
+            return Err(bacnet_objects::event::EventTransitionCommitError::Unsupported);
+        }
+        self.inner
+            .commit_event_enrollment_reliability_internal(commit)?;
+        if self.reliability_error_after_write {
             Err(bacnet_objects::event::EventTransitionCommitError::Unsupported)
         } else {
             Ok(())
@@ -573,7 +601,7 @@ fn malformed_reference_shapes_do_not_become_local() {
         let enrollment = ReferenceValueObject::new(Some(PropertyValue::List(items)));
         assert!(matches!(
             super::super::read_object_property_ref(&enrollment),
-            Ok(None)
+            Err(super::super::LocalConfigurationReadError::Malformed)
         ));
     }
 
@@ -583,9 +611,9 @@ fn malformed_reference_shapes_do_not_become_local() {
     ])));
     assert_eq!(
         super::super::read_object_property_ref(&legacy),
-        Ok(Some(super::super::MonitoredReference::local(
+        Ok(super::super::MonitoredReference::local(
             target, property, None
-        )))
+        ))
     );
 }
 
@@ -654,6 +682,7 @@ fn malformed_retarget_does_not_resume_stale_countdown() {
             None,
         )
         .unwrap();
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
     assert_eq!(

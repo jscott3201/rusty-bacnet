@@ -3,6 +3,9 @@ use bacnet_types::constructed::BACnetEventParameter;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
+use super::support::classify_required_property_read_error;
+use super::LocalConfigurationReadError;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct MonitoredReference {
     pub(super) object_identifier: ObjectIdentifier,
@@ -29,49 +32,49 @@ impl MonitoredReference {
 
 /// Read the object-property reference from an Event Enrollment object.
 ///
-/// `Err` means the property could not be read; `Ok(None)` means it was read but
-/// does not contain a usable local reference shape.
+/// `Malformed` means the required property is absent or does not contain a
+/// usable reference shape. Other read failures remain temporarily unavailable.
 pub(super) fn read_object_property_ref(
     enrollment: &dyn BACnetObject,
-) -> Result<Option<MonitoredReference>, ()> {
+) -> Result<MonitoredReference, LocalConfigurationReadError> {
     match enrollment.read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None) {
         Ok(PropertyValue::List(ref items)) if (2..=4).contains(&items.len()) => {
             let object_identifier = match &items[0] {
                 PropertyValue::ObjectIdentifier(oid) => *oid,
-                _ => return Ok(None),
+                _ => return Err(LocalConfigurationReadError::Malformed),
             };
             let PropertyValue::Unsigned(property_identifier) = &items[1] else {
-                return Ok(None);
+                return Err(LocalConfigurationReadError::Malformed);
             };
             let Ok(property_identifier) = u32::try_from(*property_identifier) else {
-                return Ok(None);
+                return Err(LocalConfigurationReadError::Malformed);
             };
             if property_identifier > 0x3F_FFFF {
-                return Ok(None);
+                return Err(LocalConfigurationReadError::Malformed);
             }
             let property_identifier = PropertyIdentifier::from_raw(property_identifier);
             let array_index = match items.get(2) {
                 None | Some(PropertyValue::Null) => None,
                 Some(PropertyValue::Unsigned(index)) => match u32::try_from(*index) {
                     Ok(index) => Some(index),
-                    Err(_) => return Ok(None),
+                    Err(_) => return Err(LocalConfigurationReadError::Malformed),
                 },
-                Some(_) => return Ok(None),
+                Some(_) => return Err(LocalConfigurationReadError::Malformed),
             };
             let device_identifier = match items.get(3) {
                 None | Some(PropertyValue::Null) => None,
                 Some(PropertyValue::ObjectIdentifier(oid)) => Some(*oid),
-                Some(_) => return Ok(None),
+                Some(_) => return Err(LocalConfigurationReadError::Malformed),
             };
-            Ok(Some(MonitoredReference {
+            Ok(MonitoredReference {
                 object_identifier,
                 property_identifier,
                 array_index,
                 device_identifier,
-            }))
+            })
         }
-        Ok(_) => Ok(None),
-        Err(_) => Err(()),
+        Ok(_) => Err(LocalConfigurationReadError::Malformed),
+        Err(error) => Err(classify_required_property_read_error(&error)),
     }
 }
 

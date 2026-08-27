@@ -554,7 +554,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             "Event enrollment: state changed"
                         );
                     }
-                    crate::event_enrollment::log_evaluation_failures(&report);
+                    crate::event_enrollment::log_evaluation_report(&report);
                 }
             }))
         } else {

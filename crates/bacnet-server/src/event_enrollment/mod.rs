@@ -41,7 +41,9 @@
 
 mod algorithms;
 mod commit;
+mod fault;
 mod reference;
+mod support;
 
 use std::collections::{HashMap, HashSet};
 
@@ -52,6 +54,7 @@ pub use algorithms::{
 pub use commit::{
     EventEnrollmentEvaluationDiagnostic, EventEnrollmentEvaluationOutcome,
     EventEnrollmentEvaluationReport, EventEnrollmentEvaluationStage,
+    EventEnrollmentReliabilityCause, EventEnrollmentReliabilityResult,
 };
 
 use algorithms::{
@@ -59,23 +62,31 @@ use algorithms::{
     eval_floating_limit_struct, eval_legacy_le_arm, eval_out_of_range_struct, extract_bitstring,
     extract_property_state_value, extract_real, ArmEvaluation,
 };
-pub(crate) use commit::log_evaluation_failures;
+pub(crate) use commit::log_evaluation_report;
 use commit::{apply_updates, EnrollmentUpdate, FiredTransition};
+use fault::{
+    evaluate_fault_algorithm, read_event_parameters, read_fault_algorithm,
+    read_monitored_reliability, FaultAlgorithmEvaluation, MonitoredReliability,
+    SupportedFaultAlgorithm,
+};
 #[cfg(test)]
 use reference::MonitoredReference;
 use reference::{params_fingerprint, read_object_property_ref};
+use support::*;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LocalConfigurationReadError {
+    Malformed,
+    Unavailable,
+}
 
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::event::{EventStateChange, EventTransition};
-use bacnet_objects::event_enrollment::{
-    EventEnrollmentEvalState, EventEnrollmentMonitoredSource, EventEnrollmentPending,
-};
+use bacnet_objects::event_enrollment::{EventEnrollmentEvalState, EventEnrollmentPending};
+#[cfg(test)]
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::BACnetEventParameter;
-use bacnet_types::enums::{
-    ErrorClass, ErrorCode, EventState, EventType, ObjectType, PropertyIdentifier,
-};
-use bacnet_types::error::Error;
+use bacnet_types::enums::{EventState, EventType, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 /// A state transition detected during event enrollment evaluation.
@@ -96,136 +107,6 @@ pub struct EventEnrollmentTransition {
     /// either way; a cleared bit suppresses only the outbound notification
     /// (ASHRAE 135-2020 Clause 12.12).
     pub distribute: bool,
-}
-
-enum SetpointRead {
-    Value(f32),
-    Unusable,
-    Transient,
-}
-
-fn read_setpoint(
-    db: &ObjectDatabase,
-    reference: &bacnet_types::constructed::BACnetDeviceObjectPropertyReference,
-) -> SetpointRead {
-    // Remote-device setpoint references are not resolvable from a local DB.
-    if reference.device_identifier.is_some() {
-        return SetpointRead::Transient;
-    }
-    let Some(obj) = db.get(&reference.object_identifier) else {
-        return SetpointRead::Transient;
-    };
-    let prop = PropertyIdentifier::from_raw(reference.property_identifier);
-    if reference.property_array_index.is_some() && !obj.is_array_property(prop) {
-        return SetpointRead::Unusable;
-    }
-    match obj.read_property(prop, reference.property_array_index) {
-        Ok(value) => extract_real(&value)
-            .map(SetpointRead::Value)
-            .unwrap_or(SetpointRead::Unusable),
-        Err(error)
-            if reference.property_array_index.is_some() && invalid_indexed_target_error(&error) =>
-        {
-            SetpointRead::Unusable
-        }
-        Err(_) => SetpointRead::Transient,
-    }
-}
-
-/// Convert a seconds delay to pending passes with never-fire-early ceiling
-/// semantics: `ceil(delay_secs / interval_secs)`. At the default 10s
-/// interval a 5s delay seeds 1 pass (fires when that pass elapses, ~10s
-/// later); a 15s delay seeds 2 (~20s). Callers never pass `delay_secs == 0`
-/// — a zero delay fires without seeding.
-fn passes_for_delay(delay_secs: u32, interval_secs: u64) -> u32 {
-    let passes = (delay_secs as u64).div_ceil(interval_secs.max(1));
-    u32::try_from(passes).unwrap_or(u32::MAX)
-}
-
-/// Resolve whether the Notification Class referenced by an enrollment
-/// requires acknowledgment of `transition_bit`.
-///
-/// Clause 13.2.3: "Whether or not an acknowledgment is required is determined
-/// by the Ack_Required property from the referenced Notification Class
-/// object." A missing or unreadable Notification Class resolves to
-/// not-required — the standard's fallback for an absent parameter is the
-/// "otherwise it is set" half of the same sentence, which leaves
-/// `Acked_Transitions` alone-equals-acknowledged rather than stranding a
-/// transition permanently unacknowledged for want of a class object.
-fn ack_required_for_transition(
-    db: &ObjectDatabase,
-    enrollment: &dyn BACnetObject,
-    transition_bit: u8,
-) -> bool {
-    let Ok(PropertyValue::Unsigned(nc_instance)) =
-        enrollment.read_property(PropertyIdentifier::NOTIFICATION_CLASS, None)
-    else {
-        return false;
-    };
-    let Ok(nc_oid) = ObjectIdentifier::new(
-        ObjectType::NOTIFICATION_CLASS,
-        u32::try_from(nc_instance).unwrap_or(u32::MAX),
-    ) else {
-        return false;
-    };
-    let Some(nc) = db.get(&nc_oid) else {
-        return false;
-    };
-    match nc.read_property(PropertyIdentifier::ACK_REQUIRED, None) {
-        Ok(PropertyValue::BitString { data, .. }) => {
-            bacnet_types::bitstring::unpack_octet(&data, 3) & transition_bit != 0
-        }
-        _ => false,
-    }
-}
-
-fn queue_eval_state_reset(
-    updates: &mut HashMap<ObjectIdentifier, EnrollmentUpdate>,
-    oid: ObjectIdentifier,
-    supported: bool,
-    state: &EventEnrollmentEvalState,
-) {
-    if supported && *state != EventEnrollmentEvalState::default() {
-        updates.entry(oid).or_default().reset_eval_state();
-    }
-}
-
-fn queue_pending_cancellation(
-    updates: &mut HashMap<ObjectIdentifier, EnrollmentUpdate>,
-    oid: ObjectIdentifier,
-    supported: bool,
-    state: &mut EventEnrollmentEvalState,
-) {
-    if state.pending.take().is_some() && supported {
-        updates
-            .entry(oid)
-            .or_default()
-            .cancel_pending(state.clone());
-    }
-}
-
-fn queue_eval_source_reset(
-    updates: &mut HashMap<ObjectIdentifier, EnrollmentUpdate>,
-    oid: ObjectIdentifier,
-    source: Option<Option<EventEnrollmentMonitoredSource>>,
-) {
-    if source.flatten().is_some() {
-        updates.entry(oid).or_default().set_eval_source(None);
-    }
-}
-
-fn invalid_indexed_target_error(error: &Error) -> bool {
-    matches!(
-        error,
-        Error::Protocol { class, code }
-            if *class == ErrorClass::PROPERTY.to_raw() as u32
-                && matches!(
-                    *code,
-                    code if code == ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32
-                        || code == ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32
-                        || code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32
-                )
-    )
 }
 
 /// Evaluate all EventEnrollment objects in the database.
@@ -291,36 +172,6 @@ pub fn evaluate_event_enrollments_report(
             None => None,
         };
         let force_state_reset = db.enrollment_eval_state_invalidated(oid);
-        let reference = match read_object_property_ref(enrollment) {
-            Ok(reference) => reference,
-            Err(()) => continue,
-        };
-        let Some(monitored) = reference.filter(|reference| {
-            reference
-                .device_identifier
-                .is_none_or(|oid| Some(oid) == local_device_oid)
-        }) else {
-            queue_eval_state_reset(&mut updates, *oid, eval_state_supported, &eval_state);
-            queue_eval_source_reset(&mut updates, *oid, eval_source);
-            continue;
-        };
-        let monitored_oid = monitored.object_identifier;
-        let monitored_prop = monitored.property_identifier;
-        let monitored_reference = (monitored_oid, monitored_prop, monitored.array_index);
-        // Private evaluation state belongs to one exact monitored source. A
-        // nonempty ownerless state cannot be adopted safely.
-        let source_changed = match eval_source {
-            Some(Some(current)) => current != monitored_reference,
-            Some(None) => eval_state != EventEnrollmentEvalState::default(),
-            None => false,
-        };
-        if source_changed || force_state_reset {
-            let had_private_state = eval_state != EventEnrollmentEvalState::default();
-            eval_state = EventEnrollmentEvalState::default();
-            if eval_state_supported && (had_private_state || force_state_reset) {
-                updates.entry(*oid).or_default().reset_eval_state();
-            }
-        }
 
         if let Ok(PropertyValue::Boolean(true)) =
             enrollment.read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
@@ -364,53 +215,338 @@ pub fn evaluate_event_enrollments_report(
             _ => 0,
         };
 
-        let params = match enrollment.read_property(PropertyIdentifier::EVENT_PARAMETERS, None) {
-            // Framed wire form (the EventEnrollment object's read arm emits
-            // full ASN.1 CHOICE framing).
-            Ok(PropertyValue::ApplicationData(bytes)) => {
-                match bacnet_encoding::constructed::decode_event_parameter(&bytes, 0) {
-                    Ok((ep, consumed)) if consumed == bytes.len() => ep,
-                    _ => {
-                        queue_pending_cancellation(
-                            &mut updates,
-                            *oid,
-                            eval_state_supported,
-                            &mut eval_state,
-                        );
-                        continue;
-                    }
-                }
-            }
-            // Legacy flat application-tagged form (downstream/custom object
-            // types that have not migrated to the framed read arm).
-            Ok(v) => match BACnetEventParameter::decode(&v) {
-                Ok(ep) => ep,
-                Err(_) => {
-                    queue_pending_cancellation(
-                        &mut updates,
-                        *oid,
-                        eval_state_supported,
-                        &mut eval_state,
-                    );
+        let current_reliability =
+            match enrollment.read_property(PropertyIdentifier::RELIABILITY, None) {
+                Ok(PropertyValue::Enumerated(value)) => Reliability::from_raw(value),
+                _ => {
+                    queue_observation_unavailable(&mut updates, *oid);
                     continue;
                 }
-            },
-            Err(_) => {
-                queue_pending_cancellation(
+            };
+
+        // Local configuration is resolved before any target observation. A
+        // malformed/missing required reference, malformed parameters, or an
+        // unsupported configured fault alternative therefore wins the
+        // Reliability precedence chain deterministically.
+        let reference = read_object_property_ref(enrollment);
+        let params = read_event_parameters(enrollment);
+        let fault_algorithm = read_fault_algorithm(enrollment, local_device_oid);
+        if matches!(reference, Err(LocalConfigurationReadError::Malformed))
+            || matches!(params, Err(LocalConfigurationReadError::Malformed))
+            || matches!(fault_algorithm, Err(LocalConfigurationReadError::Malformed))
+        {
+            let monitored_oid = reference
+                .as_ref()
+                .ok()
+                .map(|reference| reference.object_identifier);
+            queue_eval_state_reset(
+                &mut updates,
+                *oid,
+                eval_state_supported,
+                &eval_state,
+                force_state_reset,
+            );
+            if matches!(reference, Err(LocalConfigurationReadError::Malformed)) {
+                queue_eval_source_reset(&mut updates, *oid, eval_source);
+            }
+            queue_reliability_transition(
+                db,
+                enrollment,
+                &mut updates,
+                *oid,
+                monitored_oid,
+                current_reliability,
+                Reliability::CONFIGURATION_ERROR,
+                current_state,
+                event_enable,
+                EventEnrollmentReliabilityCause::Configuration,
+            );
+            continue;
+        }
+
+        if matches!(reference, Err(LocalConfigurationReadError::Unavailable)) {
+            queue_observation_unavailable(&mut updates, *oid);
+            continue;
+        }
+        if matches!(params, Err(LocalConfigurationReadError::Unavailable)) {
+            queue_pending_cancellation(&mut updates, *oid, eval_state_supported, &mut eval_state);
+            continue;
+        }
+        if matches!(
+            fault_algorithm,
+            Err(LocalConfigurationReadError::Unavailable)
+        ) {
+            queue_observation_unavailable(&mut updates, *oid);
+            continue;
+        }
+
+        let monitored = reference.expect("validated reference");
+        let params = params.expect("validated Event_Parameters");
+        let fault_algorithm = fault_algorithm.expect("validated Fault_Parameters");
+
+        // A well-formed remote target is temporarily unobservable in this
+        // local-only slice. It is not rewritten into persistent target-loss
+        // policy; PR-0303 owns that behavior.
+        if monitored
+            .device_identifier
+            .is_some_and(|device| Some(device) != local_device_oid)
+        {
+            queue_observation_unavailable(&mut updates, *oid);
+            continue;
+        }
+
+        let monitored_oid = monitored.object_identifier;
+        let monitored_prop = monitored.property_identifier;
+        let monitored_reference = (monitored_oid, monitored_prop, monitored.array_index);
+        // Private evaluation state belongs to one exact monitored source. A
+        // nonempty ownerless state cannot be adopted safely. Defer the actual
+        // setter until all required observations succeed, so an unavailable
+        // observation mutates nothing.
+        let source_changed = match eval_source {
+            Some(Some(current)) => current != monitored_reference,
+            Some(None) => eval_state != EventEnrollmentEvalState::default(),
+            None => false,
+        };
+        let reset_evaluation_state = source_changed || force_state_reset;
+        if reset_evaluation_state {
+            eval_state = EventEnrollmentEvalState::default();
+        }
+
+        let Some(monitored_obj) = db.get(&monitored_oid) else {
+            queue_observation_unavailable(&mut updates, *oid);
+            continue;
+        };
+        if monitored.array_index.is_some() && !monitored_obj.is_array_property(monitored_prop) {
+            queue_invalid_reference(&mut updates, *oid, eval_state_supported, eval_source);
+            queue_reliability_transition(
+                db,
+                enrollment,
+                &mut updates,
+                *oid,
+                Some(monitored_oid),
+                current_reliability,
+                Reliability::CONFIGURATION_ERROR,
+                current_state,
+                event_enable,
+                EventEnrollmentReliabilityCause::Configuration,
+            );
+            continue;
+        }
+
+        match read_monitored_reliability(monitored_obj) {
+            MonitoredReliability::ConfigurationError => {
+                queue_evaluation_ownership(
                     &mut updates,
                     *oid,
                     eval_state_supported,
-                    &mut eval_state,
+                    reset_evaluation_state,
+                    eval_source,
+                    monitored_reference,
+                );
+                queue_reliability_transition(
+                    db,
+                    enrollment,
+                    &mut updates,
+                    *oid,
+                    Some(monitored_oid),
+                    current_reliability,
+                    Reliability::CONFIGURATION_ERROR,
+                    current_state,
+                    event_enable,
+                    EventEnrollmentReliabilityCause::Configuration,
                 );
                 continue;
             }
+            MonitoredReliability::ObservationUnavailable => {
+                queue_observation_unavailable(&mut updates, *oid);
+                continue;
+            }
+            MonitoredReliability::Value(reliability)
+                if reliability != Reliability::NO_FAULT_DETECTED =>
+            {
+                queue_evaluation_ownership(
+                    &mut updates,
+                    *oid,
+                    eval_state_supported,
+                    reset_evaluation_state,
+                    eval_source,
+                    monitored_reference,
+                );
+                queue_reliability_transition(
+                    db,
+                    enrollment,
+                    &mut updates,
+                    *oid,
+                    Some(monitored_oid),
+                    current_reliability,
+                    Reliability::MONITORED_OBJECT_FAULT,
+                    current_state,
+                    event_enable,
+                    EventEnrollmentReliabilityCause::MonitoredObject,
+                );
+                continue;
+            }
+            MonitoredReliability::Absent | MonitoredReliability::Value(_) => {}
+        }
+
+        let mut monitored_value = None;
+        if matches!(fault_algorithm, SupportedFaultAlgorithm::OutOfRange { .. }) {
+            match monitored_obj.read_property(monitored_prop, monitored.array_index) {
+                Ok(value) => monitored_value = Some(value),
+                Err(error)
+                    if monitored.array_index.is_some() && invalid_indexed_target_error(&error) =>
+                {
+                    queue_invalid_reference(&mut updates, *oid, eval_state_supported, eval_source);
+                    queue_reliability_transition(
+                        db,
+                        enrollment,
+                        &mut updates,
+                        *oid,
+                        Some(monitored_oid),
+                        current_reliability,
+                        Reliability::CONFIGURATION_ERROR,
+                        current_state,
+                        event_enable,
+                        EventEnrollmentReliabilityCause::Configuration,
+                    );
+                    continue;
+                }
+                Err(_) => {
+                    queue_observation_unavailable(&mut updates, *oid);
+                    continue;
+                }
+            }
+        }
+
+        match evaluate_fault_algorithm(db, &fault_algorithm, monitored_value.as_ref()) {
+            FaultAlgorithmEvaluation::ConfigurationError => {
+                queue_evaluation_ownership(
+                    &mut updates,
+                    *oid,
+                    eval_state_supported,
+                    reset_evaluation_state,
+                    eval_source,
+                    monitored_reference,
+                );
+                queue_reliability_transition(
+                    db,
+                    enrollment,
+                    &mut updates,
+                    *oid,
+                    Some(monitored_oid),
+                    current_reliability,
+                    Reliability::CONFIGURATION_ERROR,
+                    current_state,
+                    event_enable,
+                    EventEnrollmentReliabilityCause::Configuration,
+                );
+                continue;
+            }
+            FaultAlgorithmEvaluation::ObservationUnavailable => {
+                queue_observation_unavailable(&mut updates, *oid);
+                continue;
+            }
+            FaultAlgorithmEvaluation::Fault(reliability) => {
+                queue_evaluation_ownership(
+                    &mut updates,
+                    *oid,
+                    eval_state_supported,
+                    reset_evaluation_state,
+                    eval_source,
+                    monitored_reference,
+                );
+                queue_reliability_transition(
+                    db,
+                    enrollment,
+                    &mut updates,
+                    *oid,
+                    Some(monitored_oid),
+                    current_reliability,
+                    reliability,
+                    current_state,
+                    event_enable,
+                    EventEnrollmentReliabilityCause::FaultAlgorithm,
+                );
+                continue;
+            }
+            FaultAlgorithmEvaluation::Healthy => {}
+        }
+
+        if current_reliability != Reliability::NO_FAULT_DETECTED
+            || current_state == EventState::FAULT
+        {
+            eval_state = EventEnrollmentEvalState::default();
+            queue_evaluation_ownership(
+                &mut updates,
+                *oid,
+                eval_state_supported,
+                true,
+                eval_source,
+                monitored_reference,
+            );
+            let cause = if current_reliability == Reliability::CONFIGURATION_ERROR {
+                EventEnrollmentReliabilityCause::Configuration
+            } else if current_reliability == Reliability::MONITORED_OBJECT_FAULT {
+                EventEnrollmentReliabilityCause::MonitoredObject
+            } else {
+                EventEnrollmentReliabilityCause::FaultAlgorithm
+            };
+            queue_reliability_transition(
+                db,
+                enrollment,
+                &mut updates,
+                *oid,
+                Some(monitored_oid),
+                current_reliability,
+                Reliability::NO_FAULT_DETECTED,
+                current_state,
+                event_enable,
+                cause,
+            );
+            continue;
+        }
+
+        let monitored_value = match monitored_value {
+            Some(value) => value,
+            None => match monitored_obj.read_property(monitored_prop, monitored.array_index) {
+                Ok(value) => value,
+                Err(error)
+                    if monitored.array_index.is_some() && invalid_indexed_target_error(&error) =>
+                {
+                    queue_invalid_reference(&mut updates, *oid, eval_state_supported, eval_source);
+                    queue_reliability_transition(
+                        db,
+                        enrollment,
+                        &mut updates,
+                        *oid,
+                        Some(monitored_oid),
+                        current_reliability,
+                        Reliability::CONFIGURATION_ERROR,
+                        current_state,
+                        event_enable,
+                        EventEnrollmentReliabilityCause::Configuration,
+                    );
+                    continue;
+                }
+                Err(_) => {
+                    queue_observation_unavailable(&mut updates, *oid);
+                    continue;
+                }
+            },
         };
+
+        queue_evaluation_ownership(
+            &mut updates,
+            *oid,
+            eval_state_supported,
+            reset_evaluation_state,
+            eval_source,
+            monitored_reference,
+        );
 
         // The effective normal-direction delay: the EE object's read arm
         // applies the Clause 13.3 fallback (Time_Delay_Normal absent → the
         // Event_Parameters Time_Delay), so this read IS pTimeDelayNormal.
-        // Unreadable (custom object without the property) degrades to 0,
-        // the pre-#163 immediate-transition behavior.
         let normal_delay =
             match enrollment.read_property(PropertyIdentifier::TIME_DELAY_NORMAL, None) {
                 Ok(PropertyValue::Unsigned(v)) => u32::try_from(v).unwrap_or(u32::MAX),
@@ -423,9 +559,7 @@ pub fn evaluate_event_enrollments_report(
 
         // A parameter (or reference) change mid-pending cancels the countdown
         // and re-gates from the current parameters; no partial countdown is
-        // resumed. The cancellation is flushed BEFORE any later exit — a
-        // dropped write-back here is what let a params round-trip A→B→A
-        // resume a stale countdown.
+        // resumed.
         let Ok(fingerprint) =
             params_fingerprint(&params, normal_delay as u64, event_type_raw, &monitored)
         else {
@@ -438,7 +572,6 @@ pub fn evaluate_event_enrollments_report(
             .is_some_and(|p| p.params_fingerprint != fingerprint)
         {
             eval_state.pending = None;
-            eval_state_dirty = false;
             if eval_state_supported {
                 updates
                     .entry(*oid)
@@ -447,35 +580,7 @@ pub fn evaluate_event_enrollments_report(
             }
         }
 
-        let Some(monitored_obj) = db.get(&monitored_oid) else {
-            continue;
-        };
-        if monitored.array_index.is_some() && !monitored_obj.is_array_property(monitored_prop) {
-            queue_eval_state_reset(&mut updates, *oid, eval_state_supported, &eval_state);
-            queue_eval_source_reset(&mut updates, *oid, eval_source);
-            continue;
-        }
-        let monitored_value = match monitored_obj
-            .read_property(monitored_prop, monitored.array_index)
-        {
-            Ok(v) => v,
-            Err(error) => {
-                if monitored.array_index.is_some() && invalid_indexed_target_error(&error) {
-                    // A definitive indexed-target error is not a request to
-                    // retry the whole property.
-                    queue_eval_state_reset(&mut updates, *oid, eval_state_supported, &eval_state);
-                    queue_eval_source_reset(&mut updates, *oid, eval_source);
-                }
-                continue;
-            }
-        };
         let event_type = EventType::from_raw(event_type_raw);
-        if eval_source.is_some_and(|current| current != Some(monitored_reference)) {
-            updates
-                .entry(*oid)
-                .or_default()
-                .set_eval_source(Some(monitored_reference));
-        }
 
         let (time_delay, arm) = match &params {
             BACnetEventParameter::OutOfRange {
@@ -531,7 +636,10 @@ pub fn evaluate_event_enrollments_report(
                         );
                         continue;
                     }
-                    SetpointRead::Transient => continue,
+                    SetpointRead::Transient => {
+                        queue_observation_unavailable(&mut updates, *oid);
+                        continue;
+                    }
                 };
                 (
                     *time_delay,
