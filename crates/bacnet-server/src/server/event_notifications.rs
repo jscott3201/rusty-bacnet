@@ -1,3 +1,4 @@
+use super::event_message_policy::intrinsic_event_message_text;
 use super::event_recipient_route::{ConfirmedRecipientRoute, RecipientRoute};
 use super::event_timestamp::{
     confirm_event_timestamp, sample_event_timestamp, stage_event_timestamp, SampledEventClock,
@@ -265,12 +266,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .unwrap_or(0);
         let (_, ack_required) = resolve_transition_priority_ack(db, notification_class, coordinate);
         let staged_timestamp = stage_event_timestamp(db);
+        let message_text = intrinsic_event_message_text(oid, &outcome.change);
         let commit = EventTransitionCommit {
             change: outcome.change.clone(),
             coordinate,
             ack_required,
             timestamp: staged_timestamp.sample.timestamp.clone(),
-            message_text: None,
+            message_text: Some(message_text),
         };
 
         if let Err(error) = db.get_mut(oid)?.commit_event_transition_internal(commit) {
@@ -378,8 +380,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // transition actions, none of which it governs.
         //
         // The shared commit kernel has also stored the selected timestamp and
-        // updated Acked_Transitions from the Notification Class policy. Message
-        // text is intentionally absent for this built-in path.
+        // updated Acked_Transitions from the Notification Class policy and
+        // stored the selected local message in the transition coordinate.
         if let Some(resolved) = resolved {
             if resolved.distribute() {
                 Self::build_and_send_event_notification_with_bindings(

@@ -13,6 +13,7 @@
 //! feed acks through the same correlation entry point the dispatch loop uses.
 
 use super::device_bindings::{DeviceBindingTable, OBSERVED_BINDING_TTL};
+use super::event_notifications::CommittedIntrinsicTransition;
 use super::event_notifications_tests::local_broadcast_destination;
 use super::event_recipient_routing_tests::{address_recipient, destination_for};
 use super::*;
@@ -161,6 +162,48 @@ impl Harness {
         }
     }
 
+    async fn commit_transition(
+        &self,
+        from: EventState,
+        to: EventState,
+    ) -> CommittedIntrinsicTransition {
+        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+        let mut db = self.db.write().await;
+        BACnetServer::<RecordingTransport>::commit_intrinsic_transition(
+            &mut db,
+            &oid,
+            bacnet_objects::event::TransitionOutcome {
+                change: EventStateChange { from, to },
+                event_type: EventType::OUT_OF_RANGE,
+                distribute: true,
+            },
+        )
+        .expect("the built-in transition must commit")
+    }
+
+    async fn distribute_committed(&self) -> ObjectIdentifier {
+        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+        let committed = self
+            .commit_transition(EventState::NORMAL, EventState::HIGH_LIMIT)
+            .await;
+        BACnetServer::<RecordingTransport>::build_and_send_event_notification_with_bindings(
+            &self.db,
+            &self.network,
+            &self.comm_state,
+            &self.server_tsm,
+            &self.notification_transactions,
+            &self.device_bindings,
+            &oid,
+            committed,
+            self.retry_timeout_ms,
+        )
+        .await;
+        for _ in 0..16 {
+            tokio::task::yield_now().await;
+        }
+        oid
+    }
+
     fn broadcast_frames(&self) -> Vec<Bytes> {
         self.broadcasts.lock().unwrap().clone()
     }
@@ -281,6 +324,70 @@ async fn configured_routed_device_retries_unicast_to_router_and_correlates_by_fi
             .ack_routed(ROUTER_A, 1000, RECIPIENT, request.invoke_id)
             .await,
         "terminal correlation uses the final routed peer identity"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn confirmed_retry_reuses_committed_message_bytes_after_history_changes() {
+    let identifier = ObjectIdentifier::new(ObjectType::DEVICE, 92).unwrap();
+    let mut bindings = DeviceBindingTable::new();
+    bindings
+        .insert_configured(
+            DeviceBinding::routed(identifier, 1002, RECIPIENT, ROUTER_A).unwrap(),
+            |_| false,
+        )
+        .unwrap();
+    let harness = Harness::new_with_bindings(
+        vec![destination_for(BACnetRecipient::Device(identifier), true)],
+        1_000,
+        bindings,
+    )
+    .await;
+    let oid = harness.distribute_committed().await;
+
+    let first = harness.unicast_frames();
+    assert_eq!(first.len(), 1);
+    let first_frame = first[0].1.clone();
+    let (_, first_request) = decode_confirmed(&first_frame);
+    let notification = EventNotificationRequest::decode(&first_request.service_request).unwrap();
+    assert_eq!(
+        notification.message_text,
+        Some("ANALOG_INPUT,1: NORMAL -> HIGH_LIMIT".into())
+    );
+
+    harness
+        .commit_transition(EventState::HIGH_LIMIT, EventState::NORMAL)
+        .await;
+    harness
+        .commit_transition(EventState::NORMAL, EventState::LOW_LIMIT)
+        .await;
+    let PropertyValue::CharacterString(current_message) = harness
+        .db
+        .read()
+        .await
+        .get(&oid)
+        .unwrap()
+        .read_property(PropertyIdentifier::EVENT_MESSAGE_TEXTS, Some(1))
+        .unwrap()
+    else {
+        panic!("Event_Message_Texts coordinate must be a character string");
+    };
+    assert_eq!(current_message, "ANALOG_INPUT,1: NORMAL -> LOW_LIMIT");
+
+    tokio::time::advance(Duration::from_secs(1)).await;
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    let retried = harness.unicast_frames();
+    assert!(retried.len() >= 2, "silence must trigger a retry");
+    assert!(
+        retried.iter().all(|(_, frame)| frame == &first_frame),
+        "every retry must reuse the originally committed encoded bytes"
+    );
+    assert!(
+        harness
+            .ack_routed(ROUTER_A, 1002, RECIPIENT, first_request.invoke_id)
+            .await
     );
 }
 
