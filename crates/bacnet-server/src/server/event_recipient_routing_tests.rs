@@ -12,13 +12,14 @@ use super::event_notifications_tests::local_broadcast_destination;
 use super::*;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
-use bacnet_objects::event::EventStateChange;
+use bacnet_objects::event::{EventStateChange, EventTransition};
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
 use bacnet_types::enums::{EventState, EventType};
 use bytes::Bytes;
+use std::borrow::Cow;
 use std::sync::{Arc as StdArc, Mutex as StdMutex};
 use tokio::sync::mpsc;
 
@@ -107,13 +108,6 @@ async fn distribute_with_clock_mode(
     destinations: Vec<BACnetDestination>,
     clocked: bool,
 ) -> (Vec<Bytes>, Vec<(Vec<u8>, Bytes)>) {
-    let transport = RoutingTransport::default();
-    let broadcasts = StdArc::clone(&transport.broadcasts);
-    let unicasts = StdArc::clone(&transport.unicasts);
-    let network = Arc::new(NetworkLayer::new(transport));
-    let comm_state = Arc::new(AtomicU8::new(0));
-    let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
-
     let mut db = if clocked {
         clocked_test_database()
     } else {
@@ -125,6 +119,17 @@ async fn distribute_with_clock_mode(
         nc.add_destination(destination);
     }
     db.add(Box::new(nc)).unwrap();
+    distribute_from_database(db).await
+}
+
+async fn distribute_from_database(mut db: ObjectDatabase) -> (Vec<Bytes>, Vec<(Vec<u8>, Bytes)>) {
+    let transport = RoutingTransport::default();
+    let broadcasts = StdArc::clone(&transport.broadcasts);
+    let unicasts = StdArc::clone(&transport.unicasts);
+    let network = Arc::new(NetworkLayer::new(transport));
+    let comm_state = Arc::new(AtomicU8::new(0));
+    let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
             instance: 1,
@@ -174,6 +179,120 @@ async fn distribute_with_clock_mode(
     let broadcasts = broadcasts.lock().unwrap().clone();
     let unicasts = unicasts.lock().unwrap().clone();
     (broadcasts, unicasts)
+}
+
+enum TestRecipientList {
+    Unavailable,
+    Invalid,
+}
+
+struct TestNotificationClass {
+    oid: ObjectIdentifier,
+    recipient_list: TestRecipientList,
+}
+
+impl TestNotificationClass {
+    fn new(recipient_list: TestRecipientList) -> Self {
+        Self {
+            oid: ObjectIdentifier::new(ObjectType::NOTIFICATION_CLASS, 0).unwrap(),
+            recipient_list,
+        }
+    }
+}
+
+impl BACnetObject for TestNotificationClass {
+    fn object_identifier(&self) -> ObjectIdentifier {
+        self.oid
+    }
+
+    fn object_name(&self) -> &str {
+        "recipient-lookup-test-class"
+    }
+
+    fn read_property(
+        &self,
+        property: PropertyIdentifier,
+        _array_index: Option<u32>,
+    ) -> Result<PropertyValue, Error> {
+        match property {
+            p if p == PropertyIdentifier::NOTIFICATION_CLASS => Ok(PropertyValue::Unsigned(0)),
+            p if p == PropertyIdentifier::RECIPIENT_LIST => match self.recipient_list {
+                TestRecipientList::Unavailable => Err(Error::Protocol {
+                    class: ErrorClass::PROPERTY.to_raw() as u32,
+                    code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                }),
+                TestRecipientList::Invalid => Ok(PropertyValue::ApplicationData(vec![0x5E])),
+            },
+            _ => Err(Error::Protocol {
+                class: ErrorClass::PROPERTY.to_raw() as u32,
+                code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+            }),
+        }
+    }
+
+    fn write_property(
+        &mut self,
+        _property: PropertyIdentifier,
+        _array_index: Option<u32>,
+        _value: PropertyValue,
+        _priority: Option<u8>,
+    ) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::PROPERTY.to_raw() as u32,
+            code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+        })
+    }
+
+    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
+        Cow::Borrowed(&[
+            PropertyIdentifier::NOTIFICATION_CLASS,
+            PropertyIdentifier::RECIPIENT_LIST,
+        ])
+    }
+}
+
+async fn distribute_non_matched_case(case: &str) -> (Vec<Bytes>, Vec<(Vec<u8>, Bytes)>) {
+    let mut db = clocked_test_database();
+    match case {
+        "missing-class" => {}
+        "list-unavailable" => db
+            .add(Box::new(TestNotificationClass::new(
+                TestRecipientList::Unavailable,
+            )))
+            .unwrap(),
+        "list-invalid" => db
+            .add(Box::new(TestNotificationClass::new(
+                TestRecipientList::Invalid,
+            )))
+            .unwrap(),
+        "empty-list" => db
+            .add(Box::new(NotificationClass::new(0, "NC-0").unwrap()))
+            .unwrap(),
+        "no-eligible-destination" => {
+            let mut nc = NotificationClass::new(0, "NC-0").unwrap();
+            let mut destination = destination_for(address_recipient(0, &[]), false);
+            destination.transitions = EventTransition::ToNormal.bit_mask();
+            nc.add_destination(destination);
+            db.add(Box::new(nc)).unwrap();
+        }
+        _ => unreachable!("test case is fixed"),
+    }
+    distribute_from_database(db).await
+}
+
+#[tokio::test]
+async fn every_non_matched_lookup_outcome_emits_no_frame() {
+    for case in [
+        "missing-class",
+        "list-unavailable",
+        "list-invalid",
+        "empty-list",
+        "no-eligible-destination",
+    ] {
+        let (broadcasts, unicasts) = distribute_non_matched_case(case).await;
+        assert!(broadcasts.is_empty(), "{case} must not widen to broadcast");
+        assert!(unicasts.is_empty(), "{case} must not emit a unicast");
+    }
 }
 
 #[tokio::test]

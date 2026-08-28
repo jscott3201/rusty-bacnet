@@ -405,25 +405,73 @@ pub fn resolve_transition_priority_ack(
     (priority, ack_required)
 }
 
-/// Get notification recipients for a given notification class number and transition.
+/// The complete outcome of looking up and selecting Notification Class recipients.
 ///
-/// Looks up the `NotificationClass` object whose `Notification_Class` property equals
-/// `notification_class`, then filters its `Recipient_List` by day, time, and transition.
+/// Broadcast is not an outcome. It is represented only by an address inside
+/// [`Matched`](Self::Matched), after that configured destination passes the
+/// day, time, and transition filters. Device recipients are also successful
+/// matches here; resolving them to network addresses is a later routing step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecipientLookupOutcome {
+    /// No Notification Class has the requested class number.
+    NotificationClassMissing,
+    /// The class exists, but its recipient-list property could not be read.
+    RecipientListUnavailable,
+    /// The complete recipient-list value could not be decoded.
+    RecipientListInvalid,
+    /// The class contains a valid list with zero configured destinations.
+    NoConfiguredDestinations,
+    /// Destinations are configured, but none is eligible for this selection.
+    NoMatchingDestinations,
+    /// Eligible configured destinations and their delivery settings.
+    Matched(Vec<(BACnetRecipient, u32, bool)>),
+}
+
+/// Look up and select recipients for a Notification Class transition.
 ///
-/// # Parameters
-/// - `db`: the object database containing NotificationClass objects
-/// - `notification_class`: the notification class number to look up
-/// - `transition`: which event transition to filter for
-/// - `today_bit`: bitmask for today's day of week in `valid_days`, using the
-///   `BACnetDaysOfWeek` convention **bit 0 = Monday, …, bit 6 = Sunday**
-///   (i.e. `1 << dow` where `dow = 0` on Monday)
-/// - `current_time`: the current local time for time-window filtering
+/// This is the canonical recipient lookup API and distinguishes configuration
+/// failures from valid empty or ineligible configuration. Selection uses the
+/// configured destination's day mask, local time window, and transition mask.
+/// `today_bit` uses bit 0 for Monday through bit 6 for Sunday.
 ///
-/// Returns `(recipient, process_identifier, issue_confirmed_notifications)` tuples.
-/// Returns an empty `Vec` if no matching NotificationClass is found or no recipients match.
-/// Compatibility wrapper: a `Recipient_List` that fails to decode yields an
-/// empty list here; routing that must distinguish "no recipients" from
-/// "undecodable list" uses [`get_notification_recipients_strict`].
+/// A malformed complete list returns
+/// [`RecipientListInvalid`](RecipientLookupOutcome::RecipientListInvalid);
+/// no decodable prefix is selected. Every non-matched outcome is fail-closed
+/// and names no implicit destination.
+pub fn lookup_notification_recipients(
+    db: &ObjectDatabase,
+    notification_class: u32,
+    transition: EventTransition,
+    today_bit: u8,
+    current_time: &Time,
+) -> RecipientLookupOutcome {
+    let Some(nc) = find_notification_class(db, notification_class) else {
+        return RecipientLookupOutcome::NotificationClassMissing;
+    };
+    let Ok(recipient_list_value) = nc.read_property(PropertyIdentifier::RECIPIENT_LIST, None)
+    else {
+        return RecipientLookupOutcome::RecipientListUnavailable;
+    };
+    let Ok(destinations) = decode_destination_list_pv(&recipient_list_value) else {
+        return RecipientLookupOutcome::RecipientListInvalid;
+    };
+    if destinations.is_empty() {
+        return RecipientLookupOutcome::NoConfiguredDestinations;
+    }
+
+    let recipients = filter_destinations(destinations, transition, today_bit, current_time);
+    if recipients.is_empty() {
+        RecipientLookupOutcome::NoMatchingDestinations
+    } else {
+        RecipientLookupOutcome::Matched(recipients)
+    }
+}
+
+/// Get notification recipients for a given class number and transition.
+///
+/// This source-compatible wrapper delegates to
+/// [`lookup_notification_recipients`] and returns the matched recipient tuples.
+/// Every other outcome maps to an empty vector, preserving the legacy API.
 pub fn get_notification_recipients(
     db: &ObjectDatabase,
     notification_class: u32,
@@ -431,18 +479,29 @@ pub fn get_notification_recipients(
     today_bit: u8,
     current_time: &Time,
 ) -> Vec<(BACnetRecipient, u32, bool)> {
-    get_notification_recipients_strict(db, notification_class, transition, today_bit, current_time)
-        .unwrap_or_default()
+    match lookup_notification_recipients(
+        db,
+        notification_class,
+        transition,
+        today_bit,
+        current_time,
+    ) {
+        RecipientLookupOutcome::Matched(recipients) => recipients,
+        RecipientLookupOutcome::NotificationClassMissing
+        | RecipientLookupOutcome::RecipientListUnavailable
+        | RecipientLookupOutcome::RecipientListInvalid
+        | RecipientLookupOutcome::NoConfiguredDestinations
+        | RecipientLookupOutcome::NoMatchingDestinations => Vec::new(),
+    }
 }
 
 /// Strict variant of [`get_notification_recipients`] for fail-closed routing.
 ///
-/// - `Some(list)` — no class matched (value `[]`, as before), or the class
-///   was found and its `Recipient_List` decoded; `list` may be empty after
-///   filtering (no recipient viable right now).
-/// - `None` — a NotificationClass matched but its stored `Recipient_List`
-///   FAILED to decode: the configured recipients are unknown, and delivering
-///   to a decodable prefix would notify the wrong set of devices.
+/// This source-compatible wrapper delegates to
+/// [`lookup_notification_recipients`]. It preserves `None` for an invalid or
+/// undecodable complete list and `Some([])` for missing class, property-read
+/// failure, configured empty, and no-match outcomes. Successful matches return
+/// `Some(recipients)`.
 pub fn get_notification_recipients_strict(
     db: &ObjectDatabase,
     notification_class: u32,
@@ -450,19 +509,20 @@ pub fn get_notification_recipients_strict(
     today_bit: u8,
     current_time: &Time,
 ) -> Option<Vec<(BACnetRecipient, u32, bool)>> {
-    let Some(nc) = find_notification_class(db, notification_class) else {
-        return Some(Vec::new());
-    };
-    let Ok(recipient_list_val) = nc.read_property(PropertyIdentifier::RECIPIENT_LIST, None) else {
-        return Some(Vec::new());
-    };
-    let destinations = decode_destination_list_pv(&recipient_list_val).ok()?;
-    Some(filter_destinations(
-        destinations,
+    match lookup_notification_recipients(
+        db,
+        notification_class,
         transition,
         today_bit,
         current_time,
-    ))
+    ) {
+        RecipientLookupOutcome::RecipientListInvalid => None,
+        RecipientLookupOutcome::Matched(recipients) => Some(recipients),
+        RecipientLookupOutcome::NotificationClassMissing
+        | RecipientLookupOutcome::RecipientListUnavailable
+        | RecipientLookupOutcome::NoConfiguredDestinations
+        | RecipientLookupOutcome::NoMatchingDestinations => Some(Vec::new()),
+    }
 }
 
 /// Decode ONE legacy flat `Recipient_List` entry (the pre-#152
@@ -575,7 +635,7 @@ fn decode_destination_list_pv(value: &PropertyValue) -> Result<Vec<BACnetDestina
 
 /// Filter decoded destinations by day, time, and transition — the shared
 /// selection step of [`filter_recipient_list`] and
-/// [`get_notification_recipients_strict`].
+/// [`lookup_notification_recipients`].
 fn filter_destinations(
     destinations: Vec<BACnetDestination>,
     transition: EventTransition,

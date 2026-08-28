@@ -12,6 +12,10 @@ use bacnet_types::primitives::{BACnetTimeStamp, Time};
 
 use crate::event_enrollment::{CommittedEventEnrollmentDelivery, CommittedEventEnrollmentResult};
 
+#[path = "event_recipient_lookup.rs"]
+mod recipient_lookup;
+use recipient_lookup::matched_recipients_or_log;
+
 /// One exact transition-coordinate projection from object-owned event history.
 #[derive(Debug, Clone, PartialEq)]
 struct CommittedHistorySnapshot {
@@ -587,6 +591,20 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 resolve_transition_priority_ack(&db, notification_class, transition);
             let ack_required = ack_required_snapshot.unwrap_or(resolved_ack_required);
 
+            let Some(recipients) = matched_recipients_or_log(
+                lookup_notification_recipients(
+                    &db,
+                    notification_class,
+                    transition,
+                    today_bit,
+                    &current_time,
+                ),
+                notification_class,
+                transition,
+            ) else {
+                return;
+            };
+
             let base_notification = EventNotificationRequest {
                 process_identifier: 0,
                 initiating_device_identifier: device_oid,
@@ -611,29 +629,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 event_values: None,
             };
 
-            let recipients = match get_notification_recipients_strict(
-                &db,
-                notification_class,
-                transition,
-                today_bit,
-                &current_time,
-            ) {
-                Some(recipients) => recipients,
-                None => {
-                    // The NotificationClass's Recipient_List failed to
-                    // decode — its configured recipients are UNKNOWN. Fail
-                    // closed (consistent with the encode-failure branches
-                    // below): deliver this notification to NO ONE rather
-                    // than to a silently-truncated prefix of the configured
-                    // destinations.
-                    warn!(
-                        notification_class,
-                        "Recipient_List failed to decode; skipping event notification delivery"
-                    );
-                    return;
-                }
-            };
-
             (base_notification, recipients)
         };
 
@@ -641,20 +636,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // Clause 13.2.5.4 sets the NPDU priority from the notification's
         // event priority, on every send of this notification — retries too.
         let network_priority = network_priority_for_event(notification.priority);
-
-        // Clause 13.2.5: "notifications are distributed to the notification-
-        // clients specified by the Recipient_List input". The Recipient_List is
-        // the destination set, so no matching recipient means no notification
-        // is distributed. Broadcasting instead would invent a destination the
-        // configuration never named, and would leak the alarm to every device
-        // on the link.
-        if recipients.is_empty() {
-            debug!(
-                notification_class,
-                "No Recipient_List entry matched this transition; nothing distributed"
-            );
-            return;
-        }
 
         for (recipient, process_id, confirmed) in &recipients {
             let route =
