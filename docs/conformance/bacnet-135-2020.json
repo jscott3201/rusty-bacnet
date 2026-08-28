@@ -1858,7 +1858,7 @@
   },
   {
    "id": "BACNET-13-EVENT-ENROLLMENT-NOTIFICATION-LIFECYCLE",
-   "standard_anchor": "Clause 12.12 (Event Enrollment Event_Type, Event_Enable, Notification_Class, Acked_Transitions, Event_Time_Stamps and Event_Message_Texts); Clause 13.2.2.1.4 (commit before indication/distribution, including same-state indication); Clause 13.2.3 (transition acknowledgment state and Notification Class Ack_Required); Clause 13.2.5, 13.2.5.2 Table 13-3 and 13.2.5.3 Table 13-5 (distribution gate and committed notification fields)",
+   "standard_anchor": "Event Enrollment object and event-reporting lifecycle requirements for configured event type, transition enablement, Notification Class policy, committed acknowledgment/timestamp/message history, same-state indication, distribution gating, and committed notification fields",
    "priority": "P1",
    "requirement_summary": "Already-committed Event Enrollment normal and Reliability transitions are projected under the database guard and then delivered sequentially through the shared EventNotification sender after the guard is released. Projection preserves deterministic enrollment order, the exact committed Event_Time_Stamps coordinate, commit-time acknowledgment policy and clock state, and canonical Event Type; FAULT entry, changed-Reliability FAULT re-entry, and recovery use CHANGE_OF_RELIABILITY through the shared selector. Event_Enable gates only external delivery. Event Enrollment intentionally has no Event_Message_Texts property, so its committed projection carries an absent message without weakening intrinsic history validation.",
    "status": "implementation-present-needs-conformance-tests",
