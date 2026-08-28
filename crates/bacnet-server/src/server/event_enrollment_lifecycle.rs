@@ -7,6 +7,7 @@ pub(super) fn spawn_event_enrollment_task<T: TransportPort + 'static>(
     comm_state: Arc<AtomicU8>,
     server_tsm: Arc<Mutex<ServerTsm>>,
     notification_transactions: Arc<NotificationTransactions>,
+    device_bindings: Arc<RwLock<DeviceBindingTable>>,
     period: Duration,
     retry_ms: u64,
 ) -> JoinHandle<()> {
@@ -52,12 +53,13 @@ pub(super) fn spawn_event_enrollment_task<T: TransportPort + 'static>(
             }
             crate::event_enrollment::log_evaluation_report(&report);
             for (oid, transition) in outbound {
-                BACnetServer::<T>::build_and_send_event_notification(
+                BACnetServer::<T>::build_and_send_event_notification_with_bindings(
                     &db,
                     &network,
                     &comm_state,
                     &server_tsm,
                     &notification_transactions,
+                    &device_bindings,
                     &oid,
                     transition,
                     retry_ms,

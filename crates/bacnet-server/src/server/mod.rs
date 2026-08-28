@@ -53,6 +53,8 @@ use bacnet_types::MacAddr;
 use crate::cov::{CovNotificationKind, CovSubscription, CovSubscriptionTable};
 use crate::handlers;
 use crate::life_safety::{LifeSafetyOperationAuthorizationContext, LifeSafetyOperationAuthorizer};
+pub use device_bindings::DeviceBinding;
+use device_bindings::{register_configured_binding, DeviceBindingTable};
 use notification_transactions::{
     canonical_direct_peer, canonical_routed_peer, run_notification_worker,
     NotificationTransactions, NotificationWorkerResult,
@@ -403,6 +405,7 @@ pub struct ServerBuilder<T: TransportPort> {
     config: ServerConfig,
     db: ObjectDatabase,
     transport: Option<T>,
+    configured_device_bindings: Vec<DeviceBinding>,
 }
 
 impl<T: TransportPort + 'static> ServerBuilder<T> {
@@ -416,6 +419,12 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
     pub fn transport(mut self, transport: T) -> Self {
         self.transport = Some(transport);
         self
+    }
+
+    /// Register one explicit unicast route for a Device recipient.
+    pub fn device_binding(mut self, binding: DeviceBinding) -> Result<Self, Error> {
+        register_configured_binding(&mut self.configured_device_bindings, binding)?;
+        Ok(self)
     }
 
     /// Set the password required for DeviceCommunicationControl requests.
@@ -483,7 +492,14 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
         let transport = self
             .transport
             .ok_or_else(|| Error::Encoding("transport not set on ServerBuilder".into()))?;
-        BACnetServer::start(self.config, self.db, transport).await
+        BACnetServer::start_with_clock_mode_and_bindings(
+            self.config,
+            self.db,
+            transport,
+            Some(ClockConfig::default()),
+            self.configured_device_bindings,
+        )
+        .await
     }
 }
 
@@ -491,6 +507,7 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
 pub struct BipServerBuilder {
     config: ServerConfig,
     db: ObjectDatabase,
+    configured_device_bindings: Vec<DeviceBinding>,
 }
 
 impl BipServerBuilder {
@@ -516,6 +533,12 @@ impl BipServerBuilder {
     pub fn database(mut self, db: ObjectDatabase) -> Self {
         self.db = db;
         self
+    }
+
+    /// Register one explicit unicast route for a Device recipient.
+    pub fn device_binding(mut self, binding: DeviceBinding) -> Result<Self, Error> {
+        register_configured_binding(&mut self.configured_device_bindings, binding)?;
+        Ok(self)
     }
 
     /// Set the password required for DeviceCommunicationControl requests.
@@ -585,7 +608,14 @@ impl BipServerBuilder {
             self.config.port,
             self.config.broadcast_address,
         );
-        BACnetServer::start(self.config, self.db, transport).await
+        BACnetServer::start_with_clock_mode_and_bindings(
+            self.config,
+            self.db,
+            transport,
+            Some(ClockConfig::default()),
+            self.configured_device_bindings,
+        )
+        .await
     }
 }
 
@@ -767,6 +797,8 @@ pub struct BACnetServer<T: TransportPort> {
     server_tsm: Arc<Mutex<ServerTsm>>,
     /// Invoke-ID ownership and terminal admission for confirmed notifications.
     notification_transactions: Arc<NotificationTransactions>,
+    /// Shared configured and passively observed Device recipient authority.
+    device_bindings: Arc<RwLock<DeviceBindingTable>>,
     /// Communication state: 0 = Enable, 1 = Disable, 2 = DisableInitiation.
     comm_state: Arc<AtomicU8>,
     /// Handle for the DCC auto-re-enable timer. A new DCC request aborts
@@ -807,184 +839,13 @@ impl BACnetServer<BipTransport> {
         BipServerBuilder {
             config: ServerConfig::default(),
             db: ObjectDatabase::new(),
+            configured_device_bindings: Vec::new(),
         }
     }
 
     /// Create a BIP-specific builder (alias for backward compatibility).
     pub fn builder() -> BipServerBuilder {
         Self::bip_builder()
-    }
-}
-
-#[cfg(feature = "sc-tls")]
-impl BACnetServer<bacnet_transport::sc::ScTransport<bacnet_transport::sc_tls::TlsWebSocket>> {
-    /// Create an SC-specific builder that connects to a BACnet/SC hub.
-    pub fn sc_builder() -> ScServerBuilder {
-        ScServerBuilder {
-            config: ServerConfig::default(),
-            db: ObjectDatabase::new(),
-            hub_url: String::new(),
-            tls_config: None,
-            vmac: [0; 6],
-            heartbeat_interval_ms: 30_000,
-            heartbeat_timeout_ms: 60_000,
-            reconnect: None,
-        }
-    }
-}
-
-/// SC-specific server builder.
-///
-/// Created by [`BACnetServer::sc_builder()`].  Requires the `sc-tls` feature.
-#[cfg(feature = "sc-tls")]
-pub struct ScServerBuilder {
-    config: ServerConfig,
-    db: ObjectDatabase,
-    hub_url: String,
-    tls_config: Option<std::sync::Arc<tokio_rustls::rustls::ClientConfig>>,
-    vmac: bacnet_transport::sc_frame::Vmac,
-    heartbeat_interval_ms: u64,
-    heartbeat_timeout_ms: u64,
-    reconnect: Option<bacnet_transport::sc::ScReconnectConfig>,
-}
-
-#[cfg(feature = "sc-tls")]
-impl ScServerBuilder {
-    /// Set the hub WebSocket URL (e.g. `wss://hub.example.com/bacnet`).
-    pub fn hub_url(mut self, url: &str) -> Self {
-        self.hub_url = url.to_string();
-        self
-    }
-
-    /// Set the segmentation support this device advertises and enforces.
-    ///
-    /// The dispatch loop honors the advertisement (Clause 5.4.5.1): inbound
-    /// segmented requests are reassembled only under `BOTH` or `RECEIVE`, and
-    /// draw a SEGMENTATION_NOT_SUPPORTED Abort otherwise. The default is
-    /// `NONE`.
-    pub fn segmentation_supported(mut self, segmentation: Segmentation) -> Self {
-        self.config.segmentation_supported = segmentation;
-        self
-    }
-
-    /// Set the TLS client configuration.
-    pub fn tls_config(
-        mut self,
-        config: std::sync::Arc<tokio_rustls::rustls::ClientConfig>,
-    ) -> Self {
-        self.tls_config = Some(config);
-        self
-    }
-
-    /// Set the local VMAC address.
-    pub fn vmac(mut self, vmac: [u8; 6]) -> Self {
-        self.vmac = vmac;
-        self
-    }
-
-    /// Set the object database (transfers ownership).
-    pub fn database(mut self, db: ObjectDatabase) -> Self {
-        self.db = db;
-        self
-    }
-
-    /// Set the heartbeat interval in milliseconds (default 30 000).
-    pub fn heartbeat_interval_ms(mut self, ms: u64) -> Self {
-        self.heartbeat_interval_ms = ms;
-        self
-    }
-
-    /// Set the heartbeat timeout in milliseconds (default 60 000).
-    pub fn heartbeat_timeout_ms(mut self, ms: u64) -> Self {
-        self.heartbeat_timeout_ms = ms;
-        self
-    }
-
-    /// Enable automatic reconnection with the given configuration.
-    pub fn reconnect(mut self, config: bacnet_transport::sc::ScReconnectConfig) -> Self {
-        self.reconnect = Some(config);
-        self
-    }
-
-    /// Set the password required for DeviceCommunicationControl requests.
-    pub fn dcc_password(mut self, password: impl Into<String>) -> Self {
-        self.config.dcc_password = Some(password.into());
-        self
-    }
-
-    /// Set the password required for ReinitializeDevice requests.
-    pub fn reinit_password(mut self, password: impl Into<String>) -> Self {
-        self.config.reinit_password = Some(password.into());
-        self
-    }
-
-    /// Set the policy that authorizes inbound LifeSafetyOperation requests.
-    pub fn life_safety_operation_authorizer<F>(mut self, authorizer: F) -> Self
-    where
-        F: Fn(&LifeSafetyOperationAuthorizationContext) -> bool + Send + Sync + 'static,
-    {
-        self.config.life_safety_operation_authorizer = Some(Arc::new(authorizer));
-        self
-    }
-
-    /// Enable periodic fault detection / reliability evaluation.
-    ///
-    /// Reliability evaluation only; Event Enrollment evaluation is configured
-    /// by [`enable_event_enrollment`](Self::enable_event_enrollment).
-    pub fn enable_fault_detection(mut self, enabled: bool) -> Self {
-        self.config.enable_fault_detection = enabled;
-        self
-    }
-
-    /// Enable periodic Event Enrollment evaluation (default `true`).
-    pub fn enable_event_enrollment(mut self, enabled: bool) -> Self {
-        self.config.enable_event_enrollment = enabled;
-        self
-    }
-
-    /// Set the interval in seconds between Event Enrollment evaluation passes
-    /// (default 10).
-    pub fn event_enrollment_interval_secs(mut self, secs: u64) -> Self {
-        self.config.event_enrollment_interval_secs = secs;
-        self
-    }
-
-    /// Connect to the hub and start the server.
-    pub async fn build(
-        self,
-    ) -> Result<
-        BACnetServer<bacnet_transport::sc::ScTransport<bacnet_transport::sc_tls::TlsWebSocket>>,
-        Error,
-    > {
-        let tls_config = self
-            .tls_config
-            .ok_or_else(|| Error::Encoding("SC server builder: tls_config is required".into()))?;
-
-        let ws = bacnet_transport::sc_tls::TlsWebSocket::connect(&self.hub_url, tls_config.clone())
-            .await?;
-
-        let mut transport = bacnet_transport::sc::ScTransport::new(ws, self.vmac)
-            .with_heartbeat_interval_ms(self.heartbeat_interval_ms)
-            .with_heartbeat_timeout_ms(self.heartbeat_timeout_ms);
-        if let Some(rc) = self.reconnect {
-            let hub_url = self.hub_url.clone();
-            let tls_config = tls_config.clone();
-            #[allow(deprecated)]
-            {
-                transport = transport
-                    .with_connector(move || {
-                        let hub_url = hub_url.clone();
-                        let tls_config = tls_config.clone();
-                        async move {
-                            bacnet_transport::sc_tls::TlsWebSocket::connect(&hub_url, tls_config)
-                                .await
-                        }
-                    })
-                    .with_reconnect(rc);
-            }
-        }
-
-        BACnetServer::start(self.config, self.db, transport).await
     }
 }
 
@@ -995,15 +856,21 @@ pub use clock::ClockConfig;
 use clock::ServerClock;
 mod cov_clock;
 mod cov_notifications;
+mod device_bindings;
 mod dispatch;
 mod event_enrollment_lifecycle;
 mod event_notifications;
+mod event_recipient_route;
 pub(crate) mod event_timestamp;
 mod lifecycle;
 mod notification_transactions;
 mod requests;
+#[cfg(feature = "sc-tls")]
+mod sc_builder;
 #[cfg(test)]
 pub(crate) use requests::{EXECUTED_CONFIRMED, EXECUTED_UNCONFIRMED};
+#[cfg(feature = "sc-tls")]
+pub use sc_builder::ScServerBuilder;
 mod responses;
 mod segmentation;
 mod segmented_receive;
@@ -1013,6 +880,10 @@ mod shutdown;
 mod cov_notifications_tests;
 #[cfg(test)]
 mod dcc_event_detection_tests;
+#[cfg(test)]
+mod device_bindings_tests;
+#[cfg(test)]
+mod device_recipient_routing_tests;
 #[cfg(test)]
 mod event_confirmed_routing_tests;
 #[cfg(test)]
@@ -1040,6 +911,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             config: ServerConfig::default(),
             db: ObjectDatabase::new(),
             transport: None,
+            configured_device_bindings: Vec::new(),
         }
     }
 }

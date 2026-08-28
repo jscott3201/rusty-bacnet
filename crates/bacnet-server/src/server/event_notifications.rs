@@ -1,3 +1,4 @@
+use super::event_recipient_route::RecipientRoute;
 use super::event_timestamp::{
     confirm_event_timestamp, sample_event_timestamp, stage_event_timestamp, SampledEventClock,
 };
@@ -110,9 +111,6 @@ impl From<ResolvedIntrinsicTransition> for NotificationTransition {
         }
     }
 }
-
-/// The DNET reserved for a global broadcast (Clause 6.3).
-const GLOBAL_BROADCAST_NETWORK: u16 = 0xFFFF;
 
 /// Project an alarm/event priority onto the NPDU Network Priority.
 ///
@@ -248,119 +246,6 @@ pub(super) fn resolve_committed_event_enrollment_transition(
     ))
 }
 
-/// The network destination a Notification Class recipient resolves to.
-///
-/// Clause 21's `BACnetAddress` gives a recipient two independent knobs —
-/// `network-number`, where "A value of 0 indicates the local network", and
-/// `mac-address`, where "A string of length 0 indicates a broadcast" — and
-/// Clause 6.3 reserves network 65535 for the global broadcast. Their
-/// combinations are distinct sends rather than one unicast with edge cases,
-/// which is why this is resolved once up front rather than decided at each
-/// send site.
-enum RecipientRoute {
-    /// Network 0 with an explicit MAC: unicast on the local network.
-    LocalUnicast(MacAddr),
-    /// Network 0 with a zero-length MAC. Clause 12.21 prescribes exactly this
-    /// recipient for a device whose `Recipient_List` is not writable and which
-    /// uses no local Notification Forwarder objects.
-    LocalBroadcast,
-    /// A zero-length MAC on a remote network. Clause 6.3: "DNET shall specify
-    /// the network number of the remote network and DLEN shall be set to zero".
-    RemoteBroadcast(u16),
-    /// A zero-length MAC on network 65535. Clause 6.3: "A global broadcast,
-    /// indicated by a DNET of X'FFFF', is sent to all networks through all
-    /// routers" — a destination of its own, not a remote network that happens
-    /// to be numbered 65535. `broadcast_to_network` rejects 0xFFFF outright,
-    /// so routing it as one would drop the notification.
-    GlobalBroadcast,
-    /// A unicast MAC on a remote network. The NPDU names the recipient via
-    /// DNET/DADR; with no router table in this non-routing device, the link
-    /// DA is the local broadcast, exactly as Clause 6.5.3 prescribes when
-    /// "the address of the router is initially unknown".
-    RemoteUnicast { network: u16, mac: MacAddr },
-    /// A unicast MAC alongside network 65535, which is self-contradictory: a
-    /// global broadcast requires DLEN zero.
-    ContradictoryGlobal,
-    /// A device-instance recipient. Resolving it needs a device-to-address
-    /// binding this device does not maintain. Tracked by #125.
-    UnresolvedDevice(ObjectIdentifier),
-}
-
-impl RecipientRoute {
-    fn resolve(recipient: &BACnetRecipient, is_link_broadcast: impl Fn(&[u8]) -> bool) -> Self {
-        match recipient {
-            BACnetRecipient::Device(oid) => Self::UnresolvedDevice(*oid),
-            BACnetRecipient::Address(addr) => {
-                match (addr.network_number, addr.mac_address.is_empty()) {
-                    (0, true) => Self::LocalBroadcast,
-                    // The data-link spelling of a broadcast (#360): Clause 6.3
-                    // names the medium's literal broadcast MAC alongside the
-                    // zero-length form, and both name the same destination.
-                    (0, false) if is_link_broadcast(&addr.mac_address) => Self::LocalBroadcast,
-                    (0, false) => Self::LocalUnicast(addr.mac_address.clone()),
-                    (GLOBAL_BROADCAST_NETWORK, true) => Self::GlobalBroadcast,
-                    (net, true) => Self::RemoteBroadcast(net),
-                    (GLOBAL_BROADCAST_NETWORK, false) => Self::ContradictoryGlobal,
-                    (net, false) => Self::RemoteUnicast {
-                        network: net,
-                        mac: addr.mac_address.clone(),
-                    },
-                }
-            }
-        }
-    }
-
-    /// Whether a ConfirmedEventNotification may be sent to this destination.
-    ///
-    /// Clause 6.3: "Of the BACnet APDUs, only the BACnet-Unconfirmed-Request-PDU
-    /// may be transmitted using a multicast or broadcast network layer address".
-    /// A confirmed notification also has nowhere to return its SimpleACK from.
-    ///
-    /// Both spellings of a broadcast land here as non-unicast routes: the
-    /// zero-length `mac-address` (Clause 21), and the data link's literal
-    /// broadcast MAC, which `resolve` folds into `LocalBroadcast` via the
-    /// transport's own knowledge of its spelling.
-    ///
-    /// `RemoteUnicast` is admitted: Clause 6.3 permits sending it confirmed
-    /// (the DNET/DADR restricts the destination to one device), and the
-    /// server TSM correlates the acknowledgment by routed identity even when
-    /// it arrives through a router whose MAC was unknown at send time (#375).
-    fn permits_confirmed(&self) -> bool {
-        matches!(self, Self::LocalUnicast(_) | Self::RemoteUnicast { .. })
-    }
-
-    /// Whether this destination can be sent to at all, logging why not when it
-    /// cannot. The two failures are reported separately because they are
-    /// separate operator problems: a self-contradictory address is a
-    /// configuration error, while an unbound device instance is a recipient
-    /// this device cannot address at all.
-    fn is_deliverable(&self, notification_class: u32) -> bool {
-        match self {
-            Self::LocalUnicast(_)
-            | Self::LocalBroadcast
-            | Self::RemoteBroadcast(_)
-            | Self::GlobalBroadcast
-            | Self::RemoteUnicast { .. } => true,
-            Self::ContradictoryGlobal => {
-                warn!(
-                    notification_class,
-                    "Skipping recipient: network 65535 with a unicast MAC is \
-                     self-contradictory (a global broadcast requires DLEN zero)"
-                );
-                false
-            }
-            Self::UnresolvedDevice(device) => {
-                warn!(
-                    notification_class,
-                    %device,
-                    "Skipping recipient: no address binding for this device instance"
-                );
-                false
-            }
-        }
-    }
-}
-
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Resolve policy and atomically commit one intrinsic proposal.
     pub(super) fn commit_intrinsic_transition(
@@ -432,12 +317,36 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// seeds a pending transition (returning `None`, so no notification is
     /// sent here) and the one-second [`intrinsic_reporting_task`](Self::start)
     /// advances the countdown and sends the notification on expiry.
+    #[cfg(test)]
     pub(super) async fn fire_event_notifications(
         db: &Arc<RwLock<ObjectDatabase>>,
         network: &Arc<NetworkLayer<T>>,
         comm_state: &Arc<AtomicU8>,
         server_tsm: &Arc<Mutex<ServerTsm>>,
         notification_transactions: &Arc<NotificationTransactions>,
+        oid: &ObjectIdentifier,
+        retry_timeout_ms: u64,
+    ) {
+        Self::fire_event_notifications_with_bindings(
+            db,
+            network,
+            comm_state,
+            server_tsm,
+            notification_transactions,
+            &Arc::new(RwLock::new(DeviceBindingTable::new())),
+            oid,
+            retry_timeout_ms,
+        )
+        .await;
+    }
+
+    pub(super) async fn fire_event_notifications_with_bindings(
+        db: &Arc<RwLock<ObjectDatabase>>,
+        network: &Arc<NetworkLayer<T>>,
+        comm_state: &Arc<AtomicU8>,
+        server_tsm: &Arc<Mutex<ServerTsm>>,
+        notification_transactions: &Arc<NotificationTransactions>,
+        device_bindings: &Arc<RwLock<DeviceBindingTable>>,
         oid: &ObjectIdentifier,
         retry_timeout_ms: u64,
     ) {
@@ -473,12 +382,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // text is intentionally absent for this built-in path.
         if let Some(resolved) = resolved {
             if resolved.distribute() {
-                Self::build_and_send_event_notification(
+                Self::build_and_send_event_notification_with_bindings(
                     db,
                     network,
                     comm_state,
                     server_tsm,
                     notification_transactions,
+                    device_bindings,
                     oid,
                     resolved,
                     retry_timeout_ms,
@@ -491,17 +401,43 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Build an `EventNotificationRequest` for a pre-computed transition and
     /// send it to the recipients the object's NotificationClass names.
     ///
-    /// Shared by the per-write path ([`fire_event_notifications`]) and the
+    /// Shared by the per-write path and the
     /// periodic `Time_Delay` confirmation path, so both emit identical
     /// notifications. Skipped when DCC is active (comm_state >= 1). Re-reads
     /// `Notification_Class` / `Notify_Type` under a brief `db.write()` guard,
     /// then drops the lock before any network send.
+    #[cfg(test)]
     pub(super) async fn build_and_send_event_notification(
         db: &Arc<RwLock<ObjectDatabase>>,
         network: &Arc<NetworkLayer<T>>,
         comm_state: &Arc<AtomicU8>,
         server_tsm: &Arc<Mutex<ServerTsm>>,
         notification_transactions: &Arc<NotificationTransactions>,
+        oid: &ObjectIdentifier,
+        transition: impl Into<NotificationTransition>,
+        retry_timeout_ms: u64,
+    ) {
+        Self::build_and_send_event_notification_with_bindings(
+            db,
+            network,
+            comm_state,
+            server_tsm,
+            notification_transactions,
+            &Arc::new(RwLock::new(DeviceBindingTable::new())),
+            oid,
+            transition,
+            retry_timeout_ms,
+        )
+        .await;
+    }
+
+    pub(super) async fn build_and_send_event_notification_with_bindings(
+        db: &Arc<RwLock<ObjectDatabase>>,
+        network: &Arc<NetworkLayer<T>>,
+        comm_state: &Arc<AtomicU8>,
+        server_tsm: &Arc<Mutex<ServerTsm>>,
+        notification_transactions: &Arc<NotificationTransactions>,
+        device_bindings: &Arc<RwLock<DeviceBindingTable>>,
         oid: &ObjectIdentifier,
         transition: impl Into<NotificationTransition>,
         retry_timeout_ms: u64,
@@ -638,8 +574,22 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let network_priority = network_priority_for_event(notification.priority);
 
         for (recipient, process_id, confirmed) in &recipients {
-            let route =
-                RecipientRoute::resolve(recipient, |mac| network.transport().is_broadcast_mac(mac));
+            let route = match recipient {
+                BACnetRecipient::Address(address) => {
+                    RecipientRoute::resolve_address(address, |mac| {
+                        network.transport().is_broadcast_mac(mac)
+                    })
+                }
+                BACnetRecipient::Device(identifier) => {
+                    let resolution = {
+                        let table = device_bindings.read().await;
+                        table.resolve_at(identifier, Instant::now(), |mac| {
+                            network.transport().is_broadcast_mac(mac)
+                        })
+                    };
+                    RecipientRoute::from_device_resolution(resolution)
+                }
+            };
 
             if !route.is_deliverable(notification_class) {
                 continue;
@@ -669,8 +619,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let service_bytes = service_buf.freeze();
 
             if *confirmed {
-                // `permits_confirmed` above admits exactly these two route
-                // shapes. If that predicate ever widens without this arm
+                // `permits_confirmed` above admits only unicast route shapes.
+                // If that predicate ever widens without this arm
                 // learning the new route, fail loudly instead of dropping
                 // the notification with no diagnostic.
                 //
@@ -683,7 +633,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     RecipientRoute::RemoteUnicast { network, mac } => (
                         canonical_routed_peer(*network, mac),
                         None,
-                        Some((*network, mac.clone())),
+                        Some((*network, mac.clone(), None)),
+                    ),
+                    RecipientRoute::BoundRoutedUnicast {
+                        network,
+                        mac,
+                        router,
+                    } => (
+                        canonical_routed_peer(*network, mac),
+                        None,
+                        Some((*network, mac.clone(), Some(router.clone()))),
                     ),
                     _ => {
                         warn!(
@@ -745,13 +704,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                             .send_apdu(&buf, &target, true, network_priority)
                                             .await
                                     }
-                                    (None, Some((dnet, dadr))) => {
-                                        // Retry through the local broadcast if a learned
-                                        // router stops answering.
-                                        let router = if attempt == 0 {
-                                            tsm.lock().await.cached_router(dnet)
-                                        } else {
-                                            None
+                                    (None, Some((dnet, dadr, configured_router))) => {
+                                        // A configured Device route keeps its fixed
+                                        // next hop for every attempt. Address recipients
+                                        // retain the learned-router/broadcast behavior.
+                                        let router = match configured_router {
+                                            Some(router) => Some(router),
+                                            None if attempt == 0 => {
+                                                tsm.lock().await.cached_router(dnet)
+                                            }
+                                            None => None,
                                         };
                                         match router {
                                             Some(router_mac) => {
@@ -855,10 +817,20 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             )
                             .await
                     }
-                    // Filtered out by `RecipientRoute::is_deliverable` above.
-                    RecipientRoute::ContradictoryGlobal | RecipientRoute::UnresolvedDevice(_) => {
-                        continue
+                    RecipientRoute::BoundRoutedUnicast {
+                        network: net,
+                        mac,
+                        router,
+                    } => {
+                        network
+                            .send_apdu_routed(&buf, *net, mac, router, false, network_priority)
+                            .await
                     }
+                    // Filtered out by `RecipientRoute::is_deliverable` above.
+                    RecipientRoute::ContradictoryGlobal
+                    | RecipientRoute::UnknownDevice
+                    | RecipientRoute::StaleDevice
+                    | RecipientRoute::InvalidDevice => continue,
                 };
 
                 if let Err(e) = send_result {

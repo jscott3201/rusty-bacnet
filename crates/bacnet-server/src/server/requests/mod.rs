@@ -57,6 +57,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         cov_in_flight: &Arc<Semaphore>,
         server_tsm: &Arc<Mutex<ServerTsm>>,
         notification_transactions: &Arc<NotificationTransactions>,
+        device_bindings: &Arc<RwLock<DeviceBindingTable>>,
         comm_state: &Arc<AtomicU8>,
         dcc_timer: &Arc<Mutex<Option<JoinHandle<()>>>>,
         config: &ServerConfig,
@@ -502,12 +503,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
 
                 for oid in &written_oids {
-                    Self::fire_event_notifications(
+                    Self::fire_event_notifications_with_bindings(
                         db,
                         network,
                         comm_state,
                         server_tsm,
                         notification_transactions,
+                        device_bindings,
                         oid,
                         config.cov_retry_timeout_ms,
                     )
@@ -602,12 +604,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
 
         for oid in &written_oids {
-            Self::fire_event_notifications(
+            Self::fire_event_notifications_with_bindings(
                 db,
                 network,
                 comm_state,
                 server_tsm,
                 notification_transactions,
+                device_bindings,
                 oid,
                 config.cov_retry_timeout_ms,
             )

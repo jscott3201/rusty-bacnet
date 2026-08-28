@@ -43,6 +43,7 @@ async fn dispatch_life_safety_operation(
     let cov_in_flight = Arc::new(Semaphore::new(1));
     let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
     let notification_transactions = NotificationTransactions::new();
+    let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
     let comm_state = Arc::new(AtomicU8::new(0));
     let dcc_timer = Arc::new(Mutex::new(None::<JoinHandle<()>>));
     let mut service_request = BytesMut::new();
@@ -70,6 +71,7 @@ async fn dispatch_life_safety_operation(
         &cov_in_flight,
         &server_tsm,
         &notification_transactions,
+        &device_bindings,
         &comm_state,
         &dcc_timer,
         &config,

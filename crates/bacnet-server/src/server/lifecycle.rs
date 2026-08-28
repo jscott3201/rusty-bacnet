@@ -21,12 +21,19 @@ pub(super) fn event_enrollment_period(secs: u64) -> Duration {
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
-    pub(super) async fn start_with_clock_mode(
+    pub(super) async fn start_with_clock_mode_and_bindings(
         mut config: ServerConfig,
         mut db: ObjectDatabase,
         transport: T,
         clock_config: Option<ClockConfig>,
+        configured_device_bindings: Vec<DeviceBinding>,
     ) -> Result<Self, Error> {
+        // Validate every configured route against the concrete transport before
+        // mutating the database or starting network work.
+        let device_bindings =
+            DeviceBindingTable::from_configured(configured_device_bindings, |mac| {
+                transport.is_broadcast_mac(mac)
+            })?;
         let transport_max = transport.max_apdu_length() as u32;
         config.max_apdu_length = config.max_apdu_length.min(transport_max);
         let max_apdu = u16::try_from(config.max_apdu_length).map_err(|_| {
@@ -61,6 +68,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let cov_in_flight = Arc::new(Semaphore::new(255));
         let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
         let notification_transactions = NotificationTransactions::new();
+        let device_bindings = Arc::new(RwLock::new(device_bindings));
         let comm_state = Arc::new(AtomicU8::new(0)); // 0 = Enable (default)
         let dcc_timer: Arc<Mutex<Option<JoinHandle<()>>>> = Arc::new(Mutex::new(None));
 
@@ -72,6 +80,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let cov_in_flight_dispatch = Arc::clone(&cov_in_flight);
         let server_tsm_dispatch = Arc::clone(&server_tsm);
         let notification_transactions_dispatch = Arc::clone(&notification_transactions);
+        let device_bindings_dispatch = Arc::clone(&device_bindings);
         let comm_state_dispatch = Arc::clone(&comm_state);
         let dcc_timer_dispatch = Arc::clone(&dcc_timer);
         let config_dispatch = Arc::new(config.clone());
@@ -404,7 +413,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     &seg_send_permits_dispatch,
                                     &cov_in_flight_dispatch,
                                     &server_tsm_dispatch,
-                                    &notification_transactions_dispatch,
+                                                    &notification_transactions_dispatch,
+	                                                    &device_bindings_dispatch,
 	                                                    &comm_state_dispatch,
 	                                                    &dcc_timer_dispatch,
 	                                                    &config_dispatch,
@@ -454,6 +464,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 &cov_in_flight_dispatch,
                                 &server_tsm_dispatch,
                                 &notification_transactions_dispatch,
+                                &device_bindings_dispatch,
                                 &comm_state_dispatch,
                                 &dcc_timer_dispatch,
                                 &config_dispatch,
@@ -531,6 +542,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     Arc::clone(&comm_state),
                     Arc::clone(&server_tsm),
                     Arc::clone(&notification_transactions),
+                    Arc::clone(&device_bindings),
                     ee_period,
                     config.cov_retry_timeout_ms,
                 ),
@@ -585,6 +597,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let comm_state_intrinsic = Arc::clone(&comm_state);
         let server_tsm_intrinsic = Arc::clone(&server_tsm);
         let notification_transactions_intrinsic = Arc::clone(&notification_transactions);
+        let device_bindings_intrinsic = Arc::clone(&device_bindings);
         let intrinsic_retry_ms = config.cov_retry_timeout_ms;
         let intrinsic_reporting_task = Some(tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(1));
@@ -635,12 +648,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     out
                 };
                 for (oid, resolved) in fired {
-                    Self::build_and_send_event_notification(
+                    Self::build_and_send_event_notification_with_bindings(
                         &db_intrinsic,
                         &network_intrinsic,
                         &comm_state_intrinsic,
                         &server_tsm_intrinsic,
                         &notification_transactions_intrinsic,
+                        &device_bindings_intrinsic,
                         &oid,
                         resolved,
                         intrinsic_retry_ms,
@@ -661,6 +675,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             cov_in_flight,
             server_tsm,
             notification_transactions,
+            device_bindings,
             comm_state,
             dcc_timer,
             dispatch_task: Some(dispatch_task),
@@ -794,12 +809,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
 
         // Post-write COV/event trigger, mirroring the network handler's loop.
-        Self::fire_event_notifications(
+        Self::fire_event_notifications_with_bindings(
             &self.db,
             &self.network,
             &self.comm_state,
             &self.server_tsm,
             &self.notification_transactions,
+            &self.device_bindings,
             oid,
             self.config.cov_retry_timeout_ms,
         )

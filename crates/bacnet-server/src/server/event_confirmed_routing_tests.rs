@@ -12,6 +12,7 @@
 //! The tests drive the real distribution path over a recording transport and
 //! feed acks through the same correlation entry point the dispatch loop uses.
 
+use super::device_bindings::DeviceBindingTable;
 use super::event_notifications_tests::local_broadcast_destination;
 use super::event_recipient_routing_tests::{address_recipient, destination_for};
 use super::*;
@@ -21,7 +22,7 @@ use bacnet_objects::event::EventStateChange;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_transport::port::TransportPort;
-use bacnet_types::constructed::BACnetDestination;
+use bacnet_types::constructed::{BACnetDestination, BACnetRecipient};
 use bacnet_types::enums::{EventState, EventType};
 use bytes::Bytes;
 use std::sync::{Arc as StdArc, Mutex as StdMutex};
@@ -69,6 +70,7 @@ struct Harness {
     network: Arc<NetworkLayer<RecordingTransport>>,
     server_tsm: Arc<Mutex<ServerTsm>>,
     notification_transactions: Arc<NotificationTransactions>,
+    device_bindings: Arc<RwLock<DeviceBindingTable>>,
     comm_state: Arc<AtomicU8>,
     broadcasts: StdArc<StdMutex<Vec<Bytes>>>,
     unicasts: StdArc<StdMutex<Vec<(Vec<u8>, Bytes)>>>,
@@ -77,6 +79,14 @@ struct Harness {
 
 impl Harness {
     async fn new(destinations: Vec<BACnetDestination>, retry_timeout_ms: u64) -> Self {
+        Self::new_with_bindings(destinations, retry_timeout_ms, DeviceBindingTable::new()).await
+    }
+
+    async fn new_with_bindings(
+        destinations: Vec<BACnetDestination>,
+        retry_timeout_ms: u64,
+        device_bindings: DeviceBindingTable,
+    ) -> Self {
         let transport = RecordingTransport::default();
         let broadcasts = StdArc::clone(&transport.broadcasts);
         let unicasts = StdArc::clone(&transport.unicasts);
@@ -116,6 +126,7 @@ impl Harness {
             network,
             server_tsm,
             notification_transactions,
+            device_bindings: Arc::new(RwLock::new(device_bindings)),
             comm_state,
             broadcasts,
             unicasts,
@@ -125,12 +136,13 @@ impl Harness {
 
     async fn distribute(&self) {
         let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-        BACnetServer::<RecordingTransport>::build_and_send_event_notification(
+        BACnetServer::<RecordingTransport>::build_and_send_event_notification_with_bindings(
             &self.db,
             &self.network,
             &self.comm_state,
             &self.server_tsm,
             &self.notification_transactions,
+            &self.device_bindings,
             &oid,
             (
                 EventStateChange {
@@ -197,6 +209,7 @@ impl Harness {
             &Arc::new(Semaphore::new(255)),
             &self.server_tsm,
             &self.notification_transactions,
+            &self.device_bindings,
             &self.comm_state,
             &Arc::new(Mutex::new(None::<JoinHandle<()>>)),
             &Arc::new(ServerConfig::default()),
@@ -219,6 +232,56 @@ impl Harness {
         }
         self.notification_transactions.active_count() < active_before
     }
+}
+
+#[tokio::test]
+async fn configured_routed_device_retries_unicast_to_router_and_correlates_by_final_peer() {
+    let identifier = ObjectIdentifier::new(ObjectType::DEVICE, 90).unwrap();
+    let mut bindings = DeviceBindingTable::new();
+    bindings
+        .insert_configured(
+            DeviceBinding::routed(identifier, 1000, RECIPIENT, ROUTER_A).unwrap(),
+            |_| false,
+        )
+        .unwrap();
+    let harness = Harness::new_with_bindings(
+        vec![destination_for(BACnetRecipient::Device(identifier), true)],
+        75,
+        bindings,
+    )
+    .await;
+    harness.distribute().await;
+
+    assert!(harness.broadcast_frames().is_empty());
+    let first = harness.unicast_frames();
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].0.as_slice(), ROUTER_A);
+    let (npdu, request) = decode_confirmed(&first[0].1);
+    let destination = npdu.destination.unwrap();
+    assert_eq!(destination.network, 1000);
+    assert_eq!(destination.mac_address.as_ref() as &[u8], RECIPIENT);
+
+    tokio::time::sleep(Duration::from_millis(190)).await;
+    let retried = harness.unicast_frames();
+    assert!(retried.len() >= 2, "silence triggers a retry");
+    for (router, frame) in &retried {
+        assert_eq!(router.as_slice(), ROUTER_A, "every attempt uses the router");
+        let (npdu, retry) = decode_confirmed(frame);
+        let destination = npdu.destination.unwrap();
+        assert_eq!(destination.network, 1000);
+        assert_eq!(destination.mac_address.as_ref() as &[u8], RECIPIENT);
+        assert_eq!(retry.invoke_id, request.invoke_id);
+    }
+    assert!(
+        harness.broadcast_frames().is_empty(),
+        "retries never broadcast"
+    );
+    assert!(
+        harness
+            .ack_routed(ROUTER_A, 1000, RECIPIENT, request.invoke_id)
+            .await,
+        "terminal correlation uses the final routed peer identity"
+    );
 }
 
 /// Decode a captured frame into its NPDU and the confirmed request inside.

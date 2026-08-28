@@ -88,6 +88,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         cov_in_flight: &Arc<Semaphore>,
         server_tsm: &Arc<Mutex<ServerTsm>>,
         notification_transactions: &Arc<NotificationTransactions>,
+        device_bindings: &Arc<RwLock<DeviceBindingTable>>,
         comm_state: &Arc<AtomicU8>,
         dcc_timer: &Arc<Mutex<Option<JoinHandle<()>>>>,
         config: &Arc<ServerConfig>,
@@ -107,6 +108,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let cov_in_flight = Arc::clone(cov_in_flight);
                 let server_tsm = Arc::clone(server_tsm);
                 let notification_transactions = Arc::clone(notification_transactions);
+                let device_bindings = Arc::clone(device_bindings);
                 let comm_state = Arc::clone(comm_state);
                 let dcc_timer = Arc::clone(dcc_timer);
                 let config = Arc::clone(config);
@@ -122,6 +124,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         &cov_in_flight,
                         &server_tsm,
                         &notification_transactions,
+                        &device_bindings,
                         &comm_state,
                         &dcc_timer,
                         &config,
@@ -139,6 +142,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let config = Arc::clone(config);
                 let clock = clock.clone();
                 let comm_state = Arc::clone(comm_state);
+                let device_bindings = Arc::clone(device_bindings);
                 tokio::spawn(async move {
                     Self::handle_unconfirmed_request(
                         &db,
@@ -146,6 +150,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         &config,
                         clock.as_ref(),
                         &comm_state,
+                        &device_bindings,
                         req,
                         &received,
                     )

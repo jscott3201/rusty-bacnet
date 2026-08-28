@@ -27,6 +27,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         config: &ServerConfig,
         clock: Option<&Arc<ServerClock>>,
         comm_state: &Arc<AtomicU8>,
+        device_bindings: &Arc<RwLock<DeviceBindingTable>>,
         req: UnconfirmedRequestPdu,
         received: &bacnet_network::layer::ReceivedApdu,
     ) {
@@ -36,7 +37,33 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return;
         }
 
-        if req.service_choice == UnconfirmedServiceChoice::WHO_IS {
+        if req.service_choice == UnconfirmedServiceChoice::I_AM {
+            let i_am = match IAmRequest::decode(&req.service_request) {
+                Ok(request) => request,
+                Err(_) => {
+                    debug!("Ignoring malformed I-Am observation");
+                    return;
+                }
+            };
+            let outcome = device_bindings.write().await.observe_i_am_at(
+                i_am.object_identifier,
+                &received.source_mac,
+                received.source_network.as_ref(),
+                Instant::now(),
+                |mac| network.transport().is_broadcast_mac(mac),
+            );
+            match outcome {
+                device_bindings::ObservationOutcome::RejectedInvalid => {
+                    debug!("Ignoring unusable I-Am observation");
+                }
+                device_bindings::ObservationOutcome::RejectedCapacity => {
+                    warn!("Device binding capacity reached; I-Am observation ignored");
+                }
+                device_bindings::ObservationOutcome::Inserted
+                | device_bindings::ObservationOutcome::Refreshed
+                | device_bindings::ObservationOutcome::ConfiguredPreserved => {}
+            }
+        } else if req.service_choice == UnconfirmedServiceChoice::WHO_IS {
             let who_is = match WhoIsRequest::decode(&req.service_request) {
                 Ok(r) => r,
                 Err(e) => {

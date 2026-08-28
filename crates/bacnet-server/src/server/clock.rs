@@ -55,6 +55,16 @@ impl Default for ClockConfig {
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
+    pub(super) async fn start_with_clock_mode(
+        config: ServerConfig,
+        db: ObjectDatabase,
+        transport: T,
+        clock_config: Option<ClockConfig>,
+    ) -> Result<Self, Error> {
+        Self::start_with_clock_mode_and_bindings(config, db, transport, clock_config, Vec::new())
+            .await
+    }
+
     /// Start with the default system-UTC Device clock.
     pub async fn start(
         config: ServerConfig,

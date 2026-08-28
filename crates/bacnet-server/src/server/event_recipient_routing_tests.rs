@@ -28,7 +28,7 @@ use tokio::sync::mpsc;
 /// local unicast reaches whichever device happens to hold that MAC on this link,
 /// which is the failure this module exists to catch.
 #[derive(Clone, Default)]
-struct RoutingTransport {
+pub(super) struct RoutingTransport {
     broadcasts: StdArc<StdMutex<Vec<Bytes>>>,
     unicasts: StdArc<StdMutex<Vec<(Vec<u8>, Bytes)>>>,
 }
@@ -122,7 +122,20 @@ async fn distribute_with_clock_mode(
     distribute_from_database(db).await
 }
 
-async fn distribute_from_database(mut db: ObjectDatabase) -> (Vec<Bytes>, Vec<(Vec<u8>, Bytes)>) {
+async fn distribute_from_database(db: ObjectDatabase) -> (Vec<Bytes>, Vec<(Vec<u8>, Bytes)>) {
+    distribute_from_database_with_bindings(
+        db,
+        Arc::new(RwLock::new(
+            super::device_bindings::DeviceBindingTable::new(),
+        )),
+    )
+    .await
+}
+
+pub(super) async fn distribute_from_database_with_bindings(
+    mut db: ObjectDatabase,
+    device_bindings: Arc<RwLock<super::device_bindings::DeviceBindingTable>>,
+) -> (Vec<Bytes>, Vec<(Vec<u8>, Bytes)>) {
     let transport = RoutingTransport::default();
     let broadcasts = StdArc::clone(&transport.broadcasts);
     let unicasts = StdArc::clone(&transport.unicasts);
@@ -151,12 +164,13 @@ async fn distribute_from_database(mut db: ObjectDatabase) -> (Vec<Bytes>, Vec<(V
 
     let db = Arc::new(RwLock::new(db));
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-    BACnetServer::<RoutingTransport>::build_and_send_event_notification(
+    BACnetServer::<RoutingTransport>::build_and_send_event_notification_with_bindings(
         &db,
         &network,
         &comm_state,
         &server_tsm,
         &NotificationTransactions::new(),
+        &device_bindings,
         &oid,
         (
             EventStateChange {

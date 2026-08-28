@@ -98,6 +98,38 @@ fn all_builders_assign_life_safety_operation_authorizer() {
     }
 }
 
+#[test]
+fn all_builders_register_the_same_validated_device_binding_surface() {
+    let identifier = ObjectIdentifier::new(ObjectType::DEVICE, 44).unwrap();
+    let binding = DeviceBinding::local(identifier, [1, 2, 3]).unwrap();
+
+    let generic = BACnetServer::<BipTransport>::generic_builder()
+        .device_binding(binding.clone())
+        .unwrap();
+    assert_eq!(generic.configured_device_bindings.len(), 1);
+
+    let bip = BACnetServer::<BipTransport>::bip_builder()
+        .device_binding(binding.clone())
+        .unwrap();
+    assert_eq!(bip.configured_device_bindings.len(), 1);
+
+    #[cfg(feature = "sc-tls")]
+    {
+        let sc = BACnetServer::sc_builder().device_binding(binding).unwrap();
+        assert_eq!(sc.configured_device_bindings.len(), 1);
+    }
+}
+
+#[test]
+fn builder_rejects_duplicate_configured_device_before_start() {
+    let identifier = ObjectIdentifier::new(ObjectType::DEVICE, 45).unwrap();
+    let binding = DeviceBinding::local(identifier, [1, 2, 3]).unwrap();
+    let builder = BACnetServer::<BipTransport>::generic_builder()
+        .device_binding(binding.clone())
+        .unwrap();
+    assert!(builder.device_binding(binding).is_err());
+}
+
 // -----------------------------------------------------------------------
 // Event Enrollment lifecycle configuration (issue #133)
 // -----------------------------------------------------------------------
@@ -573,6 +605,7 @@ async fn reply_tx_response_preserves_routed_npdu_destination() {
     let cov_in_flight = Arc::new(Semaphore::new(1));
     let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
     let notification_transactions = NotificationTransactions::new();
+    let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
     let comm_state = Arc::new(AtomicU8::new(0));
     let dcc_timer = Arc::new(Mutex::new(None::<JoinHandle<()>>));
     let config = ServerConfig::default();
@@ -604,6 +637,7 @@ async fn reply_tx_response_preserves_routed_npdu_destination() {
         &cov_in_flight,
         &server_tsm,
         &notification_transactions,
+        &device_bindings,
         &comm_state,
         &dcc_timer,
         &config,
