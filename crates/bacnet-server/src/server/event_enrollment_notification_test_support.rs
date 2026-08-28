@@ -59,7 +59,7 @@ pub(super) struct ObservedObject {
     oid: ObjectIdentifier,
     name: String,
     value: PropertyValue,
-    reliability: Reliability,
+    reliability: PropertyValue,
     status_flags: u8,
 }
 
@@ -69,12 +69,17 @@ impl ObservedObject {
             oid: ObjectIdentifier::new(ObjectType::ANALOG_VALUE, instance).unwrap(),
             name: format!("observed-{instance}"),
             value,
-            reliability: Reliability::NO_FAULT_DETECTED,
+            reliability: PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw()),
             status_flags: 0,
         }
     }
 
     pub(super) fn with_reliability(mut self, reliability: Reliability) -> Self {
+        self.reliability = PropertyValue::Enumerated(reliability.to_raw());
+        self
+    }
+
+    pub(super) fn with_reliability_value(mut self, reliability: PropertyValue) -> Self {
         self.reliability = reliability;
         self
     }
@@ -110,9 +115,7 @@ impl BACnetObject for ObservedObject {
                 Ok(PropertyValue::Enumerated(ObjectType::ANALOG_VALUE.to_raw()))
             }
             p if p == PropertyIdentifier::PRESENT_VALUE => Ok(self.value.clone()),
-            p if p == PropertyIdentifier::RELIABILITY => {
-                Ok(PropertyValue::Enumerated(self.reliability.to_raw()))
-            }
+            p if p == PropertyIdentifier::RELIABILITY => Ok(self.reliability.clone()),
             p if p == PropertyIdentifier::STATUS_FLAGS => Ok(PropertyValue::BitString {
                 unused_bits: 4,
                 data: vec![self.status_flags],
@@ -133,8 +136,11 @@ impl BACnetObject for ObservedObject {
     ) -> Result<(), Error> {
         match (property, value) {
             (p, value) if p == PropertyIdentifier::PRESENT_VALUE => self.value = value,
-            (p, PropertyValue::Enumerated(raw)) if p == PropertyIdentifier::RELIABILITY => {
-                self.reliability = Reliability::from_raw(raw);
+            (p, value) if p == PropertyIdentifier::RELIABILITY => self.reliability = value,
+            (p, PropertyValue::BitString { data, .. })
+                if p == PropertyIdentifier::STATUS_FLAGS && data.len() == 1 =>
+            {
+                self.status_flags = data[0];
             }
             _ => {
                 return Err(Error::Protocol {
@@ -281,6 +287,43 @@ pub(super) fn history_timestamp(
     let (timestamp, consumed) = decode_timestamp_choice(&bytes, 0).unwrap();
     assert_eq!(consumed, bytes.len());
     timestamp
+}
+
+pub(super) fn assert_committed_reliability_notifications(
+    db: &ObjectDatabase,
+    notifications: &[EventNotificationRequest],
+    expected_instances: &[u32],
+    from: EventState,
+    to: EventState,
+    first_sequence: u16,
+) {
+    assert_eq!(notifications.len(), expected_instances.len());
+    assert_eq!(
+        notifications
+            .iter()
+            .map(|notification| notification.event_object_identifier.instance_number())
+            .collect::<Vec<_>>(),
+        expected_instances
+    );
+    for (offset, notification) in notifications.iter().enumerate() {
+        assert_eq!(
+            notification.event_type,
+            EventType::CHANGE_OF_RELIABILITY.to_raw()
+        );
+        assert_eq!(notification.from_state, from.to_raw());
+        assert_eq!(notification.to_state, to.to_raw());
+        assert!(notification.ack_required);
+        assert_eq!(notification.message_text, None);
+        assert_eq!(notification.event_values, None);
+        assert_eq!(
+            notification.timestamp,
+            BACnetTimeStamp::SequenceNumber(first_sequence + offset as u16)
+        );
+        assert_eq!(
+            notification.timestamp,
+            history_timestamp(db, notification.event_object_identifier, to)
+        );
+    }
 }
 
 pub(super) fn event_state(db: &ObjectDatabase, oid: ObjectIdentifier) -> EventState {

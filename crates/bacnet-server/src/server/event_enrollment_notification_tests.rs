@@ -254,10 +254,14 @@ async fn event_enrollment_ack_policy_is_the_commit_time_snapshot() {
 async fn reliability_producers_and_fault_cycle_deliver_change_of_reliability() {
     let mut db = ObjectDatabase::new();
 
+    let configuration_target = ObservedObject::new(10, PropertyValue::Real(50.0))
+        .with_reliability_value(PropertyValue::Real(0.0));
+    let configuration_target_oid = configuration_target.object_identifier();
+    db.add(Box::new(configuration_target)).unwrap();
     db.add(Box::new(enrollment(
         10,
-        EventType::OUT_OF_RANGE,
-        None,
+        EventType::NONE,
+        Some(configuration_target_oid),
         out_of_range_parameters(0),
     )))
     .unwrap();
@@ -268,7 +272,7 @@ async fn reliability_producers_and_fault_cycle_deliver_change_of_reliability() {
     db.add(Box::new(monitored)).unwrap();
     db.add(Box::new(enrollment(
         11,
-        EventType::OUT_OF_RANGE,
+        EventType::NONE,
         Some(monitored_oid),
         out_of_range_parameters(0),
     )))
@@ -282,7 +286,7 @@ async fn reliability_producers_and_fault_cycle_deliver_change_of_reliability() {
     db.add(Box::new(status_member)).unwrap();
     let mut status_enrollment = enrollment(
         12,
-        EventType::OUT_OF_RANGE,
+        EventType::NONE,
         Some(status_source_oid),
         out_of_range_parameters(0),
     );
@@ -299,9 +303,14 @@ async fn reliability_producers_and_fault_cycle_deliver_change_of_reliability() {
     db.add(Box::new(fault_target)).unwrap();
     let mut fault_enrollment = enrollment(
         13,
-        EventType::OUT_OF_RANGE,
+        EventType::NONE,
         Some(fault_target_oid),
-        out_of_range_parameters(0),
+        BACnetEventParameter::OutOfRange {
+            time_delay: 0,
+            low_limit: -100.0,
+            high_limit: 100.0,
+            deadband: 2.0,
+        },
     );
     fault_enrollment.set_fault_parameters(Some(FaultParameters::FaultOutOfRange {
         min_normal: 0.0,
@@ -312,69 +321,121 @@ async fn reliability_producers_and_fault_cycle_deliver_change_of_reliability() {
     let (mut server, sent) = start_server(db, true).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     let entries = drain_notifications(&sent);
-    assert_eq!(entries.len(), 4);
-    assert!(entries.iter().all(|notification| {
-        notification.event_type == EventType::CHANGE_OF_RELIABILITY.to_raw()
-            && notification.from_state == EventState::NORMAL.to_raw()
-            && notification.to_state == EventState::FAULT.to_raw()
-    }));
+    {
+        let db = server.database().read().await;
+        assert_committed_reliability_notifications(
+            &db,
+            &entries,
+            &[10, 11, 12, 13],
+            EventState::NORMAL,
+            EventState::FAULT,
+            0,
+        );
+    }
 
-    server
-        .database()
-        .write()
-        .await
-        .get_mut(&fault_target_oid)
-        .unwrap()
-        .write_property(
-            PropertyIdentifier::PRESENT_VALUE,
-            None,
-            PropertyValue::Real(11.0),
-            None,
-        )
-        .unwrap();
+    {
+        let mut db = server.database().write().await;
+        db.get_mut(&monitored_oid)
+            .unwrap()
+            .write_property(
+                PropertyIdentifier::RELIABILITY,
+                None,
+                PropertyValue::Enumerated(Reliability::UNDER_RANGE.to_raw()),
+                None,
+            )
+            .unwrap();
+        db.get_mut(&fault_target_oid)
+            .unwrap()
+            .write_property(
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+                PropertyValue::Real(11.0),
+                None,
+            )
+            .unwrap();
+    }
     tokio::time::sleep(Duration::from_secs(1)).await;
     let reentry = drain_notifications(&sent);
-    assert_eq!(reentry.len(), 1);
-    assert_eq!(
-        (
-            reentry[0].event_type,
-            reentry[0].from_state,
-            reentry[0].to_state
-        ),
-        (
-            EventType::CHANGE_OF_RELIABILITY.to_raw(),
-            EventState::FAULT.to_raw(),
-            EventState::FAULT.to_raw(),
-        )
-    );
+    {
+        let db = server.database().read().await;
+        assert_committed_reliability_notifications(
+            &db,
+            &reentry,
+            &[13],
+            EventState::FAULT,
+            EventState::FAULT,
+            4,
+        );
+    }
 
-    server
-        .database()
-        .write()
-        .await
-        .get_mut(&fault_target_oid)
-        .unwrap()
-        .write_property(
-            PropertyIdentifier::PRESENT_VALUE,
-            None,
-            PropertyValue::Real(5.0),
-            None,
-        )
-        .unwrap();
+    {
+        let mut db = server.database().write().await;
+        db.get_mut(&configuration_target_oid)
+            .unwrap()
+            .write_property(
+                PropertyIdentifier::RELIABILITY,
+                None,
+                PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw()),
+                None,
+            )
+            .unwrap();
+        db.get_mut(&monitored_oid)
+            .unwrap()
+            .write_property(
+                PropertyIdentifier::RELIABILITY,
+                None,
+                PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw()),
+                None,
+            )
+            .unwrap();
+        db.get_mut(&status_member_oid)
+            .unwrap()
+            .write_property(
+                PropertyIdentifier::STATUS_FLAGS,
+                None,
+                PropertyValue::BitString {
+                    unused_bits: 4,
+                    data: vec![0],
+                },
+                None,
+            )
+            .unwrap();
+        db.get_mut(&fault_target_oid)
+            .unwrap()
+            .write_property(
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+                PropertyValue::Real(5.0),
+                None,
+            )
+            .unwrap();
+    }
     tokio::time::sleep(Duration::from_secs(1)).await;
     let recovery = drain_notifications(&sent);
-    assert_eq!(recovery.len(), 1);
+    {
+        let db = server.database().read().await;
+        assert_committed_reliability_notifications(
+            &db,
+            &recovery,
+            &[10, 11, 12, 13],
+            EventState::FAULT,
+            EventState::NORMAL,
+            5,
+        );
+    }
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let repeated = drain_notifications(&sent);
+    assert!(repeated.is_empty(), "unexpected repeat: {repeated:?}");
     assert_eq!(
-        (
-            recovery[0].event_type,
-            recovery[0].from_state,
-            recovery[0].to_state
-        ),
-        (
-            EventType::CHANGE_OF_RELIABILITY.to_raw(),
-            EventState::FAULT.to_raw(),
-            EventState::NORMAL.to_raw(),
-        )
+        server
+            .database()
+            .write()
+            .await
+            .reserve_event_sequence_number()
+            .number(),
+        9,
+        "delivery must not allocate a second timestamp or repeat on the next pass"
     );
     server.stop().await.unwrap();
 }

@@ -209,6 +209,7 @@ pub(super) fn resolve_committed_event_enrollment_transition(
                 EventType::CHANGE_OF_STATE,
                 EventType::CHANGE_OF_BITSTRING,
                 EventType::CHANGE_OF_VALUE,
+                EventType::NONE,
             ]
             .contains(&configured_event_type)
             {
