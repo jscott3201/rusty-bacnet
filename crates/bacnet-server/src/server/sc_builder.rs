@@ -136,6 +136,10 @@ impl ScServerBuilder {
         BACnetServer<bacnet_transport::sc::ScTransport<bacnet_transport::sc_tls::TlsWebSocket>>,
         Error,
     > {
+        DeviceBindingTable::from_configured(self.configured_device_bindings.clone(), |mac| {
+            mac == bacnet_transport::sc_frame::BROADCAST_VMAC
+        })?;
+
         let tls_config = self
             .tls_config
             .ok_or_else(|| Error::Encoding("SC server builder: tls_config is required".into()))?;

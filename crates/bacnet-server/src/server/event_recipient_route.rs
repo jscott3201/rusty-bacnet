@@ -1,4 +1,4 @@
-use super::device_bindings::DeviceResolution;
+use super::device_bindings::{BindingFreshness, DeviceResolution};
 use super::*;
 use bacnet_types::constructed::BACnetAddress;
 
@@ -7,6 +7,10 @@ const GLOBAL_BROADCAST_NETWORK: u16 = 0xFFFF;
 /// The transport action selected for one matched Notification Class recipient.
 pub(super) enum RecipientRoute {
     LocalUnicast(MacAddr),
+    BoundLocalUnicast {
+        mac: MacAddr,
+        freshness: BindingFreshness,
+    },
     LocalBroadcast,
     RemoteBroadcast(u16),
     GlobalBroadcast,
@@ -20,11 +24,19 @@ pub(super) enum RecipientRoute {
         network: u16,
         mac: MacAddr,
         router: MacAddr,
+        freshness: BindingFreshness,
     },
     ContradictoryGlobal,
     UnknownDevice,
     StaleDevice,
     InvalidDevice,
+}
+
+pub(super) struct ConfirmedRecipientRoute {
+    pub(super) canonical_peer: bacnet_endpoint_core::coordinator::CanonicalPeer,
+    pub(super) local_target: Option<MacAddr>,
+    pub(super) remote: Option<(u16, MacAddr, Option<MacAddr>)>,
+    pub(super) freshness: Option<BindingFreshness>,
 }
 
 impl RecipientRoute {
@@ -49,15 +61,23 @@ impl RecipientRoute {
 
     pub(super) fn from_device_resolution(resolution: DeviceResolution) -> Self {
         match resolution {
-            DeviceResolution::ResolvedLocal { peer_mac } => Self::LocalUnicast(peer_mac),
+            DeviceResolution::ResolvedLocal {
+                peer_mac,
+                freshness,
+            } => Self::BoundLocalUnicast {
+                mac: peer_mac,
+                freshness,
+            },
             DeviceResolution::ResolvedRouted {
                 network,
                 final_mac,
                 router_mac,
+                freshness,
             } => Self::BoundRoutedUnicast {
                 network,
                 mac: final_mac,
                 router: router_mac,
+                freshness,
             },
             DeviceResolution::Unknown => Self::UnknownDevice,
             DeviceResolution::Stale => Self::StaleDevice,
@@ -68,14 +88,54 @@ impl RecipientRoute {
     pub(super) fn permits_confirmed(&self) -> bool {
         matches!(
             self,
-            Self::LocalUnicast(_) | Self::RemoteUnicast { .. } | Self::BoundRoutedUnicast { .. }
+            Self::LocalUnicast(_)
+                | Self::BoundLocalUnicast { .. }
+                | Self::RemoteUnicast { .. }
+                | Self::BoundRoutedUnicast { .. }
         )
+    }
+
+    pub(super) fn into_confirmed(self) -> Option<ConfirmedRecipientRoute> {
+        let (canonical_peer, local_target, remote, freshness) = match self {
+            Self::LocalUnicast(mac) => (canonical_direct_peer(&mac), Some(mac), None, None),
+            Self::BoundLocalUnicast { mac, freshness } => (
+                canonical_direct_peer(&mac),
+                Some(mac),
+                None,
+                Some(freshness),
+            ),
+            Self::RemoteUnicast { network, mac } => (
+                canonical_routed_peer(network, &mac),
+                None,
+                Some((network, mac, None)),
+                None,
+            ),
+            Self::BoundRoutedUnicast {
+                network,
+                mac,
+                router,
+                freshness,
+            } => (
+                canonical_routed_peer(network, &mac),
+                None,
+                Some((network, mac, Some(router))),
+                Some(freshness),
+            ),
+            _ => return None,
+        };
+        Some(ConfirmedRecipientRoute {
+            canonical_peer,
+            local_target,
+            remote,
+            freshness,
+        })
     }
 
     /// Log only bounded classification data for unusable recipients.
     pub(super) fn is_deliverable(&self, notification_class: u32) -> bool {
         match self {
             Self::LocalUnicast(_)
+            | Self::BoundLocalUnicast { .. }
             | Self::LocalBroadcast
             | Self::RemoteBroadcast(_)
             | Self::GlobalBroadcast

@@ -104,15 +104,32 @@ pub(super) fn register_configured_binding(
 pub(super) enum DeviceResolution {
     ResolvedLocal {
         peer_mac: MacAddr,
+        freshness: BindingFreshness,
     },
     ResolvedRouted {
         network: u16,
         final_mac: MacAddr,
         router_mac: MacAddr,
+        freshness: BindingFreshness,
     },
     Unknown,
     Stale,
     Invalid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum BindingFreshness {
+    Configured,
+    ObservedUntil(tokio::time::Instant),
+}
+
+impl BindingFreshness {
+    pub(super) fn permits_attempt_at(self, now: tokio::time::Instant) -> bool {
+        match self {
+            Self::Configured => true,
+            Self::ObservedUntil(deadline) => now < deadline,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -254,8 +271,8 @@ impl DeviceBindingTable {
         if device.object_type() != ObjectType::DEVICE {
             return DeviceResolution::Invalid;
         }
-        let target = match self.entries.get(device) {
-            Some(BindingEntry::Configured(target)) => target,
+        let (target, freshness) = match self.entries.get(device) {
+            Some(BindingEntry::Configured(target)) => (target, BindingFreshness::Configured),
             Some(BindingEntry::Observed {
                 target,
                 observed_at,
@@ -263,7 +280,12 @@ impl DeviceBindingTable {
                 if now.saturating_duration_since(*observed_at) >= OBSERVED_BINDING_TTL {
                     return DeviceResolution::Stale;
                 }
-                target
+                (
+                    target,
+                    BindingFreshness::ObservedUntil(tokio::time::Instant::from_std(
+                        *observed_at + OBSERVED_BINDING_TTL,
+                    )),
+                )
             }
             None => return DeviceResolution::Unknown,
         };
@@ -273,6 +295,7 @@ impl DeviceBindingTable {
         match target {
             DeviceBindingTarget::Local { peer_mac } => DeviceResolution::ResolvedLocal {
                 peer_mac: peer_mac.clone(),
+                freshness,
             },
             DeviceBindingTarget::Routed {
                 network,
@@ -282,6 +305,7 @@ impl DeviceBindingTable {
                 network: *network,
                 final_mac: final_mac.clone(),
                 router_mac: router_mac.clone(),
+                freshness,
             },
         }
     }

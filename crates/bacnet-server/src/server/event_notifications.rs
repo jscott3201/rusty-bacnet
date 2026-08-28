@@ -1,4 +1,4 @@
-use super::event_recipient_route::RecipientRoute;
+use super::event_recipient_route::{ConfirmedRecipientRoute, RecipientRoute};
 use super::event_timestamp::{
     confirm_event_timestamp, sample_event_timestamp, stage_event_timestamp, SampledEventClock,
 };
@@ -619,39 +619,20 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let service_bytes = service_buf.freeze();
 
             if *confirmed {
-                // `permits_confirmed` above admits only unicast route shapes.
-                // If that predicate ever widens without this arm
-                // learning the new route, fail loudly instead of dropping
-                // the notification with no diagnostic.
-                //
-                let (canonical_peer, local_target, remote) = match &route {
-                    RecipientRoute::LocalUnicast(target_mac) => (
-                        canonical_direct_peer(target_mac),
-                        Some(target_mac.clone()),
-                        None,
-                    ),
-                    RecipientRoute::RemoteUnicast { network, mac } => (
-                        canonical_routed_peer(*network, mac),
-                        None,
-                        Some((*network, mac.clone(), None)),
-                    ),
-                    RecipientRoute::BoundRoutedUnicast {
-                        network,
-                        mac,
-                        router,
-                    } => (
-                        canonical_routed_peer(*network, mac),
-                        None,
-                        Some((*network, mac.clone(), Some(router.clone()))),
-                    ),
-                    _ => {
-                        warn!(
-                            notification_class,
-                            "Confirmed notification reached the send path on a \
-                             non-unicast route; dropping"
-                        );
-                        continue;
-                    }
+                // Convert only the unicast route shapes admitted above and
+                // fail closed if the route classification changes.
+                let Some(ConfirmedRecipientRoute {
+                    canonical_peer,
+                    local_target,
+                    remote,
+                    freshness,
+                }) = route.into_confirmed()
+                else {
+                    warn!(
+                        notification_class,
+                        "Confirmed notification route is unusable"
+                    );
+                    continue;
                 };
                 let (operation, result_rx) = match notification_transactions.reserve(
                     canonical_peer,
@@ -698,6 +679,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             let local_target = local_target.clone();
                             let remote = remote.clone();
                             async move {
+                                if freshness.is_some_and(|freshness| {
+                                    !freshness.permits_attempt_at(tokio::time::Instant::now())
+                                }) {
+                                    debug!(
+                                        invoke_id = id,
+                                        attempt,
+                                        "Observed Device binding expired before notification attempt"
+                                    );
+                                    return Err(());
+                                }
                                 let send_result = match (local_target, remote) {
                                     (Some(target), None) => {
                                         network
@@ -705,9 +696,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                             .await
                                     }
                                     (None, Some((dnet, dadr, configured_router))) => {
-                                        // A configured Device route keeps its fixed
-                                        // next hop for every attempt. Address recipients
-                                        // retain the learned-router/broadcast behavior.
+                                        // A Device binding keeps its fixed next hop for
+                                        // each permitted attempt. Address recipients retain
+                                        // the learned-router/broadcast behavior.
                                         let router = match configured_router {
                                             Some(router) => Some(router),
                                             None if attempt == 0 => {
@@ -753,7 +744,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                         attempt, "Confirmed EventNotification send failed"
                                     ),
                                 }
-                                send_result
+                                send_result.map_err(|_| ())
                             }
                         },
                     )
@@ -783,6 +774,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
                 let send_result = match &route {
                     RecipientRoute::LocalUnicast(mac) => {
+                        network.send_apdu(&buf, mac, false, network_priority).await
+                    }
+                    RecipientRoute::BoundLocalUnicast { mac, .. } => {
                         network.send_apdu(&buf, mac, false, network_priority).await
                     }
                     RecipientRoute::LocalBroadcast => {
@@ -821,6 +815,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         network: net,
                         mac,
                         router,
+                        ..
                     } => {
                         network
                             .send_apdu_routed(&buf, *net, mac, router, false, network_priority)

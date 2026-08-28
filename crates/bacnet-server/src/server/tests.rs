@@ -130,6 +130,23 @@ fn builder_rejects_duplicate_configured_device_before_start() {
     assert!(builder.device_binding(binding).is_err());
 }
 
+#[cfg(feature = "sc-tls")]
+#[tokio::test]
+async fn sc_builder_rejects_broadcast_binding_before_tls_prerequisites() {
+    let identifier = ObjectIdentifier::new(ObjectType::DEVICE, 46).unwrap();
+    let binding =
+        DeviceBinding::local(identifier, bacnet_transport::sc_frame::BROADCAST_VMAC).unwrap();
+    let builder = BACnetServer::sc_builder().device_binding(binding).unwrap();
+
+    let Err(error) = builder.build().await else {
+        panic!("invalid SC binding unexpectedly started a server");
+    };
+    assert!(
+        error.to_string().contains("broadcast address"),
+        "binding validation must precede TLS prerequisites: {error}"
+    );
+}
+
 // -----------------------------------------------------------------------
 // Event Enrollment lifecycle configuration (issue #133)
 // -----------------------------------------------------------------------

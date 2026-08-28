@@ -12,7 +12,7 @@
 //! The tests drive the real distribution path over a recording transport and
 //! feed acks through the same correlation entry point the dispatch loop uses.
 
-use super::device_bindings::DeviceBindingTable;
+use super::device_bindings::{DeviceBindingTable, OBSERVED_BINDING_TTL};
 use super::event_notifications_tests::local_broadcast_destination;
 use super::event_recipient_routing_tests::{address_recipient, destination_for};
 use super::*;
@@ -282,6 +282,41 @@ async fn configured_routed_device_retries_unicast_to_router_and_correlates_by_fi
             .await,
         "terminal correlation uses the final routed peer identity"
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn observed_routed_device_stops_emitting_when_retry_reaches_expiry() {
+    let identifier = ObjectIdentifier::new(ObjectType::DEVICE, 91).unwrap();
+    let mut bindings = DeviceBindingTable::new();
+    let observed_at = Instant::now() - OBSERVED_BINDING_TTL + Duration::from_millis(500);
+    let source = NpduAddress {
+        network: 1001,
+        mac_address: MacAddr::from_slice(RECIPIENT),
+    };
+    assert_eq!(
+        bindings.observe_i_am_at(identifier, ROUTER_A, Some(&source), observed_at, |_| false),
+        super::device_bindings::ObservationOutcome::Inserted
+    );
+    let harness = Harness::new_with_bindings(
+        vec![destination_for(BACnetRecipient::Device(identifier), true)],
+        1_000,
+        bindings,
+    )
+    .await;
+    harness.distribute().await;
+
+    assert_eq!(harness.unicast_frames().len(), 1);
+    tokio::time::advance(Duration::from_secs(1)).await;
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+
+    assert_eq!(
+        harness.unicast_frames().len(),
+        1,
+        "an observed route cannot emit at or after its expiry boundary"
+    );
+    assert!(harness.broadcast_frames().is_empty());
 }
 
 /// Decode a captured frame into its NPDU and the confirmed request inside.

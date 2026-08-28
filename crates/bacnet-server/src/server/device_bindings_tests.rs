@@ -1,6 +1,6 @@
 use super::device_bindings::{
-    DeviceBindingTable, DeviceResolution, ObservationOutcome, MAX_DEVICE_BINDINGS,
-    OBSERVED_BINDING_TTL,
+    BindingFreshness, DeviceBindingTable, DeviceResolution, ObservationOutcome,
+    MAX_DEVICE_BINDINGS, OBSERVED_BINDING_TTL,
 };
 use super::*;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
@@ -89,6 +89,7 @@ fn configured_precedence_and_observed_refresh_expiry_are_deterministic() {
         table.resolve_at(&configured_device, now, no_broadcast),
         DeviceResolution::ResolvedLocal {
             peer_mac: MacAddr::from_slice(LOCAL_PEER),
+            freshness: BindingFreshness::Configured,
         }
     );
 
@@ -115,6 +116,9 @@ fn configured_precedence_and_observed_refresh_expiry_are_deterministic() {
         ),
         DeviceResolution::ResolvedLocal {
             peer_mac: MacAddr::from_slice(UPDATED_PEER),
+            freshness: BindingFreshness::ObservedUntil(tokio::time::Instant::from_std(
+                refreshed_at + OBSERVED_BINDING_TTL,
+            )),
         }
     );
     assert_eq!(
@@ -243,6 +247,7 @@ fn capacity_rejection_stale_reclamation_and_configured_retention_are_bounded() {
         reclaiming.resolve_at(&configured_device, after_expiry, no_broadcast),
         DeviceResolution::ResolvedLocal {
             peer_mac: MacAddr::from_slice(UPDATED_PEER),
+            freshness: BindingFreshness::Configured,
         },
         "configured rows never expire or get evicted"
     );
@@ -349,20 +354,22 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
 
     let now = Instant::now();
     let table = bindings.read().await;
-    assert_eq!(
+    assert!(matches!(
         table.resolve_at(&local_device, now, test_broadcast),
         DeviceResolution::ResolvedLocal {
-            peer_mac: MacAddr::from_slice(LOCAL_PEER),
-        }
-    );
-    assert_eq!(
+            peer_mac,
+            freshness: BindingFreshness::ObservedUntil(_),
+        } if peer_mac.as_slice() == LOCAL_PEER
+    ));
+    assert!(matches!(
         table.resolve_at(&routed_device, now, test_broadcast),
         DeviceResolution::ResolvedRouted {
             network: 200,
-            final_mac: MacAddr::from_slice(FINAL_PEER),
-            router_mac: MacAddr::from_slice(ROUTER),
-        }
-    );
+            final_mac,
+            router_mac,
+            freshness: BindingFreshness::ObservedUntil(_),
+        } if final_mac.as_slice() == FINAL_PEER && router_mac.as_slice() == ROUTER
+    ));
     drop(table);
 
     BACnetServer::<PassiveTransport>::handle_unconfirmed_request(
@@ -416,16 +423,16 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
     )
     .await;
     assert_eq!(bindings.read().await.len(), 2, "DCC also blocks insertion");
-    assert_eq!(
+    assert!(matches!(
         bindings
             .read()
             .await
             .resolve_at(&local_device, Instant::now(), test_broadcast),
         DeviceResolution::ResolvedLocal {
-            peer_mac: MacAddr::from_slice(LOCAL_PEER),
-        },
-        "DCC-disabled traffic cannot refresh the observed row"
-    );
+            peer_mac,
+            freshness: BindingFreshness::ObservedUntil(_),
+        } if peer_mac.as_slice() == LOCAL_PEER
+    ));
 }
 
 #[derive(Clone)]
