@@ -520,44 +520,21 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         };
 
         let event_enrollment_task = if config.enable_event_enrollment {
-            let db_ee = Arc::clone(&db);
             let ee_period = event_enrollment_period(config.event_enrollment_interval_secs);
             // The delay countdown converts seconds to passes with
             // `ceil(delay / period)`, so the evaluator needs the actual,
             // clamped interval — not the raw config value.
-            let ee_interval_secs = ee_period.as_secs().max(1);
-            Some(tokio::spawn(async move {
-                let mut interval = tokio::time::interval(ee_period);
-                // A stalled runtime must not fire a burst of catch-up passes; the
-                // adjacent intrinsic-reporting task sets this for the same reason.
-                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                loop {
-                    interval.tick().await;
-                    let mut db_guard = db_ee.write().await;
-                    let report =
-                        crate::event_enrollment::evaluate_event_enrollments_detailed_report(
-                            &mut db_guard,
-                            ee_interval_secs,
-                        );
-                    for t in &report.transitions {
-                        // `distribute` is logged rather than acted on: this task
-                        // records Event_State but does not yet emit
-                        // EventNotifications (#127). Surfacing it keeps an
-                        // Event_Enable-suppressed transition visible to an
-                        // operator, who would otherwise see the state move with
-                        // no notification and no explanation.
-                        debug!(
-                            enrollment = %t.enrollment_oid,
-                            monitored = %t.monitored_oid,
-                            from = ?t.change.from,
-                            to = ?t.change.to,
-                            distribute = t.distribute,
-                            "Event enrollment: state changed"
-                        );
-                    }
-                    crate::event_enrollment::log_evaluation_report(&report);
-                }
-            }))
+            Some(
+                super::event_enrollment_lifecycle::spawn_event_enrollment_task(
+                    Arc::clone(&db),
+                    Arc::clone(&network),
+                    Arc::clone(&comm_state),
+                    Arc::clone(&server_tsm),
+                    Arc::clone(&notification_transactions),
+                    ee_period,
+                    config.cov_retry_timeout_ms,
+                ),
+            )
         } else {
             None
         };

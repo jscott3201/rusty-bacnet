@@ -35,9 +35,9 @@
 //! Class's `Ack_Required` (Clause 13.2.3), and the transition is emitted with
 //! its `Event_Enable`-scoped `distribute` flag. What is NOT here, by design:
 //! `Event_Time_Stamps` is committed atomically with `Event_State` and
-//! `Acked_Transitions`; `Event_Message_Texts` remains absent, and no
-//! notification is sent (#127) — the lifecycle task logs committed
-//! transitions and internal commit failures.
+//! `Acked_Transitions`; `Event_Message_Texts` remains intentionally absent.
+//! The server lifecycle projects successful commits into its shared
+//! notification sender without repeating these transition actions.
 
 mod algorithms;
 mod commit;
@@ -64,8 +64,14 @@ use algorithms::{
     eval_floating_limit_struct, eval_legacy_le_arm, eval_out_of_range_struct, extract_bitstring,
     extract_property_state_value, extract_real, ArmEvaluation,
 };
+#[cfg(test)]
+use commit::apply_updates;
 pub(crate) use commit::log_evaluation_report;
-use commit::{apply_updates, EnrollmentUpdate, FiredTransition};
+use commit::{apply_updates_for_delivery, EnrollmentUpdate, FiredTransition};
+pub(crate) use commit::{
+    CommittedEventEnrollmentDelivery, CommittedEventEnrollmentResult,
+    EventEnrollmentEvaluationBatch,
+};
 use fault::{
     evaluate_fault_algorithm, read_event_parameters, read_fault_algorithm,
     read_monitored_reliability, FaultAlgorithmEvaluation, MonitoredReliability,
@@ -153,6 +159,14 @@ pub fn evaluate_event_enrollments_detailed_report(
     db: &mut ObjectDatabase,
     interval_secs: u64,
 ) -> EventEnrollmentDetailedEvaluationReport {
+    evaluate_event_enrollments_for_delivery(db, interval_secs).report
+}
+
+/// Evaluate and retain the private commit-order stream for server delivery.
+pub(crate) fn evaluate_event_enrollments_for_delivery(
+    db: &mut ObjectDatabase,
+    interval_secs: u64,
+) -> EventEnrollmentEvaluationBatch {
     let interval_secs = interval_secs.max(1);
     let oids = db.find_by_type(ObjectType::EVENT_ENROLLMENT);
     // A qualified reference can identify self only when the containing Device
@@ -866,7 +880,7 @@ pub fn evaluate_event_enrollments_detailed_report(
         });
     }
 
-    apply_updates(db, &oids, updates, &database_eval_sources)
+    apply_updates_for_delivery(db, &oids, updates, &database_eval_sources)
 }
 
 #[cfg(test)]

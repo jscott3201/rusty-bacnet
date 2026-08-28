@@ -1,4 +1,9 @@
 use super::*;
+use crate::event_enrollment::{
+    CommittedEventEnrollmentDelivery, CommittedEventEnrollmentResult,
+    EventEnrollmentReliabilityCause, EventEnrollmentReliabilityResult, EventEnrollmentTransition,
+};
+use crate::server::event_timestamp::SampledEventClock;
 use bacnet_objects::event::{
     EventStateChange, EventTransitionCommit, EventTransitionCommitError, TransitionOutcome,
 };
@@ -15,6 +20,7 @@ enum IndexedHistoryRead {
 
 struct AtomicHistoryObject {
     oid: ObjectIdentifier,
+    event_type: Option<PropertyValue>,
     timestamps: [IndexedHistoryRead; 3],
     messages: [IndexedHistoryRead; 3],
 }
@@ -71,6 +77,12 @@ impl BACnetObject for AtomicHistoryObject {
             p if p == PropertyIdentifier::NOTIFICATION_CLASS => Ok(PropertyValue::Unsigned(0)),
             p if p == PropertyIdentifier::NOTIFY_TYPE => {
                 Ok(PropertyValue::Enumerated(NotifyType::ALARM.to_raw()))
+            }
+            p if p == PropertyIdentifier::EVENT_TYPE => {
+                self.event_type.clone().ok_or_else(|| Error::Protocol {
+                    class: ErrorClass::PROPERTY.to_raw() as u32,
+                    code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                })
             }
             p if p == PropertyIdentifier::EVENT_TIME_STAMPS => {
                 Self::indexed(&self.timestamps, array_index)
@@ -145,6 +157,7 @@ fn atomic_history_database(
     };
     db.add(Box::new(AtomicHistoryObject {
         oid,
+        event_type: Some(PropertyValue::Enumerated(EventType::OUT_OF_RANGE.to_raw())),
         timestamps,
         messages,
     }))
@@ -212,6 +225,146 @@ fn repeated_timestamp_reads(timestamp: BACnetTimeStamp) -> [IndexedHistoryRead; 
 
 fn empty_message_reads() -> [IndexedHistoryRead; 3] {
     std::array::from_fn(|_| empty_message_read())
+}
+
+fn committed_enrollment_normal(
+    oid: ObjectIdentifier,
+    change: EventStateChange,
+) -> CommittedEventEnrollmentDelivery {
+    CommittedEventEnrollmentDelivery {
+        result: CommittedEventEnrollmentResult::Normal(EventEnrollmentTransition {
+            enrollment_oid: oid,
+            monitored_oid: oid,
+            change,
+            event_type: EventType::OUT_OF_RANGE,
+            distribute: true,
+        }),
+        ack_required: true,
+        recipient_clock: SampledEventClock::Unavailable,
+    }
+}
+
+fn committed_enrollment_reliability(oid: ObjectIdentifier) -> CommittedEventEnrollmentDelivery {
+    CommittedEventEnrollmentDelivery {
+        result: CommittedEventEnrollmentResult::Reliability(EventEnrollmentReliabilityResult {
+            enrollment_oid: oid,
+            monitored_oid: Some(oid),
+            previous_reliability: bacnet_types::enums::Reliability::NO_FAULT_DETECTED,
+            new_reliability: bacnet_types::enums::Reliability::OVER_RANGE,
+            state_change: Some(EventStateChange {
+                from: EventState::NORMAL,
+                to: EventState::FAULT,
+            }),
+            distribute: true,
+            cause: EventEnrollmentReliabilityCause::FaultAlgorithm,
+        }),
+        ack_required: true,
+        recipient_clock: SampledEventClock::Unavailable,
+    }
+}
+
+#[test]
+fn event_enrollment_projection_accepts_intentionally_absent_message_without_mutation() {
+    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 77).unwrap();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(AtomicHistoryObject {
+        oid,
+        event_type: Some(PropertyValue::Enumerated(EventType::OUT_OF_RANGE.to_raw())),
+        timestamps: repeated_timestamp_reads(BACnetTimeStamp::SequenceNumber(19)),
+        messages: std::array::from_fn(|_| IndexedHistoryRead::Missing),
+    }))
+    .unwrap();
+
+    let before = db.reserve_event_sequence_number().number();
+    let resolved =
+        crate::server::event_notifications::resolve_committed_event_enrollment_transition(
+            &db,
+            committed_enrollment_normal(
+                oid,
+                EventStateChange {
+                    from: EventState::NORMAL,
+                    to: EventState::HIGH_LIMIT,
+                },
+            ),
+        );
+
+    assert!(resolved.is_some());
+    assert_eq!(db.reserve_event_sequence_number().number(), before);
+}
+
+#[test]
+fn malformed_or_unreadable_event_enrollment_history_fails_closed_without_mutation() {
+    let failures = [
+        IndexedHistoryRead::Missing,
+        IndexedHistoryRead::Unreadable,
+        IndexedHistoryRead::Value(PropertyValue::Unsigned(7)),
+        IndexedHistoryRead::Value(PropertyValue::ApplicationData(vec![0x19])),
+    ];
+
+    for (instance, failure) in failures.into_iter().enumerate() {
+        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 80 + instance as u32).unwrap();
+        let mut db = ObjectDatabase::new();
+        let timestamps = std::array::from_fn(|index| {
+            if index == 0 {
+                failure.clone()
+            } else {
+                timestamp_read(BACnetTimeStamp::SequenceNumber(index as u16))
+            }
+        });
+        db.add(Box::new(AtomicHistoryObject {
+            oid,
+            event_type: Some(PropertyValue::Enumerated(EventType::OUT_OF_RANGE.to_raw())),
+            timestamps,
+            messages: std::array::from_fn(|_| IndexedHistoryRead::Missing),
+        }))
+        .unwrap();
+
+        assert!(
+            crate::server::event_notifications::resolve_committed_event_enrollment_transition(
+                &db,
+                committed_enrollment_normal(
+                    oid,
+                    EventStateChange {
+                        from: EventState::NORMAL,
+                        to: EventState::HIGH_LIMIT,
+                    },
+                ),
+            )
+            .is_none()
+        );
+        assert_eq!(db.reserve_event_sequence_number().number(), 0);
+    }
+}
+
+#[test]
+fn unreadable_or_malformed_reliability_event_type_fails_closed_without_mutation() {
+    for (instance, event_type) in [
+        None,
+        Some(PropertyValue::Unsigned(2)),
+        Some(PropertyValue::Enumerated(999)),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 90 + instance as u32).unwrap();
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(AtomicHistoryObject {
+            oid,
+            event_type,
+            timestamps: repeated_timestamp_reads(BACnetTimeStamp::SequenceNumber(23)),
+            messages: std::array::from_fn(|_| IndexedHistoryRead::Missing),
+        }))
+        .unwrap();
+
+        assert!(
+            crate::server::event_notifications::resolve_committed_event_enrollment_transition(
+                &db,
+                committed_enrollment_reliability(oid),
+            )
+            .is_none()
+        );
+        assert_eq!(db.reserve_event_sequence_number().number(), 0);
+    }
 }
 
 #[tokio::test]

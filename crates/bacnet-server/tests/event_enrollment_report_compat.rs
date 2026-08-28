@@ -2,9 +2,9 @@
 
 use bacnet_objects::event::EventStateChange;
 use bacnet_server::event_enrollment::{
-    EventEnrollmentEvaluationOutcome, EventEnrollmentEvaluationReport,
-    EventEnrollmentEvaluationStage, EventEnrollmentReliabilityCause,
-    EventEnrollmentReliabilityResult,
+    EventEnrollmentDetailedEvaluationReport, EventEnrollmentEvaluationOutcome,
+    EventEnrollmentEvaluationReport, EventEnrollmentEvaluationStage,
+    EventEnrollmentReliabilityCause, EventEnrollmentReliabilityResult, EventEnrollmentTransition,
 };
 use bacnet_types::enums::{EventState, EventType, ObjectType, Reliability};
 use bacnet_types::primitives::ObjectIdentifier;
@@ -71,4 +71,30 @@ fn detailed_reliability_result_remains_constructible_and_derives_event_type() {
         ..result
     };
     assert_eq!(no_state_change.event_type(EventType::OUT_OF_RANGE), None);
+}
+
+#[test]
+fn public_transition_and_detailed_report_keep_their_original_fields() {
+    let enrollment_oid = ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, 2).unwrap();
+    let monitored_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 2).unwrap();
+    let transition = EventEnrollmentTransition {
+        enrollment_oid,
+        monitored_oid,
+        change: EventStateChange {
+            from: EventState::NORMAL,
+            to: EventState::HIGH_LIMIT,
+        },
+        event_type: EventType::OUT_OF_RANGE,
+        distribute: true,
+    };
+    let report = EventEnrollmentDetailedEvaluationReport {
+        transitions: vec![transition],
+        reliability_results: vec![],
+        diagnostics: vec![],
+    };
+
+    assert_eq!(report.transitions[0].enrollment_oid, enrollment_oid);
+    assert_eq!(report.transitions[0].monitored_oid, monitored_oid);
+    assert!(report.reliability_results.is_empty());
+    assert!(report.diagnostics.is_empty());
 }

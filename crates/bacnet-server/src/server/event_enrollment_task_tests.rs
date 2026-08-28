@@ -19,8 +19,8 @@ use bacnet_types::enums::{EventState, EventType};
 use std::sync::{Arc as StdArc, Mutex as StdMutex};
 use tokio::sync::mpsc;
 
-/// Records broadcasts (unused here — #127 means the EE path still only logs)
-/// and discards unicasts; the same minimal harness the other server tests use.
+/// Records broadcasts and discards unicasts; the same minimal harness the
+/// other server notification tests use.
 #[derive(Clone, Default)]
 struct RecordingTransport {
     sent_broadcast: StdArc<StdMutex<Vec<bytes::Bytes>>>,
@@ -94,10 +94,8 @@ async fn spawned_task_advances_and_fires_the_time_delay_countdown() {
         .unwrap(),
     ))
     .unwrap();
-    // A recipient that WOULD be broadcast to. The Event Enrollment path has no
-    // send call today, so this changes nothing now — it makes the assertion
-    // below a live tripwire: when #127 gives that path a sender, this test goes
-    // red and asks to be updated instead of quietly staying green.
+    // A local-broadcast recipient makes successful external distribution
+    // observable after the delayed transition commits.
     db.add(Box::new(
         super::event_notifications_tests::notification_class_0_broadcasting(),
     ))
@@ -145,10 +143,10 @@ async fn spawned_task_advances_and_fires_the_time_delay_countdown() {
         "Time_Delay elapsed under the real spawned task: the transition fired"
     );
 
-    // Nothing was distributed — #127 owns sending; this tranche only logs.
-    assert!(
-        sent.lock().unwrap().is_empty(),
-        "the EE path still does not emit notifications (#127)"
+    assert_eq!(
+        sent.lock().unwrap().len(),
+        1,
+        "the committed delayed Event Enrollment transition must distribute once"
     );
 }
 

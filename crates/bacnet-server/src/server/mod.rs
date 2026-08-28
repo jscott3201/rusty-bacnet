@@ -320,14 +320,11 @@ pub struct ServerConfig {
     /// Evaluation is a no-op on databases holding no Event Enrollment objects,
     /// so the default is on.
     ///
-    /// What a detected transition currently does is limited: it updates
-    /// `Event_State` and is logged. Routing it into the notification pipeline is
-    /// not implemented yet (see issue #127), nor are the `Acked_Transitions` and
-    /// `Event_Time_Stamps` updates a transition is supposed to carry (#123). A
-    /// device holding active enrollments will therefore change `Event_State`
-    /// without emitting an EventNotification, so a client learns of the alarm
-    /// only by polling. Enabling this by default makes that the standing
-    /// behavior rather than an opt-in one.
+    /// Successful enabled transitions commit `Event_State`,
+    /// `Acked_Transitions`, and `Event_Time_Stamps` atomically and are then
+    /// routed through the shared EventNotification sender. Event Enrollment
+    /// message text remains intentionally absent, and exact event-specific
+    /// notification values are deferred to the payload projection work.
     pub enable_event_enrollment: bool,
     /// Interval in seconds between Event Enrollment evaluation passes (default 10).
     ///
@@ -999,6 +996,7 @@ use clock::ServerClock;
 mod cov_clock;
 mod cov_notifications;
 mod dispatch;
+mod event_enrollment_lifecycle;
 mod event_notifications;
 pub(crate) mod event_timestamp;
 mod lifecycle;

@@ -10,6 +10,8 @@ use bacnet_types::constructed::BACnetRecipient;
 use bacnet_types::enums::EventType;
 use bacnet_types::primitives::{BACnetTimeStamp, Time};
 
+use crate::event_enrollment::{CommittedEventEnrollmentDelivery, CommittedEventEnrollmentResult};
+
 /// One exact transition-coordinate projection from object-owned event history.
 #[derive(Debug, Clone, PartialEq)]
 struct CommittedHistorySnapshot {
@@ -17,11 +19,16 @@ struct CommittedHistorySnapshot {
     message_text: Option<String>,
 }
 
+enum CommittedMessageProjection {
+    RequiredProperty,
+    IntentionallyAbsent,
+}
+
 /// The source boundary for the notification's timestamp and message.
 enum NotificationHistorySource {
     /// Legacy/default objects sample their timestamp when distribution begins.
     SendTime,
-    /// Atomic built-ins use the exact history coordinate read after commit.
+    /// Atomic transitions use the exact history coordinate read after commit.
     Committed {
         snapshot: CommittedHistorySnapshot,
         recipient_clock: SampledEventClock,
@@ -131,13 +138,16 @@ fn system_utc_recipient_filter_time(now: Duration) -> (u8, Time) {
 
 /// Read one exact committed transition coordinate through the object contract.
 ///
-/// Both properties are projected while the caller still owns the database
+/// Required properties are projected while the caller still owns the database
 /// write guard. A malformed or incomplete projection is not equivalent to a
 /// missing message/timestamp: the committed transition remains local, but no
-/// outward frame can be built from an unproven history snapshot.
+/// outward frame can be built from an unproven history snapshot. Event
+/// Enrollment is the explicit exception for message lookup because that object
+/// intentionally has no `Event_Message_Texts` property.
 fn read_committed_history_snapshot(
     object: &dyn BACnetObject,
     coordinate: EventTransition,
+    message_projection: CommittedMessageProjection,
 ) -> Option<CommittedHistorySnapshot> {
     let array_index = u32::try_from(coordinate.index() + 1)
         .expect("three event transition coordinates fit in u32");
@@ -152,17 +162,85 @@ fn read_committed_history_snapshot(
         return None;
     }
 
-    let PropertyValue::CharacterString(message_text) = object
-        .read_property(PropertyIdentifier::EVENT_MESSAGE_TEXTS, Some(array_index))
-        .ok()?
-    else {
-        return None;
+    let message_text = match message_projection {
+        CommittedMessageProjection::RequiredProperty => {
+            let PropertyValue::CharacterString(message_text) = object
+                .read_property(PropertyIdentifier::EVENT_MESSAGE_TEXTS, Some(array_index))
+                .ok()?
+            else {
+                return None;
+            };
+            (!message_text.is_empty()).then_some(message_text)
+        }
+        CommittedMessageProjection::IntentionallyAbsent => None,
     };
 
     Some(CommittedHistorySnapshot {
         timestamp,
-        message_text: (!message_text.is_empty()).then_some(message_text),
+        message_text,
     })
+}
+
+/// Project an already-committed Event Enrollment result without another
+/// transition commit or timestamp sample.
+pub(super) fn resolve_committed_event_enrollment_transition(
+    db: &ObjectDatabase,
+    committed: CommittedEventEnrollmentDelivery,
+) -> Option<(ObjectIdentifier, bool, NotificationTransition)> {
+    let (oid, change, event_type, distribute) = match committed.result {
+        CommittedEventEnrollmentResult::Normal(result) => (
+            result.enrollment_oid,
+            result.change,
+            result.event_type,
+            result.distribute,
+        ),
+        CommittedEventEnrollmentResult::Reliability(result) => {
+            let object = db.get(&result.enrollment_oid)?;
+            let PropertyValue::Enumerated(configured_event_type) = object
+                .read_property(PropertyIdentifier::EVENT_TYPE, None)
+                .ok()?
+            else {
+                return None;
+            };
+            let configured_event_type = EventType::from_raw(configured_event_type);
+            if ![
+                EventType::OUT_OF_RANGE,
+                EventType::FLOATING_LIMIT,
+                EventType::CHANGE_OF_STATE,
+                EventType::CHANGE_OF_BITSTRING,
+                EventType::CHANGE_OF_VALUE,
+            ]
+            .contains(&configured_event_type)
+            {
+                return None;
+            }
+            let event_type = result.event_type(configured_event_type)?;
+            let change = result.state_change.clone()?;
+            (result.enrollment_oid, change, event_type, result.distribute)
+        }
+    };
+
+    let coordinate = change.transition();
+    let history_snapshot = db.get(&oid).and_then(|object| {
+        read_committed_history_snapshot(
+            object,
+            coordinate,
+            CommittedMessageProjection::IntentionallyAbsent,
+        )
+    })?;
+    Some((
+        oid,
+        distribute,
+        NotificationTransition {
+            change,
+            event_type,
+            history_source: NotificationHistorySource::Committed {
+                snapshot: history_snapshot,
+                recipient_clock: committed.recipient_clock,
+            },
+            ack_required: Some(committed.ack_required),
+        },
+    ))
 }
 
 /// The network destination a Notification Class recipient resolves to.
@@ -311,10 +389,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
 
         let recipient_clock = confirm_event_timestamp(db, staged_timestamp).clock;
-        let history_snapshot = match db
-            .get(oid)
-            .and_then(|object| read_committed_history_snapshot(object, coordinate))
-        {
+        let history_snapshot = match db.get(oid).and_then(|object| {
+            read_committed_history_snapshot(
+                object,
+                coordinate,
+                CommittedMessageProjection::RequiredProperty,
+            )
+        }) {
             Some(snapshot) => snapshot,
             None => {
                 debug!(

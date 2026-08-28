@@ -10,7 +10,9 @@ use bacnet_types::enums::{EventState, EventType, PropertyIdentifier, Reliability
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::EventEnrollmentTransition;
-use crate::server::event_timestamp::{confirm_event_timestamp, stage_event_timestamp};
+use crate::server::event_timestamp::{
+    confirm_event_timestamp, stage_event_timestamp, SampledEventClock,
+};
 
 /// Stage at which an Event Enrollment evaluation result was committed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,6 +179,25 @@ pub struct EventEnrollmentDetailedEvaluationReport {
     pub reliability_results: Vec<EventEnrollmentReliabilityResult>,
     /// Every detailed evaluation, observation, and commit diagnostic.
     pub diagnostics: Vec<EventEnrollmentDetailedEvaluationDiagnostic>,
+}
+
+/// Public result family carried by one private, already-committed delivery.
+pub(crate) enum CommittedEventEnrollmentResult {
+    Normal(EventEnrollmentTransition),
+    Reliability(EventEnrollmentReliabilityResult),
+}
+
+/// One Event Enrollment commit plus policy captured under its database guard.
+pub(crate) struct CommittedEventEnrollmentDelivery {
+    pub(crate) result: CommittedEventEnrollmentResult,
+    pub(crate) ack_required: bool,
+    pub(crate) recipient_clock: SampledEventClock,
+}
+
+/// Public report plus the commit-order stream consumed only by the server.
+pub(crate) struct EventEnrollmentEvaluationBatch {
+    pub(crate) report: EventEnrollmentDetailedEvaluationReport,
+    pub(crate) deliveries: Vec<CommittedEventEnrollmentDelivery>,
 }
 
 impl EventEnrollmentDetailedEvaluationReport {
@@ -410,13 +431,24 @@ fn clear_source_ownership(
     }
 }
 
+#[cfg(test)]
 pub(super) fn apply_updates(
+    db: &mut ObjectDatabase,
+    oids: &[ObjectIdentifier],
+    updates: HashMap<ObjectIdentifier, EnrollmentUpdate>,
+    database_eval_sources: &HashSet<ObjectIdentifier>,
+) -> EventEnrollmentDetailedEvaluationReport {
+    apply_updates_for_delivery(db, oids, updates, database_eval_sources).report
+}
+
+pub(super) fn apply_updates_for_delivery(
     db: &mut ObjectDatabase,
     oids: &[ObjectIdentifier],
     mut updates: HashMap<ObjectIdentifier, EnrollmentUpdate>,
     database_eval_sources: &HashSet<ObjectIdentifier>,
-) -> EventEnrollmentDetailedEvaluationReport {
+) -> EventEnrollmentEvaluationBatch {
     let mut report = EventEnrollmentDetailedEvaluationReport::default();
+    let mut deliveries = Vec::new();
 
     for &oid in oids {
         let Some(update) = updates.remove(&oid) else {
@@ -543,18 +575,22 @@ pub(super) fn apply_updates(
                 continue;
             }
 
-            confirm_event_timestamp(db, staged_timestamp);
-            report
-                .reliability_results
-                .push(EventEnrollmentReliabilityResult {
-                    enrollment_oid: oid,
-                    monitored_oid: reliability.monitored_oid,
-                    previous_reliability: reliability.previous,
-                    new_reliability: reliability.desired,
-                    state_change: Some(change),
-                    distribute: reliability.distribute,
-                    cause: reliability.cause,
-                });
+            let recipient_clock = confirm_event_timestamp(db, staged_timestamp).clock;
+            let result = EventEnrollmentReliabilityResult {
+                enrollment_oid: oid,
+                monitored_oid: reliability.monitored_oid,
+                previous_reliability: reliability.previous,
+                new_reliability: reliability.desired,
+                state_change: Some(change),
+                distribute: reliability.distribute,
+                cause: reliability.cause,
+            };
+            report.reliability_results.push(result.clone());
+            deliveries.push(CommittedEventEnrollmentDelivery {
+                result: CommittedEventEnrollmentResult::Reliability(result),
+                ack_required: reliability.ack_required,
+                recipient_clock,
+            });
             continue;
         }
 
@@ -614,16 +650,22 @@ pub(super) fn apply_updates(
             continue;
         }
 
-        confirm_event_timestamp(db, staged_timestamp);
+        let recipient_clock = confirm_event_timestamp(db, staged_timestamp).clock;
         let event_type = change.event_type(EventType::from_raw(fired.event_type_raw));
-        report.transitions.push(EventEnrollmentTransition {
+        let result = EventEnrollmentTransition {
             enrollment_oid: oid,
             monitored_oid: fired.monitored_oid,
             change,
             event_type,
             distribute: fired.distribute,
+        };
+        report.transitions.push(result.clone());
+        deliveries.push(CommittedEventEnrollmentDelivery {
+            result: CommittedEventEnrollmentResult::Normal(result),
+            ack_required: fired.ack_required,
+            recipient_clock,
         });
     }
 
-    report
+    EventEnrollmentEvaluationBatch { report, deliveries }
 }
