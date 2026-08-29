@@ -354,6 +354,46 @@ async fn confirmed_retry_reuses_committed_message_bytes_after_history_changes() 
         notification.message_text,
         Some("ANALOG_INPUT,1: NORMAL -> HIGH_LIMIT".into())
     );
+    assert_eq!(
+        notification.event_values,
+        Some(
+            bacnet_services::alarm_event::NotificationParameters::OutOfRange {
+                exceeding_value: 0.0,
+                status_flags: 0b1000,
+                deadband: 1.0,
+                exceeded_limit: 100.0,
+            }
+        )
+    );
+
+    {
+        let mut db = harness.db.write().await;
+        let source = db.get_mut(&oid).unwrap();
+        source
+            .write_property(
+                PropertyIdentifier::OUT_OF_SERVICE,
+                None,
+                PropertyValue::Boolean(true),
+                None,
+            )
+            .unwrap();
+        source
+            .write_property(
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+                PropertyValue::Real(99.0),
+                None,
+            )
+            .unwrap();
+        source
+            .write_property(
+                PropertyIdentifier::HIGH_LIMIT,
+                None,
+                PropertyValue::Real(101.0),
+                None,
+            )
+            .unwrap();
+    }
 
     harness
         .commit_transition(EventState::HIGH_LIMIT, EventState::NORMAL)

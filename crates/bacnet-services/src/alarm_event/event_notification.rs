@@ -72,15 +72,19 @@ impl EventNotificationRequest {
         if self.notify_type != 2 {
             primitives::encode_ctx_boolean(buf, 9, self.ack_required);
         }
-        // [10] fromState
-        primitives::encode_ctx_enumerated(buf, 10, self.from_state);
+        // [10] fromState (only for ALARM/EVENT)
+        if self.notify_type != 2 {
+            primitives::encode_ctx_enumerated(buf, 10, self.from_state);
+        }
         // [11] toState
         primitives::encode_ctx_enumerated(buf, 11, self.to_state);
         // [12] eventValues — optional
-        if let Some(ref params) = self.event_values {
-            tags::encode_opening_tag(buf, 12);
-            params.encode(buf)?;
-            tags::encode_closing_tag(buf, 12);
+        if self.notify_type != 2 {
+            if let Some(ref params) = self.event_values {
+                tags::encode_opening_tag(buf, 12);
+                params.encode(buf)?;
+                tags::encode_closing_tag(buf, 12);
+            }
         }
         Ok(())
     }
@@ -157,10 +161,25 @@ impl EventNotificationRequest {
             }
         }
 
-        // [10] fromState
-        let (from_state, new_offset) =
-            decode_context_u32(data, offset, 10, "EventNotification fromState")?;
-        offset = new_offset;
+        // [10] fromState (absent for ACK_NOTIFICATION)
+        let mut from_state = 0;
+        if offset < data.len() {
+            let (peek, _) = tags::decode_tag(data, offset)?;
+            if peek.is_context(10) {
+                (from_state, offset) =
+                    decode_context_u32(data, offset, 10, "EventNotification fromState")?;
+            } else if notify_type != 2 {
+                return Err(Error::decoding(
+                    offset,
+                    "EventNotification expected fromState",
+                ));
+            }
+        } else if notify_type != 2 {
+            return Err(Error::decoding(
+                offset,
+                "EventNotification missing fromState",
+            ));
+        }
 
         // [11] toState
         let (to_state, new_offset) =

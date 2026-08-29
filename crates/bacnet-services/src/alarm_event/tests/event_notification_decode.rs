@@ -205,6 +205,51 @@ fn event_notification_preserves_optional_envelope_fields() {
 }
 
 #[test]
+fn ack_notification_omits_ack_from_state_and_event_values_exactly() {
+    let request = EventNotificationRequest {
+        process_identifier: 1,
+        initiating_device_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap(),
+        event_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 3).unwrap(),
+        timestamp: BACnetTimeStamp::SequenceNumber(7),
+        notification_class: 5,
+        priority: 100,
+        event_type: 5,
+        message_text: None,
+        notify_type: 2,
+        ack_required: true,
+        from_state: 4,
+        to_state: 3,
+        event_values: Some(NotificationParameters::OutOfRange {
+            exceeding_value: 85.0,
+            status_flags: 0b1000,
+            deadband: 2.0,
+            exceeded_limit: 80.0,
+        }),
+    };
+
+    let mut encoded = BytesMut::new();
+    request.encode(&mut encoded).unwrap();
+    assert_eq!(
+        encoded.as_ref(),
+        &[
+            0x09, 0x01, 0x1c, 0x02, 0x00, 0x00, 0x01, 0x2c, 0x00, 0x00, 0x00, 0x03, 0x3e, 0x19,
+            0x07, 0x3f, 0x49, 0x05, 0x59, 0x64, 0x69, 0x05, 0x89, 0x02, 0xb9, 0x03,
+        ],
+        "ACK_NOTIFICATION must end with To State [11] and omit [9], [10], and [12]"
+    );
+
+    let decoded = EventNotificationRequest::decode(&encoded).unwrap();
+    assert_eq!(decoded.notify_type, 2);
+    assert!(!decoded.ack_required);
+    assert_eq!(
+        decoded.from_state, 0,
+        "absent From State uses the neutral default"
+    );
+    assert_eq!(decoded.to_state, 3);
+    assert!(decoded.event_values.is_none());
+}
+
+#[test]
 fn event_notification_rejects_every_truncated_prefix() {
     let request = EventNotificationRequest {
         process_identifier: 1,

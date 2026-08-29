@@ -1,16 +1,19 @@
 use super::event_message_policy::intrinsic_event_message_text;
-use super::event_recipient_route::{ConfirmedRecipientRoute, RecipientRoute};
+use super::event_notification_payload::{project_intrinsic_payload, CommittedNotificationPayload};
+use super::event_recipient_route::{
+    network_priority_for_event, system_utc_recipient_filter_time, ConfirmedRecipientRoute,
+    RecipientRoute,
+};
 use super::event_timestamp::{
     confirm_event_timestamp, sample_event_timestamp, stage_event_timestamp, SampledEventClock,
 };
 use super::*;
 use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_objects::event::{EventTransition, EventTransitionCommit, TransitionOutcome};
-use bacnet_objects::notification_class::local_day_and_time;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::BACnetRecipient;
 use bacnet_types::enums::EventType;
-use bacnet_types::primitives::{BACnetTimeStamp, Time};
+use bacnet_types::primitives::BACnetTimeStamp;
 
 use crate::event_enrollment::{CommittedEventEnrollmentDelivery, CommittedEventEnrollmentResult};
 
@@ -46,6 +49,7 @@ pub(super) struct NotificationTransition {
     event_type: EventType,
     history_source: NotificationHistorySource,
     ack_required: Option<bool>,
+    event_values: Option<CommittedNotificationPayload>,
 }
 
 impl From<(EventStateChange, EventType)> for NotificationTransition {
@@ -55,6 +59,7 @@ impl From<(EventStateChange, EventType)> for NotificationTransition {
             event_type,
             history_source: NotificationHistorySource::SendTime,
             ack_required: None,
+            event_values: None,
         }
     }
 }
@@ -67,6 +72,7 @@ pub(super) struct CommittedIntrinsicTransition {
     history_snapshot: CommittedHistorySnapshot,
     recipient_clock: SampledEventClock,
     ack_required: bool,
+    event_values: Option<CommittedNotificationPayload>,
 }
 
 impl From<CommittedIntrinsicTransition> for NotificationTransition {
@@ -79,6 +85,7 @@ impl From<CommittedIntrinsicTransition> for NotificationTransition {
                 recipient_clock: committed.recipient_clock,
             },
             ack_required: Some(committed.ack_required),
+            event_values: committed.event_values,
         }
     }
 }
@@ -100,6 +107,10 @@ impl ResolvedIntrinsicTransition {
             Self::Legacy(outcome) => outcome.distribute,
         }
     }
+
+    pub(super) fn can_emit(&self) -> bool {
+        !matches!(self, Self::Committed(committed) if committed.event_values.is_none())
+    }
 }
 
 impl From<ResolvedIntrinsicTransition> for NotificationTransition {
@@ -111,32 +122,6 @@ impl From<ResolvedIntrinsicTransition> for NotificationTransition {
             }
         }
     }
-}
-
-/// Project an alarm/event priority onto the NPDU Network Priority.
-///
-/// Clause 13.2.5.4: "the Network Priority as defined in Clause 6.2.2 shall be
-/// set as a function of the alarm and event priority as defined in Table
-/// 13-6". Lower event priority is more urgent: 00–63 is a Life Safety
-/// message, 64–127 Critical Equipment, 128–191 Urgent, 192–255 Normal.
-pub(super) fn network_priority_for_event(priority: u8) -> NetworkPriority {
-    match priority {
-        0..=63 => NetworkPriority::LIFE_SAFETY,
-        64..=127 => NetworkPriority::CRITICAL_EQUIPMENT,
-        128..=191 => NetworkPriority::URGENT,
-        192..=255 => NetworkPriority::NORMAL,
-    }
-}
-
-/// Operational fallback for recipient-window filtering in clockless mode.
-///
-/// This uses system UTC only to avoid dropping an alarm while no Device clock
-/// is advertised; it does not create a Device DateTime or change wire
-/// timestamp selection.
-fn system_utc_recipient_filter_time(now: Duration) -> (u8, Time) {
-    let (today_bit, mut current_time) = local_day_and_time(now.as_secs(), 0);
-    current_time.hundredths = (now.subsec_millis() / 10) as u8;
-    (today_bit, current_time)
 }
 
 /// Read one exact committed transition coordinate through the object contract.
@@ -190,37 +175,20 @@ pub(super) fn resolve_committed_event_enrollment_transition(
     db: &ObjectDatabase,
     committed: CommittedEventEnrollmentDelivery,
 ) -> Option<(ObjectIdentifier, bool, NotificationTransition)> {
-    let (oid, change, event_type, distribute) = match committed.result {
-        CommittedEventEnrollmentResult::Normal(result) => (
-            result.enrollment_oid,
-            result.change,
-            result.event_type,
-            result.distribute,
-        ),
+    let CommittedEventEnrollmentDelivery {
+        result,
+        ack_required,
+        recipient_clock,
+        event_type,
+        event_values,
+    } = committed;
+    let (oid, change, distribute) = match result {
+        CommittedEventEnrollmentResult::Normal(result) => {
+            (result.enrollment_oid, result.change, result.distribute)
+        }
         CommittedEventEnrollmentResult::Reliability(result) => {
-            let object = db.get(&result.enrollment_oid)?;
-            let PropertyValue::Enumerated(configured_event_type) = object
-                .read_property(PropertyIdentifier::EVENT_TYPE, None)
-                .ok()?
-            else {
-                return None;
-            };
-            let configured_event_type = EventType::from_raw(configured_event_type);
-            if ![
-                EventType::OUT_OF_RANGE,
-                EventType::FLOATING_LIMIT,
-                EventType::CHANGE_OF_STATE,
-                EventType::CHANGE_OF_BITSTRING,
-                EventType::CHANGE_OF_VALUE,
-                EventType::NONE,
-            ]
-            .contains(&configured_event_type)
-            {
-                return None;
-            }
-            let event_type = result.event_type(configured_event_type)?;
             let change = result.state_change.clone()?;
-            (result.enrollment_oid, change, event_type, result.distribute)
+            (result.enrollment_oid, change, result.distribute)
         }
     };
 
@@ -240,9 +208,10 @@ pub(super) fn resolve_committed_event_enrollment_transition(
             event_type,
             history_source: NotificationHistorySource::Committed {
                 snapshot: history_snapshot,
-                recipient_clock: committed.recipient_clock,
+                recipient_clock,
             },
-            ack_required: Some(committed.ack_required),
+            ack_required: Some(ack_required),
+            event_values: Some(event_values),
         },
     ))
 }
@@ -298,13 +267,26 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 return None;
             }
         };
+        let event_type = outcome.change.event_type(outcome.event_type);
+        let event_values = db
+            .get(oid)
+            .and_then(|object| project_intrinsic_payload(object, &outcome.change, event_type))
+            .or_else(|| {
+                debug!(
+                    %oid,
+                    ?event_type,
+                    "Committed intrinsic Event Values projection rejected; suppressing distribution"
+                );
+                None
+            });
         Some(CommittedIntrinsicTransition {
             change: outcome.change,
-            event_type: outcome.event_type,
+            event_type,
             distribute: outcome.distribute,
             history_snapshot,
             recipient_clock,
             ack_required,
+            event_values,
         })
     }
 
@@ -383,7 +365,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // updated Acked_Transitions from the Notification Class policy and
         // stored the selected local message in the transition coordinate.
         if let Some(resolved) = resolved {
-            if resolved.distribute() {
+            if resolved.distribute() && resolved.can_emit() {
                 Self::build_and_send_event_notification_with_bindings(
                     db,
                     network,
@@ -453,6 +435,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             event_type,
             history_source,
             ack_required: ack_required_snapshot,
+            event_values,
         } = transition.into();
         let system_utc = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -564,7 +547,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 },
                 from_state: change.from.to_raw(),
                 to_state: change.to.to_raw(),
-                event_values: None,
+                event_values: if notify_type == NotifyType::ACK_NOTIFICATION.to_raw() {
+                    None
+                } else {
+                    event_values.map(CommittedNotificationPayload::into_parameters)
+                },
             };
 
             (base_notification, recipients)

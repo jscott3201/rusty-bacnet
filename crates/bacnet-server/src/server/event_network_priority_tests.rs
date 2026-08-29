@@ -8,7 +8,7 @@
 //!
 //! Split from `event_notifications_tests.rs`, which is near the 700-LOC cap.
 
-use super::event_notifications::network_priority_for_event;
+use super::event_recipient_route::network_priority_for_event;
 use super::event_recipient_routing_tests::{
     address_recipient, destination_for, distribute_with_priority,
 };

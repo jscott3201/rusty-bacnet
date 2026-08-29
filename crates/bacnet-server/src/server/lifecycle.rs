@@ -640,7 +640,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             }
                         });
                         if let Some(resolved) = resolved {
-                            if resolved.distribute() {
+                            if resolved.distribute() && resolved.can_emit() {
                                 out.push((oid, resolved));
                             }
                         }

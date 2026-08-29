@@ -4,6 +4,7 @@ use super::*;
 use bacnet_objects::event_log::EventLogObject;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
+use bacnet_services::alarm_event::{ChangeOfValueChoice, NotificationParameters};
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, BACnetPropertyStates,
     ChangeOfValueCriteria, FaultParameters,
@@ -103,6 +104,29 @@ async fn every_evaluated_normal_algorithm_uses_committed_history_once_on_wire() 
     )))
     .unwrap();
 
+    let cov_bits_target = ObservedObject::new(
+        7,
+        PropertyValue::BitString {
+            unused_bits: 5,
+            data: vec![0x80],
+        },
+    );
+    let cov_bits_target_oid = cov_bits_target.object_identifier();
+    db.add(Box::new(cov_bits_target)).unwrap();
+    db.add(Box::new(enrollment(
+        6,
+        EventType::CHANGE_OF_VALUE,
+        Some(cov_bits_target_oid),
+        BACnetEventParameter::ChangeOfValue {
+            time_delay: 0,
+            criteria: ChangeOfValueCriteria::Bitmask {
+                unused_bits: 5,
+                data: vec![0xe0],
+            },
+        },
+    )))
+    .unwrap();
+
     let event_log_oid = ObjectIdentifier::new(ObjectType::EVENT_LOG, 1).unwrap();
     db.add(Box::new(EventLogObject::new(1, "Event Log", 16).unwrap()))
         .unwrap();
@@ -112,13 +136,41 @@ async fn every_evaluated_normal_algorithm_uses_committed_history_once_on_wire() 
 
     let first = drain_notifications(&sent);
     assert_eq!(first.len(), 4, "four immediate algorithms must deliver");
-    for (index, (notification, expected_type)) in first
+    for (index, (notification, (expected_type, expected_values))) in first
         .iter()
         .zip([
-            EventType::OUT_OF_RANGE,
-            EventType::FLOATING_LIMIT,
-            EventType::CHANGE_OF_STATE,
-            EventType::CHANGE_OF_BITSTRING,
+            (
+                EventType::OUT_OF_RANGE,
+                NotificationParameters::OutOfRange {
+                    exceeding_value: 85.0,
+                    status_flags: 0,
+                    deadband: 2.0,
+                    exceeded_limit: 80.0,
+                },
+            ),
+            (
+                EventType::FLOATING_LIMIT,
+                NotificationParameters::FloatingLimit {
+                    reference_value: 65.0,
+                    status_flags: 0,
+                    setpoint_value: 50.0,
+                    error_limit: 10.0,
+                },
+            ),
+            (
+                EventType::CHANGE_OF_STATE,
+                NotificationParameters::ChangeOfState {
+                    new_state: BACnetPropertyStates::BinaryValue(1),
+                    status_flags: 0,
+                },
+            ),
+            (
+                EventType::CHANGE_OF_BITSTRING,
+                NotificationParameters::ChangeOfBitstring {
+                    referenced_bitstring: (5, vec![0xe0]),
+                    status_flags: 0,
+                },
+            ),
         ])
         .enumerate()
     {
@@ -129,7 +181,7 @@ async fn every_evaluated_normal_algorithm_uses_committed_history_once_on_wire() 
         );
         assert!(notification.ack_required);
         assert_eq!(notification.message_text, None);
-        assert_eq!(notification.event_values, None);
+        assert_eq!(notification.event_values.as_ref(), Some(&expected_values));
         let db = server.database().read().await;
         assert_eq!(
             notification.timestamp,
@@ -155,13 +207,49 @@ async fn every_evaluated_normal_algorithm_uses_committed_history_once_on_wire() 
             None,
         )
         .unwrap();
+    server
+        .database()
+        .write()
+        .await
+        .get_mut(&cov_bits_target_oid)
+        .unwrap()
+        .write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![0xa0],
+            },
+            None,
+        )
+        .unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
     let cov = drain_notifications(&sent);
-    assert_eq!(cov.len(), 1, "CHANGE_OF_VALUE threshold crossing delivers");
-    assert_eq!(cov[0].event_type, EventType::CHANGE_OF_VALUE.to_raw());
-    assert_eq!(cov[0].from_state, EventState::NORMAL.to_raw());
-    assert_eq!(cov[0].to_state, EventState::NORMAL.to_raw());
+    assert_eq!(cov.len(), 2, "both CHANGE_OF_VALUE choices deliver");
+    for notification in &cov {
+        assert_eq!(notification.event_type, EventType::CHANGE_OF_VALUE.to_raw());
+        assert_eq!(notification.from_state, EventState::NORMAL.to_raw());
+        assert_eq!(notification.to_state, EventState::NORMAL.to_raw());
+    }
     assert_eq!(cov[0].timestamp, BACnetTimeStamp::SequenceNumber(4));
+    assert_eq!(
+        cov[0].event_values,
+        Some(NotificationParameters::ChangeOfValue {
+            new_value: ChangeOfValueChoice::ChangedValue(8.0),
+            status_flags: 0,
+        })
+    );
+    assert_eq!(cov[1].timestamp, BACnetTimeStamp::SequenceNumber(5));
+    assert_eq!(
+        cov[1].event_values,
+        Some(NotificationParameters::ChangeOfValue {
+            new_value: ChangeOfValueChoice::ChangedBits {
+                unused_bits: 5,
+                data: vec![0xa0],
+            },
+            status_flags: 0,
+        })
+    );
 
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert!(
@@ -169,7 +257,7 @@ async fn every_evaluated_normal_algorithm_uses_committed_history_once_on_wire() 
         "the next no-transition pass must not duplicate a token or send"
     );
     let db = server.database().write().await;
-    assert_eq!(db.reserve_event_sequence_number().number(), 5);
+    assert_eq!(db.reserve_event_sequence_number().number(), 6);
     assert_eq!(
         db.get(&event_log_oid)
             .unwrap()
@@ -213,12 +301,23 @@ async fn event_enrollment_ack_policy_is_the_commit_time_snapshot() {
     };
 
     {
+        let mut guard = db.write().await;
+        guard
+            .get_mut(&target_oid)
+            .unwrap()
+            .write_property(
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+                PropertyValue::Real(5.0),
+                None,
+            )
+            .unwrap();
         let mut replacement = NotificationClass::new(0, "NC-replaced").unwrap();
         replacement.ack_required = [false; 3];
         replacement.add_destination(
             crate::server::event_notifications_tests::local_broadcast_destination(),
         );
-        db.write().await.add(Box::new(replacement)).unwrap();
+        guard.add(Box::new(replacement)).unwrap();
     }
 
     let sent = StdArc::new(StdMutex::new(Vec::new()));
@@ -242,6 +341,16 @@ async fn event_enrollment_ack_policy_is_the_commit_time_snapshot() {
     assert!(
         notifications[0].ack_required,
         "send-time Notification Class edits must not replace committed ACK policy"
+    );
+    assert_eq!(
+        notifications[0].event_values,
+        Some(NotificationParameters::OutOfRange {
+            exceeding_value: 85.0,
+            status_flags: 0,
+            deadband: 2.0,
+            exceeded_limit: 80.0,
+        }),
+        "unconfirmed delivery must retain the committed monitored value"
     );
     assert_eq!(
         db.write().await.reserve_event_sequence_number().number(),
@@ -326,10 +435,18 @@ async fn reliability_producers_and_fault_cycle_deliver_change_of_reliability() {
         assert_committed_reliability_notifications(
             &db,
             &entries,
-            &[10, 11, 12, 13],
+            &[11, 12, 13],
             EventState::NORMAL,
             EventState::FAULT,
-            0,
+            1,
+        );
+        assert_eq!(
+            event_state(
+                &db,
+                ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, 10).unwrap()
+            ),
+            EventState::FAULT,
+            "malformed monitored Reliability still commits locally"
         );
     }
 
@@ -471,7 +588,17 @@ async fn mixed_normal_and_reliability_commits_preserve_enrollment_order() {
         .into_iter()
         .map(|notification| notification.event_object_identifier.instance_number())
         .collect();
-    assert_eq!(object_order, vec![20, 21, 22]);
+    assert_eq!(object_order, vec![20, 22]);
+    let db = server.database().read().await;
+    assert_eq!(
+        event_state(
+            &db,
+            ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, 21).unwrap(),
+        ),
+        EventState::FAULT,
+        "missing Object_Property_Reference suppresses only the frame after commit"
+    );
+    drop(db);
     server.stop().await.unwrap();
 }
 

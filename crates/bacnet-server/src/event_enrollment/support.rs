@@ -14,6 +14,7 @@ use super::algorithms::extract_real;
 use super::commit::{EnrollmentUpdate, ReliabilityUpdate};
 use super::EventEnrollmentReliabilityCause;
 use super::LocalConfigurationReadError;
+use crate::server::event_notification_payload::CapturedReferencedValue;
 
 pub(super) enum SetpointRead {
     Value(f32),
@@ -167,6 +168,7 @@ pub(super) fn queue_reliability_transition(
     current_state: EventState,
     event_enable: u8,
     cause: EventEnrollmentReliabilityCause,
+    referenced_value: CapturedReferencedValue,
 ) {
     let target = if desired == Reliability::NO_FAULT_DETECTED {
         EventState::NORMAL
@@ -189,6 +191,7 @@ pub(super) fn queue_reliability_transition(
             distribute: event_enable & transition_bit != 0,
             ack_required: ack_required_for_transition(db, enrollment, transition_bit),
             cause,
+            referenced_value,
         });
 }
 

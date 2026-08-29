@@ -1,8 +1,25 @@
 use super::device_bindings::{BindingFreshness, DeviceResolution};
 use super::*;
+use bacnet_objects::notification_class::local_day_and_time;
 use bacnet_types::constructed::BACnetAddress;
+use bacnet_types::primitives::Time;
 
 const GLOBAL_BROADCAST_NETWORK: u16 = 0xFFFF;
+
+pub(super) fn network_priority_for_event(priority: u8) -> NetworkPriority {
+    match priority {
+        0..=63 => NetworkPriority::LIFE_SAFETY,
+        64..=127 => NetworkPriority::CRITICAL_EQUIPMENT,
+        128..=191 => NetworkPriority::URGENT,
+        192..=255 => NetworkPriority::NORMAL,
+    }
+}
+
+pub(super) fn system_utc_recipient_filter_time(now: Duration) -> (u8, Time) {
+    let (today_bit, mut current_time) = local_day_and_time(now.as_secs(), 0);
+    current_time.hundredths = (now.subsec_millis() / 10) as u8;
+    (today_bit, current_time)
+}
 
 /// The transport action selected for one matched Notification Class recipient.
 pub(super) enum RecipientRoute {

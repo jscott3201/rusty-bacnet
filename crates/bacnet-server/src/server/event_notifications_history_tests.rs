@@ -3,13 +3,16 @@ use crate::event_enrollment::{
     CommittedEventEnrollmentDelivery, CommittedEventEnrollmentResult,
     EventEnrollmentReliabilityCause, EventEnrollmentReliabilityResult, EventEnrollmentTransition,
 };
+use crate::server::event_notification_payload::CommittedNotificationPayload;
 use crate::server::event_timestamp::SampledEventClock;
 use bacnet_objects::event::{
     EventStateChange, EventTransitionCommit, EventTransitionCommitError, TransitionOutcome,
 };
 use bacnet_objects::traits::BACnetObject;
+use bacnet_services::alarm_event::NotificationParameters;
 use bacnet_types::enums::{EventState, EventType};
 use bacnet_types::primitives::{BACnetTimeStamp, Date, Time};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Clone)]
 enum IndexedHistoryRead {
@@ -23,6 +26,8 @@ struct AtomicHistoryObject {
     event_type: Option<PropertyValue>,
     timestamps: [IndexedHistoryRead; 3],
     messages: [IndexedHistoryRead; 3],
+    status_flags: Option<PropertyValue>,
+    commits: Arc<AtomicUsize>,
 }
 
 impl AtomicHistoryObject {
@@ -90,6 +95,17 @@ impl BACnetObject for AtomicHistoryObject {
             p if p == PropertyIdentifier::EVENT_MESSAGE_TEXTS => {
                 Self::indexed(&self.messages, array_index)
             }
+            p if p == PropertyIdentifier::PRESENT_VALUE => Ok(PropertyValue::Real(50.0)),
+            p if p == PropertyIdentifier::STATUS_FLAGS => {
+                self.status_flags.clone().ok_or_else(|| Error::Protocol {
+                    class: ErrorClass::PROPERTY.to_raw() as u32,
+                    code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                })
+            }
+            p if p == PropertyIdentifier::RELIABILITY => Ok(PropertyValue::Enumerated(0)),
+            p if p == PropertyIdentifier::HIGH_LIMIT => Ok(PropertyValue::Real(80.0)),
+            p if p == PropertyIdentifier::LOW_LIMIT => Ok(PropertyValue::Real(20.0)),
+            p if p == PropertyIdentifier::DEADBAND => Ok(PropertyValue::Real(2.0)),
             _ => Err(Error::Protocol {
                 class: ErrorClass::PROPERTY.to_raw() as u32,
                 code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
@@ -119,6 +135,12 @@ impl BACnetObject for AtomicHistoryObject {
             PropertyIdentifier::NOTIFY_TYPE,
             PropertyIdentifier::EVENT_TIME_STAMPS,
             PropertyIdentifier::EVENT_MESSAGE_TEXTS,
+            PropertyIdentifier::PRESENT_VALUE,
+            PropertyIdentifier::STATUS_FLAGS,
+            PropertyIdentifier::RELIABILITY,
+            PropertyIdentifier::HIGH_LIMIT,
+            PropertyIdentifier::LOW_LIMIT,
+            PropertyIdentifier::DEADBAND,
         ])
     }
 
@@ -130,6 +152,7 @@ impl BACnetObject for AtomicHistoryObject {
         &mut self,
         _commit: EventTransitionCommit,
     ) -> Result<(), EventTransitionCommitError> {
+        self.commits.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 }
@@ -160,6 +183,11 @@ fn atomic_history_database(
         event_type: Some(PropertyValue::Enumerated(EventType::OUT_OF_RANGE.to_raw())),
         timestamps,
         messages,
+        status_flags: Some(PropertyValue::BitString {
+            unused_bits: 4,
+            data: vec![0],
+        }),
+        commits: Arc::new(AtomicUsize::new(0)),
     }))
     .unwrap();
     db.add(Box::new(
@@ -241,6 +269,13 @@ fn committed_enrollment_normal(
         }),
         ack_required: true,
         recipient_clock: SampledEventClock::Unavailable,
+        event_type: EventType::OUT_OF_RANGE,
+        event_values: CommittedNotificationPayload::for_test(NotificationParameters::OutOfRange {
+            exceeding_value: 1.0,
+            status_flags: 0,
+            deadband: 0.0,
+            exceeded_limit: 1.0,
+        }),
     }
 }
 
@@ -260,6 +295,14 @@ fn committed_enrollment_reliability(oid: ObjectIdentifier) -> CommittedEventEnro
         }),
         ack_required: true,
         recipient_clock: SampledEventClock::Unavailable,
+        event_type: EventType::CHANGE_OF_RELIABILITY,
+        event_values: CommittedNotificationPayload::for_test(
+            NotificationParameters::ChangeOfReliability {
+                reliability: bacnet_types::enums::Reliability::OVER_RANGE.to_raw(),
+                status_flags: 0,
+                property_values: Vec::new(),
+            },
+        ),
     }
 }
 
@@ -272,6 +315,11 @@ fn event_enrollment_projection_accepts_intentionally_absent_message_without_muta
         event_type: Some(PropertyValue::Enumerated(EventType::OUT_OF_RANGE.to_raw())),
         timestamps: repeated_timestamp_reads(BACnetTimeStamp::SequenceNumber(19)),
         messages: std::array::from_fn(|_| IndexedHistoryRead::Missing),
+        status_flags: Some(PropertyValue::BitString {
+            unused_bits: 4,
+            data: vec![0],
+        }),
+        commits: Arc::new(AtomicUsize::new(0)),
     }))
     .unwrap();
 
@@ -316,6 +364,11 @@ fn malformed_or_unreadable_event_enrollment_history_fails_closed_without_mutatio
             event_type: Some(PropertyValue::Enumerated(EventType::OUT_OF_RANGE.to_raw())),
             timestamps,
             messages: std::array::from_fn(|_| IndexedHistoryRead::Missing),
+            status_flags: Some(PropertyValue::BitString {
+                unused_bits: 4,
+                data: vec![0],
+            }),
+            commits: Arc::new(AtomicUsize::new(0)),
         }))
         .unwrap();
 
@@ -337,7 +390,7 @@ fn malformed_or_unreadable_event_enrollment_history_fails_closed_without_mutatio
 }
 
 #[test]
-fn unreadable_or_malformed_reliability_event_type_fails_closed_without_mutation() {
+fn committed_reliability_effective_type_does_not_reread_configured_event_type() {
     for (instance, event_type) in [
         None,
         Some(PropertyValue::Unsigned(2)),
@@ -353,6 +406,11 @@ fn unreadable_or_malformed_reliability_event_type_fails_closed_without_mutation(
             event_type,
             timestamps: repeated_timestamp_reads(BACnetTimeStamp::SequenceNumber(23)),
             messages: std::array::from_fn(|_| IndexedHistoryRead::Missing),
+            status_flags: Some(PropertyValue::BitString {
+                unused_bits: 4,
+                data: vec![0],
+            }),
+            commits: Arc::new(AtomicUsize::new(0)),
         }))
         .unwrap();
 
@@ -361,9 +419,50 @@ fn unreadable_or_malformed_reliability_event_type_fails_closed_without_mutation(
                 &db,
                 committed_enrollment_reliability(oid),
             )
-            .is_none()
+            .is_some()
         );
         assert_eq!(db.reserve_event_sequence_number().number(), 0);
+    }
+}
+
+#[test]
+fn malformed_or_missing_required_projection_commits_locally_but_cannot_emit() {
+    for (instance, status_flags) in [Some(PropertyValue::Unsigned(0)), None]
+        .into_iter()
+        .enumerate()
+    {
+        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 99 + instance as u32).unwrap();
+        let commits = Arc::new(AtomicUsize::new(0));
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(AtomicHistoryObject {
+            oid,
+            event_type: Some(PropertyValue::Enumerated(EventType::OUT_OF_RANGE.to_raw())),
+            timestamps: repeated_timestamp_reads(BACnetTimeStamp::SequenceNumber(31)),
+            messages: std::array::from_fn(|_| empty_message_read()),
+            status_flags,
+            commits: Arc::clone(&commits),
+        }))
+        .unwrap();
+
+        let committed = BACnetServer::<RecordingTransport>::commit_intrinsic_transition(
+            &mut db,
+            &oid,
+            TransitionOutcome {
+                change: EventStateChange {
+                    from: EventState::NORMAL,
+                    to: EventState::HIGH_LIMIT,
+                },
+                event_type: EventType::OUT_OF_RANGE,
+                distribute: true,
+            },
+        )
+        .expect("the local atomic transition remains committed");
+        assert_eq!(commits.load(Ordering::Relaxed), 1);
+        assert!(
+            !crate::server::event_notifications::ResolvedIntrinsicTransition::Committed(committed)
+                .can_emit(),
+            "malformed or missing required values suppress the frame before encoding"
+        );
     }
 }
 

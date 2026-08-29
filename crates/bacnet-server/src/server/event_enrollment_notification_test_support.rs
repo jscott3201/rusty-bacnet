@@ -6,9 +6,11 @@ use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
-use bacnet_services::alarm_event::EventNotificationRequest;
+use bacnet_services::alarm_event::{EventNotificationRequest, NotificationParameters};
 use bacnet_transport::port::TransportPort;
-use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetEventParameter};
+use bacnet_types::constructed::{
+    BACnetDeviceObjectPropertyReference, BACnetEventParameter, FaultParameters,
+};
 use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, EventType, Reliability};
 use bacnet_types::primitives::BACnetTimeStamp;
 use bytes::Bytes;
@@ -59,8 +61,8 @@ pub(super) struct ObservedObject {
     oid: ObjectIdentifier,
     name: String,
     value: PropertyValue,
-    reliability: PropertyValue,
-    status_flags: u8,
+    reliability: Option<PropertyValue>,
+    status_flags: Option<u8>,
 }
 
 impl ObservedObject {
@@ -69,23 +71,35 @@ impl ObservedObject {
             oid: ObjectIdentifier::new(ObjectType::ANALOG_VALUE, instance).unwrap(),
             name: format!("observed-{instance}"),
             value,
-            reliability: PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw()),
-            status_flags: 0,
+            reliability: Some(PropertyValue::Enumerated(
+                Reliability::NO_FAULT_DETECTED.to_raw(),
+            )),
+            status_flags: Some(0),
         }
     }
 
     pub(super) fn with_reliability(mut self, reliability: Reliability) -> Self {
-        self.reliability = PropertyValue::Enumerated(reliability.to_raw());
+        self.reliability = Some(PropertyValue::Enumerated(reliability.to_raw()));
         self
     }
 
     pub(super) fn with_reliability_value(mut self, reliability: PropertyValue) -> Self {
-        self.reliability = reliability;
+        self.reliability = Some(reliability);
         self
     }
 
     pub(super) fn with_status_flags(mut self, status_flags: u8) -> Self {
-        self.status_flags = status_flags;
+        self.status_flags = Some(status_flags);
+        self
+    }
+
+    pub(super) fn without_reliability(mut self) -> Self {
+        self.reliability = None;
+        self
+    }
+
+    pub(super) fn without_status_flags(mut self) -> Self {
+        self.status_flags = None;
         self
     }
 }
@@ -115,11 +129,22 @@ impl BACnetObject for ObservedObject {
                 Ok(PropertyValue::Enumerated(ObjectType::ANALOG_VALUE.to_raw()))
             }
             p if p == PropertyIdentifier::PRESENT_VALUE => Ok(self.value.clone()),
-            p if p == PropertyIdentifier::RELIABILITY => Ok(self.reliability.clone()),
-            p if p == PropertyIdentifier::STATUS_FLAGS => Ok(PropertyValue::BitString {
-                unused_bits: 4,
-                data: vec![self.status_flags],
-            }),
+            p if p == PropertyIdentifier::RELIABILITY => {
+                self.reliability.clone().ok_or(Error::Protocol {
+                    class: ErrorClass::PROPERTY.to_raw() as u32,
+                    code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                })
+            }
+            p if p == PropertyIdentifier::STATUS_FLAGS => self
+                .status_flags
+                .map(|status_flags| PropertyValue::BitString {
+                    unused_bits: 4,
+                    data: vec![status_flags],
+                })
+                .ok_or(Error::Protocol {
+                    class: ErrorClass::PROPERTY.to_raw() as u32,
+                    code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                }),
             _ => Err(Error::Protocol {
                 class: ErrorClass::PROPERTY.to_raw() as u32,
                 code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
@@ -136,11 +161,11 @@ impl BACnetObject for ObservedObject {
     ) -> Result<(), Error> {
         match (property, value) {
             (p, value) if p == PropertyIdentifier::PRESENT_VALUE => self.value = value,
-            (p, value) if p == PropertyIdentifier::RELIABILITY => self.reliability = value,
+            (p, value) if p == PropertyIdentifier::RELIABILITY => self.reliability = Some(value),
             (p, PropertyValue::BitString { data, .. })
                 if p == PropertyIdentifier::STATUS_FLAGS && data.len() == 1 =>
             {
-                self.status_flags = data[0];
+                self.status_flags = Some(data[0]);
             }
             _ => {
                 return Err(Error::Protocol {
@@ -314,7 +339,35 @@ pub(super) fn assert_committed_reliability_notifications(
         assert_eq!(notification.to_state, to.to_raw());
         assert!(notification.ack_required);
         assert_eq!(notification.message_text, None);
-        assert_eq!(notification.event_values, None);
+        let Some(NotificationParameters::ChangeOfReliability {
+            status_flags,
+            property_values,
+            ..
+        }) = notification.event_values.as_ref()
+        else {
+            panic!("Event Enrollment fault transition must carry CHANGE_OF_RELIABILITY values");
+        };
+        assert_eq!(
+            *status_flags,
+            if to == EventState::FAULT { 0b1100 } else { 0 }
+        );
+        let mut properties = Vec::new();
+        let mut position = 0;
+        while position < property_values.len() {
+            let (property, next) = BACnetPropertyValue::decode(property_values, position).unwrap();
+            assert!(next > position);
+            properties.push(property.property_identifier);
+            position = next;
+        }
+        assert_eq!(
+            properties,
+            vec![
+                PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
+                PropertyIdentifier::PRESENT_VALUE,
+                PropertyIdentifier::RELIABILITY,
+                PropertyIdentifier::STATUS_FLAGS,
+            ]
+        );
         assert_eq!(
             notification.timestamp,
             BACnetTimeStamp::SequenceNumber(first_sequence + offset as u16)
@@ -336,4 +389,53 @@ pub(super) fn event_state(db: &ObjectDatabase, oid: ObjectIdentifier) -> EventSt
         panic!("Event_State must be Enumerated");
     };
     EventState::from_raw(raw)
+}
+
+#[tokio::test(start_paused = true)]
+async fn event_enrollment_reliability_omits_only_unavailable_monitored_entries() {
+    let mut db = ObjectDatabase::new();
+    let target = ObservedObject::new(70, PropertyValue::Real(-1.0))
+        .without_reliability()
+        .without_status_flags();
+    let target_oid = target.object_identifier();
+    db.add(Box::new(target)).unwrap();
+    let mut enrollment = enrollment(
+        70,
+        EventType::OUT_OF_RANGE,
+        Some(target_oid),
+        out_of_range_parameters(0),
+    );
+    enrollment.set_fault_parameters(Some(FaultParameters::FaultOutOfRange {
+        min_normal: 0.0,
+        max_normal: 10.0,
+    }));
+    db.add(Box::new(enrollment)).unwrap();
+
+    let (mut server, sent) = start_server(db, true).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let notifications = drain_notifications(&sent);
+    assert_eq!(notifications.len(), 1);
+    let Some(NotificationParameters::ChangeOfReliability {
+        property_values, ..
+    }) = notifications[0].event_values.as_ref()
+    else {
+        panic!("fault transition must carry CHANGE_OF_RELIABILITY");
+    };
+    let mut identifiers = Vec::new();
+    let mut position = 0;
+    while position < property_values.len() {
+        let (property, next) = BACnetPropertyValue::decode(property_values, position).unwrap();
+        identifiers.push(property.property_identifier);
+        position = next;
+    }
+    assert_eq!(
+        identifiers,
+        vec![
+            PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
+            PropertyIdentifier::PRESENT_VALUE,
+        ],
+        "only unavailable monitored Reliability and Status_Flags may be omitted"
+    );
+    assert_eq!(notifications[0].message_text, None);
+    server.stop().await.unwrap();
 }

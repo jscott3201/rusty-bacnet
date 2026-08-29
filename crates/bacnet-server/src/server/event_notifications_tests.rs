@@ -115,7 +115,9 @@ async fn dcc_suppresses_periodic_event_send() {
 /// Panics with a useful message if no notification was sent (so a regression
 /// that silently drops the notification is caught rather than masking as
 /// "no broadcast = pass").
-fn decode_broadcast_notification(sent: &StdMutex<Vec<Bytes>>) -> EventNotificationRequest {
+pub(super) fn decode_broadcast_notification(
+    sent: &StdMutex<Vec<Bytes>>,
+) -> EventNotificationRequest {
     use bacnet_encoding::apdu::decode_apdu;
     use bacnet_encoding::npdu::decode_npdu;
 
@@ -632,31 +634,6 @@ async fn event_enable_cleared_suppresses_per_write_send() {
             .unwrap(),
         PropertyValue::Enumerated(EventState::HIGH_LIMIT.to_raw()),
         "Event_State advances even though the notification was suppressed"
-    );
-}
-
-/// The other direction: with TO_OFFNORMAL set, the notification IS sent.
-///
-/// Paired deliberately with the suppression test — a gate stuck permanently
-/// closed would satisfy that one alone. Together they pin the gate to
-/// `Event_Enable` rather than to a constant.
-#[tokio::test]
-async fn event_enable_set_permits_per_write_send() {
-    // TO_OFFNORMAL only: wire bit 0 = 0x80 (Clause 20.2.10).
-    let db = db_with_high_limit_transition(0x80);
-    let sent = broadcasts_from_per_write_path(&db, 0).await;
-
-    assert_eq!(
-        sent.len(),
-        1,
-        "Event_Enable with TO_OFFNORMAL set must distribute the notification"
-    );
-    let sent = StdMutex::new(sent);
-    let notif = decode_broadcast_notification(&sent);
-    assert_eq!(
-        notif.event_type,
-        EventType::OUT_OF_RANGE.to_raw(),
-        "the detector's non-FAULT OUT_OF_RANGE algorithm must reach the wire"
     );
 }
 

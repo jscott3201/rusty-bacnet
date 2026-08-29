@@ -860,6 +860,7 @@ mod device_bindings;
 mod dispatch;
 mod event_enrollment_lifecycle;
 mod event_message_policy;
+pub(crate) mod event_notification_payload;
 mod event_notifications;
 mod event_recipient_route;
 pub(crate) mod event_timestamp;

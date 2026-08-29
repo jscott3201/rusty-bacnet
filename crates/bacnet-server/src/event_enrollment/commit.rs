@@ -10,6 +10,10 @@ use bacnet_types::enums::{EventState, EventType, PropertyIdentifier, Reliability
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::EventEnrollmentTransition;
+use crate::server::event_notification_payload::{
+    project_event_enrollment_payload, CapturedReferencedValue, CommittedNotificationPayload,
+    EventEnrollmentProjectionSnapshot,
+};
 use crate::server::event_timestamp::{
     confirm_event_timestamp, stage_event_timestamp, SampledEventClock,
 };
@@ -192,6 +196,8 @@ pub(crate) struct CommittedEventEnrollmentDelivery {
     pub(crate) result: CommittedEventEnrollmentResult,
     pub(crate) ack_required: bool,
     pub(crate) recipient_clock: SampledEventClock,
+    pub(crate) event_type: EventType,
+    pub(crate) event_values: CommittedNotificationPayload,
 }
 
 /// Public report plus the commit-order stream consumed only by the server.
@@ -305,6 +311,7 @@ pub(super) struct FiredTransition {
     pub(super) to: EventState,
     pub(super) distribute: bool,
     pub(super) ack_required: bool,
+    pub(super) projection: EventEnrollmentProjectionSnapshot,
 }
 
 pub(super) struct ReliabilityUpdate {
@@ -316,6 +323,7 @@ pub(super) struct ReliabilityUpdate {
     pub(super) distribute: bool,
     pub(super) ack_required: bool,
     pub(super) cause: EventEnrollmentReliabilityCause,
+    pub(super) referenced_value: CapturedReferencedValue,
 }
 
 impl EnrollmentUpdate {
@@ -586,11 +594,32 @@ pub(super) fn apply_updates_for_delivery(
                 cause: reliability.cause,
             };
             report.reliability_results.push(result.clone());
-            deliveries.push(CommittedEventEnrollmentDelivery {
-                result: CommittedEventEnrollmentResult::Reliability(result),
-                ack_required: reliability.ack_required,
-                recipient_clock,
-            });
+            let event_type = EventType::CHANGE_OF_RELIABILITY;
+            if let Some(event_values) = project_event_enrollment_payload(
+                db,
+                oid,
+                reliability.monitored_oid,
+                result
+                    .state_change
+                    .as_ref()
+                    .expect("committed Reliability delivery has a state change"),
+                event_type,
+                None,
+                Some(&reliability.referenced_value),
+            ) {
+                deliveries.push(CommittedEventEnrollmentDelivery {
+                    result: CommittedEventEnrollmentResult::Reliability(result),
+                    ack_required: reliability.ack_required,
+                    recipient_clock,
+                    event_type,
+                    event_values,
+                });
+            } else {
+                tracing::debug!(
+                    enrollment = %oid,
+                    "Committed Event Enrollment reliability payload rejected; suppressing distribution"
+                );
+            }
             continue;
         }
 
@@ -660,11 +689,29 @@ pub(super) fn apply_updates_for_delivery(
             distribute: fired.distribute,
         };
         report.transitions.push(result.clone());
-        deliveries.push(CommittedEventEnrollmentDelivery {
-            result: CommittedEventEnrollmentResult::Normal(result),
-            ack_required: fired.ack_required,
-            recipient_clock,
-        });
+        if let Some(event_values) = project_event_enrollment_payload(
+            db,
+            oid,
+            Some(fired.monitored_oid),
+            &result.change,
+            event_type,
+            Some(&fired.projection),
+            None,
+        ) {
+            deliveries.push(CommittedEventEnrollmentDelivery {
+                result: CommittedEventEnrollmentResult::Normal(result),
+                ack_required: fired.ack_required,
+                recipient_clock,
+                event_type,
+                event_values,
+            });
+        } else {
+            tracing::debug!(
+                enrollment = %oid,
+                ?event_type,
+                "Committed Event Enrollment payload rejected; suppressing distribution"
+            );
+        }
     }
 
     EventEnrollmentEvaluationBatch { report, deliveries }

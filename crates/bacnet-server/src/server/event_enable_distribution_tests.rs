@@ -20,6 +20,7 @@ use bacnet_objects::binary::{BinaryInputObject, BinaryValueObject};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::multistate::{MultiStateInputObject, MultiStateValueObject};
 use bacnet_objects::traits::BACnetObject;
+use bacnet_services::alarm_event::NotificationParameters;
 use bacnet_services::list_manipulation::ListElementRequest;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::bitstring::EventTransitionBits;
@@ -62,6 +63,42 @@ impl TransportPort for RecordingTransport {
 /// The state value the fixture treats as an alarm, and the one it does not.
 const ALARM_STATE: u64 = 2;
 const NORMAL_STATE: u64 = 1;
+
+#[tokio::test]
+async fn analog_event_enable_set_delivers_committed_event_values() {
+    use super::event_notifications_tests::{
+        broadcasts_from_per_write_path, db_with_high_limit_transition,
+        decode_broadcast_notification,
+    };
+
+    let db = db_with_high_limit_transition(0x80);
+    db.write()
+        .await
+        .get_mut(&ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap())
+        .unwrap()
+        .write_property(
+            PropertyIdentifier::NOTIFY_TYPE,
+            None,
+            PropertyValue::Enumerated(NotifyType::EVENT.to_raw()),
+            None,
+        )
+        .unwrap();
+    let sent = broadcasts_from_per_write_path(&db, 0).await;
+
+    assert_eq!(sent.len(), 1);
+    let notification = decode_broadcast_notification(&StdMutex::new(sent));
+    assert_eq!(notification.notify_type, NotifyType::EVENT.to_raw());
+    assert_eq!(notification.event_type, EventType::OUT_OF_RANGE.to_raw());
+    assert_eq!(
+        notification.event_values,
+        Some(NotificationParameters::OutOfRange {
+            exceeding_value: 81.0,
+            status_flags: 0b1000,
+            deadband: 2.0,
+            exceeded_limit: 80.0,
+        })
+    );
+}
 
 /// A Multi-state Input in a one-object database, plus what the per-write
 /// notification path needs to run against it.
