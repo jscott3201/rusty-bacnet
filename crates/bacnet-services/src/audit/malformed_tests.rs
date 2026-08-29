@@ -1,6 +1,7 @@
 use super::*;
 use bacnet_encoding::{constructed::encode_recipient, primitives, tags};
 use bacnet_types::enums::ObjectType;
+use bacnet_types::primitives::{Date, Time};
 use bacnet_types::MacAddr;
 
 fn device(instance: u32) -> ObjectIdentifier {
@@ -366,4 +367,160 @@ fn decoder_requires_full_service_consumption() {
 
     let wrong_wrapper = [0x1e, 0x1f];
     assert!(AuditNotificationRequest::decode(&wrong_wrapper).is_err());
+}
+
+fn query_ack(datum: BACnetAuditLogDatum) -> AuditLogQueryAck {
+    AuditLogQueryAck {
+        audit_log: ObjectIdentifier::new(ObjectType::AUDIT_LOG, 1).unwrap(),
+        records: vec![BACnetAuditLogRecordResult {
+            sequence_number: 1,
+            record: BACnetAuditLogRecord {
+                timestamp: (
+                    Date {
+                        year: 126,
+                        month: 8,
+                        day: 29,
+                        day_of_week: 6,
+                    },
+                    Time {
+                        hour: 12,
+                        minute: 34,
+                        second: 56,
+                        hundredths: 78,
+                    },
+                ),
+                datum,
+            },
+        }],
+        no_more_items: false,
+    }
+}
+
+fn encode_query_ack(datum: BACnetAuditLogDatum) -> Vec<u8> {
+    let mut encoded = BytesMut::new();
+    query_ack(datum).encode(&mut encoded).unwrap();
+    encoded.to_vec()
+}
+
+#[test]
+fn query_ack_rejects_unsigned_boolean_and_top_level_malformations() {
+    let canonical = encode_query_ack(BACnetAuditLogDatum::LogStatus(0));
+    let sequence = canonical
+        .windows(2)
+        .position(|bytes| bytes == [0x09, 1])
+        .unwrap();
+
+    let mut noncanonical = canonical.clone();
+    noncanonical.splice(sequence..sequence + 2, [0x0a, 0, 1]);
+    assert!(AuditLogQueryAck::decode(&noncanonical).is_err());
+
+    let mut over_wide = canonical.clone();
+    over_wide.splice(sequence..sequence + 2, [0x0d, 9, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+    assert!(AuditLogQueryAck::decode(&over_wide).is_err());
+
+    let mut non_boolean = canonical.clone();
+    *non_boolean.last_mut().unwrap() = 2;
+    assert!(AuditLogQueryAck::decode(&non_boolean).is_err());
+
+    let mut missing_boolean = canonical.clone();
+    missing_boolean.truncate(missing_boolean.len() - 2);
+    assert!(AuditLogQueryAck::decode(&missing_boolean).is_err());
+
+    let mut trailing = canonical.clone();
+    trailing.push(0);
+    assert!(AuditLogQueryAck::decode(&trailing).is_err());
+
+    let mut wrong_list = canonical.clone();
+    wrong_list[5] = 0x2e;
+    assert!(AuditLogQueryAck::decode(&wrong_list).is_err());
+
+    let mut mismatched_list = canonical;
+    let list_close = mismatched_list.len() - 3;
+    mismatched_list[list_close] = 0x0f;
+    assert!(AuditLogQueryAck::decode(&mismatched_list).is_err());
+}
+
+#[test]
+fn query_ack_rejects_malformed_date_time_and_datum_choices() {
+    let canonical = encode_query_ack(BACnetAuditLogDatum::LogStatus(0b010));
+
+    let date = canonical.iter().position(|byte| *byte == 0xa4).unwrap();
+    let mut invalid_date = canonical.clone();
+    invalid_date[date + 2] = 0;
+    assert!(AuditLogQueryAck::decode(&invalid_date).is_err());
+
+    let time = canonical.iter().position(|byte| *byte == 0xb4).unwrap();
+    let mut invalid_time = canonical.clone();
+    invalid_time[time + 1] = 24;
+    assert!(AuditLogQueryAck::decode(&invalid_time).is_err());
+
+    let status = canonical
+        .windows(3)
+        .position(|bytes| bytes == [0x0a, 5, 0x40])
+        .unwrap();
+    let mut bad_unused = canonical.clone();
+    bad_unused[status + 1] = 4;
+    assert!(AuditLogQueryAck::decode(&bad_unused).is_err());
+
+    let mut bad_padding = canonical.clone();
+    bad_padding[status + 2] |= 1;
+    assert!(AuditLogQueryAck::decode(&bad_padding).is_err());
+
+    let mut wrong_class = canonical;
+    wrong_class[status] = 0x82;
+    assert!(AuditLogQueryAck::decode(&wrong_class).is_err());
+
+    let mut real = encode_query_ack(BACnetAuditLogDatum::TimeChange(1.5));
+    let real_tag = real.iter().position(|byte| *byte == 0x2c).unwrap();
+    real[real_tag] = 0x2b;
+    assert!(AuditLogQueryAck::decode(&real).is_err());
+}
+
+#[test]
+fn query_ack_nested_notification_requires_complete_consumption() {
+    let notification = minimal_notification(AuditOperation::WRITE);
+    let mut encoded = encode_query_ack(BACnetAuditLogDatum::AuditNotification(notification));
+    let target_close = encoded.iter().position(|byte| *byte == 0xaf).unwrap();
+    encoded.insert(target_close + 1, 0x00);
+    assert!(AuditLogQueryAck::decode(&encoded).is_err());
+}
+
+#[test]
+fn query_ack_record_list_accepts_limit_and_rejects_one_more() {
+    let record = BACnetAuditLogRecordResult {
+        sequence_number: 0,
+        record: query_ack(BACnetAuditLogDatum::LogStatus(0))
+            .records
+            .pop()
+            .unwrap()
+            .record,
+    };
+    let at_limit = AuditLogQueryAck {
+        audit_log: ObjectIdentifier::new(ObjectType::AUDIT_LOG, 1).unwrap(),
+        records: vec![record.clone(); crate::common::MAX_DECODED_ITEMS],
+        no_more_items: true,
+    };
+    let mut encoded = BytesMut::new();
+    at_limit.encode(&mut encoded).unwrap();
+    assert_eq!(
+        AuditLogQueryAck::decode(&encoded).unwrap().records.len(),
+        crate::common::MAX_DECODED_ITEMS
+    );
+
+    let item = encoded[6..encoded.len() - 3].to_vec();
+    let mut over_limit = encoded;
+    over_limit.truncate(over_limit.len() - 3);
+    over_limit.extend_from_slice(&item[..item.len() / crate::common::MAX_DECODED_ITEMS]);
+    tags::encode_closing_tag(&mut over_limit, 1);
+    primitives::encode_ctx_boolean(&mut over_limit, 2, true);
+    assert!(AuditLogQueryAck::decode(&over_limit).is_err());
+
+    let over_limit_model = AuditLogQueryAck {
+        audit_log: ObjectIdentifier::new(ObjectType::AUDIT_LOG, 1).unwrap(),
+        records: vec![record; crate::common::MAX_DECODED_ITEMS + 1],
+        no_more_items: false,
+    };
+    let mut output = BytesMut::from(&b"prefix"[..]);
+    assert!(over_limit_model.encode(&mut output).is_err());
+    assert_eq!(output.as_ref(), b"prefix");
 }

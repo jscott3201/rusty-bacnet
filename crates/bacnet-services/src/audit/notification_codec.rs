@@ -33,7 +33,7 @@ pub(super) fn encode(request: &AuditNotificationRequest, buf: &mut BytesMut) -> 
     Ok(())
 }
 
-fn encode_notification(
+pub(super) fn encode_notification(
     notification: &BACnetAuditNotification,
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
@@ -184,7 +184,7 @@ pub(super) fn decode(data: &[u8]) -> Result<AuditNotificationRequest, Error> {
     Ok(AuditNotificationRequest { notifications })
 }
 
-fn decode_notification(
+pub(super) fn decode_notification(
     data: &[u8],
     mut offset: usize,
 ) -> Result<(BACnetAuditNotification, usize), Error> {

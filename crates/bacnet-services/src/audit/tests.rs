@@ -1,14 +1,15 @@
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::bitstring::AuditOperationFlags;
 use bacnet_types::constructed::{BACnetAddress, BACnetRecipient};
-use bacnet_types::enums::{AuditOperation, ObjectType, PropertyIdentifier};
-use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::enums::{AuditOperation, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
+use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 use bacnet_types::MacAddr;
 use bytes::BytesMut;
 
 use super::{
-    AuditLogQueryRequest, AuditNotificationRequest, AuditPropertyReference,
-    BACnetAuditLogQueryParameters, BACnetAuditNotification,
+    AuditLogQueryAck, AuditLogQueryRequest, AuditNotificationRequest, AuditPropertyReference,
+    BACnetAuditLogDatum, BACnetAuditLogQueryParameters, BACnetAuditLogRecord,
+    BACnetAuditLogRecordResult, BACnetAuditNotification,
 };
 
 fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
@@ -388,4 +389,163 @@ fn encode_outer_suffix(buf: &mut BytesMut, choice: u8) {
     tags::encode_closing_tag(buf, choice);
     tags::encode_closing_tag(buf, 1);
     primitives::encode_ctx_unsigned(buf, 3, 1);
+}
+
+fn audit_record(datum: BACnetAuditLogDatum) -> BACnetAuditLogRecord {
+    BACnetAuditLogRecord {
+        timestamp: (
+            Date {
+                year: 126,
+                month: 8,
+                day: 29,
+                day_of_week: 6,
+            },
+            Time {
+                hour: 12,
+                minute: 34,
+                second: 56,
+                hundredths: 78,
+            },
+        ),
+        datum,
+    }
+}
+
+fn ack_notification() -> BACnetAuditNotification {
+    BACnetAuditNotification {
+        source_timestamp: None,
+        target_timestamp: None,
+        source_device: BACnetRecipient::Device(oid(ObjectType::DEVICE, 1)),
+        source_object: None,
+        operation: AuditOperation::WRITE,
+        source_comment: None,
+        target_comment: None,
+        invoke_id: None,
+        source_user_id: None,
+        source_user_role: None,
+        target_device: BACnetRecipient::Device(oid(ObjectType::DEVICE, 2)),
+        target_object: None,
+        target_property: None,
+        target_priority: None,
+        target_value: None,
+        current_value: None,
+        result: Some((ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED)),
+    }
+}
+
+#[test]
+fn audit_log_query_ack_empty_matches_clause_21_literal() {
+    let ack = AuditLogQueryAck {
+        audit_log: oid(ObjectType::AUDIT_LOG, 1),
+        records: Vec::new(),
+        no_more_items: true,
+    };
+    let mut encoded = BytesMut::new();
+    ack.try_encode(&mut encoded).unwrap();
+
+    assert_eq!(
+        encoded.as_ref(),
+        &[0x0c, 0x0f, 0x40, 0x00, 0x01, 0x1e, 0x1f, 0x29, 0x01]
+    );
+    assert_eq!(AuditLogQueryAck::decode(&encoded).unwrap(), ack);
+}
+
+#[test]
+fn audit_log_query_ack_log_status_matches_clause_21_literal() {
+    let ack = AuditLogQueryAck {
+        audit_log: oid(ObjectType::AUDIT_LOG, 1),
+        records: vec![BACnetAuditLogRecordResult {
+            sequence_number: 1,
+            record: audit_record(BACnetAuditLogDatum::LogStatus(0b010)),
+        }],
+        no_more_items: false,
+    };
+    let expected = [
+        0x0c, 0x0f, 0x40, 0x00, 0x01, // audit-log [0]
+        0x1e, // list-of-records [1]
+        0x09, 0x01, // sequence-number [0]
+        0x1e, // record [1]
+        0x0e, 0xa4, 126, 8, 29, 6, 0xb4, 12, 34, 56, 78, 0x0f, // timestamp [0]
+        0x1e, 0x0a, 5, 0x40, 0x1f, // datum [1], log-status [0]
+        0x1f, // end record
+        0x1f, // end list
+        0x29, 0x00, // no-more-items [2]
+    ];
+
+    let mut encoded = BytesMut::new();
+    ack.try_encode(&mut encoded).unwrap();
+    assert_eq!(encoded.as_ref(), expected);
+    assert_eq!(AuditLogQueryAck::decode(&expected).unwrap(), ack);
+}
+
+#[test]
+fn audit_log_query_ack_nested_notification_with_error_matches_literal() {
+    let notification = ack_notification();
+    let ack = AuditLogQueryAck {
+        audit_log: oid(ObjectType::AUDIT_LOG, 1),
+        records: vec![BACnetAuditLogRecordResult {
+            sequence_number: 2,
+            record: audit_record(BACnetAuditLogDatum::AuditNotification(notification.clone())),
+        }],
+        no_more_items: true,
+    };
+    let expected = [
+        0x0c, 0x0f, 0x40, 0x00, 0x01, 0x1e, 0x09, 0x02, 0x1e, 0x0e, 0xa4, 126, 8, 29, 6, 0xb4, 12,
+        34, 56, 78, 0x0f, 0x1e, // datum [1]
+        0x1e, // notification alternative [1]
+        0x2e, 0x0c, 0x02, 0x00, 0x00, 0x01, 0x2f, // source-device
+        0x49, 0x01, // WRITE operation
+        0xae, 0x0c, 0x02, 0x00, 0x00, 0x02, 0xaf, // target-device
+        0xfe, 16, 0x91, 0x02, 0x91, 0x28, 0xff, 16, // optional Error [16]
+        0x1f, 0x1f, 0x1f, 0x1f, 0x29, 0x01,
+    ];
+
+    let mut encoded = BytesMut::new();
+    ack.encode(&mut encoded).unwrap();
+    assert_eq!(encoded.as_ref(), expected);
+    assert_eq!(AuditLogQueryAck::decode(&expected).unwrap(), ack);
+}
+
+#[test]
+fn audit_log_query_ack_time_change_and_adjacent_results_match_literal() {
+    let ack = AuditLogQueryAck {
+        audit_log: oid(ObjectType::AUDIT_LOG, 1),
+        records: vec![
+            BACnetAuditLogRecordResult {
+                sequence_number: u64::MAX,
+                record: audit_record(BACnetAuditLogDatum::TimeChange(1.5)),
+            },
+            BACnetAuditLogRecordResult {
+                sequence_number: 0,
+                record: audit_record(BACnetAuditLogDatum::LogStatus(0)),
+            },
+        ],
+        no_more_items: false,
+    };
+    let expected = [
+        0x0c, 0x0f, 0x40, 0x00, 0x01, 0x1e, 0x0d, 0x08, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x1e, 0x0e, 0xa4, 126, 8, 29, 6, 0xb4, 12, 34, 56, 78, 0x0f, 0x1e, 0x2c, 0x3f, 0xc0,
+        0x00, 0x00, 0x1f, 0x1f, 0x09, 0x00, 0x1e, 0x0e, 0xa4, 126, 8, 29, 6, 0xb4, 12, 34, 56, 78,
+        0x0f, 0x1e, 0x0a, 5, 0x00, 0x1f, 0x1f, 0x1f, 0x29, 0x00,
+    ];
+
+    let mut encoded = BytesMut::new();
+    ack.encode(&mut encoded).unwrap();
+    assert_eq!(encoded.as_ref(), expected);
+    assert_eq!(AuditLogQueryAck::decode(&expected).unwrap(), ack);
+}
+
+#[test]
+fn audit_log_query_ack_encode_is_atomic() {
+    let ack = AuditLogQueryAck {
+        audit_log: oid(ObjectType::AUDIT_LOG, 1),
+        records: vec![BACnetAuditLogRecordResult {
+            sequence_number: 1,
+            record: audit_record(BACnetAuditLogDatum::LogStatus(0b1000)),
+        }],
+        no_more_items: false,
+    };
+    let mut output = BytesMut::from(&b"prefix"[..]);
+    assert!(ack.try_encode(&mut output).is_err());
+    assert_eq!(output.as_ref(), b"prefix");
 }
