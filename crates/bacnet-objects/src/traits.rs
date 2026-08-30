@@ -11,7 +11,7 @@ use bacnet_types::enums::{
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
-use crate::audit::AuditLogStorage;
+use crate::audit::{AuditLogNotificationSink, AuditLogStorage};
 use crate::clock::ClockReader;
 use crate::event::{EventTransitionCommit, EventTransitionCommitError, TransitionOutcome};
 use crate::event_enrollment::{
@@ -545,6 +545,16 @@ pub trait BACnetObject: Send + Sync {
     /// does not opt in is reported as SERVICES /
     /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
     fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {
+        None
+    }
+
+    /// Mutably borrow this object's Audit notification receiver capability.
+    ///
+    /// The default opts out. Implementations own their persistence transaction
+    /// and must leave memory unchanged when the batch cannot be committed.
+    fn audit_log_notification_sink_internal(
+        &mut self,
+    ) -> Option<&mut dyn AuditLogNotificationSink> {
         None
     }
 

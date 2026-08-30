@@ -111,6 +111,21 @@ impl ScServerBuilder {
         self
     }
 
+    /// Select the only local Audit Log that receives authorized notifications.
+    pub fn audit_notification_sink(mut self, sink: ObjectIdentifier) -> Self {
+        self.config.audit_notification_sink = Some(sink);
+        self
+    }
+
+    /// Set the fail-closed ConfirmedAuditNotification authorization policy.
+    pub fn audit_notification_authorizer<F>(mut self, authorizer: F) -> Self
+    where
+        F: Fn(&AuditNotificationAuthorizationContext) -> bool + Send + Sync + 'static,
+    {
+        self.config.audit_notification_authorizer = Some(Arc::new(authorizer));
+        self
+    }
+
     /// Enable periodic fault detection / reliability evaluation.
     pub fn enable_fault_detection(mut self, enabled: bool) -> Self {
         self.config.enable_fault_detection = enabled;

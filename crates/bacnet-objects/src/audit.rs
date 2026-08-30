@@ -16,7 +16,9 @@ use crate::clock::ClockReader;
 use crate::common::read_property_list_property;
 use crate::traits::{BACnetObject, WritePropertyRollback};
 
+mod notification;
 mod persistence;
+pub use notification::AuditLogNotificationSink;
 use persistence::{validate_record, validate_snapshot};
 pub use persistence::{
     AuditLogPersistence, AuditLogSnapshot, FileAuditLogPersistence, MAX_AUDIT_RECORDS,
@@ -515,6 +517,12 @@ impl BACnetObject for AuditLogObject {
         Some(self)
     }
 
+    fn audit_log_notification_sink_internal(
+        &mut self,
+    ) -> Option<&mut dyn AuditLogNotificationSink> {
+        Some(self)
+    }
+
     fn capture_write_property_rollback(
         &mut self,
         property: PropertyIdentifier,
@@ -662,3 +670,7 @@ mod tests;
 #[cfg(test)]
 #[path = "audit/query_tests.rs"]
 mod query_tests;
+
+#[cfg(test)]
+#[path = "audit/notification_tests.rs"]
+mod notification_tests;

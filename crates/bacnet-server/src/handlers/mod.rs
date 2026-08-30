@@ -37,6 +37,7 @@ use crate::cov::{CovNotificationKind, CovSubscription, CovSubscriptionTable};
 
 mod alarm_event;
 mod audit_log_query;
+mod audit_notification;
 mod cov;
 mod device_mgmt;
 mod file;
@@ -47,6 +48,7 @@ mod write_property;
 
 pub use alarm_event::*;
 pub use audit_log_query::*;
+pub use audit_notification::*;
 pub use cov::*;
 pub use device_mgmt::*;
 pub use file::*;

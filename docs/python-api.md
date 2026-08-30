@@ -995,10 +995,12 @@ raw = await client.audit_log_query(
 These three methods are generic outbound byte paths. They do not validate the
 payload or provide structured Python audit models. A bundled server with an
 explicitly persisted Audit Log object can execute the raw AuditLogQuery payload
-against its retained in-memory records and return a raw typed ACK payload. Its
-confirmed and unconfirmed AuditNotification receivers remain unsupported, and
-query authorization, ingestion, and replay policy remain application/follow-up
-work.
+against its retained in-memory records and return a raw typed ACK payload. The
+Rust server API can also receive ConfirmedAuditNotification when an application
+explicitly configures one sink and a fail-closed authorizer; this release adds
+no Python builder for that receiver. Unconfirmed receipt, query authorization,
+durable idempotency, and a high-level structured Python Audit API remain
+unsupported.
 
 ---
 

@@ -50,6 +50,10 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bacnet_types::MacAddr;
 
+use crate::audit_notification::{
+    AuditNotificationAuthorizationContext, AuditNotificationAuthorizer, DuplicateAdmission,
+    MAX_AUDIT_NOTIFICATIONS, MAX_AUDIT_NOTIFICATION_BYTES,
+};
 use crate::cov::{CovNotificationKind, CovSubscription, CovSubscriptionTable};
 use crate::handlers;
 use crate::life_safety::{LifeSafetyOperationAuthorizationContext, LifeSafetyOperationAuthorizer};
@@ -293,6 +297,15 @@ pub struct ServerConfig {
     /// Absence is fail-closed: requests receive SERVICES /
     /// SERVICE_REQUEST_DENIED before object mutation.
     pub life_safety_operation_authorizer: Option<LifeSafetyOperationAuthorizer>,
+    /// Exactly one explicitly configured Audit Log notification sink.
+    ///
+    /// Absence is fail-closed; the server never selects a sink by database
+    /// iteration order.
+    pub audit_notification_sink: Option<ObjectIdentifier>,
+    /// Optional fast, nonblocking ConfirmedAuditNotification authorizer.
+    ///
+    /// Absence, `false`, or a panic denies the request before mutation.
+    pub audit_notification_authorizer: Option<AuditNotificationAuthorizer>,
     /// Optional password required for DeviceCommunicationControl.
     pub dcc_password: Option<String>,
     /// Optional password required for ReinitializeDevice.
@@ -364,6 +377,14 @@ impl std::fmt::Debug for ServerConfig {
                     .as_ref()
                     .map(|_| "<callback>"),
             )
+            .field("audit_notification_sink", &self.audit_notification_sink)
+            .field(
+                "audit_notification_authorizer",
+                &self
+                    .audit_notification_authorizer
+                    .as_ref()
+                    .map(|_| "<callback>"),
+            )
             .field("dcc_password", &self.dcc_password.as_ref().map(|_| "***"))
             .field(
                 "reinit_password",
@@ -391,6 +412,8 @@ impl Default for ServerConfig {
             cov_retry_timeout_ms: 3000,
             on_time_sync: None,
             life_safety_operation_authorizer: None,
+            audit_notification_sink: None,
+            audit_notification_authorizer: None,
             dcc_password: None,
             reinit_password: None,
             enable_fault_detection: false,
@@ -445,6 +468,21 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
         F: Fn(&LifeSafetyOperationAuthorizationContext) -> bool + Send + Sync + 'static,
     {
         self.config.life_safety_operation_authorizer = Some(Arc::new(authorizer));
+        self
+    }
+
+    /// Select the only local Audit Log that receives authorized notifications.
+    pub fn audit_notification_sink(mut self, sink: ObjectIdentifier) -> Self {
+        self.config.audit_notification_sink = Some(sink);
+        self
+    }
+
+    /// Set the fail-closed ConfirmedAuditNotification authorization policy.
+    pub fn audit_notification_authorizer<F>(mut self, authorizer: F) -> Self
+    where
+        F: Fn(&AuditNotificationAuthorizationContext) -> bool + Send + Sync + 'static,
+    {
+        self.config.audit_notification_authorizer = Some(Arc::new(authorizer));
         self
     }
 
@@ -559,6 +597,21 @@ impl BipServerBuilder {
         F: Fn(&LifeSafetyOperationAuthorizationContext) -> bool + Send + Sync + 'static,
     {
         self.config.life_safety_operation_authorizer = Some(Arc::new(authorizer));
+        self
+    }
+
+    /// Select the only local Audit Log that receives authorized notifications.
+    pub fn audit_notification_sink(mut self, sink: ObjectIdentifier) -> Self {
+        self.config.audit_notification_sink = Some(sink);
+        self
+    }
+
+    /// Set the fail-closed ConfirmedAuditNotification authorization policy.
+    pub fn audit_notification_authorizer<F>(mut self, authorizer: F) -> Self
+    where
+        F: Fn(&AuditNotificationAuthorizationContext) -> bool + Send + Sync + 'static,
+    {
+        self.config.audit_notification_authorizer = Some(Arc::new(authorizer));
         self
     }
 
@@ -871,6 +924,8 @@ mod requests;
 mod sc_builder;
 #[cfg(test)]
 pub(crate) use requests::{EXECUTED_CONFIRMED, EXECUTED_UNCONFIRMED};
+#[cfg(test)]
+mod audit_notification_tests;
 #[cfg(feature = "sc-tls")]
 pub use sc_builder::ScServerBuilder;
 mod responses;
