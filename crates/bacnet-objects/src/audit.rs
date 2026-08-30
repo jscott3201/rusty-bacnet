@@ -13,7 +13,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
 use crate::clock::ClockReader;
 use crate::common::read_property_list_property;
-use crate::traits::BACnetObject;
+use crate::traits::{BACnetObject, WritePropertyRollback};
 
 mod persistence;
 use persistence::{validate_record, validate_snapshot};
@@ -38,6 +38,10 @@ pub struct AuditLogObject {
     generation: u64,
     persistence: Arc<dyn AuditLogPersistence>,
     clock: Option<Arc<dyn ClockReader>>,
+}
+
+struct AuditLogWriteRollback {
+    snapshot: AuditLogSnapshot,
 }
 
 const LOG_DISABLED_STATUS: u8 = 0b001;
@@ -181,14 +185,20 @@ impl AuditLogObject {
             .generation
             .checked_add(1)
             .ok_or_else(|| Error::OutOfRange("AuditLog persistence generation exhausted".into()))?;
-        Ok(AuditLogSnapshot {
+        let mut snapshot = self.current_snapshot();
+        snapshot.generation = generation;
+        Ok(snapshot)
+    }
+
+    fn current_snapshot(&self) -> AuditLogSnapshot {
+        AuditLogSnapshot {
             object_identifier: self.oid,
-            generation,
+            generation: self.generation,
             capacity: self.buffer_size,
             log_enable: self.log_enable,
             total_record_count: self.total_record_count,
             records: self.buffer.iter().cloned().collect(),
-        })
+        }
     }
 
     fn commit_and_apply(&mut self, snapshot: AuditLogSnapshot) -> Result<(), Error> {
@@ -347,6 +357,38 @@ impl BACnetObject for AuditLogObject {
 
     fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
         self.clock = clock;
+    }
+
+    fn capture_write_property_rollback(
+        &mut self,
+        property: PropertyIdentifier,
+        value: &PropertyValue,
+    ) -> Option<WritePropertyRollback> {
+        let PropertyValue::Boolean(requested) = value else {
+            return None;
+        };
+        (property == PropertyIdentifier::LOG_ENABLE && *requested != self.log_enable).then(|| {
+            WritePropertyRollback::new(AuditLogWriteRollback {
+                snapshot: self.current_snapshot(),
+            })
+        })
+    }
+
+    fn restore_write_property_rollback(
+        &mut self,
+        rollback: WritePropertyRollback,
+    ) -> Result<(), Error> {
+        let mut snapshot = rollback.downcast::<AuditLogWriteRollback>()?.snapshot;
+        if snapshot.object_identifier != self.oid || snapshot.capacity != self.buffer_size {
+            return Err(Error::Encoding(
+                "AuditLog rollback snapshot does not belong to this object".into(),
+            ));
+        }
+        snapshot.generation = self
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| Error::OutOfRange("AuditLog persistence generation exhausted".into()))?;
+        self.commit_and_apply(snapshot)
     }
 }
 

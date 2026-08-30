@@ -1,15 +1,63 @@
 use super::*;
 use bacnet_objects::access_control::AccessDoorObject;
+use bacnet_objects::audit::{AuditLogObject, FileAuditLogPersistence};
 use bacnet_objects::binary::BinaryValueObject;
+use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::event_log::EventLogObject;
 use bacnet_objects::network_port::NetworkPortObject;
 use bacnet_objects::traits::WritePropertyRollback;
 use bacnet_objects::trend::{TrendLogMultipleObject, TrendLogObject};
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
-use bacnet_types::constructed::{BACnetLogRecord, LogDatum};
+use bacnet_types::constructed::{
+    BACnetAuditLogDatum, BACnetAuditLogRecord, BACnetLogRecord, LogDatum,
+};
 use bacnet_types::primitives::{Date, Time};
 use std::borrow::Cow;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
+static AUDIT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn audit_temp_base() -> PathBuf {
+    let serial = AUDIT_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "rusty-bacnet-wpm-audit-{}-{serial}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir.join("state")
+}
+
+fn cleanup_audit_base(base: &std::path::Path) {
+    if let Some(parent) = base.parent() {
+        let _ = std::fs::remove_dir_all(parent);
+    }
+}
+
+struct FixedAuditClock;
+
+impl ClockReader for FixedAuditClock {
+    fn read_clock(&self) -> Option<ClockFrame> {
+        Some(ClockFrame {
+            local_date: Date {
+                year: 124,
+                month: 2,
+                day: 29,
+                day_of_week: 4,
+            },
+            local_time: Time {
+                hour: 12,
+                minute: 0,
+                second: 0,
+                hundredths: 0,
+            },
+            utc_offset: 0,
+            daylight_savings_status: false,
+        })
+    }
+}
 
 struct TokenBackedNameObject {
     oid: ObjectIdentifier,
@@ -466,4 +514,92 @@ fn log_record_count_rollback_restores_cleared_buffers() {
             "{oid:?}"
         );
     }
+}
+
+#[test]
+fn audit_log_enable_rollback_restores_memory_and_durable_state() {
+    let base = audit_temp_base();
+    let storage = Arc::new(FileAuditLogPersistence::new(&base).unwrap());
+    let mut audit = AuditLogObject::new(1, "AL-1", 4, storage.clone()).unwrap();
+    audit
+        .add_record(BACnetAuditLogRecord {
+            timestamp: (
+                Date {
+                    year: 124,
+                    month: 2,
+                    day: 29,
+                    day_of_week: 4,
+                },
+                Time {
+                    hour: 11,
+                    minute: 59,
+                    second: 0,
+                    hundredths: 0,
+                },
+            ),
+            datum: BACnetAuditLogDatum::TimeChange(1.0),
+        })
+        .unwrap();
+    let oid = audit.object_identifier();
+    let expected_records = audit.records().clone();
+    let expected_total = audit.total_record_count();
+
+    let mut db = ObjectDatabase::new();
+    db.set_clock_reader(Some(Arc::new(FixedAuditClock)));
+    db.add(Box::new(audit)).unwrap();
+    let before_enable = db
+        .get(&oid)
+        .unwrap()
+        .read_property(PropertyIdentifier::LOG_ENABLE, None)
+        .unwrap();
+    let before_count = db
+        .get(&oid)
+        .unwrap()
+        .read_property(PropertyIdentifier::RECORD_COUNT, None)
+        .unwrap();
+    let before_total = db
+        .get(&oid)
+        .unwrap()
+        .read_property(PropertyIdentifier::TOTAL_RECORD_COUNT, None)
+        .unwrap();
+
+    let mut disabled = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_boolean(&mut disabled, false);
+    let (result, residual_oids) = failed_wpm(
+        &mut db,
+        oid,
+        PropertyIdentifier::LOG_ENABLE,
+        disabled.to_vec(),
+        None,
+    );
+
+    assert!(result.is_err());
+    assert!(residual_oids.is_empty());
+    let object = db.get(&oid).unwrap();
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::LOG_ENABLE, None)
+            .unwrap(),
+        before_enable
+    );
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::RECORD_COUNT, None)
+            .unwrap(),
+        before_count
+    );
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::TOTAL_RECORD_COUNT, None)
+            .unwrap(),
+        before_total
+    );
+    drop(db);
+
+    let reopened = AuditLogObject::new(1, "AL-1", 4, storage).unwrap();
+    assert!(reopened.log_enable());
+    assert_eq!(reopened.records(), &expected_records);
+    assert_eq!(reopened.records().len() as u64, 1);
+    assert_eq!(reopened.total_record_count(), expected_total);
+    cleanup_audit_base(&base);
 }

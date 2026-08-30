@@ -36,6 +36,18 @@ fn cleanup_base(base: &std::path::Path) {
     }
 }
 
+fn rewrite_snapshot_checksum(data: &mut [u8]) {
+    let checksum_start = data.len() - 4;
+    let mut crc = !0u32;
+    for byte in &data[..checksum_start] {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xedb8_8320 & (0u32.wrapping_sub(crc & 1)));
+        }
+    }
+    data[checksum_start..].copy_from_slice(&(!crc).to_be_bytes());
+}
+
 fn oid(instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::AUDIT_LOG, instance).unwrap()
 }
@@ -315,7 +327,7 @@ fn newer_slot_corruption_falls_back_but_no_valid_slot_fails_closed() {
 }
 
 #[test]
-fn incompatible_newer_slot_never_falls_back_to_valid_prior_slot() {
+fn corrupted_header_falls_back_but_checksum_valid_incompatibility_is_fatal() {
     let base = temp_base("incompatible-newer");
     let storage = Arc::new(FileAuditLogPersistence::new(&base).unwrap());
     let mut log = AuditLogObject::new(1, "AL-1", 2, storage.clone()).unwrap();
@@ -328,11 +340,23 @@ fn incompatible_newer_slot_never_falls_back_to_valid_prior_slot() {
     let original = std::fs::read(&newest).unwrap();
     let mut unknown_version = original.clone();
     unknown_version[8..10].copy_from_slice(&2u16.to_be_bytes());
+    std::fs::write(&newest, &unknown_version).unwrap();
+    let recovered = AuditLogObject::new(1, "AL-1", 2, storage.clone()).unwrap();
+    assert!(recovered.records().is_empty());
+    drop(recovered);
+
+    let mut wrong_identity = original.clone();
+    wrong_identity[10..14].copy_from_slice(&oid(2).encode());
+    std::fs::write(&newest, &wrong_identity).unwrap();
+    let recovered = AuditLogObject::new(1, "AL-1", 2, storage.clone()).unwrap();
+    assert!(recovered.records().is_empty());
+    drop(recovered);
+
+    rewrite_snapshot_checksum(&mut unknown_version);
     std::fs::write(&newest, unknown_version).unwrap();
     assert!(AuditLogObject::new(1, "AL-1", 2, storage.clone()).is_err());
 
-    let mut wrong_identity = original;
-    wrong_identity[10..14].copy_from_slice(&oid(2).encode());
+    rewrite_snapshot_checksum(&mut wrong_identity);
     std::fs::write(&newest, wrong_identity).unwrap();
     assert!(AuditLogObject::new(1, "AL-1", 2, storage).is_err());
     cleanup_base(&base);
@@ -522,6 +546,74 @@ fn write_and_sync_failures_preserve_memory_and_prior_snapshot() {
         assert_eq!(log.total_record_count(), 0);
         assert_eq!(persistence.snapshot.lock().unwrap().as_ref(), Some(&before));
     }
+}
+
+#[test]
+fn log_enable_rollback_restores_exact_state_and_propagates_commit_failure() {
+    let persistence = Arc::new(MemoryPersistence::default());
+    let mut log = AuditLogObject::new(1, "AL-1", 4, persistence.clone()).unwrap();
+    log.add_record(record(1, BACnetAuditLogDatum::TimeChange(1.0)))
+        .unwrap();
+    log.bind_clock_internal(Some(Arc::new(FixedClock(Some(frame(2))))));
+    let before = persistence.snapshot.lock().unwrap().clone().unwrap();
+
+    assert!(log
+        .capture_write_property_rollback(
+            PropertyIdentifier::LOG_ENABLE,
+            &PropertyValue::Boolean(true),
+        )
+        .is_none());
+    assert!(log
+        .capture_write_property_rollback(
+            PropertyIdentifier::LOG_ENABLE,
+            &PropertyValue::Unsigned(0),
+        )
+        .is_none());
+
+    let rollback = log
+        .capture_write_property_rollback(
+            PropertyIdentifier::LOG_ENABLE,
+            &PropertyValue::Boolean(false),
+        )
+        .unwrap();
+    log.write_property(
+        PropertyIdentifier::LOG_ENABLE,
+        None,
+        PropertyValue::Boolean(false),
+        None,
+    )
+    .unwrap();
+    log.restore_write_property_rollback(rollback).unwrap();
+
+    let mut restored = before;
+    restored.generation = log.generation();
+    assert_matches_snapshot(&log, &restored);
+    assert_eq!(
+        persistence.snapshot.lock().unwrap().as_ref(),
+        Some(&restored)
+    );
+
+    let rollback = log
+        .capture_write_property_rollback(
+            PropertyIdentifier::LOG_ENABLE,
+            &PropertyValue::Boolean(false),
+        )
+        .unwrap();
+    log.write_property(
+        PropertyIdentifier::LOG_ENABLE,
+        None,
+        PropertyValue::Boolean(false),
+        None,
+    )
+    .unwrap();
+    let changed = persistence.snapshot.lock().unwrap().clone().unwrap();
+    persistence.fail_sync.store(true, Ordering::Release);
+    assert!(log.restore_write_property_rollback(rollback).is_err());
+    assert_matches_snapshot(&log, &changed);
+    assert_eq!(
+        persistence.snapshot.lock().unwrap().as_ref(),
+        Some(&changed)
+    );
 }
 
 #[test]

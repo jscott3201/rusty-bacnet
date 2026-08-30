@@ -229,26 +229,56 @@ fn read_slot_inner(
         )));
     }
 
-    if data.len() >= 10 && &data[..8] == MAGIC {
-        let version = u16::from_be_bytes(data[8..10].try_into().unwrap());
-        if version != SCHEMA_VERSION {
-            return Err(SlotReadFailure::Fatal(Error::Encoding(format!(
-                "AuditLog snapshot schema version {version} is unsupported"
-            ))));
-        }
-        if data.len() >= 14 {
-            let object_identifier =
-                ObjectIdentifier::decode(&data[10..14]).map_err(SlotReadFailure::Recoverable)?;
-            if object_identifier != expected_object {
-                return Err(SlotReadFailure::Fatal(Error::Encoding(
-                    "AuditLog snapshot object identity does not match".into(),
-                )));
-            }
-        }
+    verify_snapshot_integrity(&data).map_err(SlotReadFailure::Recoverable)?;
+    let version = u16::from_be_bytes(data[8..10].try_into().unwrap());
+    if version != SCHEMA_VERSION {
+        return Err(SlotReadFailure::Fatal(Error::Encoding(format!(
+            "AuditLog snapshot schema version {version} is unsupported"
+        ))));
     }
-    decode_snapshot(&data, expected_object)
+    let object_identifier =
+        ObjectIdentifier::decode(&data[10..14]).map_err(SlotReadFailure::Recoverable)?;
+    if object_identifier != expected_object {
+        return Err(SlotReadFailure::Fatal(Error::Encoding(
+            "AuditLog snapshot object identity does not match".into(),
+        )));
+    }
+    decode_verified_snapshot(&data, object_identifier)
         .map(Some)
         .map_err(SlotReadFailure::Recoverable)
+}
+
+fn verify_snapshot_integrity(data: &[u8]) -> Result<(), Error> {
+    if data.len() > MAX_SNAPSHOT_BYTES {
+        return Err(Error::OutOfRange(format!(
+            "AuditLog snapshot length {} exceeds {MAX_SNAPSHOT_BYTES}",
+            data.len()
+        )));
+    }
+    if data.len() < HEADER_LEN + TRAILER_LEN {
+        return Err(Error::Encoding("AuditLog snapshot is truncated".into()));
+    }
+    if &data[..8] != MAGIC {
+        return Err(Error::Encoding("AuditLog snapshot magic is invalid".into()));
+    }
+    let payload_len = u32::from_be_bytes(data[22..26].try_into().unwrap()) as usize;
+    let expected_len = HEADER_LEN
+        .checked_add(payload_len)
+        .and_then(|length| length.checked_add(TRAILER_LEN))
+        .ok_or_else(|| Error::OutOfRange("AuditLog snapshot length overflow".into()))?;
+    if expected_len != data.len() {
+        return Err(Error::Encoding(
+            "AuditLog snapshot declared length does not match file length".into(),
+        ));
+    }
+    let checksum_start = data.len() - TRAILER_LEN;
+    let stored_checksum = u32::from_be_bytes(data[checksum_start..].try_into().unwrap());
+    if crc32(&data[..checksum_start]) != stored_checksum {
+        return Err(Error::Encoding(
+            "AuditLog snapshot checksum is invalid".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn encode_snapshot(snapshot: &AuditLogSnapshot) -> Result<Vec<u8>, Error> {
@@ -304,52 +334,17 @@ fn encode_snapshot(snapshot: &AuditLogSnapshot) -> Result<Vec<u8>, Error> {
     Ok(data)
 }
 
-fn decode_snapshot(
+fn decode_verified_snapshot(
     data: &[u8],
-    expected_object: ObjectIdentifier,
+    object_identifier: ObjectIdentifier,
 ) -> Result<AuditLogSnapshot, Error> {
-    if data.len() < HEADER_LEN + TRAILER_LEN {
-        return Err(Error::Encoding("AuditLog snapshot is truncated".into()));
-    }
-    if &data[..8] != MAGIC {
-        return Err(Error::Encoding("AuditLog snapshot magic is invalid".into()));
-    }
-    let version = u16::from_be_bytes(data[8..10].try_into().unwrap());
-    if version != SCHEMA_VERSION {
-        return Err(Error::Encoding(format!(
-            "AuditLog snapshot schema version {version} is unsupported"
-        )));
-    }
-    let object_identifier = ObjectIdentifier::decode(&data[10..14])?;
-    if object_identifier != expected_object {
-        return Err(Error::Encoding(
-            "AuditLog snapshot object identity does not match".into(),
-        ));
-    }
     let generation = u64::from_be_bytes(data[14..22].try_into().unwrap());
     if generation == 0 {
         return Err(Error::Encoding(
             "AuditLog snapshot generation must be nonzero".into(),
         ));
     }
-    let payload_len = u32::from_be_bytes(data[22..26].try_into().unwrap()) as usize;
-    let expected_len = HEADER_LEN
-        .checked_add(payload_len)
-        .and_then(|length| length.checked_add(TRAILER_LEN))
-        .ok_or_else(|| Error::OutOfRange("AuditLog snapshot length overflow".into()))?;
-    if expected_len != data.len() {
-        return Err(Error::Encoding(
-            "AuditLog snapshot declared length does not match file length".into(),
-        ));
-    }
     let checksum_start = data.len() - TRAILER_LEN;
-    let stored_checksum = u32::from_be_bytes(data[checksum_start..].try_into().unwrap());
-    if crc32(&data[..checksum_start]) != stored_checksum {
-        return Err(Error::Encoding(
-            "AuditLog snapshot checksum is invalid".into(),
-        ));
-    }
-
     let payload = &data[HEADER_LEN..checksum_start];
     let mut offset = 0;
     let capacity = take_u32(payload, &mut offset, "capacity")?;
