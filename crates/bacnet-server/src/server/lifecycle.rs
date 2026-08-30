@@ -582,13 +582,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // It is also what carries Reliability into event-state-detection. Per
         // Clause 13.2.2 the FAULT determination is a standing condition, so each
         // tick re-derives it from the object's current `Reliability` rather than
-        // reacting to a change event. That is why the fault detector below can
+        // reacting to a change event. That is why the fault detector above can
         // keep merely *logging* its `ReliabilityChange` records: whoever writes
-        // Reliability — that detector, a local write, or a network write —
-        // reaches detection through this tick, and no route needs to notify
-        // anything. `enable_fault_detection` therefore governs only whether
-        // Reliability is *derived* from limits, never whether a Reliability that
-        // exists is honored.
+        // Reliability — an object's opt-in evaluation hook, a local write, or a
+        // network write — reaches detection through this tick, and no route
+        // needs to notify anything. `enable_fault_detection` therefore governs
+        // only whether those object-owned hooks run every 10 seconds, never
+        // whether an existing Reliability is honored.
         //
         // Six of the nine wired object types have no route that can set
         // Reliability, so the fault path is correct but inert on them (#218).

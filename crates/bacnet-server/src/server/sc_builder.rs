@@ -136,6 +136,9 @@ impl ScServerBuilder {
     }
 
     /// Enable periodic fault detection / reliability evaluation.
+    ///
+    /// When enabled, every object's opt-in reliability hook runs every 10
+    /// seconds; the default hook is a no-op.
     pub fn enable_fault_detection(mut self, enabled: bool) -> Self {
         self.config.enable_fault_detection = enabled;
         self

@@ -28,9 +28,9 @@ pub struct AnalogInputObject {
     /// Reliability: 0 = NO_FAULT_DETECTED.
     reliability: u32,
     reliability_before_out_of_service: Option<u32>,
-    /// Optional minimum present value for fault detection.
+    /// Optional minimum engineering bound metadata for Present_Value.
     min_pres_value: Option<f32>,
-    /// Optional maximum present value for fault detection.
+    /// Optional maximum engineering bound metadata for Present_Value.
     max_pres_value: Option<f32>,
     pub(crate) event_history: EventHistory,
 }
@@ -72,12 +72,12 @@ impl AnalogInputObject {
         self.description = desc.into();
     }
 
-    /// Set the minimum present value for fault detection.
+    /// Set minimum engineering-bound metadata; this is not a reliability fault limit.
     pub fn set_min_pres_value(&mut self, value: f32) {
         self.min_pres_value = Some(value);
     }
 
-    /// Set the maximum present value for fault detection.
+    /// Set maximum engineering-bound metadata; this is not a reliability fault limit.
     pub fn set_max_pres_value(&mut self, value: f32) {
         self.max_pres_value = Some(value);
     }

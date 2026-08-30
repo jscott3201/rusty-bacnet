@@ -67,12 +67,12 @@ impl AnalogOutputObject {
         self.description = desc.into();
     }
 
-    /// Set the minimum present value for fault detection.
+    /// Set minimum engineering-bound metadata; this is not a reliability fault limit.
     pub fn set_min_pres_value(&mut self, value: f32) {
         self.min_pres_value = Some(value);
     }
 
-    /// Set the maximum present value for fault detection.
+    /// Set maximum engineering-bound metadata; this is not a reliability fault limit.
     pub fn set_max_pres_value(&mut self, value: f32) {
         self.max_pres_value = Some(value);
     }

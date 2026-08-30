@@ -123,6 +123,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Reliability evaluation now belongs to each `BACnetObject` through a defaulted
+  opt-in hook. Enabling server fault detection invokes that hook for every
+  object every 10 seconds; stock objects currently make no change. The server
+  no longer treats Analog Input, Analog Output, or Analog Value
+  `Min_Pres_Value` / `Max_Pres_Value` engineering metadata as reliability fault
+  limits, so those bounds cannot synthesize `OVER_RANGE` or `UNDER_RANGE`.
+  Analog Output `OUT_OF_RANGE` intrinsic event reporting is unchanged and
+  remains separate from reliability evaluation. Full Analog Input/Value
+  `FAULT_OUT_OF_RANGE` algorithms remain deferred.
+
 - Correct `NotificationParameters` codecs for complex event values `[6]`,
   AccessEvent credentials and authentication factors `[13]`, rejection of the
   omitted choice `[20]`, and independently optional ChangeOfTimer fields `[22]`

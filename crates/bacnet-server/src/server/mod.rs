@@ -316,8 +316,9 @@ pub struct ServerConfig {
     /// Optional password required for ReinitializeDevice.
     pub reinit_password: Option<String>,
     /// Enable periodic fault detection / reliability evaluation.
-    /// When true, the server evaluates analog objects every 10 s for
-    /// OVER_RANGE / UNDER_RANGE faults.
+    /// When true, the server invokes every object's opt-in, object-owned
+    /// reliability evaluation hook every 10 seconds. Stock objects currently
+    /// inherit the no-op default.
     ///
     /// This governs reliability evaluation only. Event Enrollment evaluation
     /// is configured separately via [`enable_event_enrollment`](Self::enable_event_enrollment).
@@ -510,6 +511,9 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
 
     /// Enable periodic fault detection / reliability evaluation.
     ///
+    /// When enabled, every object's opt-in reliability hook runs every 10
+    /// seconds; the default hook is a no-op.
+    ///
     /// Reliability evaluation only; Event Enrollment evaluation is configured
     /// by [`enable_event_enrollment`](Self::enable_event_enrollment).
     pub fn enable_fault_detection(mut self, enabled: bool) -> Self {
@@ -647,6 +651,9 @@ impl BipServerBuilder {
     }
 
     /// Enable periodic fault detection / reliability evaluation.
+    ///
+    /// When enabled, every object's opt-in reliability hook runs every 10
+    /// seconds; the default hook is a no-op.
     ///
     /// Reliability evaluation only; Event Enrollment evaluation is configured
     /// by [`enable_event_enrollment`](Self::enable_event_enrollment).

@@ -38,6 +38,20 @@ pub enum LifeSafetyOperationEffect {
     AlreadyApplied,
 }
 
+/// Result of one object-owned reliability evaluation pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReliabilityEvaluation {
+    /// The object made no reliability-related mutation.
+    Unchanged,
+    /// The object successfully mutated its `Reliability` value.
+    Changed {
+        /// Reliability before the successful mutation.
+        old_reliability: u32,
+        /// Reliability after the successful mutation.
+        new_reliability: u32,
+    },
+}
+
 impl WritePropertyRollback {
     /// Wrap object-private rollback state.
     #[doc(hidden)]
@@ -515,6 +529,22 @@ pub trait BACnetObject: Send + Sync {
             class: ErrorClass::OBJECT.to_raw() as u32,
             code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
         })
+    }
+
+    /// Evaluate and, when necessary, mutate this object's `Reliability`.
+    ///
+    /// Reliability evaluation is object-owned: an implementation decides
+    /// whether and how its internal conditions affect `Reliability`, performs
+    /// the mutation itself, and returns [`ReliabilityEvaluation::Changed`] only
+    /// after that mutation succeeds. [`ReliabilityEvaluation::Unchanged`] means
+    /// the object made no mutation. Returning `Err` MUST leave all object state
+    /// unchanged.
+    ///
+    /// The default opts out without changing state, preserving source
+    /// compatibility for object implementations that do not own a reliability
+    /// evaluation algorithm.
+    fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {
+        Ok(ReliabilityEvaluation::Unchanged)
     }
 
     /// Apply an internally-derived `Reliability` value.
