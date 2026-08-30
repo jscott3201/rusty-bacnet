@@ -1,6 +1,5 @@
 use super::*;
 use bacnet_objects::access_control::AccessDoorObject;
-use bacnet_objects::audit::{AuditLogObject, AuditRecord};
 use bacnet_objects::binary::BinaryValueObject;
 use bacnet_objects::event_log::EventLogObject;
 use bacnet_objects::network_port::NetworkPortObject;
@@ -377,15 +376,7 @@ fn log_record_count_rollback_restores_cleared_buffers() {
     let event_oid = event.object_identifier();
     db.add(Box::new(event)).unwrap();
 
-    let mut audit = AuditLogObject::new(1, "AL-1", 10).unwrap();
-    audit.add_record(AuditRecord {
-        timestamp_secs: 1,
-        description: "record".into(),
-    });
-    let audit_oid = audit.object_identifier();
-    db.add(Box::new(audit)).unwrap();
-
-    for oid in [trend_oid, trend_multiple_oid, event_oid, audit_oid] {
+    for oid in [trend_oid, trend_multiple_oid, event_oid] {
         let object = db.get(&oid).unwrap();
         let before = object
             .read_property(PropertyIdentifier::RECORD_COUNT, None)

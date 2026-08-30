@@ -11,6 +11,12 @@ use crate::error::Error;
 use crate::primitives::{Date, ObjectIdentifier, Time};
 use crate::MacAddr;
 
+mod audit;
+pub use audit::{
+    AuditPropertyReference, BACnetAuditLogDatum, BACnetAuditLogQueryParameters,
+    BACnetAuditLogRecord, BACnetAuditLogRecordResult, BACnetAuditNotification,
+};
+
 // ---------------------------------------------------------------------------
 // BACnetDateRange (Clause 21 -- used by CalendarEntry and BACnetSpecialEvent)
 // ---------------------------------------------------------------------------

@@ -14,7 +14,7 @@ use bacnet_objects::access_control::{
 };
 use bacnet_objects::accumulator::{AccumulatorObject, PulseConverterObject};
 use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
-use bacnet_objects::audit::{AuditLogObject, AuditReporterObject};
+use bacnet_objects::audit::{AuditLogObject, AuditReporterObject, FileAuditLogPersistence};
 use bacnet_objects::averaging::AveragingObject;
 use bacnet_objects::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use bacnet_objects::command::CommandObject;

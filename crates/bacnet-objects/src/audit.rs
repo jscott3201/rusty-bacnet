@@ -2,77 +2,223 @@
 
 use std::borrow::Cow;
 use std::collections::VecDeque;
+use std::sync::Arc;
 
+use bacnet_types::constructed::{
+    BACnetAuditLogDatum, BACnetAuditLogRecord, BACnetAuditLogRecordResult,
+};
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
+use crate::clock::ClockReader;
 use crate::common::read_property_list_property;
-use crate::traits::{BACnetObject, WritePropertyRollback};
+use crate::traits::BACnetObject;
+
+mod persistence;
+use persistence::{validate_record, validate_snapshot};
+pub use persistence::{
+    AuditLogPersistence, AuditLogSnapshot, FileAuditLogPersistence, MAX_AUDIT_RECORDS,
+};
 
 // ---------------------------------------------------------------------------
 // AuditLog (type 61)
 // ---------------------------------------------------------------------------
 
-/// A single audit log record.
-#[derive(Debug, Clone)]
-pub struct AuditRecord {
-    pub timestamp_secs: u64,
-    pub description: String,
-}
-
-/// BACnet AuditLog object — stores audit trail records in a ring buffer.
+/// BACnet AuditLog object with explicit application-owned durable storage.
 pub struct AuditLogObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
     log_enable: bool,
     buffer_size: u32,
-    buffer: VecDeque<AuditRecord>,
+    buffer: VecDeque<BACnetAuditLogRecordResult>,
     total_record_count: u64,
     status_flags: StatusFlags,
+    generation: u64,
+    persistence: Arc<dyn AuditLogPersistence>,
+    clock: Option<Arc<dyn ClockReader>>,
 }
 
-struct AuditLogWriteRollback {
-    buffer: VecDeque<AuditRecord>,
-}
+const LOG_DISABLED_STATUS: u8 = 0b001;
+const BUFFER_PURGED_STATUS: u8 = 0b010;
 
 impl AuditLogObject {
-    pub fn new(instance: u32, name: impl Into<String>, buffer_size: u32) -> Result<Self, Error> {
+    /// Open or initialize one AuditLog using the explicitly supplied storage.
+    pub fn new(
+        instance: u32,
+        name: impl Into<String>,
+        buffer_size: u32,
+        persistence: Arc<dyn AuditLogPersistence>,
+    ) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::AUDIT_LOG, instance)?;
+        if buffer_size > MAX_AUDIT_RECORDS {
+            return Err(Error::OutOfRange(format!(
+                "AuditLog capacity {buffer_size} exceeds {MAX_AUDIT_RECORDS}"
+            )));
+        }
+        let snapshot = match persistence.load(oid)? {
+            Some(snapshot) => {
+                if snapshot.object_identifier != oid || snapshot.capacity != buffer_size {
+                    return Err(Error::Encoding(
+                        "AuditLog persisted identity or capacity does not match configuration"
+                            .into(),
+                    ));
+                }
+                validate_snapshot(&snapshot)?;
+                snapshot
+            }
+            None => {
+                let snapshot = AuditLogSnapshot {
+                    object_identifier: oid,
+                    generation: 1,
+                    capacity: buffer_size,
+                    log_enable: true,
+                    total_record_count: 0,
+                    records: Vec::new(),
+                };
+                validate_snapshot(&snapshot)?;
+                persistence.commit(&snapshot)?;
+                snapshot
+            }
+        };
         Ok(Self {
             oid,
             name: name.into(),
             description: String::new(),
-            log_enable: true,
-            buffer_size,
-            buffer: VecDeque::new(),
-            total_record_count: 0,
+            log_enable: snapshot.log_enable,
+            buffer_size: snapshot.capacity,
+            buffer: snapshot.records.into(),
+            total_record_count: snapshot.total_record_count,
             status_flags: StatusFlags::empty(),
+            generation: snapshot.generation,
+            persistence,
+            clock: None,
         })
     }
 
-    /// Add an audit record to the log.
-    pub fn add_record(&mut self, record: AuditRecord) {
+    /// Append one application-supplied record when logging is enabled.
+    pub fn add_record(&mut self, record: BACnetAuditLogRecord) -> Result<Option<u64>, Error> {
         if !self.log_enable {
-            return;
+            return Ok(None);
         }
-        if self.buffer.len() >= self.buffer_size as usize {
-            self.buffer.pop_front();
-        }
-        self.buffer.push_back(record);
-        self.total_record_count += 1;
+        validate_record(&record)?;
+        let mut prospective = self.snapshot_for_next_generation()?;
+        let sequence_number = append_record(&mut prospective, record);
+        self.commit_and_apply(prospective)?;
+        Ok(Some(sequence_number))
     }
 
     /// Get the current buffer contents.
-    pub fn records(&self) -> &VecDeque<AuditRecord> {
+    pub fn records(&self) -> &VecDeque<BACnetAuditLogRecordResult> {
         &self.buffer
+    }
+
+    /// Configured and persisted ring capacity.
+    pub fn buffer_size(&self) -> u32 {
+        self.buffer_size
+    }
+
+    /// Persisted logging enable policy.
+    pub fn log_enable(&self) -> bool {
+        self.log_enable
+    }
+
+    /// Monotonic record identity counter with BACnet MAX-to-one wrap.
+    pub fn total_record_count(&self) -> u64 {
+        self.total_record_count
+    }
+
+    /// Current durable snapshot generation.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Clear buffered records and append the internal BUFFER_PURGED status.
+    fn purge(&mut self) -> Result<u64, Error> {
+        let timestamp = self.valid_timestamp()?;
+        let mut prospective = self.snapshot_for_next_generation()?;
+        prospective.records.clear();
+        let sequence_number = append_record(
+            &mut prospective,
+            BACnetAuditLogRecord {
+                timestamp,
+                datum: BACnetAuditLogDatum::LogStatus(BUFFER_PURGED_STATUS),
+            },
+        );
+        self.commit_and_apply(prospective)?;
+        Ok(sequence_number)
     }
 
     /// Set the description string.
     pub fn set_description(&mut self, desc: impl Into<String>) {
         self.description = desc.into();
     }
+
+    fn valid_timestamp(
+        &self,
+    ) -> Result<
+        (
+            bacnet_types::primitives::Date,
+            bacnet_types::primitives::Time,
+        ),
+        Error,
+    > {
+        let frame = self
+            .clock
+            .as_ref()
+            .and_then(|clock| clock.read_clock())
+            .filter(|frame| frame.is_valid_actual_datetime())
+            .ok_or(Error::Protocol {
+                class: ErrorClass::DEVICE.to_raw() as u32,
+                code: ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32,
+            })?;
+        Ok((frame.local_date, frame.local_time))
+    }
+
+    fn snapshot_for_next_generation(&self) -> Result<AuditLogSnapshot, Error> {
+        let generation = self
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| Error::OutOfRange("AuditLog persistence generation exhausted".into()))?;
+        Ok(AuditLogSnapshot {
+            object_identifier: self.oid,
+            generation,
+            capacity: self.buffer_size,
+            log_enable: self.log_enable,
+            total_record_count: self.total_record_count,
+            records: self.buffer.iter().cloned().collect(),
+        })
+    }
+
+    fn commit_and_apply(&mut self, snapshot: AuditLogSnapshot) -> Result<(), Error> {
+        validate_snapshot(&snapshot)?;
+        self.persistence.commit(&snapshot)?;
+        self.generation = snapshot.generation;
+        self.log_enable = snapshot.log_enable;
+        self.total_record_count = snapshot.total_record_count;
+        self.buffer = snapshot.records.into();
+        Ok(())
+    }
+}
+
+fn append_record(snapshot: &mut AuditLogSnapshot, record: BACnetAuditLogRecord) -> u64 {
+    let sequence_number = if snapshot.total_record_count == u64::MAX {
+        1
+    } else {
+        snapshot.total_record_count + 1
+    };
+    snapshot.total_record_count = sequence_number;
+    if snapshot.capacity != 0 {
+        if snapshot.records.len() >= snapshot.capacity as usize {
+            snapshot.records.remove(0);
+        }
+        snapshot.records.push(BACnetAuditLogRecordResult {
+            sequence_number,
+            record,
+        });
+    }
+    sequence_number
 }
 
 impl BACnetObject for AuditLogObject {
@@ -136,7 +282,24 @@ impl BACnetObject for AuditLogObject {
     ) -> Result<(), Error> {
         if property == PropertyIdentifier::LOG_ENABLE {
             if let PropertyValue::Boolean(v) = value {
-                self.log_enable = v;
+                if v == self.log_enable {
+                    return Ok(());
+                }
+                let timestamp = self.valid_timestamp()?;
+                let mut prospective = self.snapshot_for_next_generation()?;
+                prospective.log_enable = v;
+                append_record(
+                    &mut prospective,
+                    BACnetAuditLogRecord {
+                        timestamp,
+                        datum: BACnetAuditLogDatum::LogStatus(if v {
+                            0
+                        } else {
+                            LOG_DISABLED_STATUS
+                        }),
+                    },
+                );
+                self.commit_and_apply(prospective)?;
                 return Ok(());
             }
             return Err(Error::Protocol {
@@ -145,13 +308,9 @@ impl BACnetObject for AuditLogObject {
             });
         }
         if property == PropertyIdentifier::RECORD_COUNT {
-            if let PropertyValue::Unsigned(0) = value {
-                self.buffer.clear();
-                return Ok(());
-            }
             return Err(Error::Protocol {
                 class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
+                code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
             });
         }
         if property == PropertyIdentifier::DESCRIPTION {
@@ -186,26 +345,8 @@ impl BACnetObject for AuditLogObject {
         Cow::Borrowed(PROPS)
     }
 
-    fn capture_write_property_rollback(
-        &mut self,
-        property: PropertyIdentifier,
-        value: &PropertyValue,
-    ) -> Option<WritePropertyRollback> {
-        (property == PropertyIdentifier::RECORD_COUNT
-            && matches!(value, PropertyValue::Unsigned(0)))
-        .then(|| {
-            WritePropertyRollback::new(AuditLogWriteRollback {
-                buffer: std::mem::take(&mut self.buffer),
-            })
-        })
-    }
-
-    fn restore_write_property_rollback(
-        &mut self,
-        rollback: WritePropertyRollback,
-    ) -> Result<(), Error> {
-        self.buffer = rollback.downcast::<AuditLogWriteRollback>()?.buffer;
-        Ok(())
+    fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
+        self.clock = clock;
     }
 }
 
@@ -317,110 +458,5 @@ impl BACnetObject for AuditReporterObject {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    // --- AuditLog ---
-
-    #[test]
-    fn audit_log_add_records() {
-        let mut al = AuditLogObject::new(1, "AL-1", 100).unwrap();
-        al.add_record(AuditRecord {
-            timestamp_secs: 1000,
-            description: "User login".into(),
-        });
-        assert_eq!(al.records().len(), 1);
-        assert_eq!(
-            al.read_property(PropertyIdentifier::RECORD_COUNT, None)
-                .unwrap(),
-            PropertyValue::Unsigned(1)
-        );
-    }
-
-    #[test]
-    fn audit_log_ring_buffer() {
-        let mut al = AuditLogObject::new(1, "AL-1", 2).unwrap();
-        for i in 0..4 {
-            al.add_record(AuditRecord {
-                timestamp_secs: i * 60,
-                description: format!("Event {i}"),
-            });
-        }
-        assert_eq!(al.records().len(), 2);
-        assert_eq!(al.records()[0].description, "Event 2");
-        assert_eq!(
-            al.read_property(PropertyIdentifier::TOTAL_RECORD_COUNT, None)
-                .unwrap(),
-            PropertyValue::Unsigned(4)
-        );
-    }
-
-    #[test]
-    fn audit_log_disable() {
-        let mut al = AuditLogObject::new(1, "AL-1", 100).unwrap();
-        al.write_property(
-            PropertyIdentifier::LOG_ENABLE,
-            None,
-            PropertyValue::Boolean(false),
-            None,
-        )
-        .unwrap();
-        al.add_record(AuditRecord {
-            timestamp_secs: 1000,
-            description: "Should not appear".into(),
-        });
-        assert_eq!(al.records().len(), 0);
-    }
-
-    #[test]
-    fn audit_log_clear() {
-        let mut al = AuditLogObject::new(1, "AL-1", 100).unwrap();
-        al.add_record(AuditRecord {
-            timestamp_secs: 1000,
-            description: "Event".into(),
-        });
-        al.write_property(
-            PropertyIdentifier::RECORD_COUNT,
-            None,
-            PropertyValue::Unsigned(0),
-            None,
-        )
-        .unwrap();
-        assert_eq!(al.records().len(), 0);
-    }
-
-    #[test]
-    fn audit_log_read_object_type() {
-        let al = AuditLogObject::new(1, "AL-1", 100).unwrap();
-        assert_eq!(
-            al.read_property(PropertyIdentifier::OBJECT_TYPE, None)
-                .unwrap(),
-            PropertyValue::Enumerated(ObjectType::AUDIT_LOG.to_raw())
-        );
-    }
-
-    // --- AuditReporter ---
-
-    #[test]
-    fn audit_reporter_read_object_type() {
-        let ar = AuditReporterObject::new(1, "AR-1").unwrap();
-        assert_eq!(
-            ar.read_property(PropertyIdentifier::OBJECT_TYPE, None)
-                .unwrap(),
-            PropertyValue::Enumerated(ObjectType::AUDIT_REPORTER.to_raw())
-        );
-    }
-
-    #[test]
-    fn audit_reporter_write_denied() {
-        let mut ar = AuditReporterObject::new(1, "AR-1").unwrap();
-        assert!(ar
-            .write_property(
-                PropertyIdentifier::OBJECT_NAME,
-                None,
-                PropertyValue::CharacterString("new".into()),
-                None,
-            )
-            .is_err());
-    }
-}
+#[path = "audit/tests.rs"]
+mod tests;

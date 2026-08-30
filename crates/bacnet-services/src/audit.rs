@@ -6,11 +6,12 @@
 //! sequence and a three-state success filter. This model intentionally uses
 //! Clause 21's `Unsigned32` and strict mandatory Boolean forms.
 
-use bacnet_types::bitstring::AuditOperationFlags;
-use bacnet_types::constructed::{BACnetAddress, BACnetRecipient};
-use bacnet_types::enums::{AuditOperation, ErrorClass, ErrorCode, PropertyIdentifier};
+pub use bacnet_types::constructed::{
+    AuditPropertyReference, BACnetAuditLogDatum, BACnetAuditLogQueryParameters,
+    BACnetAuditLogRecord, BACnetAuditLogRecordResult, BACnetAuditNotification,
+};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, Time};
+use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
 use crate::common::PropertyReference;
@@ -29,31 +30,6 @@ pub struct AuditNotificationRequest {
     pub notifications: Vec<BACnetAuditNotification>,
 }
 
-/// One audit operation record (`BACnetAuditNotification`, Clause 21).
-#[derive(Debug, Clone, PartialEq)]
-pub struct BACnetAuditNotification {
-    pub source_timestamp: Option<BACnetTimeStamp>,
-    pub target_timestamp: Option<BACnetTimeStamp>,
-    pub source_device: BACnetRecipient,
-    pub source_object: Option<ObjectIdentifier>,
-    pub operation: AuditOperation,
-    pub source_comment: Option<String>,
-    pub target_comment: Option<String>,
-    pub invoke_id: Option<u8>,
-    pub source_user_id: Option<u16>,
-    pub source_user_role: Option<u8>,
-    pub target_device: BACnetRecipient,
-    pub target_object: Option<ObjectIdentifier>,
-    pub target_property: Option<AuditPropertyReference>,
-    /// Command priority, constrained to `1..=16` when present.
-    pub target_priority: Option<u8>,
-    /// Raw, structurally validated `ABSTRACT-SYNTAX.&Type` encoding.
-    pub target_value: Option<Vec<u8>>,
-    /// Raw, structurally validated `ABSTRACT-SYNTAX.&Type` encoding.
-    pub current_value: Option<Vec<u8>>,
-    pub result: Option<(ErrorClass, ErrorCode)>,
-}
-
 /// AuditLogQuery-ACK service parameters.
 ///
 /// This wire model does not perform storage queries or infer record ordering,
@@ -66,68 +42,11 @@ pub struct AuditLogQueryAck {
     pub no_more_items: bool,
 }
 
-/// One result in an [`AuditLogQueryAck`].
-#[derive(Debug, Clone, PartialEq)]
-pub struct BACnetAuditLogRecordResult {
-    pub sequence_number: u64,
-    pub record: BACnetAuditLogRecord,
-}
-
-/// One Audit Log record, distinct from Trend/Event Log record models.
-#[derive(Debug, Clone, PartialEq)]
-pub struct BACnetAuditLogRecord {
-    /// BACnetDateTime encoded as application Date followed by application Time.
-    pub timestamp: (Date, Time),
-    pub datum: BACnetAuditLogDatum,
-}
-
-/// Audit-specific `BACnetAuditLogRecord` datum CHOICE.
-#[derive(Debug, Clone, PartialEq)]
-pub enum BACnetAuditLogDatum {
-    /// Three-bit BACnetLogStatus: log-disabled, buffer-purged, log-interrupted.
-    LogStatus(u8),
-    /// A bare BACnetAuditNotification wrapped by choice tag `[1]`.
-    AuditNotification(BACnetAuditNotification),
-    /// Clock adjustment in seconds, encoded as a four-octet REAL under `[2]`.
-    TimeChange(f32),
-}
-
-/// Typed `BACnetAuditLogQueryParameters` CHOICE.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BACnetAuditLogQueryParameters {
-    ByTarget {
-        target_device_identifier: ObjectIdentifier,
-        target_device_address: Option<BACnetAddress>,
-        target_object_identifier: Option<ObjectIdentifier>,
-        target_property_identifier: Option<PropertyIdentifier>,
-        target_array_index: Option<u64>,
-        /// Command priority filter, constrained to `1..=16` when present.
-        target_priority: Option<u8>,
-        operations: Option<AuditOperationFlags>,
-        successful_actions_only: bool,
-    },
-    BySource {
-        source_device_identifier: ObjectIdentifier,
-        source_device_address: Option<BACnetAddress>,
-        source_object_identifier: Option<ObjectIdentifier>,
-        operations: Option<AuditOperationFlags>,
-        successful_actions_only: bool,
-    },
-}
-
 /// Audit-local wire-equivalent of `BACnetPropertyReference`.
 ///
 /// The shared service [`PropertyReference`] predates these codecs and narrows
 /// the optional array index to `u32`. Clause 21 defines it as unconstrained
 /// Unsigned, so Audit preserves every value supported by the primitive layer.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AuditPropertyReference {
-    /// Property selected by the Audit notification.
-    pub property_identifier: PropertyIdentifier,
-    /// Optional array index, within the primitive layer's `u64` domain.
-    pub property_array_index: Option<u64>,
-}
-
 impl From<PropertyReference> for AuditPropertyReference {
     fn from(value: PropertyReference) -> Self {
         Self {

@@ -1070,9 +1070,18 @@ server.add_event_enrollment(instance=1, name="Event", event_type=0)
 server.add_trend_log(instance=1, name="Temp Log", buffer_size=1000)
 server.add_trend_log_multiple(instance=1, name="Multi Log", buffer_size=1000)
 server.add_event_log(instance=1, name="Event Log", buffer_size=500)
-server.add_audit_log(instance=1, name="Audit Trail", buffer_size=500)
+server.add_audit_log(
+    instance=1,
+    name="Audit Trail",
+    storage_path="/application/state/audit-trail",
+    buffer_size=500,
+)
 server.add_audit_reporter(instance=1, name="Reporter")
 ```
+
+`storage_path` is application-owned and produces two sibling snapshot files
+with `.slot0` and `.slot1` suffixes. Reuse the same path when reopening that
+Audit Log; the server does not infer a global or working-directory location.
 
 #### Building Control
 

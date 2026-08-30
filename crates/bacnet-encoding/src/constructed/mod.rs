@@ -32,12 +32,19 @@ use bytes::BytesMut;
 use crate::primitives;
 use crate::tags::{self, TagClass};
 
+mod audit_notification;
+mod audit_record;
 pub mod cov_subscription;
 pub mod event_parameter;
 pub mod fault_parameter;
 pub mod object_property_reference;
 pub mod recipient;
 
+pub use audit_notification::{decode_audit_notification_at, encode_audit_notification};
+pub use audit_record::{
+    decode_audit_log_record, decode_audit_log_record_result_at, encode_audit_log_record,
+    encode_audit_log_record_result,
+};
 pub use cov_subscription::{encode_cov_subscription, encode_cov_subscription_list};
 pub use event_parameter::{decode_event_parameter, encode_event_parameter};
 pub use fault_parameter::{decode_fault_parameters, encode_fault_parameters};

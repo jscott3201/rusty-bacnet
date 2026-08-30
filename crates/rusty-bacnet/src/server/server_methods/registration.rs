@@ -186,9 +186,16 @@ impl BACnetServer {
     }
 
     /// Add an Audit Log object to the server (before starting).
-    #[pyo3(signature = (instance, name, buffer_size=100))]
-    fn add_audit_log(&self, instance: u32, name: &str, buffer_size: u32) -> PyResult<()> {
-        let al = AuditLogObject::new(instance, name, buffer_size).map_err(to_py_err)?;
+    #[pyo3(signature = (instance, name, storage_path, buffer_size=100))]
+    fn add_audit_log(
+        &self,
+        instance: u32,
+        name: &str,
+        storage_path: &str,
+        buffer_size: u32,
+    ) -> PyResult<()> {
+        let storage = Arc::new(FileAuditLogPersistence::new(storage_path).map_err(to_py_err)?);
+        let al = AuditLogObject::new(instance, name, buffer_size, storage).map_err(to_py_err)?;
         self.push_pending(Box::new(al))
     }
 
