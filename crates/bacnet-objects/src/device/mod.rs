@@ -59,6 +59,7 @@ pub const EXECUTED_SERVICES: &[ServiceSupported] = &[
     ServiceSupported::GET_EVENT_INFORMATION,
     ServiceSupported::SUBSCRIBE_COV_PROPERTY_MULTIPLE,
     ServiceSupported::CONFIRMED_AUDIT_NOTIFICATION,
+    ServiceSupported::UNCONFIRMED_AUDIT_NOTIFICATION,
     ServiceSupported::AUDIT_LOG_QUERY,
 ];
 

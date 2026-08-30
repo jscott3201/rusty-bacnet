@@ -1,5 +1,5 @@
-//! Unconfirmed-service dispatch (Who-Is, Who-Has, time sync, and
-//! UnconfirmedTextMessage) — see `EXECUTED_UNCONFIRMED`.
+//! Unconfirmed-service dispatch (Who-Is, Who-Has, time sync, text, and Audit
+//! notification receipt) — see `EXECUTED_UNCONFIRMED`.
 //!
 //! Split out of `requests.rs` to keep every file under the 700-LOC cap.
 
@@ -17,6 +17,7 @@ pub(crate) const EXECUTED_UNCONFIRMED: &[UnconfirmedServiceChoice] = &[
     UnconfirmedServiceChoice::TIME_SYNCHRONIZATION,
     UnconfirmedServiceChoice::UTC_TIME_SYNCHRONIZATION,
     UnconfirmedServiceChoice::UNCONFIRMED_TEXT_MESSAGE,
+    UnconfirmedServiceChoice::UNCONFIRMED_AUDIT_NOTIFICATION,
 ];
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
@@ -189,6 +190,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 Err(e) => {
                     debug!(error = %e, "UnconfirmedTextMessage decode failed");
                 }
+            }
+        } else if req.service_choice == UnconfirmedServiceChoice::UNCONFIRMED_AUDIT_NOTIFICATION {
+            if let Err(error) = super::audit_notification::receive_unconfirmed_audit_notification(
+                db,
+                config,
+                &received.source_mac,
+                received.source_network.as_ref(),
+                &req.service_request,
+            )
+            .await
+            {
+                debug!(%error, "Ignoring UnconfirmedAuditNotification request");
             }
         } else {
             debug!(

@@ -14,9 +14,9 @@ use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, Property
 use super::*;
 
 #[derive(Default)]
-struct MemoryPersistence {
-    snapshot: StdMutex<Option<AuditLogSnapshot>>,
-    fail: AtomicBool,
+pub(super) struct MemoryPersistence {
+    pub(super) snapshot: StdMutex<Option<AuditLogSnapshot>>,
+    pub(super) fail: AtomicBool,
 }
 
 impl AuditLogPersistence for MemoryPersistence {
@@ -58,11 +58,11 @@ impl ClockReader for FixedClock {
     }
 }
 
-fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
+pub(super) fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(object_type, instance).unwrap()
 }
 
-fn notification(operation: AuditOperation) -> BACnetAuditNotification {
+pub(super) fn notification(operation: AuditOperation) -> BACnetAuditNotification {
     BACnetAuditNotification {
         source_timestamp: Some(BACnetTimeStamp::Time(Time {
             hour: 12,
@@ -91,7 +91,7 @@ fn notification(operation: AuditOperation) -> BACnetAuditNotification {
     }
 }
 
-fn request_bytes(notifications: Vec<BACnetAuditNotification>) -> Bytes {
+pub(super) fn request_bytes(notifications: Vec<BACnetAuditNotification>) -> Bytes {
     let mut bytes = BytesMut::new();
     AuditNotificationRequest { notifications }
         .try_encode(&mut bytes)
@@ -99,14 +99,14 @@ fn request_bytes(notifications: Vec<BACnetAuditNotification>) -> Bytes {
     bytes.freeze()
 }
 
-fn database(
+pub(super) fn database(
     persistence: Arc<MemoryPersistence>,
     sink_instance: u32,
 ) -> Arc<RwLock<ObjectDatabase>> {
     database_with_device(persistence, sink_instance, Some(DeviceConfig::default()))
 }
 
-fn database_with_device(
+pub(super) fn database_with_device(
     persistence: Arc<MemoryPersistence>,
     sink_instance: u32,
     device_config: Option<DeviceConfig>,
@@ -182,7 +182,7 @@ async fn dispatch(
         .map(|bytes| decode_apdu(decode_npdu(bytes).unwrap().payload).unwrap())
 }
 
-async fn count(db: &Arc<RwLock<ObjectDatabase>>, sink: ObjectIdentifier) -> (u64, u64) {
+pub(super) async fn count(db: &Arc<RwLock<ObjectDatabase>>, sink: ObjectIdentifier) -> (u64, u64) {
     let db = db.read().await;
     let object = db.get(&sink).unwrap();
     let PropertyValue::Unsigned(records) = object
@@ -497,14 +497,14 @@ async fn missing_or_invalid_device_apdu_timeout_is_operational_problem_without_m
 }
 
 #[test]
-fn executed_service_truth_is_confirmed_only() {
+fn executed_service_truth_includes_confirmed_and_unconfirmed_receipt() {
     assert!(EXECUTED_CONFIRMED.contains(&ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION));
     assert!(
-        !EXECUTED_UNCONFIRMED.contains(&UnconfirmedServiceChoice::UNCONFIRMED_AUDIT_NOTIFICATION)
+        EXECUTED_UNCONFIRMED.contains(&UnconfirmedServiceChoice::UNCONFIRMED_AUDIT_NOTIFICATION)
     );
     assert!(bacnet_objects::device::EXECUTED_SERVICES
         .contains(&ServiceSupported::CONFIRMED_AUDIT_NOTIFICATION));
-    assert!(!bacnet_objects::device::EXECUTED_SERVICES
+    assert!(bacnet_objects::device::EXECUTED_SERVICES
         .contains(&ServiceSupported::UNCONFIRMED_AUDIT_NOTIFICATION));
 }
 
@@ -513,15 +513,25 @@ fn generic_and_bip_builders_store_the_same_explicit_receiver_policy() {
     let sink = oid(ObjectType::AUDIT_LOG, 7);
     let generic = BACnetServer::<BipTransport>::generic_builder()
         .audit_notification_sink(sink)
-        .audit_notification_authorizer(|_| true);
+        .audit_notification_authorizer(|_| true)
+        .unconfirmed_audit_notification_authorizer(|_| true);
     assert_eq!(generic.config.audit_notification_sink, Some(sink));
     assert!(generic.config.audit_notification_authorizer.is_some());
+    assert!(generic
+        .config
+        .unconfirmed_audit_notification_authorizer
+        .is_some());
 
     let bip = BACnetServer::<BipTransport>::bip_builder()
         .audit_notification_sink(sink)
-        .audit_notification_authorizer(|_| true);
+        .audit_notification_authorizer(|_| true)
+        .unconfirmed_audit_notification_authorizer(|_| true);
     assert_eq!(bip.config.audit_notification_sink, Some(sink));
     assert!(bip.config.audit_notification_authorizer.is_some());
+    assert!(bip
+        .config
+        .unconfirmed_audit_notification_authorizer
+        .is_some());
 }
 
 #[cfg(feature = "sc-tls")]
@@ -532,7 +542,12 @@ fn sc_builder_exposes_the_same_explicit_receiver_policy() {
         bacnet_transport::sc::ScTransport<bacnet_transport::sc_tls::TlsWebSocket>,
     >::sc_builder()
     .audit_notification_sink(sink)
-    .audit_notification_authorizer(|_| true);
+    .audit_notification_authorizer(|_| true)
+    .unconfirmed_audit_notification_authorizer(|_| true);
     assert_eq!(sc.config.audit_notification_sink, Some(sink));
     assert!(sc.config.audit_notification_authorizer.is_some());
+    assert!(sc
+        .config
+        .unconfirmed_audit_notification_authorizer
+        .is_some());
 }

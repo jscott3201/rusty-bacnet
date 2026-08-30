@@ -843,18 +843,24 @@ let query_ack = AuditLogQueryAck::decode(&raw_ack)?;
 These remain generic-client examples. The bundled server executes
 AuditLogQuery against the retained in-memory snapshot of an explicitly backed
 `AuditLogObject`, returning newest-first typed records through the existing
-ComplexACK segmentation path. ConfirmedAuditNotification receipt is available
-only when the server is configured with exactly one `audit_notification_sink`
-and a fast `audit_notification_authorizer`; missing, false, or panicking policy
-fails closed. Accepted lists merge or create records atomically through the
-sink's durable backend. Transport provenance is passed to policy separately
-from the preserved, peer-reported payload. Duplicate detection is bounded and
-process-local (60 seconds / 256 exact requests) and silently discards detected
-retransmissions rather than replaying responses. Synchronous persistence under
-the database writer is an intentional availability limitation. Unconfirmed
-receipt, query authorization, sustained rate limiting, durable idempotency,
-failures-only filtering, and a wrap-safe 64-bit continuation are not provided.
-No Audit BIBB claim is implied.
+ComplexACK segmentation path. ConfirmedAuditNotification and
+UnconfirmedAuditNotification receipt are available only when the server is
+configured with exactly one `audit_notification_sink` and the corresponding
+fast `audit_notification_authorizer` or
+`unconfirmed_audit_notification_authorizer`; missing, false, or panicking
+policy fails closed. Each policy receives the immediate MAC, optional routed
+NPDU source, configured sink, and decoded request separately from the
+peer-reported payload; only the confirmed context has an invoke ID. Accepted
+lists merge or create records atomically through the sink's durable backend.
+Confirmed duplicate detection is bounded and process-local (60 seconds / 256
+exact requests) and silently discards detected retransmissions rather than
+replaying responses. Unconfirmed receipt never emits a response and does not
+use duplicate tracking. Synchronous persistence under the database writer is
+an intentional availability limitation. Query authorization, sustained rate
+limiting, durable idempotency, producer/report generation, forwarding,
+multi-log routing policy, failures-only filtering, and a wrap-safe 64-bit
+continuation are not provided. Executed-service bit 46 represents receipt only;
+no Audit Reporting BIBB, including AR-L-A, is claimed.
 
 ---
 
@@ -948,6 +954,7 @@ The server automatically dispatches:
 - WhoHas / IHave
 - TimeSynchronization, UTCTimeSynchronization
 - UnconfirmedTextMessage
+- UnconfirmedAuditNotification (explicit sink and distinct fail-closed authorizer; no response or duplicate tracking)
 
 **Outgoing (server-initiated):**
 - COV notifications (confirmed and unconfirmed, with ServerTsm retry for confirmed)

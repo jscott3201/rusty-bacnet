@@ -126,6 +126,15 @@ impl ScServerBuilder {
         self
     }
 
+    /// Set the fail-closed UnconfirmedAuditNotification authorization policy.
+    pub fn unconfirmed_audit_notification_authorizer<F>(mut self, authorizer: F) -> Self
+    where
+        F: Fn(&UnconfirmedAuditNotificationAuthorizationContext) -> bool + Send + Sync + 'static,
+    {
+        self.config.unconfirmed_audit_notification_authorizer = Some(Arc::new(authorizer));
+        self
+    }
+
     /// Enable periodic fault detection / reliability evaluation.
     pub fn enable_fault_detection(mut self, enabled: bool) -> Self {
         self.config.enable_fault_detection = enabled;

@@ -832,7 +832,7 @@
    "id": "BACNET-13-AUDIT-WIRE-MODELS",
    "standard_anchor": "Clauses 13.19-13.21; Clause 21.2.1, Clause 21.2.3, Clause 21.3.1, BACnetAuditNotification, BACnetAuditLogQueryParameters, and BACnetAuditOperationFlags productions",
    "priority": "P1",
-   "requirement_summary": "AuditNotification request payloads carry one or more typed BACnetAuditNotification values under context tag 0, while AuditLogQuery requests carry a typed by-target or by-source query alternative. The bundled server executes queries over explicitly persisted retained records and receives ConfirmedAuditNotification only through one explicit sink plus fail-closed transport-provenance authorization, bounded duplicate detection, and atomic durable merge-or-create. Within the primitive layer's u64 Unsigned domain, the codecs preserve the Clause 21 field order, tags, numeric domains, Boolean encoding, recipient alternatives, standard operation-flag bits 0-15, and proprietary bits 32-63; reject reserved flag bits, trailing or malformed structure; bound allocation; and leave destination buffers unchanged when validation fails.",
+   "requirement_summary": "AuditNotification request payloads carry one or more typed BACnetAuditNotification values under context tag 0, while AuditLogQuery requests carry a typed by-target or by-source query alternative. The bundled server executes queries over explicitly persisted retained records and receives both ConfirmedAuditNotification and UnconfirmedAuditNotification through one explicit sink plus distinct fail-closed transport-provenance authorizers and one atomic durable merge-or-create path. Confirmed receipt retains bounded duplicate detection and ACK/Error replies; unconfirmed receipt has neither an invoke ID nor duplicate tracking and emits no response on any outcome. Executed bit 46 reflects only this receipt path, not notification generation, forwarding, or AR-L-A support. Within the primitive layer's u64 Unsigned domain, the codecs preserve the Clause 21 field order, tags, numeric domains, Boolean encoding, recipient alternatives, standard operation-flag bits 0-15, and proprietary bits 32-63; reject reserved flag bits, trailing or malformed structure; bound allocation; and leave destination buffers unchanged when validation fails.",
    "status": "implementation-present-needs-source-review",
    "code_anchors": [
     "crates/bacnet-types/src/bitstring.rs",
@@ -847,6 +847,7 @@
     "crates/bacnet-server/src/handlers/audit_notification.rs",
     "crates/bacnet-server/src/audit_notification.rs",
     "crates/bacnet-server/src/server/requests/audit_notification.rs",
+    "crates/bacnet-server/src/server/requests/unconfirmed.rs",
     "crates/bacnet-server/src/server/requests/mod.rs",
     "crates/bacnet-objects/src/device/mod.rs",
     "crates/rusty-bacnet/src/client/client_methods/vt_audit_time_directed.rs"
@@ -870,7 +871,8 @@
     "crates/bacnet-objects/src/audit/notification_tests.rs::complementary_batch_merges_once_and_target_current_value_wins",
     "crates/bacnet-objects/src/audit/notification_tests.rs::completed_match_is_dropped_and_merge_preserves_record_identity",
     "crates/bacnet-server/src/server/audit_notification_tests.rs::authorized_routed_request_preserves_provenance_and_duplicate_is_silent",
-    "crates/bacnet-server/src/server/audit_notification_tests.rs::executed_service_truth_is_confirmed_only",
+    "crates/bacnet-server/src/server/unconfirmed_audit_notification_tests.rs::accepted_direct_and_routed_requests_commit_atomically_without_output",
+    "crates/bacnet-server/src/server/audit_notification_tests.rs::executed_service_truth_includes_confirmed_and_unconfirmed_receipt",
     "crates/bacnet-server/src/pics/tests.rs::executed_services_match_dispatch_table"
    ],
    "negative_tests": [
@@ -892,7 +894,8 @@
     "crates/bacnet-server/src/handlers/tests/audit_log_query.rs::audit_typed_object_without_capability_maps_to_optional_functionality",
     "crates/bacnet-server/src/handlers/tests/audit_log_query.rs::malformed_payload_fails_before_audit_storage_is_inspected",
     "crates/bacnet-objects/src/audit/notification_tests.rs::commit_and_clock_failures_leave_memory_and_durable_snapshot_unchanged",
-    "crates/bacnet-server/src/server/audit_notification_tests.rs::policy_decode_bounds_sink_and_persistence_fail_before_success_ack"
+    "crates/bacnet-server/src/server/audit_notification_tests.rs::policy_decode_bounds_sink_and_persistence_fail_before_success_ack",
+    "crates/bacnet-server/src/server/unconfirmed_audit_notification_tests.rs::every_precommit_failure_is_silent_and_nonmutating"
    ],
    "benchmarks": [],
    "public_claims": [],

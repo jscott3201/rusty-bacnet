@@ -9,7 +9,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 /// Persistence is synchronous under the database writer in this bounded
 /// receiver foundation. That limits availability to the configured backend's
 /// commit latency, but keeps the durable commit and memory apply atomic.
-pub fn handle_confirmed_audit_notification(
+pub fn handle_audit_notification(
     db: &mut ObjectDatabase,
     sink: ObjectIdentifier,
     request: &AuditNotificationRequest,
@@ -34,6 +34,18 @@ pub fn handle_confirmed_audit_notification(
         .audit_log_notification_sink_internal()
         .expect("sink capability was checked before Device timeout lookup");
     storage.store_notifications(&request.notifications, apdu_timeout_ms)
+}
+
+/// Store one decoded and authorized confirmed notification batch.
+///
+/// Retained as a compatibility alias for the original confirmed-only receiver
+/// API; both inbound AuditNotification forms use the same atomic storage owner.
+pub fn handle_confirmed_audit_notification(
+    db: &mut ObjectDatabase,
+    sink: ObjectIdentifier,
+    request: &AuditNotificationRequest,
+) -> Result<(), Error> {
+    handle_audit_notification(db, sink, request)
 }
 
 fn configured_apdu_timeout(db: &ObjectDatabase) -> Result<u32, Error> {
