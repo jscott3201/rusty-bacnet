@@ -930,6 +930,7 @@ The server automatically dispatches:
 - GetAlarmSummary, GetEnrollmentSummary
 - ConfirmedTextMessage
 - LifeSafetyOperation (authorized silence/unsilence; built-in reset is unsupported)
+- AuditLogQuery (retained records; no built-in ingestion, authorization, or failures-only mode)
 - ReadRange
 - AtomicReadFile, AtomicWriteFile
 - AddListElement, RemoveListElement
