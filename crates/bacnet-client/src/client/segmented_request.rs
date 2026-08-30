@@ -45,6 +45,18 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         });
         let mut buf = BytesMut::with_capacity(context.remote_max_apdu as usize);
         encode_apdu(&mut buf, &pdu)?;
+        if !self.routed_path_limits.authorize_attempt(
+            context.target,
+            context.tsm_mac,
+            context.invoke_id,
+            context.owner,
+            buf.len(),
+        ) {
+            return response_rx
+                .await
+                .map(OutgoingSegmentSend::Terminal)
+                .map_err(|_| Error::Encoding("TSM response channel closed".into()));
+        }
         let send = self.send_confirmed_target_apdu(context.target, &buf);
         tokio::pin!(send);
 

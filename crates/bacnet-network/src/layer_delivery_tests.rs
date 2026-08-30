@@ -1,6 +1,7 @@
 use super::*;
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::loopback::LoopbackTransport;
+use bacnet_types::enums::{NetworkMessageType, RejectMessageReason};
 use std::net::Ipv4Addr;
 use tokio::time::{timeout, Duration};
 
@@ -78,6 +79,83 @@ fn encoded_npdu(destination: Option<NpduAddress>) -> Bytes {
     let mut buffer = BytesMut::new();
     encode_npdu(&mut buffer, &npdu).unwrap();
     buffer.freeze()
+}
+
+fn encoded_reject_message_to_network(reason: RejectMessageReason, dnet: u16) -> Bytes {
+    let npdu = Npdu {
+        is_network_message: true,
+        message_type: Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw()),
+        payload: Bytes::from(vec![reason.to_raw(), (dnet >> 8) as u8, dnet as u8]),
+        ..Npdu::default()
+    };
+    let mut buffer = BytesMut::new();
+    encode_npdu(&mut buffer, &npdu).unwrap();
+    buffer.freeze()
+}
+
+#[tokio::test]
+async fn opted_in_network_control_stream_preserves_start_apdu_receiver() {
+    let (transport, mut peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+    let mut network = NetworkLayer::new(transport);
+    let mut controls = network.enable_network_control_receiver().unwrap();
+    assert!(network.enable_network_control_receiver().is_err());
+    let mut apdus = network.start().await.unwrap();
+
+    peer.send_unicast(
+        &encoded_reject_message_to_network(RejectMessageReason::MESSAGE_TOO_LONG, 100),
+        &[0x01],
+    )
+    .await
+    .unwrap();
+
+    let received = timeout(Duration::from_secs(1), controls.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(received.source_mac.as_slice(), &[0x02]);
+    assert_eq!(
+        received.npdu.message_type,
+        Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw())
+    );
+    assert!(timeout(Duration::from_millis(25), apdus.recv())
+        .await
+        .is_err());
+    assert!(network.enable_network_control_receiver().is_err());
+
+    network.stop().await.unwrap();
+    peer.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn network_controls_without_opt_in_are_discarded_without_stopping_apdu_ingress() {
+    let (transport, mut peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+    let mut network = NetworkLayer::new(transport);
+    let mut apdus = network.start().await.unwrap();
+
+    peer.send_unicast(
+        &encoded_reject_message_to_network(RejectMessageReason::MESSAGE_TOO_LONG, 100),
+        &[0x01],
+    )
+    .await
+    .unwrap();
+    assert!(timeout(Duration::from_millis(25), apdus.recv())
+        .await
+        .is_err());
+
+    peer.send_unicast(&encoded_npdu(None), &[0x01])
+        .await
+        .unwrap();
+    assert_eq!(
+        timeout(Duration::from_secs(1), apdus.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .apdu,
+        Bytes::from_static(&[0x10, 0x08])
+    );
+
+    network.stop().await.unwrap();
+    peer.stop().await.unwrap();
 }
 
 #[tokio::test]

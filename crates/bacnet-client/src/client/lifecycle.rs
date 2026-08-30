@@ -42,6 +42,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         options.validate()?;
 
         let mut network = NetworkLayer::new(transport);
+        let mut network_control_rx = network.enable_network_control_receiver()?;
         let mut apdu_rx = network.start().await?;
         config.max_apdu_length = cap_max_apdu_to_transport(
             config.max_apdu_length,
@@ -72,16 +73,29 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         #[cfg(test)]
         let segmented_cleanup_dispatch = Arc::clone(&segmented_cleanup);
         let response_limits = ResponseLimits::from_config(&config);
+        let routed_path_limits = Arc::new(RoutedPathLimits::default());
+        let routed_path_limits_dispatch = Arc::clone(&routed_path_limits);
 
         let dispatch_task = tokio::spawn(async move {
             let mut seg_state: HashMap<SegKey, SegmentedReceiveState> = HashMap::new();
             let mut device_purge_interval = tokio::time::interval(DEVICE_PURGE_INTERVAL);
+            let mut network_control_open = true;
             // Tokio intervals tick immediately; consume that tick so discovery purges
             // run on the configured cadence instead of racing the first APDU.
             device_purge_interval.tick().await;
 
             loop {
                 tokio::select! {
+                    control = network_control_rx.recv(), if network_control_open => {
+                        match control {
+                            Some(control) => {
+                                routed_path_limits_dispatch
+                                    .handle_network_control(&tsm_dispatch, control)
+                                    .await;
+                            }
+                            None => network_control_open = false,
+                        }
+                    }
                     cleanup = cleanup_rx.recv() => {
                         let Some(cleanup) = cleanup else {
                             break;
@@ -175,6 +189,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             #[cfg(test)]
             segmented_cleanup,
             local_mac,
+            routed_path_limits,
         })
     }
     /// Get the client's local MAC address.

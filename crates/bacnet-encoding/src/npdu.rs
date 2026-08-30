@@ -4,7 +4,7 @@
 //! or a network-layer message, with optional source/destination routing
 //! information for multi-hop BACnet internetworks.
 
-use bacnet_types::enums::NetworkPriority;
+use bacnet_types::enums::{NetworkPriority, RejectMessageReason};
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 use bytes::{BufMut, Bytes, BytesMut};
@@ -52,6 +52,18 @@ pub struct Npdu {
     pub vendor_id: Option<u16>,
     /// Payload: either APDU bytes or network message data.
     pub payload: Bytes,
+}
+
+/// Decoded payload of a Reject-Message-To-Network control message.
+///
+/// The enclosing NPDU identifies the network-message type; this type models
+/// only the fixed reason/DNET payload used by that message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RejectMessageToNetwork {
+    /// Why the router rejected the message.
+    pub reason: RejectMessageReason,
+    /// Destination network named by the rejection.
+    pub dnet: u16,
 }
 
 impl Default for Npdu {
@@ -309,6 +321,27 @@ pub fn decode_npdu(data: Bytes) -> Result<Npdu, Error> {
     })
 }
 
+/// Decode the fixed three-octet Reject-Message-To-Network payload.
+///
+/// The payload is rejected unless it contains exactly one reason octet and
+/// one two-octet destination network. Callers remain responsible for checking
+/// that the enclosing NPDU is the standard Reject-Message-To-Network type.
+pub fn decode_reject_message_to_network(payload: &[u8]) -> Result<RejectMessageToNetwork, Error> {
+    if payload.len() != 3 {
+        return Err(Error::decoding(
+            0,
+            format!(
+                "Reject-Message-To-Network payload must be exactly 3 octets, got {}",
+                payload.len()
+            ),
+        ));
+    }
+    Ok(RejectMessageToNetwork {
+        reason: RejectMessageReason::from_raw(payload[0]),
+        dnet: u16::from_be_bytes([payload[1], payload[2]]),
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -467,6 +500,25 @@ mod tests {
         assert_eq!(encoded[1] & 0x80, 0x80);
         let decoded = decode_npdu(Bytes::from(encoded)).unwrap();
         assert_eq!(decoded, npdu);
+    }
+
+    #[test]
+    fn reject_message_to_network_payload_decodes_typed_reason_and_dnet() {
+        let decoded = decode_reject_message_to_network(&[
+            RejectMessageReason::MESSAGE_TOO_LONG.to_raw(),
+            0x12,
+            0x34,
+        ])
+        .unwrap();
+        assert_eq!(decoded.reason, RejectMessageReason::MESSAGE_TOO_LONG);
+        assert_eq!(decoded.dnet, 0x1234);
+    }
+
+    #[test]
+    fn reject_message_to_network_payload_requires_exact_length() {
+        for payload in [&[][..], &[4, 0][..], &[4, 0, 1, 2][..]] {
+            assert!(decode_reject_message_to_network(payload).is_err());
+        }
     }
 
     #[test]

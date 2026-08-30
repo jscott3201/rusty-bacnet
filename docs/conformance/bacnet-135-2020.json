@@ -183,6 +183,42 @@
     "notes": "Receive-side client SEGMENTED_CONF and server SEGMENTED_REQUEST now use the Clause 5.4.2.2 predicate corrected by Addendum 135-2020ch, with modulo-256 unit vectors. Per-session DuplicateCount uses ActualWindowSize as Ndup: exactly Ndup in-window duplicates are discarded silently, the next is NAKed, and true out-of-order segments are NAKed immediately. Focused tests cover window one, windows greater than one, client/server baseline resets, ACK roles and fields, and byte-exact payload survival. The row remains below supported status pending multi-segment send-window behavior, full-transfer modulo-256 wrap evidence, max APDU/max segment boundaries, and broader TSM transition coverage."
   },
   {
+   "id": "BACNET-5-ROUTED-PATH-LIMIT",
+   "standard_anchor": "Clauses 5.2.1.2, 6.4.4, and 19.4",
+   "priority": "P1",
+   "requirement_summary": "Confirmed routed APDU sizing combines peer, local transport, and path NPDU evidence, while an exactly correlated too-long network rejection terminates the active owner and narrows later sends.",
+   "status": "implementation-present-needs-conformance-tests",
+   "code_anchors": [
+    "crates/bacnet-encoding/src/npdu.rs",
+    "crates/bacnet-network/src/layer.rs",
+    "crates/bacnet-client/src/client/routed_path_limits.rs",
+    "crates/bacnet-client/src/client/requests.rs",
+    "crates/bacnet-client/src/client/segmented_request.rs",
+    "crates/bacnet-client/src/client/segmentation.rs",
+    "crates/bacnet-client/src/tsm.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-encoding/src/npdu.rs::tests::reject_message_to_network_payload_decodes_typed_reason_and_dnet",
+    "crates/bacnet-network/src/layer_delivery_tests.rs::opted_in_network_control_stream_preserves_start_apdu_receiver",
+    "crates/bacnet-client/src/client/routed_path_limit_tests.rs::routed_sizing_uses_conservative_and_configured_forwarded_envelopes",
+    "crates/bacnet-client/src/client/routed_path_limit_tests.rs::reason_4_completes_exact_caller_learns_bound_and_does_not_retry",
+    "crates/bacnet-client/src/client/routed_path_limit_tests.rs::same_path_serializes_while_a_second_router_remains_concurrent"
+   ],
+   "negative_tests": [
+    "crates/bacnet-encoding/src/npdu.rs::tests::reject_message_to_network_payload_requires_exact_length",
+    "crates/bacnet-network/src/layer_delivery_tests.rs::network_controls_without_opt_in_are_discarded_without_stopping_apdu_ingress",
+    "crates/bacnet-client/src/client/routed_path_limit_tests.rs::subminimum_path_cap_fails_before_registration_or_emission",
+    "crates/bacnet-client/src/client/routed_path_limit_tests.rs::unmatched_controls_and_direct_requests_do_not_change_path_policy",
+    "crates/bacnet-client/src/client/routed_path_limit_tests.rs::reason_4_during_segmented_send_prevents_window_retransmission",
+    "crates/bacnet-client/src/client/routed_path_limits.rs::tests::claimed_control_cannot_complete_reused_invoke_id_for_new_owner"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md routed confirmed-request limits"
+   ],
+   "notes": "The path key is immediate-router MAC plus DNET, separate from discovery state. Unknown paths use a 228-octet NPDU envelope; the forwarded NPCI allowance includes destination and source fields using the client's local transport MAC, so six-octet addresses leave 207 APDU octets and an explicitly configured 1497-octet path leaves 1476 before peer or local-link constraints. Configured evidence and process-lifetime learned exclusive upper bounds combine by minimum. One active owner per path makes reason-4 completion owner-qualified; learning occurs only when that completion wins, and retry/window retransmission stops afterward. Malformed, unmatched, stale, wrong-router, wrong-DNET, other-reason, and direct traffic do not mutate policy. Full active probing, persistent cache, router enforcement, and unconfirmed-traffic changes remain deferred. Third-party conformance evidence is still required."
+  },
+  {
    "id": "BACNET-6-NPDU-CONTROL",
    "standard_anchor": "Clause 6.2",
    "priority": "P1",

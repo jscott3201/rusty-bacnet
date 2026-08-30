@@ -165,6 +165,7 @@ pub(crate) fn confirmed_response_result(response: TsmResponse) -> Result<Bytes, 
         TsmResponse::Error { class, code } => Err(Error::Protocol { class, code }),
         TsmResponse::Reject { reason } => Err(Error::Reject { reason }),
         TsmResponse::Abort { reason } => Err(Error::Abort { reason }),
+        TsmResponse::NetworkPathTooLong { dnet } => Err(Error::RoutedPathTooLong { dnet }),
     }
 }
 
@@ -428,6 +429,7 @@ pub struct BACnetClient<T: TransportPort> {
     #[cfg(test)]
     segmented_cleanup: Arc<SegmentedCleanupHook>,
     local_mac: MacAddr,
+    routed_path_limits: Arc<RoutedPathLimits>,
 }
 
 impl BACnetClient<BipTransport> {
@@ -789,10 +791,12 @@ mod object_mgmt;
 mod property;
 mod requests;
 mod response_admission;
+mod routed_path_limits;
 mod segmentation;
 mod segmented_request;
 mod transaction_cleanup;
 mod transaction_peer;
+use routed_path_limits::RoutedPathLimits;
 use transaction_peer::response_transaction_peer;
 
 pub use cov_notifications::{
@@ -827,6 +831,8 @@ mod request_timer_tests;
 mod response_correlation_tests;
 #[cfg(test)]
 mod routed_max_apdu_tests;
+#[cfg(test)]
+mod routed_path_limit_tests;
 #[cfg(test)]
 mod routed_reply_tests;
 #[cfg(all(test, feature = "sc-tls"))]

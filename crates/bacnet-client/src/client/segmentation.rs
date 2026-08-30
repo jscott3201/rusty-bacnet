@@ -475,6 +475,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         service_data: &[u8],
         remote_max_apdu: u16,
         remote_max_segments: Option<u32>,
+        routed_forwarded_npci_len: Option<u16>,
     ) -> Result<Bytes, Error> {
         let transaction_peer = target.transaction_peer();
         let tsm_mac = transaction_peer.tsm_mac;
@@ -512,6 +513,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         };
 
         let owner = registration.owner.clone();
+        if let Some(forwarded_npci_len) = routed_forwarded_npci_len {
+            self.routed_path_limits.install_active(
+                target,
+                tsm_mac.clone(),
+                invoke_id,
+                owner.clone(),
+                forwarded_npci_len,
+            );
+        }
         let mut guard = TransactionGuard::new(
             Arc::clone(&self.tsm),
             self.cleanup_tx.clone(),

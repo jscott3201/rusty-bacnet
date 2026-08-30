@@ -55,6 +55,13 @@ pub enum Error {
         reason: u8,
     },
 
+    /// A router reported that the active message was too long for a routed path.
+    #[error("message is too long for routed path to DNET {dnet}")]
+    RoutedPathTooLong {
+        /// Destination network rejected by the router.
+        dnet: u16,
+    },
+
     /// Error encoding a PDU.
     #[error("encoding error: {0}")]
     Encoding(String),
@@ -156,5 +163,11 @@ mod tests {
     fn timeout_error_display() {
         let err = Error::Timeout(Duration::from_secs(3));
         assert!(err.to_string().contains("3s"));
+    }
+
+    #[test]
+    fn routed_path_too_long_display_preserves_dnet() {
+        let err = Error::RoutedPathTooLong { dnet: 1234 };
+        assert!(err.to_string().contains("1234"));
     }
 }

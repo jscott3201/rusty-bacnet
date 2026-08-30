@@ -39,6 +39,23 @@ pub struct ReceivedApdu {
     pub reply_tx: Option<oneshot::Sender<Bytes>>,
 }
 
+/// A decoded network-layer control message received from a transport peer.
+///
+/// Non-router users opt in to this stream before [`NetworkLayer::start`].
+/// Without that opt-in, network messages retain their historical discard/log
+/// behavior.
+#[derive(Debug, Clone)]
+pub struct ReceivedNetworkControl {
+    /// Decoded NPDU, including network-message type and typed-address fields.
+    pub npdu: Npdu,
+    /// Immediate transport peer that sent the message.
+    pub source_mac: MacAddr,
+    /// Whether the data-link delivery was multicast or broadcast.
+    pub link_layer_group: bool,
+    /// Data-link attributes supplied by the transport.
+    pub data_attributes: Vec<DataAttribute>,
+}
+
 impl Clone for ReceivedApdu {
     fn clone(&self) -> Self {
         Self {
@@ -83,6 +100,7 @@ pub(crate) fn is_group_delivery(link_layer_group: bool, destination: Option<&Npd
 pub struct NetworkLayer<T: TransportPort> {
     transport: T,
     dispatch_task: Option<JoinHandle<()>>,
+    network_control_tx: Option<mpsc::Sender<ReceivedNetworkControl>>,
 }
 
 impl<T: TransportPort + 'static> NetworkLayer<T> {
@@ -91,7 +109,31 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         Self {
             transport,
             dispatch_task: None,
+            network_control_tx: None,
         }
+    }
+
+    /// Enable the one-consumer decoded network-control stream.
+    ///
+    /// This must be called before [`Self::start`] and at most once. Dropping
+    /// the returned receiver disables control delivery without affecting APDU
+    /// ingress.
+    pub fn enable_network_control_receiver(
+        &mut self,
+    ) -> Result<mpsc::Receiver<ReceivedNetworkControl>, Error> {
+        if self.dispatch_task.is_some() {
+            return Err(Error::Encoding(
+                "network-control receiver must be enabled before NetworkLayer::start".into(),
+            ));
+        }
+        if self.network_control_tx.is_some() {
+            return Err(Error::Encoding(
+                "network-control receiver is already enabled".into(),
+            ));
+        }
+        let (tx, rx) = mpsc::channel(256);
+        self.network_control_tx = Some(tx);
+        Ok(rx)
     }
 
     /// Start the network layer. Returns a receiver for incoming APDUs.
@@ -100,6 +142,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// decodes incoming NPDUs and extracts APDUs.
     pub async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedApdu>, Error> {
         let mut npdu_rx = self.transport.start().await?;
+        let mut network_control_tx = self.network_control_tx.take();
 
         let (apdu_tx, apdu_rx) = mpsc::channel(256);
 
@@ -108,10 +151,23 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
                 match decode_npdu(received.npdu.clone()) {
                     Ok(npdu) => {
                         if npdu.is_network_message {
-                            debug!(
-                                message_type = npdu.message_type,
-                                "Ignoring network layer message (non-router mode)"
-                            );
+                            if let Some(tx) = network_control_tx.as_ref() {
+                                let control = ReceivedNetworkControl {
+                                    npdu,
+                                    source_mac: received.source_mac,
+                                    link_layer_group: received.link_layer_group,
+                                    data_attributes: received.data_attributes,
+                                };
+                                if tx.send(control).await.is_err() {
+                                    network_control_tx = None;
+                                    debug!("Network-control receiver closed; resuming discard behavior");
+                                }
+                            } else {
+                                debug!(
+                                    message_type = npdu.message_type,
+                                    "Ignoring network layer message (non-router mode)"
+                                );
+                            }
                             continue;
                         }
 
@@ -491,7 +547,7 @@ mod tests {
     use bacnet_transport::bip::BipTransport;
     use bacnet_transport::sc::{LoopbackWebSocket, ScTransport, WebSocketPort};
     use bacnet_transport::sc_frame::{
-        decode_sc_message, encode_sc_message, ScFunction, ScMessage, ScOption, Vmac,
+        decode_sc_message, encode_sc_message, ScFunction, ScMessage, Vmac,
     };
     use std::net::Ipv4Addr;
     use tokio::time::{timeout, Duration};
@@ -555,76 +611,6 @@ mod tests {
             ws_hub.send(&buf).await.is_err(),
             "{context} must reject post-drop Heartbeat-Request on the closed socket"
         );
-    }
-
-    #[tokio::test]
-    async fn sc_data_options_reach_received_apdu_data_attributes() {
-        let (ws_client, ws_hub) = LoopbackWebSocket::pair();
-        let hub_vmac = [0x10; 6];
-        let mut net = NetworkLayer::new(ScTransport::new(ws_client, [0x01; 6]));
-
-        let hub_accept_task = tokio::spawn(async move {
-            sc_hub_accept(&ws_hub, hub_vmac).await;
-            ws_hub
-        });
-
-        let mut rx = net.start().await.unwrap();
-        let ws_hub = hub_accept_task.await.unwrap();
-
-        let apdu = Bytes::from_static(&[0x10, 0x08]);
-        let npdu = Npdu {
-            is_network_message: false,
-            expecting_reply: false,
-            priority: NetworkPriority::NORMAL,
-            destination: None,
-            source: None,
-            payload: apdu.clone(),
-            ..Npdu::default()
-        };
-        let mut npdu_buf = BytesMut::new();
-        encode_npdu(&mut npdu_buf, &npdu).unwrap();
-
-        let msg = ScMessage {
-            function: ScFunction::EncapsulatedNpdu,
-            message_id: 0x2345,
-            originating_vmac: Some(hub_vmac),
-            destination_vmac: None,
-            dest_options: Vec::new(),
-            data_options: vec![
-                ScOption {
-                    option_type: 1,
-                    must_understand: true,
-                    data: Vec::new(),
-                },
-                ScOption {
-                    option_type: 31,
-                    must_understand: false,
-                    data: vec![0x12, 0x34, 0x56],
-                },
-            ],
-            payload: npdu_buf.freeze(),
-        };
-        let mut sc_buf = BytesMut::new();
-        encode_sc_message(&mut sc_buf, &msg);
-        ws_hub.send(&sc_buf).await.unwrap();
-
-        let received = timeout(Duration::from_secs(1), rx.recv())
-            .await
-            .expect("timed out waiting for APDU")
-            .expect("APDU channel closed");
-
-        assert_eq!(received.apdu, apdu);
-        assert_eq!(received.source_mac.as_slice(), hub_vmac);
-        assert!(received.source_network.is_none());
-        assert_eq!(received.data_attributes.len(), 2);
-        assert_eq!(received.data_attributes[0].option_type, 1);
-        assert!(received.data_attributes[0].must_understand);
-        assert!(received.data_attributes[0].data.is_empty());
-        assert_eq!(received.data_attributes[1].option_type, 31);
-        assert!(!received.data_attributes[1].must_understand);
-        assert_eq!(received.data_attributes[1].data, vec![0x12, 0x34, 0x56]);
-
-        net.stop().await.unwrap();
     }
 
     #[tokio::test]
@@ -845,3 +831,7 @@ mod tests {
 #[cfg(test)]
 #[path = "layer_delivery_tests.rs"]
 mod delivery_tests;
+
+#[cfg(test)]
+#[path = "layer_sc_data_options_tests.rs"]
+mod sc_data_options_tests;
