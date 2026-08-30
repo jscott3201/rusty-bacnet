@@ -832,13 +832,19 @@
    "id": "BACNET-13-AUDIT-WIRE-MODELS",
    "standard_anchor": "Clauses 13.19-13.21; Clause 21.2.1, Clause 21.2.3, Clause 21.3.1, BACnetAuditNotification, BACnetAuditLogQueryParameters, and BACnetAuditOperationFlags productions",
    "priority": "P1",
-   "requirement_summary": "AuditNotification request payloads carry one or more typed BACnetAuditNotification values under context tag 0, while AuditLogQuery requests carry a typed by-target or by-source query alternative. Within the primitive layer's u64 Unsigned domain, the codecs preserve the Clause 21 field order, tags, numeric domains, Boolean encoding, recipient alternatives, standard operation-flag bits 0-15, and proprietary bits 32-63; reject reserved flag bits, trailing or malformed structure; bound notification-list allocation; and leave destination buffers unchanged when model validation fails.",
+   "requirement_summary": "AuditNotification request payloads carry one or more typed BACnetAuditNotification values under context tag 0, while AuditLogQuery requests carry a typed by-target or by-source query alternative and the bundled server can execute those queries against explicitly persisted retained Audit Log records. Within the primitive layer's u64 Unsigned domain, the codecs preserve the Clause 21 field order, tags, numeric domains, Boolean encoding, recipient alternatives, standard operation-flag bits 0-15, and proprietary bits 32-63; reject reserved flag bits, trailing or malformed structure; bound notification/query-result allocation; and leave destination buffers unchanged when model validation fails.",
    "status": "implementation-present-needs-source-review",
    "code_anchors": [
     "crates/bacnet-types/src/bitstring.rs",
     "crates/bacnet-services/src/audit.rs",
     "crates/bacnet-services/src/audit/notification_codec.rs",
     "crates/bacnet-services/src/audit/query_codec.rs",
+    "crates/bacnet-services/src/audit/query_ack_codec.rs",
+    "crates/bacnet-objects/src/audit.rs",
+    "crates/bacnet-objects/src/traits.rs",
+    "crates/bacnet-server/src/handlers/audit_log_query.rs",
+    "crates/bacnet-server/src/server/requests/mod.rs",
+    "crates/bacnet-objects/src/device/mod.rs",
     "crates/rusty-bacnet/src/client/client_methods/vt_audit_time_directed.rs"
    ],
    "positive_tests": [
@@ -849,7 +855,15 @@
     "crates/bacnet-services/src/audit/malformed_tests.rs::minimal_notification_has_no_per_item_sequence_wrapper",
     "crates/bacnet-services/src/audit/tests.rs::by_target_minimum_matches_clause_21_golden",
     "crates/bacnet-services/src/audit/tests.rs::by_source_minimum_and_sequence_number_match_clause_21_golden",
-    "crates/bacnet-services/src/audit/tests.rs::by_target_all_optional_fields_round_trip"
+    "crates/bacnet-services/src/audit/tests.rs::by_target_all_optional_fields_round_trip",
+    "crates/bacnet-objects/src/audit/query_tests.rs::target_filter_matches_every_field_and_device_identifier_or_address",
+    "crates/bacnet-objects/src/audit/query_tests.rs::source_filter_and_success_boolean_follow_the_wire_contract",
+    "crates/bacnet-objects/src/audit/query_tests.rs::query_uses_insertion_order_literal_start_and_complete_scan_for_no_more_items",
+    "crates/bacnet-objects/src/audit/query_tests.rs::query_observes_retained_ring_eviction_and_newest_first_order",
+    "crates/bacnet-objects/src/audit/query_tests.rs::query_never_returns_more_than_the_retained_storage_cap",
+    "crates/bacnet-server/src/handlers/tests/audit_log_query.rs::handler_decodes_then_returns_an_owned_page_from_real_audit_storage",
+    "crates/bacnet-server/src/server/audit_log_query_tests.rs::audit_log_query_dispatch_returns_a_typed_complex_ack",
+    "crates/bacnet-server/src/pics/tests.rs::executed_services_match_dispatch_table"
    ],
    "negative_tests": [
     "crates/bacnet-types/src/bitstring.rs::tests::audit_operation_flags_reject_overlong_and_nonzero_padding",
@@ -865,11 +879,14 @@
     "crates/bacnet-services/src/audit/tests.rs::nested_field_widths_and_priority_range_are_enforced",
     "crates/bacnet-services/src/audit/tests.rs::operation_flags_reject_more_than_64_bits_and_nonzero_padding",
     "crates/bacnet-services/src/audit/tests.rs::every_constructed_level_requires_full_consumption",
-    "crates/bacnet-services/src/audit/tests.rs::invalid_priority_encode_is_atomic"
+    "crates/bacnet-services/src/audit/tests.rs::invalid_priority_encode_is_atomic",
+    "crates/bacnet-server/src/handlers/tests/audit_log_query.rs::missing_or_non_audit_identifiers_map_to_unknown_object",
+    "crates/bacnet-server/src/handlers/tests/audit_log_query.rs::audit_typed_object_without_capability_maps_to_optional_functionality",
+    "crates/bacnet-server/src/handlers/tests/audit_log_query.rs::malformed_payload_fails_before_audit_storage_is_inspected"
    ],
    "benchmarks": [],
    "public_claims": [],
-   "notes": "Wire-model-only evidence for issue #345. The request models follow the Clause 21 field and tag productions within the library's u64 Unsigned implementation limit: start-at-sequence-number is Unsigned32 and successful-actions-only is BOOLEAN. Clause 13.19 instead describes Unsigned64 and the three-state BACnetSuccessFilter, including failures-only; that internal Standard conflict remains unresolved pending authoritative addendum or errata research, so this row stays below supported status. The 10,000-notification bound is an implementation resource cap, not a Standard service cardinality. Raw target/current ANY values receive structural TLV validation only, not property-schema validation. Python exposes all three audit sends as caller-supplied, pre-encoded Clause 21 payload escape hatches. AuditLogQuery acknowledgment/record models, bundled-server execution and persistence, authorization, transport-source provenance, rate limiting, replay/merge policy, error mapping, APDU sizing/segmentation, Device service truth, PICS declarations, and BIBB claims remain unsupported or deferred."
+   "notes": "Partial evidence for issue #345. The request/ACK models follow the Clause 21 field and tag productions within the library's u64 Unsigned implementation limit: start-at-sequence-number is Unsigned32 and successful-actions-only is BOOLEAN. Clause 13.19 instead describes Unsigned64 and the three-state BACnetSuccessFilter, including failures-only; that internal Standard conflict remains unresolved pending authoritative addendum or errata research, so this row stays below supported status. AuditLogQuery executes both alternatives over the explicitly persisted, already-loaded retained snapshot, traverses insertion order newest-first without numeric sorting, applies the literal Unsigned32 start predicate, scans completely for No_More_Items, and returns at most the 10,000-record persistence/ACK cap through the generic ComplexACK sizing and segmentation path. Missing/non-Audit identifiers and absent query capability use the Clause 13.19 business errors; malformed payloads retain the repository's SERVICES/OTHER mapping after decode-first failure. The 10,000 notification/result bounds are implementation resource caps, not Standard service cardinalities. Raw target/current ANY values receive structural TLV validation only, not property-schema validation. Python exposes the three audit sends and query response as caller-supplied/pre-encoded byte escape hatches. AuditNotification ingestion, authorization, transport-source provenance, rate limiting, replay/merge policy, failures-only queries, wrap-safe continuation, and Audit BIBB claims remain unsupported or deferred."
   },
   {
    "id": "BACNET-15-ARRAY-INDEX-GATING",

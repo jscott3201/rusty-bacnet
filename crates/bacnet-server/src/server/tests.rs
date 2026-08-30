@@ -640,7 +640,7 @@ async fn reply_tx_response_preserves_routed_npdu_destination() {
         invoke_id: 0x31,
         sequence_number: None,
         proposed_window_size: None,
-        service_choice: ConfirmedServiceChoice::AUDIT_LOG_QUERY,
+        service_choice: ConfirmedServiceChoice::VT_OPEN,
         service_request: Bytes::new(),
     };
     let (tx, rx) = oneshot::channel();

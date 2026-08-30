@@ -233,8 +233,8 @@ use bacnet_services::vt::{VtOpenRequest, VtCloseRequest, VtDataRequest};
 
 ```rust
 use bacnet_services::audit::{
-    AuditLogQueryRequest, AuditNotificationRequest, AuditPropertyReference,
-    BACnetAuditLogQueryParameters, BACnetAuditNotification,
+    AuditLogQueryAck, AuditLogQueryRequest, AuditNotificationRequest,
+    AuditPropertyReference, BACnetAuditLogQueryParameters, BACnetAuditNotification,
 };
 ```
 
@@ -524,7 +524,7 @@ let obj = db.get_mut(&oid);            // Option<&mut Box<dyn BACnetObject>>
 | `TrendLogObject` | `::new(instance, name, buffer_size)` |
 | `TrendLogMultipleObject` | `::new(instance, name, buffer_size)` |
 | `EventLogObject` | `::new(instance, name, buffer_size)` |
-| `AuditLogObject` | `::new(instance, name, buffer_size)` |
+| `AuditLogObject` | `::new(instance, name, buffer_size, persistence)` |
 | `AuditReporterObject` | `::new(instance, name)` |
 
 #### Building Control (7)
@@ -808,7 +808,9 @@ let raw = client.vt_data(&mac, session_id, &data, data_flag).await?;
 ### Audit Services
 
 ```rust
-use bacnet_services::audit::{AuditLogQueryRequest, AuditNotificationRequest};
+use bacnet_services::audit::{
+    AuditLogQueryAck, AuditLogQueryRequest, AuditNotificationRequest,
+};
 use bacnet_types::enums::{ConfirmedServiceChoice, UnconfirmedServiceChoice};
 use bytes::BytesMut;
 
@@ -835,11 +837,17 @@ let raw_ack = client.confirmed_request(
     ConfirmedServiceChoice::AUDIT_LOG_QUERY,
     &query_data,
 ).await?;
+let query_ack = AuditLogQueryAck::decode(&raw_ack)?;
 ```
 
-These are codec plus generic-client examples. `raw_ack` is not yet decoded by
-an AuditLogQuery acknowledgment model, and the bundled server does not execute
-the audit notification or query services. No PICS or BIBB support is implied.
+These remain generic-client examples. The bundled server executes
+AuditLogQuery against the retained in-memory snapshot of an explicitly backed
+`AuditLogObject`, returning newest-first typed records through the existing
+ComplexACK segmentation path. Its confirmed and unconfirmed AuditNotification
+receivers remain unsupported, so records still come from application-owned
+storage/producer policy. Query authorization, replay policy, failures-only
+filtering, and a wrap-safe 64-bit continuation are not provided. No Audit BIBB
+claim is implied.
 
 ---
 

@@ -879,6 +879,8 @@ mod segmented_receive;
 mod shutdown;
 
 #[cfg(test)]
+mod audit_log_query_tests;
+#[cfg(test)]
 mod cov_notifications_tests;
 #[cfg(test)]
 mod dcc_event_detection_tests;

@@ -5,7 +5,8 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use bacnet_types::constructed::{
-    BACnetAuditLogDatum, BACnetAuditLogRecord, BACnetAuditLogRecordResult,
+    BACnetAuditLogDatum, BACnetAuditLogQueryParameters, BACnetAuditLogRecord,
+    BACnetAuditLogRecordResult, BACnetAuditNotification, BACnetRecipient,
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
@@ -20,6 +21,34 @@ use persistence::{validate_record, validate_snapshot};
 pub use persistence::{
     AuditLogPersistence, AuditLogSnapshot, FileAuditLogPersistence, MAX_AUDIT_RECORDS,
 };
+
+/// One owned page returned by an object-level AuditLogQuery capability.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AuditLogQueryPage {
+    /// Matching records in newest-first retained insertion order.
+    pub records: Vec<BACnetAuditLogRecordResult>,
+    /// Whether a complete retained-buffer scan found no unreturned match.
+    pub no_more_items: bool,
+}
+
+/// Read-only query capability for an object's retained Audit Log records.
+///
+/// Implementations return owned pages so the server can release its object
+/// database read guard before building and encoding the ComplexACK. This
+/// interface never performs persistence I/O or mutates the log.
+pub trait AuditLogStorage: Send + Sync {
+    /// Filter and page the currently retained in-memory records.
+    ///
+    /// A present start is the existing Clause-21 `Unsigned32` model and admits
+    /// only literal sequence identities below it. This intentionally does not
+    /// add a modular cursor across `u64::MAX -> 1`.
+    fn query(
+        &self,
+        parameters: &BACnetAuditLogQueryParameters,
+        start_at_sequence_number: Option<u32>,
+        requested_count: u16,
+    ) -> AuditLogQueryPage;
+}
 
 // ---------------------------------------------------------------------------
 // AuditLog (type 61)
@@ -231,6 +260,129 @@ fn append_record(snapshot: &mut AuditLogSnapshot, record: BACnetAuditLogRecord) 
     sequence_number
 }
 
+fn recipient_matches(
+    actual: &BACnetRecipient,
+    required_identifier: ObjectIdentifier,
+    optional_address: Option<&bacnet_types::constructed::BACnetAddress>,
+) -> bool {
+    match actual {
+        BACnetRecipient::Device(identifier) => *identifier == required_identifier,
+        BACnetRecipient::Address(address) => {
+            optional_address.is_some_and(|filter| address == filter)
+        }
+    }
+}
+
+fn operation_matches(
+    notification: &BACnetAuditNotification,
+    operations: Option<bacnet_types::bitstring::AuditOperationFlags>,
+    successful_actions_only: bool,
+) -> bool {
+    operations.is_none_or(|flags| flags.contains(notification.operation))
+        && (!successful_actions_only || notification.result.is_none())
+}
+
+fn query_matches(
+    notification: &BACnetAuditNotification,
+    parameters: &BACnetAuditLogQueryParameters,
+) -> bool {
+    match parameters {
+        BACnetAuditLogQueryParameters::ByTarget {
+            target_device_identifier,
+            target_device_address,
+            target_object_identifier,
+            target_property_identifier,
+            target_array_index,
+            target_priority,
+            operations,
+            successful_actions_only,
+        } => {
+            recipient_matches(
+                &notification.target_device,
+                *target_device_identifier,
+                target_device_address.as_ref(),
+            ) && target_object_identifier
+                .is_none_or(|filter| notification.target_object == Some(filter))
+                && target_property_identifier.is_none_or(|filter| {
+                    notification.target_property.as_ref().is_some_and(|property| {
+                        property.property_identifier == filter
+                    })
+                })
+                && target_array_index.is_none_or(|filter| {
+                    notification.target_property.as_ref().is_some_and(|property| {
+                        property.property_array_index == Some(filter)
+                    })
+                })
+                // Clause 13.19 says a record without Priority matches any
+                // requested Target Priority.
+                && target_priority.is_none_or(|filter| {
+                    notification
+                        .target_priority
+                        .is_none_or(|priority| priority == filter)
+                })
+                && operation_matches(notification, *operations, *successful_actions_only)
+        }
+        BACnetAuditLogQueryParameters::BySource {
+            source_device_identifier,
+            source_device_address,
+            source_object_identifier,
+            operations,
+            successful_actions_only,
+        } => {
+            recipient_matches(
+                &notification.source_device,
+                *source_device_identifier,
+                source_device_address.as_ref(),
+            ) && source_object_identifier
+                .is_none_or(|filter| notification.source_object == Some(filter))
+                && operation_matches(notification, *operations, *successful_actions_only)
+        }
+    }
+}
+
+impl AuditLogStorage for AuditLogObject {
+    fn query(
+        &self,
+        parameters: &BACnetAuditLogQueryParameters,
+        start_at_sequence_number: Option<u32>,
+        requested_count: u16,
+    ) -> AuditLogQueryPage {
+        let limit = usize::from(requested_count).min(MAX_AUDIT_RECORDS as usize);
+        let mut records = Vec::with_capacity(limit.min(self.buffer.len()));
+        let mut unreturned_match = false;
+
+        // The ring is stored oldest-to-newest. Reverse insertion order is the
+        // query order even across sequence wrap; numeric sorting would turn
+        // retained [MAX, 1] into the wrong chronology.
+        for result in self.buffer.iter().rev() {
+            if start_at_sequence_number
+                .is_some_and(|start| result.sequence_number >= u64::from(start))
+            {
+                continue;
+            }
+            let BACnetAuditLogDatum::AuditNotification(notification) = &result.record.datum else {
+                continue;
+            };
+            if !query_matches(notification, parameters) {
+                continue;
+            }
+            if records.len() < limit {
+                records.push(result.clone());
+            } else {
+                // Keep scanning the complete retained snapshot so a full page
+                // can still truthfully distinguish exhaustion from a later
+                // eligible match. This also defines count=0.
+                unreturned_match = true;
+            }
+        }
+
+        AuditLogQueryPage {
+            records,
+            no_more_items: !unreturned_match,
+        }
+    }
+}
+
 impl BACnetObject for AuditLogObject {
     fn object_identifier(&self) -> ObjectIdentifier {
         self.oid
@@ -357,6 +509,10 @@ impl BACnetObject for AuditLogObject {
 
     fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
         self.clock = clock;
+    }
+
+    fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {
+        Some(self)
     }
 
     fn capture_write_property_rollback(
@@ -502,3 +658,7 @@ impl BACnetObject for AuditReporterObject {
 #[cfg(test)]
 #[path = "audit/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "audit/query_tests.rs"]
+mod query_tests;

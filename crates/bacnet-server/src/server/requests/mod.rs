@@ -43,6 +43,7 @@ pub(crate) const EXECUTED_CONFIRMED: &[ConfirmedServiceChoice] = &[
     ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY,
     ConfirmedServiceChoice::GET_EVENT_INFORMATION,
     ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE,
+    ConfirmedServiceChoice::AUDIT_LOG_QUERY,
 ];
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
@@ -337,6 +338,28 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let db = db.read().await;
                 match handlers::handle_get_enrollment_summary(&db, &req.service_request, &mut buf) {
                     Ok(()) => complex_ack(buf),
+                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
+                }
+            }
+            s if s == ConfirmedServiceChoice::AUDIT_LOG_QUERY => {
+                // Query under the read guard, then release it before ACK
+                // construction/encoding and the generic segmentation path.
+                let query_result = {
+                    let db = db.read().await;
+                    handlers::handle_audit_log_query(&db, &req.service_request)
+                };
+                match query_result {
+                    Ok((audit_log, page)) => {
+                        let ack = bacnet_services::audit::AuditLogQueryAck {
+                            audit_log,
+                            records: page.records,
+                            no_more_items: page.no_more_items,
+                        };
+                        match ack.try_encode(&mut ack_buf) {
+                            Ok(()) => complex_ack(ack_buf),
+                            Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
+                        }
+                    }
                     Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
                 }
             }

@@ -58,6 +58,7 @@ pub const EXECUTED_SERVICES: &[ServiceSupported] = &[
     ServiceSupported::SUBSCRIBE_COV_PROPERTY,
     ServiceSupported::GET_EVENT_INFORMATION,
     ServiceSupported::SUBSCRIBE_COV_PROPERTY_MULTIPLE,
+    ServiceSupported::AUDIT_LOG_QUERY,
 ];
 
 /// Number of bits in the `BACnetServicesSupported` production: bits 0..=48

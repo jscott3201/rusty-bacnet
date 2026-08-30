@@ -11,6 +11,7 @@ use bacnet_types::enums::{
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
+use crate::audit::AuditLogStorage;
 use crate::clock::ClockReader;
 use crate::event::{EventTransitionCommit, EventTransitionCommitError, TransitionOutcome};
 use crate::event_enrollment::{
@@ -533,6 +534,18 @@ pub trait BACnetObject: Send + Sync {
             class: ErrorClass::OBJECT.to_raw() as u32,
             code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
         })
+    }
+
+    /// Borrow this object's Audit Log query storage, if it has any.
+    ///
+    /// This read-only, type-erased channel lets the bundled server execute an
+    /// AuditLogQuery against an object's already-loaded retained records. It
+    /// deliberately does not expose persistence, mutation, or object
+    /// downcasting. The **default** returns `None`; an Audit Log object that
+    /// does not opt in is reported as SERVICES /
+    /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+    fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {
+        None
     }
 
     /// Borrow this object's File storage, if it has any.
