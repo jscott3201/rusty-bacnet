@@ -4,6 +4,21 @@ use super::super::*;
 impl BACnetServer {
     /// Start the server. It will begin responding to BACnet requests.
     fn start<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        // MS/TP serial open is synchronous and must succeed before pending
+        // registrations are moved into the startup future.
+        let mut mstp_transport: Option<AnyTransport<crate::mstp_py::PySerial>> =
+            if self.transport_type == "mstp" {
+                Some(crate::mstp_py::build_mstp_transport(
+                    self.serial_port.as_deref(),
+                    self.mstp_baud,
+                    self.mstp_mac,
+                    self.mstp_max_master,
+                    self.mstp_max_info_frames,
+                )?)
+            } else {
+                None
+            };
+
         let inner = self.inner.clone();
         let started = self.started.clone();
         let device_instance = self.device_instance;
@@ -23,7 +38,6 @@ impl BACnetServer {
         let dcc_password = self.dcc_password.clone();
         let reinit_password = self.reinit_password.clone();
 
-        // Take pending objects (synchronous, before async block)
         let objects: Vec<Box<dyn BACnetObject + Send>> = {
             let mut guard = self.lock_pending()?;
             guard.drain(..).collect()
@@ -64,7 +78,7 @@ impl BACnetServer {
             })?;
 
             // Build transport based on type
-            let transport: AnyTransport<NoSerial> = match transport_type.as_str() {
+            let transport: AnyTransport<crate::mstp_py::PySerial> = match transport_type.as_str() {
                 "bip" => {
                     let interface: Ipv4Addr = interface_str
                         .parse()
@@ -114,9 +128,12 @@ impl BACnetServer {
                     }
                     AnyTransport::Sc(Box::new(sc))
                 }
+                "mstp" => mstp_transport
+                    .take()
+                    .ok_or_else(|| PyRuntimeError::new_err("MS/TP transport was not prepared"))?,
                 other => {
                     return Err(PyRuntimeError::new_err(format!(
-                        "unknown transport: '{other}'. Use 'bip', 'ipv6', or 'sc'"
+                        "unknown transport: '{other}'. Use 'bip', 'ipv6', 'sc', or 'mstp'"
                     )));
                 }
             };
@@ -188,6 +205,15 @@ impl BACnetServer {
                     let ip = std::net::Ipv6Addr::from(ip_bytes);
                     let port = u16::from_be_bytes([mac[16], mac[17]]);
                     Ok(format!("[{ip}]:{port}"))
+                }
+                "mstp" => {
+                    if mac.len() != 1 {
+                        return Err(PyRuntimeError::new_err(format!(
+                            "unexpected MS/TP MAC length: {}",
+                            mac.len()
+                        )));
+                    }
+                    Ok(mac[0].to_string())
                 }
                 _ => {
                     // SC, Ethernet, or other: hex-encode

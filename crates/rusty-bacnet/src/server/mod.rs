@@ -50,7 +50,6 @@ use bacnet_server::server;
 use bacnet_transport::any::AnyTransport;
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::bip6::Bip6Transport;
-use bacnet_transport::mstp::NoSerial;
 use bacnet_types::primitives::PropertyValue;
 
 use crate::errors::to_py_err;
@@ -71,9 +70,10 @@ use crate::types::{PyObjectIdentifier, PyPropertyIdentifier, PyPropertyValue};
 /// - `"bip"` (default): BACnet/IP over UDP
 /// - `"ipv6"`: BACnet/IPv6 over UDP multicast
 /// - `"sc"`: BACnet/SC over TLS WebSocket (requires `sc_hub`, `sc_vmac`)
+/// - `"mstp"`: BACnet MS/TP over RS-485 (requires `serial_port`)
 #[pyclass(name = "BACnetServer")]
 pub struct BACnetServer {
-    inner: Arc<Mutex<Option<server::BACnetServer<AnyTransport<NoSerial>>>>>,
+    inner: Arc<Mutex<Option<server::BACnetServer<AnyTransport<crate::mstp_py::PySerial>>>>>,
     device_instance: u32,
     device_name: String,
     transport_type: String,
@@ -91,6 +91,12 @@ pub struct BACnetServer {
     sc_heartbeat_timeout_ms: Option<u64>,
     // IPv6 config
     ipv6_interface: Option<String>,
+    // MS/TP config
+    serial_port: Option<String>,
+    mstp_baud: u32,
+    mstp_mac: u8,
+    mstp_max_master: u8,
+    mstp_max_info_frames: u8,
     // Passwords
     dcc_password: Option<String>,
     reinit_password: Option<String>,

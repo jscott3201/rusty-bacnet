@@ -797,7 +797,7 @@ class BACnetClient:
     """Async BACnet client for reading/writing properties on remote devices.
 
     Supports BACnet/IP (``"bip"``), BACnet/IPv6 (``"ipv6"``),
-    and BACnet/SC (``"sc"``) transports.
+    BACnet/SC (``"sc"``), and BACnet MS/TP (``"mstp"``) transports.
 
     Usage::
 
@@ -806,6 +806,10 @@ class BACnetClient:
             devices = await client.discovered_devices()
             value = await client.read_property("192.168.1.100:47808", oid, pid)
             print(value.tag, value.value)
+
+        # MS/TP peer address is a station MAC string ("7" or "mstp:7")
+        async with BACnetClient(transport="mstp", serial_port="/dev/ttyUSB0", mstp_mac=3) as client:
+            value = await client.read_property("7", oid, pid)
     """
 
     def __init__(
@@ -823,6 +827,12 @@ class BACnetClient:
         sc_heartbeat_interval_ms: Optional[int] = None,
         sc_heartbeat_timeout_ms: Optional[int] = None,
         ipv6_interface: Optional[str] = None,
+        *,
+        serial_port: Optional[str] = None,
+        mstp_baud: int = 38400,
+        mstp_mac: int = 1,
+        mstp_max_master: int = 127,
+        mstp_max_info_frames: int = 1,
     ) -> None: ...
 
     async def __aenter__(self) -> BACnetClient: ...
@@ -1474,6 +1484,12 @@ class BACnetServer:
         ipv6_interface: Optional[str] = None,
         dcc_password: Optional[str] = None,
         reinit_password: Optional[str] = None,
+        *,
+        serial_port: Optional[str] = None,
+        mstp_baud: int = 38400,
+        mstp_mac: int = 1,
+        mstp_max_master: int = 127,
+        mstp_max_info_frames: int = 1,
     ) -> None: ...
 
     # --- Analog objects ---

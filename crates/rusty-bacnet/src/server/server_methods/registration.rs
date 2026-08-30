@@ -19,7 +19,13 @@ impl BACnetServer {
         sc_heartbeat_timeout_ms=None,
         ipv6_interface=None,
         dcc_password=None,
-        reinit_password=None
+        reinit_password=None,
+        *,
+        serial_port=None,
+        mstp_baud=38400,
+        mstp_mac=1,
+        mstp_max_master=127,
+        mstp_max_info_frames=1
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -39,6 +45,11 @@ impl BACnetServer {
         ipv6_interface: Option<String>,
         dcc_password: Option<String>,
         reinit_password: Option<String>,
+        serial_port: Option<String>,
+        mstp_baud: u32,
+        mstp_mac: u8,
+        mstp_max_master: u8,
+        mstp_max_info_frames: u8,
     ) -> Self {
         Self {
             inner: Arc::new(Mutex::new(None)),
@@ -56,11 +67,22 @@ impl BACnetServer {
             sc_heartbeat_interval_ms,
             sc_heartbeat_timeout_ms,
             ipv6_interface,
+            serial_port,
+            mstp_baud,
+            mstp_mac,
+            mstp_max_master,
+            mstp_max_info_frames,
             dcc_password,
             reinit_password,
             started: Arc::new(AtomicBool::new(false)),
             pending_objects: std::sync::Mutex::new(Vec::new()),
         }
+    }
+
+    /// Test seam for verifying that fallible startup leaves registrations intact.
+    #[doc(hidden)]
+    fn _pending_registration_count(&self) -> PyResult<usize> {
+        Ok(self.lock_pending()?.len())
     }
 
     /// Add an Analog Input object to the server (before starting).

@@ -114,6 +114,14 @@ impl<S: SerialPort> MstpTransport<S> {
     pub fn node_state(&self) -> Option<&Arc<Mutex<MasterNode>>> {
         self.node.as_ref()
     }
+
+    fn abort_receive_task_and_release_state(&mut self) {
+        if let Some(task) = self.recv_task.take() {
+            task.abort();
+        }
+        self.serial.take();
+        self.node.take();
+    }
 }
 
 impl<S: SerialPort> TransportPort for MstpTransport<S> {
@@ -496,6 +504,10 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
         Ok(())
     }
 
+    fn abort(&mut self) {
+        self.abort_receive_task_and_release_state();
+    }
+
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
         if mac.len() != 1 {
             return Err(Error::Encoding(format!(
@@ -539,6 +551,12 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
 
     fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
         mac == [BROADCAST_MAC]
+    }
+}
+
+impl<S: SerialPort> Drop for MstpTransport<S> {
+    fn drop(&mut self) {
+        self.abort_receive_task_and_release_state();
     }
 }
 
@@ -697,5 +715,81 @@ mod assembly_tests {
         let frames = assemble_host_chunk(&mut frame_buf, &token_wire[1..]);
         assert_eq!(frames, vec![token]);
         assert!(frame_buf.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod abort_tests {
+    use std::future::pending;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    use super::*;
+
+    struct ExclusiveSerial(Arc<AtomicBool>);
+
+    impl ExclusiveSerial {
+        fn open(in_use: Arc<AtomicBool>) -> Option<Self> {
+            in_use
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .ok()
+                .map(|_| Self(in_use))
+        }
+    }
+
+    impl Drop for ExclusiveSerial {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::SeqCst);
+        }
+    }
+
+    impl SerialPort for ExclusiveSerial {
+        async fn write(&self, _data: &[u8]) -> Result<(), Error> {
+            Ok(())
+        }
+
+        async fn read(&self, _buf: &mut [u8]) -> Result<usize, Error> {
+            pending().await
+        }
+    }
+
+    async fn reopen(in_use: &Arc<AtomicBool>) -> ExclusiveSerial {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let Some(serial) = ExclusiveSerial::open(in_use.clone()) {
+                    break serial;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("aborted receive task retained the serial resource")
+    }
+
+    #[tokio::test]
+    async fn abort_takes_task_and_releases_serial_for_reopen() {
+        let in_use = Arc::new(AtomicBool::new(false));
+        let serial = ExclusiveSerial::open(in_use.clone()).unwrap();
+        let mut transport = MstpTransport::new(serial, MstpConfig::default());
+        let _rx = transport.start().await.unwrap();
+        assert!(ExclusiveSerial::open(in_use.clone()).is_none());
+
+        transport.abort();
+        assert!(transport.recv_task.is_none());
+        assert!(transport.node.is_none());
+        drop(reopen(&in_use).await);
+        assert!(!in_use.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn drop_aborts_task_and_releases_serial_for_reopen() {
+        let in_use = Arc::new(AtomicBool::new(false));
+        let serial = ExclusiveSerial::open(in_use.clone()).unwrap();
+        let mut transport = MstpTransport::new(serial, MstpConfig::default());
+        let _rx = transport.start().await.unwrap();
+
+        drop(transport);
+        drop(reopen(&in_use).await);
+        assert!(!in_use.load(Ordering::SeqCst));
     }
 }

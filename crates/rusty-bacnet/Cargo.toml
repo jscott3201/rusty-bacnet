@@ -15,7 +15,7 @@ bacnet-types.workspace = true
 bacnet-encoding.workspace = true
 bacnet-client.workspace = true
 bacnet-server.workspace = true
-bacnet-transport = { workspace = true, features = ["sc-tls", "ipv6"] }
+bacnet-transport = { workspace = true, features = ["sc-tls", "ipv6", "serial"] }
 bacnet-objects.workspace = true
 bacnet-services.workspace = true
 pyo3.workspace = true

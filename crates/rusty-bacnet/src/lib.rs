@@ -5,6 +5,7 @@ use pyo3::prelude::*;
 mod client;
 mod errors;
 mod hub;
+mod mstp_py;
 mod server;
 mod tls;
 mod types;
