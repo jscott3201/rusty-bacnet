@@ -200,23 +200,28 @@
    "positive_tests": [
     "crates/bacnet-encoding/src/npdu.rs::tests::reject_message_to_network_payload_decodes_typed_reason_and_dnet",
     "crates/bacnet-network/src/layer_delivery_tests.rs::opted_in_network_control_stream_preserves_start_apdu_receiver",
-    "crates/bacnet-client/src/client/routed_path_limit_tests.rs::routed_sizing_uses_conservative_and_configured_forwarded_envelopes",
-    "crates/bacnet-client/src/client/routed_path_limit_tests.rs::reason_4_completes_exact_caller_learns_bound_and_does_not_retry",
-    "crates/bacnet-client/src/client/routed_path_limit_tests.rs::same_path_serializes_while_a_second_router_remains_concurrent"
+     "crates/bacnet-client/src/client/routed_path_limit_tests.rs::routed_sizing_uses_conservative_and_configured_forwarded_envelopes",
+     "crates/bacnet-client/src/client/routed_path_limit_tests.rs::reason_4_completes_exact_caller_learns_bound_and_does_not_retry",
+     "crates/bacnet-client/src/client/routed_path_limit_tests.rs::same_path_serializes_while_a_second_router_remains_concurrent",
+     "crates/bacnet-client/src/client/routed_path_limits_tests.rs::capacity_cleanup_never_splits_a_held_or_waiting_same_path_gate"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/npdu.rs::tests::reject_message_to_network_payload_requires_exact_length",
     "crates/bacnet-network/src/layer_delivery_tests.rs::network_controls_without_opt_in_are_discarded_without_stopping_apdu_ingress",
     "crates/bacnet-client/src/client/routed_path_limit_tests.rs::subminimum_path_cap_fails_before_registration_or_emission",
-    "crates/bacnet-client/src/client/routed_path_limit_tests.rs::unmatched_controls_and_direct_requests_do_not_change_path_policy",
-    "crates/bacnet-client/src/client/routed_path_limit_tests.rs::reason_4_during_segmented_send_prevents_window_retransmission",
-    "crates/bacnet-client/src/client/routed_path_limits.rs::tests::claimed_control_cannot_complete_reused_invoke_id_for_new_owner"
+     "crates/bacnet-client/src/client/routed_path_limit_tests.rs::unmatched_controls_and_direct_requests_do_not_change_path_policy",
+     "crates/bacnet-client/src/client/routed_path_limit_tests.rs::reason_4_during_segmented_send_prevents_window_retransmission",
+     "crates/bacnet-client/src/client/routed_path_limit_tests.rs::configured_capacity_exhaustion_fails_before_registration_or_emission",
+     "crates/bacnet-client/src/client/routed_path_limit_tests.rs::cancelled_generation_quarantines_delayed_reason_4_before_next_send",
+     "crates/bacnet-client/src/client/routed_path_limits_tests.rs::configured_and_learned_evidence_are_never_evicted_for_capacity",
+     "crates/bacnet-client/src/client/routed_path_limits_tests.rs::control_queued_before_activation_cannot_claim_the_new_generation",
+     "crates/bacnet-client/src/client/routed_path_limits_tests.rs::claimed_control_cannot_complete_reused_invoke_id_for_new_owner"
    ],
    "benchmarks": [],
    "public_claims": [
     "docs/rust-api.md routed confirmed-request limits"
    ],
-   "notes": "The path key is immediate-router MAC plus DNET, separate from discovery state. Unknown paths use a 228-octet NPDU envelope; the forwarded NPCI allowance includes destination and source fields using the client's local transport MAC, so six-octet addresses leave 207 APDU octets and an explicitly configured 1497-octet path leaves 1476 before peer or local-link constraints. Configured evidence and process-lifetime learned exclusive upper bounds combine by minimum. One active owner per path makes reason-4 completion owner-qualified; learning occurs only when that completion wins, and retry/window retransmission stops afterward. Malformed, unmatched, stale, wrong-router, wrong-DNET, other-reason, and direct traffic do not mutate policy. Full active probing, persistent cache, router enforcement, and unconfirmed-traffic changes remain deferred. Third-party conformance evidence is still required."
+    "notes": "The path key is immediate-router MAC plus DNET, separate from discovery state. Unknown paths use a 228-octet NPDU envelope; the forwarded NPCI allowance includes destination and source fields using the client's local transport MAC, so six-octet addresses leave 207 APDU octets and an explicitly configured 1497-octet path leaves 1476 before peer or local-link constraints. Configured evidence and process-lifetime learned exclusive upper bounds combine by minimum. One active owner per path makes reason-4 completion owner-qualified; learning occurs only when that completion wins, and retry/window retransmission stops afterward. Path state is capped at 256 entries; deterministic idle reclamation never removes configured/learned evidence or a gate with an owner/waiter, and exhaustion fails before TSM registration. Ambiguous termination holds the same-path gate through a configuration-derived stale-control quarantine, while monotonic network-ingress sequencing prevents controls queued before activation from claiming a later generation. Malformed, unmatched, stale, wrong-router, wrong-DNET, other-reason, and direct traffic do not mutate policy. Full active probing, persistent cache, router enforcement, and unconfirmed-traffic changes remain deferred. Third-party conformance evidence is still required."
   },
   {
    "id": "BACNET-6-NPDU-CONTROL",

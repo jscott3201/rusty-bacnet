@@ -68,61 +68,6 @@ fn check_transmittable_length(peer_or_local: LengthBoundedBy, transport: u16) ->
     )))
 }
 
-#[cfg(test)]
-mod transmittable_length_tests {
-    use super::{check_transmittable_length, LengthBoundedBy};
-
-    #[test]
-    fn conformant_lengths_pass() {
-        for advertised in [50u16, 128, 206, 480, 1024, 1476] {
-            assert!(
-                check_transmittable_length(LengthBoundedBy::DiscoveredPeer(advertised), 1476)
-                    .is_ok(),
-                "{advertised} is at or above MinimumMessageSize"
-            );
-        }
-    }
-
-    /// I-Am carries an Unsigned octet count, not the four-bit code, and Clause
-    /// 20.1.2.5 says the true value "may be larger than indicated in this
-    /// parameter" — so values outside the six encodings are legitimate.
-    #[test]
-    fn lengths_outside_the_encoded_set_are_not_rejected() {
-        for advertised in [51u16, 600, 1500, u16::MAX] {
-            assert!(
-                check_transmittable_length(LengthBoundedBy::DiscoveredPeer(advertised), u16::MAX)
-                    .is_ok(),
-                "{advertised} is conformant even though it is not one of the six encodings"
-            );
-        }
-    }
-
-    /// The error must blame whichever term actually bound the minimum. The peer
-    /// is only sometimes that term: BACnet/SC recomputes its own limit from the
-    /// hub's Connect-Accept, so a transport can fall below the floor while the
-    /// peer is entirely conformant.
-    #[test]
-    fn the_error_names_the_binding_term() {
-        let peer_bound =
-            check_transmittable_length(LengthBoundedBy::DiscoveredPeer(3), 1476).unwrap_err();
-        assert!(
-            peer_bound.to_string().contains("peer's advertised"),
-            "peer is the binding term here, got: {peer_bound}"
-        );
-
-        let transport_bound =
-            check_transmittable_length(LengthBoundedBy::DiscoveredPeer(1476), 48).unwrap_err();
-        assert!(
-            transport_bound.to_string().contains("transport's limit"),
-            "transport is the binding term here and the peer is conformant, got: {transport_bound}"
-        );
-        assert!(
-            !transport_bound.to_string().contains("peer's advertised"),
-            "must not blame a conformant peer for the transport's limit"
-        );
-    }
-}
-
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Send a confirmed request and wait for the response.
     ///
@@ -186,7 +131,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             } => Some(
                 self.routed_path_limits
                     .acquire(router_mac, dest_network)
-                    .await,
+                    .await?,
             ),
         };
         let (routed_path_max_apdu, routed_forwarded_npci_len) = match (path_lease.as_ref(), target)
@@ -281,6 +226,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     remote_max_apdu,
                     remote_max_segments,
                     routed_forwarded_npci_len,
+                    path_lease.as_ref(),
                 )
                 .await;
         }
@@ -330,6 +276,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 invoke_id,
                 owner.clone(),
                 forwarded_npci_len,
+                self.network.network_control_ingress_sequence(),
             );
         }
         if !self.routed_path_limits.authorize_attempt(
@@ -370,6 +317,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 Some(&buf),
             )
             .await;
+        if response.is_ok() {
+            if let Some(lease) = path_lease.as_ref() {
+                lease.mark_terminal_observed();
+            }
+        }
         guard.mark_completed();
         response.and_then(Self::confirmed_response_result)
     }
@@ -702,3 +654,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await
     }
 }
+
+#[cfg(test)]
+#[path = "requests_tests.rs"]
+mod transmittable_length_tests;

@@ -113,6 +113,8 @@ async fn opted_in_network_control_stream_preserves_start_apdu_receiver() {
         .unwrap()
         .unwrap();
     assert_eq!(received.source_mac.as_slice(), &[0x02]);
+    assert_eq!(received.ingress_sequence, 1);
+    assert_eq!(network.network_control_ingress_sequence(), 1);
     assert_eq!(
         received.npdu.message_type,
         Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw())

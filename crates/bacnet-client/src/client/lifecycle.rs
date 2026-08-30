@@ -73,7 +73,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         #[cfg(test)]
         let segmented_cleanup_dispatch = Arc::clone(&segmented_cleanup);
         let response_limits = ResponseLimits::from_config(&config);
-        let routed_path_limits = Arc::new(RoutedPathLimits::default());
+        let routed_path_limits = Arc::new(RoutedPathLimits::new(routed_path_quarantine_horizon(
+            &config,
+        )));
         let routed_path_limits_dispatch = Arc::clone(&routed_path_limits);
 
         let dispatch_task = tokio::spawn(async move {

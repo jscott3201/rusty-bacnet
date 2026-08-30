@@ -11,6 +11,8 @@ use bacnet_types::enums::NetworkPriority;
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
@@ -54,6 +56,12 @@ pub struct ReceivedNetworkControl {
     pub link_layer_group: bool,
     /// Data-link attributes supplied by the transport.
     pub data_attributes: Vec<DataAttribute>,
+    /// Monotonic decoded-ingress sequence assigned before channel delivery.
+    ///
+    /// A consumer can compare this with [`NetworkLayer::network_control_ingress_sequence`]
+    /// when activating state so controls already queued at that point cannot
+    /// be mistaken for feedback about the new state.
+    pub ingress_sequence: u64,
 }
 
 impl Clone for ReceivedApdu {
@@ -101,6 +109,7 @@ pub struct NetworkLayer<T: TransportPort> {
     transport: T,
     dispatch_task: Option<JoinHandle<()>>,
     network_control_tx: Option<mpsc::Sender<ReceivedNetworkControl>>,
+    network_control_ingress_sequence: Arc<AtomicU64>,
 }
 
 impl<T: TransportPort + 'static> NetworkLayer<T> {
@@ -110,6 +119,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
             transport,
             dispatch_task: None,
             network_control_tx: None,
+            network_control_ingress_sequence: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -143,6 +153,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     pub async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedApdu>, Error> {
         let mut npdu_rx = self.transport.start().await?;
         let mut network_control_tx = self.network_control_tx.take();
+        let network_control_ingress_sequence = Arc::clone(&self.network_control_ingress_sequence);
 
         let (apdu_tx, apdu_rx) = mpsc::channel(256);
 
@@ -152,11 +163,15 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
                     Ok(npdu) => {
                         if npdu.is_network_message {
                             if let Some(tx) = network_control_tx.as_ref() {
+                                let ingress_sequence = next_ingress_sequence(
+                                    network_control_ingress_sequence.as_ref(),
+                                );
                                 let control = ReceivedNetworkControl {
                                     npdu,
                                     source_mac: received.source_mac,
                                     link_layer_group: received.link_layer_group,
                                     data_attributes: received.data_attributes,
+                                    ingress_sequence,
                                 };
                                 if tx.send(control).await.is_err() {
                                     network_control_tx = None;
@@ -490,6 +505,15 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         self.transport.local_mac()
     }
 
+    /// Sequence assigned to the most recently decoded network-control ingress.
+    ///
+    /// The value is updated before the control is queued for its opt-in
+    /// consumer. At counter exhaustion it remains at `u64::MAX`, which makes
+    /// sequence-based consumers fail closed rather than accepting an alias.
+    pub fn network_control_ingress_sequence(&self) -> u64 {
+        self.network_control_ingress_sequence.load(Ordering::SeqCst)
+    }
+
     /// Encode an APDU into an NPDU whose destination is `dest_network` /
     /// `dest_mac`, ready for whichever link send the caller chooses.
     fn encode_routed_npdu_buf(
@@ -524,6 +548,15 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         }
         self.transport.stop().await
     }
+}
+
+fn next_ingress_sequence(sequence: &AtomicU64) -> u64 {
+    let previous = sequence
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+            value.checked_add(1)
+        })
+        .unwrap_or(u64::MAX);
+    previous.saturating_add(1)
 }
 
 impl<T: TransportPort> NetworkLayer<T> {

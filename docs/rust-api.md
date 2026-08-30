@@ -60,13 +60,17 @@ use bacnet_types::error::Error;
 // Protocol error from a remote device
 let e = Error::Protocol { class: 2, code: 31 }; // ErrorClass(2)=PROPERTY, ErrorCode(31)=UNKNOWN_PROPERTY
 
-// Other variants: Timeout, Reject, Abort, RoutedPathTooLong, Encoding, etc.
+// Other variants: Timeout, Reject, Abort, RoutedPathTooLong,
+// RoutedPathCapacityExceeded, Encoding, etc.
 ```
 
 `Error::RoutedPathTooLong { dnet }` identifies the destination network from a
 matching network-layer rejection; it does not claim an exact supported length.
-`Error` is a public enum, so this added variant can require a new arm in
-downstream exhaustive matches. Matchers with a wildcard arm are unaffected.
+`Error::RoutedPathCapacityExceeded { capacity }` reports that all bounded path
+state is protected by a held/waiting gate or configured/learned evidence, so a
+new path was rejected before transaction registration or frame emission.
+`Error` is a public enum, so these variants can require new arms in downstream
+exhaustive matches. Matchers with a wildcard arm are unaffected.
 
 ---
 
@@ -691,6 +695,23 @@ configuring replaces the prior value and deliberately resets learned evidence,
 while clearing removes configured and learned evidence. Active Clause 19.4
 path probing and cache persistence across process restarts are not provided.
 
+The client retains at most 256 routed-path entries. At capacity it
+deterministically reclaims the least-recently-used entry only when it has no
+configured or learned evidence and its gate has neither an owner nor waiters.
+Configured and learned safety evidence is never silently evicted. If no entry
+is safely reclaimable, the operation returns
+`Error::RoutedPathCapacityExceeded { capacity: 256 }` before TSM registration
+or frame emission.
+
+An ambiguously terminated send (including cancellation, timeout, or send
+failure) quarantines its path for the configured APDU timeout multiplied by
+the configured attempt count. The same-path gate remains exclusive during
+that interval, and network controls already observed at ingress before the
+next generation activates are discarded using a monotonic ingress sequence.
+A source-correlated terminal response after one attempted frame can end the
+generation without quarantine; multi-frame or retried generations remain
+conservative.
+
 ### Property Access
 
 ```rust
@@ -1019,6 +1040,7 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | `Error::Reject { reason }` | Remote device rejected request |
 | `Error::Abort { reason }` | Remote device aborted request |
 | `Error::RoutedPathTooLong { dnet }` | Router rejected the active message as too long for DNET |
+| `Error::RoutedPathCapacityExceeded { capacity }` | No routed-path entry can be allocated without discarding protected safety state |
 | `Error::Encoding(msg)` | Malformed packet |
 | `Error::Io(io_error)` | Transport I/O failure |
 

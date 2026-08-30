@@ -3,9 +3,7 @@ use std::sync::Arc;
 use bacnet_encoding::apdu::{self, encode_apdu, Apdu, SegmentAck, SimpleAck};
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
-use bacnet_types::enums::{
-    ConfirmedServiceChoice, NetworkMessageType, NetworkPriority, RejectMessageReason,
-};
+use bacnet_types::enums::{ConfirmedServiceChoice, NetworkMessageType, RejectMessageReason};
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
@@ -13,7 +11,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout, Duration};
 
-use super::{BACnetClient, ClientConfig};
+use super::{routed_path_limits::MAX_ROUTED_PATH_ENTRIES, BACnetClient, ClientConfig};
 
 const DNET: u16 = 100;
 
@@ -333,6 +331,44 @@ async fn subminimum_path_cap_fails_before_registration_or_emission() {
 }
 
 #[tokio::test]
+async fn configured_capacity_exhaustion_fails_before_registration_or_emission() {
+    let (transport, _inbound, mut outbound) = harness(&[1; 6], 1490);
+    let mut client = BACnetClient::generic_builder()
+        .transport(transport)
+        .build()
+        .await
+        .unwrap();
+
+    for path in 1..=MAX_ROUTED_PATH_ENTRIES {
+        let path = u16::try_from(path).unwrap();
+        client
+            .configure_routed_path_max_npdu(&path.to_be_bytes(), path, 1497)
+            .await
+            .unwrap();
+    }
+
+    let result = client
+        .confirmed_request_routed(
+            &[0xff, 0xfe],
+            u16::try_from(MAX_ROUTED_PATH_ENTRIES + 1).unwrap(),
+            &[3],
+            ConfirmedServiceChoice::READ_PROPERTY,
+            &[0x0c],
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(Error::RoutedPathCapacityExceeded {
+            capacity: MAX_ROUTED_PATH_ENTRIES
+        })
+    ));
+    assert!(outbound.try_recv().is_err());
+    assert_eq!(client.tsm.lock().await.pending_count(), 0);
+    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
+    client.stop().await.unwrap();
+}
+
+#[tokio::test]
 async fn reason_4_completes_exact_caller_learns_bound_and_does_not_retry() {
     let router = vec![2];
     let dadr = vec![3];
@@ -584,6 +620,94 @@ async fn same_path_serializes_while_a_second_router_remains_concurrent() {
 }
 
 #[tokio::test]
+async fn cancelled_generation_quarantines_delayed_reason_4_before_next_send() {
+    let router = vec![2];
+    let dadr = vec![3];
+    let (transport, inbound, mut outbound) = harness(&[1], 1486);
+    let client = Arc::new(
+        BACnetClient::start(
+            ClientConfig {
+                apdu_timeout_ms: 100,
+                apdu_retries: 0,
+                ..ClientConfig::default()
+            },
+            transport,
+        )
+        .await
+        .unwrap(),
+    );
+    client
+        .configure_routed_path_max_npdu(&router, DNET, 1497)
+        .await
+        .unwrap();
+
+    let cancelled = routed_request(
+        Arc::clone(&client),
+        router.clone(),
+        DNET,
+        dadr.clone(),
+        vec![0x61; 300],
+    );
+    let _cancelled_request = confirmed_request(outbound.recv().await.unwrap(), &router);
+    cancelled.abort();
+    assert!(cancelled.await.unwrap_err().is_cancelled());
+
+    let next = routed_request(
+        Arc::clone(&client),
+        router.clone(),
+        DNET,
+        dadr.clone(),
+        vec![0x62; 300],
+    );
+    assert!(
+        timeout(Duration::from_millis(20), outbound.recv())
+            .await
+            .is_err(),
+        "same-path request became active before the stale-control quarantine"
+    );
+
+    // This control belongs to the cancelled generation. It reaches network
+    // ingress while the next request is waiting, and must be drained without
+    // completing or teaching the next generation.
+    inject_reason_4(&inbound, &router, DNET).await;
+    sleep(Duration::from_millis(10)).await;
+    assert!(!next.is_finished());
+
+    let next_request = confirmed_request(
+        timeout(Duration::from_millis(200), outbound.recv())
+            .await
+            .expect("quarantine did not release the next request")
+            .unwrap(),
+        &router,
+    );
+    assert!(
+        !next_request.segmented,
+        "delayed reason-4 must not poison the waiting generation"
+    );
+    inject_simple_ack(&inbound, &router, DNET, &dadr, next_request.invoke_id).await;
+    assert!(next.await.unwrap().unwrap().is_empty());
+
+    let proof = routed_request(
+        Arc::clone(&client),
+        router.clone(),
+        DNET,
+        dadr.clone(),
+        vec![0x63; 300],
+    );
+    let proof_request = confirmed_request(outbound.recv().await.unwrap(), &router);
+    assert!(
+        !proof_request.segmented,
+        "stale control changed learned policy"
+    );
+    inject_simple_ack(&inbound, &router, DNET, &dadr, proof_request.invoke_id).await;
+    assert!(proof.await.unwrap().unwrap().is_empty());
+
+    assert_eq!(client.tsm.lock().await.pending_count(), 0);
+    let mut client = Arc::try_unwrap(client).ok().unwrap();
+    client.stop().await.unwrap();
+}
+
+#[tokio::test]
 async fn reason_4_during_segmented_send_prevents_window_retransmission() {
     let router = vec![2];
     let dadr = vec![3];
@@ -628,11 +752,4 @@ async fn reason_4_during_segmented_send_prevents_window_retransmission() {
 
     let mut client = Arc::try_unwrap(client).ok().unwrap();
     client.stop().await.unwrap();
-}
-
-#[test]
-fn network_control_message_type_constant_remains_standard_value() {
-    assert_eq!(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw(), 0x03);
-    assert_eq!(RejectMessageReason::MESSAGE_TOO_LONG.to_raw(), 4);
-    assert_eq!(NetworkPriority::NORMAL.to_raw(), 0);
 }

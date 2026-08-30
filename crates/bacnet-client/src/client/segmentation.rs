@@ -476,6 +476,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         remote_max_apdu: u16,
         remote_max_segments: Option<u32>,
         routed_forwarded_npci_len: Option<u16>,
+        routed_path_lease: Option<&RoutedPathLease>,
     ) -> Result<Bytes, Error> {
         let transaction_peer = target.transaction_peer();
         let tsm_mac = transaction_peer.tsm_mac;
@@ -520,6 +521,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 invoke_id,
                 owner.clone(),
                 forwarded_npci_len,
+                self.network.network_control_ingress_sequence(),
             );
         }
         let mut guard = TransactionGuard::new(
@@ -812,6 +814,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             }
         };
 
+        if let Some(lease) = routed_path_lease {
+            lease.mark_terminal_observed();
+        }
         guard.mark_completed();
         Self::confirmed_response_result(response)
     }

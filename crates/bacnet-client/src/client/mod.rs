@@ -796,7 +796,7 @@ mod segmentation;
 mod segmented_request;
 mod transaction_cleanup;
 mod transaction_peer;
-use routed_path_limits::RoutedPathLimits;
+use routed_path_limits::{routed_path_quarantine_horizon, RoutedPathLease, RoutedPathLimits};
 use transaction_peer::response_transaction_peer;
 
 pub use cov_notifications::{

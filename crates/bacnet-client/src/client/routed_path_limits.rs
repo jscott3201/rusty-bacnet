@@ -1,19 +1,22 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard as StdMutexGuard};
-use std::time::Instant;
+use std::time::{Duration, Instant as StdInstant};
 
 use bacnet_encoding::npdu::decode_reject_message_to_network;
 use bacnet_network::layer::ReceivedNetworkControl;
 use bacnet_types::enums::{NetworkMessageType, RejectMessageReason};
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
+use tokio::time::Instant as TokioInstant;
 
 use super::*;
 use crate::tsm::CompletionOutcome;
 
 /// Smallest routed NPDU envelope required across the standard data links.
 const CONSERVATIVE_ROUTED_PATH_MAX_NPDU: u16 = 228;
+/// Hard bound covering gates, configured evidence, and learned evidence.
+pub(super) const MAX_ROUTED_PATH_ENTRIES: usize = 256;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 struct RoutedPathKey {
     immediate_router_mac: MacAddr,
     dnet: u16,
@@ -36,12 +39,12 @@ enum ConfiguredLimitProvenance {
 struct ConfiguredPathLimit {
     max_npdu: u16,
     provenance: ConfiguredLimitProvenance,
-    observed_at: Instant,
+    observed_at: StdInstant,
 }
 
 struct LearnedPathLimit {
     exclusive_max_npdu: u16,
-    observed_at: Instant,
+    observed_at: StdInstant,
 }
 
 struct ActiveRoutedSend {
@@ -51,6 +54,7 @@ struct ActiveRoutedSend {
     owner: TransactionOwner,
     forwarded_npci_len: u16,
     outgoing_apdu_len: Option<u16>,
+    ingress_floor: u64,
 }
 
 struct RoutedPathEntry {
@@ -58,42 +62,156 @@ struct RoutedPathEntry {
     configured: Option<ConfiguredPathLimit>,
     learned: Option<LearnedPathLimit>,
     active: Option<ActiveRoutedSend>,
+    last_used: u64,
+    quarantine_started: Option<TokioInstant>,
+    generation_attempts: u32,
+    generation_terminal_observed: bool,
 }
 
-impl Default for RoutedPathEntry {
-    fn default() -> Self {
+impl RoutedPathEntry {
+    fn new(last_used: u64) -> Self {
         Self {
             gate: Arc::new(AsyncMutex::new(())),
             configured: None,
             learned: None,
             active: None,
+            last_used,
+            quarantine_started: None,
+            generation_attempts: 0,
+            generation_terminal_observed: false,
         }
     }
 }
 
-#[derive(Default)]
+struct RoutedPathState {
+    entries: HashMap<RoutedPathKey, RoutedPathEntry>,
+    next_use: u64,
+    capacity: usize,
+}
+
 pub(super) struct RoutedPathLimits {
-    entries: StdMutex<HashMap<RoutedPathKey, RoutedPathEntry>>,
+    state: StdMutex<RoutedPathState>,
+    quarantine_horizon: Duration,
 }
 
 impl RoutedPathLimits {
-    fn entries(&self) -> StdMutexGuard<'_, HashMap<RoutedPathKey, RoutedPathEntry>> {
-        self.entries
+    pub(super) fn new(quarantine_horizon: Duration) -> Self {
+        Self::with_capacity(MAX_ROUTED_PATH_ENTRIES, quarantine_horizon)
+    }
+
+    fn with_capacity(capacity: usize, quarantine_horizon: Duration) -> Self {
+        assert!(capacity > 0, "routed path capacity must be nonzero");
+        Self {
+            state: StdMutex::new(RoutedPathState {
+                entries: HashMap::new(),
+                next_use: 0,
+                capacity,
+            }),
+            quarantine_horizon,
+        }
+    }
+
+    fn state(&self) -> StdMutexGuard<'_, RoutedPathState> {
+        self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    pub(super) async fn acquire(self: &Arc<Self>, router_mac: &[u8], dnet: u16) -> RoutedPathLease {
+    pub(super) async fn acquire(
+        self: &Arc<Self>,
+        router_mac: &[u8],
+        dnet: u16,
+    ) -> Result<RoutedPathLease, Error> {
         let key = RoutedPathKey::new(router_mac, dnet);
-        let gate = {
-            let mut entries = self.entries();
-            Arc::clone(&entries.entry(key.clone()).or_default().gate)
-        };
+        let gate = self.reserve_gate(&key)?;
         let gate = gate.lock_owned().await;
-        RoutedPathLease {
+        self.wait_for_quarantine(&key).await;
+        Ok(RoutedPathLease {
             limits: Arc::clone(self),
             key,
             _gate: gate,
+        })
+    }
+
+    fn reserve_gate(&self, key: &RoutedPathKey) -> Result<Arc<AsyncMutex<()>>, Error> {
+        let mut state = self.state();
+        let last_used = bump_use(&mut state);
+        if let Some(entry) = state.entries.get_mut(key) {
+            entry.last_used = last_used;
+            return Ok(Arc::clone(&entry.gate));
+        }
+
+        if state.entries.len() >= state.capacity {
+            let reclaim = state
+                .entries
+                .iter()
+                .filter(|(_, entry)| self.is_safely_reclaimable(entry))
+                .min_by(|(key_a, entry_a), (key_b, entry_b)| {
+                    entry_a
+                        .last_used
+                        .cmp(&entry_b.last_used)
+                        .then_with(|| key_a.cmp(key_b))
+                })
+                .map(|(key, _)| key.clone());
+            if let Some(reclaim) = reclaim {
+                state.entries.remove(&reclaim);
+            }
+        }
+        if state.entries.len() >= state.capacity {
+            return Err(Error::RoutedPathCapacityExceeded {
+                capacity: state.capacity,
+            });
+        }
+
+        let entry = RoutedPathEntry::new(last_used);
+        let gate = Arc::clone(&entry.gate);
+        state.entries.insert(key.clone(), entry);
+        Ok(gate)
+    }
+
+    fn is_safely_reclaimable(&self, entry: &RoutedPathEntry) -> bool {
+        entry.configured.is_none()
+            && entry.learned.is_none()
+            && entry.active.is_none()
+            && Arc::strong_count(&entry.gate) == 1
+            && entry
+                .quarantine_started
+                .is_none_or(|started| started.elapsed() >= self.quarantine_horizon)
+    }
+
+    async fn wait_for_quarantine(&self, key: &RoutedPathKey) {
+        loop {
+            let remaining = {
+                let mut state = self.state();
+                let last_used = bump_use(&mut state);
+                let entry = state
+                    .entries
+                    .get_mut(key)
+                    .expect("a held or waiting gate keeps its path entry resident");
+                entry.last_used = last_used;
+                match entry.quarantine_started {
+                    Some(started) => {
+                        let remaining = self.quarantine_horizon.saturating_sub(started.elapsed());
+                        if remaining.is_zero() {
+                            entry.quarantine_started = None;
+                            entry.generation_attempts = 0;
+                            entry.generation_terminal_observed = false;
+                            None
+                        } else {
+                            Some(remaining)
+                        }
+                    }
+                    None => {
+                        entry.generation_attempts = 0;
+                        entry.generation_terminal_observed = false;
+                        None
+                    }
+                }
+            };
+            let Some(remaining) = remaining else {
+                return;
+            };
+            tokio::time::sleep(remaining).await;
         }
     }
 
@@ -104,6 +222,7 @@ impl RoutedPathLimits {
         invoke_id: u8,
         owner: TransactionOwner,
         forwarded_npci_len: u16,
+        ingress_floor: u64,
     ) {
         let ConfirmedTarget::Routed {
             router_mac,
@@ -114,8 +233,11 @@ impl RoutedPathLimits {
             return;
         };
         let key = RoutedPathKey::new(router_mac, dest_network);
-        let mut entries = self.entries();
-        let entry = entries.entry(key.clone()).or_default();
+        let mut state = self.state();
+        let entry = state
+            .entries
+            .get_mut(&key)
+            .expect("the routed path lease keeps its entry resident");
         debug_assert!(
             entry.active.is_none(),
             "the per-path gate permits only one active routed request"
@@ -127,6 +249,7 @@ impl RoutedPathLimits {
             owner,
             forwarded_npci_len,
             outgoing_apdu_len: None,
+            ingress_floor,
         });
     }
 
@@ -150,11 +273,11 @@ impl RoutedPathLimits {
             return false;
         };
         let key = RoutedPathKey::new(router_mac, dest_network);
-        let mut entries = self.entries();
-        let Some(active) = entries
-            .get_mut(&key)
-            .and_then(|entry| entry.active.as_mut())
-        else {
+        let mut state = self.state();
+        let Some(entry) = state.entries.get_mut(&key) else {
+            return false;
+        };
+        let Some(active) = entry.active.as_mut() else {
             return false;
         };
         if active.tsm_mac != *tsm_mac
@@ -164,6 +287,7 @@ impl RoutedPathLimits {
             return false;
         }
         active.outgoing_apdu_len = Some(outgoing_apdu_len);
+        entry.generation_attempts = entry.generation_attempts.saturating_add(1);
         true
     }
 
@@ -183,7 +307,9 @@ impl RoutedPathLimits {
             return;
         }
 
-        let Some(active) = self.claim_active(&control.source_mac, reject.dnet) else {
+        let Some(active) =
+            self.claim_active(&control.source_mac, reject.dnet, control.ingress_sequence)
+        else {
             return;
         };
         let outcome = tsm.lock().await.complete_network_path_too_long_for_owner(
@@ -197,15 +323,20 @@ impl RoutedPathLimits {
         }
     }
 
-    fn claim_active(&self, router_mac: &[u8], dnet: u16) -> Option<ActiveRoutedSend> {
+    fn claim_active(
+        &self,
+        router_mac: &[u8],
+        dnet: u16,
+        ingress_sequence: u64,
+    ) -> Option<ActiveRoutedSend> {
         let key = RoutedPathKey::new(router_mac, dnet);
-        let mut entries = self.entries();
-        let entry = entries.get_mut(&key)?;
-        if entry
-            .active
-            .as_ref()
-            .is_none_or(|active| active.outgoing_apdu_len.is_none() || active.path != key)
-        {
+        let mut state = self.state();
+        let entry = state.entries.get_mut(&key)?;
+        if entry.active.as_ref().is_none_or(|active| {
+            active.outgoing_apdu_len.is_none()
+                || active.path != key
+                || ingress_sequence <= active.ingress_floor
+        }) {
             return None;
         }
         entry.active.take()
@@ -218,14 +349,17 @@ impl RoutedPathLimits {
         else {
             return;
         };
-        let mut entries = self.entries();
-        let entry = entries.entry(active.path).or_default();
+        let mut state = self.state();
+        let entry = state
+            .entries
+            .get_mut(&active.path)
+            .expect("the reason-4 claimant still holds its routed path gate");
         let exclusive_max_npdu = entry.learned.as_ref().map_or(attempted_npdu, |learned| {
             learned.exclusive_max_npdu.min(attempted_npdu)
         });
         entry.learned = Some(LearnedPathLimit {
             exclusive_max_npdu,
-            observed_at: Instant::now(),
+            observed_at: StdInstant::now(),
         });
     }
 }
@@ -243,8 +377,9 @@ impl RoutedPathLease {
         local_source_mac_len: usize,
     ) -> Result<u16, Error> {
         let forwarded_npci_len = forwarded_npci_len(dadr_len, local_source_mac_len)?;
-        let entries = self.limits.entries();
-        let entry = entries
+        let state = self.limits.state();
+        let entry = state
+            .entries
             .get(&self.key)
             .expect("path entry remains present while its gate is held");
         let configured_or_conservative =
@@ -283,22 +418,37 @@ impl RoutedPathLease {
         forwarded_npci_len(dadr_len, local_source_mac_len)
     }
 
+    /// Mark a source-correlated terminal response for the current generation.
+    /// One attempted frame plus its terminal response proves there cannot be a
+    /// second reason-4 still in flight for that generation. Multi-frame or
+    /// retried generations remain ambiguous and are quarantined on drop.
+    pub(super) fn mark_terminal_observed(&self) {
+        let mut state = self.limits.state();
+        let entry = state
+            .entries
+            .get_mut(&self.key)
+            .expect("path entry remains present while its gate is held");
+        entry.generation_terminal_observed = entry.generation_attempts == 1;
+    }
+
     fn configure(&self, max_npdu: u16) {
-        let mut entries = self.limits.entries();
-        let entry = entries
+        let mut state = self.limits.state();
+        let entry = state
+            .entries
             .get_mut(&self.key)
             .expect("path entry remains present while its gate is held");
         entry.configured = Some(ConfiguredPathLimit {
             max_npdu,
             provenance: ConfiguredLimitProvenance::ExplicitApi,
-            observed_at: Instant::now(),
+            observed_at: StdInstant::now(),
         });
         entry.learned = None;
     }
 
     fn clear(&self) {
-        let mut entries = self.limits.entries();
-        let entry = entries
+        let mut state = self.limits.state();
+        let entry = state
+            .entries
             .get_mut(&self.key)
             .expect("path entry remains present while its gate is held");
         entry.configured = None;
@@ -308,11 +458,30 @@ impl RoutedPathLease {
 
 impl Drop for RoutedPathLease {
     fn drop(&mut self) {
-        let mut entries = self.limits.entries();
-        if let Some(entry) = entries.get_mut(&self.key) {
+        let mut state = self.limits.state();
+        if let Some(entry) = state.entries.get_mut(&self.key) {
             entry.active = None;
+            if entry.generation_attempts > 0 && !entry.generation_terminal_observed {
+                entry.quarantine_started = Some(TokioInstant::now());
+            }
+            entry.generation_attempts = 0;
+            entry.generation_terminal_observed = false;
         }
     }
+}
+
+fn bump_use(state: &mut RoutedPathState) -> u64 {
+    state.next_use = state.next_use.saturating_add(1);
+    state.next_use
+}
+
+pub(super) fn routed_path_quarantine_horizon(config: &ClientConfig) -> Duration {
+    // Reuse the configured complete request/retry horizon instead of adding a
+    // separate arbitrary stale-control timer. A zero timeout still receives
+    // one millisecond, the existing configuration's millisecond granularity,
+    // so ambiguous generations never skip quarantine entirely.
+    let attempts = u64::from(config.apdu_retries).saturating_add(1);
+    Duration::from_millis(config.apdu_timeout_ms.saturating_mul(attempts).max(1))
 }
 
 fn forwarded_npci_len(dadr_len: usize, local_source_mac_len: usize) -> Result<u16, Error> {
@@ -343,7 +512,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         max_npdu: u16,
     ) -> Result<(), Error> {
         validate_public_path(router_mac, dnet)?;
-        let lease = self.routed_path_limits.acquire(router_mac, dnet).await;
+        let lease = self.routed_path_limits.acquire(router_mac, dnet).await?;
         lease.configure(max_npdu);
         Ok(())
     }
@@ -355,7 +524,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// conservative routed NPDU envelope until new evidence is supplied.
     pub async fn clear_routed_path_limit(&self, router_mac: &[u8], dnet: u16) -> Result<(), Error> {
         validate_public_path(router_mac, dnet)?;
-        let lease = self.routed_path_limits.acquire(router_mac, dnet).await;
+        let lease = self.routed_path_limits.acquire(router_mac, dnet).await?;
         lease.clear();
         Ok(())
     }
@@ -376,65 +545,5 @@ fn validate_public_path(router_mac: &[u8], dnet: u16) -> Result<(), Error> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use bacnet_types::enums::ConfirmedServiceChoice;
-
-    #[test]
-    fn conservative_and_configured_npdu_envelopes_use_forwarded_source() {
-        let header = forwarded_npci_len(6, 6).unwrap();
-        assert_eq!(header, 21);
-        assert_eq!(CONSERVATIVE_ROUTED_PATH_MAX_NPDU - header, 207);
-        assert_eq!(1497 - header, 1476);
-
-        assert_eq!(forwarded_npci_len(1, 1).unwrap(), 11);
-        assert_eq!(forwarded_npci_len(4, 6).unwrap(), 19);
-    }
-
-    #[test]
-    fn forwarded_npci_rejects_unrepresentable_addresses() {
-        assert!(forwarded_npci_len(256, 6).is_err());
-        assert!(forwarded_npci_len(6, 0).is_err());
-        assert!(forwarded_npci_len(6, 256).is_err());
-    }
-
-    #[test]
-    fn claimed_control_cannot_complete_reused_invoke_id_for_new_owner() {
-        let limits = RoutedPathLimits::default();
-        let router = [2];
-        let dadr = [3];
-        let target = ConfirmedTarget::Routed {
-            router_mac: &router,
-            dest_network: 100,
-            dest_mac: &dadr,
-        };
-        let tsm_mac = target.transaction_peer().tsm_mac;
-        let mut tsm = Tsm::new(TsmConfig::default());
-        let old = tsm.register_transaction_with_progress(
-            tsm_mac.clone(),
-            7,
-            ConfirmedServiceChoice::READ_PROPERTY,
-        );
-        limits.install_active(target, tsm_mac.clone(), 7, old.owner.clone(), 11);
-        assert!(limits.authorize_attempt(target, &tsm_mac, 7, &old.owner, 100));
-        let claimed = limits.claim_active(&router, 100).unwrap();
-
-        assert!(tsm.cancel_transaction_for_owner(&tsm_mac, 7, &old.owner));
-        let replacement = tsm.register_transaction_with_progress(
-            tsm_mac.clone(),
-            7,
-            ConfirmedServiceChoice::READ_PROPERTY,
-        );
-        assert_eq!(
-            tsm.complete_network_path_too_long_for_owner(
-                &claimed.tsm_mac,
-                claimed.invoke_id,
-                &claimed.owner,
-                100,
-            ),
-            CompletionOutcome::NoTransaction
-        );
-        assert!(tsm.owner_is_current(&tsm_mac, 7, &replacement.owner));
-        assert_eq!(tsm.pending_count(), 1);
-    }
-}
+#[path = "routed_path_limits_tests.rs"]
+mod tests;
