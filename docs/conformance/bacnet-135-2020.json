@@ -374,6 +374,37 @@
    "notes": "Initial family row only; later work should split high-claim services and object families into detailed rows."
   },
   {
+   "id": "BACNET-12-LOG-RECORD-IDENTITY",
+   "standard_anchor": "Clause 12.25 (p. 319), Clause 12.27 (p. 337), Clause 12.30 (p. 361); Clause 15.8 (pp. 745-750); Clause 21.6 (pp. 902-914)",
+   "priority": "P1",
+   "requirement_summary": "Event Log, Trend Log, and Trend Log Multiple resident records have stable object-owned Unsigned32 sequence and Date/Time identity across accepted append, FIFO overwrite, MAX-to-1 wrap, normal clear, and failed WritePropertyMultiple clear rollback. Record payload projection remains family-specific.",
+   "status": "in-progress",
+   "code_anchors": [
+    "crates/bacnet-objects/src/log_buffer.rs::LogRecordIdentity",
+    "crates/bacnet-objects/src/log_buffer.rs::LogRecordBuffer",
+    "crates/bacnet-objects/src/traits.rs::BACnetObject::log_record_identities_internal",
+    "crates/bacnet-objects/src/event_log.rs::EventLogObject",
+    "crates/bacnet-objects/src/trend/mod.rs::TrendLogObject",
+    "crates/bacnet-objects/src/trend/mod.rs::TrendLogMultipleObject"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/log_buffer.rs::tests::log_buffer_assigns_one_and_wraps_max_without_zero",
+    "crates/bacnet-objects/src/log_buffer.rs::tests::log_buffer_wrap_and_eviction_keep_modular_fifo_alignment",
+    "crates/bacnet-objects/src/log_buffer.rs::tests::log_buffer_clear_preserves_counter_and_constructor_resets_it",
+    "crates/bacnet-objects/src/event_log/tests.rs::event_log_identities_align_after_eviction_and_differ_from_position",
+    "crates/bacnet-objects/src/event_log/tests.rs::event_log_total_record_count_is_u32_and_wraps_max_to_one",
+    "crates/bacnet-objects/src/trend/log_record_tests.rs::trend_log_projects_only_present_status_flags_as_fourth_field",
+    "crates/bacnet-objects/src/trend/log_record_tests.rs::trend_multiple_retains_raw_flags_but_projects_three_fields"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/log_buffer.rs::tests::log_buffer_rejections_do_not_consume_sequence",
+    "crates/bacnet-server/src/handlers/tests/wpm_rollback_contract.rs::log_record_count_rollback_restores_cleared_buffers"
+   ],
+   "benchmarks": [],
+   "public_claims": [],
+   "notes": "In-memory storage/model foundation only; this row makes no public support claim. Sequence identity is object metadata and is never serialized in LOG_BUFFER. Trend Log alone projects a present legacy BACnetLogRecord.status_flags value as its formal optional fourth StatusFlags bitstring; Event Log and Trend Log Multiple retain that raw shared-Rust field for source compatibility but always project only Date, Time, and datum. ReadRange By-Sequence/By-Time behavior, First Sequence Number, restart durability/persistence, formal EventLog notification-record modeling, and mandatory purge/status records remain deferred."
+  },
+  {
    "id": "BACNET-12-PROPERTY-METADATA-CORE",
    "standard_anchor": "Clause 12.6, Table 12-6 (pp. 189-190); Clause 12.42, Table 12-49 (pp. 444-445); Clause 15.7.3.1 (p. 743); Annex A (pp. 964-965)",
    "priority": "P1",

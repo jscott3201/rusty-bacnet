@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_types::constructed::LogDatum;
 use bacnet_types::primitives::{Date, Time};
 
 fn make_record(hour: u8, value: f32) -> BACnetLogRecord {
@@ -80,7 +81,11 @@ fn trendlog_stop_when_full() {
         tl.add_record(make_record(i, i as f32));
     }
     assert_eq!(tl.records().len(), 2);
-    assert_eq!(tl.total_record_count, 2); // Only 2 accepted
+    assert_eq!(
+        tl.read_property(PropertyIdentifier::TOTAL_RECORD_COUNT, None)
+            .unwrap(),
+        PropertyValue::Unsigned(2)
+    ); // Only 2 accepted
 }
 
 #[test]

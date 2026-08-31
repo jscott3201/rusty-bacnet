@@ -3,20 +3,23 @@
 use std::borrow::Cow;
 use std::collections::VecDeque;
 
-use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetLogRecord, LogDatum};
+use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetLogRecord};
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
 use crate::common::{self, read_property_list_property};
+use crate::log_buffer::{
+    LogRecordBuffer, LogRecordBufferRecords, LogRecordIdentity, LogRecordProfile,
+};
 use crate::traits::{BACnetObject, WritePropertyRollback};
 
 struct TrendLogWriteRollback {
-    buffer: VecDeque<BACnetLogRecord>,
+    records: LogRecordBufferRecords,
 }
 
 struct TrendLogMultipleWriteRollback {
-    buffer: VecDeque<BACnetLogRecord>,
+    records: LogRecordBufferRecords,
 }
 
 /// BACnet TrendLog object.
@@ -31,8 +34,7 @@ pub struct TrendLogObject {
     log_interval: u32,
     stop_when_full: bool,
     buffer_size: u32,
-    buffer: VecDeque<BACnetLogRecord>,
-    total_record_count: u64,
+    log_buffer: LogRecordBuffer,
     out_of_service: bool,
     reliability: u32,
     status_flags: StatusFlags,
@@ -51,8 +53,7 @@ impl TrendLogObject {
             log_interval: 0,
             stop_when_full: false,
             buffer_size,
-            buffer: VecDeque::new(),
-            total_record_count: 0,
+            log_buffer: LogRecordBuffer::new(buffer_size),
             out_of_service: false,
             reliability: 0,
             status_flags: StatusFlags::empty(),
@@ -63,27 +64,18 @@ impl TrendLogObject {
 
     /// Add a BACnetLogRecord to the trend log buffer.
     pub fn add_record(&mut self, record: BACnetLogRecord) {
-        if !self.log_enable {
-            return;
-        }
-        if self.buffer.len() >= self.buffer_size as usize {
-            if self.stop_when_full {
-                return;
-            }
-            self.buffer.pop_front();
-        }
-        self.buffer.push_back(record);
-        self.total_record_count += 1;
+        self.log_buffer
+            .append(record, self.log_enable, self.stop_when_full);
     }
 
     /// Get the current buffer contents.
     pub fn records(&self) -> &VecDeque<BACnetLogRecord> {
-        &self.buffer
+        self.log_buffer.records()
     }
 
     /// Clear the buffer.
     pub fn clear(&mut self) {
-        self.buffer.clear();
+        self.log_buffer.clear();
     }
 
     /// Set the description string.
@@ -143,11 +135,11 @@ impl BACnetObject for TrendLogObject {
                 Ok(PropertyValue::Unsigned(self.buffer_size as u64))
             }
             p if p == PropertyIdentifier::RECORD_COUNT => {
-                Ok(PropertyValue::Unsigned(self.buffer.len() as u64))
+                Ok(PropertyValue::Unsigned(self.records().len() as u64))
             }
-            p if p == PropertyIdentifier::TOTAL_RECORD_COUNT => {
-                Ok(PropertyValue::Unsigned(self.total_record_count))
-            }
+            p if p == PropertyIdentifier::TOTAL_RECORD_COUNT => Ok(PropertyValue::Unsigned(
+                self.log_buffer.total_record_count() as u64,
+            )),
             p if p == PropertyIdentifier::STATUS_FLAGS => Ok(PropertyValue::BitString {
                 unused_bits: 4,
                 data: vec![self.status_flags.bits() << 4],
@@ -160,42 +152,7 @@ impl BACnetObject for TrendLogObject {
                 Ok(PropertyValue::Boolean(self.out_of_service))
             }
             p if p == PropertyIdentifier::LOG_BUFFER => {
-                let records = self
-                    .buffer
-                    .iter()
-                    .map(|record| {
-                        let datum_value = match &record.log_datum {
-                            LogDatum::LogStatus(v) => PropertyValue::Unsigned(*v as u64),
-                            LogDatum::BooleanValue(v) => PropertyValue::Boolean(*v),
-                            LogDatum::RealValue(v) => PropertyValue::Real(*v),
-                            LogDatum::EnumValue(v) => PropertyValue::Enumerated(*v),
-                            LogDatum::UnsignedValue(v) => PropertyValue::Unsigned(*v),
-                            LogDatum::SignedValue(v) => PropertyValue::Signed(*v as i32),
-                            LogDatum::BitstringValue { unused_bits, data } => {
-                                PropertyValue::BitString {
-                                    unused_bits: *unused_bits,
-                                    data: data.clone(),
-                                }
-                            }
-                            LogDatum::NullValue => PropertyValue::Null,
-                            LogDatum::Failure {
-                                error_class,
-                                error_code,
-                            } => PropertyValue::List(vec![
-                                PropertyValue::Unsigned(*error_class as u64),
-                                PropertyValue::Unsigned(*error_code as u64),
-                            ]),
-                            LogDatum::TimeChange(v) => PropertyValue::Real(*v),
-                            LogDatum::AnyValue(bytes) => PropertyValue::OctetString(bytes.clone()),
-                        };
-                        PropertyValue::List(vec![
-                            PropertyValue::Date(record.date),
-                            PropertyValue::Time(record.time),
-                            datum_value,
-                        ])
-                    })
-                    .collect();
-                Ok(PropertyValue::List(records))
+                Ok(self.log_buffer.project(LogRecordProfile::Trend))
             }
             p if p == PropertyIdentifier::LOGGING_TYPE => {
                 Ok(PropertyValue::Enumerated(self.logging_type))
@@ -267,7 +224,7 @@ impl BACnetObject for TrendLogObject {
         if property == PropertyIdentifier::RECORD_COUNT {
             // Writing 0 clears the buffer
             if let PropertyValue::Unsigned(0) = value {
-                self.buffer.clear();
+                self.clear();
                 return Ok(());
             }
             return Err(Error::Protocol {
@@ -347,7 +304,7 @@ impl BACnetObject for TrendLogObject {
             && matches!(value, PropertyValue::Unsigned(0)))
         .then(|| {
             WritePropertyRollback::new(TrendLogWriteRollback {
-                buffer: std::mem::take(&mut self.buffer),
+                records: self.log_buffer.take_records(),
             })
         })
     }
@@ -356,8 +313,13 @@ impl BACnetObject for TrendLogObject {
         &mut self,
         rollback: WritePropertyRollback,
     ) -> Result<(), Error> {
-        self.buffer = rollback.downcast::<TrendLogWriteRollback>()?.buffer;
+        self.log_buffer
+            .restore_records(rollback.downcast::<TrendLogWriteRollback>()?.records);
         Ok(())
+    }
+
+    fn log_record_identities_internal(&self) -> Option<Vec<LogRecordIdentity>> {
+        Some(self.log_buffer.identities())
     }
 
     fn add_trend_record(&mut self, record: BACnetLogRecord) {
@@ -382,8 +344,7 @@ pub struct TrendLogMultipleObject {
     log_interval: u32,
     stop_when_full: bool,
     buffer_size: u32,
-    buffer: VecDeque<BACnetLogRecord>,
-    total_record_count: u64,
+    log_buffer: LogRecordBuffer,
     status_flags: StatusFlags,
     log_device_object_property: Vec<BACnetDeviceObjectPropertyReference>,
     logging_type: u32, // 0=polled, 1=cov, 2=triggered
@@ -402,8 +363,7 @@ impl TrendLogMultipleObject {
             log_interval: 0,
             stop_when_full: false,
             buffer_size,
-            buffer: VecDeque::new(),
-            total_record_count: 0,
+            log_buffer: LogRecordBuffer::new(buffer_size),
             status_flags: StatusFlags::empty(),
             log_device_object_property: Vec::new(),
             logging_type: 0,
@@ -414,17 +374,8 @@ impl TrendLogMultipleObject {
 
     /// Add a BACnetLogRecord to the trend log buffer.
     pub fn add_record(&mut self, record: BACnetLogRecord) {
-        if !self.log_enable {
-            return;
-        }
-        if self.buffer.len() >= self.buffer_size as usize {
-            if self.stop_when_full {
-                return;
-            }
-            self.buffer.pop_front();
-        }
-        self.buffer.push_back(record);
-        self.total_record_count += 1;
+        self.log_buffer
+            .append(record, self.log_enable, self.stop_when_full);
     }
 
     /// Add a property reference to the monitored list.
@@ -434,12 +385,12 @@ impl TrendLogMultipleObject {
 
     /// Get the current buffer contents.
     pub fn records(&self) -> &VecDeque<BACnetLogRecord> {
-        &self.buffer
+        self.log_buffer.records()
     }
 
     /// Clear the buffer.
     pub fn clear(&mut self) {
-        self.buffer.clear();
+        self.log_buffer.clear();
     }
 
     /// Set the description string.
@@ -491,11 +442,11 @@ impl BACnetObject for TrendLogMultipleObject {
                 Ok(PropertyValue::Unsigned(self.buffer_size as u64))
             }
             p if p == PropertyIdentifier::RECORD_COUNT => {
-                Ok(PropertyValue::Unsigned(self.buffer.len() as u64))
+                Ok(PropertyValue::Unsigned(self.records().len() as u64))
             }
-            p if p == PropertyIdentifier::TOTAL_RECORD_COUNT => {
-                Ok(PropertyValue::Unsigned(self.total_record_count))
-            }
+            p if p == PropertyIdentifier::TOTAL_RECORD_COUNT => Ok(PropertyValue::Unsigned(
+                self.log_buffer.total_record_count() as u64,
+            )),
             p if p == PropertyIdentifier::STATUS_FLAGS => Ok(PropertyValue::BitString {
                 unused_bits: 4,
                 data: vec![self.status_flags.bits() << 4],
@@ -508,42 +459,7 @@ impl BACnetObject for TrendLogMultipleObject {
                 Ok(PropertyValue::Enumerated(self.reliability))
             }
             p if p == PropertyIdentifier::LOG_BUFFER => {
-                let records = self
-                    .buffer
-                    .iter()
-                    .map(|record| {
-                        let datum_value = match &record.log_datum {
-                            LogDatum::LogStatus(v) => PropertyValue::Unsigned(*v as u64),
-                            LogDatum::BooleanValue(v) => PropertyValue::Boolean(*v),
-                            LogDatum::RealValue(v) => PropertyValue::Real(*v),
-                            LogDatum::EnumValue(v) => PropertyValue::Enumerated(*v),
-                            LogDatum::UnsignedValue(v) => PropertyValue::Unsigned(*v),
-                            LogDatum::SignedValue(v) => PropertyValue::Signed(*v as i32),
-                            LogDatum::BitstringValue { unused_bits, data } => {
-                                PropertyValue::BitString {
-                                    unused_bits: *unused_bits,
-                                    data: data.clone(),
-                                }
-                            }
-                            LogDatum::NullValue => PropertyValue::Null,
-                            LogDatum::Failure {
-                                error_class,
-                                error_code,
-                            } => PropertyValue::List(vec![
-                                PropertyValue::Unsigned(*error_class as u64),
-                                PropertyValue::Unsigned(*error_code as u64),
-                            ]),
-                            LogDatum::TimeChange(v) => PropertyValue::Real(*v),
-                            LogDatum::AnyValue(bytes) => PropertyValue::OctetString(bytes.clone()),
-                        };
-                        PropertyValue::List(vec![
-                            PropertyValue::Date(record.date),
-                            PropertyValue::Time(record.time),
-                            datum_value,
-                        ])
-                    })
-                    .collect();
-                Ok(PropertyValue::List(records))
+                Ok(self.log_buffer.project(LogRecordProfile::TrendMultiple))
             }
             p if p == PropertyIdentifier::LOGGING_TYPE => {
                 Ok(PropertyValue::Enumerated(self.logging_type))
@@ -619,7 +535,7 @@ impl BACnetObject for TrendLogMultipleObject {
         if property == PropertyIdentifier::RECORD_COUNT {
             // Writing 0 clears the buffer
             if let PropertyValue::Unsigned(0) = value {
-                self.buffer.clear();
+                self.clear();
                 return Ok(());
             }
             return Err(Error::Protocol {
@@ -675,7 +591,7 @@ impl BACnetObject for TrendLogMultipleObject {
             && matches!(value, PropertyValue::Unsigned(0)))
         .then(|| {
             WritePropertyRollback::new(TrendLogMultipleWriteRollback {
-                buffer: std::mem::take(&mut self.buffer),
+                records: self.log_buffer.take_records(),
             })
         })
     }
@@ -684,14 +600,25 @@ impl BACnetObject for TrendLogMultipleObject {
         &mut self,
         rollback: WritePropertyRollback,
     ) -> Result<(), Error> {
-        self.buffer = rollback.downcast::<TrendLogMultipleWriteRollback>()?.buffer;
+        self.log_buffer.restore_records(
+            rollback
+                .downcast::<TrendLogMultipleWriteRollback>()?
+                .records,
+        );
         Ok(())
+    }
+
+    fn log_record_identities_internal(&self) -> Option<Vec<LogRecordIdentity>> {
+        Some(self.log_buffer.identities())
     }
 
     fn add_trend_record(&mut self, record: BACnetLogRecord) {
         self.add_record(record);
     }
 }
+
+#[cfg(test)]
+mod log_record_tests;
 
 #[cfg(test)]
 mod tests;
