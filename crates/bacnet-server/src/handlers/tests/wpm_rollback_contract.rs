@@ -409,6 +409,7 @@ fn access_door_rollback_restores_priority_array() {
 #[test]
 fn log_record_count_rollback_restores_cleared_buffers() {
     let mut db = ObjectDatabase::new();
+    db.set_clock_reader(Some(Arc::new(FixedAuditClock)));
     let mut trend = TrendLogObject::new(1, "TL-1", 10).unwrap();
     trend.add_record(log_record());
     trend.add_record(log_record());
@@ -530,7 +531,34 @@ fn log_record_count_rollback_restores_cleared_buffers() {
                 .unwrap()
                 .read_property(PropertyIdentifier::RECORD_COUNT, None)
                 .unwrap(),
-            PropertyValue::Unsigned(0),
+            PropertyValue::Unsigned(1),
+            "{oid:?}"
+        );
+        assert_eq!(
+            db.get(&oid)
+                .unwrap()
+                .read_property(PropertyIdentifier::TOTAL_RECORD_COUNT, None)
+                .unwrap(),
+            PropertyValue::Unsigned(3),
+            "{oid:?}"
+        );
+        let PropertyValue::List(records) = db
+            .get(&oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::LOG_BUFFER, None)
+            .unwrap()
+        else {
+            panic!("expected log records for {oid:?}");
+        };
+        let PropertyValue::List(fields) = &records[0] else {
+            panic!("expected log record fields for {oid:?}");
+        };
+        assert_eq!(
+            fields[2],
+            PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![0b0100_0000],
+            },
             "{oid:?}"
         );
     }

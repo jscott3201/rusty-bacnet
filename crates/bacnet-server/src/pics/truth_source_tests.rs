@@ -16,8 +16,11 @@ use bacnet_objects::multistate::{
     MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject,
 };
 use bacnet_objects::traits::BACnetObject;
-use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::PropertyValue;
+
+use super::{PicsConfig, PicsGenerator};
+use crate::server::ServerConfig;
 
 /// Cross-check the central truth-source invariant: for every core I/O/V type,
 /// `is_writable_property` and `write_property` must agree. If the override
@@ -529,4 +532,76 @@ fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging(
             ),
         ],
     );
+}
+
+#[test]
+fn pics_log_family_writability_comes_from_runtime_routes() {
+    use bacnet_objects::database::ObjectDatabase;
+    use bacnet_objects::event_log::EventLogObject;
+    use bacnet_objects::trend::{TrendLogMultipleObject, TrendLogObject};
+
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(EventLogObject::new(1, "EL-1", 3).unwrap()))
+        .unwrap();
+    db.add(Box::new(TrendLogObject::new(1, "TL-1", 3).unwrap()))
+        .unwrap();
+    db.add(Box::new(
+        TrendLogMultipleObject::new(1, "TLM-1", 3).unwrap(),
+    ))
+    .unwrap();
+    let server_config = ServerConfig::default();
+    let pics_config = PicsConfig::default();
+    let pics = PicsGenerator::new(&db, &server_config, &pics_config).generate();
+
+    let cases = [
+        (
+            ObjectType::EVENT_LOG,
+            &[
+                PropertyIdentifier::LOG_ENABLE,
+                PropertyIdentifier::LOG_INTERVAL,
+                PropertyIdentifier::STOP_WHEN_FULL,
+                PropertyIdentifier::RECORD_COUNT,
+                PropertyIdentifier::OUT_OF_SERVICE,
+                PropertyIdentifier::DESCRIPTION,
+            ][..],
+        ),
+        (
+            ObjectType::TREND_LOG,
+            &[
+                PropertyIdentifier::LOG_ENABLE,
+                PropertyIdentifier::LOG_INTERVAL,
+                PropertyIdentifier::STOP_WHEN_FULL,
+                PropertyIdentifier::RECORD_COUNT,
+                PropertyIdentifier::OUT_OF_SERVICE,
+                PropertyIdentifier::DESCRIPTION,
+            ][..],
+        ),
+        (
+            ObjectType::TREND_LOG_MULTIPLE,
+            &[
+                PropertyIdentifier::LOG_ENABLE,
+                PropertyIdentifier::LOG_INTERVAL,
+                PropertyIdentifier::STOP_WHEN_FULL,
+                PropertyIdentifier::RECORD_COUNT,
+                PropertyIdentifier::DESCRIPTION,
+            ][..],
+        ),
+    ];
+    for (object_type, expected) in cases {
+        let support = pics
+            .supported_object_types
+            .iter()
+            .find(|support| support.object_type == object_type)
+            .unwrap();
+        let writable = support
+            .supported_properties
+            .iter()
+            .filter(|property| property.access.writable)
+            .map(|property| property.property_id)
+            .collect::<Vec<_>>();
+        assert_eq!(writable.len(), expected.len(), "{object_type:?}");
+        for property in expected {
+            assert!(writable.contains(property), "{object_type:?} {property:?}");
+        }
+    }
 }
