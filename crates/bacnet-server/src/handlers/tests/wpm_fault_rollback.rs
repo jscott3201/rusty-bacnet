@@ -2,6 +2,7 @@
 
 use super::*;
 use bacnet_objects::binary::BinaryInputObject;
+use bacnet_objects::multistate::{MultiStateInputObject, MultiStateOutputObject};
 use bacnet_objects::traits::ReliabilityEvaluation;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
@@ -389,4 +390,211 @@ fn wpm_rollback_restores_non_range_inhibit_reliability_and_future_oos_state() {
         PropertyValue::Enumerated(Reliability::NO_SENSOR.to_raw()),
         "the next OOS cycle must independently save and restore Reliability"
     );
+}
+
+#[test]
+fn multistate_wpm_source_rollback_restores_reliability_and_private_ownership() {
+    let mut db = ObjectDatabase::new();
+    let mut output = MultiStateOutputObject::new(1, "MSO-rollback", 3).unwrap();
+    output
+        .write_property(
+            PropertyIdentifier::FEEDBACK_VALUE,
+            None,
+            PropertyValue::Unsigned(3),
+            None,
+        )
+        .unwrap();
+    output.set_number_of_states(2).unwrap();
+    let oid = output.object_identifier();
+    db.add(Box::new(output)).unwrap();
+
+    let mut repaired_feedback = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_unsigned(&mut repaired_feedback, 2);
+    let mut read_only_value = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_enumerated(&mut read_only_value, 0);
+    let request = WritePropertyMultipleRequest {
+        list_of_write_access_specs: vec![WriteAccessSpecification {
+            object_identifier: oid,
+            list_of_properties: vec![
+                BACnetPropertyValue {
+                    property_identifier: PropertyIdentifier::FEEDBACK_VALUE,
+                    property_array_index: None,
+                    value: repaired_feedback.to_vec(),
+                    priority: None,
+                },
+                BACnetPropertyValue {
+                    property_identifier: PropertyIdentifier::OBJECT_TYPE,
+                    property_array_index: None,
+                    value: read_only_value.to_vec(),
+                    priority: None,
+                },
+            ],
+        }],
+    };
+    let mut request_bytes = BytesMut::new();
+    request.encode(&mut request_bytes);
+    assert!(handle_write_property_multiple(&mut db, &request_bytes).is_err());
+
+    let object = db.get_mut(&oid).unwrap();
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::FEEDBACK_VALUE, None)
+            .unwrap(),
+        PropertyValue::Unsigned(3)
+    );
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::RELIABILITY, None)
+            .unwrap(),
+        PropertyValue::Enumerated(Reliability::CONFIGURATION_ERROR.to_raw())
+    );
+    object
+        .write_property(
+            PropertyIdentifier::FEEDBACK_VALUE,
+            None,
+            PropertyValue::Unsigned(2),
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::RELIABILITY, None)
+            .unwrap(),
+        PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw()),
+        "recovery proves rollback restored the private evaluator owner"
+    );
+}
+
+#[test]
+fn multistate_wpm_gate_release_rollback_restores_saved_and_owned_reliability() {
+    let mut db = ObjectDatabase::new();
+    let mut input = MultiStateInputObject::new(2, "MSI-gate-rollback", 2).unwrap();
+    input.set_present_value(3);
+    input
+        .write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(true),
+            None,
+        )
+        .unwrap();
+    input.set_present_value(1);
+    input
+        .write_property(
+            PropertyIdentifier::RELIABILITY,
+            None,
+            PropertyValue::Enumerated(Reliability::NO_SENSOR.to_raw()),
+            None,
+        )
+        .unwrap();
+    let oid = input.object_identifier();
+    db.add(Box::new(input)).unwrap();
+
+    let mut leave_oos = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_boolean(&mut leave_oos, false);
+    let mut read_only_value = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_enumerated(&mut read_only_value, 0);
+    let request = WritePropertyMultipleRequest {
+        list_of_write_access_specs: vec![WriteAccessSpecification {
+            object_identifier: oid,
+            list_of_properties: vec![
+                BACnetPropertyValue {
+                    property_identifier: PropertyIdentifier::OUT_OF_SERVICE,
+                    property_array_index: None,
+                    value: leave_oos.to_vec(),
+                    priority: None,
+                },
+                BACnetPropertyValue {
+                    property_identifier: PropertyIdentifier::OBJECT_TYPE,
+                    property_array_index: None,
+                    value: read_only_value.to_vec(),
+                    priority: None,
+                },
+            ],
+        }],
+    };
+    let mut request_bytes = BytesMut::new();
+    request.encode(&mut request_bytes);
+    assert!(handle_write_property_multiple(&mut db, &request_bytes).is_err());
+
+    let object = db.get_mut(&oid).unwrap();
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
+            .unwrap(),
+        PropertyValue::Boolean(true)
+    );
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::RELIABILITY, None)
+            .unwrap(),
+        PropertyValue::Enumerated(Reliability::NO_SENSOR.to_raw())
+    );
+    object
+        .write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(false),
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::RELIABILITY, None)
+            .unwrap(),
+        PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw()),
+        "release recovery proves rollback restored saved Reliability and its private owner"
+    );
+}
+
+#[test]
+fn multistate_number_of_states_stays_wpm_read_only() {
+    for (mut db, oid) in [
+        {
+            let mut db = ObjectDatabase::new();
+            let object = MultiStateInputObject::new(10, "MSI-count", 2).unwrap();
+            let oid = object.object_identifier();
+            db.add(Box::new(object)).unwrap();
+            (db, oid)
+        },
+        {
+            let mut db = ObjectDatabase::new();
+            let object = MultiStateOutputObject::new(10, "MSO-count", 2).unwrap();
+            let oid = object.object_identifier();
+            db.add(Box::new(object)).unwrap();
+            (db, oid)
+        },
+        {
+            let mut db = ObjectDatabase::new();
+            let object =
+                bacnet_objects::multistate::MultiStateValueObject::new(10, "MSV-count", 2).unwrap();
+            let oid = object.object_identifier();
+            db.add(Box::new(object)).unwrap();
+            (db, oid)
+        },
+    ] {
+        let mut count = BytesMut::new();
+        bacnet_encoding::primitives::encode_app_unsigned(&mut count, 3);
+        let request = WritePropertyMultipleRequest {
+            list_of_write_access_specs: vec![WriteAccessSpecification {
+                object_identifier: oid,
+                list_of_properties: vec![BACnetPropertyValue {
+                    property_identifier: PropertyIdentifier::NUMBER_OF_STATES,
+                    property_array_index: None,
+                    value: count.to_vec(),
+                    priority: None,
+                }],
+            }],
+        };
+        let mut request_bytes = BytesMut::new();
+        request.encode(&mut request_bytes);
+        assert!(handle_write_property_multiple(&mut db, &request_bytes).is_err());
+        assert_eq!(
+            db.get(&oid)
+                .unwrap()
+                .read_property(PropertyIdentifier::NUMBER_OF_STATES, None)
+                .unwrap(),
+            PropertyValue::Unsigned(2)
+        );
+    }
 }
