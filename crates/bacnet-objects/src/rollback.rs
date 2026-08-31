@@ -24,10 +24,85 @@ pub(crate) enum IntrinsicWriteRollback {
         range_fault_ownership: Option<Option<crate::analog::OwnedRangeFault>>,
         multistate_fault_ownership: Option<Option<crate::multistate::OwnedMultiStateFault>>,
     },
+    MultiStateCommand {
+        priority_array: [Option<u32>; 16],
+        relinquish_default: u32,
+        present_value: u32,
+        reliability: u32,
+        fault_ownership: Option<crate::multistate::OwnedMultiStateFault>,
+    },
 }
 
-/// Preserve event state that the detection-disable reset clears, plus the raw
-/// optional `Time_Delay_Normal` backing value that effective readback hides.
+macro_rules! capture_multistate_command_rollback {
+    (
+        $object:ident,
+        $reliability_field:ident;
+        $fault_field:ident,
+        $priority_array_field:ident,
+        $relinquish_default_field:ident,
+        $present_value_field:ident
+    ) => {
+        Some($crate::traits::WritePropertyRollback::new(
+            $crate::rollback::IntrinsicWriteRollback::MultiStateCommand {
+                priority_array: $object.$priority_array_field,
+                relinquish_default: $object.$relinquish_default_field,
+                present_value: $object.$present_value_field,
+                reliability: $object.$reliability_field,
+                fault_ownership: $object.$fault_field.owned_fault,
+            },
+        ))
+    };
+    ($object:ident, $reliability_field:ident $(; $fault_field:ident)?) => {
+        None
+    };
+}
+
+macro_rules! restore_multistate_command_rollback {
+    (
+        $object:ident,
+        $priority_array:ident,
+        $relinquish_default:ident,
+        $present_value:ident,
+        $reliability:ident,
+        $fault_ownership:ident,
+        $reliability_field:ident;
+        $fault_field:ident,
+        $priority_array_field:ident,
+        $relinquish_default_field:ident,
+        $present_value_field:ident
+    ) => {{
+        $object.$priority_array_field = $priority_array;
+        $object.$relinquish_default_field = $relinquish_default;
+        $object.$present_value_field = $present_value;
+        $object.$reliability_field = $reliability;
+        $object.$fault_field.owned_fault = $fault_ownership;
+        Ok(())
+    }};
+    (
+        $object:ident,
+        $priority_array:ident,
+        $relinquish_default:ident,
+        $present_value:ident,
+        $reliability:ident,
+        $fault_ownership:ident,
+        $reliability_field:ident
+        $(; $fault_field:ident)?
+    ) => {{
+        let _ = (
+            $priority_array,
+            $relinquish_default,
+            $present_value,
+            $reliability,
+            $fault_ownership,
+        );
+        Err(bacnet_types::error::Error::Encoding(
+            "object received an incompatible multi-state command rollback token".into(),
+        ))
+    }};
+}
+
+/// Preserve intrinsic event/inhibit state hidden by property readback and,
+/// when configured, exact retained multi-state command configuration.
 macro_rules! impl_intrinsic_write_rollback {
     (
         $detector_field:ident,
@@ -38,7 +113,11 @@ macro_rules! impl_intrinsic_write_rollback {
         $out_of_service_field:ident,
         $saved_reliability_field:ident
         $(, $range_fault_field:ident)?
-        $(; $multistate_fault_field:ident)?
+        $(; $multistate_fault_field:ident
+            $(, $priority_array_field:ident,
+                $relinquish_default_field:ident,
+                $present_value_field:ident)?
+        )?
     ) => {
         fn capture_write_property_rollback(
             &mut self,
@@ -85,6 +164,18 @@ macro_rules! impl_intrinsic_write_rollback {
                             multistate_fault_ownership,
                         },
                     ))
+                }
+                bacnet_types::enums::PropertyIdentifier::PRIORITY_ARRAY
+                | bacnet_types::enums::PropertyIdentifier::RELINQUISH_DEFAULT => {
+                    $crate::rollback::capture_multistate_command_rollback!(
+                        self,
+                        $reliability_field
+                        $(; $multistate_fault_field
+                            $(, $priority_array_field,
+                                $relinquish_default_field,
+                                $present_value_field)?
+                        )?
+                    )
                 }
                 _ => None,
             }
@@ -162,8 +253,30 @@ macro_rules! impl_intrinsic_write_rollback {
                     let _ = (range_fault_ownership, multistate_fault_ownership);
                     Ok(())
                 }
+                $crate::rollback::IntrinsicWriteRollback::MultiStateCommand {
+                    priority_array,
+                    relinquish_default,
+                    present_value,
+                    reliability,
+                    fault_ownership,
+                } => $crate::rollback::restore_multistate_command_rollback!(
+                    self,
+                    priority_array,
+                    relinquish_default,
+                    present_value,
+                    reliability,
+                    fault_ownership,
+                    $reliability_field
+                    $(; $multistate_fault_field
+                        $(, $priority_array_field,
+                            $relinquish_default_field,
+                            $present_value_field)?
+                    )?
+                ),
             }
         }
     };
 }
+pub(crate) use capture_multistate_command_rollback;
 pub(crate) use impl_intrinsic_write_rollback;
+pub(crate) use restore_multistate_command_rollback;

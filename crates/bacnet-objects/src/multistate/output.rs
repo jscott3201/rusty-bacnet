@@ -170,7 +170,10 @@ impl BACnetObject for MultiStateOutputObject {
         reliability,
         out_of_service,
         reliability_before_out_of_service;
-        reliability_evaluator
+        reliability_evaluator,
+        priority_array,
+        relinquish_default,
+        present_value
     );
 
     fn read_property(
