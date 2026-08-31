@@ -44,6 +44,7 @@ mod file;
 mod list;
 mod object_mgmt;
 mod read_property;
+mod read_range;
 mod write_property;
 
 pub use alarm_event::*;
@@ -55,6 +56,7 @@ pub use file::*;
 pub use list::*;
 pub use object_mgmt::*;
 pub use read_property::*;
+pub use read_range::*;
 pub use write_property::*;
 
 #[cfg(test)]

@@ -30,12 +30,20 @@ fn validate_read_range_ack(
                 | bacnet_services::read_range::RangeSpec::ByTime { .. }
         )
     );
-    let permits_first_sequence_number = sequence_range && ack.item_count > 0;
-    if ack.first_sequence_number.is_some() && !permits_first_sequence_number {
-        return Err(Error::decoding(
-            0,
-            "ReadRange ACK first sequence number is invalid for the request range",
-        ));
+    match (sequence_range, ack.item_count, ack.first_sequence_number) {
+        (true, 1.., Some(1..)) | (true, 0, None) | (false, _, None) => {}
+        (true, 1.., _) => {
+            return Err(Error::decoding(
+                0,
+                "nonempty ReadRange By Sequence/Time ACK requires a nonzero first sequence number",
+            ));
+        }
+        _ => {
+            return Err(Error::decoding(
+                0,
+                "ReadRange ACK first sequence number is invalid for the request range",
+            ));
+        }
     }
 
     Ok(())
@@ -357,7 +365,8 @@ mod tests {
             count: 1,
         }));
         assert!(validate_read_range_ack(&by_sequence, &ack(&by_sequence, 1, Some(1))).is_ok());
-        assert!(validate_read_range_ack(&by_sequence, &ack(&by_sequence, 1, None)).is_ok());
+        assert!(validate_read_range_ack(&by_sequence, &ack(&by_sequence, 1, None)).is_err());
+        assert!(validate_read_range_ack(&by_sequence, &ack(&by_sequence, 1, Some(0))).is_err());
         assert!(validate_read_range_ack(&by_sequence, &ack(&by_sequence, 0, None)).is_ok());
         assert!(validate_read_range_ack(&by_sequence, &ack(&by_sequence, 0, Some(1))).is_err());
 
@@ -379,12 +388,17 @@ mod tests {
             count: 1,
         }));
         assert!(validate_read_range_ack(&by_time, &ack(&by_time, 1, Some(1))).is_ok());
+        assert!(validate_read_range_ack(&by_time, &ack(&by_time, 1, None)).is_err());
+        assert!(validate_read_range_ack(&by_time, &ack(&by_time, 1, Some(0))).is_err());
 
         let by_position = request(Some(RangeSpec::ByPosition {
             reference_index: 1,
             count: 1,
         }));
         assert!(validate_read_range_ack(&by_position, &ack(&by_position, 1, Some(1))).is_err());
+
+        let no_range = request(None);
+        assert!(validate_read_range_ack(&no_range, &ack(&no_range, 1, Some(1))).is_err());
     }
 }
 
