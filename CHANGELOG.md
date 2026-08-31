@@ -148,6 +148,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Built-in `FileObject` payload mutations now select `Modification_Date` from
+  the object database's coherent clock (or a fully unspecified Date/Time when
+  unavailable or invalid) and clear `Archive`, including direct preloads and
+  equal-content or empty AtomicWriteFile writes (#416). Failed writes remain
+  metadata-neutral; custom `FileStorage` implementations still own their
+  metadata, and File_Size/Record_Count network writes remain deferred to #417.
+
 - Reliability evaluation now belongs to each `BACnetObject` through a defaulted
   opt-in hook. Enabling server fault detection invokes that hook for every
   object every 10 seconds; stock objects remain opted out by default. Analog

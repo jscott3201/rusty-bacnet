@@ -53,6 +53,59 @@ fn record_file() -> FileObject {
     file
 }
 
+fn retained_datetime() -> (Date, Time) {
+    (
+        Date {
+            year: 124,
+            month: 2,
+            day: 29,
+            day_of_week: 4,
+        },
+        Time {
+            hour: 12,
+            minute: 34,
+            second: 56,
+            hundredths: 78,
+        },
+    )
+}
+
+#[derive(Debug, PartialEq)]
+struct StreamState {
+    data: Vec<u8>,
+    file_size: u64,
+    modification_date: (Date, Time),
+    archive: bool,
+}
+
+fn stream_state(file: &FileObject) -> StreamState {
+    StreamState {
+        data: file.data.clone(),
+        file_size: file.file_size,
+        modification_date: file.modification_date,
+        archive: file.archive,
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct RecordState {
+    records: Vec<Vec<u8>>,
+    file_size: u64,
+    record_count: Option<u64>,
+    modification_date: (Date, Time),
+    archive: bool,
+}
+
+fn record_state(file: &FileObject) -> RecordState {
+    RecordState {
+        records: file.records.clone(),
+        file_size: file.file_size,
+        record_count: file.record_count,
+        modification_date: file.modification_date,
+        archive: file.archive,
+    }
+}
+
 #[test]
 fn storage_stream_write_then_read_round_trips() {
     let mut file = stream_file();
@@ -205,6 +258,65 @@ fn storage_record_caps_are_file_full_and_leave_records_unchanged() {
         .unwrap();
     assert_eq!(file.records()[0], vec![0x10, 0x11]);
     assert_eq!(file.file_size(), 5);
+}
+
+#[test]
+fn file_metadata_storage_failures_preserve_payload_accounting_and_metadata() {
+    let retained = retained_datetime();
+
+    let mut stream = stream_file();
+    stream.set_modification_date(retained.0, retained.1);
+    stream.set_archive(true);
+    let expected = stream_state(&stream);
+    stream
+        .write_records(FileWriteStart::At(0), &[vec![0x01]])
+        .unwrap_err();
+    assert_eq!(stream_state(&stream), expected, "stream access failure");
+
+    let expected = stream_state(&stream);
+    stream
+        .write_stream(FileWriteStart::At(u64::MAX), &[0x01])
+        .unwrap_err();
+    assert_eq!(stream_state(&stream), expected, "stream start overflow");
+
+    stream.set_max_file_size(7);
+    let expected = stream_state(&stream);
+    stream
+        .write_stream(FileWriteStart::Append, &[0x01])
+        .unwrap_err();
+    assert_eq!(stream_state(&stream), expected, "stream growth cap");
+
+    let mut record = record_file();
+    record.set_modification_date(retained.0, retained.1);
+    record.set_archive(true);
+    let expected = record_state(&record);
+    record
+        .write_stream(FileWriteStart::At(0), &[0x01])
+        .unwrap_err();
+    assert_eq!(record_state(&record), expected, "record access failure");
+
+    let expected = record_state(&record);
+    record
+        .write_records(FileWriteStart::At(u64::MAX), &[vec![0x01]])
+        .unwrap_err();
+    assert_eq!(record_state(&record), expected, "record start overflow");
+
+    record.set_max_record_count(2);
+    let expected = record_state(&record);
+    record
+        .write_records(FileWriteStart::Append, &[vec![0x01]])
+        .unwrap_err();
+    assert_eq!(record_state(&record), expected, "record count cap");
+
+    let mut record = record_file();
+    record.set_modification_date(retained.0, retained.1);
+    record.set_archive(true);
+    record.set_max_file_size(4);
+    let expected = record_state(&record);
+    record
+        .write_records(FileWriteStart::Append, &[vec![0x01]])
+        .unwrap_err();
+    assert_eq!(record_state(&record), expected, "record octet cap");
 }
 
 #[test]

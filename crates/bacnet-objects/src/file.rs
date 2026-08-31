@@ -9,7 +9,9 @@ use bacnet_types::enums::{
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
 use std::borrow::Cow;
+use std::sync::Arc;
 
+use crate::clock::ClockReader;
 use crate::common::{self, read_common_properties};
 use crate::traits::BACnetObject;
 
@@ -204,6 +206,8 @@ pub struct FileObject {
     max_file_size: u64,
     /// Growth cap in records for network writes; not a BACnet property.
     max_record_count: u64,
+    /// Database-owned coherent clock source used at successful mutations.
+    clock: Option<Arc<dyn ClockReader>>,
 }
 
 impl FileObject {
@@ -225,16 +229,16 @@ impl FileObject {
             file_size: 0,
             modification_date: (
                 Date {
-                    year: 0xFF,
-                    month: 0xFF,
-                    day: 0xFF,
-                    day_of_week: 0xFF,
+                    year: Date::UNSPECIFIED,
+                    month: Date::UNSPECIFIED,
+                    day: Date::UNSPECIFIED,
+                    day_of_week: Date::UNSPECIFIED,
                 },
                 Time {
-                    hour: 0xFF,
-                    minute: 0xFF,
-                    second: 0xFF,
-                    hundredths: 0xFF,
+                    hour: Time::UNSPECIFIED,
+                    minute: Time::UNSPECIFIED,
+                    second: Time::UNSPECIFIED,
+                    hundredths: Time::UNSPECIFIED,
                 },
             ),
             archive: false,
@@ -248,6 +252,7 @@ impl FileObject {
             reliability: 0,
             max_file_size: DEFAULT_MAX_FILE_SIZE,
             max_record_count: DEFAULT_MAX_RECORD_COUNT,
+            clock: None,
         })
     }
 
@@ -270,6 +275,7 @@ impl FileObject {
         if self.file_access_method != FileAccessMethod::RECORD_ACCESS.to_raw() {
             self.file_size = self.data.len() as u64;
         }
+        self.mark_modified();
     }
 
     /// Get a reference to the stream data.
@@ -285,6 +291,7 @@ impl FileObject {
     /// object switches to: Table 12-16 footnote 2 has Record_Count present
     /// only under RECORD_ACCESS, and File_Size counts that channel's octets.
     pub fn set_file_access_method(&mut self, method: u32) {
+        let old_file_size = self.file_size;
         self.file_access_method = method;
         if method == FileAccessMethod::RECORD_ACCESS.to_raw() {
             self.record_count = Some(self.records.len() as u64);
@@ -292,6 +299,9 @@ impl FileObject {
         } else {
             self.record_count = None;
             self.file_size = self.data.len() as u64;
+        }
+        if self.file_size != old_file_size {
+            self.mark_modified();
         }
     }
 
@@ -303,6 +313,7 @@ impl FileObject {
             self.record_count = Some(self.records.len() as u64);
             self.file_size = octet_total(&self.records);
         }
+        self.mark_modified();
     }
 
     /// Get a reference to the records.
@@ -312,7 +323,11 @@ impl FileObject {
 
     /// Set the modification date.
     pub fn set_modification_date(&mut self, date: Date, time: Time) {
-        self.modification_date = (date, time);
+        let modification_date = (date, time);
+        if self.modification_date != modification_date {
+            self.modification_date = modification_date;
+            self.archive = false;
+        }
     }
 
     /// Set the archive flag.
@@ -381,6 +396,32 @@ impl FileObject {
         } else {
             Err(invalid_file_access_method())
         }
+    }
+
+    fn modification_datetime(&self) -> (Date, Time) {
+        let frame = self.clock.as_ref().and_then(|clock| clock.read_clock());
+        match frame {
+            Some(frame) if frame.is_valid_actual_datetime() => (frame.local_date, frame.local_time),
+            _ => (
+                Date {
+                    year: Date::UNSPECIFIED,
+                    month: Date::UNSPECIFIED,
+                    day: Date::UNSPECIFIED,
+                    day_of_week: Date::UNSPECIFIED,
+                },
+                Time {
+                    hour: Time::UNSPECIFIED,
+                    minute: Time::UNSPECIFIED,
+                    second: Time::UNSPECIFIED,
+                    hundredths: Time::UNSPECIFIED,
+                },
+            ),
+        }
+    }
+
+    fn mark_modified(&mut self) {
+        self.modification_date = self.modification_datetime();
+        self.archive = false;
     }
 }
 
@@ -585,6 +626,10 @@ impl BACnetObject for FileObject {
             props.push(PropertyIdentifier::RECORD_COUNT);
         }
         Cow::Owned(props)
+    }
+
+    fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
+        self.clock = clock;
     }
 
     fn file_storage_internal(&self) -> Option<&dyn FileStorage> {
