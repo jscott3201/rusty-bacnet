@@ -225,6 +225,7 @@ async fn execute_command<T: TransportPort + 'static>(
         Command::FileRead {
             target,
             file_instance,
+            access,
             start,
             count,
             output,
@@ -234,6 +235,7 @@ async fn execute_command<T: TransportPort + 'static>(
                 client,
                 &mac,
                 *file_instance,
+                *access,
                 *start,
                 *count,
                 output.as_deref(),

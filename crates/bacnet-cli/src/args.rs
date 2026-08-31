@@ -6,7 +6,13 @@
 
 use std::{net::Ipv4Addr, path::PathBuf};
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum FileReadAccess {
+    Stream,
+    Record,
+}
 
 #[derive(Parser)]
 #[command(name = "bacnet", about = "BACnet command-line tool", version)]
@@ -206,13 +212,16 @@ pub(crate) enum Command {
         target: String,
         /// File object instance.
         file_instance: u32,
-        /// Start position.
+        /// BACnet file access mode.
+        #[arg(long, value_enum, default_value = "stream")]
+        access: FileReadAccess,
+        /// Initial octet position or record index.
         #[arg(long, default_value_t = 0)]
         start: i32,
-        /// Byte count.
+        /// Per-request octet or record window size.
         #[arg(long, default_value_t = 1024)]
         count: u32,
-        /// Output file path.
+        /// Stream output file or required record output directory.
         #[arg(long)]
         output: Option<String>,
     },

@@ -126,9 +126,8 @@ fn storage_stream_write_then_read_round_trips() {
     assert_eq!(file.file_size(), 9);
 }
 
-/// Clause 14.1.3.1: End Of File is "TRUE if this response includes the last
-/// octet of the file and FALSE otherwise" — an empty window is never at end
-/// of file, a short read that reaches the last octet is.
+/// End Of File remains false for an empty window in a non-empty file, while
+/// the built-in empty-file correction reports the only valid position as EOF.
 #[test]
 fn storage_stream_read_boundaries() {
     let file = stream_file();
@@ -144,7 +143,7 @@ fn storage_stream_read_boundaries() {
     let empty = FileObject::new(2, "EMPTY", "text/plain").unwrap();
     let nothing = empty.read_stream(0, 4).unwrap();
     assert!(nothing.data.is_empty());
-    assert!(!nothing.end_of_file);
+    assert!(nothing.end_of_file);
     assert_eq!(
         protocol_pair(file.read_stream(9, 1).unwrap_err()),
         invalid_start_pair()
@@ -155,6 +154,20 @@ fn storage_stream_read_boundaries() {
     let last = file.read_stream(7, 1).unwrap();
     assert_eq!(last.data, vec![8]);
     assert!(last.end_of_file);
+}
+
+#[test]
+fn storage_empty_record_file_reports_end_of_file() {
+    let mut empty = FileObject::new(2, "EMPTY-RECORDS", "application/octet-stream").unwrap();
+    empty.set_file_access_method(FileAccessMethod::RECORD_ACCESS.to_raw());
+
+    let nothing = empty.read_records(0, 4).unwrap();
+    assert!(nothing.records.is_empty());
+    assert!(nothing.end_of_file);
+    assert_eq!(
+        protocol_pair(empty.read_records(1, 1).unwrap_err()),
+        invalid_start_pair()
+    );
 }
 
 #[test]

@@ -266,19 +266,39 @@ bacnet delete-object 192.168.1.100 av:100
 ### File Transfer
 
 ```bash
-bacnet file-read 192.168.1.100 1 --output data.bin          # save to file
-bacnet file-read 192.168.1.100 1 --start 0 --count 4096     # with range
+bacnet file-read 192.168.1.100 1                             # stream payload as hex
+bacnet file-read 192.168.1.100 1 --count 4096 --output data.bin
+bacnet file-read 192.168.1.100 1 --access record --output records
 bacnet file-write 192.168.1.100 1 firmware.bin               # write file
 bacnet file-write 192.168.1.100 1 firmware.bin --start 0     # with offset
 ```
+
+`file-read` decodes each AtomicReadFile ACK and keeps requesting windows until
+the peer returns `End Of File = TRUE`. Stream mode writes or displays only the
+returned file-data octets, never the encoded ACK. Record mode never
+concatenates records: it requires an output directory and writes each record,
+including a zero-length record, to
+`record-{absolute-index:010}.bin` (for example,
+`record-0000000007.bin`). The peer's returned start and actual returned
+octet/record count select the next request cursor.
+
+`--start` must be non-negative and `--count` must be greater than zero. The
+count is the window size for each request, not a total transfer limit. Stream
+and record output refuse an existing final target. New output is staged in a
+sibling file or directory and published only after authoritative EOF; remote,
+decode, cursor, or write failures remove staging and leave the final target
+absent. If cleanup fails, the error reports the retained staging path. This is
+not a crash journal or a hostile concurrent-writer no-clobber guarantee. The
+same flags and behavior apply in the interactive shell.
 
 **file-read flags:**
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--start <N>` | `0` | Start position in file |
-| `--count <N>` | `1024` | Byte count to read |
-| `--output <PATH>` | | Save data to file (otherwise hex-dumps to stdout) |
+| `--access <MODE>` | `stream` | `stream` or `record` access |
+| `--start <N>` | `0` | Initial octet position or record index (non-negative) |
+| `--count <N>` | `1024` | Positive per-request octet or record window size |
+| `--output <PATH>` | | Stream output file or required record output directory |
 
 **file-write flags:**
 

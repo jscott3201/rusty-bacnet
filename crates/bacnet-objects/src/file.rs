@@ -51,9 +51,8 @@ pub struct FileStreamRead {
     /// The octets read: never more than requested, fewer when the file
     /// ends first (Clause 14.1 Service Procedure).
     pub data: Vec<u8>,
-    /// Clause 14.1.3.1 'End Of File': "TRUE if this response includes the
-    /// last octet of the file and FALSE otherwise", so an empty window is
-    /// never at end of file.
+    /// Clause 14.1.3.1 'End Of File'. The built-in empty file reports EOF at
+    /// its only valid start; an empty window in a non-empty file does not.
     pub end_of_file: bool,
 }
 
@@ -63,8 +62,8 @@ pub struct FileRecordRead {
     /// The records read. Its length is the ACK's 'Returned Record Count'
     /// (Clause 14.1.3.3), which may be less than the requested count.
     pub records: Vec<Vec<u8>>,
-    /// 'End Of File' per the Clause 14.1 Service Procedure: TRUE only when
-    /// `records` includes the last record of the file.
+    /// 'End Of File' per the Clause 14.1 Service Procedure. The built-in
+    /// empty record file reports EOF at its only valid start.
     pub end_of_file: bool,
 }
 
@@ -102,8 +101,8 @@ pub enum FileWriteStart {
 ///
 /// - SERVICES / INVALID_FILE_START_POSITION when a read starts past the
 ///   current end (Clause 14.1 Service Procedure). Reading *at* the end is
-///   legal and yields an empty window with `end_of_file` FALSE, since the
-///   window includes no octet at all.
+///   legal and yields an empty window. The built-in empty file reports
+///   `end_of_file` TRUE there; non-empty files report FALSE for such a window.
 /// - OBJECT / FILE_FULL when a write would grow the file past the
 ///   implementation's designed limit (Clause 14.2.4.1; Clause 18).
 /// - SERVICES / INVALID_FILE_ACCESS_METHOD when the method does not match
@@ -435,7 +434,7 @@ impl FileStorage for FileObject {
         let end = start.saturating_add(count).min(len);
         Ok(FileStreamRead {
             data: self.data[start as usize..end as usize].to_vec(),
-            end_of_file: end >= len && end > start,
+            end_of_file: len == 0 || (end >= len && end > start),
         })
     }
 
@@ -472,7 +471,7 @@ impl FileStorage for FileObject {
         let end = start.saturating_add(count).min(len);
         Ok(FileRecordRead {
             records: self.records[start as usize..end as usize].to_vec(),
-            end_of_file: end >= len && end > start,
+            end_of_file: len == 0 || (end >= len && end > start),
         })
     }
 

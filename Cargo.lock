@@ -254,6 +254,8 @@ dependencies = [
  "bacnet-client",
  "bacnet-encoding",
  "bacnet-network",
+ "bacnet-objects",
+ "bacnet-server",
  "bacnet-services",
  "bacnet-transport",
  "bacnet-types",
