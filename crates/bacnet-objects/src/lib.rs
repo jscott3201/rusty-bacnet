@@ -22,6 +22,7 @@ pub mod life_safety;
 pub mod lighting;
 pub mod load_control;
 pub mod log_buffer;
+pub(crate) mod log_lifecycle;
 pub mod loop_obj;
 pub mod multistate;
 pub mod network_port;
@@ -37,6 +38,9 @@ pub mod timer;
 pub mod traits;
 pub mod trend;
 pub mod value_types;
+
+#[cfg(test)]
+mod log_status_tests;
 
 #[cfg(test)]
 mod property_metadata_tests;

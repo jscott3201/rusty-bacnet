@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Mandatory `BACnetLogStatus` lifecycle records for Event Log, Trend Log, and
+  Trend Log Multiple (#189). `Record_Count=0`, effective Enable transitions,
+  and Stop_When_Full now share one non-recursive state machine that validates
+  the database clock before mutation, emits canonical three-bit status values,
+  preserves exact WPM rollback, and counts accepted records without retaining
+  them at zero capacity. The existing infallible Rust `add_record` and raw
+  `clear` APIs remain source-compatible; the server poller uses an additive
+  defaulted fallible hook so mandatory timestamp failures remain retryable.
+  Time-window transitions, `LOG_INTERRUPTED`, writable
+  `Log_DeviceObjectProperty` purge routes, formal Event Log notification
+  payloads, ReadRange, persistence, and full log conformance remain deferred.
+
 - Stable in-memory record identity for Event Log, Trend Log, and Trend Log
   Multiple (#134, #339). Each accepted append now owns a nonzero Unsigned32
   sequence (wrapping MAX to 1) plus its record Date/Time; FIFO eviction and
@@ -19,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a present optional record StatusFlags bitstring; Event Log and Trend Log
   Multiple retain the legacy raw Rust field but do not put it on the wire.
   ReadRange sequence/time selection, First Sequence Number, persistence,
-  formal Event Log notification records, and purge records remain deferred.
+  and formal Event Log notification records remain deferred.
 
 - Object-owned multi-state configuration Reliability and recovery for
   Multi-state Input, Output, and Value (#226). The Standard requires

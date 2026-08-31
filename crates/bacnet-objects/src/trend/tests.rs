@@ -1,6 +1,25 @@
 use super::*;
+use crate::clock::{ClockFrame, ClockReader};
 use bacnet_types::constructed::LogDatum;
 use bacnet_types::primitives::{Date, Time};
+use std::sync::Arc;
+
+struct FixedClock;
+
+impl ClockReader for FixedClock {
+    fn read_clock(&self) -> Option<ClockFrame> {
+        Some(ClockFrame {
+            local_date: make_record(9, 0.0).date,
+            local_time: make_record(9, 0.0).time,
+            utc_offset: 0,
+            daylight_savings_status: false,
+        })
+    }
+}
+
+fn bind_clock(object: &mut dyn BACnetObject) {
+    object.bind_clock_internal(Some(Arc::new(FixedClock)));
+}
 
 fn make_record(hour: u8, value: f32) -> BACnetLogRecord {
     BACnetLogRecord {
@@ -70,6 +89,7 @@ fn trendlog_ring_buffer_wraps() {
 #[test]
 fn trendlog_stop_when_full() {
     let mut tl = TrendLogObject::new(1, "TL-1", 2).unwrap();
+    bind_clock(&mut tl);
     tl.write_property(
         PropertyIdentifier::STOP_WHEN_FULL,
         None,
@@ -91,6 +111,7 @@ fn trendlog_stop_when_full() {
 #[test]
 fn trendlog_disable_logging() {
     let mut tl = TrendLogObject::new(1, "TL-1", 100).unwrap();
+    bind_clock(&mut tl);
     tl.write_property(
         PropertyIdentifier::LOG_ENABLE,
         None,
@@ -99,12 +120,14 @@ fn trendlog_disable_logging() {
     )
     .unwrap();
     tl.add_record(make_record(10, 72.5));
-    assert_eq!(tl.records().len(), 0);
+    assert_eq!(tl.records().len(), 1);
+    assert_eq!(tl.records()[0].log_datum, LogDatum::LogStatus(0b001));
 }
 
 #[test]
 fn trendlog_clear_buffer() {
     let mut tl = TrendLogObject::new(1, "TL-1", 100).unwrap();
+    bind_clock(&mut tl);
     tl.add_record(make_record(10, 72.5));
     assert_eq!(tl.records().len(), 1);
     tl.write_property(
@@ -114,7 +137,8 @@ fn trendlog_clear_buffer() {
         None,
     )
     .unwrap();
-    assert_eq!(tl.records().len(), 0);
+    assert_eq!(tl.records().len(), 1);
+    assert_eq!(tl.records()[0].log_datum, LogDatum::LogStatus(0b010));
 }
 
 #[test]
@@ -213,6 +237,7 @@ fn trendlog_log_buffer_empty() {
 #[test]
 fn trendlog_log_buffer_overflow_stop_when_full() {
     let mut tl = TrendLogObject::new(1, "TL-1", 3).unwrap();
+    bind_clock(&mut tl);
     tl.write_property(
         PropertyIdentifier::STOP_WHEN_FULL,
         None,
@@ -235,7 +260,13 @@ fn trendlog_log_buffer_overflow_stop_when_full() {
             panic!("Expected List");
         }
         if let PropertyValue::List(fields) = &records[2] {
-            assert_eq!(fields[2], PropertyValue::Real(20.0));
+            assert_eq!(
+                fields[2],
+                PropertyValue::BitString {
+                    unused_bits: 5,
+                    data: vec![0b0010_0000],
+                }
+            );
         } else {
             panic!("Expected List");
         }
@@ -507,6 +538,7 @@ fn trendlog_multiple_empty_property_references() {
 #[test]
 fn trendlog_multiple_write_log_enable() {
     let mut tlm = TrendLogMultipleObject::new(1, "TLM-1", 100).unwrap();
+    bind_clock(&mut tlm);
     tlm.write_property(
         PropertyIdentifier::LOG_ENABLE,
         None,
@@ -521,7 +553,8 @@ fn trendlog_multiple_write_log_enable() {
     );
     // Records should not be added when disabled
     tlm.add_record(make_record(10, 72.5));
-    assert_eq!(tlm.records().len(), 0);
+    assert_eq!(tlm.records().len(), 1);
+    assert_eq!(tlm.records()[0].log_datum, LogDatum::LogStatus(0b001));
 }
 
 // ──────────────────────────────────────────────────────────────────────────

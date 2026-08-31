@@ -1,6 +1,25 @@
 use super::*;
+use crate::clock::{ClockFrame, ClockReader};
 use bacnet_types::constructed::LogDatum;
 use bacnet_types::primitives::{Date, Time};
+use std::sync::Arc;
+
+struct FixedClock;
+
+impl ClockReader for FixedClock {
+    fn read_clock(&self) -> Option<ClockFrame> {
+        Some(ClockFrame {
+            local_date: make_date(),
+            local_time: make_time(9),
+            utc_offset: 0,
+            daylight_savings_status: false,
+        })
+    }
+}
+
+fn bind_clock(object: &mut EventLogObject) {
+    object.bind_clock_internal(Some(Arc::new(FixedClock)));
+}
 
 fn make_date() -> Date {
     Date {
@@ -123,6 +142,7 @@ fn ring_buffer_wraps() {
 #[test]
 fn stop_when_full() {
     let mut el = EventLogObject::new(1, "EL-1", 2).unwrap();
+    bind_clock(&mut el);
     el.write_property(
         PropertyIdentifier::STOP_WHEN_FULL,
         None,
@@ -144,6 +164,7 @@ fn stop_when_full() {
 #[test]
 fn disable_logging() {
     let mut el = EventLogObject::new(1, "EL-1", 100).unwrap();
+    bind_clock(&mut el);
     el.write_property(
         PropertyIdentifier::LOG_ENABLE,
         None,
@@ -152,12 +173,14 @@ fn disable_logging() {
     )
     .unwrap();
     el.add_record(make_record(10, 72.5));
-    assert_eq!(el.records().len(), 0);
+    assert_eq!(el.records().len(), 1);
+    assert_eq!(el.records()[0].log_datum, LogDatum::LogStatus(0b001));
 }
 
 #[test]
 fn clear_buffer_via_record_count() {
     let mut el = EventLogObject::new(1, "EL-1", 100).unwrap();
+    bind_clock(&mut el);
     el.add_record(make_record(10, 72.5));
     assert_eq!(el.records().len(), 1);
     el.write_property(
@@ -167,7 +190,8 @@ fn clear_buffer_via_record_count() {
         None,
     )
     .unwrap();
-    assert_eq!(el.records().len(), 0);
+    assert_eq!(el.records().len(), 1);
+    assert_eq!(el.records()[0].log_datum, LogDatum::LogStatus(0b010));
 }
 
 #[test]
@@ -341,8 +365,9 @@ fn event_log_clear_preserves_total_and_next_identity() {
 }
 
 #[test]
-fn event_log_rejections_do_not_consume_identity() {
+fn event_log_disabled_ordinary_rejection_does_not_consume_identity() {
     let mut el = EventLogObject::new(1, "EL-1", 1).unwrap();
+    bind_clock(&mut el);
     el.write_property(
         PropertyIdentifier::LOG_ENABLE,
         None,
@@ -350,28 +375,10 @@ fn event_log_rejections_do_not_consume_identity() {
         None,
     )
     .unwrap();
+    let before = el.log_record_identities_internal().unwrap();
     el.add_record(make_record(1, 1.0));
-    el.write_property(
-        PropertyIdentifier::LOG_ENABLE,
-        None,
-        PropertyValue::Boolean(true),
-        None,
-    )
-    .unwrap();
-    el.write_property(
-        PropertyIdentifier::STOP_WHEN_FULL,
-        None,
-        PropertyValue::Boolean(true),
-        None,
-    )
-    .unwrap();
-    el.add_record(make_record(2, 2.0));
-    el.add_record(make_record(3, 3.0));
 
-    assert_eq!(
-        el.log_record_identities_internal().unwrap()[0].sequence_number(),
-        1
-    );
+    assert_eq!(el.log_record_identities_internal().unwrap(), before);
     assert_eq!(
         el.read_property(PropertyIdentifier::TOTAL_RECORD_COUNT, None)
             .unwrap(),

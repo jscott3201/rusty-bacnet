@@ -402,7 +402,40 @@
    ],
    "benchmarks": [],
    "public_claims": [],
-   "notes": "In-memory storage/model foundation only; this row makes no public support claim. Sequence identity is object metadata and is never serialized in LOG_BUFFER. Trend Log alone projects a present legacy BACnetLogRecord.status_flags value as its formal optional fourth StatusFlags bitstring; Event Log and Trend Log Multiple retain that raw shared-Rust field for source compatibility but always project only Date, Time, and datum. ReadRange By-Sequence/By-Time behavior, First Sequence Number, restart durability/persistence, formal EventLog notification-record modeling, and mandatory purge/status records remain deferred."
+    "notes": "In-memory storage/model foundation only; this row makes no public support claim. Sequence identity is object metadata and is never serialized in LOG_BUFFER. Trend Log alone projects a present legacy BACnetLogRecord.status_flags value as its formal optional fourth StatusFlags bitstring; Event Log and Trend Log Multiple retain that raw shared-Rust field for source compatibility but always project only Date, Time, and datum. Mandatory purge/status lifecycle behavior is tracked separately by BACNET-12-LOG-STATUS-LIFECYCLE. ReadRange By-Sequence/By-Time behavior, First Sequence Number, restart durability/persistence, and formal EventLog notification-record modeling remain deferred."
+  },
+  {
+   "id": "BACNET-12-LOG-STATUS-LIFECYCLE",
+   "standard_anchor": "Clause 12.25 Trend Log (pp. 319-336); Clause 12.27 Event Log (pp. 337-346); Clause 12.30 Trend Log Multiple (pp. 361-378); Clause 21.6 BACnetLogStatus (p. 914)",
+   "priority": "P1",
+   "requirement_summary": "Event Log, Trend Log, and Trend Log Multiple append mandatory BUFFER_PURGED and LOG_DISABLED lifecycle records with object-local Date/Time, deterministic Stop_When_Full ordering, non-recursive forced insertion, stable total-record identity, zero-capacity count-only behavior, and atomic clock/error handling.",
+   "status": "in-progress",
+   "code_anchors": [
+    "crates/bacnet-objects/src/log_lifecycle.rs::LogLifecycle",
+    "crates/bacnet-objects/src/log_buffer.rs::OrdinaryAdmission",
+    "crates/bacnet-objects/src/event_log.rs::EventLogObject",
+    "crates/bacnet-objects/src/trend/mod.rs::TrendLogObject",
+    "crates/bacnet-objects/src/trend/mod.rs::TrendLogMultipleObject",
+    "crates/bacnet-objects/src/traits.rs::BACnetObject::try_add_trend_record_internal",
+    "crates/bacnet-server/src/trend_log.rs::poll_trend_logs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/log_status_tests.rs::purge_is_unconditional_initial_status_and_repeats_for_every_log_family",
+    "crates/bacnet-objects/src/log_status_tests.rs::stop_before_full_omits_triggering_ordinary_and_clock_failure_is_atomic",
+    "crates/bacnet-objects/src/log_status_tests.rs::enable_and_stop_when_full_transitions_emit_exactly_one_status",
+    "crates/bacnet-objects/src/log_status_tests.rs::zero_capacity_counts_without_residents_and_enforces_full_enable_gate",
+    "crates/bacnet-objects/src/trend/log_record_tests.rs::trend_log_keeps_log_status_and_record_status_flags_as_distinct_bitstrings",
+    "crates/bacnet-server/src/handlers/tests/wpm_rollback_contract.rs::log_record_count_rollback_restores_cleared_buffers",
+    "crates/bacnet-server/src/handlers/tests/wpm_log_lifecycle.rs::log_enable_and_stop_rollback_restore_exact_lifecycle",
+    "crates/bacnet-server/src/pics/truth_source_tests.rs::pics_log_family_writability_comes_from_runtime_routes"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/log_status_tests.rs::status_writes_require_a_valid_clock_before_mutation",
+    "crates/bacnet-server/src/trend_log.rs::tests::poller_retries_when_mandatory_stop_status_has_no_clock"
+   ],
+   "benchmarks": [],
+   "public_claims": [],
+   "notes": "Qualified PR-0702 evidence only; no full log-family support claim is made. The shared lifecycle covers explicit effective Enable transitions, Record_Count zero purges, Stop_When_Full activation/full behavior, and ordinary stop-before-full insertion. Public constructors, records(), add_record(), and raw clear() remain compatible. Time-window Start_Time/Stop_Time transitions, LOG_INTERRUPTED, writable Log_DeviceObjectProperty purge paths, formal EventLog notification records, Trend Log Multiple polling, ReadRange, First Sequence Number, persistence/restart, and complete log conformance remain deferred."
   },
   {
    "id": "BACNET-12-PROPERTY-METADATA-CORE",

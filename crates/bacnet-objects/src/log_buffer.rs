@@ -51,12 +51,25 @@ pub(crate) enum LogRecordProfile {
     TrendMultiple,
 }
 
-pub(crate) struct LogRecordBufferRecords(VecDeque<BACnetLogRecord>);
-
+#[derive(Clone)]
 pub(crate) struct LogRecordBuffer {
     capacity: u32,
     records: VecDeque<BACnetLogRecord>,
     total_record_count: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OrdinaryAdmission {
+    IgnoredDisabled,
+    Inserted,
+    CountOnly,
+    StopBeforeFull,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ForcedAdmission {
+    Inserted,
+    CountOnly,
 }
 
 impl LogRecordBuffer {
@@ -68,24 +81,35 @@ impl LogRecordBuffer {
         }
     }
 
-    pub(crate) fn append(
+    pub(crate) fn admit_ordinary(
         &mut self,
         record: BACnetLogRecord,
         enabled: bool,
         stop_when_full: bool,
-    ) -> bool {
-        let full = self.records.len() >= self.capacity as usize;
-        if !enabled || (full && stop_when_full) {
-            return false;
+    ) -> OrdinaryAdmission {
+        if !enabled {
+            return OrdinaryAdmission::IgnoredDisabled;
+        }
+        if stop_when_full && self.next_record_would_fill() {
+            return OrdinaryAdmission::StopBeforeFull;
         }
 
-        let sequence_number = next_sequence(self.total_record_count);
-        self.total_record_count = sequence_number;
-        if full {
-            self.records.pop_front();
+        match self.insert_counted(record) {
+            ForcedAdmission::Inserted => OrdinaryAdmission::Inserted,
+            ForcedAdmission::CountOnly => OrdinaryAdmission::CountOnly,
         }
-        self.records.push_back(record);
-        true
+    }
+
+    pub(crate) fn insert_forced(&mut self, record: BACnetLogRecord) -> ForcedAdmission {
+        self.insert_counted(record)
+    }
+
+    pub(crate) fn is_full(&self) -> bool {
+        self.records.len() >= self.capacity as usize
+    }
+
+    pub(crate) fn next_record_would_fill_positive_capacity(&self) -> bool {
+        self.capacity > 0 && self.next_record_would_fill()
     }
 
     pub(crate) fn records(&self) -> &VecDeque<BACnetLogRecord> {
@@ -94,6 +118,10 @@ impl LogRecordBuffer {
 
     pub(crate) fn total_record_count(&self) -> u32 {
         self.total_record_count
+    }
+
+    pub(crate) fn capacity(&self) -> u32 {
+        self.capacity
     }
 
     pub(crate) fn clear(&mut self) {
@@ -134,13 +162,20 @@ impl LogRecordBuffer {
         )
     }
 
-    pub(crate) fn take_records(&mut self) -> LogRecordBufferRecords {
-        LogRecordBufferRecords(std::mem::take(&mut self.records))
+    fn next_record_would_fill(&self) -> bool {
+        self.capacity == 0 || self.records.len().saturating_add(1) >= self.capacity as usize
     }
 
-    pub(crate) fn restore_records(&mut self, records: LogRecordBufferRecords) {
-        debug_assert!(self.records.is_empty());
-        self.records = records.0;
+    fn insert_counted(&mut self, record: BACnetLogRecord) -> ForcedAdmission {
+        self.total_record_count = next_sequence(self.total_record_count);
+        if self.capacity == 0 {
+            return ForcedAdmission::CountOnly;
+        }
+        if self.is_full() {
+            self.records.pop_front();
+        }
+        self.records.push_back(record);
+        ForcedAdmission::Inserted
     }
 
     #[cfg(test)]
@@ -183,7 +218,10 @@ fn project_record(record: &BACnetLogRecord, profile: LogRecordProfile) -> Proper
 
 fn project_datum(datum: &LogDatum) -> PropertyValue {
     match datum {
-        LogDatum::LogStatus(value) => PropertyValue::Unsigned(*value as u64),
+        LogDatum::LogStatus(value) => PropertyValue::BitString {
+            unused_bits: 5,
+            data: vec![(value & 0b111) << 5],
+        },
         LogDatum::BooleanValue(value) => PropertyValue::Boolean(*value),
         LogDatum::RealValue(value) => PropertyValue::Real(*value),
         LogDatum::EnumValue(value) => PropertyValue::Enumerated(*value),
@@ -237,12 +275,18 @@ mod tests {
         assert_eq!(buffer.total_record_count(), 0);
         assert!(LogRecordIdentity::new(0, record(0).date, record(0).time).is_none());
 
-        assert!(buffer.append(record(1), true, false));
+        assert_eq!(
+            buffer.admit_ordinary(record(1), true, false),
+            OrdinaryAdmission::Inserted
+        );
         assert_eq!(buffer.identities()[0].sequence_number(), 1);
 
         buffer.clear();
         buffer.set_total_record_count_for_test(u32::MAX);
-        assert!(buffer.append(record(2), true, false));
+        assert_eq!(
+            buffer.admit_ordinary(record(2), true, false),
+            OrdinaryAdmission::Inserted
+        );
         assert_eq!(buffer.total_record_count(), 1);
         assert_eq!(buffer.identities()[0].sequence_number(), 1);
     }
@@ -250,26 +294,39 @@ mod tests {
     #[test]
     fn log_buffer_rejections_do_not_consume_sequence() {
         let mut buffer = LogRecordBuffer::new(1);
-        assert!(!buffer.append(record(1), false, false));
+        assert_eq!(
+            buffer.admit_ordinary(record(1), false, false),
+            OrdinaryAdmission::IgnoredDisabled
+        );
         assert_eq!(buffer.total_record_count(), 0);
 
-        assert!(buffer.append(record(2), true, true));
-        assert!(!buffer.append(record(3), true, true));
-        assert_eq!(buffer.total_record_count(), 1);
-        assert_eq!(buffer.identities()[0].sequence_number(), 1);
+        assert_eq!(
+            buffer.admit_ordinary(record(2), true, true),
+            OrdinaryAdmission::StopBeforeFull
+        );
+        assert_eq!(buffer.total_record_count(), 0);
+        assert!(buffer.identities().is_empty());
     }
 
     #[test]
-    fn log_buffer_preserves_zero_capacity_runtime_behavior() {
+    fn log_buffer_zero_capacity_counts_without_retaining() {
         let mut ring = LogRecordBuffer::new(0);
-        assert!(ring.append(record(1), true, false));
-        assert!(ring.append(record(2), true, false));
-        assert_eq!(ring.records().len(), 1);
-        assert_eq!(ring.records()[0].time.hour, 2);
+        assert_eq!(
+            ring.admit_ordinary(record(1), true, false),
+            OrdinaryAdmission::CountOnly
+        );
+        assert_eq!(
+            ring.admit_ordinary(record(2), true, false),
+            OrdinaryAdmission::CountOnly
+        );
+        assert!(ring.records().is_empty());
         assert_eq!(ring.total_record_count(), 2);
 
         let mut stop_when_full = LogRecordBuffer::new(0);
-        assert!(!stop_when_full.append(record(1), true, true));
+        assert_eq!(
+            stop_when_full.admit_ordinary(record(1), true, true),
+            OrdinaryAdmission::StopBeforeFull
+        );
         assert!(stop_when_full.records().is_empty());
         assert_eq!(stop_when_full.total_record_count(), 0);
     }
@@ -277,10 +334,19 @@ mod tests {
     #[test]
     fn log_buffer_fifo_eviction_keeps_survivor_identity_and_alignment() {
         let mut buffer = LogRecordBuffer::new(2);
-        assert!(buffer.append(record(1), true, false));
-        assert!(buffer.append(record(2), true, false));
+        assert_eq!(
+            buffer.admit_ordinary(record(1), true, false),
+            OrdinaryAdmission::Inserted
+        );
+        assert_eq!(
+            buffer.admit_ordinary(record(2), true, false),
+            OrdinaryAdmission::Inserted
+        );
         let survivor = buffer.identities()[1];
-        assert!(buffer.append(record(3), true, false));
+        assert_eq!(
+            buffer.admit_ordinary(record(3), true, false),
+            OrdinaryAdmission::Inserted
+        );
 
         let identities = buffer.identities();
         assert_eq!(
@@ -302,9 +368,18 @@ mod tests {
     fn log_buffer_wrap_and_eviction_keep_modular_fifo_alignment() {
         let mut buffer = LogRecordBuffer::new(3);
         buffer.set_total_record_count_for_test(u32::MAX - 1);
-        assert!(buffer.append(record(1), true, false));
-        assert!(buffer.append(record(2), true, false));
-        assert!(buffer.append(record(3), true, false));
+        assert_eq!(
+            buffer.admit_ordinary(record(1), true, false),
+            OrdinaryAdmission::Inserted
+        );
+        assert_eq!(
+            buffer.admit_ordinary(record(2), true, false),
+            OrdinaryAdmission::Inserted
+        );
+        assert_eq!(
+            buffer.admit_ordinary(record(3), true, false),
+            OrdinaryAdmission::Inserted
+        );
         assert_eq!(
             buffer
                 .identities()
@@ -314,7 +389,10 @@ mod tests {
             vec![u32::MAX, 1, 2]
         );
 
-        assert!(buffer.append(record(4), true, false));
+        assert_eq!(
+            buffer.admit_ordinary(record(4), true, false),
+            OrdinaryAdmission::Inserted
+        );
         assert_eq!(
             buffer
                 .identities()
@@ -336,14 +414,23 @@ mod tests {
     #[test]
     fn log_buffer_clear_preserves_counter_and_constructor_resets_it() {
         let mut buffer = LogRecordBuffer::new(2);
-        assert!(buffer.append(record(1), true, false));
-        assert!(buffer.append(record(2), true, false));
+        assert_eq!(
+            buffer.admit_ordinary(record(1), true, false),
+            OrdinaryAdmission::Inserted
+        );
+        assert_eq!(
+            buffer.admit_ordinary(record(2), true, false),
+            OrdinaryAdmission::Inserted
+        );
         buffer.clear();
 
         assert!(buffer.records().is_empty());
         assert!(buffer.identities().is_empty());
         assert_eq!(buffer.total_record_count(), 2);
-        assert!(buffer.append(record(3), true, false));
+        assert_eq!(
+            buffer.admit_ordinary(record(3), true, false),
+            OrdinaryAdmission::Inserted
+        );
         assert_eq!(buffer.identities()[0].sequence_number(), 3);
         assert_eq!(LogRecordBuffer::new(2).total_record_count(), 0);
     }
@@ -352,8 +439,14 @@ mod tests {
     fn log_buffer_duplicate_timestamps_keep_distinct_sequences() {
         let mut buffer = LogRecordBuffer::new(2);
         let duplicate = record(4);
-        assert!(buffer.append(duplicate.clone(), true, false));
-        assert!(buffer.append(duplicate, true, false));
+        assert_eq!(
+            buffer.admit_ordinary(duplicate.clone(), true, false),
+            OrdinaryAdmission::Inserted
+        );
+        assert_eq!(
+            buffer.admit_ordinary(duplicate, true, false),
+            OrdinaryAdmission::Inserted
+        );
 
         let identities = buffer.identities();
         assert_eq!(identities[0].date(), identities[1].date());
@@ -363,18 +456,23 @@ mod tests {
     }
 
     #[test]
-    fn log_buffer_move_restore_preserves_payloads_and_derived_identities() {
+    fn log_buffer_clone_restore_preserves_payloads_and_derived_identities() {
         let mut buffer = LogRecordBuffer::new(2);
-        assert!(buffer.append(record(1), true, false));
-        assert!(buffer.append(record(2), true, false));
+        assert_eq!(
+            buffer.admit_ordinary(record(1), true, false),
+            OrdinaryAdmission::Inserted
+        );
+        assert_eq!(
+            buffer.admit_ordinary(record(2), true, false),
+            OrdinaryAdmission::Inserted
+        );
         let records = buffer.records().clone();
         let identities = buffer.identities();
         let total = buffer.total_record_count();
 
-        let moved = buffer.take_records();
-        assert!(buffer.records().is_empty());
-        assert_eq!(buffer.total_record_count(), total);
-        buffer.restore_records(moved);
+        let snapshot = buffer.clone();
+        buffer.clear();
+        buffer = snapshot;
 
         assert_eq!(buffer.records(), &records);
         assert_eq!(buffer.identities(), identities);

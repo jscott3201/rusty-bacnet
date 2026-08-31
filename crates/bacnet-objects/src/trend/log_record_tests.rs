@@ -65,6 +65,34 @@ fn trend_log_projects_only_present_status_flags_as_fourth_field() {
 }
 
 #[test]
+fn trend_log_keeps_log_status_and_record_status_flags_as_distinct_bitstrings() {
+    let mut trend = TrendLogObject::new(1, "TL-1", 1).unwrap();
+    let mut status = record(1, 0.0, Some(0b0100));
+    status.log_datum = LogDatum::LogStatus(0b101);
+    trend.add_record(status);
+
+    let projected = projected_records(&trend);
+    let PropertyValue::List(fields) = &projected[0] else {
+        panic!("expected projected record fields");
+    };
+    assert_eq!(fields.len(), 4);
+    assert_eq!(
+        fields[2],
+        PropertyValue::BitString {
+            unused_bits: 5,
+            data: vec![0b1010_0000],
+        }
+    );
+    assert_eq!(
+        fields[3],
+        PropertyValue::BitString {
+            unused_bits: 4,
+            data: vec![0b0100_0000],
+        }
+    );
+}
+
+#[test]
 fn trend_multiple_retains_raw_flags_but_projects_three_fields() {
     let mut trend = TrendLogMultipleObject::new(1, "TLM-1", 1).unwrap();
     trend.add_record(record(1, 10.0, Some(0b0100)));

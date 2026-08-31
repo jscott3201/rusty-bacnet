@@ -2,25 +2,18 @@
 
 use std::borrow::Cow;
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetLogRecord};
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
+use crate::clock::ClockReader;
 use crate::common::{self, read_property_list_property};
-use crate::log_buffer::{
-    LogRecordBuffer, LogRecordBufferRecords, LogRecordIdentity, LogRecordProfile,
-};
+use crate::log_buffer::{LogRecordBuffer, LogRecordIdentity, LogRecordProfile};
+use crate::log_lifecycle::{LogLifecycle, LogLifecycleSnapshot};
 use crate::traits::{BACnetObject, WritePropertyRollback};
-
-struct TrendLogWriteRollback {
-    records: LogRecordBufferRecords,
-}
-
-struct TrendLogMultipleWriteRollback {
-    records: LogRecordBufferRecords,
-}
 
 /// BACnet TrendLog object.
 ///
@@ -40,6 +33,7 @@ pub struct TrendLogObject {
     status_flags: StatusFlags,
     log_device_object_property: Option<BACnetDeviceObjectPropertyReference>,
     logging_type: u32, // 0=polled, 1=cov, 2=triggered
+    clock: Option<Arc<dyn ClockReader>>,
 }
 
 impl TrendLogObject {
@@ -59,13 +53,13 @@ impl TrendLogObject {
             status_flags: StatusFlags::empty(),
             log_device_object_property: None,
             logging_type: 0,
+            clock: None,
         })
     }
 
     /// Add a BACnetLogRecord to the trend log buffer.
     pub fn add_record(&mut self, record: BACnetLogRecord) {
-        self.log_buffer
-            .append(record, self.log_enable, self.stop_when_full);
+        let _ = self.try_add_record_internal(record);
     }
 
     /// Get the current buffer contents.
@@ -94,6 +88,19 @@ impl TrendLogObject {
     /// Set the logging type (0=polled, 1=cov, 2=triggered).
     pub fn set_logging_type(&mut self, logging_type: u32) {
         self.logging_type = logging_type;
+    }
+
+    fn try_add_record_internal(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
+        self.lifecycle().try_add_ordinary(record).map(|_| ())
+    }
+
+    fn lifecycle(&mut self) -> LogLifecycle<'_> {
+        LogLifecycle::new(
+            &mut self.log_buffer,
+            &mut self.log_enable,
+            &mut self.stop_when_full,
+            self.clock.as_ref(),
+        )
     }
 }
 
@@ -193,8 +200,7 @@ impl BACnetObject for TrendLogObject {
     ) -> Result<(), Error> {
         if property == PropertyIdentifier::LOG_ENABLE {
             if let PropertyValue::Boolean(v) = value {
-                self.log_enable = v;
-                return Ok(());
+                return self.lifecycle().write_enable(v);
             }
             return Err(Error::Protocol {
                 class: ErrorClass::PROPERTY.to_raw() as u32,
@@ -213,8 +219,7 @@ impl BACnetObject for TrendLogObject {
         }
         if property == PropertyIdentifier::STOP_WHEN_FULL {
             if let PropertyValue::Boolean(v) = value {
-                self.stop_when_full = v;
-                return Ok(());
+                return self.lifecycle().write_stop_when_full(v);
             }
             return Err(Error::Protocol {
                 class: ErrorClass::PROPERTY.to_raw() as u32,
@@ -222,10 +227,8 @@ impl BACnetObject for TrendLogObject {
             });
         }
         if property == PropertyIdentifier::RECORD_COUNT {
-            // Writing 0 clears the buffer
             if let PropertyValue::Unsigned(0) = value {
-                self.clear();
-                return Ok(());
+                return self.lifecycle().purge();
             }
             return Err(Error::Protocol {
                 class: ErrorClass::PROPERTY.to_raw() as u32,
@@ -295,17 +298,39 @@ impl BACnetObject for TrendLogObject {
         Cow::Borrowed(PROPS)
     }
 
+    fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
+        self.clock = clock;
+    }
+
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        matches!(
+            property,
+            PropertyIdentifier::LOG_ENABLE
+                | PropertyIdentifier::LOG_INTERVAL
+                | PropertyIdentifier::STOP_WHEN_FULL
+                | PropertyIdentifier::RECORD_COUNT
+                | PropertyIdentifier::OUT_OF_SERVICE
+                | PropertyIdentifier::DESCRIPTION
+        )
+    }
+
     fn capture_write_property_rollback(
         &mut self,
         property: PropertyIdentifier,
         value: &PropertyValue,
     ) -> Option<WritePropertyRollback> {
-        (property == PropertyIdentifier::RECORD_COUNT
+        ((property == PropertyIdentifier::RECORD_COUNT
             && matches!(value, PropertyValue::Unsigned(0)))
+            || (matches!(
+                property,
+                PropertyIdentifier::LOG_ENABLE | PropertyIdentifier::STOP_WHEN_FULL
+            ) && matches!(value, PropertyValue::Boolean(_))))
         .then(|| {
-            WritePropertyRollback::new(TrendLogWriteRollback {
-                records: self.log_buffer.take_records(),
-            })
+            WritePropertyRollback::new(LogLifecycleSnapshot::capture(
+                &self.log_buffer,
+                self.log_enable,
+                self.stop_when_full,
+            ))
         })
     }
 
@@ -313,8 +338,11 @@ impl BACnetObject for TrendLogObject {
         &mut self,
         rollback: WritePropertyRollback,
     ) -> Result<(), Error> {
-        self.log_buffer
-            .restore_records(rollback.downcast::<TrendLogWriteRollback>()?.records);
+        rollback.downcast::<LogLifecycleSnapshot>()?.restore(
+            &mut self.log_buffer,
+            &mut self.log_enable,
+            &mut self.stop_when_full,
+        );
         Ok(())
     }
 
@@ -324,6 +352,10 @@ impl BACnetObject for TrendLogObject {
 
     fn add_trend_record(&mut self, record: BACnetLogRecord) {
         self.add_record(record);
+    }
+
+    fn try_add_trend_record_internal(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
+        self.try_add_record_internal(record)
     }
 }
 
@@ -350,6 +382,7 @@ pub struct TrendLogMultipleObject {
     logging_type: u32, // 0=polled, 1=cov, 2=triggered
     out_of_service: bool,
     reliability: u32,
+    clock: Option<Arc<dyn ClockReader>>,
 }
 
 impl TrendLogMultipleObject {
@@ -369,13 +402,13 @@ impl TrendLogMultipleObject {
             logging_type: 0,
             out_of_service: false,
             reliability: 0,
+            clock: None,
         })
     }
 
     /// Add a BACnetLogRecord to the trend log buffer.
     pub fn add_record(&mut self, record: BACnetLogRecord) {
-        self.log_buffer
-            .append(record, self.log_enable, self.stop_when_full);
+        let _ = self.try_add_record_internal(record);
     }
 
     /// Add a property reference to the monitored list.
@@ -401,6 +434,19 @@ impl TrendLogMultipleObject {
     /// Set the logging type (0=polled, 1=cov, 2=triggered).
     pub fn set_logging_type(&mut self, logging_type: u32) {
         self.logging_type = logging_type;
+    }
+
+    fn try_add_record_internal(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
+        self.lifecycle().try_add_ordinary(record).map(|_| ())
+    }
+
+    fn lifecycle(&mut self) -> LogLifecycle<'_> {
+        LogLifecycle::new(
+            &mut self.log_buffer,
+            &mut self.log_enable,
+            &mut self.stop_when_full,
+            self.clock.as_ref(),
+        )
     }
 }
 
@@ -504,8 +550,7 @@ impl BACnetObject for TrendLogMultipleObject {
     ) -> Result<(), Error> {
         if property == PropertyIdentifier::LOG_ENABLE {
             if let PropertyValue::Boolean(v) = value {
-                self.log_enable = v;
-                return Ok(());
+                return self.lifecycle().write_enable(v);
             }
             return Err(Error::Protocol {
                 class: ErrorClass::PROPERTY.to_raw() as u32,
@@ -524,8 +569,7 @@ impl BACnetObject for TrendLogMultipleObject {
         }
         if property == PropertyIdentifier::STOP_WHEN_FULL {
             if let PropertyValue::Boolean(v) = value {
-                self.stop_when_full = v;
-                return Ok(());
+                return self.lifecycle().write_stop_when_full(v);
             }
             return Err(Error::Protocol {
                 class: ErrorClass::PROPERTY.to_raw() as u32,
@@ -533,10 +577,8 @@ impl BACnetObject for TrendLogMultipleObject {
             });
         }
         if property == PropertyIdentifier::RECORD_COUNT {
-            // Writing 0 clears the buffer
             if let PropertyValue::Unsigned(0) = value {
-                self.clear();
-                return Ok(());
+                return self.lifecycle().purge();
             }
             return Err(Error::Protocol {
                 class: ErrorClass::PROPERTY.to_raw() as u32,
@@ -582,17 +624,38 @@ impl BACnetObject for TrendLogMultipleObject {
         Cow::Borrowed(PROPS)
     }
 
+    fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
+        self.clock = clock;
+    }
+
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        matches!(
+            property,
+            PropertyIdentifier::LOG_ENABLE
+                | PropertyIdentifier::LOG_INTERVAL
+                | PropertyIdentifier::STOP_WHEN_FULL
+                | PropertyIdentifier::RECORD_COUNT
+                | PropertyIdentifier::DESCRIPTION
+        )
+    }
+
     fn capture_write_property_rollback(
         &mut self,
         property: PropertyIdentifier,
         value: &PropertyValue,
     ) -> Option<WritePropertyRollback> {
-        (property == PropertyIdentifier::RECORD_COUNT
+        ((property == PropertyIdentifier::RECORD_COUNT
             && matches!(value, PropertyValue::Unsigned(0)))
+            || (matches!(
+                property,
+                PropertyIdentifier::LOG_ENABLE | PropertyIdentifier::STOP_WHEN_FULL
+            ) && matches!(value, PropertyValue::Boolean(_))))
         .then(|| {
-            WritePropertyRollback::new(TrendLogMultipleWriteRollback {
-                records: self.log_buffer.take_records(),
-            })
+            WritePropertyRollback::new(LogLifecycleSnapshot::capture(
+                &self.log_buffer,
+                self.log_enable,
+                self.stop_when_full,
+            ))
         })
     }
 
@@ -600,10 +663,10 @@ impl BACnetObject for TrendLogMultipleObject {
         &mut self,
         rollback: WritePropertyRollback,
     ) -> Result<(), Error> {
-        self.log_buffer.restore_records(
-            rollback
-                .downcast::<TrendLogMultipleWriteRollback>()?
-                .records,
+        rollback.downcast::<LogLifecycleSnapshot>()?.restore(
+            &mut self.log_buffer,
+            &mut self.log_enable,
+            &mut self.stop_when_full,
         );
         Ok(())
     }
@@ -614,6 +677,10 @@ impl BACnetObject for TrendLogMultipleObject {
 
     fn add_trend_record(&mut self, record: BACnetLogRecord) {
         self.add_record(record);
+    }
+
+    fn try_add_trend_record_internal(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
+        self.try_add_record_internal(record)
     }
 }
 

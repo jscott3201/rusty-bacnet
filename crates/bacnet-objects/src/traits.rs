@@ -649,4 +649,15 @@ pub trait BACnetObject: Send + Sync {
     ///
     /// Default is a no-op. TrendLog objects override to append to their buffer.
     fn add_trend_record(&mut self, _record: BACnetLogRecord) {}
+
+    /// Fallible internal trend-record insertion used by the server poller.
+    ///
+    /// The default preserves source compatibility with existing implementors by
+    /// invoking the legacy void hook and reporting success. Built-in log objects
+    /// override this to surface mandatory status-timestamp failures atomically.
+    #[doc(hidden)]
+    fn try_add_trend_record_internal(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
+        self.add_trend_record(record);
+        Ok(())
+    }
 }
