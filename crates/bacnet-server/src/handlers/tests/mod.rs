@@ -55,6 +55,7 @@ mod read_rpm;
 mod reference_writes;
 mod wpm_create_alarm;
 mod wpm_event_rollback;
+mod wpm_fault_rollback;
 mod wpm_parameter_rollback;
 mod wpm_rollback_contract;
 mod write_cov_who;

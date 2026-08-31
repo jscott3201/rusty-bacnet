@@ -28,6 +28,7 @@ pub struct AnalogInputObject {
     /// Reliability: 0 = NO_FAULT_DETECTED.
     reliability: u32,
     reliability_before_out_of_service: Option<u32>,
+    fault_out_of_range: FaultOutOfRangeState,
     /// Optional minimum engineering bound metadata for Present_Value.
     min_pres_value: Option<f32>,
     /// Optional maximum engineering bound metadata for Present_Value.
@@ -52,6 +53,7 @@ impl AnalogInputObject {
             event_detection_enable: true,
             reliability: 0,
             reliability_before_out_of_service: None,
+            fault_out_of_range: FaultOutOfRangeState::default(),
             min_pres_value: None,
             max_pres_value: None,
             event_history: EventHistory::default(),
@@ -80,6 +82,15 @@ impl AnalogInputObject {
     /// Set maximum engineering-bound metadata; this is not a reliability fault limit.
     pub fn set_max_pres_value(&mut self, value: f32) {
         self.max_pres_value = Some(value);
+    }
+
+    /// Configure the optional object-owned FAULT_OUT_OF_RANGE algorithm.
+    ///
+    /// Both limits become readable together. Equal limits are valid; non-finite
+    /// limits and a low limit greater than the high limit are rejected without
+    /// changing the prior configuration.
+    pub fn configure_fault_out_of_range(&mut self, low: f32, high: f32) -> Result<(), Error> {
+        self.fault_out_of_range.configure(low, high)
     }
 }
 
@@ -120,6 +131,9 @@ impl BACnetObject for AnalogInputObject {
         }
         if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {
             return Ok(PropertyValue::Boolean(self.event_detection_enable));
+        }
+        if let Some(value) = self.fault_out_of_range.read_limit(property) {
+            return Ok(value);
         }
         match property {
             p if p == PropertyIdentifier::OBJECT_TYPE => {
@@ -247,7 +261,7 @@ impl BACnetObject for AnalogInputObject {
             PropertyIdentifier::EVENT_TIME_STAMPS,
             PropertyIdentifier::EVENT_MESSAGE_TEXTS,
         ];
-        Cow::Borrowed(PROPS)
+        self.fault_out_of_range.property_list(PROPS)
     }
 
     fn supports_cov(&self) -> bool {
@@ -280,7 +294,16 @@ impl BACnetObject for AnalogInputObject {
             return Err(common::value_out_of_range_error());
         }
         self.reliability = reliability;
+        self.fault_out_of_range.clear_ownership();
         Ok(())
+    }
+
+    fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {
+        if self.out_of_service {
+            return Ok(ReliabilityEvaluation::Unchanged);
+        }
+        self.fault_out_of_range
+            .evaluate(self.present_value, &mut self.reliability)
     }
 
     fn is_createable(&self) -> bool {
@@ -521,5 +544,84 @@ mod detection_enable_reset_tests {
             BACnetTimeStamp::SequenceNumber(7)
         );
         assert_eq!(ai.event_history.message_texts[0], "offnormal");
+    }
+}
+
+#[cfg(test)]
+mod fault_out_of_range_non_finite_tests {
+    use super::*;
+    use bacnet_types::enums::{ErrorClass, ErrorCode, Reliability};
+
+    fn assert_value_out_of_range(result: Result<ReliabilityEvaluation, Error>) {
+        assert!(matches!(
+            result,
+            Err(Error::Protocol { class, code })
+                if class == ErrorClass::PROPERTY.to_raw() as u32
+                    && code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32
+        ));
+    }
+
+    #[test]
+    fn ai_non_finite_monitored_values_preserve_reliability_status_and_ownership() {
+        for non_finite in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut normal = AnalogInputObject::new(1, "AI-normal", 62).unwrap();
+            normal.configure_fault_out_of_range(10.0, 20.0).unwrap();
+            let status_before = normal
+                .read_property(PropertyIdentifier::STATUS_FLAGS, None)
+                .unwrap();
+            normal.present_value = non_finite;
+
+            assert_value_out_of_range(normal.evaluate_reliability_internal());
+            assert_eq!(normal.present_value.to_bits(), non_finite.to_bits());
+            assert_eq!(normal.reliability, Reliability::NO_FAULT_DETECTED.to_raw());
+            assert_eq!(
+                normal
+                    .read_property(PropertyIdentifier::STATUS_FLAGS, None)
+                    .unwrap(),
+                status_before
+            );
+            assert!(normal.fault_out_of_range.owned_fault.is_none());
+
+            normal.present_value = 9.0;
+            assert_eq!(
+                normal.evaluate_reliability_internal().unwrap(),
+                ReliabilityEvaluation::Changed {
+                    old_reliability: Reliability::NO_FAULT_DETECTED.to_raw(),
+                    new_reliability: Reliability::UNDER_RANGE.to_raw(),
+                }
+            );
+
+            let mut owned = AnalogInputObject::new(2, "AI-owned", 62).unwrap();
+            owned.configure_fault_out_of_range(10.0, 20.0).unwrap();
+            owned.present_value = 9.0;
+            owned.evaluate_reliability_internal().unwrap();
+            let status_before = owned
+                .read_property(PropertyIdentifier::STATUS_FLAGS, None)
+                .unwrap();
+            owned.present_value = non_finite;
+
+            assert_value_out_of_range(owned.evaluate_reliability_internal());
+            assert_eq!(owned.present_value.to_bits(), non_finite.to_bits());
+            assert_eq!(owned.reliability, Reliability::UNDER_RANGE.to_raw());
+            assert_eq!(
+                owned
+                    .read_property(PropertyIdentifier::STATUS_FLAGS, None)
+                    .unwrap(),
+                status_before
+            );
+            assert!(matches!(
+                owned.fault_out_of_range.owned_fault,
+                Some(OwnedRangeFault::UnderRange)
+            ));
+
+            owned.present_value = 21.0;
+            assert_eq!(
+                owned.evaluate_reliability_internal().unwrap(),
+                ReliabilityEvaluation::Changed {
+                    old_reliability: Reliability::UNDER_RANGE.to_raw(),
+                    new_reliability: Reliability::OVER_RANGE.to_raw(),
+                }
+            );
+        }
     }
 }

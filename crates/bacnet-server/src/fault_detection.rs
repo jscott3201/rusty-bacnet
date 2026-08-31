@@ -122,7 +122,7 @@ mod tests {
 
     use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
     use bacnet_objects::traits::BACnetObject;
-    use bacnet_types::enums::{ObjectType, PropertyIdentifier, Reliability};
+    use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliability};
     use bacnet_types::error::Error;
     use bacnet_types::primitives::PropertyValue;
 
@@ -279,6 +279,136 @@ mod tests {
                 .unwrap(),
             PropertyValue::Real(150.0)
         );
+    }
+
+    #[test]
+    fn configured_ai_and_av_changes_are_recorded_and_seen_by_intrinsic_fault_observation() {
+        let mut db = ObjectDatabase::new();
+
+        let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+        ai.configure_fault_out_of_range(10.0, 20.0).unwrap();
+        ai.set_present_value(21.0);
+        let ai_oid = ai.object_identifier();
+        db.add(Box::new(ai)).unwrap();
+
+        let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+        av.configure_fault_out_of_range(10.0, 20.0).unwrap();
+        av.write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(9.0),
+            Some(8),
+        )
+        .unwrap();
+        let av_oid = av.object_identifier();
+        db.add(Box::new(av)).unwrap();
+
+        let detector = FaultDetector::default();
+        let changes = detector.evaluate(&mut db);
+        assert_eq!(changes.len(), 2);
+        assert!(changes.contains(&ReliabilityChange {
+            object_id: ai_oid,
+            old_reliability: Reliability::NO_FAULT_DETECTED.to_raw(),
+            new_reliability: Reliability::OVER_RANGE.to_raw(),
+        }));
+        assert!(changes.contains(&ReliabilityChange {
+            object_id: av_oid,
+            old_reliability: Reliability::NO_FAULT_DETECTED.to_raw(),
+            new_reliability: Reliability::UNDER_RANGE.to_raw(),
+        }));
+        assert!(detector.evaluate(&mut db).is_empty());
+
+        for oid in [ai_oid, av_oid] {
+            let proposal = db
+                .get_mut(&oid)
+                .unwrap()
+                .evaluate_intrinsic_reporting()
+                .expect("range Reliability must be observed as an intrinsic fault");
+            assert_eq!(proposal.change.from, EventState::NORMAL);
+            assert_eq!(proposal.change.to, EventState::FAULT);
+        }
+    }
+
+    // The public sensor setters intentionally retain their debug assertions.
+    // This release-only test exercises the production path where those setters
+    // can receive non-finite application data without changing their API.
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn non_finite_configured_analogs_create_no_change_and_keep_owned_faults() {
+        let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+        ai.configure_fault_out_of_range(10.0, 20.0).unwrap();
+        ai.set_present_value(21.0);
+        ai.evaluate_reliability_internal().unwrap();
+        ai.set_present_value(f32::NAN);
+        let ai_oid = ai.object_identifier();
+
+        let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+        av.configure_fault_out_of_range(10.0, 20.0).unwrap();
+        av.set_present_value(9.0);
+        av.evaluate_reliability_internal().unwrap();
+        av.set_present_value(f32::INFINITY);
+        let av_oid = av.object_identifier();
+
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(ai)).unwrap();
+        db.add(Box::new(av)).unwrap();
+        let detector = FaultDetector::default();
+
+        assert!(detector.evaluate(&mut db).is_empty());
+        assert!(detector.evaluate(&mut db).is_empty());
+        assert_eq!(
+            read_reliability(&db, ai_oid),
+            Reliability::OVER_RANGE.to_raw()
+        );
+        assert_eq!(
+            read_reliability(&db, av_oid),
+            Reliability::UNDER_RANGE.to_raw()
+        );
+
+        let ai = db.get_mut(&ai_oid).unwrap();
+        ai.write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(true),
+            None,
+        )
+        .unwrap();
+        ai.write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(9.0),
+            None,
+        )
+        .unwrap();
+        ai.write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(false),
+            None,
+        )
+        .unwrap();
+        db.get_mut(&av_oid)
+            .unwrap()
+            .write_property(
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+                PropertyValue::Real(21.0),
+                Some(8),
+            )
+            .unwrap();
+
+        let changes = detector.evaluate(&mut db);
+        assert_eq!(changes.len(), 2);
+        assert!(changes.contains(&ReliabilityChange {
+            object_id: ai_oid,
+            old_reliability: Reliability::OVER_RANGE.to_raw(),
+            new_reliability: Reliability::UNDER_RANGE.to_raw(),
+        }));
+        assert!(changes.contains(&ReliabilityChange {
+            object_id: av_oid,
+            old_reliability: Reliability::UNDER_RANGE.to_raw(),
+            new_reliability: Reliability::OVER_RANGE.to_raw(),
+        }));
     }
 
     #[test]
