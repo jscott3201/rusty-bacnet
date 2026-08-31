@@ -402,7 +402,8 @@ Commands:
   read-range <target> <object> [prop]  Read a range (e.g., rr 10.0.1.5 trend-log:1)
   write <target> <obj> <prop> <val>  Write a property (e.g., write 10.0.1.5 av:1 pv 72.5)
   writem <target> <obj> <prop=val,...>  Write multiple properties (WPM)
-  file-read <target> <instance>         Read a file (AtomicReadFile)
+  file-read <target> <instance> [--access stream|record] [--start N] [--count N] [--output PATH]
+                                       Read a file through successive AtomicReadFile ACKs
   file-write <target> <instance> <path> Write a file (AtomicWriteFile)
   subscribe <target> <object>        Subscribe to COV notifications
   control <target> <action>          Device communication control (enable/disable)

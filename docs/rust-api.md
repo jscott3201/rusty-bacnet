@@ -820,9 +820,16 @@ client.life_safety_operation(&mac, process_id, "operator", LifeSafetyOperation::
 ### File Services
 
 ```rust
-let raw = client.atomic_read_file(&mac, file_oid, FileAccessMethod::Stream { file_start_position: 0, requested_octet_count: 1024 }).await?;
+let access = FileAccessMethod::Stream { file_start_position: 0, requested_octet_count: 1024 };
+let raw = client.atomic_read_file(&mac, file_oid, access.clone()).await?;
+let ack = client.atomic_read_file_decoded(&mac, file_oid, access).await?;
 client.atomic_write_file(&mac, file_oid, FileWriteAccessMethod::Stream { file_start_position: 0, file_data: data }).await?;
 ```
+
+`atomic_read_file` remains the compatibility API for the raw encoded ACK payload.
+`atomic_read_file_decoded` performs one request, decodes its `AtomicReadFileAck`,
+and validates that the ACK access arm matches the request and does not exceed
+the requested window. It does not iterate an entire file.
 
 ### ReadRange
 

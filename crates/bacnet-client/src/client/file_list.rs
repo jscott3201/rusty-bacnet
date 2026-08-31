@@ -41,6 +41,48 @@ fn validate_read_range_ack(
     Ok(())
 }
 
+fn validate_atomic_read_file_ack(
+    request: &bacnet_services::file::FileAccessMethod,
+    ack: &bacnet_services::file::AtomicReadFileAck,
+) -> Result<(), Error> {
+    use bacnet_services::file::{FileAccessMethod, FileReadAckMethod};
+
+    match (request, &ack.access) {
+        (
+            FileAccessMethod::Stream {
+                requested_octet_count,
+                ..
+            },
+            FileReadAckMethod::Stream { file_data, .. },
+        ) if file_data.len() <= *requested_octet_count as usize => Ok(()),
+        (FileAccessMethod::Stream { .. }, FileReadAckMethod::Stream { .. }) => Err(
+            Error::decoding(0, "AtomicReadFile ACK exceeds the requested octet window"),
+        ),
+        (
+            FileAccessMethod::Record {
+                requested_record_count,
+                ..
+            },
+            FileReadAckMethod::Record {
+                returned_record_count,
+                file_record_data,
+                ..
+            },
+        ) if returned_record_count <= requested_record_count
+            && *returned_record_count as usize == file_record_data.len() =>
+        {
+            Ok(())
+        }
+        (FileAccessMethod::Record { .. }, FileReadAckMethod::Record { .. }) => Err(
+            Error::decoding(0, "AtomicReadFile ACK exceeds the requested record window"),
+        ),
+        _ => Err(Error::decoding(
+            0,
+            "AtomicReadFile ACK access method does not match the request",
+        )),
+    }
+}
+
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Get event information from a remote device.
     pub async fn get_event_information(
@@ -148,6 +190,27 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             &buf,
         )
         .await
+    }
+
+    /// Read and strictly decode one AtomicReadFile ACK window.
+    ///
+    /// This additive typed boundary validates that the ACK uses the requested
+    /// stream/record access arm and does not return more octets or records than
+    /// requested. Use [`Self::atomic_read_file`] when the raw encoded service
+    /// payload is required for compatibility.
+    pub async fn atomic_read_file_decoded(
+        &self,
+        destination_mac: &[u8],
+        file_identifier: bacnet_types::primitives::ObjectIdentifier,
+        access: bacnet_services::file::FileAccessMethod,
+    ) -> Result<bacnet_services::file::AtomicReadFileAck, Error> {
+        let requested_access = access.clone();
+        let response = self
+            .atomic_read_file(destination_mac, file_identifier, access)
+            .await?;
+        let ack = bacnet_services::file::AtomicReadFileAck::decode(&response)?;
+        validate_atomic_read_file_ack(&requested_access, &ack)?;
+        Ok(ack)
     }
 
     /// Write file data to a remote device (stream or record access).
@@ -324,3 +387,7 @@ mod tests {
         assert!(validate_read_range_ack(&by_position, &ack(&by_position, 1, Some(1))).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "file_list_decoded_tests.rs"]
+mod decoded_tests;

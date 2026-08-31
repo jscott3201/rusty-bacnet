@@ -148,6 +148,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `bacnet file-read` now strictly decodes AtomicReadFile ACKs, requires each
+  returned start to match the requested cursor, and advances by the actual
+  returned count until authoritative EOF instead of writing raw ACK encoding
+  (#419). Stream access emits payload octets only; no-output display is bounded
+  to 1 MiB and directs larger files to `--output`. Record access requires an
+  output directory and preserves each record in a deterministic absolute-index
+  file. Both output modes refuse an existing target and publish sibling staging
+  only after EOF, with failure/cancellation cleanup. The raw
+  `BACnetClient::atomic_read_file` API remains compatible, while the additive
+  `atomic_read_file_decoded` helper validates the ACK arm and requested window.
+  Built-in empty stream and record files now return empty data with EOF true.
+
 - Built-in `FileObject` payload mutations now select `Modification_Date` from
   the object database's coherent clock (or a fully unspecified Date/Time when
   unavailable or invalid) and clear `Archive`, including direct preloads and
