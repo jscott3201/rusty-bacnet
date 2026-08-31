@@ -411,15 +411,18 @@ fn log_record_count_rollback_restores_cleared_buffers() {
     let mut db = ObjectDatabase::new();
     let mut trend = TrendLogObject::new(1, "TL-1", 10).unwrap();
     trend.add_record(log_record());
+    trend.add_record(log_record());
     let trend_oid = trend.object_identifier();
     db.add(Box::new(trend)).unwrap();
 
     let mut trend_multiple = TrendLogMultipleObject::new(1, "TLM-1", 10).unwrap();
     trend_multiple.add_record(log_record());
+    trend_multiple.add_record(log_record());
     let trend_multiple_oid = trend_multiple.object_identifier();
     db.add(Box::new(trend_multiple)).unwrap();
 
     let mut event = EventLogObject::new(1, "EL-1", 10).unwrap();
+    event.add_record(log_record());
     event.add_record(log_record());
     let event_oid = event.object_identifier();
     db.add(Box::new(event)).unwrap();
@@ -435,6 +438,15 @@ fn log_record_count_rollback_restores_cleared_buffers() {
         let before_total = object
             .read_property(PropertyIdentifier::TOTAL_RECORD_COUNT, None)
             .unwrap();
+        let before_identities = object.log_record_identities_internal().unwrap();
+        assert_eq!(
+            before_identities
+                .iter()
+                .map(|identity| identity.sequence_number())
+                .collect::<Vec<_>>(),
+            vec![1, 2],
+            "{oid:?}"
+        );
         let mut clear = BytesMut::new();
         bacnet_encoding::primitives::encode_app_unsigned(&mut clear, 0);
 
@@ -454,6 +466,14 @@ fn log_record_count_rollback_restores_cleared_buffers() {
                 .read_property(PropertyIdentifier::RECORD_COUNT, None)
                 .unwrap(),
             before,
+            "{oid:?}"
+        );
+        assert_eq!(
+            db.get(&oid)
+                .unwrap()
+                .log_record_identities_internal()
+                .unwrap(),
+            before_identities,
             "{oid:?}"
         );
         if let Some(before_buffer) = before_buffer {

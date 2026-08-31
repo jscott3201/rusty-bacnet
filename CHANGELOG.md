@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Stable in-memory record identity for Event Log, Trend Log, and Trend Log
+  Multiple (#134, #339). Each accepted append now owns a nonzero Unsigned32
+  sequence (wrapping MAX to 1) plus its record Date/Time; FIFO eviction and
+  normal clear do not renumber survivors or reset the live total, and failed
+  WPM clears restore the exact payload/identity view. The additive
+  `LogRecordIdentity` and defaulted `BACnetObject` identity hook preserve the
+  existing public `records()` and `add_record()` signatures. Trend Log projects
+  a present optional record StatusFlags bitstring; Event Log and Trend Log
+  Multiple retain the legacy raw Rust field but do not put it on the wire.
+  ReadRange sequence/time selection, First Sequence Number, persistence,
+  formal Event Log notification records, and purge records remain deferred.
+
 - Object-owned multi-state configuration Reliability and recovery for
   Multi-state Input, Output, and Value (#226). The Standard requires
   `MULTI_STATE_OUT_OF_RANGE` for an invalid retained `Present_Value`, and

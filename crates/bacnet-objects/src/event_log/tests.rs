@@ -134,7 +134,11 @@ fn stop_when_full() {
         el.add_record(make_record(i, i as f32));
     }
     assert_eq!(el.records().len(), 2);
-    assert_eq!(el.total_record_count, 2); // Only 2 accepted
+    assert_eq!(
+        el.read_property(PropertyIdentifier::TOTAL_RECORD_COUNT, None)
+            .unwrap(),
+        PropertyValue::Unsigned(2)
+    ); // Only 2 accepted
 }
 
 #[test]
@@ -268,4 +272,151 @@ fn log_buffer_various_datum_types() {
     } else {
         panic!("Expected List for LOG_BUFFER");
     }
+}
+
+#[test]
+fn event_log_identities_align_after_eviction_and_differ_from_position() {
+    let mut el = EventLogObject::new(1, "EL-1", 2).unwrap();
+    for hour in 1..=3 {
+        el.add_record(make_record(hour, hour as f32));
+    }
+
+    let identities = el.log_record_identities_internal().unwrap();
+    let projected = match el
+        .read_property(PropertyIdentifier::LOG_BUFFER, None)
+        .unwrap()
+    {
+        PropertyValue::List(records) => records,
+        other => panic!("expected projected log list, got {other:?}"),
+    };
+    assert_eq!(identities.len(), el.records().len());
+    assert_eq!(identities.len(), projected.len());
+    assert_eq!(identities[0].sequence_number(), 2);
+    assert_ne!(identities[0].sequence_number(), 1);
+    for ((identity, raw), wire) in identities.iter().zip(el.records()).zip(projected) {
+        assert_eq!(identity.date(), raw.date);
+        assert_eq!(identity.time(), raw.time);
+        assert_eq!(
+            wire,
+            PropertyValue::List(vec![
+                PropertyValue::Date(raw.date),
+                PropertyValue::Time(raw.time),
+                PropertyValue::Real(raw.time.hour as f32),
+            ])
+        );
+    }
+}
+
+#[test]
+fn event_log_clear_preserves_total_and_next_identity() {
+    let mut el = EventLogObject::new(1, "EL-1", 2).unwrap();
+    assert_eq!(
+        el.read_property(PropertyIdentifier::TOTAL_RECORD_COUNT, None)
+            .unwrap(),
+        PropertyValue::Unsigned(0)
+    );
+    el.add_record(make_record(1, 1.0));
+    el.add_record(make_record(1, 2.0));
+    assert_eq!(
+        el.log_record_identities_internal()
+            .unwrap()
+            .iter()
+            .map(|identity| identity.sequence_number())
+            .collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+
+    el.clear();
+    assert!(el.log_record_identities_internal().unwrap().is_empty());
+    assert_eq!(
+        el.read_property(PropertyIdentifier::TOTAL_RECORD_COUNT, None)
+            .unwrap(),
+        PropertyValue::Unsigned(2)
+    );
+    el.add_record(make_record(1, 3.0));
+    assert_eq!(
+        el.log_record_identities_internal().unwrap()[0].sequence_number(),
+        3
+    );
+}
+
+#[test]
+fn event_log_rejections_do_not_consume_identity() {
+    let mut el = EventLogObject::new(1, "EL-1", 1).unwrap();
+    el.write_property(
+        PropertyIdentifier::LOG_ENABLE,
+        None,
+        PropertyValue::Boolean(false),
+        None,
+    )
+    .unwrap();
+    el.add_record(make_record(1, 1.0));
+    el.write_property(
+        PropertyIdentifier::LOG_ENABLE,
+        None,
+        PropertyValue::Boolean(true),
+        None,
+    )
+    .unwrap();
+    el.write_property(
+        PropertyIdentifier::STOP_WHEN_FULL,
+        None,
+        PropertyValue::Boolean(true),
+        None,
+    )
+    .unwrap();
+    el.add_record(make_record(2, 2.0));
+    el.add_record(make_record(3, 3.0));
+
+    assert_eq!(
+        el.log_record_identities_internal().unwrap()[0].sequence_number(),
+        1
+    );
+    assert_eq!(
+        el.read_property(PropertyIdentifier::TOTAL_RECORD_COUNT, None)
+            .unwrap(),
+        PropertyValue::Unsigned(1)
+    );
+}
+
+#[test]
+fn event_log_total_record_count_is_u32_and_wraps_max_to_one() {
+    let mut el = EventLogObject::new(1, "EL-1", 1).unwrap();
+    el.log_buffer.set_total_record_count_for_test(u32::MAX);
+    assert_eq!(
+        el.read_property(PropertyIdentifier::TOTAL_RECORD_COUNT, None)
+            .unwrap(),
+        PropertyValue::Unsigned(u32::MAX as u64)
+    );
+    el.add_record(make_record(1, 1.0));
+    assert_eq!(
+        el.read_property(PropertyIdentifier::TOTAL_RECORD_COUNT, None)
+            .unwrap(),
+        PropertyValue::Unsigned(1)
+    );
+    assert_eq!(
+        el.log_record_identities_internal().unwrap()[0].sequence_number(),
+        1
+    );
+}
+
+#[test]
+fn event_log_retains_raw_flags_but_projects_no_status_or_sequence() {
+    let mut el = EventLogObject::new(1, "EL-1", 1).unwrap();
+    let mut record = make_record(1, 42.0);
+    record.status_flags = Some(0b0100);
+    el.add_record(record);
+
+    assert_eq!(el.records()[0].status_flags, Some(0b0100));
+    let PropertyValue::List(records) = el
+        .read_property(PropertyIdentifier::LOG_BUFFER, None)
+        .unwrap()
+    else {
+        panic!("expected projected log list");
+    };
+    let PropertyValue::List(fields) = &records[0] else {
+        panic!("expected projected record fields");
+    };
+    assert_eq!(fields.len(), 3);
+    assert_eq!(fields[2], PropertyValue::Real(42.0));
 }
