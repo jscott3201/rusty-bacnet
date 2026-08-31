@@ -279,17 +279,20 @@ returned file-data octets, never the encoded ACK. Record mode never
 concatenates records: it requires an output directory and writes each record,
 including a zero-length record, to
 `record-{absolute-index:010}.bin` (for example,
-`record-0000000007.bin`). The peer's returned start and actual returned
-octet/record count select the next request cursor.
+`record-0000000007.bin`). Each ACK's returned start must exactly match the
+cursor requested for that window; a gap or overlap fails before that window is
+written. The actual returned octet or record count advances the next cursor.
 
 `--start` must be non-negative and `--count` must be greater than zero. The
 count is the window size for each request, not a total transfer limit. Stream
-and record output refuse an existing final target. New output is staged in a
-sibling file or directory and published only after authoritative EOF; remote,
-decode, cursor, or write failures remove staging and leave the final target
-absent. If cleanup fails, the error reports the retained staging path. This is
-not a crash journal or a hostile concurrent-writer no-clobber guarantee. The
-same flags and behavior apply in the interactive shell.
+display without `--output` is limited to 1 MiB of cumulative payload; use
+`--output FILE` for larger files. Stream and record output refuse an existing
+final target. New output is staged in a sibling file or directory and published
+only after authoritative EOF; remote, decode, cursor, or write failures remove
+staging and leave the final target absent. If cleanup fails, the error reports
+the retained staging path. This is not a crash journal or a hostile
+concurrent-writer no-clobber guarantee. The same flags and behavior apply in
+the interactive shell.
 
 **file-read flags:**
 

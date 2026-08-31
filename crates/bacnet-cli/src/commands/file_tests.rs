@@ -106,6 +106,53 @@ async fn stream_retrieval_uses_payload_and_returned_progress_until_eof() {
 }
 
 #[tokio::test]
+async fn display_payload_limit_rejects_a_progressing_multi_window_overflow() {
+    const DISPLAY_LIMIT: usize = 1024 * 1024;
+    let mut replies = VecDeque::from([
+        Ok(stream_ack(0, &vec![0xAA; DISPLAY_LIMIT], false)),
+        Ok(stream_ack(DISPLAY_LIMIT as i32, &[0xBB], true)),
+    ]);
+    let mut destination = FileReadDestination::create(FileReadAccess::Stream, None).unwrap();
+
+    let error = retrieve_windows(
+        FileReadAccess::Stream,
+        0,
+        DISPLAY_LIMIT as u32,
+        &mut destination,
+        move |_| ready(replies.pop_front().unwrap()),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(error.to_string().contains("--output"));
+    assert_eq!(destination.display_data().len(), DISPLAY_LIMIT);
+}
+
+#[tokio::test]
+async fn display_payload_limit_accepts_exact_boundary_across_windows() {
+    const DISPLAY_LIMIT: usize = 1024 * 1024;
+    let half = DISPLAY_LIMIT / 2;
+    let mut replies = VecDeque::from([
+        Ok(stream_ack(0, &vec![0xAA; half], false)),
+        Ok(stream_ack(half as i32, &vec![0xBB; half], true)),
+    ]);
+    let mut destination = FileReadDestination::create(FileReadAccess::Stream, None).unwrap();
+
+    let summary = retrieve_windows(
+        FileReadAccess::Stream,
+        0,
+        half as u32,
+        &mut destination,
+        move |_| ready(replies.pop_front().unwrap()),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(summary.octets, DISPLAY_LIMIT as u64);
+    assert_eq!(destination.display_data().len(), DISPLAY_LIMIT);
+}
+
+#[tokio::test]
 async fn empty_stream_and_record_eof_complete_without_false_progress() {
     let mut stream_sink = MemorySink::default();
     let stream = retrieve_windows(FileReadAccess::Stream, 0, 4, &mut stream_sink, |_| {
@@ -194,7 +241,7 @@ fn invalid_start_count_and_record_output_fail_before_fetch_or_staging() {
 async fn malformed_cursor_windows_fail_before_writes() {
     let mut sink = MemorySink::default();
     let error = retrieve_windows(FileReadAccess::Stream, 2, 2, &mut sink, |_| {
-        ready(Ok(stream_ack(0, &[0xAA], false)))
+        ready(Ok(stream_ack(2, &[], false)))
     })
     .await
     .unwrap_err();
@@ -208,6 +255,39 @@ async fn malformed_cursor_windows_fail_before_writes() {
     .unwrap_err();
     assert!(error.to_string().contains("range"));
     assert!(sink.stream.is_empty());
+}
+
+#[tokio::test]
+async fn terminal_stream_and_record_gaps_and_overlaps_fail_before_bad_window_write() {
+    for returned_start in [1, 3] {
+        let mut replies = VecDeque::from([
+            Ok(stream_ack(0, &[0x10, 0x20], false)),
+            Ok(stream_ack(returned_start, &[0x30], true)),
+        ]);
+        let mut sink = MemorySink::default();
+        let error = retrieve_windows(FileReadAccess::Stream, 0, 2, &mut sink, move |_| {
+            ready(replies.pop_front().unwrap())
+        })
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("cursor-continuity"));
+        assert_eq!(sink.stream, vec![0x10, 0x20]);
+    }
+
+    for returned_start in [5, 7] {
+        let mut replies = VecDeque::from([
+            Ok(record_ack(5, vec![vec![0x10]], false)),
+            Ok(record_ack(returned_start, vec![vec![0x20]], true)),
+        ]);
+        let mut sink = MemorySink::default();
+        let error = retrieve_windows(FileReadAccess::Record, 5, 1, &mut sink, move |_| {
+            ready(replies.pop_front().unwrap())
+        })
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("cursor-continuity"));
+        assert_eq!(sink.records, vec![(5, vec![0x10])]);
+    }
 }
 
 #[tokio::test]
@@ -259,6 +339,54 @@ fn only_directory_entry(path: &Path) -> Option<PathBuf> {
     let first = entries.next().transpose().unwrap().map(|e| e.path());
     assert!(entries.next().is_none());
     first
+}
+
+async fn assert_cursor_failure_cleans_staging(
+    label: &str,
+    access: FileReadAccess,
+    start: i32,
+    replies: VecDeque<Result<AtomicReadFileAck, Error>>,
+) {
+    let temp = TempDir::new(label);
+    let output = temp.0.join("output");
+    let mut replies = replies;
+    let result = read_file_with(access, start, 2, Some(&output), move |_| {
+        ready(replies.pop_front().unwrap())
+    })
+    .await;
+
+    assert!(result.is_err());
+    assert!(!output.exists(), "{label}: final target must stay absent");
+    assert!(only_directory_entry(&temp.0).is_none(), "{label}");
+}
+
+#[tokio::test]
+async fn cursor_continuity_failures_remove_staging_and_do_not_publish() {
+    for (label, returned_start) in [("stream-overlap", 1), ("stream-gap", 3)] {
+        assert_cursor_failure_cleans_staging(
+            label,
+            FileReadAccess::Stream,
+            0,
+            VecDeque::from([
+                Ok(stream_ack(0, &[0x10, 0x20], false)),
+                Ok(stream_ack(returned_start, &[0x30], true)),
+            ]),
+        )
+        .await;
+    }
+
+    for (label, returned_start) in [("record-overlap", 5), ("record-gap", 7)] {
+        assert_cursor_failure_cleans_staging(
+            label,
+            FileReadAccess::Record,
+            5,
+            VecDeque::from([
+                Ok(record_ack(5, vec![vec![0x10]], false)),
+                Ok(record_ack(returned_start, vec![vec![0x20]], true)),
+            ]),
+        )
+        .await;
+    }
 }
 
 #[tokio::test]

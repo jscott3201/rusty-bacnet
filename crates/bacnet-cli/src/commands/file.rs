@@ -21,6 +21,7 @@ use crate::output::{self, OutputFormat};
 type BoxError = Box<dyn StdError>;
 
 static STAGING_ID: AtomicU64 = AtomicU64::new(0);
+const MAX_DISPLAY_OCTETS: usize = 1024 * 1024;
 
 #[derive(Debug, Default)]
 struct FileReadSummary {
@@ -201,6 +202,13 @@ impl FileReadSink for FileReadDestination {
     fn write_stream(&mut self, data: &[u8]) -> io::Result<()> {
         match self {
             Self::Display { data: displayed } => {
+                let new_len = displayed
+                    .len()
+                    .checked_add(data.len())
+                    .ok_or_else(display_limit_error)?;
+                if new_len > MAX_DISPLAY_OCTETS {
+                    return Err(display_limit_error());
+                }
                 displayed.extend_from_slice(data);
                 Ok(())
             }
@@ -226,6 +234,12 @@ impl FileReadSink for FileReadDestination {
             )),
         }
     }
+}
+
+fn display_limit_error() -> io::Error {
+    io::Error::other(format!(
+        "stream display is limited to {MAX_DISPLAY_OCTETS} payload bytes; use --output FILE for larger files"
+    ))
 }
 
 fn record_file_name(index: i32) -> String {
@@ -389,6 +403,12 @@ where
                 if file_data.len() > count as usize {
                     return Err("AtomicReadFile ACK exceeds the requested octet window".into());
                 }
+                if file_start_position != cursor {
+                    return Err(format!(
+                        "AtomicReadFile stream interoperability cursor-continuity error: requested {cursor}, ACK returned {file_start_position}"
+                    )
+                    .into());
+                }
                 let next = checked_next_cursor(file_start_position, file_data.len())?;
                 if !ack.end_of_file && (file_data.is_empty() || next <= cursor) {
                     return Err("AtomicReadFile stream ACK made no forward progress".into());
@@ -416,6 +436,12 @@ where
                 }
                 if returned_record_count > count {
                     return Err("AtomicReadFile ACK exceeds the requested record window".into());
+                }
+                if file_start_record != cursor {
+                    return Err(format!(
+                        "AtomicReadFile record interoperability cursor-continuity error: requested {cursor}, ACK returned {file_start_record}"
+                    )
+                    .into());
                 }
                 let next = checked_next_cursor(file_start_record, file_record_data.len())?;
                 if !ack.end_of_file && (file_record_data.is_empty() || next <= cursor) {
