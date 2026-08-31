@@ -22,6 +22,7 @@ pub struct MultiStateValueObject {
     reliability: u32,
     reliability_before_out_of_service: Option<u32>,
     reliability_inhibit: common::ReliabilityInhibitState,
+    reliability_evaluator: MultiStateReliabilityState,
     state_text: Vec<String>,
     /// CHANGE_OF_STATE event detector.
     event_detector: ChangeOfStateDetector,
@@ -54,6 +55,7 @@ impl MultiStateValueObject {
             reliability: 0,
             reliability_before_out_of_service: None,
             reliability_inhibit: common::ReliabilityInhibitState::default(),
+            reliability_evaluator: MultiStateReliabilityState::default(),
             state_text: (1..=number_of_states)
                 .map(|i| format!("State {i}"))
                 .collect(),
@@ -72,6 +74,57 @@ impl MultiStateValueObject {
     fn recalculate_present_value(&mut self) {
         self.present_value =
             common::recalculate_from_priority_array(&self.priority_array, self.relinquish_default);
+        let _ = self.recompute_reliability();
+    }
+
+    fn configuration_invalid(&self) -> bool {
+        let is_invalid = |value: u32| !(1..=self.number_of_states).contains(&value);
+        self.priority_array
+            .iter()
+            .flatten()
+            .copied()
+            .any(is_invalid)
+            || is_invalid(self.relinquish_default)
+            || self
+                .event_detector
+                .alarm_values
+                .iter()
+                .copied()
+                .any(is_invalid)
+    }
+
+    fn recompute_reliability(&mut self) -> ReliabilityEvaluation {
+        if self.out_of_service || self.reliability_inhibit.enabled() {
+            return ReliabilityEvaluation::Unchanged;
+        }
+        let configuration_invalid = self.configuration_invalid();
+        self.reliability_evaluator.evaluate(
+            configuration_invalid,
+            self.present_value,
+            self.number_of_states,
+            &mut self.reliability,
+        )
+    }
+
+    /// Change the locally configured number of states.
+    ///
+    /// The BACnet `Number_Of_States` property remains read-only. A successful
+    /// local change resizes State_Text and immediately re-evaluates Reliability;
+    /// retained commands, defaults, alarms, and Present_Value are not repaired.
+    pub fn set_number_of_states(&mut self, number_of_states: u32) -> Result<(), Error> {
+        resize_state_text(
+            &mut self.number_of_states,
+            &mut self.state_text,
+            number_of_states,
+        )?;
+        let _ = self.recompute_reliability();
+        Ok(())
+    }
+
+    /// Set the alarm values and synchronously re-evaluate configuration Reliability.
+    pub fn set_alarm_values(&mut self, values: Vec<u32>) {
+        self.event_detector.alarm_values = values;
+        let _ = self.recompute_reliability();
     }
 
     /// Set the Relinquish_Default (#270).
@@ -82,12 +135,11 @@ impl MultiStateValueObject {
     /// default immediately.
     ///
     /// Number_Of_States shrink interplay: if the state count ever shrinks
-    /// below this value, the standard leaves adjustment of Priority_Array,
-    /// Relinquish_Default, Present_Value, and Feedback_Value "a local matter"
-    /// (Clause 12.19/12.22 Number_Of_States text). This implementation does
-    /// NOT auto-adjust: out-of-range stored values are a configuration
-    /// decision for the application to resolve (Reliability
-    /// CONFIGURATION_ERROR reporting for that condition tracks #226).
+    /// below this value, retained Priority_Array, Relinquish_Default,
+    /// Present_Value, and Alarm_Values are not auto-adjusted (Clause 12.20 /
+    /// Table 12-23). An out-of-range retained value is a configuration decision
+    /// for the application to resolve; the object-owned evaluator reports
+    /// CONFIGURATION_ERROR while that condition remains.
     pub fn set_relinquish_default(&mut self, value: u32) -> Result<(), Error> {
         if value < 1 || value > self.number_of_states {
             return Err(common::value_out_of_range_error());
@@ -125,7 +177,8 @@ impl BACnetObject for MultiStateValueObject {
         reliability_inhibit,
         reliability,
         out_of_service,
-        reliability_before_out_of_service
+        reliability_before_out_of_service;
+        reliability_evaluator
     );
 
     fn read_property(
@@ -260,7 +313,7 @@ impl BACnetObject for MultiStateValueObject {
         }
         if property == PropertyIdentifier::ALARM_VALUES {
             let values = decode_alarm_values_write(array_index, value)?;
-            self.event_detector.alarm_values = values;
+            self.set_alarm_values(values);
             return Ok(());
         }
         if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {
@@ -286,7 +339,9 @@ impl BACnetObject for MultiStateValueObject {
             property,
             &value,
         ) {
-            return result;
+            result?;
+            let _ = self.recompute_reliability();
+            return Ok(());
         }
         if let Some(result) = self.reliability_inhibit.write_out_of_service(
             &mut self.out_of_service,
@@ -295,7 +350,9 @@ impl BACnetObject for MultiStateValueObject {
             property,
             &value,
         ) {
-            return result;
+            result?;
+            let _ = self.recompute_reliability();
+            return Ok(());
         }
         if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
             return result;
@@ -368,7 +425,12 @@ impl BACnetObject for MultiStateValueObject {
             return Err(common::value_out_of_range_error());
         }
         self.reliability = reliability;
+        self.reliability_evaluator.clear_ownership();
         Ok(())
+    }
+
+    fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {
+        Ok(self.recompute_reliability())
     }
 
     fn reliability_evaluation_inhibited_internal(&self) -> bool {
@@ -454,5 +516,37 @@ mod detection_enable_tests {
             .property_list()
             .contains(&PropertyIdentifier::EVENT_DETECTION_ENABLE));
         assert!(msv.is_writable_property(PropertyIdentifier::EVENT_DETECTION_ENABLE));
+    }
+}
+
+#[cfg(test)]
+mod reliability_evaluator_tests {
+    use super::*;
+    use bacnet_types::enums::Reliability;
+
+    #[test]
+    fn configuration_error_dominates_bypassed_invalid_present_value() {
+        let mut msv = MultiStateValueObject::new(1, "MSV-dominance", 2).unwrap();
+        msv.present_value = 3;
+        msv.event_detector.alarm_values = vec![3];
+
+        msv.evaluate_reliability_internal().unwrap();
+        assert_eq!(
+            msv.reliability,
+            Reliability::CONFIGURATION_ERROR.to_raw(),
+            "invalid configuration must dominate invalid Present_Value"
+        );
+        msv.event_detector.alarm_values = vec![1];
+        msv.evaluate_reliability_internal().unwrap();
+        assert_eq!(
+            msv.reliability,
+            Reliability::MULTI_STATE_OUT_OF_RANGE.to_raw()
+        );
+        msv.set_number_of_states(3).unwrap();
+        assert_eq!(
+            msv.reliability,
+            Reliability::NO_FAULT_DETECTED.to_raw(),
+            "count growth must synchronously recover the retained Present_Value"
+        );
     }
 }

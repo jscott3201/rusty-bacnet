@@ -22,6 +22,7 @@ pub(crate) enum IntrinsicWriteRollback {
         out_of_service: bool,
         saved_reliability: Option<u32>,
         range_fault_ownership: Option<Option<crate::analog::OwnedRangeFault>>,
+        multistate_fault_ownership: Option<Option<crate::multistate::OwnedMultiStateFault>>,
     },
 }
 
@@ -37,6 +38,7 @@ macro_rules! impl_intrinsic_write_rollback {
         $out_of_service_field:ident,
         $saved_reliability_field:ident
         $(, $range_fault_field:ident)?
+        $(; $multistate_fault_field:ident)?
     ) => {
         fn capture_write_property_rollback(
             &mut self,
@@ -70,6 +72,9 @@ macro_rules! impl_intrinsic_write_rollback {
                     let range_fault_ownership = None$(.or(Some(
                         self.$range_fault_field.owned_fault,
                     )))?;
+                    let multistate_fault_ownership = None$(.or(Some(
+                        self.$multistate_fault_field.owned_fault,
+                    )))?;
                     Some($crate::traits::WritePropertyRollback::new(
                         $crate::rollback::IntrinsicWriteRollback::ReliabilityInhibit {
                             state: self.$inhibit_field,
@@ -77,6 +82,7 @@ macro_rules! impl_intrinsic_write_rollback {
                             out_of_service: self.$out_of_service_field,
                             saved_reliability: self.$saved_reliability_field,
                             range_fault_ownership,
+                            multistate_fault_ownership,
                         },
                     ))
                 }
@@ -117,6 +123,7 @@ macro_rules! impl_intrinsic_write_rollback {
                     out_of_service,
                     saved_reliability,
                     range_fault_ownership,
+                    multistate_fault_ownership,
                 } => {
                     $(
                         let range_fault_ownership = range_fault_ownership.ok_or_else(|| {
@@ -130,6 +137,18 @@ macro_rules! impl_intrinsic_write_rollback {
                             )
                         })?;
                     )?
+                    $(
+                        let multistate_fault_ownership = multistate_fault_ownership.ok_or_else(|| {
+                            bacnet_types::error::Error::Encoding(
+                                concat!(
+                                    "multi-state rollback token omitted ",
+                                    stringify!($multistate_fault_field),
+                                    " ownership",
+                                )
+                                .into(),
+                            )
+                        })?;
+                    )?
                     self.$inhibit_field = state;
                     self.$reliability_field = reliability;
                     self.$out_of_service_field = out_of_service;
@@ -137,7 +156,10 @@ macro_rules! impl_intrinsic_write_rollback {
                     $(
                         self.$range_fault_field.owned_fault = range_fault_ownership;
                     )?
-                    let _ = range_fault_ownership;
+                    $(
+                        self.$multistate_fault_field.owned_fault = multistate_fault_ownership;
+                    )?
+                    let _ = (range_fault_ownership, multistate_fault_ownership);
                     Ok(())
                 }
             }

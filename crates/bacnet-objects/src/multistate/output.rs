@@ -24,6 +24,7 @@ pub struct MultiStateOutputObject {
     reliability: u32,
     reliability_before_out_of_service: Option<u32>,
     reliability_inhibit: common::ReliabilityInhibitState,
+    reliability_evaluator: MultiStateReliabilityState,
     event_detection_enable: bool,
     state_text: Vec<String>,
     /// COMMAND_FAILURE event detector.
@@ -55,6 +56,7 @@ impl MultiStateOutputObject {
             reliability: 0,
             reliability_before_out_of_service: None,
             reliability_inhibit: common::ReliabilityInhibitState::default(),
+            reliability_evaluator: MultiStateReliabilityState::default(),
             event_detection_enable: false,
             state_text: (1..=number_of_states)
                 .map(|i| format!("State {i}"))
@@ -73,6 +75,46 @@ impl MultiStateOutputObject {
     fn recalculate_present_value(&mut self) {
         self.present_value =
             common::recalculate_from_priority_array(&self.priority_array, self.relinquish_default);
+        let _ = self.recompute_reliability();
+    }
+
+    fn configuration_invalid(&self) -> bool {
+        let is_invalid = |value: u32| !(1..=self.number_of_states).contains(&value);
+        self.priority_array
+            .iter()
+            .flatten()
+            .copied()
+            .any(is_invalid)
+            || is_invalid(self.relinquish_default)
+            || is_invalid(self.feedback_value)
+    }
+
+    fn recompute_reliability(&mut self) -> ReliabilityEvaluation {
+        if self.out_of_service || self.reliability_inhibit.enabled() {
+            return ReliabilityEvaluation::Unchanged;
+        }
+        let configuration_invalid = self.configuration_invalid();
+        self.reliability_evaluator.evaluate(
+            configuration_invalid,
+            self.present_value,
+            self.number_of_states,
+            &mut self.reliability,
+        )
+    }
+
+    /// Change the locally configured number of states.
+    ///
+    /// The BACnet `Number_Of_States` property remains read-only. A successful
+    /// local change resizes State_Text and immediately re-evaluates Reliability;
+    /// retained commands, defaults, feedback, and Present_Value are not repaired.
+    pub fn set_number_of_states(&mut self, number_of_states: u32) -> Result<(), Error> {
+        resize_state_text(
+            &mut self.number_of_states,
+            &mut self.state_text,
+            number_of_states,
+        )?;
+        let _ = self.recompute_reliability();
+        Ok(())
     }
 
     /// Set the Relinquish_Default (#270).
@@ -85,10 +127,10 @@ impl MultiStateOutputObject {
     /// Number_Of_States shrink interplay: if the state count ever shrinks
     /// below this value, the standard leaves adjustment of Priority_Array,
     /// Relinquish_Default, Present_Value, and Feedback_Value "a local matter"
-    /// (Clause 12.19/12.22 Number_Of_States text). This implementation does
+    /// (Clause 12.19 / Table 12-22 Number_Of_States text). This implementation does
     /// NOT auto-adjust: out-of-range stored values are a configuration
-    /// decision for the application to resolve (Reliability
-    /// CONFIGURATION_ERROR reporting for that condition tracks #226).
+    /// decision for the application to resolve; the object-owned evaluator
+    /// reports CONFIGURATION_ERROR while that retained condition remains.
     pub fn set_relinquish_default(&mut self, value: u32) -> Result<(), Error> {
         if value < 1 || value > self.number_of_states {
             return Err(common::value_out_of_range_error());
@@ -127,7 +169,8 @@ impl BACnetObject for MultiStateOutputObject {
         reliability_inhibit,
         reliability,
         out_of_service,
-        reliability_before_out_of_service
+        reliability_before_out_of_service;
+        reliability_evaluator
     );
 
     fn read_property(
@@ -253,7 +296,7 @@ impl BACnetObject for MultiStateOutputObject {
                 // — not as a value to refuse. Feedback_Value reflects a sensed quantity
                 // whose determination is "a local matter", so it can legitimately fall
                 // outside the configured range; refusing it would make CONFIGURATION_ERROR
-                // unreachable. Setting that reliability is tracked as #226.
+                // unreachable. The object-owned evaluator applies that reliability.
                 //
                 // The u32 conversion is still checked. A BACnet Unsigned decodes from up
                 // to 8 octets, so a bare `as u32` would wrap a large value back into the
@@ -262,6 +305,7 @@ impl BACnetObject for MultiStateOutputObject {
                 // representation limit, not a configuration limit, so it is enforced here
                 // while the state-set range is not.
                 self.feedback_value = common::u64_to_u32(u)?;
+                let _ = self.recompute_reliability();
                 return Ok(());
             }
             return Err(common::invalid_data_type_error());
@@ -302,7 +346,9 @@ impl BACnetObject for MultiStateOutputObject {
             property,
             &value,
         ) {
-            return result;
+            result?;
+            let _ = self.recompute_reliability();
+            return Ok(());
         }
         if let Some(result) = self.reliability_inhibit.write_out_of_service(
             &mut self.out_of_service,
@@ -311,7 +357,9 @@ impl BACnetObject for MultiStateOutputObject {
             property,
             &value,
         ) {
-            return result;
+            result?;
+            let _ = self.recompute_reliability();
+            return Ok(());
         }
         if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
             return result;
@@ -384,7 +432,12 @@ impl BACnetObject for MultiStateOutputObject {
             return Err(common::value_out_of_range_error());
         }
         self.reliability = reliability;
+        self.reliability_evaluator.clear_ownership();
         Ok(())
+    }
+
+    fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {
+        Ok(self.recompute_reliability())
     }
 
     fn reliability_evaluation_inhibited_internal(&self) -> bool {
@@ -454,7 +507,7 @@ mod command_failure_tests {
     }
 
     /// Clause 12.19 defines an out-of-range Feedback_Value as a reportable condition
-    /// (Reliability CONFIGURATION_ERROR, see #226), not a value to refuse. Refusing it
+    /// (Reliability CONFIGURATION_ERROR), not a value to refuse. Refusing it
     /// would make that reliability unreachable, so the write is accepted even though
     /// Present_Value at the same value would be rejected.
     #[test]
@@ -703,5 +756,43 @@ mod command_failure_tests {
             .property_list()
             .contains(&PropertyIdentifier::EVENT_DETECTION_ENABLE));
         assert!(mso.is_writable_property(PropertyIdentifier::EVENT_DETECTION_ENABLE));
+    }
+}
+
+#[cfg(test)]
+mod reliability_evaluator_tests {
+    use super::*;
+    use bacnet_types::enums::Reliability;
+
+    #[test]
+    fn configuration_error_dominates_bypassed_invalid_present_value() {
+        let mut mso = MultiStateOutputObject::new(1, "MSO-dominance", 2).unwrap();
+        mso.present_value = 3;
+        mso.feedback_value = 3;
+
+        mso.evaluate_reliability_internal().unwrap();
+        assert_eq!(
+            mso.reliability,
+            Reliability::CONFIGURATION_ERROR.to_raw(),
+            "invalid configuration must dominate invalid Present_Value"
+        );
+        mso.feedback_value = 1;
+        mso.evaluate_reliability_internal().unwrap();
+        assert_eq!(
+            mso.reliability,
+            Reliability::MULTI_STATE_OUT_OF_RANGE.to_raw()
+        );
+        mso.write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Unsigned(1),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            mso.reliability,
+            Reliability::NO_FAULT_DETECTED.to_raw(),
+            "the central priority recalculation must recover synchronously"
+        );
     }
 }

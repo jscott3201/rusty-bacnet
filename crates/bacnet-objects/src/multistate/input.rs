@@ -20,6 +20,7 @@ pub struct MultiStateInputObject {
     reliability: u32,
     reliability_before_out_of_service: Option<u32>,
     reliability_inhibit: common::ReliabilityInhibitState,
+    reliability_evaluator: MultiStateReliabilityState,
     state_text: Vec<String>,
     /// CHANGE_OF_STATE event detector.
     event_detector: ChangeOfStateDetector,
@@ -48,6 +49,7 @@ impl MultiStateInputObject {
             reliability: 0,
             reliability_before_out_of_service: None,
             reliability_inhibit: common::ReliabilityInhibitState::default(),
+            reliability_evaluator: MultiStateReliabilityState::default(),
             state_text: (1..=number_of_states)
                 .map(|i| format!("State {i}"))
                 .collect(),
@@ -65,11 +67,40 @@ impl MultiStateInputObject {
     /// Set the present value (used by application to update input state).
     pub fn set_present_value(&mut self, value: u32) {
         self.present_value = value;
+        let _ = self.recompute_reliability();
+    }
+
+    /// Change the locally configured number of states.
+    ///
+    /// The BACnet `Number_Of_States` property remains read-only. A successful
+    /// local change retains the State_Text prefix, truncates its tail on
+    /// shrink, appends constructor-style labels on growth, and immediately
+    /// re-evaluates Reliability without repairing Present_Value.
+    pub fn set_number_of_states(&mut self, number_of_states: u32) -> Result<(), Error> {
+        resize_state_text(
+            &mut self.number_of_states,
+            &mut self.state_text,
+            number_of_states,
+        )?;
+        let _ = self.recompute_reliability();
+        Ok(())
     }
 
     /// Set the description string.
     pub fn set_description(&mut self, desc: impl Into<String>) {
         self.description = desc.into();
+    }
+
+    fn recompute_reliability(&mut self) -> ReliabilityEvaluation {
+        if self.out_of_service || self.reliability_inhibit.enabled() {
+            return ReliabilityEvaluation::Unchanged;
+        }
+        self.reliability_evaluator.evaluate(
+            false,
+            self.present_value,
+            self.number_of_states,
+            &mut self.reliability,
+        )
     }
 }
 
@@ -100,7 +131,8 @@ impl BACnetObject for MultiStateInputObject {
         reliability_inhibit,
         reliability,
         out_of_service,
-        reliability_before_out_of_service
+        reliability_before_out_of_service;
+        reliability_evaluator
     );
 
     fn read_property(
@@ -181,6 +213,7 @@ impl BACnetObject for MultiStateInputObject {
                     return Err(common::value_out_of_range_error());
                 }
                 self.present_value = v as u32;
+                let _ = self.recompute_reliability();
                 return Ok(());
             }
             return Err(common::invalid_data_type_error());
@@ -226,7 +259,9 @@ impl BACnetObject for MultiStateInputObject {
             property,
             &value,
         ) {
-            return result;
+            result?;
+            let _ = self.recompute_reliability();
+            return Ok(());
         }
         if let Some(result) = self.reliability_inhibit.write_out_of_service(
             &mut self.out_of_service,
@@ -235,7 +270,9 @@ impl BACnetObject for MultiStateInputObject {
             property,
             &value,
         ) {
-            return result;
+            result?;
+            let _ = self.recompute_reliability();
+            return Ok(());
         }
         if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
             return result;
@@ -298,7 +335,12 @@ impl BACnetObject for MultiStateInputObject {
             return Err(common::value_out_of_range_error());
         }
         self.reliability = reliability;
+        self.reliability_evaluator.clear_ownership();
         Ok(())
+    }
+
+    fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {
+        Ok(self.recompute_reliability())
     }
 
     fn reliability_evaluation_inhibited_internal(&self) -> bool {
@@ -378,5 +420,30 @@ mod detection_enable_tests {
             .property_list()
             .contains(&PropertyIdentifier::EVENT_DETECTION_ENABLE));
         assert!(msi.is_writable_property(PropertyIdentifier::EVENT_DETECTION_ENABLE));
+    }
+}
+
+#[cfg(test)]
+mod reliability_safety_net_tests {
+    use super::*;
+    use crate::traits::ReliabilityEvaluation;
+    use bacnet_types::enums::Reliability;
+
+    #[test]
+    fn periodic_hook_repairs_one_stale_bypassed_state_then_is_unchanged() {
+        let mut msi = MultiStateInputObject::new(1, "MSI-stale", 2).unwrap();
+        msi.present_value = 3;
+
+        assert_eq!(
+            msi.evaluate_reliability_internal().unwrap(),
+            ReliabilityEvaluation::Changed {
+                old_reliability: Reliability::NO_FAULT_DETECTED.to_raw(),
+                new_reliability: Reliability::MULTI_STATE_OUT_OF_RANGE.to_raw(),
+            }
+        );
+        assert_eq!(
+            msi.evaluate_reliability_internal().unwrap(),
+            ReliabilityEvaluation::Unchanged
+        );
     }
 }

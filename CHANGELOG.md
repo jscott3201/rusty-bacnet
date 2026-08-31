@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Object-owned multi-state configuration Reliability and recovery for
+  Multi-state Input, Output, and Value (#226). The Standard requires
+  `MULTI_STATE_OUT_OF_RANGE` for an invalid retained `Present_Value`, and
+  `CONFIGURATION_ERROR` (with precedence) for invalid retained MSO priority,
+  default, or feedback configuration and MSV priority, default, or alarm
+  configuration. Relevant successful mutations now recompute synchronously;
+  the periodic object hook shares the same owned first-stage evaluator, while
+  intrinsic FAULT/NORMAL reporting remains in the existing event kernel. A new
+  fallible Rust-only `set_number_of_states` API supplies the local count-change
+  path: zero is rejected before mutation, shrink truncates `State_Text`, and
+  growth retains its prefix and appends constructor-style `State {n}` labels.
+  The local API and label policy are product choices; `Number_Of_States` stays
+  read-only through BACnet WP/WPM, PICS, and Python. MSV `Fault_Values` remains
+  unsupported, and no broader conformance claim is made.
+
 - Product-elected `Reliability_Evaluation_Inhibit` support on Analog,
   Binary, and Multi-state Input/Output/Value objects (#232). The optional
   Boolean is present on all nine types, defaults to FALSE, is BACnet-readable

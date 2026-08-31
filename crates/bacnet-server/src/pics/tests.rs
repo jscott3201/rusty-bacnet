@@ -667,18 +667,19 @@ fn pics_state_text_writable_on_multistate_types() {
 }
 
 #[test]
-fn pics_universal_readonly_properties_never_writable() {
+fn pics_fixed_readonly_properties_never_writable() {
     let db = make_real_objects_db();
     let pics = generate_pics(&db, &ServerConfig::default(), &make_pics_config());
 
-    // OBJECT_IDENTIFIER, OBJECT_TYPE, PROPERTY_LIST, STATUS_FLAGS are never
-    // writable on any object type.
+    // The universal identifiers below are never writable. Number_Of_States is
+    // likewise fixed on every object type that exposes it.
     for ot in pics.supported_object_types.iter() {
         for pid in [
             PropertyIdentifier::OBJECT_IDENTIFIER,
             PropertyIdentifier::OBJECT_TYPE,
             PropertyIdentifier::PROPERTY_LIST,
             PropertyIdentifier::STATUS_FLAGS,
+            PropertyIdentifier::NUMBER_OF_STATES,
         ] {
             if ot.supported_properties.iter().any(|p| p.property_id == pid) {
                 assert!(
