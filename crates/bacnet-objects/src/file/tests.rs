@@ -1,5 +1,58 @@
 use super::*;
+use crate::clock::{ClockFrame, ClockReader};
 use bacnet_types::enums::ErrorCode;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+
+struct SequenceClock(Mutex<VecDeque<ClockFrame>>);
+
+impl SequenceClock {
+    fn new(frames: impl IntoIterator<Item = ClockFrame>) -> Self {
+        Self(Mutex::new(frames.into_iter().collect()))
+    }
+}
+
+impl ClockReader for SequenceClock {
+    fn read_clock(&self) -> Option<ClockFrame> {
+        self.0.lock().ok()?.pop_front()
+    }
+}
+
+fn clock_frame(hour: u8) -> ClockFrame {
+    ClockFrame {
+        local_date: Date {
+            year: 124,
+            month: 2,
+            day: 29,
+            day_of_week: 4,
+        },
+        local_time: Time {
+            hour,
+            minute: 15,
+            second: 30,
+            hundredths: 25,
+        },
+        utc_offset: 300,
+        daylight_savings_status: false,
+    }
+}
+
+fn unspecified_datetime() -> (Date, Time) {
+    (
+        Date {
+            year: Date::UNSPECIFIED,
+            month: Date::UNSPECIFIED,
+            day: Date::UNSPECIFIED,
+            day_of_week: Date::UNSPECIFIED,
+        },
+        Time {
+            hour: Time::UNSPECIFIED,
+            minute: Time::UNSPECIFIED,
+            second: Time::UNSPECIFIED,
+            hundredths: Time::UNSPECIFIED,
+        },
+    )
+}
 
 #[test]
 fn file_object_creation() {
@@ -160,6 +213,156 @@ fn file_set_and_read_modification_date() {
     } else {
         panic!("expected PropertyValue::List");
     }
+}
+
+#[test]
+fn file_metadata_direct_payload_mutations_use_bound_clock() {
+    let old = clock_frame(1);
+
+    let stream_frame = clock_frame(8);
+    let mut stream = FileObject::new(1, "STREAM", "text/plain").unwrap();
+    stream.set_modification_date(old.local_date, old.local_time);
+    stream.set_archive(true);
+    stream.bind_clock_internal(Some(Arc::new(SequenceClock::new([stream_frame]))));
+    assert_eq!(
+        stream.modification_date,
+        (old.local_date, old.local_time),
+        "clock binding must not timestamp the object"
+    );
+    assert!(stream.archive());
+    stream.set_data(vec![1, 2, 3]);
+    assert_eq!(
+        stream.modification_date,
+        (stream_frame.local_date, stream_frame.local_time)
+    );
+    assert!(!stream.archive());
+
+    let record_frame = clock_frame(9);
+    let mut record = FileObject::new(2, "RECORD", "text/plain").unwrap();
+    record.set_file_access_method(FileAccessMethod::RECORD_ACCESS.to_raw());
+    record.set_modification_date(old.local_date, old.local_time);
+    record.set_archive(true);
+    record.bind_clock_internal(Some(Arc::new(SequenceClock::new([record_frame]))));
+    record.set_records(vec![vec![0xAA], vec![0xBB, 0xCC]]);
+    assert_eq!(
+        record.modification_date,
+        (record_frame.local_date, record_frame.local_time)
+    );
+    assert!(!record.archive());
+}
+
+#[test]
+fn file_metadata_clockless_and_invalid_frames_are_fully_unspecified() {
+    let old = clock_frame(1);
+
+    let mut clockless = FileObject::new(1, "CLOCKLESS", "text/plain").unwrap();
+    clockless.set_modification_date(old.local_date, old.local_time);
+    clockless.set_archive(true);
+    clockless.set_data(vec![1]);
+    assert_eq!(clockless.modification_date, unspecified_datetime());
+    assert!(!clockless.archive());
+
+    let mut invalid_frame = clock_frame(2);
+    invalid_frame.local_time.hour = 24;
+    let mut invalid = FileObject::new(2, "INVALID", "text/plain").unwrap();
+    invalid.set_modification_date(old.local_date, old.local_time);
+    invalid.set_archive(true);
+    invalid.bind_clock_internal(Some(Arc::new(SequenceClock::new([invalid_frame]))));
+    invalid.set_data(vec![2]);
+    assert_eq!(invalid.modification_date, unspecified_datetime());
+    assert!(!invalid.archive());
+}
+
+#[test]
+fn file_metadata_equal_and_empty_mutations_sample_the_next_frame() {
+    let first = clock_frame(10);
+    let second = clock_frame(11);
+    let mut file = FileObject::new(1, "FILE", "text/plain").unwrap();
+    file.set_data(vec![1, 2]);
+    file.set_archive(true);
+    file.bind_clock_internal(Some(Arc::new(SequenceClock::new([first, second]))));
+
+    file.set_data(vec![1, 2]);
+    assert_eq!(
+        file.modification_date,
+        (first.local_date, first.local_time),
+        "an equal-content mutation still selects a new Modification_Date"
+    );
+    assert!(!file.archive());
+
+    file.set_archive(true);
+    file.set_data(Vec::new());
+    assert_eq!(
+        file.modification_date,
+        (second.local_date, second.local_time),
+        "an empty successful mutation samples the clock again"
+    );
+    assert!(!file.archive());
+}
+
+#[test]
+fn file_metadata_manual_assignment_clears_archive_only_when_changed() {
+    let first = clock_frame(4);
+    let second = clock_frame(5);
+    let mut file = FileObject::new(1, "FILE", "text/plain").unwrap();
+    file.set_modification_date(first.local_date, first.local_time);
+    file.set_archive(true);
+
+    file.set_modification_date(first.local_date, first.local_time);
+    assert!(file.archive(), "an identical assignment is not a change");
+
+    file.set_modification_date(second.local_date, second.local_time);
+    assert_eq!(
+        file.modification_date,
+        (second.local_date, second.local_time)
+    );
+    assert!(!file.archive());
+}
+
+#[test]
+fn file_metadata_access_method_marks_only_effective_file_size_changes() {
+    let old = clock_frame(1);
+    let next = clock_frame(6);
+    let mut equal_size = FileObject::new(1, "EQUAL", "text/plain").unwrap();
+    equal_size.set_data(vec![1, 2]);
+    equal_size.set_records(vec![vec![3], vec![4]]);
+    equal_size.set_modification_date(old.local_date, old.local_time);
+    equal_size.set_archive(true);
+    equal_size.bind_clock_internal(Some(Arc::new(SequenceClock::new([next]))));
+
+    equal_size.set_file_access_method(FileAccessMethod::RECORD_ACCESS.to_raw());
+    assert_eq!(equal_size.file_size(), 2);
+    assert_eq!(
+        equal_size.modification_date,
+        (old.local_date, old.local_time)
+    );
+    assert!(
+        equal_size.archive(),
+        "method and Record_Count changes with equal File_Size are not modification events"
+    );
+
+    equal_size.set_data(vec![1, 2]);
+    assert_eq!(
+        equal_size.modification_date,
+        (next.local_date, next.local_time),
+        "the equal-size method switch must not consume the clock sample"
+    );
+    assert!(!equal_size.archive());
+
+    let changed = clock_frame(7);
+    let mut changed_size = FileObject::new(2, "CHANGED", "text/plain").unwrap();
+    changed_size.set_data(vec![1, 2, 3]);
+    changed_size.set_records(vec![vec![4], vec![5]]);
+    changed_size.set_modification_date(old.local_date, old.local_time);
+    changed_size.set_archive(true);
+    changed_size.bind_clock_internal(Some(Arc::new(SequenceClock::new([changed]))));
+    changed_size.set_file_access_method(FileAccessMethod::RECORD_ACCESS.to_raw());
+    assert_eq!(changed_size.file_size(), 2);
+    assert_eq!(
+        changed_size.modification_date,
+        (changed.local_date, changed.local_time)
+    );
+    assert!(!changed_size.archive());
 }
 
 #[test]

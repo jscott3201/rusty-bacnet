@@ -43,6 +43,7 @@ mod device_event;
 mod enrollment_summary_filters;
 mod escalator_writes;
 mod file_access_method;
+mod file_metadata;
 mod file_persistence;
 mod file_storage_hook;
 mod framed_properties;
