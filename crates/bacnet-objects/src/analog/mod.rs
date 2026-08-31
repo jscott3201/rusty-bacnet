@@ -19,7 +19,7 @@ struct FaultOutOfRangeLimits {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum OwnedRangeFault {
+pub(crate) enum OwnedRangeFault {
     UnderRange,
     OverRange,
 }

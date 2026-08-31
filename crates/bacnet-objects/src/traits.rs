@@ -547,6 +547,19 @@ pub trait BACnetObject: Send + Sync {
         Ok(ReliabilityEvaluation::Unchanged)
     }
 
+    /// Whether periodic object-owned reliability evaluation is currently
+    /// inhibited.
+    ///
+    /// The default is FALSE so existing and downstream object implementations
+    /// remain source-compatible. Objects that elect the optional
+    /// Reliability_Evaluation_Inhibit property override this internal
+    /// predicate; reporting of an already-applied Reliability transition is
+    /// intentionally unaffected.
+    #[doc(hidden)]
+    fn reliability_evaluation_inhibited_internal(&self) -> bool {
+        false
+    }
+
     /// Apply an internally-derived `Reliability` value.
     ///
     /// This is the **internal** reliability-evaluation path, distinct from the

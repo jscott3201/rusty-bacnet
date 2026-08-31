@@ -84,29 +84,35 @@ impl FaultDetector {
     /// Returns a list of changes that object hooks successfully applied.
     pub fn evaluate(&self, db: &mut ObjectDatabase) -> Vec<ReliabilityChange> {
         let mut changes = Vec::new();
-        db.for_each_object_mut(|oid, object| match object.evaluate_reliability_internal() {
-            Ok(ReliabilityEvaluation::Unchanged) => {
+        db.for_each_object_mut(|oid, object| {
+            if object.reliability_evaluation_inhibited_internal() {
                 self.clear_internal_failure(&oid);
+                return;
             }
-            Ok(ReliabilityEvaluation::Changed {
-                old_reliability,
-                new_reliability,
-            }) => {
-                self.clear_internal_failure(&oid);
-                changes.push(ReliabilityChange {
-                    object_id: oid,
+            match object.evaluate_reliability_internal() {
+                Ok(ReliabilityEvaluation::Unchanged) => {
+                    self.clear_internal_failure(&oid);
+                }
+                Ok(ReliabilityEvaluation::Changed {
                     old_reliability,
                     new_reliability,
-                });
-            }
-            Err(error) => {
-                let error_text = error.to_string();
-                if self.should_warn_internal_failure(oid, &error_text) {
-                    tracing::warn!(
-                        object = %oid,
-                        error = %error,
-                        "Fault detection object-owned reliability evaluation failed"
-                    );
+                }) => {
+                    self.clear_internal_failure(&oid);
+                    changes.push(ReliabilityChange {
+                        object_id: oid,
+                        old_reliability,
+                        new_reliability,
+                    });
+                }
+                Err(error) => {
+                    let error_text = error.to_string();
+                    if self.should_warn_internal_failure(oid, &error_text) {
+                        tracing::warn!(
+                            object = %oid,
+                            error = %error,
+                            "Fault detection object-owned reliability evaluation failed"
+                        );
+                    }
                 }
             }
         });
@@ -117,7 +123,7 @@ impl FaultDetector {
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
 
     use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
@@ -212,6 +218,73 @@ mod tests {
                 new_reliability: self.reliability,
             })
         }
+    }
+
+    struct InhibitedProbeObject {
+        oid: ObjectIdentifier,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl BACnetObject for InhibitedProbeObject {
+        fn object_identifier(&self) -> ObjectIdentifier {
+            self.oid
+        }
+
+        fn object_name(&self) -> &str {
+            "inhibited-probe"
+        }
+
+        fn read_property(
+            &self,
+            _property: PropertyIdentifier,
+            _array_index: Option<u32>,
+        ) -> Result<PropertyValue, Error> {
+            Err(Error::Encoding("test property is unsupported".into()))
+        }
+
+        fn write_property(
+            &mut self,
+            _property: PropertyIdentifier,
+            _array_index: Option<u32>,
+            _value: PropertyValue,
+            _priority: Option<u8>,
+        ) -> Result<(), Error> {
+            Err(Error::Encoding("test object is read-only".into()))
+        }
+
+        fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
+            Cow::Borrowed(&[])
+        }
+
+        fn reliability_evaluation_inhibited_internal(&self) -> bool {
+            true
+        }
+
+        fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(Error::Encoding(HOOK_ERROR.into()))
+        }
+    }
+
+    #[test]
+    fn inhibited_object_skips_hook_and_clears_stale_failure_warning() {
+        let detector = FaultDetector::default();
+        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 77).unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(InhibitedProbeObject {
+            oid,
+            calls: Arc::clone(&calls),
+        }))
+        .unwrap();
+        assert!(detector.should_warn_internal_failure(oid, HOOK_ERROR));
+
+        assert!(detector.evaluate(&mut db).is_empty());
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "inhibited hook was called");
+        assert!(
+            detector.should_warn_internal_failure(oid, HOOK_ERROR),
+            "inhibition must clear an old warning so recovery cannot leave stale state"
+        );
     }
 
     #[test]
