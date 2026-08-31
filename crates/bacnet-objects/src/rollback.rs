@@ -16,12 +16,28 @@ pub(crate) enum IntrinsicWriteRollback {
         message_texts: [String; 3],
     },
     TimeDelayNormal(Option<u32>),
+    ReliabilityInhibit {
+        state: crate::common::ReliabilityInhibitState,
+        reliability: u32,
+        out_of_service: bool,
+        saved_reliability: Option<u32>,
+        range_fault_ownership: Option<Option<crate::analog::OwnedRangeFault>>,
+    },
 }
 
 /// Preserve event state that the detection-disable reset clears, plus the raw
 /// optional `Time_Delay_Normal` backing value that effective readback hides.
 macro_rules! impl_intrinsic_write_rollback {
-    ($detector_field:ident, $detection_enable_field:ident, $history_field:ident) => {
+    (
+        $detector_field:ident,
+        $detection_enable_field:ident,
+        $history_field:ident,
+        $inhibit_field:ident,
+        $reliability_field:ident,
+        $out_of_service_field:ident,
+        $saved_reliability_field:ident
+        $(, $range_fault_field:ident)?
+    ) => {
         fn capture_write_property_rollback(
             &mut self,
             property: bacnet_types::enums::PropertyIdentifier,
@@ -46,6 +62,22 @@ macro_rules! impl_intrinsic_write_rollback {
                         $crate::rollback::IntrinsicWriteRollback::TimeDelayNormal(
                             self.$detector_field.time_delay_normal,
                         ),
+                    ))
+                }
+                bacnet_types::enums::PropertyIdentifier::RELIABILITY_EVALUATION_INHIBIT
+                | bacnet_types::enums::PropertyIdentifier::RELIABILITY
+                | bacnet_types::enums::PropertyIdentifier::OUT_OF_SERVICE => {
+                    let range_fault_ownership = None$(.or(Some(
+                        self.$range_fault_field.owned_fault,
+                    )))?;
+                    Some($crate::traits::WritePropertyRollback::new(
+                        $crate::rollback::IntrinsicWriteRollback::ReliabilityInhibit {
+                            state: self.$inhibit_field,
+                            reliability: self.$reliability_field,
+                            out_of_service: self.$out_of_service_field,
+                            saved_reliability: self.$saved_reliability_field,
+                            range_fault_ownership,
+                        },
                     ))
                 }
                 _ => None,
@@ -77,6 +109,35 @@ macro_rules! impl_intrinsic_write_rollback {
                 }
                 $crate::rollback::IntrinsicWriteRollback::TimeDelayNormal(value) => {
                     self.$detector_field.time_delay_normal = value;
+                    Ok(())
+                }
+                $crate::rollback::IntrinsicWriteRollback::ReliabilityInhibit {
+                    state,
+                    reliability,
+                    out_of_service,
+                    saved_reliability,
+                    range_fault_ownership,
+                } => {
+                    $(
+                        let range_fault_ownership = range_fault_ownership.ok_or_else(|| {
+                            bacnet_types::error::Error::Encoding(
+                                concat!(
+                                    "analog rollback token omitted ",
+                                    stringify!($range_fault_field),
+                                    " ownership",
+                                )
+                                .into(),
+                            )
+                        })?;
+                    )?
+                    self.$inhibit_field = state;
+                    self.$reliability_field = reliability;
+                    self.$out_of_service_field = out_of_service;
+                    self.$saved_reliability_field = saved_reliability;
+                    $(
+                        self.$range_fault_field.owned_fault = range_fault_ownership;
+                    )?
+                    let _ = range_fault_ownership;
                     Ok(())
                 }
             }

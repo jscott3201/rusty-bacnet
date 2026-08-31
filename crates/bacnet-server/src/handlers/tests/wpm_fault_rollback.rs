@@ -87,3 +87,144 @@ fn wpm_out_of_service_rollback_preserves_range_fault_ownership() {
         "successful rollback must preserve the private owner needed for recovery"
     );
 }
+
+#[test]
+fn wpm_rollback_restores_inhibit_oos_override_saved_reliability_and_range_owner() {
+    let mut db = ObjectDatabase::new();
+    let mut input = AnalogInputObject::new(2, "AI-inhibit", 62).unwrap();
+    input.configure_fault_out_of_range(10.0, 20.0).unwrap();
+    input.set_present_value(21.0);
+    input.evaluate_reliability_internal().unwrap();
+    input.set_present_value(15.0);
+    input
+        .write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(true),
+            None,
+        )
+        .unwrap();
+    input
+        .write_property(
+            PropertyIdentifier::RELIABILITY,
+            None,
+            PropertyValue::Enumerated(Reliability::NO_SENSOR.to_raw()),
+            None,
+        )
+        .unwrap();
+    let oid = input.object_identifier();
+    db.add(Box::new(input)).unwrap();
+
+    let mut inhibit = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_boolean(&mut inhibit, true);
+    let mut changed_reliability = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_enumerated(
+        &mut changed_reliability,
+        Reliability::OVER_RANGE.to_raw(),
+    );
+    let mut leave_oos = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_boolean(&mut leave_oos, false);
+    let mut read_only_value = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_enumerated(&mut read_only_value, 0);
+    let request = WritePropertyMultipleRequest {
+        list_of_write_access_specs: vec![WriteAccessSpecification {
+            object_identifier: oid,
+            list_of_properties: vec![
+                BACnetPropertyValue {
+                    property_identifier: PropertyIdentifier::RELIABILITY_EVALUATION_INHIBIT,
+                    property_array_index: None,
+                    value: inhibit.to_vec(),
+                    priority: None,
+                },
+                BACnetPropertyValue {
+                    property_identifier: PropertyIdentifier::RELIABILITY,
+                    property_array_index: None,
+                    value: changed_reliability.to_vec(),
+                    priority: None,
+                },
+                BACnetPropertyValue {
+                    property_identifier: PropertyIdentifier::OUT_OF_SERVICE,
+                    property_array_index: None,
+                    value: leave_oos.to_vec(),
+                    priority: None,
+                },
+                BACnetPropertyValue {
+                    property_identifier: PropertyIdentifier::OBJECT_TYPE,
+                    property_array_index: None,
+                    value: read_only_value.to_vec(),
+                    priority: None,
+                },
+            ],
+        }],
+    };
+    let mut request_bytes = BytesMut::new();
+    request.encode(&mut request_bytes);
+    assert!(handle_write_property_multiple(&mut db, &request_bytes).is_err());
+
+    let object = db.get_mut(&oid).unwrap();
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::RELIABILITY_EVALUATION_INHIBIT, None)
+            .unwrap(),
+        PropertyValue::Boolean(false)
+    );
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
+            .unwrap(),
+        PropertyValue::Boolean(true)
+    );
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::RELIABILITY, None)
+            .unwrap(),
+        PropertyValue::Enumerated(Reliability::NO_SENSOR.to_raw())
+    );
+
+    object
+        .write_property(
+            PropertyIdentifier::RELIABILITY_EVALUATION_INHIBIT,
+            None,
+            PropertyValue::Boolean(true),
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::RELIABILITY, None)
+            .unwrap(),
+        PropertyValue::Enumerated(Reliability::NO_SENSOR.to_raw()),
+        "rollback must restore the accepted-client-write marker"
+    );
+    object
+        .write_property(
+            PropertyIdentifier::RELIABILITY_EVALUATION_INHIBIT,
+            None,
+            PropertyValue::Boolean(false),
+            None,
+        )
+        .unwrap();
+    object
+        .write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(false),
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::RELIABILITY, None)
+            .unwrap(),
+        PropertyValue::Enumerated(Reliability::OVER_RANGE.to_raw()),
+        "rollback must restore the evaluated Reliability saved on OOS entry"
+    );
+    assert_eq!(
+        object.evaluate_reliability_internal().unwrap(),
+        ReliabilityEvaluation::Changed {
+            old_reliability: Reliability::OVER_RANGE.to_raw(),
+            new_reliability: Reliability::NO_FAULT_DETECTED.to_raw(),
+        },
+        "rollback must restore analog range-fault ownership"
+    );
+}

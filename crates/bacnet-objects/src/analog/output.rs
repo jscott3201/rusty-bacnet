@@ -29,6 +29,7 @@ pub struct AnalogOutputObject {
     event_detection_enable: bool,
     reliability: u32,
     reliability_before_out_of_service: Option<u32>,
+    reliability_inhibit: common::ReliabilityInhibitState,
     min_pres_value: Option<f32>,
     max_pres_value: Option<f32>,
     pub(crate) event_history: EventHistory,
@@ -55,6 +56,7 @@ impl AnalogOutputObject {
             event_detection_enable: true,
             reliability: 0,
             reliability_before_out_of_service: None,
+            reliability_inhibit: common::ReliabilityInhibitState::default(),
             min_pres_value: None,
             max_pres_value: None,
             event_history: EventHistory::default(),
@@ -117,6 +119,9 @@ impl BACnetObject for AnalogOutputObject {
                 self.out_of_service,
                 self.event_detector.event_state.to_raw(),
             ));
+        }
+        if let Some(value) = self.reliability_inhibit.read(property) {
+            return Ok(value);
         }
         if let Some(result) = read_common_properties!(self, property, array_index) {
             return result;
@@ -203,7 +208,15 @@ impl BACnetObject for AnalogOutputObject {
                 }
             });
         }
-        if let Some(result) = common::write_out_of_service_with_reliability_restore(
+        if let Some(result) = self.reliability_inhibit.write_inhibit(
+            &mut self.reliability,
+            self.out_of_service,
+            property,
+            &value,
+        ) {
+            return result;
+        }
+        if let Some(result) = self.reliability_inhibit.write_out_of_service(
             &mut self.out_of_service,
             &mut self.reliability,
             &mut self.reliability_before_out_of_service,
@@ -223,18 +236,13 @@ impl BACnetObject for AnalogOutputObject {
         // than NO_FAULT_DETECTED, shall be writable to allow simulating specific
         // conditions or for testing purposes".
         // `is_writable_property` stays statically true because it describes capability.
-        if property == PropertyIdentifier::RELIABILITY {
-            if !self.out_of_service {
-                return Err(common::write_access_denied_error());
-            }
-            if let PropertyValue::Enumerated(v) = value {
-                if !common::is_reliability_value_valid(v) {
-                    return Err(common::value_out_of_range_error());
-                }
-                self.reliability = v;
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
+        if let Some(result) = self.reliability_inhibit.write_client_reliability(
+            self.out_of_service,
+            &mut self.reliability,
+            property,
+            &value,
+        ) {
+            return result;
         }
         if property == PropertyIdentifier::RELINQUISH_DEFAULT {
             if let PropertyValue::Real(v) = value {
@@ -295,6 +303,7 @@ impl BACnetObject for AnalogOutputObject {
             PropertyIdentifier::TIME_DELAY,
             PropertyIdentifier::TIME_DELAY_NORMAL,
             PropertyIdentifier::RELIABILITY,
+            PropertyIdentifier::RELIABILITY_EVALUATION_INHIBIT,
             PropertyIdentifier::ACKED_TRANSITIONS,
             PropertyIdentifier::EVENT_TIME_STAMPS,
             PropertyIdentifier::EVENT_MESSAGE_TEXTS,
@@ -317,7 +326,15 @@ impl BACnetObject for AnalogOutputObject {
         reliability,
         event_detection_enable
     );
-    impl_intrinsic_write_rollback!(event_detector, event_detection_enable, event_history);
+    impl_intrinsic_write_rollback!(
+        event_detector,
+        event_detection_enable,
+        event_history,
+        reliability_inhibit,
+        reliability,
+        out_of_service,
+        reliability_before_out_of_service
+    );
 
     fn acknowledge_alarm(&mut self, transition_bit: u8) -> Result<(), bacnet_types::error::Error> {
         self.event_detector.acked_transitions |= transition_bit & 0x07;
@@ -325,7 +342,7 @@ impl BACnetObject for AnalogOutputObject {
     }
 
     fn set_reliability_internal(&mut self, reliability: u32) -> Result<(), Error> {
-        if self.out_of_service {
+        if self.out_of_service || self.reliability_inhibit.enabled() {
             return Err(common::write_access_denied_error());
         }
         if !common::is_reliability_value_valid(reliability) {
@@ -333,6 +350,10 @@ impl BACnetObject for AnalogOutputObject {
         }
         self.reliability = reliability;
         Ok(())
+    }
+
+    fn reliability_evaluation_inhibited_internal(&self) -> bool {
+        self.reliability_inhibit.enabled()
     }
 
     fn is_createable(&self) -> bool {
@@ -345,6 +366,7 @@ impl BACnetObject for AnalogOutputObject {
         common::is_commandable_property_writable(property)
             || common::is_common_writable(property)
             || property == PropertyIdentifier::RELIABILITY
+            || property == PropertyIdentifier::RELIABILITY_EVALUATION_INHIBIT
             || property == PropertyIdentifier::COV_INCREMENT
             || common::is_event_property_writable(property)
             || property == PropertyIdentifier::EVENT_DETECTION_ENABLE

@@ -20,6 +20,7 @@ pub struct BinaryValueObject {
     /// Reliability: 0 = NO_FAULT_DETECTED.
     reliability: u32,
     reliability_before_out_of_service: Option<u32>,
+    reliability_inhibit: common::ReliabilityInhibitState,
     active_text: String,
     inactive_text: String,
     /// CHANGE_OF_STATE event detector.
@@ -47,6 +48,7 @@ impl BinaryValueObject {
             relinquish_default: 0,
             reliability: 0,
             reliability_before_out_of_service: None,
+            reliability_inhibit: common::ReliabilityInhibitState::default(),
             active_text: "Active".into(),
             inactive_text: "Inactive".into(),
             event_detector: ChangeOfStateDetector {
@@ -104,7 +106,15 @@ impl BACnetObject for BinaryValueObject {
         reliability,
         event_detection_enable
     );
-    impl_intrinsic_write_rollback!(event_detector, event_detection_enable, event_history);
+    impl_intrinsic_write_rollback!(
+        event_detector,
+        event_detection_enable,
+        event_history,
+        reliability_inhibit,
+        reliability,
+        out_of_service,
+        reliability_before_out_of_service
+    );
 
     fn read_property(
         &self,
@@ -118,6 +128,9 @@ impl BACnetObject for BinaryValueObject {
                 self.out_of_service,
                 self.event_detector.event_state.to_raw(),
             ));
+        }
+        if let Some(value) = self.reliability_inhibit.read(property) {
+            return Ok(value);
         }
         if let Some(result) = read_common_properties!(self, property, array_index) {
             return result;
@@ -255,7 +268,15 @@ impl BACnetObject for BinaryValueObject {
         if let Some(result) = write_generic_event_properties!(self, property, value) {
             return result;
         }
-        if let Some(result) = common::write_out_of_service_with_reliability_restore(
+        if let Some(result) = self.reliability_inhibit.write_inhibit(
+            &mut self.reliability,
+            self.out_of_service,
+            property,
+            &value,
+        ) {
+            return result;
+        }
+        if let Some(result) = self.reliability_inhibit.write_out_of_service(
             &mut self.out_of_service,
             &mut self.reliability,
             &mut self.reliability_before_out_of_service,
@@ -275,18 +296,13 @@ impl BACnetObject for BinaryValueObject {
         // than NO_FAULT_DETECTED, shall be writable to allow simulating specific
         // conditions or for testing purposes".
         // `is_writable_property` stays statically true because it describes capability.
-        if property == PropertyIdentifier::RELIABILITY {
-            if !self.out_of_service {
-                return Err(common::write_access_denied_error());
-            }
-            if let PropertyValue::Enumerated(v) = value {
-                if !common::is_reliability_value_valid(v) {
-                    return Err(common::value_out_of_range_error());
-                }
-                self.reliability = v;
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
+        if let Some(result) = self.reliability_inhibit.write_client_reliability(
+            self.out_of_service,
+            &mut self.reliability,
+            property,
+            &value,
+        ) {
+            return result;
         }
         Err(common::write_access_denied_error())
     }
@@ -314,6 +330,7 @@ impl BACnetObject for BinaryValueObject {
             PropertyIdentifier::RELINQUISH_DEFAULT,
             PropertyIdentifier::CURRENT_COMMAND_PRIORITY,
             PropertyIdentifier::RELIABILITY,
+            PropertyIdentifier::RELIABILITY_EVALUATION_INHIBIT,
             PropertyIdentifier::ACTIVE_TEXT,
             PropertyIdentifier::INACTIVE_TEXT,
             PropertyIdentifier::ALARM_VALUE,
@@ -326,7 +343,7 @@ impl BACnetObject for BinaryValueObject {
     }
 
     fn set_reliability_internal(&mut self, reliability: u32) -> Result<(), Error> {
-        if self.out_of_service {
+        if self.out_of_service || self.reliability_inhibit.enabled() {
             return Err(common::write_access_denied_error());
         }
         if !common::is_reliability_value_valid(reliability) {
@@ -334,6 +351,10 @@ impl BACnetObject for BinaryValueObject {
         }
         self.reliability = reliability;
         Ok(())
+    }
+
+    fn reliability_evaluation_inhibited_internal(&self) -> bool {
+        self.reliability_inhibit.enabled()
     }
 
     fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
@@ -350,6 +371,7 @@ impl BACnetObject for BinaryValueObject {
             || property == PropertyIdentifier::INACTIVE_TEXT
             || property == PropertyIdentifier::ALARM_VALUE
             || property == PropertyIdentifier::RELIABILITY
+            || property == PropertyIdentifier::RELIABILITY_EVALUATION_INHIBIT
             || property == PropertyIdentifier::EVENT_DETECTION_ENABLE
     }
 }

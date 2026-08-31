@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Product-elected `Reliability_Evaluation_Inhibit` support on Analog,
+  Binary, and Multi-state Input/Output/Value objects (#232). The optional
+  Boolean is present on all nine types, defaults to FALSE, is BACnet-readable
+  and writable, and is advertised through `Property_List` and PICS. When TRUE,
+  reliability evaluation is skipped and `Reliability` is normalized to
+  `NO_FAULT_DETECTED`, except for an accepted alternate Reliability write in
+  the current out-of-service period. The Standard defines the behavior when
+  the optional property is present; presence, default, and writability here
+  are product choices.
+
 - Add executable `PropertyMetadata` rows and the defaulted
   `BACnetObject::property_metadata` hook (#261). Time Value and Binary Input
   now derive property-list, required/optional, and writability classifications

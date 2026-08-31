@@ -216,6 +216,8 @@ pub(crate) fn write_out_of_service_with_reliability_restore(
     }
 }
 
+pub(crate) use crate::reliability_inhibit::ReliabilityInhibitState;
+
 /// Handle writing the DESCRIPTION property.
 ///
 /// Returns `Some(Ok(()))` if the property was DESCRIPTION and successfully handled,

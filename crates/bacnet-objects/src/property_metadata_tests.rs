@@ -175,7 +175,7 @@ fn property_metadata_contract_time_value() {
 fn property_metadata_contract_binary_input() {
     let object = BinaryInputObject::new(1, "BI-1").unwrap();
     assert_unique_and_canonical(&object);
-    assert_eq!(object.property_metadata().len(), 23);
+    assert_eq!(object.property_metadata().len(), 24);
 
     let present_value = metadata_row(&object, PropertyIdentifier::PRESENT_VALUE);
     assert_eq!(present_value.conformance, PropertyConformance::RequiredRead);
@@ -190,6 +190,11 @@ fn property_metadata_contract_binary_input() {
         reliability.write_capability,
         PropertyWriteCapability::WhenOutOfService
     );
+
+    let inhibit = metadata_row(&object, PropertyIdentifier::RELIABILITY_EVALUATION_INHIBIT);
+    assert_eq!(inhibit.conformance, PropertyConformance::Optional);
+    assert_eq!(inhibit.presence_condition, None);
+    assert_eq!(inhibit.write_capability, PropertyWriteCapability::Always);
 
     let event_enable = metadata_row(&object, PropertyIdentifier::EVENT_ENABLE);
     assert_eq!(event_enable.conformance, PropertyConformance::Optional);
@@ -273,6 +278,7 @@ fn property_metadata_contract_property_list_projection_excludes_property_list() 
                 PropertyIdentifier::OUT_OF_SERVICE,
                 PropertyIdentifier::POLARITY,
                 PropertyIdentifier::RELIABILITY,
+                PropertyIdentifier::RELIABILITY_EVALUATION_INHIBIT,
                 PropertyIdentifier::ACTIVE_TEXT,
                 PropertyIdentifier::INACTIVE_TEXT,
                 PropertyIdentifier::ALARM_VALUE,
