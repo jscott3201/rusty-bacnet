@@ -65,6 +65,7 @@ async fn audit_log_query_dispatch_returns_a_typed_complex_ack() {
     let cov_in_flight = Arc::new(Semaphore::new(1));
     let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
     let notification_transactions = NotificationTransactions::new();
+    let confirmed_request_tracker = Arc::new(ConfirmedRequestTracker::default());
     let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
     let comm_state = Arc::new(AtomicU8::new(0));
     let dcc_timer = Arc::new(Mutex::new(None::<JoinHandle<()>>));
@@ -97,6 +98,7 @@ async fn audit_log_query_dispatch_returns_a_typed_complex_ack() {
         &cov_in_flight,
         &server_tsm,
         &notification_transactions,
+        &confirmed_request_tracker,
         &device_bindings,
         &comm_state,
         &dcc_timer,

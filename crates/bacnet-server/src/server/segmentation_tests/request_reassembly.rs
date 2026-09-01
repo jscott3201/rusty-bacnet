@@ -342,6 +342,52 @@ pub(super) async fn present_value<T: TransportPort + 'static>(server: &BACnetSer
     }
 }
 
+#[tokio::test]
+async fn reassembled_request_uses_direct_request_duplicate_admission_boundary() {
+    let (server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
+    let invoke_id = 5;
+    let text = "direct-then-reassembled-duplicate";
+    let payload = write_property_payload(text);
+    let direct = ConfirmedRequestPdu {
+        segmented: false,
+        more_follows: false,
+        segmented_response_accepted: true,
+        max_segments: None,
+        max_apdu_length: 1476,
+        invoke_id,
+        sequence_number: None,
+        proposed_window_size: None,
+        service_choice: ConfirmedServiceChoice::WRITE_PROPERTY,
+        service_request: Bytes::copy_from_slice(&payload),
+    };
+
+    send_apdu(&client, &Apdu::ConfirmedRequest(direct)).await;
+    match recv_apdu(&mut rx, "direct request response").await {
+        Apdu::SimpleAck(ack) => assert_eq!(ack.invoke_id, invoke_id),
+        other => panic!("expected direct SimpleAck, got {other:?}"),
+    }
+
+    let chunks = split_into(&payload, 2);
+    for (index, chunk) in chunks.iter().enumerate() {
+        send_segment(
+            &client,
+            invoke_id,
+            index as u8,
+            index + 1 < chunks.len(),
+            chunk,
+        )
+        .await;
+        expect_positive_ack(&mut rx, invoke_id, index as u8).await;
+    }
+    assert!(
+        timeout(Duration::from_millis(250), rx.recv())
+            .await
+            .is_err(),
+        "the reassembled exact duplicate must not produce a service response"
+    );
+    assert_eq!(present_value(&server).await, text);
+}
+
 /// #364: exactly 256 segments — the full sequence space — reassemble to the
 /// byte-exact request. Passed before the fix too (`seq + 1` happens to equal
 /// the count when nothing has wrapped); this pins the boundary the cap must

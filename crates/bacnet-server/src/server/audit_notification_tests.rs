@@ -127,7 +127,7 @@ pub(super) fn database_with_device(
 async fn dispatch(
     db: &Arc<RwLock<ObjectDatabase>>,
     config: &ServerConfig,
-    notification_transactions: &Arc<NotificationTransactions>,
+    confirmed_request_tracker: &Arc<ConfirmedRequestTracker>,
     invoke_id: u8,
     source_mac: &[u8],
     source_network: Option<NpduAddress>,
@@ -143,6 +143,7 @@ async fn dispatch(
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
     let cov_in_flight = Arc::new(Semaphore::new(1));
     let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+    let notification_transactions = NotificationTransactions::new();
     let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
     let comm_state = Arc::new(AtomicU8::new(0));
     let dcc_timer = Arc::new(Mutex::new(None::<JoinHandle<()>>));
@@ -167,7 +168,8 @@ async fn dispatch(
         &seg_send_permits,
         &cov_in_flight,
         &server_tsm,
-        notification_transactions,
+        &notification_transactions,
+        confirmed_request_tracker,
         &device_bindings,
         &comm_state,
         &dcc_timer,
@@ -215,7 +217,7 @@ async fn authorized_routed_request_preserves_provenance_and_duplicate_is_silent(
         observed.lock().unwrap().push(context.clone());
         true
     }));
-    let notification_transactions = NotificationTransactions::new();
+    let confirmed_request_tracker = Arc::new(ConfirmedRequestTracker::default());
     let routed = NpduAddress {
         network: 55,
         mac_address: MacAddr::from_slice(&[0xaa]),
@@ -234,7 +236,7 @@ async fn authorized_routed_request_preserves_provenance_and_duplicate_is_silent(
     let response = dispatch(
         &db,
         &config,
-        &notification_transactions,
+        &confirmed_request_tracker,
         9,
         &[0x10],
         Some(routed.clone()),
@@ -257,7 +259,7 @@ async fn authorized_routed_request_preserves_provenance_and_duplicate_is_silent(
     assert!(dispatch(
         &db,
         &config,
-        &notification_transactions,
+        &confirmed_request_tracker,
         9,
         &[0x10],
         context.source_network,
@@ -271,7 +273,7 @@ async fn authorized_routed_request_preserves_provenance_and_duplicate_is_silent(
     let response = dispatch(
         &db,
         &config,
-        &notification_transactions,
+        &confirmed_request_tracker,
         9,
         &[0x10],
         None,
@@ -311,7 +313,7 @@ async fn policy_decode_bounds_sink_and_persistence_fail_before_success_ack() {
         let response = dispatch(
             &db,
             &config,
-            &NotificationTransactions::new(),
+            &Arc::new(ConfirmedRequestTracker::default()),
             1,
             &[1],
             None,
@@ -338,7 +340,7 @@ async fn policy_decode_bounds_sink_and_persistence_fail_before_success_ack() {
     let response = dispatch(
         &db,
         &config,
-        &NotificationTransactions::new(),
+        &Arc::new(ConfirmedRequestTracker::default()),
         2,
         &[1],
         None,
@@ -356,7 +358,7 @@ async fn policy_decode_bounds_sink_and_persistence_fail_before_success_ack() {
         let response = dispatch(
             &db,
             &config,
-            &NotificationTransactions::new(),
+            &Arc::new(ConfirmedRequestTracker::default()),
             3,
             &[1],
             None,
@@ -376,7 +378,7 @@ async fn policy_decode_bounds_sink_and_persistence_fail_before_success_ack() {
     let response = dispatch(
         &db,
         &config,
-        &NotificationTransactions::new(),
+        &Arc::new(ConfirmedRequestTracker::default()),
         4,
         &[1],
         None,
@@ -400,7 +402,7 @@ async fn policy_decode_bounds_sink_and_persistence_fail_before_success_ack() {
         let response = dispatch(
             &db,
             &config,
-            &NotificationTransactions::new(),
+            &Arc::new(ConfirmedRequestTracker::default()),
             5,
             &[1],
             None,
@@ -443,7 +445,7 @@ async fn disabled_sink_returns_service_request_denied_without_receiver_mutation(
     let response = dispatch(
         &db,
         &config,
-        &NotificationTransactions::new(),
+        &Arc::new(ConfirmedRequestTracker::default()),
         6,
         &[1],
         None,
@@ -479,7 +481,7 @@ async fn missing_or_invalid_device_apdu_timeout_is_operational_problem_without_m
         let response = dispatch(
             &db,
             &config,
-            &NotificationTransactions::new(),
+            &Arc::new(ConfirmedRequestTracker::default()),
             7,
             &[1],
             None,

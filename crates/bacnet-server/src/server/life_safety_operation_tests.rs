@@ -1,5 +1,6 @@
 use super::*;
 
+use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex as StdMutex;
 
 use bacnet_encoding::apdu::decode_apdu;
@@ -32,6 +33,28 @@ async fn dispatch_life_safety_operation(
     source_network: Option<NpduAddress>,
     request: LifeSafetyOperationRequest,
 ) -> Apdu {
+    dispatch_life_safety_operation_with_tracker(
+        db,
+        config,
+        &Arc::new(ConfirmedRequestTracker::default()),
+        source_mac,
+        source_network,
+        0x51,
+        request,
+    )
+    .await
+    .expect("first request should receive a response")
+}
+
+async fn dispatch_life_safety_operation_with_tracker(
+    db: Arc<RwLock<ObjectDatabase>>,
+    config: ServerConfig,
+    confirmed_request_tracker: &Arc<ConfirmedRequestTracker>,
+    source_mac: MacAddr,
+    source_network: Option<NpduAddress>,
+    invoke_id: u8,
+    request: LifeSafetyOperationRequest,
+) -> Result<Apdu, tokio::sync::oneshot::error::RecvError> {
     let network = Arc::new(NetworkLayer::new(BipTransport::new(
         Ipv4Addr::LOCALHOST,
         0,
@@ -54,7 +77,7 @@ async fn dispatch_life_safety_operation(
         segmented_response_accepted: false,
         max_segments: None,
         max_apdu_length: 480,
-        invoke_id: 0x51,
+        invoke_id,
         sequence_number: None,
         proposed_window_size: None,
         service_choice: ConfirmedServiceChoice::LIFE_SAFETY_OPERATION,
@@ -71,6 +94,7 @@ async fn dispatch_life_safety_operation(
         &cov_in_flight,
         &server_tsm,
         &notification_transactions,
+        confirmed_request_tracker,
         &device_bindings,
         &comm_state,
         &dcc_timer,
@@ -82,8 +106,10 @@ async fn dispatch_life_safety_operation(
     )
     .await;
 
-    let npdu = decode_npdu(rx.await.expect("reply_tx should receive response")).unwrap();
-    decode_apdu(npdu.payload).unwrap()
+    rx.await.map(|bytes| {
+        let npdu = decode_npdu(bytes).unwrap();
+        decode_apdu(npdu.payload).unwrap()
+    })
 }
 
 fn assert_error(apdu: Apdu, class: ErrorClass, code: ErrorCode) {
@@ -381,5 +407,150 @@ async fn life_safety_operation_panicking_authorizer_fails_closed() {
         apdu,
         ErrorClass::SERVICES,
         ErrorCode::SERVICE_REQUEST_DENIED,
+    );
+}
+
+#[tokio::test]
+async fn exact_success_duplicate_is_silent_and_changed_reuse_executes_normally() {
+    let oid = point_oid(1);
+    let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
+    point.set_operation_expected(LifeSafetyOperation::SILENCE);
+    let mut objects = ObjectDatabase::new();
+    objects.add(Box::new(point)).unwrap();
+    let db = Arc::new(RwLock::new(objects));
+    let authorizations = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&authorizations);
+    let config = ServerConfig {
+        life_safety_operation_authorizer: Some(Arc::new(move |_| {
+            observed.fetch_add(1, Ordering::AcqRel);
+            true
+        })),
+        ..ServerConfig::default()
+    };
+    let tracker = Arc::new(ConfirmedRequestTracker::default());
+    let source = MacAddr::from_slice(&[1, 2, 3]);
+    let silence = request(LifeSafetyOperation::SILENCE, Some(oid));
+
+    let first = dispatch_life_safety_operation_with_tracker(
+        Arc::clone(&db),
+        config.clone(),
+        &tracker,
+        source.clone(),
+        None,
+        0x51,
+        silence.clone(),
+    )
+    .await
+    .unwrap();
+    assert_simple_ack(first);
+    assert!(dispatch_life_safety_operation_with_tracker(
+        Arc::clone(&db),
+        config.clone(),
+        &tracker,
+        source.clone(),
+        None,
+        0x51,
+        silence,
+    )
+    .await
+    .is_err());
+    assert_eq!(authorizations.load(Ordering::Acquire), 1);
+    assert_eq!(
+        db.read()
+            .await
+            .get(&oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::SILENCED, None)
+            .unwrap(),
+        PropertyValue::Enumerated(SilencedState::ALL_SILENCED.to_raw())
+    );
+
+    db.write()
+        .await
+        .get_mut(&oid)
+        .unwrap()
+        .set_life_safety_operation_expected_internal(LifeSafetyOperation::UNSILENCE)
+        .unwrap();
+    let changed = dispatch_life_safety_operation_with_tracker(
+        Arc::clone(&db),
+        config,
+        &tracker,
+        source,
+        None,
+        0x51,
+        request(LifeSafetyOperation::UNSILENCE, Some(oid)),
+    )
+    .await
+    .unwrap();
+    assert_simple_ack(changed);
+    assert_eq!(authorizations.load(Ordering::Acquire), 2);
+    assert_eq!(
+        db.read()
+            .await
+            .get(&oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::SILENCED, None)
+            .unwrap(),
+        PropertyValue::Enumerated(SilencedState::UNSILENCED.to_raw())
+    );
+}
+
+#[tokio::test]
+async fn exact_denied_duplicate_is_silent_without_second_authorization() {
+    let oid = point_oid(1);
+    let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
+    point.set_operation_expected(LifeSafetyOperation::SILENCE);
+    let mut objects = ObjectDatabase::new();
+    objects.add(Box::new(point)).unwrap();
+    let db = Arc::new(RwLock::new(objects));
+    let authorizations = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&authorizations);
+    let config = ServerConfig {
+        life_safety_operation_authorizer: Some(Arc::new(move |_| {
+            observed.fetch_add(1, Ordering::AcqRel);
+            false
+        })),
+        ..ServerConfig::default()
+    };
+    let tracker = Arc::new(ConfirmedRequestTracker::default());
+    let source = MacAddr::from_slice(&[4, 5, 6]);
+    let denied = request(LifeSafetyOperation::SILENCE, Some(oid));
+
+    let first = dispatch_life_safety_operation_with_tracker(
+        Arc::clone(&db),
+        config.clone(),
+        &tracker,
+        source.clone(),
+        None,
+        0x51,
+        denied.clone(),
+    )
+    .await
+    .unwrap();
+    assert_error(
+        first,
+        ErrorClass::SERVICES,
+        ErrorCode::SERVICE_REQUEST_DENIED,
+    );
+    assert!(dispatch_life_safety_operation_with_tracker(
+        Arc::clone(&db),
+        config,
+        &tracker,
+        source,
+        None,
+        0x51,
+        denied,
+    )
+    .await
+    .is_err());
+    assert_eq!(authorizations.load(Ordering::Acquire), 1);
+    assert_eq!(
+        db.read()
+            .await
+            .get(&oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::SILENCED, None)
+            .unwrap(),
+        PropertyValue::Enumerated(SilencedState::UNSILENCED.to_raw())
     );
 }

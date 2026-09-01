@@ -51,13 +51,14 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bacnet_types::MacAddr;
 
 use crate::audit_notification::{
-    AuditNotificationAuthorizationContext, AuditNotificationAuthorizer, DuplicateAdmission,
+    AuditNotificationAuthorizationContext, AuditNotificationAuthorizer,
     UnconfirmedAuditNotificationAuthorizationContext, UnconfirmedAuditNotificationAuthorizer,
     MAX_AUDIT_NOTIFICATIONS, MAX_AUDIT_NOTIFICATION_BYTES,
 };
 use crate::cov::{CovNotificationKind, CovSubscription, CovSubscriptionTable};
 use crate::handlers;
 use crate::life_safety::{LifeSafetyOperationAuthorizationContext, LifeSafetyOperationAuthorizer};
+use confirmed_request_tracker::{ConfirmedRequestAdmission, ConfirmedRequestTracker};
 pub use device_bindings::DeviceBinding;
 use device_bindings::{register_configured_binding, DeviceBindingTable};
 use notification_transactions::{
@@ -888,6 +889,9 @@ pub struct BACnetServer<T: TransportPort> {
     server_tsm: Arc<Mutex<ServerTsm>>,
     /// Invoke-ID ownership and terminal admission for confirmed notifications.
     notification_transactions: Arc<NotificationTransactions>,
+    /// Server-lifetime exact inbound ConfirmedRequest duplicate state.
+    #[allow(dead_code)]
+    confirmed_request_tracker: Arc<ConfirmedRequestTracker>,
     /// Shared configured and passively observed Device recipient authority.
     device_bindings: Arc<RwLock<DeviceBindingTable>>,
     /// Communication state: 0 = Enable, 1 = Disable, 2 = DisableInitiation.
@@ -945,6 +949,7 @@ mod clock;
 pub(crate) use clock::clocked_test_database;
 pub use clock::ClockConfig;
 use clock::ServerClock;
+mod confirmed_request_tracker;
 mod cov_clock;
 mod cov_notifications;
 mod device_bindings;

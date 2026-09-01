@@ -205,6 +205,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Detected exact duplicate inbound Confirmed-Request messages are now silently
+  discarded before service decoding, authorization, mutation, side effects, or
+  response construction (`Refs #177`). Detection is server-lifetime and
+  process-local, retains no response bytes, and is bounded by a local
+  60-second completed window, 256 entries, and a 64 KiB tracked request-body
+  limit; requests that cannot be tracked safely continue through normal service.
+
 - `bacnet file-read` now strictly decodes AtomicReadFile ACKs, requires each
   returned start to match the requested cursor, and advances by the actual
   returned count until authoritative EOF instead of writing raw ACK encoding

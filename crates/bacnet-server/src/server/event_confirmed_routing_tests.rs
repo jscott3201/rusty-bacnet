@@ -252,6 +252,7 @@ impl Harness {
             &Arc::new(Semaphore::new(255)),
             &self.server_tsm,
             &self.notification_transactions,
+            &Arc::new(ConfirmedRequestTracker::default()),
             &self.device_bindings,
             &self.comm_state,
             &Arc::new(Mutex::new(None::<JoinHandle<()>>)),

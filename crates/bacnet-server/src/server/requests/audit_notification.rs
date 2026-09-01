@@ -1,34 +1,16 @@
 use super::*;
 
-/// Decode, authorize, and durably store one confirmed Audit request.
-///
-/// `None` means an exact pending/completed duplicate was detected and must be
-/// silently discarded. Every other request returns its service result.
+/// Decode, authorize, and durably store one admitted confirmed Audit request.
 pub(super) async fn receive_confirmed_audit_notification(
     db: &Arc<RwLock<ObjectDatabase>>,
-    notification_transactions: &Arc<NotificationTransactions>,
     config: &ServerConfig,
     source_mac: &[u8],
     source_network: Option<&NpduAddress>,
     invoke_id: u8,
     service_request: &Bytes,
-) -> Option<Result<(), Error>> {
-    if let Err(error) = validate_payload_size("ConfirmedAuditNotification", service_request) {
-        return Some(Err(error));
-    }
-
-    let pending = match notification_transactions
-        .audit_notification_tracker()
-        .begin(
-            source_mac,
-            source_network,
-            invoke_id,
-            service_request.clone(),
-        ) {
-        DuplicateAdmission::Duplicate => return None,
-        DuplicateAdmission::New(pending) => pending,
-    };
-    let execution = decode_authorize_and_store(
+) -> Result<(), Error> {
+    validate_payload_size("ConfirmedAuditNotification", service_request)?;
+    decode_authorize_and_store(
         db,
         config,
         "ConfirmedAuditNotification",
@@ -47,9 +29,7 @@ pub(super) async fn receive_confirmed_audit_notification(
                 .is_some_and(|authorizer| fail_closed_authorize(|| authorizer(&context)))
         },
     )
-    .await;
-    pending.complete();
-    Some(execution)
+    .await
 }
 
 /// Decode, authorize, and durably store one unconfirmed Audit request.

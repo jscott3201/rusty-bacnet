@@ -88,6 +88,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         cov_in_flight: &Arc<Semaphore>,
         server_tsm: &Arc<Mutex<ServerTsm>>,
         notification_transactions: &Arc<NotificationTransactions>,
+        confirmed_request_tracker: &Arc<ConfirmedRequestTracker>,
         device_bindings: &Arc<RwLock<DeviceBindingTable>>,
         comm_state: &Arc<AtomicU8>,
         dcc_timer: &Arc<Mutex<Option<JoinHandle<()>>>>,
@@ -108,6 +109,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let cov_in_flight = Arc::clone(cov_in_flight);
                 let server_tsm = Arc::clone(server_tsm);
                 let notification_transactions = Arc::clone(notification_transactions);
+                let confirmed_request_tracker = Arc::clone(confirmed_request_tracker);
                 let device_bindings = Arc::clone(device_bindings);
                 let comm_state = Arc::clone(comm_state);
                 let dcc_timer = Arc::clone(dcc_timer);
@@ -124,6 +126,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         &cov_in_flight,
                         &server_tsm,
                         &notification_transactions,
+                        &confirmed_request_tracker,
                         &device_bindings,
                         &comm_state,
                         &dcc_timer,
