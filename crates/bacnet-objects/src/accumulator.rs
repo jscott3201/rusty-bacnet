@@ -333,6 +333,9 @@ impl BACnetObject for PulseConverterObject {
         }
         match property {
             p if p == PropertyIdentifier::PRESENT_VALUE => {
+                if !self.out_of_service {
+                    return Err(common::write_access_denied_error());
+                }
                 if let PropertyValue::Real(v) = value {
                     common::reject_non_finite(v)?;
                     self.present_value = v;
@@ -400,12 +403,10 @@ impl BACnetObject for PulseConverterObject {
         Some(self.cov_increment)
     }
 
-    /// Mirror the `write_property` arms exactly (PICS truth invariant):
-    /// Pulse Converter accepts PRESENT_VALUE / SCALE_FACTOR / ADJUST_VALUE /
-    /// INPUT_REFERENCE plus the shared DESCRIPTION / OUT_OF_SERVICE /
-    /// COV_INCREMENT routes. OBJECT_NAME is NOT advertised: unlike the
-    /// historical default's blanket claim, no arm routes it (a network write
-    /// falls through to WRITE_ACCESS_DENIED).
+    /// Mirror the static `write_property` routes (PICS truth invariant):
+    /// PRESENT_VALUE is advertised because its route is available while OOS;
+    /// this method does not report current-state authorization. OBJECT_NAME is
+    /// not advertised because no arm routes it.
     fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
         matches!(
             property,
@@ -423,6 +424,10 @@ impl BACnetObject for PulseConverterObject {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+#[path = "pulse_converter_policy_tests.rs"]
+mod pulse_converter_policy_tests;
 
 #[cfg(test)]
 mod tests {
@@ -553,8 +558,15 @@ mod tests {
     }
 
     #[test]
-    fn pulse_converter_read_write_present_value() {
+    fn pulse_converter_read_write_present_value_while_out_of_service() {
         let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+        pc.write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(true),
+            None,
+        )
+        .unwrap();
         pc.write_property(
             PropertyIdentifier::PRESENT_VALUE,
             None,

@@ -231,6 +231,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Direct in-service network writes to Pulse Converter `Present_Value` are now
+  denied under the repository's Pulse Converter safety policy. Out-of-service
+  simulation writes remain accepted as required by ASHRAE 135-2020 §12.23
+  (`Closes #280`). This does not claim full Pulse Converter conformance.
+
 - Alert Enrollment now serves the bounded ASHRAE 135-2020 Table 12-61
   property model (`Closes #291`). `Present_Value` is the read-only
   `ObjectIdentifier` of the most recent alert source, and both the Rust

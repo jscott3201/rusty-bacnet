@@ -55,6 +55,7 @@ mod life_safety_reset;
 mod multi_element_writes;
 mod passwords;
 mod property_metadata;
+mod pulse_converter_writes;
 mod read_event_arrays;
 mod read_range;
 mod read_range_time;
