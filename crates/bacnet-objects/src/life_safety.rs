@@ -11,6 +11,14 @@ use std::borrow::Cow;
 use crate::common::{self, read_common_properties};
 use crate::traits::{BACnetObject, LifeSafetyOperationEffect};
 
+mod reset;
+
+pub use reset::{
+    LifeSafetyPointResetCommit, LifeSafetyPointResetContext, LifeSafetyPointResetExecutor,
+    LifeSafetyResetError, LifeSafetyZoneResetCommit, LifeSafetyZoneResetContext,
+    LifeSafetyZoneResetExecutor,
+};
+
 fn life_safety_error(code: ErrorCode) -> Error {
     Error::Protocol {
         class: ErrorClass::OBJECT.to_raw() as u32,
@@ -92,6 +100,8 @@ pub struct LifeSafetyPointObject {
     out_of_service: bool,
     /// Reliability (0 = NO_FAULT_DETECTED).
     reliability: u32,
+    /// Application-owned physical reset integration, configured before insertion.
+    reset_executor: Option<LifeSafetyPointResetExecutor>,
 }
 
 impl LifeSafetyPointObject {
@@ -117,6 +127,7 @@ impl LifeSafetyPointObject {
             status_flags: StatusFlags::empty(),
             out_of_service: false,
             reliability: 0,
+            reset_executor: None,
         })
     }
 
@@ -143,6 +154,20 @@ impl LifeSafetyPointObject {
     /// Set the next LifeSafetyOperation expected by local device logic.
     pub fn set_operation_expected(&mut self, operation: LifeSafetyOperation) {
         self.operation_expected = operation.to_raw();
+    }
+
+    /// Configure the application-owned reset executor before database insertion.
+    ///
+    /// The executor is used only for `RESET`, `RESET_ALARM`, and `RESET_FAULT`.
+    /// See [`LifeSafetyPointResetExecutor`] for its synchronous execution contract.
+    pub fn set_reset_executor(&mut self, executor: LifeSafetyPointResetExecutor) {
+        self.reset_executor = Some(executor);
+    }
+
+    /// Configure and return this point for insertion into an object database.
+    pub fn with_reset_executor(mut self, executor: LifeSafetyPointResetExecutor) -> Self {
+        self.set_reset_executor(executor);
+        self
     }
 
     /// Set the direct reading (raw sensor value).
@@ -302,7 +327,11 @@ impl BACnetObject for LifeSafetyPointObject {
         &mut self,
         operation: LifeSafetyOperation,
     ) -> Result<LifeSafetyOperationEffect, Error> {
-        apply_silenced_operation(&mut self.silenced, &mut self.operation_expected, operation)
+        if reset::is_reset_operation(operation) {
+            self.apply_reset_operation(operation)
+        } else {
+            apply_silenced_operation(&mut self.silenced, &mut self.operation_expected, operation)
+        }
     }
 
     fn set_life_safety_operation_expected_internal(
@@ -343,6 +372,8 @@ pub struct LifeSafetyZoneObject {
     out_of_service: bool,
     /// Reliability (0 = NO_FAULT_DETECTED).
     reliability: u32,
+    /// Application-owned physical reset integration, configured before insertion.
+    reset_executor: Option<LifeSafetyZoneResetExecutor>,
 }
 
 impl LifeSafetyZoneObject {
@@ -365,6 +396,7 @@ impl LifeSafetyZoneObject {
             status_flags: StatusFlags::empty(),
             out_of_service: false,
             reliability: 0,
+            reset_executor: None,
         })
     }
 
@@ -386,6 +418,20 @@ impl LifeSafetyZoneObject {
     /// Set the next LifeSafetyOperation expected by local device logic.
     pub fn set_operation_expected(&mut self, operation: LifeSafetyOperation) {
         self.operation_expected = operation.to_raw();
+    }
+
+    /// Configure the application-owned reset executor before database insertion.
+    ///
+    /// The executor is used only for `RESET`, `RESET_ALARM`, and `RESET_FAULT`.
+    /// See [`LifeSafetyZoneResetExecutor`] for its synchronous execution contract.
+    pub fn set_reset_executor(&mut self, executor: LifeSafetyZoneResetExecutor) {
+        self.reset_executor = Some(executor);
+    }
+
+    /// Configure and return this zone for insertion into an object database.
+    pub fn with_reset_executor(mut self, executor: LifeSafetyZoneResetExecutor) -> Self {
+        self.set_reset_executor(executor);
+        self
     }
 
     /// Set the description.
@@ -511,7 +557,11 @@ impl BACnetObject for LifeSafetyZoneObject {
         &mut self,
         operation: LifeSafetyOperation,
     ) -> Result<LifeSafetyOperationEffect, Error> {
-        apply_silenced_operation(&mut self.silenced, &mut self.operation_expected, operation)
+        if reset::is_reset_operation(operation) {
+            self.apply_reset_operation(operation)
+        } else {
+            apply_silenced_operation(&mut self.silenced, &mut self.operation_expected, operation)
+        }
     }
 
     fn set_life_safety_operation_expected_internal(
@@ -529,3 +579,6 @@ impl BACnetObject for LifeSafetyZoneObject {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod reset_tests;

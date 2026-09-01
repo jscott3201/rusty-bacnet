@@ -261,7 +261,7 @@ fn point_life_safety_operation_covers_silence_and_unsilence_matrix() {
 }
 
 #[test]
-fn point_rejects_wrong_expected_operation_and_reset_without_mutation() {
+fn point_rejects_wrong_expected_silence_and_reset_without_mutation() {
     let mut point = LifeSafetyPointObject::new(1, "LSP-1").unwrap();
     point.set_operation_expected(LifeSafetyOperation::SILENCE_AUDIBLE);
 
@@ -281,7 +281,11 @@ fn point_rejects_wrong_expected_operation_and_reset_without_mutation() {
     let error = point
         .apply_life_safety_operation(LifeSafetyOperation::RESET)
         .unwrap_err();
-    assert_protocol_error(error, ErrorClass::OBJECT, ErrorCode::VALUE_OUT_OF_RANGE);
+    assert_protocol_error(
+        error,
+        ErrorClass::OBJECT,
+        ErrorCode::INVALID_OPERATION_IN_THIS_STATE,
+    );
     assert_eq!(
         read_enumerated(&point, PropertyIdentifier::OPERATION_EXPECTED),
         LifeSafetyOperation::SILENCE_AUDIBLE.to_raw()
