@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Exact-delta Life Safety COV reporting for the bundled server (`Refs #177`).
+  Whole-object Point/Zone subscriptions now trigger only for actual
+  `Present_Value` or `Status_Flags` changes and report exactly those two
+  properties. Property subscriptions are limited to the modeled operational
+  surface and report the subscribed property plus one `Status_Flags`; Point
+  additionally supports `Tracking_Value`, while Zone rejects its unmodeled
+  `Tracking_Value` with `NOT_COV_PROPERTY`. Authorized operations, trusted
+  `Operation_Expected` rearming, server-owned WP/WPM/local writes, and live
+  Schedule writes use post-commit readback deltas after unlocking (and after
+  the service ACK where applicable), so silence-only whole-object changes and
+  same-value writes are quiet while actual status changes fan out.
+  Existing non-Life-Safety COV remains on the generic route. This is not full
+  Point/Zone table, metadata, PICS/BIBB, profile, or intrinsic-event support.
+
 - Opt-in, application-owned synchronous execution for `RESET`, `RESET_ALARM`,
   and `RESET_FAULT` on built-in Life Safety Point and Zone objects (`Refs
   #177`). Separate typed contexts expose only modeled immutable local state,

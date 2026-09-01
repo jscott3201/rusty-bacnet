@@ -49,6 +49,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let client_accepts_segmented = req.segmented_response_accepted;
         let client_max_segments = req.max_segments;
         let mut written_oids: Vec<ObjectIdentifier> = Vec::new();
+        let mut coarse_cov_oids: Vec<ObjectIdentifier> = Vec::new();
+        let mut life_safety_cov_changes = Vec::new();
         let mut initial_cov_notifications: Vec<InitialCovNotification> = Vec::new();
 
         let state = comm_state.load(Ordering::Acquire);
@@ -87,13 +89,28 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 confirmed_response::read_property_response(db, &req).await
             }
             s if s == ConfirmedServiceChoice::WRITE_PROPERTY => {
-                let result = {
+                let (result, exact_changes) = {
                     let mut db = db.write().await;
-                    handlers::handle_write_property(&mut db, &req.service_request)
+                    let snapshots =
+                        crate::life_safety_cov::LifeSafetyCovSnapshots::capture_write_property(
+                            &db,
+                            &req.service_request,
+                        );
+                    let result = handlers::handle_write_property(&mut db, &req.service_request);
+                    let changes = result
+                        .as_ref()
+                        .map(|oid| snapshots.changes(&db, std::slice::from_ref(oid)))
+                        .unwrap_or_default();
+                    (result, changes)
                 };
                 match result {
                     Ok(oid) => {
                         written_oids.push(oid);
+                        if crate::life_safety_cov::is_life_safety_object(oid) {
+                            life_safety_cov_changes = exact_changes;
+                        } else {
+                            coarse_cov_oids.push(oid);
+                        }
                         simple_ack()
                     }
                     Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
@@ -111,21 +128,37 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
             s if s == ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE => {
-                let (result, residual_oids) = {
+                let (result, residual_oids, exact_changes) = {
                     let mut db = db.write().await;
-                    handlers::handle_write_property_multiple_with_residuals(
-                        &mut db,
+                    let snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::capture_write_property_multiple(
+                        &db,
                         &req.service_request,
-                    )
+                    );
+                    let (result, residual_oids) =
+                        handlers::handle_write_property_multiple_with_residuals(
+                            &mut db,
+                            &req.service_request,
+                        );
+                    let affected = result.as_ref().unwrap_or(&residual_oids);
+                    let changes = snapshots.changes(&db, affected);
+                    (result, residual_oids, changes)
                 };
                 written_oids = residual_oids;
-                match result {
+                let response = match result {
                     Ok(oids) => {
                         written_oids = oids;
                         simple_ack()
                     }
                     Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
-                }
+                };
+                coarse_cov_oids.extend(
+                    written_oids
+                        .iter()
+                        .copied()
+                        .filter(|oid| !crate::life_safety_cov::is_life_safety_object(*oid)),
+                );
+                life_safety_cov_changes = exact_changes;
+                response
             }
             s if s == ConfirmedServiceChoice::SUBSCRIBE_COV => {
                 let db = db.read().await;
@@ -399,17 +432,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     ))
                                 } else {
                                     let mut db = db.write().await;
-                                    handlers::handle_life_safety_operation(&mut db, &request)
+                                    handlers::handle_life_safety_operation_detailed(
+                                        &mut db, &request,
+                                    )
                                 }
                             }
                         };
 
                         match execution {
-                            // LifeSafetyOperation changes Silenced and
-                            // Operation_Expected, not the whole-object COV and
-                            // event inputs represented by written_oids. A
-                            // property-aware COV path remains follow-up #177.
-                            Ok(_changed) => simple_ack(),
+                            Ok(result) => {
+                                life_safety_cov_changes.extend(result.cov_changes);
+                                simple_ack()
+                            }
                             Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
                         }
                     }
@@ -524,19 +558,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     )
                     .await;
                 }
-                for oid in &written_oids {
-                    Self::fire_cov_notifications(
-                        db,
-                        network,
-                        cov_table,
-                        cov_in_flight,
-                        notification_transactions,
-                        comm_state,
-                        config,
-                        oid,
-                    )
-                    .await;
-                }
+                Self::fire_post_write_cov_notifications(
+                    db,
+                    network,
+                    cov_table,
+                    cov_in_flight,
+                    notification_transactions,
+                    comm_state,
+                    config,
+                    &coarse_cov_oids,
+                    &life_safety_cov_changes,
+                )
+                .await;
                 for notification in &initial_cov_notifications {
                     match notification {
                         InitialCovNotification::Single(subscription) => {
@@ -626,19 +659,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .await;
         }
 
-        for oid in &written_oids {
-            Self::fire_cov_notifications(
-                db,
-                network,
-                cov_table,
-                cov_in_flight,
-                notification_transactions,
-                comm_state,
-                config,
-                oid,
-            )
-            .await;
-        }
+        Self::fire_post_write_cov_notifications(
+            db,
+            network,
+            cov_table,
+            cov_in_flight,
+            notification_transactions,
+            comm_state,
+            config,
+            &coarse_cov_oids,
+            &life_safety_cov_changes,
+        )
+        .await;
 
         for notification in &initial_cov_notifications {
             match notification {

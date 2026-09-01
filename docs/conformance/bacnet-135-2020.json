@@ -2063,41 +2063,59 @@
   },
   {
    "id": "BACNET-13-LIFE-SAFETY-OPERATION",
-   "standard_anchor": "Clause 13.13; Clauses 12.15 and 12.16 Silenced and Operation_Expected properties; Clause 18 errors",
+    "standard_anchor": "Clauses 13.13-13.15; Tables 13-1 and 13-1a; Clauses 12.15 and 12.16 Present_Value, Status_Flags, Tracking_Value, Silenced, and Operation_Expected properties; Clause 18 errors",
    "priority": "P0",
-   "requirement_summary": "The server executes authorized LifeSafetyOperation requests without false-positive acknowledgment, applies targeted or all-applicable silence/unsilence operations atomically per object, and returns the Clause 13.13 Result(-) taxonomy.",
+    "requirement_summary": "The server executes authorized LifeSafetyOperation requests with exact Result(+)/Result(-), delegates reset state only to configured application-owned executors, silently discards bounded exact duplicates before execution, and emits initial and post-mutation Life Safety COV only for actual deltas on the explicitly supported modeled operational properties.",
    "status": "implementation-present-needs-conformance-tests",
    "code_anchors": [
-    "crates/bacnet-services/src/life_safety.rs",
-    "crates/bacnet-objects/src/life_safety.rs",
-    "crates/bacnet-objects/src/traits.rs",
-    "crates/bacnet-server/src/life_safety.rs",
-    "crates/bacnet-server/src/handlers/alarm_event/life_safety_operation.rs",
-    "crates/bacnet-server/src/server/requests/mod.rs"
+     "crates/bacnet-services/src/life_safety.rs",
+     "crates/bacnet-objects/src/life_safety.rs",
+     "crates/bacnet-objects/src/life_safety/reset.rs",
+     "crates/bacnet-objects/src/traits.rs",
+     "crates/bacnet-server/src/life_safety.rs",
+     "crates/bacnet-server/src/life_safety_cov.rs",
+     "crates/bacnet-server/src/handlers/alarm_event/life_safety_operation.rs",
+     "crates/bacnet-server/src/handlers/cov.rs",
+      "crates/bacnet-server/src/server/cov_notifications.rs",
+      "crates/bacnet-server/src/server/cov_notifications/life_safety.rs",
+      "crates/bacnet-server/src/server/local_writes.rs",
+      "crates/bacnet-server/src/schedule.rs",
+      "crates/bacnet-server/src/server/lifecycle.rs",
+      "crates/bacnet-server/src/server/requests/mod.rs"
    ],
    "positive_tests": [
     "crates/bacnet-services/src/life_safety.rs::tests::unsupported_requesting_source_charsets_use_empty_string",
-    "crates/bacnet-objects/src/life_safety/tests.rs::point_life_safety_operation_combines_silenced_components",
-    "crates/bacnet-objects/src/life_safety/tests.rs::point_can_be_rearmed_through_the_local_trait_channel",
-    "crates/bacnet-objects/src/life_safety/tests.rs::zone_life_safety_operation_unsilences_one_component",
-    "crates/bacnet-server/src/handlers/tests/life_safety_operation.rs::life_safety_operation_without_target_attempts_every_object",
-    "crates/bacnet-server/src/server/life_safety_operation_tests.rs::life_safety_operation_authorizer_receives_routed_identity_before_success"
+     "crates/bacnet-objects/src/life_safety/tests.rs::point_life_safety_operation_combines_silenced_components",
+      "crates/bacnet-objects/src/life_safety/tests.rs::point_silence_and_unsilence_report_only_actual_silenced_and_expected_deltas",
+     "crates/bacnet-objects/src/life_safety/tests.rs::point_can_be_rearmed_through_the_local_trait_channel",
+     "crates/bacnet-objects/src/life_safety/tests.rs::zone_life_safety_operation_unsilences_one_component",
+     "crates/bacnet-objects/src/life_safety/reset_tests.rs::{point_reset_detailed_outcome_reports_exact_committed_deltas,same_value_reset_commit_reports_only_expected_operation,zone_reset_detailed_outcome_never_invents_tracking_value}",
+     "crates/bacnet-server/src/handlers/tests/life_safety_operation.rs::life_safety_operation_without_target_attempts_every_object",
+     "crates/bacnet-server/src/handlers/tests/life_safety_operation.rs::targetless_mixed_outcomes_aggregate_only_successful_exact_deltas",
+     "crates/bacnet-server/src/server/life_safety_operation_tests.rs::life_safety_operation_authorizer_receives_routed_identity_before_success",
+     "crates/bacnet-server/src/server/life_safety_cov_tests.rs::{exact_single_cov_filters_whole_and_property_payloads,exact_point_tracking_cov_does_not_add_unrelated_subscriptions,exact_multiple_cov_groups_matching_properties_and_one_status_flags,initial_single_and_multiple_life_safety_payloads_include_one_status_flags,trusted_rearm_and_local_oos_write_notify_only_actual_deltas,network_write_property_and_multiple_use_exact_status_deltas,operation_ack_precedes_exact_cov_and_duplicate_is_silent}",
+     "crates/bacnet-server/src/server/life_safety_cov_tests/initial.rs::{subscribe_initial_and_resub_ack_precede_notification_and_cancel_is_quiet,multiple_initial_and_resub_ack_precede_payload_and_cancel_is_quiet}",
+     "crates/bacnet-server/src/server/life_safety_cov_tests/routed.rs::exact_confirmed_multiple_preserves_routed_peer_and_mode",
+     "crates/bacnet-server/src/server/life_safety_cov_tests/schedule.rs::live_schedule_retains_actual_life_safety_status_delta"
    ],
    "negative_tests": [
     "crates/bacnet-services/src/life_safety.rs::tests::malformed_supported_requesting_source_still_errors",
     "crates/bacnet-objects/src/life_safety/tests.rs::point_replayed_silence_without_response_cache_is_invalid_state",
-    "crates/bacnet-objects/src/life_safety/tests.rs::point_rejects_wrong_expected_operation_and_reset_without_mutation",
-    "crates/bacnet-objects/src/life_safety/tests.rs::point_silenced_and_operation_expected_are_network_read_only",
-    "crates/bacnet-server/src/handlers/tests/life_safety_operation.rs::life_safety_properties_cannot_be_bypassed_through_write_property_multiple",
+     "crates/bacnet-objects/src/life_safety/tests.rs::point_rejects_wrong_expected_silence_and_reset_without_mutation",
+     "crates/bacnet-objects/src/life_safety/tests.rs::point_silenced_and_operation_expected_are_network_read_only",
+     "crates/bacnet-objects/src/life_safety/reset_tests.rs::{wrong_expected_reset_never_calls_executor_or_changes_state,executor_failures_and_panics_map_exactly_without_mutation,invalid_commits_cannot_partially_mutate_point_or_zone}",
+     "crates/bacnet-server/src/handlers/tests/life_safety_operation.rs::life_safety_properties_cannot_be_bypassed_through_write_property_multiple",
+     "crates/bacnet-server/src/handlers/tests/life_safety_cov.rs::{life_safety_single_property_cov_uses_explicit_capability_and_error_taxonomy,life_safety_multiple_property_cov_rejection_is_atomic,life_safety_property_cancellation_bypasses_current_capability_checks}",
     "crates/bacnet-server/src/server/life_safety_operation_tests.rs::life_safety_operation_default_policy_denies_without_mutation",
     "crates/bacnet-server/src/server/life_safety_operation_tests.rs::life_safety_operation_dispatch_preserves_all_targeted_error_rows",
-    "crates/bacnet-server/src/server/life_safety_operation_tests.rs::life_safety_operation_panicking_authorizer_fails_closed"
+     "crates/bacnet-server/src/server/life_safety_operation_tests.rs::life_safety_operation_panicking_authorizer_fails_closed",
+     "crates/bacnet-server/src/server/life_safety_cov_tests/failures.rs::denied_invalid_and_panicking_operations_emit_no_cov"
    ],
    "benchmarks": [],
    "public_claims": [
-    "README supported services (qualified silence/unsilence server support)"
+     "README supported services (qualified authorized Life Safety operations and modeled exact COV)"
    ],
-   "notes": "Partial #177 safety slice. The former decode-only unconditional SimpleACK path is removed. Authorization is fail-closed and sees immediate plus routed requester identity; Requesting Source remains untrusted text. Built-in Point/Zone objects implement only the six silence/unsilence operations and require an exact Operation_Expected match. Targeted Reset, Reset Alarm, and Reset Fault return OBJECT / VALUE_OUT_OF_RANGE pending an application-owned executor or latch contract plus duplicate-response semantics; targetless reset requests perform the required all-applicable attempt and return Result(+) without built-in reset mutation. A retransmission after successful state mutation returns INVALID_OPERATION_IN_THIS_STATE until confirmed-request response replay exists. Silenced and Operation_Expected are network-read-only by local safety policy, including WPM rollback evidence. LifeSafetyOperation deliberately does not enter the coarse whole-object COV/event fan-out; property-aware COV for Silenced and Operation_Expected remains follow-up #177. No AE-LS-A/AE-LS-B or life-safety profile claim is made."
+    "notes": "Partial #177 operational-state evidence only. Authorization is fail-closed and sees immediate plus routed requester identity; Requesting Source remains untrusted text. Built-in Point/Zone execute the six silence/unsilence operations with exact Operation_Expected arming. Reset variants execute only through configured application-owned synchronous executors and commit only supplied modeled values before clearing Operation_Expected; no physical state is inferred. The bounded process-local confirmed-request tracker silently discards exact duplicates before authorization/execution but is not durable actuation idempotency. Detailed object outcomes and WP/WPM/write_local/live-Schedule readback snapshots retain ordered actual deltas. Whole-object Life Safety COV triggers only for Present_Value/Status_Flags and reports exactly both; property COV reports the supported subscribed property plus one Status_Flags and fans out on an actual Status_Flags change. Point supports Present_Value, Status_Flags, Tracking_Value, Silenced, and Operation_Expected; Zone supports those without Tracking_Value and rejects Zone Tracking_Value as NOT_COV_PROPERTY. Initial and re-subscription notifications follow the same payload sets after ACK; cancellation is quiet. Gaps retained: no complete Point/Zone table, metadata, PICS, BIBB, profile, or device-advertisement claim; Zone Tracking_Value is absent; Accepted_Modes/mode validation, out-of-service tracking/reliability behavior, datatype/reference fixes, persistence/durable replay, and a broad intrinsic CHANGE_OF_LIFE_SAFETY event algorithm remain deferred."
   },
   {
    "id": "BACNET-14-FILE-ACCESS-METHOD",

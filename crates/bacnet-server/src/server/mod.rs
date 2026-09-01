@@ -961,6 +961,7 @@ mod event_notifications;
 mod event_recipient_route;
 pub(crate) mod event_timestamp;
 mod lifecycle;
+mod local_writes;
 mod notification_transactions;
 mod requests;
 #[cfg(feature = "sc-tls")]
@@ -1000,6 +1001,8 @@ mod event_network_priority_tests;
 mod event_notifications_tests;
 #[cfg(test)]
 mod event_recipient_routing_tests;
+#[cfg(test)]
+mod life_safety_cov_tests;
 #[cfg(test)]
 mod life_safety_operation_tests;
 #[cfg(test)]

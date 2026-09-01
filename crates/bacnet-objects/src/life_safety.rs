@@ -9,7 +9,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
-use crate::traits::{BACnetObject, LifeSafetyOperationEffect};
+use crate::traits::{BACnetObject, LifeSafetyOperationEffect, LifeSafetyOperationOutcome};
 
 mod reset;
 
@@ -63,6 +63,41 @@ fn apply_silenced_operation(
     *silenced = desired;
     *operation_expected = LifeSafetyOperation::NONE.to_raw();
     Ok(LifeSafetyOperationEffect::Applied)
+}
+
+const POINT_COV_PROPERTIES: [PropertyIdentifier; 5] = [
+    PropertyIdentifier::PRESENT_VALUE,
+    PropertyIdentifier::TRACKING_VALUE,
+    PropertyIdentifier::SILENCED,
+    PropertyIdentifier::OPERATION_EXPECTED,
+    PropertyIdentifier::STATUS_FLAGS,
+];
+
+const ZONE_COV_PROPERTIES: [PropertyIdentifier; 4] = [
+    PropertyIdentifier::PRESENT_VALUE,
+    PropertyIdentifier::SILENCED,
+    PropertyIdentifier::OPERATION_EXPECTED,
+    PropertyIdentifier::STATUS_FLAGS,
+];
+
+fn operation_outcome(
+    object: &dyn BACnetObject,
+    before: Vec<(PropertyIdentifier, PropertyValue)>,
+    effect: LifeSafetyOperationEffect,
+) -> LifeSafetyOperationOutcome {
+    let changed_properties = before
+        .into_iter()
+        .filter_map(|(property, previous)| {
+            object
+                .read_property(property, None)
+                .is_ok_and(|current| current != previous)
+                .then_some(property)
+        })
+        .collect();
+    LifeSafetyOperationOutcome {
+        effect,
+        changed_properties,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -312,6 +347,10 @@ impl BACnetObject for LifeSafetyPointObject {
         true
     }
 
+    fn supports_cov_property(&self, property: PropertyIdentifier) -> bool {
+        POINT_COV_PROPERTIES.contains(&property)
+    }
+
     fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
         matches!(
             property,
@@ -332,6 +371,22 @@ impl BACnetObject for LifeSafetyPointObject {
         } else {
             apply_silenced_operation(&mut self.silenced, &mut self.operation_expected, operation)
         }
+    }
+
+    fn apply_life_safety_operation_detailed(
+        &mut self,
+        operation: LifeSafetyOperation,
+    ) -> Result<LifeSafetyOperationOutcome, Error> {
+        let before = POINT_COV_PROPERTIES
+            .into_iter()
+            .filter_map(|property| {
+                self.read_property(property, None)
+                    .ok()
+                    .map(|value| (property, value))
+            })
+            .collect();
+        let effect = self.apply_life_safety_operation(operation)?;
+        Ok(operation_outcome(self, before, effect))
     }
 
     fn set_life_safety_operation_expected_internal(
@@ -544,6 +599,10 @@ impl BACnetObject for LifeSafetyZoneObject {
         true
     }
 
+    fn supports_cov_property(&self, property: PropertyIdentifier) -> bool {
+        ZONE_COV_PROPERTIES.contains(&property)
+    }
+
     fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
         matches!(
             property,
@@ -562,6 +621,22 @@ impl BACnetObject for LifeSafetyZoneObject {
         } else {
             apply_silenced_operation(&mut self.silenced, &mut self.operation_expected, operation)
         }
+    }
+
+    fn apply_life_safety_operation_detailed(
+        &mut self,
+        operation: LifeSafetyOperation,
+    ) -> Result<LifeSafetyOperationOutcome, Error> {
+        let before = ZONE_COV_PROPERTIES
+            .into_iter()
+            .filter_map(|property| {
+                self.read_property(property, None)
+                    .ok()
+                    .map(|value| (property, value))
+            })
+            .collect();
+        let effect = self.apply_life_safety_operation(operation)?;
+        Ok(operation_outcome(self, before, effect))
     }
 
     fn set_life_safety_operation_expected_internal(

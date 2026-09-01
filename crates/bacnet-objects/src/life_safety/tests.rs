@@ -151,6 +151,46 @@ fn point_life_safety_operation_combines_silenced_components() {
 }
 
 #[test]
+fn point_silence_and_unsilence_report_only_actual_silenced_and_expected_deltas() {
+    let mut point = LifeSafetyPointObject::new(1, "LSP-1").unwrap();
+    point.set_operation_expected(LifeSafetyOperation::SILENCE);
+
+    let outcome = point
+        .apply_life_safety_operation_detailed(LifeSafetyOperation::SILENCE)
+        .unwrap();
+
+    assert_eq!(outcome.effect, LifeSafetyOperationEffect::Applied);
+    assert_eq!(
+        outcome.changed_properties,
+        vec![
+            PropertyIdentifier::SILENCED,
+            PropertyIdentifier::OPERATION_EXPECTED,
+        ]
+    );
+
+    point.set_operation_expected(LifeSafetyOperation::SILENCE);
+    let outcome = point
+        .apply_life_safety_operation_detailed(LifeSafetyOperation::SILENCE)
+        .unwrap();
+    assert_eq!(
+        outcome.changed_properties,
+        vec![PropertyIdentifier::OPERATION_EXPECTED]
+    );
+
+    point.set_operation_expected(LifeSafetyOperation::UNSILENCE);
+    let outcome = point
+        .apply_life_safety_operation_detailed(LifeSafetyOperation::UNSILENCE)
+        .unwrap();
+    assert_eq!(
+        outcome.changed_properties,
+        vec![
+            PropertyIdentifier::SILENCED,
+            PropertyIdentifier::OPERATION_EXPECTED,
+        ]
+    );
+}
+
+#[test]
 fn point_replayed_silence_without_response_cache_is_invalid_state() {
     let mut point = LifeSafetyPointObject::new(1, "LSP-1").unwrap();
     point.set_operation_expected(LifeSafetyOperation::SILENCE);
@@ -441,6 +481,33 @@ fn point_property_list() {
     assert!(props.contains(&PropertyIdentifier::STATUS_FLAGS));
     assert!(props.contains(&PropertyIdentifier::OUT_OF_SERVICE));
     assert!(props.contains(&PropertyIdentifier::RELIABILITY));
+}
+
+#[test]
+fn life_safety_property_cov_capabilities_are_explicit() {
+    let point = LifeSafetyPointObject::new(1, "LSP-1").unwrap();
+    for property in [
+        PropertyIdentifier::PRESENT_VALUE,
+        PropertyIdentifier::STATUS_FLAGS,
+        PropertyIdentifier::TRACKING_VALUE,
+        PropertyIdentifier::SILENCED,
+        PropertyIdentifier::OPERATION_EXPECTED,
+    ] {
+        assert!(point.supports_cov_property(property));
+    }
+    assert!(!point.supports_cov_property(PropertyIdentifier::MODE));
+
+    let zone = LifeSafetyZoneObject::new(1, "LSZ-1").unwrap();
+    for property in [
+        PropertyIdentifier::PRESENT_VALUE,
+        PropertyIdentifier::STATUS_FLAGS,
+        PropertyIdentifier::SILENCED,
+        PropertyIdentifier::OPERATION_EXPECTED,
+    ] {
+        assert!(zone.supports_cov_property(property));
+    }
+    assert!(!zone.supports_cov_property(PropertyIdentifier::TRACKING_VALUE));
+    assert!(!zone.supports_cov_property(PropertyIdentifier::MODE));
 }
 
 #[test]

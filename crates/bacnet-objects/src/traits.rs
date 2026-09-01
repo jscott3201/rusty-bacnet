@@ -42,6 +42,21 @@ pub enum LifeSafetyOperationEffect {
     AlreadyApplied,
 }
 
+/// Detailed result of applying a `LifeSafetyOperation` to object-owned state.
+///
+/// `changed_properties` is ordered by the object's stable reporting order and
+/// contains each property at most once. Custom objects that implement only
+/// [`BACnetObject::apply_life_safety_operation`] remain source-compatible: the
+/// default detailed hook delegates to that method and reports no properties
+/// because the trait cannot truthfully infer their object-private mutations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LifeSafetyOperationOutcome {
+    /// Existing coarse operation result.
+    pub effect: LifeSafetyOperationEffect,
+    /// Exact properties whose committed readback changed.
+    pub changed_properties: Vec<PropertyIdentifier>,
+}
+
 /// Result of one object-owned reliability evaluation pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReliabilityEvaluation {
@@ -244,6 +259,34 @@ pub trait BACnetObject: Send + Sync {
         false
     }
 
+    /// Whether a readable property supports property-specific COV.
+    ///
+    /// The default preserves the existing behavior of every other COV-capable
+    /// object family while enforcing the bounded standardized Life Safety
+    /// surface for source-compatible custom Point and Zone implementations.
+    fn supports_cov_property(&self, property: PropertyIdentifier) -> bool {
+        use bacnet_types::enums::ObjectType;
+
+        match self.object_identifier().object_type() {
+            ObjectType::LIFE_SAFETY_POINT => matches!(
+                property,
+                PropertyIdentifier::PRESENT_VALUE
+                    | PropertyIdentifier::STATUS_FLAGS
+                    | PropertyIdentifier::TRACKING_VALUE
+                    | PropertyIdentifier::SILENCED
+                    | PropertyIdentifier::OPERATION_EXPECTED
+            ),
+            ObjectType::LIFE_SAFETY_ZONE => matches!(
+                property,
+                PropertyIdentifier::PRESENT_VALUE
+                    | PropertyIdentifier::STATUS_FLAGS
+                    | PropertyIdentifier::SILENCED
+                    | PropertyIdentifier::OPERATION_EXPECTED
+            ),
+            _ => self.supports_cov(),
+        }
+    }
+
     /// COV increment for this object (analog objects only).
     ///
     /// Returns `Some(increment)` for objects that use COV_Increment filtering
@@ -392,6 +435,21 @@ pub trait BACnetObject: Send + Sync {
             class: ErrorClass::OBJECT.to_raw() as u32,
             code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
         })
+    }
+
+    /// Apply a LifeSafetyOperation and report exact known property deltas.
+    ///
+    /// The default delegates to the source-compatible coarse hook and reports
+    /// no known properties rather than guessing about custom object state.
+    fn apply_life_safety_operation_detailed(
+        &mut self,
+        operation: LifeSafetyOperation,
+    ) -> Result<LifeSafetyOperationOutcome, Error> {
+        self.apply_life_safety_operation(operation)
+            .map(|effect| LifeSafetyOperationOutcome {
+                effect,
+                changed_properties: Vec::new(),
+            })
     }
 
     /// Set the next LifeSafetyOperation expected by trusted local logic.

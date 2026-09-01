@@ -94,6 +94,37 @@ fn point_reset_variants_receive_exact_context_and_commit_atomically() {
 }
 
 #[test]
+fn point_reset_detailed_outcome_reports_exact_committed_deltas() {
+    let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
+    point.set_present_value(LifeSafetyState::ALARM.to_raw());
+    point.set_tracking_value(LifeSafetyState::FAULT.to_raw());
+    point.set_silenced(SilencedState::ALL_SILENCED);
+    point.set_operation_expected(LifeSafetyOperation::RESET);
+    point.set_reset_executor(Arc::new(|_| {
+        Ok(LifeSafetyPointResetCommit {
+            present_value: Some(LifeSafetyState::QUIET),
+            tracking_value: Some(LifeSafetyState::QUIET),
+            silenced: Some(SilencedState::UNSILENCED),
+        })
+    }));
+
+    let outcome = point
+        .apply_life_safety_operation_detailed(LifeSafetyOperation::RESET)
+        .unwrap();
+
+    assert_eq!(outcome.effect, LifeSafetyOperationEffect::Applied);
+    assert_eq!(
+        outcome.changed_properties,
+        vec![
+            PropertyIdentifier::PRESENT_VALUE,
+            PropertyIdentifier::TRACKING_VALUE,
+            PropertyIdentifier::SILENCED,
+            PropertyIdentifier::OPERATION_EXPECTED,
+        ]
+    );
+}
+
+#[test]
 fn zone_reset_variants_receive_exact_context_and_commit_atomically() {
     for operation in [
         LifeSafetyOperation::RESET,
@@ -157,6 +188,61 @@ fn no_delta_reset_success_preserves_values_and_clears_expected_operation() {
         read(&point, PropertyIdentifier::OPERATION_EXPECTED),
         LifeSafetyOperation::NONE.to_raw()
     );
+}
+
+#[test]
+fn same_value_reset_commit_reports_only_expected_operation() {
+    let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
+    point.set_present_value(LifeSafetyState::ALARM.to_raw());
+    point.set_tracking_value(LifeSafetyState::FAULT.to_raw());
+    point.set_silenced(SilencedState::ALL_SILENCED);
+    point.set_operation_expected(LifeSafetyOperation::RESET);
+    point.set_reset_executor(Arc::new(|_| {
+        Ok(LifeSafetyPointResetCommit {
+            present_value: Some(LifeSafetyState::ALARM),
+            tracking_value: Some(LifeSafetyState::FAULT),
+            silenced: Some(SilencedState::ALL_SILENCED),
+        })
+    }));
+
+    let outcome = point
+        .apply_life_safety_operation_detailed(LifeSafetyOperation::RESET)
+        .unwrap();
+
+    assert_eq!(
+        outcome.changed_properties,
+        vec![PropertyIdentifier::OPERATION_EXPECTED]
+    );
+}
+
+#[test]
+fn zone_reset_detailed_outcome_never_invents_tracking_value() {
+    let mut zone = LifeSafetyZoneObject::new(1, "zone").unwrap();
+    zone.set_present_value(LifeSafetyState::ALARM.to_raw());
+    zone.set_silenced(SilencedState::ALL_SILENCED);
+    zone.set_operation_expected(LifeSafetyOperation::RESET);
+    zone.set_reset_executor(Arc::new(|_| {
+        Ok(LifeSafetyZoneResetCommit {
+            present_value: Some(LifeSafetyState::QUIET),
+            silenced: Some(SilencedState::UNSILENCED),
+        })
+    }));
+
+    let outcome = zone
+        .apply_life_safety_operation_detailed(LifeSafetyOperation::RESET)
+        .unwrap();
+
+    assert_eq!(
+        outcome.changed_properties,
+        vec![
+            PropertyIdentifier::PRESENT_VALUE,
+            PropertyIdentifier::SILENCED,
+            PropertyIdentifier::OPERATION_EXPECTED,
+        ]
+    );
+    assert!(!outcome
+        .changed_properties
+        .contains(&PropertyIdentifier::TRACKING_VALUE));
 }
 
 #[test]

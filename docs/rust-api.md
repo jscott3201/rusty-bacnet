@@ -985,16 +985,36 @@ server.stop().await?;
 
 Inbound LifeSafetyOperation is fail-closed unless an authorizer is configured.
 The built-in Life Safety Point and Zone objects execute the six silence and
-unsilence operations. Targeted reset variants return `OBJECT / VALUE_OUT_OF_RANGE`
-until application-executor and duplicate-response semantics are available;
-targetless reset requests complete the required all-applicable attempt without
-mutating built-in objects.
+unsilence operations. `RESET`, `RESET_ALARM`, and `RESET_FAULT` execute only
+through a configured application-owned Point/Zone reset executor after exact
+`Operation_Expected` arming; omitted commit fields remain unchanged and no
+physical state is inferred. Exact confirmed duplicates are discarded silently
+by the bounded process-local request tracker, so irreversible actuation still
+requires application-owned idempotency across tracker expiry or restart.
 
 Trusted runtime logic can arm or rearm a Life Safety object through
 `BACnetServer::set_life_safety_operation_expected_local`. The lower-level
 `BACnetObject::set_life_safety_operation_expected_internal` channel also remains
 available to custom database owners. Protocol WriteProperty and
 WritePropertyMultiple cannot forge `Operation_Expected` or `Silenced`.
+
+The additive `BACnetObject::apply_life_safety_operation_detailed` result carries
+the existing `LifeSafetyOperationEffect` plus ordered actual property deltas;
+its default delegates to the legacy hook and reports no guessed properties.
+The bundled server uses those deltas, trusted rearm readback, and exact WP/WPM/
+`write_local`/live-Schedule pre/post readback to route Life Safety COV after
+unlocking and after the service ACK where applicable.
+Whole-object reports are exactly `Present_Value` plus `Status_Flags` and trigger
+only when either changes. Property reports are the subscribed property plus one
+`Status_Flags` and trigger when either changes. Point property COV supports
+`Present_Value`, `Status_Flags`, `Tracking_Value`, `Silenced`, and
+`Operation_Expected`; Zone supports the same set without its unmodeled
+`Tracking_Value`, which is rejected with `PROPERTY / NOT_COV_PROPERTY`.
+Low-level object setters still bypass server notification ownership.
+
+This is a bounded operational-state slice, not complete Life Safety Point/Zone
+table, metadata, PICS/BIBB, profile, accepted-mode, reliability/tracking, or
+intrinsic `CHANGE_OF_LIFE_SAFETY` event-algorithm conformance.
 
 ### Handled Services
 
@@ -1009,7 +1029,7 @@ The server automatically dispatches:
 - GetEventInformation, AcknowledgeAlarm
 - GetAlarmSummary, GetEnrollmentSummary
 - ConfirmedTextMessage
-- LifeSafetyOperation (authorized silence/unsilence; built-in reset is unsupported)
+- LifeSafetyOperation (authorized silence/unsilence; reset via configured application executor)
 - ConfirmedAuditNotification (explicit sink and fail-closed authorizer; process-local duplicate detection)
 - AuditLogQuery (retained records; no query authorization or failures-only mode)
 - ReadRange
