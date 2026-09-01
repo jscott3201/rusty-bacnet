@@ -107,11 +107,12 @@ fn life_safety_operation_reports_target_errors() {
 }
 
 #[test]
-fn life_safety_operation_rejects_reserved_and_builtin_reset() {
+fn life_safety_operation_rejects_none_and_reserved_and_reports_missing_reset_executor() {
     let oid = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 1).unwrap();
+    let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
+    point.set_operation_expected(LifeSafetyOperation::RESET);
     let mut db = ObjectDatabase::new();
-    db.add(Box::new(LifeSafetyPointObject::new(1, "point").unwrap()))
-        .unwrap();
+    db.add(Box::new(point)).unwrap();
 
     for operation in [LifeSafetyOperation::NONE, LifeSafetyOperation::from_raw(10)] {
         let error =
@@ -122,11 +123,15 @@ fn life_safety_operation_rejects_reserved_and_builtin_reset() {
     let error =
         handle_life_safety_operation(&mut db, &request(LifeSafetyOperation::RESET, Some(oid)))
             .unwrap_err();
-    assert_protocol_error(error, ErrorClass::OBJECT, ErrorCode::VALUE_OUT_OF_RANGE);
+    assert_protocol_error(
+        error,
+        ErrorClass::OBJECT,
+        ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+    );
 }
 
 #[test]
-fn life_safety_operation_without_target_attempts_reset_without_mutation() {
+fn life_safety_operation_without_target_suppresses_missing_reset_executor() {
     let oid = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 1).unwrap();
     let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
     point.set_operation_expected(LifeSafetyOperation::RESET);

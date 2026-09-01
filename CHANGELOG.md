@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Opt-in, application-owned synchronous execution for `RESET`, `RESET_ALARM`,
+  and `RESET_FAULT` on built-in Life Safety Point and Zone objects (`Refs
+  #177`). Separate typed contexts expose only modeled immutable local state,
+  and typed atomic commits may update only Point Present/Tracking/Silenced or
+  Zone Present/Silenced before the object clears `Operation_Expected`.
+  Missing executors, unsupported variants, invalid state, operational failure,
+  panic, invalid commits, and authorization denial retain exact Result(-)
+  handling; targetless reset keeps successful object commits while suppressing
+  per-object failures. No built-in or physical reset behavior is inferred,
+  Zone Tracking_Value and PICS/BIBB claims remain deferred, and bounded
+  duplicate tracking does not replace application-owned actuation idempotency.
+
 - Synchronous pre-start Python management for pending built-in File objects
   (#420). Servers can select stream or record access, copy payloads in and out,
   and set effective clamped octet/record growth caps on the exact object later

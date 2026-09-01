@@ -49,6 +49,7 @@ mod file_persistence;
 mod file_storage_hook;
 mod framed_properties;
 mod life_safety_operation;
+mod life_safety_reset;
 mod multi_element_writes;
 mod passwords;
 mod property_metadata;

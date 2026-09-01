@@ -7,9 +7,11 @@ use bacnet_types::enums::{ErrorClass, ErrorCode, LifeSafetyOperation};
 
 /// Handle a LifeSafetyOperation request.
 ///
-/// Targeted requests return the exact Clause 13.13 object error. Requests
-/// without an Object Identifier attempt every object and retain successful
-/// per-object mutations. Returned identifiers are objects whose state changed.
+/// Targeted requests return the exact Clause 13.13 object error. Targetless
+/// reset requests attempt only Life Safety Point and Zone objects; targetless
+/// silence/unsilence retains its generic legacy traversal. Successful
+/// per-object mutations are retained. Returned identifiers are objects whose
+/// state changed.
 pub fn handle_life_safety_operation(
     db: &mut ObjectDatabase,
     request: &LifeSafetyOperationRequest,
@@ -20,6 +22,12 @@ pub fn handle_life_safety_operation(
         let object = db
             .get_mut(&oid)
             .ok_or_else(|| life_safety_error(ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT))?;
+        if is_reset_operation(request.request) && !is_life_safety_object(oid) {
+            return Err(life_safety_error(
+                ErrorClass::OBJECT,
+                ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+            ));
+        }
         return match object.apply_life_safety_operation(request.request)? {
             LifeSafetyOperationEffect::Applied => Ok(vec![oid]),
             LifeSafetyOperationEffect::AlreadyApplied => Ok(Vec::new()),
@@ -27,6 +35,9 @@ pub fn handle_life_safety_operation(
     }
 
     let mut object_ids = db.list_objects();
+    if is_reset_operation(request.request) {
+        object_ids.retain(|oid| is_life_safety_object(*oid));
+    }
     object_ids.sort_by_key(|oid| (oid.object_type().to_raw(), oid.instance_number()));
     let attempted = object_ids.len();
     let mut changed = Vec::new();
@@ -55,11 +66,8 @@ pub fn handle_life_safety_operation(
 
 /// Validate the standard operations accepted by the service.
 ///
-/// Built-in reset execution remains unavailable until application-executor and
-/// duplicate-response semantics are defined. A targeted built-in object returns
-/// the specified unsupported-operation error from its object hook. A request
-/// without an Object Identifier still performs the Clause 13.13 all-applicable
-/// attempt and returns Result(+), even when every built-in object rejects reset.
+/// `NONE` and reserved/unknown values are rejected. All three reset variants
+/// are delegated distinctly to configured built-in Point/Zone executors.
 pub fn validate_life_safety_operation(operation: LifeSafetyOperation) -> Result<(), Error> {
     if (LifeSafetyOperation::SILENCE.to_raw()..=LifeSafetyOperation::UNSILENCE_VISUAL.to_raw())
         .contains(&operation.to_raw())
@@ -71,6 +79,22 @@ pub fn validate_life_safety_operation(operation: LifeSafetyOperation) -> Result<
             ErrorCode::VALUE_OUT_OF_RANGE,
         ))
     }
+}
+
+fn is_reset_operation(operation: LifeSafetyOperation) -> bool {
+    matches!(
+        operation,
+        LifeSafetyOperation::RESET
+            | LifeSafetyOperation::RESET_ALARM
+            | LifeSafetyOperation::RESET_FAULT
+    )
+}
+
+fn is_life_safety_object(oid: ObjectIdentifier) -> bool {
+    matches!(
+        oid.object_type(),
+        ObjectType::LIFE_SAFETY_POINT | ObjectType::LIFE_SAFETY_ZONE
+    )
 }
 
 pub(crate) fn life_safety_error(class: ErrorClass, code: ErrorCode) -> Error {

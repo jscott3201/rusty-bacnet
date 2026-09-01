@@ -6,9 +6,9 @@ use std::sync::Mutex as StdMutex;
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_objects::analog::AnalogInputObject;
-use bacnet_objects::life_safety::LifeSafetyPointObject;
+use bacnet_objects::life_safety::{LifeSafetyPointObject, LifeSafetyPointResetCommit};
 use bacnet_services::life_safety::LifeSafetyOperationRequest;
-use bacnet_types::enums::{LifeSafetyOperation, SilencedState};
+use bacnet_types::enums::{LifeSafetyOperation, LifeSafetyState, SilencedState};
 
 fn point_oid(instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, instance).unwrap()
@@ -143,10 +143,16 @@ fn assert_simple_ack(apdu: Apdu) {
 #[tokio::test]
 async fn local_rearm_api_supports_two_operation_cycles() {
     let oid = point_oid(1);
+    let executions = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&executions);
+    let point = LifeSafetyPointObject::new(1, "point")
+        .unwrap()
+        .with_reset_executor(Arc::new(move |_| {
+            observed.fetch_add(1, Ordering::AcqRel);
+            Ok(LifeSafetyPointResetCommit::default())
+        }));
     let mut objects = ObjectDatabase::new();
-    objects
-        .add(Box::new(LifeSafetyPointObject::new(1, "point").unwrap()))
-        .unwrap();
+    objects.add(Box::new(point)).unwrap();
     let mut server = BACnetServer::<BipTransport>::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
@@ -156,7 +162,7 @@ async fn local_rearm_api_supports_two_operation_cycles() {
         .await
         .unwrap();
 
-    for operation in [LifeSafetyOperation::SILENCE, LifeSafetyOperation::UNSILENCE] {
+    for operation in [LifeSafetyOperation::RESET, LifeSafetyOperation::RESET_FAULT] {
         server
             .set_life_safety_operation_expected_local(&oid, operation)
             .await
@@ -168,13 +174,14 @@ async fn local_rearm_api_supports_two_operation_cycles() {
         assert_eq!(changed, vec![oid]);
     }
 
+    assert_eq!(executions.load(Ordering::Acquire), 2);
     let db = server.db.read().await;
     assert_eq!(
         db.get(&oid)
             .unwrap()
-            .read_property(PropertyIdentifier::SILENCED, None)
+            .read_property(PropertyIdentifier::OPERATION_EXPECTED, None)
             .unwrap(),
-        PropertyValue::Enumerated(SilencedState::UNSILENCED.to_raw())
+        PropertyValue::Enumerated(LifeSafetyOperation::NONE.to_raw())
     );
     drop(db);
     server.stop().await.unwrap();
@@ -183,8 +190,18 @@ async fn local_rearm_api_supports_two_operation_cycles() {
 #[tokio::test]
 async fn life_safety_operation_default_policy_denies_without_mutation() {
     let oid = point_oid(1);
+    let executions = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&executions);
     let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
-    point.set_operation_expected(LifeSafetyOperation::SILENCE);
+    point.set_present_value(LifeSafetyState::ALARM.to_raw());
+    point.set_operation_expected(LifeSafetyOperation::RESET);
+    point.set_reset_executor(Arc::new(move |_| {
+        observed.fetch_add(1, Ordering::AcqRel);
+        Ok(LifeSafetyPointResetCommit {
+            present_value: Some(LifeSafetyState::QUIET),
+            ..Default::default()
+        })
+    }));
     let mut objects = ObjectDatabase::new();
     objects.add(Box::new(point)).unwrap();
     let db = Arc::new(RwLock::new(objects));
@@ -194,7 +211,7 @@ async fn life_safety_operation_default_policy_denies_without_mutation() {
         ServerConfig::default(),
         MacAddr::from_slice(&[1, 2, 3]),
         None,
-        request(LifeSafetyOperation::SILENCE, Some(oid)),
+        request(LifeSafetyOperation::RESET, Some(oid)),
     )
     .await;
 
@@ -203,15 +220,49 @@ async fn life_safety_operation_default_policy_denies_without_mutation() {
         ErrorClass::SERVICES,
         ErrorCode::SERVICE_REQUEST_DENIED,
     );
+    assert_eq!(executions.load(Ordering::Acquire), 0);
     let guard = db.read().await;
     assert_eq!(
         guard
             .get(&oid)
             .unwrap()
-            .read_property(PropertyIdentifier::SILENCED, None)
+            .read_property(PropertyIdentifier::PRESENT_VALUE, None)
             .unwrap(),
-        PropertyValue::Enumerated(SilencedState::UNSILENCED.to_raw())
+        PropertyValue::Enumerated(LifeSafetyState::ALARM.to_raw())
     );
+    assert_eq!(
+        guard
+            .get(&oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::OPERATION_EXPECTED, None)
+            .unwrap(),
+        PropertyValue::Enumerated(LifeSafetyOperation::RESET.to_raw())
+    );
+}
+
+#[tokio::test]
+async fn unknown_target_is_rejected_before_authorization() {
+    let authorizations = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&authorizations);
+    let config = ServerConfig {
+        life_safety_operation_authorizer: Some(Arc::new(move |_| {
+            observed.fetch_add(1, Ordering::AcqRel);
+            true
+        })),
+        ..ServerConfig::default()
+    };
+
+    let apdu = dispatch_life_safety_operation(
+        Arc::new(RwLock::new(ObjectDatabase::new())),
+        config,
+        MacAddr::from_slice(&[1]),
+        None,
+        request(LifeSafetyOperation::RESET, Some(point_oid(99))),
+    )
+    .await;
+
+    assert_error(apdu, ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT);
+    assert_eq!(authorizations.load(Ordering::Acquire), 0);
 }
 
 #[tokio::test]
@@ -308,7 +359,7 @@ async fn life_safety_operation_dispatch_preserves_all_targeted_error_rows() {
         allow(),
         source.clone(),
         None,
-        request(LifeSafetyOperation::SILENCE, Some(analog_oid)),
+        request(LifeSafetyOperation::RESET, Some(analog_oid)),
     )
     .await;
     assert_error(
@@ -318,10 +369,10 @@ async fn life_safety_operation_dispatch_preserves_all_targeted_error_rows() {
     );
 
     let oid = point_oid(1);
+    let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
+    point.set_operation_expected(LifeSafetyOperation::RESET);
     let mut objects = ObjectDatabase::new();
-    objects
-        .add(Box::new(LifeSafetyPointObject::new(1, "point").unwrap()))
-        .unwrap();
+    objects.add(Box::new(point)).unwrap();
     let db = Arc::new(RwLock::new(objects));
     let apdu = dispatch_life_safety_operation(
         Arc::clone(&db),
@@ -331,7 +382,11 @@ async fn life_safety_operation_dispatch_preserves_all_targeted_error_rows() {
         request(LifeSafetyOperation::RESET, Some(oid)),
     )
     .await;
-    assert_error(apdu, ErrorClass::OBJECT, ErrorCode::VALUE_OUT_OF_RANGE);
+    assert_error(
+        apdu,
+        ErrorClass::OBJECT,
+        ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+    );
 
     let apdu = dispatch_life_safety_operation(
         db,
@@ -349,7 +404,7 @@ async fn life_safety_operation_dispatch_preserves_all_targeted_error_rows() {
 }
 
 #[tokio::test]
-async fn life_safety_operation_targetless_reset_attempt_returns_simple_ack_without_mutation() {
+async fn life_safety_operation_targetless_missing_executor_returns_simple_ack_without_mutation() {
     let oid = point_oid(1);
     let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
     point.set_operation_expected(LifeSafetyOperation::RESET);
@@ -413,8 +468,23 @@ async fn life_safety_operation_panicking_authorizer_fails_closed() {
 #[tokio::test]
 async fn exact_success_duplicate_is_silent_and_changed_reuse_executes_normally() {
     let oid = point_oid(1);
+    let executions = Arc::new(AtomicUsize::new(0));
+    let observed_executions = Arc::clone(&executions);
     let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
-    point.set_operation_expected(LifeSafetyOperation::SILENCE);
+    point.set_present_value(LifeSafetyState::ALARM.to_raw());
+    point.set_operation_expected(LifeSafetyOperation::RESET);
+    point.set_reset_executor(Arc::new(move |context| {
+        observed_executions.fetch_add(1, Ordering::AcqRel);
+        let present_value = if context.operation == LifeSafetyOperation::RESET {
+            LifeSafetyState::QUIET
+        } else {
+            LifeSafetyState::ACTIVE
+        };
+        Ok(LifeSafetyPointResetCommit {
+            present_value: Some(present_value),
+            ..Default::default()
+        })
+    }));
     let mut objects = ObjectDatabase::new();
     objects.add(Box::new(point)).unwrap();
     let db = Arc::new(RwLock::new(objects));
@@ -429,7 +499,7 @@ async fn exact_success_duplicate_is_silent_and_changed_reuse_executes_normally()
     };
     let tracker = Arc::new(ConfirmedRequestTracker::default());
     let source = MacAddr::from_slice(&[1, 2, 3]);
-    let silence = request(LifeSafetyOperation::SILENCE, Some(oid));
+    let reset = request(LifeSafetyOperation::RESET, Some(oid));
 
     let first = dispatch_life_safety_operation_with_tracker(
         Arc::clone(&db),
@@ -438,7 +508,7 @@ async fn exact_success_duplicate_is_silent_and_changed_reuse_executes_normally()
         source.clone(),
         None,
         0x51,
-        silence.clone(),
+        reset.clone(),
     )
     .await
     .unwrap();
@@ -450,26 +520,27 @@ async fn exact_success_duplicate_is_silent_and_changed_reuse_executes_normally()
         source.clone(),
         None,
         0x51,
-        silence,
+        reset,
     )
     .await
     .is_err());
     assert_eq!(authorizations.load(Ordering::Acquire), 1);
+    assert_eq!(executions.load(Ordering::Acquire), 1);
     assert_eq!(
         db.read()
             .await
             .get(&oid)
             .unwrap()
-            .read_property(PropertyIdentifier::SILENCED, None)
+            .read_property(PropertyIdentifier::PRESENT_VALUE, None)
             .unwrap(),
-        PropertyValue::Enumerated(SilencedState::ALL_SILENCED.to_raw())
+        PropertyValue::Enumerated(LifeSafetyState::QUIET.to_raw())
     );
 
     db.write()
         .await
         .get_mut(&oid)
         .unwrap()
-        .set_life_safety_operation_expected_internal(LifeSafetyOperation::UNSILENCE)
+        .set_life_safety_operation_expected_internal(LifeSafetyOperation::RESET_ALARM)
         .unwrap();
     let changed = dispatch_life_safety_operation_with_tracker(
         Arc::clone(&db),
@@ -478,20 +549,21 @@ async fn exact_success_duplicate_is_silent_and_changed_reuse_executes_normally()
         source,
         None,
         0x51,
-        request(LifeSafetyOperation::UNSILENCE, Some(oid)),
+        request(LifeSafetyOperation::RESET_ALARM, Some(oid)),
     )
     .await
     .unwrap();
     assert_simple_ack(changed);
     assert_eq!(authorizations.load(Ordering::Acquire), 2);
+    assert_eq!(executions.load(Ordering::Acquire), 2);
     assert_eq!(
         db.read()
             .await
             .get(&oid)
             .unwrap()
-            .read_property(PropertyIdentifier::SILENCED, None)
+            .read_property(PropertyIdentifier::PRESENT_VALUE, None)
             .unwrap(),
-        PropertyValue::Enumerated(SilencedState::UNSILENCED.to_raw())
+        PropertyValue::Enumerated(LifeSafetyState::ACTIVE.to_raw())
     );
 }
 
