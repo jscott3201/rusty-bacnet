@@ -14,7 +14,6 @@ use tokio::sync::oneshot;
 use tokio::time::Duration;
 
 use super::CovAckResult;
-use crate::audit_notification::AuditNotificationTracker;
 
 #[derive(Debug)]
 pub(super) enum NotificationReserveError {
@@ -51,10 +50,6 @@ struct NotificationState {
 pub(super) struct NotificationTransactions {
     coordinator: Arc<OutboundTransactionCoordinator>,
     state: Mutex<NotificationState>,
-    /// Physical server-lifetime anchor only. Inbound Audit duplicate state,
-    /// keys, expiry, admission, and cleanup are independent of outbound
-    /// notification correlation and are not changed by `close`.
-    audit_notification_tracker: Arc<AuditNotificationTracker>,
 }
 
 impl NotificationTransactions {
@@ -69,12 +64,7 @@ impl NotificationTransactions {
                 closed: false,
                 pending: HashMap::new(),
             }),
-            audit_notification_tracker: Arc::new(AuditNotificationTracker::default()),
         })
-    }
-
-    pub(super) fn audit_notification_tracker(&self) -> &Arc<AuditNotificationTracker> {
-        &self.audit_notification_tracker
     }
 
     pub(super) fn reserve(

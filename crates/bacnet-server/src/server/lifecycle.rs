@@ -68,6 +68,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let cov_in_flight = Arc::new(Semaphore::new(255));
         let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
         let notification_transactions = NotificationTransactions::new();
+        let confirmed_request_tracker = Arc::new(ConfirmedRequestTracker::default());
         let device_bindings = Arc::new(RwLock::new(device_bindings));
         let comm_state = Arc::new(AtomicU8::new(0)); // 0 = Enable (default)
         let dcc_timer: Arc<Mutex<Option<JoinHandle<()>>>> = Arc::new(Mutex::new(None));
@@ -80,6 +81,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let cov_in_flight_dispatch = Arc::clone(&cov_in_flight);
         let server_tsm_dispatch = Arc::clone(&server_tsm);
         let notification_transactions_dispatch = Arc::clone(&notification_transactions);
+        let confirmed_request_tracker_dispatch = Arc::clone(&confirmed_request_tracker);
         let device_bindings_dispatch = Arc::clone(&device_bindings);
         let comm_state_dispatch = Arc::clone(&comm_state);
         let dcc_timer_dispatch = Arc::clone(&dcc_timer);
@@ -380,25 +382,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     if let Some(state) = seg_receivers.remove(&key) {
                                         match state.receiver.reassemble(total) {
                                             Ok(full_data) => {
-                                                let reassembled =
-                                                    bacnet_encoding::apdu::ConfirmedRequest {
-                                                        segmented: false,
-                                                        more_follows: false,
-                                                        sequence_number: None,
-                                                        proposed_window_size: None,
-                                                        service_request: Bytes::from(full_data),
-                                                        invoke_id: state.first_req.invoke_id,
-                                                        service_choice: state
-                                                            .first_req
-                                                            .service_choice,
-                                                        max_apdu_length: state
-                                                            .first_req
-                                                            .max_apdu_length,
-                                                        segmented_response_accepted: state
-                                                            .first_req
-                                                            .segmented_response_accepted,
-                                                        max_segments: state.first_req.max_segments,
-                                                    };
+                                                let reassembled = super::segmented_receive::
+                                                    reassembled_confirmed_request(
+                                                        &state.first_req,
+                                                        Bytes::from(full_data),
+                                                    );
                                                 debug!(
                                                     invoke_id = reassembled.invoke_id,
                                                     segments = total,
@@ -414,6 +402,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     &cov_in_flight_dispatch,
                                     &server_tsm_dispatch,
                                                     &notification_transactions_dispatch,
+	                                                    &confirmed_request_tracker_dispatch,
 	                                                    &device_bindings_dispatch,
 	                                                    &comm_state_dispatch,
 	                                                    &dcc_timer_dispatch,
@@ -464,6 +453,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 &cov_in_flight_dispatch,
                                 &server_tsm_dispatch,
                                 &notification_transactions_dispatch,
+                                &confirmed_request_tracker_dispatch,
                                 &device_bindings_dispatch,
                                 &comm_state_dispatch,
                                 &dcc_timer_dispatch,
@@ -675,6 +665,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             cov_in_flight,
             server_tsm,
             notification_transactions,
+            confirmed_request_tracker,
             device_bindings,
             comm_state,
             dcc_timer,

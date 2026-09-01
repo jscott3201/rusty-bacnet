@@ -1,6 +1,7 @@
 use super::*;
 
 mod audit_notification;
+mod confirmed;
 mod confirmed_response;
 mod endpoint_responder;
 #[cfg(test)]
@@ -17,9 +18,9 @@ pub(crate) use executed::EXECUTED_CONFIRMED;
 pub(crate) use unconfirmed::EXECUTED_UNCONFIRMED;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
-    /// Handle a confirmed request.
+    /// Handle one admitted confirmed request.
     #[allow(clippy::too_many_arguments)]
-    pub(super) async fn handle_confirmed_request(
+    async fn handle_admitted_confirmed_request(
         db: &Arc<RwLock<ObjectDatabase>>,
         network: &Arc<NetworkLayer<T>>,
         cov_table: &Arc<RwLock<CovSubscriptionTable>>,
@@ -336,7 +337,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             s if s == ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION => {
                 match audit_notification::receive_confirmed_audit_notification(
                     db,
-                    notification_transactions,
                     config,
                     source_mac,
                     source_network.as_ref(),
@@ -345,11 +345,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 )
                 .await
                 {
-                    None => return,
-                    Some(Ok(())) => simple_ack(),
-                    Some(Err(error)) => {
-                        Self::error_apdu_from_error(invoke_id, service_choice, &error)
-                    }
+                    Ok(()) => simple_ack(),
+                    Err(error) => Self::error_apdu_from_error(invoke_id, service_choice, &error),
                 }
             }
             s if s == ConfirmedServiceChoice::CONFIRMED_TEXT_MESSAGE => {

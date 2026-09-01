@@ -1,5 +1,23 @@
 use super::*;
 
+pub(super) fn reassembled_confirmed_request(
+    first: &ConfirmedRequestPdu,
+    service_request: Bytes,
+) -> ConfirmedRequestPdu {
+    ConfirmedRequestPdu {
+        segmented: false,
+        more_follows: false,
+        sequence_number: None,
+        proposed_window_size: None,
+        service_request,
+        invoke_id: first.invoke_id,
+        service_choice: first.service_choice,
+        max_apdu_length: first.max_apdu_length,
+        segmented_response_accepted: first.segmented_response_accepted,
+        max_segments: first.max_segments,
+    }
+}
+
 /// Apply the Clause 5.4.5.2 duplicate or out-of-order receive transition.
 pub(super) fn classify_non_next_segment(
     state: &mut SegmentedRequestState,
