@@ -605,3 +605,68 @@ fn pics_log_family_writability_comes_from_runtime_routes() {
         }
     }
 }
+
+#[test]
+fn pics_file_resize_writability_uses_the_isolated_representative() {
+    use bacnet_objects::database::ObjectDatabase;
+    use bacnet_objects::file::FileObject;
+    use bacnet_types::enums::FileAccessMethod;
+
+    fn property_access(
+        file: FileObject,
+        property: PropertyIdentifier,
+    ) -> Option<super::PropertyAccess> {
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(file)).unwrap();
+        PicsGenerator::new(&db, &ServerConfig::default(), &PicsConfig::default())
+            .generate()
+            .supported_object_types
+            .into_iter()
+            .find(|support| support.object_type == ObjectType::FILE)
+            .unwrap()
+            .supported_properties
+            .into_iter()
+            .find(|support| support.property_id == property)
+            .map(|support| support.access)
+    }
+
+    let stream = FileObject::new(1, "STREAM", "raw").unwrap();
+    assert!(
+        property_access(stream, PropertyIdentifier::FILE_SIZE)
+            .unwrap()
+            .writable
+    );
+    let stream = FileObject::new(2, "STREAM", "raw").unwrap();
+    assert!(property_access(stream, PropertyIdentifier::RECORD_COUNT).is_none());
+
+    let mut record = FileObject::new(3, "RECORD", "raw").unwrap();
+    record.set_file_access_method(FileAccessMethod::RECORD_ACCESS.to_raw());
+    assert!(
+        !property_access(record, PropertyIdentifier::FILE_SIZE)
+            .unwrap()
+            .writable
+    );
+    let mut record = FileObject::new(4, "RECORD", "raw").unwrap();
+    record.set_file_access_method(FileAccessMethod::RECORD_ACCESS.to_raw());
+    assert!(
+        property_access(record, PropertyIdentifier::RECORD_COUNT)
+            .unwrap()
+            .writable
+    );
+
+    let mut read_only_stream = FileObject::new(5, "RO-STREAM", "raw").unwrap();
+    read_only_stream.set_read_only(true);
+    assert!(
+        !property_access(read_only_stream, PropertyIdentifier::FILE_SIZE)
+            .unwrap()
+            .writable
+    );
+    let mut read_only_record = FileObject::new(6, "RO-RECORD", "raw").unwrap();
+    read_only_record.set_file_access_method(FileAccessMethod::RECORD_ACCESS.to_raw());
+    read_only_record.set_read_only(true);
+    assert!(
+        !property_access(read_only_record, PropertyIdentifier::RECORD_COUNT)
+            .unwrap()
+            .writable
+    );
+}

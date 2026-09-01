@@ -13,7 +13,9 @@ use std::sync::Arc;
 
 use crate::clock::ClockReader;
 use crate::common::{self, read_common_properties};
-use crate::traits::BACnetObject;
+use crate::traits::{BACnetObject, WritePropertyRollback};
+
+mod resize;
 
 // ---------------------------------------------------------------------------
 // File storage (the Clause 14 service data behind a File object)
@@ -593,14 +595,14 @@ impl BACnetObject for FileObject {
                 // application may need it. Deny remote writes.
                 Err(common::write_access_denied_error())
             }
-            p if p == PropertyIdentifier::FILE_SIZE => Err(common::write_access_denied_error()),
+            p if p == PropertyIdentifier::FILE_SIZE => resize::write_stream(self, value),
             p if p == PropertyIdentifier::FILE_ACCESS_METHOD => {
                 Err(common::write_access_denied_error())
             }
             p if p == PropertyIdentifier::MODIFICATION_DATE => {
                 Err(common::write_access_denied_error())
             }
-            p if p == PropertyIdentifier::RECORD_COUNT => Err(common::write_access_denied_error()),
+            p if p == PropertyIdentifier::RECORD_COUNT => resize::write_records(self, value),
             _ => Err(common::write_access_denied_error()),
         }
     }
@@ -627,6 +629,25 @@ impl BACnetObject for FileObject {
         Cow::Owned(props)
     }
 
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        resize::is_writable(self, property)
+    }
+
+    fn capture_write_property_rollback(
+        &mut self,
+        property: PropertyIdentifier,
+        value: &PropertyValue,
+    ) -> Option<WritePropertyRollback> {
+        resize::capture(self, property, value)
+    }
+
+    fn restore_write_property_rollback(
+        &mut self,
+        rollback: WritePropertyRollback,
+    ) -> Result<(), Error> {
+        resize::restore(self, rollback)
+    }
+
     fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
         self.clock = clock;
     }
@@ -644,6 +665,8 @@ impl BACnetObject for FileObject {
 // Tests
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
+mod resize_tests;
 #[cfg(test)]
 mod storage_tests;
 #[cfg(test)]

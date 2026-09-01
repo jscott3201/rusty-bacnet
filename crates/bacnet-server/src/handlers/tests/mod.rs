@@ -60,6 +60,7 @@ mod reference_writes;
 mod wpm_create_alarm;
 mod wpm_event_rollback;
 mod wpm_fault_rollback;
+mod wpm_file_resize_rollback;
 mod wpm_log_lifecycle;
 mod wpm_multistate_reliability_rollback;
 mod wpm_parameter_rollback;
