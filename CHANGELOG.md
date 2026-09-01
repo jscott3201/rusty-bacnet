@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Conditional built-in `FileObject` resize properties (#417). Mutable exact
+  stream-access representatives accept bounded `File_Size` writes, while
+  mutable exact record-access representatives accept bounded `Record_Count`
+  writes; shrink and zero preserve prefixes or clear data, and expansion fills
+  with zero octets or empty records. Actual changes keep size/count accounting
+  coherent, sample `Modification_Date` once, clear `Archive`, and restore
+  losslessly if a later WPM write fails; exact no-ops are metadata-neutral.
+  Read-only, wrong-mode, and unknown-method instances deny the route, preloaded
+  contents retain growth-only cap semantics, and PICS remains based on one
+  representative per type rather than heterogeneous File-instance aggregation.
+
 - Exact ReadRange By Position, By Sequence, and By Time selection for resident
   Event Log, Trend Log, and Trend Log Multiple buffers (#134, #339). By Time
   validates aligned specific record timestamps, anchors strictly after/before

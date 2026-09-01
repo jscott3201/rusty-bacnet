@@ -558,8 +558,9 @@ fn file_write_read_only_denied() {
 }
 
 #[test]
-fn file_write_file_size_denied() {
+fn file_write_file_size_denied_when_read_only() {
     let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
+    file.set_read_only(true);
     let result = file.write_property(
         PropertyIdentifier::FILE_SIZE,
         None,
