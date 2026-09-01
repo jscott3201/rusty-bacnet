@@ -731,7 +731,8 @@ fn ee_event_enable_rejects_noncanonical_bit_strings() {
 /// arm; it honors the same 3-bit production, so it enforces the same shape.
 #[test]
 fn alert_enrollment_event_enable_rejects_noncanonical_bit_strings() {
-    let mut ae = AlertEnrollmentObject::new(1, "AE-1").unwrap();
+    let source = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    let mut ae = AlertEnrollmentObject::new(1, "AE-1", source).unwrap();
     let canonical = ae
         .read_property(PropertyIdentifier::EVENT_ENABLE, None)
         .unwrap();

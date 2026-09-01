@@ -6,6 +6,10 @@ use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::primitives::{BACnetTimeStamp, Date, Time};
 
+fn alert_source() -> ObjectIdentifier {
+    ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap()
+}
+
 fn assert_default_timestamp_array(object: &dyn BACnetObject, label: &str) {
     let value = object
         .read_property(PropertyIdentifier::EVENT_TIME_STAMPS, None)
@@ -27,7 +31,7 @@ fn assert_default_timestamp_array(object: &dyn BACnetObject, label: &str) {
 #[test]
 fn enrollment_objects_default_event_time_stamps_are_three_zero_sequences() {
     let event = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
-    let alert = AlertEnrollmentObject::new(1, "AE-1").unwrap();
+    let alert = AlertEnrollmentObject::new(1, "AE-1", alert_source()).unwrap();
 
     assert_default_timestamp_array(&event, "Event Enrollment");
     assert_default_timestamp_array(&alert, "Alert Enrollment");
@@ -156,7 +160,7 @@ fn enrollment_event_time_stamp_arrays_preserve_order_indexes_and_choices() {
     let expected = seeded_timestamps();
     let mut event = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
     event.event_history.time_stamps = expected.clone();
-    let mut alert = AlertEnrollmentObject::new(1, "AE-1").unwrap();
+    let mut alert = AlertEnrollmentObject::new(1, "AE-1", alert_source()).unwrap();
     alert.event_history.time_stamps = expected.clone();
 
     assert_seeded_timestamp_reads(&event, &expected, "Event Enrollment");
@@ -194,7 +198,7 @@ fn event_enrollment_detection_disable_resets_history_and_rollback_restores_it() 
 #[test]
 fn alert_enrollment_disable_projection_reset_and_rollback_cover_history() {
     let expected = seeded_timestamps();
-    let mut object = AlertEnrollmentObject::new(1, "AE-1").unwrap();
+    let mut object = AlertEnrollmentObject::new(1, "AE-1", alert_source()).unwrap();
     object.event_history.time_stamps = expected.clone();
     let rollback = object
         .capture_write_property_rollback(
@@ -295,7 +299,7 @@ fn enrollment_property_metadata_is_complete_and_pins_timestamp_requirements() {
     ];
     assert_complete_metadata(&event, &event_ids, "Event Enrollment");
 
-    let alert = AlertEnrollmentObject::new(1, "AE-1").unwrap();
+    let alert = AlertEnrollmentObject::new(1, "AE-1", alert_source()).unwrap();
     let alert_ids = [
         PropertyIdentifier::OBJECT_IDENTIFIER,
         PropertyIdentifier::OBJECT_NAME,
@@ -304,13 +308,11 @@ fn enrollment_property_metadata_is_complete_and_pins_timestamp_requirements() {
         PropertyIdentifier::PRESENT_VALUE,
         PropertyIdentifier::EVENT_STATE,
         PropertyIdentifier::EVENT_DETECTION_ENABLE,
+        PropertyIdentifier::NOTIFICATION_CLASS,
         PropertyIdentifier::EVENT_ENABLE,
         PropertyIdentifier::ACKED_TRANSITIONS,
-        PropertyIdentifier::NOTIFICATION_CLASS,
+        PropertyIdentifier::NOTIFY_TYPE,
         PropertyIdentifier::EVENT_TIME_STAMPS,
-        PropertyIdentifier::STATUS_FLAGS,
-        PropertyIdentifier::OUT_OF_SERVICE,
-        PropertyIdentifier::RELIABILITY,
         PropertyIdentifier::PROPERTY_LIST,
     ];
     assert_complete_metadata(&alert, &alert_ids, "Alert Enrollment");
@@ -324,23 +326,45 @@ fn enrollment_property_metadata_is_complete_and_pins_timestamp_requirements() {
         );
     }
 
-    assert!(alert
+    let required_alert: Vec<_> = alert
         .property_metadata()
         .iter()
-        .all(|row| row.property_identifier != PropertyIdentifier::NOTIFY_TYPE));
-    assert!(!alert
-        .property_list()
-        .contains(&PropertyIdentifier::NOTIFY_TYPE));
-    assert_property_error(
-        alert.read_property(PropertyIdentifier::NOTIFY_TYPE, None),
-        ErrorCode::UNKNOWN_PROPERTY,
-        "Alert Enrollment Notify_Type remains an explicit model limitation",
+        .filter_map(|row| {
+            row.conformance
+                .is_required()
+                .then_some(row.property_identifier)
+        })
+        .collect();
+    assert_eq!(
+        required_alert,
+        [
+            PropertyIdentifier::OBJECT_IDENTIFIER,
+            PropertyIdentifier::OBJECT_NAME,
+            PropertyIdentifier::OBJECT_TYPE,
+            PropertyIdentifier::PRESENT_VALUE,
+            PropertyIdentifier::EVENT_STATE,
+            PropertyIdentifier::EVENT_DETECTION_ENABLE,
+            PropertyIdentifier::NOTIFICATION_CLASS,
+            PropertyIdentifier::EVENT_ENABLE,
+            PropertyIdentifier::ACKED_TRANSITIONS,
+            PropertyIdentifier::NOTIFY_TYPE,
+            PropertyIdentifier::EVENT_TIME_STAMPS,
+            PropertyIdentifier::PROPERTY_LIST,
+        ]
+    );
+    assert_eq!(
+        metadata_row(&alert, PropertyIdentifier::DESCRIPTION).conformance,
+        PropertyConformance::Optional
+    );
+    assert_eq!(
+        metadata_row(&alert, PropertyIdentifier::NOTIFY_TYPE).write_capability,
+        PropertyWriteCapability::Always
     );
 }
 
 #[test]
 fn alert_to_normal_acknowledgment_cannot_be_cleared() {
-    let mut alert = AlertEnrollmentObject::new(1, "AE-1").unwrap();
+    let mut alert = AlertEnrollmentObject::new(1, "AE-1", alert_source()).unwrap();
 
     alert.set_acked_transitions_internal(0x04, false).unwrap();
     assert_eq!(alert.acked_transitions, 0b111);

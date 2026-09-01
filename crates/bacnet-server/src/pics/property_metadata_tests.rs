@@ -4,6 +4,7 @@ use bacnet_objects::{
     value_types::TimeValueObject,
 };
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::primitives::ObjectIdentifier;
 
 use super::*;
 
@@ -33,8 +34,11 @@ fn pics_projects_migrated_property_metadata() {
         .unwrap();
     db.add(Box::new(EventEnrollmentObject::new(1, "ee-1", 0).unwrap()))
         .unwrap();
-    db.add(Box::new(AlertEnrollmentObject::new(1, "ae-1").unwrap()))
-        .unwrap();
+    let alert_source = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    db.add(Box::new(
+        AlertEnrollmentObject::new(1, "ae-1", alert_source).unwrap(),
+    ))
+    .unwrap();
     let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
 
     for (object_type, property_id, optional, writable) in [
@@ -120,8 +124,33 @@ fn pics_projects_migrated_property_metadata() {
         .iter()
         .find(|support| support.object_type == ObjectType::ALERT_ENROLLMENT)
         .expect("Alert Enrollment support");
-    assert!(alert
+    let alert_rows: Vec<_> = alert
         .supported_properties
         .iter()
-        .all(|property| property.property_id != PropertyIdentifier::NOTIFY_TYPE));
+        .map(|property| {
+            (
+                property.property_id,
+                property.access.optional,
+                property.access.writable,
+            )
+        })
+        .collect();
+    assert_eq!(
+        alert_rows,
+        vec![
+            (PropertyIdentifier::OBJECT_IDENTIFIER, false, false),
+            (PropertyIdentifier::OBJECT_NAME, false, false),
+            (PropertyIdentifier::DESCRIPTION, true, true),
+            (PropertyIdentifier::OBJECT_TYPE, false, false),
+            (PropertyIdentifier::PRESENT_VALUE, false, false),
+            (PropertyIdentifier::EVENT_STATE, false, false),
+            (PropertyIdentifier::EVENT_DETECTION_ENABLE, false, true,),
+            (PropertyIdentifier::NOTIFICATION_CLASS, false, true),
+            (PropertyIdentifier::EVENT_ENABLE, false, true),
+            (PropertyIdentifier::ACKED_TRANSITIONS, false, false),
+            (PropertyIdentifier::NOTIFY_TYPE, false, true),
+            (PropertyIdentifier::EVENT_TIME_STAMPS, false, false),
+            (PropertyIdentifier::PROPERTY_LIST, false, false),
+        ]
+    );
 }

@@ -317,9 +317,15 @@ impl BACnetServer {
     }
 
     /// Add an Alert Enrollment object to the server (before starting).
-    #[pyo3(signature = (instance, name))]
-    fn add_alert_enrollment(&self, instance: u32, name: &str) -> PyResult<()> {
-        let obj = AlertEnrollmentObject::new(instance, name).map_err(to_py_err)?;
+    #[pyo3(signature = (instance, name, initial_source))]
+    fn add_alert_enrollment(
+        &self,
+        instance: u32,
+        name: &str,
+        initial_source: PyObjectIdentifier,
+    ) -> PyResult<()> {
+        let obj = AlertEnrollmentObject::new(instance, name, initial_source.to_rust())
+            .map_err(to_py_err)?;
         self.push_pending(Box::new(obj))
     }
 

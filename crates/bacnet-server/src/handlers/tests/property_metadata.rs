@@ -14,8 +14,11 @@ fn make_metadata_db() -> ObjectDatabase {
         .unwrap();
     db.add(Box::new(EventEnrollmentObject::new(1, "EE-1", 0).unwrap()))
         .unwrap();
-    db.add(Box::new(AlertEnrollmentObject::new(1, "AE-1").unwrap()))
-        .unwrap();
+    let alert_source = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    db.add(Box::new(
+        AlertEnrollmentObject::new(1, "AE-1", alert_source).unwrap(),
+    ))
+    .unwrap();
     db
 }
 
@@ -246,13 +249,11 @@ fn rpm_metadata_selectors_are_exact_for_alert_enrollment() {
             PropertyIdentifier::PRESENT_VALUE,
             PropertyIdentifier::EVENT_STATE,
             PropertyIdentifier::EVENT_DETECTION_ENABLE,
+            PropertyIdentifier::NOTIFICATION_CLASS,
             PropertyIdentifier::EVENT_ENABLE,
             PropertyIdentifier::ACKED_TRANSITIONS,
-            PropertyIdentifier::NOTIFICATION_CLASS,
+            PropertyIdentifier::NOTIFY_TYPE,
             PropertyIdentifier::EVENT_TIME_STAMPS,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
         ]
     );
     assert_eq!(
@@ -264,30 +265,15 @@ fn rpm_metadata_selectors_are_exact_for_alert_enrollment() {
             PropertyIdentifier::PRESENT_VALUE,
             PropertyIdentifier::EVENT_STATE,
             PropertyIdentifier::EVENT_DETECTION_ENABLE,
+            PropertyIdentifier::NOTIFICATION_CLASS,
             PropertyIdentifier::EVENT_ENABLE,
             PropertyIdentifier::ACKED_TRANSITIONS,
-            PropertyIdentifier::NOTIFICATION_CLASS,
+            PropertyIdentifier::NOTIFY_TYPE,
             PropertyIdentifier::EVENT_TIME_STAMPS,
         ]
     );
     assert_eq!(
         rpm_property_ids(&db, oid, PropertyIdentifier::OPTIONAL),
-        vec![
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ]
+        vec![PropertyIdentifier::DESCRIPTION]
     );
-
-    for selector in [
-        PropertyIdentifier::ALL,
-        PropertyIdentifier::REQUIRED,
-        PropertyIdentifier::OPTIONAL,
-    ] {
-        assert!(
-            !rpm_property_ids(&db, oid, selector).contains(&PropertyIdentifier::NOTIFY_TYPE),
-            "Alert Enrollment must not advertise its unimplemented Notify_Type"
-        );
-    }
 }
