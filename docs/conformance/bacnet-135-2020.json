@@ -402,7 +402,7 @@
    ],
    "benchmarks": [],
    "public_claims": [],
-    "notes": "In-memory storage/model foundation only; this row makes no public support claim. Sequence identity is object metadata and is never serialized in LOG_BUFFER. Trend Log alone projects a present legacy BACnetLogRecord.status_flags value as its formal optional fourth StatusFlags bitstring; Event Log and Trend Log Multiple retain that raw shared-Rust field for source compatibility but always project only Date, Time, and datum. Mandatory purge/status lifecycle behavior is tracked separately by BACNET-12-LOG-STATUS-LIFECYCLE. ReadRange By-Sequence/By-Time behavior, First Sequence Number, restart durability/persistence, and formal EventLog notification-record modeling remain deferred."
+   "notes": "In-memory storage/model foundation only; this row makes no public support claim. Sequence identity is object metadata and is never serialized in LOG_BUFFER. Trend Log alone projects a present legacy BACnetLogRecord.status_flags value as its formal optional fourth StatusFlags bitstring; Event Log and Trend Log Multiple retain that raw shared-Rust field for source compatibility but always project only Date, Time, and datum. Mandatory purge/status lifecycle behavior is tracked separately by BACNET-12-LOG-STATUS-LIFECYCLE, and the server's qualified By Sequence consumer is tracked by BACNET-15-READ-RANGE-LOG-BUFFER. ReadRange By Time, restart durability/persistence, and formal EventLog notification-record modeling remain deferred."
   },
   {
    "id": "BACNET-12-LOG-STATUS-LIFECYCLE",
@@ -435,7 +435,36 @@
    ],
    "benchmarks": [],
    "public_claims": [],
-   "notes": "Qualified PR-0702 evidence only; no full log-family support claim is made. The shared lifecycle covers explicit effective Enable transitions, Record_Count zero purges, Stop_When_Full activation/full behavior, and ordinary stop-before-full insertion. Public constructors, records(), add_record(), and raw clear() remain compatible. Time-window Start_Time/Stop_Time transitions, LOG_INTERRUPTED, writable Log_DeviceObjectProperty purge paths, formal EventLog notification records, Trend Log Multiple polling, ReadRange, First Sequence Number, persistence/restart, and complete log conformance remain deferred."
+   "notes": "Qualified PR-0702 evidence only; no full log-family support claim is made. The shared lifecycle covers explicit effective Enable transitions, Record_Count zero purges, Stop_When_Full activation/full behavior, and ordinary stop-before-full insertion. Public constructors, records(), add_record(), and raw clear() remain compatible. ReadRange By Sequence can continue through the resident purge status identity under BACNET-15-READ-RANGE-LOG-BUFFER. Time-window Start_Time/Stop_Time transitions, LOG_INTERRUPTED, writable Log_DeviceObjectProperty purge paths, formal EventLog notification records, Trend Log Multiple polling, ReadRange By Time, persistence/restart, and complete log conformance remain deferred."
+  },
+  {
+   "id": "BACNET-15-READ-RANGE-LOG-BUFFER",
+   "standard_anchor": "Clause 12.1.5.2 (PDF p. 164 / printed p. 162); Clause 15.8 and Clause 15.8.1.1.4-15.8.1.3 (PDF pp. 747-753 / printed pp. 745-751)",
+   "priority": "P1",
+   "requirement_summary": "The bundled server selects ReadRange By Position around an exact one-based list position and By Sequence around an exact aligned resident identity for Event Log, Trend Log, and Trend Log Multiple LOG_BUFFER properties. Positive and negative counts return records oldest-to-newest with boundary short reads, empty misses carry no endpoint flags or First Sequence Number, nonempty results report included resident endpoints, and nonempty By Sequence results identify the oldest returned record. The client requires a nonzero First Sequence Number on every nonempty By Sequence or By Time ACK and rejects it on By Position, no-range, and empty ACKs.",
+   "status": "in-progress",
+   "code_anchors": [
+    "crates/bacnet-server/src/handlers/read_range.rs::select_signed_range",
+    "crates/bacnet-server/src/handlers/read_range.rs::handle_read_range",
+    "crates/bacnet-objects/src/traits.rs::BACnetObject::log_record_identities_internal",
+    "crates/bacnet-client/src/client/file_list.rs::validate_read_range_ack"
+   ],
+   "positive_tests": [
+    "crates/bacnet-server/src/handlers/tests/read_range.rs::by_position_is_one_based_signed_and_reports_exact_endpoints",
+    "crates/bacnet-server/src/handlers/tests/read_range.rs::by_sequence_uses_exact_wrapped_identity_without_sorting",
+    "crates/bacnet-server/src/handlers/tests/read_range.rs::every_log_family_continues_by_surviving_fifo_identity",
+    "crates/bacnet-server/src/handlers/tests/read_range.rs::purge_status_record_replaces_old_sequence_continuation",
+    "crates/bacnet-server/src/handlers/tests/read_range.rs::client_decodes_server_ack_and_continues_by_returned_sequence",
+    "crates/bacnet-client/src/client/file_list.rs::tests::first_sequence_number_must_match_the_requested_range"
+   ],
+   "negative_tests": [
+    "crates/bacnet-server/src/handlers/tests/read_range.rs::by_sequence_rejects_unnumbered_properties_and_misalignment",
+    "crates/bacnet-server/src/handlers/tests/read_range.rs::item_encoding_error_keeps_response_byte_for_byte_unchanged",
+    "crates/bacnet-server/src/handlers/tests/read_range.rs::by_time_keeps_explicit_typed_denial"
+   ],
+   "benchmarks": [],
+   "public_claims": [],
+   "notes": "Qualified PR-0703 evidence only; no full ReadRange or log-family support claim is made. Sequence selection is limited to LOG_BUFFER properties whose object supplies an exactly aligned resident identity view; another list property and an unnumbered or misaligned LOG_BUFFER fail PROPERTY / LIST_ITEM_NOT_NUMBERED. This implementation returns every matched requested item without a separate response/PDU cap, so a smaller requested Count is not truncation and MORE_ITEMS remains FALSE. By Time remains explicitly denied SERVICES / SERVICE_REQUEST_DENIED. Indexed Log_Buffer reads, response-size pagination/segmentation, persistence/restart, formal Event Log notification records, and complete ReadRange/log conformance remain deferred. No runtime PICS/service bit is changed."
   },
   {
    "id": "BACNET-12-PROPERTY-METADATA-CORE",
