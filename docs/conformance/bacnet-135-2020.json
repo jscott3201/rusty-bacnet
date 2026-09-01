@@ -3,8 +3,8 @@
  "reviewed_at": "2026-08-13",
  "repo_sha": "f485021f5cd7058ac406d57d3d317936cbe7b361",
  "row_evidence_policy": "repo_sha identifies the last repository-wide review; individual rows may cite later PR reviews for narrower evidence updates",
- "review_scope": "Event-state disabled reset and lossless WPM rollback tranche (branch codex/c3-event-reset-rollback, tranche C3; issues #205, #209, #289): Alert Enrollment now exposes Event_State and Acked_Transitions and applies their Clause 13.2.2.1 initial conditions while Event_Detection_Enable is FALSE, including guarded internal updates and projection after direct assignment to the existing public flag. This is partial Alert Enrollment evidence, not a complete Table 12-61 claim; #264 and #291 track the remaining property-model gaps. The repository's WPM rollback policy now uses object-owned tokens when property readback is not state-equivalent. Covered state includes event detection and history, raw Time_Delay_Normal storage, Network Port Changes_Pending, Access Door command slots, and log buffers cleared through Record_Count. Restoration failures are returned instead of being hidden in tracing. Clause 15.10 permits preceding successful writes to remain applied and does not require this policy. Fences: no Alert Enrollment evaluator, notification sending (#127), Event Enrollment history properties (#264), complete Alert Enrollment property model (#291), or DCC behavior (#220).",
- "addenda_errata_status": "No external addenda/errata check was performed for this tranche. The local Standard 135-2020 source was reviewed for Clause 13.2.2.1's disabled-state initial conditions, the Clause 13.3 pTimeDelayNormal fallback, Alert Enrollment Table 12-61's required event-state properties, and Clause 15.10's ordered partial-success procedure. The rollback behavior is identified as repository policy, not a conformance requirement.",
+ "review_scope": "PR-0808 Alert Enrollment Table 12-61 property-model correction (#291): Present_Value is the explicit ObjectIdentifier of the last alert source; Notify_Type is implemented with configurable ALARM/EVENT values; metadata, Property_List, RPM selectors, PICS, Rust/Python APIs, and migration docs share the exact required-row projection; and the non-table Status_Flags, Out_Of_Service, and Reliability compatibility routes are removed. Existing Event_Detection_Enable reset/history, acknowledgement, and generic event-summary consumers remain intact. Fences: no Alert evaluator, source discovery, transition generation, notification sending, acknowledgement-flow implementation, or optional Alert Enrollment property expansion.",
+ "addenda_errata_status": "No external addenda/errata check was performed for this tranche. The local Standard 135-2020 source contract was reviewed for Clause 12.52 and Table 12-61, Clause 21 BACnetNotifyType, and Clause 15.7 RPM selector exclusions. The Alert Enrollment claim remains bounded to the served property model and does not claim active alert evaluation or notification generation.",
  "status_taxonomy": [
   "in-progress",
   "implementation-present-needs-conformance-tests",
@@ -696,7 +696,7 @@
     "crates/bacnet-encoding/src/constructed/mod.rs",
     "crates/bacnet-types/src/constructed/property_states.rs",
     "crates/bacnet-services/src/alarm_event/property_states.rs",
-    "crates/bacnet-objects/src/event_enrollment/mod.rs",
+     "crates/bacnet-objects/src/event_enrollment/mod.rs",
     "crates/bacnet-server/src/event_enrollment/mod.rs"
    ],
    "positive_tests": [
@@ -850,6 +850,45 @@
    "notes": "Split child of BACNET-12-OBJECT-MODEL (#182). The four arms share one objects-layer helper (reference.rs) so the local List form (in-process compatibility) and the framed ApplicationData form (network) converge on the same strict Clause 21 decode; error pairings follow Clause 15.9.1.3: wrong value datatype is PROPERTY / INVALID_DATA_TYPE, malformed framing / device qualification / unknown trailing context tag is PROPERTY / INVALID_DATA_ENCODING, and a mixed flat+framed element list is refused rather than reinterpreted. Null clears, and read arms carry the reference's optional array index as a third list element. Setpoint_Reference additionally accepts the BACnetSetpointReference opening/closing tag [0] frame (unambiguous against the bare form's leading primitive [0]) while refusing unbalanced frames. WritePropertyMultiple in-order commit and rollback are proven for a reference+setpoint request failing its second property. Review round: the adversary lane's blocker on the Averaging arm (silent member drop / member retype / as-u32 truncation, newly network-reachable) is fixed by routing it through the same shared decode; the runtime+dataflow empty-frame finding is fixed by the Option-returning decode_setpoint_reference; the dataflow PICS incoherence is fixed by exact is_writable_property overrides on Pulse Converter (PRESENT_VALUE / SCALE_FACTOR / ADJUST_VALUE / INPUT_REFERENCE + DESCRIPTION / OUT_OF_SERVICE / COV_INCREMENT) and Averaging (OBJECT_PROPERTY_REFERENCE + DESCRIPTION / OUT_OF_SERVICE), which also stop advertising OBJECT_NAME on both types (no arm routes it - a truth-toward-arms PICS correction). Limitation: reads still emit the flat application-tagged list form rather than re-framing context tags - the encode side is unchanged by this tranche; interop evidence against a second implementation remains open."
   },
   {
+   "id": "BACNET-12-ALERT-ENROLLMENT-TABLE-12-61",
+   "standard_anchor": "Clause 12.52 and Table 12-61; Clause 21 BACnetNotifyType; Clause 15.7 ReadPropertyMultiple",
+   "priority": "P1",
+   "requirement_summary": "Alert Enrollment serves the twelve required Table 12-61 rows: Object_Identifier, Object_Name, Object_Type, Present_Value, Event_State, Event_Detection_Enable, Notification_Class, Event_Enable, Acked_Transitions, Notify_Type, Event_Time_Stamps, and Property_List; Description is the only implemented optional row. Present_Value is the read-only BACnetObjectIdentifier of the object that last provided an alert and can be changed only through the object-owned source-recording API, which has no event, timestamp, acknowledgement, or notification side effects. Notify_Type defaults ALARM and accepts configurable ALARM or EVENT values; ACK_NOTIFICATION is acknowledgement-flow output vocabulary and is rejected here. Status_Flags, Out_Of_Service, and Reliability are not Table 12-61 rows and are not served or advertised. Encoded Property_List excludes Object_Identifier, Object_Name, Object_Type, and Property_List itself; RPM ALL/REQUIRED exclude Property_List, and RPM OPTIONAL contains only Description.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+     "crates/bacnet-objects/src/event_enrollment/alert.rs",
+    "crates/bacnet-objects/src/event_enrollment/metadata.rs",
+    "crates/rusty-bacnet/src/server/server_methods/registration.rs",
+    "crates/rusty-bacnet/rusty_bacnet.pyi"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/event_enrollment/tests/alert.rs::alert_enrollment_present_value_is_the_explicit_initial_source_and_is_read_only",
+    "crates/bacnet-objects/src/event_enrollment/tests/alert.rs::record_alert_source_changes_only_present_value",
+    "crates/bacnet-objects/src/event_enrollment/tests/alert.rs::alert_enrollment_notify_type_defaults_and_accepts_only_alarm_or_event",
+    "crates/bacnet-objects/src/event_enrollment/tests/alert.rs::alert_enrollment_property_list",
+    "crates/bacnet-objects/src/event_enrollment/tests/timestamps.rs::enrollment_property_metadata_is_complete_and_pins_timestamp_requirements",
+    "crates/bacnet-server/src/handlers/tests/alert_enrollment.rs::alert_present_value_and_removed_properties_have_exact_wire_access",
+    "crates/bacnet-server/src/handlers/tests/alert_enrollment.rs::alert_notify_type_wire_domain_is_alarm_or_event",
+    "crates/bacnet-server/src/handlers/tests/property_metadata.rs::rpm_metadata_selectors_are_exact_for_alert_enrollment",
+    "crates/bacnet-server/src/pics/property_metadata_tests.rs::pics_projects_migrated_property_metadata",
+    "crates/bacnet-server/src/handlers/tests/wpm_event_rollback.rs::wpm_rollback_restores_alert_enrollment_notify_type",
+    "crates/rusty-bacnet/tests/test_alert_enrollment_api.py::AlertEnrollmentApiTests"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/event_enrollment/tests/alert.rs::alert_enrollment_removed_common_properties_are_unknown_and_nonmutating",
+    "crates/bacnet-objects/src/event_enrollment/tests/alert.rs::alert_enrollment_notify_type_defaults_and_accepts_only_alarm_or_event (ACK_NOTIFICATION, out-of-domain, and wrong-type refusal with preservation)",
+    "crates/bacnet-server/src/handlers/tests/alert_enrollment.rs (read/write errors for removed properties; read-only Present_Value; invalid, wrong-type, and overwide Notify_Type preservation)"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md AlertEnrollmentObject constructor migration",
+    "docs/python-api.md add_alert_enrollment constructor migration",
+    "crates/rusty-bacnet/rusty_bacnet.pyi add_alert_enrollment",
+    "CHANGELOG.md Unreleased Alert Enrollment migration note"
+   ],
+   "notes": "PR-0808 / #291 is a bounded served-object-model correction. The explicit initial-source constructor is intentionally breaking in Rust and Python, with no sentinel overload. record_alert_source owns only Present_Value; it is not alert source discovery or an evaluator. The existing Event_Detection_Enable reset/history, Event_State, Acked_Transitions (including TO_NORMAL always acknowledged), Event_Enable, Notification_Class, Event_Time_Stamps, object-name/database behavior, WPM rollback, and generic event-information consumers remain in place. Optional message/inhibit/audit/tag/profile rows remain unimplemented. This row does not claim an Alert evaluator, transition generation, notification sending, or complete optional-property support."
+  },
+  {
    "id": "BACNET-12-ENROLLMENT-EVENT-TIME-STAMPS",
    "standard_anchor": "Clause 12.12 Table 12-14; Clause 12.52 Table 12-61; Clause 12.1.5.1; Clause 13.2.2.1; Clause 21 BACnetTimeStamp",
    "priority": "P1",
@@ -874,11 +913,11 @@
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/event_enrollment/tests/timestamps.rs::enrollment_event_time_stamp_arrays_preserve_order_indexes_and_choices (invalid indexes, write denial, and Event_Message_Texts absence)",
-    "crates/bacnet-objects/src/event_enrollment/tests/timestamps.rs::enrollment_property_metadata_is_complete_and_pins_timestamp_requirements (Alert Enrollment Notify_Type limitation)"
+     "crates/bacnet-objects/src/event_enrollment/tests/timestamps.rs::enrollment_event_time_stamp_arrays_preserve_order_indexes_and_choices (invalid indexes, write denial, and Event_Message_Texts absence)"
    ],
    "benchmarks": [],
    "public_claims": [],
-   "notes": "#264 property-surface slice. EventHistory is embedded privately, but only an exact Event_Time_Stamps match delegates to it; optional Event_Message_Texts remains unlisted and unreadable. Detection-disabled resets restore timestamp initial conditions, including projection after direct assignment to Alert Enrollment's compatibility-public Event_Detection_Enable field, and object-owned WPM rollback tokens restore seeded history atomically. Alert Enrollment's TO_NORMAL Acked_Transitions bit is held TRUE because Clause 12.52.8 makes that transition acknowledgment-not-required. This row does not claim complete transition maintenance: evaluator/lifecycle writes of each transition timestamp remain deferred to PR-0205/PR-0305, and notification transition-history sourcing remains deferred to PR-0207. Alert Enrollment remains a partial Table 12-61 model: required Notify_Type is still unimplemented and deliberately absent from metadata/PICS (#291); Event_Message_Texts is optional and remains absent."
+    "notes": "#264 property-surface slice. EventHistory is embedded privately, but only an exact Event_Time_Stamps match delegates to it; optional Event_Message_Texts remains unlisted and unreadable. Detection-disabled resets restore timestamp initial conditions, including projection after direct assignment to Alert Enrollment's compatibility-public Event_Detection_Enable field, and object-owned WPM rollback tokens restore seeded history atomically. Alert Enrollment's TO_NORMAL Acked_Transitions bit is held TRUE because Clause 12.52.8 makes that transition acknowledgment-not-required. PR-0808 completes Alert Enrollment's required Table 12-61 served-property projection under BACNET-12-ALERT-ENROLLMENT-TABLE-12-61, but this timestamp row still does not claim complete transition maintenance: Alert evaluation, lifecycle timestamp writes, notification generation, and optional Event_Message_Texts remain deferred."
   },
   {
    "id": "BACNET-12-TIME-DELAY-NORMAL",
@@ -1096,7 +1135,7 @@
    "id": "BACNET-15-WP-EVENT-FIELD-VALIDATION",
    "standard_anchor": "Clause 15.9.1.3 (WriteProperty error table) with Clause 21 BACnetNotifyType / BACnetEventTransitionBits / BACnetLimitEnable productions",
    "priority": "P1",
-   "requirement_summary": "WriteProperty validation of the shared intrinsic-reporting event properties matches the Clause 15.9.1.3 error semantics: Notify_Type (BACnetNotifyType, a closed {alarm, event, ack-notification} production) refuses out-of-production values with PROPERTY / VALUE_OUT_OF_RANGE ('The value provided is outside the range of values that the property can take on'), and Event_Enable / Limit_Enable (BACnetEventTransitionBits = 3 bits, BACnetLimitEnable = 2 bits) require the canonical encoding of their fixed-width production - exactly one content octet with 8-N declared unused bits, the form the read path emits - refusing any other shape with PROPERTY / INVALID_DATA_ENCODING ('The encoding is not valid for the datatype of the property'). A previously-silent normalization of an over-long bit string (masking its first octet and dropping the declared count) is now a refusal, as is an empty content (previously INVALID_DATA_TYPE). Notify_Type membership derives from NotifyType::ALL_NAMED so a future addendum constant widens the gate without a second edit.",
+    "requirement_summary": "WriteProperty validation of the shared intrinsic-reporting event properties matches the Clause 15.9.1.3 error semantics: Notify_Type generally follows the closed BACnetNotifyType {alarm, event, ack-notification} production and refuses out-of-production values with PROPERTY / VALUE_OUT_OF_RANGE; Alert Enrollment narrows its configurable property to ALARM/EVENT because ACK_NOTIFICATION belongs to acknowledgement-flow output. Event_Enable / Limit_Enable (BACnetEventTransitionBits = 3 bits, BACnetLimitEnable = 2 bits) require the canonical encoding of their fixed-width production - exactly one content octet with 8-N declared unused bits, the form the read path emits - refusing any other shape with PROPERTY / INVALID_DATA_ENCODING. A previously-silent normalization of an over-long bit string is now a refusal, as is empty content.",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-objects/src/common.rs",
@@ -1110,7 +1149,8 @@
     "crates/bacnet-objects/src/analog/tests/input.rs::ai_notify_type_rejects_out_of_production_values",
     "crates/bacnet-objects/src/binary/tests/generic_event_properties.rs::bi_notify_type_rejects_out_of_production_values",
     "crates/bacnet-objects/src/multistate/tests/generic_event_properties.rs::mso_notify_type_rejects_out_of_production_values",
-    "crates/bacnet-objects/src/event_enrollment/tests/enrollment.rs::ee_notify_type_rejects_out_of_production_values"
+     "crates/bacnet-objects/src/event_enrollment/tests/enrollment.rs::ee_notify_type_rejects_out_of_production_values",
+     "crates/bacnet-objects/src/event_enrollment/tests/alert.rs::alert_enrollment_notify_type_defaults_and_accepts_only_alarm_or_event"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/analog/tests/input.rs::ai_event_enable_rejects_noncanonical_bit_strings",
@@ -1118,11 +1158,12 @@
     "crates/bacnet-objects/src/binary/tests/generic_event_properties.rs::bi_event_enable_rejects_noncanonical_bit_strings",
     "crates/bacnet-objects/src/multistate/tests/generic_event_properties.rs::mso_event_enable_rejects_noncanonical_bit_strings",
     "crates/bacnet-objects/src/event_enrollment/tests/enrollment.rs::ee_event_enable_rejects_noncanonical_bit_strings",
-    "crates/bacnet-objects/src/event_enrollment/tests/enrollment.rs::alert_enrollment_event_enable_rejects_noncanonical_bit_strings"
+     "crates/bacnet-objects/src/event_enrollment/tests/enrollment.rs::alert_enrollment_event_enable_rejects_noncanonical_bit_strings",
+     "crates/bacnet-server/src/handlers/tests/alert_enrollment.rs::alert_notify_type_wire_domain_is_alarm_or_event"
    ],
    "benchmarks": [],
    "public_claims": [],
-   "notes": "Split child of BACNET-12-OBJECT-MODEL (#255; behavior change - previously-accepted invalid writes now fail). The generic macro arms cover AI/AO/AV/BI/BO/BV/MSI/MSO/MSV, the analog macro arm adds Limit_Enable, and the EventEnrollment and AlertEnrollment objects carry their own arms with identical validation. A shared objects-layer helper (common::check_fixed_width_bit_string) shapes the PROPERTY-class error; the decoding-layer sibling in bacnet-encoding is intentionally not reused across layers. Covered shapes: out-of-production Notify_Type (3, 99, u32::MAX), an 8-bit string where the production defines fewer bits, extra or missing content octets, a half-octet string, and - for Limit_Enable - the valid Event_Enable 3-bit shape, which must not cross-apply. Related unaddressed family: the Notification Class recipient-list decoder still masks transition/day bit strings without consulting declared counts - noted as a follow-up rather than folded into this tranche."
+    "notes": "Split child of BACNET-12-OBJECT-MODEL (#255; behavior change - previously-accepted invalid writes now fail). The generic macro arms cover AI/AO/AV/BI/BO/BV/MSI/MSO/MSV, the analog macro arm adds Limit_Enable, and Event Enrollment carries its own full BACnetNotifyType arm. Alert Enrollment's PR-0808 arm deliberately accepts only configurable ALARM/EVENT and rejects ACK_NOTIFICATION, which belongs to acknowledgement-flow output; its wire tests also pin wrong-type and overwide refusal before mutation. EventEnrollment and AlertEnrollment retain their own fixed-width Event_Enable arms. A shared objects-layer helper shapes the bit-string PROPERTY error. Related unaddressed family: the Notification Class recipient-list decoder still masks transition/day bit strings without consulting declared counts."
   },
   {
    "id": "BACNET-15-STRUCTURED-WRITE-DECODE",
@@ -1976,9 +2017,9 @@
     "crates/bacnet-server/src/handlers/write_property.rs"
    ],
    "positive_tests": [
-    "crates/bacnet-objects/src/event_enrollment/tests/alert.rs (disabled-state reset/projection, guarded internal updates, Status_Flags, writability)",
+     "crates/bacnet-objects/src/event_enrollment/tests/alert.rs (disabled-state reset/projection, guarded internal updates, source ownership, Notify_Type, and exact writability)",
     "crates/bacnet-objects/src/analog/input.rs::detection_enable_reset_tests::ai_write_rollback_restores_detection_state",
-    "crates/bacnet-server/src/handlers/tests/wpm_event_rollback.rs (Event/Alert/intrinsic state rollback, raw Time_Delay_Normal fallback, duplicate-name failure, OOS ordering, per-object rollback-error reconciliation)",
+     "crates/bacnet-server/src/handlers/tests/wpm_event_rollback.rs (Event/Alert/intrinsic state rollback including Alert Notify_Type, raw Time_Delay_Normal fallback, duplicate-name failure, OOS ordering, per-object rollback-error reconciliation)",
     "crates/bacnet-server/src/handlers/tests/wpm_rollback_contract.rs (token-backed Object_Name/index restoration, unreadable-property rollback failure reporting, Network Port Changes_Pending, Access Door command slots, and destructive log clear rollback)"
    ],
    "negative_tests": [
@@ -1989,7 +2030,7 @@
    ],
    "benchmarks": [],
    "public_claims": [],
-   "notes": "C3 (#205, #209, #289). Clause 15.10 permits preceding writes to remain applied; rollback is repository policy, not a BACnet conformance requirement. Opaque object-state tokens supplement readable property snapshots for reset, fallback-backed, derived, command-slot, and destructive writes. Restoration failures are returned; only objects whose own rollback failed run event/COV reconciliation. Alert Enrollment support is partial: #264 tracks Event_Time_Stamps, while #291 tracks the Present_Value datatype, Notify_Type, required-properties metadata, and non-Table-12-61 properties. No full Alert Enrollment or PICS claim is made."
+    "notes": "C3 (#205, #209, #289), updated by PR-0808 / #291. Clause 15.10 permits preceding writes to remain applied; rollback is repository policy, not a BACnet conformance requirement. Opaque object-state tokens supplement readable property snapshots for reset, fallback-backed, derived, command-slot, and destructive writes; ordinary readable Alert Notify_Type uses the generic snapshot restoration path. Restoration failures are returned; only objects whose own rollback failed run event/COV reconciliation. Alert Enrollment's required served-property projection is now covered by BACNET-12-ALERT-ENROLLMENT-TABLE-12-61; no Alert evaluator or notification-generation claim is made."
   },
   {
    "id": "BACNET-13-EVENT-ENROLLMENT-EVALUATOR",

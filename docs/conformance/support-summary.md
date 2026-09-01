@@ -5,15 +5,15 @@
 - Standard: ANSI/ASHRAE Standard 135-2020
 - Reviewed at: 2026-08-13
 - Implementation evidence SHA reviewed: `f485021f5cd7058ac406d57d3d317936cbe7b361`
-- Scope: Event-state disabled reset and lossless WPM rollback tranche (branch codex/c3-event-reset-rollback, tranche C3; issues #205, #209, #289): Alert Enrollment now exposes Event_State and Acked_Transitions and applies their Clause 13.2.2.1 initial conditions while Event_Detection_Enable is FALSE, including guarded internal updates and projection after direct assignment to the existing public flag. This is partial Alert Enrollment evidence, not a complete Table 12-61 claim; #264 and #291 track the remaining property-model gaps. The repository's WPM rollback policy now uses object-owned tokens when property readback is not state-equivalent. Covered state includes event detection and history, raw Time_Delay_Normal storage, Network Port Changes_Pending, Access Door command slots, and log buffers cleared through Record_Count. Restoration failures are returned instead of being hidden in tracing. Clause 15.10 permits preceding successful writes to remain applied and does not require this policy. Fences: no Alert Enrollment evaluator, notification sending (#127), Event Enrollment history properties (#264), complete Alert Enrollment property model (#291), or DCC behavior (#220).
-- Addenda/errata: No external addenda/errata check was performed for this tranche. The local Standard 135-2020 source was reviewed for Clause 13.2.2.1's disabled-state initial conditions, the Clause 13.3 pTimeDelayNormal fallback, Alert Enrollment Table 12-61's required event-state properties, and Clause 15.10's ordered partial-success procedure. The rollback behavior is identified as repository policy, not a conformance requirement.
+- Scope: PR-0808 Alert Enrollment Table 12-61 property-model correction (#291): Present_Value is the explicit ObjectIdentifier of the last alert source; Notify_Type is implemented with configurable ALARM/EVENT values; metadata, Property_List, RPM selectors, PICS, Rust/Python APIs, and migration docs share the exact required-row projection; and the non-table Status_Flags, Out_Of_Service, and Reliability compatibility routes are removed. Existing Event_Detection_Enable reset/history, acknowledgement, and generic event-summary consumers remain intact. Fences: no Alert evaluator, source discovery, transition generation, notification sending, acknowledgement-flow implementation, or optional Alert Enrollment property expansion.
+- Addenda/errata: No external addenda/errata check was performed for this tranche. The local Standard 135-2020 source contract was reviewed for Clause 12.52 and Table 12-61, Clause 21 BACnetNotifyType, and Clause 15.7 RPM selector exclusions. The Alert Enrollment claim remains bounded to the served property model and does not claim active alert evaluation or notification generation.
 
 ## Counts
 
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 16 |
-| Priority | P1 | 39 |
+| Priority | P1 | 40 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
@@ -26,7 +26,7 @@
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
 | Status | in-progress | 8 |
-| Status | supported-with-clause-evidence | 15 |
+| Status | supported-with-clause-evidence | 16 |
 | Status | unknown-pending-source-review | 4 |
 | Status | unsupported-by-design | 3 |
 
@@ -62,6 +62,7 @@
 | `BACNET-12-OOS-RELIABILITY-WRITABILITY` | Clause 12.17 Table 12-20 footnote 7 (Loop); Clause 12 Out_Of_Service property texts (12.2/12.3/12.4/12.6/12.7/12.8/12.19/12.21/12.22 families); Clause 12.24 Schedule Reliability_Evaluation_Inhibit text; Clause 12.25 Table 12-29 and Clause 12.30 Table 12-35 (Trend Log / Trend Log Multiple); Clause 21 BACnetReliability | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-12-RELINQUISH-DEFAULT-WRITABILITY` | Clause 12.3 Table 12-3 (Analog Output), Clause 12.7 Table 12-8 (Binary Output), Clause 12.8 Table 12-10 (Binary Value), Clause 12.19 Table 12-22 (Multi-state Output), Clause 12.20 Table 12-23 (Multi-state Value), Clause 12.26 Table 12-30 (Access Door), Clause 12.54 Table 12-64 (Lighting Output), Clause 12.55 Table 12-69 (Binary Lighting Output), Clause 12 value object tables; Clause 19 command prioritization | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-12-REFERENCE-PROPERTY-WRITABILITY` | Clause 12.17 with Table 12-20 (Loop), Clause 12.23 with Table 12-27 (Pulse Converter Input_Reference), Clause 12.5 Table 12-5 (Averaging Object_Property_Reference - BACnetDeviceObjectPropertyReference), Clause 21 BACnetObjectPropertyReference / BACnetSetpointReference productions | P1 | supported-with-clause-evidence | 0 |
+| `BACNET-12-ALERT-ENROLLMENT-TABLE-12-61` | Clause 12.52 and Table 12-61; Clause 21 BACnetNotifyType; Clause 15.7 ReadPropertyMultiple | P1 | supported-with-clause-evidence | 4 |
 | `BACNET-12-ENROLLMENT-EVENT-TIME-STAMPS` | Clause 12.12 Table 12-14; Clause 12.52 Table 12-61; Clause 12.1.5.1; Clause 13.2.2.1; Clause 21 BACnetTimeStamp | P1 | implementation-present-needs-state-machine-audit | 0 |
 | `BACNET-12-TIME-DELAY-NORMAL` | Clause 13.3.2 CHANGE_OF_STATE, Clause 13.3.4 COMMAND_FAILURE, Clause 13.3.6 OUT_OF_RANGE (pTimeDelayNormal definitions and condition letters); Clause 12.2 Table 12-2 (Analog Input, O5), 12.3 Table 12-3 (Analog Output, O4), 12.4 Table 12-4 (Analog Value, O6), 12.6 Table 12-6 (Binary Input, O7), 12.7 Table 12-8 (Binary Output, O6), 12.8 Table 12-10 (Binary Value, O8), 12.18 Table 12-21 (Multi-state Input, O5), 12.19 Table 12-22 (Multi-state Output, O3), 12.20 Table 12-23 (Multi-state Value, O6) | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-13-COV-SUBSCRIPTIONS` | Clauses 13.14-13.18 | P1 | implementation-present-needs-conformance-tests | 0 |

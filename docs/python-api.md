@@ -1065,9 +1065,20 @@ server.add_multistate_value(instance=1, name="Season", number_of_states=4)
 server.add_calendar(instance=1, name="Holiday Calendar")
 server.add_schedule(instance=1, name="Occupancy Schedule")
 server.add_notification_class(instance=1, name="Critical Alarms", notification_class=1)
-server.add_alert_enrollment(instance=1, name="Alert")
+server.add_alert_enrollment(
+    instance=1,
+    name="Alert",
+    initial_source=ObjectIdentifier(ObjectType.ANALOG_INPUT, 1),
+)
 server.add_event_enrollment(instance=1, name="Event", event_type=0)
 ```
+
+`initial_source` is required and becomes the Alert Enrollment object's
+read-only `Present_Value`. This is an intentional breaking correction; there
+is no sentinel/default source. The served Table 12-61 surface also removes the
+former `Status_Flags`, `Out_Of_Service`, and `Reliability` compatibility
+properties. This models source ownership only and does not add an Alert
+evaluator or notification-generation flow.
 
 #### Logging & Trending
 

@@ -133,6 +133,10 @@ fn failed_wpm(
     assert!(handle_write_property_multiple(db, &request_bytes).is_err());
 }
 
+fn alert_source() -> ObjectIdentifier {
+    ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap()
+}
+
 fn out_of_range_params(time_delay: u32) -> BACnetEventParameter {
     BACnetEventParameter::OutOfRange {
         time_delay,
@@ -212,7 +216,7 @@ fn wpm_rollback_restores_event_enrollment_detection_state() {
 #[test]
 fn wpm_rollback_restores_alert_enrollment_detection_state() {
     let mut db = ObjectDatabase::new();
-    let mut enrollment = AlertEnrollmentObject::new(1, "AE-1").unwrap();
+    let mut enrollment = AlertEnrollmentObject::new(1, "AE-1", alert_source()).unwrap();
     enrollment
         .set_event_state_internal(EventState::OFFNORMAL)
         .unwrap();
@@ -256,9 +260,37 @@ fn wpm_rollback_restores_alert_enrollment_detection_state() {
 }
 
 #[test]
+fn wpm_rollback_restores_alert_enrollment_notify_type() {
+    let mut db = ObjectDatabase::new();
+    let enrollment = AlertEnrollmentObject::new(1, "AE-1", alert_source()).unwrap();
+    let oid = enrollment.object_identifier();
+    db.add(Box::new(enrollment)).unwrap();
+
+    let mut event = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_enumerated(
+        &mut event,
+        bacnet_types::enums::NotifyType::EVENT.to_raw(),
+    );
+    failed_wpm(
+        &mut db,
+        oid,
+        PropertyIdentifier::NOTIFY_TYPE,
+        event.to_vec(),
+    );
+
+    assert_eq!(
+        db.get(&oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::NOTIFY_TYPE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(bacnet_types::enums::NotifyType::ALARM.to_raw())
+    );
+}
+
+#[test]
 fn duplicate_name_failure_rolls_back_prior_event_state_write() {
     let mut db = ObjectDatabase::new();
-    let mut enrollment = AlertEnrollmentObject::new(1, "AE-1").unwrap();
+    let mut enrollment = AlertEnrollmentObject::new(1, "AE-1", alert_source()).unwrap();
     enrollment
         .set_event_state_internal(EventState::OFFNORMAL)
         .unwrap();
@@ -366,7 +398,7 @@ fn wpm_reports_object_state_rollback_failure() {
 #[test]
 fn rollback_failure_reports_only_the_object_that_failed_restoration() {
     let mut db = ObjectDatabase::new();
-    let mut enrollment = AlertEnrollmentObject::new(1, "AE-1").unwrap();
+    let mut enrollment = AlertEnrollmentObject::new(1, "AE-1", alert_source()).unwrap();
     enrollment
         .set_event_state_internal(EventState::OFFNORMAL)
         .unwrap();

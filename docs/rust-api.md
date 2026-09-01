@@ -523,8 +523,18 @@ let obj = db.get_mut(&oid);            // Option<&mut Box<dyn BACnetObject>>
 | `CalendarObject` | `::new(instance, name)` |
 | `ScheduleObject` | `::new(instance, name, default_value)` |
 | `NotificationClass` | `::new(instance, name)` |
-| `AlertEnrollmentObject` | `::new(instance, name)` |
+| `AlertEnrollmentObject` | `::new(instance, name, initial_source)` |
 | `EventEnrollmentObject` | `::new(instance, name, event_type)` |
+
+`AlertEnrollmentObject::new` now requires the initial
+`bacnet_types::primitives::ObjectIdentifier` reported by `Present_Value`.
+This is an intentional breaking correction: migrate two-argument callers by
+passing the object that most recently provided an alert. Use
+`record_alert_source(source)` to update only that source identity; the helper
+does not evaluate an alert or update event, timestamp, acknowledgement, or
+notification state. The served Table 12-61 surface no longer includes the
+previous compatibility-only `Status_Flags`, `Out_Of_Service`, or `Reliability`
+properties.
 
 #### Logging & Trending (5)
 

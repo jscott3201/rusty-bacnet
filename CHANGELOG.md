@@ -231,6 +231,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Alert Enrollment now serves the bounded ASHRAE 135-2020 Table 12-61
+  property model (`Closes #291`). `Present_Value` is the read-only
+  `ObjectIdentifier` of the most recent alert source, and both the Rust
+  `AlertEnrollmentObject::new` constructor and Python
+  `BACnetServer.add_alert_enrollment` now require that explicit initial source
+  (intentional breaking migration; no sentinel/default). `Notify_Type` is
+  required, defaults to `ALARM`, accepts configurable `ALARM`/`EVENT`, rejects
+  acknowledgement-flow `ACK_NOTIFICATION` and malformed values atomically,
+  and participates in WPM rollback. The prior compatibility-only
+  `Status_Flags`, `Out_Of_Service`, and `Reliability` routes are removed from
+  reads, writes, metadata, Property_List, RPM, and PICS. This does not add an
+  Alert evaluator, source discovery, transition generation, notification
+  sending, or optional Table 12-61 properties.
+
 - Detected exact duplicate inbound Confirmed-Request messages are now silently
   discarded before service decoding, authorization, mutation, side effects, or
   response construction (`Refs #177`). Detection is server-lifetime and

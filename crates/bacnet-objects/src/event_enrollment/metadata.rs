@@ -135,6 +135,12 @@ pub(super) static ALERT_ENROLLMENT_PROPERTIES: &[PropertyMetadata] = &[
         None,
         Always,
     ),
+    PropertyMetadata::new(
+        PropertyIdentifier::NOTIFICATION_CLASS,
+        RequiredRead,
+        None,
+        Always,
+    ),
     PropertyMetadata::new(PropertyIdentifier::EVENT_ENABLE, RequiredRead, None, Always),
     PropertyMetadata::new(
         PropertyIdentifier::ACKED_TRANSITIONS,
@@ -142,23 +148,13 @@ pub(super) static ALERT_ENROLLMENT_PROPERTIES: &[PropertyMetadata] = &[
         None,
         ReadOnly,
     ),
-    PropertyMetadata::new(
-        PropertyIdentifier::NOTIFICATION_CLASS,
-        RequiredRead,
-        None,
-        Always,
-    ),
+    PropertyMetadata::new(PropertyIdentifier::NOTIFY_TYPE, RequiredRead, None, Always),
     PropertyMetadata::new(
         PropertyIdentifier::EVENT_TIME_STAMPS,
         RequiredRead,
         None,
         ReadOnly,
     ),
-    // These three are existing compatibility projections, not Table 12-61
-    // rows. Retain them as optional so metadata covers the readable API.
-    PropertyMetadata::new(PropertyIdentifier::STATUS_FLAGS, Optional, None, ReadOnly),
-    PropertyMetadata::new(PropertyIdentifier::OUT_OF_SERVICE, Optional, None, Always),
-    PropertyMetadata::new(PropertyIdentifier::RELIABILITY, Optional, None, ReadOnly),
     PropertyMetadata::new(
         PropertyIdentifier::PROPERTY_LIST,
         RequiredRead,
