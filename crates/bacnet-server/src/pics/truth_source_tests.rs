@@ -416,6 +416,7 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
 fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging() {
     use bacnet_objects::accumulator::PulseConverterObject;
     use bacnet_objects::averaging::AveragingObject;
+    use bacnet_objects::database::ObjectDatabase;
     use bacnet_types::enums::ObjectType;
     use bacnet_types::primitives::ObjectIdentifier;
 
@@ -459,6 +460,10 @@ fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging(
         &mut pc,
         "PC",
         &[
+            (
+                PropertyIdentifier::OUT_OF_SERVICE,
+                PropertyValue::Boolean(true),
+            ),
             (PropertyIdentifier::PRESENT_VALUE, PropertyValue::Real(10.0)),
             (PropertyIdentifier::SCALE_FACTOR, PropertyValue::Real(1.5)),
             (PropertyIdentifier::ADJUST_VALUE, PropertyValue::Real(2.0)),
@@ -467,10 +472,6 @@ fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging(
             (
                 PropertyIdentifier::DESCRIPTION,
                 PropertyValue::CharacterString("d".into()),
-            ),
-            (
-                PropertyIdentifier::OUT_OF_SERVICE,
-                PropertyValue::Boolean(true),
             ),
         ],
         &[
@@ -496,6 +497,18 @@ fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging(
             ),
         ],
     );
+
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(pc)).unwrap();
+    let pics = PicsGenerator::new(&db, &ServerConfig::default(), &PicsConfig::default()).generate();
+    let pulse_support = pics
+        .supported_object_types
+        .iter()
+        .find(|support| support.object_type == ObjectType::PULSE_CONVERTER)
+        .unwrap();
+    assert!(pulse_support.supported_properties.iter().any(|property| {
+        property.property_id == PropertyIdentifier::PRESENT_VALUE && property.access.writable
+    }));
 
     let mut avg = AveragingObject::new(1, "AVG-1").unwrap();
     assert_exactly(
