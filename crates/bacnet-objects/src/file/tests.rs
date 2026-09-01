@@ -301,6 +301,37 @@ fn file_metadata_equal_and_empty_mutations_sample_the_next_frame() {
 }
 
 #[test]
+fn configuration_getters_do_not_mutate_or_sample_the_clock() {
+    let retained = clock_frame(1);
+    let next = clock_frame(12);
+    let mut file = FileObject::new(1, "FILE", "text/plain").unwrap();
+    file.set_data(vec![1, 2]);
+    file.set_modification_date(retained.local_date, retained.local_time);
+    file.set_archive(true);
+    file.bind_clock_internal(Some(Arc::new(SequenceClock::new([next]))));
+
+    assert_eq!(
+        file.file_configuration_internal()
+            .unwrap()
+            .stream_data()
+            .unwrap(),
+        &[1, 2]
+    );
+    assert_eq!(
+        file.modification_date,
+        (retained.local_date, retained.local_time)
+    );
+    assert!(file.archive());
+
+    file.file_configuration_internal_mut()
+        .unwrap()
+        .set_stream_data(vec![3, 4])
+        .unwrap();
+    assert_eq!(file.modification_date, (next.local_date, next.local_time));
+    assert!(!file.archive());
+}
+
+#[test]
 fn file_metadata_manual_assignment_clears_archive_only_when_changed() {
     let first = clock_frame(4);
     let second = clock_frame(5);

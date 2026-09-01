@@ -1170,8 +1170,33 @@ server.add_date_time_pattern_value(instance=1, name="Schedule Pattern")
 server.add_accumulator(instance=1, name="kWh Meter", units=70)      # 70 = kilowatt-hours
 server.add_pulse_converter(instance=1, name="Pulse Count", units=95) # 95 = counts
 server.add_file(instance=1, name="Config File", file_type="text/plain")
+server.set_file_data(instance=1, data=b"mode=occupied\n")
+
+server.add_file(instance=2, name="Record File")
+server.set_file_access_method(instance=2, access_method="record")
+server.set_file_records(instance=2, records=[b"first", b"second"])
 server.add_network_port(instance=1, name="BIP Port", network_type=0)
 ```
+
+The seven File configuration methods are synchronous and operate only on a
+pending built-in File before `start()`:
+
+- `set_file_access_method(instance, access_method)` accepts only `"stream"` or
+  `"record"`. Select the mode before loading its corresponding payload; a mode
+  change preserves both stored channels and does not convert between them.
+- `set_file_data` / `get_file_data` require stream mode.
+- `set_file_records` / `get_file_records` require record mode.
+- `set_max_file_size` and `set_max_record_count` return the effective value
+  after the built-in File clamp. These are growth limits for later
+  AtomicWriteFile requests; lowering a cap does not truncate preloaded content.
+
+Inputs are copied. Getters return a fresh `bytes`, or a fresh `list` containing
+fresh `bytes`, so later Python-side mutation cannot alter Rust storage.
+Preloading is trusted local configuration and is independent of `Read_Only`;
+network clients read and write runtime content through AtomicReadFile and
+AtomicWriteFile, where `Read_Only`, access method, caps, and all-or-failure
+behavior remain enforced. These methods do not mutate a live database and do
+not persist File content across stop/restart.
 
 ### Lifecycle
 
@@ -1234,7 +1259,7 @@ All BACnet errors are raised as Python exceptions:
 | Exception | Meaning |
 |-----------|---------|
 | `BacnetError` | Base exception for all BACnet errors |
-| `BacnetProtocolError` | Remote device returned a BACnet error (class + code) |
+| `BacnetProtocolError` | A remote or local BACnet protocol check returned an error (class + code) |
 | `BacnetTimeoutError` | Request timed out (APDU retries exhausted) |
 | `BacnetRejectError` | Remote device rejected the request |
 | `BacnetAbortError` | Remote device aborted the request |

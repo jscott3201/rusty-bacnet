@@ -17,7 +17,7 @@ use crate::event::{EventTransitionCommit, EventTransitionCommitError, Transition
 use crate::event_enrollment::{
     EventEnrollmentEvalState, EventEnrollmentMonitoredSource, EventEnrollmentReliabilityCommit,
 };
-use crate::file::FileStorage;
+use crate::file::{FileConfiguration, FileStorage};
 use crate::log_buffer::LogRecordIdentity;
 
 mod defaults;
@@ -602,6 +602,27 @@ pub trait BACnetObject: Send + Sync {
     fn audit_log_notification_sink_internal(
         &mut self,
     ) -> Option<&mut dyn AuditLogNotificationSink> {
+        None
+    }
+
+    /// Borrow this object's trusted local File configuration capability.
+    ///
+    /// The default returns `None`. The built-in [`crate::file::FileObject`]
+    /// opts in so bindings can configure its pending payload, access method,
+    /// and growth limits without general object downcasting or a parallel
+    /// state cache.
+    #[doc(hidden)]
+    fn file_configuration_internal(&self) -> Option<&dyn FileConfiguration> {
+        None
+    }
+
+    /// Mutably borrow this object's trusted local File configuration capability.
+    ///
+    /// The default returns `None`; payload mutations remain object-owned and
+    /// must preserve the same accounting and metadata behavior as the built-in
+    /// File setters.
+    #[doc(hidden)]
+    fn file_configuration_internal_mut(&mut self) -> Option<&mut dyn FileConfiguration> {
         None
     }
 

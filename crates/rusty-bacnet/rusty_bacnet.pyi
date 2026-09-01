@@ -1579,6 +1579,40 @@ class BACnetServer:
 
     # --- Files/network ---
     def add_file(self, instance: int, name: str, file_type: str = "application/octet-stream") -> None: ...
+    def set_file_access_method(self, /, instance: int, access_method: str) -> None:
+        """Select ``"stream"`` or ``"record"`` on a pending built-in File.
+
+        This synchronous operation is valid only before ``start()``. Select the
+        access method before loading the corresponding payload; changing modes
+        does not convert stream data to records or vice versa.
+        """
+        ...
+    def set_file_data(self, /, instance: int, data: bytes) -> None:
+        """Copy bytes into a pending stream-access built-in File before ``start()``."""
+        ...
+    def get_file_data(self, /, instance: int) -> bytes:
+        """Return a fresh bytes copy from a pending stream File before ``start()``."""
+        ...
+    def set_file_records(self, /, instance: int, records: list[bytes]) -> None:
+        """Copy records into a pending record-access built-in File before ``start()``."""
+        ...
+    def get_file_records(self, /, instance: int) -> list[bytes]:
+        """Return a fresh list and fresh bytes from a pending record File before ``start()``."""
+        ...
+    def set_max_file_size(self, /, instance: int, max_octets: int) -> int:
+        """Set and return the effective octet growth cap before ``start()``.
+
+        The built-in File clamp is authoritative. This does not truncate
+        preloaded content.
+        """
+        ...
+    def set_max_record_count(self, /, instance: int, max_records: int) -> int:
+        """Set and return the effective record growth cap before ``start()``.
+
+        The built-in File clamp is authoritative. This does not truncate
+        preloaded records.
+        """
+        ...
     def add_network_port(self, instance: int, name: str, network_type: int = 0) -> None: ...
 
     # --- Server lifecycle ---
