@@ -553,11 +553,32 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }));
 
         let db_schedule = Arc::clone(&db);
+        let network_schedule = Arc::clone(&network);
+        let cov_table_schedule = Arc::clone(&cov_table);
+        let cov_in_flight_schedule = Arc::clone(&cov_in_flight);
+        let notification_transactions_schedule = Arc::clone(&notification_transactions);
+        let comm_state_schedule = Arc::clone(&comm_state);
+        let schedule_config = config.clone();
         let schedule_tick_task = Some(tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
             loop {
                 interval.tick().await;
-                crate::schedule::tick_schedules(&db_schedule, 0).await;
+                let changes =
+                    crate::schedule::tick_schedules_with_life_safety_cov(&db_schedule, 0).await;
+                for change in changes {
+                    Self::fire_life_safety_cov_notifications(
+                        &db_schedule,
+                        &network_schedule,
+                        &cov_table_schedule,
+                        &cov_in_flight_schedule,
+                        &notification_transactions_schedule,
+                        &comm_state_schedule,
+                        &schedule_config,
+                        &change.object_identifier,
+                        &change.changed_properties,
+                    )
+                    .await;
+                }
             }
         }));
 
@@ -732,97 +753,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Returns 0 (Enable), 1 (Disable), or 2 (DisableInitiation).
     pub fn comm_state(&self) -> u8 {
         self.comm_state.load(Ordering::Acquire)
-    }
-
-    /// Arm or rearm a Life Safety object from trusted local application logic.
-    ///
-    /// This uses the object-internal state channel under the database write
-    /// lock. Network WriteProperty and WritePropertyMultiple remain unable to
-    /// forge `Operation_Expected`. Property-specific COV for this local state
-    /// change remains follow-up #177; this method deliberately avoids the
-    /// coarse whole-object COV/event path used by [`write_local`](Self::write_local).
-    pub async fn set_life_safety_operation_expected_local(
-        &self,
-        oid: &ObjectIdentifier,
-        operation: LifeSafetyOperation,
-    ) -> Result<(), Error> {
-        let mut db = self.db.write().await;
-        let object = db.get_mut(oid).ok_or_else(|| Error::Protocol {
-            class: ErrorClass::OBJECT.to_raw() as u32,
-            code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
-        })?;
-        object.set_life_safety_operation_expected_internal(operation)
-    }
-
-    /// Write a property on a local object and fire the same post-write COV
-    /// and event notifications that a network [`WriteProperty`] does.
-    ///
-    /// This is the server-owned local-mutation entry point: it performs the
-    /// write under the database lock — routing `OBJECT_NAME` through the name
-    /// uniqueness check and index refresh, exactly like the network handler —
-    /// then releases the lock and runs the COV/event trigger path so a
-    /// subscription observes a local mutation just as it would a network one.
-    ///
-    /// Low-level object setters (`set_present_value` and friends) deliberately
-    /// bypass this path; they are building blocks below the high-level server
-    /// surface and are not expected to emit notifications.
-    ///
-    /// [`WriteProperty`]: bacnet_services::write_property::WritePropertyRequest
-    pub async fn write_local(
-        &self,
-        oid: &ObjectIdentifier,
-        property: PropertyIdentifier,
-        array_index: Option<u32>,
-        value: PropertyValue,
-        priority: Option<u8>,
-    ) -> Result<(), Error> {
-        // Scoped write: mutate under the lock, then drop the guard before
-        // firing notifications — matching the network dispatch path, which
-        // releases the database lock before the post-write trigger loop.
-        {
-            let mut db = self.db.write().await;
-            if db.get(oid).is_none() {
-                return Err(Error::Protocol {
-                    class: ErrorClass::OBJECT.to_raw() as u32,
-                    code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
-                });
-            }
-            if property == PropertyIdentifier::OBJECT_NAME {
-                if let PropertyValue::CharacterString(ref new_name) = value {
-                    db.check_name_available(oid, new_name)?;
-                }
-            }
-            let object = db.get_mut(oid).expect("existence checked above");
-            object.write_property(property, array_index, value, priority)?;
-            if property == PropertyIdentifier::OBJECT_NAME {
-                db.update_name_index(oid);
-            }
-        }
-
-        // Post-write COV/event trigger, mirroring the network handler's loop.
-        Self::fire_event_notifications_with_bindings(
-            &self.db,
-            &self.network,
-            &self.comm_state,
-            &self.server_tsm,
-            &self.notification_transactions,
-            &self.device_bindings,
-            oid,
-            self.config.cov_retry_timeout_ms,
-        )
-        .await;
-        Self::fire_cov_notifications(
-            &self.db,
-            &self.network,
-            &self.cov_table,
-            &self.cov_in_flight,
-            &self.notification_transactions,
-            &self.comm_state,
-            &self.config,
-            oid,
-        )
-        .await;
-        Ok(())
     }
 
     /// Generate a PICS document from the current object database and server configuration.

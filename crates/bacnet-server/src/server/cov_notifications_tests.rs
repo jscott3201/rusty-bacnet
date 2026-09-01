@@ -12,13 +12,13 @@ use std::sync::{Arc as StdArc, Mutex as StdMutex};
 use tokio::sync::mpsc;
 
 #[derive(Clone, Default)]
-struct RecordingTransport {
+pub(super) struct RecordingTransport {
     sent_unicast: StdArc<StdMutex<Vec<(Bytes, MacAddr)>>>,
     local_mac: Vec<u8>,
 }
 
 impl RecordingTransport {
-    fn new(sent_unicast: StdArc<StdMutex<Vec<(Bytes, MacAddr)>>>) -> Self {
+    pub(super) fn new(sent_unicast: StdArc<StdMutex<Vec<(Bytes, MacAddr)>>>) -> Self {
         Self {
             sent_unicast,
             local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],

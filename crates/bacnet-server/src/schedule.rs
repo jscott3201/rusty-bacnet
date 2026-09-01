@@ -22,14 +22,23 @@ pub(crate) fn current_time_components(frame: ClockFrame) -> Option<(u8, u8, u8)>
 /// Called periodically by the server (every 60 seconds). The offset argument
 /// remains for source compatibility; evaluation uses the database clock frame.
 pub async fn tick_schedules(db: &Arc<RwLock<ObjectDatabase>>, _utc_offset_minutes: i16) {
+    let _ = tick_schedules_with_life_safety_cov(db, _utc_offset_minutes).await;
+}
+
+/// Evaluate schedules while retaining exact Life Safety changes for the live
+/// server's post-lock COV route.
+pub(crate) async fn tick_schedules_with_life_safety_cov(
+    db: &Arc<RwLock<ObjectDatabase>>,
+    _utc_offset_minutes: i16,
+) -> Vec<crate::life_safety_cov::LifeSafetyCovChange> {
     let frame = db.read().await.clock_frame();
     let Some((day_of_week, hour, minute)) = frame.and_then(current_time_components) else {
         debug!("Skipping Schedule evaluation without a valid Device clock");
-        return;
+        return Vec::new();
     };
 
     let mut writes = Vec::new();
-    {
+    let changes = {
         let mut db_w = db.write().await;
         let schedule_oids = db_w.find_by_type(ObjectType::SCHEDULE);
         for oid in schedule_oids {
@@ -47,6 +56,11 @@ pub async fn tick_schedules(db: &Arc<RwLock<ObjectDatabase>>, _utc_offset_minute
             }
         }
 
+        let snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::capture_oids(
+            &db_w,
+            writes.iter().map(|(target_oid, _, _)| *target_oid),
+        );
+        let mut successful_oids = Vec::new();
         for (target_oid, prop_id, value) in writes {
             if let Some(target_obj) = db_w.get_mut(&target_oid) {
                 let prop = PropertyIdentifier::from_raw(prop_id);
@@ -57,8 +71,12 @@ pub async fn tick_schedules(db: &Arc<RwLock<ObjectDatabase>>, _utc_offset_minute
                         error = %e,
                         "Schedule failed to write to controlled property"
                     );
+                } else if !successful_oids.contains(&target_oid) {
+                    successful_oids.push(target_oid);
                 }
             }
         }
-    }
+        snapshots.changes(&db_w, &successful_oids)
+    };
+    changes
 }

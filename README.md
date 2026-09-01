@@ -294,7 +294,7 @@ docs/                 API documentation and design plans
 | GetAlarmSummary | ✓ | ✓ |
 | GetEnrollmentSummary | ✓ | ✓ |
 | GetEventInformation | ✓ | ✓ |
-| LifeSafetyOperation | ✓ | Silence/unsilence (authorization policy required) |
+| LifeSafetyOperation | ✓ | Authorized silence/unsilence; reset via configured application executor; exact COV on modeled operational properties |
 | ReadRange | ✓ | ✓ |
 | AtomicReadFile / AtomicWriteFile | ✓ | ✓ |
 | AddListElement / RemoveListElement | ✓ | ✓ |

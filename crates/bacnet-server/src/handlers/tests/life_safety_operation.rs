@@ -199,6 +199,44 @@ fn life_safety_operation_without_target_attempts_every_object() {
 }
 
 #[test]
+fn targetless_mixed_outcomes_aggregate_only_successful_exact_deltas() {
+    let point_oid = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 1).unwrap();
+    let zone_oid = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_ZONE, 1).unwrap();
+    let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
+    point.set_silenced(SilencedState::VISIBLE_SILENCED);
+    point.set_operation_expected(LifeSafetyOperation::SILENCE_VISUAL);
+    let mut zone = LifeSafetyZoneObject::new(1, "zone").unwrap();
+    zone.set_operation_expected(LifeSafetyOperation::SILENCE_VISUAL);
+    let failed = LifeSafetyPointObject::new(2, "failed").unwrap();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(point)).unwrap();
+    db.add(Box::new(zone)).unwrap();
+    db.add(Box::new(failed)).unwrap();
+
+    let result = handle_life_safety_operation_detailed(
+        &mut db,
+        &request(LifeSafetyOperation::SILENCE_VISUAL, None),
+    )
+    .unwrap();
+
+    assert_eq!(result.applied_object_identifiers, vec![point_oid, zone_oid]);
+    assert_eq!(result.cov_changes.len(), 2);
+    assert_eq!(result.cov_changes[0].object_identifier, point_oid);
+    assert_eq!(
+        result.cov_changes[0].changed_properties,
+        vec![PropertyIdentifier::OPERATION_EXPECTED]
+    );
+    assert_eq!(result.cov_changes[1].object_identifier, zone_oid);
+    assert_eq!(
+        result.cov_changes[1].changed_properties,
+        vec![
+            PropertyIdentifier::SILENCED,
+            PropertyIdentifier::OPERATION_EXPECTED,
+        ]
+    );
+}
+
+#[test]
 fn life_safety_operation_without_target_succeeds_with_empty_database() {
     let mut db = ObjectDatabase::new();
     assert!(

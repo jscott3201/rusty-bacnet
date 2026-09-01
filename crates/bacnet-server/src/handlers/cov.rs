@@ -2,6 +2,34 @@ use super::*;
 
 const MAX_COV_SUBSCRIPTIONS: usize = 1024;
 
+fn cov_property_error(code: ErrorCode) -> Error {
+    Error::Protocol {
+        class: ErrorClass::PROPERTY.to_raw() as u32,
+        code: code.to_raw() as u32,
+    }
+}
+
+fn validate_cov_property(
+    object: &dyn bacnet_objects::traits::BACnetObject,
+    property: PropertyIdentifier,
+    array_index: Option<u32>,
+) -> Result<(), Error> {
+    let zone_tracking_deferred = object.object_identifier().object_type()
+        == ObjectType::LIFE_SAFETY_ZONE
+        && property == PropertyIdentifier::TRACKING_VALUE;
+    if object.read_property(property, array_index).is_err() {
+        return Err(cov_property_error(if zone_tracking_deferred {
+            ErrorCode::NOT_COV_PROPERTY
+        } else {
+            ErrorCode::UNKNOWN_PROPERTY
+        }));
+    }
+    if !object.supports_cov_property(property) {
+        return Err(cov_property_error(ErrorCode::NOT_COV_PROPERTY));
+    }
+    Ok(())
+}
+
 /// Handle a SubscribeCOV request.
 ///
 /// Absent optional fields indicate a cancellation. Otherwise creates or updates
@@ -151,15 +179,18 @@ pub(crate) fn handle_subscribe_cov_property_with_initial_endpoint(
             code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
         })?;
 
-    object
-        .read_property(
-            request.monitored_property_identifier,
-            request.monitored_property_array_index,
-        )
-        .map_err(|_| Error::Protocol {
-            class: ErrorClass::PROPERTY.to_raw() as u32,
-            code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
-        })?;
+    if !object.supports_cov() {
+        return Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        });
+    }
+
+    validate_cov_property(
+        object,
+        request.monitored_property_identifier,
+        request.monitored_property_array_index,
+    )?;
 
     if table.len() >= MAX_COV_SUBSCRIPTIONS
         && !table.contains(
@@ -346,12 +377,7 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
             let property_identifier = cov_ref.monitored_property.property_identifier;
             let property_array_index = cov_ref.monitored_property.property_array_index;
 
-            object
-                .read_property(property_identifier, property_array_index)
-                .map_err(|_| Error::Protocol {
-                    class: ErrorClass::PROPERTY.to_raw() as u32,
-                    code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
-                })?;
+            validate_cov_property(object, property_identifier, property_array_index)?;
 
             if !table.contains(
                 &subscriber_mac,

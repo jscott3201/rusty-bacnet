@@ -1,6 +1,8 @@
 use super::cov_clock::{cov_multiple_datetime, cov_multiple_time_remaining};
 use super::*;
 
+mod life_safety;
+
 impl<T: TransportPort + 'static> BACnetServer<T> {
     pub(super) async fn send_cov_apdu(
         network: &NetworkLayer<T>,
@@ -373,6 +375,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
 
+            life_safety::append_status_flags(&db, subscriptions, timestamp, &mut items);
+
             (device_oid, items, last_notified, timestamp)
         };
 
@@ -587,21 +591,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let notification_values = if let Some(prop) = sub.monitored_property {
                 let db = db.read().await;
                 if let Some(object) = db.get(oid) {
-                    if let Ok(pv) = object.read_property(prop, sub.monitored_property_array_index) {
-                        let mut buf = BytesMut::new();
-                        if encode_property_value(&mut buf, &pv).is_ok() {
-                            vec![BACnetPropertyValue {
-                                property_identifier: prop,
-                                property_array_index: sub.monitored_property_array_index,
-                                value: buf.to_vec(),
-                                priority: None,
-                            }]
-                        } else {
-                            values.clone()
-                        }
-                    } else {
-                        values.clone()
-                    }
+                    life_safety::single_property_values(
+                        object,
+                        prop,
+                        sub.monitored_property_array_index,
+                    )
+                    .unwrap_or_else(|| values.clone())
                 } else {
                     values.clone()
                 }
