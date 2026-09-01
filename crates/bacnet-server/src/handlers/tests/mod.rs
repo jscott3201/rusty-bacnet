@@ -54,6 +54,7 @@ mod passwords;
 mod property_metadata;
 mod read_event_arrays;
 mod read_range;
+mod read_range_time;
 mod read_rpm;
 mod reference_writes;
 mod wpm_create_alarm;

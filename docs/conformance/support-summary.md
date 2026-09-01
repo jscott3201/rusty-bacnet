@@ -49,7 +49,7 @@
 | `BACNET-12-OBJECT-MODEL` | Clauses 12-19 | P1 | implementation-present-needs-conformance-tests | 3 |
 | `BACNET-12-LOG-RECORD-IDENTITY` | Clause 12.25 (p. 319), Clause 12.27 (p. 337), Clause 12.30 (p. 361); Clause 15.8 (pp. 745-750); Clause 21.6 (pp. 902-914) | P1 | in-progress | 0 |
 | `BACNET-12-LOG-STATUS-LIFECYCLE` | Clause 12.25 Trend Log (pp. 319-336); Clause 12.27 Event Log (pp. 337-346); Clause 12.30 Trend Log Multiple (pp. 361-378); Clause 21.6 BACnetLogStatus (p. 914) | P1 | in-progress | 0 |
-| `BACNET-15-READ-RANGE-LOG-BUFFER` | Clause 12.1.5.2 (PDF p. 164 / printed p. 162); Clause 15.8 and Clause 15.8.1.1.4-15.8.1.3 (PDF pp. 747-753 / printed pp. 745-751) | P1 | in-progress | 0 |
+| `BACNET-15-READ-RANGE-LOG-BUFFER` | Clause 12.1.5.2 (PDF p. 164 / printed p. 162); Clause 12.27 (PDF pp. 337-340 / printed pp. 335-338); Clause 15.8 and Clause 15.8.1.1.4-15.8.1.3 (PDF pp. 747-753 / printed pp. 745-751); Clause 21.6 BACnetEventLogRecord, BACnetLogRecord, and BACnetLogMultipleRecord (PDF pp. 906, 916) | P1 | in-progress | 0 |
 | `BACNET-12-PROPERTY-METADATA-CORE` | Clause 12.6, Table 12-6 (pp. 189-190); Clause 12.42, Table 12-49 (pp. 444-445); Clause 15.7.3.1 (p. 743); Annex A (pp. 964-965) | P1 | in-progress | 1 |
 | `BACNET-12-ESCALATOR-STATUS-WRITABILITY` | Clause 12 general property conformance rules; Clause 12.60 Table 12-78 and Out_Of_Service; Clause 15.9.1.3; Clause 21 BACnetEscalatorMode, BACnetEscalatorOperationDirection, and BACnetEscalatorFault; Clause 23.1 | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-12-DEVICE-MAX-SEGMENTS` | Clause 12.11, Table 12-13 | P1 | implementation-present-needs-conformance-tests | 0 |
