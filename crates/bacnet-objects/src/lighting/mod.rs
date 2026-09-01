@@ -317,9 +317,10 @@ pub struct BinaryLightingOutputObject {
 }
 
 impl BinaryLightingOutputObject {
-    /// Highest BinaryLightingPV value accepted in writes. The Clause 21
-    /// production runs off=0, on=1, warn=2, warn-off=3, warn-relinquish=4,
-    /// stop=5; this object accepts 0..=4 (stop is a known gap, #283).
+    /// Highest BinaryLightingPV value accepted in Present_Value and
+    /// Priority_Array writes. The Clause 21 production runs off=0, on=1,
+    /// warn=2, warn-off=3, warn-relinquish=4, stop=5; those command paths
+    /// currently accept 0..=4 (stop is a known gap, #283).
     const MAX_PV: u32 = 4;
 
     /// Create a new Binary Lighting Output object.
@@ -352,15 +353,14 @@ impl BinaryLightingOutputObject {
             common::recalculate_from_priority_array(&self.priority_array, self.relinquish_default);
     }
 
-    /// Set the Relinquish_Default (#270).
+    /// Set Relinquish_Default to OFF (0) or ON (1) (#270, #283).
     ///
-    /// Validated the same way a commanded Present_Value is (BinaryLightingPV
-    /// 0..=4 of the Clause 21 production: off, on, warn, warn-off,
-    /// warn-relinquish) per Table 12-69; after the
-    /// store, Present_Value is resolved anew from the priority array so an
-    /// empty array falls back to the new default immediately.
+    /// Clause 12.55 restricts this property to the two steady values even
+    /// though Present_Value has a wider operation domain. After the store,
+    /// Present_Value is resolved anew from the priority array so an empty
+    /// array falls back to the new default immediately.
     pub fn set_relinquish_default(&mut self, value: u32) -> Result<(), Error> {
-        if value > Self::MAX_PV {
+        if !matches!(value, 0 | 1) {
             return Err(common::value_out_of_range_error());
         }
         self.relinquish_default = value;
@@ -466,8 +466,8 @@ impl BACnetObject for BinaryLightingOutputObject {
         }
 
         // RELINQUISH_DEFAULT — writable per Table 12-69 (R; the standard
-        // permits writability), validated the same way a commanded
-        // Present_Value is by the shared setter.
+        // permits writability), with its OFF/ON-only domain owned by the
+        // shared setter rather than the wider Present_Value command guard.
         if property == PropertyIdentifier::RELINQUISH_DEFAULT {
             if let PropertyValue::Enumerated(e) = value {
                 return self.set_relinquish_default(e);

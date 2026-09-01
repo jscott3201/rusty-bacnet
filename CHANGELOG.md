@@ -231,6 +231,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Binary Lighting Output `Relinquish_Default` now accepts only OFF or ON and
+  atomically refuses all other values with `PROPERTY / VALUE_OUT_OF_RANGE`
+  (`Refs #283`). Present_Value and Priority_Array retain their existing command
+  domain; STOP behavior remains deferred to PR-0806 and is not claimed here.
+
 - Direct in-service network writes to Pulse Converter `Present_Value` are now
   denied under the repository's Pulse Converter safety policy. Out-of-service
   simulation writes remain accepted as required by ASHRAE 135-2020 §12.23
