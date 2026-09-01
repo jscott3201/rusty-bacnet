@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Synchronous pre-start Python management for pending built-in File objects
+  (#420). Servers can select stream or record access, copy payloads in and out,
+  and set effective clamped octet/record growth caps on the exact object later
+  moved into the runtime database. Mode mismatches use the existing typed
+  `SERVICES / INVALID_FILE_ACCESS_METHOD` error; payload setters retain
+  File_Size/Record_Count and Modification_Date/Archive behavior. Caps do not
+  truncate trusted preloads, and AtomicWriteFile still enforces Read_Only,
+  access mode, caps, and atomic failure. This local API is pre-start-only,
+  returns copies, adds no live replacement or persistence, and broadens no
+  Clause 14 conformance claim.
+
 - Conditional built-in `FileObject` resize properties (#417). Mutable exact
   stream-access representatives accept bounded `File_Size` writes, while
   mutable exact record-access representatives accept bounded `Record_Count`

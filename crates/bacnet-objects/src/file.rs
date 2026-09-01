@@ -47,6 +47,37 @@ pub const DEFAULT_MAX_RECORD_COUNT: u64 = 10_000;
 /// [`DEFAULT_MAX_RECORD_COUNT`] for why it is the decoder's limit.
 const MAX_RECORD_CAP: u64 = DEFAULT_MAX_RECORD_COUNT;
 
+/// Trusted local configuration for the built-in in-memory File payload.
+///
+/// This narrow capability is separate from [`FileStorage`]: configuration may
+/// preload data regardless of `Read_Only` or the later network-write growth
+/// caps, while AtomicWriteFile continues to use `FileStorage` and enforce both.
+/// Payload operations reject a shape that does not match the active
+/// `File_Access_Method` before mutating the object.
+#[doc(hidden)]
+pub trait FileConfiguration: Send + Sync {
+    /// Select the active File access method without converting either payload.
+    fn set_access_method(&mut self, method: FileAccessMethod);
+
+    /// Replace the stream payload through the File object's accounting path.
+    fn set_stream_data(&mut self, data: Vec<u8>) -> Result<(), Error>;
+
+    /// Borrow the stream payload when stream access is active.
+    fn stream_data(&self) -> Result<&[u8], Error>;
+
+    /// Replace the record payload through the File object's accounting path.
+    fn set_record_data(&mut self, records: Vec<Vec<u8>>) -> Result<(), Error>;
+
+    /// Borrow the record payload when record access is active.
+    fn record_data(&self) -> Result<&[Vec<u8>], Error>;
+
+    /// Set and return the effective octet growth cap.
+    fn set_max_file_size(&mut self, max_octets: u64) -> u64;
+
+    /// Set and return the effective record-count growth cap.
+    fn set_max_record_count(&mut self, max_records: u64) -> u64;
+}
+
 /// One stream-access read window, as AtomicReadFile returns it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileStreamRead {
@@ -514,6 +545,44 @@ impl FileStorage for FileObject {
     }
 }
 
+impl FileConfiguration for FileObject {
+    fn set_access_method(&mut self, method: FileAccessMethod) {
+        FileObject::set_file_access_method(self, method.to_raw());
+    }
+
+    fn set_stream_data(&mut self, data: Vec<u8>) -> Result<(), Error> {
+        self.require_access(FileAccessMethod::STREAM_ACCESS)?;
+        FileObject::set_data(self, data);
+        Ok(())
+    }
+
+    fn stream_data(&self) -> Result<&[u8], Error> {
+        self.require_access(FileAccessMethod::STREAM_ACCESS)?;
+        Ok(FileObject::data(self))
+    }
+
+    fn set_record_data(&mut self, records: Vec<Vec<u8>>) -> Result<(), Error> {
+        self.require_access(FileAccessMethod::RECORD_ACCESS)?;
+        FileObject::set_records(self, records);
+        Ok(())
+    }
+
+    fn record_data(&self) -> Result<&[Vec<u8>], Error> {
+        self.require_access(FileAccessMethod::RECORD_ACCESS)?;
+        Ok(FileObject::records(self))
+    }
+
+    fn set_max_file_size(&mut self, max_octets: u64) -> u64 {
+        FileObject::set_max_file_size(self, max_octets);
+        FileObject::max_file_size(self)
+    }
+
+    fn set_max_record_count(&mut self, max_records: u64) -> u64 {
+        FileObject::set_max_record_count(self, max_records);
+        FileObject::max_record_count(self)
+    }
+}
+
 impl BACnetObject for FileObject {
     fn object_identifier(&self) -> ObjectIdentifier {
         self.oid
@@ -650,6 +719,14 @@ impl BACnetObject for FileObject {
 
     fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
         self.clock = clock;
+    }
+
+    fn file_configuration_internal(&self) -> Option<&dyn FileConfiguration> {
+        Some(self)
+    }
+
+    fn file_configuration_internal_mut(&mut self) -> Option<&mut dyn FileConfiguration> {
+        Some(self)
     }
 
     fn file_storage_internal(&self) -> Option<&dyn FileStorage> {

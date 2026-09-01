@@ -131,6 +131,7 @@ impl BACnetServer {
 }
 
 mod server_methods {
+    mod file_configuration;
     mod lifecycle;
     mod registration;
 }

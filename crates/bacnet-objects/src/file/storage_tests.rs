@@ -70,6 +70,23 @@ fn retained_datetime() -> (Date, Time) {
     )
 }
 
+fn unspecified_datetime() -> (Date, Time) {
+    (
+        Date {
+            year: Date::UNSPECIFIED,
+            month: Date::UNSPECIFIED,
+            day: Date::UNSPECIFIED,
+            day_of_week: Date::UNSPECIFIED,
+        },
+        Time {
+            hour: Time::UNSPECIFIED,
+            minute: Time::UNSPECIFIED,
+            second: Time::UNSPECIFIED,
+            hundredths: Time::UNSPECIFIED,
+        },
+    )
+}
+
 #[derive(Debug, PartialEq)]
 struct StreamState {
     data: Vec<u8>,
@@ -510,9 +527,13 @@ impl BACnetObject for NoStorageFile {
 #[test]
 fn storage_hooks_default_to_none_and_file_object_opts_in() {
     let mut none = NoStorageFile;
+    assert!(none.file_configuration_internal().is_none());
+    assert!(none.file_configuration_internal_mut().is_none());
     assert!(none.file_storage_internal().is_none());
     assert!(none.file_storage_internal_mut().is_none());
     let mut file = stream_file();
+    assert!(file.file_configuration_internal().is_some());
+    assert!(file.file_configuration_internal_mut().is_some());
     assert!(file.file_storage_internal().is_some());
     assert!(file.file_storage_internal_mut().is_some());
     // 65 was the fabricated "File Data" property the old handler read (it
@@ -521,4 +542,109 @@ fn storage_hooks_default_to_none_and_file_object_opts_in() {
         .property_list()
         .iter()
         .any(|p| *p == PropertyIdentifier::from_raw(65)));
+}
+
+#[test]
+fn configuration_capability_enforces_shape_and_routes_payload_metadata() {
+    let retained = retained_datetime();
+    let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
+    file.set_read_only(true);
+    file.set_modification_date(retained.0, retained.1);
+    file.set_archive(true);
+
+    {
+        let configuration = file.file_configuration_internal_mut().unwrap();
+        configuration.set_stream_data(vec![1, 2, 3]).unwrap();
+        assert_eq!(configuration.stream_data().unwrap(), &[1, 2, 3]);
+    }
+    assert_eq!(file.file_size(), 3);
+    assert!(file.read_only(), "trusted preload does not clear Read_Only");
+    assert_eq!(file.modification_date, unspecified_datetime());
+    assert!(!file.archive());
+
+    file.set_modification_date(retained.0, retained.1);
+    file.set_archive(true);
+    let expected = stream_state(&file);
+    let err = file
+        .file_configuration_internal_mut()
+        .unwrap()
+        .set_record_data(vec![vec![9]])
+        .unwrap_err();
+    assert_eq!(protocol_pair(err), invalid_method_pair());
+    assert_eq!(stream_state(&file), expected);
+
+    file.file_configuration_internal_mut()
+        .unwrap()
+        .set_access_method(FileAccessMethod::RECORD_ACCESS);
+    file.set_modification_date(retained.0, retained.1);
+    file.set_archive(true);
+    {
+        let configuration = file.file_configuration_internal_mut().unwrap();
+        configuration
+            .set_record_data(vec![vec![0xAA], vec![0xBB, 0xCC]])
+            .unwrap();
+        assert_eq!(
+            configuration.record_data().unwrap(),
+            &[vec![0xAA], vec![0xBB, 0xCC]]
+        );
+    }
+    assert_eq!(file.file_size(), 3);
+    assert_eq!(
+        file.read_property(PropertyIdentifier::RECORD_COUNT, None)
+            .unwrap(),
+        PropertyValue::Unsigned(2)
+    );
+    assert_eq!(file.modification_date, unspecified_datetime());
+    assert!(!file.archive());
+
+    file.set_modification_date(retained.0, retained.1);
+    file.set_archive(true);
+    let expected = record_state(&file);
+    let err = file
+        .file_configuration_internal_mut()
+        .unwrap()
+        .set_stream_data(vec![7, 8])
+        .unwrap_err();
+    assert_eq!(protocol_pair(err), invalid_method_pair());
+    assert_eq!(record_state(&file), expected);
+}
+
+#[test]
+fn configuration_capability_caps_are_effective_growth_limits_not_preload_limits() {
+    let mut stream = stream_file();
+    {
+        let configuration = stream.file_configuration_internal_mut().unwrap();
+        assert_eq!(configuration.set_max_file_size(u64::MAX), i32::MAX as u64);
+        assert_eq!(configuration.set_max_file_size(4), 4);
+    }
+    let expected = stream_state(&stream);
+    assert_eq!(
+        protocol_pair(
+            stream
+                .write_stream(FileWriteStart::Append, &[0x99])
+                .unwrap_err()
+        ),
+        file_full_pair()
+    );
+    assert_eq!(stream_state(&stream), expected);
+
+    let mut record = record_file();
+    {
+        let configuration = record.file_configuration_internal_mut().unwrap();
+        assert_eq!(
+            configuration.set_max_record_count(u64::MAX),
+            DEFAULT_MAX_RECORD_COUNT
+        );
+        assert_eq!(configuration.set_max_record_count(2), 2);
+    }
+    let expected = record_state(&record);
+    assert_eq!(
+        protocol_pair(
+            record
+                .write_records(FileWriteStart::Append, &[vec![0x99]])
+                .unwrap_err()
+        ),
+        file_full_pair()
+    );
+    assert_eq!(record_state(&record), expected);
 }
