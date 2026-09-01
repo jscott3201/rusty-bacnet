@@ -9,16 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Exact ReadRange By Position and By Sequence selection for sequence-numbered
-  Event Log, Trend Log, and Trend Log Multiple buffers (#134, #339). Signed
-  ranges now select around an exact one-based position or stable resident
-  sequence identity without sorting or sequence arithmetic, preserve FIFO,
-  purge-status, and Unsigned32 wrap order, return exact endpoint flags and
-  First Sequence Number metadata, and stage the complete ACK before emission.
-  The client now rejects missing or zero sequence metadata on nonempty By
-  Sequence/By Time ACKs and rejects unexpected metadata elsewhere. By Time,
-  indexed Log_Buffer reads, response-size pagination/segmentation, persistence,
-  and complete log-family conformance remain deferred.
+- Exact ReadRange By Position, By Sequence, and By Time selection for resident
+  Event Log, Trend Log, and Trend Log Multiple buffers (#134, #339). By Time
+  validates aligned specific record timestamps, anchors strictly after/before
+  the reference without sorting clock-rollback records, and returns resident
+  order with exact endpoint flags. Nonempty By Sequence and By Time ACKs carry
+  the oldest returned record's nonzero First Sequence Number. ReadRange rejects
+  every array index on these BACnetLIST properties. Trend preserves its formal
+  optional record StatusFlags bytes; Event and Trend Log Multiple keep the
+  shared raw field but serialize only Date, Time, and datum. Complete ACKs
+  remain staged before emission; response-size pagination/segmentation,
+  persistence, and full ReadRange/log-family conformance remain deferred.
 
 - Mandatory `BACnetLogStatus` lifecycle records for Event Log, Trend Log, and
   Trend Log Multiple (#189). `Record_Count=0`, effective Enable transitions,
@@ -30,8 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   defaulted fallible hook so mandatory timestamp failures remain retryable.
   Time-window transitions, `LOG_INTERRUPTED`, writable
   `Log_DeviceObjectProperty` purge routes, formal Event Log notification
-  payloads, ReadRange By Time, persistence, and full log conformance remain
-  deferred.
+  payloads, persistence, and full log conformance remain deferred.
 
 - Stable in-memory record identity for Event Log, Trend Log, and Trend Log
   Multiple (#134, #339). Each accepted append now owns a nonzero Unsigned32
@@ -42,8 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existing public `records()` and `add_record()` signatures. Trend Log projects
   a present optional record StatusFlags bitstring; Event Log and Trend Log
   Multiple retain the legacy raw Rust field but do not put it on the wire.
-  ReadRange By Time selection, persistence, and formal Event Log notification
-  records remain deferred.
+  Persistence and formal Event Log notification records remain deferred.
 
 - Object-owned multi-state configuration Reliability and recovery for
   Multi-state Input, Output, and Value (#226). The Standard requires
