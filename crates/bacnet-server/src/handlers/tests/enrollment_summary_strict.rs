@@ -1,6 +1,8 @@
-use bacnet_objects::event::EventTransition;
+use bacnet_objects::analog::AnalogInputObject;
+use bacnet_objects::event::{EventStateChange, EventTransition, EventTransitionCommit};
 use bacnet_services::enrollment_summary::GetEnrollmentSummaryRequest;
 use bacnet_types::enums::EventType;
+use bacnet_types::primitives::BACnetTimeStamp;
 
 use super::enrollment_summary_support::*;
 use super::*;
@@ -26,6 +28,151 @@ fn database(candidate: SummaryFixture) -> ObjectDatabase {
     db.add(Box::new(class(7, 19, [11, 22, 33], Vec::new())))
         .unwrap();
     db
+}
+
+#[test]
+fn intrinsic_detection_rollback_restores_summary_transition_coordinate() {
+    let mut object = AnalogInputObject::new(1, "AI-rollback", 62).unwrap();
+    object
+        .write_property(
+            PropertyIdentifier::NOTIFICATION_CLASS,
+            None,
+            PropertyValue::Unsigned(7),
+            None,
+        )
+        .unwrap();
+    let reset_time_stamps = object
+        .read_property(PropertyIdentifier::EVENT_TIME_STAMPS, None)
+        .unwrap();
+    let reset_message_texts = object
+        .read_property(PropertyIdentifier::EVENT_MESSAGE_TEXTS, None)
+        .unwrap();
+    object
+        .commit_event_transition_internal(EventTransitionCommit {
+            change: EventStateChange {
+                from: EventState::NORMAL,
+                to: EventState::HIGH_LIMIT,
+            },
+            coordinate: EventTransition::ToOffnormal,
+            ack_required: true,
+            timestamp: BACnetTimeStamp::SequenceNumber(41),
+            message_text: Some("high limit".into()),
+        })
+        .unwrap();
+
+    let expected_event_state = object
+        .read_property(PropertyIdentifier::EVENT_STATE, None)
+        .unwrap();
+    let expected_acked_transitions = object
+        .read_property(PropertyIdentifier::ACKED_TRANSITIONS, None)
+        .unwrap();
+    let expected_time_stamps = object
+        .read_property(PropertyIdentifier::EVENT_TIME_STAMPS, None)
+        .unwrap();
+    let expected_message_texts = object
+        .read_property(PropertyIdentifier::EVENT_MESSAGE_TEXTS, None)
+        .unwrap();
+    assert_eq!(
+        expected_event_state,
+        PropertyValue::Enumerated(EventState::HIGH_LIMIT.to_raw())
+    );
+    assert_eq!(expected_acked_transitions, transition_bits(0b110));
+    assert_eq!(
+        object
+            .enrollment_summary_capability_internal()
+            .unwrap()
+            .last_transition,
+        Some(EventTransition::ToOffnormal)
+    );
+
+    let rollback = object
+        .capture_write_property_rollback(
+            PropertyIdentifier::EVENT_DETECTION_ENABLE,
+            &PropertyValue::Boolean(false),
+        )
+        .unwrap();
+    object
+        .write_property(
+            PropertyIdentifier::EVENT_DETECTION_ENABLE,
+            None,
+            PropertyValue::Boolean(false),
+            None,
+        )
+        .unwrap();
+
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::EVENT_STATE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(EventState::NORMAL.to_raw())
+    );
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::ACKED_TRANSITIONS, None)
+            .unwrap(),
+        transition_bits(0b111)
+    );
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::EVENT_TIME_STAMPS, None)
+            .unwrap(),
+        reset_time_stamps
+    );
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::EVENT_MESSAGE_TEXTS, None)
+            .unwrap(),
+        reset_message_texts
+    );
+    assert_eq!(
+        object
+            .enrollment_summary_capability_internal()
+            .unwrap()
+            .last_transition,
+        None
+    );
+
+    object.restore_write_property_rollback(rollback).unwrap();
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::EVENT_STATE, None)
+            .unwrap(),
+        expected_event_state
+    );
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::ACKED_TRANSITIONS, None)
+            .unwrap(),
+        expected_acked_transitions
+    );
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::EVENT_TIME_STAMPS, None)
+            .unwrap(),
+        expected_time_stamps
+    );
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::EVENT_MESSAGE_TEXTS, None)
+            .unwrap(),
+        expected_message_texts
+    );
+    assert_eq!(
+        object
+            .enrollment_summary_capability_internal()
+            .unwrap()
+            .last_transition,
+        Some(EventTransition::ToOffnormal)
+    );
+
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(object)).unwrap();
+    db.add(Box::new(class(7, 19, [11, 22, 33], Vec::new())))
+        .unwrap();
+    let ack = response(&db, &request()).unwrap();
+    assert_eq!(ack.entries.len(), 1);
+    assert_eq!(ack.entries[0].event_state, EventState::HIGH_LIMIT);
+    assert_eq!(ack.entries[0].priority, 11);
 }
 
 #[test]

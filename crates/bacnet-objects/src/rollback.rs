@@ -4,9 +4,8 @@
 //! WritePropertyMultiple retains successful prefix writes.
 
 use bacnet_types::enums::EventState;
-use bacnet_types::primitives::BACnetTimeStamp;
 
-use crate::event::PendingTransition;
+use crate::event::{history::EventHistory, PendingTransition};
 
 pub(crate) enum IntrinsicWriteRollback {
     EventDetection {
@@ -15,9 +14,7 @@ pub(crate) enum IntrinsicWriteRollback {
         acked_transitions: u8,
         pending: Option<PendingTransition>,
         fault_reliability: Option<u32>,
-        time_stamps: [BACnetTimeStamp; 3],
-        original_to_states: [Option<EventState>; 3],
-        message_texts: [String; 3],
+        event_history: EventHistory,
     },
     TimeDelayNormal(Option<u32>),
     ReliabilityInhibit {
@@ -137,9 +134,7 @@ macro_rules! impl_intrinsic_write_rollback {
                             acked_transitions: self.$detector_field.acked_transitions,
                             pending: self.$detector_field.pending.clone(),
                             fault_reliability: self.$detector_field.fault_reliability,
-                            time_stamps: self.$history_field.time_stamps.clone(),
-                            original_to_states: self.$history_field.original_to_states,
-                            message_texts: self.$history_field.message_texts.clone(),
+                            event_history: self.$history_field.clone(),
                         },
                     ))
                 }
@@ -197,18 +192,14 @@ macro_rules! impl_intrinsic_write_rollback {
                     acked_transitions,
                     pending,
                     fault_reliability,
-                    time_stamps,
-                    original_to_states,
-                    message_texts,
+                    event_history,
                 } => {
                     self.$detection_enable_field = enabled;
                     self.$detector_field.event_state = event_state;
                     self.$detector_field.acked_transitions = acked_transitions;
                     self.$detector_field.pending = pending;
                     self.$detector_field.fault_reliability = fault_reliability;
-                    self.$history_field.time_stamps = time_stamps;
-                    self.$history_field.original_to_states = original_to_states;
-                    self.$history_field.message_texts = message_texts;
+                    self.$history_field = event_history;
                     Ok(())
                 }
                 $crate::rollback::IntrinsicWriteRollback::TimeDelayNormal(value) => {
