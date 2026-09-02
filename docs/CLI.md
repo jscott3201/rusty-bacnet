@@ -203,8 +203,11 @@ Subscribes and then watches for COV notifications in real time. Press Ctrl+C to 
 ```bash
 bacnet alarms 192.168.1.100                              # get event/alarm summary
 
-bacnet ack-alarm 192.168.1.100 ai:1 --state 1            # acknowledge an alarm
-bacnet ack-alarm 192.168.1.100 ai:1 --state 1 --source "operator"  # custom source
+bacnet ack-alarm 192.168.1.100 ai:1 --state 1 \
+  --timestamp sequence:417 --ack-time time:14,30,00,00
+bacnet ack-alarm 192.168.1.100 ai:1 --state 1 --source "operator" \
+  --timestamp time:14,29,58,25 \
+  --ack-time "datetime:2026,9,2,3;14,30,00,00"
 ```
 
 **ack-alarm flags:**
@@ -212,7 +215,25 @@ bacnet ack-alarm 192.168.1.100 ai:1 --state 1 --source "operator"  # custom sour
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--state <N>` | (required) | Event state to acknowledge (0=normal, 1=fault, etc.) |
+| `--timestamp <SPEC>` | (required) | Exact timestamp from the original event notification |
+| `--ack-time <SPEC>` | (required) | Caller-selected time of acknowledgment |
 | `--source <S>` | `bacnet-cli` | Acknowledgment source string |
+
+Both timestamp flags use the same strict grammar:
+
+- `sequence:<0..65535>`
+- `time:<hour>,<minute>,<second>,<hundredths>`
+- `datetime:<full-year>,<month>,<day>,<day-of-week>;<hour>,<minute>,<second>,<hundredths>`
+
+Date years are `1900..2154`; months are `1..14`, days are `1..34`,
+days-of-week are `1..7`, and Time uses hours `0..23`, minutes/seconds
+`0..59`, and hundredths `0..99`. Any Date/Time component may be `255`
+when BACnet's unspecified value is intended (use full-year `255` for an
+unspecified year). Values are preserved exactly and neither timestamp is
+inferred from a clock. Quote `datetime:` values in command shells because the
+grammar contains a semicolon. `--timestamp` must come from the original event
+notification; `--ack-time` is explicitly chosen by the caller. The current
+raw `alarms` response is not a guided source for these values.
 
 **Alias:** `ack` = ack-alarm
 

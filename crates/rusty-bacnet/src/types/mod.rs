@@ -29,6 +29,7 @@ mod enums;
 mod object_identifier;
 mod property_value;
 mod rpm_wpm;
+mod timestamp;
 
 pub use address::parse_address;
 pub use cov::{PyCovNotification, PyCovNotificationIterator};
@@ -37,6 +38,7 @@ pub use enums::*;
 pub use object_identifier::PyObjectIdentifier;
 pub use property_value::PyPropertyValue;
 pub(crate) use rpm_wpm::{py_to_rpm_specs, py_to_wpm_specs, rpm_ack_to_py};
+pub use timestamp::PyBACnetTimeStamp;
 
 // Module registration
 // ---------------------------------------------------------------------------
@@ -85,6 +87,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Composite types
     m.add_class::<PyObjectIdentifier>()?;
     m.add_class::<PyPropertyValue>()?;
+    m.add_class::<PyBACnetTimeStamp>()?;
     m.add_class::<PyDiscoveredDevice>()?;
     m.add_class::<PyCovNotification>()?;
     m.add_class::<PyCovNotificationIterator>()?;
