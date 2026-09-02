@@ -33,6 +33,13 @@ use crate::database::ObjectDatabase;
 use crate::event::EventTransition;
 use crate::traits::BACnetObject;
 
+mod enrollment_summary;
+#[doc(hidden)]
+pub use enrollment_summary::{
+    resolve_enrollment_summary_class_internal, EnrollmentSummaryClassProjection,
+    EnrollmentSummaryClassProjectionError,
+};
+
 /// BACnet NotificationClass object.
 ///
 /// Stores notification routing configuration: which priorities, acknowledgement
@@ -610,7 +617,9 @@ fn destination_from_flat_fields(fields: &[PropertyValue]) -> Option<BACnetDestin
 /// the FIRST malformed destination (or trailing bytes) fails the whole
 /// decode — a prefix-tolerant walk would silently route notifications to
 /// only a subset of the configured recipients (review blocker).
-fn decode_destination_list_pv(value: &PropertyValue) -> Result<Vec<BACnetDestination>, Error> {
+pub(super) fn decode_destination_list_pv(
+    value: &PropertyValue,
+) -> Result<Vec<BACnetDestination>, Error> {
     match value {
         PropertyValue::ApplicationData(bytes) => {
             bacnet_encoding::constructed::decode_destination_list(bytes)

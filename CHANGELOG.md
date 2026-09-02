@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking Rust source migration:** GetEnrollmentSummary's public
+  `RecipientProcess::device: Option<ObjectIdentifier>` field is replaced by
+  `recipient: BACnetRecipient`, adding the standard Device-or-Address CHOICE.
+  The deprecated interoperability service now projects only object-owned event
+  capabilities, exact committed-transition priority, and strict conjunctive
+  filters; this does not broaden PICS, BIBB, or runtime support claims.
+
 ### Added
 
 - Correlated AcknowledgeAlarm core validation and a lossless Rust request API

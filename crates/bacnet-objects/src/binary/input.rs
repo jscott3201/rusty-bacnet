@@ -237,9 +237,10 @@ impl BACnetObject for BinaryInputObject {
     crate::event::impl_builtin_intrinsic_reporting!(
         event_detector,
         event_history,
-        present_value,
+        [present_value],
         reliability,
-        event_detection_enable
+        event_detection_enable,
+        ChangeOfStateDetector::ALGORITHM
     );
     impl_intrinsic_write_rollback!(
         event_detector,

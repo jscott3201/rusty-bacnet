@@ -14,7 +14,10 @@ use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue}
 
 use crate::audit::{AuditLogNotificationSink, AuditLogStorage};
 use crate::clock::ClockReader;
-use crate::event::{EventTransitionCommit, EventTransitionCommitError, TransitionOutcome};
+use crate::event::{
+    EnrollmentSummaryCapability, EventTransitionCommit, EventTransitionCommitError,
+    TransitionOutcome,
+};
 use crate::event_enrollment::{
     EventEnrollmentEvalState, EventEnrollmentMonitoredSource, EventEnrollmentReliabilityCommit,
 };
@@ -305,6 +308,16 @@ pub trait BACnetObject: Send + Sync {
     /// notifications (analog, binary, multi-state I/O/V). Default is `false`.
     fn supports_cov(&self) -> bool {
         false
+    }
+
+    /// Return this object's GetEnrollmentSummary event capability.
+    ///
+    /// The default opts custom and downstream objects out. Implementations opt
+    /// in only when they own an actual configured or implied event algorithm
+    /// and shared committed-transition history.
+    #[doc(hidden)]
+    fn enrollment_summary_capability_internal(&self) -> Option<EnrollmentSummaryCapability> {
+        None
     }
 
     /// Whether a readable property supports property-specific COV.

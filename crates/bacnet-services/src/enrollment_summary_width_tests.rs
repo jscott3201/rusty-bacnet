@@ -1,5 +1,7 @@
 use super::*;
+use bacnet_types::constructed::{BACnetAddress, BACnetRecipient};
 use bacnet_types::enums::ObjectType;
+use bacnet_types::MacAddr;
 
 fn raw_request(fields: [&[u8]; 7], device: bool) -> BytesMut {
     let mut buf = BytesMut::new();
@@ -60,9 +62,10 @@ fn request_values_must_fit_public_field_widths() {
     let max_u32 = [0, 0xFF, 0xFF, 0xFF, 0xFF];
     let max_u8 = [0, 0xFF];
     let max_filter = [4];
+    let acknowledgment_filter = [2];
     let decoded = GetEnrollmentSummaryRequest::decode(&raw_request(
         [
-            &max_u32,
+            &acknowledgment_filter,
             &max_u32,
             &max_filter,
             &max_u32,
@@ -73,7 +76,7 @@ fn request_values_must_fit_public_field_widths() {
         true,
     ))
     .unwrap();
-    assert_eq!(decoded.acknowledgment_filter, u32::MAX);
+    assert_eq!(decoded.acknowledgment_filter, 2);
     assert_eq!(
         decoded.enrollment_filter.unwrap().process_identifier,
         u32::MAX
@@ -91,7 +94,6 @@ fn request_values_must_fit_public_field_widths() {
     let overflow_u32 = (u32::MAX as u64 + 1).to_be_bytes();
     let overflow_u8 = [1, 0];
     for (field, overflow) in [
-        (0, &overflow_u32[..]),
         (1, &overflow_u32[..]),
         (3, &overflow_u32[..]),
         (4, &overflow_u8[..]),
@@ -103,7 +105,7 @@ fn request_values_must_fit_public_field_widths() {
         assert!(GetEnrollmentSummaryRequest::decode(&raw_request(fields, true)).is_err());
     }
     let max_u64 = u64::MAX.to_be_bytes();
-    for field in 0..7 {
+    for field in 1..7 {
         let mut fields = base;
         fields[field] = &max_u64;
         assert!(GetEnrollmentSummaryRequest::decode(&raw_request(fields, true)).is_err());
@@ -116,7 +118,7 @@ fn request_enrollment_filter_uses_standard_recipient_process_framing() {
     let request = GetEnrollmentSummaryRequest {
         acknowledgment_filter: 0,
         enrollment_filter: Some(RecipientProcess {
-            device: Some(device),
+            recipient: BACnetRecipient::Device(device),
             process_identifier: 7,
         }),
         event_state_filter: None,
@@ -152,6 +154,38 @@ fn request_enrollment_filter_uses_standard_recipient_process_framing() {
 }
 
 #[test]
+fn request_enrollment_filter_address_choice_golden_and_round_trip() {
+    let request = GetEnrollmentSummaryRequest {
+        acknowledgment_filter: 1,
+        enrollment_filter: Some(RecipientProcess {
+            recipient: BACnetRecipient::Address(BACnetAddress {
+                network_number: 5,
+                mac_address: MacAddr::from_slice(&[192, 0, 2, 9, 0xba, 0xc0]),
+            }),
+            process_identifier: 9,
+        }),
+        event_state_filter: None,
+        event_type_filter: None,
+        priority_filter: None,
+        notification_class_filter: None,
+    };
+    let mut encoded = BytesMut::new();
+    request.encode(&mut encoded);
+
+    assert_eq!(
+        encoded.as_ref(),
+        &[
+            0x09, 1, 0x1e, 0x0e, 0x1e, 0x21, 5, 0x65, 6, 192, 0, 2, 9, 0xba, 0xc0, 0x1f, 0x0f,
+            0x19, 9, 0x1f,
+        ]
+    );
+    assert_eq!(
+        GetEnrollmentSummaryRequest::decode(&encoded).unwrap(),
+        request
+    );
+}
+
+#[test]
 fn request_rejects_malformed_nested_and_trailing_fields() {
     let zero = [0];
     let valid = raw_request([&zero; 7], true);
@@ -162,9 +196,17 @@ fn request_rejects_malformed_nested_and_trailing_fields() {
 
     assert!(GetEnrollmentSummaryRequest::decode(&raw_request([&zero[..]; 7], false)).is_err());
 
-    let mut trailing = valid;
+    let mut trailing = valid.clone();
     primitives::encode_app_null(&mut trailing);
     assert!(GetEnrollmentSummaryRequest::decode(&trailing).is_err());
+
+    let mut trailing_choice = valid.to_vec();
+    trailing_choice.insert(9, 0);
+    assert!(GetEnrollmentSummaryRequest::decode(&trailing_choice).is_err());
+
+    let mut malformed_choice = valid;
+    malformed_choice[4] = 0x2c;
+    assert!(GetEnrollmentSummaryRequest::decode(&malformed_choice).is_err());
 
     let mut missing_process = BytesMut::new();
     primitives::encode_ctx_unsigned(&mut missing_process, 0, 0);
@@ -176,11 +218,8 @@ fn request_rejects_malformed_nested_and_trailing_fields() {
 #[test]
 fn request_try_encode_rejects_unrepresentable_filters_without_writing() {
     let request = GetEnrollmentSummaryRequest {
-        acknowledgment_filter: 0,
-        enrollment_filter: Some(RecipientProcess {
-            device: None,
-            process_identifier: 7,
-        }),
+        acknowledgment_filter: 3,
+        enrollment_filter: None,
         event_state_filter: None,
         event_type_filter: None,
         priority_filter: None,
@@ -189,6 +228,41 @@ fn request_try_encode_rejects_unrepresentable_filters_without_writing() {
     let mut encoded = BytesMut::new();
     assert!(request.try_encode(&mut encoded).is_err());
     assert!(encoded.is_empty());
+
+    let request = GetEnrollmentSummaryRequest {
+        acknowledgment_filter: 0,
+        priority_filter: Some(PriorityFilter {
+            min_priority: 10,
+            max_priority: 9,
+        }),
+        ..request
+    };
+    assert!(request.try_encode(&mut encoded).is_err());
+    assert!(encoded.is_empty());
+}
+
+#[test]
+fn request_rejects_undefined_acknowledgment_filter_and_inverted_priority() {
+    for raw in [3, u8::MAX] {
+        let encoded = [0x09, raw];
+        assert!(matches!(
+            GetEnrollmentSummaryRequest::decode(&encoded),
+            Err(Error::Reject { reason })
+                if reason == bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION.to_raw()
+        ));
+    }
+
+    let mut encoded = BytesMut::new();
+    primitives::encode_ctx_enumerated(&mut encoded, 0, 0);
+    tags::encode_opening_tag(&mut encoded, 4);
+    primitives::encode_ctx_unsigned(&mut encoded, 0, 10);
+    primitives::encode_ctx_unsigned(&mut encoded, 1, 9);
+    tags::encode_closing_tag(&mut encoded, 4);
+    assert!(matches!(
+        GetEnrollmentSummaryRequest::decode(&encoded),
+        Err(Error::Reject { reason })
+            if reason == bacnet_types::enums::RejectReason::INVALID_DATA_ENCODING.to_raw()
+    ));
 }
 
 #[test]
