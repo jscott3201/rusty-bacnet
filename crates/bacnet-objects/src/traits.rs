@@ -21,6 +21,10 @@ use crate::event_enrollment::{
 use crate::file::{FileConfiguration, FileStorage};
 use crate::log_buffer::LogRecordIdentity;
 
+/// Process-local monotonic time source used by internal object lifecycles.
+#[doc(hidden)]
+pub type MonotonicClock = dyn Fn() -> Duration + Send + Sync;
+
 mod defaults;
 use defaults::{array_property_default, historical_writable_default};
 
@@ -152,6 +156,28 @@ pub trait BACnetObject: Send + Sync {
     #[doc(hidden)]
     fn advance_time_internal(&mut self, _elapsed: Duration) -> bool {
         false
+    }
+
+    /// Bind the process-local monotonic source used when operations arm.
+    #[doc(hidden)]
+    fn bind_monotonic_clock_internal(&mut self, _clock: Option<Arc<MonotonicClock>>) {}
+
+    /// Advance operations to an absolute process-local monotonic instant.
+    #[doc(hidden)]
+    fn advance_monotonic_time_internal(&mut self, _now: Duration) -> bool {
+        false
+    }
+
+    /// Return the next absolute process-local operation deadline, if any.
+    #[doc(hidden)]
+    fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
+        None
+    }
+
+    /// Freeze COV-readable state while the object's mutation lock is held.
+    #[doc(hidden)]
+    fn cov_snapshot_internal(&self) -> Option<Box<dyn BACnetObject>> {
+        None
     }
 
     /// Return the retained logical blink-request observation, when modeled.

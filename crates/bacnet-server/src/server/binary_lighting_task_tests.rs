@@ -1,5 +1,6 @@
 use super::cov_notifications_tests::RecordingTransport;
 use super::*;
+use bacnet_encoding::{apdu::decode_apdu, npdu::decode_npdu};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::lighting::BinaryLightingOutputObject;
 use bacnet_objects::traits::BACnetObject;
@@ -103,6 +104,9 @@ async fn settle() {
 #[tokio::test(start_paused = true)]
 async fn operation_task_has_no_early_completion_and_expires_at_exact_monotonic_time() {
     let (mut server, oid, _) = start_server(2).await;
+    tokio::time::advance(Duration::from_secs(1)).await;
+    settle().await;
+    tokio::time::advance(Duration::from_millis(1)).await;
     write_command(&server, oid, 3, 8).await;
 
     tokio::time::advance(Duration::from_secs(1)).await;
@@ -221,4 +225,122 @@ async fn expiry_fires_one_generic_cov_after_database_lock_release() {
     settle().await;
     assert_eq!(sent.lock().unwrap().len(), 1, "one COV per actual expiry");
     server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn terminal_cov_snapshot_survives_a_later_command_before_delivery() {
+    for operation in [3, 4] {
+        let (mut server, oid, sent) = start_server(2).await;
+        if let Some(task) = server.binary_lighting_operation_task.take() {
+            task.abort();
+            let _ = task.await;
+        }
+        {
+            let mut table = server.cov_table.write().await;
+            for (process, property, kind) in [
+                (31, None, CovNotificationKind::Single),
+                (
+                    32,
+                    Some(PropertyIdentifier::EGRESS_ACTIVE),
+                    CovNotificationKind::Multiple,
+                ),
+            ] {
+                table.subscribe(CovSubscription {
+                    subscriber_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, process as u8]),
+                    subscriber_network: None,
+                    subscriber_process_identifier: process,
+                    monitored_object_identifier: oid,
+                    issue_confirmed_notifications: false,
+                    expires_at: None,
+                    last_notified_value: None,
+                    monitored_property: property,
+                    monitored_property_array_index: None,
+                    cov_increment: None,
+                    notification_kind: kind,
+                    timestamped: false,
+                });
+            }
+        }
+
+        let snapshot = {
+            let mut db = server.db.write().await;
+            let object = db.get_mut(&oid).unwrap();
+            object
+                .write_property(
+                    PropertyIdentifier::PRESENT_VALUE,
+                    None,
+                    PropertyValue::Enumerated(operation),
+                    Some(8),
+                )
+                .unwrap();
+            let deadline = object.next_monotonic_deadline_internal().unwrap();
+            assert!(object.advance_monotonic_time_internal(deadline));
+            object.cov_snapshot_internal().unwrap()
+        };
+        {
+            let mut db = server.db.write().await;
+            db.get_mut(&oid)
+                .unwrap()
+                .write_property(
+                    PropertyIdentifier::PRESENT_VALUE,
+                    None,
+                    PropertyValue::Enumerated(1),
+                    Some(4),
+                )
+                .unwrap();
+        }
+
+        BACnetServer::<RecordingTransport>::fire_cov_notifications_from_snapshot(
+            &server.db,
+            &server.network,
+            &server.cov_table,
+            &server.cov_in_flight,
+            &server.notification_transactions,
+            &server.comm_state,
+            &server.config,
+            &oid,
+            snapshot.as_ref(),
+        )
+        .await;
+
+        let apdus = sent
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(frame, _)| decode_apdu(decode_npdu(frame.clone()).unwrap().payload).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(apdus.len(), 2);
+        for apdu in apdus {
+            let Apdu::UnconfirmedRequest(request) = apdu else {
+                panic!("expected unconfirmed COV");
+            };
+            if request.service_choice == UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION {
+                let notification =
+                    COVNotificationRequest::decode(&request.service_request).unwrap();
+                let value = &notification
+                    .list_of_values
+                    .iter()
+                    .find(|value| value.property_identifier == PropertyIdentifier::PRESENT_VALUE)
+                    .unwrap()
+                    .value;
+                assert_eq!(
+                    bacnet_encoding::primitives::decode_application_value(value, 0)
+                        .unwrap()
+                        .0,
+                    PropertyValue::Enumerated(0)
+                );
+            } else {
+                let notification =
+                    COVNotificationMultipleRequest::decode(&request.service_request).unwrap();
+                let value = &notification.list_of_cov_notifications[0].list_of_values[0].value;
+                assert_eq!(
+                    bacnet_encoding::primitives::decode_application_value(value, 0)
+                        .unwrap()
+                        .0,
+                    PropertyValue::Boolean(false)
+                );
+            }
+        }
+        server.stop().await.unwrap();
+    }
 }

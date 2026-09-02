@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::sync::Arc;
 use std::time::Duration;
 
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
@@ -6,7 +7,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
 use crate::common::{self, read_common_properties, read_priority_array};
-use crate::traits::{BACnetObject, WritePropertyRollback};
+use crate::traits::{BACnetObject, MonotonicClock, WritePropertyRollback};
 
 const OFF: u32 = 0;
 const ON: u32 = 1;
@@ -21,7 +22,7 @@ enum OperationKind {
 struct ActiveOperation {
     kind: OperationKind,
     priority: u8,
-    remaining: Duration,
+    deadline: Duration,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,12 +43,14 @@ struct CommandRollback {
     relinquish_default: u32,
     active_operation: Option<ActiveOperation>,
     blink_request_count: u64,
+    logical_now: Duration,
 }
 
 /// BACnet Binary Lighting Output object.
 ///
 /// The priority array stores only steady OFF/ON values. WARN, WARN_OFF,
 /// WARN_RELINQUISH, and STOP are command operations interpreted at write time.
+#[derive(Clone)]
 pub struct BinaryLightingOutputObject {
     oid: ObjectIdentifier,
     name: String,
@@ -57,6 +60,8 @@ pub struct BinaryLightingOutputObject {
     egress_time: u32,
     active_operation: Option<ActiveOperation>,
     blink_request_count: u64,
+    monotonic_clock: Option<Arc<MonotonicClock>>,
+    logical_now: Duration,
     out_of_service: bool,
     status_flags: StatusFlags,
     /// Reliability: 0 = NO_FAULT_DETECTED.
@@ -77,6 +82,8 @@ impl BinaryLightingOutputObject {
             egress_time: 0,
             active_operation: None,
             blink_request_count: 0,
+            monotonic_clock: None,
+            logical_now: Duration::ZERO,
             out_of_service: false,
             status_flags: StatusFlags::empty(),
             reliability: 0,
@@ -195,12 +202,13 @@ impl BinaryLightingOutputObject {
     }
 
     fn arm_operation(&mut self, kind: OperationKind, priority: u8) {
+        let duration = Duration::from_secs(self.egress_time as u64);
         let operation = ActiveOperation {
             kind,
             priority,
-            remaining: Duration::from_secs(self.egress_time as u64),
+            deadline: self.monotonic_now().saturating_add(duration),
         };
-        if operation.remaining.is_zero() {
+        if duration.is_zero() {
             self.apply_terminal(operation);
         } else {
             self.active_operation = Some(operation);
@@ -264,7 +272,26 @@ impl BinaryLightingOutputObject {
             relinquish_default: self.relinquish_default,
             active_operation: self.active_operation,
             blink_request_count: self.blink_request_count,
+            logical_now: self.logical_now,
         }
+    }
+
+    fn monotonic_now(&self) -> Duration {
+        self.monotonic_clock
+            .as_ref()
+            .map_or(self.logical_now, |clock| clock())
+    }
+
+    fn expire_at(&mut self, now: Duration) -> bool {
+        let Some(operation) = self.active_operation else {
+            return false;
+        };
+        if now < operation.deadline {
+            return false;
+        }
+        self.active_operation = None;
+        self.apply_terminal(operation);
+        true
     }
 }
 
@@ -421,20 +448,29 @@ impl BACnetObject for BinaryLightingOutputObject {
         self.relinquish_default = rollback.relinquish_default;
         self.active_operation = rollback.active_operation;
         self.blink_request_count = rollback.blink_request_count;
+        self.logical_now = rollback.logical_now;
         Ok(())
     }
 
     fn advance_time_internal(&mut self, elapsed: Duration) -> bool {
-        let Some(mut operation) = self.active_operation.take() else {
-            return false;
-        };
-        if elapsed < operation.remaining {
-            operation.remaining -= elapsed;
-            self.active_operation = Some(operation);
-            return false;
-        }
-        self.apply_terminal(operation);
-        true
+        self.logical_now = self.logical_now.saturating_add(elapsed);
+        self.expire_at(self.logical_now)
+    }
+
+    fn bind_monotonic_clock_internal(&mut self, clock: Option<Arc<MonotonicClock>>) {
+        self.monotonic_clock = clock;
+    }
+
+    fn advance_monotonic_time_internal(&mut self, now: Duration) -> bool {
+        self.expire_at(now)
+    }
+
+    fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
+        self.active_operation.map(|operation| operation.deadline)
+    }
+
+    fn cov_snapshot_internal(&self) -> Option<Box<dyn BACnetObject>> {
+        Some(Box::new(self.clone()))
     }
 
     fn binary_lighting_blink_count_internal(&self) -> u64 {

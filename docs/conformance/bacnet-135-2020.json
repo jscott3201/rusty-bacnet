@@ -826,7 +826,8 @@
      "crates/bacnet-objects/src/lighting/binary_direct_tests.rs::lower_priority_direct_write_preserves_each_operation_and_remaining_time",
      "crates/bacnet-server/src/handlers/tests/binary_lighting_operations.rs::eligible_warn_warn_off_warn_relinquish_and_stop_execute_over_wp",
     "crates/bacnet-server/src/handlers/tests/binary_lighting_operations.rs::successful_wpm_can_arm_one_operation",
-    "crates/bacnet-server/src/server/binary_lighting_task_tests.rs::operation_task_has_no_early_completion_and_expires_at_exact_monotonic_time",
+     "crates/bacnet-server/src/server/binary_lighting_task_tests.rs::operation_task_has_no_early_completion_and_expires_at_exact_monotonic_time",
+     "crates/bacnet-server/src/server/binary_lighting_task_tests.rs::terminal_cov_snapshot_survives_a_later_command_before_delivery",
     "crates/bacnet-server/src/server/binary_lighting_task_tests.rs::expiry_fires_one_generic_cov_after_database_lock_release",
     "crates/bacnet-server/src/server/binary_lighting_task_tests.rs::local_stop_cancels_timer_and_prevents_later_expiry"
    ],
@@ -842,7 +843,7 @@
    ],
    "benchmarks": [],
    "public_claims": [],
-    "notes": "Egress state and its monotonic Duration are object-owned, process-local, and intentionally not reconstructed after restart. Egress_Time is captured when an operation arms; later Egress_Time or Blink_Warn_Enable writes affect future commands only, and Out_Of_Service does not suspend progress. The server runs one unconditional one-second Delay interval using actual tokio monotonic elapsed, releases the database write lock before generic COV work, and emits one expiry COV only when readable state changes. Logical blink requests are retained only through a hidden internal observation for deterministic tests and WPM rollback; there is no Rust/Python host callback, BACnet property, physical output, persistence, or hardware support claim. Direct Priority_Array[index] compatibility remains writable for OFF/ON/NULL only and follows the same validated same/higher halt ordering; the broader pre-existing read-only conformance mismatch is outside this row."
+    "notes": "Egress state and its arm-relative monotonic deadline are object-owned, process-local, and intentionally not reconstructed after restart. Egress_Time is captured when an operation arms; later Egress_Time or Blink_Warn_Enable writes affect future commands only, and Out_Of_Service does not suspend progress. A hidden database-bound Tokio monotonic source gives writes and the lifecycle task one time domain; the one-second Delay interval also wakes for an exact known deadline and delayed wakes use actual time without charging pre-arm elapsed. Expiry freezes COV-readable terminal state with the mutation under the database write lock, then the generic single/multiple path encodes and sends from that immutable snapshot after releasing locks, so later commands cannot rewrite the terminal payload. Logical blink requests are retained only through a hidden internal observation for deterministic tests and WPM rollback; there is no Rust/Python host callback, BACnet property, physical output, persistence, or hardware support claim. Direct Priority_Array[index] compatibility remains writable for OFF/ON/NULL only and follows the same validated same/higher halt ordering; the broader pre-existing read-only conformance mismatch is outside this row."
   },
   {
    "id": "BACNET-12-REFERENCE-PROPERTY-WRITABILITY",

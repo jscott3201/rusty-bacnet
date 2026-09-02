@@ -236,8 +236,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#283). `Present_Value` now interprets WARN, WARN_OFF,
   WARN_RELINQUISH, and STOP as operations without storing those values in
   `Present_Value` or `Priority_Array`. Eligible egress operations retain the
-  existing ON command for the snapshotted `Egress_Time`, advance from monotonic
-  elapsed time, and can be cancelled by same-priority STOP; direct
+  existing ON command until an arm-relative monotonic deadline based on the
+  snapshotted `Egress_Time`, and can be cancelled by same-priority STOP. Expiry
+  COV uses an atomic terminal readback snapshot before out-of-lock delivery; direct
   `Priority_Array[index]` writes now accept only OFF, ON, or NULL. Logical blink
   requests are internal/test-only observations, not physical-output or host
   callback support, and active egress is not persisted across process restart.
