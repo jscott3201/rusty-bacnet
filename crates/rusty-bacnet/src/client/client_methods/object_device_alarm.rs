@@ -1,5 +1,24 @@
 use super::super::*;
 
+#[allow(clippy::too_many_arguments)]
+fn build_acknowledge_alarm_request(
+    acknowledging_process_identifier: u32,
+    event_object_identifier: bacnet_types::primitives::ObjectIdentifier,
+    event_state_acknowledged: u32,
+    timestamp: BACnetTimeStamp,
+    acknowledgment_source: String,
+    time_of_acknowledgment: BACnetTimeStamp,
+) -> AcknowledgeAlarmRequest {
+    AcknowledgeAlarmRequest {
+        acknowledging_process_identifier,
+        event_object_identifier,
+        event_state_acknowledged,
+        timestamp,
+        acknowledgment_source,
+        time_of_acknowledgment,
+    }
+}
+
 #[pymethods]
 impl BACnetClient {
     // -----------------------------------------------------------------------
@@ -158,7 +177,52 @@ impl BACnetClient {
     // Alarms / Events
     // -----------------------------------------------------------------------
 
-    /// Acknowledge an alarm on a remote device.
+    /// Acknowledge an alarm on a remote device with both caller-supplied timestamps.
+    ///
+    /// `timestamp` must exactly echo the original event-notification timestamp;
+    /// `time_of_acknowledgment` is the caller-selected acknowledgment time.
+    #[pyo3(signature = (address, acknowledging_process_identifier, event_object_identifier, event_state_acknowledged, timestamp, acknowledgment_source, time_of_acknowledgment))]
+    #[allow(clippy::too_many_arguments)]
+    fn acknowledge_alarm_request<'py>(
+        &self,
+        py: Python<'py>,
+        address: String,
+        acknowledging_process_identifier: u32,
+        event_object_identifier: PyObjectIdentifier,
+        event_state_acknowledged: u32,
+        timestamp: PyBACnetTimeStamp,
+        acknowledgment_source: String,
+        time_of_acknowledgment: PyBACnetTimeStamp,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        let mac = parse_address(&address)?;
+        let request = build_acknowledge_alarm_request(
+            acknowledging_process_identifier,
+            event_object_identifier.to_rust(),
+            event_state_acknowledged,
+            timestamp.to_rust().clone(),
+            acknowledgment_source,
+            time_of_acknowledgment.to_rust().clone(),
+        );
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let c = {
+                let guard = inner.lock().await;
+                Arc::clone(guard.as_ref().ok_or_else(|| {
+                    PyRuntimeError::new_err("client not started — use 'async with'")
+                })?)
+            };
+            c.acknowledge_alarm_request(&mac, &request)
+                .await
+                .map_err(to_py_err)?;
+            Ok(())
+        })
+    }
+
+    /// Deprecated compatibility helper for acknowledging an alarm.
+    ///
+    /// This method fabricates SequenceNumber(0) for both timestamps. Use
+    /// `acknowledge_alarm_request` with exact caller-supplied timestamps.
     #[pyo3(signature = (address, acknowledging_process_identifier, event_object_identifier, event_state_acknowledged, acknowledgment_source))]
     #[allow(clippy::too_many_arguments, deprecated)]
     fn acknowledge_alarm<'py>(
@@ -170,6 +234,12 @@ impl BACnetClient {
         event_state_acknowledged: u32,
         acknowledgment_source: String,
     ) -> PyResult<Bound<'py, PyAny>> {
+        PyErr::warn(
+            py,
+            &py.get_type::<PyDeprecationWarning>(),
+            c"BACnetClient.acknowledge_alarm() is deprecated; use acknowledge_alarm_request() with exact event and acknowledgment timestamps",
+            2,
+        )?;
         let inner = self.inner.clone();
         let oid = event_object_identifier.to_rust();
 
@@ -295,5 +365,56 @@ impl BACnetClient {
                 Ok(dict.into_any().unbind())
             })
         })
+    }
+}
+
+#[cfg(test)]
+mod acknowledgment_request_tests {
+    use super::*;
+    use bacnet_types::enums::{EventState, ObjectType};
+    use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
+
+    #[test]
+    fn python_request_builder_preserves_mixed_timestamp_choices_and_metadata() {
+        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 91).unwrap();
+        let event_timestamp = BACnetTimeStamp::Time(Time {
+            hour: 7,
+            minute: 8,
+            second: 9,
+            hundredths: 10,
+        });
+        let acknowledgment_timestamp = BACnetTimeStamp::DateTime {
+            date: Date {
+                year: 126,
+                month: 14,
+                day: 34,
+                day_of_week: Date::UNSPECIFIED,
+            },
+            time: Time {
+                hour: 11,
+                minute: 12,
+                second: 13,
+                hundredths: 14,
+            },
+        };
+
+        let request = build_acknowledge_alarm_request(
+            0x1020_3040,
+            oid,
+            EventState::HIGH_LIMIT.to_raw(),
+            event_timestamp.clone(),
+            "operator-console".into(),
+            acknowledgment_timestamp.clone(),
+        );
+
+        assert_eq!(request.acknowledging_process_identifier, 0x1020_3040);
+        assert_eq!(request.event_object_identifier, oid);
+        assert_eq!(
+            request.event_state_acknowledged,
+            EventState::HIGH_LIMIT.to_raw()
+        );
+        assert_eq!(request.timestamp, event_timestamp);
+        assert_eq!(request.acknowledgment_source, "operator-console");
+        assert_eq!(request.time_of_acknowledgment, acknowledgment_timestamp);
     }
 }

@@ -607,6 +607,51 @@ class ObjectIdentifier:
     def __hash__(self) -> int: ...
 
 
+class BACnetTimeStamp:
+    """Lossless BACnetTimeStamp CHOICE.
+
+    Time components accept their normal BACnet ranges or 255 for unspecified.
+    Date accepts full years 1900..2154 or 255 for unspecified, months 1..14,
+    days 1..34, and days-of-week 1..7; each non-year date field also accepts
+    255 for unspecified. Supplied values are never normalized.
+    """
+
+    @staticmethod
+    def sequence_number(value: int) -> BACnetTimeStamp:
+        """Construct the Sequence Number CHOICE with a value in 0..65535."""
+        ...
+    @staticmethod
+    def time(
+        hour: int, minute: int, second: int, hundredths: int
+    ) -> BACnetTimeStamp:
+        """Construct the Time CHOICE."""
+        ...
+    @staticmethod
+    def date_time(
+        date: tuple[int, int, int, int],
+        time: tuple[int, int, int, int],
+    ) -> BACnetTimeStamp:
+        """Construct DateTime from ``(full_year, month, day, day_of_week)`` and Time tuples."""
+        ...
+
+    @property
+    def kind(self) -> str:
+        """Selected CHOICE: ``sequence_number``, ``time``, or ``date_time``."""
+        ...
+
+    @property
+    def value(
+        self,
+    ) -> int | tuple[int, int, int, int] | tuple[
+        tuple[int, int, int, int], tuple[int, int, int, int]
+    ]:
+        """Exact selected value, using a full year for the Date tuple."""
+        ...
+
+    def __repr__(self) -> str: ...
+    def __eq__(self, other: object) -> bool: ...
+
+
 class PropertyValue:
     """A decoded BACnet property value with tag and Python-native value.
 
@@ -1182,6 +1227,23 @@ class BACnetClient:
 
     # --- Alarms and events ---
 
+    async def acknowledge_alarm_request(
+        self,
+        address: str,
+        acknowledging_process_identifier: int,
+        event_object_identifier: ObjectIdentifier,
+        event_state_acknowledged: int,
+        timestamp: BACnetTimeStamp,
+        acknowledgment_source: str,
+        time_of_acknowledgment: BACnetTimeStamp,
+    ) -> None:
+        """Acknowledge an alarm with exact caller-supplied BACnetTimeStamp values.
+
+        ``timestamp`` must echo the original event notification timestamp;
+        ``time_of_acknowledgment`` is selected by the caller.
+        """
+        ...
+
     async def acknowledge_alarm(
         self,
         address: str,
@@ -1190,7 +1252,11 @@ class BACnetClient:
         event_state_acknowledged: int,
         acknowledgment_source: str,
     ) -> None:
-        """Acknowledge an alarm on a remote device."""
+        """Deprecated compatibility method.
+
+        This method fabricates sequence-number zero for both timestamps. Use
+        ``acknowledge_alarm_request`` for a lossless request.
+        """
         ...
 
     async def get_event_information(

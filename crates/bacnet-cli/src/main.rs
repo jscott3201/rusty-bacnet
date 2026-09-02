@@ -18,6 +18,7 @@ mod parse;
 mod resolve;
 mod session;
 mod shell;
+mod timestamp;
 mod transport;
 
 use args::{Cli, Command};
@@ -270,9 +271,11 @@ async fn execute_command<T: TransportPort + 'static>(
             object,
             state,
             source,
+            timestamp,
+            ack_time,
         } => {
-            let mac = resolve_target_mac(client, target).await?;
             let (object_type, instance) = parse::parse_object_specifier(object)?;
+            let mac = resolve_target_mac(client, target).await?;
             commands::device::acknowledge_alarm_cmd(
                 client,
                 &mac,
@@ -280,6 +283,8 @@ async fn execute_command<T: TransportPort + 'static>(
                 instance,
                 *state,
                 source,
+                timestamp.clone(),
+                ack_time.clone(),
                 format,
             )
             .await?;

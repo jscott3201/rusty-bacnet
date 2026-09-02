@@ -2,9 +2,10 @@
 //! AcknowledgeAlarm, CreateObject, DeleteObject, TimeSync.
 
 use bacnet_client::client::BACnetClient;
+use bacnet_services::alarm_event::AcknowledgeAlarmRequest;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{EnableDisable, ObjectType, ReinitializedState};
-use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier};
 
 use crate::output::{self, OutputFormat};
 
@@ -165,8 +166,27 @@ pub async fn alarms_cmd<T: TransportPort + 'static>(
     Ok(())
 }
 
-/// Acknowledge an alarm on a remote device.
-#[allow(deprecated)]
+fn build_acknowledge_alarm_request(
+    process_id: u32,
+    object_type: ObjectType,
+    instance: u32,
+    event_state: u32,
+    source: &str,
+    timestamp: BACnetTimeStamp,
+    time_of_acknowledgment: BACnetTimeStamp,
+) -> Result<AcknowledgeAlarmRequest, bacnet_types::error::Error> {
+    Ok(AcknowledgeAlarmRequest {
+        acknowledging_process_identifier: process_id,
+        event_object_identifier: ObjectIdentifier::new(object_type, instance)?,
+        event_state_acknowledged: event_state,
+        timestamp,
+        acknowledgment_source: source.to_string(),
+        time_of_acknowledgment,
+    })
+}
+
+/// Acknowledge an alarm on a remote device with exact caller-supplied timestamps.
+#[allow(clippy::too_many_arguments)]
 pub async fn acknowledge_alarm_cmd<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     mac: &[u8],
@@ -174,15 +194,23 @@ pub async fn acknowledge_alarm_cmd<T: TransportPort + 'static>(
     instance: u32,
     event_state: u32,
     source: &str,
+    timestamp: BACnetTimeStamp,
+    time_of_acknowledgment: BACnetTimeStamp,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let oid = ObjectIdentifier::new(object_type, instance)?;
     // Use PID as process identifier
     let process_id = std::process::id();
+    let request = build_acknowledge_alarm_request(
+        process_id,
+        object_type,
+        instance,
+        event_state,
+        source,
+        timestamp,
+        time_of_acknowledgment,
+    )?;
 
-    client
-        .acknowledge_alarm(mac, process_id, oid, event_state, source)
-        .await?;
+    client.acknowledge_alarm_request(mac, &request).await?;
 
     output::print_success("Alarm acknowledged", format);
     Ok(())
@@ -221,4 +249,50 @@ pub async fn create_object_cmd<T: TransportPort + 'static>(
         .join(" ");
     output::print_success(&format!("Created object (response: {hex})"), format);
     Ok(())
+}
+
+#[cfg(test)]
+mod acknowledgment_tests {
+    use super::*;
+    use bacnet_types::primitives::{Date, Time};
+
+    #[test]
+    fn request_builder_preserves_both_timestamps_and_all_metadata() {
+        let event_timestamp = BACnetTimeStamp::SequenceNumber(65_535);
+        let acknowledgment_timestamp = BACnetTimeStamp::DateTime {
+            date: Date {
+                year: 126,
+                month: 14,
+                day: 34,
+                day_of_week: 255,
+            },
+            time: Time {
+                hour: 23,
+                minute: 59,
+                second: 58,
+                hundredths: 99,
+            },
+        };
+        let request = build_acknowledge_alarm_request(
+            0x1234_5678,
+            ObjectType::ANALOG_INPUT,
+            77,
+            3,
+            "operator-console",
+            event_timestamp.clone(),
+            acknowledgment_timestamp.clone(),
+        )
+        .unwrap();
+
+        assert_eq!(request.acknowledging_process_identifier, 0x1234_5678);
+        assert_eq!(
+            request.event_object_identifier.object_type(),
+            ObjectType::ANALOG_INPUT
+        );
+        assert_eq!(request.event_object_identifier.instance_number(), 77);
+        assert_eq!(request.event_state_acknowledged, 3);
+        assert_eq!(request.timestamp, event_timestamp);
+        assert_eq!(request.acknowledgment_source, "operator-console");
+        assert_eq!(request.time_of_acknowledgment, acknowledgment_timestamp);
+    }
 }

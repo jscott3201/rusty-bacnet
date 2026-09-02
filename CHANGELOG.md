@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking CLI invocation:** one-shot and interactive `ack-alarm` (including
+  the `ack` alias) now require exact caller-supplied `--timestamp` and
+  `--ack-time` BACnetTimeStamp values. Neither value is inferred from a clock.
+  The five-argument Python `BACnetClient.acknowledge_alarm` signature remains
+  available for compatibility but is deprecated and emits
+  `DeprecationWarning` before retaining its historical sequence-zero behavior.
+
 - **Breaking Rust source migration:** GetEnrollmentSummary's public
   `RecipientProcess::device: Option<ObjectIdentifier>` field is replaced by
   `recipient: BACnetRecipient`, adding the standard Device-or-Address CHOICE.
@@ -19,13 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Correlated AcknowledgeAlarm core validation and a lossless Rust request API
-  (`Refs #132`). The bundled server now requires the latest committed original
+  (#132). The bundled server now requires the latest committed original
   To State and exact timestamp before setting one supported Analog or Event
   Enrollment acknowledgment bit; valid repeated transactions remain
-  idempotent. The legacy timestamp-fabricating helper is deprecated. Python,
-  CLI timestamp design, additional object families, and ACK_NOTIFICATION
-  distribution (#175) remain deferred, so this is not full Clause 13.5
-  conformance and does not close #132.
+  idempotent. Python now exposes the protocol-backed `BACnetTimeStamp` CHOICE
+  and a lossless `BACnetClient.acknowledge_alarm_request` method, while the CLI
+  uses that canonical Rust request with both mandatory timestamps. Additional
+  object families (#170) and ACK_NOTIFICATION distribution (#175) remain
+  deferred, so this does not broaden conformance claims.
 
 - Exact-delta Life Safety COV reporting for the bundled server (`Refs #177`).
   Whole-object Point/Zone subscriptions now trigger only for actual

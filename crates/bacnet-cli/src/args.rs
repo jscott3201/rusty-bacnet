@@ -6,6 +6,7 @@
 
 use std::{net::Ipv4Addr, path::PathBuf};
 
+use bacnet_types::primitives::BACnetTimeStamp;
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -14,7 +15,7 @@ pub(crate) enum FileReadAccess {
     Record,
 }
 
-#[derive(Parser)]
+#[derive(Debug, Parser)]
 #[command(name = "bacnet", about = "BACnet command-line tool", version)]
 pub(crate) struct Cli {
     /// Network interface IP address to bind (omit to select interactively in shell mode).
@@ -85,7 +86,7 @@ pub(crate) struct Cli {
     pub(crate) command: Option<Command>,
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 pub(crate) enum Command {
     /// Launch interactive shell.
     Shell,
@@ -285,6 +286,12 @@ pub(crate) enum Command {
         /// Acknowledgment source string.
         #[arg(long, default_value = "bacnet-cli")]
         source: String,
+        /// Exact timestamp from the original event notification.
+        #[arg(long, value_parser = crate::timestamp::parse_bacnet_timestamp)]
+        timestamp: BACnetTimeStamp,
+        /// Caller-selected time of acknowledgment.
+        #[arg(long, value_parser = crate::timestamp::parse_bacnet_timestamp)]
+        ack_time: BACnetTimeStamp,
     },
 
     /// Read a range of items from a list or log buffer.
@@ -352,4 +359,112 @@ pub(crate) enum Command {
         #[arg(long, default_value_t = 65535)]
         snaplen: u32,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bacnet_types::primitives::{Date, Time};
+    use clap::error::ErrorKind;
+
+    #[test]
+    fn ack_alarm_and_alias_require_both_timestamp_flags() {
+        for command in ["ack-alarm", "ack"] {
+            let missing_both =
+                Cli::try_parse_from(["bacnet", command, "127.0.0.1", "ai:1", "--state", "1"])
+                    .unwrap_err();
+            assert_eq!(missing_both.kind(), ErrorKind::MissingRequiredArgument);
+
+            let missing_ack_time = Cli::try_parse_from([
+                "bacnet",
+                command,
+                "127.0.0.1",
+                "ai:1",
+                "--state",
+                "1",
+                "--timestamp",
+                "sequence:9",
+            ])
+            .unwrap_err();
+            assert_eq!(missing_ack_time.kind(), ErrorKind::MissingRequiredArgument);
+        }
+    }
+
+    #[test]
+    fn ack_alarm_clap_uses_lossless_shared_timestamp_parser() {
+        let cli = Cli::try_parse_from([
+            "bacnet",
+            "ack",
+            "127.0.0.1",
+            "ai:1",
+            "--state",
+            "3",
+            "--source",
+            "operator",
+            "--timestamp",
+            "time:1,2,3,4",
+            "--ack-time",
+            "datetime:2026,9,2,3;5,6,7,8",
+        ])
+        .unwrap();
+        let Some(Command::AckAlarm {
+            state,
+            source,
+            timestamp,
+            ack_time,
+            ..
+        }) = cli.command
+        else {
+            panic!("expected AckAlarm");
+        };
+        assert_eq!(state, 3);
+        assert_eq!(source, "operator");
+        assert_eq!(
+            timestamp,
+            BACnetTimeStamp::Time(Time {
+                hour: 1,
+                minute: 2,
+                second: 3,
+                hundredths: 4,
+            })
+        );
+        assert_eq!(
+            ack_time,
+            BACnetTimeStamp::DateTime {
+                date: Date {
+                    year: 126,
+                    month: 9,
+                    day: 2,
+                    day_of_week: 3,
+                },
+                time: Time {
+                    hour: 5,
+                    minute: 6,
+                    second: 7,
+                    hundredths: 8,
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn ack_alarm_clap_reports_shared_parser_error_before_execution() {
+        let error = Cli::try_parse_from([
+            "bacnet",
+            "ack-alarm",
+            "127.0.0.1",
+            "ai:1",
+            "--state",
+            "1",
+            "--timestamp",
+            "time:24,0,0,0",
+            "--ack-time",
+            "sequence:1",
+        ])
+        .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ValueValidation);
+        assert!(error
+            .to_string()
+            .contains("BACnetTimeStamp hour must be 0..=23 or 255 (unspecified), got 24"));
+    }
 }
