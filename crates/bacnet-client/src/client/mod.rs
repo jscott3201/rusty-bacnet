@@ -808,6 +808,8 @@ pub use cov_renewal::{
 };
 
 #[cfg(test)]
+mod acknowledge_alarm_tests;
+#[cfg(test)]
 mod builder_options_tests;
 #[cfg(test)]
 mod confirmed_request_dispatch_tests;

@@ -3,9 +3,9 @@
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, FaultParameters,
 };
-use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
+use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
@@ -113,6 +113,25 @@ impl EventEnrollmentObject {
     /// meaning no event of that type has ever occurred (ASHRAE 135-2020
     /// Clause 12.12).
     const RESET_ACKED_TRANSITIONS: u8 = 0b111;
+
+    fn has_configured_event_generation(&self) -> bool {
+        let event_algorithm_supported = matches!(
+            &self.event_parameters,
+            BACnetEventParameter::OutOfRange { .. }
+                | BACnetEventParameter::FloatingLimit { .. }
+                | BACnetEventParameter::ChangeOfState { .. }
+                | BACnetEventParameter::ChangeOfBitstring { .. }
+                | BACnetEventParameter::ChangeOfValue { .. }
+                | BACnetEventParameter::Opaque { tag: 0xFF, .. }
+        );
+        let fault_algorithm_supported = matches!(
+            self.effective_fault_parameters(),
+            FaultParameters::FaultStatusFlags { .. } | FaultParameters::FaultOutOfRange { .. }
+        );
+        self.event_detection_enable
+            && self.object_property_reference.is_some()
+            && (event_algorithm_supported || fault_algorithm_supported)
+    }
 
     /// Apply the reset ASHRAE 135-2020 Clause 13.2.2.1 requires while
     /// `Event_Detection_Enable` is FALSE: "no transitions shall occur,
@@ -510,6 +529,24 @@ impl BACnetObject for EventEnrollmentObject {
         }
         self.acked_transitions |= transition_bit & 0x07;
         Ok(())
+    }
+
+    fn acknowledge_alarm_correlated_internal(
+        &mut self,
+        event_state: EventState,
+        timestamp: &BACnetTimeStamp,
+    ) -> Result<(), Error> {
+        if !self.has_configured_event_generation() {
+            return Err(Error::Protocol {
+                class: ErrorClass::OBJECT.to_raw() as u32,
+                code: ErrorCode::NO_ALARM_CONFIGURED.to_raw() as u32,
+            });
+        }
+        self.event_history.acknowledge_correlated(
+            &mut self.acked_transitions,
+            event_state,
+            timestamp,
+        )
     }
 
     /// Clause 13.2.3's transition-received maintenance of `Acked_Transitions`:

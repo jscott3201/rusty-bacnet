@@ -160,7 +160,7 @@ impl BACnetClient {
 
     /// Acknowledge an alarm on a remote device.
     #[pyo3(signature = (address, acknowledging_process_identifier, event_object_identifier, event_state_acknowledged, acknowledgment_source))]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, deprecated)]
     fn acknowledge_alarm<'py>(
         &self,
         py: Python<'py>,

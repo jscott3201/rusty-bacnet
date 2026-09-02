@@ -1,7 +1,7 @@
 //! Shared storage for intrinsic-reporting event history properties.
 
 use bacnet_encoding::primitives::encode_timestamp_choice;
-use bacnet_types::enums::{EventState, PropertyIdentifier};
+use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
 use bytes::BytesMut;
@@ -12,6 +12,8 @@ use super::{EventTransition, EventTransitionCommit, EventTransitionCommitError};
 pub(crate) struct EventHistory {
     /// Transition slots ordered `[TO_OFFNORMAL, TO_FAULT, TO_NORMAL]`.
     pub(crate) time_stamps: [BACnetTimeStamp; 3],
+    /// Exact committed To State for each transition slot.
+    pub(crate) original_to_states: [Option<EventState>; 3],
     /// Transition slots ordered `[TO_OFFNORMAL, TO_FAULT, TO_NORMAL]`.
     pub(crate) message_texts: [String; 3],
 }
@@ -71,6 +73,7 @@ impl<'a> EventTransitionState<'a> {
             *self.acked_transitions &= !bit;
         }
         self.history.time_stamps[index] = commit.timestamp;
+        self.history.original_to_states[index] = Some(commit.change.to);
         if let Some(message_text) = commit.message_text {
             self.history.message_texts[index] = message_text;
         }
@@ -216,6 +219,7 @@ impl Default for EventHistory {
                 BACnetTimeStamp::SequenceNumber(0),
                 BACnetTimeStamp::SequenceNumber(0),
             ],
+            original_to_states: [None, None, None],
             message_texts: [String::new(), String::new(), String::new()],
         }
     }
@@ -224,6 +228,34 @@ impl Default for EventHistory {
 impl EventHistory {
     pub(crate) fn reset(&mut self) {
         *self = Self::default();
+    }
+
+    /// Validate an acknowledgment against the latest committed transition slot.
+    pub(crate) fn acknowledge_correlated(
+        &self,
+        acked_transitions: &mut u8,
+        requested_state: EventState,
+        timestamp: &BACnetTimeStamp,
+    ) -> Result<(), Error> {
+        let coordinate = EventTransition::for_target_state(requested_state);
+        let index = coordinate.index();
+        let Some(original_state) = self.original_to_states[index] else {
+            return Err(service_error(ErrorCode::INVALID_TIME_STAMP));
+        };
+
+        let state_matches = original_state == requested_state
+            || (requested_state == EventState::OFFNORMAL
+                && EventTransition::for_target_state(original_state)
+                    == EventTransition::ToOffnormal);
+        if !state_matches {
+            return Err(service_error(ErrorCode::INVALID_EVENT_STATE));
+        }
+        if self.time_stamps[index] != *timestamp {
+            return Err(service_error(ErrorCode::INVALID_TIME_STAMP));
+        }
+
+        *acked_transitions |= coordinate.bit_mask();
+        Ok(())
     }
 
     /// Reads the fixed-size event arrays with their BACnet array semantics.
@@ -259,6 +291,16 @@ impl EventHistory {
         }
     }
 }
+
+fn service_error(code: ErrorCode) -> Error {
+    Error::Protocol {
+        class: ErrorClass::SERVICES.to_raw() as u32,
+        code: code.to_raw() as u32,
+    }
+}
+
+#[cfg(test)]
+mod correlation_tests;
 
 fn timestamp_value(stamp: &BACnetTimeStamp) -> PropertyValue {
     let mut encoded = BytesMut::new();
@@ -329,6 +371,7 @@ mod tests {
     fn reset_restores_mutated_history_to_default() {
         let mut history = EventHistory::default();
         history.time_stamps[1] = BACnetTimeStamp::SequenceNumber(42);
+        history.original_to_states[1] = Some(EventState::FAULT);
         history.message_texts[2] = "transition".into();
 
         history.reset();
@@ -346,6 +389,7 @@ mod tests {
                 BACnetTimeStamp::SequenceNumber(20),
                 BACnetTimeStamp::SequenceNumber(30),
             ],
+            original_to_states: [None, None, None],
             message_texts: [
                 "old-offnormal".into(),
                 "old-fault".into(),
@@ -370,6 +414,7 @@ mod tests {
         assert_eq!(state, EventState::HIGH_LIMIT);
         assert_eq!(acked, 0b100, "only TO_OFFNORMAL is cleared");
         assert_eq!(history.time_stamps[0], time(1));
+        assert_eq!(history.original_to_states[0], Some(EventState::HIGH_LIMIT));
         assert_eq!(history.time_stamps[1], BACnetTimeStamp::SequenceNumber(20));
         assert_eq!(history.time_stamps[2], BACnetTimeStamp::SequenceNumber(30));
         assert_eq!(
@@ -395,6 +440,7 @@ mod tests {
         assert_eq!(acked, 0b110, "TO_FAULT is set and other bits are untouched");
         assert_eq!(history.time_stamps[0], time(1));
         assert_eq!(history.time_stamps[1], BACnetTimeStamp::SequenceNumber(0));
+        assert_eq!(history.original_to_states[1], Some(EventState::FAULT));
         assert_eq!(history.time_stamps[2], BACnetTimeStamp::SequenceNumber(30));
         assert_eq!(history.message_texts, ["high-limit", "fault", "old-normal"]);
 
@@ -418,6 +464,14 @@ mod tests {
             history.time_stamps,
             [time(1), BACnetTimeStamp::SequenceNumber(0), date_time(27)]
         );
+        assert_eq!(
+            history.original_to_states,
+            [
+                Some(EventState::HIGH_LIMIT),
+                Some(EventState::FAULT),
+                Some(EventState::NORMAL),
+            ]
+        );
         assert_eq!(history.message_texts, ["high-limit", "fault", "normal"]);
     }
 
@@ -431,6 +485,7 @@ mod tests {
                 BACnetTimeStamp::SequenceNumber(2),
                 BACnetTimeStamp::SequenceNumber(3),
             ],
+            original_to_states: [None, None, None],
             message_texts: ["offnormal".into(), "fault".into(), "normal".into()],
         };
         let messages_before = history.message_texts.clone();
@@ -472,6 +527,11 @@ mod tests {
         let mut acked = 0b101;
         let mut history = EventHistory {
             time_stamps: [time(9), BACnetTimeStamp::SequenceNumber(44), date_time(26)],
+            original_to_states: [
+                Some(EventState::HIGH_LIMIT),
+                Some(EventState::FAULT),
+                Some(EventState::NORMAL),
+            ],
             message_texts: ["offnormal".into(), "fault".into(), "normal".into()],
         };
         let expected_state = state;

@@ -16,6 +16,7 @@ pub(crate) enum IntrinsicWriteRollback {
         pending: Option<PendingTransition>,
         fault_reliability: Option<u32>,
         time_stamps: [BACnetTimeStamp; 3],
+        original_to_states: [Option<EventState>; 3],
         message_texts: [String; 3],
     },
     TimeDelayNormal(Option<u32>),
@@ -137,6 +138,7 @@ macro_rules! impl_intrinsic_write_rollback {
                             pending: self.$detector_field.pending.clone(),
                             fault_reliability: self.$detector_field.fault_reliability,
                             time_stamps: self.$history_field.time_stamps.clone(),
+                            original_to_states: self.$history_field.original_to_states,
                             message_texts: self.$history_field.message_texts.clone(),
                         },
                     ))
@@ -196,6 +198,7 @@ macro_rules! impl_intrinsic_write_rollback {
                     pending,
                     fault_reliability,
                     time_stamps,
+                    original_to_states,
                     message_texts,
                 } => {
                     self.$detection_enable_field = enabled;
@@ -204,6 +207,7 @@ macro_rules! impl_intrinsic_write_rollback {
                     self.$detector_field.pending = pending;
                     self.$detector_field.fault_reliability = fault_reliability;
                     self.$history_field.time_stamps = time_stamps;
+                    self.$history_field.original_to_states = original_to_states;
                     self.$history_field.message_texts = message_texts;
                     Ok(())
                 }

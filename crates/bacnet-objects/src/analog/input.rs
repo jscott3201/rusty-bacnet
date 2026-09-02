@@ -304,6 +304,24 @@ impl BACnetObject for AnalogInputObject {
         Ok(())
     }
 
+    fn acknowledge_alarm_correlated_internal(
+        &mut self,
+        event_state: EventState,
+        timestamp: &BACnetTimeStamp,
+    ) -> Result<(), Error> {
+        if !self.event_detection_enable {
+            return Err(Error::Protocol {
+                class: ErrorClass::OBJECT.to_raw() as u32,
+                code: ErrorCode::NO_ALARM_CONFIGURED.to_raw() as u32,
+            });
+        }
+        self.event_history.acknowledge_correlated(
+            &mut self.event_detector.acked_transitions,
+            event_state,
+            timestamp,
+        )
+    }
+
     fn set_reliability_internal(&mut self, reliability: u32) -> Result<(), Error> {
         if self.out_of_service || self.reliability_inhibit.enabled() {
             return Err(common::write_access_denied_error());
@@ -537,6 +555,7 @@ mod detection_enable_reset_tests {
         });
         ai.event_detector.fault_reliability = Some(1);
         ai.event_history.time_stamps[0] = BACnetTimeStamp::SequenceNumber(7);
+        ai.event_history.original_to_states[0] = Some(EventState::HIGH_LIMIT);
         ai.event_history.message_texts[0] = "offnormal".into();
         let rollback = ai
             .capture_write_property_rollback(
@@ -566,9 +585,16 @@ mod detection_enable_reset_tests {
             ai.event_history.time_stamps[0],
             BACnetTimeStamp::SequenceNumber(7)
         );
+        assert_eq!(
+            ai.event_history.original_to_states[0],
+            Some(EventState::HIGH_LIMIT)
+        );
         assert_eq!(ai.event_history.message_texts[0], "offnormal");
     }
 }
+
+#[cfg(test)]
+mod acknowledge_alarm_correlation_tests;
 
 #[cfg(test)]
 mod fault_out_of_range_non_finite_tests {

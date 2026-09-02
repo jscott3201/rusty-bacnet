@@ -166,6 +166,7 @@ pub async fn alarms_cmd<T: TransportPort + 'static>(
 }
 
 /// Acknowledge an alarm on a remote device.
+#[allow(deprecated)]
 pub async fn acknowledge_alarm_cmd<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     mac: &[u8],

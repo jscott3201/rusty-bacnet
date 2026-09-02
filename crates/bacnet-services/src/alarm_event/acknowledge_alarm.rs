@@ -2,6 +2,13 @@ use super::*;
 
 use crate::common::{decode_context, decode_context_u32};
 
+fn decode_acknowledgment_source(content: &[u8]) -> Result<String, Error> {
+    if content.is_empty() {
+        return primitives::decode_character_string(content);
+    }
+    Ok(primitives::decode_character_string(content).unwrap_or_default())
+}
+
 // ---------------------------------------------------------------------------
 // AcknowledgeAlarm
 // ---------------------------------------------------------------------------
@@ -60,7 +67,7 @@ impl AcknowledgeAlarmRequest {
         // [4] acknowledgmentSource
         let (content, end) =
             decode_context(data, offset, 4, "AcknowledgeAlarm acknowledgment-source")?;
-        let acknowledgment_source = primitives::decode_character_string(content)?;
+        let acknowledgment_source = decode_acknowledgment_source(content)?;
         offset = end;
 
         // [5] timeOfAcknowledgment

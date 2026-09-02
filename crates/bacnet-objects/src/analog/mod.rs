@@ -2,7 +2,9 @@
 //!
 //! Per ASHRAE 135-2020 Clauses 12.2 (AI), 12.3 (AO), and 12.4 (AV).
 
-use bacnet_types::enums::{ObjectType, PropertyIdentifier, Reliability};
+use bacnet_types::enums::{
+    ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier, Reliability,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
