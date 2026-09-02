@@ -9,7 +9,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::clock::{ClockFrame, ClockReader};
 use crate::event_enrollment::EventEnrollmentMonitoredSource;
-use crate::traits::BACnetObject;
+use crate::traits::{BACnetObject, MonotonicClock};
 
 /// A collection of BACnet objects, keyed by ObjectIdentifier.
 ///
@@ -19,6 +19,7 @@ pub struct ObjectDatabase {
     objects: HashMap<ObjectIdentifier, Box<dyn BACnetObject>>,
     /// Shared Device clock reader. `None` is an explicit clockless database.
     clock: Option<Arc<dyn ClockReader>>,
+    monotonic_clock: Option<Arc<MonotonicClock>>,
     /// Device-local EventNotification ordering source for clockless operation.
     event_sequence_number: u16,
     /// Reverse index: object name → ObjectIdentifier for uniqueness enforcement.
@@ -60,6 +61,7 @@ impl ObjectDatabase {
         Self {
             objects: HashMap::new(),
             clock: None,
+            monotonic_clock: None,
             event_sequence_number: 0,
             name_index: HashMap::new(),
             type_index: HashMap::new(),
@@ -74,6 +76,7 @@ impl ObjectDatabase {
     /// Replacing an object with the same OID is allowed (the old object is removed).
     pub fn add(&mut self, mut object: Box<dyn BACnetObject>) -> Result<(), Error> {
         object.bind_clock_internal(self.clock.clone());
+        object.bind_monotonic_clock_internal(self.monotonic_clock.clone());
         let oid = object.object_identifier();
         let name = object.object_name().to_string();
 
@@ -275,6 +278,15 @@ impl ObjectDatabase {
         self.clock = clock;
         for object in self.objects.values_mut() {
             object.bind_clock_internal(self.clock.clone());
+        }
+    }
+
+    /// Bind one process-local monotonic source to every contained object.
+    #[doc(hidden)]
+    pub fn set_monotonic_clock_internal(&mut self, clock: Option<Arc<MonotonicClock>>) {
+        self.monotonic_clock = clock;
+        for object in self.objects.values_mut() {
+            object.bind_monotonic_clock_internal(self.monotonic_clock.clone());
         }
     }
 

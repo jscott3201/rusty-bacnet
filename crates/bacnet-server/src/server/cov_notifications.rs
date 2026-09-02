@@ -61,6 +61,31 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         config: &ServerConfig,
         oid: &ObjectIdentifier,
     ) {
+        Self::fire_cov_notifications_inner(
+            db,
+            network,
+            cov_table,
+            cov_in_flight,
+            notification_transactions,
+            comm_state,
+            config,
+            oid,
+            None,
+        )
+        .await;
+    }
+
+    pub(super) async fn fire_cov_notifications_inner(
+        db: &Arc<RwLock<ObjectDatabase>>,
+        network: &Arc<NetworkLayer<T>>,
+        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
+        cov_in_flight: &Arc<Semaphore>,
+        notification_transactions: &Arc<NotificationTransactions>,
+        comm_state: &Arc<AtomicU8>,
+        config: &ServerConfig,
+        oid: &ObjectIdentifier,
+        snapshot: Option<&dyn bacnet_objects::traits::BACnetObject>,
+    ) {
         if comm_state.load(Ordering::Acquire) >= 1 {
             return;
         }
@@ -86,6 +111,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             config,
             oid,
             &single_subs,
+            snapshot,
         )
         .await;
 
@@ -99,6 +125,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             config,
             Some(oid),
             &multiple_subs,
+            snapshot,
         )
         .await;
     }
@@ -129,6 +156,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             config,
             &subscription.monitored_object_identifier,
             std::slice::from_ref(subscription),
+            None,
         )
         .await;
     }
@@ -144,6 +172,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         config: &ServerConfig,
         changed_oid: Option<&ObjectIdentifier>,
         subscriptions: &[CovSubscription],
+        snapshot: Option<&dyn bacnet_objects::traits::BACnetObject>,
     ) {
         if comm_state.load(Ordering::Acquire) >= 1 || subscriptions.is_empty() {
             return;
@@ -154,7 +183,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         if let Some(oid) = changed_oid {
             let (current_pv, cov_increment) = {
                 let db = db.read().await;
-                let object = match db.get(oid) {
+                let object = match snapshot.or_else(|| db.get(oid)) {
                     Some(object) => object,
                     None => return,
                 };
@@ -206,51 +235,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 notification_transactions,
                 config,
                 subs,
+                snapshot,
             )
             .await;
         }
-    }
-
-    pub(super) fn encode_confirmed_cov_multiple_apdu(
-        notification: &COVNotificationMultipleRequest,
-        invoke_id: u8,
-        max_apdu_length: u16,
-    ) -> Result<BytesMut, Error> {
-        let mut service_buf = BytesMut::new();
-        notification.encode(&mut service_buf)?;
-
-        let pdu = Apdu::ConfirmedRequest(ConfirmedRequestPdu {
-            segmented: false,
-            more_follows: false,
-            segmented_response_accepted: false,
-            max_segments: None,
-            max_apdu_length,
-            invoke_id,
-            sequence_number: None,
-            proposed_window_size: None,
-            service_choice: ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE,
-            service_request: service_buf.freeze(),
-        });
-
-        let mut buf = BytesMut::new();
-        encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
-        Ok(buf)
-    }
-
-    pub(super) fn encode_unconfirmed_cov_multiple_apdu(
-        notification: &COVNotificationMultipleRequest,
-    ) -> Result<BytesMut, Error> {
-        let mut service_buf = BytesMut::new();
-        notification.encode(&mut service_buf)?;
-
-        let pdu = Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
-            service_choice: UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION_MULTIPLE,
-            service_request: service_buf.freeze(),
-        });
-
-        let mut buf = BytesMut::new();
-        encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
-        Ok(buf)
     }
 
     /// Fire the initial COVNotificationMultiple for a newly accepted
@@ -276,6 +264,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             config,
             None,
             subscriptions,
+            None,
         )
         .await;
     }
@@ -289,13 +278,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         notification_transactions: &Arc<NotificationTransactions>,
         config: &ServerConfig,
         subscriptions: &[CovSubscription],
+        snapshot: Option<&dyn bacnet_objects::traits::BACnetObject>,
     ) {
         if subscriptions.is_empty() {
             return;
         }
 
         let representative = &subscriptions[0];
-        let (device_oid, items, last_notified, timestamp) = {
+        let (device_oid, timestamp) = {
             let db = db.read().await;
             let device_oid = db
                 .list_objects()
@@ -318,6 +308,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 None
             };
 
+            (device_oid, timestamp)
+        };
+        let (items, last_notified) = {
+            let db = if snapshot.is_none() {
+                Some(db.read().await)
+            } else {
+                None
+            };
             let mut items: Vec<COVNotificationItem> = Vec::new();
             let mut last_notified = Vec::new();
 
@@ -325,7 +323,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let Some(property_identifier) = sub.monitored_property else {
                     continue;
                 };
-                let Some(object) = db.get(&sub.monitored_object_identifier) else {
+                let Some(object) = snapshot
+                    .filter(|object| object.object_identifier() == sub.monitored_object_identifier)
+                    .or_else(|| db.as_deref()?.get(&sub.monitored_object_identifier))
+                else {
                     continue;
                 };
 
@@ -375,9 +376,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
 
-            life_safety::append_status_flags(&db, subscriptions, timestamp, &mut items);
+            if let Some(db) = db.as_deref() {
+                life_safety::append_status_flags(db, subscriptions, timestamp, &mut items);
+            }
 
-            (device_oid, items, last_notified, timestamp)
+            (items, last_notified)
         };
 
         if items.is_empty() {
@@ -525,10 +528,22 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         config: &ServerConfig,
         oid: &ObjectIdentifier,
         subs: &[CovSubscription],
+        snapshot: Option<&dyn bacnet_objects::traits::BACnetObject>,
     ) {
-        let (device_oid, values, current_pv, cov_increment) = {
+        let device_oid = {
             let db = db.read().await;
-            let object = match db.get(oid) {
+            db.list_objects()
+                .into_iter()
+                .find(|o| o.object_type() == ObjectType::DEVICE)
+                .unwrap_or_else(|| ObjectIdentifier::new(ObjectType::DEVICE, 0).unwrap())
+        };
+        let (values, current_pv, cov_increment) = {
+            let db = if snapshot.is_none() {
+                Some(db.read().await)
+            } else {
+                None
+            };
+            let object = match snapshot.or_else(|| db.as_deref()?.get(oid)) {
                 Some(o) => o,
                 None => return,
             };
@@ -563,13 +578,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
 
-            let device_oid = db
-                .list_objects()
-                .into_iter()
-                .find(|o| o.object_type() == ObjectType::DEVICE)
-                .unwrap_or_else(|| ObjectIdentifier::new(ObjectType::DEVICE, 0).unwrap());
-
-            (device_oid, values, current_pv, cov_increment)
+            (values, current_pv, cov_increment)
         };
 
         if values.is_empty() {
@@ -589,8 +598,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             });
 
             let notification_values = if let Some(prop) = sub.monitored_property {
-                let db = db.read().await;
-                if let Some(object) = db.get(oid) {
+                if let Some(object) = snapshot {
                     life_safety::single_property_values(
                         object,
                         prop,
@@ -598,7 +606,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     )
                     .unwrap_or_else(|| values.clone())
                 } else {
-                    values.clone()
+                    let db = db.read().await;
+                    db.get(oid)
+                        .and_then(|object| {
+                            life_safety::single_property_values(
+                                object,
+                                prop,
+                                sub.monitored_property_array_index,
+                            )
+                        })
+                        .unwrap_or_else(|| values.clone())
                 }
             } else {
                 values.clone()

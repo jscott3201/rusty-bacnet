@@ -3,6 +3,7 @@
 use std::any::Any;
 use std::borrow::Cow;
 use std::sync::Arc;
+use std::time::Duration;
 
 use bacnet_types::constructed::BACnetLogRecord;
 use bacnet_types::enums::{
@@ -19,6 +20,10 @@ use crate::event_enrollment::{
 };
 use crate::file::{FileConfiguration, FileStorage};
 use crate::log_buffer::LogRecordIdentity;
+
+/// Process-local monotonic time source used by internal object lifecycles.
+#[doc(hidden)]
+pub type MonotonicClock = dyn Fn() -> Duration + Send + Sync;
 
 mod defaults;
 use defaults::{array_property_default, historical_writable_default};
@@ -141,6 +146,48 @@ pub trait BACnetObject: Send + Sync {
     /// lifecycle hook.
     #[doc(hidden)]
     fn bind_clock_internal(&mut self, _clock: Option<Arc<dyn ClockReader>>) {}
+
+    /// Advance object-owned operations that use monotonic elapsed time.
+    ///
+    /// The server calls this internal hook from a dedicated lifecycle task.
+    /// `true` means readable state changed and generic COV processing is
+    /// required. The default is a source-compatible no-op for downstream
+    /// object implementations.
+    #[doc(hidden)]
+    fn advance_time_internal(&mut self, _elapsed: Duration) -> bool {
+        false
+    }
+
+    /// Bind the process-local monotonic source used when operations arm.
+    #[doc(hidden)]
+    fn bind_monotonic_clock_internal(&mut self, _clock: Option<Arc<MonotonicClock>>) {}
+
+    /// Advance operations to an absolute process-local monotonic instant.
+    #[doc(hidden)]
+    fn advance_monotonic_time_internal(&mut self, _now: Duration) -> bool {
+        false
+    }
+
+    /// Return the next absolute process-local operation deadline, if any.
+    #[doc(hidden)]
+    fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
+        None
+    }
+
+    /// Freeze COV-readable state while the object's mutation lock is held.
+    #[doc(hidden)]
+    fn cov_snapshot_internal(&self) -> Option<Box<dyn BACnetObject>> {
+        None
+    }
+
+    /// Return the retained logical blink-request observation, when modeled.
+    ///
+    /// This is an internal conformance-test channel, not a BACnet property,
+    /// host callback, or physical-output claim.
+    #[doc(hidden)]
+    fn binary_lighting_blink_count_internal(&self) -> u64 {
+        0
+    }
 
     /// Whether `write_property` accepts `property` for this object.
     ///

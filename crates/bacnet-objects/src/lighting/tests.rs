@@ -269,7 +269,8 @@ fn binary_lighting_output_write_pv_commandable() {
         .unwrap();
     assert_eq!(pv, PropertyValue::Enumerated(1));
 
-    // Write warn (2) at priority 1 overrides
+    // WARN is an operation, not a stored command. Priority 1 has no existing
+    // ON slot, so this is an accepted no-op.
     obj.write_property(
         PropertyIdentifier::PRESENT_VALUE,
         None,
@@ -280,7 +281,12 @@ fn binary_lighting_output_write_pv_commandable() {
     let pv = obj
         .read_property(PropertyIdentifier::PRESENT_VALUE, None)
         .unwrap();
-    assert_eq!(pv, PropertyValue::Enumerated(2));
+    assert_eq!(pv, PropertyValue::Enumerated(1));
+    assert_eq!(
+        obj.read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(1))
+            .unwrap(),
+        PropertyValue::Null
+    );
 
     // Relinquish priority 1 — falls back to priority 8 (on)
     obj.write_property(
@@ -302,16 +308,16 @@ fn binary_lighting_output_pv_out_of_range() {
     let result = obj.write_property(
         PropertyIdentifier::PRESENT_VALUE,
         None,
-        PropertyValue::Enumerated(5), // > MAX_PV
+        PropertyValue::Enumerated(6),
         Some(16),
     );
     assert!(result.is_err());
 }
 
 #[test]
-fn binary_lighting_output_all_valid_pv_values() {
-    let mut obj = BinaryLightingOutputObject::new(1, "BLO-1").unwrap();
-    for val in 0..=4 {
+fn binary_lighting_output_all_named_pv_commands_are_accepted_without_storing_operations() {
+    for val in 0..=5 {
+        let mut obj = BinaryLightingOutputObject::new(1, "BLO-1").unwrap();
         obj.write_property(
             PropertyIdentifier::PRESENT_VALUE,
             None,
@@ -322,7 +328,15 @@ fn binary_lighting_output_all_valid_pv_values() {
         let pv = obj
             .read_property(PropertyIdentifier::PRESENT_VALUE, None)
             .unwrap();
-        assert_eq!(pv, PropertyValue::Enumerated(val));
+        let expected = u32::from(val == 1);
+        assert_eq!(pv, PropertyValue::Enumerated(expected));
+        let slot = obj
+            .read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(16))
+            .unwrap();
+        assert!(matches!(
+            slot,
+            PropertyValue::Null | PropertyValue::Enumerated(0 | 1)
+        ));
     }
 }
 
@@ -362,14 +376,30 @@ fn binary_lighting_output_priority_array_direct_write() {
     obj.write_property(
         PropertyIdentifier::PRIORITY_ARRAY,
         Some(3),
-        PropertyValue::Enumerated(4), // warn-relinquish
+        PropertyValue::Enumerated(1),
         None,
     )
     .unwrap();
     let pv = obj
         .read_property(PropertyIdentifier::PRESENT_VALUE, None)
         .unwrap();
-    assert_eq!(pv, PropertyValue::Enumerated(4));
+    assert_eq!(pv, PropertyValue::Enumerated(1));
+
+    for operation in 2..=5 {
+        assert!(obj
+            .write_property(
+                PropertyIdentifier::PRIORITY_ARRAY,
+                Some(3),
+                PropertyValue::Enumerated(operation),
+                None,
+            )
+            .is_err());
+        assert_eq!(
+            obj.read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(3))
+                .unwrap(),
+            PropertyValue::Enumerated(1)
+        );
+    }
 }
 
 #[test]

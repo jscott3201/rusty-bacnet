@@ -53,6 +53,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .as_ref()
             .map(|clock| Arc::clone(clock) as Arc<dyn bacnet_objects::clock::ClockReader>);
         db.set_clock_reader(reader);
+        let monotonic_origin = tokio::time::Instant::now();
+        let monotonic_clock: Arc<bacnet_objects::traits::MonotonicClock> = Arc::new(move || {
+            tokio::time::Instant::now().saturating_duration_since(monotonic_origin)
+        });
+        db.set_monotonic_clock_internal(Some(monotonic_clock));
 
         let mut network = NetworkLayer::new(transport);
         let apdu_rx = network.start().await?;
@@ -675,6 +680,19 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
         }));
 
+        let binary_lighting_operation_task = Some(
+            super::binary_lighting_lifecycle::spawn_binary_lighting_operation_task(
+                Arc::clone(&db),
+                Arc::clone(&network),
+                Arc::clone(&cov_table),
+                Arc::clone(&cov_in_flight),
+                Arc::clone(&notification_transactions),
+                Arc::clone(&comm_state),
+                config.clone(),
+                monotonic_origin,
+            ),
+        );
+
         Ok(Self {
             config,
             _clock: clock,
@@ -697,6 +715,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             trend_log_task,
             schedule_tick_task,
             intrinsic_reporting_task,
+            binary_lighting_operation_task,
             local_mac,
         })
     }

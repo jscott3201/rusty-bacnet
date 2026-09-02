@@ -24,6 +24,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             task.abort();
             let _ = task.await;
         }
+        if let Some(task) = self.binary_lighting_operation_task.take() {
+            task.abort();
+            let _ = task.await;
+        }
         if let Some(task) = self.cov_purge_task.take() {
             task.abort();
             let _ = task.await;

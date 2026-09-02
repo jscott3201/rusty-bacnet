@@ -908,6 +908,8 @@ pub struct BACnetServer<T: TransportPort> {
     schedule_tick_task: Option<JoinHandle<()>>,
     /// One-second `Time_Delay` confirmation task for intrinsic reporting.
     intrinsic_reporting_task: Option<JoinHandle<()>>,
+    /// Monotonic Binary Lighting Output WARN_OFF/WARN_RELINQUISH task.
+    binary_lighting_operation_task: Option<JoinHandle<()>>,
     local_mac: MacAddr,
 }
 
@@ -949,9 +951,12 @@ mod clock;
 pub(crate) use clock::clocked_test_database;
 pub use clock::ClockConfig;
 use clock::ServerClock;
+mod binary_lighting_lifecycle;
 mod confirmed_request_tracker;
 mod cov_clock;
+mod cov_encoding;
 mod cov_notifications;
+mod cov_snapshot;
 mod device_bindings;
 mod dispatch;
 mod event_enrollment_lifecycle;
@@ -981,6 +986,8 @@ mod shutdown;
 
 #[cfg(test)]
 mod audit_log_query_tests;
+#[cfg(test)]
+mod binary_lighting_task_tests;
 #[cfg(test)]
 mod cov_notifications_tests;
 #[cfg(test)]
