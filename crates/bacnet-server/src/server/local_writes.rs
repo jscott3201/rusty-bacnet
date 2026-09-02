@@ -1,5 +1,20 @@
 use super::*;
 
+/// What a local mutation is, and on whose behalf.
+///
+/// An Input gates `Present_Value` on `Out_Of_Service` in opposite directions
+/// for the two, so this decides which check applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LocalWrite {
+    /// A client on the network, writing any property.
+    Network {
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+    },
+    /// The process the object represents, supplying its own `Present_Value`.
+    Application { array_index: Option<u32> },
+}
+
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Arm or rearm a Life Safety object from trusted local application logic.
     ///
@@ -59,6 +74,55 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         value: PropertyValue,
         priority: Option<u8>,
     ) -> Result<(), Error> {
+        self.write_local_as(
+            oid,
+            LocalWrite::Network {
+                property,
+                array_index,
+            },
+            value,
+            priority,
+        )
+        .await
+    }
+
+    /// Supply `Present_Value` for the process a local object represents, firing
+    /// the notifications [`BACnetServer::write_local`] fires.
+    ///
+    /// Routes through [`BACnetObject::set_present_value_internal`], so an Input
+    /// accepts the write while in service and refuses it while a client owns
+    /// the value.
+    ///
+    /// [`BACnetObject::set_present_value_internal`]: bacnet_objects::traits::BACnetObject::set_present_value_internal
+    pub async fn set_present_value_local(
+        &self,
+        oid: &ObjectIdentifier,
+        array_index: Option<u32>,
+        value: PropertyValue,
+        priority: Option<u8>,
+    ) -> Result<(), Error> {
+        self.write_local_as(
+            oid,
+            LocalWrite::Application { array_index },
+            value,
+            priority,
+        )
+        .await
+    }
+
+    async fn write_local_as(
+        &self,
+        oid: &ObjectIdentifier,
+        write: LocalWrite,
+        value: PropertyValue,
+        priority: Option<u8>,
+    ) -> Result<(), Error> {
+        // Only a network write can carry OBJECT_NAME, so only it needs the name
+        // index kept in step.
+        let renaming = matches!(
+            write,
+            LocalWrite::Network { property, .. } if property == PropertyIdentifier::OBJECT_NAME
+        );
         let life_safety = crate::life_safety_cov::is_life_safety_object(*oid);
         let exact_changes = {
             let mut db = self.db.write().await;
@@ -69,14 +133,22 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
                 });
             }
-            if property == PropertyIdentifier::OBJECT_NAME {
+            if renaming {
                 if let PropertyValue::CharacterString(ref new_name) = value {
                     db.check_name_available(oid, new_name)?;
                 }
             }
             let object = db.get_mut(oid).expect("existence checked above");
-            object.write_property(property, array_index, value, priority)?;
-            if property == PropertyIdentifier::OBJECT_NAME {
+            match write {
+                LocalWrite::Network {
+                    property,
+                    array_index,
+                } => object.write_property(property, array_index, value, priority)?,
+                LocalWrite::Application { array_index } => {
+                    object.set_present_value_internal(array_index, value, priority)?
+                }
+            }
+            if renaming {
                 db.update_name_index(oid);
             }
             snapshots.changes(&db, std::slice::from_ref(oid))

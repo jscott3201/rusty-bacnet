@@ -688,6 +688,35 @@ pub trait BACnetObject: Send + Sync {
         })
     }
 
+    /// Apply a `Present_Value` supplied by the process the object represents.
+    ///
+    /// The **internal** counterpart to the network
+    /// [`write_property`](Self::write_property) route, with the same symmetric
+    /// ownership as
+    /// [`set_reliability_internal`](Self::set_reliability_internal): an Input's
+    /// `Present_Value` is writable by clients only while `Out_Of_Service` is
+    /// TRUE, and by the application only while it is FALSE.
+    ///
+    /// Only the access check differs between the two routes; data-type and
+    /// range validation are identical.
+    ///
+    /// The default routes to `write_property`, which is already correct for the
+    /// commandable types, whose `Present_Value` carries no `Out_Of_Service`
+    /// condition.
+    fn set_present_value_internal(
+        &mut self,
+        array_index: Option<u32>,
+        value: PropertyValue,
+        priority: Option<u8>,
+    ) -> Result<(), Error> {
+        self.write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            array_index,
+            value,
+            priority,
+        )
+    }
+
     /// Borrow this object's Audit Log query storage, if it has any.
     ///
     /// This read-only, type-erased channel lets the bundled server execute an

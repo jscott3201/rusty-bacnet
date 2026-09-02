@@ -71,6 +71,21 @@ impl AnalogInputObject {
         self.present_value = value;
     }
 
+    /// Validate and store a `Present_Value` write, without any access check.
+    ///
+    /// Shared by the network and internal routes, which differ only in the
+    /// `Out_Of_Service` condition each requires.
+    fn apply_present_value(&mut self, value: PropertyValue) -> Result<(), Error> {
+        let PropertyValue::Real(v) = value else {
+            return Err(common::invalid_data_type_error());
+        };
+        if !v.is_finite() {
+            return Err(common::value_out_of_range_error());
+        }
+        self.present_value = v;
+        Ok(())
+    }
+
     /// Set the description string.
     pub fn set_description(&mut self, desc: impl Into<String>) {
         self.description = desc.into();
@@ -175,14 +190,7 @@ impl BACnetObject for AnalogInputObject {
             if !self.out_of_service {
                 return Err(common::write_access_denied_error());
             }
-            if let PropertyValue::Real(v) = value {
-                if !v.is_finite() {
-                    return Err(common::value_out_of_range_error());
-                }
-                self.present_value = v;
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
+            return self.apply_present_value(value);
         }
         if let Some(result) = self.reliability_inhibit.write_inhibit(
             &mut self.reliability,
@@ -314,6 +322,18 @@ impl BACnetObject for AnalogInputObject {
         self.reliability = reliability;
         self.fault_out_of_range.clear_ownership();
         Ok(())
+    }
+
+    fn set_present_value_internal(
+        &mut self,
+        _array_index: Option<u32>,
+        value: PropertyValue,
+        _priority: Option<u8>,
+    ) -> Result<(), Error> {
+        if self.out_of_service {
+            return Err(common::write_access_denied_error());
+        }
+        self.apply_present_value(value)
     }
 
     fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {

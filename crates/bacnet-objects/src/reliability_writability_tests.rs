@@ -356,3 +356,104 @@ reliability_gate_test!(
     schedule_reliability_requires_out_of_service,
     ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(0.0)).unwrap()
 );
+
+/// `Present_Value` ownership on an Input mirrors Reliability's, inverted: the
+/// network writes only while `Out_Of_Service` is TRUE, the application only
+/// while it is FALSE. A gateway supplying a proxied reading must not override a
+/// value an engineer has put out of service to simulate.
+fn assert_present_value_ownership(object: &mut dyn BACnetObject, value: PropertyValue) {
+    object
+        .write_property(PropertyIdentifier::PRESENT_VALUE, None, value.clone(), None)
+        .expect_err("in-service Present_Value write must be refused over the network");
+
+    object
+        .set_present_value_internal(None, value.clone(), None)
+        .expect("the application must supply Present_Value while in service");
+
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .expect("Present_Value must be readable"),
+        value
+    );
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
+            .expect("Out_Of_Service must be readable"),
+        PropertyValue::Boolean(false),
+        "supplying a value must not put the object out of service"
+    );
+
+    object
+        .write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(true),
+            None,
+        )
+        .expect("Out_Of_Service must be writable");
+
+    let denied = object
+        .set_present_value_internal(None, value, None)
+        .expect_err("the application must not override an out-of-service value");
+    match denied {
+        Error::Protocol { class, code } => {
+            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+            assert_eq!(code, ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32);
+        }
+        other => panic!("expected PROPERTY / WRITE_ACCESS_DENIED, got {other:?}"),
+    }
+}
+
+#[test]
+fn analog_input_present_value_is_application_supplied() {
+    let mut object = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    assert_present_value_ownership(&mut object, PropertyValue::Real(21.5));
+}
+
+#[test]
+fn binary_input_present_value_is_application_supplied() {
+    let mut object = BinaryInputObject::new(1, "BI-1").unwrap();
+    assert_present_value_ownership(&mut object, PropertyValue::Enumerated(1));
+}
+
+#[test]
+fn multistate_input_present_value_is_application_supplied() {
+    let mut object = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();
+    assert_present_value_ownership(&mut object, PropertyValue::Unsigned(2));
+}
+
+/// The commandable types carry no `Out_Of_Service` condition on
+/// `Present_Value`, so the trait default is already correct for them.
+#[test]
+fn commandable_present_value_accepts_application_writes_by_default() {
+    let mut object = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+
+    object
+        .set_present_value_internal(None, PropertyValue::Real(21.5), None)
+        .expect("a commandable Present_Value takes an application write");
+
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .expect("Present_Value must be readable"),
+        PropertyValue::Real(21.5)
+    );
+}
+
+/// The application route skips the access check, not the validation.
+#[test]
+fn application_present_value_writes_are_still_validated() {
+    let mut analog = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    analog
+        .set_present_value_internal(None, PropertyValue::Real(f32::NAN), None)
+        .expect_err("non-finite Present_Value must be refused");
+    analog
+        .set_present_value_internal(None, PropertyValue::Enumerated(1), None)
+        .expect_err("a mistyped Present_Value must be refused");
+
+    let mut multistate = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();
+    multistate
+        .set_present_value_internal(None, PropertyValue::Unsigned(4), None)
+        .expect_err("a state above Number_Of_States must be refused");
+}
