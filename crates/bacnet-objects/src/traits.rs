@@ -3,6 +3,7 @@
 use std::any::Any;
 use std::borrow::Cow;
 use std::sync::Arc;
+use std::time::Duration;
 
 use bacnet_types::constructed::BACnetLogRecord;
 use bacnet_types::enums::{
@@ -141,6 +142,26 @@ pub trait BACnetObject: Send + Sync {
     /// lifecycle hook.
     #[doc(hidden)]
     fn bind_clock_internal(&mut self, _clock: Option<Arc<dyn ClockReader>>) {}
+
+    /// Advance object-owned operations that use monotonic elapsed time.
+    ///
+    /// The server calls this internal hook from a dedicated lifecycle task.
+    /// `true` means readable state changed and generic COV processing is
+    /// required. The default is a source-compatible no-op for downstream
+    /// object implementations.
+    #[doc(hidden)]
+    fn advance_time_internal(&mut self, _elapsed: Duration) -> bool {
+        false
+    }
+
+    /// Return the retained logical blink-request observation, when modeled.
+    ///
+    /// This is an internal conformance-test channel, not a BACnet property,
+    /// host callback, or physical-output claim.
+    #[doc(hidden)]
+    fn binary_lighting_blink_count_internal(&self) -> u64 {
+        0
+    }
 
     /// Whether `write_property` accepts `property` for this object.
     ///

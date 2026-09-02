@@ -38,6 +38,7 @@ mod alert_enrollment;
 mod array_index_gating;
 mod async_dcc;
 mod audit_log_query;
+mod binary_lighting_operations;
 mod binary_lighting_relinquish_default;
 mod cov_multiple_parameters;
 mod detection_enable_summary;

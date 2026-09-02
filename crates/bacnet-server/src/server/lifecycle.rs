@@ -675,6 +675,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
         }));
 
+        let binary_lighting_operation_task = Some(
+            super::binary_lighting_lifecycle::spawn_binary_lighting_operation_task(
+                Arc::clone(&db),
+                Arc::clone(&network),
+                Arc::clone(&cov_table),
+                Arc::clone(&cov_in_flight),
+                Arc::clone(&notification_transactions),
+                Arc::clone(&comm_state),
+                config.clone(),
+            ),
+        );
+
         Ok(Self {
             config,
             _clock: clock,
@@ -697,6 +709,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             trend_log_task,
             schedule_tick_task,
             intrinsic_reporting_task,
+            binary_lighting_operation_task,
             local_mac,
         })
     }

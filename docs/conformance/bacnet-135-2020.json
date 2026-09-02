@@ -755,7 +755,7 @@
    "id": "BACNET-12-RELINQUISH-DEFAULT-WRITABILITY",
    "standard_anchor": "Clause 12.3 Table 12-3 (Analog Output), Clause 12.7 Table 12-8 (Binary Output), Clause 12.8 Table 12-10 (Binary Value), Clause 12.19 Table 12-22 (Multi-state Output), Clause 12.20 Table 12-23 (Multi-state Value), Clause 12.26 Table 12-30 (Access Door), Clause 12.54 Table 12-64 (Lighting Output), Clause 12.55 Table 12-69 (Binary Lighting Output), Clause 12 value object tables; Clause 19 command prioritization",
    "priority": "P1",
-   "requirement_summary": "Relinquish_Default is network-writable and locally settable on the commandable object types, where the conformance tables carry it R or O and writability is permitted, not required - this row records permitted writability implemented, not a conformance upgrade. Each arm routes through a validated local set_relinquish_default and re-resolves Present_Value from the priority array afterward, so an all-NULL array falls back to the new default immediately while a live command still outranks it. Validation is property- and type-specific: finite Real (AO/AV), BinaryPV 0/1 (BO/BV), Unsigned 1..=Number_Of_States (MSO/MSV), finite Real in 0..=100 (Lighting Output), the BACnetDoorValue production 0..=3 - lock, unlock, pulse-unlock, extended-pulse-unlock (Access Door), and per-type extraction bounds plus a finite check for the Large Analog Value (Double). Binary Lighting Output Relinquish_Default is restricted to BACnetBinaryLightingPV OFF(0) or ON(1), deliberately separate from its current Present_Value and Priority_Array command domain of 0..=4. STOP(5) and its required warn/egress cancellation behavior remain deferred to PR-0806/#283; this row makes no STOP support claim. With #182 the datetime-paired value types (DateTime Value, Clause 12.38 Table 12-45; DateTime Pattern Value, Clause 12.46) join the network-writable set: the BACnetDateTime pair decodes from application-tagged Date+Time in the multi-element service decode.",
+   "requirement_summary": "Relinquish_Default is network-writable and locally settable on the commandable object types, where the conformance tables carry it R or O and writability is permitted, not required - this row records permitted writability implemented, not a conformance upgrade. Each arm routes through a validated local set_relinquish_default and re-resolves Present_Value from the priority array afterward, so an all-NULL array falls back to the new default immediately while a live command still outranks it. Validation is property- and type-specific: finite Real (AO/AV), BinaryPV 0/1 (BO/BV), Unsigned 1..=Number_Of_States (MSO/MSV), finite Real in 0..=100 (Lighting Output), the BACnetDoorValue production 0..=3 - lock, unlock, pulse-unlock, extended-pulse-unlock (Access Door), and per-type extraction bounds plus a finite check for the Large Analog Value (Double). Binary Lighting Output Relinquish_Default is restricted to BACnetBinaryLightingPV OFF(0) or ON(1), deliberately separate from Present_Value operation inputs; steady Priority_Array storage remains OFF/ON/NULL. WARN, WARN_OFF, WARN_RELINQUISH, and STOP behavior is evidenced in the dedicated Binary Lighting operations row. With #182 the datetime-paired value types (DateTime Value, Clause 12.38 Table 12-45; DateTime Pattern Value, Clause 12.46) join the network-writable set: the BACnetDateTime pair decodes from application-tagged Date+Time in the multi-element service decode.",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-objects/src/common.rs",
@@ -766,6 +766,7 @@
     "crates/bacnet-objects/src/multistate/output.rs",
     "crates/bacnet-objects/src/multistate/value.rs",
     "crates/bacnet-objects/src/lighting/mod.rs",
+    "crates/bacnet-objects/src/lighting/binary.rs",
     "crates/bacnet-objects/src/access_control/door.rs",
     "crates/bacnet-objects/src/value_types/mod.rs"
    ],
@@ -797,7 +798,51 @@
    ],
    "benchmarks": [],
    "public_claims": [],
-   "notes": "Split child of BACNET-12-OBJECT-MODEL (#270). is_commandable_property_writable now advertises RELINQUISH_DEFAULT for the six core commandable types (its doc no longer claims universal read-only); Lighting Output, Binary Lighting Output, Access Door, and the define_value_object_commandable! macro gained is_writable_property overrides mirroring their write arms - the macro override also corrects the PRIORITY_ARRAY writability advertising for all twelve commandable value types (previously reported read-only by the historical default while the arm accepted writes). Invalid writes refuse with VALUE_OUT_OF_RANGE for range/finiteness and INVALID_DATA_TYPE for a wrong BACnet datatype, without changing Relinquish_Default or Present_Value. For Binary Lighting Output, direct setter/object and WP tests cover the exact OFF/ON domain and atomic refusal while WPM proves rollback restores Relinquish_Default, effective Present_Value, and the active priority state. Its existing Present_Value/Priority_Array 0..=4 acceptance is intentionally unchanged and is not evidence of complete warn operations; STOP remains PR-0806/#283. Number_Of_States shrink interplay on MSO/MSV: Clause 12.19/12.22 leave stored-value adjustment a local matter and this implementation does not auto-adjust - pinned in a test comment, with CONFIGURATION_ERROR reporting for the condition tracked under #226. CURRENT_COMMAND_PRIORITY stays read-only (derived). The pre-existing unvalidated Present_Value arm on Access Door (any Enumerated accepted) is a separate defect noted for follow-up, as is the door property_list omitting PRIORITY_ARRAY/RELINQUISH_DEFAULT while both are readable. #182 addendum: the `readonly` rd_access selection now has no users (kept in the macro for a future type whose wire form needs something the service decode cannot deliver); the pinned-denial test datetime_value_relinquish_default_is_not_network_writable is replaced by datetime_value_relinquish_default_write_recaptures_present_value."
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#270). is_commandable_property_writable now advertises RELINQUISH_DEFAULT for the six core commandable types (its doc no longer claims universal read-only); Lighting Output, Binary Lighting Output, Access Door, and the define_value_object_commandable! macro gained is_writable_property overrides mirroring their write arms - the macro override also corrects the PRIORITY_ARRAY writability advertising for all twelve commandable value types (previously reported read-only by the historical default while the arm accepted writes). Invalid writes refuse with VALUE_OUT_OF_RANGE for range/finiteness and INVALID_DATA_TYPE for a wrong BACnet datatype, without changing Relinquish_Default or Present_Value. For Binary Lighting Output, direct setter/object and WP tests cover the exact OFF/ON domain and atomic refusal while WPM proves rollback restores Relinquish_Default, effective Present_Value, and the active priority state. Binary Lighting operation handling is evidenced separately in BACNET-12-BINARY-LIGHTING-OPERATIONS; this row remains bounded to Relinquish_Default. Number_Of_States shrink interplay on MSO/MSV: Clause 12.19/12.22 leave stored-value adjustment a local matter and this implementation does not auto-adjust - pinned in a test comment, with CONFIGURATION_ERROR reporting for the condition tracked under #226. CURRENT_COMMAND_PRIORITY stays read-only (derived). The pre-existing unvalidated Present_Value arm on Access Door (any Enumerated accepted) is a separate defect noted for follow-up, as is the door property_list omitting PRIORITY_ARRAY/RELINQUISH_DEFAULT while both are readable. #182 addendum: the `readonly` rd_access selection now has no users (kept in the macro for a future type whose wire form needs something the service decode cannot deliver); the pinned-denial test datetime_value_relinquish_default_is_not_network_writable is replaced by datetime_value_relinquish_default_write_recaptures_present_value."
+  },
+  {
+   "id": "BACNET-12-BINARY-LIGHTING-OPERATIONS",
+   "standard_anchor": "Clause 12.55 and Table 12-70, including 12.55.4.1 and 12.55.10.1; Clause 19.2 command prioritization; Clause 21 BACnetBinaryLightingPV",
+   "priority": "P1",
+    "requirement_summary": "Binary Lighting Output Present_Value accepts the named OFF, ON, WARN, WARN_OFF, WARN_RELINQUISH, and STOP inputs plus NULL at priorities 1..=16. Only OFF/ON/NULL are stored: WARN conditionally requests a logical blink without synthesizing ON; WARN_OFF and WARN_RELINQUISH either perform their terminal mutation immediately or retain the existing highest-priority ON command for a snapshotted Egress_Time; STOP cancels only the active same-priority egress. A validated same-or-higher non-STOP Present_Value or direct Priority_Array[index] command completes the old operation before applying the incoming command, lower-priority writes do not halt it, and exactly one monotonic in-memory operation can be active.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/lighting/binary.rs",
+    "crates/bacnet-objects/src/traits.rs",
+    "crates/bacnet-server/src/server/binary_lighting_lifecycle.rs",
+    "crates/bacnet-server/src/server/lifecycle.rs",
+    "crates/bacnet-server/src/server/shutdown.rs",
+    "crates/bacnet-server/src/handlers/write_property.rs",
+    "crates/bacnet-server/src/server/local_writes.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/lighting/binary_tests.rs::warn_requests_blink_only_for_existing_highest_on_slot",
+    "crates/bacnet-objects/src/lighting/binary_tests.rs::warn_off_arms_snapshotted_delay_and_expires_exactly_once",
+    "crates/bacnet-objects/src/lighting/binary_tests.rs::warn_relinquish_arms_only_when_the_next_effective_value_is_not_on",
+     "crates/bacnet-objects/src/lighting/binary_tests.rs::stop_is_same_priority_only_and_idempotent",
+     "crates/bacnet-objects/src/lighting/binary_tests.rs::same_and_higher_commands_complete_old_operation_before_incoming_write",
+     "crates/bacnet-objects/src/lighting/binary_direct_tests.rs::same_priority_direct_values_win_after_both_operation_kinds",
+     "crates/bacnet-objects/src/lighting/binary_direct_tests.rs::higher_priority_direct_write_completes_old_slot_then_installs_incoming",
+     "crates/bacnet-objects/src/lighting/binary_direct_tests.rs::lower_priority_direct_write_preserves_each_operation_and_remaining_time",
+     "crates/bacnet-server/src/handlers/tests/binary_lighting_operations.rs::eligible_warn_warn_off_warn_relinquish_and_stop_execute_over_wp",
+    "crates/bacnet-server/src/handlers/tests/binary_lighting_operations.rs::successful_wpm_can_arm_one_operation",
+    "crates/bacnet-server/src/server/binary_lighting_task_tests.rs::operation_task_has_no_early_completion_and_expires_at_exact_monotonic_time",
+    "crates/bacnet-server/src/server/binary_lighting_task_tests.rs::expiry_fires_one_generic_cov_after_database_lock_release",
+    "crates/bacnet-server/src/server/binary_lighting_task_tests.rs::local_stop_cancels_timer_and_prevents_later_expiry"
+   ],
+   "negative_tests": [
+     "crates/bacnet-objects/src/lighting/binary_tests.rs::invalid_commands_are_side_effect_free_before_halt",
+     "crates/bacnet-objects/src/lighting/binary_tests.rs::direct_priority_array_accepts_only_off_on_and_null_with_exact_errors",
+     "crates/bacnet-objects/src/lighting/binary_direct_tests.rs::invalid_direct_writes_preserve_each_operation_and_remaining_time",
+     "crates/bacnet-objects/src/lighting/binary_tests.rs::rollback_restores_operation_remaining_time_and_blink_observation_exactly",
+     "crates/bacnet-server/src/handlers/tests/binary_lighting_operations.rs::failed_wpm_leaks_no_new_timer_or_blink_effect",
+     "crates/bacnet-server/src/handlers/tests/binary_lighting_operations.rs::direct_priority_array_wpm_halts_and_failed_wpm_restores_original_operation",
+    "crates/bacnet-server/src/handlers/tests/binary_lighting_operations.rs::wrong_and_out_of_range_priorities_are_atomic_before_command_mutation",
+    "crates/bacnet-server/src/server/binary_lighting_task_tests.rs::stop_aborts_and_awaits_operation_task_with_no_work_after_stop"
+   ],
+   "benchmarks": [],
+   "public_claims": [],
+    "notes": "Egress state and its monotonic Duration are object-owned, process-local, and intentionally not reconstructed after restart. Egress_Time is captured when an operation arms; later Egress_Time or Blink_Warn_Enable writes affect future commands only, and Out_Of_Service does not suspend progress. The server runs one unconditional one-second Delay interval using actual tokio monotonic elapsed, releases the database write lock before generic COV work, and emits one expiry COV only when readable state changes. Logical blink requests are retained only through a hidden internal observation for deterministic tests and WPM rollback; there is no Rust/Python host callback, BACnet property, physical output, persistence, or hardware support claim. Direct Priority_Array[index] compatibility remains writable for OFF/ON/NULL only and follows the same validated same/higher halt ordering; the broader pre-existing read-only conformance mismatch is outside this row."
   },
   {
    "id": "BACNET-12-REFERENCE-PROPERTY-WRITABILITY",

@@ -233,8 +233,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Binary Lighting Output `Relinquish_Default` now accepts only OFF or ON and
   atomically refuses all other values with `PROPERTY / VALUE_OUT_OF_RANGE`
-  (`Refs #283`). Present_Value and Priority_Array retain their existing command
-  domain; STOP behavior remains deferred to PR-0806 and is not claimed here.
+  (#283). `Present_Value` now interprets WARN, WARN_OFF,
+  WARN_RELINQUISH, and STOP as operations without storing those values in
+  `Present_Value` or `Priority_Array`. Eligible egress operations retain the
+  existing ON command for the snapshotted `Egress_Time`, advance from monotonic
+  elapsed time, and can be cancelled by same-priority STOP; direct
+  `Priority_Array[index]` writes now accept only OFF, ON, or NULL. Logical blink
+  requests are internal/test-only observations, not physical-output or host
+  callback support, and active egress is not persisted across process restart.
 
 - Direct in-service network writes to Pulse Converter `Present_Value` are now
   denied under the repository's Pulse Converter safety policy. Out-of-service
