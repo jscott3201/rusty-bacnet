@@ -68,8 +68,40 @@ fn parse_date(value: &str) -> Result<Date, String> {
     })
 }
 
-/// Parse an exact BACnetTimeStamp CLI value without normalization.
+fn normalize_outer_double_quotes(spec: &str) -> Result<&str, String> {
+    let starts_with_quote = spec.starts_with('"');
+    let ends_with_quote = spec.ends_with('"');
+    let spec = match (starts_with_quote, ends_with_quote, spec.len()) {
+        (true, true, length) if length >= 2 => &spec[1..length - 1],
+        (false, false, _) => spec,
+        _ => {
+            return Err(format!(
+                "invalid BACnetTimeStamp quoting in '{spec}'; use no quotes or exactly one matching outer double-quote pair"
+            ));
+        }
+    };
+
+    if spec.contains('"') {
+        return Err(format!(
+            "invalid BACnetTimeStamp quoting in '{spec}'; embedded or multiple double quotes are not accepted"
+        ));
+    }
+    if spec.contains('\'') {
+        return Err(format!(
+            "invalid BACnetTimeStamp quoting in '{spec}'; single quotes are not accepted"
+        ));
+    }
+    if spec.trim() != spec {
+        return Err(format!(
+            "invalid BACnetTimeStamp whitespace in '{spec}'; leading and trailing whitespace are not accepted"
+        ));
+    }
+    Ok(spec)
+}
+
+/// Parse an exact BACnetTimeStamp CLI value without component normalization.
 pub(crate) fn parse_bacnet_timestamp(spec: &str) -> Result<BACnetTimeStamp, String> {
+    let spec = normalize_outer_double_quotes(spec)?;
     let (kind, value) = spec
         .split_once(':')
         .ok_or_else(|| format!("invalid BACnetTimeStamp '{spec}'; expected {TIMESTAMP_GRAMMAR}"))?;
@@ -154,6 +186,62 @@ mod tests {
                 },
             }
         );
+    }
+
+    #[test]
+    fn accepts_exactly_one_outer_double_quote_pair_for_time_and_datetime() {
+        assert_eq!(
+            parse_bacnet_timestamp("\"time:1,2,3,4\"").unwrap(),
+            BACnetTimeStamp::Time(Time {
+                hour: 1,
+                minute: 2,
+                second: 3,
+                hundredths: 4,
+            })
+        );
+        assert_eq!(
+            parse_bacnet_timestamp("\"datetime:2026,9,2,3;5,6,7,8\"").unwrap(),
+            BACnetTimeStamp::DateTime {
+                date: Date {
+                    year: 126,
+                    month: 9,
+                    day: 2,
+                    day_of_week: 3,
+                },
+                time: Time {
+                    hour: 5,
+                    minute: 6,
+                    second: 7,
+                    hundredths: 8,
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_unmatched_embedded_multiple_single_quotes_and_outer_whitespace() {
+        assert_eq!(
+            parse_bacnet_timestamp("\"time:1,2,3,4").unwrap_err(),
+            "invalid BACnetTimeStamp quoting in '\"time:1,2,3,4'; use no quotes or exactly one matching outer double-quote pair"
+        );
+        assert_eq!(
+            parse_bacnet_timestamp("time:1,2,3,4\"").unwrap_err(),
+            "invalid BACnetTimeStamp quoting in 'time:1,2,3,4\"'; use no quotes or exactly one matching outer double-quote pair"
+        );
+        for invalid in [
+            "\"time:1,\"2\",3,4\"",
+            "\"\"time:1,2,3,4\"\"",
+            "'time:1,2,3,4'",
+            " time:1,2,3,4",
+            "time:1,2,3,4 ",
+            "\" time:1,2,3,4\"",
+            "\"time:1,2,3,4 \"",
+        ] {
+            assert!(
+                parse_bacnet_timestamp(invalid).is_err(),
+                "accepted invalid timestamp quoting {invalid}"
+            );
+        }
     }
 
     #[test]
