@@ -1,7 +1,9 @@
 //! GetEnrollmentSummary service per ASHRAE 135-2020 Clause 13.11.
 
+use bacnet_encoding::constructed::{decode_recipient, encode_recipient};
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
+use bacnet_types::constructed::BACnetRecipient;
 use bacnet_types::enums::{EnrollmentSummaryEventStateFilter, EventState, EventType};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
@@ -26,12 +28,10 @@ pub struct PriorityFilter {
 
 /// BACnetRecipientProcess — identifies a notification recipient.
 ///
-/// Simplified: only the `device` choice of BACnetRecipient is supported,
-/// plus the process identifier.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecipientProcess {
-    /// Device object identifier (from BACnetRecipient CHOICE [0] device).
-    pub device: Option<ObjectIdentifier>,
+    /// Device or address BACnetRecipient CHOICE.
+    pub recipient: BACnetRecipient,
     /// Process identifier.
     pub process_identifier: u32,
 }
@@ -58,8 +58,7 @@ impl GetEnrollmentSummaryRequest {
     ///
     /// # Panics
     ///
-    /// Panics if an enrollment filter has no device or an event-state filter
-    /// contains a value outside the service-defined enumeration.
+    /// Panics if a filter contains a value outside its service-defined range.
     pub fn encode(&self, buf: &mut BytesMut) {
         self.try_encode(buf)
             .expect("invalid GetEnrollmentSummary request");
@@ -67,13 +66,9 @@ impl GetEnrollmentSummaryRequest {
 
     /// Encode this request after validating representable filter invariants.
     pub fn try_encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
-        if self
-            .enrollment_filter
-            .as_ref()
-            .is_some_and(|filter| filter.device.is_none())
-        {
+        if self.acknowledgment_filter > 2 {
             return Err(Error::Encoding(
-                "EnrollmentSummary enrollmentFilter requires a device".into(),
+                "EnrollmentSummary acknowledgmentFilter is an undefined enumeration".into(),
             ));
         }
         if self.event_state_filter.is_some_and(|filter| {
@@ -83,16 +78,22 @@ impl GetEnrollmentSummaryRequest {
                 "EnrollmentSummary eventStateFilter is an undefined enumeration".into(),
             ));
         }
+        if self
+            .priority_filter
+            .is_some_and(|filter| filter.min_priority > filter.max_priority)
+        {
+            return Err(Error::Encoding(
+                "EnrollmentSummary priorityFilter minimum exceeds maximum".into(),
+            ));
+        }
         // [0] acknowledgmentFilter
         primitives::encode_ctx_enumerated(buf, 0, self.acknowledgment_filter);
         // [1] enrollmentFilter (optional, constructed)
         if let Some(ref ef) = self.enrollment_filter {
             tags::encode_opening_tag(buf, 1);
-            if let Some(ref device) = ef.device {
-                tags::encode_opening_tag(buf, 0);
-                primitives::encode_ctx_object_id(buf, 0, device);
-                tags::encode_closing_tag(buf, 0);
-            }
+            tags::encode_opening_tag(buf, 0);
+            encode_recipient(buf, &ef.recipient);
+            tags::encode_closing_tag(buf, 0);
             primitives::encode_ctx_unsigned(buf, 1, ef.process_identifier as u64);
             tags::encode_closing_tag(buf, 1);
         }
@@ -136,10 +137,7 @@ impl GetEnrollmentSummaryRequest {
                 "EnrollmentSummary truncated at acknowledgmentFilter",
             ));
         }
-        let acknowledgment_filter = primitives::decode_unsigned(&data[pos..end])?;
-        let acknowledgment_filter = u32::try_from(acknowledgment_filter).map_err(|_| {
-            Error::decoding(pos, "EnrollmentSummary acknowledgmentFilter exceeds u32")
-        })?;
+        let acknowledgment_filter = decode_closed_enumeration(&data[pos..end], 2)?;
         offset = end;
 
         // [1] enrollmentFilter (optional, constructed)
@@ -157,27 +155,13 @@ impl GetEnrollmentSummaryRequest {
                 }
                 let (recipient_content, recipient_end) =
                     tags::extract_context_value(content, recipient_pos, 0)?;
-                let (device_tag, device_pos) = tags::decode_tag(recipient_content, 0)?;
-                if !device_tag.is_context(0) {
+                let (recipient, recipient_choice_end) = decode_recipient(recipient_content, 0)?;
+                if recipient_choice_end != recipient_content.len() {
                     return Err(Error::decoding(
-                        tag_end + recipient_pos,
-                        "EnrollmentSummary expected recipient device tag 0",
-                    ));
-                }
-                let device_end = device_pos + device_tag.length as usize;
-                if device_end > recipient_content.len() {
-                    return Err(Error::decoding(
-                        tag_end + device_pos,
-                        "EnrollmentSummary truncated at recipient device",
-                    ));
-                }
-                if device_end != recipient_content.len() {
-                    return Err(Error::decoding(
-                        tag_end + device_end,
+                        tag_end + recipient_pos + recipient_choice_end,
                         "EnrollmentSummary recipient has trailing data",
                     ));
                 }
-                let device = ObjectIdentifier::decode(&recipient_content[device_pos..device_end])?;
 
                 let (process_tag, process_pos) = tags::decode_tag(content, recipient_end)?;
                 if !process_tag.is_context(1) {
@@ -207,7 +191,7 @@ impl GetEnrollmentSummaryRequest {
                     ));
                 }
                 enrollment_filter = Some(RecipientProcess {
-                    device: Some(device),
+                    recipient,
                     process_identifier: process_id,
                 });
                 offset = new_offset;
@@ -309,6 +293,11 @@ impl GetEnrollmentSummaryRequest {
                         "EnrollmentSummary priorityFilter has trailing data",
                     ));
                 }
+                if min_priority > max_priority {
+                    return Err(Error::Reject {
+                        reason: bacnet_types::enums::RejectReason::INVALID_DATA_ENCODING.to_raw(),
+                    });
+                }
                 priority_filter = Some(PriorityFilter {
                     min_priority,
                     max_priority,
@@ -348,6 +337,28 @@ impl GetEnrollmentSummaryRequest {
             notification_class_filter,
         })
     }
+}
+
+fn decode_closed_enumeration(data: &[u8], maximum: u32) -> Result<u32, Error> {
+    let value = match data {
+        [value] => u32::from(*value),
+        [] | [0, ..] => {
+            return Err(Error::Reject {
+                reason: bacnet_types::enums::RejectReason::INVALID_DATA_ENCODING.to_raw(),
+            })
+        }
+        _ => {
+            return Err(Error::Reject {
+                reason: bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION.to_raw(),
+            })
+        }
+    };
+    if value > maximum {
+        return Err(Error::Reject {
+            reason: bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION.to_raw(),
+        });
+    }
+    Ok(value)
 }
 
 // ---------------------------------------------------------------------------

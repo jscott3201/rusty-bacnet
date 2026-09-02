@@ -109,6 +109,15 @@ impl BACnetObject for DisabledAlarmingObject {
         }
         std::borrow::Cow::Owned(properties)
     }
+
+    fn enrollment_summary_capability_internal(
+        &self,
+    ) -> Option<bacnet_objects::event::EnrollmentSummaryCapability> {
+        Some(bacnet_objects::event::EnrollmentSummaryCapability {
+            event_type: bacnet_types::enums::EventType::OUT_OF_RANGE,
+            last_transition: Some(bacnet_objects::event::EventTransition::ToOffnormal),
+        })
+    }
 }
 
 fn db_with_enrollment(detection_enabled: bool) -> ObjectDatabase {
@@ -117,6 +126,10 @@ fn db_with_enrollment(detection_enabled: bool) -> ObjectDatabase {
         oid: ObjectIdentifier::new(bacnet_types::enums::ObjectType::EVENT_ENROLLMENT, 1).unwrap(),
         detection_enable: Some(detection_enabled),
     }))
+    .unwrap();
+    db.add(Box::new(
+        bacnet_objects::notification_class::NotificationClass::new(0, "NC-0").unwrap(),
+    ))
     .unwrap();
     db
 }

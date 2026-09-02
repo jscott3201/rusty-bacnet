@@ -2,6 +2,7 @@ mod alert;
 mod atomic_commit;
 mod detection_enable;
 mod enrollment;
+mod enrollment_summary;
 mod fault_parameters;
 mod object_name;
 mod reliability_commit;

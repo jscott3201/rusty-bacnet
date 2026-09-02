@@ -16,6 +16,8 @@ pub(crate) struct EventHistory {
     pub(crate) original_to_states: [Option<EventState>; 3],
     /// Transition slots ordered `[TO_OFFNORMAL, TO_FAULT, TO_NORMAL]`.
     pub(crate) message_texts: [String; 3],
+    /// Coordinate of the most recent successful commit, independent of timestamp choice.
+    last_transition: Option<EventTransition>,
 }
 
 /// Borrowed object-owned state for one atomic event-transition commit.
@@ -77,6 +79,7 @@ impl<'a> EventTransitionState<'a> {
         if let Some(message_text) = commit.message_text {
             self.history.message_texts[index] = message_text;
         }
+        self.history.last_transition = Some(commit.coordinate);
 
         Ok(())
     }
@@ -92,11 +95,20 @@ macro_rules! impl_builtin_intrinsic_reporting {
     (
         $detector_field:ident,
         $history_field:ident,
-        $present_value_field:ident,
-        $feedback_value_field:ident,
+        [$($input_field:ident),+],
         $reliability_field:ident,
-        $event_detection_enable_field:ident
+        $event_detection_enable_field:ident,
+        $algorithm:expr
     ) => {
+        fn enrollment_summary_capability_internal(
+            &self,
+        ) -> Option<$crate::event::EnrollmentSummaryCapability> {
+            Some($crate::event::EnrollmentSummaryCapability {
+                event_type: $algorithm,
+                last_transition: self.$history_field.last_transition(),
+            })
+        }
+
         fn intrinsic_reporting_requires_atomic_commit(&self) -> bool {
             true
         }
@@ -106,8 +118,7 @@ macro_rules! impl_builtin_intrinsic_reporting {
                 return None;
             }
             self.$detector_field.propose(
-                self.$present_value_field,
-                self.$feedback_value_field,
+                $(self.$input_field,)+
                 self.$reliability_field,
             )
         }
@@ -117,53 +128,9 @@ macro_rules! impl_builtin_intrinsic_reporting {
                 return None;
             }
             self.$detector_field.tick_proposal(
-                self.$present_value_field,
-                self.$feedback_value_field,
+                $(self.$input_field,)+
                 self.$reliability_field,
             )
-        }
-
-        fn commit_event_transition_internal(
-            &mut self,
-            commit: $crate::event::EventTransitionCommit,
-        ) -> Result<(), $crate::event::EventTransitionCommitError> {
-            let change = commit.change.clone();
-            $crate::event::history::EventTransitionState::new(
-                &mut self.$detector_field.event_state,
-                &mut self.$detector_field.acked_transitions,
-                &mut self.$history_field,
-            )
-            .commit(commit)?;
-            self.$detector_field
-                .confirm_transition(&change, self.$reliability_field);
-            Ok(())
-        }
-    };
-    (
-        $detector_field:ident,
-        $history_field:ident,
-        $present_value_field:ident,
-        $reliability_field:ident,
-        $event_detection_enable_field:ident
-    ) => {
-        fn intrinsic_reporting_requires_atomic_commit(&self) -> bool {
-            true
-        }
-
-        fn evaluate_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
-            if !self.$event_detection_enable_field {
-                return None;
-            }
-            self.$detector_field
-                .propose(self.$present_value_field, self.$reliability_field)
-        }
-
-        fn tick_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
-            if !self.$event_detection_enable_field {
-                return None;
-            }
-            self.$detector_field
-                .tick_proposal(self.$present_value_field, self.$reliability_field)
         }
 
         fn commit_event_transition_internal(
@@ -221,11 +188,16 @@ impl Default for EventHistory {
             ],
             original_to_states: [None, None, None],
             message_texts: [String::new(), String::new(), String::new()],
+            last_transition: None,
         }
     }
 }
 
 impl EventHistory {
+    pub(crate) fn last_transition(&self) -> Option<EventTransition> {
+        self.last_transition
+    }
+
     pub(crate) fn reset(&mut self) {
         *self = Self::default();
     }
@@ -373,6 +345,7 @@ mod tests {
         history.time_stamps[1] = BACnetTimeStamp::SequenceNumber(42);
         history.original_to_states[1] = Some(EventState::FAULT);
         history.message_texts[2] = "transition".into();
+        history.last_transition = Some(EventTransition::ToFault);
 
         history.reset();
 
@@ -395,6 +368,7 @@ mod tests {
                 "old-fault".into(),
                 "old-normal".into(),
             ],
+            last_transition: None,
         };
 
         commit(
@@ -415,6 +389,10 @@ mod tests {
         assert_eq!(acked, 0b100, "only TO_OFFNORMAL is cleared");
         assert_eq!(history.time_stamps[0], time(1));
         assert_eq!(history.original_to_states[0], Some(EventState::HIGH_LIMIT));
+        assert_eq!(
+            history.last_transition(),
+            Some(EventTransition::ToOffnormal)
+        );
         assert_eq!(history.time_stamps[1], BACnetTimeStamp::SequenceNumber(20));
         assert_eq!(history.time_stamps[2], BACnetTimeStamp::SequenceNumber(30));
         assert_eq!(
@@ -441,6 +419,7 @@ mod tests {
         assert_eq!(history.time_stamps[0], time(1));
         assert_eq!(history.time_stamps[1], BACnetTimeStamp::SequenceNumber(0));
         assert_eq!(history.original_to_states[1], Some(EventState::FAULT));
+        assert_eq!(history.last_transition(), Some(EventTransition::ToFault));
         assert_eq!(history.time_stamps[2], BACnetTimeStamp::SequenceNumber(30));
         assert_eq!(history.message_texts, ["high-limit", "fault", "old-normal"]);
 
@@ -473,6 +452,11 @@ mod tests {
             ]
         );
         assert_eq!(history.message_texts, ["high-limit", "fault", "normal"]);
+        assert_eq!(
+            history.last_transition(),
+            Some(EventTransition::ToNormal),
+            "commit order wins across Time, SequenceNumber, and DateTime choices"
+        );
     }
 
     #[test]
@@ -487,6 +471,7 @@ mod tests {
             ],
             original_to_states: [None, None, None],
             message_texts: ["offnormal".into(), "fault".into(), "normal".into()],
+            last_transition: Some(EventTransition::ToFault),
         };
         let messages_before = history.message_texts.clone();
 
@@ -519,6 +504,11 @@ mod tests {
             ]
         );
         assert_eq!(history.message_texts, messages_before);
+        assert_eq!(
+            history.last_transition(),
+            Some(EventTransition::ToNormal),
+            "same-state re-indication updates the latest coordinate"
+        );
     }
 
     #[test]
@@ -533,6 +523,7 @@ mod tests {
                 Some(EventState::NORMAL),
             ],
             message_texts: ["offnormal".into(), "fault".into(), "normal".into()],
+            last_transition: Some(EventTransition::ToOffnormal),
         };
         let expected_state = state;
         let expected_acked = acked;
@@ -659,5 +650,6 @@ mod tests {
             object.commit_event_transition_internal(commit),
             Err(EventTransitionCommitError::Unsupported)
         );
+        assert_eq!(object.enrollment_summary_capability_internal(), None);
     }
 }

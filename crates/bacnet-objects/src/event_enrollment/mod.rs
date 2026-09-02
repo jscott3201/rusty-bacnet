@@ -10,7 +10,9 @@ use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
 use crate::event::history::EventHistory;
-use crate::event::{EventTransitionCommit, EventTransitionCommitError};
+use crate::event::{
+    EnrollmentSummaryCapability, EventTransitionCommit, EventTransitionCommitError,
+};
 use crate::property_metadata::PropertyMetadata;
 use crate::traits::{BACnetObject, WritePropertyRollback};
 
@@ -113,25 +115,6 @@ impl EventEnrollmentObject {
     /// meaning no event of that type has ever occurred (ASHRAE 135-2020
     /// Clause 12.12).
     const RESET_ACKED_TRANSITIONS: u8 = 0b111;
-
-    fn has_configured_event_generation(&self) -> bool {
-        let event_algorithm_supported = matches!(
-            &self.event_parameters,
-            BACnetEventParameter::OutOfRange { .. }
-                | BACnetEventParameter::FloatingLimit { .. }
-                | BACnetEventParameter::ChangeOfState { .. }
-                | BACnetEventParameter::ChangeOfBitstring { .. }
-                | BACnetEventParameter::ChangeOfValue { .. }
-                | BACnetEventParameter::Opaque { tag: 0xFF, .. }
-        );
-        let fault_algorithm_supported = matches!(
-            self.effective_fault_parameters(),
-            FaultParameters::FaultStatusFlags { .. } | FaultParameters::FaultOutOfRange { .. }
-        );
-        self.event_detection_enable
-            && self.object_property_reference.is_some()
-            && (event_algorithm_supported || fault_algorithm_supported)
-    }
 
     /// Apply the reset ASHRAE 135-2020 Clause 13.2.2.1 requires while
     /// `Event_Detection_Enable` is FALSE: "no transitions shall occur,
@@ -249,6 +232,23 @@ impl BACnetObject for EventEnrollmentObject {
 
     fn object_name(&self) -> &str {
         &self.name
+    }
+
+    fn enrollment_summary_capability_internal(&self) -> Option<EnrollmentSummaryCapability> {
+        let supported_parameters = match &self.event_parameters {
+            BACnetEventParameter::Extended { .. } => false,
+            BACnetEventParameter::Opaque { tag, .. } => *tag == 0xFF,
+            _ => true,
+        } || matches!(
+            self.effective_fault_parameters(),
+            FaultParameters::FaultStatusFlags { .. } | FaultParameters::FaultOutOfRange { .. }
+        );
+        (self.object_property_reference.is_some() && supported_parameters).then_some(
+            EnrollmentSummaryCapability {
+                event_type: bacnet_types::enums::EventType::from_raw(self.event_type),
+                last_transition: self.event_history.last_transition(),
+            },
+        )
     }
 
     fn read_property(
@@ -536,7 +536,7 @@ impl BACnetObject for EventEnrollmentObject {
         event_state: EventState,
         timestamp: &BACnetTimeStamp,
     ) -> Result<(), Error> {
-        if !self.has_configured_event_generation() {
+        if !self.event_detection_enable || self.enrollment_summary_capability_internal().is_none() {
             return Err(Error::Protocol {
                 class: ErrorClass::OBJECT.to_raw() as u32,
                 code: ErrorCode::NO_ALARM_CONFIGURED.to_raw() as u32,

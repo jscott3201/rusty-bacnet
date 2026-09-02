@@ -50,3 +50,6 @@ mod reliability_writability_tests;
 
 #[cfg(test)]
 mod reliability_inhibit_tests;
+
+#[cfg(test)]
+mod enrollment_summary_capability_tests;

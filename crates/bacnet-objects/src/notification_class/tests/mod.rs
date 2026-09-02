@@ -1,3 +1,4 @@
+mod enrollment_summary_projection;
 mod lookup;
 mod priority;
 mod properties;

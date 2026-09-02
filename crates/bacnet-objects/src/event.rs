@@ -82,6 +82,21 @@ pub enum EventTransition {
     ToNormal,
 }
 
+/// Object-owned GetEnrollmentSummary event capability.
+///
+/// This internal projection identifies the object's one configured or implied
+/// event algorithm and the coordinate of its latest successful commit. It does
+/// not expose detector state or treat the CHANGE_OF_RELIABILITY notification
+/// override as a second event algorithm.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnrollmentSummaryCapability {
+    /// Configured or object-type-implied event algorithm.
+    pub event_type: EventType,
+    /// Latest successfully committed transition coordinate.
+    pub last_transition: Option<EventTransition>,
+}
+
 impl EventTransition {
     /// Classify a destination event state under ASHRAE 135-2020 Clause 13.2.
     ///
