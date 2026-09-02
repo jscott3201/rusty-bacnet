@@ -4,6 +4,37 @@ use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::wpm::WritePropertyMultipleError;
 
+fn malformed_indexed_value_after_description(oid: ObjectIdentifier, description: &str) -> BytesMut {
+    let mut encoded_description = BytesMut::new();
+    bacnet_encoding::primitives::encode_property_value(
+        &mut encoded_description,
+        &PropertyValue::CharacterString(description.into()),
+    )
+    .unwrap();
+    let request = WritePropertyMultipleRequest {
+        list_of_write_access_specs: vec![WriteAccessSpecification {
+            object_identifier: oid,
+            list_of_properties: vec![BACnetPropertyValue {
+                property_identifier: PropertyIdentifier::DESCRIPTION,
+                property_array_index: None,
+                value: encoded_description.to_vec(),
+                priority: None,
+            }],
+        }],
+    };
+    let mut encoded = BytesMut::new();
+    request.encode(&mut encoded);
+    assert_eq!(encoded.last(), Some(&0x1f));
+    encoded.truncate(encoded.len() - 1);
+    bacnet_encoding::primitives::encode_ctx_unsigned(
+        &mut encoded,
+        0,
+        PropertyIdentifier::OBJECT_TYPE.to_raw() as u64,
+    );
+    bacnet_encoding::primitives::encode_ctx_unsigned(&mut encoded, 1, 4);
+    encoded
+}
+
 #[tokio::test]
 async fn event_enrollment_prefix_commit_returns_exact_error_through_server_dispatch() {
     let mut db = clocked_test_database();
@@ -89,6 +120,58 @@ async fn event_enrollment_prefix_commit_returns_exact_error_through_server_dispa
             .read_property(PropertyIdentifier::DESCRIPTION, None)
             .unwrap(),
         PropertyValue::CharacterString("committed through dispatch".into())
+    );
+}
+
+#[tokio::test]
+async fn malformed_value_after_prefix_returns_exact_formal_error_through_dispatch() {
+    let mut db = clocked_test_database();
+    let object = BinaryValueObject::new(8, "malformed-prefix").unwrap();
+    let oid = object.object_identifier();
+    db.add(Box::new(object)).unwrap();
+    let fixture = DispatchFixture::new(db, std::iter::empty()).await;
+    let description = "prefix survives malformed value";
+    let encoded = malformed_indexed_value_after_description(oid, description);
+
+    fixture
+        .dispatch(
+            0x46,
+            ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
+            encoded.freeze(),
+        )
+        .await;
+
+    let apdus = fixture.take_apdus();
+    assert_eq!(apdus.len(), 1);
+    let Apdu::Error(error_pdu) = &apdus[0] else {
+        panic!("expected service-16 Error, got {:?}", apdus[0]);
+    };
+    assert_eq!(
+        error_pdu.service_choice,
+        ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE
+    );
+    assert_eq!(error_pdu.error_class, ErrorClass::SERVICES);
+    assert_eq!(error_pdu.error_code, ErrorCode::INVALID_TAG);
+    let formal = WritePropertyMultipleError::from_error_pdu(error_pdu).unwrap();
+    assert_eq!(formal.first_failed_write_attempt.object_identifier, oid);
+    assert_eq!(
+        formal.first_failed_write_attempt.property_identifier,
+        PropertyIdentifier::OBJECT_TYPE.to_raw()
+    );
+    assert_eq!(
+        formal.first_failed_write_attempt.property_array_index,
+        Some(4)
+    );
+    assert_eq!(
+        fixture
+            .db
+            .read()
+            .await
+            .get(&oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::DESCRIPTION, None)
+            .unwrap(),
+        PropertyValue::CharacterString(description.into())
     );
 }
 

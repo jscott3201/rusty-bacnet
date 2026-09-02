@@ -293,7 +293,7 @@ impl BACnetPropertyValue {
                 tag_failure_reason(data, offset),
                 Some(property_identifier),
                 array_index,
-                false,
+                true,
             )
         })?;
         if !tag.is_opening_tag(2) {
@@ -304,7 +304,7 @@ impl BACnetPropertyValue {
                 wrong_tag_reason(&tag),
                 Some(property_identifier),
                 array_index,
-                false,
+                true,
             ));
         }
         let (value_bytes, offset) =

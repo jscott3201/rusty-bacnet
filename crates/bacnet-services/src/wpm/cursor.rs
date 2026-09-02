@@ -552,6 +552,34 @@ mod tests {
     }
 
     #[test]
+    fn value_opening_failures_keep_the_completed_property_reference() {
+        let object = oid(ObjectType::BINARY_VALUE, 1);
+        let property = PropertyIdentifier::OBJECT_TYPE;
+
+        for (array_index, terminate_with_wrong_tag) in [(Some(4), false), (None, true)] {
+            let mut data = BytesMut::new();
+            primitives::encode_ctx_object_id(&mut data, 0, &object);
+            tags::encode_opening_tag(&mut data, 1);
+            primitives::encode_ctx_unsigned(&mut data, 0, property.to_raw() as u64);
+            if let Some(index) = array_index {
+                primitives::encode_ctx_unsigned(&mut data, 1, index as u64);
+            }
+            if terminate_with_wrong_tag {
+                tags::encode_closing_tag(&mut data, 1);
+            }
+
+            let error = first_error(&data);
+            assert_eq!(error.stage, WritePropertyMultipleDecodeStage::Value);
+            let reference = error
+                .first_failed_write_attempt
+                .expect("the property coordinate is complete before value framing");
+            assert_eq!(reference.object_identifier, object);
+            assert_eq!(reference.property_identifier, property.to_raw());
+            assert_eq!(reference.property_array_index, array_index);
+        }
+    }
+
+    #[test]
     fn total_attempt_bound_prevents_unbounded_collection() {
         let object = oid(ObjectType::BINARY_VALUE, 1);
         let data = encode(vec![WriteAccessSpecification {
