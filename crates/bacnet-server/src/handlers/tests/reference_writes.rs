@@ -446,7 +446,7 @@ fn averaging_object_property_reference_over_the_wire() {
 }
 
 #[test]
-fn wpm_reference_write_commits_in_order_and_rolls_back_on_failure() {
+fn wpm_reference_write_commits_in_order_and_keeps_prefix_on_failure() {
     use bacnet_services::common::BACnetPropertyValue;
     use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
 
@@ -467,7 +467,7 @@ fn wpm_reference_write_commits_in_order_and_rolls_back_on_failure() {
         handle_write_property_multiple(db, &buf)
     };
 
-    // Whole request applies atomically on success.
+    // The complete request applies in order on success.
     wpm(
         &mut db,
         vec![
@@ -498,8 +498,7 @@ fn wpm_reference_write_commits_in_order_and_rolls_back_on_failure() {
         PropertyValue::Real(21.5)
     );
 
-    // Failing second property rolls the whole request back: the reference
-    // returns to Null, not to a half-committed new value.
+    // A failing second property leaves the first reference write committed.
     let err = wpm(
         &mut db,
         vec![
@@ -531,14 +530,16 @@ fn wpm_reference_write_commits_in_order_and_rolls_back_on_failure() {
     assert_eq!(
         read_prop(&db, oid, PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE),
         PropertyValue::List(vec![
-            PropertyValue::ObjectIdentifier(target),
+            PropertyValue::ObjectIdentifier(
+                ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 3).unwrap(),
+            ),
             PropertyValue::Enumerated(present_value),
         ]),
-        "rolled back to the pre-request reference"
+        "the successful reference prefix stays committed"
     );
     assert_eq!(
         read_prop(&db, oid, PropertyIdentifier::SETPOINT),
         PropertyValue::Real(21.5),
-        "rolled back to the pre-request setpoint"
+        "the failed setpoint attempt is mutation-free"
     );
 }

@@ -1,7 +1,6 @@
 //! Exact readback snapshots for server-owned Life Safety COV mutation paths.
 
 use bacnet_objects::database::ObjectDatabase;
-use bacnet_services::wpm::WritePropertyMultipleRequest;
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -77,20 +76,22 @@ impl LifeSafetyCovSnapshots {
             .unwrap_or_default()
     }
 
-    pub(crate) fn capture_write_property_multiple(
+    /// Capture a Life Safety object immediately before its first WPM attempt.
+    pub(crate) fn capture_before_write(
+        &mut self,
         db: &ObjectDatabase,
-        service_data: &[u8],
-    ) -> Self {
-        let Ok(request) = WritePropertyMultipleRequest::decode(service_data) else {
-            return Self::default();
-        };
-        Self::capture_oids(
-            db,
-            request
-                .list_of_write_access_specs
-                .iter()
-                .map(|spec| spec.object_identifier),
-        )
+        object_identifier: ObjectIdentifier,
+    ) {
+        if self
+            .objects
+            .iter()
+            .any(|snapshot| snapshot.object_identifier == object_identifier)
+        {
+            return;
+        }
+        if let Some(snapshot) = Self::capture_oid(db, object_identifier).objects.pop() {
+            self.objects.push(snapshot);
+        }
     }
 
     pub(crate) fn changes(

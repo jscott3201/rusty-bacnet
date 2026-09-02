@@ -9,6 +9,9 @@ use bytes::{BufMut, BytesMut};
 /// Safety limit for decoded sequences to prevent unbounded allocations.
 pub const MAX_DECODED_ITEMS: usize = 10_000;
 
+mod property_value_decode;
+pub(crate) use property_value_decode::{PropertyValueDecodeError, PropertyValueDecodeStage};
+
 pub(crate) fn decode_context<'a>(
     data: &'a [u8],
     offset: usize,
@@ -72,7 +75,11 @@ pub(crate) enum PropertyValueBoundary {
     Closing(u8),
 }
 
-fn matches_property_boundary(data: &[u8], offset: usize, boundary: PropertyValueBoundary) -> bool {
+pub(crate) fn matches_property_boundary(
+    data: &[u8],
+    offset: usize,
+    boundary: PropertyValueBoundary,
+) -> bool {
     match boundary {
         PropertyValueBoundary::End => offset == data.len(),
         PropertyValueBoundary::Context(number) => {
@@ -232,112 +239,6 @@ impl BACnetPropertyValue {
             primitives::encode_ctx_unsigned(buf, 3, prio as u64);
         }
     }
-
-    pub fn decode(data: &[u8], offset: usize) -> Result<(Self, usize), Error> {
-        Self::decode_with_boundaries(
-            data,
-            offset,
-            &[
-                PropertyValueBoundary::End,
-                PropertyValueBoundary::ContextToEnd(3),
-            ],
-        )
-    }
-
-    pub(crate) fn decode_in_list(
-        data: &[u8],
-        offset: usize,
-        closing_tag: u8,
-    ) -> Result<(Self, usize), Error> {
-        Self::decode_with_boundaries(
-            data,
-            offset,
-            &[
-                PropertyValueBoundary::Context(3),
-                PropertyValueBoundary::Context(0),
-                PropertyValueBoundary::Closing(closing_tag),
-            ],
-        )
-    }
-
-    fn decode_with_boundaries(
-        data: &[u8],
-        offset: usize,
-        boundaries: &[PropertyValueBoundary],
-    ) -> Result<(Self, usize), Error> {
-        // [0] propertyIdentifier
-        let (prop_id, mut offset) =
-            decode_context_u32(data, offset, 0, "BACnetPropertyValue property-id")?;
-
-        // [1] propertyArrayIndex (optional)
-        let mut array_index = None;
-        if offset < data.len() {
-            let (tag, _) = tags::decode_tag(data, offset)?;
-            if tag.is_context(1) {
-                let (value, end) =
-                    decode_context_u32(data, offset, 1, "BACnetPropertyValue array-index")?;
-                array_index = Some(value);
-                offset = end;
-            }
-        }
-
-        // [2] value
-        let (tag, tag_end) = tags::decode_tag(data, offset)?;
-        if !tag.is_opening_tag(2) {
-            return Err(Error::decoding(
-                offset,
-                "BACnetPropertyValue expected opening tag 2",
-            ));
-        }
-        let property_identifier = PropertyIdentifier::from_raw(prop_id);
-        let (value_bytes, offset) =
-            extract_property_value(data, tag_end, 2, property_identifier, boundaries)?;
-        let value = value_bytes.to_vec();
-
-        // [3] priority (optional)
-        let mut priority = None;
-        if offset < data.len() {
-            let (tag, new_pos) = tags::decode_tag(data, offset)?;
-            if tag.is_context(3) {
-                let end = new_pos + tag.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        new_pos,
-                        "BACnetPropertyValue truncated at priority",
-                    ));
-                }
-                let prio = primitives::decode_unsigned(&data[new_pos..end])?;
-                if !(1..=16).contains(&prio) {
-                    return Err(Error::decoding(
-                        new_pos,
-                        format!("BACnetPropertyValue priority {prio} out of range 1-16"),
-                    ));
-                }
-                priority = Some(u8::try_from(prio).map_err(|_| {
-                    Error::decoding(new_pos, "BACnetPropertyValue priority conversion failed")
-                })?);
-                return Ok((
-                    Self {
-                        property_identifier,
-                        property_array_index: array_index,
-                        value,
-                        priority,
-                    },
-                    end,
-                ));
-            }
-        }
-
-        Ok((
-            Self {
-                property_identifier,
-                property_array_index: array_index,
-                value,
-                priority,
-            },
-            offset,
-        ))
-    }
 }
 
 #[cfg(test)]
@@ -397,6 +298,34 @@ mod tests {
         pv.encode(&mut buf);
         let (decoded, _) = BACnetPropertyValue::decode(&buf, 0).unwrap();
         assert_eq!(pv, decoded);
+    }
+
+    #[test]
+    fn bacnet_property_value_stops_at_the_next_concatenated_value() {
+        let first = BACnetPropertyValue {
+            property_identifier: PropertyIdentifier::PRESENT_VALUE,
+            property_array_index: None,
+            value: vec![0x10],
+            priority: None,
+        };
+        let second = BACnetPropertyValue {
+            property_identifier: PropertyIdentifier::STATUS_FLAGS,
+            property_array_index: None,
+            value: vec![0x00],
+            priority: None,
+        };
+        let mut buf = BytesMut::new();
+        first.encode(&mut buf);
+        let first_end = buf.len();
+        second.encode(&mut buf);
+
+        let (decoded_first, next) = BACnetPropertyValue::decode(&buf, 0).unwrap();
+        let (decoded_second, end) = BACnetPropertyValue::decode(&buf, next).unwrap();
+
+        assert_eq!(decoded_first, first);
+        assert_eq!(decoded_second, second);
+        assert_eq!(next, first_end);
+        assert_eq!(end, buf.len());
     }
 
     #[test]

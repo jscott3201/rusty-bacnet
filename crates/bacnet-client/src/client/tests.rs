@@ -13,6 +13,8 @@ use std::net::Ipv4Addr;
 use std::time::Instant;
 use tokio::time::Duration;
 
+mod wpm_error_projection;
+
 async fn make_client() -> BACnetClient<BipTransport> {
     BACnetClient::builder()
         .interface(Ipv4Addr::LOCALHOST)

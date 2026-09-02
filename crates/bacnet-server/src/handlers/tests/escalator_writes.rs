@@ -188,7 +188,7 @@ fn escalator_fault_signals_reject_array_index_before_empty_list_decode() {
 }
 
 #[test]
-fn escalator_empty_fault_signals_wpm_write_and_rollback() {
+fn escalator_empty_fault_signals_wpm_prefix_stays_committed() {
     let (mut db, oid) = escalator_db();
     let prior = PropertyValue::List(vec![
         PropertyValue::Enumerated(0),
@@ -223,7 +223,10 @@ fn escalator_empty_fault_signals_wpm_write_and_rollback() {
     )
     .unwrap_err();
     assert_property_error(error, ErrorCode::INVALID_DATA_TYPE);
-    assert_eq!(read(&db, oid, PropertyIdentifier::FAULT_SIGNALS), prior);
+    assert_eq!(
+        read(&db, oid, PropertyIdentifier::FAULT_SIGNALS),
+        PropertyValue::List(vec![])
+    );
     assert_eq!(
         read(&db, oid, PropertyIdentifier::PASSENGER_ALARM),
         PropertyValue::Boolean(false)

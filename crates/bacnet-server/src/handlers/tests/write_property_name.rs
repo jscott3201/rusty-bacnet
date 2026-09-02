@@ -193,7 +193,7 @@ fn write_property_multiple_name_rename_refreshes_index() {
 }
 
 #[test]
-fn write_property_multiple_rollback_restores_name_index() {
+fn write_property_multiple_failed_attempt_is_mutation_free_and_prefix_index_stays_committed() {
     let (mut db, oid_a, oid_b) = db_with_two_bvs();
 
     // First spec renames A to "BV-B" — but B already owns "BV-B", so the
@@ -225,10 +225,8 @@ fn write_property_multiple_rollback_restores_name_index() {
     assert!(db.find_by_name("BV-A").is_some());
     assert!(db.find_by_name("BV-B").is_some());
 
-    // Now exercise true rollback: rename A to a *free* name ("BV-A2") followed
-    // by an invalid write (wrong type for DESCRIPTION is not invalid, so use a
-    // read-only property write to force a mid-transaction failure after the
-    // successful rename). The rollback must restore A's name AND the index.
+    // Rename A to a free name, then fail on a read-only property. The rename
+    // and its database index update are the successful committed prefix.
     let mut good_name_buf = BytesMut::new();
     bacnet_encoding::primitives::encode_app_character_string(&mut good_name_buf, "BV-A2").unwrap();
     // OBJECT_TYPE is read-only → write_property returns WRITE_ACCESS_DENIED.
@@ -262,20 +260,18 @@ fn write_property_multiple_rollback_restores_name_index() {
         "read-only write must fail the transaction"
     );
 
-    // Rollback restored A's name field AND resynced the index back: "BV-A2"
-    // must no longer map to A, and "BV-A" must resolve again.
     assert_eq!(
         db.get(&oid_a).unwrap().object_name(),
-        "BV-A",
-        "rollback must restore the object name"
+        "BV-A2",
+        "the successful rename remains committed"
     );
     assert!(
-        db.find_by_name("BV-A2").is_none(),
-        "rollback must free the rolled-back new name in the index"
+        db.find_by_name("BV-A2").is_some(),
+        "the committed new name stays indexed"
     );
     assert!(
-        db.find_by_name("BV-A").is_some(),
-        "rollback must restore the old name in the index"
+        db.find_by_name("BV-A").is_none(),
+        "the committed rename keeps the old name free"
     );
 }
 

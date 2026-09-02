@@ -10,7 +10,6 @@ use std::time::{Duration, Instant};
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_objects::database::ObjectDatabase;
-use bacnet_objects::traits::WritePropertyRollback;
 use bacnet_services::alarm_event::{
     AcknowledgeAlarmRequest, EventSummary, GetEventInformationAck, GetEventInformationRequest,
 };
@@ -22,8 +21,9 @@ use bacnet_services::rpm::{
     ReadAccessResult, ReadPropertyMultipleACK, ReadPropertyMultipleRequest, ReadResultElement,
 };
 use bacnet_services::who_has::{IHaveRequest, WhoHasObject, WhoHasRequest};
-use bacnet_services::wpm::WritePropertyMultipleRequest;
+use bacnet_services::wpm::{WritePropertyMultipleCursor, WritePropertyMultipleEvent};
 use bacnet_services::write_property::WritePropertyRequest;
+use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{
     EnableDisable, ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier, RejectReason,
 };

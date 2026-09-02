@@ -377,7 +377,7 @@
    "id": "BACNET-12-LOG-RECORD-IDENTITY",
    "standard_anchor": "Clause 12.25 (p. 319), Clause 12.27 (p. 337), Clause 12.30 (p. 361); Clause 15.8 (pp. 745-750); Clause 21.6 (pp. 902-914)",
    "priority": "P1",
-   "requirement_summary": "Event Log, Trend Log, and Trend Log Multiple resident records have stable object-owned Unsigned32 sequence and Date/Time identity across accepted append, FIFO overwrite, MAX-to-1 wrap, normal clear, and failed WritePropertyMultiple clear rollback. Record payload projection remains family-specific.",
+   "requirement_summary": "Event Log, Trend Log, and Trend Log Multiple resident records have stable object-owned Unsigned32 sequence and Date/Time identity across accepted append, FIFO overwrite, MAX-to-1 wrap, and normal clear. Record payload projection remains family-specific.",
    "status": "in-progress",
    "code_anchors": [
     "crates/bacnet-objects/src/log_buffer.rs::LogRecordIdentity",
@@ -396,10 +396,9 @@
     "crates/bacnet-objects/src/trend/log_record_tests.rs::trend_log_projects_only_present_status_flags_as_fourth_field",
     "crates/bacnet-objects/src/trend/log_record_tests.rs::trend_multiple_retains_raw_flags_but_projects_three_fields"
    ],
-   "negative_tests": [
-    "crates/bacnet-objects/src/log_buffer.rs::tests::log_buffer_rejections_do_not_consume_sequence",
-    "crates/bacnet-server/src/handlers/tests/wpm_rollback_contract.rs::log_record_count_rollback_restores_cleared_buffers"
-   ],
+    "negative_tests": [
+     "crates/bacnet-objects/src/log_buffer.rs::tests::log_buffer_rejections_do_not_consume_sequence"
+    ],
    "benchmarks": [],
    "public_claims": [],
     "notes": "In-memory storage/model foundation only; this row makes no public support claim. Sequence identity is object metadata and is never serialized in LOG_BUFFER. Trend Log alone projects a present legacy BACnetLogRecord.status_flags value as its formal optional fourth StatusFlags bitstring; Event Log and Trend Log Multiple retain that raw shared-Rust field for source compatibility but always project only Date, Time, and datum. Mandatory purge/status lifecycle behavior is tracked separately by BACNET-12-LOG-STATUS-LIFECYCLE, and the server's qualified By Sequence and By Time consumers are tracked by BACNET-15-READ-RANGE-LOG-BUFFER. Restart durability/persistence and formal EventLog notification-record modeling remain deferred."
@@ -424,9 +423,7 @@
     "crates/bacnet-objects/src/log_status_tests.rs::stop_before_full_omits_triggering_ordinary_and_clock_failure_is_atomic",
     "crates/bacnet-objects/src/log_status_tests.rs::enable_and_stop_when_full_transitions_emit_exactly_one_status",
     "crates/bacnet-objects/src/log_status_tests.rs::zero_capacity_counts_without_residents_and_enforces_full_enable_gate",
-    "crates/bacnet-objects/src/trend/log_record_tests.rs::trend_log_keeps_log_status_and_record_status_flags_as_distinct_bitstrings",
-    "crates/bacnet-server/src/handlers/tests/wpm_rollback_contract.rs::log_record_count_rollback_restores_cleared_buffers",
-    "crates/bacnet-server/src/handlers/tests/wpm_log_lifecycle.rs::log_enable_and_stop_rollback_restore_exact_lifecycle",
+     "crates/bacnet-objects/src/trend/log_record_tests.rs::trend_log_keeps_log_status_and_record_status_flags_as_distinct_bitstrings",
     "crates/bacnet-server/src/pics/truth_source_tests.rs::pics_log_family_writability_comes_from_runtime_routes"
    ],
    "negative_tests": [
@@ -528,7 +525,7 @@
     "crates/bacnet-objects/src/elevator/tests/escalator_status_writability.rs::fault_signals_accept_empty_singleton_and_typed_multi_value_sets",
     "crates/bacnet-server/src/handlers/tests/escalator_writes.rs::escalator_status_family_writes_over_wp_in_service_and_oos",
     "crates/bacnet-server/src/handlers/tests/escalator_writes.rs::escalator_fault_signals_empty_singleton_and_multi_reach_the_object_over_wp",
-    "crates/bacnet-server/src/handlers/tests/escalator_writes.rs::escalator_empty_fault_signals_wpm_write_and_rollback"
+     "crates/bacnet-server/src/handlers/tests/escalator_writes.rs::escalator_empty_fault_signals_wpm_prefix_stays_committed"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/elevator/tests/escalator_status_writability.rs::fault_signals_reject_reserved_oversized_and_duplicate_values_atomically",
@@ -792,13 +789,13 @@
      "crates/bacnet-objects/src/lighting/tests.rs::binary_lighting_output_relinquish_default_rejects_non_binary_values_atomically",
      "crates/bacnet-objects/src/lighting/tests.rs::binary_lighting_output_relinquish_default_wrong_type_is_atomic",
      "crates/bacnet-server/src/handlers/tests/binary_lighting_relinquish_default.rs::binary_lighting_output_relinquish_default_rejects_non_binary_values_over_write_property",
-     "crates/bacnet-server/src/handlers/tests/binary_lighting_relinquish_default.rs::binary_lighting_output_failed_wpm_restores_default_present_value_and_priority",
+     "crates/bacnet-server/src/handlers/tests/binary_lighting_relinquish_default.rs::binary_lighting_output_failed_wpm_keeps_default_prefix_and_priority",
      "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::datetime_write_with_mispaired_members_is_refused_and_preserves",
     "crates/bacnet-objects/src/multistate/tests/relinquish_default.rs::mso_relinquish_default_is_not_range_locked_after_store"
    ],
    "benchmarks": [],
    "public_claims": [],
-   "notes": "Split child of BACNET-12-OBJECT-MODEL (#270). is_commandable_property_writable now advertises RELINQUISH_DEFAULT for the six core commandable types (its doc no longer claims universal read-only); Lighting Output, Binary Lighting Output, Access Door, and the define_value_object_commandable! macro gained is_writable_property overrides mirroring their write arms - the macro override also corrects the PRIORITY_ARRAY writability advertising for all twelve commandable value types (previously reported read-only by the historical default while the arm accepted writes). Invalid writes refuse with VALUE_OUT_OF_RANGE for range/finiteness and INVALID_DATA_TYPE for a wrong BACnet datatype, without changing Relinquish_Default or Present_Value. For Binary Lighting Output, direct setter/object and WP tests cover the exact OFF/ON domain and atomic refusal while WPM proves rollback restores Relinquish_Default, effective Present_Value, and the active priority state. Binary Lighting operation handling is evidenced separately in BACNET-12-BINARY-LIGHTING-OPERATIONS; this row remains bounded to Relinquish_Default. Number_Of_States shrink interplay on MSO/MSV: Clause 12.19/12.22 leave stored-value adjustment a local matter and this implementation does not auto-adjust - pinned in a test comment, with CONFIGURATION_ERROR reporting for the condition tracked under #226. CURRENT_COMMAND_PRIORITY stays read-only (derived). The pre-existing unvalidated Present_Value arm on Access Door (any Enumerated accepted) is a separate defect noted for follow-up, as is the door property_list omitting PRIORITY_ARRAY/RELINQUISH_DEFAULT while both are readable. #182 addendum: the `readonly` rd_access selection now has no users (kept in the macro for a future type whose wire form needs something the service decode cannot deliver); the pinned-denial test datetime_value_relinquish_default_is_not_network_writable is replaced by datetime_value_relinquish_default_write_recaptures_present_value."
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#270). is_commandable_property_writable now advertises RELINQUISH_DEFAULT for the six core commandable types (its doc no longer claims universal read-only); Lighting Output, Binary Lighting Output, Access Door, and the define_value_object_commandable! macro gained is_writable_property overrides mirroring their write arms - the macro override also corrects the PRIORITY_ARRAY writability advertising for all twelve commandable value types (previously reported read-only by the historical default while the arm accepted writes). Invalid writes refuse with VALUE_OUT_OF_RANGE for range/finiteness and INVALID_DATA_TYPE for a wrong BACnet datatype, without changing Relinquish_Default or Present_Value. For Binary Lighting Output, direct setter/object and WP tests cover the exact OFF/ON domain and atomic refusal while WPM proves a valid Relinquish_Default prefix remains committed when a later value is refused, without disturbing the active priority state. Binary Lighting operation handling is evidenced separately in BACNET-12-BINARY-LIGHTING-OPERATIONS; this row remains bounded to Relinquish_Default. Number_Of_States shrink interplay on MSO/MSV: Clause 12.19/12.22 leave stored-value adjustment a local matter and this implementation does not auto-adjust - pinned in a test comment, with CONFIGURATION_ERROR reporting for the condition tracked under #226. CURRENT_COMMAND_PRIORITY stays read-only (derived). The pre-existing unvalidated Present_Value arm on Access Door (any Enumerated accepted) is a separate defect noted for follow-up, as is the door property_list omitting PRIORITY_ARRAY/RELINQUISH_DEFAULT while both are readable. #182 addendum: the `readonly` rd_access selection now has no users (kept in the macro for a future type whose wire form needs something the service decode cannot deliver); the pinned-denial test datetime_value_relinquish_default_is_not_network_writable is replaced by datetime_value_relinquish_default_write_recaptures_present_value."
   },
   {
    "id": "BACNET-12-BINARY-LIGHTING-OPERATIONS",
@@ -836,14 +833,14 @@
      "crates/bacnet-objects/src/lighting/binary_tests.rs::direct_priority_array_accepts_only_off_on_and_null_with_exact_errors",
      "crates/bacnet-objects/src/lighting/binary_direct_tests.rs::invalid_direct_writes_preserve_each_operation_and_remaining_time",
      "crates/bacnet-objects/src/lighting/binary_tests.rs::rollback_restores_operation_remaining_time_and_blink_observation_exactly",
-     "crates/bacnet-server/src/handlers/tests/binary_lighting_operations.rs::failed_wpm_leaks_no_new_timer_or_blink_effect",
-     "crates/bacnet-server/src/handlers/tests/binary_lighting_operations.rs::direct_priority_array_wpm_halts_and_failed_wpm_restores_original_operation",
-    "crates/bacnet-server/src/handlers/tests/binary_lighting_operations.rs::wrong_and_out_of_range_priorities_are_atomic_before_command_mutation",
+     "crates/bacnet-server/src/handlers/tests/binary_lighting_operations.rs::failed_wpm_keeps_new_timer_from_successful_prefix",
+     "crates/bacnet-server/src/handlers/tests/binary_lighting_operations.rs::direct_priority_array_wpm_halts_and_failed_wpm_keeps_prefix",
+    "crates/bacnet-server/src/handlers/tests/binary_lighting_operations.rs::write_property_priority_errors_are_atomic_and_wpm_keeps_prior_prefix",
     "crates/bacnet-server/src/server/binary_lighting_task_tests.rs::stop_aborts_and_awaits_operation_task_with_no_work_after_stop"
    ],
    "benchmarks": [],
    "public_claims": [],
-    "notes": "Egress state and its arm-relative monotonic deadline are object-owned, process-local, and intentionally not reconstructed after restart. Egress_Time is captured when an operation arms; later Egress_Time or Blink_Warn_Enable writes affect future commands only, and Out_Of_Service does not suspend progress. A hidden database-bound Tokio monotonic source gives writes and the lifecycle task one time domain; the one-second Delay interval also wakes for an exact known deadline and delayed wakes use actual time without charging pre-arm elapsed. Expiry freezes COV-readable terminal state with the mutation under the database write lock, then the generic single/multiple path encodes and sends from that immutable snapshot after releasing locks, so later commands cannot rewrite the terminal payload. Logical blink requests are retained only through a hidden internal observation for deterministic tests and WPM rollback; there is no Rust/Python host callback, BACnet property, physical output, persistence, or hardware support claim. Direct Priority_Array[index] compatibility remains writable for OFF/ON/NULL only and follows the same validated same/higher halt ordering; the broader pre-existing read-only conformance mismatch is outside this row."
+    "notes": "Egress state and its arm-relative monotonic deadline are object-owned, process-local, and intentionally not reconstructed after restart. Egress_Time is captured when an operation arms; later Egress_Time or Blink_Warn_Enable writes affect future commands only, and Out_Of_Service does not suspend progress. A hidden database-bound Tokio monotonic source gives writes and the lifecycle task one time domain; the one-second Delay interval also wakes for an exact known deadline and delayed wakes use actual time without charging pre-arm elapsed. Expiry freezes COV-readable terminal state with the mutation under the database write lock, then the generic single/multiple path encodes and sends from that immutable snapshot after releasing locks, so later commands cannot rewrite the terminal payload. Logical blink requests are retained only through a hidden internal observation for deterministic tests; a successful WPM prefix may arm or halt an operation even when a later write fails. There is no Rust/Python host callback, BACnet property, physical output, persistence, or hardware support claim. Direct Priority_Array[index] compatibility remains writable for OFF/ON/NULL only and follows the same validated same/higher halt ordering; the broader pre-existing read-only conformance mismatch is outside this row."
   },
   {
    "id": "BACNET-12-REFERENCE-PROPERTY-WRITABILITY",
@@ -881,7 +878,7 @@
     "crates/bacnet-server/src/handlers/tests/reference_writes.rs::loop_references_framed_writes_over_the_wire",
     "crates/bacnet-server/src/handlers/tests/reference_writes.rs::reference_write_flattened_local_form_also_lands_over_the_wire",
     "crates/bacnet-server/src/handlers/tests/reference_writes.rs::pulse_converter_input_reference_over_the_wire",
-    "crates/bacnet-server/src/handlers/tests/reference_writes.rs::wpm_reference_write_commits_in_order_and_rolls_back_on_failure"
+    "crates/bacnet-server/src/handlers/tests/reference_writes.rs::wpm_reference_write_commits_in_order_and_keeps_prefix_on_failure"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::bare_decode_rejects_device_qualified_reference",
@@ -899,7 +896,7 @@
    ],
    "benchmarks": [],
    "public_claims": [],
-   "notes": "Split child of BACNET-12-OBJECT-MODEL (#182). The four arms share one objects-layer helper (reference.rs) so the local List form (in-process compatibility) and the framed ApplicationData form (network) converge on the same strict Clause 21 decode; error pairings follow Clause 15.9.1.3: wrong value datatype is PROPERTY / INVALID_DATA_TYPE, malformed framing / device qualification / unknown trailing context tag is PROPERTY / INVALID_DATA_ENCODING, and a mixed flat+framed element list is refused rather than reinterpreted. Null clears, and read arms carry the reference's optional array index as a third list element. Setpoint_Reference additionally accepts the BACnetSetpointReference opening/closing tag [0] frame (unambiguous against the bare form's leading primitive [0]) while refusing unbalanced frames. WritePropertyMultiple in-order commit and rollback are proven for a reference+setpoint request failing its second property. Review round: the adversary lane's blocker on the Averaging arm (silent member drop / member retype / as-u32 truncation, newly network-reachable) is fixed by routing it through the same shared decode; the runtime+dataflow empty-frame finding is fixed by the Option-returning decode_setpoint_reference; the dataflow PICS incoherence is fixed by exact is_writable_property overrides on Pulse Converter (PRESENT_VALUE / SCALE_FACTOR / ADJUST_VALUE / INPUT_REFERENCE + DESCRIPTION / OUT_OF_SERVICE / COV_INCREMENT) and Averaging (OBJECT_PROPERTY_REFERENCE + DESCRIPTION / OUT_OF_SERVICE), which also stop advertising OBJECT_NAME on both types (no arm routes it - a truth-toward-arms PICS correction). Limitation: reads still emit the flat application-tagged list form rather than re-framing context tags - the encode side is unchanged by this tranche; interop evidence against a second implementation remains open."
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#182). The four arms share one objects-layer helper (reference.rs) so the local List form (in-process compatibility) and the framed ApplicationData form (network) converge on the same strict Clause 21 decode; error pairings follow Clause 15.9.1.3: wrong value datatype is PROPERTY / INVALID_DATA_TYPE, malformed framing / device qualification / unknown trailing context tag is PROPERTY / INVALID_DATA_ENCODING, and a mixed flat+framed element list is refused rather than reinterpreted. Null clears, and read arms carry the reference's optional array index as a third list element. Setpoint_Reference additionally accepts the BACnetSetpointReference opening/closing tag [0] frame (unambiguous against the bare form's leading primitive [0]) while refusing unbalanced frames. WritePropertyMultiple ordered prefix commit is proven for a reference+setpoint request failing its second property. Review round: the adversary lane's blocker on the Averaging arm (silent member drop / member retype / as-u32 truncation, newly network-reachable) is fixed by routing it through the same shared decode; the runtime+dataflow empty-frame finding is fixed by the Option-returning decode_setpoint_reference; the dataflow PICS incoherence is fixed by exact is_writable_property overrides on Pulse Converter (PRESENT_VALUE / SCALE_FACTOR / ADJUST_VALUE / INPUT_REFERENCE + DESCRIPTION / OUT_OF_SERVICE / COV_INCREMENT) and Averaging (OBJECT_PROPERTY_REFERENCE + DESCRIPTION / OUT_OF_SERVICE), which also stop advertising OBJECT_NAME on both types (no arm routes it - a truth-toward-arms PICS correction). Limitation: reads still emit the flat application-tagged list form rather than re-framing context tags - the encode side is unchanged by this tranche; interop evidence against a second implementation remains open."
   },
   {
    "id": "BACNET-12-ALERT-ENROLLMENT-TABLE-12-61",
@@ -923,7 +920,6 @@
     "crates/bacnet-server/src/handlers/tests/alert_enrollment.rs::alert_notify_type_wire_domain_is_alarm_or_event",
     "crates/bacnet-server/src/handlers/tests/property_metadata.rs::rpm_metadata_selectors_are_exact_for_alert_enrollment",
     "crates/bacnet-server/src/pics/property_metadata_tests.rs::pics_projects_migrated_property_metadata",
-    "crates/bacnet-server/src/handlers/tests/wpm_event_rollback.rs::wpm_rollback_restores_alert_enrollment_notify_type",
     "crates/rusty-bacnet/tests/test_alert_enrollment_api.py::AlertEnrollmentApiTests"
    ],
    "negative_tests": [
@@ -938,7 +934,7 @@
     "crates/rusty-bacnet/rusty_bacnet.pyi add_alert_enrollment",
     "CHANGELOG.md Unreleased Alert Enrollment migration note"
    ],
-   "notes": "PR-0808 / #291 is a bounded served-object-model correction. The explicit initial-source constructor is intentionally breaking in Rust and Python, with no sentinel overload. record_alert_source owns only Present_Value; it is not alert source discovery or an evaluator. The existing Event_Detection_Enable reset/history, Event_State, Acked_Transitions (including TO_NORMAL always acknowledged), Event_Enable, Notification_Class, Event_Time_Stamps, object-name/database behavior, WPM rollback, and generic event-information consumers remain in place. Optional message/inhibit/audit/tag/profile rows remain unimplemented. This row does not claim an Alert evaluator, transition generation, notification sending, or complete optional-property support."
+   "notes": "PR-0808 / #291 is a bounded served-object-model correction. The explicit initial-source constructor is intentionally breaking in Rust and Python, with no sentinel overload. record_alert_source owns only Present_Value; it is not alert source discovery or an evaluator. The existing Event_Detection_Enable reset/history, Event_State, Acked_Transitions (including TO_NORMAL always acknowledged), Event_Enable, Notification_Class, Event_Time_Stamps, object-name/database behavior, and generic event-information consumers remain in place. WPM follows Clause 15.10 ordered prefix commit. Optional message/inhibit/audit/tag/profile rows remain unimplemented. This row does not claim an Alert evaluator, transition generation, notification sending, or complete optional-property support."
   },
   {
    "id": "BACNET-12-ENROLLMENT-EVENT-TIME-STAMPS",
@@ -969,7 +965,7 @@
    ],
    "benchmarks": [],
    "public_claims": [],
-    "notes": "#264 property-surface slice. EventHistory is embedded privately, but only an exact Event_Time_Stamps match delegates to it; optional Event_Message_Texts remains unlisted and unreadable. Detection-disabled resets restore timestamp initial conditions, including projection after direct assignment to Alert Enrollment's compatibility-public Event_Detection_Enable field, and object-owned WPM rollback tokens restore seeded history atomically. Alert Enrollment's TO_NORMAL Acked_Transitions bit is held TRUE because Clause 12.52.8 makes that transition acknowledgment-not-required. PR-0808 completes Alert Enrollment's required Table 12-61 served-property projection under BACNET-12-ALERT-ENROLLMENT-TABLE-12-61, but this timestamp row still does not claim complete transition maintenance: Alert evaluation, lifecycle timestamp writes, notification generation, and optional Event_Message_Texts remain deferred."
+    "notes": "#264 property-surface slice. EventHistory is embedded privately, but only an exact Event_Time_Stamps match delegates to it; optional Event_Message_Texts remains unlisted and unreadable. Detection-disabled resets restore timestamp initial conditions, including projection after direct assignment to Alert Enrollment's compatibility-public Event_Detection_Enable field. Compatibility object rollback hooks remain implemented but are no longer invoked by WPM, which keeps successful prefix writes. Alert Enrollment's TO_NORMAL Acked_Transitions bit is held TRUE because Clause 12.52.8 makes that transition acknowledgment-not-required. PR-0808 completes Alert Enrollment's required Table 12-61 served-property projection under BACNET-12-ALERT-ENROLLMENT-TABLE-12-61, but this timestamp row still does not claim complete transition maintenance: Alert evaluation, lifecycle timestamp writes, notification generation, and optional Event_Message_Texts remain deferred."
   },
   {
    "id": "BACNET-12-TIME-DELAY-NORMAL",
@@ -1170,7 +1166,7 @@
     "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::reference_properties_reject_indexed_read_property",
     "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::list_properties_reject_indexed_write_property_and_write_property_multiple",
     "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::schedule_list_of_object_property_references_rejects_indexed_read_and_write",
-    "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::wpm_gate_rejection_commits_nothing",
+    "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::wpm_gate_rejection_keeps_valid_prefix",
     "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::indexed_access_to_recipient_list_rejected_with_not_an_array",
     "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::wpm_omitted_index_priority_array_write_is_write_access_denied",
     "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::write_property_omitted_index_priority_array_is_write_access_denied",
@@ -1232,7 +1228,7 @@
     "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::well_formed_trailing_element_reaches_scalar_arm_as_list_and_is_refused",
     "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::datetime_value_present_value_and_priority_array_over_the_wire",
     "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::datetime_relinquish_default_over_the_wire_recaptures_present_value",
-    "crates/bacnet-server/src/handlers/tests/reference_writes.rs::wpm_reference_write_commits_in_order_and_rolls_back_on_failure",
+    "crates/bacnet-server/src/handlers/tests/reference_writes.rs::wpm_reference_write_commits_in_order_and_keeps_prefix_on_failure",
     "crates/bacnet-server/src/handlers/tests/framed_properties.rs::recipient_list_framed_wire_round_trip",
     "crates/bacnet-server/src/handlers/tests/framed_properties.rs::event_parameters_framed_wire_round_trip",
     "crates/bacnet-server/src/handlers/tests/escalator_writes.rs::escalator_fault_signals_empty_singleton_and_multi_reach_the_object_over_wp"
@@ -1246,7 +1242,47 @@
    ],
    "benchmarks": [],
    "public_claims": [],
-   "notes": "Split child of BACNET-12-OBJECT-MODEL (#182; behavior change - trailing bytes previously dropped between the single-element decoder and the arm now decide the write, and malformed value payloads map to PROPERTY / INVALID_DATA_ENCODING instead of the SERVICES/OTHER a propagated raw decoding error produced). A value TLV-truncated far enough to break framing is refused earlier by the service request's own [3]/[4] context walk (a framing error, still never silent; pinned by list_write_with_tlv_truncated_tail_is_refused_before_the_value_decode). Unlocks covered here: MSI Alarm_Values whole-list writes (the pin in handlers/list.rs flipped from pinned failure to per-element-validated success) and the datetime-paired value properties completing #270 (DateTime Value PV / Priority_Array entries, Relinquish_Default on DateTime Value + DateTime Pattern Value; see BACNET-12-RELINQUISH-DEFAULT-WRITABILITY). #401 adds the narrow zero-element exception for Fault_Signals; other empty propertyValue payloads remain refused. WPM keeps its validate-all-then-commit-with-rollback semantics for structured values. Known residues (follow-ups, not regressions): AddListElement/RemoveListElement still break their listOfElements loop on an undecodable element instead of erroring (#182's wider scope); Enumerated contents wider than four octets still truncate to u32 (#277, explicitly untouched); and properties declared SEQUENCE OF beyond the four reference arms (e.g. LIST_OF_OBJECT_PROPERTY_REFERENCES) keep their pre-existing arm-level behavior."
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#182; behavior change - trailing bytes previously dropped between the single-element decoder and the arm now decide the write, and malformed value payloads map to PROPERTY / INVALID_DATA_ENCODING instead of the SERVICES/OTHER a propagated raw decoding error produced). A value TLV-truncated so far that framing breaks is refused by the shared incremental service grammar before that write is attempted. Unlocks covered here: MSI Alarm_Values whole-list writes (the pin in handlers/list.rs flipped from pinned failure to per-element-validated success) and the datetime-paired value properties completing #270 (DateTime Value PV / Priority_Array entries, Relinquish_Default on DateTime Value + DateTime Pattern Value; see BACNET-12-RELINQUISH-DEFAULT-WRITABILITY). #401 adds the narrow zero-element exception for Fault_Signals; other empty propertyValue payloads remain refused. WPM decodes and commits each complete attempt in order and stops at the first failure. Known residues (follow-ups, not regressions): AddListElement/RemoveListElement still break their listOfElements loop on an undecodable element instead of erroring (#182's wider scope); Enumerated contents wider than four octets still truncate to u32 (#277, explicitly untouched); and properties declared SEQUENCE OF beyond the four reference arms (e.g. LIST_OF_OBJECT_PROPERTY_REFERENCES) keep their pre-existing arm-level behavior."
+  },
+  {
+   "id": "BACNET-15-WPM-ORDERED-PREFIX-ERROR",
+   "standard_anchor": "Clause 15.10 and 15.10.1.3 (WritePropertyMultiple service procedure and Result(-)); Clause 18.9 (Reject reasons); Clause 21 (Error and BACnetObjectPropertyReference productions)",
+   "priority": "P1",
+   "requirement_summary": "WritePropertyMultiple parses and executes complete write attempts in wire order, stops at the first failure, and retains all successful prefix writes. Semantic failures return the formal service-16 Error body with Error plus the complete first-failed BACnetObjectPropertyReference. Malformed syntax before a successful write returns a classified Reject; malformed syntax after a successful prefix returns SERVICES / INVALID_TAG with an exact completed reference when available or the documented undecodable-coordinate sentinel.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-services/src/wpm.rs",
+    "crates/bacnet-services/src/wpm/cursor.rs",
+    "crates/bacnet-services/src/wpm/error.rs",
+    "crates/bacnet-encoding/src/apdu/mod.rs",
+    "crates/bacnet-server/src/handlers/write_property.rs",
+    "crates/bacnet-server/src/server/requests/mod.rs",
+    "crates/bacnet-server/src/life_safety_cov.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-services/src/wpm/cursor.rs::tests::yields_multi_object_and_property_attempts_in_wire_order",
+    "crates/bacnet-services/src/wpm/cursor.rs::tests::empty_request_and_empty_property_lists_are_noops",
+    "crates/bacnet-services/src/wpm/error.rs::tests::indexed_and_unindexed_round_trip_with_exact_outer_shape",
+    "crates/bacnet-encoding/src/apdu/wpm_error_tests.rs::formal_wpm_error_round_trip_does_not_prepend_generic_pair",
+    "crates/bacnet-encoding/src/apdu/wpm_error_tests.rs::legacy_generic_wpm_error_still_decodes_and_encodes",
+    "crates/bacnet-server/src/handlers/tests/wpm_prefix_commit.rs::event_enrollment_prefix_commits_before_read_only_first_failure",
+    "crates/bacnet-server/src/handlers/tests/wpm_prefix_commit.rs::malformed_after_prefix_uses_exact_or_sentinel_reference_and_keeps_prefix",
+     "crates/bacnet-server/src/server/life_safety_cov_tests/wpm_prefix.rs::failed_wpm_sends_formal_error_before_committed_prefix_cov",
+     "crates/bacnet-server/src/server/life_safety_cov_tests/wpm_prefix.rs::event_enrollment_prefix_commit_returns_exact_error_through_server_dispatch",
+     "crates/bacnet-client/src/client/tests/wpm_error_projection.rs::high_level_error_projection_remains_class_and_code_only"
+   ],
+   "negative_tests": [
+    "crates/bacnet-services/src/wpm/cursor.rs::tests::pre_write_failures_use_narrow_reject_classifications",
+    "crates/bacnet-services/src/wpm/cursor.rs::tests::total_attempt_bound_prevents_unbounded_collection",
+    "crates/bacnet-services/src/wpm/error.rs::tests::strict_decode_rejects_missing_duplicate_wrong_and_trailing_fields",
+    "crates/bacnet-encoding/src/apdu/wpm_error_tests.rs::formal_wpm_error_projection_must_match_body",
+    "crates/bacnet-server/src/handlers/tests/wpm_prefix_commit.rs::unknown_object_is_semantic_result_with_actual_reference_before_any_commit",
+    "crates/bacnet-server/src/handlers/tests/wpm_prefix_commit.rs::semantic_index_value_name_and_write_arm_failures_keep_exact_reference",
+    "crates/bacnet-server/src/handlers/tests/wpm_prefix_commit.rs::malformed_before_first_write_rejects_without_mutation"
+   ],
+   "benchmarks": [],
+   "public_claims": [],
+   "notes": "Bounded service-procedure correction (Refs #242), not full BACnet, object, PICS, or BIBB conformance. The post-success undecodable-coordinate policy uses DEVICE instance 4194303, PropertyIdentifier ALL, and no array index; only the instance is normative. Empty requests and empty property lists retain the existing SimpleACK/no-op compatibility. Existing ErrorPdu, TsmResponse, client, and Python shapes are unchanged: low-level ErrorPdu.error_data retains the complete formal body while high-level clients continue exposing class/code. Legacy generic WPM Error PDUs remain decodable. Public object rollback traits remain for compatibility but service 16 no longer invokes them."
   },
   {
    "id": "BACNET-20-ENCODING",
@@ -2057,32 +2093,26 @@
    "notes": "AB.6.3 heartbeat evidence now covers no-VMAC Heartbeat-Request/Heartbeat-ACK construction, native Heartbeat-ACK message-id/no-VMAC validation, production `ScTransport::start` rejection of configurable heartbeat intervals outside 3..300 seconds, production rejection of disconnect timeouts that are not greater than the heartbeat interval, periodic heartbeat initiation after idle inbound BVLC activity, inbound BVLC activity resetting the liveness timer, timeout-driven native disconnect when no BVLC response arrives, send-error disconnect behavior, and hub-initiated heartbeat tracking that sends idle Heartbeat-Requests, records the pending Message ID, clears the pending state only for a matching Heartbeat-ACK, and removes the hub client when the pending ACK exceeds the hub timeout. Accelerated native heartbeat tests use a private test-only timing override so production builders keep Annex AB.6.3 range enforcement at start. The row remains open because the native heartbeat timeout evidence relies on a test-only timing override rather than formal Annex AB.6.3 timeout conformance tests."
   },
   {
-   "id": "BACNET-13-EVENT-DISABLE-WPM-ROLLBACK",
+   "id": "BACNET-13-EVENT-DISABLE-WPM-PREFIX",
    "standard_anchor": "Clause 12.52 Table 12-61 (Alert Enrollment Event_State, Acked_Transitions, Event_Detection_Enable); Clause 13.2.2.1 disabled-state initial conditions; Clause 13.3 pTimeDelayNormal fallback; Clause 15.10 ordered WritePropertyMultiple procedure",
    "priority": "P1",
-   "requirement_summary": "Alert Enrollment exposes Event_State and Acked_Transitions and keeps them at their initial conditions while Event_Detection_Enable is FALSE. The repository's optional WPM rollback policy preserves object-private event state and raw fallback-backed Time_Delay_Normal storage when a later write fails.",
-   "status": "implementation-present-needs-conformance-tests",
+   "requirement_summary": "Alert Enrollment exposes Event_State and Acked_Transitions and keeps them at their initial conditions while Event_Detection_Enable is FALSE. Public object-layer rollback hooks remain for compatibility, but WPM no longer invokes them: a successful Event_Detection_Enable or Time_Delay_Normal prefix write remains committed when a later write fails.",
+   "status": "in-progress",
    "code_anchors": [
     "crates/bacnet-objects/src/event_enrollment/mod.rs",
     "crates/bacnet-objects/src/rollback.rs",
-    "crates/bacnet-objects/src/traits.rs",
-    "crates/bacnet-server/src/handlers/write_property.rs"
+    "crates/bacnet-objects/src/traits.rs"
    ],
    "positive_tests": [
      "crates/bacnet-objects/src/event_enrollment/tests/alert.rs (disabled-state reset/projection, guarded internal updates, source ownership, Notify_Type, and exact writability)",
-    "crates/bacnet-objects/src/analog/input.rs::detection_enable_reset_tests::ai_write_rollback_restores_detection_state",
-     "crates/bacnet-server/src/handlers/tests/wpm_event_rollback.rs (Event/Alert/intrinsic state rollback including Alert Notify_Type, raw Time_Delay_Normal fallback, duplicate-name failure, OOS ordering, per-object rollback-error reconciliation)",
-    "crates/bacnet-server/src/handlers/tests/wpm_rollback_contract.rs (token-backed Object_Name/index restoration, unreadable-property rollback failure reporting, Network Port Changes_Pending, Access Door command slots, and destructive log clear rollback)"
+     "crates/bacnet-objects/src/analog/input.rs::detection_enable_reset_tests::ai_write_rollback_restores_detection_state"
    ],
    "negative_tests": [
-    "crates/bacnet-objects/src/event_enrollment/tests/alert.rs::alert_enrollment_disabled_state_rejects_internal_transition_updates",
-    "crates/bacnet-server/src/handlers/tests/wpm_event_rollback.rs::wpm_reports_object_state_rollback_failure",
-    "crates/bacnet-server/src/handlers/tests/wpm_event_rollback.rs::rollback_failure_reports_only_the_object_that_failed_restoration",
-    "crates/bacnet-server/src/handlers/tests/wpm_rollback_contract.rs::unreadable_successful_write_reports_failed_rollback_and_residual_object"
+    "crates/bacnet-objects/src/event_enrollment/tests/alert.rs::alert_enrollment_disabled_state_rejects_internal_transition_updates"
    ],
    "benchmarks": [],
    "public_claims": [],
-    "notes": "C3 (#205, #209, #289), updated by PR-0808 / #291. Clause 15.10 permits preceding writes to remain applied; rollback is repository policy, not a BACnet conformance requirement. Opaque object-state tokens supplement readable property snapshots for reset, fallback-backed, derived, command-slot, and destructive writes; ordinary readable Alert Notify_Type uses the generic snapshot restoration path. Restoration failures are returned; only objects whose own rollback failed run event/COV reconciliation. Alert Enrollment's required served-property projection is now covered by BACNET-12-ALERT-ENROLLMENT-TABLE-12-61; no Alert evaluator or notification-generation claim is made."
+    "notes": "C3 (#205, #209, #289), updated by PR-0808 / #291 and superseded for WPM service behavior by BACNET-15-WPM-ORDERED-PREFIX-ERROR. The object rollback trait and implementations are intentionally retained but are not invoked by service 16. Alert Enrollment's required served-property projection is covered by BACNET-12-ALERT-ENROLLMENT-TABLE-12-61. This row does not claim Acked_Transitions policy completion, an Alert evaluator, or notification generation."
   },
   {
    "id": "BACNET-13-EVENT-ENROLLMENT-EVALUATOR",
@@ -2283,9 +2313,7 @@
      "crates/bacnet-objects/src/file/resize_tests.rs::record_count_zero_shrink_and_expand_keep_octet_accounting_coherent",
      "crates/bacnet-objects/src/file/resize_tests.rs::resize_noop_is_clock_and_metadata_neutral_but_actual_change_samples_once",
      "crates/bacnet-objects/src/file/resize_tests.rs::empty_record_growth_is_a_metadata_change_even_when_file_size_is_unchanged",
-     "crates/bacnet-objects/src/file/resize_tests.rs::resize_writability_and_rollback_capture_follow_runtime_eligibility",
-     "crates/bacnet-server/src/handlers/tests/wpm_file_resize_rollback.rs::stream_resize_wpm_rollback_restores_exact_bytes_size_and_metadata",
-     "crates/bacnet-server/src/handlers/tests/wpm_file_resize_rollback.rs::record_resize_wpm_rollback_restores_exact_records_count_size_and_metadata",
+      "crates/bacnet-objects/src/file/resize_tests.rs::resize_writability_and_rollback_capture_follow_runtime_eligibility",
      "crates/bacnet-server/src/pics/truth_source_tests.rs::pics_file_resize_writability_uses_the_isolated_representative",
     "crates/bacnet-objects/src/file/storage_tests.rs::storage_hooks_default_to_none_and_file_object_opts_in",
     "crates/bacnet-server/src/handlers/tests/file_storage_hook.rs::in_place_stream_write_over_the_cap_succeeds",
@@ -2337,7 +2365,7 @@
    ],
    "benchmarks": [],
    "public_claims": [],
-      "notes": "Row added with #397, extended for built-in FileObject mutation metadata with #416, and extended for conditional built-in resize properties with #417. AtomicReadFile/AtomicWriteFile gate order remains object type, lookup, storage presence, read-only for writes, access method, then storage start-position and capacity checks. End Of File is authoritative: an empty window at the end of a non-empty built-in file, including a zero-count read, reports FALSE; a valid read at the only position of a built-in empty stream or record file returns empty data with TRUE. The growth caps (1 MiB of octets, 10,000 records by default, per object, growth-only so preloaded contents past the cap remain valid) are the designed limit Clause 18 defines FILE_FULL for; the caps are not BACnet properties and never appear in Property_List. AtomicWriteFile record decoding requires file-record-data cardinality to equal Record Count (#418): a short list is rejected MISSING_REQUIRED_PARAMETER and an extra element is rejected TOO_MANY_ARGUMENTS. The handler's access-method gate is pinned independently with lax custom storage; FileStorage defaults report FILE_ACCESS_DENIED, never a method mismatch. Built-in mutation metadata is object-owned: ObjectDatabase binds the ClockReader, and FileObject samples only after successful payload/accounting commit. Custom FileStorage implementations still own their Modification_Date and Archive maintenance; no generic callback or custom-backend resize contract is claimed. Property resize has a separate PROPERTY-class policy: exact access method and Read_Only eligibility precede Unsigned datatype validation, actual changes reuse set_data/set_records, and exact no-ops bypass the clock and metadata. WPM readable-property replay is intentionally followed by direct opaque-token restoration because replay cannot reconstruct truncated bytes or records and would otherwise restamp metadata. File PICS tests use isolated mutable-stream, mutable-record, and read-only representatives. PICS generation still selects the first representative for an object type; heterogeneous File instances are not aggregated, representative ordering is not made deterministic, and no mixed-instance truth claim is made. Clause 19.1.3.3 explains the File_Size=0 restore use case, but restore orchestration is not implemented here. Other deferrals are custom FileStorage/custom-backend property resize, host filesystem storage, locking beyond the object-database guard, Python/CLI exposure, ReadRange, and unbounded allocation. The read handler clamps a record window to MAX_DECODED_ITEMS so one ACK never exceeds what the workspace decoder accepts, including files preloaded past the record cap. This is a recorded departure from the Clause 14.1 Service Procedure, which short-reads only when fewer records remain; the clamp adds a second local reason. Clause 14.1.3.1 makes End Of File data-independent, so a client that continues from start + Returned Record Count still reads the whole file. FileObject::set_data and set_records update File_Size and Record_Count only for the selected channel (any raw value other than RECORD_ACCESS is the stream channel for those local setters), while network property resize requires an exact named access method and set_file_access_method recomputes both on a switch; Record_Count remains present only under RECORD_ACCESS (Table 12-16 footnote 2)."
+      "notes": "Row added with #397, extended for built-in FileObject mutation metadata with #416, and extended for conditional built-in resize properties with #417. AtomicReadFile/AtomicWriteFile gate order remains object type, lookup, storage presence, read-only for writes, access method, then storage start-position and capacity checks. End Of File is authoritative: an empty window at the end of a non-empty built-in file, including a zero-count read, reports FALSE; a valid read at the only position of a built-in empty stream or record file returns empty data with TRUE. The growth caps (1 MiB of octets, 10,000 records by default, per object, growth-only so preloaded contents past the cap remain valid) are the designed limit Clause 18 defines FILE_FULL for; the caps are not BACnet properties and never appear in Property_List. AtomicWriteFile record decoding requires file-record-data cardinality to equal Record Count (#418): a short list is rejected MISSING_REQUIRED_PARAMETER and an extra element is rejected TOO_MANY_ARGUMENTS. The handler's access-method gate is pinned independently with lax custom storage; FileStorage defaults report FILE_ACCESS_DENIED, never a method mismatch. Built-in mutation metadata is object-owned: ObjectDatabase binds the ClockReader, and FileObject samples only after successful payload/accounting commit. Custom FileStorage implementations still own their Modification_Date and Archive maintenance; no generic callback or custom-backend resize contract is claimed. Property resize has a separate PROPERTY-class policy: exact access method and Read_Only eligibility precede Unsigned datatype validation, actual changes reuse set_data/set_records, and exact no-ops bypass the clock and metadata. The retained compatibility snapshot hook directly restores truncated bytes, records, and metadata in object-local tests; bundled-server Service 16 does not invoke it and retains successful file-resize prefix writes. File PICS tests use isolated mutable-stream, mutable-record, and read-only representatives. PICS generation still selects the first representative for an object type; heterogeneous File instances are not aggregated, representative ordering is not made deterministic, and no mixed-instance truth claim is made. Clause 19.1.3.3 explains the File_Size=0 restore use case, but restore orchestration is not implemented here. Other deferrals are custom FileStorage/custom-backend property resize, host filesystem storage, locking beyond the object-database guard, Python/CLI exposure, ReadRange, and unbounded allocation. The read handler clamps a record window to MAX_DECODED_ITEMS so one ACK never exceeds what the workspace decoder accepts, including files preloaded past the record cap. This is a recorded departure from the Clause 14.1 Service Procedure, which short-reads only when fewer records remain; the clamp adds a second local reason. Clause 14.1.3.1 makes End Of File data-independent, so a client that continues from start + Returned Record Count still reads the whole file. FileObject::set_data and set_records update File_Size and Record_Count only for the selected channel (any raw value other than RECORD_ACCESS is the stream channel for those local setters), while network property resize requires an exact named access method and set_file_access_method recomputes both on a switch; Record_Count remains present only under RECORD_ACCESS (Table 12-16 footnote 2)."
   }
  ]
 }
