@@ -13,9 +13,7 @@ mod unconfirmed;
 #[cfg(test)]
 mod unconfirmed_tests;
 #[cfg(test)]
-pub(crate) use executed::EXECUTED_CONFIRMED;
-#[cfg(test)]
-pub(crate) use unconfirmed::EXECUTED_UNCONFIRMED;
+pub(crate) use self::{executed::EXECUTED_CONFIRMED, unconfirmed::EXECUTED_UNCONFIRMED};
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Handle one admitted confirmed request.
@@ -128,28 +126,51 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
             s if s == ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE => {
-                let (result, residual_oids, exact_changes) = {
+                let (outcome, exact_changes) = {
                     let mut db = db.write().await;
-                    let snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::capture_write_property_multiple(
-                        &db,
+                    let mut snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::default();
+                    let outcome = handlers::handle_write_property_multiple_detailed(
+                        &mut db,
                         &req.service_request,
+                        &mut snapshots,
                     );
-                    let (result, residual_oids) =
-                        handlers::handle_write_property_multiple_with_residuals(
-                            &mut db,
-                            &req.service_request,
-                        );
-                    let affected = result.as_ref().unwrap_or(&residual_oids);
-                    let changes = snapshots.changes(&db, affected);
-                    (result, residual_oids, changes)
+                    let committed_oids = match &outcome {
+                        handlers::WritePropertyMultipleOutcome::Success { committed_oids }
+                        | handlers::WritePropertyMultipleOutcome::Error {
+                            committed_oids, ..
+                        } => committed_oids.as_slice(),
+                        handlers::WritePropertyMultipleOutcome::Reject { .. } => &[],
+                    };
+                    let changes = snapshots.changes(&db, committed_oids);
+                    (outcome, changes)
                 };
-                written_oids = residual_oids;
-                let response = match result {
-                    Ok(oids) => {
-                        written_oids = oids;
+                let response = match outcome {
+                    handlers::WritePropertyMultipleOutcome::Success { committed_oids } => {
+                        written_oids = committed_oids;
                         simple_ack()
                     }
-                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
+                    handlers::WritePropertyMultipleOutcome::Error {
+                        error,
+                        first_failed_write_attempt,
+                        committed_oids,
+                    } => {
+                        written_oids = committed_oids;
+                        let (error_class, error_code) = confirmed_response::error_fields(&error);
+                        Apdu::Error(
+                            bacnet_services::wpm::WritePropertyMultipleError {
+                                error_class,
+                                error_code,
+                                first_failed_write_attempt,
+                            }
+                            .to_error_pdu(invoke_id),
+                        )
+                    }
+                    handlers::WritePropertyMultipleOutcome::Reject { reason } => {
+                        Apdu::Reject(RejectPdu {
+                            invoke_id,
+                            reject_reason: reason,
+                        })
+                    }
                 };
                 coarse_cov_oids.extend(
                     written_oids
@@ -702,13 +723,5 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
         }
-    }
-    /// Convert an error into its protocol response APDU.
-    pub(super) fn error_apdu_from_error(
-        invoke_id: u8,
-        service_choice: ConfirmedServiceChoice,
-        error: &Error,
-    ) -> Apdu {
-        confirmed_response::error_apdu_from_error(invoke_id, service_choice, error)
     }
 }

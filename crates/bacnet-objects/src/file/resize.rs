@@ -1,4 +1,6 @@
-//! Private property-resize authority and opaque WPM rollback state.
+//! Private property-resize authority and compatibility snapshot state.
+//!
+//! Service 16 no longer invokes the retained object-local snapshot hooks.
 
 use super::{common, file_full, FileObject};
 use crate::traits::WritePropertyRollback;

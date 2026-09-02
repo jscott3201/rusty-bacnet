@@ -31,18 +31,33 @@ pub(super) fn error_apdu_from_error(
             reject_reason: RejectReason::from_raw(*reason),
         });
     }
-    let (class, code) = match error {
-        Error::Protocol { class, code } => (*class, *code),
-        _ => (
-            ErrorClass::SERVICES.to_raw() as u32,
-            ErrorCode::OTHER.to_raw() as u32,
-        ),
-    };
+    let (error_class, error_code) = error_fields(error);
     Apdu::Error(ErrorPdu {
         invoke_id,
         service_choice,
-        error_class: ErrorClass::from_raw(class as u16),
-        error_code: ErrorCode::from_raw(code as u16),
+        error_class,
+        error_code,
         error_data: Bytes::new(),
     })
+}
+
+pub(super) fn error_fields(error: &Error) -> (ErrorClass, ErrorCode) {
+    match error {
+        Error::Protocol { class, code } => (
+            ErrorClass::from_raw(*class as u16),
+            ErrorCode::from_raw(*code as u16),
+        ),
+        _ => (ErrorClass::SERVICES, ErrorCode::OTHER),
+    }
+}
+
+impl<T: TransportPort + 'static> BACnetServer<T> {
+    /// Convert an error into its protocol response APDU.
+    pub(in crate::server) fn error_apdu_from_error(
+        invoke_id: u8,
+        service_choice: ConfirmedServiceChoice,
+        error: &Error,
+    ) -> Apdu {
+        error_apdu_from_error(invoke_id, service_choice, error)
+    }
 }

@@ -285,8 +285,8 @@ fn life_safety_properties_cannot_be_bypassed_through_write_property_multiple() {
     assert_protocol_error(error, ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED);
     assert_eq!(
         read_enumerated(&db, oid, PropertyIdentifier::MODE),
-        0,
-        "the earlier MODE write must roll back"
+        1,
+        "the earlier MODE write stays committed"
     );
     assert_eq!(
         read_enumerated(&db, oid, PropertyIdentifier::SILENCED),

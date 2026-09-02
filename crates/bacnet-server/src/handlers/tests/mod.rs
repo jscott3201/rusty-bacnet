@@ -1,6 +1,7 @@
 use super::*;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::traits::BACnetObject;
+use bacnet_services::wpm::WritePropertyMultipleRequest;
 
 fn make_db_with_ai() -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
@@ -64,13 +65,7 @@ mod read_range_time;
 mod read_rpm;
 mod reference_writes;
 mod wpm_create_alarm;
-mod wpm_event_rollback;
-mod wpm_fault_rollback;
-mod wpm_file_resize_rollback;
-mod wpm_log_lifecycle;
-mod wpm_multistate_reliability_rollback;
-mod wpm_parameter_rollback;
-mod wpm_rollback_contract;
+mod wpm_prefix_commit;
 mod write_cov_who;
 mod write_property_name;
 mod write_validation;

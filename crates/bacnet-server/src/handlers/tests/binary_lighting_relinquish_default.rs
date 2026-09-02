@@ -149,7 +149,7 @@ fn binary_lighting_output_relinquish_default_rejects_non_binary_values_over_writ
 }
 
 #[test]
-fn binary_lighting_output_failed_wpm_restores_default_present_value_and_priority() {
+fn binary_lighting_output_failed_wpm_keeps_default_prefix_and_priority() {
     let (mut db, oid) = binary_lighting_output_db();
     write_wire(
         &mut db,
@@ -159,16 +159,10 @@ fn binary_lighting_output_failed_wpm_restores_default_present_value_and_priority
         Some(8),
     )
     .unwrap();
-    let priority_before = read_property(&db, oid, PropertyIdentifier::PRIORITY_ARRAY, None);
     assert_command_state(&db, oid, 0, 1, PropertyValue::Enumerated(1));
 
     assert_value_out_of_range(write_multiple_relinquish_defaults(&mut db, oid, &[1, 2]));
-    assert_command_state(&db, oid, 0, 1, PropertyValue::Enumerated(1));
-    assert_eq!(
-        read_property(&db, oid, PropertyIdentifier::PRIORITY_ARRAY, None),
-        priority_before,
-        "failed WPM must restore the complete priority array"
-    );
+    assert_command_state(&db, oid, 1, 1, PropertyValue::Enumerated(1));
 
     write_wire(
         &mut db,
@@ -178,5 +172,5 @@ fn binary_lighting_output_failed_wpm_restores_default_present_value_and_priority
         Some(8),
     )
     .unwrap();
-    assert_command_state(&db, oid, 0, 0, PropertyValue::Null);
+    assert_command_state(&db, oid, 1, 1, PropertyValue::Null);
 }

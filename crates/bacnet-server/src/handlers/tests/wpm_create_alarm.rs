@@ -26,21 +26,10 @@ fn wpm_handler_unknown_object_fails() {
 }
 
 #[test]
-fn wpm_handler_atomicity_rollback() {
-    // Write two properties: first succeeds (HIGH_LIMIT), second fails (read-only OBJECT_TYPE).
-    // Verify HIGH_LIMIT is rolled back to its original value.
+fn wpm_handler_commits_successful_prefix() {
+    // HIGH_LIMIT succeeds before the read-only OBJECT_TYPE failure.
     let mut db = make_db_with_ai();
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-
-    let original_hl = match db
-        .get(&oid)
-        .unwrap()
-        .read_property(PropertyIdentifier::HIGH_LIMIT, None)
-        .unwrap()
-    {
-        PropertyValue::Real(v) => v,
-        _ => panic!("expected Real"),
-    };
 
     let mut hl_buf = BytesMut::new();
     bacnet_encoding::primitives::encode_app_real(&mut hl_buf, 999.0);
@@ -75,7 +64,6 @@ fn wpm_handler_atomicity_rollback() {
     // Should fail because OBJECT_TYPE is read-only
     assert!(handle_write_property_multiple(&mut db, &buf).is_err());
 
-    // HIGH_LIMIT should be rolled back to original
     let after_hl = match db
         .get(&oid)
         .unwrap()
@@ -85,14 +73,11 @@ fn wpm_handler_atomicity_rollback() {
         PropertyValue::Real(v) => v,
         _ => panic!("expected Real"),
     };
-    assert_eq!(
-        original_hl, after_hl,
-        "HIGH_LIMIT should be rolled back after failed WPM"
-    );
+    assert_eq!(after_hl, 999.0, "the successful prefix stays committed");
 }
 
 #[test]
-fn wpm_rollback_restores_out_of_service_reliability_and_saved_value() {
+fn wpm_prefix_commit_keeps_out_of_service_transition() {
     use bacnet_services::common::BACnetPropertyValue;
     use bacnet_services::wpm::WriteAccessSpecification;
     use bacnet_types::enums::Reliability;
@@ -148,13 +133,13 @@ fn wpm_rollback_restores_out_of_service_reliability_and_saved_value() {
     assert_eq!(
         obj.read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
             .unwrap(),
-        PropertyValue::Boolean(true)
+        PropertyValue::Boolean(false)
     );
     assert_eq!(
         obj.read_property(PropertyIdentifier::RELIABILITY, None)
             .unwrap(),
-        PropertyValue::Enumerated(Reliability::NO_SENSOR.to_raw()),
-        "rollback must restore the client's simulated Reliability"
+        PropertyValue::Enumerated(Reliability::OVER_RANGE.to_raw()),
+        "the successful OOS exit restores evaluated Reliability"
     );
 
     obj.write_property(
@@ -168,7 +153,7 @@ fn wpm_rollback_restores_out_of_service_reliability_and_saved_value() {
         obj.read_property(PropertyIdentifier::RELIABILITY, None)
             .unwrap(),
         PropertyValue::Enumerated(Reliability::OVER_RANGE.to_raw()),
-        "rollback must reconstruct the saved evaluated Reliability"
+        "a repeated in-service write keeps evaluated Reliability"
     );
 }
 #[test]
@@ -355,7 +340,7 @@ fn acknowledge_alarm_unknown_object_fails() {
 
 /// Build a database with one commandable AnalogOutput whose priority-8 slot
 /// holds an active command, so a `PRESENT_VALUE` write at priority 8 has a real
-/// slot to roll back to. Returns the db and the AO's object identifier.
+/// slot to overwrite. Returns the db and the AO's object identifier.
 fn make_db_with_commandable_ao() -> (ObjectDatabase, ObjectIdentifier) {
     use bacnet_objects::analog::AnalogOutputObject;
     let mut db = ObjectDatabase::new();
@@ -390,34 +375,15 @@ fn priority_slot(db: &ObjectDatabase, oid: &ObjectIdentifier, slot: u32) -> Opti
     }
 }
 
-/// Regression for #118: a `WritePropertyMultiple` whose later write fails must
-/// roll a commandable `PRESENT_VALUE` write back to the **priority-array slot**
-/// it changed, not write the resolved value to priority 16.
-///
-/// Setup: AO with an active priority-8 command (50.0). The WPM writes
-/// `PRESENT_VALUE=99.0` at priority 8 (overwriting the slot), then a second
-/// spec writes the read-only `OBJECT_TYPE` (which fails). Rollback must
-/// restore priority-8 to 50.0, leave priority-16 empty, and keep the effective
-/// `PRESENT_VALUE` / `CURRENT_COMMAND_PRIORITY` at their pre-request values.
 #[test]
-fn wpm_rollback_restores_commandable_priority_slot_not_effective_value() {
+fn wpm_prefix_commit_keeps_commandable_priority_slot() {
     let (mut db, oid) = make_db_with_commandable_ao();
 
-    let pre_pv = db
-        .get(&oid)
-        .unwrap()
-        .read_property(PropertyIdentifier::PRESENT_VALUE, None)
-        .unwrap();
-    let pre_ccp = db
-        .get(&oid)
-        .unwrap()
-        .read_property(PropertyIdentifier::CURRENT_COMMAND_PRIORITY, None)
-        .unwrap();
     assert_eq!(priority_slot(&db, &oid, 8), Some(50.0));
     assert_eq!(priority_slot(&db, &oid, 16), None);
 
     // First spec: overwrite the priority-8 command. Second spec: OBJECT_TYPE is
-    // read-only and fails, triggering rollback of the first write.
+    // read-only and fails after the first write commits.
     let mut pv_buf = BytesMut::new();
     bacnet_encoding::primitives::encode_app_real(&mut pv_buf, 99.0);
     let mut ot_buf = BytesMut::new();
@@ -449,13 +415,11 @@ fn wpm_rollback_restores_commandable_priority_slot_not_effective_value() {
 
     assert!(handle_write_property_multiple(&mut db, &buf).is_err());
 
-    // The priority-8 slot is restored to its pre-request value (50.0), not left
-    // at 99.0 and not duplicated at priority 16.
-    assert_eq!(priority_slot(&db, &oid, 8), Some(50.0));
+    assert_eq!(priority_slot(&db, &oid, 8), Some(99.0));
     assert_eq!(
         priority_slot(&db, &oid, 16),
         None,
-        "rollback must not leave a spurious priority-16 command"
+        "the failed attempt does not create another command"
     );
     // Effective present value and command priority are unchanged.
     assert_eq!(
@@ -463,31 +427,24 @@ fn wpm_rollback_restores_commandable_priority_slot_not_effective_value() {
             .unwrap()
             .read_property(PropertyIdentifier::PRESENT_VALUE, None)
             .unwrap(),
-        pre_pv
+        PropertyValue::Real(99.0)
     );
     assert_eq!(
         db.get(&oid)
             .unwrap()
             .read_property(PropertyIdentifier::CURRENT_COMMAND_PRIORITY, None)
             .unwrap(),
-        pre_ccp
+        PropertyValue::Unsigned(8)
     );
 }
 
-/// Regression for #118: rolling back a `PRESENT_VALUE` write that **relinquished**
-/// a slot (wrote `Null`) must restore the slot's prior command, not leave it
-/// relinquished.
-///
-/// Setup: AO with an active priority-8 command (50.0). The WPM writes
-/// `Null` (relinquish) at priority 8, then a second spec fails. Rollback must
-/// restore priority-8 to 50.0.
 #[test]
-fn wpm_rollback_restores_relinquished_priority_slot() {
+fn wpm_prefix_commit_keeps_relinquished_priority_slot() {
     let (mut db, oid) = make_db_with_commandable_ao();
     assert_eq!(priority_slot(&db, &oid, 8), Some(50.0));
 
     // First spec: relinquish priority 8 (write Null). Second spec: OBJECT_TYPE
-    // fails, triggering rollback.
+    // fails after the relinquish commits.
     let mut null_buf = BytesMut::new();
     bacnet_encoding::primitives::encode_app_null(&mut null_buf);
     let mut ot_buf = BytesMut::new();
@@ -519,32 +476,22 @@ fn wpm_rollback_restores_relinquished_priority_slot() {
 
     assert!(handle_write_property_multiple(&mut db, &buf).is_err());
 
-    // The priority-8 command is restored, not left relinquished.
     assert_eq!(
         priority_slot(&db, &oid, 8),
-        Some(50.0),
-        "rollback of a relinquish must restore the prior command"
+        None,
+        "the successful relinquish stays committed"
     );
     assert_eq!(
         db.get(&oid)
             .unwrap()
             .read_property(PropertyIdentifier::PRESENT_VALUE, None)
             .unwrap(),
-        PropertyValue::Real(50.0)
+        PropertyValue::Real(0.0)
     );
 }
 
-/// Regression for the non-commandable half of #118: a `PRESENT_VALUE` write on a
-/// non-commandable object (no `PRIORITY_ARRAY`) must still roll back. The
-/// commandable fix snapshots `PRIORITY_ARRAY[priority]`, which returns `Err` on
-/// a non-commandable object; the snapshot then falls back to reading
-/// `PRESENT_VALUE` directly so the write is restored. Without that fallback a
-/// failed multi-write would leave the non-commandable `PRESENT_VALUE` changed
-/// despite this implementation's all-or-nothing WPM policy.
-///
-/// `AnalogInput` is writable only while out-of-service, so place it OOS first.
 #[test]
-fn wpm_rollback_restores_noncommandable_present_value_analoginput() {
+fn wpm_prefix_commit_keeps_noncommandable_present_value_analoginput() {
     use bacnet_objects::analog::AnalogInputObject;
     let mut db = ObjectDatabase::new();
     let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
@@ -572,7 +519,7 @@ fn wpm_rollback_restores_noncommandable_present_value_analoginput() {
     assert_eq!(pre_pv, PropertyValue::Real(10.0));
 
     // First spec: write PRESENT_VALUE (succeeds, AI is OOS). Second spec:
-    // OBJECT_TYPE is read-only and fails, triggering rollback of the first.
+    // OBJECT_TYPE is read-only and fails after the first write commits.
     let mut pv_buf = BytesMut::new();
     bacnet_encoding::primitives::encode_app_real(&mut pv_buf, 77.0);
     let mut ot_buf = BytesMut::new();
@@ -609,19 +556,11 @@ fn wpm_rollback_restores_noncommandable_present_value_analoginput() {
         .unwrap()
         .read_property(PropertyIdentifier::PRESENT_VALUE, None)
         .unwrap();
-    assert_eq!(
-        post_pv, pre_pv,
-        "non-commandable PRESENT_VALUE must roll back to {pre_pv:?}, got {post_pv:?}"
-    );
+    assert_eq!(post_pv, PropertyValue::Real(77.0));
 }
 
-/// A commandable `MultiStateOutput` whose priority-8 command is overwritten and
-/// then rolled back must restore the priority-8 slot. Multi-state priority slots
-/// hold `Unsigned` values (not `Real`), so this exercises the `Unsigned`
-/// wrap/extract path end to end — the slot snapshot and the rollback write both
-/// carry an `Unsigned` `PropertyValue`.
 #[test]
-fn wpm_rollback_restores_commandable_priority_slot_multistate_output() {
+fn wpm_prefix_commit_keeps_commandable_priority_slot_multistate_output() {
     use bacnet_objects::multistate::MultiStateOutputObject;
     let mut db = ObjectDatabase::new();
     let mut mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
@@ -669,24 +608,19 @@ fn wpm_rollback_restores_commandable_priority_slot_multistate_output() {
 
     assert!(handle_write_property_multiple(&mut db, &buf).is_err());
 
-    // Priority-8 slot restored to 2, no spurious priority-16 command.
-    assert_eq!(priority_slot(&db, &oid, 8), Some(2.0));
+    assert_eq!(priority_slot(&db, &oid, 8), Some(3.0));
     assert_eq!(priority_slot(&db, &oid, 16), None);
 }
 
-/// A commandable `PRESENT_VALUE` write with no explicit priority targets slot
-/// 16 (`priority.unwrap_or(16)`). Rolling it back must relinquish slot 16 (it
-/// was empty) and leave the higher-priority slot-8 command driving the
-/// effective value untouched.
 #[test]
-fn wpm_rollback_restores_commandable_priority_16_slot() {
+fn wpm_prefix_commit_keeps_commandable_priority_16_slot() {
     let (mut db, oid) = make_db_with_commandable_ao();
     // priority 8 holds 50.0 (from the helper); priority 16 is empty.
     assert_eq!(priority_slot(&db, &oid, 8), Some(50.0));
     assert_eq!(priority_slot(&db, &oid, 16), None);
 
     // First spec: write PRESENT_VALUE with no priority → slot 16 = 99.0.
-    // Second spec: OBJECT_TYPE fails, triggering rollback of the slot-16 write.
+    // Second spec: OBJECT_TYPE fails after the slot-16 write commits.
     let mut pv_buf = BytesMut::new();
     bacnet_encoding::primitives::encode_app_real(&mut pv_buf, 99.0);
     let mut ot_buf = BytesMut::new();
@@ -718,9 +652,7 @@ fn wpm_rollback_restores_commandable_priority_16_slot() {
 
     assert!(handle_write_property_multiple(&mut db, &buf).is_err());
 
-    // Slot 16 relinquished again (empty), slot 8 unchanged, effective PV still
-    // driven by the priority-8 command.
-    assert_eq!(priority_slot(&db, &oid, 16), None);
+    assert_eq!(priority_slot(&db, &oid, 16), Some(99.0));
     assert_eq!(priority_slot(&db, &oid, 8), Some(50.0));
     assert_eq!(
         db.get(&oid)

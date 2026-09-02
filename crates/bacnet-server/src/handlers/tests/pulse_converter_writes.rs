@@ -158,7 +158,7 @@ fn write_property_multiple_oos_before_present_value_succeeds() {
 }
 
 #[test]
-fn write_property_multiple_later_failure_rolls_back_present_value_and_oos() {
+fn write_property_multiple_later_failure_keeps_present_value_and_oos_prefix() {
     let (mut db, oid) = pulse_converter_db();
 
     assert_write_access_denied(write_multiple_wire(
@@ -176,5 +176,5 @@ fn write_property_multiple_later_failure_rolls_back_present_value_and_oos() {
             ),
         ],
     ));
-    assert_state(&db, oid, 0.0, false);
+    assert_state(&db, oid, 12.5, true);
 }

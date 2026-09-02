@@ -13,11 +13,11 @@
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 16 |
-| Priority | P1 | 41 |
+| Priority | P1 | 42 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
-| Status | implementation-present-needs-conformance-tests | 15 |
+| Status | implementation-present-needs-conformance-tests | 14 |
 | Status | implementation-present-needs-negative-tests | 6 |
 | Status | implementation-present-needs-platform-tests | 1 |
 | Status | implementation-present-needs-security-tests | 1 |
@@ -25,8 +25,8 @@
 | Status | implementation-present-needs-state-machine-audit | 4 |
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
-| Status | in-progress | 8 |
-| Status | supported-with-clause-evidence | 17 |
+| Status | in-progress | 9 |
+| Status | supported-with-clause-evidence | 18 |
 | Status | unknown-pending-source-review | 4 |
 | Status | unsupported-by-design | 3 |
 
@@ -71,6 +71,7 @@
 | `BACNET-15-ARRAY-INDEX-GATING` | Clause 15.5.1.3, Clause 15.9.1.3 (with Clause 12.1.5) | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-15-WP-EVENT-FIELD-VALIDATION` | Clause 15.9.1.3 (WriteProperty error table) with Clause 21 BACnetNotifyType / BACnetEventTransitionBits / BACnetLimitEnable productions | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-15-STRUCTURED-WRITE-DECODE` | Clause 15.9 WriteProperty (15.9.1.2 Result(+), 15.9.1.3 Result(-)), Clause 15.10 WritePropertyMultiple, Clause 20.2.1 (concatenated elements) | P1 | supported-with-clause-evidence | 0 |
+| `BACNET-15-WPM-ORDERED-PREFIX-ERROR` | Clause 15.10 and 15.10.1.3 (WritePropertyMultiple service procedure and Result(-)); Clause 18.9 (Reject reasons); Clause 21 (Error and BACnetObjectPropertyReference productions) | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-20-ENCODING` | Clause 20 | P1 | implementation-present-needs-negative-tests | 2 |
 | `BACNET-21-FORMAL-APDUS` | Clause 21 | P1 | implementation-present-needs-conformance-tests | 2 |
 | `BACNET-21-TIMESTAMP-CHOICE` | Clause 21 (BACnetTimeStamp), Clause 20.2.1.5 | P1 | supported-with-clause-evidence | 1 |
@@ -94,7 +95,7 @@
 | `BACNET-AB-SC-HUB-CONNECTOR` | Annex AB.5 | P0 | supported-with-clause-evidence | 2 |
 | `BACNET-AB-SC-WEBSOCKET-TLS` | Annex AB.7 | P0 | implementation-present-needs-security-tests | 2 |
 | `BACNET-AB-SC-HEARTBEAT` | Annex AB.6.3 | P0 | implementation-present-needs-timeout-tests | 2 |
-| `BACNET-13-EVENT-DISABLE-WPM-ROLLBACK` | Clause 12.52 Table 12-61 (Alert Enrollment Event_State, Acked_Transitions, Event_Detection_Enable); Clause 13.2.2.1 disabled-state initial conditions; Clause 13.3 pTimeDelayNormal fallback; Clause 15.10 ordered WritePropertyMultiple procedure | P1 | implementation-present-needs-conformance-tests | 0 |
+| `BACNET-13-EVENT-DISABLE-WPM-PREFIX` | Clause 12.52 Table 12-61 (Alert Enrollment Event_State, Acked_Transitions, Event_Detection_Enable); Clause 13.2.2.1 disabled-state initial conditions; Clause 13.3 pTimeDelayNormal fallback; Clause 15.10 ordered WritePropertyMultiple procedure | P1 | in-progress | 0 |
 | `BACNET-13-EVENT-ENROLLMENT-EVALUATOR` | Clause 12.12 with Table 12-14 (Event Enrollment Object Type; configured Event_Type excludes CHANGE_OF_RELIABILITY; Time_Delay_Normal Unsigned, conformance O, extract 16444-16446, property text 16887-16889); Clause 12.12 Table 12-15 (Time_Delay -> pTimeDelay mapping for every evaluated algorithm); Clause 13.2.2.1 (changed nonzero Reliability while FAULT is a To-Fault re-entry); Clause 13.2.2.1.4 (transition actions incl. the same-state rule); Clause 13.2.3 (Acked_Transitions on a received transition); Clause 13.2.5.2 Table 13-3 and Clause 13.2.5.3 (CHANGE_OF_RELIABILITY whenever From or To is FAULT); Clause 13.3 common introduction and 13.3.1/13.3.2/13.3.3/13.3.5/13.3.6 direction rules with the pTimeDelayNormal fallback; Figure 13-10 | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-13-EVENT-ENROLLMENT-NOTIFICATION-LIFECYCLE` | Event Enrollment object and event-reporting lifecycle requirements for configured event type, transition enablement, Notification Class policy, committed acknowledgment/timestamp/message history, same-state indication, distribution gating, and committed notification fields | P1 | implementation-present-needs-conformance-tests | 0 |
 | `BACNET-13-LIFE-SAFETY-OPERATION` | Clauses 13.13-13.15; Tables 13-1 and 13-1a; Clauses 12.15 and 12.16 Present_Value, Status_Flags, Tracking_Value, Silenced, and Operation_Expected properties; Clause 18 errors | P0 | implementation-present-needs-conformance-tests | 1 |

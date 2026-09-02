@@ -6,7 +6,16 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
-use crate::common::{BACnetPropertyValue, MAX_DECODED_ITEMS};
+use crate::common::BACnetPropertyValue;
+
+pub mod cursor;
+pub mod error;
+
+pub use cursor::{
+    WritePropertyAttempt, WritePropertyMultipleCursor, WritePropertyMultipleCursorError,
+    WritePropertyMultipleDecodeStage, WritePropertyMultipleEvent,
+};
+pub use error::WritePropertyMultipleError;
 
 // ---------------------------------------------------------------------------
 // WritePropertyMultipleRequest
@@ -40,58 +49,41 @@ impl WritePropertyMultipleRequest {
     }
 
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
+        let mut cursor = WritePropertyMultipleCursor::new(data);
         let mut specs = Vec::new();
+        let mut current = None;
 
-        while offset < data.len() {
-            if specs.len() >= MAX_DECODED_ITEMS {
-                return Err(Error::decoding(
-                    offset,
-                    "WPM request exceeds max decoded items",
-                ));
-            }
-
-            // [0] object-identifier
-            let (tag, pos) = tags::decode_tag(data, offset)?;
-            let end = pos + tag.length as usize;
-            if end > data.len() {
-                return Err(Error::decoding(pos, "WPM request truncated at object-id"));
-            }
-            let object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-            offset = end;
-
-            // [1] list-of-properties (opening tag 1)
-            let (tag, tag_end) = tags::decode_tag(data, offset)?;
-            if !tag.is_opening_tag(1) {
-                return Err(Error::decoding(
-                    offset,
-                    "WPM request expected opening tag 1",
-                ));
-            }
-            offset = tag_end;
-
-            let mut props = Vec::new();
-            loop {
-                if offset >= data.len() {
-                    return Err(Error::decoding(offset, "WPM request missing closing tag 1"));
+        while let Some(event) = cursor.next_event().map_err(|error| {
+            Error::decoding(
+                error.offset,
+                format!("WPM {:?}: {}", error.stage, error.message),
+            )
+        })? {
+            match event {
+                WritePropertyMultipleEvent::ObjectStart(object_identifier) => {
+                    current = Some(WriteAccessSpecification {
+                        object_identifier,
+                        list_of_properties: Vec::new(),
+                    });
                 }
-                if props.len() >= MAX_DECODED_ITEMS {
-                    return Err(Error::decoding(offset, "WPM properties exceeds max"));
+                WritePropertyMultipleEvent::WriteAttempt(attempt) => {
+                    current
+                        .as_mut()
+                        .expect("cursor emits attempts inside an object")
+                        .list_of_properties
+                        .push(BACnetPropertyValue {
+                            property_identifier: bacnet_types::enums::PropertyIdentifier::from_raw(
+                                attempt.reference.property_identifier,
+                            ),
+                            property_array_index: attempt.reference.property_array_index,
+                            value: attempt.value,
+                            priority: attempt.priority,
+                        });
                 }
-                let (tag, tag_end) = tags::decode_tag(data, offset)?;
-                if tag.is_closing_tag(1) {
-                    offset = tag_end;
-                    break;
+                WritePropertyMultipleEvent::ObjectEnd => {
+                    specs.push(current.take().expect("cursor ends an open object"));
                 }
-                let (pv, new_offset) = BACnetPropertyValue::decode_in_list(data, offset, 1)?;
-                props.push(pv);
-                offset = new_offset;
             }
-
-            specs.push(WriteAccessSpecification {
-                object_identifier,
-                list_of_properties: props,
-            });
         }
 
         Ok(Self {

@@ -28,13 +28,13 @@ pub type MonotonicClock = dyn Fn() -> Duration + Send + Sync;
 mod defaults;
 use defaults::{array_property_default, historical_writable_default};
 
-/// Object-owned state that cannot be reconstructed from property readback.
+/// Object-owned snapshot state retained for compatibility and local use.
 ///
-/// This token supports the server's stronger-than-Clause-15.10 rollback policy
-/// for WritePropertyMultiple. The server still snapshots readable property
-/// values when a token exists; the token supplements that snapshot with state
-/// hidden by readback. This includes event-detection resets, fallback-backed
-/// values, destructive log writes, and writes that update derived properties.
+/// The bundled server no longer invokes these tokens from Service 16:
+/// WritePropertyMultiple retains its successful prefix as required by Clause
+/// 15.10. Existing object implementations and downstream users may still use
+/// the hooks directly to preserve state hidden by property readback, including
+/// event resets, fallback-backed values, destructive writes, and derived state.
 #[doc(hidden)]
 pub struct WritePropertyRollback(Box<dyn Any + Send + Sync>);
 
@@ -113,8 +113,8 @@ pub trait BACnetObject: Send + Sync {
     /// Write a property value.
     ///
     /// Returning `Err` MUST leave the object unchanged. WritePropertyMultiple
-    /// can restore earlier successful writes, but it cannot reconstruct a
-    /// write-only property that mutates before rejecting its own write.
+    /// retains earlier successful writes and cannot undo a mutation made by the
+    /// currently failing write, including for a write-only property.
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
@@ -232,15 +232,13 @@ pub trait BACnetObject: Send + Sync {
         array_property_default(self.object_identifier().object_type(), property)
     }
 
-    /// Capture state that property readback cannot preserve during rollback.
+    /// Capture compatibility state that property readback cannot preserve.
     ///
-    /// The default returns `None`; the server snapshots readable property
-    /// values before calling this hook. Implementations may return a token for
-    /// writes whose side effects, destructive behavior, or fallback-backed
-    /// storage make replay lossy. A destructive write may move state into the
-    /// token when `value` is valid; the token is restored if the write or a
-    /// later write fails, and dropped when the WPM request succeeds. Returning
-    /// `None` MUST leave the object unchanged.
+    /// The default returns `None`. Service 16 no longer calls this hook because
+    /// WritePropertyMultiple retains successful prefix writes. Implementations
+    /// and downstream callers may still use a token directly for object-local
+    /// snapshot/restore flows involving destructive or fallback-backed state.
+    /// Returning `None` MUST leave the object unchanged.
     #[doc(hidden)]
     fn capture_write_property_rollback(
         &mut self,
@@ -250,7 +248,10 @@ pub trait BACnetObject: Send + Sync {
         None
     }
 
-    /// Restore a token returned by [`capture_write_property_rollback`](Self::capture_write_property_rollback).
+    /// Restore a compatibility token returned by
+    /// [`capture_write_property_rollback`](Self::capture_write_property_rollback).
+    ///
+    /// The bundled server's Service 16 path does not invoke this hook.
     #[doc(hidden)]
     fn restore_write_property_rollback(
         &mut self,

@@ -108,6 +108,16 @@ fn assert_priority_decode_error(error: Error, priority: u8) {
     }
 }
 
+fn assert_services_invalid_tag(error: Error) {
+    match error {
+        Error::Protocol { class, code } => {
+            assert_eq!(class, ErrorClass::SERVICES.to_raw() as u32);
+            assert_eq!(code, ErrorCode::INVALID_TAG.to_raw() as u32);
+        }
+        other => panic!("expected SERVICES/INVALID_TAG, got {other:?}"),
+    }
+}
+
 fn configure_eligible_warn_off(db: &mut ObjectDatabase, oid: ObjectIdentifier, seconds: u64) {
     for (property, value, priority) in [
         (
@@ -199,7 +209,7 @@ fn present_value_named_commands_and_null_decode_at_valid_and_default_priorities(
 }
 
 #[test]
-fn wrong_and_out_of_range_priorities_are_atomic_before_command_mutation() {
+fn write_property_priority_errors_are_atomic_and_wpm_keeps_prior_prefix() {
     let (mut db, oid) = database();
     configure_eligible_warn_off(&mut db, oid, 5);
     wp(
@@ -232,7 +242,7 @@ fn wrong_and_out_of_range_priorities_are_atomic_before_command_mutation() {
         assert_eq!(blink_count(&db, oid), 1);
     }
 
-    assert_priority_decode_error(
+    assert_services_invalid_tag(
         wpm(
             &mut db,
             oid,
@@ -252,19 +262,17 @@ fn wrong_and_out_of_range_priorities_are_atomic_before_command_mutation() {
             ],
         )
         .unwrap_err(),
-        0,
     );
     assert_eq!(
         read(&db, oid, PropertyIdentifier::PRIORITY_ARRAY, Some(4)),
-        PropertyValue::Null,
-        "WPM priority decode must reject before its earlier write"
+        PropertyValue::Enumerated(1),
+        "the valid WPM prefix commits before malformed priority syntax"
     );
     assert_eq!(
         read(&db, oid, PropertyIdentifier::EGRESS_ACTIVE, None),
-        PropertyValue::Boolean(true)
+        PropertyValue::Boolean(false)
     );
-    assert!(!advance(&mut db, oid, Duration::from_millis(4_999)));
-    assert!(advance(&mut db, oid, Duration::from_millis(1)));
+    assert!(!advance(&mut db, oid, Duration::from_secs(5)));
 }
 
 #[test]
@@ -352,8 +360,8 @@ fn direct_priority_array_operation_values_are_rejected_with_exact_errors() {
     );
     assert_eq!(
         read(&db, oid, PropertyIdentifier::PRIORITY_ARRAY, Some(4)),
-        PropertyValue::Null,
-        "a direct priority-array WPM rejection must roll back earlier writes"
+        PropertyValue::Enumerated(1),
+        "a later priority-array rejection keeps the earlier write"
     );
 }
 
@@ -504,7 +512,7 @@ fn successful_wpm_can_arm_one_operation() {
 }
 
 #[test]
-fn failed_wpm_leaks_no_new_timer_or_blink_effect() {
+fn failed_wpm_keeps_new_timer_from_successful_prefix() {
     let (mut db, oid) = database();
     configure_eligible_warn_off(&mut db, oid, 5);
     assert_property_error(
@@ -529,20 +537,20 @@ fn failed_wpm_leaks_no_new_timer_or_blink_effect() {
         .unwrap_err(),
         ErrorCode::VALUE_OUT_OF_RANGE,
     );
-    assert_eq!(blink_count(&db, oid), 0);
+    assert_eq!(blink_count(&db, oid), 1);
     assert_eq!(
         read(&db, oid, PropertyIdentifier::EGRESS_ACTIVE, None),
-        PropertyValue::Boolean(false)
+        PropertyValue::Boolean(true)
     );
-    assert!(!advance(&mut db, oid, Duration::from_secs(100)));
+    assert!(advance(&mut db, oid, Duration::from_secs(5)));
     assert_eq!(
         read(&db, oid, PropertyIdentifier::PRIORITY_ARRAY, Some(8)),
-        PropertyValue::Enumerated(1)
+        PropertyValue::Enumerated(0)
     );
 }
 
 #[test]
-fn direct_priority_array_wpm_halts_and_failed_wpm_restores_original_operation() {
+fn direct_priority_array_wpm_halts_and_failed_wpm_keeps_prefix() {
     let (mut successful_db, successful_oid) = database();
     configure_eligible_warn_off(&mut successful_db, successful_oid, 5);
     wp(
@@ -605,8 +613,6 @@ fn direct_priority_array_wpm_halts_and_failed_wpm_restores_original_operation() 
     )
     .unwrap();
     assert!(!advance(&mut db, oid, Duration::from_millis(1_500)));
-    let slots_before = read(&db, oid, PropertyIdentifier::PRIORITY_ARRAY, None);
-
     assert_property_error(
         wpm(
             &mut db,
@@ -631,16 +637,15 @@ fn direct_priority_array_wpm_halts_and_failed_wpm_restores_original_operation() 
     );
     assert_eq!(blink_count(&db, oid), 1);
     assert_eq!(
-        read(&db, oid, PropertyIdentifier::PRIORITY_ARRAY, None),
-        slots_before,
-        "rollback must restore every slot after the direct write halts another priority"
+        read(&db, oid, PropertyIdentifier::PRIORITY_ARRAY, Some(4)),
+        PropertyValue::Enumerated(1),
+        "the successful direct priority write stays committed"
     );
     assert_eq!(
         read(&db, oid, PropertyIdentifier::EGRESS_ACTIVE, None),
-        PropertyValue::Boolean(true)
+        PropertyValue::Boolean(false)
     );
-    assert!(!advance(&mut db, oid, Duration::from_millis(3_499)));
-    assert!(advance(&mut db, oid, Duration::from_millis(1)));
+    assert!(!advance(&mut db, oid, Duration::from_millis(3_500)));
 }
 
 #[test]

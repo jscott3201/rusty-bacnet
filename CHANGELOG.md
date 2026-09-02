@@ -51,8 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mutable exact record-access representatives accept bounded `Record_Count`
   writes; shrink and zero preserve prefixes or clear data, and expansion fills
   with zero octets or empty records. Actual changes keep size/count accounting
-  coherent, sample `Modification_Date` once, clear `Archive`, and restore
-  losslessly if a later WPM write fails; exact no-ops are metadata-neutral.
+  coherent, sample `Modification_Date` once, and clear `Archive`. A successful
+  resize remains committed if a later WPM write fails; exact no-ops are
+  metadata-neutral.
   Read-only, wrong-mode, and unknown-method instances deny the route, preloaded
   contents retain growth-only cap semantics, and PICS remains based on one
   representative per type rather than heterogeneous File-instance aggregation.
@@ -73,8 +74,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Trend Log Multiple (#189). `Record_Count=0`, effective Enable transitions,
   and Stop_When_Full now share one non-recursive state machine that validates
   the database clock before mutation, emits canonical three-bit status values,
-  preserves exact WPM rollback, and counts accepted records without retaining
-  them at zero capacity. The existing infallible Rust `add_record` and raw
+  retains each accepted lifecycle mutation if a later WPM write fails, and
+  counts accepted records without retaining them at zero capacity. The existing
+  infallible Rust `add_record` and raw
   `clear` APIs remain source-compatible; the server poller uses an additive
   defaulted fallible hook so mandatory timestamp failures remain retryable.
   Time-window transitions, `LOG_INTERRUPTED`, writable
@@ -84,8 +86,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stable in-memory record identity for Event Log, Trend Log, and Trend Log
   Multiple (#134, #339). Each accepted append now owns a nonzero Unsigned32
   sequence (wrapping MAX to 1) plus its record Date/Time; FIFO eviction and
-  normal clear do not renumber survivors or reset the live total, and failed
-  WPM clears restore the exact payload/identity view. The additive
+  normal clear do not renumber survivors or reset the live total. A successful
+  WPM clear remains applied if a later write fails, preserving the resulting
+  empty resident view and live identity total. The additive
   `LogRecordIdentity` and defaulted `BACnetObject` identity hook preserve the
   existing public `records()` and `add_record()` signatures. Trend Log projects
   a present optional record StatusFlags bitstring; Event Log and Trend Log
@@ -255,8 +258,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `BACnetServer.add_alert_enrollment` now require that explicit initial source
   (intentional breaking migration; no sentinel/default). `Notify_Type` is
   required, defaults to `ALARM`, accepts configurable `ALARM`/`EVENT`, rejects
-  acknowledgement-flow `ACK_NOTIFICATION` and malformed values atomically,
-  and participates in WPM rollback. The prior compatibility-only
+  acknowledgement-flow `ACK_NOTIFICATION` and malformed values without
+  mutation. A successful `Notify_Type` WPM prefix write remains committed if a
+  later write fails. The prior compatibility-only
   `Status_Flags`, `Out_Of_Service`, and `Reliability` routes are removed from
   reads, writes, metadata, Property_List, RPM, and PICS. This does not add an
   Alert evaluator, source discovery, transition generation, notification
@@ -768,17 +772,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   complete the Alert Enrollment property model; #264 and #291 track the
   remaining Table 12-61 gaps.
 
-- WritePropertyMultiple rollback now preserves object-private and derived
-  state that property readback cannot reconstruct (#209, #289).
-  Event-detection writes restore detector state and event history, while an
-  unset `Time_Delay_Normal` restores as unset rather than as its effective
-  fallback. The same object-owned snapshots preserve Channel `Last_Priority`,
-  Network Port `Changes_Pending`, Access Door command slots, and log records
-  cleared through `Record_Count`. Restoration failures are returned instead
-  of being hidden in tracing, and only objects whose own rollback failed run
-  event/COV reconciliation. Opaque rollback tokens supplement readable
-  property snapshots rather than replacing them. Clause 15.10 permits earlier
-  successful writes to remain applied and is not cited as requiring rollback.
+- Retain the object-private snapshot hooks introduced for event-detection,
+  fallback-backed, Channel, Network Port, Access Door, and log state as a
+  source-compatible object-local surface (#209, #289). Their direct object
+  tests still prove exact capture and restoration, but the bundled server's
+  Service 16 path no longer invokes them: Clause 15.10 ordered processing keeps
+  successful prefix writes applied and requires the currently failing object
+  write to be mutation-free.
 
 - The Event Enrollment evaluator honors `Time_Delay` and
   `Time_Delay_Normal` (#163). Every algorithm arm previously discarded
@@ -978,8 +978,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the read arms now carry the reference's optional array index as a third
   list element. Malformed framed writes refuse PROPERTY /
   INVALID_DATA_ENCODING, wrong-datatype writes INVALID_DATA_TYPE, and
-  WritePropertyMultiple in-order commit / rollback is proven on a failing
-  reference request. (#182)
+  WritePropertyMultiple ordered prefix commit is proven on a failing reference
+  request. (#182)
 
 - The empty `BACnetSetpointReference` frame (`0x0E 0x0F`) is accepted on
   Loop `Setpoint_Reference`: the production's member is OPTIONAL and its
@@ -1221,10 +1221,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tests pin single-bit `Event_Enable` gating on Multi-state Input in both
   transition directions; MSI is the vehicle because the other three types'
   detectors cannot enter OFFNORMAL until #228 lands. (#229)
-- Preserve WritePropertyMultiple atomicity when rolling back an
-  `Out_Of_Service` write. The rollback now restores the client-simulated
-  `Reliability` and reconstructs the saved evaluated value as well as restoring
-  `Out_Of_Service`.
+- Keep a refused `Out_Of_Service` write mutation-free. Within
+  WritePropertyMultiple, a successful `Out_Of_Service` write and its resulting
+  client-simulated `Reliability` state remain committed if a later write fails.
 - Re-enter FAULT when `Reliability` changes to a *different* fault value (ASHRAE 135-2020 Clause 13.2.2.1). The Fault state defines a ToFault transition — "If reliability-evaluation indicates a different Reliability value and the new Reliability value is not NO_FAULT_DETECTED ... then perform the corresponding transition actions and re-enter the Fault state" — and the same clause makes the transition actions apply "even if the transition does not change the event state". `fault_precedence` reduced reliability to a boolean on its first line and no detector retained the previous value, so a change from `OVER_RANGE` to `NO_SENSOR` while already in FAULT held silently and no `CHANGE_OF_RELIABILITY` notification was produced.
 
   `FaultPrecedence` gains a `ReenterFault` variant, and each of the three detectors gains a `fault_reliability: Option<u32>` holding the value in force at the last entry to FAULT.
@@ -1305,9 +1304,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stop over-reporting `AnalogValue` as createable in PICS. The static heuristic declared all types createable except Device and NetworkPort, but `handle_create_object` has no branch for `AnalogValue` (it falls through to `UNSUPPORTED_OBJECT_TYPE`). `is_createable` now returns `true` only for the 8 types the runtime factory actually constructs (AI, AO, BI, BO, BV, MSI, MSO, MSV); `AnalogValue` is `false` until/unless a later PR adds the factory branch.
 - Stop over-reporting `Device` as deleteable via the static heuristic; `Device` and `NetworkPort` now override `is_deleteable` to `false` on the objects themselves.
 - Reconcile `handle_delete_object` with `is_deleteable`: the runtime DeleteObject handler now rejects `NetworkPort` (matching its `is_deleteable` override) in addition to `Device`, so PICS and runtime dispatch share one truth source for deleteability with no remaining drift.
-- Route `WriteProperty`, `WritePropertyMultiple`, `CreateObject` initial values, and the local `write_property_local` Python-binding writes of `OBJECT_NAME` through the `ObjectDatabase` name index. A duplicate name is now rejected up front with `DUPLICATE_NAME` (the database's `check_name_available` helper, previously dead code), and a successful rename refreshes the index via `update_name_index` so `find_by_name` resolves to the new name and the old name is freed for reuse. `WritePropertyMultiple` rollback re-syncs the index for any rolled-back `OBJECT_NAME` write, restoring the pre-transaction name mappings; `CreateObject` rolls back (removes the created object) when an `OBJECT_NAME` initial value collides. Previously, `write_property(OBJECT_NAME, …)` and `CreateObject` initial-value writes mutated the object's name field in place without touching the database secondary index, leaving stale lookups and allowing duplicates.
+- Route `WriteProperty`, `WritePropertyMultiple`, `CreateObject` initial values, and the local `write_property_local` Python-binding writes of `OBJECT_NAME` through the `ObjectDatabase` name index. A duplicate name is now rejected up front with `DUPLICATE_NAME` (the database's `check_name_available` helper, previously dead code), and a successful rename refreshes the index via `update_name_index` so `find_by_name` resolves to the new name and the old name is freed for reuse. A successful `WritePropertyMultiple` rename remains indexed when a later write fails; the failed name attempt itself is mutation-free. `CreateObject` rolls back (removes the created object) when an `OBJECT_NAME` initial value collides. Previously, `write_property(OBJECT_NAME, …)` and `CreateObject` initial-value writes mutated the object's name field in place without touching the database secondary index, leaving stale lookups and allowing duplicates.
 - Fire COV (and event) notifications on local/internal property writes. The Python `write_property_local` path and direct object setters mutated objects without entering the server's post-write trigger path, so a subscription could observe a network mutation but not an equivalent local mutation. Local writes now go through `BACnetServer::write_local`, which applies the same post-write COV/event processing as the network dispatch loop (and respects DCC: notifications are skipped while communication is disabled). Low-level object setters (`set_present_value` and the like) remain notification-bypassing building blocks below the high-level server surface.
-- Restore the priority-array slot — not the effective present value — when a `WritePropertyMultiple` rolls back a commandable `PRESENT_VALUE` write. The previous rollback snapshotted `PRESENT_VALUE` (which reads the resolved highest-priority value) and wrote it back with no priority, selecting priority 16; a failed multi-write could therefore leave the originally-changed slot un-restored and add a spurious priority-16 command, so the object's `PRIORITY_ARRAY`, `CURRENT_COMMAND_PRIORITY`, and effective `PRESENT_VALUE` could differ from their pre-request state despite the operation reporting failure. Rollback now snapshots `PRIORITY_ARRAY[priority]` (the exact slot the write targets, or `Null` if it was relinquished) and restores that slot directly; a `Null` snapshot relinquishes the slot again. Non-commandable objects (where `PRIORITY_ARRAY` is not readable) fall back to the prior value snapshot.
+- Apply a commandable `PRESENT_VALUE` WritePropertyMultiple prefix write to the requested priority-array slot and retain that exact slot if a later write fails. Ordered prefix execution does not synthesize a priority-16 command or rewrite the effective `PRESENT_VALUE`; a relinquished slot remains relinquished until a successful prefix write targets it. The earlier Unreleased rollback implementation and its readable-value fallback are superseded and are not active in Service 16.
 - Honor the intrinsic `Time_Delay` (ASHRAE 135-2020 §13.2.4) in the production `EventNotification` path. The production detectors (`OutOfRangeDetector`, `ChangeOfStateDetector`, `CommandFailureDetector`) mutated `event_state` eagerly and left their `time_delay` fields unused, so any nonzero `Time_Delay` was silently ignored — a transition fired on the first qualifying write instead of after the configured delay. The detectors now split evaluation into `probe` (per-write: seed a pending transition / cancel on revert / fire only when `Time_Delay == 0`; never decrement and never re-seed an existing transition to the same target) and `tick` (periodic: decrement the remaining delay / fire on expiry / cancel on revert). The server runs a 1-second `intrinsic_reporting_task` (with `MissedTickBehavior::Delay` so a delayed wake cannot burst-compress the countdown) that ticks every object, so the countdown advances per elapsed wall-clock second rather than per `evaluate()` call — repeated writes can neither shorten the delay nor pin it indefinitely (a `Time_Delay` is a debounce timer: a redundant write of the same qualifying value leaves the in-flight countdown untouched), and a condition that clears before the delay elapses cancels the pending transition with no notification and leaves `Event_State` at its confirmed (old) value. The notification bytes are unchanged; only their timing changes.
 - Reject `number_of_states == 0` at construction for the three multi-state object types (`MultiStateInput`, `MultiStateOutput`, `MultiStateValue`). The constructors previously accepted zero, initialized `PRESENT_VALUE` (and, for Output/Value, the relinquish default) to `1`, and built an empty `STATE_TEXT` list — leaving the initial value outside the accepted `1..=number_of_states` write range with no attainable value. `new(.., 0)` now returns `Error::OutOfRange`, enforced through a single shared `require_nonzero_states` guard so every caller (direct instantiation, the `CreateObject` factory, and tests) hits one boundary; the factory already passes a nonzero count and is unaffected. Boundary tests cover zero (rejected) and one state (initial and relinquish-default values stay in range).
 - Resolve the per-transition `Priority` and `Ack_Required` for an `EventNotification` from the referenced `NotificationClass` instead of a hardcoded branch (ASHRAE 135-2020 §13.2.1). The production sender chose `Priority` from a normal/non-normal branch (200 for `TO_NORMAL`, 100 otherwise) and derived `Ack_Required` purely from `Notify_Type == ALARM`, so the class's configured `PRIORITY[TO_OFFNORMAL/TO_FAULT/TO_NORMAL]` and `ACK_REQUIRED[TO_OFFNORMAL/TO_FAULT/TO_NORMAL]` were never projected into outbound notifications and an `EVENT`-type notification always cleared `Ack_Required`. The notification now selects the array element for the current transition coordinate (via `resolve_transition_priority_ack`), with a shared `find_notification_class` lookup; when no matching class is configured it falls back to the BACnet defaults (`Priority = 255`, no ack) so the notification is still delivered rather than dropped. `Ack_Required` is still suppressed on the wire for `ACK_NOTIFICATION` (the field is only valid for `ALARM`/`EVENT`). Coverage spans offnormal, fault, and normal transitions plus the missing-class fallback.
@@ -1330,6 +1329,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Two known non-conformances in this area are deliberately left in place, because fixing them here would be speculative: the enrollment evaluator's same-state skip still discards transitions Clause 13.2.2.1.4 requires to be acted on, since removing it needs a change baseline to distinguish a genuine same-state indication from "nothing changed" (#166, which depends on #137); and the enrollment path does not yet emit notifications at all (#127), so its `distribute` flag is logged rather than acted on. Separately, `CommandFailureDetector::fire` hardcodes `distribute = false` for FAULT where its two siblings consult the `TO_FAULT` bit — an arm unreachable today because that detector never computes FAULT, filed as #200 to be fixed alongside #167, the change that makes it reachable and therefore testable. All seven regression tests (four on the detectors, three on the enrollment evaluator) are proven to fail under a mutation that restores the previous gate.
 
 ### Changed
+
+- Correct `WritePropertyMultiple` to follow ANSI/ASHRAE 135-2020 §15.10
+  ordered processing (`Refs #242`). Successful writes before the first failed
+  property now remain committed instead of being rolled back. Semantic
+  failures emit the formal service-16 Error body with the first failed object,
+  property, and optional array index; malformed requests use classified Reject
+  responses before any commit and `SERVICES / INVALID_TAG` with provenance
+  after a committed prefix. Only committed-prefix objects feed post-response
+  event/COV notifications. Existing high-level client/Python error shapes stay
+  class/code-only, while low-level `ErrorPdu.error_data` retains the formal
+  body. This corrects earlier Unreleased descriptions; the public object-layer
+  snapshot and restore hooks remain for compatibility but service 16 no longer
+  invokes them.
 
 - `FileObject::set_data` and `set_records` now update `File_Size` and
   `Record_Count` only for the channel `File_Access_Method` selects, and

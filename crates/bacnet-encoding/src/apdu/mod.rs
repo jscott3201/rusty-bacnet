@@ -20,6 +20,8 @@ use bytes::{BufMut, Bytes, BytesMut};
 use crate::primitives;
 use crate::tags;
 
+mod wpm_error;
+
 // ---------------------------------------------------------------------------
 // Max-segments encoding
 // ---------------------------------------------------------------------------
@@ -269,10 +271,7 @@ pub fn encode_apdu(buf: &mut BytesMut, apdu: &Apdu) -> Result<(), Error> {
         }
         Apdu::ComplexAck(pdu) => encode_complex_ack(buf, pdu),
         Apdu::SegmentAck(pdu) => encode_segment_ack(buf, pdu),
-        Apdu::Error(pdu) => {
-            encode_error(buf, pdu);
-            Ok(())
-        }
+        Apdu::Error(pdu) => encode_error(buf, pdu),
         Apdu::Reject(pdu) => {
             encode_reject(buf, pdu);
             Ok(())
@@ -383,15 +382,36 @@ fn valid_window_size(field: &str, value: u8) -> Result<u8, Error> {
     }
 }
 
-fn encode_error(buf: &mut BytesMut, pdu: &ErrorPdu) {
+fn encode_error(buf: &mut BytesMut, pdu: &ErrorPdu) -> Result<(), Error> {
+    let formal = if pdu.service_choice == ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE {
+        // A legacy generic WPM Error may carry arbitrary service data beginning
+        // with context [0]. Only suppress the generic pair for a complete,
+        // structurally valid formal service body.
+        wpm_error::decode_formal_body(&pdu.error_data).unwrap_or(None)
+    } else {
+        None
+    };
+    if let Some((error_class, error_code)) = formal {
+        if error_class != pdu.error_class || error_code != pdu.error_code {
+            return Err(Error::Encoding(
+                "formal WPM Error body disagrees with ErrorPdu class/code".into(),
+            ));
+        }
+    }
+
     buf.put_u8(PduType::ERROR.to_raw() << 4);
     buf.put_u8(pdu.invoke_id);
     buf.put_u8(pdu.service_choice.to_raw());
-    primitives::encode_app_enumerated(buf, pdu.error_class.to_raw() as u32);
-    primitives::encode_app_enumerated(buf, pdu.error_code.to_raw() as u32);
-    if !pdu.error_data.is_empty() {
+    if formal.is_some() {
         buf.put_slice(&pdu.error_data);
+    } else {
+        primitives::encode_app_enumerated(buf, pdu.error_class.to_raw() as u32);
+        primitives::encode_app_enumerated(buf, pdu.error_code.to_raw() as u32);
+        if !pdu.error_data.is_empty() {
+            buf.put_slice(&pdu.error_data);
+        }
     }
+    Ok(())
 }
 
 fn encode_reject(buf: &mut BytesMut, pdu: &RejectPdu) {
@@ -605,6 +625,18 @@ fn decode_error(data: Bytes) -> Result<ErrorPdu, Error> {
     let invoke_id = data[1];
     let service_choice = ConfirmedServiceChoice::from_raw(data[2]);
 
+    if service_choice == ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE {
+        if let Some((error_class, error_code)) = wpm_error::decode_formal_body(&data[3..])? {
+            return Ok(ErrorPdu {
+                invoke_id,
+                service_choice,
+                error_class,
+                error_code,
+                error_data: data.slice(3..),
+            });
+        }
+    }
+
     let mut offset = 3;
     let (tag, tag_end) = tags::decode_tag(&data, offset)?;
     if tag.class != tags::TagClass::Application || tag.number != tags::app_tag::ENUMERATED {
@@ -698,3 +730,5 @@ fn decode_abort(data: Bytes) -> Result<AbortPdu, Error> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod wpm_error_tests;

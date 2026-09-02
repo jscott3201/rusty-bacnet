@@ -1,4 +1,7 @@
-//! Object-owned snapshots for WritePropertyMultiple rollback.
+//! Compatibility object snapshots retained for direct object-local use.
+//!
+//! The bundled server's Service 16 path no longer invokes these helpers;
+//! WritePropertyMultiple retains successful prefix writes.
 
 use bacnet_types::enums::EventState;
 use bacnet_types::primitives::BACnetTimeStamp;
