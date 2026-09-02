@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Correlated AcknowledgeAlarm core validation and a lossless Rust request API
+  (`Refs #132`). The bundled server now requires the latest committed original
+  To State and exact timestamp before setting one supported Analog or Event
+  Enrollment acknowledgment bit; valid repeated transactions remain
+  idempotent. The legacy timestamp-fabricating helper is deprecated. Python,
+  CLI timestamp design, additional object families, and ACK_NOTIFICATION
+  distribution (#175) remain deferred, so this is not full Clause 13.5
+  conformance and does not close #132.
+
 - Exact-delta Life Safety COV reporting for the bundled server (`Refs #177`).
   Whole-object Point/Zone subscriptions now trigger only for actual
   `Present_Value` or `Status_Flags` changes and report exactly those two

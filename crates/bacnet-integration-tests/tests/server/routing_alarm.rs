@@ -293,6 +293,36 @@ async fn subscribe_cov_routed_ack_and_initial_notification_return_to_remote_subs
 // AcknowledgeAlarm integration test
 // ---------------------------------------------------------------------------
 
+async fn make_acknowledge_alarm_server() -> BACnetServer<BipTransport> {
+    use bacnet_objects::event::{EventStateChange, EventTransition, EventTransitionCommit};
+    use bacnet_types::enums::EventState;
+    use bacnet_types::primitives::BACnetTimeStamp;
+
+    let mut db = ObjectDatabase::new();
+    let mut ai = AnalogInputObject::new(1, "Zone Temp", 62).unwrap();
+    ai.commit_event_transition_internal(EventTransitionCommit {
+        change: EventStateChange {
+            from: EventState::NORMAL,
+            to: EventState::HIGH_LIMIT,
+        },
+        coordinate: EventTransition::ToOffnormal,
+        ack_required: true,
+        timestamp: BACnetTimeStamp::SequenceNumber(42),
+        message_text: None,
+    })
+    .unwrap();
+    db.add(Box::new(ai)).unwrap();
+
+    BACnetServer::bip_builder()
+        .interface(Ipv4Addr::LOCALHOST)
+        .port(0)
+        .broadcast_address(Ipv4Addr::LOCALHOST)
+        .database(db)
+        .build()
+        .await
+        .unwrap()
+}
+
 /// Send an AcknowledgeAlarm confirmed request to the server and verify
 /// we receive a SimpleACK back (service choice 0 = ACKNOWLEDGE_ALARM).
 #[tokio::test]
@@ -301,7 +331,7 @@ async fn acknowledge_alarm_returns_simple_ack() {
     use bacnet_types::enums::ConfirmedServiceChoice;
     use bacnet_types::primitives::BACnetTimeStamp;
 
-    let mut server = make_server().await;
+    let mut server = make_acknowledge_alarm_server().await;
     let mut client = make_client().await;
     let server_mac = server.local_mac().to_vec();
 

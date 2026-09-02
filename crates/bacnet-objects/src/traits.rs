@@ -10,7 +10,7 @@ use bacnet_types::enums::{
     ErrorClass, ErrorCode, EventState, LifeSafetyOperation, PropertyIdentifier,
 };
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
 
 use crate::audit::{AuditLogNotificationSink, AuditLogStorage};
 use crate::clock::ClockReader;
@@ -465,6 +465,19 @@ pub trait BACnetObject: Send + Sync {
             class: bacnet_types::enums::ErrorClass::OBJECT.to_raw() as u32,
             code: bacnet_types::enums::ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw()
                 as u32,
+        })
+    }
+
+    /// Correlate an acknowledgment with the latest committed transition.
+    #[doc(hidden)]
+    fn acknowledge_alarm_correlated_internal(
+        &mut self,
+        _event_state: EventState,
+        _timestamp: &BACnetTimeStamp,
+    ) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::NO_ALARM_CONFIGURED.to_raw() as u32,
         })
     }
 

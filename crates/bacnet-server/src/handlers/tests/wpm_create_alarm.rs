@@ -289,55 +289,6 @@ fn create_object_bad_initial_value_rolls_back() {
     );
 }
 
-// -----------------------------------------------------------------------
-// AcknowledgeAlarm handler tests
-// -----------------------------------------------------------------------
-
-#[test]
-fn acknowledge_alarm_success() {
-    let mut db = make_db_with_ai();
-    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-
-    let request = AcknowledgeAlarmRequest {
-        acknowledging_process_identifier: 1,
-        event_object_identifier: oid,
-        event_state_acknowledged: 3,
-        timestamp: BACnetTimeStamp::SequenceNumber(42),
-        acknowledgment_source: "operator".into(),
-        time_of_acknowledgment: BACnetTimeStamp::SequenceNumber(0),
-    };
-    let mut buf = BytesMut::new();
-    request.encode(&mut buf).unwrap();
-
-    handle_acknowledge_alarm(&mut db, &buf).unwrap();
-}
-
-#[test]
-fn acknowledge_alarm_unknown_object_fails() {
-    let mut db = make_db_with_ai();
-    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 99).unwrap();
-
-    let request = AcknowledgeAlarmRequest {
-        acknowledging_process_identifier: 1,
-        event_object_identifier: oid,
-        event_state_acknowledged: 3,
-        timestamp: BACnetTimeStamp::SequenceNumber(42),
-        acknowledgment_source: "operator".into(),
-        time_of_acknowledgment: BACnetTimeStamp::SequenceNumber(0),
-    };
-    let mut buf = BytesMut::new();
-    request.encode(&mut buf).unwrap();
-
-    let err = handle_acknowledge_alarm(&mut db, &buf).unwrap_err();
-    match err {
-        Error::Protocol { class, code } => {
-            assert_eq!(class, ErrorClass::OBJECT.to_raw() as u32);
-            assert_eq!(code, ErrorCode::UNKNOWN_OBJECT.to_raw() as u32);
-        }
-        other => panic!("expected Protocol error, got: {other:?}"),
-    }
-}
-
 /// Build a database with one commandable AnalogOutput whose priority-8 slot
 /// holds an active command, so a `PRESENT_VALUE` write at priority 8 has a real
 /// slot to overwrite. Returns the db and the AO's object identifier.

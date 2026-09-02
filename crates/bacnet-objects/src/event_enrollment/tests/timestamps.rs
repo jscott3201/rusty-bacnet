@@ -174,6 +174,11 @@ fn event_enrollment_detection_disable_resets_history_and_rollback_restores_it() 
     let expected = seeded_timestamps();
     let mut object = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
     object.event_history.time_stamps = expected.clone();
+    object.event_history.original_to_states = [
+        Some(EventState::HIGH_LIMIT),
+        Some(EventState::FAULT),
+        Some(EventState::NORMAL),
+    ];
     let rollback = object
         .capture_write_property_rollback(
             PropertyIdentifier::EVENT_DETECTION_ENABLE,
@@ -193,6 +198,14 @@ fn event_enrollment_detection_disable_resets_history_and_rollback_restores_it() 
 
     object.restore_write_property_rollback(rollback).unwrap();
     assert_seeded_timestamp_reads(&object, &expected, "restored Event Enrollment");
+    assert_eq!(
+        object.event_history.original_to_states,
+        [
+            Some(EventState::HIGH_LIMIT),
+            Some(EventState::FAULT),
+            Some(EventState::NORMAL),
+        ]
+    );
 }
 
 #[test]

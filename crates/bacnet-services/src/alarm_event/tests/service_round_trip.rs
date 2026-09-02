@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_types::enums::EventState;
 
 fn raw_context_unsigned(buf: &mut BytesMut, tag_number: u8, value: &[u8]) {
     bacnet_encoding::tags::encode_tag(
@@ -25,6 +26,24 @@ fn raw_acknowledge_alarm(process_id: &[u8], event_state: &[u8], field_tags: [u8;
     primitives::encode_ctx_character_string(&mut buf, field_tags[4], "operator").unwrap();
     primitives::encode_timestamp(&mut buf, field_tags[5], &BACnetTimeStamp::SequenceNumber(0))
         .unwrap();
+    buf
+}
+
+fn raw_acknowledge_alarm_with_source(source: &[u8]) -> BytesMut {
+    let mut buf = BytesMut::new();
+    raw_context_unsigned(&mut buf, 0, &[1]);
+    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    primitives::encode_ctx_object_id(&mut buf, 1, &oid);
+    raw_context_unsigned(&mut buf, 2, &[EventState::HIGH_LIMIT.to_raw() as u8]);
+    primitives::encode_timestamp(&mut buf, 3, &BACnetTimeStamp::SequenceNumber(42)).unwrap();
+    bacnet_encoding::tags::encode_tag(
+        &mut buf,
+        4,
+        bacnet_encoding::tags::TagClass::Context,
+        source.len() as u32,
+    );
+    buf.extend_from_slice(source);
+    primitives::encode_timestamp(&mut buf, 5, &BACnetTimeStamp::SequenceNumber(7)).unwrap();
     buf
 }
 
@@ -96,6 +115,33 @@ fn acknowledge_alarm_rejects_trailing_data() {
     let mut encoded = raw_acknowledge_alarm(&[1], &[1], [0, 1, 2, 3, 4, 5]);
     primitives::encode_ctx_unsigned(&mut encoded, 6, 1);
     assert!(AcknowledgeAlarmRequest::decode(&encoded).is_err());
+}
+
+#[test]
+fn acknowledge_alarm_sanitizes_unsupported_or_invalid_source_text() {
+    for source in [
+        &[1, 0xff][..],
+        &[2, 0xff][..],
+        &[3, 0xff][..],
+        &[0xff, 0xff][..],
+        &[0, 0xff][..],
+        &[4, 0xd8, 0x00][..],
+        &[4, 0x00][..],
+    ] {
+        let decoded =
+            AcknowledgeAlarmRequest::decode(&raw_acknowledge_alarm_with_source(source)).unwrap();
+        assert_eq!(decoded.acknowledgment_source, "", "source {source:?}");
+        assert_eq!(decoded.timestamp, BACnetTimeStamp::SequenceNumber(42));
+        assert_eq!(
+            decoded.time_of_acknowledgment,
+            BACnetTimeStamp::SequenceNumber(7)
+        );
+    }
+}
+
+#[test]
+fn acknowledge_alarm_rejects_source_without_charset_framing() {
+    assert!(AcknowledgeAlarmRequest::decode(&raw_acknowledge_alarm_with_source(&[])).is_err());
 }
 
 #[test]

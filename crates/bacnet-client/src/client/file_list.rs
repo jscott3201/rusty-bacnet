@@ -114,7 +114,35 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         .await
     }
 
+    /// Send a caller-supplied AcknowledgeAlarm request without fabricating fields.
+    pub async fn acknowledge_alarm_request(
+        &self,
+        destination_mac: &[u8],
+        request: &bacnet_services::alarm_event::AcknowledgeAlarmRequest,
+    ) -> Result<(), Error> {
+        let mut buf = BytesMut::new();
+        request.encode(&mut buf)?;
+
+        let _ = self
+            .confirmed_request(
+                destination_mac,
+                ConfirmedServiceChoice::ACKNOWLEDGE_ALARM,
+                &buf,
+            )
+            .await?;
+
+        Ok(())
+    }
+
     /// Acknowledge an alarm on a remote device.
+    ///
+    /// This compatibility helper fabricates sequence-zero timestamps, which
+    /// are not a valid general correlation mechanism. Use
+    /// [`Self::acknowledge_alarm_request`] with the original notification's
+    /// exact timestamp and a caller-selected acknowledgment time.
+    #[deprecated(
+        note = "use acknowledge_alarm_request with caller-supplied correlation timestamps"
+    )]
     pub async fn acknowledge_alarm(
         &self,
         destination_mac: &[u8],
@@ -133,18 +161,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             acknowledgment_source: acknowledgment_source.to_string(),
             time_of_acknowledgment: bacnet_types::primitives::BACnetTimeStamp::SequenceNumber(0),
         };
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf)?;
-
-        let _ = self
-            .confirmed_request(
-                destination_mac,
-                ConfirmedServiceChoice::ACKNOWLEDGE_ALARM,
-                &buf,
-            )
-            .await?;
-
-        Ok(())
+        self.acknowledge_alarm_request(destination_mac, &request)
+            .await
     }
 
     /// Read a range of items from a list or log-buffer property.

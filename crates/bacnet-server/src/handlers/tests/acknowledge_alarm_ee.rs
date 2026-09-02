@@ -48,12 +48,16 @@ fn make_db_with_ack_required_ee() -> (ObjectDatabase, ObjectIdentifier) {
     (db, ee_oid)
 }
 
-fn ack_request(ee_oid: ObjectIdentifier, event_state: u32) -> bytes::BytesMut {
+fn ack_request(
+    ee_oid: ObjectIdentifier,
+    event_state: u32,
+    timestamp: BACnetTimeStamp,
+) -> bytes::BytesMut {
     let request = AcknowledgeAlarmRequest {
         acknowledging_process_identifier: 1,
         event_object_identifier: ee_oid,
         event_state_acknowledged: event_state,
-        timestamp: BACnetTimeStamp::SequenceNumber(1),
+        timestamp,
         acknowledgment_source: "operator".into(),
         time_of_acknowledgment: BACnetTimeStamp::SequenceNumber(2),
     };
@@ -102,7 +106,11 @@ fn ee_acknowledge_alarm_round_trip_over_services() {
     // offnormal 'To State', Table 13-9).
     handle_acknowledge_alarm(
         &mut db,
-        &ack_request(ee_oid, EventState::OFFNORMAL.to_raw()),
+        &ack_request(
+            ee_oid,
+            EventState::OFFNORMAL.to_raw(),
+            BACnetTimeStamp::SequenceNumber(0),
+        ),
     )
     .unwrap();
     assert_eq!(
@@ -115,7 +123,11 @@ fn ee_acknowledge_alarm_round_trip_over_services() {
     // success, and the other bits are untouched.
     handle_acknowledge_alarm(
         &mut db,
-        &ack_request(ee_oid, EventState::OFFNORMAL.to_raw()),
+        &ack_request(
+            ee_oid,
+            EventState::OFFNORMAL.to_raw(),
+            BACnetTimeStamp::SequenceNumber(0),
+        ),
     )
     .unwrap();
     assert_eq!(gei_summary_acked(&db, ee_oid), 0b111);
@@ -128,9 +140,39 @@ fn ee_acknowledge_to_normal_bit() {
     let (mut db, ee_oid) = make_db_with_ack_required_ee();
     db.get_mut(&ee_oid)
         .unwrap()
-        .set_acked_transitions_internal(0x04, false)
+        .commit_event_transition_internal(bacnet_objects::event::EventTransitionCommit {
+            change: bacnet_objects::event::EventStateChange {
+                from: EventState::NORMAL,
+                to: EventState::HIGH_LIMIT,
+            },
+            coordinate: bacnet_objects::event::EventTransition::ToOffnormal,
+            ack_required: false,
+            timestamp: BACnetTimeStamp::SequenceNumber(1),
+            message_text: None,
+        })
         .unwrap();
-    handle_acknowledge_alarm(&mut db, &ack_request(ee_oid, EventState::NORMAL.to_raw())).unwrap();
+    db.get_mut(&ee_oid)
+        .unwrap()
+        .commit_event_transition_internal(bacnet_objects::event::EventTransitionCommit {
+            change: bacnet_objects::event::EventStateChange {
+                from: EventState::HIGH_LIMIT,
+                to: EventState::NORMAL,
+            },
+            coordinate: bacnet_objects::event::EventTransition::ToNormal,
+            ack_required: true,
+            timestamp: BACnetTimeStamp::SequenceNumber(2),
+            message_text: None,
+        })
+        .unwrap();
+    handle_acknowledge_alarm(
+        &mut db,
+        &ack_request(
+            ee_oid,
+            EventState::NORMAL.to_raw(),
+            BACnetTimeStamp::SequenceNumber(2),
+        ),
+    )
+    .unwrap();
     match db
         .get(&ee_oid)
         .unwrap()
@@ -163,7 +205,11 @@ fn ee_acknowledge_alarm_detection_disabled_refused() {
 
     let err = handle_acknowledge_alarm(
         &mut db,
-        &ack_request(ee_oid, EventState::OFFNORMAL.to_raw()),
+        &ack_request(
+            ee_oid,
+            EventState::OFFNORMAL.to_raw(),
+            BACnetTimeStamp::SequenceNumber(1),
+        ),
     )
     .unwrap_err();
     match err {
