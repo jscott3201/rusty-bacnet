@@ -7,6 +7,7 @@ mod endpoint_responder;
 #[cfg(test)]
 #[path = "endpoint_shared_runtime_tests.rs"]
 mod endpoint_shared_runtime_tests;
+mod event_information;
 #[cfg(test)]
 mod executed;
 mod unconfirmed;
@@ -46,6 +47,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let client_max_apdu = req.max_apdu_length;
         let client_accepts_segmented = req.segmented_response_accepted;
         let client_max_segments = req.max_segments;
+        let effective_max_apdu = event_information::limit(client_max_apdu, config.max_apdu_length);
+        let device_transmits_segments =
+            event_information::can_segment(config.segmentation_supported);
+        let segmented_response_available = client_accepts_segmented && device_transmits_segments;
         let mut written_oids: Vec<ObjectIdentifier> = Vec::new();
         let mut coarse_cov_oids: Vec<ObjectIdentifier> = Vec::new();
         let mut life_safety_cov_changes = Vec::new();
@@ -295,15 +300,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
             s if s == ConfirmedServiceChoice::GET_EVENT_INFORMATION => {
-                let db = db.read().await;
-                match handlers::handle_get_event_information(
-                    &db,
-                    &req.service_request,
-                    &mut ack_buf,
-                ) {
-                    Ok(()) => complex_ack(ack_buf),
-                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
-                }
+                event_information::response(
+                    db,
+                    &req,
+                    effective_max_apdu,
+                    segmented_response_available,
+                )
+                .await
             }
             s if s == ConfirmedServiceChoice::ACKNOWLEDGE_ALARM => {
                 let mut db = db.write().await;
@@ -515,7 +518,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let mut full_buf = BytesMut::new();
             encode_apdu(&mut full_buf, &response).expect("valid APDU encoding");
 
-            if full_buf.len() > client_max_apdu as usize {
+            if full_buf.len() > effective_max_apdu as usize {
                 // Clause 5.4.5.3 CannotSendSegmentedComplexACK reads both
                 // sides of the exchange: case (a) — "this device does not
                 // support the transmission of segmented messages" — and case
@@ -523,8 +526,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 // "cannot be sent as one PDU or multiple PDUs" and draws the
                 // same Abort; SendSegmentedComplexACK is available only when
                 // the device supports transmitting segments (#381).
-                let device_transmits_segments = config.segmentation_supported == Segmentation::BOTH
-                    || config.segmentation_supported == Segmentation::TRANSMIT;
                 if !client_accepts_segmented || !device_transmits_segments {
                     let abort = Apdu::Abort(AbortPdu {
                         sent_by_server: true,
@@ -559,7 +560,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             invoke_id,
                             service_choice,
                             &service_ack_data,
-                            client_max_apdu,
+                            effective_max_apdu,
                             client_max_segments,
                         )
                         .await;

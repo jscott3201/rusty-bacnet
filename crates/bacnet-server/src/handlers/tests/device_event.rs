@@ -1,5 +1,6 @@
 use super::*;
 use bacnet_encoding::primitives::encode_timestamp_choice;
+use bacnet_objects::notification_class::NotificationClass;
 use bacnet_types::primitives::{Date, Time};
 
 struct EventSummaryFixture {
@@ -95,6 +96,27 @@ fn timestamp_value(timestamp: &BACnetTimeStamp) -> PropertyValue {
     let mut encoded = BytesMut::new();
     encode_timestamp_choice(&mut encoded, timestamp).unwrap();
     PropertyValue::ApplicationData(encoded.to_vec())
+}
+
+fn add_notification_class(
+    db: &mut ObjectDatabase,
+    instance: u32,
+    class_number: u32,
+    priority: [u8; 3],
+) {
+    let mut class = NotificationClass::new(instance, format!("NC-{instance}")).unwrap();
+    class.notification_class = class_number;
+    class.priority = priority;
+    db.add(Box::new(class)).unwrap();
+}
+
+fn assert_operational_problem(error: Error) {
+    assert!(matches!(
+        error,
+        Error::Protocol { class, code }
+            if class == ErrorClass::DEVICE.to_raw() as u32
+                && code == ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32
+    ));
 }
 
 fn commit_test_proposal(
@@ -194,7 +216,8 @@ fn reinitialize_device_handler() {
 
 #[test]
 fn get_event_information_empty() {
-    let db = make_db_with_ai();
+    let mut db = make_db_with_ai();
+    add_notification_class(&mut db, 10, 0, [255; 3]);
     let request = bacnet_services::alarm_event::GetEventInformationRequest {
         last_received_object_identifier: None,
     };
@@ -259,6 +282,7 @@ fn get_event_information_reports_non_normal_objects() {
         .expect("out-of-range value must propose HIGH_LIMIT");
     commit_test_proposal(&mut ai, proposal);
     db.add(Box::new(ai)).unwrap();
+    add_notification_class(&mut db, 10, 5, [255; 3]);
 
     let request = bacnet_services::alarm_event::GetEventInformationRequest {
         last_received_object_identifier: None,
@@ -276,8 +300,6 @@ fn get_event_information_reports_non_normal_objects() {
 #[test]
 fn get_event_information_reads_event_enable_notify_type_and_priorities() {
     use bacnet_objects::event::LimitEnable;
-    use bacnet_objects::notification_class::NotificationClass;
-
     let mut db = ObjectDatabase::new();
     let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
     ai.write_property(
@@ -346,10 +368,7 @@ fn get_event_information_reads_event_enable_notify_type_and_priorities() {
     db.add(Box::new(ai)).unwrap();
 
     // Add NotificationClass object with custom priorities
-    let mut nc = NotificationClass::new(5, "NC-5").unwrap();
-    nc.notification_class = 7;
-    nc.priority = [100, 150, 200];
-    db.add(Box::new(nc)).unwrap();
+    add_notification_class(&mut db, 5, 7, [100, 150, 200]);
 
     let request = bacnet_services::alarm_event::GetEventInformationRequest {
         last_received_object_identifier: None,
@@ -367,26 +386,11 @@ fn get_event_information_reads_event_enable_notify_type_and_priorities() {
 }
 
 #[test]
-fn get_event_information_forwards_valid_sequence_timestamps_and_defaults_invalid_array() {
+fn get_event_information_forwards_valid_sequence_timestamps_and_rejects_invalid_array() {
     let mut db = ObjectDatabase::new();
     db.add(Box::new(event_summary_fixture(1, [11, 65535, 33])))
         .unwrap();
-    db.add(Box::new(event_summary_fixture(2, [65536, 44, 55])))
-        .unwrap();
-    let mut trailing_data = timestamp_value(&BACnetTimeStamp::SequenceNumber(66));
-    let PropertyValue::ApplicationData(encoded) = &mut trailing_data else {
-        unreachable!("timestamp helper must return ApplicationData")
-    };
-    encoded.push(0);
-    db.add(Box::new(event_summary_fixture_with_values(
-        3,
-        [
-            trailing_data,
-            timestamp_value(&BACnetTimeStamp::SequenceNumber(77)),
-            timestamp_value(&BACnetTimeStamp::SequenceNumber(88)),
-        ],
-    )))
-    .unwrap();
+    add_notification_class(&mut db, 10, 0, [255; 3]);
 
     let ack = get_event_information_ack(&db, None);
     assert_eq!(
@@ -397,21 +401,41 @@ fn get_event_information_forwards_valid_sequence_timestamps_and_defaults_invalid
             BACnetTimeStamp::SequenceNumber(33),
         ]
     );
-    assert_eq!(
-        ack.list_of_event_summaries[1].event_timestamps,
-        [
-            BACnetTimeStamp::SequenceNumber(0),
-            BACnetTimeStamp::SequenceNumber(0),
-            BACnetTimeStamp::SequenceNumber(0),
-        ]
+
+    let mut invalid_sequence = ObjectDatabase::new();
+    invalid_sequence
+        .add(Box::new(event_summary_fixture(2, [65536, 44, 55])))
+        .unwrap();
+    add_notification_class(&mut invalid_sequence, 10, 0, [255; 3]);
+    let mut request = BytesMut::new();
+    GetEventInformationRequest {
+        last_received_object_identifier: None,
+    }
+    .encode(&mut request);
+    assert_operational_problem(
+        handle_get_event_information(&invalid_sequence, &request, &mut BytesMut::new())
+            .unwrap_err(),
     );
-    assert_eq!(
-        ack.list_of_event_summaries[2].event_timestamps,
-        [
-            BACnetTimeStamp::SequenceNumber(0),
-            BACnetTimeStamp::SequenceNumber(0),
-            BACnetTimeStamp::SequenceNumber(0),
-        ]
+
+    let mut trailing_data = timestamp_value(&BACnetTimeStamp::SequenceNumber(66));
+    let PropertyValue::ApplicationData(encoded) = &mut trailing_data else {
+        unreachable!("timestamp helper must return ApplicationData")
+    };
+    encoded.push(0);
+    let mut trailing = ObjectDatabase::new();
+    trailing
+        .add(Box::new(event_summary_fixture_with_values(
+            3,
+            [
+                trailing_data,
+                timestamp_value(&BACnetTimeStamp::SequenceNumber(77)),
+                timestamp_value(&BACnetTimeStamp::SequenceNumber(88)),
+            ],
+        )))
+        .unwrap();
+    add_notification_class(&mut trailing, 10, 0, [255; 3]);
+    assert_operational_problem(
+        handle_get_event_information(&trailing, &request, &mut BytesMut::new()).unwrap_err(),
     );
 }
 
@@ -448,6 +472,7 @@ fn get_event_information_preserves_timestamp_choices() {
             .map(|timestamp| timestamp_value(&timestamp)),
     )))
     .unwrap();
+    add_notification_class(&mut db, 10, 0, [255; 3]);
 
     let ack = get_event_information_ack(&db, None);
     assert_eq!(ack.list_of_event_summaries[0].event_timestamps, expected);
@@ -460,6 +485,7 @@ fn get_event_information_paginates_by_object_identifier_after_cursor_removal() {
         db.add(Box::new(event_summary_fixture(instance, [0; 3])))
             .unwrap();
     }
+    add_notification_class(&mut db, 50, 0, [255; 3]);
 
     let first_page = get_event_information_ack(&db, None);
     let first_instances: Vec<_> = first_page
@@ -467,10 +493,10 @@ fn get_event_information_paginates_by_object_identifier_after_cursor_removal() {
         .iter()
         .map(|summary| summary.object_identifier.instance_number())
         .collect();
-    assert_eq!(first_instances, (1..=25).collect::<Vec<_>>());
-    assert!(first_page.more_events);
+    assert_eq!(first_instances, (1..=27).collect::<Vec<_>>());
+    assert!(!first_page.more_events);
 
-    let cursor = first_page.list_of_event_summaries[24].object_identifier;
+    let cursor = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 25).unwrap();
     db.remove(&cursor).unwrap();
     let second_page = get_event_information_ack(&db, Some(cursor));
     let second_instances: Vec<_> = second_page

@@ -62,6 +62,20 @@ impl BACnetObject for DisabledAlarmingObject {
                 bacnet_types::enums::EventType::OUT_OF_RANGE.to_raw(),
             )),
             p if p == PropertyIdentifier::NOTIFICATION_CLASS => Ok(PropertyValue::Unsigned(0)),
+            p if p == PropertyIdentifier::EVENT_ENABLE => Ok(PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![0xe0],
+            }),
+            p if p == PropertyIdentifier::ACKED_TRANSITIONS => Ok(PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![0xe0],
+            }),
+            p if p == PropertyIdentifier::NOTIFY_TYPE => Ok(PropertyValue::Enumerated(0)),
+            p if p == PropertyIdentifier::EVENT_TIME_STAMPS => Ok(PropertyValue::List(vec![
+                PropertyValue::Unsigned(0),
+                PropertyValue::Unsigned(0),
+                PropertyValue::Unsigned(0),
+            ])),
             _ => Err(Error::Protocol {
                 class: bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32,
                 code: bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
@@ -81,13 +95,19 @@ impl BACnetObject for DisabledAlarmingObject {
         })
     }
     fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
+        let mut properties = vec![
             PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::EVENT_DETECTION_ENABLE,
             PropertyIdentifier::EVENT_TYPE,
             PropertyIdentifier::NOTIFICATION_CLASS,
+            PropertyIdentifier::EVENT_ENABLE,
+            PropertyIdentifier::ACKED_TRANSITIONS,
+            PropertyIdentifier::NOTIFY_TYPE,
+            PropertyIdentifier::EVENT_TIME_STAMPS,
         ];
-        std::borrow::Cow::Borrowed(PROPS)
+        if self.detection_enable.is_some() {
+            properties.push(PropertyIdentifier::EVENT_DETECTION_ENABLE);
+        }
+        std::borrow::Cow::Owned(properties)
     }
 }
 
@@ -201,7 +221,11 @@ fn get_event_information_excludes_detection_disabled_object() {
     use bacnet_services::alarm_event::GetEventInformationRequest;
 
     let responses = [true, false].map(|enabled| {
-        let db = db_with_enrollment(enabled);
+        let mut db = db_with_enrollment(enabled);
+        db.add(Box::new(
+            bacnet_objects::notification_class::NotificationClass::new(0, "NC-0").unwrap(),
+        ))
+        .unwrap();
         let request = GetEventInformationRequest {
             last_received_object_identifier: None,
         };
