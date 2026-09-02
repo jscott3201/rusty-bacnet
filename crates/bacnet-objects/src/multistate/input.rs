@@ -64,10 +64,31 @@ impl MultiStateInputObject {
         self.event_detector.alarm_values = values;
     }
 
-    /// Set the present value (used by application to update input state).
+    /// Mutate `Present_Value` on an unattached or otherwise application-owned object.
+    ///
+    /// This low-level helper bypasses running-server `Out_Of_Service` ownership,
+    /// range validation, intrinsic-event processing, and COV processing, while
+    /// retaining this object's reliability recomputation. Applications updating
+    /// a live object should use `BACnetServer::set_present_value_local`.
     pub fn set_present_value(&mut self, value: u32) {
         self.present_value = value;
         let _ = self.recompute_reliability();
+    }
+
+    /// Validate and store a `Present_Value` write, without any access check.
+    ///
+    /// Shared by the network and internal routes, which differ only in the
+    /// `Out_Of_Service` condition each requires.
+    fn apply_present_value(&mut self, value: PropertyValue) -> Result<(), Error> {
+        let PropertyValue::Unsigned(v) = value else {
+            return Err(common::invalid_data_type_error());
+        };
+        if v < 1 || v > self.number_of_states as u64 {
+            return Err(common::value_out_of_range_error());
+        }
+        self.present_value = v as u32;
+        let _ = self.recompute_reliability();
+        Ok(())
     }
 
     /// Change the locally configured number of states.
@@ -209,15 +230,7 @@ impl BACnetObject for MultiStateInputObject {
             if !self.out_of_service {
                 return Err(common::write_access_denied_error());
             }
-            if let PropertyValue::Unsigned(v) = value {
-                if v < 1 || v > self.number_of_states as u64 {
-                    return Err(common::value_out_of_range_error());
-                }
-                self.present_value = v as u32;
-                let _ = self.recompute_reliability();
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
+            return self.apply_present_value(value);
         }
         if property == PropertyIdentifier::STATE_TEXT {
             match array_index {
@@ -338,6 +351,14 @@ impl BACnetObject for MultiStateInputObject {
         self.reliability = reliability;
         self.reliability_evaluator.clear_ownership();
         Ok(())
+    }
+
+    fn set_present_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
+        // Local safe-ownership policy: preserve the client's OOS simulation.
+        if self.out_of_service {
+            return Err(common::write_access_denied_error());
+        }
+        self.apply_present_value(value)
     }
 
     fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {

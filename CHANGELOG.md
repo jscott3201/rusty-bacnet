@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Rust-only, application-owned logical `Present_Value` updates for in-service
+  Analog Input, Binary Input, and Multi-state Input objects, using the existing
+  server post-write intrinsic-event and COV processing. Out-of-service client
+  simulations remain protected; Python exposure remains tracked in #503.
+
 - Correlated AcknowledgeAlarm core validation and a lossless Rust request API
   (#132). The bundled server now requires the latest committed original
   To State and exact timestamp before setting one supported Analog or Event
