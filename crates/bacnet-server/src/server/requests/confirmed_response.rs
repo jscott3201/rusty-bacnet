@@ -61,3 +61,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         error_apdu_from_error(invoke_id, service_choice, error)
     }
 }
+
+#[cfg(test)]
+#[path = "../alarm_summary_tests.rs"]
+mod alarm_summary_tests;

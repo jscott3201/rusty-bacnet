@@ -243,6 +243,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The deprecated GetAlarmSummary server now selects only advertised
+  Event_State/Notify_Type/Acked_Transitions candidates whose Event_State is
+  non-NORMAL and whose Notify_Type is ALARM, while excluding an explicitly
+  disabled Event_Detection_Enable and preserving the exact state and canonical
+  acknowledgment bits (#172). Under the repository's local strict-projection
+  policy, unreadable, wrongly typed, or noncanonical required fields reached by
+  that predicate now return DEVICE / OPERATIONAL_PROBLEM instead of fabricated
+  defaults; this is a behavior correction, not a broader conformance claim.
+
 - GetEventInformation now projects each advertised event-initiating object as
   one strict typed snapshot, applies the NORMAL-or-unacknowledged selection
   rule independently of Event_Enable, preserves all three BACnetTimeStamp
