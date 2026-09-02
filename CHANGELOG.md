@@ -243,6 +243,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- GetEventInformation now projects each advertised event-initiating object as
+  one strict typed snapshot, applies the NORMAL-or-unacknowledged selection
+  rule independently of Event_Enable, preserves all three BACnetTimeStamp
+  choices, and resolves all three priorities from exactly one associated
+  Notification Class (#128, #206). Missing or malformed projection/class data
+  returns DEVICE / OPERATIONAL_PROBLEM instead of fabricated zero values.
+  Responses use encoded Object Identifier order and byte-accurate APDU
+  continuation when segmentation is unavailable; segmentation-capable peers
+  retain the complete response for the existing segmented ComplexACK path.
+
 - Binary Lighting Output `Relinquish_Default` now accepts only OFF or ON and
   atomically refuses all other values with `PROPERTY / VALUE_OUT_OF_RANGE`
   (#283). `Present_Value` now interprets WARN, WARN_OFF,
