@@ -1,4 +1,4 @@
-//! GetAlarmSummary service per ASHRAE 135-2020 Clause 13.7 (deprecated).
+//! GetAlarmSummary service per ASHRAE 135-2020 Clause 13.10 (deprecated).
 
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;

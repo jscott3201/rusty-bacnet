@@ -36,6 +36,7 @@ fn make_db_with_device_and_ai() -> ObjectDatabase {
 
 mod acknowledge_alarm;
 mod acknowledge_alarm_ee;
+mod alarm_summary_projection;
 mod alert_enrollment;
 mod array_index_gating;
 mod async_dcc;
