@@ -674,4 +674,7 @@ mod tests;
 mod property_metadata_tests;
 
 #[cfg(test)]
+mod acked_transitions_policy_tests;
+
+#[cfg(test)]
 mod truth_source_tests;
