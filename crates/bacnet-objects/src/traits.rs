@@ -715,6 +715,24 @@ pub trait BACnetObject: Send + Sync {
         })
     }
 
+    /// Apply the logical `Present_Value` supplied by an Input's application.
+    ///
+    /// This narrow internal hook is distinct from the network
+    /// [`write_property`](Self::write_property) route. Built-in Analog Input,
+    /// Binary Input, and Multi-state Input objects opt in. Their implementations
+    /// accept application updates only while in service; rejecting them while
+    /// `Out_Of_Service` is TRUE is a local ownership policy that protects the
+    /// client's simulation value, not a requirement imposed by the Standard.
+    ///
+    /// The default fails closed so commandable and other object families do not
+    /// acquire privileged `Present_Value` write authority through this hook.
+    fn set_present_value_internal(&mut self, _value: PropertyValue) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
     /// Borrow this object's Audit Log query storage, if it has any.
     ///
     /// This read-only, type-erased channel lets the bundled server execute an

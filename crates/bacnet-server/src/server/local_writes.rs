@@ -1,5 +1,25 @@
 use super::*;
 
+#[cfg(test)]
+#[path = "input_present_value_tests.rs"]
+mod input_present_value_tests;
+
+/// What a local mutation is, and on whose behalf.
+///
+/// An Input gates `Present_Value` on `Out_Of_Service` in opposite directions
+/// for the two, so this decides which check applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LocalWrite {
+    /// A client on the network, writing any property.
+    Network {
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+        priority: Option<u8>,
+    },
+    /// The application supplying a supported Input's logical `Present_Value`.
+    ApplicationInputPresentValue,
+}
+
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Arm or rearm a Life Safety object from trusted local application logic.
     ///
@@ -59,6 +79,54 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         value: PropertyValue,
         priority: Option<u8>,
     ) -> Result<(), Error> {
+        self.write_local_as(
+            oid,
+            LocalWrite::Network {
+                property,
+                array_index,
+                priority,
+            },
+            value,
+        )
+        .await
+    }
+
+    /// Supply a supported Input's logical `Present_Value` from Rust application code.
+    ///
+    /// Analog Input, Binary Input, and Multi-state Input opt in. Binary values
+    /// are logical INACTIVE/ACTIVE states after Polarity, not raw physical
+    /// states. The update runs the existing post-write intrinsic-event and COV
+    /// processing after the database lock is released; configured delays and
+    /// distribution policy still determine when notifications are delivered.
+    ///
+    /// Applications are denied while `Out_Of_Service` is TRUE to protect a
+    /// client's simulation value. That ownership rule is local policy, not a
+    /// Standard mandate. Other object families fail closed; use
+    /// [`BACnetServer::write_local`] for ordinary network-equivalent writes and
+    /// commandable objects. Python exposure is tracked separately in #503.
+    ///
+    /// [`BACnetObject::set_present_value_internal`]: bacnet_objects::traits::BACnetObject::set_present_value_internal
+    pub async fn set_present_value_local(
+        &self,
+        oid: &ObjectIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        self.write_local_as(oid, LocalWrite::ApplicationInputPresentValue, value)
+            .await
+    }
+
+    async fn write_local_as(
+        &self,
+        oid: &ObjectIdentifier,
+        write: LocalWrite,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        // Only a network write can carry OBJECT_NAME, so only it needs the name
+        // index kept in step.
+        let renaming = matches!(
+            write,
+            LocalWrite::Network { property, .. } if property == PropertyIdentifier::OBJECT_NAME
+        );
         let life_safety = crate::life_safety_cov::is_life_safety_object(*oid);
         let exact_changes = {
             let mut db = self.db.write().await;
@@ -69,14 +137,23 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
                 });
             }
-            if property == PropertyIdentifier::OBJECT_NAME {
+            if renaming {
                 if let PropertyValue::CharacterString(ref new_name) = value {
                     db.check_name_available(oid, new_name)?;
                 }
             }
             let object = db.get_mut(oid).expect("existence checked above");
-            object.write_property(property, array_index, value, priority)?;
-            if property == PropertyIdentifier::OBJECT_NAME {
+            match write {
+                LocalWrite::Network {
+                    property,
+                    array_index,
+                    priority,
+                } => object.write_property(property, array_index, value, priority)?,
+                LocalWrite::ApplicationInputPresentValue => {
+                    object.set_present_value_internal(value)?
+                }
+            }
+            if renaming {
                 db.update_name_index(oid);
             }
             snapshots.changes(&db, std::slice::from_ref(oid))

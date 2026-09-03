@@ -206,9 +206,30 @@ impl BinaryInputObject {
         })
     }
 
-    /// Set the present value (used by application to update input state).
+    /// Mutate logical `Present_Value` on an unattached or application-owned object.
+    ///
+    /// The value is BACnet INACTIVE (`0`) or ACTIVE (`1`) **after Polarity**,
+    /// not a raw electrical or physical state. This low-level helper bypasses
+    /// running-server `Out_Of_Service` ownership, validation, intrinsic-event
+    /// processing, and COV processing. Applications updating a live object
+    /// should use `BACnetServer::set_present_value_local`.
     pub fn set_present_value(&mut self, value: u32) {
         self.present_value = value;
+    }
+
+    /// Validate and store a `Present_Value` write, without any access check.
+    ///
+    /// Shared by the network and internal routes, which differ only in the
+    /// `Out_Of_Service` condition each requires.
+    fn apply_present_value(&mut self, value: PropertyValue) -> Result<(), Error> {
+        let PropertyValue::Enumerated(v) = value else {
+            return Err(common::invalid_data_type_error());
+        };
+        if v > 1 {
+            return Err(common::value_out_of_range_error());
+        }
+        self.present_value = v;
+        Ok(())
     }
 
     /// Set the description string.
@@ -320,14 +341,7 @@ impl BACnetObject for BinaryInputObject {
             if !self.out_of_service {
                 return Err(common::write_access_denied_error());
             }
-            if let PropertyValue::Enumerated(v) = value {
-                if v > 1 {
-                    return Err(common::value_out_of_range_error());
-                }
-                self.present_value = v;
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
+            return self.apply_present_value(value);
         }
         if property == PropertyIdentifier::ACTIVE_TEXT {
             if let PropertyValue::CharacterString(s) = value {
@@ -422,6 +436,14 @@ impl BACnetObject for BinaryInputObject {
         }
         self.reliability = reliability;
         Ok(())
+    }
+
+    fn set_present_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
+        // Local safe-ownership policy: preserve the client's OOS simulation.
+        if self.out_of_service {
+            return Err(common::write_access_denied_error());
+        }
+        self.apply_present_value(value)
     }
 
     fn reliability_evaluation_inhibited_internal(&self) -> bool {
