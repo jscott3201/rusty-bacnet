@@ -1729,6 +1729,22 @@ class BACnetServer:
         """Write a property on a local object."""
         ...
 
+    async def set_present_value_local(
+        self,
+        object_id: ObjectIdentifier,
+        value: PropertyValue,
+    ) -> None:
+        """Update Present_Value through the narrow, non-generic application Input authority.
+
+        Accepted values are a finite REAL for Analog Input, logical Enumerated 0/1
+        (INACTIVE/ACTIVE) for Binary Input, and Unsigned 1..=Number_Of_States for
+        Multi-state Input. Binary values are BACnet logical values after Polarity,
+        not raw hardware/interface levels. An Input with Out_Of_Service set rejects
+        this update to preserve network simulation ownership. Other object types are
+        not writable through this method.
+        """
+        ...
+
     async def comm_state(self) -> int:
         """Get the DeviceCommunicationControl state (0=Enable, 1=Disable, 2=DisableInitiation)."""
         ...

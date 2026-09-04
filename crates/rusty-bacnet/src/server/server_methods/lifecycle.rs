@@ -310,6 +310,34 @@ impl BACnetServer {
         })
     }
 
+    /// Update Present_Value for an application-owned Input object.
+    ///
+    /// This is the narrow Input-only route for finite Analog Input REAL values,
+    /// logical Binary Input Enumerated 0/1 values, and in-range Multi-state
+    /// Input Unsigned values. The object implementation owns validation and
+    /// Out_Of_Service simulation exclusivity.
+    #[pyo3(signature = (object_id, value))]
+    fn set_present_value_local<'py>(
+        &self,
+        py: Python<'py>,
+        object_id: PyObjectIdentifier,
+        value: PyPropertyValue,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        let oid = object_id.to_rust();
+        let prop_value = value.inner;
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let srv = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
+            srv.set_present_value_local(&oid, prop_value)
+                .await
+                .map_err(to_py_err)
+        })
+    }
+
     /// Get the server's current communication state.
     ///
     /// Returns 0=Enable, 1=Disable, 2=DisableInitiation.
