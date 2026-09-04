@@ -983,15 +983,24 @@ policy fails closed. Each policy receives the immediate MAC, optional routed
 NPDU source, configured sink, and decoded request separately from the
 peer-reported payload; only the confirmed context has an invoke ID. Accepted
 lists merge or create records atomically through the sink's durable backend.
-Confirmed duplicate detection is bounded and process-local (60 seconds / 256
-exact requests) and silently discards detected retransmissions rather than
-replaying responses. Unconfirmed receipt never emits a response and does not
-use duplicate tracking. Synchronous persistence under the database writer is
-an intentional availability limitation. Query authorization, sustained rate
-limiting, durable idempotency, producer/report generation, forwarding,
-multi-log routing policy, failures-only filtering, and a wrap-safe 64-bit
-continuation are not provided. Executed-service bit 46 represents receipt only;
-no Audit Reporting BIBB, including AR-L-A, is claimed.
+For the built-in `AuditLogObject`, a successful confirmed receipt also stores
+its complete exact-request identity and Unix UTC completion timestamp in that
+same snapshot transaction. The 60-second / 256-entry ledger survives a reopen;
+retained duplicates are discarded before authorization without a SimpleACK
+replay. Entries expire at 60 seconds, and a stored future timestamp fails open
+rather than suppressing indefinitely. The general process-local confirmed-
+request tracker remains the pending/session guard.
+
+`AuditLogSnapshot::completed_receipts` is part of the public custom-persistence
+snapshot contract. `FileAuditLogPersistence` writes schema v2, reads schema v1
+as an empty receipt ledger, rejects unknown future versions, and retains the
+existing two-slot generation/checksum recovery policy. Unconfirmed receipt
+never emits a response and never writes the confirmed ledger. Synchronous
+persistence under the database writer is an intentional availability
+limitation. Query authorization, sustained rate limiting, producer/report
+generation, forwarding, multi-log routing policy, failures-only filtering, and
+a wrap-safe 64-bit continuation are not provided. Executed-service bit 46
+represents receipt only; no Audit Reporting BIBB, including AR-L-A, is claimed.
 
 ---
 

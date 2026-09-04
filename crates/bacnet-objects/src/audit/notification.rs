@@ -20,6 +20,26 @@ pub trait AuditLogNotificationSink: Send + Sync {
         notifications: &[BACnetAuditNotification],
         apdu_timeout_ms: u32,
     ) -> Result<(), Error>;
+
+    /// Check the durable completed-confirmed ledger without mutating it.
+    fn has_completed_confirmed_receipt(
+        &self,
+        _key: &[u8],
+        _now_unix_millis: u64,
+    ) -> Result<bool, Error> {
+        Ok(false)
+    }
+
+    /// Atomically merge one confirmed batch and retain its completed receipt.
+    fn store_confirmed_notifications(
+        &mut self,
+        notifications: &[BACnetAuditNotification],
+        apdu_timeout_ms: u32,
+        _receipt: CompletedAuditReceipt,
+    ) -> Result<ConfirmedAuditNotificationOutcome, Error> {
+        self.store_notifications(notifications, apdu_timeout_ms)?;
+        Ok(ConfirmedAuditNotificationOutcome::Stored)
+    }
 }
 
 impl AuditLogObject {
@@ -41,6 +61,55 @@ impl AuditLogObject {
         }
 
         let mut prospective = self.snapshot_for_next_generation()?;
+        let changed =
+            self.apply_notification_batch(&mut prospective, notifications, apdu_timeout_ms)?;
+        if changed {
+            self.commit_and_apply(prospective)?;
+        }
+        Ok(())
+    }
+
+    fn store_confirmed_notification_batch(
+        &mut self,
+        notifications: &[BACnetAuditNotification],
+        apdu_timeout_ms: u32,
+        receipt: CompletedAuditReceipt,
+    ) -> Result<ConfirmedAuditNotificationOutcome, Error> {
+        if !self.log_enable {
+            return Err(Error::Protocol {
+                class: ErrorClass::SERVICES.to_raw() as u32,
+                code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
+            });
+        }
+        if notifications.is_empty() {
+            return Err(Error::OutOfRange(
+                "Audit notification batch must not be empty".into(),
+            ));
+        }
+        if receipt::contains(
+            &self.completed_receipts,
+            receipt.key(),
+            receipt.completed_at_unix_millis(),
+        )? {
+            return Ok(ConfirmedAuditNotificationOutcome::Duplicate);
+        }
+
+        let mut prospective = self.snapshot_for_next_generation()?;
+        self.apply_notification_batch(&mut prospective, notifications, apdu_timeout_ms)?;
+        let outcome = receipt::insert(&mut prospective.completed_receipts, receipt)?;
+        if outcome == ConfirmedAuditNotificationOutcome::Duplicate {
+            return Ok(outcome);
+        }
+        self.commit_and_apply(prospective)?;
+        Ok(outcome)
+    }
+
+    fn apply_notification_batch(
+        &self,
+        prospective: &mut AuditLogSnapshot,
+        notifications: &[BACnetAuditNotification],
+        apdu_timeout_ms: u32,
+    ) -> Result<bool, Error> {
         let mut changed = false;
         for notification in notifications {
             if let Some(index) = matching_record_index(
@@ -66,14 +135,11 @@ impl AuditLogObject {
                     datum: BACnetAuditLogDatum::AuditNotification(notification.clone()),
                 };
                 validate_record(&record)?;
-                append_record(&mut prospective, record);
+                append_record(prospective, record);
                 changed = true;
             }
         }
-        if changed {
-            self.commit_and_apply(prospective)?;
-        }
-        Ok(())
+        Ok(changed)
     }
 }
 
@@ -88,6 +154,23 @@ impl AuditLogNotificationSink for AuditLogObject {
         apdu_timeout_ms: u32,
     ) -> Result<(), Error> {
         self.store_notification_batch(notifications, apdu_timeout_ms)
+    }
+
+    fn has_completed_confirmed_receipt(
+        &self,
+        key: &[u8],
+        now_unix_millis: u64,
+    ) -> Result<bool, Error> {
+        receipt::contains(&self.completed_receipts, key, now_unix_millis)
+    }
+
+    fn store_confirmed_notifications(
+        &mut self,
+        notifications: &[BACnetAuditNotification],
+        apdu_timeout_ms: u32,
+        receipt: CompletedAuditReceipt,
+    ) -> Result<ConfirmedAuditNotificationOutcome, Error> {
+        self.store_confirmed_notification_batch(notifications, apdu_timeout_ms, receipt)
     }
 }
 

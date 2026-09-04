@@ -167,6 +167,14 @@ async fn accepted_direct_and_routed_requests_commit_atomically_without_output() 
     .await;
     assert_eq!(count(&db, sink).await, (2, 2));
     assert_eq!(sends.load(Ordering::SeqCst), 0);
+    assert!(persistence
+        .snapshot
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .completed_receipts
+        .is_empty());
 
     let contexts = contexts.lock().unwrap();
     assert_eq!(contexts[0].source_mac, MacAddr::from_slice(&[0x10]));

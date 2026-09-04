@@ -12,7 +12,8 @@ use bacnet_types::MacAddr;
 /// one, but does not mandate these bounds or exact-request discrimination. An
 /// identical legal Invoke ID reuse inside this window is necessarily
 /// indistinguishable and may therefore be discarded. No response is retained
-/// or replayed; expiry or server restart permits normal service again.
+/// or replayed; expiry or server restart clears this guard, though a service-
+/// specific durable idempotency policy may still apply.
 const COMPLETED_RETENTION: Duration = Duration::from_secs(60);
 const MAX_ENTRIES: usize = 256;
 const MAX_TRACKED_SERVICE_REQUEST_BYTES: usize = 64 * 1024;

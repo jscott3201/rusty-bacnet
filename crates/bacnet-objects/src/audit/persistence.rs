@@ -10,11 +10,16 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
+use super::receipt::{self, CompletedAuditReceipt};
+
+mod receipt_codec;
+
 /// Maximum configured AuditLog capacity accepted by the repository.
 pub const MAX_AUDIT_RECORDS: u32 = 10_000;
 
 const MAGIC: &[u8; 8] = b"RBALOG01";
-const SCHEMA_VERSION: u16 = 1;
+const SCHEMA_VERSION_V1: u16 = 1;
+const SCHEMA_VERSION: u16 = 2;
 const HEADER_LEN: usize = 8 + 2 + 4 + 8 + 4;
 const TRAILER_LEN: usize = 4;
 const MAX_RECORD_BYTES: usize = 1024 * 1024;
@@ -35,6 +40,8 @@ pub struct AuditLogSnapshot {
     pub total_record_count: u64,
     /// Oldest-to-newest retained typed records.
     pub records: Vec<BACnetAuditLogRecordResult>,
+    /// Bounded completed confirmed-request receipts owned by this Audit Log.
+    pub completed_receipts: Vec<CompletedAuditReceipt>,
 }
 
 /// Application-owned persistence port for one AuditLog object.
@@ -231,7 +238,7 @@ fn read_slot_inner(
 
     verify_snapshot_integrity(&data).map_err(SlotReadFailure::Recoverable)?;
     let version = u16::from_be_bytes(data[8..10].try_into().unwrap());
-    if version != SCHEMA_VERSION {
+    if !matches!(version, SCHEMA_VERSION_V1 | SCHEMA_VERSION) {
         return Err(SlotReadFailure::Fatal(Error::Encoding(format!(
             "AuditLog snapshot schema version {version} is unsupported"
         ))));
@@ -243,7 +250,7 @@ fn read_slot_inner(
             "AuditLog snapshot object identity does not match".into(),
         )));
     }
-    decode_verified_snapshot(&data, object_identifier)
+    decode_verified_snapshot(&data, object_identifier, version)
         .map(Some)
         .map_err(SlotReadFailure::Recoverable)
 }
@@ -282,6 +289,23 @@ fn verify_snapshot_integrity(data: &[u8]) -> Result<(), Error> {
 }
 
 fn encode_snapshot(snapshot: &AuditLogSnapshot) -> Result<Vec<u8>, Error> {
+    encode_snapshot_for_version(snapshot, SCHEMA_VERSION)
+}
+
+#[cfg(test)]
+pub(super) fn encode_snapshot_v1(snapshot: &AuditLogSnapshot) -> Result<Vec<u8>, Error> {
+    if !snapshot.completed_receipts.is_empty() {
+        return Err(Error::Encoding(
+            "AuditLog schema-v1 snapshot cannot contain completed receipts".into(),
+        ));
+    }
+    encode_snapshot_for_version(snapshot, SCHEMA_VERSION_V1)
+}
+
+fn encode_snapshot_for_version(
+    snapshot: &AuditLogSnapshot,
+    version: u16,
+) -> Result<Vec<u8>, Error> {
     validate_snapshot(snapshot)?;
     let mut payload = Vec::new();
     payload.extend_from_slice(&snapshot.capacity.to_be_bytes());
@@ -312,6 +336,9 @@ fn encode_snapshot(snapshot: &AuditLogSnapshot) -> Result<Vec<u8>, Error> {
         payload.extend_from_slice(&(record.len() as u32).to_be_bytes());
         payload.extend_from_slice(&record);
     }
+    if version == SCHEMA_VERSION {
+        receipt_codec::encode(&snapshot.completed_receipts, &mut payload)?;
+    }
     let total_len = HEADER_LEN
         .checked_add(payload.len())
         .and_then(|length| length.checked_add(TRAILER_LEN))
@@ -324,7 +351,7 @@ fn encode_snapshot(snapshot: &AuditLogSnapshot) -> Result<Vec<u8>, Error> {
 
     let mut data = Vec::with_capacity(total_len);
     data.extend_from_slice(MAGIC);
-    data.extend_from_slice(&SCHEMA_VERSION.to_be_bytes());
+    data.extend_from_slice(&version.to_be_bytes());
     data.extend_from_slice(&snapshot.object_identifier.encode());
     data.extend_from_slice(&snapshot.generation.to_be_bytes());
     data.extend_from_slice(&(payload.len() as u32).to_be_bytes());
@@ -337,6 +364,7 @@ fn encode_snapshot(snapshot: &AuditLogSnapshot) -> Result<Vec<u8>, Error> {
 fn decode_verified_snapshot(
     data: &[u8],
     object_identifier: ObjectIdentifier,
+    version: u16,
 ) -> Result<AuditLogSnapshot, Error> {
     let generation = u64::from_be_bytes(data[14..22].try_into().unwrap());
     if generation == 0 {
@@ -384,6 +412,11 @@ fn decode_verified_snapshot(
             record: decode_audit_log_record(record_data)?,
         });
     }
+    let completed_receipts = if version == SCHEMA_VERSION_V1 {
+        Vec::new()
+    } else {
+        receipt_codec::decode(payload, &mut offset)?
+    };
     if offset != payload.len() {
         return Err(Error::Encoding(
             "AuditLog snapshot payload has trailing bytes".into(),
@@ -397,6 +430,7 @@ fn decode_verified_snapshot(
         log_enable,
         total_record_count,
         records,
+        completed_receipts,
     };
     validate_snapshot(&snapshot)?;
     Ok(snapshot)
@@ -421,6 +455,7 @@ pub(super) fn validate_snapshot(snapshot: &AuditLogSnapshot) -> Result<(), Error
             snapshot.capacity
         )));
     }
+    receipt::validate_receipts(&snapshot.completed_receipts)?;
     if (snapshot.total_record_count == 0 && !snapshot.records.is_empty())
         || (snapshot.total_record_count != 0
             && snapshot.capacity != 0
@@ -470,6 +505,22 @@ pub(super) fn validate_snapshot(snapshot: &AuditLogSnapshot) -> Result<(), Error
                 "AuditLog snapshot length exceeds {MAX_SNAPSHOT_BYTES}"
             )));
         }
+    }
+    // An empty ledger contributes no projected bytes here so every valid
+    // schema-v1 snapshot remains loadable. The v2 encoder's final concrete
+    // length check still includes its four-byte zero count.
+    let receipt_len = if snapshot.completed_receipts.is_empty() {
+        0
+    } else {
+        receipt_codec::encoded_len(&snapshot.completed_receipts)?
+    };
+    projected_len = projected_len
+        .checked_add(receipt_len)
+        .ok_or_else(|| Error::OutOfRange("AuditLog snapshot length overflow".into()))?;
+    if projected_len > MAX_SNAPSHOT_BYTES {
+        return Err(Error::OutOfRange(format!(
+            "AuditLog snapshot length exceeds {MAX_SNAPSHOT_BYTES}"
+        )));
     }
     Ok(())
 }
@@ -576,6 +627,7 @@ mod tests {
             log_enable: true,
             total_record_count: 0,
             records: Vec::new(),
+            completed_receipts: Vec::new(),
         }
     }
 

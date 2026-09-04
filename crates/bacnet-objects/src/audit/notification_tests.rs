@@ -11,7 +11,10 @@ use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, Time};
 use crate::clock::{ClockFrame, ClockReader};
 use crate::traits::BACnetObject;
 
-use super::{AuditLogNotificationSink, AuditLogObject, AuditLogPersistence, AuditLogSnapshot};
+use super::{
+    AuditLogNotificationSink, AuditLogObject, AuditLogPersistence, AuditLogSnapshot,
+    CompletedAuditReceipt, ConfirmedAuditNotificationOutcome,
+};
 
 #[derive(Default)]
 struct MemoryPersistence {
@@ -125,6 +128,10 @@ fn log(capacity: u32) -> (AuditLogObject, Arc<MemoryPersistence>) {
     (log, persistence)
 }
 
+fn receipt(key: &[u8], completed_at: u64) -> CompletedAuditReceipt {
+    CompletedAuditReceipt::new(key.to_vec(), completed_at).unwrap()
+}
+
 #[test]
 fn complementary_batch_merges_once_and_target_current_value_wins() {
     let (mut log, persistence) = log(10);
@@ -174,6 +181,75 @@ fn completed_match_is_dropped_and_merge_preserves_record_identity() {
     assert_eq!(log.generation(), generation);
     assert_eq!(persistence.commits.load(Ordering::Acquire), commits);
     assert_eq!(log.total_record_count(), 1);
+}
+
+#[test]
+fn confirmed_completed_match_still_commits_receipt_without_record_change() {
+    let (mut log, persistence) = log(10);
+    let source = notification(Some(BACnetTimeStamp::Time(time(0))), None);
+    let target = notification(None, Some(BACnetTimeStamp::Time(time(3))));
+    log.store_notifications(&[source, target.clone()], 2_000)
+        .unwrap();
+    let generation = log.generation();
+    let record = log.records().front().unwrap().clone();
+
+    assert_eq!(
+        log.store_confirmed_notifications(&[target], 2_000, receipt(b"complete", 100))
+            .unwrap(),
+        ConfirmedAuditNotificationOutcome::Stored
+    );
+    assert_eq!(log.generation(), generation + 1);
+    assert_eq!(log.total_record_count(), 1);
+    assert_eq!(log.records().front(), Some(&record));
+    assert_eq!(
+        persistence
+            .snapshot
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .completed_receipts
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn confirmed_commit_failure_is_atomic_and_exact_retry_can_succeed() {
+    let (mut log, persistence) = log(10);
+    let incoming = notification(Some(BACnetTimeStamp::Time(time(0))), None);
+    let completed = receipt(b"retry", 100);
+    let before = persistence.snapshot.lock().unwrap().clone().unwrap();
+    persistence.fail.store(true, Ordering::Release);
+
+    assert!(log
+        .store_confirmed_notifications(std::slice::from_ref(&incoming), 2_000, completed.clone(),)
+        .is_err());
+    assert_eq!(log.generation(), before.generation);
+    assert!(log.records().is_empty());
+    assert_eq!(persistence.snapshot.lock().unwrap().as_ref(), Some(&before));
+
+    persistence.fail.store(false, Ordering::Release);
+    assert_eq!(
+        log.store_confirmed_notifications(&[incoming], 2_000, completed.clone())
+            .unwrap(),
+        ConfirmedAuditNotificationOutcome::Stored
+    );
+    let accepted = persistence.snapshot.lock().unwrap().clone().unwrap();
+    assert_eq!(accepted.completed_receipts, vec![completed.clone()]);
+    assert_eq!(
+        log.store_confirmed_notifications(
+            &[notification(None, Some(BACnetTimeStamp::Time(time(1))))],
+            2_000,
+            completed,
+        )
+        .unwrap(),
+        ConfirmedAuditNotificationOutcome::Duplicate
+    );
+    assert_eq!(
+        persistence.snapshot.lock().unwrap().as_ref(),
+        Some(&accepted)
+    );
 }
 
 #[test]

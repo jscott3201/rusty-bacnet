@@ -189,6 +189,7 @@ fn audit_capacity_eviction_and_total_wrap_are_transactional() {
             sequence_number: u64::MAX,
             record: record(0, BACnetAuditLogDatum::LogStatus(0)),
         }],
+        completed_receipts: Vec::new(),
     }));
     let mut log = AuditLogObject::new(1, "AL-1", 2, persistence).unwrap();
     assert_eq!(
@@ -283,6 +284,7 @@ fn zero_capacity_validates_enabled_records_before_advancing_sequence() {
         log_enable: false,
         total_record_count: 0,
         records: Vec::new(),
+        completed_receipts: Vec::new(),
     }));
     let mut disabled_log = AuditLogObject::new(2, "AL-2", 0, disabled.clone()).unwrap();
     let disabled_before = disabled.snapshot.lock().unwrap().clone().unwrap();
@@ -339,7 +341,7 @@ fn corrupted_header_falls_back_but_checksum_valid_incompatibility_is_fatal() {
 
     let original = std::fs::read(&newest).unwrap();
     let mut unknown_version = original.clone();
-    unknown_version[8..10].copy_from_slice(&2u16.to_be_bytes());
+    unknown_version[8..10].copy_from_slice(&3u16.to_be_bytes());
     std::fs::write(&newest, &unknown_version).unwrap();
     let recovered = AuditLogObject::new(1, "AL-1", 2, storage.clone()).unwrap();
     assert!(recovered.records().is_empty());
@@ -378,7 +380,7 @@ fn persistence_identity_version_capacity_and_length_validation_fail_closed() {
     assert!(AuditLogObject::new(1, "AL-1", 2, storage.clone()).is_err());
 
     let mut unknown_version = original.clone();
-    unknown_version[8..10].copy_from_slice(&2u16.to_be_bytes());
+    unknown_version[8..10].copy_from_slice(&3u16.to_be_bytes());
     std::fs::write(&active, &unknown_version).unwrap();
     assert!(AuditLogObject::new(1, "AL-1", 2, storage.clone()).is_err());
 
@@ -404,6 +406,7 @@ fn persistence_identity_version_capacity_and_length_validation_fail_closed() {
                 record: record(1, BACnetAuditLogDatum::LogStatus(0)),
             },
         ],
+        completed_receipts: Vec::new(),
     }));
     assert!(AuditLogObject::new(2, "AL-2", 2, zero_sequence).is_err());
     assert!(FileAuditLogPersistence::new("").is_err());
@@ -467,6 +470,7 @@ fn custom_backend_cannot_bypass_record_or_snapshot_validation() {
                 sequence_number: 1,
                 record: invalid_record.clone(),
             }],
+            completed_receipts: Vec::new(),
         }));
         assert!(AuditLogObject::new(1, "AL-1", 2, loaded).is_err());
 
@@ -494,6 +498,7 @@ fn custom_backend_cannot_bypass_record_or_snapshot_validation() {
                 record: record(2, BACnetAuditLogDatum::LogStatus(0)),
             },
         ],
+        completed_receipts: Vec::new(),
     }));
     assert!(AuditLogObject::new(1, "AL-1", 1, over_capacity).is_err());
 
