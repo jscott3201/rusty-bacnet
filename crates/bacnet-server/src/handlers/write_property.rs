@@ -95,7 +95,11 @@ pub(crate) fn handle_write_property_multiple_detailed(
                 committed_oids,
             );
         }
-        let value = match decode_write_property_value(property, &attempt.value) {
+        let value = match decode_write_property_value(
+            property,
+            reference.property_array_index,
+            &attempt.value,
+        ) {
             Ok(value) => value,
             Err(error) => return semantic_failure(error, reference, committed_oids),
         };
@@ -168,6 +172,7 @@ fn invalid_data_encoding_error() -> Error {
 /// Decode the complete propertyValue payload handed to an object write arm.
 pub(crate) fn decode_write_property_value(
     property: PropertyIdentifier,
+    array_index: Option<u32>,
     bytes: &[u8],
 ) -> Result<PropertyValue, Error> {
     if property == PropertyIdentifier::EVENT_PARAMETERS && bytes.starts_with(&[0xfe, 0xff]) {
@@ -185,6 +190,17 @@ pub(crate) fn decode_write_property_value(
     if property == PropertyIdentifier::RECIPIENT_LIST {
         return Ok(PropertyValue::ApplicationData(bytes.to_vec()));
     }
+    if array_index != Some(0) && property == PropertyIdentifier::STAGES {
+        return decode_structured_array(bytes, array_index, |data, offset| {
+            bacnet_encoding::constructed::decode_stage_limit_value(data, offset).map(|(_, end)| end)
+        });
+    }
+    if array_index != Some(0) && property == PropertyIdentifier::TARGET_REFERENCES {
+        return decode_structured_array(bytes, array_index, |data, offset| {
+            bacnet_encoding::constructed::decode_device_object_reference(data, offset)
+                .map(|(_, end)| end)
+        });
+    }
     let mut values = Vec::new();
     let mut offset = 0;
     while offset < bytes.len() {
@@ -200,6 +216,38 @@ pub(crate) fn decode_write_property_value(
         1 => Ok(values.pop().expect("one element present")),
         _ => Ok(PropertyValue::List(values)),
     }
+}
+
+fn decode_structured_array<F>(
+    bytes: &[u8],
+    array_index: Option<u32>,
+    mut decode: F,
+) -> Result<PropertyValue, Error>
+where
+    F: FnMut(&[u8], usize) -> Result<usize, Error>,
+{
+    let mut values = Vec::new();
+    let mut offset = 0;
+    while offset < bytes.len() {
+        if values.len() >= 10_000 {
+            return Err(invalid_data_encoding_error());
+        }
+        let start = offset;
+        offset = decode(bytes, offset).map_err(|_| invalid_data_encoding_error())?;
+        if offset <= start || offset > bytes.len() {
+            return Err(invalid_data_encoding_error());
+        }
+        values.push(PropertyValue::ApplicationData(
+            bytes[start..offset].to_vec(),
+        ));
+    }
+    if array_index.is_some() {
+        if values.len() == 1 {
+            return Ok(values.pop().unwrap());
+        }
+        return Err(invalid_data_encoding_error());
+    }
+    Ok(PropertyValue::List(values))
 }
 
 /// Handle a WriteProperty request.
@@ -227,7 +275,11 @@ pub fn handle_write_property(
             ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
         ));
     }
-    let value = decode_write_property_value(request.property_identifier, &request.property_value)?;
+    let value = decode_write_property_value(
+        request.property_identifier,
+        request.property_array_index,
+        &request.property_value,
+    )?;
     if request.property_identifier == PropertyIdentifier::OBJECT_NAME {
         check_and_prepare_name_write(db, &oid, &value)?;
     }

@@ -16,6 +16,8 @@ pub use audit::{
     AuditPropertyReference, BACnetAuditLogDatum, BACnetAuditLogQueryParameters,
     BACnetAuditLogRecord, BACnetAuditLogRecordResult, BACnetAuditNotification,
 };
+mod staging;
+pub use staging::BACnetStageLimitValue;
 
 // ---------------------------------------------------------------------------
 // BACnetDateRange (Clause 21 -- used by CalendarEntry and BACnetSpecialEvent)
@@ -481,10 +483,11 @@ pub struct BACnetLightingCommand {
 // BACnetDeviceObjectReference (Clause 21 -- used by Access Control objects)
 // ---------------------------------------------------------------------------
 
-/// BACnet Device Object Reference (simplified).
+/// BACnet Device Object Reference.
 ///
-/// References an object, optionally on a specific device. Used by access
-/// control objects (e.g., BACnetAccessRule location).
+/// Clause 21 encodes the optional device identifier as context `[0]` followed
+/// by the required object identifier as context `[1]`. `None` identifies a
+/// local object, including Staging target references.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BACnetDeviceObjectReference {
     /// Optional device identifier (None = local device).

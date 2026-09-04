@@ -1,8 +1,13 @@
 use super::*;
+use bacnet_objects::staging::StagingWritePlan;
 
 #[cfg(test)]
 #[path = "input_present_value_tests.rs"]
 mod input_present_value_tests;
+
+#[cfg(test)]
+#[path = "staging_local_writes_tests.rs"]
+mod staging_local_writes_tests;
 
 /// What a local mutation is, and on whose behalf.
 ///
@@ -128,7 +133,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             LocalWrite::Network { property, .. } if property == PropertyIdentifier::OBJECT_NAME
         );
         let life_safety = crate::life_safety_cov::is_life_safety_object(*oid);
-        let exact_changes = {
+        let (exact_changes, staging_plans) = {
             let mut db = self.db.write().await;
             let snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::capture_oid(&db, *oid);
             if db.get(oid).is_none() {
@@ -156,7 +161,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             if renaming {
                 db.update_name_index(oid);
             }
-            snapshots.changes(&db, std::slice::from_ref(oid))
+            let staging_plans = Self::take_staging_plans(&mut db, std::slice::from_ref(oid));
+            (
+                snapshots.changes(&db, std::slice::from_ref(oid)),
+                staging_plans,
+            )
         };
 
         Self::fire_event_notifications_with_bindings(
@@ -198,6 +207,144 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             )
             .await;
         }
+        Self::execute_staging_plans(
+            &self.db,
+            &self.network,
+            &self.cov_table,
+            &self.cov_in_flight,
+            &self.server_tsm,
+            &self.notification_transactions,
+            &self.device_bindings,
+            &self.comm_state,
+            &self.config,
+            staging_plans,
+        )
+        .await;
         Ok(())
+    }
+
+    pub(super) fn take_staging_plans(
+        db: &mut ObjectDatabase,
+        oids: &[ObjectIdentifier],
+    ) -> Vec<StagingWritePlan> {
+        oids.iter()
+            .filter_map(|oid| {
+                db.get_mut(oid)
+                    .and_then(|object| object.take_staging_write_plan_internal())
+            })
+            .collect()
+    }
+
+    /// Execute local Staging targets one mutation guard at a time.
+    ///
+    /// Every target mutation is generation-checked in the same database guard
+    /// that applies it. Event/COV work runs only after that guard is released.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn execute_staging_plans(
+        db: &Arc<RwLock<ObjectDatabase>>,
+        network: &Arc<NetworkLayer<T>>,
+        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
+        cov_in_flight: &Arc<Semaphore>,
+        server_tsm: &Arc<Mutex<ServerTsm>>,
+        notification_transactions: &Arc<NotificationTransactions>,
+        device_bindings: &Arc<RwLock<DeviceBindingTable>>,
+        comm_state: &Arc<AtomicU8>,
+        config: &ServerConfig,
+        plans: Vec<StagingWritePlan>,
+    ) {
+        for plan in plans {
+            let mut all_succeeded = true;
+            for target in &plan.writes {
+                enum TargetResult {
+                    Applied,
+                    Failed,
+                    Stale,
+                }
+
+                let result = {
+                    let mut database = db.write().await;
+                    let current = database
+                        .get(&plan.source)
+                        .and_then(|source| source.staging_generation_internal())
+                        == Some(plan.generation);
+                    if !current {
+                        TargetResult::Stale
+                    } else {
+                        match database.get_mut(&target.object_identifier) {
+                            Some(object) => match object.write_property(
+                                PropertyIdentifier::PRESENT_VALUE,
+                                None,
+                                PropertyValue::Enumerated(u32::from(target.active)),
+                                Some(plan.priority),
+                            ) {
+                                Ok(()) => TargetResult::Applied,
+                                Err(_) => TargetResult::Failed,
+                            },
+                            None => TargetResult::Failed,
+                        }
+                    }
+                };
+
+                match result {
+                    TargetResult::Stale => break,
+                    TargetResult::Failed => all_succeeded = false,
+                    TargetResult::Applied => {
+                        Self::fire_event_notifications_with_bindings(
+                            db,
+                            network,
+                            comm_state,
+                            server_tsm,
+                            notification_transactions,
+                            device_bindings,
+                            &target.object_identifier,
+                            config.cov_retry_timeout_ms,
+                        )
+                        .await;
+                        Self::fire_cov_notifications(
+                            db,
+                            network,
+                            cov_table,
+                            cov_in_flight,
+                            notification_transactions,
+                            comm_state,
+                            config,
+                            &target.object_identifier,
+                        )
+                        .await;
+                    }
+                }
+            }
+
+            let reliability_changed = {
+                let mut database = db.write().await;
+                database.get_mut(&plan.source).is_some_and(|source| {
+                    source.complete_staging_write_plan_internal(plan.generation, all_succeeded)
+                })
+            };
+            if reliability_changed {
+                Self::fire_event_notifications_with_bindings(
+                    db,
+                    network,
+                    comm_state,
+                    server_tsm,
+                    notification_transactions,
+                    device_bindings,
+                    &plan.source,
+                    config.cov_retry_timeout_ms,
+                )
+                .await;
+                Self::fire_cov_notifications(
+                    db,
+                    network,
+                    cov_table,
+                    cov_in_flight,
+                    notification_transactions,
+                    comm_state,
+                    config,
+                    &plan.source,
+                )
+                .await;
+            }
+        }
     }
 }

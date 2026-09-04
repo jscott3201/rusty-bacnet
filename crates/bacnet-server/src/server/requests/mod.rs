@@ -52,9 +52,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let device_transmits_segments =
             event_information::can_segment(config.segmentation_supported);
         let segmented_response_available = client_accepts_segmented && device_transmits_segments;
-        let mut written_oids: Vec<ObjectIdentifier> = Vec::new();
-        let mut coarse_cov_oids: Vec<ObjectIdentifier> = Vec::new();
+        let (mut written_oids, mut coarse_cov_oids) = (Vec::new(), Vec::new());
         let mut life_safety_cov_changes = Vec::new();
+        let mut staging_plans = Vec::new();
         let mut initial_cov_notifications: Vec<InitialCovNotification> = Vec::new();
         let mut accepted_acknowledgment = None;
 
@@ -94,7 +94,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 confirmed_response::read_property_response(db, &req).await
             }
             s if s == ConfirmedServiceChoice::WRITE_PROPERTY => {
-                let (result, exact_changes) = {
+                let (result, exact_changes, plans) = {
                     let mut db = db.write().await;
                     let snapshots =
                         crate::life_safety_cov::LifeSafetyCovSnapshots::capture_write_property(
@@ -106,8 +106,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         .as_ref()
                         .map(|oid| snapshots.changes(&db, std::slice::from_ref(oid)))
                         .unwrap_or_default();
-                    (result, changes)
+                    let plans = result.as_ref().map_or_else(
+                        |_| Vec::new(),
+                        |oid| Self::take_staging_plans(&mut db, std::slice::from_ref(oid)),
+                    );
+                    (result, changes, plans)
                 };
+                staging_plans.extend(plans);
                 match result {
                     Ok(oid) => {
                         written_oids.push(oid);
@@ -133,7 +138,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
             s if s == ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE => {
-                let (outcome, exact_changes) = {
+                let (outcome, exact_changes, plans) = {
                     let mut db = db.write().await;
                     let mut snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::default();
                     let outcome = handlers::handle_write_property_multiple_detailed(
@@ -149,8 +154,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         handlers::WritePropertyMultipleOutcome::Reject { .. } => &[],
                     };
                     let changes = snapshots.changes(&db, committed_oids);
-                    (outcome, changes)
+                    let plans = Self::take_staging_plans(&mut db, committed_oids);
+                    (outcome, changes, plans)
                 };
+                staging_plans.extend(plans);
                 let response = match outcome {
                     handlers::WritePropertyMultipleOutcome::Success { committed_oids } => {
                         written_oids = committed_oids;
@@ -511,6 +518,20 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 })
             }
         };
+
+        Self::execute_staging_plans(
+            db,
+            network,
+            cov_table,
+            cov_in_flight,
+            server_tsm,
+            notification_transactions,
+            device_bindings,
+            comm_state,
+            config,
+            staging_plans,
+        )
+        .await;
 
         if let Apdu::ComplexAck(ref ack) = response {
             let mut full_buf = BytesMut::new();

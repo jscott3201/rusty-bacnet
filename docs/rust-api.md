@@ -556,7 +556,61 @@ properties.
 | `LoadControlObject` | `::new(instance, name)` |
 | `ProgramObject` | `::new(instance, name)` |
 | `AveragingObject` | `::new(instance, name)` |
-| `StagingObject` | `::new(instance, name, num_stages)` |
+| `StagingObject` | `::new(instance, name, StagingConfig { ... })` |
+
+Staging uses an explicit atomic configuration; the former stage-count-only
+constructor is intentionally removed because it could not create a valid
+ladder or target mapping:
+
+```rust
+use bacnet_objects::staging::{StagingConfig, StagingObject};
+use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
+use bacnet_types::enums::ObjectType;
+use bacnet_types::primitives::ObjectIdentifier;
+
+let target = BACnetDeviceObjectReference {
+    device_identifier: None,
+    object_identifier: ObjectIdentifier::new(ObjectType::BINARY_OUTPUT, 1)?,
+};
+let staging = StagingObject::new(
+    1,
+    "Two-stage fan",
+    StagingConfig {
+        present_value: 5.0,
+        min_present_value: 0.0,
+        units: 62,
+        priority_for_writing: 8,
+        stages: vec![
+            BACnetStageLimitValue {
+                limit: 10.0,
+                values: vec![false],
+                deadband: 1.0,
+            },
+            BACnetStageLimitValue {
+                limit: 20.0,
+                values: vec![true],
+                deadband: 1.0,
+            },
+        ],
+        target_references: vec![target],
+        stage_names: Some(vec!["Off".into(), "On".into()]),
+    },
+)?;
+# Ok::<(), bacnet_types::error::Error>(())
+```
+
+Staging targets are local-only Binary Output, Binary Value, or Binary Lighting
+Output objects. The server applies stage changes through its ordinary local
+write notification path at `priority_for_writing`, completing the bounded local
+plan during write handling without remote I/O. A target failure sets source
+`Reliability` to `UNRELIABLE_OTHER`; a later fully successful current plan
+clears it. `Out_Of_Service` decouples targets while preserving PV/stage
+evaluation, and returning to service reapplies the selected stage. Network
+writes may replace individual or whole `Stages`, `Target_References`, and
+configured `Stage_Names` arrays, but array lengths are fixed after construction
+so coupled configuration cannot pass through an invalid intermediate shape.
+`Max_Pres_Value` is derived from the final stage limit. Staging does not
+advertise intrinsic reporting or COV.
 
 #### Lighting & Color (4)
 

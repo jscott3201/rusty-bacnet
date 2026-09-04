@@ -310,6 +310,31 @@ pub trait BACnetObject: Send + Sync {
         false
     }
 
+    /// Take pending local target work from a Staging object.
+    ///
+    /// The default keeps every non-Staging object source-compatible. The
+    /// bundled server calls this only while it owns the database mutation
+    /// guard, then performs the returned writes after releasing that guard.
+    #[doc(hidden)]
+    fn take_staging_write_plan_internal(&mut self) -> Option<crate::staging::StagingWritePlan> {
+        None
+    }
+
+    /// Return the current Staging transition generation, if applicable.
+    #[doc(hidden)]
+    fn staging_generation_internal(&self) -> Option<u64> {
+        None
+    }
+
+    /// Commit one guarded Staging plan's success or failure to Reliability.
+    ///
+    /// Returns whether readable source state changed. Implementations ignore a
+    /// stale generation so older work cannot fault a newer transition.
+    #[doc(hidden)]
+    fn complete_staging_write_plan_internal(&mut self, _generation: u64, _success: bool) -> bool {
+        false
+    }
+
     /// Return this object's GetEnrollmentSummary event capability.
     ///
     /// The default opts custom and downstream objects out. Implementations opt

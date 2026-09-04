@@ -526,10 +526,41 @@ impl BACnetServer {
         self.push_pending(Box::new(obj))
     }
 
-    /// Add a Staging object to the server (before starting).
-    #[pyo3(signature = (instance, name, num_stages))]
-    fn add_staging(&self, instance: u32, name: &str, num_stages: usize) -> PyResult<()> {
-        let obj = StagingObject::new(instance, name, num_stages).map_err(to_py_err)?;
+    /// Add an explicitly configured local-target Staging object before starting.
+    #[pyo3(signature = (
+        instance,
+        name,
+        present_value,
+        min_present_value,
+        units,
+        priority_for_writing,
+        stages,
+        target_references,
+        stage_names=None
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn add_staging(
+        &self,
+        instance: u32,
+        name: &str,
+        present_value: f32,
+        min_present_value: f32,
+        units: u32,
+        priority_for_writing: u8,
+        stages: Vec<(f32, Vec<bool>, f32)>,
+        target_references: Vec<PyObjectIdentifier>,
+        stage_names: Option<Vec<String>>,
+    ) -> PyResult<()> {
+        let config = staging_config(
+            present_value,
+            min_present_value,
+            units,
+            priority_for_writing,
+            stages,
+            target_references,
+            stage_names,
+        );
+        let obj = StagingObject::new(instance, name, config).map_err(to_py_err)?;
         self.push_pending(Box::new(obj))
     }
 
@@ -554,3 +585,41 @@ impl BACnetServer {
         self.push_pending(Box::new(obj))
     }
 }
+
+#[allow(clippy::too_many_arguments)]
+fn staging_config(
+    present_value: f32,
+    min_present_value: f32,
+    units: u32,
+    priority_for_writing: u8,
+    stages: Vec<(f32, Vec<bool>, f32)>,
+    target_references: Vec<PyObjectIdentifier>,
+    stage_names: Option<Vec<String>>,
+) -> StagingConfig {
+    StagingConfig {
+        present_value,
+        min_present_value,
+        units,
+        priority_for_writing,
+        stages: stages
+            .into_iter()
+            .map(|(limit, values, deadband)| BACnetStageLimitValue {
+                limit,
+                values,
+                deadband,
+            })
+            .collect(),
+        target_references: target_references
+            .into_iter()
+            .map(|reference| BACnetDeviceObjectReference {
+                device_identifier: None,
+                object_identifier: reference.to_rust(),
+            })
+            .collect(),
+        stage_names,
+    }
+}
+
+#[cfg(test)]
+#[path = "registration_tests.rs"]
+mod tests;

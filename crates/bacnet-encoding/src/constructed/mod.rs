@@ -39,6 +39,7 @@ pub mod event_parameter;
 pub mod fault_parameter;
 pub mod object_property_reference;
 pub mod recipient;
+pub mod staging;
 
 pub use audit_notification::{decode_audit_notification_at, encode_audit_notification};
 pub use audit_record::{
@@ -55,6 +56,10 @@ pub use object_property_reference::{
 pub use recipient::{
     decode_destination, decode_destination_list, decode_recipient, encode_destination,
     encode_destination_list, encode_recipient,
+};
+pub use staging::{
+    decode_device_object_reference, decode_stage_limit_value, encode_device_object_reference,
+    encode_stage_limit_value,
 };
 
 /// Upper bound on decoded SEQUENCE OF / list lengths, mirroring the socket-

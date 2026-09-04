@@ -693,7 +693,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             ),
         );
 
-        Ok(Self {
+        let server = Self {
             config,
             _clock: clock,
             network,
@@ -717,7 +717,29 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             intrinsic_reporting_task,
             binary_lighting_operation_task,
             local_mac,
-        })
+        };
+        let staging_oids = {
+            let database = server.db.read().await;
+            database.find_by_type(ObjectType::STAGING)
+        };
+        let staging_plans = {
+            let mut database = server.db.write().await;
+            Self::take_staging_plans(&mut database, &staging_oids)
+        };
+        Self::execute_staging_plans(
+            &server.db,
+            &server.network,
+            &server.cov_table,
+            &server.cov_in_flight,
+            &server.server_tsm,
+            &server.notification_transactions,
+            &server.device_bindings,
+            &server.comm_state,
+            &server.config,
+            staging_plans,
+        )
+        .await;
+        Ok(server)
     }
 
     /// Send a `'server' = TRUE` Abort back along the request's path.

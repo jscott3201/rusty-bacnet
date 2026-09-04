@@ -1108,8 +1108,31 @@ server.add_timer(instance=1, name="Timer")
 server.add_load_control(instance=1, name="Load Control")
 server.add_program(instance=1, name="Program")
 server.add_averaging(instance=1, name="Averaging")
-server.add_staging(instance=1, name="Staging", num_stages=4)
+server.add_staging(
+    instance=1,
+    name="Two-stage fan",
+    present_value=5.0,
+    min_present_value=0.0,
+    units=62,
+    priority_for_writing=8,
+    # Each tuple is (limit, target value bits, deadband).
+    stages=[(10.0, [False], 1.0), (20.0, [True], 1.0)],
+    # References are always local and must be BO, BV, or BLO objects.
+    target_references=[ObjectIdentifier(ObjectType.BINARY_OUTPUT, 1)],
+    stage_names=["Off", "On"],
+)
 ```
+
+`add_staging` validates the complete ladder and target mapping atomically; it
+does not invent stage limits, deadbands, names, priorities, or targets. Each
+stage's bit list must have the same length as `target_references`, and remote
+device references are not exposed by this local-only Python boundary. Runtime
+array writes retain their configured lengths so the coupled arrays never pass
+through a partially configured state. Local target writes complete during
+write handling; failures set source Reliability to `UNRELIABLE_OTHER` until a
+current plan succeeds. `Out_Of_Service` decouples targets and returning to
+service reapplies the current stage. Staging does not advertise intrinsic
+reporting or COV.
 
 #### Lighting
 
