@@ -73,6 +73,13 @@ impl FaultDetector {
             .remove(oid);
     }
 
+    fn prune_internal_failures(&self, db: &ObjectDatabase) {
+        self.warned_internal_failures
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retain(|oid, _| db.get(oid).is_some());
+    }
+
     /// Evaluate reliability for all objects in the database.
     ///
     /// Each object owns both the decision and any mutation. Engineering
@@ -116,6 +123,7 @@ impl FaultDetector {
                 }
             }
         });
+        self.prune_internal_failures(db);
         changes
     }
 }
@@ -131,10 +139,48 @@ mod tests {
     use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliability};
     use bacnet_types::error::Error;
     use bacnet_types::primitives::PropertyValue;
+    use tracing::span::{Attributes, Id, Record};
+    use tracing::{Event, Level, Metadata, Subscriber};
 
     use super::*;
 
     const HOOK_ERROR: &str = "test reliability hook failed";
+
+    struct WarningCounter {
+        warnings: Arc<AtomicUsize>,
+    }
+
+    impl Subscriber for WarningCounter {
+        fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+            *metadata.level() == Level::WARN
+        }
+
+        fn new_span(&self, _span: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+        fn event(&self, event: &Event<'_>) {
+            if *event.metadata().level() == Level::WARN {
+                self.warnings.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        fn enter(&self, _span: &Id) {}
+
+        fn exit(&self, _span: &Id) {}
+    }
+
+    fn with_warning_counter(test: impl FnOnce(&AtomicUsize)) {
+        let warnings = Arc::new(AtomicUsize::new(0));
+        let subscriber = WarningCounter {
+            warnings: Arc::clone(&warnings),
+        };
+        tracing::subscriber::with_default(subscriber, || test(warnings.as_ref()));
+    }
 
     fn read_reliability(db: &ObjectDatabase, oid: ObjectIdentifier) -> u32 {
         match db
@@ -568,11 +614,61 @@ mod tests {
     }
 
     #[test]
-    fn failing_hook_is_rate_limited_and_cannot_create_a_change() {
+    fn failing_hook_warning_is_rate_limited_and_restored_after_recovery() {
         let fail = Arc::new(AtomicBool::new(true));
         let object = OptInReliabilityObject::new(
             1,
             "failing-hook",
+            Reliability::NO_SENSOR.to_raw(),
+            Arc::clone(&fail),
+        );
+        let oid = object.object_identifier();
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(object)).unwrap();
+        let detector = FaultDetector::default();
+
+        with_warning_counter(|warnings| {
+            assert!(detector.evaluate(&mut db).is_empty());
+            assert_eq!(warnings.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                read_reliability(&db, oid),
+                Reliability::NO_FAULT_DETECTED.to_raw()
+            );
+
+            assert!(detector.evaluate(&mut db).is_empty());
+            assert_eq!(warnings.load(Ordering::SeqCst), 1);
+
+            fail.store(false, Ordering::SeqCst);
+            assert_eq!(
+                detector.evaluate(&mut db),
+                vec![ReliabilityChange {
+                    object_id: oid,
+                    old_reliability: Reliability::NO_FAULT_DETECTED.to_raw(),
+                    new_reliability: Reliability::NO_SENSOR.to_raw(),
+                }]
+            );
+            assert_eq!(warnings.load(Ordering::SeqCst), 1);
+
+            fail.store(true, Ordering::SeqCst);
+            assert!(detector.evaluate(&mut db).is_empty());
+            assert_eq!(warnings.load(Ordering::SeqCst), 2);
+
+            fail.store(false, Ordering::SeqCst);
+            assert!(detector.evaluate(&mut db).is_empty());
+            assert_eq!(warnings.load(Ordering::SeqCst), 2);
+
+            fail.store(true, Ordering::SeqCst);
+            assert!(detector.evaluate(&mut db).is_empty());
+            assert_eq!(warnings.load(Ordering::SeqCst), 3);
+        });
+    }
+
+    #[test]
+    fn deleted_failure_warning_is_pruned_and_oid_reuse_warns() {
+        let fail = Arc::new(AtomicBool::new(true));
+        let object = OptInReliabilityObject::new(
+            1,
+            "removed-failing-hook",
             Reliability::NO_FAULT_DETECTED.to_raw(),
             Arc::clone(&fail),
         );
@@ -580,26 +676,27 @@ mod tests {
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
         let detector = FaultDetector::default();
-        let error_text = Error::Encoding(HOOK_ERROR.into()).to_string();
 
-        assert!(detector.evaluate(&mut db).is_empty());
-        assert_eq!(
-            read_reliability(&db, oid),
-            Reliability::NO_FAULT_DETECTED.to_raw()
-        );
-        assert!(!detector.should_warn_internal_failure(oid, &error_text));
-        assert!(detector.evaluate(&mut db).is_empty());
-        assert_eq!(
-            read_reliability(&db, oid),
-            Reliability::NO_FAULT_DETECTED.to_raw()
-        );
+        with_warning_counter(|warnings| {
+            assert!(detector.evaluate(&mut db).is_empty());
+            assert_eq!(warnings.load(Ordering::SeqCst), 1);
 
-        fail.store(false, Ordering::SeqCst);
-        assert!(detector.evaluate(&mut db).is_empty());
-        assert_eq!(
-            read_reliability(&db, oid),
-            Reliability::NO_FAULT_DETECTED.to_raw()
-        );
-        assert!(detector.should_warn_internal_failure(oid, &error_text));
+            assert!(detector.evaluate(&mut db).is_empty());
+            assert_eq!(warnings.load(Ordering::SeqCst), 1);
+
+            assert!(db.remove(&oid).is_some());
+            assert!(detector.evaluate(&mut db).is_empty());
+            assert_eq!(warnings.load(Ordering::SeqCst), 1);
+
+            db.add(Box::new(OptInReliabilityObject::new(
+                1,
+                "replacement-failing-hook",
+                Reliability::NO_FAULT_DETECTED.to_raw(),
+                fail,
+            )))
+            .unwrap();
+            assert!(detector.evaluate(&mut db).is_empty());
+            assert_eq!(warnings.load(Ordering::SeqCst), 2);
+        });
     }
 }
