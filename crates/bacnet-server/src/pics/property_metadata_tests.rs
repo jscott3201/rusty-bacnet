@@ -1,8 +1,10 @@
 use bacnet_objects::{
     binary::BinaryInputObject,
     event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject},
+    staging::{StagingConfig, StagingObject},
     value_types::TimeValueObject,
 };
+use bacnet_types::constructed::BACnetStageLimitValue;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 
@@ -37,6 +39,34 @@ fn pics_projects_migrated_property_metadata() {
     let alert_source = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
     db.add(Box::new(
         AlertEnrollmentObject::new(1, "ae-1", alert_source).unwrap(),
+    ))
+    .unwrap();
+    db.add(Box::new(
+        StagingObject::new(
+            1,
+            "stg-1",
+            StagingConfig {
+                present_value: 0.0,
+                min_present_value: -1.0,
+                units: 62,
+                priority_for_writing: 8,
+                stages: vec![
+                    BACnetStageLimitValue {
+                        limit: 1.0,
+                        values: vec![],
+                        deadband: 0.0,
+                    },
+                    BACnetStageLimitValue {
+                        limit: 2.0,
+                        values: vec![],
+                        deadband: 0.0,
+                    },
+                ],
+                target_references: vec![],
+                stage_names: Some(vec!["Low".into(), "High".into()]),
+            },
+        )
+        .unwrap(),
     ))
     .unwrap();
     let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
@@ -96,6 +126,55 @@ fn pics_projects_migrated_property_metadata() {
             false,
             false,
         ),
+        (
+            ObjectType::STAGING,
+            PropertyIdentifier::PRESENT_VALUE,
+            false,
+            true,
+        ),
+        (
+            ObjectType::STAGING,
+            PropertyIdentifier::PRESENT_STAGE,
+            false,
+            false,
+        ),
+        (ObjectType::STAGING, PropertyIdentifier::STAGES, false, true),
+        (
+            ObjectType::STAGING,
+            PropertyIdentifier::STAGE_NAMES,
+            true,
+            true,
+        ),
+        (
+            ObjectType::STAGING,
+            PropertyIdentifier::TARGET_REFERENCES,
+            false,
+            true,
+        ),
+        (
+            ObjectType::STAGING,
+            PropertyIdentifier::RELIABILITY,
+            false,
+            true,
+        ),
+        (
+            ObjectType::STAGING,
+            PropertyIdentifier::PRIORITY_FOR_WRITING,
+            false,
+            true,
+        ),
+        (
+            ObjectType::STAGING,
+            PropertyIdentifier::MIN_PRES_VALUE,
+            false,
+            true,
+        ),
+        (
+            ObjectType::STAGING,
+            PropertyIdentifier::MAX_PRES_VALUE,
+            false,
+            false,
+        ),
     ] {
         let support = property_support(&pics, object_type, property_id);
         assert_eq!(
@@ -113,6 +192,7 @@ fn pics_projects_migrated_property_metadata() {
         ObjectType::BINARY_INPUT,
         ObjectType::EVENT_ENROLLMENT,
         ObjectType::ALERT_ENROLLMENT,
+        ObjectType::STAGING,
     ] {
         let property_list = property_support(&pics, object_type, PropertyIdentifier::PROPERTY_LIST);
         assert!(!property_list.access.optional);

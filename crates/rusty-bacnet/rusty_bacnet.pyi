@@ -1628,7 +1628,19 @@ class BACnetServer:
     def add_elevator_group(self, instance: int, name: str) -> None: ...
     def add_escalator(self, instance: int, name: str) -> None: ...
     def add_lift(self, instance: int, name: str, num_floors: int) -> None: ...
-    def add_staging(self, instance: int, name: str, num_stages: int) -> None: ...
+    def add_staging(
+        self,
+        instance: int,
+        name: str,
+        present_value: float,
+        min_present_value: float,
+        units: int,
+        priority_for_writing: int,
+        stages: list[tuple[float, list[bool], float]],
+        target_references: list[ObjectIdentifier],
+        stage_names: list[str] | None = None,
+    ) -> None:
+        """Add a validated local-target Staging object before start()."""
 
     # --- Averaging ---
     def add_averaging(self, instance: int, name: str) -> None: ...

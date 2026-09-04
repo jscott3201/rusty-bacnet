@@ -36,7 +36,7 @@ use bacnet_objects::network_port::NetworkPortObject;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::program::ProgramObject;
 use bacnet_objects::schedule::{CalendarObject, ScheduleObject};
-use bacnet_objects::staging::StagingObject;
+use bacnet_objects::staging::{StagingConfig, StagingObject};
 use bacnet_objects::timer::TimerObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_objects::trend::{TrendLogMultipleObject, TrendLogObject};
@@ -50,6 +50,7 @@ use bacnet_server::server;
 use bacnet_transport::any::AnyTransport;
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::bip6::Bip6Transport;
+use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
 use bacnet_types::primitives::PropertyValue;
 
 use crate::errors::to_py_err;

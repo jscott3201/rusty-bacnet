@@ -17,13 +17,50 @@ use bacnet_objects::group::{GlobalGroupObject, GroupObject, StructuredViewObject
 use bacnet_objects::multistate::MultiStateInputObject;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::schedule::{CalendarObject, ScheduleObject};
-use bacnet_objects::staging::StagingObject;
+use bacnet_objects::staging::{StagingConfig, StagingObject};
 use bacnet_objects::value_types::CharacterStringValueObject;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::WriteAccessSpecification;
+use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
 
 fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(object_type, instance).unwrap()
+}
+
+fn staging(instance: u32, name: &str) -> StagingObject {
+    StagingObject::new(
+        instance,
+        name,
+        StagingConfig {
+            present_value: 0.0,
+            min_present_value: -1.0,
+            units: 62,
+            priority_for_writing: 8,
+            stages: vec![
+                BACnetStageLimitValue {
+                    limit: 1.0,
+                    values: vec![false],
+                    deadband: 0.0,
+                },
+                BACnetStageLimitValue {
+                    limit: 2.0,
+                    values: vec![false],
+                    deadband: 0.0,
+                },
+                BACnetStageLimitValue {
+                    limit: 3.0,
+                    values: vec![false],
+                    deadband: 0.0,
+                },
+            ],
+            target_references: vec![BACnetDeviceObjectReference {
+                device_identifier: None,
+                object_identifier: oid(ObjectType::BINARY_OUTPUT, ObjectIdentifier::MAX_INSTANCE),
+            }],
+            stage_names: Some(vec!["Low".into(), "Middle".into(), "High".into()]),
+        },
+    )
+    .unwrap()
 }
 
 /// Database holding one instance of every object type the matrix touches.
@@ -72,8 +109,7 @@ fn gating_db() -> ObjectDatabase {
     let mut command = CommandObject::new(1, "CMD-1").unwrap();
     command.set_action(vec![vec![1, 2, 3]]);
     db.add(Box::new(command)).unwrap();
-    db.add(Box::new(StagingObject::new(1, "STG-1", 3).unwrap()))
-        .unwrap();
+    db.add(Box::new(staging(1, "STG-1"))).unwrap();
     db
 }
 
@@ -542,7 +578,7 @@ fn object_level_classification_matrix() {
     assert!(!cmd.is_array_property(PropertyIdentifier::ACTION_TEXT));
     assert!(!cmd.is_array_property(PropertyIdentifier::PRESENT_VALUE));
 
-    let stg = StagingObject::new(9, "STG-9", 3).unwrap();
+    let stg = staging(9, "STG-9");
     // Staging (Table 12-80): all three collection properties are arrays.
     assert!(stg.is_array_property(PropertyIdentifier::STAGES));
     assert!(stg.is_array_property(PropertyIdentifier::STAGE_NAMES));
