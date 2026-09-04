@@ -30,18 +30,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   server post-write intrinsic-event and COV processing. Out-of-service client
   simulations remain protected; Python exposure remains tracked in #503.
 
-- Correlated AcknowledgeAlarm core validation and a lossless Rust request API
-  (#132). The bundled server now requires the latest committed original
-  To State and exact timestamp before setting one supported Analog, Binary,
-  Multi-state, or Event Enrollment acknowledgment bit; valid repeated
-  transactions remain idempotent. Python now exposes the protocol-backed
-  `BACnetTimeStamp` CHOICE and a lossless
-  `BACnetClient.acknowledge_alarm_request` method, while the CLI uses that
-  canonical Rust request with both mandatory timestamps. Binary
-  Input/Output/Value and Multi-state Input/Output/Value now share the same
-  correlated behavior (#170). Alert Enrollment remains excluded, and
-  ACK_NOTIFICATION distribution (#175) remains deferred, so this does not
-  claim full Clause 13.5 compliance or broaden conformance claims.
+- Correlated AcknowledgeAlarm validation, lossless Rust request construction,
+  and bundled-server ACK notification distribution (#132, #170, #175). The
+  server requires the latest committed original To State and exact timestamp
+  before setting one supported Analog, Binary, Multi-state, or Event Enrollment
+  acknowledgment bit. It preserves the requester SimpleACK, then sends a fresh
+  `ACK_NOTIFICATION` to each currently selected Notification Class recipient
+  using that entry's process identifier and confirmed/unconfirmed policy;
+  Event_Enable, DCC, recipient lookup, reservation, encoding, or transport
+  failure suppresses only affected delivery and never rolls back the accepted
+  acknowledgment. Valid newly admitted repeats remain idempotent and notify
+  again, while exact duplicate confirmed requests remain silent. Python exposes
+  the protocol-backed `BACnetTimeStamp` CHOICE and lossless
+  `BACnetClient.acknowledge_alarm_request`; the CLI uses that canonical request
+  with both mandatory timestamps. Alert Enrollment remains excluded. Custom
+  objects implementing only the source-compatible coarse acknowledgment hook
+  still receive SimpleACK but provide no exact history for distribution, and
+  unresolved Device recipients remain fail-closed under the partial #125
+  routing boundary. This does not broaden README, PICS, BIBB, or public support
+  claims.
 
 - Exact-delta Life Safety COV reporting for the bundled server (`Refs #177`).
   Whole-object Point/Zone subscriptions now trigger only for actual

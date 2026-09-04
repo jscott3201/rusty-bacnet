@@ -549,6 +549,24 @@ impl BACnetObject for EventEnrollmentObject {
         )
     }
 
+    fn acknowledge_alarm_correlated_detailed_internal(
+        &mut self,
+        event_state: EventState,
+        timestamp: &BACnetTimeStamp,
+    ) -> Result<Option<crate::event::EventStateChange>, Error> {
+        if !self.event_detection_enable || self.enrollment_summary_capability_internal().is_none() {
+            return Err(Error::Protocol {
+                class: ErrorClass::OBJECT.to_raw() as u32,
+                code: ErrorCode::NO_ALARM_CONFIGURED.to_raw() as u32,
+            });
+        }
+        self.event_history.acknowledge_correlated_detailed(
+            &mut self.acked_transitions,
+            event_state,
+            timestamp,
+        )
+    }
+
     /// Clause 13.2.3's transition-received maintenance of `Acked_Transitions`:
     /// the evaluator resolves `Ack_Required` from the referenced Notification
     /// Class object and this call applies the outcome — clear the bit when

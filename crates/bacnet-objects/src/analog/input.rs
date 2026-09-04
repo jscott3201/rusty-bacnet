@@ -559,6 +559,8 @@ mod detection_enable_reset_tests {
                 BACnetTimeStamp::SequenceNumber(0),
             ]
         );
+        assert_eq!(ai.event_history.original_from_states, [None, None, None]);
+        assert_eq!(ai.event_history.original_to_states, [None, None, None]);
         assert_eq!(
             ai.event_history.message_texts,
             [String::new(), String::new(), String::new()]
@@ -576,6 +578,7 @@ mod detection_enable_reset_tests {
         });
         ai.event_detector.fault_reliability = Some(1);
         ai.event_history.time_stamps[0] = BACnetTimeStamp::SequenceNumber(7);
+        ai.event_history.original_from_states[0] = Some(EventState::NORMAL);
         ai.event_history.original_to_states[0] = Some(EventState::HIGH_LIMIT);
         ai.event_history.message_texts[0] = "offnormal".into();
         let rollback = ai
@@ -605,6 +608,10 @@ mod detection_enable_reset_tests {
         assert_eq!(
             ai.event_history.time_stamps[0],
             BACnetTimeStamp::SequenceNumber(7)
+        );
+        assert_eq!(
+            ai.event_history.original_from_states[0],
+            Some(EventState::NORMAL)
         );
         assert_eq!(
             ai.event_history.original_to_states[0],

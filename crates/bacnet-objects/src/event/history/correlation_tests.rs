@@ -157,11 +157,35 @@ fn request_side_offnormal_wildcard_matches_every_residual_offnormal_state() {
         let mut history = EventHistory::default();
         commit(&mut state, &mut acked, &mut history, stored, sequence(9));
 
-        history
-            .acknowledge_correlated(&mut acked, EventState::OFFNORMAL, &sequence(9))
-            .unwrap();
+        let detailed = history
+            .acknowledge_correlated_detailed(&mut acked, EventState::OFFNORMAL, &sequence(9))
+            .unwrap()
+            .expect("committed transitions retain their exact From State");
         assert_eq!(acked, 0b111, "stored state {stored:?}");
+        assert_eq!(
+            detailed,
+            EventStateChange {
+                from: EventState::NORMAL,
+                to: stored,
+            },
+            "the request wildcard must not replace exact object history"
+        );
     }
+}
+
+#[test]
+fn missing_optional_from_state_preserves_a_correlated_acknowledgment() {
+    let mut history = EventHistory::default();
+    history.time_stamps[0] = sequence(9);
+    history.original_to_states[0] = Some(EventState::HIGH_LIMIT);
+    let mut acked = 0b110;
+
+    let detailed = history
+        .acknowledge_correlated_detailed(&mut acked, EventState::OFFNORMAL, &sequence(9))
+        .unwrap();
+
+    assert_eq!(detailed, None);
+    assert_eq!(acked, 0b111);
 }
 
 #[test]

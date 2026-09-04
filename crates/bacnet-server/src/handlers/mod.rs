@@ -25,7 +25,8 @@ use bacnet_services::wpm::{WritePropertyMultipleCursor, WritePropertyMultipleEve
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{
-    EnableDisable, ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier, RejectReason,
+    EnableDisable, ErrorClass, ErrorCode, EventState, EventType, ObjectType, PropertyIdentifier,
+    RejectReason,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};

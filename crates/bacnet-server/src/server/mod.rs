@@ -28,7 +28,6 @@ use bacnet_encoding::segmentation::{
 };
 use bacnet_network::layer::NetworkLayer;
 use bacnet_objects::database::ObjectDatabase;
-use bacnet_objects::event::EventStateChange;
 use bacnet_objects::notification_class::{
     lookup_notification_recipients, resolve_transition_priority_ack,
 };

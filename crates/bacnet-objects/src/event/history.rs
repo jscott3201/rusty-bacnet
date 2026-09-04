@@ -12,6 +12,8 @@ use super::{EventTransition, EventTransitionCommit, EventTransitionCommitError};
 pub(crate) struct EventHistory {
     /// Transition slots ordered `[TO_OFFNORMAL, TO_FAULT, TO_NORMAL]`.
     pub(crate) time_stamps: [BACnetTimeStamp; 3],
+    /// Exact committed From State for each transition slot.
+    pub(crate) original_from_states: [Option<EventState>; 3],
     /// Exact committed To State for each transition slot.
     pub(crate) original_to_states: [Option<EventState>; 3],
     /// Transition slots ordered `[TO_OFFNORMAL, TO_FAULT, TO_NORMAL]`.
@@ -75,6 +77,7 @@ impl<'a> EventTransitionState<'a> {
             *self.acked_transitions &= !bit;
         }
         self.history.time_stamps[index] = commit.timestamp;
+        self.history.original_from_states[index] = Some(commit.change.from);
         self.history.original_to_states[index] = Some(commit.change.to);
         if let Some(message_text) = commit.message_text {
             self.history.message_texts[index] = message_text;
@@ -148,6 +151,25 @@ macro_rules! impl_builtin_intrinsic_reporting {
                 .confirm_transition(&change, self.$reliability_field);
             Ok(())
         }
+
+        fn acknowledge_alarm_correlated_detailed_internal(
+            &mut self,
+            event_state: bacnet_types::enums::EventState,
+            timestamp: &bacnet_types::primitives::BACnetTimeStamp,
+        ) -> Result<Option<$crate::event::EventStateChange>, bacnet_types::error::Error> {
+            if !self.$event_detection_enable_field {
+                return Err(bacnet_types::error::Error::Protocol {
+                    class: bacnet_types::enums::ErrorClass::OBJECT.to_raw() as u32,
+                    code: bacnet_types::enums::ErrorCode::NO_ALARM_CONFIGURED.to_raw() as u32,
+                });
+            }
+            self.$history_field
+                .acknowledge_correlated_detailed(
+                    &mut self.$detector_field.acked_transitions,
+                    event_state,
+                    timestamp,
+                )
+        }
     };
 }
 
@@ -186,6 +208,7 @@ impl Default for EventHistory {
                 BACnetTimeStamp::SequenceNumber(0),
                 BACnetTimeStamp::SequenceNumber(0),
             ],
+            original_from_states: [None, None, None],
             original_to_states: [None, None, None],
             message_texts: [String::new(), String::new(), String::new()],
             last_transition: None,
@@ -209,6 +232,18 @@ impl EventHistory {
         requested_state: EventState,
         timestamp: &BACnetTimeStamp,
     ) -> Result<(), Error> {
+        self.acknowledge_correlated_detailed(acked_transitions, requested_state, timestamp)
+            .map(|_| ())
+    }
+
+    /// Validate an acknowledgment and return exact historical context when
+    /// its optional From State is available.
+    pub(crate) fn acknowledge_correlated_detailed(
+        &self,
+        acked_transitions: &mut u8,
+        requested_state: EventState,
+        timestamp: &BACnetTimeStamp,
+    ) -> Result<Option<super::EventStateChange>, Error> {
         let coordinate = EventTransition::for_target_state(requested_state);
         let index = coordinate.index();
         let Some(original_state) = self.original_to_states[index] else {
@@ -227,7 +262,12 @@ impl EventHistory {
         }
 
         *acked_transitions |= coordinate.bit_mask();
-        Ok(())
+        Ok(
+            self.original_from_states[index].map(|from| super::EventStateChange {
+                from,
+                to: original_state,
+            }),
+        )
     }
 
     /// Reads the fixed-size event arrays with their BACnet array semantics.
@@ -343,6 +383,7 @@ mod tests {
     fn reset_restores_mutated_history_to_default() {
         let mut history = EventHistory::default();
         history.time_stamps[1] = BACnetTimeStamp::SequenceNumber(42);
+        history.original_from_states[1] = Some(EventState::HIGH_LIMIT);
         history.original_to_states[1] = Some(EventState::FAULT);
         history.message_texts[2] = "transition".into();
         history.last_transition = Some(EventTransition::ToFault);
@@ -362,6 +403,7 @@ mod tests {
                 BACnetTimeStamp::SequenceNumber(20),
                 BACnetTimeStamp::SequenceNumber(30),
             ],
+            original_from_states: [None, None, None],
             original_to_states: [None, None, None],
             message_texts: [
                 "old-offnormal".into(),
@@ -388,6 +430,7 @@ mod tests {
         assert_eq!(state, EventState::HIGH_LIMIT);
         assert_eq!(acked, 0b100, "only TO_OFFNORMAL is cleared");
         assert_eq!(history.time_stamps[0], time(1));
+        assert_eq!(history.original_from_states[0], Some(EventState::NORMAL));
         assert_eq!(history.original_to_states[0], Some(EventState::HIGH_LIMIT));
         assert_eq!(
             history.last_transition(),
@@ -418,6 +461,10 @@ mod tests {
         assert_eq!(acked, 0b110, "TO_FAULT is set and other bits are untouched");
         assert_eq!(history.time_stamps[0], time(1));
         assert_eq!(history.time_stamps[1], BACnetTimeStamp::SequenceNumber(0));
+        assert_eq!(
+            history.original_from_states[1],
+            Some(EventState::HIGH_LIMIT)
+        );
         assert_eq!(history.original_to_states[1], Some(EventState::FAULT));
         assert_eq!(history.last_transition(), Some(EventTransition::ToFault));
         assert_eq!(history.time_stamps[2], BACnetTimeStamp::SequenceNumber(30));
@@ -442,6 +489,14 @@ mod tests {
         assert_eq!(
             history.time_stamps,
             [time(1), BACnetTimeStamp::SequenceNumber(0), date_time(27)]
+        );
+        assert_eq!(
+            history.original_from_states,
+            [
+                Some(EventState::NORMAL),
+                Some(EventState::HIGH_LIMIT),
+                Some(EventState::FAULT),
+            ]
         );
         assert_eq!(
             history.original_to_states,
@@ -469,6 +524,7 @@ mod tests {
                 BACnetTimeStamp::SequenceNumber(2),
                 BACnetTimeStamp::SequenceNumber(3),
             ],
+            original_from_states: [None, None, None],
             original_to_states: [None, None, None],
             message_texts: ["offnormal".into(), "fault".into(), "normal".into()],
             last_transition: Some(EventTransition::ToFault),
@@ -517,6 +573,11 @@ mod tests {
         let mut acked = 0b101;
         let mut history = EventHistory {
             time_stamps: [time(9), BACnetTimeStamp::SequenceNumber(44), date_time(26)],
+            original_from_states: [
+                Some(EventState::NORMAL),
+                Some(EventState::HIGH_LIMIT),
+                Some(EventState::FAULT),
+            ],
             original_to_states: [
                 Some(EventState::HIGH_LIMIT),
                 Some(EventState::FAULT),

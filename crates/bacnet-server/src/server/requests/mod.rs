@@ -1,5 +1,6 @@
 use super::*;
 
+mod acknowledge_alarm;
 mod audit_notification;
 mod confirmed;
 mod confirmed_response;
@@ -55,6 +56,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let mut coarse_cov_oids: Vec<ObjectIdentifier> = Vec::new();
         let mut life_safety_cov_changes = Vec::new();
         let mut initial_cov_notifications: Vec<InitialCovNotification> = Vec::new();
+        let mut accepted_acknowledgment = None;
 
         let state = comm_state.load(Ordering::Acquire);
         if state == 1
@@ -309,11 +311,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .await
             }
             s if s == ConfirmedServiceChoice::ACKNOWLEDGE_ALARM => {
-                let mut db = db.write().await;
-                match handlers::handle_acknowledge_alarm(&mut db, &req.service_request) {
-                    Ok(()) => simple_ack(),
-                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
-                }
+                acknowledge_alarm::response(db, &req, &mut accepted_acknowledgment).await
             }
             s if s == ConfirmedServiceChoice::READ_RANGE => {
                 let db = db.read().await;
@@ -626,45 +624,27 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
         }
 
-        let mut buf = BytesMut::new();
-        encode_apdu(&mut buf, &response).expect("valid APDU encoding");
+        confirmed_response::send_unsegmented_response(
+            network,
+            &response,
+            source_mac,
+            source_network.as_ref(),
+            reply_tx,
+        )
+        .await;
 
-        if let Some(tx) = reply_tx {
-            use bacnet_encoding::npdu::{encode_npdu, Npdu};
-            let apdu_bytes = buf.freeze();
-            let npdu = Npdu {
-                is_network_message: false,
-                expecting_reply: false,
-                priority: NetworkPriority::NORMAL,
-                destination: source_network.clone(),
-                source: None,
-                payload: apdu_bytes.clone(),
-                ..Npdu::default()
-            };
-            let mut npdu_buf = BytesMut::with_capacity(2 + apdu_bytes.len());
-            match encode_npdu(&mut npdu_buf, &npdu) {
-                Ok(()) => {
-                    let _ = tx.send(npdu_buf.freeze());
-                }
-                Err(e) => {
-                    warn!(error = %e, "Failed to encode NPDU for MS/TP reply");
-                    if let Err(e) = Self::send_confirmed_response_apdu(
-                        network,
-                        &apdu_bytes,
-                        source_mac,
-                        source_network.as_ref(),
-                    )
-                    .await
-                    {
-                        warn!(error = %e, "Failed to send response");
-                    }
-                }
-            }
-        } else if let Err(e) =
-            Self::send_confirmed_response_apdu(network, &buf, source_mac, source_network.as_ref())
-                .await
-        {
-            warn!(error = %e, "Failed to send response");
+        if let Some(accepted) = accepted_acknowledgment {
+            Self::send_acknowledgment_notification_with_bindings(
+                db,
+                network,
+                comm_state,
+                server_tsm,
+                notification_transactions,
+                device_bindings,
+                accepted,
+                config.cov_retry_timeout_ms,
+            )
+            .await;
         }
 
         for oid in &written_oids {
