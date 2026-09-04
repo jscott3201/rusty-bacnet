@@ -53,3 +53,6 @@ mod reliability_inhibit_tests;
 
 #[cfg(test)]
 mod enrollment_summary_capability_tests;
+
+#[cfg(test)]
+mod acknowledge_alarm_object_family_tests;

@@ -1,7 +1,7 @@
 //! Binary Input (type 3), Binary Output (type 4), and Binary Value (type 5)
 //! objects per ASHRAE 135-2020 Clauses 12.6, 12.7, and 12.8.
 
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;

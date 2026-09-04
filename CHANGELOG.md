@@ -32,13 +32,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Correlated AcknowledgeAlarm core validation and a lossless Rust request API
   (#132). The bundled server now requires the latest committed original
-  To State and exact timestamp before setting one supported Analog or Event
-  Enrollment acknowledgment bit; valid repeated transactions remain
-  idempotent. Python now exposes the protocol-backed `BACnetTimeStamp` CHOICE
-  and a lossless `BACnetClient.acknowledge_alarm_request` method, while the CLI
-  uses that canonical Rust request with both mandatory timestamps. Additional
-  object families (#170) and ACK_NOTIFICATION distribution (#175) remain
-  deferred, so this does not broaden conformance claims.
+  To State and exact timestamp before setting one supported Analog, Binary,
+  Multi-state, or Event Enrollment acknowledgment bit; valid repeated
+  transactions remain idempotent. Python now exposes the protocol-backed
+  `BACnetTimeStamp` CHOICE and a lossless
+  `BACnetClient.acknowledge_alarm_request` method, while the CLI uses that
+  canonical Rust request with both mandatory timestamps. Binary
+  Input/Output/Value and Multi-state Input/Output/Value now share the same
+  correlated behavior (#170). Alert Enrollment remains excluded, and
+  ACK_NOTIFICATION distribution (#175) remains deferred, so this does not
+  claim full Clause 13.5 compliance or broaden conformance claims.
 
 - Exact-delta Life Safety COV reporting for the bundled server (`Refs #177`).
   Whole-object Point/Zone subscriptions now trigger only for actual
