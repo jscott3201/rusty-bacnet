@@ -15,6 +15,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         cov_tx: &broadcast::Sender<ReceivedCOVNotification>,
         confirmed_cov_ack_policy: &ConfirmedCOVNotificationAckPolicy,
         device_tx: &broadcast::Sender<DeviceEvent>,
+        device_collision_tx: &broadcast::Sender<DeviceCollisionEvent>,
         seg_state: &mut HashMap<SegKey, SegmentedReceiveState>,
         seg_ack_senders: &Arc<Mutex<HashMap<SegKey, SegmentAckRoute>>>,
         source_mac: &[u8],
@@ -450,15 +451,30 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 source_network: src_net,
                                 source_address: src_addr,
                             };
-                            let status =
-                                device_table.lock().await.upsert_with_result(device.clone());
-                            let kind = match status {
-                                DeviceUpsertResult::Inserted => Some(DeviceEventKind::Discovered),
-                                DeviceUpsertResult::Updated => Some(DeviceEventKind::Updated),
-                                DeviceUpsertResult::Dropped => None,
+                            let status = {
+                                let mut table = device_table.lock().await;
+                                table.upsert_with_result(device.clone())
                             };
-                            if let Some(kind) = kind {
-                                let _ = device_tx.send(DeviceEvent { kind, device });
+                            match status {
+                                DeviceUpsertResult::Inserted => {
+                                    let _ = device_tx.send(DeviceEvent {
+                                        kind: DeviceEventKind::Discovered,
+                                        device,
+                                    });
+                                }
+                                DeviceUpsertResult::Updated => {
+                                    let _ = device_tx.send(DeviceEvent {
+                                        kind: DeviceEventKind::Updated,
+                                        device,
+                                    });
+                                }
+                                DeviceUpsertResult::Collision { retained } => {
+                                    let _ = device_collision_tx.send(DeviceCollisionEvent {
+                                        retained,
+                                        incoming: device,
+                                    });
+                                }
+                                DeviceUpsertResult::Dropped => {}
                             }
                         }
                         Err(e) => {

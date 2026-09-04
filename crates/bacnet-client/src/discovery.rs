@@ -84,7 +84,8 @@ struct TableEntry {
 /// Thread-safe device discovery table.
 ///
 /// Keyed by device instance number (the instance part of the DEVICE object
-/// identifier). Updated whenever an IAm is received.
+/// identifier). Ordinary I-Am refreshes update a row, while a conflicting
+/// complete endpoint claim leaves the first authoritative row unchanged.
 ///
 /// # Address-space invariant
 ///
@@ -109,11 +110,18 @@ pub struct DeviceTable {
     devices: HashMap<u32, TableEntry>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(crate) enum DeviceUpsertResult {
     Inserted,
     Updated,
+    Collision { retained: DiscoveredDevice },
     Dropped,
+}
+
+enum DeviceEndpoint<'a> {
+    Local(&'a [u8]),
+    Routed(u16, &'a [u8]),
+    Incomplete,
 }
 
 impl DeviceTable {
@@ -127,16 +135,52 @@ impl DeviceTable {
     ///
     /// The row's `segmentation_supported` is treated as authoritative
     /// capability (explicit configuration); see [`PeerSegmentation`].
+    /// This explicit administrative path replaces any row with the same
+    /// instance regardless of endpoint identity.
     ///
     /// The table is capped at 4096 entries. If the table is full and the
     /// device is not already present, the new entry is silently dropped.
     pub fn upsert(&mut self, device: DiscoveredDevice) {
-        let _ = self.upsert_with_result(device);
+        let segmentation = PeerSegmentation::Authoritative(device.segmentation_supported);
+        let _ = self.insert_entry(device, segmentation);
     }
 
     pub(crate) fn upsert_with_result(&mut self, device: DiscoveredDevice) -> DeviceUpsertResult {
+        let key = device.object_identifier.instance_number();
+        if let Some(existing) = self.devices.get(&key) {
+            let replace = existing.segmentation == PeerSegmentation::Placeholder
+                || match (Self::endpoint(&existing.device), Self::endpoint(&device)) {
+                    // A malformed retained row has no stable endpoint identity;
+                    // accepting the next I-Am keeps it repairable.
+                    (DeviceEndpoint::Incomplete, _) => true,
+                    // A malformed incoming row cannot displace stable routing.
+                    (_, DeviceEndpoint::Incomplete) => false,
+                    (DeviceEndpoint::Local(current), DeviceEndpoint::Local(incoming)) => {
+                        current == incoming
+                    }
+                    (
+                        DeviceEndpoint::Routed(current_network, current_address),
+                        DeviceEndpoint::Routed(incoming_network, incoming_address),
+                    ) => current_network == incoming_network && current_address == incoming_address,
+                    _ => false,
+                };
+            if !replace {
+                return DeviceUpsertResult::Collision {
+                    retained: existing.device.clone(),
+                };
+            }
+        }
+
         let segmentation = PeerSegmentation::Authoritative(device.segmentation_supported);
         self.insert_entry(device, segmentation)
+    }
+
+    fn endpoint(device: &DiscoveredDevice) -> DeviceEndpoint<'_> {
+        match (&device.source_network, &device.source_address) {
+            (None, None) => DeviceEndpoint::Local(device.mac_address.as_slice()),
+            (Some(network), Some(address)) => DeviceEndpoint::Routed(*network, address.as_slice()),
+            _ => DeviceEndpoint::Incomplete,
+        }
     }
 
     /// Insert or update a device whose capability fields are manual
@@ -297,6 +341,10 @@ impl DeviceTable {
 }
 
 #[cfg(test)]
+#[path = "discovery_collision_tests.rs"]
+mod discovery_collision_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use bacnet_types::enums::ObjectType;
@@ -338,14 +386,14 @@ mod tests {
     #[test]
     fn upsert_with_result_reports_insert_and_update() {
         let mut table = DeviceTable::new();
-        assert_eq!(
+        assert!(matches!(
             table.upsert_with_result(make_device(1234)),
             DeviceUpsertResult::Inserted
-        );
-        assert_eq!(
+        ));
+        assert!(matches!(
             table.upsert_with_result(make_device(1234)),
             DeviceUpsertResult::Updated
-        );
+        ));
     }
 
     #[test]

@@ -80,6 +80,15 @@ pub struct DeviceEvent {
     pub device: DiscoveredDevice,
 }
 
+/// Notification emitted when two endpoints claim the same Device instance.
+#[derive(Debug, Clone)]
+pub struct DeviceCollisionEvent {
+    /// Snapshot of the authoritative discovery-table row that was retained.
+    pub retained: DiscoveredDevice,
+    /// Snapshot constructed from the conflicting incoming I-Am.
+    pub incoming: DiscoveredDevice,
+}
+
 /// Client configuration.
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
@@ -416,6 +425,7 @@ pub struct BACnetClient<T: TransportPort> {
     device_table: Arc<Mutex<DeviceTable>>,
     cov_tx: broadcast::Sender<ReceivedCOVNotification>,
     device_tx: broadcast::Sender<DeviceEvent>,
+    device_collision_tx: broadcast::Sender<DeviceCollisionEvent>,
     dispatch_task: Option<JoinHandle<()>>,
     /// Owner-qualified channels feeding SegmentACKs to in-flight segmented sends.
     ///
