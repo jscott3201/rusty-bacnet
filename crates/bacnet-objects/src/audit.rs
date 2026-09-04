@@ -4,11 +4,14 @@ use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::constructed::{
     BACnetAuditLogDatum, BACnetAuditLogQueryParameters, BACnetAuditLogRecord,
     BACnetAuditLogRecordResult, BACnetAuditNotification, BACnetRecipient,
 };
-use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    AuditLevel, ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier, Reliability,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
@@ -576,6 +579,10 @@ pub struct AuditReporterObject {
     name: String,
     description: String,
     status_flags: StatusFlags,
+    audit_level: AuditLevel,
+    auditable_operations: AuditOperationFlags,
+    audit_priority_filter: BACnetPriorityFilter,
+    issue_confirmed_notifications: bool,
 }
 
 impl AuditReporterObject {
@@ -586,12 +593,42 @@ impl AuditReporterObject {
             name: name.into(),
             description: String::new(),
             status_flags: StatusFlags::empty(),
+            audit_level: AuditLevel::NONE,
+            auditable_operations: AuditOperationFlags::empty(),
+            audit_priority_filter: BACnetPriorityFilter::all(),
+            issue_confirmed_notifications: false,
         })
     }
 
     /// Set the description string.
     pub fn set_description(&mut self, desc: impl Into<String>) {
         self.description = desc.into();
+    }
+
+    /// Set the locally managed audit level.
+    pub fn set_audit_level(&mut self, level: AuditLevel) -> Result<(), Error> {
+        if level == AuditLevel::DEFAULT {
+            return Err(Error::OutOfRange(
+                "Audit Reporter audit level must not be DEFAULT".into(),
+            ));
+        }
+        self.audit_level = level;
+        Ok(())
+    }
+
+    /// Set the locally managed operation filter.
+    pub fn set_auditable_operations(&mut self, operations: AuditOperationFlags) {
+        self.auditable_operations = operations;
+    }
+
+    /// Set the locally managed command-priority filter.
+    pub fn set_audit_priority_filter(&mut self, filter: BACnetPriorityFilter) {
+        self.audit_priority_filter = filter;
+    }
+
+    /// Select confirmed or unconfirmed audit notifications for future producers.
+    pub fn set_issue_confirmed_notifications(&mut self, confirmed: bool) {
+        self.issue_confirmed_notifications = confirmed;
     }
 }
 
@@ -626,7 +663,29 @@ impl BACnetObject for AuditReporterObject {
                 unused_bits: 4,
                 data: vec![self.status_flags.bits() << 4],
             }),
-            p if p == PropertyIdentifier::EVENT_STATE => Ok(PropertyValue::Enumerated(0)),
+            p if p == PropertyIdentifier::RELIABILITY => Ok(PropertyValue::Enumerated(
+                Reliability::NO_FAULT_DETECTED.to_raw(),
+            )),
+            p if p == PropertyIdentifier::EVENT_STATE => {
+                Ok(PropertyValue::Enumerated(EventState::NORMAL.to_raw()))
+            }
+            p if p == PropertyIdentifier::AUDIT_LEVEL => {
+                Ok(PropertyValue::Enumerated(self.audit_level.to_raw()))
+            }
+            p if p == PropertyIdentifier::AUDIT_SOURCE_REPORTER => {
+                Ok(PropertyValue::Boolean(false))
+            }
+            p if p == PropertyIdentifier::AUDITABLE_OPERATIONS => {
+                let (unused_bits, data) = self.auditable_operations.to_bacnet();
+                Ok(PropertyValue::BitString { unused_bits, data })
+            }
+            p if p == PropertyIdentifier::AUDIT_PRIORITY_FILTER => {
+                let (unused_bits, data) = self.audit_priority_filter.to_bacnet();
+                Ok(PropertyValue::BitString { unused_bits, data })
+            }
+            p if p == PropertyIdentifier::ISSUE_CONFIRMED_NOTIFICATIONS => {
+                Ok(PropertyValue::Boolean(self.issue_confirmed_notifications))
+            }
             p if p == PropertyIdentifier::PROPERTY_LIST => {
                 read_property_list_property(&self.property_list(), array_index)
             }
@@ -667,9 +726,19 @@ impl BACnetObject for AuditReporterObject {
             PropertyIdentifier::DESCRIPTION,
             PropertyIdentifier::OBJECT_TYPE,
             PropertyIdentifier::STATUS_FLAGS,
+            PropertyIdentifier::RELIABILITY,
             PropertyIdentifier::EVENT_STATE,
+            PropertyIdentifier::AUDIT_LEVEL,
+            PropertyIdentifier::AUDIT_SOURCE_REPORTER,
+            PropertyIdentifier::AUDITABLE_OPERATIONS,
+            PropertyIdentifier::AUDIT_PRIORITY_FILTER,
+            PropertyIdentifier::ISSUE_CONFIRMED_NOTIFICATIONS,
         ];
         Cow::Borrowed(PROPS)
+    }
+
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        property == PropertyIdentifier::DESCRIPTION
     }
 }
 

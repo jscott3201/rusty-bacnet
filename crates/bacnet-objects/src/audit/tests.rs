@@ -18,6 +18,8 @@ use super::{
     FileAuditLogPersistence, MAX_AUDIT_RECORDS,
 };
 
+mod reporter;
+
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn temp_base(label: &str) -> PathBuf {
