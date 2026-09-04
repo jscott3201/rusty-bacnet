@@ -172,6 +172,93 @@ fn construction_accepts_two_and_three_stages_and_rejects_all_config_boundaries()
 }
 
 #[test]
+fn stage_limits_are_strictly_ascending_while_deadband_edges_may_touch() {
+    let mut equal_limits = config();
+    equal_limits.stages[0].deadband = 0.0;
+    equal_limits.stages[1].limit = equal_limits.stages[0].limit;
+    equal_limits.stages[1].deadband = 0.0;
+    assert_protocol_error(
+        StagingObject::new(1, "equal limits", equal_limits)
+            .err()
+            .unwrap(),
+        ErrorClass::PROPERTY,
+        ErrorCode::VALUE_OUT_OF_RANGE,
+    );
+
+    let mut touching_edges = config();
+    touching_edges.stages[0].deadband = 4.0;
+    touching_edges.stages[1].deadband = 6.0;
+    assert_eq!(
+        touching_edges.stages[0].limit + touching_edges.stages[0].deadband,
+        touching_edges.stages[1].limit - touching_edges.stages[1].deadband
+    );
+    assert!(StagingObject::new(2, "touching edges", touching_edges).is_ok());
+}
+
+#[test]
+fn equal_limit_stage_replacements_are_atomic_for_whole_and_indexed_writes() {
+    let mut initial = config();
+    initial.stages[0].deadband = 0.0;
+    initial.stages[1].deadband = 0.0;
+    let mut equal_stage = initial.stages[1].clone();
+    equal_stage.limit = initial.stages[0].limit;
+
+    let mut object = StagingObject::new(1, "STG-1", initial.clone()).unwrap();
+    let before = object
+        .read_property(PropertyIdentifier::STAGES, None)
+        .unwrap();
+    let mut whole = initial.stages;
+    whole[1] = equal_stage.clone();
+    let whole = whole
+        .iter()
+        .map(|stage| {
+            let mut encoded = BytesMut::new();
+            encode_stage_limit_value(&mut encoded, stage);
+            PropertyValue::ApplicationData(encoded.to_vec())
+        })
+        .collect();
+    assert_protocol_error(
+        object
+            .write_property(
+                PropertyIdentifier::STAGES,
+                None,
+                PropertyValue::List(whole),
+                None,
+            )
+            .unwrap_err(),
+        ErrorClass::PROPERTY,
+        ErrorCode::VALUE_OUT_OF_RANGE,
+    );
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::STAGES, None)
+            .unwrap(),
+        before
+    );
+
+    let mut encoded = BytesMut::new();
+    encode_stage_limit_value(&mut encoded, &equal_stage);
+    assert_protocol_error(
+        object
+            .write_property(
+                PropertyIdentifier::STAGES,
+                Some(2),
+                PropertyValue::ApplicationData(encoded.to_vec()),
+                None,
+            )
+            .unwrap_err(),
+        ErrorClass::PROPERTY,
+        ErrorCode::VALUE_OUT_OF_RANGE,
+    );
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::STAGES, None)
+            .unwrap(),
+        before
+    );
+}
+
+#[test]
 fn clamp_selection_and_bidirectional_hysteresis_follow_stage_boundaries() {
     let mut object = StagingObject::new(1, "STG-1", config()).unwrap();
     write_real(&mut object, -100.0);

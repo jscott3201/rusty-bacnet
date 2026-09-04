@@ -647,6 +647,9 @@ fn validate_ladder(
         }
     }
     for adjacent in stages.windows(2) {
+        if adjacent[0].limit >= adjacent[1].limit {
+            return Err(common::value_out_of_range_error());
+        }
         if adjacent[0].limit + adjacent[0].deadband > adjacent[1].limit - adjacent[1].deadband {
             return Err(common::value_out_of_range_error());
         }
