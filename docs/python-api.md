@@ -952,6 +952,122 @@ raw = await client.vt_data(
 
 ### Audit Services
 
+The additive `_typed` methods accept dictionaries (or other Python mappings)
+described by the installed `TypedDict` stubs. They convert into the native Rust
+Audit request models before transport; the native client helpers remain the
+only service encoder, transaction coordinator, and strict query-ACK decoder.
+The mapping objects, wrapper values, and address string are not modified.
+
+`AuditOperation` is the one Audit runtime wrapper. Its named constants are the
+standard operations 0 through 15. `AuditOperation.from_raw()` remains lossless,
+but request mappings accept only standard operations 0..15 or proprietary
+operations 32..63; reserved 16..31 and values above 63 are rejected.
+
+Recipients are discriminated mappings:
+
+```python
+device = {"kind": "device", "object_identifier": device_oid}
+address = {
+    "kind": "address",
+    "network_number": 5,  # Unsigned16
+    "mac_address": b"\x01\x02",
+}
+```
+
+An `AuditNotificationInput` requires `source_device`, `operation`, and
+`target_device`. Its optional keys are `source_timestamp`, `target_timestamp`,
+`source_object`, `source_comment`, `target_comment`, `invoke_id`,
+`source_user_id`, `source_user_role`, `target_object`, `target_property`,
+`target_priority`, `target_value`, `current_value`, and `result`.
+`target_property` uses `property_identifier` and optional
+`property_array_index`; `result` is an `(ErrorClass, ErrorCode)` tuple.
+`target_value` and `current_value` are `bytes | None` containing structurally
+valid raw `ABSTRACT-SYNTAX.&Type` values, not `PropertyValue` objects.
+
+#### `confirmed_audit_notification_typed(address, request) -> None`
+
+Send one or more structured notifications and wait for the confirmed response.
+The `notifications` list must contain 1..10,000 items.
+
+```python
+from rusty_bacnet import AuditOperation
+
+await client.confirmed_audit_notification_typed(
+    "192.168.1.100:47808",
+    {
+        "notifications": [
+            {
+                "source_device": device,
+                "operation": AuditOperation.WRITE,
+                "target_device": device,
+                "target_property": {
+                    "property_identifier": PropertyIdentifier.PRESENT_VALUE,
+                },
+                "target_priority": 8,
+            }
+        ]
+    },
+)
+```
+
+#### `unconfirmed_audit_notification_typed(address, request) -> None`
+
+Send the same mapping contract without waiting for a response.
+
+#### `audit_log_query_typed(address, request) -> AuditLogQueryAck`
+
+The request requires `audit_log`, discriminated `query_parameters`, and an
+Unsigned16 `requested_count`; `start_at_sequence_number` is an optional
+Unsigned32. Query parameters use `kind: "by_target"` with required
+`target_device_identifier`, or `kind: "by_source"` with required
+`source_device_identifier`. Both require `successful_actions_only`. Optional
+fields follow the installed `AuditLogQueryByTargetInput` and
+`AuditLogQueryBySourceInput` definitions. `operations` is an integer bit mask:
+bits 0..15 and 32..63 are permitted, while reserved bits 16..31, negative
+values, and masks wider than 64 bits are rejected.
+
+```python
+ack = await client.audit_log_query_typed(
+    "192.168.1.100:47808",
+    {
+        "audit_log": ObjectIdentifier(ObjectType.AUDIT_LOG, 1),
+        "query_parameters": {
+            "kind": "by_target",
+            "target_device_identifier": ObjectIdentifier(ObjectType.DEVICE, 100),
+            "operations": 1 << AuditOperation.WRITE.to_raw(),
+            "successful_actions_only": True,
+        },
+        "requested_count": 100,
+    },
+)
+```
+
+The ACK always has exactly `audit_log`, `records`, and `no_more_items`. Each
+record result has `sequence_number` and `record`; each record has `timestamp`
+and `datum`. `timestamp` is `(date, time)`, where date is
+`(full_year, month, day, day_of_week)` and time is
+`(hour, minute, second, hundredths)`, matching the established
+`BACnetTimeStamp.date_time(...).value` convention. Datum mappings use `kind`
+values `"log_status"`, `"audit_notification"`, or `"time_change"`, with a
+same-named payload key. Nested notifications use the canonical field names
+listed above and include every optional key with either its decoded value or
+`None`. ACK projection is all-or-error and never returns a partial mapping.
+
+All mappings reject unknown keys. A non-mapping container, wrong field
+container, or wrong wrapper/value type raises `TypeError`; missing required
+keys, bad discriminators, reserved values, and out-of-range integers raise
+`ValueError`. Native validation, transport, and protocol failures use the
+existing `BacnetError` hierarchy. Validation and native encoding complete
+before an APDU can be sent.
+
+This boundary follows the Standard 135-2020 Audit query, notification, actor,
+and formal type productions. It preserves the qualified Clause 21 model's
+Unsigned32 start sequence and mandatory Boolean success filter despite the
+known conflicting service-clause description; it does not add notification
+generation policy, authorization, persistence, or conformance claims.
+
+#### Raw Audit escape hatches
+
 #### `confirmed_audit_notification(address, service_data)`
 
 Send a confirmed audit notification. `service_data` is a raw escape hatch: the
@@ -992,15 +1108,15 @@ raw = await client.audit_log_query(
 )
 ```
 
-These three methods are generic outbound byte paths. They do not validate the
-payload or provide structured Python audit models. A bundled server with an
+These three methods remain signature- and byte-compatible generic outbound
+paths. They do not validate the caller-provided payload. A bundled server with an
 explicitly persisted Audit Log object can execute the raw AuditLogQuery payload
 against its retained in-memory records and return a raw typed ACK payload. The
 Rust server API can also receive ConfirmedAuditNotification when an application
-explicitly configures one sink and a fail-closed authorizer; this release adds
-no Python builder for that receiver. Unconfirmed receipt, query authorization,
-durable idempotency, and a high-level structured Python Audit API remain
-unsupported.
+explicitly configures one sink and a fail-closed authorizer. The Python server
+does not expose that receiver configuration. The typed client boundary does not
+weaken that authorization or add query authorization, producer behavior,
+forwarding, or durable idempotency.
 
 ---
 

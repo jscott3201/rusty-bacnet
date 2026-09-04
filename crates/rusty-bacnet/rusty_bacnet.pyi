@@ -6,7 +6,7 @@ as class attributes; vendor-proprietary values are available via ``from_raw()``.
 
 from __future__ import annotations
 
-from typing import Any, Optional, Union
+from typing import Any, Literal, NotRequired, Optional, TypedDict, Union
 
 
 # ---------------------------------------------------------------------------
@@ -433,6 +433,39 @@ class ErrorCode:
     def __hash__(self) -> int: ...
 
 
+class AuditOperation:
+    """BACnet audit operation.
+
+    Typed Audit request mappings accept standard values 0..15 and proprietary
+    values 32..63. ``from_raw()`` remains a lossless enum-wrapper constructor;
+    reserved or wider values are rejected when used in a request mapping.
+    """
+
+    READ: AuditOperation
+    WRITE: AuditOperation
+    CREATE: AuditOperation
+    DELETE: AuditOperation
+    LIFE_SAFETY: AuditOperation
+    ACKNOWLEDGE_ALARM: AuditOperation
+    DEVICE_DISABLE_COMM: AuditOperation
+    DEVICE_ENABLE_COMM: AuditOperation
+    DEVICE_RESET: AuditOperation
+    DEVICE_BACKUP: AuditOperation
+    DEVICE_RESTORE: AuditOperation
+    SUBSCRIPTION: AuditOperation
+    NOTIFICATION: AuditOperation
+    AUDITING_FAILURE: AuditOperation
+    NETWORK_CHANGES: AuditOperation
+    GENERAL: AuditOperation
+
+    @staticmethod
+    def from_raw(value: int) -> AuditOperation: ...
+    def to_raw(self) -> int: ...
+    def __repr__(self) -> str: ...
+    def __eq__(self, other: object) -> bool: ...
+    def __hash__(self) -> int: ...
+
+
 class EnableDisable:
     """BACnet DeviceCommunicationControl enable/disable options (Clause 16.4)."""
 
@@ -650,6 +683,151 @@ class BACnetTimeStamp:
 
     def __repr__(self) -> str: ...
     def __eq__(self, other: object) -> bool: ...
+
+
+class AuditRecipientDevice(TypedDict):
+    """Audit recipient selected by Device object identifier."""
+
+    kind: Literal["device"]
+    object_identifier: ObjectIdentifier
+
+
+class AuditRecipientAddress(TypedDict):
+    """Audit recipient selected by BACnet network and MAC address."""
+
+    kind: Literal["address"]
+    network_number: int
+    mac_address: bytes
+
+
+AuditRecipientInput = AuditRecipientDevice | AuditRecipientAddress
+
+
+class AuditPropertyReference(TypedDict):
+    property_identifier: PropertyIdentifier
+    property_array_index: NotRequired[int | None]
+
+
+class AuditNotificationInput(TypedDict):
+    source_device: AuditRecipientInput
+    operation: AuditOperation
+    target_device: AuditRecipientInput
+    source_timestamp: NotRequired[BACnetTimeStamp | None]
+    target_timestamp: NotRequired[BACnetTimeStamp | None]
+    source_object: NotRequired[ObjectIdentifier | None]
+    source_comment: NotRequired[str | None]
+    target_comment: NotRequired[str | None]
+    invoke_id: NotRequired[int | None]
+    source_user_id: NotRequired[int | None]
+    source_user_role: NotRequired[int | None]
+    target_object: NotRequired[ObjectIdentifier | None]
+    target_property: NotRequired[AuditPropertyReference | None]
+    target_priority: NotRequired[int | None]
+    target_value: NotRequired[bytes | None]
+    current_value: NotRequired[bytes | None]
+    result: NotRequired[tuple[ErrorClass, ErrorCode] | None]
+
+
+class AuditNotificationRequestInput(TypedDict):
+    notifications: list[AuditNotificationInput]
+
+
+class AuditLogQueryByTargetInput(TypedDict):
+    kind: Literal["by_target"]
+    target_device_identifier: ObjectIdentifier
+    successful_actions_only: bool
+    target_device_address: NotRequired[AuditRecipientAddress | None]
+    target_object_identifier: NotRequired[ObjectIdentifier | None]
+    target_property_identifier: NotRequired[PropertyIdentifier | None]
+    target_array_index: NotRequired[int | None]
+    target_priority: NotRequired[int | None]
+    operations: NotRequired[int | None]
+
+
+class AuditLogQueryBySourceInput(TypedDict):
+    kind: Literal["by_source"]
+    source_device_identifier: ObjectIdentifier
+    successful_actions_only: bool
+    source_device_address: NotRequired[AuditRecipientAddress | None]
+    source_object_identifier: NotRequired[ObjectIdentifier | None]
+    operations: NotRequired[int | None]
+
+
+AuditLogQueryParametersInput = AuditLogQueryByTargetInput | AuditLogQueryBySourceInput
+
+
+class AuditLogQueryRequestInput(TypedDict):
+    audit_log: ObjectIdentifier
+    query_parameters: AuditLogQueryParametersInput
+    requested_count: int
+    start_at_sequence_number: NotRequired[int | None]
+
+
+BACnetDateTime = tuple[
+    tuple[int, int, int, int],
+    tuple[int, int, int, int],
+]
+
+
+class AuditPropertyReferenceResult(TypedDict):
+    property_identifier: PropertyIdentifier
+    property_array_index: int | None
+
+
+class AuditNotification(TypedDict):
+    """Canonical return mapping for a decoded Audit notification."""
+
+    source_timestamp: BACnetTimeStamp | None
+    target_timestamp: BACnetTimeStamp | None
+    source_device: AuditRecipientInput
+    source_object: ObjectIdentifier | None
+    operation: AuditOperation
+    source_comment: str | None
+    target_comment: str | None
+    invoke_id: int | None
+    source_user_id: int | None
+    source_user_role: int | None
+    target_device: AuditRecipientInput
+    target_object: ObjectIdentifier | None
+    target_property: AuditPropertyReferenceResult | None
+    target_priority: int | None
+    target_value: bytes | None
+    current_value: bytes | None
+    result: tuple[ErrorClass, ErrorCode] | None
+
+
+class AuditLogStatusDatum(TypedDict):
+    kind: Literal["log_status"]
+    log_status: int
+
+
+class AuditNotificationDatum(TypedDict):
+    kind: Literal["audit_notification"]
+    audit_notification: AuditNotification
+
+
+class AuditTimeChangeDatum(TypedDict):
+    kind: Literal["time_change"]
+    time_change: float
+
+
+AuditLogDatum = AuditLogStatusDatum | AuditNotificationDatum | AuditTimeChangeDatum
+
+
+class AuditLogRecord(TypedDict):
+    timestamp: BACnetDateTime
+    datum: AuditLogDatum
+
+
+class AuditLogRecordResult(TypedDict):
+    sequence_number: int
+    record: AuditLogRecord
+
+
+class AuditLogQueryAck(TypedDict):
+    audit_log: ObjectIdentifier
+    records: list[AuditLogRecordResult]
+    no_more_items: bool
 
 
 class PropertyValue:
@@ -1478,6 +1656,30 @@ class BACnetClient:
         ...
 
     # --- Audit ---
+
+    async def confirmed_audit_notification_typed(
+        self,
+        address: str,
+        request: AuditNotificationRequestInput,
+    ) -> None:
+        """Send a validated mapping through the native confirmed Audit helper."""
+        ...
+
+    async def unconfirmed_audit_notification_typed(
+        self,
+        address: str,
+        request: AuditNotificationRequestInput,
+    ) -> None:
+        """Send a validated mapping through the native unconfirmed Audit helper."""
+        ...
+
+    async def audit_log_query_typed(
+        self,
+        address: str,
+        request: AuditLogQueryRequestInput,
+    ) -> AuditLogQueryAck:
+        """Send a typed Audit Log query and return a canonical decoded mapping."""
+        ...
 
     async def confirmed_audit_notification(
         self, address: str, service_data: bytes

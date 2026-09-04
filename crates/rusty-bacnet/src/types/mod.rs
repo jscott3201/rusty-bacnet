@@ -23,6 +23,8 @@ use bacnet_types::enums as bacnet_enums;
 use bacnet_types::primitives;
 
 mod address;
+mod audit;
+mod audit_projection;
 mod cov;
 mod device;
 mod enums;
@@ -32,6 +34,8 @@ mod rpm_wpm;
 mod timestamp;
 
 pub use address::parse_address;
+pub(crate) use audit::{audit_log_query_request_from_py, audit_notification_request_from_py};
+pub(crate) use audit_projection::audit_log_query_ack_to_py;
 pub use cov::{PyCovNotification, PyCovNotificationIterator};
 pub use device::PyDiscoveredDevice;
 pub use enums::*;
@@ -57,6 +61,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     m.add_class::<PyErrorCode>()?;
     PyErrorCode::register_constants(&m.getattr("ErrorCode")?)?;
+
+    m.add_class::<PyAuditOperation>()?;
+    PyAuditOperation::register_constants(&m.getattr("AuditOperation")?)?;
 
     m.add_class::<PyEnableDisable>()?;
     PyEnableDisable::register_constants(&m.getattr("EnableDisable")?)?;

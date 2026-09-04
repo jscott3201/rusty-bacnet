@@ -73,6 +73,12 @@ py_bacnet_enum!(
 py_bacnet_enum!("ErrorClass", PyErrorClass, bacnet_enums::ErrorClass, u16);
 py_bacnet_enum!("ErrorCode", PyErrorCode, bacnet_enums::ErrorCode, u16);
 py_bacnet_enum!(
+    "AuditOperation",
+    PyAuditOperation,
+    bacnet_enums::AuditOperation,
+    u32
+);
+py_bacnet_enum!(
     "EnableDisable",
     PyEnableDisable,
     bacnet_enums::EnableDisable,
