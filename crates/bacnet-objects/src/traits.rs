@@ -15,8 +15,8 @@ use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue}
 use crate::audit::{AuditLogNotificationSink, AuditLogStorage};
 use crate::clock::ClockReader;
 use crate::event::{
-    EnrollmentSummaryCapability, EventTransitionCommit, EventTransitionCommitError,
-    TransitionOutcome,
+    EnrollmentSummaryCapability, EventStateChange, EventTransitionCommit,
+    EventTransitionCommitError, TransitionOutcome,
 };
 use crate::event_enrollment::{
     EventEnrollmentEvalState, EventEnrollmentMonitoredSource, EventEnrollmentReliabilityCommit,
@@ -492,6 +492,22 @@ pub trait BACnetObject: Send + Sync {
             class: ErrorClass::OBJECT.to_raw() as u32,
             code: ErrorCode::NO_ALARM_CONFIGURED.to_raw() as u32,
         })
+    }
+
+    /// Correlate an acknowledgment and report exact object-owned history.
+    ///
+    /// The default delegates to the source-compatible coarse hook and returns
+    /// no notification context. Custom objects that implement only the coarse
+    /// hook therefore retain their accepted-acknowledgment behavior without the
+    /// bundled server guessing historical states for an ACK notification.
+    #[doc(hidden)]
+    fn acknowledge_alarm_correlated_detailed_internal(
+        &mut self,
+        event_state: EventState,
+        timestamp: &BACnetTimeStamp,
+    ) -> Result<Option<EventStateChange>, Error> {
+        self.acknowledge_alarm_correlated_internal(event_state, timestamp)
+            .map(|()| None)
     }
 
     /// Apply a LifeSafetyOperation atomically to this object.

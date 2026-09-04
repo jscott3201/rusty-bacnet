@@ -2154,9 +2154,9 @@
   },
   {
    "id": "BACNET-13-ACKED-TRANSITIONS-NETWORK-OWNERSHIP",
-   "standard_anchor": "Clause 12.1.2; Acked_Transitions property paragraphs and Tables 12-2 (Analog Input), 12-3 (Analog Output), 12-4 (Analog Value), 12-6 (Binary Input), 12-8 (Binary Output), 12-10 (Binary Value), 12-14 (Event Enrollment), 12-21 (Multi-state Input), 12-22 (Multi-state Output), 12-23 (Multi-state Value), and 12-61 (Alert Enrollment); Clause 13.2.3; Clauses 15.9 and 15.10; Annex K Table K-17 footnote 1",
+   "standard_anchor": "Clause 12.1.2; Acked_Transitions property paragraphs and Tables 12-2 (Analog Input), 12-3 (Analog Output), 12-4 (Analog Value), 12-6 (Binary Input), 12-8 (Binary Output), 12-10 (Binary Value), 12-14 (Event Enrollment), 12-21 (Multi-state Input), 12-22 (Multi-state Output), 12-23 (Multi-state Value), and 12-61 (Alert Enrollment); Clauses 13.2.3, 13.2.5, and 13.5; Clauses 15.9 and 15.10; Annex K Table K-17 footnote 1",
    "priority": "P1",
-   "requirement_summary": "Acked_Transitions is exposed and readable as a three-bit BitString but network read-only on exactly the eleven currently supported carriers: Analog Input, Analog Output, Analog Value, Binary Input, Binary Output, Binary Value, Multi-state Input, Multi-state Output, Multi-state Value, Event Enrollment, and Alert Enrollment. The property-specific read-only rule controls over Clause 12.1.2's general implementor option. A whole-property WriteProperty with a valid value returns PROPERTY / WRITE_ACCESS_DENIED without mutation. WritePropertyMultiple stops at that exact failed reference while retaining earlier successful writes. Event transitions, alarm acknowledgments or local acknowledgment indications, and detection-disable lifecycle resets retain mutation ownership. Generated PICS support remains present/readable and non-writable.",
+   "requirement_summary": "Acked_Transitions is exposed and readable as a three-bit BitString but network read-only on exactly the eleven currently supported carriers: Analog Input, Analog Output, Analog Value, Binary Input, Binary Output, Binary Value, Multi-state Input, Multi-state Output, Multi-state Value, Event Enrollment, and Alert Enrollment. The property-specific read-only rule controls over Clause 12.1.2's general implementor option. A whole-property WriteProperty with a valid value returns PROPERTY / WRITE_ACCESS_DENIED without mutation. WritePropertyMultiple stops at that exact failed reference while retaining earlier successful writes. Event transitions, alarm acknowledgments or local acknowledgment indications, and detection-disable lifecycle resets retain mutation ownership. For the nine intrinsic-reporting families and Event Enrollment, a successfully correlated network acknowledgment retains the requester SimpleACK and then distributes a fresh ACK_NOTIFICATION to currently selected recipients under Event_Enable, DCC, transition priority, process identifier, and confirmed/unconfirmed recipient policy. Generated PICS support remains present/readable and non-writable.",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-objects/src/analog/input.rs",
@@ -2175,6 +2175,9 @@
     "crates/bacnet-objects/src/traits.rs",
     "crates/bacnet-server/src/handlers/write_property.rs",
     "crates/bacnet-server/src/handlers/alarm_event/acknowledge_alarm.rs",
+    "crates/bacnet-server/src/server/requests/acknowledge_alarm.rs",
+    "crates/bacnet-server/src/server/event_notification_profile.rs",
+    "crates/bacnet-server/src/server/event_notifications.rs",
     "crates/bacnet-server/src/pics/mod.rs"
    ],
    "positive_tests": [
@@ -2182,16 +2185,21 @@
     "crates/bacnet-server/src/event_enrollment/tests/same_state.rs::acked_transitions_bit_clears_when_notification_class_requires_ack",
     "crates/bacnet-server/src/event_enrollment/tests/same_state.rs::acked_transitions_bit_sets_when_no_ack_required",
     "crates/bacnet-server/src/handlers/tests/acknowledge_alarm_ee.rs::ee_acknowledge_alarm_round_trip_over_services",
+    "crates/bacnet-server/src/handlers/tests/acknowledge_alarm.rs::supported_families_acknowledge_only_the_correlated_transition",
+    "crates/bacnet-server/src/handlers/tests/acknowledge_alarm.rs::fault_recovery_acknowledgment_uses_historical_change_of_reliability",
+    "crates/bacnet-server/src/server/acknowledge_alarm_notification_tests.rs::{simple_ack_precedes_fresh_exact_unconfirmed_ack_notification,recipient_policy_selects_confirmed_and_unconfirmed_services_with_process_ids,duplicate_is_silent_new_invoke_notifies_again_and_confirmed_retry_is_immutable}",
     "crates/bacnet-objects/src/analog/input.rs::detection_enable_reset_tests::ai_disabling_detection_resets_event_history",
     "crates/bacnet-objects/src/event_enrollment/tests/detection_enable.rs::disabled_detection_reports_initial_acked_transitions"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/pics/acked_transitions_policy_tests.rs::acked_transitions_network_policy_is_uniform_on_all_supported_types",
-    "crates/bacnet-server/src/handlers/tests/wpm_prefix_commit.rs::event_enrollment_prefix_commits_before_read_only_first_failure"
+    "crates/bacnet-server/src/handlers/tests/wpm_prefix_commit.rs::event_enrollment_prefix_commits_before_read_only_first_failure",
+    "crates/bacnet-server/src/handlers/tests/acknowledge_alarm.rs::legacy_coarse_hook_accepts_without_inventing_notification_context",
+    "crates/bacnet-server/src/server/acknowledge_alarm_notification_tests.rs::{event_enable_dcc_empty_and_unresolved_recipients_preserve_acceptance_without_fallback,recipient_send_and_reservation_failures_do_not_retract_ack_or_block_other_recipients}"
    ],
    "benchmarks": [],
    "public_claims": [],
-   "notes": "Policy/evidence-only resolution of #242; no runtime behavior or public API changes. Annex K Table K-17 footnote 1 requires AE-AVM-A to present Event_State, Acked_Transitions, and Event_Time_Stamps, not to modify them; the life-safety and access variants reuse that table and add no B-side network-write obligation. BACnetObject::write_property is the authoritative object route used after network WriteProperty decoding, while internal transition commit, acknowledgment, and detection-disable reset paths remain distinct and no public setter is added. This row does not complete #123 event lifecycle or #175 ACK_NOTIFICATION, does not claim AcknowledgeAlarm support beyond the current Analog Input, Analog Output, Analog Value, and Event Enrollment overrides, and specifically does not claim it for Binary, Multi-state, or Alert Enrollment. It does not expand event-notification or BIBB conformance, PICS/BIBB drafts, README support, or any other public claim."
+   "notes": "The network-write policy remains the evidence-backed resolution of #242: Annex K Table K-17 footnote 1 requires AE-AVM-A to present Event_State, Acked_Transitions, and Event_Time_Stamps, not to modify them; the life-safety and access variants reuse that table and add no B-side network-write obligation. PR-0503 / #175 completes only the bundled server's post-correlation ACK_NOTIFICATION gap for the nine built-in intrinsic-reporting families and Event Enrollment. Exact historical From/To State stays object-owned and reset/rollback-safe; notification delivery occurs after the requester response and reuses current Notification Class recipient routing and confirmed transaction retries without rollback on delivery failure. The additive defaulted detailed hook delegates to the existing coarse hook, so downstream custom objects remain source-compatible and preserve accepted acknowledgments but emit no ACK notification unless they provide exact context. Alert Enrollment remains excluded, Device-recipient resolution remains partial and fail-closed under #125, and no historical Recipient_List snapshot, persistence, client receive API, README, PICS/BIBB, or broader public conformance claim is added."
   },
   {
    "id": "BACNET-13-EVENT-ENROLLMENT-NOTIFICATION-LIFECYCLE",

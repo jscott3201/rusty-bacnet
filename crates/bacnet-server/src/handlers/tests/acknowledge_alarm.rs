@@ -4,7 +4,7 @@ use bacnet_encoding::primitives;
 use bacnet_encoding::tags::{encode_tag, TagClass};
 use bacnet_objects::analog::{AnalogOutputObject, AnalogValueObject};
 use bacnet_objects::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
-use bacnet_objects::event::{EventStateChange, EventTransitionCommit};
+use bacnet_objects::event::{EnrollmentSummaryCapability, EventStateChange, EventTransitionCommit};
 use bacnet_objects::event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject};
 use bacnet_objects::multistate::{
     MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject,
@@ -127,6 +127,154 @@ fn configured_event_enrollment() -> EventEnrollmentObject {
     object
 }
 
+struct LegacyCoarseAckObject {
+    oid: ObjectIdentifier,
+}
+
+struct MalformedDetailedAckObject {
+    oid: ObjectIdentifier,
+}
+
+impl BACnetObject for MalformedDetailedAckObject {
+    fn object_identifier(&self) -> ObjectIdentifier {
+        self.oid
+    }
+
+    fn object_name(&self) -> &str {
+        "malformed-detailed-ack"
+    }
+
+    fn read_property(
+        &self,
+        property: PropertyIdentifier,
+        _array_index: Option<u32>,
+    ) -> Result<PropertyValue, Error> {
+        if property == PropertyIdentifier::EVENT_ENABLE {
+            Ok(PropertyValue::BitString {
+                unused_bits: 4,
+                data: vec![0xf0],
+            })
+        } else {
+            Err(Error::Encoding("property unavailable".into()))
+        }
+    }
+
+    fn write_property(
+        &mut self,
+        _property: PropertyIdentifier,
+        _array_index: Option<u32>,
+        _value: PropertyValue,
+        _priority: Option<u8>,
+    ) -> Result<(), Error> {
+        Err(Error::Encoding("test object is read-only".into()))
+    }
+
+    fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
+        std::borrow::Cow::Borrowed(&[])
+    }
+
+    fn enrollment_summary_capability_internal(&self) -> Option<EnrollmentSummaryCapability> {
+        Some(EnrollmentSummaryCapability {
+            event_type: EventType::OUT_OF_RANGE,
+            last_transition: None,
+        })
+    }
+
+    fn acknowledge_alarm_correlated_detailed_internal(
+        &mut self,
+        _event_state: EventState,
+        _timestamp: &BACnetTimeStamp,
+    ) -> Result<Option<EventStateChange>, Error> {
+        Ok(Some(EventStateChange {
+            from: EventState::NORMAL,
+            to: EventState::HIGH_LIMIT,
+        }))
+    }
+}
+
+impl BACnetObject for LegacyCoarseAckObject {
+    fn object_identifier(&self) -> ObjectIdentifier {
+        self.oid
+    }
+
+    fn object_name(&self) -> &str {
+        "legacy-coarse-ack"
+    }
+
+    fn read_property(
+        &self,
+        _property: PropertyIdentifier,
+        _array_index: Option<u32>,
+    ) -> Result<PropertyValue, Error> {
+        Err(Error::Encoding(
+            "legacy test object has no properties".into(),
+        ))
+    }
+
+    fn write_property(
+        &mut self,
+        _property: PropertyIdentifier,
+        _array_index: Option<u32>,
+        _value: PropertyValue,
+        _priority: Option<u8>,
+    ) -> Result<(), Error> {
+        Err(Error::Encoding("legacy test object is read-only".into()))
+    }
+
+    fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
+        std::borrow::Cow::Borrowed(&[])
+    }
+
+    fn acknowledge_alarm_correlated_internal(
+        &mut self,
+        _event_state: EventState,
+        _timestamp: &BACnetTimeStamp,
+    ) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+#[test]
+fn legacy_coarse_hook_accepts_without_inventing_notification_context() {
+    let oid = ObjectIdentifier::new(ObjectType::ACCUMULATOR, 91).unwrap();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(LegacyCoarseAckObject { oid })).unwrap();
+
+    let accepted = handle_acknowledge_alarm(
+        &mut db,
+        &encode_request(
+            oid,
+            EventState::HIGH_LIMIT,
+            BACnetTimeStamp::SequenceNumber(42),
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(accepted.event_object_identifier, oid);
+    assert_eq!(accepted.notification, None);
+}
+
+#[test]
+fn malformed_optional_distribution_context_does_not_retract_acceptance() {
+    let oid = ObjectIdentifier::new(ObjectType::ACCUMULATOR, 92).unwrap();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(MalformedDetailedAckObject { oid }))
+        .unwrap();
+
+    let accepted = handle_acknowledge_alarm(
+        &mut db,
+        &encode_request(
+            oid,
+            EventState::HIGH_LIMIT,
+            BACnetTimeStamp::SequenceNumber(42),
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(accepted.event_object_identifier, oid);
+    assert_eq!(accepted.notification, None);
+}
+
 #[test]
 fn supported_families_acknowledge_only_the_correlated_transition() {
     let mut db = ObjectDatabase::new();
@@ -226,9 +374,62 @@ fn supported_families_acknowledge_only_the_correlated_transition() {
 
     for (oid, state) in cases {
         assert_eq!(acked(&db, oid), 0b110);
-        handle_acknowledge_alarm(&mut db, &encode_request(oid, state, stamp.clone())).unwrap();
+        let accepted =
+            handle_acknowledge_alarm(&mut db, &encode_request(oid, state, stamp.clone())).unwrap();
+        let notification = accepted
+            .notification
+            .expect("built-in objects return exact acknowledgment history");
+        assert_eq!(notification.change.to, state);
         assert_eq!(acked(&db, oid), 0b111);
     }
+}
+
+#[test]
+fn fault_recovery_acknowledgment_uses_historical_change_of_reliability() {
+    let mut object = AnalogInputObject::new(2, "AI-fault-recovery", 62).unwrap();
+    object
+        .commit_event_transition_internal(EventTransitionCommit {
+            change: EventStateChange {
+                from: EventState::NORMAL,
+                to: EventState::FAULT,
+            },
+            coordinate: bacnet_objects::event::EventTransition::ToFault,
+            ack_required: false,
+            timestamp: BACnetTimeStamp::SequenceNumber(41),
+            message_text: None,
+        })
+        .unwrap();
+    object
+        .commit_event_transition_internal(EventTransitionCommit {
+            change: EventStateChange {
+                from: EventState::FAULT,
+                to: EventState::NORMAL,
+            },
+            coordinate: bacnet_objects::event::EventTransition::ToNormal,
+            ack_required: true,
+            timestamp: BACnetTimeStamp::SequenceNumber(42),
+            message_text: None,
+        })
+        .unwrap();
+    let oid = object.object_identifier();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(object)).unwrap();
+
+    let accepted = handle_acknowledge_alarm(
+        &mut db,
+        &encode_request(oid, EventState::NORMAL, BACnetTimeStamp::SequenceNumber(42)),
+    )
+    .unwrap();
+    let notification = accepted.notification.unwrap();
+
+    assert_eq!(
+        notification.change,
+        EventStateChange {
+            from: EventState::FAULT,
+            to: EventState::NORMAL,
+        }
+    );
+    assert_eq!(notification.event_type, EventType::CHANGE_OF_RELIABILITY);
 }
 
 #[test]

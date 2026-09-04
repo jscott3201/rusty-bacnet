@@ -239,3 +239,6 @@ async fn exact_duplicate_is_silent_and_new_invoke_id_is_idempotent_success() {
     assert_eq!(acked(&*db.read().await, oid), 0b111);
     assert_eq!(notification_transactions.active_count(), 0);
 }
+
+#[path = "acknowledge_alarm_notification_tests.rs"]
+mod notification_tests;

@@ -69,6 +69,10 @@ fn stock_enrollment_atomically_commits_state_ack_and_exact_history_coordinate() 
     assert_eq!(timestamp_at(&object, 2), BACnetTimeStamp::SequenceNumber(0));
     assert_eq!(timestamp_at(&object, 3), BACnetTimeStamp::SequenceNumber(0));
     assert_eq!(
+        object.event_history.original_from_states,
+        [Some(EventState::NORMAL), None, None]
+    );
+    assert_eq!(
         object.event_history.original_to_states,
         [Some(EventState::HIGH_LIMIT), None, None]
     );
@@ -88,6 +92,10 @@ fn stock_enrollment_atomically_commits_state_ack_and_exact_history_coordinate() 
     assert_eq!(
         timestamp_at(&object, 1),
         BACnetTimeStamp::SequenceNumber(42)
+    );
+    assert_eq!(
+        object.event_history.original_from_states,
+        [Some(EventState::HIGH_LIMIT), None, None]
     );
     assert_eq!(
         object.event_history.original_to_states,

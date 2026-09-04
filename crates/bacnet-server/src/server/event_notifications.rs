@@ -1,5 +1,12 @@
 use super::event_message_policy::intrinsic_event_message_text;
 use super::event_notification_payload::{project_intrinsic_payload, CommittedNotificationPayload};
+#[path = "event_notification_profile.rs"]
+mod profile;
+use self::profile::{
+    CommittedHistorySnapshot, CommittedMessageProjection, NotificationConstruction,
+    NotificationHistorySource, NotificationTransition,
+};
+pub(super) use self::profile::{CommittedIntrinsicTransition, ResolvedIntrinsicTransition};
 use super::event_recipient_route::{
     network_priority_for_event, system_utc_recipient_filter_time, ConfirmedRecipientRoute,
     RecipientRoute,
@@ -12,117 +19,12 @@ use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_objects::event::{EventTransition, EventTransitionCommit, TransitionOutcome};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::BACnetRecipient;
-use bacnet_types::enums::EventType;
-use bacnet_types::primitives::BACnetTimeStamp;
 
 use crate::event_enrollment::{CommittedEventEnrollmentDelivery, CommittedEventEnrollmentResult};
 
 #[path = "event_recipient_lookup.rs"]
 mod recipient_lookup;
 use recipient_lookup::matched_recipients_or_log;
-
-/// One exact transition-coordinate projection from object-owned event history.
-#[derive(Debug, Clone, PartialEq)]
-struct CommittedHistorySnapshot {
-    timestamp: BACnetTimeStamp,
-    message_text: Option<String>,
-}
-
-enum CommittedMessageProjection {
-    RequiredProperty,
-    IntentionallyAbsent,
-}
-
-/// The source boundary for the notification's timestamp and message.
-enum NotificationHistorySource {
-    /// Legacy/default objects sample their timestamp when distribution begins.
-    SendTime,
-    /// Atomic transitions use the exact history coordinate read after commit.
-    Committed {
-        snapshot: CommittedHistorySnapshot,
-        recipient_clock: SampledEventClock,
-    },
-}
-
-pub(super) struct NotificationTransition {
-    change: EventStateChange,
-    event_type: EventType,
-    history_source: NotificationHistorySource,
-    ack_required: Option<bool>,
-    event_values: Option<CommittedNotificationPayload>,
-}
-
-impl From<(EventStateChange, EventType)> for NotificationTransition {
-    fn from((change, event_type): (EventStateChange, EventType)) -> Self {
-        Self {
-            change,
-            event_type,
-            history_source: NotificationHistorySource::SendTime,
-            ack_required: None,
-            event_values: None,
-        }
-    }
-}
-
-/// One built-in intrinsic transition committed under the database write guard.
-pub(super) struct CommittedIntrinsicTransition {
-    pub(super) change: EventStateChange,
-    pub(super) event_type: EventType,
-    pub(super) distribute: bool,
-    history_snapshot: CommittedHistorySnapshot,
-    recipient_clock: SampledEventClock,
-    ack_required: bool,
-    event_values: Option<CommittedNotificationPayload>,
-}
-
-impl From<CommittedIntrinsicTransition> for NotificationTransition {
-    fn from(committed: CommittedIntrinsicTransition) -> Self {
-        Self {
-            change: committed.change,
-            event_type: committed.event_type,
-            history_source: NotificationHistorySource::Committed {
-                snapshot: committed.history_snapshot,
-                recipient_clock: committed.recipient_clock,
-            },
-            ack_required: Some(committed.ack_required),
-            event_values: committed.event_values,
-        }
-    }
-}
-
-/// A server-ready intrinsic outcome under its declared object contract.
-///
-/// Built-ins carry their atomic commit snapshot. Legacy implementations have
-/// already mutated state during evaluation and retain send-time policy and
-/// timestamp sampling.
-pub(super) enum ResolvedIntrinsicTransition {
-    Committed(CommittedIntrinsicTransition),
-    Legacy(TransitionOutcome),
-}
-
-impl ResolvedIntrinsicTransition {
-    pub(super) fn distribute(&self) -> bool {
-        match self {
-            Self::Committed(committed) => committed.distribute,
-            Self::Legacy(outcome) => outcome.distribute,
-        }
-    }
-
-    pub(super) fn can_emit(&self) -> bool {
-        !matches!(self, Self::Committed(committed) if committed.event_values.is_none())
-    }
-}
-
-impl From<ResolvedIntrinsicTransition> for NotificationTransition {
-    fn from(transition: ResolvedIntrinsicTransition) -> Self {
-        match transition {
-            ResolvedIntrinsicTransition::Committed(committed) => committed.into(),
-            ResolvedIntrinsicTransition::Legacy(outcome) => {
-                (outcome.change, outcome.event_type).into()
-            }
-        }
-    }
-}
 
 /// Read one exact committed transition coordinate through the object contract.
 ///
@@ -212,6 +114,7 @@ pub(super) fn resolve_committed_event_enrollment_transition(
             },
             ack_required: Some(ack_required),
             event_values: Some(event_values),
+            construction: NotificationConstruction::Event,
         },
     ))
 }
@@ -436,6 +339,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             history_source,
             ack_required: ack_required_snapshot,
             event_values,
+            construction,
         } = transition.into();
         let system_utc = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -493,14 +397,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 })
                 .unwrap_or(0);
 
-            let notify_type = object
-                .read_property(PropertyIdentifier::NOTIFY_TYPE, None)
-                .ok()
-                .and_then(|v| match v {
-                    PropertyValue::Enumerated(n) => Some(n),
-                    _ => None,
-                })
-                .unwrap_or(NotifyType::ALARM.to_raw());
+            let notify_type = match construction {
+                NotificationConstruction::Acknowledgment => NotifyType::ACK_NOTIFICATION.to_raw(),
+                NotificationConstruction::Event => object
+                    .read_property(PropertyIdentifier::NOTIFY_TYPE, None)
+                    .ok()
+                    .and_then(|v| match v {
+                        PropertyValue::Enumerated(n) => Some(n),
+                        _ => None,
+                    })
+                    .unwrap_or(NotifyType::ALARM.to_raw()),
+            };
 
             let transition = change.transition();
 
@@ -825,5 +732,37 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
         }
+    }
+
+    /// Distribute a successfully accepted acknowledgment after its requester
+    /// response path has completed.
+    pub(super) async fn send_acknowledgment_notification_with_bindings(
+        db: &Arc<RwLock<ObjectDatabase>>,
+        network: &Arc<NetworkLayer<T>>,
+        comm_state: &Arc<AtomicU8>,
+        server_tsm: &Arc<Mutex<ServerTsm>>,
+        notification_transactions: &Arc<NotificationTransactions>,
+        device_bindings: &Arc<RwLock<DeviceBindingTable>>,
+        accepted: handlers::AcceptedAcknowledgeAlarm,
+        retry_timeout_ms: u64,
+    ) {
+        let Some(notification) = accepted.notification else {
+            return;
+        };
+        if !notification.distribute {
+            return;
+        }
+        Self::build_and_send_event_notification_with_bindings(
+            db,
+            network,
+            comm_state,
+            server_tsm,
+            notification_transactions,
+            device_bindings,
+            &accepted.event_object_identifier,
+            NotificationTransition::acknowledgment(notification.change, notification.event_type),
+            retry_timeout_ms,
+        )
+        .await;
     }
 }
