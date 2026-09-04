@@ -25,6 +25,9 @@ use crate::enums::{AuditOperation, ObjectType, ServiceSupported};
 use crate::error::{Error, Result};
 
 pub use crate::primitives::StatusFlags;
+pub use priority_filter::BACnetPriorityFilter;
+
+mod priority_filter;
 
 /// Read bit `n` of a BACnet bit string (MSB-first) from its content bytes.
 ///

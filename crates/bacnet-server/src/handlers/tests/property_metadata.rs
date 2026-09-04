@@ -1,5 +1,6 @@
 use super::*;
 
+use bacnet_objects::audit::AuditReporterObject;
 use bacnet_objects::binary::BinaryInputObject;
 use bacnet_objects::event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject};
 use bacnet_objects::value_types::TimeValueObject;
@@ -19,6 +20,8 @@ fn make_metadata_db() -> ObjectDatabase {
         AlertEnrollmentObject::new(1, "AE-1", alert_source).unwrap(),
     ))
     .unwrap();
+    db.add(Box::new(AuditReporterObject::new(1, "AR-1").unwrap()))
+        .unwrap();
     db
 }
 
@@ -270,6 +273,50 @@ fn rpm_metadata_selectors_are_exact_for_alert_enrollment() {
             PropertyIdentifier::ACKED_TRANSITIONS,
             PropertyIdentifier::NOTIFY_TYPE,
             PropertyIdentifier::EVENT_TIME_STAMPS,
+        ]
+    );
+    assert_eq!(
+        rpm_property_ids(&db, oid, PropertyIdentifier::OPTIONAL),
+        vec![PropertyIdentifier::DESCRIPTION]
+    );
+}
+
+#[test]
+fn rpm_metadata_selectors_are_exact_for_audit_reporter() {
+    let db = make_metadata_db();
+    let oid = ObjectIdentifier::new(ObjectType::AUDIT_REPORTER, 1).unwrap();
+
+    assert_eq!(
+        rpm_property_ids(&db, oid, PropertyIdentifier::ALL),
+        vec![
+            PropertyIdentifier::OBJECT_IDENTIFIER,
+            PropertyIdentifier::OBJECT_NAME,
+            PropertyIdentifier::OBJECT_TYPE,
+            PropertyIdentifier::DESCRIPTION,
+            PropertyIdentifier::STATUS_FLAGS,
+            PropertyIdentifier::RELIABILITY,
+            PropertyIdentifier::EVENT_STATE,
+            PropertyIdentifier::AUDIT_LEVEL,
+            PropertyIdentifier::AUDIT_SOURCE_REPORTER,
+            PropertyIdentifier::AUDITABLE_OPERATIONS,
+            PropertyIdentifier::AUDIT_PRIORITY_FILTER,
+            PropertyIdentifier::ISSUE_CONFIRMED_NOTIFICATIONS,
+        ]
+    );
+    assert_eq!(
+        rpm_property_ids(&db, oid, PropertyIdentifier::REQUIRED),
+        vec![
+            PropertyIdentifier::OBJECT_IDENTIFIER,
+            PropertyIdentifier::OBJECT_NAME,
+            PropertyIdentifier::OBJECT_TYPE,
+            PropertyIdentifier::STATUS_FLAGS,
+            PropertyIdentifier::RELIABILITY,
+            PropertyIdentifier::EVENT_STATE,
+            PropertyIdentifier::AUDIT_LEVEL,
+            PropertyIdentifier::AUDIT_SOURCE_REPORTER,
+            PropertyIdentifier::AUDITABLE_OPERATIONS,
+            PropertyIdentifier::AUDIT_PRIORITY_FILTER,
+            PropertyIdentifier::ISSUE_CONFIRMED_NOTIFICATIONS,
         ]
     );
     assert_eq!(

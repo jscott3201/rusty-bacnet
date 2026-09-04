@@ -1,4 +1,5 @@
 use bacnet_objects::{
+    audit::AuditReporterObject,
     binary::BinaryInputObject,
     event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject},
     staging::{StagingConfig, StagingObject},
@@ -231,6 +232,65 @@ fn pics_projects_migrated_property_metadata() {
             (PropertyIdentifier::NOTIFY_TYPE, false, true),
             (PropertyIdentifier::EVENT_TIME_STAMPS, false, false),
             (PropertyIdentifier::PROPERTY_LIST, false, false),
+        ]
+    );
+}
+
+#[test]
+fn pics_audit_reporter_metadata_is_complete_and_exact() {
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(AuditReporterObject::new(1, "ar-1").unwrap()))
+        .unwrap();
+    let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+    let reporter = pics
+        .supported_object_types
+        .iter()
+        .find(|support| support.object_type == ObjectType::AUDIT_REPORTER)
+        .expect("Audit Reporter support");
+    let rows = reporter
+        .supported_properties
+        .iter()
+        .map(|property| {
+            (
+                property.property_id,
+                property.access.readable,
+                property.access.optional,
+                property.access.writable,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        rows,
+        vec![
+            (PropertyIdentifier::OBJECT_IDENTIFIER, true, false, false),
+            (PropertyIdentifier::OBJECT_NAME, true, false, false),
+            (PropertyIdentifier::OBJECT_TYPE, true, false, false),
+            (PropertyIdentifier::DESCRIPTION, true, true, true),
+            (PropertyIdentifier::STATUS_FLAGS, true, false, false),
+            (PropertyIdentifier::RELIABILITY, true, false, false),
+            (PropertyIdentifier::EVENT_STATE, true, false, false),
+            (PropertyIdentifier::AUDIT_LEVEL, true, false, false),
+            (
+                PropertyIdentifier::AUDIT_SOURCE_REPORTER,
+                true,
+                false,
+                false,
+            ),
+            (PropertyIdentifier::AUDITABLE_OPERATIONS, true, false, false,),
+            (
+                PropertyIdentifier::AUDIT_PRIORITY_FILTER,
+                true,
+                false,
+                false,
+            ),
+            (
+                PropertyIdentifier::ISSUE_CONFIRMED_NOTIFICATIONS,
+                true,
+                false,
+                false,
+            ),
+            (PropertyIdentifier::PROPERTY_LIST, true, false, false),
         ]
     );
 }
