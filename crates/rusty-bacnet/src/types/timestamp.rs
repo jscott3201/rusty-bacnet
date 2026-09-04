@@ -19,6 +19,10 @@ impl PyBACnetTimeStamp {
     pub fn to_rust(&self) -> &primitives::BACnetTimeStamp {
         &self.inner
     }
+
+    pub(crate) fn from_rust(timestamp: primitives::BACnetTimeStamp) -> Self {
+        Self { inner: timestamp }
+    }
 }
 
 fn integer(value: &Bound<'_, PyAny>, name: &str) -> PyResult<i128> {

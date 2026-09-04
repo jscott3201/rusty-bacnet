@@ -42,6 +42,7 @@ use bacnet_types::primitives::BACnetTimeStamp;
 
 use crate::errors::to_py_err;
 use crate::types::{
+    audit_log_query_ack_to_py, audit_log_query_request_from_py, audit_notification_request_from_py,
     parse_address, py_to_rpm_specs, py_to_wpm_specs, rpm_ack_to_py, PyBACnetTimeStamp,
     PyCovNotificationIterator, PyDiscoveredDevice, PyEnableDisable,
     PyEnrollmentSummaryEventStateFilter, PyEventState, PyEventType, PyLifeSafetyOperation,
