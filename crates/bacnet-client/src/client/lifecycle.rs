@@ -64,6 +64,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let confirmed_cov_ack_policy = options.confirmed_cov_notification_ack_policy.clone();
         let (device_tx, _) = broadcast::channel::<DeviceEvent>(DEVICE_EVENT_CHANNEL_CAPACITY);
         let device_tx_dispatch = device_tx.clone();
+        let (device_collision_tx, _) =
+            broadcast::channel::<DeviceCollisionEvent>(DEVICE_EVENT_CHANNEL_CAPACITY);
+        let device_collision_tx_dispatch = device_collision_tx.clone();
         let seg_ack_senders: Arc<Mutex<HashMap<SegKey, SegmentAckRoute>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let seg_ack_senders_dispatch = Arc::clone(&seg_ack_senders);
@@ -156,6 +159,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                     &cov_tx_dispatch,
                                     &confirmed_cov_ack_policy,
                                     &device_tx_dispatch,
+                                    &device_collision_tx_dispatch,
                                     &mut seg_state,
                                     &seg_ack_senders_dispatch,
                                     &received.source_mac,
@@ -183,6 +187,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             device_table,
             cov_tx,
             device_tx,
+            device_collision_tx,
             dispatch_task: Some(dispatch_task),
             seg_ack_senders,
             cleanup_tx,
