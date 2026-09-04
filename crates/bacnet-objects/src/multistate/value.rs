@@ -185,6 +185,24 @@ impl BACnetObject for MultiStateValueObject {
         present_value
     );
 
+    fn acknowledge_alarm_correlated_internal(
+        &mut self,
+        event_state: EventState,
+        timestamp: &BACnetTimeStamp,
+    ) -> Result<(), Error> {
+        if !self.event_detection_enable {
+            return Err(Error::Protocol {
+                class: ErrorClass::OBJECT.to_raw() as u32,
+                code: ErrorCode::NO_ALARM_CONFIGURED.to_raw() as u32,
+            });
+        }
+        self.event_history.acknowledge_correlated(
+            &mut self.event_detector.acked_transitions,
+            event_state,
+            timestamp,
+        )
+    }
+
     fn read_property(
         &self,
         property: PropertyIdentifier,

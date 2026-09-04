@@ -3,10 +3,12 @@ use super::*;
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags::{encode_tag, TagClass};
 use bacnet_objects::analog::{AnalogOutputObject, AnalogValueObject};
-use bacnet_objects::binary::BinaryInputObject;
+use bacnet_objects::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use bacnet_objects::event::{EventStateChange, EventTransitionCommit};
 use bacnet_objects::event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject};
-use bacnet_objects::multistate::MultiStateInputObject;
+use bacnet_objects::multistate::{
+    MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject,
+};
 use bacnet_services::alarm_event::AcknowledgeAlarmRequest;
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetEventParameter};
 use bacnet_types::enums::EventType;
@@ -32,6 +34,18 @@ fn add_committed<O: BACnetObject + 'static>(
         .unwrap();
     db.add(Box::new(object)).unwrap();
     oid
+}
+
+fn with_event_detection<O: BACnetObject>(mut object: O) -> O {
+    object
+        .write_property(
+            PropertyIdentifier::EVENT_DETECTION_ENABLE,
+            None,
+            PropertyValue::Boolean(true),
+            None,
+        )
+        .unwrap();
+    object
 }
 
 fn encode_request(
@@ -117,40 +131,102 @@ fn configured_event_enrollment() -> EventEnrollmentObject {
 fn supported_families_acknowledge_only_the_correlated_transition() {
     let mut db = ObjectDatabase::new();
     let stamp = BACnetTimeStamp::SequenceNumber(42);
-    let oids = [
-        add_committed(
-            &mut db,
-            AnalogInputObject::new(1, "AI-ack", 62).unwrap(),
+    let cases = [
+        (
+            add_committed(
+                &mut db,
+                AnalogInputObject::new(1, "AI-ack", 62).unwrap(),
+                EventState::HIGH_LIMIT,
+                stamp.clone(),
+            ),
             EventState::HIGH_LIMIT,
-            stamp.clone(),
         ),
-        add_committed(
-            &mut db,
-            AnalogOutputObject::new(1, "AO-ack", 62).unwrap(),
+        (
+            add_committed(
+                &mut db,
+                AnalogOutputObject::new(1, "AO-ack", 62).unwrap(),
+                EventState::HIGH_LIMIT,
+                stamp.clone(),
+            ),
             EventState::HIGH_LIMIT,
-            stamp.clone(),
         ),
-        add_committed(
-            &mut db,
-            AnalogValueObject::new(1, "AV-ack", 62).unwrap(),
+        (
+            add_committed(
+                &mut db,
+                AnalogValueObject::new(1, "AV-ack", 62).unwrap(),
+                EventState::HIGH_LIMIT,
+                stamp.clone(),
+            ),
             EventState::HIGH_LIMIT,
-            stamp.clone(),
         ),
-        add_committed(
-            &mut db,
-            configured_event_enrollment(),
+        (
+            add_committed(
+                &mut db,
+                BinaryInputObject::new(1, "BI-ack").unwrap(),
+                EventState::OFFNORMAL,
+                stamp.clone(),
+            ),
+            EventState::OFFNORMAL,
+        ),
+        (
+            add_committed(
+                &mut db,
+                with_event_detection(BinaryOutputObject::new(1, "BO-ack").unwrap()),
+                EventState::OFFNORMAL,
+                stamp.clone(),
+            ),
+            EventState::OFFNORMAL,
+        ),
+        (
+            add_committed(
+                &mut db,
+                BinaryValueObject::new(1, "BV-ack").unwrap(),
+                EventState::OFFNORMAL,
+                stamp.clone(),
+            ),
+            EventState::OFFNORMAL,
+        ),
+        (
+            add_committed(
+                &mut db,
+                MultiStateInputObject::new(1, "MSI-ack", 3).unwrap(),
+                EventState::OFFNORMAL,
+                stamp.clone(),
+            ),
+            EventState::OFFNORMAL,
+        ),
+        (
+            add_committed(
+                &mut db,
+                with_event_detection(MultiStateOutputObject::new(1, "MSO-ack", 3).unwrap()),
+                EventState::OFFNORMAL,
+                stamp.clone(),
+            ),
+            EventState::OFFNORMAL,
+        ),
+        (
+            add_committed(
+                &mut db,
+                MultiStateValueObject::new(1, "MSV-ack", 3).unwrap(),
+                EventState::OFFNORMAL,
+                stamp.clone(),
+            ),
+            EventState::OFFNORMAL,
+        ),
+        (
+            add_committed(
+                &mut db,
+                configured_event_enrollment(),
+                EventState::HIGH_LIMIT,
+                stamp.clone(),
+            ),
             EventState::HIGH_LIMIT,
-            stamp.clone(),
         ),
     ];
 
-    for oid in oids {
+    for (oid, state) in cases {
         assert_eq!(acked(&db, oid), 0b110);
-        handle_acknowledge_alarm(
-            &mut db,
-            &encode_request(oid, EventState::HIGH_LIMIT, stamp.clone()),
-        )
-        .unwrap();
+        handle_acknowledge_alarm(&mut db, &encode_request(oid, state, stamp.clone())).unwrap();
         assert_eq!(acked(&db, oid), 0b111);
     }
 }
@@ -215,18 +291,14 @@ fn unknown_uninitialized_and_unsupported_objects_fail_closed() {
     assert_protocol(error, ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT);
 
     let mut db = ObjectDatabase::new();
-    let objects: Vec<Box<dyn BACnetObject>> = vec![
-        Box::new(BinaryInputObject::new(1, "BI-unsupported").unwrap()),
-        Box::new(MultiStateInputObject::new(1, "MSI-unsupported", 3).unwrap()),
-        Box::new(
-            AlertEnrollmentObject::new(
-                1,
-                "AE-unsupported",
-                ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 7).unwrap(),
-            )
-            .unwrap(),
-        ),
-    ];
+    let objects: Vec<Box<dyn BACnetObject>> = vec![Box::new(
+        AlertEnrollmentObject::new(
+            1,
+            "AE-unsupported",
+            ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 7).unwrap(),
+        )
+        .unwrap(),
+    )];
     for object in objects {
         let oid = object.object_identifier();
         db.add(object).unwrap();
