@@ -787,6 +787,7 @@ fn cap_max_apdu_to_transport(configured: u16, transport_limit: u16) -> Result<u1
     })
 }
 
+mod audit;
 mod builder_options;
 mod cov;
 mod cov_notifications;
@@ -819,6 +820,8 @@ pub use cov_renewal::{
 
 #[cfg(test)]
 mod acknowledge_alarm_tests;
+#[cfg(test)]
+mod audit_tests;
 #[cfg(test)]
 mod builder_options_tests;
 #[cfg(test)]
