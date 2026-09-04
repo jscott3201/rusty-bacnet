@@ -18,10 +18,15 @@ use crate::traits::{BACnetObject, WritePropertyRollback};
 
 mod notification;
 mod persistence;
+mod receipt;
 pub use notification::AuditLogNotificationSink;
 use persistence::{validate_record, validate_snapshot};
 pub use persistence::{
     AuditLogPersistence, AuditLogSnapshot, FileAuditLogPersistence, MAX_AUDIT_RECORDS,
+};
+pub use receipt::{
+    CompletedAuditReceipt, ConfirmedAuditNotificationOutcome, MAX_AUDIT_RECEIPT_KEY_BYTES,
+    MAX_COMPLETED_AUDIT_RECEIPTS,
 };
 
 /// One owned page returned by an object-level AuditLogQuery capability.
@@ -64,6 +69,7 @@ pub struct AuditLogObject {
     log_enable: bool,
     buffer_size: u32,
     buffer: VecDeque<BACnetAuditLogRecordResult>,
+    completed_receipts: Vec<CompletedAuditReceipt>,
     total_record_count: u64,
     status_flags: StatusFlags,
     generation: u64,
@@ -111,6 +117,7 @@ impl AuditLogObject {
                     log_enable: true,
                     total_record_count: 0,
                     records: Vec::new(),
+                    completed_receipts: Vec::new(),
                 };
                 validate_snapshot(&snapshot)?;
                 persistence.commit(&snapshot)?;
@@ -124,6 +131,7 @@ impl AuditLogObject {
             log_enable: snapshot.log_enable,
             buffer_size: snapshot.capacity,
             buffer: snapshot.records.into(),
+            completed_receipts: snapshot.completed_receipts,
             total_record_count: snapshot.total_record_count,
             status_flags: StatusFlags::empty(),
             generation: snapshot.generation,
@@ -229,6 +237,7 @@ impl AuditLogObject {
             log_enable: self.log_enable,
             total_record_count: self.total_record_count,
             records: self.buffer.iter().cloned().collect(),
+            completed_receipts: self.completed_receipts.clone(),
         }
     }
 
@@ -239,6 +248,7 @@ impl AuditLogObject {
         self.log_enable = snapshot.log_enable;
         self.total_record_count = snapshot.total_record_count;
         self.buffer = snapshot.records.into();
+        self.completed_receipts = snapshot.completed_receipts;
         Ok(())
     }
 }
@@ -674,3 +684,11 @@ mod query_tests;
 #[cfg(test)]
 #[path = "audit/notification_tests.rs"]
 mod notification_tests;
+
+#[cfg(test)]
+#[path = "audit/receipt_tests.rs"]
+mod receipt_tests;
+
+#[cfg(test)]
+#[path = "audit/persistence_receipt_tests.rs"]
+mod persistence_receipt_tests;

@@ -1,3 +1,4 @@
+use bacnet_objects::audit::{CompletedAuditReceipt, ConfirmedAuditNotificationOutcome};
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_services::audit::AuditNotificationRequest;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
@@ -46,6 +47,52 @@ pub fn handle_confirmed_audit_notification(
     request: &AuditNotificationRequest,
 ) -> Result<(), Error> {
     handle_audit_notification(db, sink, request)
+}
+
+/// Check one sink-owned completed confirmed receipt without mutation.
+pub(crate) fn has_completed_confirmed_audit_receipt(
+    db: &mut ObjectDatabase,
+    sink: ObjectIdentifier,
+    key: &[u8],
+    now_unix_millis: u64,
+) -> Result<bool, Error> {
+    if sink.object_type() != ObjectType::AUDIT_LOG {
+        return Err(service_request_denied());
+    }
+    let object = db.get_mut(&sink).ok_or_else(service_request_denied)?;
+    let storage = object
+        .audit_log_notification_sink_internal()
+        .ok_or_else(service_request_denied)?;
+    storage.has_completed_confirmed_receipt(key, now_unix_millis)
+}
+
+/// Atomically store one confirmed Audit batch and its completed receipt.
+pub(crate) fn handle_confirmed_audit_notification_with_receipt(
+    db: &mut ObjectDatabase,
+    sink: ObjectIdentifier,
+    request: &AuditNotificationRequest,
+    receipt: CompletedAuditReceipt,
+) -> Result<ConfirmedAuditNotificationOutcome, Error> {
+    if sink.object_type() != ObjectType::AUDIT_LOG {
+        return Err(service_request_denied());
+    }
+    {
+        let object = db.get_mut(&sink).ok_or_else(service_request_denied)?;
+        let storage = object
+            .audit_log_notification_sink_internal()
+            .ok_or_else(service_request_denied)?;
+        if !storage.notification_logging_enabled() {
+            return Err(service_request_denied());
+        }
+    }
+    let apdu_timeout_ms = configured_apdu_timeout(db)?;
+    let object = db
+        .get_mut(&sink)
+        .expect("sink existence was checked before Device timeout lookup");
+    let storage = object
+        .audit_log_notification_sink_internal()
+        .expect("sink capability was checked before Device timeout lookup");
+    storage.store_confirmed_notifications(&request.notifications, apdu_timeout_ms, receipt)
 }
 
 fn configured_apdu_timeout(db: &ObjectDatabase) -> Result<u32, Error> {

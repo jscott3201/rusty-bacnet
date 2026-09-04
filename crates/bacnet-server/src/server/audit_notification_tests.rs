@@ -124,7 +124,22 @@ pub(super) fn database_with_device(
     Arc::new(RwLock::new(db))
 }
 
-async fn dispatch(
+pub(super) fn confirmed_request(invoke_id: u8, service_request: Bytes) -> ConfirmedRequestPdu {
+    ConfirmedRequestPdu {
+        segmented: false,
+        more_follows: false,
+        segmented_response_accepted: false,
+        max_segments: None,
+        max_apdu_length: 1476,
+        invoke_id,
+        sequence_number: None,
+        proposed_window_size: None,
+        service_choice: ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION,
+        service_request,
+    }
+}
+
+pub(super) async fn dispatch(
     db: &Arc<RwLock<ObjectDatabase>>,
     config: &ServerConfig,
     confirmed_request_tracker: &Arc<ConfirmedRequestTracker>,
@@ -132,6 +147,25 @@ async fn dispatch(
     source_mac: &[u8],
     source_network: Option<NpduAddress>,
     service_request: Bytes,
+) -> Result<Apdu, tokio::sync::oneshot::error::RecvError> {
+    dispatch_confirmed(
+        db,
+        config,
+        confirmed_request_tracker,
+        source_mac,
+        source_network,
+        confirmed_request(invoke_id, service_request),
+    )
+    .await
+}
+
+pub(super) async fn dispatch_confirmed(
+    db: &Arc<RwLock<ObjectDatabase>>,
+    config: &ServerConfig,
+    confirmed_request_tracker: &Arc<ConfirmedRequestTracker>,
+    source_mac: &[u8],
+    source_network: Option<NpduAddress>,
+    confirmed: ConfirmedRequestPdu,
 ) -> Result<Apdu, tokio::sync::oneshot::error::RecvError> {
     let network = Arc::new(NetworkLayer::new(BipTransport::new(
         Ipv4Addr::LOCALHOST,
@@ -147,18 +181,6 @@ async fn dispatch(
     let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
     let comm_state = Arc::new(AtomicU8::new(0));
     let dcc_timer = Arc::new(Mutex::new(None::<JoinHandle<()>>));
-    let confirmed = ConfirmedRequestPdu {
-        segmented: false,
-        more_follows: false,
-        segmented_response_accepted: false,
-        max_segments: None,
-        max_apdu_length: 1476,
-        invoke_id,
-        sequence_number: None,
-        proposed_window_size: None,
-        service_choice: ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION,
-        service_request,
-    };
     let (tx, rx) = oneshot::channel();
     BACnetServer::<BipTransport>::handle_confirmed_request(
         db,
@@ -304,7 +326,8 @@ async fn policy_decode_bounds_sink_and_persistence_fail_before_success_ack() {
         ),
     ] {
         let persistence = Arc::new(MemoryPersistence::default());
-        let db = database(persistence, 7);
+        let db = database(Arc::clone(&persistence), 7);
+        let before = persistence.snapshot.lock().unwrap().clone();
         let config = ServerConfig {
             audit_notification_sink: Some(sink),
             audit_notification_authorizer: authorizer,
@@ -327,10 +350,12 @@ async fn policy_decode_bounds_sink_and_persistence_fail_before_success_ack() {
         assert_eq!(error.error_class, ErrorClass::SERVICES);
         assert_eq!(error.error_code, ErrorCode::SERVICE_REQUEST_DENIED);
         assert_eq!(count(&db, sink).await, (0, 0));
+        assert_eq!(*persistence.snapshot.lock().unwrap(), before);
     }
 
     let persistence = Arc::new(MemoryPersistence::default());
     let db = database(persistence.clone(), 7);
+    let before = persistence.snapshot.lock().unwrap().clone();
     persistence.fail.store(true, Ordering::Release);
     let config = ServerConfig {
         audit_notification_sink: Some(sink),
@@ -417,13 +442,14 @@ async fn policy_decode_bounds_sink_and_persistence_fail_before_success_ack() {
         assert_eq!(error.error_code, ErrorCode::SERVICE_REQUEST_DENIED);
         assert_eq!(count(&db, sink).await, (0, 0));
     }
+    assert_eq!(*persistence.snapshot.lock().unwrap(), before);
 }
 
 #[tokio::test]
 async fn disabled_sink_returns_service_request_denied_without_receiver_mutation() {
     let persistence = Arc::new(MemoryPersistence::default());
     let sink = oid(ObjectType::AUDIT_LOG, 7);
-    let db = database(persistence, 7);
+    let db = database(Arc::clone(&persistence), 7);
     {
         let mut db = db.write().await;
         db.get_mut(&sink)
@@ -436,7 +462,8 @@ async fn disabled_sink_returns_service_request_denied_without_receiver_mutation(
             )
             .unwrap();
     }
-    let before = count(&db, sink).await;
+    let durable_before = persistence.snapshot.lock().unwrap().clone();
+    let count_before = count(&db, sink).await;
     let config = ServerConfig {
         audit_notification_sink: Some(sink),
         audit_notification_authorizer: Some(Arc::new(|_| true)),
@@ -458,7 +485,8 @@ async fn disabled_sink_returns_service_request_denied_without_receiver_mutation(
     };
     assert_eq!(error.error_class, ErrorClass::SERVICES);
     assert_eq!(error.error_code, ErrorCode::SERVICE_REQUEST_DENIED);
-    assert_eq!(count(&db, sink).await, before);
+    assert_eq!(count(&db, sink).await, count_before);
+    assert_eq!(*persistence.snapshot.lock().unwrap(), durable_before);
 }
 
 #[tokio::test]
@@ -472,7 +500,8 @@ async fn missing_or_invalid_device_apdu_timeout_is_operational_problem_without_m
         }),
     ] {
         let persistence = Arc::new(MemoryPersistence::default());
-        let db = database_with_device(persistence, 7, device_config);
+        let db = database_with_device(Arc::clone(&persistence), 7, device_config);
+        let before = persistence.snapshot.lock().unwrap().clone();
         let config = ServerConfig {
             audit_notification_sink: Some(sink),
             audit_notification_authorizer: Some(Arc::new(|_| true)),
@@ -495,6 +524,7 @@ async fn missing_or_invalid_device_apdu_timeout_is_operational_problem_without_m
         assert_eq!(error.error_class, ErrorClass::DEVICE);
         assert_eq!(error.error_code, ErrorCode::OPERATIONAL_PROBLEM);
         assert_eq!(count(&db, sink).await, (0, 0));
+        assert_eq!(*persistence.snapshot.lock().unwrap(), before);
     }
 }
 
@@ -553,3 +583,6 @@ fn sc_builder_exposes_the_same_explicit_receiver_policy() {
         .unconfirmed_audit_notification_authorizer
         .is_some());
 }
+
+#[path = "audit_notification_receipt_tests.rs"]
+mod receipt_tests;

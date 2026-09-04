@@ -402,12 +402,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     config,
                     source_mac,
                     source_network.as_ref(),
-                    invoke_id,
-                    &req.service_request,
+                    &req,
                 )
                 .await
                 {
-                    Ok(()) => simple_ack(),
+                    Ok(audit_notification::Stored) => simple_ack(),
+                    Ok(audit_notification::Duplicate) => return,
                     Err(error) => Self::error_apdu_from_error(invoke_id, service_choice, &error),
                 }
             }

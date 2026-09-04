@@ -110,6 +110,7 @@ fn log_with_records(records: Vec<BACnetAuditLogRecordResult>) -> AuditLogObject 
         log_enable: true,
         total_record_count,
         records,
+        completed_receipts: Vec::new(),
     }));
     AuditLogObject::new(1, "Audit-1", capacity, persistence).unwrap()
 }
