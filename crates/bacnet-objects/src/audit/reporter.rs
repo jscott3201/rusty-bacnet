@@ -6,6 +6,7 @@ use bacnet_types::enums::{
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
+use crate::property_metadata::{PropertyConformance, PropertyWriteCapability};
 use crate::traits::BACnetObject;
 
 use super::super::AuditReporterObject;
@@ -93,13 +94,90 @@ fn audit_reporter_constructor_has_exact_inert_required_property_defaults() {
 }
 
 #[test]
+fn audit_reporter_canonical_metadata_and_required_projection_are_complete() {
+    use PropertyConformance::{Optional, RequiredRead};
+    use PropertyWriteCapability::{Always, ReadOnly};
+
+    let reporter = AuditReporterObject::new(1, "AR-1").unwrap();
+    let metadata = reporter.property_metadata();
+    assert_eq!(
+        metadata
+            .iter()
+            .map(|row| {
+                (
+                    row.property_identifier,
+                    row.conformance,
+                    row.write_capability,
+                )
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                PropertyIdentifier::OBJECT_IDENTIFIER,
+                RequiredRead,
+                ReadOnly
+            ),
+            (PropertyIdentifier::OBJECT_NAME, RequiredRead, ReadOnly),
+            (PropertyIdentifier::OBJECT_TYPE, RequiredRead, ReadOnly),
+            (PropertyIdentifier::DESCRIPTION, Optional, Always),
+            (PropertyIdentifier::STATUS_FLAGS, RequiredRead, ReadOnly),
+            (PropertyIdentifier::RELIABILITY, RequiredRead, ReadOnly),
+            (PropertyIdentifier::EVENT_STATE, RequiredRead, ReadOnly),
+            (PropertyIdentifier::AUDIT_LEVEL, RequiredRead, ReadOnly),
+            (
+                PropertyIdentifier::AUDIT_SOURCE_REPORTER,
+                RequiredRead,
+                ReadOnly,
+            ),
+            (
+                PropertyIdentifier::AUDITABLE_OPERATIONS,
+                RequiredRead,
+                ReadOnly,
+            ),
+            (
+                PropertyIdentifier::AUDIT_PRIORITY_FILTER,
+                RequiredRead,
+                ReadOnly,
+            ),
+            (
+                PropertyIdentifier::ISSUE_CONFIRMED_NOTIFICATIONS,
+                RequiredRead,
+                ReadOnly,
+            ),
+            (PropertyIdentifier::PROPERTY_LIST, RequiredRead, ReadOnly),
+        ]
+    );
+    assert!(metadata.iter().all(|row| row.presence_condition.is_none()));
+
+    let required = reporter.required_properties();
+    assert_eq!(
+        required.as_ref(),
+        [
+            PropertyIdentifier::OBJECT_IDENTIFIER,
+            PropertyIdentifier::OBJECT_NAME,
+            PropertyIdentifier::OBJECT_TYPE,
+            PropertyIdentifier::STATUS_FLAGS,
+            PropertyIdentifier::RELIABILITY,
+            PropertyIdentifier::EVENT_STATE,
+            PropertyIdentifier::AUDIT_LEVEL,
+            PropertyIdentifier::AUDIT_SOURCE_REPORTER,
+            PropertyIdentifier::AUDITABLE_OPERATIONS,
+            PropertyIdentifier::AUDIT_PRIORITY_FILTER,
+            PropertyIdentifier::ISSUE_CONFIRMED_NOTIFICATIONS,
+            PropertyIdentifier::PROPERTY_LIST,
+        ]
+    );
+    assert!(!required.contains(&PropertyIdentifier::DESCRIPTION));
+}
+
+#[test]
 fn audit_reporter_property_list_preserves_bacnet_array_projection() {
     let reporter = AuditReporterObject::new(1, "AR-1").unwrap();
     let supported = [
         PropertyIdentifier::OBJECT_IDENTIFIER,
         PropertyIdentifier::OBJECT_NAME,
-        PropertyIdentifier::DESCRIPTION,
         PropertyIdentifier::OBJECT_TYPE,
+        PropertyIdentifier::DESCRIPTION,
         PropertyIdentifier::STATUS_FLAGS,
         PropertyIdentifier::RELIABILITY,
         PropertyIdentifier::EVENT_STATE,

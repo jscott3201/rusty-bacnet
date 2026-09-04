@@ -17,11 +17,13 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
 use crate::clock::ClockReader;
 use crate::common::read_property_list_property;
+use crate::property_metadata::PropertyMetadata;
 use crate::traits::{BACnetObject, WritePropertyRollback};
 
 mod notification;
 mod persistence;
 mod receipt;
+mod reporter_metadata;
 pub use notification::AuditLogNotificationSink;
 use persistence::{validate_record, validate_snapshot};
 pub use persistence::{
@@ -641,6 +643,10 @@ impl BACnetObject for AuditReporterObject {
         &self.name
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        Cow::Borrowed(reporter_metadata::AUDIT_REPORTER_PROPERTIES)
+    }
+
     fn read_property(
         &self,
         property: PropertyIdentifier,
@@ -720,25 +726,9 @@ impl BACnetObject for AuditReporterObject {
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::RELIABILITY,
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::AUDIT_LEVEL,
-            PropertyIdentifier::AUDIT_SOURCE_REPORTER,
-            PropertyIdentifier::AUDITABLE_OPERATIONS,
-            PropertyIdentifier::AUDIT_PRIORITY_FILTER,
-            PropertyIdentifier::ISSUE_CONFIRMED_NOTIFICATIONS,
-        ];
-        Cow::Borrowed(PROPS)
-    }
-
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        property == PropertyIdentifier::DESCRIPTION
+        crate::property_metadata::property_list_from_metadata(
+            reporter_metadata::AUDIT_REPORTER_PROPERTIES,
+        )
     }
 }
 
