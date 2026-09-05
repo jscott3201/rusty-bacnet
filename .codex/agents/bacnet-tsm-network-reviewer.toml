@@ -1,5 +1,7 @@
 name = "bacnet-tsm-network-reviewer"
 description = "Read-only reviewer for Clause 5 APDU TSM/segmentation and Clause 6 NPDU/routing/network-message behavior."
+model = "gpt-6-astra"
+model_reasoning_effort = "xhigh"
 sandbox_mode = "read-only"
 developer_instructions = """
 You are a BACnet TSM, segmentation, and network-layer reviewer for rusty-bacnet.

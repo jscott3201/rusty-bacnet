@@ -25,12 +25,12 @@ Do not claim readiness without verification evidence. Do not hide unresolved ris
 
 ## Subagent orchestration rules
 
-Use subagents when the task benefits from context isolation, parallel exploration, independent verification, or specialized expertise. Do not spawn subagents for a one-shot formatting task.
+Delegate bounded independent questions in parallel when useful root work can proceed alongside them. Use only the roles needed for the decision; the list below is a menu, not a mandatory panel. Handle small or tightly coupled work locally. Children do not delegate. Use configured models and the running harness's supported collaboration tools.
 
 When spawning subagents, pass this minimum packet:
 
 1. Objective: one sentence describing the question to answer.
-2. Scope: files, folders, PR diff, services, packages, or docs to inspect.
+2. Scope: exact revision and files/symbols or supplied artifact; include the root-resolved Codebase Memory project/root and coverage notes for repository source work, otherwise mark it not applicable.
 3. Constraints: read-only vs write, commands allowed, network/doc lookup allowed, and timeout.
 4. Required evidence: exact files/symbols/commands/sources to cite.
 5. Output schema: use the schema requested by the skill.
@@ -38,7 +38,7 @@ When spawning subagents, pass this minimum packet:
 Parent-agent responsibilities:
 
 - Assign non-overlapping scopes when possible.
-- Wait for all requested subagents unless a blocking failure makes remaining work irrelevant.
+- Advance independent root work while agents run; collect required results before dependent decisions. Reuse compatible agents and successful exact-target validation; do not duplicate builds or run competing benchmarks.
 - Cross-check subagent conclusions against each other.
 - Resolve conflicts explicitly. Do not silently choose the more confident subagent.
 - Produce one synthesized result with a risk-ranked decision, not a paste of raw subagent notes.
@@ -50,6 +50,8 @@ Parent-agent responsibilities:
 - `security-reliability-reviewer` — Review failure modes, secrets, access control, data handling, concurrency, and reliability hazards.
 - `release-risk-reviewer` — Assess release notes, migration/rollback plan, observability, config, compatibility, and docs needs.
 - `external-researcher` — Check external release/publish requirements or changelog constraints if relevant.
+
+A completed exact-target delivery review and passing gates are reusable evidence. Add a readiness lane only for an unresolved release risk; this skill does not mandate another panel or authorize publication.
 
 ## Workflow
 
@@ -106,14 +108,6 @@ ready | not ready | ready with risks | inconclusive
 - [ ] ...
 ```
 
-## Useful shared references
+## Local references
 
-When this package is copied whole, use these templates as needed:
-
-- `shared/references/evidence-ledger-template.md`
-- `shared/references/review-report-template.md`
-- `shared/references/research-brief-template.md`
-- `shared/references/spec-compliance-matrix-template.md`
-- `shared/references/benchmark-report-template.md`
-- `shared/references/review-severity-rubric.md`
-- `shared/references/safe-research-practices.md`
+Use [output contracts](references/output-contracts.md) and the [severity rubric](references/severity-rubric.md) when useful. For delivery review, the active `pr-gate-loop` target, severity vocabulary, and stopping rules take precedence.

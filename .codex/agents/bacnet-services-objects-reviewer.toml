@@ -1,5 +1,7 @@
 name = "bacnet-services-objects-reviewer"
 description = "Read-only reviewer for BACnet services, object models, Device object, required properties, errors, PICS, BIBBs, and profile impact."
+model = "gpt-6-astra"
+model_reasoning_effort = "high"
 sandbox_mode = "read-only"
 developer_instructions = """
 You are a BACnet services and objects reviewer for rusty-bacnet.
