@@ -172,6 +172,12 @@ impl<W: WebSocketPort> ScTransport<W> {
     /// for true transport-level recovery from a dead WebSocket/TCP/TLS connection;
     /// otherwise reconnect attempts can only reuse the current WebSocket object.
     /// The local VMAC is preserved across reconnections.
+    ///
+    /// [`TransportPort::start`] validates this configuration before any transport
+    /// startup state changes or I/O, retaining the socket on validation failure.
+    /// It cannot undo a caller-owned dial: call [`ScReconnectConfig::validate`]
+    /// before dialing if needed. Generic endpoint startup may change its own
+    /// state before calling the transport; this is not transactional rollback.
     pub fn with_reconnect(mut self, config: ScReconnectConfig) -> Self {
         self.reconnect_config = Some(config);
         self
@@ -267,6 +273,10 @@ async fn publish_connected_ws<W: WebSocketPort>(
 
 impl<W: WebSocketPort> TransportPort for ScTransport<W> {
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
+        if let Some(config) = &self.reconnect_config {
+            config.validate()?;
+        }
+
         /// NPDU receive channel capacity — smaller than BIP/Ethernet since SC is hub-relayed.
         const NPDU_CHANNEL_CAPACITY: usize = 64;
 
@@ -811,6 +821,9 @@ mod primary_restore_tests;
 
 #[cfg(test)]
 mod redial_tests;
+
+#[cfg(test)]
+mod reconnect_validation_tests;
 
 #[cfg(test)]
 mod tests;
