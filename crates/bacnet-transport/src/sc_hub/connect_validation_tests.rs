@@ -59,7 +59,7 @@ async fn connect_request_valid_options_preserve_peer_limits_and_repeat_close() {
     let mut expected = vec![7, 0, 0x22, 0x33];
     expected.extend_from_slice(&[0x10; 6]);
     expected.extend_from_slice(&[0x10; 16]);
-    expected.extend_from_slice(&[0x05, 0xC4, 0x05, 0xC4]);
+    expected.extend_from_slice(&[0x16, 0x49, 0x05, 0xD9]);
     assert_eq!(recv_raw(&mut live).await, expected);
     let map = clients.lock().await;
     let client = map.get(&live.vmac).unwrap();

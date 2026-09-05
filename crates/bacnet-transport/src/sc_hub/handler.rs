@@ -44,7 +44,7 @@ pub(super) async fn run(
         }
 
         let data = match msg_result {
-            Ok(Message::Binary(data)) => data.to_vec(),
+            Ok(Message::Binary(data)) => data,
             Ok(Message::Close(_)) => {
                 debug!("Hub: client {peer_addr} sent close");
                 break;
@@ -127,7 +127,15 @@ pub(super) async fn run(
             continue;
         }
 
-        // Decoded BVLC messages that pass Connect/control admission count as activity.
+        if sc_msg.function == ScFunction::EncapsulatedNpdu
+            && sc_msg.payload.len() > HUB_MAX_NPDU_LENGTH as usize
+        {
+            warn!("Hub: NPDU exceeds local Max-NPDU-Length, dropping");
+            continue;
+        }
+
+        // Decoded BVLC messages that pass Connect/control admission and local
+        // NPDU capacity checks count as activity.
         // WebSocket control, oversized, and undecodable frames do not.
         client_activity.store(now_secs(), std::sync::atomic::Ordering::Release);
 

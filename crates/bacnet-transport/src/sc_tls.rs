@@ -71,10 +71,15 @@ impl TlsWebSocket {
             })?;
 
         let stream = MaybeTlsStream::Rustls(tls_stream);
-        let (ws_stream, response) =
-            tokio_tungstenite::client_async_with_config(request, stream, None)
-                .await
-                .map_err(map_websocket_upgrade_error)?;
+        let (ws_stream, response) = tokio_tungstenite::client_async_with_config(
+            request,
+            stream,
+            // Public local capacities remain mutable u16 values. The adapter
+            // bounds its first Vec copy; protocol layers apply current limits.
+            Some(crate::sc_limits::websocket(u16::MAX as usize)),
+        )
+        .await
+        .map_err(map_websocket_upgrade_error)?;
         verify_hub_subprotocol(&response)?;
 
         let (write, read) = ws_stream.split();
