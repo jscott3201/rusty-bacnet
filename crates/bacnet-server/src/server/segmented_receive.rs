@@ -3,6 +3,29 @@ use super::*;
 /// Private defensive limit, not a normative SegmentTimer or total-request age.
 const SEG_RECEIVER_PROGRESS_TIMEOUT: Duration = Duration::from_secs(16);
 
+/// Private resource partition, not an authenticated-peer fairness guarantee.
+const MAX_SEG_RECEIVERS_PER_PEER: usize = 16;
+
+/// Only for a new, supported sequence-zero request with a valid window.
+/// Global capacity takes precedence; the bounded key scan ignores invoke ID.
+pub(super) fn segmented_request_admission_error(
+    receivers: &HashMap<SegKey, SegmentedRequestState>,
+    key: &SegKey,
+) -> Option<AbortReason> {
+    if receivers.len() >= MAX_SEG_RECEIVERS {
+        return Some(AbortReason::BUFFER_OVERFLOW);
+    }
+    if receivers
+        .keys()
+        .filter(|existing| existing.0 == key.0 && existing.1 == key.1)
+        .count()
+        >= MAX_SEG_RECEIVERS_PER_PEER
+    {
+        return Some(AbortReason::OUT_OF_RESOURCES);
+    }
+    None
+}
+
 /// Drop stale incarnations and all their retained payload ownership before input.
 /// Cleanup is silent and synchronous; idle or blocked dispatch is not reclaimed.
 pub(super) fn expire_segmented_requests(

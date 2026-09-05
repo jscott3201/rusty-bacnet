@@ -26,7 +26,7 @@ const SERVER_MAC: &[u8] = &[0x02];
 const CLIENT_MAC: &[u8] = &[0x01];
 const CSV_INSTANCE: u32 = 1;
 
-struct RoutedInjectionTransport {
+pub(super) struct RoutedInjectionTransport {
     incoming: Option<mpsc::Receiver<ReceivedNpdu>>,
     sent_unicast: SentFrames,
     local_mac: MacAddr,
@@ -74,7 +74,7 @@ impl TransportPort for RoutedInjectionTransport {
     }
 }
 
-async fn start_routed_reassembly_server() -> (
+pub(super) async fn start_routed_reassembly_server() -> (
     BACnetServer<RoutedInjectionTransport>,
     mpsc::Sender<ReceivedNpdu>,
     SentFrames,
@@ -121,7 +121,7 @@ async fn inject_routed_apdu(
         .unwrap();
 }
 
-async fn inject_routed_segment(
+pub(super) async fn inject_routed_segment(
     incoming: &mpsc::Sender<ReceivedNpdu>,
     router_mac: &MacAddr,
     routed_source: &NpduAddress,
@@ -150,7 +150,7 @@ async fn inject_routed_segment(
     .await;
 }
 
-fn sent_routed_frame(sent: &SentFrames, index: usize) -> (Npdu, MacAddr) {
+pub(super) fn sent_routed_frame(sent: &SentFrames, index: usize) -> (Npdu, MacAddr) {
     let (npdu, link_destination) = {
         let sent = sent.lock().unwrap();
         sent[index].clone()
@@ -233,7 +233,7 @@ pub(super) fn split_into(payload: &[u8], count: usize) -> Vec<Vec<u8>> {
     chunks
 }
 
-async fn send_apdu(transport: &LoopbackTransport, apdu: &Apdu) {
+pub(super) async fn send_apdu(transport: &LoopbackTransport, apdu: &Apdu) {
     let mut apdu_buf = BytesMut::new();
     encode_apdu(&mut apdu_buf, apdu).unwrap();
     let npdu = Npdu {
@@ -696,20 +696,41 @@ async fn transmit_only_config_aborts_segmented_requests_as_unsupported() {
 /// in the branch reorder.
 #[tokio::test]
 async fn session_count_cap_refuses_the_129th_session() {
-    let (_server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
+    use super::request_peer_quota::{assert_positive_ack, assert_server_abort, next_routed_apdu};
 
+    let (server, incoming, sent) = start_routed_reassembly_server().await;
+    let router = test_mac(30);
+    let mut index = 0;
+    // Eight canonical peers share one router, each occupying all sixteen slots.
     for invoke_id in 0u8..128 {
-        send_segment(&client, invoke_id, 0, true, &[invoke_id; 8]).await;
-        expect_positive_ack(&mut rx, invoke_id, 0).await;
+        let remote = routed_address(400, invoke_id / 16);
+        inject_routed_segment(
+            &incoming,
+            &router,
+            &remote,
+            invoke_id,
+            0,
+            true,
+            &[invoke_id; 8],
+        )
+        .await;
+        assert_positive_ack(
+            next_routed_apdu(&sent, &mut index, &router, &remote).await,
+            invoke_id,
+            0,
+        );
     }
-    send_segment(&client, 128, 0, true, &[0x55; 8]).await;
-    expect_abort(
-        &mut rx,
+    let remote = routed_address(400, 0);
+    inject_routed_segment(&incoming, &router, &remote, 128, 0, true, &[0x55; 8]).await;
+    // Both caps are full: the global reason must still win.
+    assert_server_abort(
+        next_routed_apdu(&sent, &mut index, &router, &remote).await,
         128,
         AbortReason::BUFFER_OVERFLOW,
-        "the 129th concurrent session",
-    )
-    .await;
+    );
+    assert_eq!(index, 129);
+    assert_eq!(sent_count(&sent), 129);
+    assert_eq!(present_value(&server).await, "");
 }
 
 /// Clause 5.4.5.3 case (a): a device that does not support transmitting

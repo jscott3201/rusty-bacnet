@@ -1,26 +1,37 @@
 //! Private defensive no-progress cleanup (#527), not a SegmentTimer transition.
 
 use super::*;
+use request_peer_quota::{assert_positive_ack, next_routed_apdu};
 use request_reassembly::{
-    expect_positive_ack, present_value, recv_apdu, send_segment_with_window, split_into,
-    start_reassembly_server, write_property_payload,
+    expect_positive_ack, inject_routed_segment, present_value, recv_apdu, send_segment_with_window,
+    split_into, start_reassembly_server, start_routed_reassembly_server, write_property_payload,
 };
 use tokio::time::{sleep_until, timeout, Instant as TokioInstant};
 
 #[tokio::test]
 async fn request_progress_reclaims_128_stalled_slots_before_admission() {
     timeout(Duration::from_secs(25), async {
-        let (server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
+        let (server, incoming, sent) = start_routed_reassembly_server().await;
+        let router = test_mac(30);
+        let remote = routed_address(400, 0);
+        let mut index = 0;
         let discarded = split_into(&write_property_payload("must-not-be-written"), 2);
         let initial_value = present_value(&server).await;
         for invoke_id in 0..128 {
-            send_segment_with_window(&client, invoke_id, 0, 1, true, &discarded[0]).await;
-            expect_positive_ack(&mut rx, invoke_id, 0).await;
+            // Eight canonical peers, not one peer bypassing the private quota.
+            let peer = routed_address(400, invoke_id / 16);
+            inject_routed_segment(&incoming, &router, &peer, invoke_id, 0, true, &discarded[0])
+                .await;
+            assert_positive_ack(
+                next_routed_apdu(&sent, &mut index, &router, &peer).await,
+                invoke_id,
+                0,
+            );
         }
         let started = TokioInstant::now();
         let admitted = split_into(&write_property_payload("admitted-after-cleanup"), 2);
-        send_segment_with_window(&client, 128, 0, 1, true, &admitted[0]).await;
-        match recv_apdu(&mut rx, "all 128 slots occupied").await {
+        inject_routed_segment(&incoming, &router, &remote, 128, 0, true, &admitted[0]).await;
+        match next_routed_apdu(&sent, &mut index, &router, &remote).await {
             Apdu::Abort(abort) => {
                 assert!(abort.sent_by_server);
                 assert_eq!(abort.invoke_id, 128);
@@ -35,9 +46,11 @@ async fn request_progress_reclaims_128_stalled_slots_before_admission() {
         for second in 1..=15 {
             sleep_until(started + Duration::from_secs(second)).await;
             for invoke_id in 0..128 {
+                let peer = routed_address(400, invoke_id / 16);
                 let seq = if second % 2 == 0 { 0 } else { 2 };
-                send_segment_with_window(&client, invoke_id, seq, 1, true, &[0xEE]).await;
-                match recv_apdu(&mut rx, "stalled session activity").await {
+                inject_routed_segment(&incoming, &router, &peer, invoke_id, seq, true, &[0xEE])
+                    .await;
+                match next_routed_apdu(&sent, &mut index, &router, &peer).await {
                     Apdu::SegmentAck(ack) => {
                         assert!(ack.negative_ack && ack.sent_by_server);
                         assert_eq!(ack.invoke_id, invoke_id);
@@ -56,14 +69,18 @@ async fn request_progress_reclaims_128_stalled_slots_before_admission() {
         // Protocol activity is only two seconds old. Under the old activity-only
         // policy all 128 slots are still occupied and this gets BUFFER_OVERFLOW.
         // No manually pruned map or test clock participates in this dispatch.
-        send_segment_with_window(&client, 128, 0, 1, true, &admitted[0]).await;
-        expect_positive_ack(&mut rx, 128, 0).await;
+        inject_routed_segment(&incoming, &router, &remote, 128, 0, true, &admitted[0]).await;
+        assert_positive_ack(
+            next_routed_apdu(&sent, &mut index, &router, &remote).await,
+            128,
+            0,
+        );
         assert_eq!(present_value(&server).await, initial_value);
 
         // Cleanup itself emits nothing. A current noninitial segment still gets
         // the existing invalid-state Abort, rather than resurrecting old data.
-        send_segment_with_window(&client, 0, 1, 1, false, &discarded[1]).await;
-        match recv_apdu(&mut rx, "noninitial after cleanup").await {
+        inject_routed_segment(&incoming, &router, &remote, 0, 1, false, &discarded[1]).await;
+        match next_routed_apdu(&sent, &mut index, &router, &remote).await {
             Apdu::Abort(abort) => {
                 assert!(abort.sent_by_server);
                 assert_eq!(abort.invoke_id, 0);
@@ -73,25 +90,44 @@ async fn request_progress_reclaims_128_stalled_slots_before_admission() {
         }
         assert_eq!(present_value(&server).await, initial_value);
 
-        send_segment_with_window(&client, 128, 1, 1, false, &admitted[1]).await;
-        expect_positive_ack(&mut rx, 128, 1).await;
-        assert!(matches!(recv_apdu(&mut rx, "admitted write").await,
-            Apdu::SimpleAck(ack) if ack.invoke_id == 128));
+        inject_routed_segment(&incoming, &router, &remote, 128, 1, false, &admitted[1]).await;
+        assert_positive_ack(
+            next_routed_apdu(&sent, &mut index, &router, &remote).await,
+            128,
+            1,
+        );
+        assert!(
+            matches!(next_routed_apdu(&sent, &mut index, &router, &remote).await,
+            Apdu::SimpleAck(ack) if ack.invoke_id == 128)
+        );
         assert_eq!(present_value(&server).await, "admitted-after-cleanup");
 
         // Same-key sequence zero can open a new incarnation: no tombstone or
         // fairness claim. Only its new payload may reach the service.
         let reopened = split_into(&write_property_payload("new-incarnation"), 2);
-        send_segment_with_window(&client, 0, 0, 1, true, &reopened[0]).await;
-        expect_positive_ack(&mut rx, 0, 0).await;
-        send_segment_with_window(&client, 0, 1, 1, false, &reopened[1]).await;
-        expect_positive_ack(&mut rx, 0, 1).await;
-        assert!(matches!(recv_apdu(&mut rx, "reopened write").await,
-            Apdu::SimpleAck(ack) if ack.invoke_id == 0));
+        inject_routed_segment(&incoming, &router, &remote, 0, 0, true, &reopened[0]).await;
+        assert_positive_ack(
+            next_routed_apdu(&sent, &mut index, &router, &remote).await,
+            0,
+            0,
+        );
+        inject_routed_segment(&incoming, &router, &remote, 0, 1, false, &reopened[1]).await;
+        assert_positive_ack(
+            next_routed_apdu(&sent, &mut index, &router, &remote).await,
+            0,
+            1,
+        );
+        assert!(
+            matches!(next_routed_apdu(&sent, &mut index, &router, &remote).await,
+            Apdu::SimpleAck(ack) if ack.invoke_id == 0)
+        );
         assert_eq!(present_value(&server).await, "new-incarnation");
-        assert!(timeout(Duration::from_millis(100), rx.recv())
-            .await
-            .is_err());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            sent_count(&sent),
+            index,
+            "no extra cleanup or service output"
+        );
     })
     .await
     .expect("bounded hostile repetition test exceeded 25 seconds");
