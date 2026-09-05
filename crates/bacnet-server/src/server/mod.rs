@@ -838,8 +838,7 @@ impl Default for SegmentedSendOptions {
 }
 
 struct SegmentedRequestState {
-    receiver: SegmentReceiver,
-    first_req: bacnet_encoding::apdu::ConfirmedRequest,
+    payload: segmented_receive::RequestPayload,
     last_activity: Instant,
     /// Last successfully saved new in-order segment, independent of SegmentTimer.
     last_progress: Instant,

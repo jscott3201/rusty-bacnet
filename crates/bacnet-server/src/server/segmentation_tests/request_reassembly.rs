@@ -33,7 +33,7 @@ pub(super) struct RoutedInjectionTransport {
 }
 
 impl RoutedInjectionTransport {
-    fn new(sent_unicast: SentFrames) -> (Self, mpsc::Sender<ReceivedNpdu>) {
+    pub(super) fn new(sent_unicast: SentFrames) -> (Self, mpsc::Sender<ReceivedNpdu>) {
         let (incoming_tx, incoming) = mpsc::channel(16);
         (
             Self {
