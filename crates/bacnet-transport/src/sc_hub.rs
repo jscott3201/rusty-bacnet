@@ -167,9 +167,23 @@ async fn handle_client(
     peer_addr: SocketAddr,
     hub_vmac: Vmac,
     hub_uuid: DeviceUuid,
+    read: futures_util::stream::SplitStream<WebSocketStream<TlsStream>>,
+    write: Arc<Mutex<WsSink>>,
+    clients: Clients,
+) {
+    handle_client_observed(peer_addr, hub_vmac, hub_uuid, read, write, clients, || {}).await;
+}
+
+// Private dispatch observer lets tests establish that a wire ACK was fully
+// processed while heartbeat send completion is still blocked. Production is a no-op.
+async fn handle_client_observed(
+    peer_addr: SocketAddr,
+    hub_vmac: Vmac,
+    hub_uuid: DeviceUuid,
     mut read: futures_util::stream::SplitStream<WebSocketStream<TlsStream>>,
     write: Arc<Mutex<WsSink>>,
     clients: Clients,
+    on_heartbeat_ack: impl Fn() + Send,
 ) {
     let mut client_vmac: Option<Vmac> = None;
     let close_requested = Arc::new(AtomicBool::new(false));
@@ -177,6 +191,11 @@ async fn handle_client(
     let client_activity: Arc<AtomicU64> = Arc::new(AtomicU64::new(now_secs()));
 
     loop {
+        // Heartbeat retirement may precede the next wait, or a previously
+        // selected notification may have been consumed. The predicate owns close.
+        if close_requested.load(Ordering::Acquire) {
+            break;
+        }
         let msg_result = tokio::select! {
             _ = close_notify.notified() => {
                 debug!("Hub: client {peer_addr} was superseded");
@@ -187,6 +206,9 @@ async fn handle_client(
         let Some(msg_result) = msg_result else {
             break;
         };
+        if close_requested.load(Ordering::Acquire) {
+            break;
+        }
 
         // Update last-activity timestamp for heartbeat tracking
         client_activity.store(now_secs(), std::sync::atomic::Ordering::Release);
@@ -456,6 +478,7 @@ async fn handle_client(
                         sc_msg.message_id,
                     )
                     .await;
+                    on_heartbeat_ack();
                 }
             }
 
@@ -711,3 +734,10 @@ async fn handle_client(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod heartbeat_generation_tests;
+#[cfg(test)]
+mod heartbeat_test_support;
+#[cfg(test)]
+mod heartbeat_tests;

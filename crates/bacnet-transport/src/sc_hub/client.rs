@@ -1,9 +1,9 @@
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
 
 use tokio::sync::{Mutex, Notify};
 
-use super::heartbeat;
+use super::heartbeat::HubHeartbeat;
 use super::{DeviceUuid, WsSink};
 
 /// Per-client state tracked by the hub.
@@ -15,8 +15,7 @@ pub(super) struct HubClient {
     pub(super) max_bvlc: u16,
     pub(super) max_npdu: u16,
     pub(super) last_activity: Arc<AtomicU64>,
-    pub(super) pending_heartbeat_id: Arc<AtomicU16>,
-    pub(super) pending_heartbeat_sent_at: Arc<AtomicU64>,
+    pub(super) heartbeat: HubHeartbeat,
 }
 
 impl HubClient {
@@ -37,8 +36,7 @@ impl HubClient {
             max_bvlc,
             max_npdu,
             last_activity,
-            pending_heartbeat_id: Arc::new(AtomicU16::new(heartbeat::NO_PENDING_HEARTBEAT)),
-            pending_heartbeat_sent_at: Arc::new(AtomicU64::new(0)),
+            heartbeat: HubHeartbeat::default(),
         }
     }
 }
