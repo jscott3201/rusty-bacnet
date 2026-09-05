@@ -698,6 +698,9 @@ impl ScClientBuilder {
         self,
         ws: W,
     ) -> Result<BACnetClient<bacnet_transport::sc::ScTransport<W>>, Error> {
+        if let Some(config) = &self.reconnect {
+            config.validate()?;
+        }
         self.validate_identity()?;
         self.options.validate()?;
         validate_max_segments(self.config.max_segments)?;
@@ -706,12 +709,19 @@ impl ScClientBuilder {
     }
 
     /// Connect to the hub and start the client.
+    ///
+    /// Reconnect configuration is validated before TLS lookup or dialing, and
+    /// again when the transport starts. An error still consumes this builder
+    /// and drops its inputs; this does not promise generic endpoint rollback.
     pub async fn build(
         self,
     ) -> Result<
         BACnetClient<bacnet_transport::sc::ScTransport<bacnet_transport::sc_tls::TlsWebSocket>>,
         Error,
     > {
+        if let Some(config) = &self.reconnect {
+            config.validate()?;
+        }
         self.validate_identity()?;
         self.options.validate()?;
         validate_max_segments(self.config.max_segments)?;

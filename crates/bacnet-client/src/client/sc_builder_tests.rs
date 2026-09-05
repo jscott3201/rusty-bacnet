@@ -1,5 +1,5 @@
 use super::*;
-use bacnet_transport::sc::{LoopbackWebSocket, WebSocketPort};
+use bacnet_transport::sc::{LoopbackWebSocket, ScReconnectConfig, WebSocketPort};
 use bacnet_transport::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, ScMessage};
 use bytes::{Bytes, BytesMut};
 use tokio::time::{timeout, Duration};
@@ -116,4 +116,109 @@ fn sc_client_builder_rejects_broadcast_vmac_and_zero_device_uuid() {
         zero_uuid,
         Err(Error::Encoding(message)) if message.contains("device_uuid")
     ));
+}
+
+#[tokio::test]
+async fn sc_client_builder_rejects_invalid_reconnect_before_tls_lookup() {
+    for max_retries in [0, 10] {
+        for (initial_delay_ms, max_delay_ms) in [(0, 1), (1, 0), (0, 0), (2, 1)] {
+            let error = BACnetClient::sc_builder()
+                .vmac([0x22; 6])
+                .device_uuid([0xAB; 16])
+                .reconnect(ScReconnectConfig {
+                    initial_delay_ms,
+                    max_delay_ms,
+                    max_retries,
+                })
+                .build()
+                .await
+                .err()
+                .expect("invalid reconnect must fail");
+            assert!(
+                matches!(&error, Error::OutOfRange(message) if message.contains("reconnect")),
+                "expected reconnect error before TLS lookup, got {error:?}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn sc_client_builder_valid_reconnect_preserves_missing_tls_error() {
+    for reconnect in [
+        None,
+        Some(ScReconnectConfig::default()),
+        Some(ScReconnectConfig {
+            initial_delay_ms: 1,
+            max_delay_ms: 1,
+            max_retries: 0,
+        }),
+        Some(ScReconnectConfig {
+            initial_delay_ms: 1,
+            max_delay_ms: 2,
+            max_retries: u32::MAX,
+        }),
+    ] {
+        let mut builder = BACnetClient::sc_builder()
+            .vmac([0x22; 6])
+            .device_uuid([0xAB; 16]);
+        if let Some(config) = reconnect {
+            builder = builder.reconnect(config);
+        }
+        assert!(matches!(
+            builder.build().await,
+            Err(Error::Encoding(message)) if message == "SC client builder: tls_config is required"
+        ));
+    }
+}
+
+struct RejectIoWebSocket {
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+    drops: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl WebSocketPort for RejectIoWebSocket {
+    async fn send(&self, _: &[u8]) -> Result<(), Error> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err(Error::Encoding("unexpected WebSocket send".into()))
+    }
+
+    async fn recv(&self) -> Result<Vec<u8>, Error> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err(Error::Encoding("unexpected WebSocket receive".into()))
+    }
+}
+
+impl Drop for RejectIoWebSocket {
+    fn drop(&mut self) {
+        self.drops.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[tokio::test]
+async fn sc_client_test_builder_reconnect_preflight_drops_input_without_io() {
+    for (initial_delay_ms, max_delay_ms) in [(0, 1), (1, 0), (0, 0), (2, 1)] {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let drops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let error = BACnetClient::sc_builder()
+            .vmac([0x22; 6])
+            .device_uuid([0xAB; 16])
+            .reconnect(ScReconnectConfig {
+                initial_delay_ms,
+                max_delay_ms,
+                max_retries: 0,
+            })
+            .build_with_websocket_for_test(RejectIoWebSocket {
+                calls: calls.clone(),
+                drops: drops.clone(),
+            })
+            .await
+            .err()
+            .expect("invalid reconnect must fail");
+        assert!(
+            matches!(&error, Error::OutOfRange(message) if message.contains("reconnect")),
+            "expected reconnect preflight error, got {error:?}"
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(drops.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
 }

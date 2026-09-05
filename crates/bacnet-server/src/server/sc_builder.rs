@@ -157,12 +157,20 @@ impl ScServerBuilder {
     }
 
     /// Connect to the hub and start the server.
+    ///
+    /// Reconnect configuration is validated before binding-table construction,
+    /// TLS lookup, or dialing, and again when the transport starts. An error
+    /// still consumes this builder and drops its inputs; this does not promise
+    /// generic endpoint rollback.
     pub async fn build(
         self,
     ) -> Result<
         BACnetServer<bacnet_transport::sc::ScTransport<bacnet_transport::sc_tls::TlsWebSocket>>,
         Error,
     > {
+        if let Some(config) = &self.reconnect {
+            config.validate()?;
+        }
         DeviceBindingTable::from_configured(self.configured_device_bindings.clone(), |mac| {
             mac == bacnet_transport::sc_frame::BROADCAST_VMAC
         })?;
@@ -203,5 +211,71 @@ impl ScServerBuilder {
             self.configured_device_bindings,
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bacnet_transport::sc::ScReconnectConfig;
+
+    #[tokio::test]
+    async fn sc_server_builder_rejects_invalid_reconnect_before_tls_and_bindings() {
+        for broadcast_binding in [false, true] {
+            for max_retries in [0, 10] {
+                for (initial_delay_ms, max_delay_ms) in [(0, 1), (1, 0), (0, 0), (2, 1)] {
+                    let mut builder = BACnetServer::sc_builder().reconnect(ScReconnectConfig {
+                        initial_delay_ms,
+                        max_delay_ms,
+                        max_retries,
+                    });
+                    if broadcast_binding {
+                        let device = ObjectIdentifier::new(ObjectType::DEVICE, 46).unwrap();
+                        let binding = DeviceBinding::local(
+                            device,
+                            bacnet_transport::sc_frame::BROADCAST_VMAC,
+                        )
+                        .unwrap();
+                        builder = builder.device_binding(binding).unwrap();
+                    }
+                    let error = builder
+                        .build()
+                        .await
+                        .err()
+                        .expect("invalid reconnect must fail");
+                    assert!(
+                        matches!(&error, Error::OutOfRange(message) if message.contains("reconnect")),
+                        "expected reconnect error before TLS/bindings, got {error:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn sc_server_builder_valid_reconnect_preserves_missing_tls_error() {
+        for reconnect in [
+            None,
+            Some(ScReconnectConfig::default()),
+            Some(ScReconnectConfig {
+                initial_delay_ms: 1,
+                max_delay_ms: 1,
+                max_retries: 0,
+            }),
+            Some(ScReconnectConfig {
+                initial_delay_ms: 1,
+                max_delay_ms: 2,
+                max_retries: u32::MAX,
+            }),
+        ] {
+            let mut builder = BACnetServer::sc_builder();
+            if let Some(config) = reconnect {
+                builder = builder.reconnect(config);
+            }
+            assert!(matches!(
+                builder.build().await,
+                Err(Error::Encoding(message)) if message == "SC server builder: tls_config is required"
+            ));
+        }
     }
 }
