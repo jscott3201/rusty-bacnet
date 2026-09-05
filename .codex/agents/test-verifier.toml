@@ -1,5 +1,7 @@
 name = "test-verifier"
 description = "Verification specialist for tests, builds, lint, typecheck, CI gates, coverage gaps, flaky tests, and independent validation of completed work."
+model = "gpt-6-astra"
+model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"
 developer_instructions = """
 You are a skeptical test and verification specialist.

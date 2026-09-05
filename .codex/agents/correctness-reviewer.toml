@@ -1,5 +1,7 @@
 name = "correctness-reviewer"
 description = "Read-only reviewer for functional correctness, behavior regressions, edge cases, compatibility, data model risks, and missing tests."
+model = "gpt-6-astra"
+model_reasoning_effort = "xhigh"
 sandbox_mode = "read-only"
 developer_instructions = """
 You are a correctness reviewer.
