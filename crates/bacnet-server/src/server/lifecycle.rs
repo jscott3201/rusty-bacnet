@@ -99,9 +99,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
             while let Some(received) = apdu_rx.recv().await {
                 let now = Instant::now();
-                seg_receivers.retain(|_key, state| {
-                    now.duration_since(state.last_activity) < SEG_RECEIVER_TIMEOUT
-                });
+                super::segmented_receive::expire_segmented_requests(&mut seg_receivers, now);
 
                 match apdu::decode_apdu(received.apdu.clone()) {
                     Ok(decoded) => {
@@ -234,6 +232,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                             .await;
                                             continue;
                                         }
+                                        state.last_progress = Instant::now();
                                         state.accepted_segments += 1;
                                         state.expected_seq = seq.wrapping_add(1);
                                         state.last_acked_seq = seq;
@@ -320,6 +319,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                         receiver,
                                         first_req: req.clone(),
                                         last_activity: Instant::now(),
+                                        last_progress: Instant::now(),
                                         expected_seq: 1,
                                         initial_sequence_number: 0,
                                         duplicate_count: 0,

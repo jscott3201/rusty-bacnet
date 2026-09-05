@@ -1,5 +1,20 @@
 use super::*;
 
+/// Private defensive limit, not a normative SegmentTimer or total-request age.
+const SEG_RECEIVER_PROGRESS_TIMEOUT: Duration = Duration::from_secs(16);
+
+/// Drop stale incarnations and all their retained payload ownership before input.
+/// Cleanup is silent and synchronous; idle or blocked dispatch is not reclaimed.
+pub(super) fn expire_segmented_requests(
+    receivers: &mut HashMap<SegKey, SegmentedRequestState>,
+    now: Instant,
+) {
+    receivers.retain(|_key, state| {
+        now.duration_since(state.last_activity) < SEG_RECEIVER_TIMEOUT
+            && now.duration_since(state.last_progress) < SEG_RECEIVER_PROGRESS_TIMEOUT
+    });
+}
+
 pub(super) fn reassembled_confirmed_request(
     first: &ConfirmedRequestPdu,
     service_request: Bytes,

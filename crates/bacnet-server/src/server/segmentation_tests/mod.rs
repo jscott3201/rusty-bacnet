@@ -420,5 +420,7 @@ mod ack_window;
 mod control_limits;
 mod duplicate_window;
 mod get_event_information;
+mod request_progress;
+mod request_progress_expiry;
 mod request_reassembly;
 mod routing_overlap;
