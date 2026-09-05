@@ -52,8 +52,8 @@ type TlsStream = tokio_rustls::server::TlsStream<tokio::net::TcpStream>;
 type WsSink = SplitSink<WebSocketStream<TlsStream>, Message>;
 type DeviceUuid = [u8; 16];
 
-const HUB_MAX_BVLC_LENGTH: u16 = 1476;
-const HUB_MAX_NPDU_LENGTH: u16 = 1476;
+const HUB_MAX_BVLC_LENGTH: u16 = crate::sc_limits::DEFAULT_MAX_BVLC_LENGTH;
+const HUB_MAX_NPDU_LENGTH: u16 = 1497;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConnectRequestVmacDisposition {
@@ -274,3 +274,11 @@ mod heartbeat_test_support;
 mod heartbeat_tests;
 #[cfg(test)]
 mod heartbeat_validation_tests;
+
+#[cfg(test)]
+mod ws_limits_tests;
+
+#[cfg(test)]
+mod ws_capacity_tests;
+#[cfg(test)]
+mod ws_limits_test_support;

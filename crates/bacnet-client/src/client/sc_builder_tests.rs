@@ -16,7 +16,7 @@ async fn sc_client_builder_sends_configured_vmac_and_device_uuid() {
         let mut expected = vec![ScFunction::ConnectRequest.to_raw(), 0x00, 0x00, 0x01];
         expected.extend_from_slice(&client_vmac);
         expected.extend_from_slice(&device_uuid);
-        expected.extend_from_slice(&1476u16.to_be_bytes());
+        expected.extend_from_slice(&5705u16.to_be_bytes());
         expected.extend_from_slice(&1476u16.to_be_bytes());
         assert_eq!(data, expected);
 

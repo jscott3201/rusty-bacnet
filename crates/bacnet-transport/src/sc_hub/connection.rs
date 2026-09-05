@@ -159,7 +159,7 @@ pub(super) async fn serve_connection(
     let upgrade_deadline = tokio::time::Instant::now() + timeouts.websocket_upgrade();
     let ws_stream = match super::deadlines::before(
         upgrade_deadline,
-        tokio_tungstenite::accept_hdr_async(
+        tokio_tungstenite::accept_hdr_async_with_config(
             tls_stream,
             |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
              mut response: tokio_tungstenite::tungstenite::handshake::server::Response|
@@ -176,6 +176,9 @@ pub(super) async fn serve_connection(
                 );
                 Ok(response)
             },
+            Some(crate::sc_limits::websocket(
+                crate::sc_limits::DEFAULT_MAX_BVLC_LENGTH as usize,
+            )),
         ),
     )
     .await

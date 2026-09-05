@@ -63,15 +63,15 @@ async fn hub_admission_abort_during_tls_reclaims_slot() {
     assert_eq!(active.load(Ordering::Acquire), 0);
 }
 
-struct CountedHub {
-    address: SocketAddr,
-    active: Arc<AtomicUsize>,
-    clients: Clients,
+pub(super) struct CountedHub {
+    pub address: SocketAddr,
+    pub active: Arc<AtomicUsize>,
+    pub clients: Clients,
     task: JoinHandle<()>,
 }
 
 impl CountedHub {
-    async fn start(tls: &TestTls, timeouts: ScHubHandshakeTimeouts) -> Self {
+    pub async fn start(tls: &TestTls, timeouts: ScHubHandshakeTimeouts) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let active = Arc::new(AtomicUsize::new(0));
