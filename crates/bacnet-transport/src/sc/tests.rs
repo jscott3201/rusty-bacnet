@@ -179,8 +179,8 @@ fn disconnect_request_resets_state() {
     let msg = ScMessage {
         function: ScFunction::DisconnectRequest,
         message_id: 1,
-        originating_vmac: Some([0x10; 6]),
-        destination_vmac: Some([0x01; 6]),
+        originating_vmac: None,
+        destination_vmac: None,
         dest_options: Vec::new(),
         data_options: Vec::new(),
         payload: Bytes::new(),
@@ -668,8 +668,8 @@ fn disconnect_request_queues_ack() {
     let req = ScMessage {
         function: ScFunction::DisconnectRequest,
         message_id: 42,
-        originating_vmac: Some([10, 20, 30, 40, 50, 60]),
-        destination_vmac: Some([1, 2, 3, 4, 5, 6]),
+        originating_vmac: None,
+        destination_vmac: None,
         dest_options: Vec::new(),
         data_options: Vec::new(),
         payload: Bytes::new(),
@@ -689,8 +689,8 @@ fn disconnect_ack_transitions_from_disconnecting() {
     let ack = ScMessage {
         function: ScFunction::DisconnectAck,
         message_id: 99,
-        originating_vmac: Some([10, 20, 30, 40, 50, 60]),
-        destination_vmac: Some([1, 2, 3, 4, 5, 6]),
+        originating_vmac: None,
+        destination_vmac: None,
         dest_options: Vec::new(),
         data_options: Vec::new(),
         payload: Bytes::new(),

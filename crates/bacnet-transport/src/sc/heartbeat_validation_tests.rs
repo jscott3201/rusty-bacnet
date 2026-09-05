@@ -18,7 +18,7 @@ async fn heartbeat_request_payload_gets_nak_before_ack() {
     transport.stop().await.unwrap();
 }
 
-async fn start_timed() -> (
+pub(super) async fn start_timed() -> (
     ScTransport<LoopbackWebSocket>,
     mpsc::Receiver<ReceivedNpdu>,
     LoopbackWebSocket,
@@ -51,7 +51,7 @@ async fn heartbeat_unsupported_ack_does_not_clear_pending_probe() {
     rejection_barrier(&ws).await;
     for case in invalid_heartbeats([0x01; 6]) {
         ws.send(&case.wire).await.unwrap();
-        if let Some(nak) = case.nak {
+        if let Some(nak) = case.node_nak {
             assert_eq!(recv(&ws).await, nak, "{}", case.name);
         }
         let mut ack = case.wire;
@@ -141,7 +141,7 @@ async fn heartbeat_envelopes_obey_nak_precedence_addressing_and_silence() {
     for case in invalid_heartbeats([0x01; 6]) {
         assert!(decode_sc_message(&case.wire).is_ok(), "{}", case.name);
         ws.send(&case.wire).await.unwrap();
-        if let Some(nak) = case.nak {
+        if let Some(nak) = case.node_nak {
             assert_eq!(recv(&ws).await, nak, "{}", case.name);
         }
         rejection_barrier(&ws).await;
