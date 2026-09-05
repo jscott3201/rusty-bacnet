@@ -265,17 +265,21 @@ async fn handle_client_observed(
             }
         }
 
-        if let Err(nak) = crate::sc_frame::validate_heartbeat(&sc_msg, &data) {
+        if let Err(nak) = crate::sc_frame::validate_control(
+            &sc_msg,
+            &data,
+            crate::sc_frame::ControlRecipient::AcceptingHub,
+        ) {
             if let Some(nak) = nak {
                 if let Err(e) = write.lock().await.send(Message::Binary(nak)).await {
-                    warn!("Hub: failed to send heartbeat NAK to {peer_addr}: {e}");
+                    warn!("Hub: failed to send control NAK to {peer_addr}: {e}");
                     break;
                 }
             }
             continue;
         }
 
-        // Decoded BVLC messages that pass heartbeat admission count as activity.
+        // Decoded BVLC messages that pass control admission count as activity.
         // WebSocket control, oversized, and undecodable frames do not.
         client_activity.store(now_secs(), std::sync::atomic::Ordering::Release);
 
@@ -746,6 +750,8 @@ async fn handle_client_observed(
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod disconnect_validation_tests;
 #[cfg(test)]
 mod heartbeat_generation_tests;
 #[cfg(test)]

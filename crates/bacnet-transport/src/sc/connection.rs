@@ -229,6 +229,9 @@ impl ScConnection {
     /// Handle a received message. Returns NPDU data if it's an Encapsulated-NPDU for us.
     /// Hub-relayed NPDUs must include a non-reserved Originating VMAC.
     pub fn handle_received(&mut self, msg: &ScMessage) -> Option<(Bytes, Vmac)> {
+        if crate::sc_frame::control_envelope_error(msg).is_some() {
+            return None;
+        }
         match msg.function {
             ScFunction::EncapsulatedNpdu => {
                 if self.state != ScConnectionState::Connected {

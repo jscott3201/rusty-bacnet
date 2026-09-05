@@ -12,10 +12,10 @@
 use bacnet_types::error::Error;
 use bytes::{BufMut, Bytes, BytesMut};
 
-mod heartbeat;
+mod control;
 mod result;
 
-pub(crate) use heartbeat::validate_heartbeat;
+pub(crate) use control::{control_envelope_error, validate_control, ControlRecipient};
 
 #[cfg(test)]
 pub(crate) mod heartbeat_test_support;

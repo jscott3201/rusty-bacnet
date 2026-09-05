@@ -30,6 +30,7 @@ use bacnet_types::MacAddr;
 mod connect_result;
 mod connection;
 mod connector;
+mod control_admission;
 mod data_attributes;
 mod errors;
 mod failover;
@@ -413,12 +414,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                         }
                                     };
 
-                                    if let Err(nak) = crate::sc_frame::validate_heartbeat(&msg, &data) {
-                                        if let Some(nak) = nak {
-                                            if let Err(e) = ws_clone.send(&nak).await {
-                                                warn!("BACnet/SC heartbeat NAK send error: {e}");
-                                            }
-                                        }
+                                    if control_admission::reject_invalid_control(&msg, &data, &*ws_clone).await {
                                         continue;
                                     }
 
@@ -817,6 +813,9 @@ mod data_attribute_tests;
 
 #[cfg(test)]
 mod heartbeat_validation_tests;
+
+#[cfg(test)]
+mod disconnect_validation_tests;
 
 #[cfg(test)]
 mod drop_tests;
