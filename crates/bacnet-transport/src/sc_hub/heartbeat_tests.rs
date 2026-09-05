@@ -187,6 +187,9 @@ async fn closed_before_next_reader_wait_does_not_require_another_notification() 
     *live.after_ack.lock().unwrap() = Some(Box::new(move || {
         closed.store(true, Ordering::Release);
         notify.notify_one();
+        // The outer retirement waiter is registered throughout dispatch. Queue
+        // an additional retained permit and consume it before the next read.
+        notify.notify_one();
         // A previously selected/cancelled waiter may already have consumed the
         // permit. The owning reader must still observe the closed predicate.
         assert!(notify.notified().now_or_never().is_some());

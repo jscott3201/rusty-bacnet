@@ -2,7 +2,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use bytes::{BufMut, BytesMut};
-use futures_util::SinkExt;
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, warn};
@@ -169,14 +168,13 @@ pub(super) async fn relay_result(
         }
         map.get(&destination).map(|client| {
             (
-                Arc::clone(&client.sink),
-                Arc::clone(&client.closed),
+                super::HubRelaySink::capture(destination, client),
                 client.max_bvlc,
             )
         })
     };
 
-    let Some((sink, target_closed, max_bvlc)) = target else {
+    let Some((target, max_bvlc)) = target else {
         debug!("Hub: no client with vmac {destination:02x?} for Result relay");
         return ResultRelayDisposition::Continue;
     };
@@ -189,24 +187,16 @@ pub(super) async fn relay_result(
     if close_requested.load(Ordering::Acquire) {
         return ResultRelayDisposition::CloseSource;
     }
-    if target_closed.load(Ordering::Acquire) {
-        return ResultRelayDisposition::Continue;
-    }
-
     let send = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        let mut target = sink.lock().await;
-        if close_requested.load(Ordering::Acquire) {
-            return ResultRelayDisposition::CloseSource;
-        }
-        if target_closed.load(Ordering::Acquire) {
-            return ResultRelayDisposition::Continue;
-        }
-        if target
-            .send(Message::Binary(relay_buf.to_vec().into()))
-            .await
-            .is_err()
+        if let Err(error) = super::relay_send::send(
+            &target,
+            clients,
+            Message::Binary(relay_buf.to_vec().into()),
+            &super::relay_send::SocketIo,
+        )
+        .await
         {
-            warn!("Hub: Result relay failed to {destination:02x?}");
+            warn!("Hub: Result relay failed to {destination:02x?}: {error}");
         }
         ResultRelayDisposition::Continue
     })

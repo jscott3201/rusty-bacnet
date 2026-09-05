@@ -1,4 +1,4 @@
-//! Hub message dispatch and sink-identity cleanup.
+//! Hub message dispatch; its registration lease is owned by the outer runner.
 
 use super::*;
 
@@ -7,15 +7,14 @@ pub(super) async fn run(
     hub: (Vmac, DeviceUuid),
     mut read: futures_util::stream::SplitStream<WebSocketStream<TlsStream>>,
     write: Arc<Mutex<WsSink>>,
-    clients: (Clients, super::tasks::Spawner),
+    clients: (Clients, &mut super::retirement::Lease),
     deadline: &super::deadlines::ConnectDeadline,
     on_heartbeat_ack: impl Fn() + Send,
 ) {
     let (hub_vmac, hub_uuid) = hub;
-    let (clients, tasks) = clients;
-    let mut client_vmac: Option<Vmac> = None;
-    let close_requested = Arc::new(AtomicBool::new(false));
-    let close_notify = Arc::new(Notify::new());
+    let (clients, lease) = clients;
+    let close_requested = lease.closed.clone();
+    let close_notify = lease.notify.clone();
     let client_activity: Arc<AtomicU64> = Arc::new(AtomicU64::new(now_secs()));
 
     loop {
@@ -28,13 +27,7 @@ pub(super) async fn run(
         if close_requested.load(Ordering::Acquire) {
             break;
         }
-        let msg_result = tokio::select! {
-            _ = close_notify.notified() => {
-                debug!("Hub: client {peer_addr} was superseded");
-                break;
-            }
-            msg = read.next() => msg,
-        };
+        let msg_result = read.next().await;
         let Some(msg_result) = msg_result else {
             break;
         };
@@ -92,7 +85,7 @@ pub(super) async fn run(
             break;
         }
 
-        if let Some(registered_vmac) = client_vmac {
+        if let Some(registered_vmac) = lease.vmac {
             if !registered_client_matches_sink(&clients, registered_vmac, &write).await {
                 debug!("Hub: client {peer_addr} (vmac={registered_vmac:02x?}) was superseded");
                 break;
@@ -108,7 +101,7 @@ pub(super) async fn run(
             }
             // Preserve the existing pre-registration rejection lifecycle;
             // a malformed repeat must not retire an established connection.
-            if client_vmac.is_none() {
+            if lease.vmac.is_none() {
                 break;
             }
             continue;
@@ -142,7 +135,7 @@ pub(super) async fn run(
 
         match sc_msg.function {
             ScFunction::ConnectRequest => {
-                if let Some(registered_vmac) = client_vmac {
+                if let Some(registered_vmac) = lease.vmac {
                     warn!(
                         "Hub: ConnectRequest from already connected client {peer_addr} (vmac={registered_vmac:02x?}), closing"
                     );
@@ -185,7 +178,7 @@ pub(super) async fn run(
                 // Check for VMAC collision / Device UUID replacement and
                 // register atomically under a single lock to prevent TOCTOU races.
                 const MAX_SC_CLIENTS: usize = 256;
-                let superseded = {
+                {
                     #[cfg(test)]
                     deadline.admission_started.store(true, Ordering::Release);
                     let mut map = clients.lock().await;
@@ -197,7 +190,7 @@ pub(super) async fn run(
                     );
                     // The clock is checked under the registry lock, immediately
                     // before the first irreversible replacement/insertion. No await
-                    // separates deadline retirement, registry commit, and client_vmac.
+                    // separates deadline retirement, registry commit, and lease.vmac.
                     if matches!(
                         decision,
                         HubClientRegistrationDecision::Accept
@@ -206,8 +199,8 @@ pub(super) async fn run(
                     {
                         break;
                     }
-                    let superseded = match decision {
-                        HubClientRegistrationDecision::Accept => None,
+                    match decision {
+                        HubClientRegistrationDecision::Accept => {}
                         HubClientRegistrationDecision::Replace { old_vmac } => {
                             let old_client = map.remove(&old_vmac);
                             if old_vmac == vmac {
@@ -219,14 +212,10 @@ pub(super) async fn run(
                                     "Hub: replacing existing Device UUID connection from VMAC {old_vmac:02x?} with {vmac:02x?}"
                                 );
                             }
-                            old_client.and_then(|client| {
+                            if let Some(client) = old_client {
                                 client.closed.store(true, Ordering::Release);
-                                if Arc::ptr_eq(&client.sink, &write) {
-                                    None
-                                } else {
-                                    Some((client.sink, client.close_notify))
-                                }
-                            })
+                                super::retirement::wake(&client.close_notify);
+                            }
                         }
                         HubClientRegistrationDecision::NakDuplicateVmac => {
                             warn!("Hub: VMAC collision for {vmac:02x?} from {peer_addr}");
@@ -271,20 +260,7 @@ pub(super) async fn run(
                             client_activity.clone(),
                         ),
                     );
-                    superseded
-                };
-                client_vmac = Some(vmac);
-
-                if let Some((sink, notify)) = superseded {
-                    tasks.spawn(async move {
-                        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                            let mut old = sink.lock().await;
-                            old.send(Message::Close(None)).await?;
-                            old.flush().await
-                        })
-                        .await;
-                        notify.notify_waiters();
-                    });
+                    lease.vmac = Some(vmac);
                 }
 
                 let mut accept_payload = Vec::with_capacity(26);
@@ -332,7 +308,7 @@ pub(super) async fn run(
             }
 
             ScFunction::HeartbeatAck => {
-                if let Some(registered_vmac) = client_vmac {
+                if let Some(registered_vmac) = lease.vmac {
                     heartbeat::clear_matching_heartbeat_ack(
                         &clients,
                         registered_vmac,
@@ -364,7 +340,7 @@ pub(super) async fn run(
             }
 
             ScFunction::Result => {
-                let Some(registered_vmac) = client_vmac else {
+                let Some(registered_vmac) = lease.vmac else {
                     debug!("Hub: Result before ConnectRequest from {peer_addr}, dropping");
                     continue;
                 };
@@ -384,7 +360,7 @@ pub(super) async fn run(
             }
 
             ScFunction::EncapsulatedNpdu => {
-                let Some(registered_vmac) = client_vmac else {
+                let Some(registered_vmac) = lease.vmac else {
                     warn!("Hub: EncapsulatedNpdu before ConnectRequest from {peer_addr} — sending NAK");
                     let nak = build_bvlc_result_nak(
                         sc_msg.message_id,
@@ -451,11 +427,7 @@ pub(super) async fn run(
                                     c.max_npdu,
                                     c.max_bvlc,
                                 ) {
-                                    RelayLimitDecision::Send => Some(HubRelaySink {
-                                        vmac,
-                                        sink: Arc::clone(&c.sink),
-                                        closed: Arc::clone(&c.closed),
-                                    }),
+                                    RelayLimitDecision::Send => Some(HubRelaySink::capture(vmac, c)),
                                     RelayLimitDecision::DropMaxNpdu => {
                                         warn!(
                                             "Hub: broadcast NPDU ({npdu_len} bytes) exceeds target max_npdu ({}) for {vmac:02x?}, dropping for target",
@@ -479,26 +451,16 @@ pub(super) async fn run(
                         .into_iter()
                         .map(|target| {
                             let data = relay_shared.clone();
-                            let close_requested = close_requested.clone();
+                            let clients = &clients;
                             async move {
-                                if close_requested.load(Ordering::Acquire)
-                                    || target.closed.load(Ordering::Acquire)
-                                {
-                                    return;
-                                }
                                 let result = tokio::time::timeout(
                                     std::time::Duration::from_secs(5),
-                                    async {
-                                        let mut w = target.sink.lock().await;
-                                        if close_requested.load(Ordering::Acquire)
-                                            || target.closed.load(Ordering::Acquire)
-                                        {
-                                            return Ok::<(), tokio_tungstenite::tungstenite::Error>(
-                                                (),
-                                            );
-                                        }
-                                        w.send(Message::Binary(data.to_vec().into())).await
-                                    },
+                                    super::relay_send::send(
+                                        &target,
+                                        clients,
+                                        Message::Binary(data.to_vec().into()),
+                                        &super::relay_send::SocketIo,
+                                    ),
                                 )
                                 .await;
                                 if let Err(_) | Ok(Err(_)) = result {
@@ -523,31 +485,17 @@ pub(super) async fn run(
                             map.keys().copied(),
                         );
                         recipients.into_iter().next().and_then(|vmac| {
-                            map.get(&vmac).map(|c| {
-                                (
-                                    Arc::clone(&c.sink),
-                                    Arc::clone(&c.closed),
-                                    c.max_npdu,
-                                    c.max_bvlc,
-                                )
-                            })
+                            map.get(&vmac)
+                                .map(|c| (HubRelaySink::capture(vmac, c), c.max_npdu, c.max_bvlc))
                         })
                     };
-                    if let Some((sink, target_closed, max_npdu, max_bvlc)) = target {
+                    if let Some((target, max_npdu, max_bvlc)) = target {
                         match relay_limit_decision(npdu_len, relay_len, max_npdu, max_bvlc) {
                             RelayLimitDecision::Send => {
-                                if close_requested.load(Ordering::Acquire)
-                                    || target_closed.load(Ordering::Acquire)
-                                {
-                                    break;
-                                }
-                                let mut w = sink.lock().await;
-                                if close_requested.load(Ordering::Acquire)
-                                    || target_closed.load(Ordering::Acquire)
-                                {
-                                    break;
-                                }
-                                if let Err(e) = w.send(Message::Binary(relay_bytes.into())).await {
+                                if let Err(e) = super::relay_send::send(
+                                    &target, &clients, Message::Binary(relay_bytes.into()),
+                                    &super::relay_send::SocketIo,
+                                ).await {
                                     warn!("Hub: unicast relay error to {dest:02x?}: {e}");
                                 }
                             }
@@ -577,19 +525,6 @@ pub(super) async fn run(
                 let mut w = write.lock().await;
                 let _ = w.send(Message::Binary(buf.to_vec().into())).await;
             }
-        }
-    }
-
-    if let Some(vmac) = client_vmac {
-        let mut map = clients.lock().await;
-        let removed = map
-            .get(&vmac)
-            .is_some_and(|client| Arc::ptr_eq(&client.sink, &write));
-        if removed {
-            map.remove(&vmac);
-            debug!("Hub: client {peer_addr} (vmac={vmac:02x?}) disconnected");
-        } else {
-            debug!("Hub: client {peer_addr} (vmac={vmac:02x?}) disconnected after replacement");
         }
     }
 }

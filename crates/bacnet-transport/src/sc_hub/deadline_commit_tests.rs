@@ -70,13 +70,12 @@ async fn connect_commit_survives_ready_expiry_and_blocked_accept_then_cleans_up(
     let deadline = Arc::new(super::deadlines::ConnectDeadline::new(
         tokio::time::Instant::now() + Duration::from_secs(1),
     ));
-    let tasks = super::tasks::Tasks::new();
     let mut handler = Box::pin(super::deadlines::serve(
         address,
         ([0x10; 6], [0x10; 16]),
         read,
         sink,
-        (clients.clone(), tasks.spawner()),
+        clients.clone(),
         deadline.clone(),
         || {},
     ));

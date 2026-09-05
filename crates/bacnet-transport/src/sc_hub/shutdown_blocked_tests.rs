@@ -6,14 +6,14 @@ use std::time::Duration;
 
 // Real TLS/WebSocket handler attached to the production supervisor's task set.
 // Exposing its sink before Connect makes blocked Accept admission deterministic.
-struct ControlledPeer {
-    ws: ClientWs,
-    sink: Arc<Mutex<WsSink>>,
-    deadline: Arc<deadlines::ConnectDeadline>,
+pub(super) struct ControlledPeer {
+    pub ws: ClientWs,
+    pub sink: Arc<Mutex<WsSink>>,
+    pub deadline: Arc<deadlines::ConnectDeadline>,
 }
 
 impl ControlledPeer {
-    async fn open(tls: &TestTls, hub: &CountedHub) -> Self {
+    pub async fn open(tls: &TestTls, hub: &CountedHub) -> Self {
         let (server, ws, address, accepted) = tls.pair().await;
         let (write, read) = server.split();
         let sink = Arc::new(Mutex::new(write));
@@ -26,7 +26,7 @@ impl ControlledPeer {
             ([0x10; 6], [0x10; 16]),
             read,
             sink.clone(),
-            (hub.clients.clone(), hub.hub.tasks.spawner()),
+            hub.clients.clone(),
             deadline.clone(),
             || {},
         );
@@ -37,7 +37,7 @@ impl ControlledPeer {
         Self { ws, sink, deadline }
     }
 
-    async fn connect(&mut self, id: u8) {
+    pub async fn connect(&mut self, id: u8) {
         self.ws.send(request([id; 6], [id; 16])).await.unwrap();
         assert!(matches!(poll_io(self.ws.next()).await,
             Some(Ok(Message::Binary(data))) if data[0] == 7));
@@ -130,7 +130,7 @@ async fn stop_cancels_heartbeat_ack_and_unicast_sink_waits() {
 }
 
 #[tokio::test]
-async fn stop_owns_replacement_close_helper_while_old_sink_is_locked() {
+async fn stop_owns_replaced_connection_cleanup_while_old_sink_is_locked() {
     let tls = TestTls::new();
     let mut hub = CountedHub::start(&tls, ScHubHandshakeTimeouts::default()).await;
     let mut old = ControlledPeer::open(&tls, &hub).await;
@@ -146,10 +146,14 @@ async fn stop_owns_replacement_close_helper_while_old_sink_is_locked() {
     assert!(matches!(poll_io(newcomer.ws.next()).await,
         Some(Ok(Message::Binary(data))) if data[0] == 7));
     assert!(!hub.clients.lock().await.contains_key(&[0x42; 6]));
-    // Replacing the old registration starts a helper holding the old sink.
+    // The retired connection owner retains its old sink during bounded cleanup.
     assert!(socket.strong_count() > 1);
     stopped(&mut hub).await;
-    assert_eq!(socket.strong_count(), 1, "replacement helper survived stop");
+    assert_eq!(
+        socket.strong_count(),
+        1,
+        "retired connection cleanup survived stop"
+    );
     drop(held);
     assert!(socket.upgrade().is_none());
     assert!(matches!(poll_io(old.ws.next()).await, None | Some(Err(_))));

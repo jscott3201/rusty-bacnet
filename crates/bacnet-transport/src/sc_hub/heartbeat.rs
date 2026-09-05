@@ -135,7 +135,7 @@ pub(super) async fn reserve(
         let notify = retire_locked(&mut map, &attempt, Retirement::GenerationExhausted, now);
         drop(map);
         if let Some(notify) = notify {
-            notify.notify_one();
+            super::retirement::wake(&notify);
             warn!(vmac = ?attempt.vmac, "Hub: heartbeat generation exhausted, removing client");
         }
         return None;
@@ -219,9 +219,9 @@ pub(super) async fn retire(
         retire_locked(&mut map, attempt, reason, io.now_secs())
     };
     if let Some(notify) = notify {
-        // One owning reader. notify_one retains a permit if close precedes its
-        // next select; closed is the authoritative predicate, even after cancellation.
-        notify.notify_one();
+        // Wake the owning dispatch and every sender targeting this identity.
+        // The closed predicate also covers subscribers arriving after retirement.
+        super::retirement::wake(&notify);
         warn!(vmac = ?attempt.vmac, ?reason, "Hub: retiring heartbeat client");
         true
     } else {

@@ -22,7 +22,7 @@ async fn hub_admission_abort_before_first_poll_reclaims_slot() {
         address,
         tls.acceptor,
         ([0x10; 6], [0x10; 16]),
-        (clients(), super::tasks::Tasks::new().spawner()),
+        clients(),
         ScHubHandshakeTimeouts::default(),
         admission,
     ));
@@ -51,7 +51,7 @@ async fn hub_admission_abort_during_tls_reclaims_slot() {
         address,
         tls.acceptor,
         ([0x10; 6], [0x10; 16]),
-        (clients(), super::tasks::Tasks::new().spawner()),
+        clients(),
         ScHubHandshakeTimeouts::default(),
         admission,
     ));

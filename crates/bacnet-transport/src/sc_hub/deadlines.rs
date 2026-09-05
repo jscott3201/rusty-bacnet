@@ -69,20 +69,30 @@ pub(super) async fn serve(
     hub: (Vmac, DeviceUuid),
     read: futures_util::stream::SplitStream<WebSocketStream<TlsStream>>,
     write: Arc<Mutex<WsSink>>,
-    clients: (Clients, super::tasks::Spawner),
+    clients: Clients,
     deadline: Arc<ConnectDeadline>,
     on_heartbeat_ack: impl Fn() + Send,
 ) {
+    let mut lease = super::retirement::Lease::new();
+    let closed = lease.closed.clone();
+    let notify = lease.notify.clone();
     let expired = {
-        let handler = super::handler::run(
+        let dispatch = super::handler::run(
             peer_addr,
             hub,
             read,
             write.clone(),
-            clients,
+            (clients.clone(), &mut lease),
             &deadline,
             on_heartbeat_ack,
         );
+        let handler = async {
+            tokio::select! {
+                biased;
+                _ = super::retirement::wait(&closed, &notify) => {},
+                _ = dispatch => {},
+            }
+        };
         tokio::pin!(handler);
         tokio::select! {
             biased;
@@ -98,7 +108,11 @@ pub(super) async fn serve(
             _ = &mut handler => deadline.expired(),
         }
     }; // An expired, unregistered handler is dropped before cleanup I/O.
-    if expired {
+    if lease.vmac.is_some() {
+        #[cfg(test)]
+        deadline.close_started.store(true, Ordering::Release);
+        lease.cleanup(&clients, &write).await;
+    } else if expired {
         let grace = Instant::now() + std::time::Duration::from_secs(1);
         #[cfg(test)]
         deadline.close_started.store(true, Ordering::Release);

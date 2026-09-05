@@ -31,6 +31,8 @@ mod handler;
 mod heartbeat;
 mod helpers;
 mod relay;
+mod relay_send;
+mod retirement;
 mod tasks;
 mod timeouts;
 
@@ -81,6 +83,7 @@ struct HubRelaySink {
     vmac: Vmac,
     sink: Arc<Mutex<WsSink>>,
     closed: Arc<AtomicBool>,
+    notify: Arc<Notify>,
 }
 
 /// Shared state for the hub: connected clients keyed by VMAC.
@@ -228,7 +231,7 @@ async fn handle_client(
     hub_uuid: DeviceUuid,
     read: futures_util::stream::SplitStream<WebSocketStream<TlsStream>>,
     write: Arc<Mutex<WsSink>>,
-    clients: (Clients, tasks::Spawner),
+    clients: Clients,
     expires: tokio::time::Instant,
 ) {
     let deadline = Arc::new(deadlines::ConnectDeadline::new(expires));
@@ -255,7 +258,6 @@ async fn handle_client_observed(
     clients: Clients,
     on_heartbeat_ack: impl Fn() + Send,
 ) {
-    let tasks = tasks::Tasks::new();
     let deadline = Arc::new(deadlines::ConnectDeadline::new(
         tokio::time::Instant::now() + ScHubHandshakeTimeouts::default().connect_request(),
     ));
@@ -264,7 +266,7 @@ async fn handle_client_observed(
         (hub_vmac, hub_uuid),
         read,
         write,
-        (clients, tasks.spawner()),
+        clients,
         deadline,
         on_heartbeat_ack,
     )
@@ -311,3 +313,15 @@ mod task_tests;
 
 #[cfg(test)]
 mod shutdown_blocked_tests;
+
+#[cfg(test)]
+mod retirement_tests;
+
+#[cfg(test)]
+mod retirement_lifecycle_tests;
+
+#[cfg(test)]
+mod retirement_io_tests;
+
+#[cfg(test)]
+mod retirement_capacity_tests;

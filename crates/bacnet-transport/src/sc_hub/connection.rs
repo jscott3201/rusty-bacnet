@@ -87,7 +87,7 @@ pub(super) async fn accept_loop_with_counter(
             peer_addr,
             acceptor,
             (hub_vmac, hub_uuid),
-            (clients, tasks.spawner()),
+            clients,
             timeouts,
             admission,
         ));
@@ -128,7 +128,7 @@ pub(super) async fn serve_connection(
     peer_addr: std::net::SocketAddr,
     acceptor: TlsAcceptor,
     hub: (Vmac, DeviceUuid),
-    clients: (Clients, super::tasks::Spawner),
+    clients: Clients,
     timeouts: super::ScHubHandshakeTimeouts,
     admission: Admission,
 ) {
