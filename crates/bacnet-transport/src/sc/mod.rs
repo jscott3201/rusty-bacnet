@@ -39,6 +39,7 @@ mod loopback;
 mod random48;
 mod reconnect;
 mod send;
+mod source_admission;
 pub use connection::{ScConnection, ScConnectionState};
 use connector::{dial_failover_ws, dial_reconnect_ws, WebSocketConnector};
 pub use errors::{ScConnectError, ScWebSocketErrorKind};
@@ -419,6 +420,10 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                         } else {
                                             warn!("BACnet/SC ignored unexpected Heartbeat-ACK");
                                         }
+                                        continue;
+                                    }
+
+                                    if source_admission::reject_invalid_npdu_source(&msg, &*ws_clone).await {
                                         continue;
                                     }
 
@@ -815,6 +820,9 @@ mod result_tests;
 
 #[cfg(test)]
 mod state_watch_tests;
+
+#[cfg(test)]
+mod source_admission_tests;
 
 #[cfg(test)]
 mod primary_restore_tests;

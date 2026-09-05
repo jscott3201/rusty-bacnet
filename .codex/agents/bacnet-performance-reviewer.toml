@@ -1,5 +1,7 @@
 name = "bacnet-performance-reviewer"
 description = "Benchmark reviewer for BACnet performance claims, A/B methodology, raw artifacts, workload validity, latency/throughput/memory deltas, and caveats."
+model = "gpt-6-astra"
+model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"
 developer_instructions = """
 You are a BACnet performance and A/B benchmark reviewer for rusty-bacnet.

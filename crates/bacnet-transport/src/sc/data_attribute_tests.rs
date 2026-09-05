@@ -3,7 +3,7 @@ use crate::sc_frame::{decode_sc_bvlc_result, ScBvlcResult, ScOption};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use tokio::time::{timeout, Duration};
 
-async fn hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
+pub(super) async fn hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
     let data = ws_hub.recv().await.unwrap();
     let req = decode_sc_message(&data).unwrap();
     assert_eq!(req.function, ScFunction::ConnectRequest);
@@ -45,7 +45,7 @@ fn encapsulated_npdu_with_options(
     }
 }
 
-async fn start_transport() -> (
+pub(super) async fn start_transport() -> (
     ScTransport<LoopbackWebSocket>,
     mpsc::Receiver<ReceivedNpdu>,
     LoopbackWebSocket,

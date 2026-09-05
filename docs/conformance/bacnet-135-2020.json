@@ -1771,13 +1771,16 @@
     "crates/bacnet-transport/src/sc/mod.rs",
     "crates/bacnet-transport/src/sc_hub.rs",
     "crates/bacnet-transport/src/sc_hub/relay.rs",
-    "benchmarks/tests/sc_websocket.rs"
+    "benchmarks/tests/sc_websocket.rs",
+    "crates/bacnet-transport/src/sc/source_admission.rs",
+    "crates/bacnet-transport/src/sc/source_admission_tests.rs"
    ],
    "positive_tests": [
     "crates/bacnet-transport/src/sc_frame.rs::tests::sc_options_decode_marker_fields_and_payload_split",
     "crates/bacnet-transport/src/sc_frame.rs::tests::wire_format_check_both_vmacs",
     "crates/bacnet-transport/src/sc/data_attribute_tests.rs::non_must_understand_destination_option_allows_delivery",
-    "crates/bacnet-transport/src/sc_hub/tests.rs::hub_relay_wire_preserves_empty_header_data_marker"
+    "crates/bacnet-transport/src/sc_hub/tests.rs::hub_relay_wire_preserves_empty_header_data_marker",
+    "crates/bacnet-transport/src/sc/source_admission_tests.rs::generic_npdu_codec_preserves_omitted_source_for_direct_connections"
    ],
    "negative_tests": [
     "crates/bacnet-transport/src/sc_frame.rs::tests::decode_rejects_reserved_control_bits",
@@ -1788,7 +1791,15 @@
     "crates/bacnet-transport/src/sc/data_attribute_tests.rs::unsupported_must_understand_destination_option_unicast_returns_nak",
     "crates/bacnet-transport/src/sc/data_attribute_tests.rs::unsupported_destination_option_preserves_empty_header_data_marker",
     "crates/bacnet-transport/src/sc/data_attribute_tests.rs::unsupported_must_understand_destination_option_broadcast_drops_without_nak",
-    "benchmarks/tests/sc_websocket.rs::sc_websocket_routes_destination_option_nak_to_originating_node"
+    "benchmarks/tests/sc_websocket.rs::sc_websocket_routes_destination_option_nak_to_originating_node",
+    "crates/bacnet-transport/src/sc/source_admission_tests.rs::hub_connection_never_returns_missing_or_reserved_npdu_source",
+    "crates/bacnet-transport/src/sc/source_admission_tests.rs::hub_npdu_missing_source_unicast_returns_connection_local_nak",
+    "crates/bacnet-transport/src/sc/source_admission_tests.rs::hub_npdu_missing_source_precedes_destination_option_nak",
+    "crates/bacnet-transport/src/sc/source_admission_tests.rs::hub_npdu_missing_source_broadcast_is_silent_with_or_without_options",
+    "crates/bacnet-transport/src/sc/source_admission_tests.rs::hub_npdu_reserved_sources_are_discarded",
+    "crates/bacnet-transport/src/sc/source_admission_tests.rs::hub_npdu_reserved_sources_suppress_destination_option_nak",
+    "crates/bacnet-transport/src/sc/source_admission_tests.rs::hub_npdu_invalid_sources_do_not_refresh_liveness",
+    "crates/bacnet-transport/src/sc/source_admission_tests.rs::hub_npdu_invalid_sources_do_not_clear_pending_heartbeat"
    ],
    "benchmarks": [
     "benchmarks/benches/sc_latency.rs"
@@ -1796,7 +1807,7 @@
    "public_claims": [
     "README BACnet/SC transport"
    ],
-   "notes": "AB-01 adds transport codec evidence for Annex AB.2 control flag bits 7..4 rejection, Header Option Type 1..31 enforcement, AB.2.17 destination/data option marker decoding, VMAC field ordering, option count cap enforcement, option length truncation, option data truncation, and unterminated option-chain rejection. Received Encapsulated-NPDUs enforce Destination Option Must Understand semantics: an unsupported Must Understand option returns BVLC-Result NAK COMMUNICATION/HEADER_NOT_UNDERSTOOD for unicast, echoes the complete offending marker including More Options and an empty Header Data field, routes the Result to the source through the hub, and drops broadcast without a result. The hub applies its VMAC transformation while copying the validated option and payload bytes, avoiding marker normalization before the destination processes the frame. Must Understand clear does not block delivery. Addenda 135-2020cf/cp were checked for this row: cf renames Data Options bit 6 to Every Segment without changing the marker bit position, and cp adds standard header option types 2..5 that remain accepted by the generic 1..31 parser. Must Understand processing for other BVLC-SC functions, broader non-Result function-specific payload semantics, Every Segment segmentation behavior, and direct-connection behavior remain for later Annex AB work."
+   "notes": "AB-01 adds transport codec evidence for Annex AB.2 control flag bits 7..4 rejection, Header Option Type 1..31 enforcement, AB.2.17 destination/data option marker decoding, VMAC field ordering, option count cap enforcement, option length truncation, option data truncation, and unterminated option-chain rejection. Received Encapsulated-NPDUs enforce Destination Option Must Understand semantics: an unsupported Must Understand option returns BVLC-Result NAK COMMUNICATION/HEADER_NOT_UNDERSTOOD for unicast, echoes the complete offending marker including More Options and an empty Header Data field, routes the Result to the source through the hub, and drops broadcast without a result. The hub applies its VMAC transformation while copying the validated option and payload bytes, avoiding marker normalization before the destination processes the frame. Must Understand clear does not block delivery. Addenda 135-2020cf/cp were checked for this row: cf renames Data Options bit 6 to Every Segment without changing the marker bit position, and cp adds standard header option types 2..5 that remain accepted by the generic 1..31 parser. Must Understand processing for other BVLC-SC functions, broader non-Result function-specific payload semantics, Every Segment segmentation behavior, and direct-connection behavior remain for later Annex AB work. Hub-connector-only NPDU source admission requires a present, non-reserved Originating VMAC before liveness refresh, pending-heartbeat clearing, Destination Option responses, or upper-layer delivery. Requiring the source on hub-relayed NPDUs is inferred from AB.5.3.2-3; classifying a missing source as COMMUNICATION/PARAMETER_OUT_OF_RANGE is an AB.3.1.5 inference. Missing-source unicast receives a connection-local BVLC-Result NAK with the echoed message ID, no VMACs/options, marker zero, and empty detail (payload 01 01 00 00 07 00 50). Explicit zero/all-ones sources are silently discarded as conservative local hardening because neither is a valid unicast return address; this suppression is not asserted as a Standard-defined exception. Malformed-source broadcast receives no reply. Discard preserves the connection until its ordinary timeout, and the hub connection manager no longer manufactures an all-zero source. Loopback tests cover invalid source/destination/unsupported-option combinations, continued valid relayed unicast/broadcast delivery with Data Attributes, liveness expiry despite malformed traffic, and preservation of an outstanding heartbeat. Generic frame decoding retains optional-source direct-connection semantics. This is partial issue #519 evidence only: hub relay, handshake admission, other function validation, physical interoperability, and broader direct-connection conformance remain outside this slice; no newer Standard edition or additional addenda interpretation is introduced."
   },
   {
    "id": "BACNET-AB-SC-BVLC-RESULT",

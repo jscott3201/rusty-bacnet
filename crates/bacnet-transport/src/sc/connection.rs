@@ -9,7 +9,7 @@ use crate::sc_frame::{
     decode_sc_bvlc_result, is_broadcast_vmac, ScBvlcResult, ScFunction, ScMessage, Vmac,
 };
 
-use super::data_attributes;
+use super::{data_attributes, source_admission};
 
 /// BACnet/SC connection state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -227,6 +227,7 @@ impl ScConnection {
     }
 
     /// Handle a received message. Returns NPDU data if it's an Encapsulated-NPDU for us.
+    /// Hub-relayed NPDUs must include a non-reserved Originating VMAC.
     pub fn handle_received(&mut self, msg: &ScMessage) -> Option<(Bytes, Vmac)> {
         match msg.function {
             ScFunction::EncapsulatedNpdu => {
@@ -247,7 +248,7 @@ impl ScConnection {
                     );
                     return None;
                 }
-                let source = msg.originating_vmac.unwrap_or([0; 6]);
+                let source = source_admission::hub_source(msg)?;
                 Some((msg.payload.clone(), source))
             }
             ScFunction::HeartbeatRequest => None,
