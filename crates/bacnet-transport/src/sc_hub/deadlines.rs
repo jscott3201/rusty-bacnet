@@ -69,7 +69,7 @@ pub(super) async fn serve(
     hub: (Vmac, DeviceUuid),
     read: futures_util::stream::SplitStream<WebSocketStream<TlsStream>>,
     write: Arc<Mutex<WsSink>>,
-    clients: Clients,
+    clients: (Clients, super::tasks::Spawner),
     deadline: Arc<ConnectDeadline>,
     on_heartbeat_ack: impl Fn() + Send,
 ) {

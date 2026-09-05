@@ -22,7 +22,7 @@ async fn hub_admission_abort_before_first_poll_reclaims_slot() {
         address,
         tls.acceptor,
         ([0x10; 6], [0x10; 16]),
-        clients(),
+        (clients(), super::tasks::Tasks::new().spawner()),
         ScHubHandshakeTimeouts::default(),
         admission,
     ));
@@ -51,7 +51,7 @@ async fn hub_admission_abort_during_tls_reclaims_slot() {
         address,
         tls.acceptor,
         ([0x10; 6], [0x10; 16]),
-        clients(),
+        (clients(), super::tasks::Tasks::new().spawner()),
         ScHubHandshakeTimeouts::default(),
         admission,
     ));
@@ -67,7 +67,7 @@ pub(super) struct CountedHub {
     pub address: SocketAddr,
     pub active: Arc<AtomicUsize>,
     pub clients: Clients,
-    task: JoinHandle<()>,
+    pub hub: ScHub,
 }
 
 impl CountedHub {
@@ -76,27 +76,28 @@ impl CountedHub {
         let address = listener.local_addr().unwrap();
         let active = Arc::new(AtomicUsize::new(0));
         let clients = clients();
+        let tasks = super::tasks::Tasks::new();
         let task = tokio::spawn(super::connection::accept_loop_with_counter(
             listener,
             tls.acceptor.clone(),
-            [0x10; 6],
-            [0x10; 16],
+            ([0x10; 6], [0x10; 16]),
             clients.clone(),
             timeouts,
             active.clone(),
+            tasks.clone(),
         ));
         Self {
             address,
             active,
             clients,
-            task,
+            hub: ScHub {
+                hub_vmac: [0x10; 6],
+                hub_uuid: [0x10; 16],
+                listener_task: Some(task),
+                tasks,
+                local_addr: Some(address),
+            },
         }
-    }
-}
-
-impl Drop for CountedHub {
-    fn drop(&mut self) {
-        self.task.abort();
     }
 }
 

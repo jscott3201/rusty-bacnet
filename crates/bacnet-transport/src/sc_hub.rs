@@ -31,12 +31,12 @@ mod handler;
 mod heartbeat;
 mod helpers;
 mod relay;
+mod tasks;
 mod timeouts;
 
 pub use timeouts::ScHubHandshakeTimeouts;
 
 use client::HubClient;
-use connection::accept_loop;
 use helpers::*;
 
 #[cfg(test)]
@@ -91,12 +91,16 @@ type Clients = Arc<Mutex<HashMap<Vmac, HubClient>>>;
 /// Listens on a TLS WebSocket port, accepts SC node connections, performs the
 /// Connect-Request/Connect-Accept handshake, and relays messages between
 /// connected nodes.
+///
+/// Dropping the hub requests eventual worker cleanup on a running Tokio runtime.
+/// Use [`Self::stop`] to await completion before reusing its resources.
 pub struct ScHub {
     hub_vmac: Vmac,
     /// Device UUID (16 bytes, RFC 4122).
     #[allow(dead_code)]
     hub_uuid: DeviceUuid,
     listener_task: Option<JoinHandle<()>>,
+    tasks: tasks::Tasks,
     local_addr: Option<SocketAddr>,
 }
 
@@ -167,19 +171,22 @@ impl ScHub {
 
         let clients: Clients = Arc::new(Mutex::new(HashMap::new()));
 
-        let task = tokio::spawn(accept_loop(
+        let tasks = tasks::Tasks::new();
+        let task = tokio::spawn(connection::accept_loop_with_counter(
             listener,
             tls_acceptor,
-            hub_vmac,
-            hub_uuid,
+            (hub_vmac, hub_uuid),
             clients,
             timeouts,
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            tasks.clone(),
         ));
 
         Ok(Self {
             hub_vmac,
             hub_uuid,
             listener_task: Some(task),
+            tasks,
             local_addr: Some(local_addr),
         })
     }
@@ -194,12 +201,24 @@ impl ScHub {
         self.hub_vmac
     }
 
-    /// Stop the hub, aborting the listener task.
+    /// Stop admission, cancel all hub workers, and await their resource cleanup.
+    ///
+    /// This is forceful local shutdown, not the BACnet Disconnect/reciprocal
+    /// WebSocket Close sequence. Cancelling this future leaves shutdown running;
+    /// a later call can still await completion. Runtime scheduling is cooperative.
     pub async fn stop(&mut self) {
-        if let Some(task) = self.listener_task.take() {
-            task.abort();
+        self.tasks.request_shutdown();
+        if let Some(task) = self.listener_task.as_mut() {
             let _ = task.await;
+            self.listener_task = None;
         }
+    }
+}
+
+impl Drop for ScHub {
+    fn drop(&mut self) {
+        // The detached supervisor retains cleanup ownership on a live runtime.
+        self.tasks.request_shutdown();
     }
 }
 
@@ -209,7 +228,7 @@ async fn handle_client(
     hub_uuid: DeviceUuid,
     read: futures_util::stream::SplitStream<WebSocketStream<TlsStream>>,
     write: Arc<Mutex<WsSink>>,
-    clients: Clients,
+    clients: (Clients, tasks::Spawner),
     expires: tokio::time::Instant,
 ) {
     let deadline = Arc::new(deadlines::ConnectDeadline::new(expires));
@@ -236,6 +255,7 @@ async fn handle_client_observed(
     clients: Clients,
     on_heartbeat_ack: impl Fn() + Send,
 ) {
+    let tasks = tasks::Tasks::new();
     let deadline = Arc::new(deadlines::ConnectDeadline::new(
         tokio::time::Instant::now() + ScHubHandshakeTimeouts::default().connect_request(),
     ));
@@ -244,7 +264,7 @@ async fn handle_client_observed(
         (hub_vmac, hub_uuid),
         read,
         write,
-        clients,
+        (clients, tasks.spawner()),
         deadline,
         on_heartbeat_ack,
     )
@@ -282,3 +302,12 @@ mod ws_limits_tests;
 mod ws_capacity_tests;
 #[cfg(test)]
 mod ws_limits_test_support;
+
+#[cfg(test)]
+mod shutdown_tests;
+
+#[cfg(test)]
+mod task_tests;
+
+#[cfg(test)]
+mod shutdown_blocked_tests;

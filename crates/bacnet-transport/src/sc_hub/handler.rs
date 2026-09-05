@@ -7,11 +7,12 @@ pub(super) async fn run(
     hub: (Vmac, DeviceUuid),
     mut read: futures_util::stream::SplitStream<WebSocketStream<TlsStream>>,
     write: Arc<Mutex<WsSink>>,
-    clients: Clients,
+    clients: (Clients, super::tasks::Spawner),
     deadline: &super::deadlines::ConnectDeadline,
     on_heartbeat_ack: impl Fn() + Send,
 ) {
     let (hub_vmac, hub_uuid) = hub;
+    let (clients, tasks) = clients;
     let mut client_vmac: Option<Vmac> = None;
     let close_requested = Arc::new(AtomicBool::new(false));
     let close_notify = Arc::new(Notify::new());
@@ -275,7 +276,7 @@ pub(super) async fn run(
                 client_vmac = Some(vmac);
 
                 if let Some((sink, notify)) = superseded {
-                    tokio::spawn(async move {
+                    tasks.spawn(async move {
                         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
                             let mut old = sink.lock().await;
                             old.send(Message::Close(None)).await?;

@@ -43,6 +43,7 @@ pub(super) struct DeadlinePeer {
     pub deadline: Arc<super::deadlines::ConnectDeadline>,
     pub task: JoinHandle<()>,
     pub active: Arc<std::sync::atomic::AtomicUsize>,
+    _tasks: super::tasks::Tasks,
 }
 
 impl DeadlinePeer {
@@ -53,12 +54,13 @@ impl DeadlinePeer {
         let deadline = Arc::new(super::deadlines::ConnectDeadline::new(accepted + duration));
         let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let admission = super::connection::Admission::new(active.clone(), Duration::from_secs(10));
+        let tasks = super::tasks::Tasks::new();
         let operation = super::deadlines::serve(
             address,
             ([0x10; 6], [0x10; 16]),
             read,
             sink.clone(),
-            clients,
+            (clients, tasks.spawner()),
             deadline.clone(),
             || {},
         );
@@ -72,6 +74,7 @@ impl DeadlinePeer {
             deadline,
             task,
             active,
+            _tasks: tasks,
         }
     }
 

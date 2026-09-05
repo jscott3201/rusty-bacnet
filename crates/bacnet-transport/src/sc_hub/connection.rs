@@ -20,35 +20,18 @@ use super::{handle_client, Clients, DeviceUuid};
 // Accept loop
 // ---------------------------------------------------------------------------
 
-pub(super) async fn accept_loop(
-    listener: TcpListener,
-    tls_acceptor: TlsAcceptor,
-    hub_vmac: Vmac,
-    hub_uuid: DeviceUuid,
-    clients: Clients,
-    timeouts: super::ScHubHandshakeTimeouts,
-) {
-    accept_loop_with_counter(
-        listener,
-        tls_acceptor,
-        hub_vmac,
-        hub_uuid,
-        clients,
-        timeouts,
-        Arc::new(AtomicUsize::new(0)),
-    )
-    .await;
-}
-
 pub(super) async fn accept_loop_with_counter(
     listener: TcpListener,
     tls_acceptor: TlsAcceptor,
-    hub_vmac: Vmac,
-    hub_uuid: DeviceUuid,
+    hub: (Vmac, DeviceUuid),
     clients: Clients,
     timeouts: super::ScHubHandshakeTimeouts,
     active_connections: Arc<AtomicUsize>,
+    tasks: super::tasks::Tasks,
 ) {
+    let _abort_on_exit = tasks.abort_on_exit();
+    let (hub_vmac, hub_uuid) = hub;
+    let mut shutdown = tasks.subscribe();
     // All active accepted connections count, including established clients.
     const MAX_ACTIVE_CONNECTIONS: usize = 512;
 
@@ -59,7 +42,7 @@ pub(super) async fn accept_loop_with_counter(
     {
         let clients_for_hb = clients.clone();
         let next_msg_id = std::sync::atomic::AtomicU16::new(0x8000); // hub message IDs start high
-        tokio::spawn(async move {
+        tasks.spawner().spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(
                 HEARTBEAT_CHECK_INTERVAL_SECS,
             ));
@@ -71,7 +54,13 @@ pub(super) async fn accept_loop_with_counter(
     }
 
     loop {
-        let (tcp_stream, peer_addr) = match listener.accept().await {
+        let accepted = tokio::select! {
+            biased;
+            _ = shutdown.wait_for(|requested| *requested) => break,
+            _ = tasks.reap() => continue,
+            accepted = listener.accept() => accepted,
+        };
+        let (tcp_stream, peer_addr) = match accepted {
             Ok(v) => v,
             Err(e) => {
                 warn!("Hub accept error: {e}");
@@ -93,16 +82,20 @@ pub(super) async fn accept_loop_with_counter(
         let acceptor = tls_acceptor.clone();
         let clients = clients.clone();
 
-        tokio::spawn(serve_connection(
+        tasks.spawner().spawn(serve_connection(
             tcp_stream,
             peer_addr,
             acceptor,
             (hub_vmac, hub_uuid),
-            clients,
+            (clients, tasks.spawner()),
             timeouts,
             admission,
         ));
     }
+    drop(listener);
+    tasks.drain().await;
+    // Cancellation skips per-client tail cleanup. No owned mutator remains.
+    clients.lock().await.clear();
 }
 
 /// Owned from admission through the entire accepted task, even before first poll.
@@ -135,7 +128,7 @@ pub(super) async fn serve_connection(
     peer_addr: std::net::SocketAddr,
     acceptor: TlsAcceptor,
     hub: (Vmac, DeviceUuid),
-    clients: Clients,
+    clients: (Clients, super::tasks::Spawner),
     timeouts: super::ScHubHandshakeTimeouts,
     admission: Admission,
 ) {
