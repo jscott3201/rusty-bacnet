@@ -420,6 +420,8 @@ mod ack_window;
 mod control_limits;
 mod duplicate_window;
 mod get_event_information;
+mod request_peer_quota;
+mod request_peer_quota_state;
 mod request_progress;
 mod request_progress_expiry;
 mod request_reassembly;

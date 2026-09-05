@@ -280,16 +280,19 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                         continue;
                                     }
 
-                                    // This path runs only when no session
-                                    // exists for the key, so the map length
-                                    // is the whole capacity check.
-                                    if seg_receivers.len() >= MAX_SEG_RECEIVERS {
+                                    // New sessions only; global capacity precedes peer quota.
+                                    if let Some(reason) =
+                                        super::segmented_receive::segmented_request_admission_error(
+                                            &seg_receivers,
+                                            &key,
+                                        )
+                                    {
                                         Self::send_server_abort(
                                             &network_dispatch,
                                             &source_mac,
                                             source_network.as_ref(),
                                             req.invoke_id,
-                                            AbortReason::BUFFER_OVERFLOW,
+                                            reason,
                                         )
                                         .await;
                                         continue;
