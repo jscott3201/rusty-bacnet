@@ -1,7 +1,16 @@
-# Optional Codex project settings for subagent-heavy research/review workflows.
-# Copy or merge into your existing .codex/config.toml.
+# Codex CLI 0.153.4 baseline, verified 2026-09-05.
+# Project model choices; retain user-level permissions, providers and service tier.
+model = "gpt-6-astra"
+model_reasoning_effort = "high"
 
 [agents]
-max_threads = 8
-max_depth = 1
-job_max_runtime_seconds = 1800
+enabled = true
+# Counts spawned threads, excluding the root; use fewer for coupled work.
+max_concurrent_threads_per_session = 6
+default_subagent_model = "gpt-5.6-luna"
+default_subagent_reasoning_effort = "high"
+
+# Standalone .codex/agents/*.toml files pin specialist models and effort.
+# Recursion and task duration are bounded by task packets and AGENTS.md.
+# Sources: https://developers.openai.com/codex/subagents
+# https://learn.chatgpt.com/docs/config-file/config-reference

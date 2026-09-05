@@ -361,6 +361,19 @@ serial.enable_kernel_rs485(
 )?;
 ```
 
+Both delay arguments remain in microseconds but must be exact multiples of 1000:
+zero is valid, and `1000` requests one millisecond. The Linux ABI stores whole
+milliseconds, so fractional-millisecond requests return an error before any ioctl
+instead of being rounded.
+
+After applying the configuration, the method reads it back with `TIOCGRS485` and
+checks that RS-485 is enabled with the requested RTS polarity and delays. Drivers
+may reject or sanitize unsupported settings; set/readback failures and mismatches
+return an error. A mismatch reports the effective flags and millisecond delays.
+A readback or verification error can occur after the hardware configuration has
+changed; the method does not roll back or retry. Success logs the verified effective
+settings. See the [Linux RS-485 userspace ABI](https://cdn.kernel.org/doc/html/latest/driver-api/serial/serial-rs485.html).
+
 #### GPIO Direction Control (RS-485 Hats)
 
 For RS-485 hats where DE/RE is wired to a GPIO pin (e.g., Seeed Studio RS-485 Shield on Raspberry Pi with GPIO18), use `GpioDirectionPort` to wrap any `SerialPort`. Requires the `serial-gpio` feature.

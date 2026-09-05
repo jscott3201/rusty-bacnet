@@ -24,6 +24,9 @@ use bacnet_types::error::Error;
 
 use crate::mstp::SerialPort;
 
+#[cfg(any(target_os = "linux", test))]
+mod kernel_rs485;
+
 /// Configuration for a serial port connection.
 pub struct SerialConfig {
     /// Serial port device name (e.g., "/dev/ttyUSB0" on Linux, "/dev/cu.usbserial-xxx" on macOS).
@@ -76,6 +79,15 @@ impl TokioSerialPort {
     ///   before transmitting. Covers transceiver enable time.
     /// - `delay_after_send_us`: Microseconds to wait after the last byte
     ///   before deasserting RTS. Covers last-byte drain time.
+    ///
+    /// Delays must be multiples of 1000 microseconds (zero is valid), because
+    /// Linux represents them in whole milliseconds. Other values are rejected
+    /// before any ioctl; delays are never rounded.
+    ///
+    /// After setting the configuration, `TIOCGRS485` must confirm RS-485 is
+    /// enabled with the requested RTS polarity and delays. A readback failure
+    /// or driver-sanitized mismatch returns an error even though the hardware
+    /// configuration may already have changed. No rollback or retry is attempted.
     #[cfg(target_os = "linux")]
     #[allow(unsafe_code)]
     pub fn enable_kernel_rs485(
@@ -86,41 +98,40 @@ impl TokioSerialPort {
     ) -> Result<(), Error> {
         use std::os::unix::io::AsRawFd;
 
+        #[cfg(not(any(target_arch = "sparc", target_arch = "sparc64")))]
+        use libc::{TIOCGRS485, TIOCSRS485};
+        // libc 0.2.189 does not export these on SPARC. Linux v6.12 UAPI:
+        // arch/sparc/include/uapi/asm/{ioctls,ioctl}.h encodes a 32-byte
+        // serial_rs485 with _IOR('T', 0x41, ...) and _IOWR('T', 0x42, ...).
+        #[cfg(any(target_arch = "sparc", target_arch = "sparc64"))]
+        const TIOCGRS485: libc::c_ulong = 0x4020_5441;
+        #[cfg(any(target_arch = "sparc", target_arch = "sparc64"))]
+        const TIOCSRS485: libc::c_ulong = 0xc020_5442;
+
         let stream = self.inner.try_lock().map_err(|_| {
             Error::Encoding("Cannot enable RS-485: serial port is in use".to_string())
         })?;
 
-        // struct serial_rs485 { u32 flags, u32 delay_rts_before_send, u32 delay_rts_after_send, u32[5] padding }
-        const SER_RS485_ENABLED: u32 = 1;
-        const SER_RS485_RTS_ON_SEND: u32 = 1 << 1;
-        const SER_RS485_RTS_AFTER_SEND: u32 = 1 << 2;
-
-        let mut flags = SER_RS485_ENABLED;
-        if invert_rts {
-            flags |= SER_RS485_RTS_AFTER_SEND;
-        } else {
-            flags |= SER_RS485_RTS_ON_SEND;
-        }
-
-        let mut buf = [0u32; 8];
-        buf[0] = flags;
-        buf[1] = delay_before_send_us;
-        buf[2] = delay_after_send_us;
-
-        // TIOCSRS485 = 0x542F
-        // SAFETY: `stream` is a live `TokioSerial` instance whose fd is open for the duration
-        // of the lock guard; `buf` is a `[u32; 8]` stack array sized to match the kernel's
-        // `serial_rs485` struct (8 * u32 = 32 bytes); pointer is valid for the call.
-        let ret = unsafe { libc::ioctl(stream.as_raw_fd(), 0x542F, buf.as_mut_ptr()) };
-        if ret < 0 {
-            return Err(Error::Encoding(format!(
-                "TIOCSRS485 ioctl failed: {}",
-                std::io::Error::last_os_error()
-            )));
-        }
-
-        tracing::info!("Kernel RS-485 mode enabled (invert_rts={invert_rts})");
-        Ok(())
+        kernel_rs485::configure(
+            invert_rts,
+            delay_before_send_us,
+            delay_after_send_us,
+            |request, config| {
+                let request = match request {
+                    kernel_rs485::Request::Set => TIOCSRS485,
+                    kernel_rs485::Request::Get => TIOCGRS485,
+                };
+                // SAFETY: The lock guard keeps the serial stream and its fd alive.
+                // `config` is a writable, initialized 32-byte Linux serial_rs485
+                // structure, and the pointer remains valid for this ioctl call.
+                let ret = unsafe { libc::ioctl(stream.as_raw_fd(), request, config as *mut _) };
+                if ret < 0 {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
+            },
+        )
     }
 }
 

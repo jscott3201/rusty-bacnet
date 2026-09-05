@@ -1,5 +1,7 @@
 name = "bacnet-sc-security-reviewer"
 description = "Read-only reviewer for Annex AB BACnet/SC security, TLS/mTLS, WebSocket subprotocols, VMAC/UUID, heartbeat, failover, data options, and hub/direct behavior."
+model = "gpt-6-astra"
+model_reasoning_effort = "xhigh"
 sandbox_mode = "read-only"
 developer_instructions = """
 You are a BACnet/SC security and conformance reviewer for rusty-bacnet.

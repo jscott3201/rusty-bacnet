@@ -1,5 +1,7 @@
 name = "security-reliability-reviewer"
 description = "Read-only reviewer for security, privacy, secrets, authz/authn, input validation, concurrency, resource exhaustion, error handling, and fail-closed behavior."
+model = "gpt-6-astra"
+model_reasoning_effort = "xhigh"
 sandbox_mode = "read-only"
 developer_instructions = """
 You are a security and reliability reviewer.
