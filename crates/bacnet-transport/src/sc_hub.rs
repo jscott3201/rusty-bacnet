@@ -210,9 +210,6 @@ async fn handle_client_observed(
             break;
         }
 
-        // Update last-activity timestamp for heartbeat tracking
-        client_activity.store(now_secs(), std::sync::atomic::Ordering::Release);
-
         let data = match msg_result {
             Ok(Message::Binary(data)) => data.to_vec(),
             Ok(Message::Close(_)) => {
@@ -267,6 +264,20 @@ async fn handle_client_observed(
                 break;
             }
         }
+
+        if let Err(nak) = crate::sc_frame::validate_heartbeat(&sc_msg, &data) {
+            if let Some(nak) = nak {
+                if let Err(e) = write.lock().await.send(Message::Binary(nak)).await {
+                    warn!("Hub: failed to send heartbeat NAK to {peer_addr}: {e}");
+                    break;
+                }
+            }
+            continue;
+        }
+
+        // Decoded BVLC messages that pass heartbeat admission count as activity.
+        // WebSocket control, oversized, and undecodable frames do not.
+        client_activity.store(now_secs(), std::sync::atomic::Ordering::Release);
 
         match sc_msg.function {
             ScFunction::ConnectRequest => {
@@ -741,3 +752,5 @@ mod heartbeat_generation_tests;
 mod heartbeat_test_support;
 #[cfg(test)]
 mod heartbeat_tests;
+#[cfg(test)]
+mod heartbeat_validation_tests;
