@@ -71,7 +71,7 @@ pub(super) async fn reject_unsupported_must_understand_destination_option<W: Web
     true
 }
 
-fn build_bvlc_result_nak(
+pub(super) fn build_bvlc_result_nak(
     message_id: u16,
     result_for: ScFunction,
     error_header_marker: u8,
