@@ -265,6 +265,21 @@ async fn handle_client_observed(
             }
         }
 
+        if let Err(nak) = crate::sc_frame::validate_connect_request(&sc_msg, &data) {
+            if let Some(nak) = nak {
+                if let Err(e) = write.lock().await.send(Message::Binary(nak)).await {
+                    warn!("Hub: failed to send Connect NAK to {peer_addr}: {e}");
+                    break;
+                }
+            }
+            // Preserve the existing pre-registration rejection lifecycle;
+            // a malformed repeat must not retire an established connection.
+            if client_vmac.is_none() {
+                break;
+            }
+            continue;
+        }
+
         if let Err(nak) = crate::sc_frame::validate_control(
             &sc_msg,
             &data,
@@ -279,7 +294,7 @@ async fn handle_client_observed(
             continue;
         }
 
-        // Decoded BVLC messages that pass control admission count as activity.
+        // Decoded BVLC messages that pass Connect/control admission count as activity.
         // WebSocket control, oversized, and undecodable frames do not.
         client_activity.store(now_secs(), std::sync::atomic::Ordering::Release);
 
@@ -294,29 +309,6 @@ async fn handle_client_observed(
                     break;
                 }
 
-                // AB.2.10.1 defines a fixed 26-byte Connect-Request payload.
-                if sc_msg.payload.len() != 26 {
-                    warn!(
-                        "Hub: ConnectRequest from {peer_addr} has {} payload bytes, expected 26",
-                        sc_msg.payload.len()
-                    );
-                    let error_code = if sc_msg.payload.len() < 26 {
-                        ErrorCode::MESSAGE_INCOMPLETE
-                    } else {
-                        ErrorCode::UNEXPECTED_DATA
-                    };
-                    let nak = build_bvlc_result_nak(
-                        sc_msg.message_id,
-                        ScFunction::ConnectRequest,
-                        ErrorClass::COMMUNICATION,
-                        error_code,
-                    );
-                    let mut buf = BytesMut::new();
-                    encode_sc_message(&mut buf, &nak);
-                    let mut w = write.lock().await;
-                    let _ = w.send(Message::Binary(buf.to_vec().into())).await;
-                    break;
-                }
                 let mut vmac = [0u8; 6];
                 vmac.copy_from_slice(&sc_msg.payload[0..6]);
                 // Parse Device UUID (bytes 6..22) and max lengths (bytes 22..26).
@@ -750,6 +742,8 @@ async fn handle_client_observed(
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod connect_validation_tests;
 #[cfg(test)]
 mod disconnect_validation_tests;
 #[cfg(test)]

@@ -535,8 +535,8 @@ async fn sc_connect_succeeds_within_timeout() {
         let accept = ScMessage {
             function: ScFunction::ConnectAccept,
             message_id: req.message_id,
-            originating_vmac: Some([0x10; 6]),
-            destination_vmac: req.originating_vmac,
+            originating_vmac: None,
+            destination_vmac: None,
             dest_options: Vec::new(),
             data_options: Vec::new(),
             payload: Bytes::from(payload),

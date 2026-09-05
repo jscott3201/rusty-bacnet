@@ -29,6 +29,10 @@ fn malformed_bvlc_result_error(error: Error) -> Error {
     }
 }
 
+#[cfg(test)]
+#[path = "connect_validation_tests.rs"]
+mod tests;
+
 /// Perform the Connect-Request / Connect-Accept handshake on a WebSocket.
 ///
 /// Used for both the initial connection and reconnection attempts.
@@ -83,6 +87,9 @@ pub(super) async fn perform_handshake<W: WebSocketPort>(
                 }
             };
             if msg.function == ScFunction::ConnectAccept {
+                if crate::sc_frame::connect_message_error(&msg).is_some() {
+                    continue;
+                }
                 return Ok::<_, Error>(msg);
             }
             if msg.function == ScFunction::Result {

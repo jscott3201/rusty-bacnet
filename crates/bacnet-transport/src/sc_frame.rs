@@ -12,13 +12,20 @@
 use bacnet_types::error::Error;
 use bytes::{BufMut, Bytes, BytesMut};
 
+mod connect;
 mod control;
 mod result;
 
+pub(crate) use connect::connect_message_error;
+#[cfg(feature = "sc-tls")]
+pub(crate) use connect::validate_connect_request;
 pub(crate) use control::{control_envelope_error, validate_control, ControlRecipient};
 
 #[cfg(test)]
 pub(crate) mod heartbeat_test_support;
+
+#[cfg(test)]
+pub(crate) mod connect_test_support;
 
 pub use result::{decode_sc_bvlc_result, ScBvlcResult};
 
