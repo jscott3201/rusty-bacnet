@@ -167,6 +167,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 // `seq == 0` — treating it as a fresh initial
                                 // segment would silently replace the session
                                 // and reassemble only the tail (#364).
+                                let saved_bytes =
+                                    super::segmented_receive::saved_request_payload_bytes(
+                                        &seg_receivers,
+                                    );
                                 if let Some(state) = seg_receivers.get_mut(&key) {
                                     // Clause 5.4.5.2 restarts SegmentTimer
                                     // for accepted, duplicate and
@@ -212,15 +216,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                             .await;
                                             continue;
                                         }
-                                        if let Err(e) =
-                                            state.receiver.receive(seq, req.service_request.clone())
-                                        {
+                                        if let Err(e) = state.payload.save_new(
+                                            seq,
+                                            req.service_request.clone(),
+                                            saved_bytes,
+                                        ) {
                                             // An unsaveable segment ends the
                                             // session the same way — leaving
                                             // it dangling told the peer
                                             // nothing while this side could
                                             // never complete (#364).
-                                            warn!(error = %e, "Rejecting oversized segment");
+                                            warn!(error = %e, "Rejecting unsaveable segment");
                                             seg_receivers.remove(&key);
                                             Self::send_server_abort(
                                                 &network_dispatch,
@@ -298,15 +304,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                         continue;
                                     }
 
-                                    let mut receiver = SegmentReceiver::new();
-                                    if let Err(e) =
-                                        receiver.receive(seq, req.service_request.clone())
-                                    {
+                                    let mut payload =
+                                        super::segmented_receive::RequestPayload::new(req);
+                                    if let Err(e) = payload.save_new(
+                                        seq,
+                                        req.service_request.clone(),
+                                        saved_bytes,
+                                    ) {
                                         // No session exists to drop on this
                                         // path; the Abort is what tells the
                                         // peer instead of leaving it to time
                                         // out (#364).
-                                        warn!(error = %e, "Rejecting oversized segment");
+                                        warn!(error = %e, "Rejecting unsaveable segment");
                                         Self::send_server_abort(
                                             &network_dispatch,
                                             &source_mac,
@@ -319,8 +328,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     }
                                     let actual_window_size = proposed_window_size;
                                     let mut state = SegmentedRequestState {
-                                        receiver,
-                                        first_req: req.clone(),
+                                        payload,
                                         last_activity: Instant::now(),
                                         last_progress: Instant::now(),
                                         expected_seq: 1,
@@ -388,13 +396,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
                                 if let Some(total) = final_total {
                                     if let Some(state) = seg_receivers.remove(&key) {
-                                        match state.receiver.reassemble(total) {
-                                            Ok(full_data) => {
-                                                let reassembled = super::segmented_receive::
-                                                    reassembled_confirmed_request(
-                                                        &state.first_req,
-                                                        Bytes::from(full_data),
-                                                    );
+                                        match state.payload.complete(total) {
+                                            Ok(reassembled) => {
                                                 debug!(
                                                     invoke_id = reassembled.invoke_id,
                                                     segments = total,

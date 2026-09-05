@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::server::segmented_receive::{
-    expire_segmented_requests, segmented_request_admission_error,
+    expire_segmented_requests, segmented_request_admission_error, RequestPayload,
 };
 
 fn saved_state(invoke_id: u8, now: Instant) -> SegmentedRequestState {
@@ -18,13 +18,12 @@ fn saved_state(invoke_id: u8, now: Instant) -> SegmentedRequestState {
         service_choice: ConfirmedServiceChoice::WRITE_PROPERTY,
         service_request: Bytes::from_static(b"retained"),
     };
-    let mut receiver = SegmentReceiver::new();
-    receiver
-        .receive(0, first_req.service_request.clone())
+    let mut payload = RequestPayload::new(&first_req);
+    payload
+        .save_new(0, first_req.service_request.clone(), Some(0))
         .unwrap();
     SegmentedRequestState {
-        receiver,
-        first_req,
+        payload,
         last_activity: now,
         last_progress: now,
         expected_seq: 1,
@@ -124,12 +123,13 @@ fn request_peer_quota_repeated_denial_never_touches_live_state() {
         assert!(!receivers.contains_key(&key));
     }
     assert_eq!(receivers.len(), 16);
-    for (key, state) in &receivers {
+    for (key, state) in receivers {
         assert_eq!(state.last_activity, now);
         assert_eq!(state.last_progress, now);
-        assert_eq!(state.first_req.invoke_id, key.2);
-        assert_eq!(state.first_req.service_request.as_ref(), b"retained");
-        assert_eq!(state.receiver.reassemble(1).unwrap(), b"retained");
+        assert_eq!(state.payload.saved_payload_bytes(), 8);
+        let completed = state.payload.complete(1).unwrap();
+        assert_eq!(completed.invoke_id, key.2);
+        assert_eq!(completed.service_request.as_ref(), b"retained");
         assert_eq!(state.accepted_segments, 1);
         assert_eq!(state.expected_seq, 1);
         assert_eq!(state.initial_sequence_number, 0);

@@ -1,25 +1,10 @@
 //! Explicit-time tests of the production expiry boundary, without a test clock.
 
 use super::*;
-use crate::server::segmented_receive::expire_segmented_requests;
+use crate::server::segmented_receive::{
+    expire_segmented_requests, tests::observe_payload_drops, RequestPayload,
+};
 use std::sync::atomic::AtomicUsize;
-
-struct RetainedPayload {
-    data: [u8; 8],
-    drops: Arc<AtomicUsize>,
-}
-
-impl AsRef<[u8]> for RetainedPayload {
-    fn as_ref(&self) -> &[u8] {
-        &self.data
-    }
-}
-
-impl Drop for RetainedPayload {
-    fn drop(&mut self) {
-        self.drops.fetch_add(1, Ordering::SeqCst);
-    }
-}
 
 fn saved_state(last_progress: Instant, last_activity: Instant) -> SegmentedRequestState {
     let first_req = ConfirmedRequestPdu {
@@ -34,13 +19,12 @@ fn saved_state(last_progress: Instant, last_activity: Instant) -> SegmentedReque
         service_choice: ConfirmedServiceChoice::WRITE_PROPERTY,
         service_request: Bytes::from_static(b"first"),
     };
-    let mut receiver = SegmentReceiver::new();
-    receiver
-        .receive(0, first_req.service_request.clone())
+    let mut payload = RequestPayload::new(&first_req);
+    payload
+        .save_new(0, first_req.service_request.clone(), Some(0))
         .unwrap();
     SegmentedRequestState {
-        receiver,
-        first_req,
+        payload,
         last_activity,
         last_progress,
         expected_seq: 1,
@@ -93,27 +77,17 @@ fn request_progress_expiry_preserves_exact_4_second_inactivity_boundary() {
 fn request_progress_expiry_keeps_mixed_fresh_survivors_and_releases_all_payload_owners() {
     let now = Instant::now();
     let drops = Arc::new(AtomicUsize::new(0));
+    let probe = observe_payload_drops(&drops);
     let mut stale = saved_state(now - Duration::from_secs(16), now);
-    // Two owners: the initial payload shared by first_req and the receiver,
-    // and a later segment owned only by the receiver. Both must drop now.
-    stale.first_req.service_request = Bytes::from_owner(RetainedPayload {
-        data: [1; 8],
-        drops: Arc::clone(&drops),
-    });
+    // Observe actual detached first/later allocations through real saves, not
+    // raw receiver replacement or retention of the original input owner.
     stale
-        .receiver
-        .receive(0, stale.first_req.service_request.clone())
+        .payload
+        .save_new(1, Bytes::from_static(&[2; 8]), Some(5))
         .unwrap();
-    stale
-        .receiver
-        .receive(
-            1,
-            Bytes::from_owner(RetainedPayload {
-                data: [2; 8],
-                drops: Arc::clone(&drops),
-            }),
-        )
-        .unwrap();
+    stale.accepted_segments = 2;
+    stale.expected_seq = 2;
+    drop(probe);
     let stale_key = (test_mac(1), None, 0);
     let fresh_key = (test_mac(2), None, 0);
     let idle_key = (test_mac(3), None, 0);
@@ -134,10 +108,6 @@ fn request_progress_expiry_keeps_mixed_fresh_survivors_and_releases_all_payload_
     assert!(!receivers.contains_key(&idle_key));
     assert_eq!(receivers.len(), 1);
     assert_eq!(
-        receivers[&fresh_key].receiver.reassemble(1).unwrap(),
-        b"first"
-    );
-    assert_eq!(
         drops.load(Ordering::SeqCst),
         2,
         "cleanup must drop ownership synchronously"
@@ -149,4 +119,11 @@ fn request_progress_expiry_keeps_mixed_fresh_survivors_and_releases_all_payload_
         2,
         "repeated cleanup is harmless"
     );
+    let fresh = receivers
+        .remove(&fresh_key)
+        .unwrap()
+        .payload
+        .complete(1)
+        .unwrap();
+    assert_eq!(fresh.service_request.as_ref(), b"first");
 }
