@@ -129,11 +129,7 @@ impl ScConnection {
                 return false;
             }
         }
-        if msg.payload.len() != 26 {
-            warn!(
-                "ConnectAccept payload has {} bytes, expected 26",
-                msg.payload.len()
-            );
+        if crate::sc_frame::connect_message_error(msg).is_some() {
             return false;
         }
         self.pending_connect_message_id = None;

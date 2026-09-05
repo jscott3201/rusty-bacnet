@@ -747,6 +747,8 @@ fn connect_accept_validates_message_id() {
     let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
     let req = conn.build_connect_request();
     let req_id = req.message_id;
+    let mut payload = vec![0u8; 26];
+    payload[..6].fill(0x10); // non-reserved hub VMAC
 
     let accept = ScMessage {
         function: ScFunction::ConnectAccept,
@@ -755,7 +757,7 @@ fn connect_accept_validates_message_id() {
         destination_vmac: None,
         dest_options: Vec::new(),
         data_options: Vec::new(),
-        payload: Bytes::from(vec![0u8; 26]),
+        payload: Bytes::from(payload),
     };
     assert!(conn.handle_connect_accept(&accept));
     assert_eq!(conn.state, ScConnectionState::Connected);
@@ -765,6 +767,8 @@ fn connect_accept_validates_message_id() {
 fn connect_accept_rejects_wrong_message_id() {
     let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
     let _req = conn.build_connect_request();
+    let mut payload = vec![0u8; 26];
+    payload[..6].fill(0x10); // isolate the correlation failure
 
     let accept = ScMessage {
         function: ScFunction::ConnectAccept,
@@ -773,7 +777,7 @@ fn connect_accept_rejects_wrong_message_id() {
         destination_vmac: None,
         dest_options: Vec::new(),
         data_options: Vec::new(),
-        payload: Bytes::from(vec![0u8; 26]),
+        payload: Bytes::from(payload),
     };
     assert!(!conn.handle_connect_accept(&accept));
     assert_eq!(conn.state, ScConnectionState::Connecting);

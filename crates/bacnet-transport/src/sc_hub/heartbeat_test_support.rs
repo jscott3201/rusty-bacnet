@@ -22,7 +22,7 @@ impl Drop for LiveClient {
 }
 
 impl LiveClient {
-    pub async fn connect(clients: Clients, vmac: Vmac) -> Self {
+    pub async fn open(clients: Clients, vmac: Vmac) -> Self {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let rcgen::CertifiedKey { cert, signing_key } =
             rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
@@ -91,14 +91,18 @@ impl LiveClient {
                 .await;
             }
         });
-        let mut live = Self {
+        Self {
             ws: client.unwrap().0,
             clients,
             vmac,
             ack_observed,
             after_ack,
             reader,
-        };
+        }
+    }
+
+    pub async fn connect(clients: Clients, vmac: Vmac) -> Self {
+        let mut live = Self::open(clients, vmac).await;
         let mut request = frame(ScFunction::ConnectRequest, 1);
         let mut payload = Vec::from(vmac);
         payload.extend_from_slice(&[vmac[0]; 16]);
