@@ -413,6 +413,15 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                         }
                                     };
 
+                                    if let Err(nak) = crate::sc_frame::validate_heartbeat(&msg, &data) {
+                                        if let Some(nak) = nak {
+                                            if let Err(e) = ws_clone.send(&nak).await {
+                                                warn!("BACnet/SC heartbeat NAK send error: {e}");
+                                            }
+                                        }
+                                        continue;
+                                    }
+
                                     if msg.function == ScFunction::HeartbeatAck {
                                         if heartbeat::ack_matches_outstanding(&msg, pending_heartbeat_id) {
                                             last_bvlc_received = Instant::now();
@@ -805,6 +814,9 @@ impl<W: WebSocketPort> Drop for ScTransport<W> {
 
 #[cfg(test)]
 mod data_attribute_tests;
+
+#[cfg(test)]
+mod heartbeat_validation_tests;
 
 #[cfg(test)]
 mod drop_tests;

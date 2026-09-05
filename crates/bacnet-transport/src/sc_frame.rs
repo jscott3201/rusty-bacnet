@@ -12,7 +12,13 @@
 use bacnet_types::error::Error;
 use bytes::{BufMut, Bytes, BytesMut};
 
+mod heartbeat;
 mod result;
+
+pub(crate) use heartbeat::validate_heartbeat;
+
+#[cfg(test)]
+pub(crate) mod heartbeat_test_support;
 
 pub use result::{decode_sc_bvlc_result, ScBvlcResult};
 
