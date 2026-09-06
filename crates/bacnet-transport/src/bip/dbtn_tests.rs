@@ -48,6 +48,7 @@ async fn dbtn_registered_foreign_device_fans_out_without_origin_echo() {
     let (npdu_tx, mut npdu_rx) = mpsc::channel(1);
 
     let mut state = BbmdState::new(Ipv4Addr::LOCALHOST.octets(), local_port);
+    state.enable_foreign_device_registration(ForeignDevicePolicy::default());
     state
         .set_bdt(vec![BdtEntry {
             ip: Ipv4Addr::LOCALHOST.octets(),
@@ -133,6 +134,7 @@ async fn dbtn_registered_foreign_device_naks_when_forwarding_fails() {
     let (npdu_tx, _npdu_rx) = mpsc::channel(1);
 
     let mut state = BbmdState::new(Ipv4Addr::LOCALHOST.octets(), local_port);
+    state.enable_foreign_device_registration(ForeignDevicePolicy::default());
     assert_eq!(
         state.register_foreign_device(Ipv4Addr::LOCALHOST.octets(), origin_fd_port, 60),
         BvlcResultCode::SUCCESSFUL_COMPLETION

@@ -209,6 +209,11 @@ async fn rate_limit_silences_17th_register_from_same_ip() {
 async fn rate_limit_source_quota_ignores_udp_port() {
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     bbmd_transport.enable_bbmd(vec![]);
+    bbmd_transport.enable_foreign_device_registration(ForeignDevicePolicy {
+        registration_rate_per_source: 32,
+        registration_rate_global: 256,
+        ..Default::default()
+    });
     let _bbmd_rx = bbmd_transport.start().await.unwrap();
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
     let (bbmd_ip, bbmd_port) = decode_bip_mac(&bbmd_mac).unwrap();

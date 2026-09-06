@@ -185,6 +185,7 @@ async fn bbmd_register_foreign_device() {
     // Start a BBMD
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     bbmd_transport.enable_bbmd(vec![]);
+    bbmd_transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
     let _bbmd_rx = bbmd_transport.start().await.unwrap();
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
     let (bbmd_ip, bbmd_port) = decode_bip_mac(&bbmd_mac).unwrap();
@@ -249,6 +250,7 @@ async fn read_fdt_from_bbmd() {
     // Start a BBMD
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     bbmd_transport.enable_bbmd(vec![]);
+    bbmd_transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
     let _bbmd_rx = bbmd_transport.start().await.unwrap();
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
     let (bbmd_ip, bbmd_port) = decode_bip_mac(&bbmd_mac).unwrap();
@@ -438,6 +440,7 @@ async fn write_bdt_to_non_bbmd_surfaces_typed_nak() {
 async fn register_foreign_device_via_bvlc() {
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     bbmd_transport.enable_bbmd(vec![]);
+    bbmd_transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
     let _bbmd_rx = bbmd_transport.start().await.unwrap();
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
 
@@ -458,6 +461,7 @@ async fn register_foreign_device_via_bvlc() {
 async fn register_foreign_device_rejects_zero_ttl() {
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     bbmd_transport.enable_bbmd(vec![]);
+    bbmd_transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
     let _bbmd_rx = bbmd_transport.start().await.unwrap();
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
 
@@ -484,6 +488,7 @@ async fn register_foreign_device_rejects_zero_ttl() {
 async fn register_foreign_device_rejects_malformed_ttl_payload_lengths() {
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     bbmd_transport.enable_bbmd(vec![]);
+    bbmd_transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
     let _bbmd_rx = bbmd_transport.start().await.unwrap();
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
 
@@ -509,6 +514,10 @@ async fn register_foreign_device_rejects_malformed_ttl_payload_lengths() {
 async fn register_foreign_device_accepts_max_ttl_and_caps_remaining() {
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     bbmd_transport.enable_bbmd(vec![]);
+    bbmd_transport.enable_foreign_device_registration(ForeignDevicePolicy {
+        max_ttl: u16::MAX,
+        ..Default::default()
+    });
     let _bbmd_rx = bbmd_transport.start().await.unwrap();
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
 
@@ -572,10 +581,11 @@ async fn delete_fdt_entry_to_non_bbmd_surfaces_typed_nak() {
 }
 
 #[tokio::test]
-async fn delete_fdt_entry_removes_registered_foreign_device() {
+async fn delete_fdt_entry_via_bvlc() {
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     bbmd_transport.enable_bbmd(vec![]);
     bbmd_transport.set_bbmd_management_acl(vec![[127, 0, 0, 1]]);
+    bbmd_transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
     let _bbmd_rx = bbmd_transport.start().await.unwrap();
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
 
@@ -607,6 +617,7 @@ async fn delete_fdt_entry_rejects_malformed_payload_and_preserves_entry() {
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     bbmd_transport.enable_bbmd(vec![]);
     bbmd_transport.set_bbmd_management_acl(vec![[127, 0, 0, 1]]);
+    bbmd_transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
     let _bbmd_rx = bbmd_transport.start().await.unwrap();
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
 
@@ -651,6 +662,7 @@ async fn foreign_device_broadcast_via_bbmd() {
     // BBMD
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     bbmd_transport.enable_bbmd(vec![]);
+    bbmd_transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
     let mut bbmd_rx = bbmd_transport.start().await.unwrap();
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
     let (bbmd_ip, bbmd_port) = decode_bip_mac(&bbmd_mac).unwrap();

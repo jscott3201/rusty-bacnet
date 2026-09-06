@@ -196,6 +196,7 @@ async fn original_broadcast_npdu_bbmd_forwards_to_bdt_and_fdt_without_local_echo
     let (npdu_tx, mut npdu_rx) = mpsc::channel(1);
     let sender = ([192, 0, 2, 40], 0xBAC1);
     let mut state = BbmdState::new(Ipv4Addr::LOCALHOST.octets(), local_port);
+    state.enable_foreign_device_registration(ForeignDevicePolicy::default());
     state
         .set_bdt(vec![BdtEntry {
             ip: Ipv4Addr::LOCALHOST.octets(),

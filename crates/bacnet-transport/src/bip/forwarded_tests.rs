@@ -130,6 +130,7 @@ async fn forwarded_npdu_from_non_bdt_sender_is_rejected_without_delivery() {
     let origin = ([192, 0, 2, 20], 0xBAC1);
 
     let mut state = BbmdState::new(Ipv4Addr::LOCALHOST.octets(), local_port);
+    state.enable_foreign_device_registration(ForeignDevicePolicy::default());
     state
         .set_bdt(vec![BdtEntry {
             ip: Ipv4Addr::LOCALHOST.octets(),
@@ -198,6 +199,7 @@ async fn forwarded_npdu_from_directed_broadcast_peer_skips_local_rebroadcast() {
     let peer = ([192, 0, 2, 10], 0xBAC0);
     let origin = ([192, 0, 2, 20], 0xBAC1);
     let mut state = BbmdState::new(Ipv4Addr::LOCALHOST.octets(), local_port);
+    state.enable_foreign_device_registration(ForeignDevicePolicy::default());
     state
         .set_bdt(vec![
             BdtEntry {

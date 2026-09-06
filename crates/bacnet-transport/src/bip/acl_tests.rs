@@ -10,6 +10,7 @@ async fn management_acl_allows_listed_sender_delete_fdt_but_write_bdt_always_nak
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     bbmd_transport.enable_bbmd(vec![initial_bdt.clone()]);
     bbmd_transport.set_bbmd_management_acl(vec![[127, 0, 0, 1]]);
+    bbmd_transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
     let _bbmd_rx = bbmd_transport.start().await.unwrap();
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
 
@@ -74,6 +75,7 @@ async fn management_acl_denies_unlisted_sender_and_preserves_bdt_and_fdt() {
     };
     bbmd_transport.enable_bbmd(vec![initial_bdt.clone()]);
     bbmd_transport.set_bbmd_management_acl(vec![[10, 0, 0, 1]]);
+    bbmd_transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
     let _bbmd_rx = bbmd_transport.start().await.unwrap();
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
 
@@ -134,6 +136,7 @@ async fn empty_management_acl_denies_delete_fdt_and_preserves_entry() {
     // Default fail-closed policy: no ACL authorizes nobody.
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     bbmd_transport.enable_bbmd(vec![]);
+    bbmd_transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
     let _bbmd_rx = bbmd_transport.start().await.unwrap();
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
 

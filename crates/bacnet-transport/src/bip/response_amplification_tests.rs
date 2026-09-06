@@ -58,6 +58,11 @@ fn test_bdt_empty_and_max_response_sizes() {
 #[test]
 fn test_fdt_empty_and_max_response_sizes() {
     let mut state = BbmdState::new([127, 0, 0, 1], 0xBAC0);
+    state.enable_foreign_device_registration(ForeignDevicePolicy {
+        registration_rate_global: 256,
+        max_entries_per_source: 128,
+        ..Default::default()
+    });
 
     // Empty FDT payload -> 4-byte BVLC header only
     let mut empty_payload = BytesMut::new();
@@ -319,11 +324,21 @@ async fn test_bbmd_wire_read_fdt_throttling() {
     // Register 128 foreign devices directly in BBMD state
     {
         let mut state = BbmdState::new([127, 0, 0, 1], 0xBAC0);
+        state.enable_foreign_device_registration(ForeignDevicePolicy {
+            registration_rate_global: 256,
+            max_entries_per_source: 128,
+            ..Default::default()
+        });
         for i in 0..BbmdState::MAX_FDT_ENTRIES {
             let ip = [10, 0, (i / 256) as u8, (i % 256) as u8];
             state.register_foreign_device(ip, 0xBAC0 + (i as u16), 300);
         }
         bbmd_transport.enable_bbmd(state.bdt().to_vec());
+        bbmd_transport.enable_foreign_device_registration(ForeignDevicePolicy {
+            registration_rate_global: 256,
+            max_entries_per_source: 128,
+            ..Default::default()
+        });
     }
 
     let _bbmd_rx = bbmd_transport.start().await.unwrap();

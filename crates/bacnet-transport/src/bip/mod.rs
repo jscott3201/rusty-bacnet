@@ -15,6 +15,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
 use crate::bbmd::{self, BbmdState, BdtEntry, FdtEntryWire};
+pub use crate::bbmd::{FdtCounters, ForeignDevicePolicy};
 use crate::bvll::{decode_bip_mac, decode_bvll, encode_bip_mac, encode_bvll, BvllMessage};
 use crate::port::{ReceivedNpdu, TransportPort};
 use crate::udp_metadata::{DestinationReceiver, IpVersion};
@@ -116,6 +117,7 @@ pub struct ForeignDeviceConfig {
 struct BbmdConfig {
     initial_bdt: Vec<BdtEntry>,
     management_acl: Vec<[u8; 4]>,
+    foreign_device_policy: Option<ForeignDevicePolicy>,
 }
 
 /// BACnet/IP transport over UDP.
@@ -177,7 +179,24 @@ impl BipTransport {
         self.bbmd_config = Some(BbmdConfig {
             initial_bdt: bdt,
             management_acl: Vec::new(),
+            foreign_device_policy: None,
         });
+    }
+
+    /// Enable foreign device registration on this BBMD with the given policy.
+    /// Must be called after `enable_bbmd()` and before `start()`.
+    pub fn enable_foreign_device_registration(&mut self, policy: ForeignDevicePolicy) {
+        if let Some(config) = &mut self.bbmd_config {
+            config.foreign_device_policy = Some(policy);
+        } else {
+            warn!("enable_foreign_device_registration called before enable_bbmd(); policy will be ignored");
+        }
+    }
+
+    /// Set foreign device registration policy on this BBMD.
+    /// Must be called after `enable_bbmd()` and before `start()`.
+    pub fn set_foreign_device_policy(&mut self, policy: ForeignDevicePolicy) {
+        self.enable_foreign_device_registration(policy);
     }
 
     /// Set the path for loading an externally provisioned persisted BDT
@@ -217,6 +236,16 @@ impl BipTransport {
         match self.management_limiter.lock() {
             Ok(limiter) => limiter.counters(),
             Err(poison) => poison.into_inner().counters(),
+        }
+    }
+
+    /// Return operational Foreign Device Table counters if BBMD mode is enabled.
+    pub async fn fdt_counters(&self) -> Option<FdtCounters> {
+        if let Some(bbmd) = &self.bbmd {
+            let state = bbmd.lock().await;
+            Some(state.fdt_counters())
+        } else {
+            None
         }
     }
 
@@ -531,6 +560,7 @@ impl TransportPort for BipTransport {
                 return Err(Error::Encoding(format!("BDT configuration error: {e}")));
             }
             state.set_management_acl(config.management_acl);
+            state.set_foreign_device_policy(config.foreign_device_policy);
             self.bbmd = Some(Arc::new(Mutex::new(state)));
         }
 

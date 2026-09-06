@@ -23,6 +23,7 @@ async fn wait_for_fdt_len(transport: &BipTransport, expected: usize) {
 async fn bbmd_fdt_purge_task_clears_expired_entry_without_bvlc_request() {
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     bbmd_transport.enable_bbmd(vec![]);
+    bbmd_transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
     let _bbmd_rx = bbmd_transport.start().await.unwrap();
     assert!(bbmd_transport.bbmd_fdt_purge_task.is_some());
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
@@ -64,6 +65,7 @@ async fn register_foreign_device_resets_entry_before_purge_task_removes_it() {
 
     {
         let mut state = bbmd.lock().await;
+        state.enable_foreign_device_registration(ForeignDevicePolicy::default());
         assert_eq!(
             state.register_foreign_device(fd_ip, fd_port, 1),
             BvlcResultCode::SUCCESSFUL_COMPLETION
@@ -85,4 +87,32 @@ async fn register_foreign_device_resets_entry_before_purge_task_removes_it() {
 
     purge_task.abort();
     let _ = purge_task.await;
+}
+
+#[tokio::test]
+async fn bbmd_without_foreign_device_policy_naks_bvlc_registration() {
+    let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    bbmd_transport.enable_bbmd(vec![]);
+    // Do NOT call enable_foreign_device_registration
+    let _bbmd_rx = bbmd_transport.start().await.unwrap();
+    let bbmd_mac = bbmd_transport.local_mac().to_vec();
+
+    let mut client_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    let _client_rx = client_transport.start().await.unwrap();
+
+    let result = client_transport
+        .register_foreign_device_bvlc(&bbmd_mac, 60)
+        .await
+        .unwrap();
+    assert_eq!(result, BvlcResultCode::REGISTER_FOREIGN_DEVICE_NAK);
+
+    let counters = bbmd_transport.fdt_counters().await.unwrap();
+    assert_eq!(counters.registrations_rejected, 1);
+    assert_eq!(counters.registrations_accepted, 0);
+
+    // Non-BBMD client returns None for fdt_counters
+    assert!(client_transport.fdt_counters().await.is_none());
+
+    client_transport.stop().await.unwrap();
+    bbmd_transport.stop().await.unwrap();
 }
