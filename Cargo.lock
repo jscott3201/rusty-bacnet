@@ -249,7 +249,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-cli"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "bacnet-client",
  "bacnet-encoding",
@@ -281,7 +281,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-client"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-endpoint-core",
@@ -299,7 +299,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-encoding"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "bacnet-types",
  "bytes",
@@ -308,7 +308,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-endpoint-core"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-network",
@@ -320,7 +320,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-integration-tests"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "bacnet-client",
  "bacnet-encoding",
@@ -337,7 +337,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-network"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-transport",
@@ -349,7 +349,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-objects"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-types",
@@ -359,7 +359,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-server"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "bacnet-client",
  "bacnet-encoding",
@@ -377,7 +377,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-services"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-types",
@@ -387,7 +387,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-transport"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-types",
@@ -409,7 +409,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-types"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "bitflags 2.13.1",
  "serde",
@@ -2194,7 +2194,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "rusty-bacnet"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "bacnet-client",
  "bacnet-encoding",

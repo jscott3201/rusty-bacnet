@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-06
+
+### Release highlights
+
+This pre-1.0 release includes breaking Rust, Python, and CLI API changes.
+BACnet conformance remains partial: the detailed entries and
+[conformance ledger](docs/conformance/bacnet-135-2020.json) describe the supported
+boundaries and remaining gaps. This release is not a full-conformance or BTL
+certification claim.
+
+- Native BACnet/SC adds bounded handshake and control-send work, WebSocket
+  resource budgets and selected I/O deadlines, heartbeat validation, and bounded
+  connection retirement during reconnect and failover. WebSocket reader and
+  outbound-wait policy work remains tracked in #525.
+- Routed request/reply correlation, peer APDU limits, and segmented transaction
+  timers, acknowledgments, and resource bounds now follow the peer's identity
+  and advertised capabilities more closely.
+- Intrinsic event history, exact BACnetTimeStamp handling, AcknowledgeAlarm
+  correlation, and acknowledgment notification delivery preserve committed
+  transition state across the supported object families.
+- Typed Rust and Python Audit clients complement durable Audit Log storage,
+  retained-record queries, policy-controlled notification receipt, and persisted
+  confirmed-receipt duplicate detection. Audit Reporting BIBBs remain unclaimed.
+- Python gains MS/TP transport configuration and trusted local input
+  `Present_Value` updates. File objects gain bounded resizing and pre-start
+  Python management; resident logs gain exact ReadRange selection; Staging gains
+  explicit configuration and local binary-target execution.
+
+### Migration notes
+
+- Replace the former stage-count-only `StagingObject::new` argument with a
+  complete `StagingConfig`; see the [Rust construction example](docs/rust-api.md#building-control-7).
+- Custom `AuditLogPersistence` implementations must preserve the new
+  `AuditLogSnapshot::completed_receipts` field in the same atomic commit as
+  records. The built-in file backend writes schema v2 and reads v1 with an empty
+  receipt ledger; see the [snapshot migration](docs/rust-api.md#audit-services).
+- Pass exact `--timestamp` and `--ack-time` values to CLI `ack-alarm` / `ack`.
+  Python callers should use `acknowledge_alarm_request`; the five-argument
+  `acknowledge_alarm` method is deprecated.
+- Update GetEnrollmentSummary `RecipientProcess` construction from `device` to
+  the `recipient: BACnetRecipient` CHOICE. Audit request models and the raw
+  Python `audit_log_query` signature also changed; use the typed helpers when
+  possible and consult the detailed changes below for other source migrations.
+- Remove dependencies on the withdrawn WASM crate, Notification Forwarder and
+  Channel constructors, and bundled-server WriteGroup execution. Retained wire
+  identifiers and client codecs do not imply those server capabilities.
+
 ### Changed
 
 - **Breaking CLI invocation:** one-shot and interactive `ack-alarm` (including
@@ -25,10 +72,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Rust-only, application-owned logical `Present_Value` updates for in-service
+- Application-owned logical `Present_Value` updates for in-service
   Analog Input, Binary Input, and Multi-state Input objects, using the existing
   server post-write intrinsic-event and COV processing. Out-of-service client
-  simulations remain protected; Python exposure remains tracked in #503.
+  simulations remain protected. Rust and Python expose this route through the
+  server's `set_present_value_local` method (#503, #510).
 
 - Correlated AcknowledgeAlarm validation, lossless Rust request construction,
   and bundled-server ACK notification distribution (#132, #170, #175). The
@@ -350,7 +398,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unavailable or invalid) and clear `Archive`, including direct preloads and
   equal-content or empty AtomicWriteFile writes (#416). Failed writes remain
   metadata-neutral; custom `FileStorage` implementations still own their
-  metadata, and File_Size/Record_Count network writes remain deferred to #417.
+  metadata. Conditional File_Size/Record_Count network writes were subsequently
+  added in #481, resolving #417 as described above.
 
 - Reliability evaluation now belongs to each `BACnetObject` through a defaulted
   opt-in hook. Enabling server fault detection invokes that hook for every
@@ -534,17 +583,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   obsolete `acknowledgment_filter` plus opaque query tail. This is a breaking
   Rust API change. Python's breaking `audit_log_query` signature now accepts a
   complete pre-encoded `service_data: bytes` payload instead of
-  `acknowledgment_filter` and `query_options_raw`; all three Audit methods are
-  explicitly raw outbound escape hatches and do not imply bundled-server
-  execution.
+  `acknowledgment_filter` and `query_options_raw`. The raw Python methods remain
+  outbound escape hatches; additive `_typed` methods now accept structured
+  mappings and return a decoded query ACK through the native typed clients
+  (#511). Explicitly backed Audit Log objects provide durable storage and
+  retained-record query execution (#458, #463), with separately authorized
+  confirmed and unconfirmed notification receipt (#466, #512). Successful
+  confirmed receipt persists its bounded duplicate ledger with the records
+  (#535).
 
   The query model deliberately implements Clause 21's
   `start-at-sequence-number Unsigned32` and `successful-actions-only BOOLEAN`.
   Clause 13.19 describes those fields as `Unsigned64` and
   `BACnetSuccessFilter`, respectively; that internal Standard conflict remains
   an interoperability limitation pending authoritative addendum or errata
-  resolution. Audit service handlers, persistence, query acknowledgments, and
-  PICS/BIBB support claims remain out of scope.
+  resolution. Query authorization, producer/report generation, forwarding,
+  failures-only filtering, and wrap-safe 64-bit continuation remain outside
+  this release's supported Audit boundary; no Audit Reporting BIBB is claimed.
 
 - COV Multiple wire models now match the Clause 13.16–13.18 and Clause 21
   productions (#342). `issue_confirmed_notifications` and each reference's

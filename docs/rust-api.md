@@ -573,7 +573,12 @@ properties.
 
 Staging uses an explicit atomic configuration; the former stage-count-only
 constructor is intentionally removed because it could not create a valid
-ladder or target mapping:
+ladder or target mapping. To migrate to 0.11.0, replace that argument with a
+`StagingConfig` containing the initial value, minimum, units, priority, at least
+two ordered stages, and local target references. Each stage's `values` must
+have one entry per target; optional `stage_names` must have one name per stage.
+Construction returns an error for invalid configuration, so preserve the
+fallible result handling:
 
 ```rust
 use bacnet_objects::staging::{StagingConfig, StagingObject};
@@ -1007,9 +1012,21 @@ request tracker remains the pending/session guard.
 `AuditLogSnapshot::completed_receipts` is part of the public custom-persistence
 snapshot contract. `FileAuditLogPersistence` writes schema v2, reads schema v1
 as an empty receipt ledger, rejects unknown future versions, and retains the
-existing two-slot generation/checksum recovery policy. Unconfirmed receipt
-never emits a response and never writes the confirmed ledger. Synchronous
-persistence under the database writer is an intentional availability
+existing two-slot generation/checksum recovery policy. When migrating a custom
+`AuditLogPersistence` implementation to 0.11.0, add `completed_receipts: Vec::new()`
+to newly constructed snapshots and when decoding an older format without
+receipts. Thereafter, `commit` must durably store the supplied receipt ledger
+and records in the same atomic snapshot, and `load` must restore both. Dropping
+or separately committing the ledger loses confirmed-request duplicate
+protection after a reopen. The built-in file backend needs no separate v1
+conversion: it writes v2 on the next successful commit.
+
+Back up both `.slot0` and `.slot1` files before the first v2 commit. A reader that
+supports only v1 cannot read v2 snapshots; rolling back to such an implementation
+requires restoring a compatible backup and loses changes made after that backup.
+
+Unconfirmed receipt never emits a response and never writes the confirmed ledger.
+Synchronous persistence under the database writer is an intentional availability
 limitation. Query authorization, sustained rate limiting, producer/report
 generation, forwarding, multi-log routing policy, failures-only filtering, and
 a wrap-safe 64-bit continuation are not provided. Executed-service bit 46
