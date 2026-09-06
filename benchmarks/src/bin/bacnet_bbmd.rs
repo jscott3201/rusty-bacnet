@@ -8,7 +8,7 @@ use std::net::Ipv4Addr;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_server::server::BACnetServer;
-use bacnet_transport::bbmd::BdtEntry;
+use bacnet_transport::bbmd::{BdtEntry, ForeignDevicePolicy};
 use bacnet_transport::bip::BipTransport;
 use clap::Parser;
 
@@ -71,6 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut transport = BipTransport::new(interface, args.port, broadcast);
     transport.enable_bbmd(bdt);
+    transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
 
     // Minimal device database
     let mut db = ObjectDatabase::new();

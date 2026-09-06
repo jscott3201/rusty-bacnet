@@ -267,3 +267,92 @@ async fn forwarded_npdu_from_directed_broadcast_peer_skips_local_rebroadcast() {
         "Forwarded-NPDU from a BDT peer must not be re-forwarded to BDT peers"
     );
 }
+
+#[tokio::test]
+async fn forwarded_npdu_fdt_fanout_respects_budget_and_increments_counter() {
+    let bbmd_socket = Arc::new(
+        UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap(),
+    );
+    let local_port = bbmd_socket.local_addr().unwrap().port();
+    let local_broadcast_sink = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let local_broadcast_port = local_broadcast_sink.local_addr().unwrap().port();
+
+    let mut fd_sockets = Vec::new();
+    let mut fd_ports = Vec::new();
+    for _ in 0..3 {
+        let sock = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        fd_ports.push(sock.local_addr().unwrap().port());
+        fd_sockets.push(sock);
+    }
+
+    let (npdu_tx, _npdu_rx) = mpsc::channel(1);
+    let peer = ([192, 0, 2, 10], 0xBAC0);
+    let origin = ([192, 0, 2, 20], 0xBAC1);
+
+    let mut state = BbmdState::new(Ipv4Addr::LOCALHOST.octets(), local_port);
+    state.enable_foreign_device_registration(ForeignDevicePolicy {
+        max_fdt_fanout: 2,
+        ..ForeignDevicePolicy::default()
+    });
+    state
+        .set_bdt(vec![BdtEntry {
+            ip: peer.0,
+            port: peer.1,
+            broadcast_mask: [255, 255, 255, 255],
+        }])
+        .unwrap();
+
+    for &port in &fd_ports {
+        assert_eq!(
+            state.register_foreign_device(Ipv4Addr::LOCALHOST.octets(), port, 60),
+            BvlcResultCode::SUCCESSFUL_COMPLETION
+        );
+    }
+
+    let bbmd_state = Arc::new(Mutex::new(state));
+    let ctx = RecvContext {
+        local_mac: encode_bip_mac(Ipv4Addr::LOCALHOST.octets(), local_port),
+        socket: bbmd_socket,
+        npdu_tx,
+        bbmd: Some(bbmd_state.clone()),
+        broadcast_addr: Ipv4Addr::LOCALHOST,
+        broadcast_port: local_broadcast_port,
+        pending_bvlc_response: Arc::new(Mutex::new(None)),
+        management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
+        force_dbtn_forward_failure: false,
+    };
+    let msg = BvllMessage {
+        function: BvlcFunction::FORWARDED_NPDU,
+        payload: Bytes::from_static(&[0x01, 0x00, 0xAA, 0xBB]),
+        originating_ip: Some(origin.0),
+        originating_port: Some(origin.1),
+    };
+
+    handle_bvll_message(&msg, peer, &ctx).await;
+
+    // First two foreign devices received the frame
+    let frame1 = recv_bvll(&fd_sockets[0]).await;
+    assert_eq!(frame1.function, BvlcFunction::FORWARDED_NPDU);
+    assert_eq!(frame1.originating_ip, Some(origin.0));
+    assert_eq!(frame1.originating_port, Some(origin.1));
+    assert_eq!(frame1.payload.as_ref(), msg.payload.as_ref());
+
+    let frame2 = recv_bvll(&fd_sockets[1]).await;
+    assert_eq!(frame2.function, BvlcFunction::FORWARDED_NPDU);
+    assert_eq!(frame2.originating_ip, Some(origin.0));
+    assert_eq!(frame2.originating_port, Some(origin.1));
+    assert_eq!(frame2.payload.as_ref(), msg.payload.as_ref());
+
+    // Third foreign device was capped and received nothing
+    assert_no_bvll(&fd_sockets[2], "third foreign device").await;
+
+    // Counter was incremented
+    let counters = bbmd_state.lock().await.fdt_counters();
+    assert_eq!(counters.fanout_budget_reached, 1);
+}

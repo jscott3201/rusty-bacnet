@@ -575,22 +575,48 @@ impl BbmdState {
             targets.push((directed_broadcast, entry.port));
         }
 
+        targets.extend(self.fdt_forwarding_targets_at(exclude_ip, exclude_port, now));
+
+        targets
+    }
+
+    /// Get all (ip, port) FDT targets for forwarding, excluding `(exclude_ip, exclude_port)`.
+    /// Purges expired entries, caps results to `max_fdt_fanout`, and increments
+    /// `fanout_budget_reached` if capped.
+    pub fn fdt_forwarding_targets(
+        &mut self,
+        exclude_ip: [u8; 4],
+        exclude_port: u16,
+    ) -> Vec<([u8; 4], u16)> {
+        self.fdt_forwarding_targets_at(exclude_ip, exclude_port, Instant::now())
+    }
+
+    /// Get all (ip, port) FDT targets for forwarding relative to `now`, excluding `(exclude_ip, exclude_port)`.
+    /// Purges expired entries, caps results to `max_fdt_fanout`, and increments
+    /// `fanout_budget_reached` if capped.
+    pub fn fdt_forwarding_targets_at(
+        &mut self,
+        exclude_ip: [u8; 4],
+        exclude_port: u16,
+        now: Instant,
+    ) -> Vec<([u8; 4], u16)> {
+        self.purge_expired_at(now);
+
         let max_fdt_fanout = self
             .foreign_device_policy
             .as_ref()
             .map_or(32, |p| p.max_fdt_fanout);
 
-        let mut fdt_count = 0;
+        let mut targets = Vec::new();
         for entry in &self.fdt {
             if entry.ip == exclude_ip && entry.port == exclude_port {
                 continue;
             }
-            if fdt_count >= max_fdt_fanout {
+            if targets.len() >= max_fdt_fanout {
                 self.counters.fanout_budget_reached += 1;
                 break;
             }
             targets.push((entry.ip, entry.port));
-            fdt_count += 1;
         }
 
         targets

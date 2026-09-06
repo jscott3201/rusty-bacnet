@@ -341,3 +341,35 @@ fn counters_accurate_for_all_events() {
     assert_eq!(bbmd.fdt_counters().registrations_expired, 3);
     assert!(bbmd.fdt().is_empty());
 }
+
+#[test]
+fn fdt_forwarding_targets_fanout_budget_and_exclusion() {
+    let mut bbmd = make_unconfigured_bbmd();
+    bbmd.enable_foreign_device_registration(ForeignDevicePolicy {
+        max_fdt_fanout: 3,
+        max_entries_per_source: 10,
+        registration_rate_per_source: 100,
+        registration_rate_global: 100,
+        ..Default::default()
+    });
+
+    for i in 1..=5 {
+        assert_eq!(
+            bbmd.register_foreign_device([10, 0, 0, i], 0xBAC0, 60),
+            BvlcResultCode::SUCCESSFUL_COMPLETION
+        );
+    }
+
+    assert_eq!(bbmd.fdt_counters().fanout_budget_reached, 0);
+
+    // If originator is one of the foreign devices, exclude it and cap to 3
+    let targets = bbmd.fdt_forwarding_targets([10, 0, 0, 1], 0xBAC0);
+    assert_eq!(targets.len(), 3);
+    assert!(!targets.contains(&([10, 0, 0, 1], 0xBAC0)));
+    assert_eq!(bbmd.fdt_counters().fanout_budget_reached, 1);
+
+    // If originator is external, return 3 and increment counter again
+    let targets2 = bbmd.fdt_forwarding_targets([192, 168, 1, 1], 0xBAC0);
+    assert_eq!(targets2.len(), 3);
+    assert_eq!(bbmd.fdt_counters().fanout_budget_reached, 2);
+}

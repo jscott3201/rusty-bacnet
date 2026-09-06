@@ -6,6 +6,7 @@
 use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
 
+use bacnet_transport::bbmd::ForeignDevicePolicy;
 use bacnet_transport::bip::{BipTransport, ForeignDeviceConfig};
 use bacnet_transport::bvll::decode_bip_mac;
 use bacnet_transport::port::TransportPort;
@@ -21,6 +22,13 @@ pub async fn run(duration_secs: u64, steps: &[u64]) -> Vec<DegradationPoint> {
         // Start BBMD
         let mut bbmd = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
         bbmd.enable_bbmd(vec![]);
+        bbmd.enable_foreign_device_registration(ForeignDevicePolicy {
+            max_entries_per_source: 256,
+            max_fdt_fanout: 128,
+            registration_rate_per_source: 1000,
+            registration_rate_global: 2000,
+            ..Default::default()
+        });
         let _bbmd_rx = bbmd.start().await.unwrap();
         let bbmd_mac = bbmd.local_mac().to_vec();
         let (bbmd_ip, bbmd_port) = decode_bip_mac(&bbmd_mac).unwrap();

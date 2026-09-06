@@ -228,13 +228,7 @@ pub(super) async fn handle_bvll_message(
                 // Forward to FDT entries (BDT peers don't need it — they got it directly)
                 let fdt_targets = {
                     let mut state = bbmd.lock().await;
-                    state.purge_expired();
-                    state
-                        .fdt()
-                        .iter()
-                        .filter(|e| !(e.ip == orig_ip && e.port == orig_port))
-                        .map(|e| (e.ip, e.port))
-                        .collect::<Vec<_>>()
+                    state.fdt_forwarding_targets(orig_ip, orig_port)
                 };
                 let _ =
                     forward_npdu(&ctx.socket, &msg.payload, orig_ip, orig_port, &fdt_targets).await;
