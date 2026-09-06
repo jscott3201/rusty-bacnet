@@ -1,12 +1,15 @@
 //! ObjectDatabase — stores and retrieves BACnet objects by identifier.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
-use crate::traits::BACnetObject;
+use crate::clock::{ClockFrame, ClockReader};
+use crate::event_enrollment::EventEnrollmentMonitoredSource;
+use crate::traits::{BACnetObject, MonotonicClock};
 
 /// A collection of BACnet objects, keyed by ObjectIdentifier.
 ///
@@ -14,10 +17,36 @@ use crate::traits::BACnetObject;
 /// Maintains secondary indexes for O(1) name lookup and O(1) type lookup.
 pub struct ObjectDatabase {
     objects: HashMap<ObjectIdentifier, Box<dyn BACnetObject>>,
+    /// Shared Device clock reader. `None` is an explicit clockless database.
+    clock: Option<Arc<dyn ClockReader>>,
+    monotonic_clock: Option<Arc<MonotonicClock>>,
+    /// Device-local EventNotification ordering source for clockless operation.
+    event_sequence_number: u16,
     /// Reverse index: object name → ObjectIdentifier for uniqueness enforcement.
     name_index: HashMap<String, ObjectIdentifier>,
     /// Type index: object type → set of ObjectIdentifiers for fast enumeration.
     type_index: HashMap<ObjectType, Vec<ObjectIdentifier>>,
+    /// Event Enrollment objects whose private evaluator state must be reset
+    /// before it can be used again.
+    invalid_enrollment_eval_state: HashSet<ObjectIdentifier>,
+    /// Source ownership for custom Event Enrollment objects that implement
+    /// evaluation state but not the optional object-owned source channel.
+    enrollment_eval_sources: HashMap<ObjectIdentifier, EventEnrollmentMonitoredSource>,
+}
+
+/// A non-consuming reservation of the database-local event sequence source.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EventSequenceReservation {
+    number: u16,
+}
+
+impl EventSequenceReservation {
+    /// The sequence number selected by this reservation.
+    #[doc(hidden)]
+    pub fn number(self) -> u16 {
+        self.number
+    }
 }
 
 impl Default for ObjectDatabase {
@@ -31,8 +60,13 @@ impl ObjectDatabase {
     pub fn new() -> Self {
         Self {
             objects: HashMap::new(),
+            clock: None,
+            monotonic_clock: None,
+            event_sequence_number: 0,
             name_index: HashMap::new(),
             type_index: HashMap::new(),
+            invalid_enrollment_eval_state: HashSet::new(),
+            enrollment_eval_sources: HashMap::new(),
         }
     }
 
@@ -40,7 +74,9 @@ impl ObjectDatabase {
     ///
     /// Returns `Err` if another object already has the same `object_name()`.
     /// Replacing an object with the same OID is allowed (the old object is removed).
-    pub fn add(&mut self, object: Box<dyn BACnetObject>) -> Result<(), Error> {
+    pub fn add(&mut self, mut object: Box<dyn BACnetObject>) -> Result<(), Error> {
+        object.bind_clock_internal(self.clock.clone());
+        object.bind_monotonic_clock_internal(self.monotonic_clock.clone());
         let oid = object.object_identifier();
         let name = object.object_name().to_string();
 
@@ -55,13 +91,16 @@ impl ObjectDatabase {
         }
 
         // If replacing an existing object, remove its old name from the index
+        // and invalidate state owned by enrollments that monitor it.
         if let Some(old) = self.objects.get(&oid) {
             let old_name = old.object_name().to_string();
             self.name_index.remove(&old_name);
+            self.invalidate_enrollments_monitoring(&oid);
         }
 
         self.name_index.insert(name, oid);
         let is_new = !self.objects.contains_key(&oid);
+        self.enrollment_eval_sources.remove(&oid);
         self.objects.insert(oid, object);
         if is_new {
             self.type_index
@@ -120,9 +159,85 @@ impl ObjectDatabase {
         self.objects.get_mut(oid)
     }
 
+    /// Whether an Event Enrollment object's private evaluator state requires a
+    /// successful reset before reuse.
+    pub fn enrollment_eval_state_invalidated(&self, oid: &ObjectIdentifier) -> bool {
+        self.invalid_enrollment_eval_state.contains(oid)
+    }
+
+    /// Mark or clear the reset requirement for Event Enrollment private state.
+    pub fn set_enrollment_eval_state_invalidated(
+        &mut self,
+        oid: ObjectIdentifier,
+        invalidated: bool,
+    ) {
+        if invalidated {
+            self.invalid_enrollment_eval_state.insert(oid);
+        } else {
+            self.invalid_enrollment_eval_state.remove(&oid);
+        }
+    }
+
+    /// Return database-owned monitored-source state for a custom Event
+    /// Enrollment object.
+    pub fn enrollment_eval_source(
+        &self,
+        oid: &ObjectIdentifier,
+    ) -> Option<EventEnrollmentMonitoredSource> {
+        self.enrollment_eval_sources.get(oid).copied()
+    }
+
+    /// Store database-owned monitored-source state for a custom Event
+    /// Enrollment object.
+    pub fn set_enrollment_eval_source(
+        &mut self,
+        oid: ObjectIdentifier,
+        source: Option<EventEnrollmentMonitoredSource>,
+    ) {
+        if let Some(source) = source {
+            self.enrollment_eval_sources.insert(oid, source);
+        } else {
+            self.enrollment_eval_sources.remove(&oid);
+        }
+    }
+
+    fn invalidate_enrollments_monitoring(&mut self, monitored_oid: &ObjectIdentifier) {
+        let affected = self
+            .objects
+            .iter()
+            .filter_map(|(oid, object)| {
+                let source = object
+                    .enrollment_eval_source_internal()
+                    .flatten()
+                    .or_else(|| self.enrollment_eval_sources.get(oid).copied());
+                source
+                    .is_some_and(|source| source.0 == *monitored_oid)
+                    .then_some(*oid)
+            })
+            .collect::<Vec<_>>();
+        self.invalid_enrollment_eval_state.extend(affected);
+    }
+
     /// Remove an object by identifier.
     pub fn remove(&mut self, oid: &ObjectIdentifier) -> Option<Box<dyn BACnetObject>> {
-        if let Some(obj) = self.objects.remove(oid) {
+        if self.objects.contains_key(oid) {
+            self.invalidate_enrollments_monitoring(oid);
+        }
+        if let Some(mut obj) = self.objects.remove(oid) {
+            self.enrollment_eval_sources.remove(oid);
+            if obj.enrollment_eval_state_internal().is_some() {
+                if obj
+                    .set_enrollment_eval_state_internal(Default::default())
+                    .is_err()
+                {
+                    self.invalid_enrollment_eval_state.insert(*oid);
+                } else {
+                    self.invalid_enrollment_eval_state.remove(oid);
+                }
+                let _ = obj.set_enrollment_eval_source_internal(None);
+            } else {
+                self.invalid_enrollment_eval_state.remove(oid);
+            }
             self.name_index.remove(obj.object_name());
             if let Some(type_set) = self.type_index.get_mut(&oid.object_type()) {
                 type_set.retain(|o| o != oid);
@@ -156,6 +271,78 @@ impl ObjectDatabase {
         self.objects.iter().map(|(&oid, obj)| (oid, obj.as_ref()))
     }
 
+    /// Bind one clock reader to the database and every object it contains.
+    ///
+    /// Devices added after this call receive the same reader in [`add`](Self::add).
+    pub fn set_clock_reader(&mut self, clock: Option<Arc<dyn ClockReader>>) {
+        self.clock = clock;
+        for object in self.objects.values_mut() {
+            object.bind_clock_internal(self.clock.clone());
+        }
+    }
+
+    /// Bind one process-local monotonic source to every contained object.
+    #[doc(hidden)]
+    pub fn set_monotonic_clock_internal(&mut self, clock: Option<Arc<MonotonicClock>>) {
+        self.monotonic_clock = clock;
+        for object in self.objects.values_mut() {
+            object.bind_monotonic_clock_internal(self.monotonic_clock.clone());
+        }
+    }
+
+    /// Read one coherent sample from the database's shared clock.
+    pub fn clock_frame(&self) -> Option<ClockFrame> {
+        self.clock.as_ref()?.read_clock()
+    }
+
+    /// Consume the next Device-local EventNotification sequence number.
+    ///
+    /// The counter wraps modulo 65536 as required by the timestamp production.
+    #[doc(hidden)]
+    pub fn next_event_sequence_number(&mut self) -> u16 {
+        let reservation = self.reserve_event_sequence_number();
+        let number = reservation.number();
+        let confirmed = self.confirm_event_sequence_number(reservation);
+        debug_assert!(
+            confirmed,
+            "a reservation cannot become stale without mutation"
+        );
+        number
+    }
+
+    /// Reserve the current sequence number without consuming it.
+    #[doc(hidden)]
+    pub fn reserve_event_sequence_number(&self) -> EventSequenceReservation {
+        EventSequenceReservation {
+            number: self.event_sequence_number,
+        }
+    }
+
+    /// Consume an exact reservation if it is still current.
+    #[doc(hidden)]
+    pub fn confirm_event_sequence_number(&mut self, reservation: EventSequenceReservation) -> bool {
+        if reservation.number != self.event_sequence_number {
+            return false;
+        }
+        self.event_sequence_number = self.event_sequence_number.wrapping_add(1);
+        true
+    }
+
+    /// Visit every `(ObjectIdentifier, &mut dyn BACnetObject)` pair.
+    ///
+    /// Mutable counterpart to [`iter_objects`](Self::iter_objects), used by
+    /// the intrinsic-reporting tick task to advance pending transitions. A
+    /// callback is used (rather than a returned `impl Iterator`) so the
+    /// `&mut dyn BACnetObject` borrow is tied to this call's lifetime.
+    pub fn for_each_object_mut<F>(&mut self, mut f: F)
+    where
+        F: FnMut(ObjectIdentifier, &mut dyn BACnetObject),
+    {
+        for (&oid, obj) in self.objects.iter_mut() {
+            f(oid, obj.as_mut());
+        }
+    }
+
     /// Number of objects in the database.
     pub fn len(&self) -> usize {
         self.objects.len()
@@ -172,9 +359,99 @@ mod tests {
     use std::borrow::Cow;
 
     use super::*;
-    use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
+    use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
+    use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
+    use crate::event::{EventStateChange, EventTransition, EventTransitionCommit};
+    use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
+    use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier};
     use bacnet_types::error::Error;
-    use bacnet_types::primitives::PropertyValue;
+    use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
+
+    #[test]
+    fn all_nine_builtin_intrinsic_families_implement_atomic_commit() {
+        let mut objects: Vec<Box<dyn BACnetObject>> = vec![
+            Box::new(AnalogInputObject::new(1, "AI", 0).unwrap()),
+            Box::new(AnalogOutputObject::new(1, "AO", 0).unwrap()),
+            Box::new(AnalogValueObject::new(1, "AV", 0).unwrap()),
+            Box::new(BinaryInputObject::new(1, "BI").unwrap()),
+            Box::new(BinaryOutputObject::new(1, "BO").unwrap()),
+            Box::new(BinaryValueObject::new(1, "BV").unwrap()),
+            Box::new(MultiStateInputObject::new(1, "MSI", 3).unwrap()),
+            Box::new(MultiStateOutputObject::new(1, "MSO", 3).unwrap()),
+            Box::new(MultiStateValueObject::new(1, "MSV", 3).unwrap()),
+        ];
+
+        for object in &mut objects {
+            assert!(
+                object.intrinsic_reporting_requires_atomic_commit(),
+                "{} must opt into the atomic server path",
+                object.object_name()
+            );
+            object
+                .commit_event_transition_internal(EventTransitionCommit {
+                    change: EventStateChange {
+                        from: EventState::NORMAL,
+                        to: EventState::OFFNORMAL,
+                    },
+                    coordinate: EventTransition::ToOffnormal,
+                    ack_required: true,
+                    timestamp: BACnetTimeStamp::SequenceNumber(73),
+                    message_text: None,
+                })
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "{} must implement the shared commit hook: {error:?}",
+                        object.object_name()
+                    )
+                });
+
+            assert_eq!(
+                object
+                    .read_property(PropertyIdentifier::EVENT_STATE, None)
+                    .unwrap(),
+                PropertyValue::Enumerated(EventState::OFFNORMAL.to_raw()),
+                "{} Event_State",
+                object.object_name()
+            );
+            assert_eq!(
+                object
+                    .read_property(PropertyIdentifier::ACKED_TRANSITIONS, None)
+                    .unwrap(),
+                PropertyValue::BitString {
+                    unused_bits: 5,
+                    data: vec![0x60],
+                },
+                "{} Acked_Transitions",
+                object.object_name()
+            );
+        }
+    }
+
+    #[test]
+    fn event_sequence_wraps_and_is_database_local() {
+        let mut first = ObjectDatabase::new();
+        let mut second = ObjectDatabase::new();
+
+        assert_eq!(first.next_event_sequence_number(), 0);
+        assert_eq!(first.next_event_sequence_number(), 1);
+        assert_eq!(second.next_event_sequence_number(), 0);
+
+        first.event_sequence_number = u16::MAX;
+        assert_eq!(first.next_event_sequence_number(), u16::MAX);
+        assert_eq!(first.next_event_sequence_number(), 0);
+        assert_eq!(second.next_event_sequence_number(), 1);
+    }
+
+    #[test]
+    fn event_sequence_reservation_is_non_consuming_until_confirmed() {
+        let mut db = ObjectDatabase::new();
+
+        let reservation = db.reserve_event_sequence_number();
+        assert_eq!(reservation.number(), 0);
+        assert_eq!(db.reserve_event_sequence_number().number(), 0);
+        assert!(db.confirm_event_sequence_number(reservation));
+        assert_eq!(db.reserve_event_sequence_number().number(), 1);
+    }
 
     /// Minimal test object.
     struct TestObject {

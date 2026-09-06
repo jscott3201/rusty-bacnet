@@ -2,6 +2,12 @@
 // ObjectType (Clause 12)
 // ===========================================================================
 
+#[cfg(all(feature = "serde", not(feature = "std")))]
+use alloc::string::String;
+
+#[cfg(feature = "serde")]
+use serde::Deserialize;
+
 bacnet_enum! {
     /// BACnet object types (Clause 12).
     ///
@@ -73,11 +79,75 @@ bacnet_enum! {
     /// New in 135-2020.
     const STAGING = 60;
     /// New in 135-2020.
-    const AUDIT_REPORTER = 61;
+    const AUDIT_LOG = 61;
     /// New in 135-2020.
-    const AUDIT_LOG = 62;
+    const AUDIT_REPORTER = 62;
     /// New in 135-2020.
     const COLOR = 63;
     /// New in 135-2020.
     const COLOR_TEMPERATURE = 64;
+}
+
+#[cfg(feature = "serde")]
+impl<'de> Deserialize<'de> for ObjectType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let string: String = Deserialize::deserialize(deserializer)?;
+        string.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod serde_tests {
+    use super::ObjectType;
+
+    fn parse(input: &str) -> ObjectType {
+        serde_json::from_str(&format!("\"{input}\"")).expect("deserializes")
+    }
+
+    #[test]
+    fn accepts_every_supported_case_style() {
+        for input in [
+            "analoginput",
+            "ANALOGINPUT",
+            "AnalogInput",
+            "analogInput",
+            "analog_input",
+            "ANALOG_INPUT",
+            "analog-input",
+            "ANALOG-INPUT",
+        ] {
+            assert_eq!(parse(input), ObjectType::ANALOG_INPUT, "input: {input}");
+        }
+    }
+
+    #[test]
+    fn covers_the_full_standard_range() {
+        assert_eq!(parse("device"), ObjectType::DEVICE);
+        assert_eq!(parse("color-temperature"), ObjectType::COLOR_TEMPERATURE);
+    }
+
+    /// The hand-written name table this impl replaced still mapped
+    /// `audit-reporter` to 61 and `audit-log` to 62, contradicting the
+    /// constants (and Clause 21.6). Deriving names from `ALL_NAMED` keeps the
+    /// two from drifting apart again.
+    #[test]
+    fn audit_names_agree_with_the_constants() {
+        assert_eq!(parse("audit-log"), ObjectType::AUDIT_LOG);
+        assert_eq!(parse("audit-log").to_raw(), 61);
+        assert_eq!(parse("audit-reporter"), ObjectType::AUDIT_REPORTER);
+        assert_eq!(parse("audit-reporter").to_raw(), 62);
+    }
+
+    #[test]
+    fn rejects_unknown_names() {
+        assert!(serde_json::from_str::<ObjectType>("\"not-an-object\"").is_err());
+    }
+
+    #[test]
+    fn rejects_non_string_input() {
+        assert!(serde_json::from_str::<ObjectType>("8").is_err());
+    }
 }

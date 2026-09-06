@@ -33,6 +33,8 @@ cargo install bacnet-cli --features sc-tls
 | `--sc-url <URL>` | | SC hub WebSocket URL |
 | `--sc-cert <FILE>` | | SC TLS certificate PEM |
 | `--sc-key <FILE>` | | SC TLS private key PEM |
+| `--sc-vmac <HEX>` | | SC local VMAC as 12 hex digits or separated bytes |
+| `--sc-device-uuid <UUID>` | | SC device UUID as 32 hex digits or hyphenated text |
 | `--format <FMT>` | auto | Output format: `table` or `json` |
 | `--json` | | JSON output shorthand |
 | `-v` | | Verbosity (`-v`, `-vv`, `-vvv`) |
@@ -201,8 +203,11 @@ Subscribes and then watches for COV notifications in real time. Press Ctrl+C to 
 ```bash
 bacnet alarms 192.168.1.100                              # get event/alarm summary
 
-bacnet ack-alarm 192.168.1.100 ai:1 --state 1            # acknowledge an alarm
-bacnet ack-alarm 192.168.1.100 ai:1 --state 1 --source "operator"  # custom source
+bacnet ack-alarm 192.168.1.100 ai:1 --state 1 \
+  --timestamp sequence:417 --ack-time time:14,30,00,00
+bacnet ack-alarm 192.168.1.100 ai:1 --state 1 --source "operator" \
+  --timestamp time:14,29,58,25 \
+  --ack-time "datetime:2026,9,2,3;14,30,00,00"
 ```
 
 **ack-alarm flags:**
@@ -210,7 +215,25 @@ bacnet ack-alarm 192.168.1.100 ai:1 --state 1 --source "operator"  # custom sour
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--state <N>` | (required) | Event state to acknowledge (0=normal, 1=fault, etc.) |
+| `--timestamp <SPEC>` | (required) | Exact timestamp from the original event notification |
+| `--ack-time <SPEC>` | (required) | Caller-selected time of acknowledgment |
 | `--source <S>` | `bacnet-cli` | Acknowledgment source string |
+
+Both timestamp flags use the same strict grammar:
+
+- `sequence:<0..65535>`
+- `time:<hour>,<minute>,<second>,<hundredths>`
+- `datetime:<full-year>,<month>,<day>,<day-of-week>;<hour>,<minute>,<second>,<hundredths>`
+
+Date years are `1900..2154`; months are `1..14`, days are `1..34`,
+days-of-week are `1..7`, and Time uses hours `0..23`, minutes/seconds
+`0..59`, and hundredths `0..99`. Any Date/Time component may be `255`
+when BACnet's unspecified value is intended (use full-year `255` for an
+unspecified year). Values are preserved exactly and neither timestamp is
+inferred from a clock. Quote `datetime:` values in command shells because the
+grammar contains a semicolon. `--timestamp` must come from the original event
+notification; `--ack-time` is explicitly chosen by the caller. The current
+raw `alarms` response is not a guided source for these values.
 
 **Alias:** `ack` = ack-alarm
 
@@ -264,19 +287,42 @@ bacnet delete-object 192.168.1.100 av:100
 ### File Transfer
 
 ```bash
-bacnet file-read 192.168.1.100 1 --output data.bin          # save to file
-bacnet file-read 192.168.1.100 1 --start 0 --count 4096     # with range
+bacnet file-read 192.168.1.100 1                             # stream payload as hex
+bacnet file-read 192.168.1.100 1 --count 4096 --output data.bin
+bacnet file-read 192.168.1.100 1 --access record --output records
 bacnet file-write 192.168.1.100 1 firmware.bin               # write file
 bacnet file-write 192.168.1.100 1 firmware.bin --start 0     # with offset
 ```
+
+`file-read` decodes each AtomicReadFile ACK and keeps requesting windows until
+the peer returns `End Of File = TRUE`. Stream mode writes or displays only the
+returned file-data octets, never the encoded ACK. Record mode never
+concatenates records: it requires an output directory and writes each record,
+including a zero-length record, to
+`record-{absolute-index:010}.bin` (for example,
+`record-0000000007.bin`). Each ACK's returned start must exactly match the
+cursor requested for that window; a gap or overlap fails before that window is
+written. The actual returned octet or record count advances the next cursor.
+
+`--start` must be non-negative and `--count` must be greater than zero. The
+count is the window size for each request, not a total transfer limit. Stream
+display without `--output` is limited to 1 MiB of cumulative payload; use
+`--output FILE` for larger files. Stream and record output refuse an existing
+final target. New output is staged in a sibling file or directory and published
+only after authoritative EOF; remote, decode, cursor, or write failures remove
+staging and leave the final target absent. If cleanup fails, the error reports
+the retained staging path. This is not a crash journal or a hostile
+concurrent-writer no-clobber guarantee. The same flags and behavior apply in
+the interactive shell.
 
 **file-read flags:**
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--start <N>` | `0` | Start position in file |
-| `--count <N>` | `1024` | Byte count to read |
-| `--output <PATH>` | | Save data to file (otherwise hex-dumps to stdout) |
+| `--access <MODE>` | `stream` | `stream` or `record` access |
+| `--start <N>` | `0` | Initial octet position or record index (non-negative) |
+| `--count <N>` | `1024` | Positive per-request octet or record window size |
+| `--output <PATH>` | | Stream output file or required record output directory |
 
 **file-write flags:**
 
@@ -375,7 +421,7 @@ bacnet --ipv6 discover
 bacnet --ipv6 read [fe80::1]:47808 ai:1 pv
 
 # BACnet/SC (requires sc-tls feature)
-bacnet --sc --sc-url wss://hub:443 --sc-cert cert.pem --sc-key key.pem read 00:01:02:03:04:05 ai:1 pv
+bacnet --sc --sc-url wss://hub:443 --sc-cert cert.pem --sc-key key.pem --sc-vmac 22:01:02:03:04:05 --sc-device-uuid 00112233-4455-6677-8899-aabbccddeeff read 00:01:02:03:04:05 ai:1 pv
 ```
 
 ## Object Type Shorthand

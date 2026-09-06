@@ -180,6 +180,44 @@ pub(crate) fn write_out_of_service(
     }
 }
 
+/// Handle writing OUT_OF_SERVICE for objects that temporarily transfer
+/// Reliability ownership to a client simulation.
+///
+/// The evaluated value is saved on the FALSE-to-TRUE edge and restored directly
+/// on the TRUE-to-FALSE edge. If the entry edge was not observed, the restore
+/// falls back to NO_FAULT_DETECTED.
+#[inline]
+pub(crate) fn write_out_of_service_with_reliability_restore(
+    out_of_service: &mut bool,
+    reliability: &mut u32,
+    saved_reliability: &mut Option<u32>,
+    property: bacnet_types::enums::PropertyIdentifier,
+    value: &bacnet_types::primitives::PropertyValue,
+) -> Option<Result<(), bacnet_types::error::Error>> {
+    if property == bacnet_types::enums::PropertyIdentifier::OUT_OF_SERVICE {
+        if let bacnet_types::primitives::PropertyValue::Boolean(v) = value {
+            if !*out_of_service && *v {
+                *saved_reliability = Some(*reliability);
+            } else if *out_of_service && !*v {
+                *reliability = saved_reliability
+                    .take()
+                    .unwrap_or(bacnet_types::enums::Reliability::NO_FAULT_DETECTED.to_raw());
+            }
+            *out_of_service = *v;
+            Some(Ok(()))
+        } else {
+            Some(Err(protocol_error(
+                bacnet_types::enums::ErrorClass::PROPERTY,
+                bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE,
+            )))
+        }
+    } else {
+        None
+    }
+}
+
+pub(crate) use crate::reliability_inhibit::ReliabilityInhibitState;
+
 /// Handle writing the DESCRIPTION property.
 ///
 /// Returns `Some(Ok(()))` if the property was DESCRIPTION and successfully handled,
@@ -255,12 +293,82 @@ pub(crate) fn value_out_of_range_error() -> bacnet_types::error::Error {
     )
 }
 
+/// Return the invalid-data-encoding protocol error.
+///
+/// Clause 15.9.1.3: "The encoding is not valid for the datatype of the
+/// property" — the value is of the right BACnet datatype but its declared
+/// shape does not match the property's production.
+#[inline]
+pub(crate) fn invalid_data_encoding_error() -> bacnet_types::error::Error {
+    protocol_error(
+        bacnet_types::enums::ErrorClass::PROPERTY,
+        bacnet_types::enums::ErrorCode::INVALID_DATA_ENCODING,
+    )
+}
+
+/// Validate a wire `BitString` value against a fixed-width bit-string
+/// production and return its single content octet (MSB-first).
+///
+/// A production with `named_bits` defined bits (e.g.
+/// BACnetEventTransitionBits = 3, BACnetLimitEnable = 2, Clause 21) has
+/// exactly one canonical shape: one content octet carrying the bits in its
+/// high positions with `8 - named_bits` declared unused — the same form the
+/// read path emits. A write declaring any other shape (full-octet bit string,
+/// extra content octets, no content, a different unused-bit count) is refused
+/// PROPERTY / INVALID_DATA_ENCODING rather than silently masked and
+/// normalized. Objects-layer sibling of the decoding-layer checks in
+/// `bacnet-encoding` (e.g. `check_fixed_bit_string`); kept here because this
+/// layer reports protocol errors, not decoding errors.
+#[inline]
+pub(crate) fn check_fixed_width_bit_string(
+    unused_bits: u8,
+    data: &[u8],
+    named_bits: u8,
+) -> Result<u8, bacnet_types::error::Error> {
+    if data.len() == 1 && unused_bits == 8 - named_bits {
+        Ok(data[0])
+    } else {
+        Err(invalid_data_encoding_error())
+    }
+}
+
+/// Return whether a raw BACnetReliability value is defined by ASHRAE or lies
+/// in the vendor-proprietary range.
+///
+/// The named set is derived from `Reliability::ALL_NAMED` so the predicate
+/// tracks the enum: when an addendum value lands as a constant in
+/// `bacnet_types::enums::Reliability`, this write-path gate accepts it with no
+/// second edit. The production's gaps stay explicit here: 11 is reserved for
+/// a future addendum, 26..=63 are reserved for ASHRAE, and 64..=65535 is the
+/// vendor-proprietary range (Clause 21 BACnetReliability).
+#[inline]
+pub(crate) fn is_reliability_value_valid(value: u32) -> bool {
+    bacnet_types::enums::Reliability::ALL_NAMED
+        .iter()
+        .any(|&(_, named)| named.to_raw() == value)
+        || (64..=65_535).contains(&value)
+}
+
 /// Return the invalid-array-index protocol error.
 #[inline]
 pub(crate) fn invalid_array_index_error() -> bacnet_types::error::Error {
     protocol_error(
         bacnet_types::enums::ErrorClass::PROPERTY,
         bacnet_types::enums::ErrorCode::INVALID_ARRAY_INDEX,
+    )
+}
+
+/// Return the property-is-not-an-array protocol error.
+///
+/// Clause 15.5.1.3 / 15.9.1.3: an array index was provided but the property
+/// is not an array. The RP/RPM/WP/WPM service handlers gate on
+/// [`crate::traits::BACnetObject::is_array_property`]; object arms mirror the
+/// classification for direct (non-service) calls.
+#[inline]
+pub(crate) fn property_is_not_an_array_error() -> bacnet_types::error::Error {
+    protocol_error(
+        bacnet_types::enums::ErrorClass::PROPERTY,
+        bacnet_types::enums::ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
     )
 }
 
@@ -345,12 +453,8 @@ pub(crate) fn current_command_priority<T>(
     bacnet_types::primitives::PropertyValue::Null
 }
 
-/// Common intrinsic-reporting read_property arms for objects with an
-/// `OutOfRangeDetector` event_detector field.
-///
-/// Handles: HIGH_LIMIT, LOW_LIMIT, DEADBAND, LIMIT_ENABLE, EVENT_ENABLE,
-///          NOTIFY_TYPE, NOTIFICATION_CLASS, TIME_DELAY, EVENT_STATE.
-macro_rules! read_event_properties {
+/// Generic intrinsic-reporting read properties shared by every event detector.
+macro_rules! read_generic_event_properties {
     ($self:expr, $property:expr) => {
         match $property {
             p if p == bacnet_types::enums::PropertyIdentifier::EVENT_STATE => {
@@ -358,25 +462,12 @@ macro_rules! read_event_properties {
                     $self.event_detector.event_state.to_raw(),
                 )))
             }
-            p if p == bacnet_types::enums::PropertyIdentifier::HIGH_LIMIT => Some(Ok(
-                bacnet_types::primitives::PropertyValue::Real($self.event_detector.high_limit),
-            )),
-            p if p == bacnet_types::enums::PropertyIdentifier::LOW_LIMIT => Some(Ok(
-                bacnet_types::primitives::PropertyValue::Real($self.event_detector.low_limit),
-            )),
-            p if p == bacnet_types::enums::PropertyIdentifier::DEADBAND => Some(Ok(
-                bacnet_types::primitives::PropertyValue::Real($self.event_detector.deadband),
-            )),
-            p if p == bacnet_types::enums::PropertyIdentifier::LIMIT_ENABLE => {
-                Some(Ok(bacnet_types::primitives::PropertyValue::BitString {
-                    unused_bits: 6,
-                    data: vec![$self.event_detector.limit_enable.to_bits()],
-                }))
-            }
             p if p == bacnet_types::enums::PropertyIdentifier::EVENT_ENABLE => {
                 Some(Ok(bacnet_types::primitives::PropertyValue::BitString {
                     unused_bits: 5,
-                    data: vec![$self.event_detector.event_enable << 5],
+                    data: vec![bacnet_types::bitstring::pack_octet(
+                        $self.event_detector.event_enable,
+                    )],
                 }))
             }
             p if p == bacnet_types::enums::PropertyIdentifier::NOTIFY_TYPE => {
@@ -394,69 +485,74 @@ macro_rules! read_event_properties {
                     $self.event_detector.time_delay as u64,
                 )))
             }
+            p if p == bacnet_types::enums::PropertyIdentifier::TIME_DELAY_NORMAL => {
+                // Clause 13.3: "If no value is available for this parameter,
+                // then it takes on the value of the pTimeDelay parameter" —
+                // so the read-back of an unwritten Time_Delay_Normal is
+                // Time_Delay's value, matching the algorithm's behavior.
+                Some(Ok(bacnet_types::primitives::PropertyValue::Unsigned(
+                    $self
+                        .event_detector
+                        .time_delay_normal
+                        .unwrap_or($self.event_detector.time_delay) as u64,
+                )))
+            }
             p if p == bacnet_types::enums::PropertyIdentifier::ACKED_TRANSITIONS => {
                 Some(Ok(bacnet_types::primitives::PropertyValue::BitString {
                     unused_bits: 5,
-                    data: vec![$self.event_detector.acked_transitions << 5],
+                    data: vec![bacnet_types::bitstring::pack_octet(
+                        $self.event_detector.acked_transitions,
+                    )],
                 }))
-            }
-            p if p == bacnet_types::enums::PropertyIdentifier::EVENT_TIME_STAMPS => {
-                Some(Ok(bacnet_types::primitives::PropertyValue::List(vec![
-                    bacnet_types::primitives::PropertyValue::Unsigned(
-                        match $self.event_time_stamps[0] {
-                            bacnet_types::primitives::BACnetTimeStamp::SequenceNumber(n) => {
-                                n as u64
-                            }
-                            _ => 0,
-                        },
-                    ),
-                    bacnet_types::primitives::PropertyValue::Unsigned(
-                        match $self.event_time_stamps[1] {
-                            bacnet_types::primitives::BACnetTimeStamp::SequenceNumber(n) => {
-                                n as u64
-                            }
-                            _ => 0,
-                        },
-                    ),
-                    bacnet_types::primitives::PropertyValue::Unsigned(
-                        match $self.event_time_stamps[2] {
-                            bacnet_types::primitives::BACnetTimeStamp::SequenceNumber(n) => {
-                                n as u64
-                            }
-                            _ => 0,
-                        },
-                    ),
-                ])))
-            }
-            p if p == bacnet_types::enums::PropertyIdentifier::EVENT_MESSAGE_TEXTS => {
-                Some(Ok(bacnet_types::primitives::PropertyValue::List(vec![
-                    bacnet_types::primitives::PropertyValue::CharacterString(
-                        $self.event_message_texts[0].clone(),
-                    ),
-                    bacnet_types::primitives::PropertyValue::CharacterString(
-                        $self.event_message_texts[1].clone(),
-                    ),
-                    bacnet_types::primitives::PropertyValue::CharacterString(
-                        $self.event_message_texts[2].clone(),
-                    ),
-                ])))
             }
             _ => None,
         }
     };
 }
-pub(crate) use read_event_properties;
+pub(crate) use read_generic_event_properties;
 
-/// Common intrinsic-reporting write_property arms for objects with an
-/// `OutOfRangeDetector` event_detector field.
+/// Analog-only intrinsic-reporting read properties for `OutOfRangeDetector`.
 ///
-/// Handles: HIGH_LIMIT, LOW_LIMIT, DEADBAND, LIMIT_ENABLE,
-///          NOTIFICATION_CLASS, NOTIFY_TYPE.
+/// Event timestamps and message texts are served by `EventHistory::read`,
+/// invoked at every analog call site immediately after this macro.
+macro_rules! read_analog_event_properties {
+    ($self:expr, $property:expr) => {
+        match $property {
+            p if p == bacnet_types::enums::PropertyIdentifier::HIGH_LIMIT => Some(Ok(
+                bacnet_types::primitives::PropertyValue::Real($self.event_detector.high_limit),
+            )),
+            p if p == bacnet_types::enums::PropertyIdentifier::LOW_LIMIT => Some(Ok(
+                bacnet_types::primitives::PropertyValue::Real($self.event_detector.low_limit),
+            )),
+            p if p == bacnet_types::enums::PropertyIdentifier::DEADBAND => Some(Ok(
+                bacnet_types::primitives::PropertyValue::Real($self.event_detector.deadband),
+            )),
+            p if p == bacnet_types::enums::PropertyIdentifier::LIMIT_ENABLE => {
+                Some(Ok(bacnet_types::primitives::PropertyValue::BitString {
+                    unused_bits: 6,
+                    data: vec![$self.event_detector.limit_enable.to_bits()],
+                }))
+            }
+            _ => None,
+        }
+    };
+}
+pub(crate) use read_analog_event_properties;
+
+/// Analog-only intrinsic-reporting write_property arms, for objects whose event_detector is
+/// an `OutOfRangeDetector`.
+///
+/// Handles: HIGH_LIMIT, LOW_LIMIT, DEADBAND, LIMIT_ENABLE.
+///
+/// This is the analog half of the split. The properties every detector carries —
+/// EVENT_ENABLE, NOTIFICATION_CLASS, NOTIFY_TYPE, TIME_DELAY, TIME_DELAY_NORMAL
+/// and the ACKED_TRANSITIONS denial — live in [`write_generic_event_properties!`],
+/// and a call site that needs both must invoke both.
 ///
 /// Returns `Some(Ok(()))` if the property was handled,
 /// `Some(Err(...))` for type/validation errors,
 /// or `None` if the property is not an event property.
-macro_rules! write_event_properties {
+macro_rules! write_analog_event_properties {
     ($self:expr, $property:expr, $value:expr) => {
         match $property {
             p if p == bacnet_types::enums::PropertyIdentifier::HIGH_LIMIT => {
@@ -496,25 +592,46 @@ macro_rules! write_event_properties {
                 }
             }
             p if p == bacnet_types::enums::PropertyIdentifier::LIMIT_ENABLE => {
-                if let bacnet_types::primitives::PropertyValue::BitString { data, .. } = &$value {
-                    if let Some(&byte) = data.first() {
-                        $self.event_detector.limit_enable =
-                            $crate::event::LimitEnable::from_bits(byte);
-                        Some(Ok(()))
-                    } else {
-                        Some(Err($crate::common::invalid_data_type_error()))
+                // BACnetLimitEnable is a 2-bit production (Clause 21): the
+                // written BitString must declare its canonical shape.
+                if let bacnet_types::primitives::PropertyValue::BitString { unused_bits, data } =
+                    &$value
+                {
+                    match $crate::common::check_fixed_width_bit_string(*unused_bits, data, 2) {
+                        Ok(byte) => {
+                            $self.event_detector.limit_enable =
+                                $crate::event::LimitEnable::from_bits(byte);
+                            Some(Ok(()))
+                        }
+                        Err(e) => Some(Err(e)),
                     }
                 } else {
                     Some(Err($crate::common::invalid_data_type_error()))
                 }
             }
+            _ => None,
+        }
+    };
+}
+pub(crate) use write_analog_event_properties;
+
+/// Generic intrinsic-reporting write properties shared by every event detector.
+macro_rules! write_generic_event_properties {
+    ($self:expr, $property:expr, $value:expr) => {
+        match $property {
             p if p == bacnet_types::enums::PropertyIdentifier::EVENT_ENABLE => {
-                if let bacnet_types::primitives::PropertyValue::BitString { data, .. } = &$value {
-                    if let Some(&byte) = data.first() {
-                        $self.event_detector.event_enable = byte >> 5;
-                        Some(Ok(()))
-                    } else {
-                        Some(Err($crate::common::invalid_data_type_error()))
+                // BACnetEventTransitionBits is a 3-bit production (Clause 21):
+                // the written BitString must declare its canonical shape.
+                if let bacnet_types::primitives::PropertyValue::BitString { unused_bits, data } =
+                    &$value
+                {
+                    match $crate::common::check_fixed_width_bit_string(*unused_bits, data, 3) {
+                        Ok(byte) => {
+                            $self.event_detector.event_enable =
+                                bacnet_types::bitstring::unpack_octet(&[byte], 3);
+                            Some(Ok(()))
+                        }
+                        Err(e) => Some(Err(e)),
                     }
                 } else {
                     Some(Err($crate::common::invalid_data_type_error()))
@@ -534,9 +651,20 @@ macro_rules! write_event_properties {
                 }
             }
             p if p == bacnet_types::enums::PropertyIdentifier::NOTIFY_TYPE => {
+                // BACnetNotifyType is a closed three-value production
+                // {alarm, event, ack-notification} (Clause 21); membership is
+                // derived from NotifyType::ALL_NAMED so a future addendum
+                // constant widens the gate without a second edit.
                 if let bacnet_types::primitives::PropertyValue::Enumerated(v) = $value {
-                    $self.event_detector.notify_type = v;
-                    Some(Ok(()))
+                    let named = bacnet_types::enums::NotifyType::ALL_NAMED
+                        .iter()
+                        .any(|&(_, n)| n.to_raw() == v);
+                    if !named {
+                        Some(Err($crate::common::value_out_of_range_error()))
+                    } else {
+                        $self.event_detector.notify_type = v;
+                        Some(Ok(()))
+                    }
                 } else {
                     Some(Err($crate::common::invalid_data_type_error()))
                 }
@@ -554,15 +682,44 @@ macro_rules! write_event_properties {
                     Some(Err($crate::common::invalid_data_type_error()))
                 }
             }
+            p if p == bacnet_types::enums::PropertyIdentifier::TIME_DELAY_NORMAL => {
+                if let bacnet_types::primitives::PropertyValue::Unsigned(v) = $value {
+                    match $crate::common::u64_to_u32(v) {
+                        Ok(v32) => {
+                            $self.event_detector.time_delay_normal = Some(v32);
+                            Some(Ok(()))
+                        }
+                        Err(e) => Some(Err(e)),
+                    }
+                } else {
+                    Some(Err($crate::common::invalid_data_type_error()))
+                }
+            }
             p if p == bacnet_types::enums::PropertyIdentifier::ACKED_TRANSITIONS => {
-                // Read-only: modified only by AcknowledgeAlarm service
+                // Read-only: maintained by the alarm-acknowledgment process
+                // (Clause 13.2.3) from event-state transitions and
+                // acknowledgment indications — the latter arriving from
+                // AcknowledgeAlarm or a local means — never by property write.
+                //
+                // This denial predates the generic/analog split and must survive it. The
+                // service path (`BACnetObject::acknowledge_alarm`) deliberately ORs the
+                // acknowledged bit in; a property write would assign, so it could both
+                // fabricate an acknowledgment and erase one. GetAlarmSummary and
+                // GetEventInformation read this field straight off the object, so an
+                // assignable arm would let a client mark an unacknowledged alarm
+                // acknowledged with a plain WriteProperty.
+                //
+                // It also carries the Clause 12.7 / 12.19 invariant that while
+                // Event_Detection_Enable is FALSE, Acked_Transitions "shall be equal to
+                // [its] initial condition" — an ungated write arm is the one route that
+                // could break that between detection-enable writes.
                 Some(Err($crate::common::write_access_denied_error()))
             }
             _ => None,
         }
     };
 }
-pub(crate) use write_event_properties;
+pub(crate) use write_generic_event_properties;
 
 /// Read a priority array property (handles array_index=None, Some(0), Some(1..=16)).
 ///
@@ -630,6 +787,12 @@ pub(crate) use write_priority_array;
 /// writes to that priority slot. Null relinquishes; otherwise `$extract`
 /// converts the value. Calls `recalculate_present_value()` after write.
 ///
+/// Index validation follows Clause 12.1.5.1: an out-of-range index is
+/// PROPERTY / INVALID_ARRAY_INDEX; an omitted index means whole-array
+/// access, and whole-array writes are not supported on commandable objects,
+/// so it is PROPERTY / WRITE_ACCESS_DENIED — a protocol error that the
+/// service layer can return as Result(-) (Clause 15.9.1.3).
+///
 /// Returns early with `Ok(())` or `Err(...)` if the property is PRIORITY_ARRAY.
 /// Falls through (does nothing) if the property is not PRIORITY_ARRAY.
 macro_rules! write_priority_array_direct {
@@ -638,11 +801,7 @@ macro_rules! write_priority_array_direct {
             let idx = match $array_index {
                 Some(n) if (1..=16).contains(&n) => (n - 1) as usize,
                 Some(_) => return Err($crate::common::invalid_array_index_error()),
-                None => {
-                    return Err(bacnet_types::error::Error::Encoding(
-                        "PRIORITY_ARRAY requires array_index (1-16)".into(),
-                    ))
-                }
+                None => return Err($crate::common::write_access_denied_error()),
             };
             match $value {
                 bacnet_types::primitives::PropertyValue::Null => {
@@ -684,4 +843,114 @@ pub(crate) fn write_cov_increment(
     } else {
         None
     }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// PICS writability helpers
+// ──────────────────────────────────────────────────────────────────────────
+//
+// Shared property-set predicates used by the `is_writable_property` overrides
+// on the core object types. Each predicate mirrors the arms of the matching
+// `write_property` implementation (via the `write_generic_event_properties!` and
+// `write_analog_event_properties!` macros and
+// the `write_priority_array!` / `write_priority_array_direct!` macros) so PICS
+// and runtime dispatch share one truth source. Keep these in lock-step with
+// the macros below.
+
+/// Generic writable event-detection properties shared by every detector.
+///
+/// `TIME_DELAY_NORMAL` mirrors `TIME_DELAY`: every Clause 12 conformance
+/// table carries both as O-coded (present-only-if-intrinsic-reporting), so
+/// writability is permitted rather than required — and accepting the write
+/// is what makes the Clause 13.3 delay asymmetry commissionable at all.
+#[inline]
+pub(crate) fn is_generic_event_property_writable(
+    property: bacnet_types::enums::PropertyIdentifier,
+) -> bool {
+    matches!(
+        property,
+        bacnet_types::enums::PropertyIdentifier::EVENT_ENABLE
+            | bacnet_types::enums::PropertyIdentifier::NOTIFICATION_CLASS
+            | bacnet_types::enums::PropertyIdentifier::NOTIFY_TYPE
+            | bacnet_types::enums::PropertyIdentifier::TIME_DELAY
+            | bacnet_types::enums::PropertyIdentifier::TIME_DELAY_NORMAL
+    )
+    // ACKED_TRANSITIONS is deliberately absent: the generic write arm denies it, and this
+    // predicate is what PICS reports, so listing it would advertise a write dispatch rejects.
+}
+
+/// Writable generic and analog event properties exposed by analog objects.
+#[inline]
+pub(crate) fn is_event_property_writable(
+    property: bacnet_types::enums::PropertyIdentifier,
+) -> bool {
+    is_generic_event_property_writable(property)
+        || matches!(
+            property,
+            bacnet_types::enums::PropertyIdentifier::HIGH_LIMIT
+                | bacnet_types::enums::PropertyIdentifier::LOW_LIMIT
+                | bacnet_types::enums::PropertyIdentifier::DEADBAND
+                | bacnet_types::enums::PropertyIdentifier::LIMIT_ENABLE
+        )
+}
+
+/// Writable commandable-object properties shared by all commandable types
+/// (AnalogOutput, AnalogValue, BinaryOutput, BinaryValue, MultiStateOutput,
+/// MultiStateValue): `PRIORITY_ARRAY` direct writes, commandable
+/// `PRESENT_VALUE` writes, and the validated `RELINQUISH_DEFAULT` write arm
+/// (#270 — the standard permits Relinquish_Default to be writable; the
+/// conformance tables carry it R or O, and the writability implemented here
+/// is permitted, not required).
+///
+/// `CURRENT_COMMAND_PRIORITY` stays read-only: it is derived from the
+/// priority array, so no `write_property` arm accepts it.
+#[inline]
+pub(crate) fn is_commandable_property_writable(
+    property: bacnet_types::enums::PropertyIdentifier,
+) -> bool {
+    matches!(
+        property,
+        bacnet_types::enums::PropertyIdentifier::PRIORITY_ARRAY
+            | bacnet_types::enums::PropertyIdentifier::PRESENT_VALUE
+            | bacnet_types::enums::PropertyIdentifier::RELINQUISH_DEFAULT
+    )
+}
+
+/// Writable common properties shared by all core I/O/V object types (accepted
+/// via `write_out_of_service` or
+/// `write_out_of_service_with_reliability_restore`, plus `write_object_name`
+/// and `write_description`).
+#[inline]
+pub(crate) fn is_common_writable(property: bacnet_types::enums::PropertyIdentifier) -> bool {
+    matches!(
+        property,
+        bacnet_types::enums::PropertyIdentifier::OUT_OF_SERVICE
+            | bacnet_types::enums::PropertyIdentifier::OBJECT_NAME
+            | bacnet_types::enums::PropertyIdentifier::DESCRIPTION
+    )
+}
+
+/// Writable properties for commandable Multi-State objects (MSO, MSV):
+/// commandable (PRIORITY_ARRAY + PRESENT_VALUE) + common + STATE_TEXT.
+/// Mirrors the `write_property` arms of MultiStateOutput/Value.
+#[inline]
+pub(crate) fn is_multistate_commandable_writable(
+    property: bacnet_types::enums::PropertyIdentifier,
+) -> bool {
+    is_commandable_property_writable(property)
+        || is_common_writable(property)
+        || property == bacnet_types::enums::PropertyIdentifier::STATE_TEXT
+}
+
+/// Writable properties for Multi-State Input (MSI): PRESENT_VALUE (when out
+/// of service) + common + STATE_TEXT. Mirrors the `write_property` arms of
+/// MultiStateInput (commandable `PRESENT_VALUE` is not accepted — inputs are
+/// not commandable — so this excludes `is_commandable_property_writable`).
+#[inline]
+pub(crate) fn is_multistate_input_writable(
+    property: bacnet_types::enums::PropertyIdentifier,
+) -> bool {
+    is_common_writable(property)
+        || property == bacnet_types::enums::PropertyIdentifier::PRESENT_VALUE
+        || property == bacnet_types::enums::PropertyIdentifier::STATE_TEXT
 }

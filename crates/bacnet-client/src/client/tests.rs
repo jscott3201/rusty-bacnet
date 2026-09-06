@@ -3,8 +3,17 @@ use bacnet_encoding::apdu::{ComplexAck, SimpleAck};
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportPort;
+use bacnet_transport::sc::{LoopbackWebSocket, ScTransport, WebSocketPort};
+use bacnet_transport::sc_frame::{
+    decode_sc_message, encode_sc_message, ScFunction, ScMessage, Vmac,
+};
+use bacnet_types::enums::{ObjectType, Segmentation};
+use bacnet_types::primitives::ObjectIdentifier;
 use std::net::Ipv4Addr;
+use std::time::Instant;
 use tokio::time::Duration;
+
+mod wpm_error_projection;
 
 async fn make_client() -> BACnetClient<BipTransport> {
     BACnetClient::builder()
@@ -16,7 +25,68 @@ async fn make_client() -> BACnetClient<BipTransport> {
         .unwrap()
 }
 
-async fn send_routed_response<T: TransportPort>(
+async fn sc_hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
+    let data = ws_hub.recv().await.unwrap();
+    let req = decode_sc_message(&data).unwrap();
+    assert_eq!(req.function, ScFunction::ConnectRequest);
+
+    let mut accept_payload = Vec::with_capacity(26);
+    accept_payload.extend_from_slice(&hub_vmac);
+    accept_payload.extend_from_slice(&[0u8; 16]);
+    accept_payload.extend_from_slice(&1476u16.to_be_bytes());
+    accept_payload.extend_from_slice(&1476u16.to_be_bytes());
+
+    let accept = ScMessage {
+        function: ScFunction::ConnectAccept,
+        message_id: req.message_id,
+        originating_vmac: None,
+        destination_vmac: None,
+        dest_options: Vec::new(),
+        data_options: Vec::new(),
+        payload: Bytes::from(accept_payload),
+    };
+    let mut buf = BytesMut::new();
+    encode_sc_message(&mut buf, &accept);
+    ws_hub.send(&buf).await.unwrap();
+}
+
+async fn assert_sc_socket_closed_after_drop(ws_hub: &LoopbackWebSocket, context: &str) {
+    timeout(Duration::from_secs(1), async {
+        loop {
+            match ws_hub.recv().await {
+                Ok(data) => {
+                    let msg = decode_sc_message(&data).unwrap();
+                    assert_ne!(
+                        msg.function,
+                        ScFunction::HeartbeatAck,
+                        "{context} must not leave SC answering heartbeats"
+                    );
+                }
+                Err(_) => break,
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{context} did not close the SC WebSocket"));
+
+    let heartbeat = ScMessage {
+        function: ScFunction::HeartbeatRequest,
+        message_id: 0x66,
+        originating_vmac: None,
+        destination_vmac: None,
+        dest_options: Vec::new(),
+        data_options: Vec::new(),
+        payload: Bytes::new(),
+    };
+    let mut buf = BytesMut::new();
+    encode_sc_message(&mut buf, &heartbeat);
+    assert!(
+        ws_hub.send(&buf).await.is_err(),
+        "{context} must reject post-drop Heartbeat-Request on the closed socket"
+    );
+}
+
+pub(super) async fn send_routed_response<T: TransportPort>(
     transport: &T,
     client_mac: &[u8],
     source_network: u16,
@@ -42,6 +112,135 @@ async fn send_routed_response<T: TransportPort>(
 async fn client_start_stop() {
     let mut client = make_client().await;
     assert!(!client.local_mac().is_empty());
+    client.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn client_stop_releases_bip_socket_before_drop() {
+    let mut client = make_client().await;
+    let local_mac = client.local_mac().to_vec();
+    let port = u16::from_be_bytes([local_mac[4], local_mac[5]]);
+
+    client.stop().await.unwrap();
+
+    timeout(Duration::from_secs(1), async {
+        loop {
+            match BACnetClient::builder()
+                .interface(Ipv4Addr::LOCALHOST)
+                .port(port)
+                .build()
+                .await
+            {
+                Ok(mut replacement) => {
+                    replacement.stop().await.unwrap();
+                    break;
+                }
+                Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+            }
+        }
+    })
+    .await
+    .expect("stopping BACnetClient releases the B/IP socket");
+}
+
+#[tokio::test]
+async fn client_drop_aborts_dispatch_task() {
+    let client = make_client().await;
+    let abort_handle = client
+        .dispatch_task
+        .as_ref()
+        .expect("client starts a dispatch task")
+        .abort_handle();
+
+    assert!(!abort_handle.is_finished());
+    drop(client);
+
+    timeout(Duration::from_secs(1), async {
+        while !abort_handle.is_finished() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("dropping BACnetClient aborts the dispatch task");
+}
+
+#[tokio::test]
+async fn client_drop_releases_bip_socket() {
+    let client = make_client().await;
+    let local_mac = client.local_mac().to_vec();
+    let port = u16::from_be_bytes([local_mac[4], local_mac[5]]);
+
+    drop(client);
+
+    timeout(Duration::from_secs(1), async {
+        loop {
+            match BACnetClient::builder()
+                .interface(Ipv4Addr::LOCALHOST)
+                .port(port)
+                .build()
+                .await
+            {
+                Ok(mut replacement) => {
+                    replacement.stop().await.unwrap();
+                    break;
+                }
+                Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+            }
+        }
+    })
+    .await
+    .expect("dropping BACnetClient releases the B/IP socket");
+}
+
+#[tokio::test]
+async fn client_drop_releases_sc_transport_socket() {
+    let (ws_client, ws_hub) = LoopbackWebSocket::pair();
+    let client_vmac = [0x01; 6];
+    let hub_vmac = [0x10; 6];
+    let transport = ScTransport::new(ws_client, client_vmac);
+
+    let hub_task = tokio::spawn(async move {
+        sc_hub_accept(&ws_hub, hub_vmac).await;
+        ws_hub
+    });
+
+    let client = BACnetClient::start(ClientConfig::default(), transport)
+        .await
+        .unwrap();
+    let ws_hub = hub_task.await.unwrap();
+
+    drop(client);
+
+    assert_sc_socket_closed_after_drop(&ws_hub, "dropped BACnetClient").await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn device_table_purge_runs_without_inbound_apdu() {
+    let mut client = make_client().await;
+
+    tokio::task::yield_now().await;
+    tokio::task::yield_now().await;
+
+    client.device_table.lock().await.upsert(DiscoveredDevice {
+        object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 2001).unwrap(),
+        mac_address: MacAddr::from_slice(&[192, 168, 1, 42, 0xBA, 0xC0]),
+        max_apdu_length: 1476,
+        segmentation_supported: Segmentation::NONE,
+        max_segments_accepted: None,
+        vendor_id: 42,
+        last_seen: Instant::now()
+            .checked_sub(Duration::from_millis(1))
+            .unwrap_or_else(Instant::now),
+        source_network: None,
+        source_address: None,
+    });
+    assert_eq!(client.discovered_devices().await.len(), 1);
+
+    tokio::time::advance(Duration::from_secs(300)).await;
+    tokio::task::yield_now().await;
+
+    assert!(client.discovered_devices().await.is_empty());
+
     client.stop().await.unwrap();
 }
 
@@ -105,6 +304,64 @@ async fn confirmed_request_simple_ack() {
 }
 
 #[tokio::test]
+async fn confirmed_request_does_not_wrap_discovered_max_apdu_length() {
+    let client_mac = vec![0x01];
+    let remote_mac = vec![0x02];
+    let (client_transport, remote_transport) =
+        LoopbackTransport::pair(client_mac, remote_mac.clone());
+    let mut remote_network = NetworkLayer::new(remote_transport);
+    let mut remote_rx = remote_network.start().await.unwrap();
+    let mut client = BACnetClient::generic_builder()
+        .transport(client_transport)
+        .build()
+        .await
+        .unwrap();
+
+    client.device_table.lock().await.upsert(DiscoveredDevice {
+        object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 2002).unwrap(),
+        mac_address: MacAddr::from_slice(&remote_mac),
+        max_apdu_length: u32::from(u16::MAX) + 1,
+        segmentation_supported: Segmentation::NONE,
+        max_segments_accepted: None,
+        vendor_id: 42,
+        last_seen: Instant::now(),
+        source_network: None,
+        source_address: None,
+    });
+
+    let responder = tokio::spawn(async move {
+        let received = timeout(Duration::from_secs(1), remote_rx.recv())
+            .await
+            .expect("remote timed out")
+            .expect("remote channel closed");
+        let Apdu::ConfirmedRequest(req) = apdu::decode_apdu(received.apdu).unwrap() else {
+            panic!("expected ConfirmedRequest");
+        };
+        assert!(!req.segmented);
+
+        let ack = Apdu::SimpleAck(SimpleAck {
+            invoke_id: req.invoke_id,
+            service_choice: req.service_choice,
+        });
+        let mut buf = BytesMut::new();
+        encode_apdu(&mut buf, &ack).unwrap();
+        remote_network
+            .send_apdu(&buf, &received.source_mac, false, NetworkPriority::NORMAL)
+            .await
+            .unwrap();
+        remote_network.stop().await.unwrap();
+    });
+
+    let result = client
+        .confirmed_request(&remote_mac, ConfirmedServiceChoice::READ_PROPERTY, &[0x01])
+        .await;
+
+    assert!(result.unwrap().is_empty());
+    responder.await.unwrap();
+    client.stop().await.unwrap();
+}
+
+#[tokio::test]
 async fn confirmed_request_complex_ack() {
     let mut client_a = make_client().await;
 
@@ -159,6 +416,7 @@ async fn confirmed_request_timeout() {
         .confirmed_request(&fake_mac, ConfirmedServiceChoice::READ_PROPERTY, &[0x01])
         .await;
     assert!(result.is_err());
+    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
     client.stop().await.unwrap();
 }
 
@@ -542,9 +800,4 @@ async fn segment_overflow_guard() {
     );
 
     client.stop().await.unwrap();
-}
-
-#[test]
-fn seg_receiver_timeout_is_4s() {
-    assert_eq!(SEG_RECEIVER_TIMEOUT, Duration::from_secs(4));
 }

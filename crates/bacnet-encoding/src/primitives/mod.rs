@@ -113,6 +113,15 @@ pub fn decode_signed(data: &[u8]) -> Result<i32, Error> {
     Ok(i32::from_be_bytes(bytes))
 }
 
+pub(crate) fn decode_signed_canonical(data: &[u8]) -> Result<i32, Error> {
+    if data.len() > 1
+        && ((data[0] == 0 && data[1] & 0x80 == 0) || (data[0] == 0xFF && data[1] & 0x80 != 0))
+    {
+        return Err(Error::decoding(0, "signed contains a redundant sign octet"));
+    }
+    decode_signed(data)
+}
+
 // --- Real ---
 
 /// Encode an IEEE-754 single-precision float (big-endian, 4 bytes).
@@ -448,20 +457,57 @@ pub fn encode_ctx_bit_string(buf: &mut BytesMut, tag: u8, unused_bits: u8, data:
 
 /// Decode a single application-tagged value from `data` at `offset`.
 ///
+/// A leading **context-tagged** element decodes to
+/// [`PropertyValue::ApplicationData`] holding the complete tagged element
+/// verbatim (tag header(s) through the matching closing tag for constructed
+/// elements) — such bytes belong to a context-tagged ASN.1 production
+/// (e.g. `BACnetEventParameter`) whose property-level framed codec must
+/// interpret them. Application-tagged content is decoded into the typed
+/// variants as before.
+///
 /// Returns the decoded `PropertyValue` and the new offset past the consumed bytes.
 pub fn decode_application_value(
     data: &[u8],
     offset: usize,
 ) -> Result<(PropertyValue, usize), Error> {
     let (tag, new_offset) = tags::decode_tag(data, offset)?;
-    if tag.class != TagClass::Application {
-        return Err(Error::decoding(
-            offset,
-            format!("expected application tag, got context tag {}", tag.number),
+    if tag.class == TagClass::Context {
+        if tag.is_opening {
+            let (_content, after) = tags::extract_context_value(data, new_offset, tag.number)?;
+            return Ok((
+                PropertyValue::ApplicationData(data[offset..after].to_vec()),
+                after,
+            ));
+        }
+        if tag.is_closing {
+            return Err(Error::decoding(offset, "unexpected closing tag"));
+        }
+        let content_end = new_offset
+            .checked_add(tag.length as usize)
+            .ok_or_else(|| Error::decoding(new_offset, "length overflow"))?;
+        if data.len() < content_end {
+            return Err(Error::buffer_too_short(content_end, data.len()));
+        }
+        return Ok((
+            PropertyValue::ApplicationData(data[offset..content_end].to_vec()),
+            content_end,
         ));
     }
     if tag.is_opening || tag.is_closing {
         return Err(Error::decoding(offset, "unexpected opening/closing tag"));
+    }
+
+    if tag.number == app_tag::NULL && tag.length != 0 {
+        return Err(Error::decoding(
+            offset,
+            "application NULL must have no contents",
+        ));
+    }
+    if tag.number == app_tag::BOOLEAN && tag.length > 1 {
+        return Err(Error::decoding(
+            offset,
+            "application BOOLEAN L/V/T must be 0 or 1",
+        ));
     }
 
     let content_start = new_offset;
@@ -497,7 +543,11 @@ pub fn decode_application_value(
                 data: bits,
             }
         }
-        app_tag::ENUMERATED => PropertyValue::Enumerated(decode_unsigned(content)? as u32),
+        app_tag::ENUMERATED => {
+            let value = u32::try_from(decode_unsigned(content)?)
+                .map_err(|_| Error::decoding(content_start, "ENUMERATED exceeds u32"))?;
+            PropertyValue::Enumerated(value)
+        }
         app_tag::DATE => PropertyValue::Date(Date::decode(content)?),
         app_tag::TIME => PropertyValue::Time(Time::decode(content)?),
         app_tag::OBJECT_IDENTIFIER => {
@@ -512,6 +562,73 @@ pub fn decode_application_value(
     };
 
     Ok((value, content_end))
+}
+
+pub(crate) fn validate_application_value(data: &[u8], offset: usize) -> Result<usize, Error> {
+    let (tag, content_start) = tags::decode_tag(data, offset)?;
+    if tag.class != TagClass::Application || tag.is_opening || tag.is_closing {
+        return Err(Error::decoding(
+            offset,
+            "expected an application-tagged value",
+        ));
+    }
+    if tag.number != app_tag::CHARACTER_STRING && tag.number != app_tag::SIGNED {
+        return decode_application_value(data, offset).map(|(_, end)| end);
+    }
+
+    let content_end = content_start
+        .checked_add(tag.length as usize)
+        .ok_or_else(|| Error::decoding(content_start, "length overflow"))?;
+    if content_end > data.len() {
+        return Err(Error::buffer_too_short(content_end, data.len()));
+    }
+    let content = &data[content_start..content_end];
+    if tag.number == app_tag::SIGNED {
+        decode_signed_canonical(content)?;
+        return Ok(content_end);
+    }
+    let Some((&charset_id, payload)) = content.split_first() else {
+        return Err(Error::decoding(
+            content_start,
+            "CharacterString requires a character-set octet",
+        ));
+    };
+    match charset_id {
+        charset::UTF8 | charset::UCS2 | charset::ISO_8859_1 => {
+            decode_character_string(content)?;
+        }
+        charset::IBM_MICROSOFT_DBCS if payload.len() < 2 => {
+            return Err(Error::decoding(
+                content_start + 1,
+                "DBCS CharacterString requires a two-octet code page",
+            ));
+        }
+        charset::IBM_MICROSOFT_DBCS | charset::JIS_X_0208 => {}
+        charset::UCS4 => {
+            if !payload.len().is_multiple_of(4) {
+                return Err(Error::decoding(
+                    content_start + 1,
+                    "UCS-4 CharacterString length must be a multiple of four",
+                ));
+            }
+            for (index, encoded) in payload.chunks_exact(4).enumerate() {
+                let code_point = u32::from_be_bytes(encoded.try_into().unwrap());
+                if char::from_u32(code_point).is_none() {
+                    return Err(Error::decoding(
+                        content_start + 1 + index * 4,
+                        "invalid UCS-4 code point",
+                    ));
+                }
+            }
+        }
+        _ => {
+            return Err(Error::decoding(
+                content_start,
+                format!("reserved character set: {charset_id}"),
+            ));
+        }
+    }
+    Ok(content_end)
 }
 
 /// Encode a `PropertyValue` as an application-tagged value.
@@ -537,6 +654,11 @@ pub fn encode_property_value(buf: &mut BytesMut, value: &PropertyValue) -> Resul
                 encode_property_value(buf, v)?;
             }
         }
+        PropertyValue::ApplicationData(bytes) => {
+            // Already-encoded application-layer content (a context-tagged
+            // CHOICE/SEQUENCE production) is emitted verbatim.
+            buf.put_slice(bytes);
+        }
     }
     Ok(())
 }
@@ -545,20 +667,37 @@ pub fn encode_property_value(buf: &mut BytesMut, value: &PropertyValue) -> Resul
 // BACnetTimeStamp encode/decode
 // ===========================================================================
 
-/// Encode a BACnetTimeStamp wrapped in a context opening/closing tag pair.
+/// Largest encodable `sequence-number` value: the production constrains it to
+/// `Unsigned (0..65535)`.
 ///
-/// The outer `tag_number` is the context tag of the enclosing field.
-/// Inside, the CHOICE variant uses its own context tag (0=Time,
-/// 1=SequenceNumber, 2=DateTime).
-pub fn encode_timestamp(buf: &mut BytesMut, tag_number: u8, ts: &BACnetTimeStamp) {
-    tags::encode_opening_tag(buf, tag_number);
+/// `BACnetTimeStamp ::= CHOICE { time [0] Time, sequence-number [1] Unsigned
+/// (0..65535), datetime [2] BACnetDateTime }` (ASHRAE 135-2020 Clause 21).
+pub const MAX_TIMESTAMP_SEQUENCE_NUMBER: u64 = 65535;
+
+/// Encode a `BACnetTimeStamp` as a bare CHOICE element (no enclosing field
+/// tag).
+///
+/// Used where a production lists `BACnetTimeStamp` as a bare CHOICE item —
+/// e.g. the `eventTimeStamps [3] SEQUENCE OF BACnetTimeStamp` inside
+/// GetEventInformation-ACK (Clause 13.9). [`encode_timestamp`] wraps this in
+/// the enclosing field's context tag pair instead.
+///
+/// Tag forms per Clause 20.2.1.5: `time [0]` is the CHOICE's only alternative
+/// over a *primitive* base type, so it encodes as a context-specific
+/// *primitive* tag 0 of length 4 holding the raw `Time` octets (the
+/// opening-tag-0 wrapper around an application-tagged `Time` is NOT
+/// conformant); `sequence-number [1]` is a primitive context tag 1 (contents
+/// constrained to `0..=65535` by the public variant's `u16` payload);
+/// `datetime [2]` tags the *constructed* `BACnetDateTime`, so it encodes as opening tag 2 /
+/// application-tagged `Date` / application-tagged `Time` / closing tag 2.
+pub fn encode_timestamp_choice(buf: &mut BytesMut, ts: &BACnetTimeStamp) -> Result<(), Error> {
     match ts {
         BACnetTimeStamp::Time(t) => {
             tags::encode_tag(buf, 0, TagClass::Context, 4);
             buf.put_slice(&t.encode());
         }
         BACnetTimeStamp::SequenceNumber(n) => {
-            encode_ctx_unsigned(buf, 1, *n);
+            encode_ctx_unsigned(buf, 1, u64::from(*n));
         }
         BACnetTimeStamp::DateTime { date, time } => {
             tags::encode_opening_tag(buf, 2);
@@ -567,27 +706,20 @@ pub fn encode_timestamp(buf: &mut BytesMut, tag_number: u8, ts: &BACnetTimeStamp
             tags::encode_closing_tag(buf, 2);
         }
     }
-    tags::encode_closing_tag(buf, tag_number);
+    Ok(())
 }
 
-/// Decode a BACnetTimeStamp from inside a context opening/closing tag pair.
+/// Decode a bare-CHOICE `BACnetTimeStamp` starting at `offset`.
 ///
-/// `data` should point to the start of the outer opening tag for `tag_number`.
-/// Returns the decoded timestamp and the new offset past the outer closing tag.
-pub fn decode_timestamp(
+/// Returns the decoded timestamp and the new offset past its encoding. Only
+/// the Clause 20.2.1.5-conformant tag forms described on
+/// [`encode_timestamp_choice`] are accepted; `sequence-number` contents
+/// beyond `0..=65535` are rejected.
+pub fn decode_timestamp_choice(
     data: &[u8],
     offset: usize,
-    tag_number: u8,
 ) -> Result<(BACnetTimeStamp, usize), Error> {
-    let (tag, pos) = tags::decode_tag(data, offset)?;
-    if !tag.is_opening_tag(tag_number) {
-        return Err(Error::decoding(
-            offset,
-            format!("expected opening tag {tag_number} for BACnetTimeStamp"),
-        ));
-    }
-
-    let (inner_tag, inner_pos) = tags::decode_tag(data, pos)?;
+    let (inner_tag, inner_pos) = tags::decode_tag(data, offset)?;
 
     let (ts, after_inner) = if inner_tag.is_context(0) {
         let end = inner_pos
@@ -611,7 +743,18 @@ pub fn decode_timestamp(
             ));
         }
         let n = decode_unsigned(&data[inner_pos..end])?;
-        (BACnetTimeStamp::SequenceNumber(n), end)
+        if n > MAX_TIMESTAMP_SEQUENCE_NUMBER {
+            return Err(Error::decoding(
+                inner_pos,
+                format!("BACnetTimeStamp sequence-number {n} exceeds 65535"),
+            ));
+        }
+        (
+            BACnetTimeStamp::SequenceNumber(
+                u16::try_from(n).expect("BACnetTimeStamp sequence range checked above"),
+            ),
+            end,
+        )
     } else if inner_tag.is_opening_tag(2) {
         let (date_tag, date_pos) = tags::decode_tag(data, inner_pos)?;
         if date_tag.class != TagClass::Application || date_tag.number != app_tag::DATE {
@@ -663,10 +806,48 @@ pub fn decode_timestamp(
         (BACnetTimeStamp::DateTime { date, time }, close_pos)
     } else {
         return Err(Error::decoding(
-            pos,
+            offset,
             "BACnetTimeStamp: unexpected inner choice tag",
         ));
     };
+
+    Ok((ts, after_inner))
+}
+
+/// Encode a BACnetTimeStamp wrapped in a context opening/closing tag pair.
+///
+/// The outer `tag_number` is the context tag of the enclosing field.
+/// Inside, the CHOICE variant uses its own context tag (0=Time,
+/// 1=SequenceNumber, 2=DateTime) via [`encode_timestamp_choice`].
+pub fn encode_timestamp(
+    buf: &mut BytesMut,
+    tag_number: u8,
+    ts: &BACnetTimeStamp,
+) -> Result<(), Error> {
+    tags::encode_opening_tag(buf, tag_number);
+    encode_timestamp_choice(buf, ts)?;
+    tags::encode_closing_tag(buf, tag_number);
+    Ok(())
+}
+
+/// Decode a BACnetTimeStamp from inside a context opening/closing tag pair.
+///
+/// `data` should point to the start of the outer opening tag for `tag_number`.
+/// Returns the decoded timestamp and the new offset past the outer closing tag.
+pub fn decode_timestamp(
+    data: &[u8],
+    offset: usize,
+    tag_number: u8,
+) -> Result<(BACnetTimeStamp, usize), Error> {
+    let (tag, pos) = tags::decode_tag(data, offset)?;
+    if !tag.is_opening_tag(tag_number) {
+        return Err(Error::decoding(
+            offset,
+            format!("expected opening tag {tag_number} for BACnetTimeStamp"),
+        ));
+    }
+
+    let (ts, after_inner) = decode_timestamp_choice(data, pos)?;
 
     let (close, final_pos) = tags::decode_tag(data, after_inner)?;
     if !close.is_closing_tag(tag_number) {

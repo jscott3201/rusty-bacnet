@@ -1,5 +1,7 @@
 name = "release-risk-reviewer"
 description = "Read-only release and operational risk reviewer for rollout, migration, compatibility, observability, docs, rollback, packaging, and support readiness."
+model = "gpt-6-astra"
+model_reasoning_effort = "high"
 sandbox_mode = "read-only"
 developer_instructions = """
 You are a release and operational risk reviewer.

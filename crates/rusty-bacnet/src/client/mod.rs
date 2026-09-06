@@ -4,17 +4,17 @@ use std::net::Ipv4Addr;
 use std::sync::Arc;
 
 use bytes::BytesMut;
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyDeprecationWarning, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 use tokio::sync::Mutex;
 
 use bacnet_client::client;
 use bacnet_encoding::primitives::{decode_application_value, encode_property_value};
+use bacnet_services::alarm_event::AcknowledgeAlarmRequest;
 use bacnet_services::alarm_summary::GetAlarmSummaryAck;
-use bacnet_services::audit::AuditLogQueryRequest;
-
-type ClientInner = Arc<Mutex<Option<Arc<client::BACnetClient<AnyTransport<NoSerial>>>>>>;
+type ClientInner =
+    Arc<Mutex<Option<Arc<client::BACnetClient<AnyTransport<crate::mstp_py::PySerial>>>>>>;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::cov_multiple::{
     COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
@@ -37,13 +37,15 @@ use bacnet_services::write_group::{GroupChannelValue, WriteGroupRequest};
 use bacnet_transport::any::AnyTransport;
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::bip6::Bip6Transport;
-use bacnet_transport::mstp::NoSerial;
 use bacnet_types::enums::{ConfirmedServiceChoice, UnconfirmedServiceChoice};
+use bacnet_types::primitives::BACnetTimeStamp;
 
 use crate::errors::to_py_err;
 use crate::types::{
-    parse_address, py_to_rpm_specs, py_to_wpm_specs, rpm_ack_to_py, PyCovNotificationIterator,
-    PyDiscoveredDevice, PyEnableDisable, PyEventState, PyEventType, PyLifeSafetyOperation,
+    audit_log_query_ack_to_py, audit_log_query_request_from_py, audit_notification_request_from_py,
+    parse_address, py_to_rpm_specs, py_to_wpm_specs, rpm_ack_to_py, PyBACnetTimeStamp,
+    PyCovNotificationIterator, PyDiscoveredDevice, PyEnableDisable,
+    PyEnrollmentSummaryEventStateFilter, PyEventState, PyEventType, PyLifeSafetyOperation,
     PyMessagePriority, PyObjectIdentifier, PyObjectType, PyPropertyIdentifier, PyPropertyValue,
     PyReinitializedState,
 };
@@ -61,6 +63,7 @@ use crate::types::{
 /// - `"bip"` (default): BACnet/IP over UDP
 /// - `"ipv6"`: BACnet/IPv6 over UDP multicast
 /// - `"sc"`: BACnet/SC over TLS WebSocket (requires `sc_hub`, `sc_vmac`)
+/// - `"mstp"`: BACnet MS/TP over RS-485 (requires `serial_port`)
 #[pyclass(name = "BACnetClient")]
 pub struct BACnetClient {
     inner: ClientInner,
@@ -80,6 +83,12 @@ pub struct BACnetClient {
     sc_heartbeat_timeout_ms: Option<u64>,
     // IPv6 config
     ipv6_interface: Option<String>,
+    // MS/TP config
+    serial_port: Option<String>,
+    mstp_baud: u32,
+    mstp_mac: u8,
+    mstp_max_master: u8,
+    mstp_max_info_frames: u8,
 }
 
 mod client_methods {

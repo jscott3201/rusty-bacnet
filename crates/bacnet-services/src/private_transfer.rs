@@ -39,6 +39,12 @@ impl PrivateTransferRequest {
 
         // [0] vendorID
         let (tag, pos) = tags::decode_tag(data, offset)?;
+        if !tag.is_context(0) {
+            return Err(Error::decoding(
+                offset,
+                "PrivateTransfer expected context tag 0 for vendorID",
+            ));
+        }
         let end = pos + tag.length as usize;
         if end > data.len() {
             return Err(Error::decoding(
@@ -46,11 +52,23 @@ impl PrivateTransferRequest {
                 "PrivateTransfer truncated at vendorID",
             ));
         }
-        let vendor_id = primitives::decode_unsigned(&data[pos..end])? as u32;
+        let vendor_id_raw = primitives::decode_unsigned(&data[pos..end])?;
+        let vendor_id = u32::try_from(vendor_id_raw).map_err(|_| {
+            Error::decoding(
+                pos,
+                format!("PrivateTransfer vendorID {vendor_id_raw} exceeds u32"),
+            )
+        })?;
         offset = end;
 
         // [1] serviceNumber
         let (tag, pos) = tags::decode_tag(data, offset)?;
+        if !tag.is_context(1) {
+            return Err(Error::decoding(
+                offset,
+                "PrivateTransfer expected context tag 1 for serviceNumber",
+            ));
+        }
         let end = pos + tag.length as usize;
         if end > data.len() {
             return Err(Error::decoding(
@@ -58,7 +76,13 @@ impl PrivateTransferRequest {
                 "PrivateTransfer truncated at serviceNumber",
             ));
         }
-        let service_number = primitives::decode_unsigned(&data[pos..end])? as u32;
+        let service_number_raw = primitives::decode_unsigned(&data[pos..end])?;
+        let service_number = u32::try_from(service_number_raw).map_err(|_| {
+            Error::decoding(
+                pos,
+                format!("PrivateTransfer serviceNumber {service_number_raw} exceeds u32"),
+            )
+        })?;
         offset = end;
 
         // [2] serviceParameters (optional, opening/closing)
@@ -113,6 +137,12 @@ impl PrivateTransferAck {
 
         // [0] vendorID
         let (tag, pos) = tags::decode_tag(data, offset)?;
+        if !tag.is_context(0) {
+            return Err(Error::decoding(
+                offset,
+                "PrivateTransferAck expected context tag 0 for vendorID",
+            ));
+        }
         let end = pos + tag.length as usize;
         if end > data.len() {
             return Err(Error::decoding(
@@ -120,11 +150,23 @@ impl PrivateTransferAck {
                 "PrivateTransferAck truncated at vendorID",
             ));
         }
-        let vendor_id = primitives::decode_unsigned(&data[pos..end])? as u32;
+        let vendor_id_raw = primitives::decode_unsigned(&data[pos..end])?;
+        let vendor_id = u32::try_from(vendor_id_raw).map_err(|_| {
+            Error::decoding(
+                pos,
+                format!("PrivateTransferAck vendorID {vendor_id_raw} exceeds u32"),
+            )
+        })?;
         offset = end;
 
         // [1] serviceNumber
         let (tag, pos) = tags::decode_tag(data, offset)?;
+        if !tag.is_context(1) {
+            return Err(Error::decoding(
+                offset,
+                "PrivateTransferAck expected context tag 1 for serviceNumber",
+            ));
+        }
         let end = pos + tag.length as usize;
         if end > data.len() {
             return Err(Error::decoding(
@@ -132,7 +174,13 @@ impl PrivateTransferAck {
                 "PrivateTransferAck truncated at serviceNumber",
             ));
         }
-        let service_number = primitives::decode_unsigned(&data[pos..end])? as u32;
+        let service_number_raw = primitives::decode_unsigned(&data[pos..end])?;
+        let service_number = u32::try_from(service_number_raw).map_err(|_| {
+            Error::decoding(
+                pos,
+                format!("PrivateTransferAck serviceNumber {service_number_raw} exceeds u32"),
+            )
+        })?;
         offset = end;
 
         // [2] resultBlock (optional, opening/closing)
@@ -158,6 +206,18 @@ impl PrivateTransferAck {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn encode_header(vendor_id: u64, service_number: u64) -> BytesMut {
+        let mut buf = BytesMut::new();
+        primitives::encode_ctx_unsigned(&mut buf, 0, vendor_id);
+        primitives::encode_ctx_unsigned(&mut buf, 1, service_number);
+        buf
+    }
+
+    fn assert_both_decoders_reject(data: &[u8]) {
+        assert!(PrivateTransferRequest::decode(data).is_err());
+        assert!(PrivateTransferAck::decode(data).is_err());
+    }
 
     #[test]
     fn request_round_trip() {
@@ -209,6 +269,52 @@ mod tests {
         ack.encode(&mut buf);
         let decoded = PrivateTransferAck::decode(&buf).unwrap();
         assert_eq!(ack, decoded);
+    }
+
+    #[test]
+    fn private_transfer_values_must_fit_u32() {
+        let maximum = encode_header(u64::from(u32::MAX), u64::from(u32::MAX));
+        let request = PrivateTransferRequest::decode(&maximum).unwrap();
+        assert_eq!(request.vendor_id, u32::MAX);
+        assert_eq!(request.service_number, u32::MAX);
+        let ack = PrivateTransferAck::decode(&maximum).unwrap();
+        assert_eq!(ack.vendor_id, u32::MAX);
+        assert_eq!(ack.service_number, u32::MAX);
+
+        let mut leading_zero = BytesMut::new();
+        tags::encode_tag(&mut leading_zero, 0, tags::TagClass::Context, 5);
+        leading_zero.extend_from_slice(&[0, 0xff, 0xff, 0xff, 0xff]);
+        tags::encode_tag(&mut leading_zero, 1, tags::TagClass::Context, 5);
+        leading_zero.extend_from_slice(&[0, 0xff, 0xff, 0xff, 0xff]);
+        let request = PrivateTransferRequest::decode(&leading_zero).unwrap();
+        assert_eq!(request.vendor_id, u32::MAX);
+        assert_eq!(request.service_number, u32::MAX);
+        let ack = PrivateTransferAck::decode(&leading_zero).unwrap();
+        assert_eq!(ack.vendor_id, u32::MAX);
+        assert_eq!(ack.service_number, u32::MAX);
+
+        for value in [u64::from(u32::MAX) + 1, u64::MAX] {
+            assert_both_decoders_reject(&encode_header(value, 1));
+            assert_both_decoders_reject(&encode_header(1, value));
+        }
+    }
+
+    #[test]
+    fn private_transfer_requires_mandatory_context_tags() {
+        let mut wrong_vendor_tag = BytesMut::new();
+        primitives::encode_ctx_unsigned(&mut wrong_vendor_tag, 1, 42);
+        primitives::encode_ctx_unsigned(&mut wrong_vendor_tag, 1, 7);
+        assert_both_decoders_reject(&wrong_vendor_tag);
+
+        let mut wrong_service_tag = BytesMut::new();
+        primitives::encode_ctx_unsigned(&mut wrong_service_tag, 0, 42);
+        primitives::encode_ctx_unsigned(&mut wrong_service_tag, 0, 7);
+        assert_both_decoders_reject(&wrong_service_tag);
+
+        let mut application_vendor = BytesMut::new();
+        primitives::encode_app_unsigned(&mut application_vendor, 42);
+        primitives::encode_ctx_unsigned(&mut application_vendor, 1, 7);
+        assert_both_decoders_reject(&application_vendor);
     }
 
     // -----------------------------------------------------------------------

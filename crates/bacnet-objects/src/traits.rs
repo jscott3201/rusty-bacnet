@@ -1,13 +1,99 @@
 //! BACnetObject trait — the interface all BACnet objects implement.
 
+use std::any::Any;
 use std::borrow::Cow;
+use std::sync::Arc;
+use std::time::Duration;
 
 use bacnet_types::constructed::BACnetLogRecord;
-use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::enums::{
+    ErrorClass, ErrorCode, EventState, LifeSafetyOperation, PropertyIdentifier,
+};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
 
-use crate::event::EventStateChange;
+use crate::audit::{AuditLogNotificationSink, AuditLogStorage};
+use crate::clock::ClockReader;
+use crate::event::{
+    EnrollmentSummaryCapability, EventStateChange, EventTransitionCommit,
+    EventTransitionCommitError, TransitionOutcome,
+};
+use crate::event_enrollment::{
+    EventEnrollmentEvalState, EventEnrollmentMonitoredSource, EventEnrollmentReliabilityCommit,
+};
+use crate::file::{FileConfiguration, FileStorage};
+use crate::log_buffer::LogRecordIdentity;
+
+/// Process-local monotonic time source used by internal object lifecycles.
+#[doc(hidden)]
+pub type MonotonicClock = dyn Fn() -> Duration + Send + Sync;
+
+mod defaults;
+use defaults::{array_property_default, historical_writable_default};
+
+/// Object-owned snapshot state retained for compatibility and local use.
+///
+/// The bundled server no longer invokes these tokens from Service 16:
+/// WritePropertyMultiple retains its successful prefix as required by Clause
+/// 15.10. Existing object implementations and downstream users may still use
+/// the hooks directly to preserve state hidden by property readback, including
+/// event resets, fallback-backed values, destructive writes, and derived state.
+#[doc(hidden)]
+pub struct WritePropertyRollback(Box<dyn Any + Send + Sync>);
+
+/// Result of applying a LifeSafetyOperation to an object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LifeSafetyOperationEffect {
+    /// The operation changed object state.
+    Applied,
+    /// The requested idempotent state was already present.
+    AlreadyApplied,
+}
+
+/// Detailed result of applying a `LifeSafetyOperation` to object-owned state.
+///
+/// `changed_properties` is ordered by the object's stable reporting order and
+/// contains each property at most once. Custom objects that implement only
+/// [`BACnetObject::apply_life_safety_operation`] remain source-compatible: the
+/// default detailed hook delegates to that method and reports no properties
+/// because the trait cannot truthfully infer their object-private mutations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LifeSafetyOperationOutcome {
+    /// Existing coarse operation result.
+    pub effect: LifeSafetyOperationEffect,
+    /// Exact properties whose committed readback changed.
+    pub changed_properties: Vec<PropertyIdentifier>,
+}
+
+/// Result of one object-owned reliability evaluation pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReliabilityEvaluation {
+    /// The object made no reliability-related mutation.
+    Unchanged,
+    /// The object successfully mutated its `Reliability` value.
+    Changed {
+        /// Reliability before the successful mutation.
+        old_reliability: u32,
+        /// Reliability after the successful mutation.
+        new_reliability: u32,
+    },
+}
+
+impl WritePropertyRollback {
+    /// Wrap object-private rollback state.
+    #[doc(hidden)]
+    pub fn new<T: Any + Send + Sync>(state: T) -> Self {
+        Self(Box::new(state))
+    }
+
+    /// Recover object-private rollback state.
+    #[doc(hidden)]
+    pub fn downcast<T: Any + Send + Sync>(self) -> Result<T, Error> {
+        self.0.downcast::<T>().map(|state| *state).map_err(|_| {
+            Error::Encoding("object received an incompatible write rollback token".into())
+        })
+    }
+}
 
 /// The core trait for all BACnet objects.
 ///
@@ -28,6 +114,10 @@ pub trait BACnetObject: Send + Sync {
     ) -> Result<PropertyValue, Error>;
 
     /// Write a property value.
+    ///
+    /// Returning `Err` MUST leave the object unchanged. WritePropertyMultiple
+    /// retains earlier successful writes and cannot undo a mutation made by the
+    /// currently failing write, including for a write-only property.
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
@@ -36,14 +126,173 @@ pub trait BACnetObject: Send + Sync {
         priority: Option<u8>,
     ) -> Result<(), Error>;
 
-    /// List all properties this object supports.
+    /// Return canonical metadata for this object's effective property rows.
+    ///
+    /// Migrated implementations return every supported standard row for the
+    /// current instance, including `PROPERTY_LIST`. Borrowed rows cover static
+    /// or object-owned metadata; owned rows support dynamically assembled
+    /// per-instance sets. An empty borrowed default marks an object as unmigrated.
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        Cow::Borrowed(&[])
+    }
+
+    /// List all properties this object supports in the legacy projection.
+    ///
+    /// For migrated objects this includes Object_Identifier, Object_Name, and
+    /// Object_Type but omits Property_List. Reading the BACnet Property_List
+    /// property applies the additional wire-level universal-property filter.
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]>;
+
+    /// Bind or remove the database's shared wall-clock reader.
+    ///
+    /// Objects that do not expose clock-derived state ignore this internal
+    /// lifecycle hook.
+    #[doc(hidden)]
+    fn bind_clock_internal(&mut self, _clock: Option<Arc<dyn ClockReader>>) {}
+
+    /// Advance object-owned operations that use monotonic elapsed time.
+    ///
+    /// The server calls this internal hook from a dedicated lifecycle task.
+    /// `true` means readable state changed and generic COV processing is
+    /// required. The default is a source-compatible no-op for downstream
+    /// object implementations.
+    #[doc(hidden)]
+    fn advance_time_internal(&mut self, _elapsed: Duration) -> bool {
+        false
+    }
+
+    /// Bind the process-local monotonic source used when operations arm.
+    #[doc(hidden)]
+    fn bind_monotonic_clock_internal(&mut self, _clock: Option<Arc<MonotonicClock>>) {}
+
+    /// Advance operations to an absolute process-local monotonic instant.
+    #[doc(hidden)]
+    fn advance_monotonic_time_internal(&mut self, _now: Duration) -> bool {
+        false
+    }
+
+    /// Return the next absolute process-local operation deadline, if any.
+    #[doc(hidden)]
+    fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
+        None
+    }
+
+    /// Freeze COV-readable state while the object's mutation lock is held.
+    #[doc(hidden)]
+    fn cov_snapshot_internal(&self) -> Option<Box<dyn BACnetObject>> {
+        None
+    }
+
+    /// Return the retained logical blink-request observation, when modeled.
+    ///
+    /// This is an internal conformance-test channel, not a BACnet property,
+    /// host callback, or physical-output claim.
+    #[doc(hidden)]
+    fn binary_lighting_blink_count_internal(&self) -> u64 {
+        0
+    }
+
+    /// Whether `write_property` accepts `property` for this object.
+    ///
+    /// PICS generation and runtime dispatch MUST consult this (or
+    /// `write_property` itself) rather than a separate heuristic, so the PICS
+    /// writable flags cannot drift from the actual write routes. The default
+    /// reproduces the historical PICS heuristic (see
+    /// [`historical_writable_default`]) so unmigrated object types keep their
+    /// current PICS output. Object implementations override to mirror their
+    /// real `write_property` arms exactly.
+    ///
+    /// Universal read-only properties (`OBJECT_IDENTIFIER`, `OBJECT_TYPE`,
+    /// `PROPERTY_LIST`, `STATUS_FLAGS`) are always non-writable and are
+    /// excluded by the default; overrides should preserve that invariant.
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        let metadata = self.property_metadata();
+        if metadata.is_empty() {
+            historical_writable_default(self.object_identifier().object_type(), property)
+        } else {
+            crate::property_metadata::is_writable_in_metadata(metadata.as_ref(), property)
+        }
+    }
+
+    /// Whether `property` accepts an array index on this object.
+    ///
+    /// Per Clause 12.1.5.1, only BACnetARRAY (and BACnetARRAY of BACnetLIST)
+    /// properties accept an array index; Clause 12.1.5.2 makes ReadRange the
+    /// only positional access to a BACnetLIST. The RP/RPM/WP/WPM service
+    /// handlers gate the request's array index on this query and reject a
+    /// supplied index on a non-array property with PROPERTY /
+    /// PROPERTY_IS_NOT_AN_ARRAY (Clause 15.5.1.3, Clause 15.9.1.3).
+    ///
+    /// The default reproduces the standard's classification (see
+    /// [`array_property_default`]): identifier-stable arrays are admitted
+    /// without consulting the object type, the identifiers whose datatype
+    /// changes with the object type (ALARM_VALUES / FAULT_VALUES,
+    /// LIST_OF_OBJECT_PROPERTY_REFERENCES, PRESENT_VALUE) classify by
+    /// `object_identifier().object_type()`, and everything else — scalars and
+    /// BACnetLIST properties — rejects the index. Object implementations with
+    /// vendor or per-instance array properties override.
+    fn is_array_property(&self, property: PropertyIdentifier) -> bool {
+        array_property_default(self.object_identifier().object_type(), property)
+    }
+
+    /// Capture compatibility state that property readback cannot preserve.
+    ///
+    /// The default returns `None`. Service 16 no longer calls this hook because
+    /// WritePropertyMultiple retains successful prefix writes. Implementations
+    /// and downstream callers may still use a token directly for object-local
+    /// snapshot/restore flows involving destructive or fallback-backed state.
+    /// Returning `None` MUST leave the object unchanged.
+    #[doc(hidden)]
+    fn capture_write_property_rollback(
+        &mut self,
+        _property: PropertyIdentifier,
+        _value: &PropertyValue,
+    ) -> Option<WritePropertyRollback> {
+        None
+    }
+
+    /// Restore a compatibility token returned by
+    /// [`capture_write_property_rollback`](Self::capture_write_property_rollback).
+    ///
+    /// The bundled server's Service 16 path does not invoke this hook.
+    #[doc(hidden)]
+    fn restore_write_property_rollback(
+        &mut self,
+        _rollback: WritePropertyRollback,
+    ) -> Result<(), Error> {
+        Err(Error::Encoding(
+            "object does not support this write rollback token".into(),
+        ))
+    }
+
+    /// Whether this object type can be created at runtime via CreateObject.
+    ///
+    /// Default `false`; override `true` only for types the network factory
+    /// (`handle_create_object`) actually constructs, so PICS createability
+    /// matches the runtime factory with no separate list to drift.
+    fn is_createable(&self) -> bool {
+        false
+    }
+
+    /// Whether this object type can be deleted at runtime via DeleteObject.
+    ///
+    /// Default `true`; override `false` on object types that are not
+    /// deleteable (e.g. `Device`, `NetworkPort`).
+    fn is_deleteable(&self) -> bool {
+        true
+    }
 
     /// List the REQUIRED properties for this object type.
     ///
-    /// Default returns the four universal required properties.
-    /// Object implementations may override to include type-specific required properties.
+    /// Migrated objects derive this set from canonical `R` and `W` rows,
+    /// including Property_List. Unmigrated objects retain the historical four
+    /// universal properties. Service-specific consumers may exclude
+    /// Property_List where their protocol contract requires it.
     fn required_properties(&self) -> Cow<'static, [PropertyIdentifier]> {
+        let metadata = self.property_metadata();
+        if !metadata.is_empty() {
+            return crate::property_metadata::required_properties_from_metadata(metadata.as_ref());
+        }
         static UNIVERSAL: [PropertyIdentifier; 4] = [
             PropertyIdentifier::OBJECT_IDENTIFIER,
             PropertyIdentifier::OBJECT_NAME,
@@ -59,6 +308,69 @@ pub trait BACnetObject: Send + Sync {
     /// notifications (analog, binary, multi-state I/O/V). Default is `false`.
     fn supports_cov(&self) -> bool {
         false
+    }
+
+    /// Take pending local target work from a Staging object.
+    ///
+    /// The default keeps every non-Staging object source-compatible. The
+    /// bundled server calls this only while it owns the database mutation
+    /// guard, then performs the returned writes after releasing that guard.
+    #[doc(hidden)]
+    fn take_staging_write_plan_internal(&mut self) -> Option<crate::staging::StagingWritePlan> {
+        None
+    }
+
+    /// Return the current Staging transition generation, if applicable.
+    #[doc(hidden)]
+    fn staging_generation_internal(&self) -> Option<u64> {
+        None
+    }
+
+    /// Commit one guarded Staging plan's success or failure to Reliability.
+    ///
+    /// Returns whether readable source state changed. Implementations ignore a
+    /// stale generation so older work cannot fault a newer transition.
+    #[doc(hidden)]
+    fn complete_staging_write_plan_internal(&mut self, _generation: u64, _success: bool) -> bool {
+        false
+    }
+
+    /// Return this object's GetEnrollmentSummary event capability.
+    ///
+    /// The default opts custom and downstream objects out. Implementations opt
+    /// in only when they own an actual configured or implied event algorithm
+    /// and shared committed-transition history.
+    #[doc(hidden)]
+    fn enrollment_summary_capability_internal(&self) -> Option<EnrollmentSummaryCapability> {
+        None
+    }
+
+    /// Whether a readable property supports property-specific COV.
+    ///
+    /// The default preserves the existing behavior of every other COV-capable
+    /// object family while enforcing the bounded standardized Life Safety
+    /// surface for source-compatible custom Point and Zone implementations.
+    fn supports_cov_property(&self, property: PropertyIdentifier) -> bool {
+        use bacnet_types::enums::ObjectType;
+
+        match self.object_identifier().object_type() {
+            ObjectType::LIFE_SAFETY_POINT => matches!(
+                property,
+                PropertyIdentifier::PRESENT_VALUE
+                    | PropertyIdentifier::STATUS_FLAGS
+                    | PropertyIdentifier::TRACKING_VALUE
+                    | PropertyIdentifier::SILENCED
+                    | PropertyIdentifier::OPERATION_EXPECTED
+            ),
+            ObjectType::LIFE_SAFETY_ZONE => matches!(
+                property,
+                PropertyIdentifier::PRESENT_VALUE
+                    | PropertyIdentifier::STATUS_FLAGS
+                    | PropertyIdentifier::SILENCED
+                    | PropertyIdentifier::OPERATION_EXPECTED
+            ),
+            _ => self.supports_cov(),
+        }
     }
 
     /// COV increment for this object (analog objects only).
@@ -81,10 +393,93 @@ pub trait BACnetObject: Send + Sync {
 
     /// Evaluate intrinsic reporting after a present_value change.
     ///
-    /// Returns `Some(EventStateChange)` if the event state transitioned,
-    /// or `None` if no change occurred (or the object doesn't support intrinsic reporting).
-    fn evaluate_intrinsic_reporting(&mut self) -> Option<EventStateChange> {
+    /// This is the per-write entry point: it seeds (or cancels) a pending
+    /// delayed transition and fires immediately only when `Time_Delay == 0`.
+    /// It never advances the `Time_Delay` countdown — repeated writes to the
+    /// same value do not shorten the delay (per ASHRAE 135-2020 §13.2.4 the
+    /// countdown advances once per elapsed second via
+    /// [`tick_intrinsic_reporting`](Self::tick_intrinsic_reporting)).
+    ///
+    /// Returns `Some(TransitionOutcome)` whenever a transition is ready to be
+    /// committed, or
+    /// `None` when none did (no change, delay seeded, or the object does not
+    /// support intrinsic reporting). A cleared `Event_Enable` bit sets the
+    /// outcome's `distribute` flag to false rather than withholding the
+    /// transition. Built-in object families leave `Event_State`,
+    /// `Acked_Transitions`, event history, and fire-ready detector state
+    /// unchanged until [`commit_event_transition_internal`](Self::commit_event_transition_internal)
+    /// succeeds. Clause 13.2.2.1.4's transition actions run either way, and
+    /// `Event_Enable` disables only external distribution, downstream in the
+    /// notification-distribution process (Clause 13.2.5).
+    fn evaluate_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
         None
+    }
+
+    /// Advance the `Time_Delay` countdown for a pending transition.
+    ///
+    /// Called by the server's one-second intrinsic-reporting task. Fires the
+    /// pending transition when its delay elapses this tick, cancels it if the
+    /// triggering condition reverted, and returns `Some(TransitionOutcome)`
+    /// when a transition is ready. A fire-ready built-in proposal remains
+    /// retryable until the commit hook succeeds. As with
+    /// [`evaluate_intrinsic_reporting`](Self::evaluate_intrinsic_reporting),
+    /// `Event_Enable` is reported via `distribute`, not by returning `None`.
+    /// Objects without a delayed transition return `None`.
+    fn tick_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
+        None
+    }
+
+    /// Whether intrinsic-reporting outcomes require the atomic commit hook.
+    ///
+    /// The default preserves the legacy contract used by downstream objects
+    /// and [`crate::impl_intrinsic_reporting!`]: evaluation mutates detector
+    /// state immediately, so the server must distribute its outcome without
+    /// attempting another commit. Built-in proposal-based objects override
+    /// this to return `true`; their outcomes are uncommitted and must be
+    /// rejected unless [`commit_event_transition_internal`](Self::commit_event_transition_internal)
+    /// succeeds.
+    #[doc(hidden)]
+    fn intrinsic_reporting_requires_atomic_commit(&self) -> bool {
+        false
+    }
+
+    /// Atomically commit all object-owned state for one event transition.
+    ///
+    /// The caller supplies an exact state change, its transition coordinate,
+    /// the resolved Notification Class `Ack_Required` value, a typed
+    /// timestamp, and an optional message. Implementations must validate the
+    /// coordinate and source state before changing `Event_State`,
+    /// `Acked_Transitions`, `Event_Time_Stamps`, or stored message state, and
+    /// must leave every value unchanged on error. A successful built-in
+    /// implementation also finalizes the detector's pending and fault-edge
+    /// state; a failed commit leaves that state retryable.
+    ///
+    /// This internal channel is deliberately separate from network property
+    /// writes and notification distribution. The default fails closed so an
+    /// object family participates only after it can lend all required state to
+    /// the shared commit kernel.
+    #[doc(hidden)]
+    fn commit_event_transition_internal(
+        &mut self,
+        _commit: EventTransitionCommit,
+    ) -> Result<(), EventTransitionCommitError> {
+        Err(EventTransitionCommitError::Unsupported)
+    }
+
+    /// Atomically commit Event Enrollment Reliability and transition state.
+    ///
+    /// This Event Enrollment-specific channel joins `Reliability` to the
+    /// existing atomic `Event_State`, `Acked_Transitions`, and
+    /// `Event_Time_Stamps` commit. Implementations must stage every supplied
+    /// value before assigning object-owned fields and leave them unchanged on
+    /// error. The default fails closed for custom objects that have not adopted
+    /// the stronger contract.
+    #[doc(hidden)]
+    fn commit_event_enrollment_reliability_internal(
+        &mut self,
+        _commit: EventEnrollmentReliabilityCommit,
+    ) -> Result<(), EventTransitionCommitError> {
+        Err(EventTransitionCommitError::Unsupported)
     }
 
     /// Evaluate this object's schedule for the given time.
@@ -111,8 +506,370 @@ pub trait BACnetObject: Send + Sync {
         })
     }
 
+    /// Correlate an acknowledgment with the latest committed transition.
+    #[doc(hidden)]
+    fn acknowledge_alarm_correlated_internal(
+        &mut self,
+        _event_state: EventState,
+        _timestamp: &BACnetTimeStamp,
+    ) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::NO_ALARM_CONFIGURED.to_raw() as u32,
+        })
+    }
+
+    /// Correlate an acknowledgment and report exact object-owned history.
+    ///
+    /// The default delegates to the source-compatible coarse hook and returns
+    /// no notification context. Custom objects that implement only the coarse
+    /// hook therefore retain their accepted-acknowledgment behavior without the
+    /// bundled server guessing historical states for an ACK notification.
+    #[doc(hidden)]
+    fn acknowledge_alarm_correlated_detailed_internal(
+        &mut self,
+        event_state: EventState,
+        timestamp: &BACnetTimeStamp,
+    ) -> Result<Option<EventStateChange>, Error> {
+        self.acknowledge_alarm_correlated_internal(event_state, timestamp)
+            .map(|()| None)
+    }
+
+    /// Apply a LifeSafetyOperation atomically to this object.
+    ///
+    /// Implementations must leave the object unchanged when returning `Err`.
+    /// They run synchronously under the object-database write lock and must be
+    /// fast, nonblocking, and panic-free. External or irreversible actuation
+    /// also needs an application-owned idempotency/replay contract. The default
+    /// reports that the object does not support this service.
+    fn apply_life_safety_operation(
+        &mut self,
+        _operation: LifeSafetyOperation,
+    ) -> Result<LifeSafetyOperationEffect, Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
+    /// Apply a LifeSafetyOperation and report exact known property deltas.
+    ///
+    /// The default delegates to the source-compatible coarse hook and reports
+    /// no known properties rather than guessing about custom object state.
+    fn apply_life_safety_operation_detailed(
+        &mut self,
+        operation: LifeSafetyOperation,
+    ) -> Result<LifeSafetyOperationOutcome, Error> {
+        self.apply_life_safety_operation(operation)
+            .map(|effect| LifeSafetyOperationOutcome {
+                effect,
+                changed_properties: Vec::new(),
+            })
+    }
+
+    /// Set the next LifeSafetyOperation expected by trusted local logic.
+    ///
+    /// This is an application-facing state channel, not a network property
+    /// write. The default reports that the object does not support the state.
+    fn set_life_safety_operation_expected_internal(
+        &mut self,
+        _operation: LifeSafetyOperation,
+    ) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
+    /// Apply an internally-detected `Event_State` transition.
+    ///
+    /// This is the **internal** lifecycle path for the algorithmically-derived
+    /// `Event_State` on objects such as Event Enrollment (ASHRAE 135-2020
+    /// Clause 12.12). It is deliberately distinct from the network
+    /// [`write_property`](Self::write_property) route: `Event_State` is
+    /// read-only over the network, so network writes are rejected while the
+    /// server's evaluator reaches the field through this method. Objects
+    /// without an algorithmic `Event_State` return
+    /// `OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`.
+    ///
+    /// The **default** returns `Err`, so objects without an algorithmic
+    /// `Event_State` opt out. Objects that do model one (e.g.
+    /// `EventEnrollmentObject`) override this to store the value verbatim:
+    /// the only caller is a trusted internal evaluator that passes a modeled
+    /// [`EventState`], mirroring the inherent `set_event_state` builder and
+    /// the existing read arm. Network-facing validation — rejecting all
+    /// `Event_State` writes — lives in [`write_property`](Self::write_property),
+    /// not here. Implementations must leave `Event_State` unchanged when they
+    /// return `Err`.
+    fn set_event_state_internal(&mut self, _state: EventState) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
+    /// Snapshot this object's Event Enrollment evaluation state, if it models one.
+    ///
+    /// This is the read half of the internal channel the server's Event
+    /// Enrollment evaluator uses to persist per-enrollment algorithm state
+    /// across evaluation cycles: the pending (delayed) transition countdown,
+    /// the CHANGE_OF_VALUE detection baseline (Clause 13.3.3: "the value of
+    /// the monitored value when a transition to NORMAL is indicated"), and
+    /// the value that caused the last transition to OFFNORMAL (Clause 13.3.2
+    /// condition (c)). Like [`set_event_state_internal`](Self::set_event_state_internal)
+    /// it deliberately bypasses the network property model: none of the three
+    /// slots is a BACnet property, and 135-2020 assigns their initialization
+    /// to local matters.
+    ///
+    /// The default returns `None` — objects without algorithmic event
+    /// detection carry no such state, and the evaluator treats `None` as an
+    /// empty state it cannot write back (delay honoring and the COV baseline
+    /// then stay unavailable, matching this crate's pre-delay behavior).
+    fn enrollment_eval_state_internal(&self) -> Option<EventEnrollmentEvalState> {
+        None
+    }
+
+    /// Store this object's Event Enrollment evaluation state.
+    ///
+    /// The write half of [`enrollment_eval_state_internal`](Self::enrollment_eval_state_internal).
+    /// The only caller is the trusted server evaluator, passing a state it
+    /// derived from a prior snapshot plus the current cycle's evaluation.
+    /// Implementations enforce the Clause 13.2.2.1 invariant by construction:
+    /// while `Event_Detection_Enable` is FALSE "no transitions shall occur",
+    /// so a write arriving then is refused rather than queued (and the
+    /// detection-disable reset has already cleared the fields).
+    ///
+    /// The **default** returns `Err`, so objects without enrollment evaluation
+    /// state opt out and the evaluator's write-back is dropped, never stored
+    /// into an object that does not model it.
+    fn set_enrollment_eval_state_internal(
+        &mut self,
+        _state: EventEnrollmentEvalState,
+    ) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
+    /// Snapshot the monitored source that owns Event Enrollment private state.
+    ///
+    /// The outer `Option` indicates whether the object supports this channel;
+    /// the inner `Option` is empty before a source has been established.
+    /// The server stores source ownership in its object database when an
+    /// object implements evaluation state but leaves this channel unsupported.
+    fn enrollment_eval_source_internal(&self) -> Option<Option<EventEnrollmentMonitoredSource>> {
+        None
+    }
+
+    /// Store or clear the monitored source that owns Event Enrollment state.
+    fn set_enrollment_eval_source_internal(
+        &mut self,
+        _source: Option<EventEnrollmentMonitoredSource>,
+    ) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
+    /// Set or clear one `Acked_Transitions` bit on a received event-state
+    /// transition.
+    ///
+    /// Implements the alarm-acknowledgment half of Clause 13.2.2.1.4's fourth
+    /// transition action ("indicate the transition to the Alarm-Acknowledgment
+    /// process"), per Clause 13.2.3: "When an event state transition is
+    /// received, the corresponding bit in Acked_Transitions is either set or
+    /// cleared. If the corresponding bit in Ack_Required is set, then the bit
+    /// in Acked_Transitions is cleared, otherwise it is set." The caller (the
+    /// server evaluator) resolves `Ack_Required` from the referenced
+    /// Notification Class object and passes the outcome as `acknowledged`;
+    /// this method performs only the bit maintenance.
+    ///
+    /// `transition_bit` is the transition direction's bit mask in
+    /// `Acked_Transitions`' internal bit0-first form (`0x01` TO_OFFNORMAL,
+    /// `0x02` TO_FAULT, `0x04` TO_NORMAL). The set half overlaps the
+    /// network-reachable [`acknowledge_alarm`](Self::acknowledge_alarm), which
+    /// also ORs the bit in per Clause 13.2.3's acknowledgment-indication
+    /// paragraph; the clear half has no network route by design (a property
+    /// write could fabricate or erase acknowledgments — see the
+    /// `write_generic_event_properties!` denial comment).
+    ///
+    /// The **default** returns `Err`, so objects without an algorithmic
+    /// `Acked_Transitions` opt out.
+    fn set_acked_transitions_internal(
+        &mut self,
+        _transition_bit: u8,
+        _acknowledged: bool,
+    ) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
+    /// Evaluate and, when necessary, mutate this object's `Reliability`.
+    ///
+    /// Reliability evaluation is object-owned: an implementation decides
+    /// whether and how its internal conditions affect `Reliability`, performs
+    /// the mutation itself, and returns [`ReliabilityEvaluation::Changed`] only
+    /// after that mutation succeeds. [`ReliabilityEvaluation::Unchanged`] means
+    /// the object made no mutation. Returning `Err` MUST leave all object state
+    /// unchanged.
+    ///
+    /// The default opts out without changing state, preserving source
+    /// compatibility for object implementations that do not own a reliability
+    /// evaluation algorithm.
+    fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {
+        Ok(ReliabilityEvaluation::Unchanged)
+    }
+
+    /// Whether periodic object-owned reliability evaluation is currently
+    /// inhibited.
+    ///
+    /// The default is FALSE so existing and downstream object implementations
+    /// remain source-compatible. Objects that elect the optional
+    /// Reliability_Evaluation_Inhibit property override this internal
+    /// predicate; reporting of an already-applied Reliability transition is
+    /// intentionally unaffected.
+    #[doc(hidden)]
+    fn reliability_evaluation_inhibited_internal(&self) -> bool {
+        false
+    }
+
+    /// Apply an internally-derived `Reliability` value.
+    ///
+    /// This is the **internal** reliability-evaluation path, distinct from the
+    /// network [`write_property`](Self::write_property) route. Implementations
+    /// enforce symmetric ownership: clients may write while `Out_Of_Service`
+    /// is TRUE, and internal evaluation may write while it is FALSE. ASHRAE
+    /// 135-2020 Clause 3.2 defines reliability evaluation as "the process by
+    /// which an object determines its reliability and thus the value to set
+    /// into its Reliability property."
+    ///
+    /// The default rejects the operation, so object types without an internal
+    /// reliability-evaluation process remain unaffected.
+    fn set_reliability_internal(&mut self, _reliability: u32) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
+    /// Apply the logical `Present_Value` supplied by an Input's application.
+    ///
+    /// This narrow internal hook is distinct from the network
+    /// [`write_property`](Self::write_property) route. Built-in Analog Input,
+    /// Binary Input, and Multi-state Input objects opt in. Their implementations
+    /// accept application updates only while in service; rejecting them while
+    /// `Out_Of_Service` is TRUE is a local ownership policy that protects the
+    /// client's simulation value, not a requirement imposed by the Standard.
+    ///
+    /// The default fails closed so commandable and other object families do not
+    /// acquire privileged `Present_Value` write authority through this hook.
+    fn set_present_value_internal(&mut self, _value: PropertyValue) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
+    /// Borrow this object's Audit Log query storage, if it has any.
+    ///
+    /// This read-only, type-erased channel lets the bundled server execute an
+    /// AuditLogQuery against an object's already-loaded retained records. It
+    /// deliberately does not expose persistence, mutation, or object
+    /// downcasting. The **default** returns `None`; an Audit Log object that
+    /// does not opt in is reported as SERVICES /
+    /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+    fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {
+        None
+    }
+
+    /// Mutably borrow this object's Audit notification receiver capability.
+    ///
+    /// The default opts out. Implementations own their persistence transaction
+    /// and must leave memory unchanged when the batch cannot be committed.
+    fn audit_log_notification_sink_internal(
+        &mut self,
+    ) -> Option<&mut dyn AuditLogNotificationSink> {
+        None
+    }
+
+    /// Borrow this object's trusted local File configuration capability.
+    ///
+    /// The default returns `None`. The built-in [`crate::file::FileObject`]
+    /// opts in so bindings can configure its pending payload, access method,
+    /// and growth limits without general object downcasting or a parallel
+    /// state cache.
+    #[doc(hidden)]
+    fn file_configuration_internal(&self) -> Option<&dyn FileConfiguration> {
+        None
+    }
+
+    /// Mutably borrow this object's trusted local File configuration capability.
+    ///
+    /// The default returns `None`; payload mutations remain object-owned and
+    /// must preserve the same accounting and metadata behavior as the built-in
+    /// File setters.
+    #[doc(hidden)]
+    fn file_configuration_internal_mut(&mut self) -> Option<&mut dyn FileConfiguration> {
+        None
+    }
+
+    /// Borrow this object's File storage, if it has any.
+    ///
+    /// This is the read half of the **internal** channel the server's
+    /// AtomicReadFile handler uses to reach file contents. Like
+    /// [`set_event_state_internal`](Self::set_event_state_internal) it
+    /// bypasses the property model on purpose: Table 12-16 (ASHRAE 135-2020
+    /// Clause 12.13) defines no File Data property, so file contents are
+    /// reachable only through the Clause 14 File Access Services.
+    ///
+    /// The **default** returns `None`, so object types without a file opt
+    /// out; the server reports `None` on a File-typed object as SERVICES /
+    /// FILE_ACCESS_DENIED (Clause 18: "a file that is currently locked or
+    /// otherwise not accessible") rather than reading it as empty.
+    /// Applications backing a File object with their own storage — a disk
+    /// file, a firmware partition — implement [`FileStorage`] and return
+    /// `Some`.
+    fn file_storage_internal(&self) -> Option<&dyn FileStorage> {
+        None
+    }
+
+    /// Mutably borrow this object's File storage, if it has any.
+    ///
+    /// The write half of
+    /// [`file_storage_internal`](Self::file_storage_internal), used by the
+    /// AtomicWriteFile handler after the read-only and access-method gates
+    /// have passed. The **default** returns `None`.
+    fn file_storage_internal_mut(&mut self) -> Option<&mut dyn FileStorage> {
+        None
+    }
+
+    /// Return stable identities aligned with this object's resident log records.
+    ///
+    /// Implementing log objects return identities oldest-to-newest, in the
+    /// same order as their public resident-record view and `LOG_BUFFER`
+    /// projection. Sequence numbers are object-owned metadata and never part
+    /// of a projected BACnet record payload. Non-log objects return `None`.
+    fn log_record_identities_internal(&self) -> Option<Vec<LogRecordIdentity>> {
+        None
+    }
+
     /// Add a trend log record (only meaningful for TrendLog / TrendLogMultiple).
     ///
     /// Default is a no-op. TrendLog objects override to append to their buffer.
     fn add_trend_record(&mut self, _record: BACnetLogRecord) {}
+
+    /// Fallible internal trend-record insertion used by the server poller.
+    ///
+    /// The default preserves source compatibility with existing implementors by
+    /// invoking the legacy void hook and reporting success. Built-in log objects
+    /// override this to surface mandatory status-timestamp failures atomically.
+    #[doc(hidden)]
+    fn try_add_trend_record_internal(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
+        self.add_trend_record(record);
+        Ok(())
+    }
 }

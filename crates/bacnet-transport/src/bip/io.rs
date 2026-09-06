@@ -1,4 +1,4 @@
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 
 use bytes::BytesMut;
@@ -14,6 +14,40 @@ use crate::bvll::{self, encode_bip_mac, encode_bvll, encode_bvll_forwarded};
 use crate::port::ReceivedNpdu;
 
 use super::{decode_bvlc_result_code, PendingBvlcResponse};
+
+pub(super) fn original_destination_matches(
+    function: BvlcFunction,
+    destination: IpAddr,
+    local_ip: Ipv4Addr,
+    configured_broadcast: Ipv4Addr,
+    local_unicast_ips: &[Ipv4Addr],
+    wildcard_bind: bool,
+    os_group_delivery: Option<bool>,
+) -> bool {
+    let local_unicast = match destination {
+        IpAddr::V4(ip) if wildcard_bind => {
+            ip != configured_broadcast
+                && ip != Ipv4Addr::BROADCAST
+                && !ip.is_multicast()
+                && (local_unicast_ips.contains(&ip)
+                    || (cfg!(windows) && os_group_delivery == Some(false)))
+        }
+        IpAddr::V4(ip) => ip == local_ip,
+        IpAddr::V6(_) => false,
+    } && os_group_delivery != Some(true);
+    let broadcast = matches!(destination, IpAddr::V4(ip) if ip == configured_broadcast || ip == Ipv4Addr::BROADCAST)
+        && os_group_delivery != Some(false);
+
+    match function {
+        f if f == BvlcFunction::ORIGINAL_UNICAST_NPDU => local_unicast,
+        f if f == BvlcFunction::ORIGINAL_BROADCAST_NPDU => broadcast,
+        // A Forwarded-NPDU may arrive by direct unicast or by a configured
+        // directed/limited broadcast. All BVLL management requests and
+        // responses are point-to-point and must arrive as actual unicast.
+        f if f == BvlcFunction::FORWARDED_NPDU => local_unicast || broadcast,
+        _ => local_unicast,
+    }
+}
 
 /// Send a Register-Foreign-Device message to a BBMD.
 pub(super) async fn send_register_foreign_device(
@@ -84,6 +118,7 @@ pub(super) async fn handle_bvll_message(
                 .try_send(ReceivedNpdu {
                     npdu: msg.payload.clone(),
                     source_mac,
+                    link_layer_group: false,
                     data_attributes: Vec::new(),
                     reply_tx: None,
                 })
@@ -104,6 +139,7 @@ pub(super) async fn handle_bvll_message(
                 .try_send(ReceivedNpdu {
                     npdu: msg.payload.clone(),
                     source_mac,
+                    link_layer_group: true,
                     data_attributes: Vec::new(),
                     reply_tx: None,
                 })
@@ -158,6 +194,7 @@ pub(super) async fn handle_bvll_message(
                     .try_send(ReceivedNpdu {
                         npdu: msg.payload.clone(),
                         source_mac,
+                        link_layer_group: true,
                         data_attributes: Vec::new(),
                         reply_tx: None,
                     })
@@ -197,6 +234,7 @@ pub(super) async fn handle_bvll_message(
                     .try_send(ReceivedNpdu {
                         npdu: msg.payload.clone(),
                         source_mac,
+                        link_layer_group: true,
                         data_attributes: Vec::new(),
                         reply_tx: None,
                     })
@@ -236,6 +274,7 @@ pub(super) async fn handle_bvll_message(
                     .try_send(ReceivedNpdu {
                         npdu: msg.payload.clone(),
                         source_mac,
+                        link_layer_group: true,
                         data_attributes: Vec::new(),
                         reply_tx: None,
                     })

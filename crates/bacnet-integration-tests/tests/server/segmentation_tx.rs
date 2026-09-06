@@ -49,6 +49,9 @@ async fn server_segments_large_rpm_response() {
     let mut server = BACnetServer::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
+        // The transmit side is gated on the advertisement too (Clause
+        // 5.4.5.3 case (a)): segmenting the response requires saying so.
+        .segmentation_supported(Segmentation::BOTH)
         .database(db)
         .build()
         .await

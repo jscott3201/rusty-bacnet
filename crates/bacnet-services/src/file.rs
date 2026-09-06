@@ -1,8 +1,8 @@
 //! AtomicReadFile / AtomicWriteFile services per ASHRAE 135-2020 Clauses 15.1–15.2.
 
 use bacnet_encoding::{primitives, tags};
-use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::{enums::RejectReason, error::Error};
 use bytes::BytesMut;
 
 use crate::common::MAX_DECODED_ITEMS;
@@ -19,6 +19,57 @@ fn checked_slice<'a>(
         return Err(Error::decoding(p, format!("{context} truncated")));
     }
     Ok((&content[p..end], end))
+}
+
+fn checked_application_slice<'a>(
+    content: &'a [u8],
+    offset: usize,
+    expected_tag: u8,
+    context: &str,
+) -> Result<(&'a [u8], usize), Error> {
+    let (tag, pos) = tags::decode_tag(content, offset)?;
+    if tag.class != tags::TagClass::Application
+        || tag.number != expected_tag
+        || tag.is_opening
+        || tag.is_closing
+    {
+        return Err(Error::decoding(
+            offset,
+            format!("{context} has the wrong application tag"),
+        ));
+    }
+    let end = pos
+        .checked_add(tag.length as usize)
+        .ok_or_else(|| Error::decoding(pos, format!("{context} length overflow")))?;
+    if end > content.len() {
+        return Err(Error::decoding(pos, format!("{context} truncated")));
+    }
+    Ok((&content[pos..end], end))
+}
+
+fn checked_unsigned_u32(
+    content: &[u8],
+    offset: usize,
+    context: &str,
+) -> Result<(u32, usize), Error> {
+    let (tag, pos) = tags::decode_tag(content, offset)?;
+    if tag.class != tags::TagClass::Application
+        || tag.number != tags::app_tag::UNSIGNED
+        || content[offset] & 0x07 > 5
+    {
+        return Err(Error::decoding(
+            offset,
+            format!("{context} expected application Unsigned"),
+        ));
+    }
+    let end = pos + tag.length as usize;
+    if end > content.len() {
+        return Err(Error::decoding(pos, format!("{context} truncated")));
+    }
+    let raw = primitives::decode_unsigned(&content[pos..end])?;
+    let value = u32::try_from(raw)
+        .map_err(|_| Error::decoding(pos, format!("{context} {raw} exceeds u32")))?;
+    Ok((value, end))
 }
 
 // ---------------------------------------------------------------------------
@@ -112,12 +163,11 @@ impl AtomicReadFileRequest {
             let (slice, inner) =
                 checked_slice(content, 0, "AtomicReadFile stream file-start-position")?;
             let file_start_position = primitives::decode_signed(slice)?;
-            let (slice, _) = checked_slice(
+            let (requested_octet_count, _) = checked_unsigned_u32(
                 content,
                 inner,
                 "AtomicReadFile stream requested-octet-count",
             )?;
-            let requested_octet_count = primitives::decode_unsigned(slice)? as u32;
             FileAccessMethod::Stream {
                 file_start_position,
                 requested_octet_count,
@@ -127,12 +177,11 @@ impl AtomicReadFileRequest {
             let (slice, inner) =
                 checked_slice(content, 0, "AtomicReadFile record file-start-record")?;
             let file_start_record = primitives::decode_signed(slice)?;
-            let (slice, _) = checked_slice(
+            let (requested_record_count, _) = checked_unsigned_u32(
                 content,
                 inner,
                 "AtomicReadFile record requested-record-count",
             )?;
-            let requested_record_count = primitives::decode_unsigned(slice)? as u32;
             FileAccessMethod::Record {
                 file_start_record,
                 requested_record_count,
@@ -205,9 +254,8 @@ impl AtomicWriteFileRequest {
             let (slice, mut inner) =
                 checked_slice(content, 0, "AtomicWriteFile record file-start-record")?;
             let file_start_record = primitives::decode_signed(slice)?;
-            let (slice, new_inner) =
-                checked_slice(content, inner, "AtomicWriteFile record record-count")?;
-            let record_count = primitives::decode_unsigned(slice)? as u32;
+            let (record_count, new_inner) =
+                checked_unsigned_u32(content, inner, "AtomicWriteFile record record-count")?;
             inner = new_inner;
             if record_count as usize > MAX_DECODED_ITEMS {
                 return Err(Error::decoding(0, "record count exceeds maximum"));
@@ -215,12 +263,19 @@ impl AtomicWriteFileRequest {
             let mut file_record_data = Vec::new();
             for i in 0..record_count {
                 if inner >= content.len() {
-                    break;
+                    return Err(Error::Reject {
+                        reason: RejectReason::MISSING_REQUIRED_PARAMETER.to_raw(),
+                    });
                 }
                 let (slice, new_inner) =
                     checked_slice(content, inner, &format!("AtomicWriteFile record data[{i}]"))?;
                 file_record_data.push(slice.to_vec());
                 inner = new_inner;
+            }
+            if inner < content.len() {
+                return Err(Error::Reject {
+                    reason: RejectReason::TOO_MANY_ARGUMENTS.to_raw(),
+                });
             }
             FileWriteAccessMethod::Record {
                 file_start_record,
@@ -298,32 +353,63 @@ impl AtomicReadFileAck {
         let mut offset = 0;
 
         let (tag, pos) = tags::decode_tag(data, offset)?;
+        if tag.class != tags::TagClass::Application
+            || tag.number != tags::app_tag::BOOLEAN
+            || tag.is_opening
+            || tag.is_closing
+            || data[offset] & 0x07 > 1
+        {
+            return Err(Error::decoding(
+                offset,
+                "AtomicReadFileAck expected application Boolean end-of-file",
+            ));
+        }
         let end_of_file = tag.length != 0;
         offset = pos;
 
         let (tag, tag_end) = tags::decode_tag(data, offset)?;
-        let access = if tag.is_opening_tag(0) {
-            let (content, _) = tags::extract_context_value(data, tag_end, 0)?;
-            let (slice, inner) =
-                checked_slice(content, 0, "AtomicReadFileAck stream file-start-position")?;
+        let (access, access_end) = if tag.is_opening_tag(0) {
+            let (content, access_end) = tags::extract_context_value(data, tag_end, 0)?;
+            let (slice, inner) = checked_application_slice(
+                content,
+                0,
+                tags::app_tag::SIGNED,
+                "AtomicReadFileAck stream file-start-position",
+            )?;
             let file_start_position = primitives::decode_signed(slice)?;
-            let (slice, _) = checked_slice(content, inner, "AtomicReadFileAck stream file-data")?;
-            let file_data = slice.to_vec();
-            FileReadAckMethod::Stream {
-                file_start_position,
-                file_data,
+            let (slice, inner) = checked_application_slice(
+                content,
+                inner,
+                tags::app_tag::OCTET_STRING,
+                "AtomicReadFileAck stream file-data",
+            )?;
+            if inner != content.len() {
+                return Err(Error::Reject {
+                    reason: RejectReason::TOO_MANY_ARGUMENTS.to_raw(),
+                });
             }
+            let file_data = slice.to_vec();
+            (
+                FileReadAckMethod::Stream {
+                    file_start_position,
+                    file_data,
+                },
+                access_end,
+            )
         } else if tag.is_opening_tag(1) {
-            let (content, _) = tags::extract_context_value(data, tag_end, 1)?;
-            let (slice, mut inner) =
-                checked_slice(content, 0, "AtomicReadFileAck record file-start-record")?;
+            let (content, access_end) = tags::extract_context_value(data, tag_end, 1)?;
+            let (slice, mut inner) = checked_application_slice(
+                content,
+                0,
+                tags::app_tag::SIGNED,
+                "AtomicReadFileAck record file-start-record",
+            )?;
             let file_start_record = primitives::decode_signed(slice)?;
-            let (slice, new_inner) = checked_slice(
+            let (returned_record_count, new_inner) = checked_unsigned_u32(
                 content,
                 inner,
                 "AtomicReadFileAck record returned-record-count",
             )?;
-            let returned_record_count = primitives::decode_unsigned(slice)? as u32;
             inner = new_inner;
             if returned_record_count as usize > MAX_DECODED_ITEMS {
                 return Err(Error::decoding(0, "record count exceeds maximum"));
@@ -331,27 +417,43 @@ impl AtomicReadFileAck {
             let mut file_record_data = Vec::new();
             for i in 0..returned_record_count {
                 if inner >= content.len() {
-                    break;
+                    return Err(Error::Reject {
+                        reason: RejectReason::MISSING_REQUIRED_PARAMETER.to_raw(),
+                    });
                 }
-                let (slice, new_inner) = checked_slice(
+                let (slice, new_inner) = checked_application_slice(
                     content,
                     inner,
+                    tags::app_tag::OCTET_STRING,
                     &format!("AtomicReadFileAck record data[{i}]"),
                 )?;
                 file_record_data.push(slice.to_vec());
                 inner = new_inner;
             }
-            FileReadAckMethod::Record {
-                file_start_record,
-                returned_record_count,
-                file_record_data,
+            if inner != content.len() {
+                return Err(Error::Reject {
+                    reason: RejectReason::TOO_MANY_ARGUMENTS.to_raw(),
+                });
             }
+            (
+                FileReadAckMethod::Record {
+                    file_start_record,
+                    returned_record_count,
+                    file_record_data,
+                },
+                access_end,
+            )
         } else {
             return Err(Error::decoding(
                 offset,
                 "Unknown read file ACK access method",
             ));
         };
+        if access_end != data.len() {
+            return Err(Error::Reject {
+                reason: RejectReason::TOO_MANY_ARGUMENTS.to_raw(),
+            });
+        }
 
         Ok(Self {
             end_of_file,
@@ -625,160 +727,16 @@ mod tests {
         ];
         assert!(AtomicWriteFileRequest::decode(&data).is_err());
     }
-
-    // -----------------------------------------------------------------------
-    // AtomicReadFile-ACK round-trip tests
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn atomic_read_file_ack_stream_round_trip() {
-        let ack = AtomicReadFileAck {
-            end_of_file: false,
-            access: FileReadAckMethod::Stream {
-                file_start_position: 0,
-                file_data: vec![0x48, 0x65, 0x6C, 0x6C, 0x6F],
-            },
-        };
-        let mut buf = BytesMut::new();
-        ack.encode(&mut buf);
-        let decoded = AtomicReadFileAck::decode(&buf).unwrap();
-        assert_eq!(decoded, ack);
-    }
-
-    #[test]
-    fn atomic_read_file_ack_stream_eof_true() {
-        let ack = AtomicReadFileAck {
-            end_of_file: true,
-            access: FileReadAckMethod::Stream {
-                file_start_position: 512,
-                file_data: vec![0xDE, 0xAD],
-            },
-        };
-        let mut buf = BytesMut::new();
-        ack.encode(&mut buf);
-        let decoded = AtomicReadFileAck::decode(&buf).unwrap();
-        assert_eq!(decoded, ack);
-    }
-
-    #[test]
-    fn atomic_read_file_ack_record_round_trip() {
-        let ack = AtomicReadFileAck {
-            end_of_file: true,
-            access: FileReadAckMethod::Record {
-                file_start_record: 5,
-                returned_record_count: 2,
-                file_record_data: vec![vec![0xAA, 0xBB], vec![0xCC, 0xDD, 0xEE]],
-            },
-        };
-        let mut buf = BytesMut::new();
-        ack.encode(&mut buf);
-        let decoded = AtomicReadFileAck::decode(&buf).unwrap();
-        assert_eq!(decoded, ack);
-    }
-
-    #[test]
-    fn atomic_read_file_ack_record_empty() {
-        let ack = AtomicReadFileAck {
-            end_of_file: true,
-            access: FileReadAckMethod::Record {
-                file_start_record: 0,
-                returned_record_count: 0,
-                file_record_data: vec![],
-            },
-        };
-        let mut buf = BytesMut::new();
-        ack.encode(&mut buf);
-        let decoded = AtomicReadFileAck::decode(&buf).unwrap();
-        assert_eq!(decoded, ack);
-    }
-
-    // -----------------------------------------------------------------------
-    // AtomicWriteFile-ACK round-trip tests
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn atomic_write_file_ack_stream_round_trip() {
-        let ack = AtomicWriteFileAck {
-            access: FileWriteAckMethod::Stream {
-                file_start_position: 100,
-            },
-        };
-        let mut buf = BytesMut::new();
-        ack.encode(&mut buf);
-        let decoded = AtomicWriteFileAck::decode(&buf).unwrap();
-        assert_eq!(decoded, ack);
-    }
-
-    #[test]
-    fn atomic_write_file_ack_stream_negative_position() {
-        let ack = AtomicWriteFileAck {
-            access: FileWriteAckMethod::Stream {
-                file_start_position: -1,
-            },
-        };
-        let mut buf = BytesMut::new();
-        ack.encode(&mut buf);
-        let decoded = AtomicWriteFileAck::decode(&buf).unwrap();
-        assert_eq!(decoded, ack);
-    }
-
-    #[test]
-    fn atomic_write_file_ack_record_round_trip() {
-        let ack = AtomicWriteFileAck {
-            access: FileWriteAckMethod::Record {
-                file_start_record: 42,
-            },
-        };
-        let mut buf = BytesMut::new();
-        ack.encode(&mut buf);
-        let decoded = AtomicWriteFileAck::decode(&buf).unwrap();
-        assert_eq!(decoded, ack);
-    }
-
-    // -----------------------------------------------------------------------
-    // ACK truncated-input error tests
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_decode_read_file_ack_empty_input() {
-        assert!(AtomicReadFileAck::decode(&[]).is_err());
-    }
-
-    #[test]
-    fn test_decode_read_file_ack_truncated() {
-        let ack = AtomicReadFileAck {
-            end_of_file: false,
-            access: FileReadAckMethod::Stream {
-                file_start_position: 0,
-                file_data: vec![0x01, 0x02, 0x03],
-            },
-        };
-        let mut buf = BytesMut::new();
-        ack.encode(&mut buf);
-        // Only boolean tag — missing access method
-        assert!(AtomicReadFileAck::decode(&buf[..1]).is_err());
-        // Half the payload
-        let half = buf.len() / 2;
-        assert!(AtomicReadFileAck::decode(&buf[..half]).is_err());
-    }
-
-    #[test]
-    fn test_decode_write_file_ack_empty_input() {
-        assert!(AtomicWriteFileAck::decode(&[]).is_err());
-    }
-
-    #[test]
-    fn test_decode_write_file_ack_truncated() {
-        let ack = AtomicWriteFileAck {
-            access: FileWriteAckMethod::Stream {
-                file_start_position: 100,
-            },
-        };
-        let mut buf = BytesMut::new();
-        ack.encode(&mut buf);
-        // Just the tag byte, no value
-        if buf.len() > 1 {
-            assert!(AtomicWriteFileAck::decode(&buf[..1]).is_err());
-        }
-    }
 }
+
+#[cfg(test)]
+#[path = "file_width_tests.rs"]
+mod width_tests;
+
+#[cfg(test)]
+#[path = "file_ack_strict_tests.rs"]
+mod ack_strict_tests;
+
+#[cfg(test)]
+#[path = "file_ack_roundtrip_tests.rs"]
+mod ack_roundtrip_tests;

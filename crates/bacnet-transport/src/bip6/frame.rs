@@ -8,6 +8,21 @@ use super::{
     BVLC6_UNICAST_HEADER_LENGTH,
 };
 
+pub(super) fn destination_vmac_matches(
+    function: Bvlc6Function,
+    destination_vmac: Option<Bip6Vmac>,
+    local_vmac: Bip6Vmac,
+) -> bool {
+    match function {
+        Bvlc6Function::OriginalUnicast
+        | Bvlc6Function::AddressResolutionAck
+        | Bvlc6Function::VirtualAddressResolutionAck => destination_vmac == Some(local_vmac),
+        // Address-Resolution uses this field as a broadcast Target-VMAC;
+        // its handler separately decides whether the target is local.
+        _ => true,
+    }
+}
+
 /// Encode a BVLC-IPv6 frame into a buffer.
 pub fn encode_bvlc6(
     buf: &mut BytesMut,
@@ -56,10 +71,31 @@ pub fn decode_bvlc6(data: &[u8]) -> Result<Bvlc6Frame, Error> {
     if length < BVLC6_HEADER_LENGTH {
         return Err(Error::decoding(2, "BVLC6 length less than header size"));
     }
-    if length > data.len() {
+    if length != data.len() {
         return Err(Error::decoding(
             2,
-            format!("BVLC6 length {} exceeds data length {}", length, data.len()),
+            format!(
+                "BVLC6 length {} does not match datagram length {}",
+                length,
+                data.len()
+            ),
+        ));
+    }
+
+    let fixed_length = match function {
+        Bvlc6Function::Result | Bvlc6Function::RegisterForeignDevice => Some(9),
+        Bvlc6Function::DeleteForeignDeviceEntry => Some(25),
+        Bvlc6Function::VirtualAddressResolution => Some(BVLC6_HEADER_LENGTH),
+        Bvlc6Function::AddressResolution
+        | Bvlc6Function::AddressResolutionAck
+        | Bvlc6Function::VirtualAddressResolutionAck => Some(BVLC6_UNICAST_HEADER_LENGTH),
+        Bvlc6Function::ForwardedAddressResolution => Some(28),
+        _ => None,
+    };
+    if fixed_length.is_some_and(|expected| length != expected) {
+        return Err(Error::decoding(
+            2,
+            format!("BVLC6 function has invalid fixed length {length}"),
         ));
     }
 
@@ -71,6 +107,7 @@ pub fn decode_bvlc6(data: &[u8]) -> Result<Bvlc6Frame, Error> {
         function,
         Bvlc6Function::OriginalUnicast
             | Bvlc6Function::AddressResolution
+            | Bvlc6Function::ForwardedAddressResolution
             | Bvlc6Function::AddressResolutionAck
             | Bvlc6Function::VirtualAddressResolutionAck
     );
@@ -148,7 +185,7 @@ pub fn encode_virtual_address_resolution(source_vmac: &Bip6Vmac) -> BytesMut {
 
 /// Encode a BVLC-IPv6 Virtual-Address-Resolution-Ack frame (10 bytes).
 ///
-/// Per spec Clause U.2.7A: includes the requester's VMAC as destination.
+/// Per spec Clause U.2.8: includes the requester's VMAC as destination.
 /// type(1) + function(1) + length(2) + source_vmac(3) + dest_vmac(3) = 10.
 pub fn encode_virtual_address_resolution_ack(
     source_vmac: &Bip6Vmac,
@@ -178,7 +215,7 @@ pub fn encode_address_resolution(source_vmac: &Bip6Vmac, target_vmac: &Bip6Vmac)
 
 /// Encode a BVLC-IPv6 Address-Resolution-Ack frame (10 bytes).
 ///
-/// Per spec Clause U.2.5: includes the requester's VMAC as destination.
+/// Per spec Clause U.2.6: includes the requester's VMAC as destination.
 pub fn encode_address_resolution_ack(source_vmac: &Bip6Vmac, dest_vmac: &Bip6Vmac) -> BytesMut {
     let mut buf = BytesMut::with_capacity(BVLC6_UNICAST_HEADER_LENGTH);
     buf.put_u8(BVLC6_TYPE);
@@ -191,29 +228,28 @@ pub fn encode_address_resolution_ack(source_vmac: &Bip6Vmac, dest_vmac: &Bip6Vma
 
 /// Extract the NPDU from a ForwardedNpdu payload.
 ///
-/// ForwardedNpdu payload layout:
-///   Original-Source-Virtual-Address(3) + Original-Source-B/IPv6-Address(18) + NPDU.
-/// Returns the originating VMAC, originating B/IPv6 address, and NPDU bytes.
-pub fn decode_forwarded_npdu_payload(
-    payload: &[u8],
-) -> Result<(Bip6Vmac, SocketAddrV6, &[u8]), Error> {
-    if payload.len() < 21 {
+/// The BVLC6 header's Source-Virtual-Address is the original source VMAC.
+/// The payload layout is therefore:
+///   Original-Source-B/IPv6-Address(18) + NPDU.
+/// Returns the originating B/IPv6 address and NPDU bytes.
+pub fn decode_forwarded_npdu_payload(payload: &[u8]) -> Result<(SocketAddrV6, &[u8]), Error> {
+    const ADDRESS_LENGTH: usize = 18;
+    const MIN_NPDU_LENGTH: usize = 2;
+    if payload.len() < ADDRESS_LENGTH + MIN_NPDU_LENGTH {
         return Err(Error::decoding(
             0,
             format!(
-                "ForwardedNpdu payload too short: need at least 21 bytes, have {}",
+                "ForwardedNpdu payload too short: need an 18-byte address and BACnet NPDU, have {} bytes",
                 payload.len()
             ),
         ));
     }
-    let mut originating_vmac = [0u8; 3];
-    originating_vmac.copy_from_slice(&payload[..3]);
 
     let mut ipv6_bytes = [0u8; 16];
-    ipv6_bytes.copy_from_slice(&payload[3..19]);
+    ipv6_bytes.copy_from_slice(&payload[..16]);
     let ipv6_addr = Ipv6Addr::from(ipv6_bytes);
-    let port = u16::from_be_bytes([payload[19], payload[20]]);
+    let port = u16::from_be_bytes([payload[16], payload[17]]);
     let source_addr = SocketAddrV6::new(ipv6_addr, port, 0, 0);
 
-    Ok((originating_vmac, source_addr, &payload[21..]))
+    Ok((source_addr, &payload[ADDRESS_LENGTH..]))
 }

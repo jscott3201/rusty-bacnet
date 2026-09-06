@@ -2,8 +2,8 @@
 //!
 //! - DeviceCommunicationControl (Clause 15.4)
 //! - ReinitializeDevice (Clause 15.4)
-//! - TimeSynchronization (Clause 16.10)
-//! - UTCTimeSynchronization (Clause 16.10)
+//! - TimeSynchronization (§16.7)
+//! - UTCTimeSynchronization (§16.8)
 
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
@@ -46,18 +46,33 @@ impl DeviceCommunicationControlRequest {
         let mut time_duration = None;
         let (opt_data, new_offset) = tags::decode_optional_context(data, offset, 0)?;
         if let Some(content) = opt_data {
-            time_duration = Some(primitives::decode_unsigned(content)? as u16);
+            let time_duration_raw = primitives::decode_unsigned(content)?;
+            time_duration = Some(u16::try_from(time_duration_raw).map_err(|_| {
+                Error::decoding(
+                    offset,
+                    format!("DCC time-duration {time_duration_raw} exceeds u16"),
+                )
+            })?);
             offset = new_offset;
         }
 
         // [1] enable-disable
         let (tag, pos) = tags::decode_tag(data, offset)?;
+        if !tag.is_context(1) {
+            return Err(Error::decoding(offset, "DCC expected context tag 1"));
+        }
         let end = pos + tag.length as usize;
         if end > data.len() {
             return Err(Error::decoding(pos, "DCC truncated at enable-disable"));
         }
+        let enable_disable_raw = primitives::decode_unsigned(&data[pos..end])?;
         let enable_disable =
-            EnableDisable::from_raw(primitives::decode_unsigned(&data[pos..end])? as u32);
+            EnableDisable::from_raw(u32::try_from(enable_disable_raw).map_err(|_| {
+                Error::decoding(
+                    pos,
+                    format!("DCC enable-disable {enable_disable_raw} exceeds u32"),
+                )
+            })?);
         offset = end;
 
         // [2] password (optional, max 20 characters)
@@ -108,12 +123,24 @@ impl ReinitializeDeviceRequest {
 
         // [0] reinitialized-state
         let (tag, pos) = tags::decode_tag(data, offset)?;
+        if !tag.is_context(0) {
+            return Err(Error::decoding(
+                offset,
+                "Reinitialize expected context tag 0",
+            ));
+        }
         let end = pos + tag.length as usize;
         if end > data.len() {
             return Err(Error::decoding(pos, "Reinitialize truncated at state"));
         }
+        let reinitialized_state_raw = primitives::decode_unsigned(&data[pos..end])?;
         let reinitialized_state =
-            ReinitializedState::from_raw(primitives::decode_unsigned(&data[pos..end])? as u32);
+            ReinitializedState::from_raw(u32::try_from(reinitialized_state_raw).map_err(|_| {
+                Error::decoding(
+                    pos,
+                    format!("Reinitialize state {reinitialized_state_raw} exceeds u32"),
+                )
+            })?);
         offset = end;
 
         // [1] password (optional)
@@ -162,6 +189,15 @@ impl TimeSynchronizationRequest {
         let mut offset = 0;
 
         let (tag, pos) = tags::decode_tag(data, offset)?;
+        if tag.class != tags::TagClass::Application
+            || tag.number != tags::app_tag::DATE
+            || tag.length != 4
+        {
+            return Err(Error::decoding(
+                offset,
+                "TimeSync expected application Date",
+            ));
+        }
         let end = pos + tag.length as usize;
         if end > data.len() {
             return Err(Error::decoding(pos, "TimeSync truncated at date"));
@@ -170,11 +206,23 @@ impl TimeSynchronizationRequest {
         offset = end;
 
         let (tag, pos) = tags::decode_tag(data, offset)?;
+        if tag.class != tags::TagClass::Application
+            || tag.number != tags::app_tag::TIME
+            || tag.length != 4
+        {
+            return Err(Error::decoding(
+                offset,
+                "TimeSync expected application Time",
+            ));
+        }
         let end = pos + tag.length as usize;
         if end > data.len() {
             return Err(Error::decoding(pos, "TimeSync truncated at time"));
         }
         let time = Time::decode(&data[pos..end])?;
+        if end != data.len() {
+            return Err(Error::decoding(end, "TimeSync contains trailing data"));
+        }
 
         Ok(Self { date, time })
     }
@@ -183,6 +231,21 @@ impl TimeSynchronizationRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn encode_dcc(time_duration: Option<u64>, enable_disable: u64) -> BytesMut {
+        let mut buf = BytesMut::new();
+        if let Some(duration) = time_duration {
+            primitives::encode_ctx_unsigned(&mut buf, 0, duration);
+        }
+        primitives::encode_ctx_unsigned(&mut buf, 1, enable_disable);
+        buf
+    }
+
+    fn encode_reinitialize(state: u64) -> BytesMut {
+        let mut buf = BytesMut::new();
+        primitives::encode_ctx_unsigned(&mut buf, 0, state);
+        buf
+    }
 
     #[test]
     fn dcc_round_trip() {
@@ -211,6 +274,43 @@ mod tests {
     }
 
     #[test]
+    fn dcc_values_must_fit_field_widths() {
+        for (duration, enable_disable, field, value) in [
+            (Some(65_536), 0, "time-duration", 65_536_u64),
+            (None, 4_294_967_296, "enable-disable", 4_294_967_296),
+            (Some(u64::MAX), 0, "time-duration", u64::MAX),
+            (None, u64::MAX, "enable-disable", u64::MAX),
+        ] {
+            let encoded = encode_dcc(duration, enable_disable);
+            let error = DeviceCommunicationControlRequest::decode(&encoded).unwrap_err();
+            assert!(
+                error.to_string().contains(&format!("DCC {field} {value}")),
+                "unexpected error for {field} {value}: {error}"
+            );
+        }
+
+        let mut leading_zero = BytesMut::new();
+        tags::encode_tag(&mut leading_zero, 0, tags::TagClass::Context, 3);
+        leading_zero.extend_from_slice(&[0, 0xff, 0xff]);
+        tags::encode_tag(&mut leading_zero, 1, tags::TagClass::Context, 5);
+        leading_zero.extend_from_slice(&[0, 0xff, 0xff, 0xff, 0xff]);
+        let decoded = DeviceCommunicationControlRequest::decode(&leading_zero).unwrap();
+        assert_eq!(decoded.time_duration, Some(u16::MAX));
+        assert_eq!(decoded.enable_disable.to_raw(), u32::MAX);
+    }
+
+    #[test]
+    fn dcc_requires_enable_disable_context_tag() {
+        let mut application_tag = BytesMut::new();
+        primitives::encode_app_enumerated(&mut application_tag, 0);
+        assert!(DeviceCommunicationControlRequest::decode(&application_tag).is_err());
+
+        let mut wrong_context_tag = BytesMut::new();
+        primitives::encode_ctx_enumerated(&mut wrong_context_tag, 2, 0);
+        assert!(DeviceCommunicationControlRequest::decode(&wrong_context_tag).is_err());
+    }
+
+    #[test]
     fn reinitialize_round_trip() {
         let req = ReinitializeDeviceRequest {
             reinitialized_state: ReinitializedState::WARMSTART,
@@ -220,6 +320,37 @@ mod tests {
         req.encode(&mut buf).unwrap();
         let decoded = ReinitializeDeviceRequest::decode(&buf).unwrap();
         assert_eq!(req, decoded);
+    }
+
+    #[test]
+    fn reinitialize_state_must_fit_u32() {
+        for value in [4_294_967_296, 4_294_967_297, u64::MAX] {
+            let encoded = encode_reinitialize(value);
+            let error = ReinitializeDeviceRequest::decode(&encoded).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("Reinitialize state {value}")),
+                "unexpected error for state {value}: {error}"
+            );
+        }
+
+        let mut leading_zero = BytesMut::new();
+        tags::encode_tag(&mut leading_zero, 0, tags::TagClass::Context, 5);
+        leading_zero.extend_from_slice(&[0, 0xff, 0xff, 0xff, 0xff]);
+        let decoded = ReinitializeDeviceRequest::decode(&leading_zero).unwrap();
+        assert_eq!(decoded.reinitialized_state.to_raw(), u32::MAX);
+    }
+
+    #[test]
+    fn reinitialize_requires_state_context_tag() {
+        let mut application_tag = BytesMut::new();
+        primitives::encode_app_enumerated(&mut application_tag, 0);
+        assert!(ReinitializeDeviceRequest::decode(&application_tag).is_err());
+
+        let mut wrong_context_tag = BytesMut::new();
+        primitives::encode_ctx_enumerated(&mut wrong_context_tag, 1, 0);
+        assert!(ReinitializeDeviceRequest::decode(&wrong_context_tag).is_err());
     }
 
     #[test]
@@ -242,6 +373,49 @@ mod tests {
         req.encode(&mut buf);
         let decoded = TimeSynchronizationRequest::decode(&buf).unwrap();
         assert_eq!(req, decoded);
+    }
+
+    #[test]
+    fn time_sync_requires_exact_application_tags_and_no_trailing_data() {
+        let mut wrong_date = BytesMut::new();
+        primitives::encode_app_time(
+            &mut wrong_date,
+            &Time {
+                hour: 1,
+                minute: 2,
+                second: 3,
+                hundredths: 4,
+            },
+        );
+        primitives::encode_app_time(
+            &mut wrong_date,
+            &Time {
+                hour: 1,
+                minute: 2,
+                second: 3,
+                hundredths: 4,
+            },
+        );
+        assert!(TimeSynchronizationRequest::decode(&wrong_date).is_err());
+
+        let request = TimeSynchronizationRequest {
+            date: Date {
+                year: 124,
+                month: 7,
+                day: 4,
+                day_of_week: 4,
+            },
+            time: Time {
+                hour: 9,
+                minute: 15,
+                second: 0,
+                hundredths: 0,
+            },
+        };
+        let mut trailing = BytesMut::new();
+        request.encode(&mut trailing);
+        trailing.extend_from_slice(&[0]);
+        assert!(TimeSynchronizationRequest::decode(&trailing).is_err());
     }
 
     // -----------------------------------------------------------------------

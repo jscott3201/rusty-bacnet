@@ -10,6 +10,7 @@ pub mod alarm_summary;
 pub mod audit;
 pub mod common;
 pub mod cov;
+mod cov_decode;
 pub mod cov_multiple;
 pub mod device_mgmt;
 pub mod enrollment_summary;

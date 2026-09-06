@@ -6,12 +6,13 @@ use super::*;
 /// BACnet Access Door object (type 30).
 ///
 /// Represents a physical door or barrier in an access control system.
-/// Present value indicates the door command status (DoorStatus enumeration).
+/// Present value carries the door command (BACnetDoorValue); Door_Status
+/// reports the physical DoorStatus.
 pub struct AccessDoorObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    present_value: u32,    // DoorStatus: 0=closed, 1=opened, 2=unknown
+    present_value: u32,    // BACnetDoorValue: 0=lock, 1=unlock
     door_status: u32,      // DoorStatus enumeration
     lock_status: u32,      // LockStatus enumeration
     secured_status: u32,   // DoorSecuredStatus enumeration
@@ -27,6 +28,10 @@ pub struct AccessDoorObject {
     relinquish_default: u32,
 }
 
+struct AccessDoorWriteRollback {
+    priority_array: [Option<u32>; 16],
+}
+
 impl AccessDoorObject {
     /// Create a new Access Door object.
     pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
@@ -35,7 +40,7 @@ impl AccessDoorObject {
             oid,
             name: name.into(),
             description: String::new(),
-            present_value: 0, // closed
+            present_value: 0, // lock
             door_status: 0,   // closed
             lock_status: 0,
             secured_status: 0,
@@ -46,8 +51,38 @@ impl AccessDoorObject {
             out_of_service: false,
             reliability: 0,
             priority_array: Default::default(),
-            relinquish_default: 0, // closed
+            relinquish_default: 0, // lock
         })
+    }
+
+    /// Set the Relinquish_Default (#270).
+    ///
+    /// Table 12-30 types both Present_Value and Relinquish_Default as
+    /// BACnetDoorValue, whose Clause 21 production is a closed set of four:
+    /// the accepted domain is `DoorValue::LOCK..=DoorValue::EXTENDED_PULSE_UNLOCK`
+    /// (0..=3), matching what the priority-slot Present_Value arm accepts
+    /// for value 3. The bacnet-types test `door_value_values_match_clause_21`
+    /// pins the production's closed-set length, so this derivation cannot
+    /// silently drift from the enum. After the store, Present_Value is
+    /// resolved anew from the priority array so an empty array falls back
+    /// to the new default immediately.
+    pub fn set_relinquish_default(&mut self, value: u32) -> Result<(), Error> {
+        if value > DoorValue::EXTENDED_PULSE_UNLOCK.to_raw() {
+            return Err(common::value_out_of_range_error());
+        }
+        self.relinquish_default = value;
+        self.recalculate_present_value();
+        Ok(())
+    }
+
+    fn recalculate_present_value(&mut self) {
+        self.present_value = self
+            .priority_array
+            .iter()
+            .flatten()
+            .next()
+            .copied()
+            .unwrap_or(self.relinquish_default);
     }
 }
 
@@ -140,14 +175,16 @@ impl BACnetObject for AccessDoorObject {
                     return Err(common::invalid_data_type_error());
                 }
                 // Recalculate PV from priority array
-                self.present_value = self
-                    .priority_array
-                    .iter()
-                    .flatten()
-                    .next()
-                    .copied()
-                    .unwrap_or(self.relinquish_default);
+                self.recalculate_present_value();
                 Ok(())
+            }
+            // Table 12-30 carries Relinquish_Default R (BACnetDoorValue) for
+            // the commandable Access Door; the standard permits writability.
+            p if p == PropertyIdentifier::RELINQUISH_DEFAULT => {
+                if let PropertyValue::Enumerated(v) = value {
+                    return self.set_relinquish_default(v);
+                }
+                Err(common::invalid_data_type_error())
             }
             _ => Err(common::write_access_denied_error()),
         }
@@ -172,8 +209,43 @@ impl BACnetObject for AccessDoorObject {
         Cow::Borrowed(PROPS)
     }
 
+    fn capture_write_property_rollback(
+        &mut self,
+        property: PropertyIdentifier,
+        _value: &PropertyValue,
+    ) -> Option<crate::traits::WritePropertyRollback> {
+        (property == PropertyIdentifier::PRESENT_VALUE).then(|| {
+            crate::traits::WritePropertyRollback::new(AccessDoorWriteRollback {
+                priority_array: self.priority_array,
+            })
+        })
+    }
+
+    fn restore_write_property_rollback(
+        &mut self,
+        rollback: crate::traits::WritePropertyRollback,
+    ) -> Result<(), Error> {
+        self.priority_array = rollback
+            .downcast::<AccessDoorWriteRollback>()?
+            .priority_array;
+        self.recalculate_present_value();
+        Ok(())
+    }
+
     fn supports_cov(&self) -> bool {
         true
+    }
+
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        // Mirrors the AccessDoorObject `write_property` arms so the PICS and
+        // runtime dispatch share one truth source.
+        matches!(
+            property,
+            PropertyIdentifier::OUT_OF_SERVICE
+                | PropertyIdentifier::DESCRIPTION
+                | PropertyIdentifier::PRESENT_VALUE
+                | PropertyIdentifier::RELINQUISH_DEFAULT
+        )
     }
 }
 

@@ -30,6 +30,17 @@ bacnet_enum! {
     const GENERAL_ALARM = 21;
     const SUPERVISORY = 22;
     const TEST_SUPERVISORY = 23;
+    const NON_DEFAULT_MODE = 24;
+    const OEO_UNAVAILABLE = 25;
+    const OEO_ALARM = 26;
+    const OEO_PHASE1_RECALL = 27;
+    const OEO_EVACUATE = 28;
+    const OEO_UNAFFECTED = 29;
+    const TEST_OEO_UNAVAILABLE = 30;
+    const TEST_OEO_ALARM = 31;
+    const TEST_OEO_PHASE1_RECALL = 32;
+    const TEST_OEO_EVACUATE = 33;
+    const TEST_OEO_UNAFFECTED = 34;
 }
 
 bacnet_enum! {

@@ -169,7 +169,10 @@ pub async fn poll_trend_logs(db: &Arc<RwLock<ObjectDatabase>>, state: &TrendLogS
         let record = make_record(datum);
 
         if let Some(trend_obj) = db_write.get_mut(&trend_oid) {
-            trend_obj.add_trend_record(record);
+            if let Err(error) = trend_obj.try_add_trend_record_internal(record) {
+                warn!(object = %trend_oid, %error, "trend-log record insertion failed");
+                continue;
+            }
         }
 
         last_log.insert(trend_oid, now);
@@ -179,6 +182,10 @@ pub async fn poll_trend_logs(db: &Arc<RwLock<ObjectDatabase>>, state: &TrendLogS
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bacnet_objects::analog::AnalogValueObject;
+    use bacnet_objects::traits::BACnetObject;
+    use bacnet_objects::trend::TrendLogObject;
+    use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
 
     #[test]
     fn property_value_to_datum_real() {
@@ -214,5 +221,66 @@ mod tests {
         assert!(record.time.hour < 24);
         assert!(record.time.minute < 60);
         assert!(record.time.second < 60);
+    }
+
+    #[tokio::test]
+    async fn poller_retries_when_mandatory_stop_status_has_no_clock() {
+        let mut db = ObjectDatabase::new();
+        let target = AnalogValueObject::new(1, "AV-1", 95).unwrap();
+        let target_oid = target.object_identifier();
+        db.add(Box::new(target)).unwrap();
+
+        let mut trend = TrendLogObject::new(1, "TL-1", 1).unwrap();
+        trend.set_log_device_object_property(Some(BACnetDeviceObjectPropertyReference {
+            object_identifier: target_oid,
+            property_identifier: PropertyIdentifier::PRESENT_VALUE.to_raw(),
+            property_array_index: None,
+            device_identifier: None,
+        }));
+        trend
+            .write_property(
+                PropertyIdentifier::LOG_INTERVAL,
+                None,
+                PropertyValue::Unsigned(1),
+                None,
+            )
+            .unwrap();
+        trend
+            .write_property(
+                PropertyIdentifier::STOP_WHEN_FULL,
+                None,
+                PropertyValue::Boolean(true),
+                None,
+            )
+            .unwrap();
+        let trend_oid = trend.object_identifier();
+        db.add(Box::new(trend)).unwrap();
+
+        let db = Arc::new(RwLock::new(db));
+        let state = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+        poll_trend_logs(&db, &state).await;
+
+        let db = db.read().await;
+        let trend = db.get(&trend_oid).unwrap();
+        assert_eq!(
+            trend
+                .read_property(PropertyIdentifier::RECORD_COUNT, None)
+                .unwrap(),
+            PropertyValue::Unsigned(0)
+        );
+        assert_eq!(
+            trend
+                .read_property(PropertyIdentifier::TOTAL_RECORD_COUNT, None)
+                .unwrap(),
+            PropertyValue::Unsigned(0)
+        );
+        assert_eq!(
+            trend
+                .read_property(PropertyIdentifier::LOG_ENABLE, None)
+                .unwrap(),
+            PropertyValue::Boolean(true)
+        );
+        drop(db);
+        assert!(!state.lock().await.contains_key(&trend_oid));
     }
 }

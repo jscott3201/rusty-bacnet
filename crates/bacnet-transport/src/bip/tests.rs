@@ -801,3 +801,17 @@ async fn start_fails_on_nonlocal_interface() {
         "expected Error::Transport, got: {err:?}"
     );
 }
+
+/// #360: Clause J.1.2's B/IP broadcast address is the configured broadcast
+/// IP together with this port's UDP port — a broadcast IP at a different
+/// port is a different B/IP network, and the limited broadcast is not this
+/// link's spelling unless it is the configured one.
+#[test]
+fn is_broadcast_mac_requires_configured_ip_and_port() {
+    let transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0xBAC0, Ipv4Addr::new(192, 168, 1, 255));
+    assert!(transport.is_broadcast_mac(&[192, 168, 1, 255, 0xBA, 0xC0]));
+    assert!(!transport.is_broadcast_mac(&[192, 168, 1, 255, 0xBA, 0xC1]));
+    assert!(!transport.is_broadcast_mac(&[255, 255, 255, 255, 0xBA, 0xC0]));
+    assert!(!transport.is_broadcast_mac(&[192, 168, 1, 7, 0xBA, 0xC0]));
+    assert!(!transport.is_broadcast_mac(&[192, 168, 1, 255]));
+}

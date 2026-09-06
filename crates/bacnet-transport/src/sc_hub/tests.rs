@@ -197,6 +197,43 @@ fn hub_relay_unicast_adds_originating_vmac_and_strips_destination_vmac() {
 }
 
 #[test]
+fn hub_relay_wire_preserves_empty_header_data_marker() {
+    let inbound = ScMessage {
+        function: ScFunction::EncapsulatedNpdu,
+        message_id: 0x1244,
+        originating_vmac: None,
+        destination_vmac: Some([0x02; 6]),
+        dest_options: vec![ScOption {
+            option_type: 2,
+            must_understand: true,
+            data: Vec::new(),
+        }],
+        data_options: Vec::new(),
+        payload: Bytes::from_static(&[0x01, 0x20, 0x30]),
+    };
+    let mut wire = BytesMut::new();
+    encode_sc_message(&mut wire, &inbound);
+    assert_eq!(wire[10], 0x42);
+    wire[10] = 0x62;
+    let mut wire = wire.to_vec();
+    wire.splice(11..11, [0, 0]);
+    let decoded = decode_sc_message(&wire).unwrap();
+
+    let relay = encode_hub_relay_frame(
+        &wire,
+        &decoded,
+        [0x01; 6],
+        HubRelayTarget::Unicast([0x02; 6]),
+    )
+    .unwrap();
+    assert_eq!(relay[10], 0x62);
+    assert_eq!(
+        decode_sc_message(&relay).unwrap().originating_vmac,
+        Some([0x01; 6])
+    );
+}
+
+#[test]
 fn hub_relay_preserves_large_minimum_size_option_chains() {
     let inbound = ScMessage {
         function: ScFunction::EncapsulatedNpdu,

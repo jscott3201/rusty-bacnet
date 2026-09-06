@@ -1,4 +1,4 @@
-//! WriteGroup service per ASHRAE 135-2020 Clause 16.10.8.
+//! WriteGroup service per ASHRAE 135-2020 Clause 15.11.
 
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
@@ -79,7 +79,13 @@ impl WriteGroupRequest {
         if end > data.len() {
             return Err(Error::decoding(pos, "WriteGroup truncated at group-number"));
         }
-        let group_number = primitives::decode_unsigned(&data[pos..end])? as u32;
+        let group_number_raw = primitives::decode_unsigned(&data[pos..end])?;
+        let group_number = u32::try_from(group_number_raw).map_err(|_| {
+            Error::decoding(
+                pos,
+                format!("WriteGroup group number {group_number_raw} exceeds u32"),
+            )
+        })?;
         if group_number == 0 {
             return Err(Error::Encoding(
                 "WriteGroup group number 0 is reserved".into(),
@@ -96,13 +102,19 @@ impl WriteGroupRequest {
                 "WriteGroup truncated at write-priority",
             ));
         }
-        let write_priority = primitives::decode_unsigned(&data[pos..end])? as u8;
-        if !(1..=16).contains(&write_priority) {
+        let write_priority_raw = primitives::decode_unsigned(&data[pos..end])?;
+        if !(1..=16).contains(&write_priority_raw) {
             return Err(Error::decoding(
                 pos,
-                format!("WriteGroup write-priority {write_priority} out of range 1-16"),
+                format!("WriteGroup write-priority {write_priority_raw} out of range 1-16"),
             ));
         }
+        let write_priority = u8::try_from(write_priority_raw).map_err(|_| {
+            Error::decoding(
+                pos,
+                format!("WriteGroup write-priority {write_priority_raw} exceeds u8"),
+            )
+        })?;
         offset = end;
 
         // [2] changeList — opening tag 2
@@ -144,7 +156,14 @@ impl WriteGroupRequest {
             if offset < data.len() {
                 let (opt, new_off) = tags::decode_optional_context(data, offset, 1)?;
                 if let Some(content) = opt {
-                    override_priority = Some(primitives::decode_unsigned(content)? as u8);
+                    let priority_pos = new_off - content.len();
+                    let priority_raw = primitives::decode_unsigned(content)?;
+                    override_priority = Some(u8::try_from(priority_raw).map_err(|_| {
+                        Error::decoding(
+                            priority_pos,
+                            format!("WriteGroup override-priority {priority_raw} exceeds u8"),
+                        )
+                    })?);
                     offset = new_off;
                 }
             }
@@ -262,6 +281,68 @@ mod tests {
             }
         }
         assert!(WriteGroupRequest::decode(&data).is_err());
+    }
+
+    #[test]
+    fn write_group_values_must_fit_field_widths() {
+        let encode_request = |group_number, write_priority, override_priority| {
+            let mut buf = BytesMut::new();
+            primitives::encode_ctx_unsigned(&mut buf, 0, group_number);
+            primitives::encode_ctx_unsigned(&mut buf, 1, write_priority);
+            tags::encode_opening_tag(&mut buf, 2);
+            if let Some(priority) = override_priority {
+                primitives::encode_ctx_unsigned(&mut buf, 1, priority);
+            }
+            tags::encode_opening_tag(&mut buf, 2);
+            primitives::encode_app_null(&mut buf);
+            tags::encode_closing_tag(&mut buf, 2);
+            tags::encode_closing_tag(&mut buf, 2);
+            buf
+        };
+
+        for (group_number, write_priority, override_priority, field, value) in [
+            (4_294_967_297, 1, None, "group number", 4_294_967_297_u64),
+            (1, 257, None, "write-priority", 257),
+            (1, 1, Some(256), "override-priority", 256),
+        ] {
+            let encoded = encode_request(group_number, write_priority, override_priority);
+            let error = WriteGroupRequest::decode(&encoded).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("WriteGroup {field} {value}")),
+                "unexpected error for {field} {value}: {error}"
+            );
+        }
+
+        let encoded = encode_request(u32::MAX as u64, 16, Some(u8::MAX as u64));
+        let decoded = WriteGroupRequest::decode(&encoded).unwrap();
+        assert_eq!(decoded.group_number, u32::MAX);
+        assert_eq!(decoded.write_priority, 16);
+        assert_eq!(decoded.change_list[0].override_priority, Some(u8::MAX));
+
+        let mut leading_zero = BytesMut::new();
+        for (tag_number, content) in [(0, &[0, 0, 0, 0, 1][..]), (1, &[0, 16][..])] {
+            tags::encode_tag(
+                &mut leading_zero,
+                tag_number,
+                tags::TagClass::Context,
+                content.len() as u32,
+            );
+            leading_zero.extend_from_slice(content);
+        }
+        tags::encode_opening_tag(&mut leading_zero, 2);
+        tags::encode_tag(&mut leading_zero, 1, tags::TagClass::Context, 2);
+        leading_zero.extend_from_slice(&[0, u8::MAX]);
+        tags::encode_opening_tag(&mut leading_zero, 2);
+        primitives::encode_app_null(&mut leading_zero);
+        tags::encode_closing_tag(&mut leading_zero, 2);
+        tags::encode_closing_tag(&mut leading_zero, 2);
+
+        let decoded = WriteGroupRequest::decode(&leading_zero).unwrap();
+        assert_eq!(decoded.group_number, 1);
+        assert_eq!(decoded.write_priority, 16);
+        assert_eq!(decoded.change_list[0].override_priority, Some(u8::MAX));
     }
 
     #[test]

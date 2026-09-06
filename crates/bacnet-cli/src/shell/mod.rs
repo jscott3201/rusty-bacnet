@@ -17,7 +17,7 @@ use owo_colors::OwoColorize;
 
 use crate::output::OutputFormat;
 use crate::session::Session;
-use crate::{commands, output, parse, resolve};
+use crate::{commands, output, parse, resolve, timestamp};
 
 use self::admin::{
     handle_ack_alarm, handle_create_object, handle_delete_object, handle_read_range,
@@ -402,13 +402,17 @@ Commands:
   read-range <target> <object> [prop]  Read a range (e.g., rr 10.0.1.5 trend-log:1)
   write <target> <obj> <prop> <val>  Write a property (e.g., write 10.0.1.5 av:1 pv 72.5)
   writem <target> <obj> <prop=val,...>  Write multiple properties (WPM)
-  file-read <target> <instance>         Read a file (AtomicReadFile)
+  file-read <target> <instance> [--access stream|record] [--start N] [--count N] [--output PATH]
+                                       Read a file through successive AtomicReadFile ACKs
   file-write <target> <instance> <path> Write a file (AtomicWriteFile)
   subscribe <target> <object>        Subscribe to COV notifications
   control <target> <action>          Device communication control (enable/disable)
   reinit <target> <state>            Reinitialize device (coldstart/warmstart)
   alarms <target>                    Get event/alarm summary
-  ack-alarm <target> <obj> --state N Acknowledge an alarm
+  ack-alarm <target> <obj> --state N --timestamp <SPEC> --ack-time <SPEC>
+                                       Acknowledge with exact caller-supplied timestamps
+    SPEC: sequence:N | time:H,M,S,HS | datetime:Y,M,D,DOW;H,M,S,HS
+    --timestamp echoes the notification; --ack-time is caller-selected
   time-sync <target> [--utc]         Synchronize time with a device
   create-object <target> <object>    Create an object on a remote device
   delete-object <target> <object>    Delete an object on a remote device

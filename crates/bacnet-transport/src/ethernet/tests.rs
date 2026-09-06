@@ -1,4 +1,5 @@
 use super::*;
+#[cfg(target_os = "linux")]
 use crate::port::TransportPort;
 
 #[test]
@@ -14,6 +15,13 @@ fn encode_decode_round_trip() {
     assert_eq!(decoded.destination, dst);
     assert_eq!(decoded.source, src);
     assert_eq!(decoded.payload, npdu);
+}
+
+#[test]
+fn ieee_group_bit_covers_multicast_and_broadcast_destinations() {
+    assert!(!is_ethernet_group(&[0x02, 0, 0, 0, 0, 1]));
+    assert!(is_ethernet_group(&[0x01, 0, 0x5e, 0, 0, 1]));
+    assert!(is_ethernet_group(&ETHERNET_BROADCAST));
 }
 
 #[test]

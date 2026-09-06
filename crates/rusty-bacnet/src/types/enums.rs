@@ -73,6 +73,12 @@ py_bacnet_enum!(
 py_bacnet_enum!("ErrorClass", PyErrorClass, bacnet_enums::ErrorClass, u16);
 py_bacnet_enum!("ErrorCode", PyErrorCode, bacnet_enums::ErrorCode, u16);
 py_bacnet_enum!(
+    "AuditOperation",
+    PyAuditOperation,
+    bacnet_enums::AuditOperation,
+    u32
+);
+py_bacnet_enum!(
     "EnableDisable",
     PyEnableDisable,
     bacnet_enums::EnableDisable,
@@ -97,6 +103,12 @@ py_bacnet_enum!(
     u32
 );
 py_bacnet_enum!("EventState", PyEventState, bacnet_enums::EventState, u32);
+py_bacnet_enum!(
+    "EnrollmentSummaryEventStateFilter",
+    PyEnrollmentSummaryEventStateFilter,
+    bacnet_enums::EnrollmentSummaryEventStateFilter,
+    u32
+);
 py_bacnet_enum!("EventType", PyEventType, bacnet_enums::EventType, u32);
 py_bacnet_enum!(
     "MessagePriority",

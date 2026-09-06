@@ -179,8 +179,8 @@ fn disconnect_request_resets_state() {
     let msg = ScMessage {
         function: ScFunction::DisconnectRequest,
         message_id: 1,
-        originating_vmac: Some([0x10; 6]),
-        destination_vmac: Some([0x01; 6]),
+        originating_vmac: None,
+        destination_vmac: None,
         dest_options: Vec::new(),
         data_options: Vec::new(),
         payload: Bytes::new(),
@@ -222,6 +222,16 @@ fn build_disconnect_before_connect_returns_error() {
     let result = conn.build_disconnect_request();
     assert!(result.is_err());
     // State should not have changed
+    assert_eq!(conn.state, ScConnectionState::Disconnected);
+}
+
+#[test]
+fn build_disconnect_after_disconnect_returns_error() {
+    let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
+    conn.hub_vmac = Some([0x10; 6]);
+
+    let result = conn.build_disconnect_request();
+    assert!(result.is_err());
     assert_eq!(conn.state, ScConnectionState::Disconnected);
 }
 
@@ -386,6 +396,7 @@ async fn transport_receive_preserves_data_options_as_attributes() {
         .expect("SC NPDU channel closed");
     assert_eq!(received.npdu, msg.payload);
     assert_eq!(received.source_mac.as_slice(), hub_vmac);
+    assert!(!received.link_layer_group);
     assert_eq!(received.data_attributes.len(), 2);
     assert_eq!(received.data_attributes[0].option_type, 1);
     assert!(received.data_attributes[0].must_understand);
@@ -513,6 +524,7 @@ async fn transport_send_unicast_encodes_data_attributes_as_options() {
         .unwrap();
 
     let data = ws_hub.recv().await.unwrap();
+    assert_eq!(data[10], 0xC1);
     let msg = decode_sc_message(&data).unwrap();
     assert_eq!(msg.function, ScFunction::EncapsulatedNpdu);
     assert_eq!(msg.destination_vmac, Some(dest_vmac));
@@ -566,7 +578,7 @@ fn connection_rejects_too_many_data_attributes_on_encode() {
     let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
     let attributes = vec![
         DataAttribute {
-            option_type: 1,
+            option_type: 31,
             must_understand: false,
             data: Vec::new(),
         };
@@ -584,7 +596,7 @@ fn connection_rejects_too_many_data_attributes_on_encode() {
 fn connection_rejects_oversize_data_attribute_payload_on_encode() {
     let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
     let attribute = DataAttribute {
-        option_type: 1,
+        option_type: 31,
         must_understand: false,
         data: vec![0; u16::MAX as usize + 1],
     };
@@ -656,8 +668,8 @@ fn disconnect_request_queues_ack() {
     let req = ScMessage {
         function: ScFunction::DisconnectRequest,
         message_id: 42,
-        originating_vmac: Some([10, 20, 30, 40, 50, 60]),
-        destination_vmac: Some([1, 2, 3, 4, 5, 6]),
+        originating_vmac: None,
+        destination_vmac: None,
         dest_options: Vec::new(),
         data_options: Vec::new(),
         payload: Bytes::new(),
@@ -677,8 +689,8 @@ fn disconnect_ack_transitions_from_disconnecting() {
     let ack = ScMessage {
         function: ScFunction::DisconnectAck,
         message_id: 99,
-        originating_vmac: Some([10, 20, 30, 40, 50, 60]),
-        destination_vmac: Some([1, 2, 3, 4, 5, 6]),
+        originating_vmac: None,
+        destination_vmac: None,
         dest_options: Vec::new(),
         data_options: Vec::new(),
         payload: Bytes::new(),
@@ -735,6 +747,8 @@ fn connect_accept_validates_message_id() {
     let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
     let req = conn.build_connect_request();
     let req_id = req.message_id;
+    let mut payload = vec![0u8; 26];
+    payload[..6].fill(0x10); // non-reserved hub VMAC
 
     let accept = ScMessage {
         function: ScFunction::ConnectAccept,
@@ -743,7 +757,7 @@ fn connect_accept_validates_message_id() {
         destination_vmac: None,
         dest_options: Vec::new(),
         data_options: Vec::new(),
-        payload: Bytes::from(vec![0u8; 26]),
+        payload: Bytes::from(payload),
     };
     assert!(conn.handle_connect_accept(&accept));
     assert_eq!(conn.state, ScConnectionState::Connected);
@@ -753,6 +767,8 @@ fn connect_accept_validates_message_id() {
 fn connect_accept_rejects_wrong_message_id() {
     let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
     let _req = conn.build_connect_request();
+    let mut payload = vec![0u8; 26];
+    payload[..6].fill(0x10); // isolate the correlation failure
 
     let accept = ScMessage {
         function: ScFunction::ConnectAccept,
@@ -761,7 +777,7 @@ fn connect_accept_rejects_wrong_message_id() {
         destination_vmac: None,
         dest_options: Vec::new(),
         data_options: Vec::new(),
-        payload: Bytes::from(vec![0u8; 26]),
+        payload: Bytes::from(payload),
     };
     assert!(!conn.handle_connect_accept(&accept));
     assert_eq!(conn.state, ScConnectionState::Connecting);

@@ -31,6 +31,12 @@ pub struct ReceivedNpdu {
     pub npdu: Bytes,
     /// Source MAC address in transport-native format.
     pub source_mac: MacAddr,
+    /// Whether the NPDU arrived using a data-link multicast or broadcast destination.
+    ///
+    /// This is ingress provenance, not a conclusion about the NPDU's logical
+    /// destination: routers may legitimately send a routed unicast over a
+    /// group data-link destination.
+    pub link_layer_group: bool,
     /// Optional data attributes carried by the data link.
     pub data_attributes: Vec<DataAttribute>,
     /// Optional reply channel for MS/TP DataExpectingReply frames.
@@ -44,6 +50,7 @@ impl Clone for ReceivedNpdu {
         Self {
             npdu: self.npdu.clone(),
             source_mac: self.source_mac.clone(),
+            link_layer_group: self.link_layer_group,
             data_attributes: self.data_attributes.clone(),
             reply_tx: None, // oneshot::Sender is not Clone; clones lose the reply channel
         }
@@ -55,6 +62,7 @@ impl std::fmt::Debug for ReceivedNpdu {
         f.debug_struct("ReceivedNpdu")
             .field("npdu", &self.npdu)
             .field("source_mac", &self.source_mac)
+            .field("link_layer_group", &self.link_layer_group)
             .field("data_attributes", &self.data_attributes)
             .field("reply_tx", &self.reply_tx.as_ref().map(|_| "Some(Sender)"))
             .finish()
@@ -76,6 +84,13 @@ pub trait TransportPort: Send + Sync {
 
     /// Stop the transport and clean up resources.
     fn stop(&mut self) -> impl std::future::Future<Output = Result<(), Error>> + Send;
+
+    /// Synchronously abort background work and release owned transport resources.
+    ///
+    /// This hook is intended for `Drop` paths where async [`Self::stop`] cannot
+    /// be awaited. Implementations should not attempt graceful protocol shutdown
+    /// here; graceful disconnects remain the responsibility of [`Self::stop`].
+    fn abort(&mut self) {}
 
     /// Send NPDU bytes to a specific MAC address (unicast).
     fn send_unicast(
@@ -122,5 +137,19 @@ pub trait TransportPort: Send + Sync {
     /// BIP/SC: 1476 (default), MS/TP: 480.
     fn max_apdu_length(&self) -> u16 {
         1476
+    }
+
+    /// Whether `mac` is this data link's broadcast address.
+    ///
+    /// A destination can spell a broadcast two ways: the network-layer form
+    /// (a zero-length MAC) or the medium's literal broadcast MAC — Clause 6.3
+    /// names `X'FFFFFFFFFFFF'` for Ethernet, `X'FF'` for MS/TP, an IP address
+    /// with all ones in the host portion for BACnet/IP. Only the transport
+    /// knows its own literal spelling, so senders that must not unicast to a
+    /// broadcast (Clause 6.3 restricts broadcast to Unconfirmed-Request-PDUs)
+    /// ask here. The default recognizes nothing, which leaves such a MAC
+    /// treated as a unicast.
+    fn is_broadcast_mac(&self, _mac: &[u8]) -> bool {
+        false
     }
 }

@@ -5,11 +5,19 @@
 //! All types follow the same `no_std`-compatible pattern used in `primitives.rs`.
 
 #[cfg(not(feature = "std"))]
-use alloc::{vec, vec::Vec};
+use alloc::{string::String, vec::Vec};
 
 use crate::error::Error;
 use crate::primitives::{Date, ObjectIdentifier, Time};
 use crate::MacAddr;
+
+mod audit;
+pub use audit::{
+    AuditPropertyReference, BACnetAuditLogDatum, BACnetAuditLogQueryParameters,
+    BACnetAuditLogRecord, BACnetAuditLogRecordResult, BACnetAuditNotification,
+};
+mod staging;
+pub use staging::BACnetStageLimitValue;
 
 // ---------------------------------------------------------------------------
 // BACnetDateRange (Clause 21 -- used by CalendarEntry and BACnetSpecialEvent)
@@ -432,44 +440,6 @@ pub struct BACnetPrescale {
 }
 
 // ---------------------------------------------------------------------------
-// BACnetPropertyStates (Clause 21)
-// ---------------------------------------------------------------------------
-
-/// BACnet Property States — CHOICE type with 40+ variants.
-/// We represent common variants typed, uncommon as raw bytes.
-#[derive(Debug, Clone, PartialEq)]
-pub enum BACnetPropertyStates {
-    BooleanValue(bool),      // [0]
-    BinaryValue(u32),        // [1] BACnetBinaryPV
-    EventType(u32),          // [2]
-    Polarity(u32),           // [3]
-    ProgramChange(u32),      // [4]
-    ProgramState(u32),       // [5]
-    ReasonForHalt(u32),      // [6]
-    Reliability(u32),        // [7]
-    State(u32),              // [8] BACnetEventState
-    SystemStatus(u32),       // [9]
-    Units(u32),              // [10]
-    UnsignedValue(u32),      // [11]
-    LifeSafetyMode(u32),     // [12]
-    LifeSafetyState(u32),    // [13]
-    DoorAlarmState(u32),     // [14]
-    Action(u32),             // [15]
-    DoorSecuredStatus(u32),  // [16]
-    DoorStatus(u32),         // [17]
-    DoorValue(u32),          // [18]
-    LiftCarDirection(u32),   // [40]
-    LiftCarDoorCommand(u32), // [42]
-    TimerState(u32),         // [38]
-    TimerTransition(u32),    // [39]
-    /// Catch-all for uncommon variants.
-    Other {
-        tag: u8,
-        data: Vec<u8>,
-    },
-}
-
-// ---------------------------------------------------------------------------
 // BACnetShedLevel (Clause 12 — used by LoadControl)
 // ---------------------------------------------------------------------------
 
@@ -513,10 +483,11 @@ pub struct BACnetLightingCommand {
 // BACnetDeviceObjectReference (Clause 21 -- used by Access Control objects)
 // ---------------------------------------------------------------------------
 
-/// BACnet Device Object Reference (simplified).
+/// BACnet Device Object Reference.
 ///
-/// References an object, optionally on a specific device. Used by access
-/// control objects (e.g., BACnetAccessRule location).
+/// Clause 21 encodes the optional device identifier as context `[0]` followed
+/// by the required object identifier as context `[1]`. `None` identifies a
+/// local object, including Staging target references.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BACnetDeviceObjectReference {
     /// Optional device identifier (None = local device).
@@ -653,6 +624,18 @@ pub enum BACnetValueSource {
     Object(ObjectIdentifier),
     Address(BACnetAddress),
 }
+
+// ---------------------------------------------------------------------------
+// BACnetEventParameter (Clause 13.5 -- Event_Parameters CHOICE alternatives)
+// ---------------------------------------------------------------------------
+
+mod event_parameter;
+pub use event_parameter::{event_parameter_tag, BACnetEventParameter, ChangeOfValueCriteria};
+
+mod property_states;
+pub use property_states::{
+    BACnetExtendedPropertyState, BACnetPropertyStates, BACnetProprietaryPropertyState,
+};
 
 // ---------------------------------------------------------------------------
 // Tests

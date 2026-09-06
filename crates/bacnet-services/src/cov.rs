@@ -2,12 +2,17 @@
 
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
-use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::enums::{PropertyIdentifier, RejectReason};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
-use crate::common::{BACnetPropertyValue, MAX_DECODED_ITEMS};
+use crate::common::{
+    decode_context, decode_context_bool, decode_context_u32, BACnetPropertyValue,
+    PropertyReference, MAX_DECODED_ITEMS,
+};
+
+pub use crate::cov_decode::COVNotificationDecodeError;
 
 // ---------------------------------------------------------------------------
 // SubscribeCOVRequest
@@ -49,46 +54,39 @@ impl SubscribeCOVRequest {
         let mut offset = 0;
 
         // [0] subscriber-process-identifier
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "SubscribeCOV truncated at process-id"));
-        }
-        let subscriber_process_identifier = primitives::decode_unsigned(&data[pos..end])? as u32;
+        let (subscriber_process_identifier, end) =
+            decode_context_u32(data, offset, 0, "SubscribeCOV process-id")?;
         offset = end;
 
         // [1] monitored-object-identifier
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "SubscribeCOV truncated at object-id"));
-        }
-        let monitored_object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
+        let (content, end) = decode_context(data, offset, 1, "SubscribeCOV object-id")?;
+        let monitored_object_identifier = ObjectIdentifier::decode(content)?;
         offset = end;
 
         // [2] issue-confirmed-notifications (optional)
         let mut issue_confirmed_notifications = None;
         if offset < data.len() {
-            let (opt_data, new_offset) = tags::decode_optional_context(data, offset, 2)?;
-            if let Some(content) = opt_data {
-                if content.is_empty() {
-                    return Err(Error::decoding(
-                        offset,
-                        "SubscribeCOV: empty confirmed-notifications field",
-                    ));
-                }
-                issue_confirmed_notifications = Some(content[0] != 0);
-                offset = new_offset;
+            let (tag, _) = tags::decode_tag(data, offset)?;
+            if tag.is_context(2) {
+                let (value, end) =
+                    decode_context_bool(data, offset, 2, "SubscribeCOV confirmed-notifications")?;
+                issue_confirmed_notifications = Some(value);
+                offset = end;
             }
         }
 
         // [3] lifetime (optional)
         let mut lifetime = None;
         if offset < data.len() {
-            let (opt_data, _new_offset) = tags::decode_optional_context(data, offset, 3)?;
-            if let Some(content) = opt_data {
-                lifetime = Some(primitives::decode_unsigned(content)? as u32);
+            let (tag, _) = tags::decode_tag(data, offset)?;
+            if tag.is_context(3) {
+                let (value, end) = decode_context_u32(data, offset, 3, "SubscribeCOV lifetime")?;
+                lifetime = Some(value);
+                offset = end;
             }
+        }
+        if offset != data.len() {
+            return Err(Error::decoding(offset, "SubscribeCOV has trailing data"));
         }
 
         Ok(Self {
@@ -155,98 +153,87 @@ impl SubscribeCOVPropertyRequest {
         let mut offset = 0;
 
         // [0] subscriberProcessIdentifier
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if tag.number != 0 {
-            return Err(Error::decoding(pos, "expected context 0 for process-id"));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::buffer_too_short(end, data.len()));
-        }
-        let subscriber_process_identifier = primitives::decode_unsigned(&data[pos..end])? as u32;
+        let (subscriber_process_identifier, end) =
+            decode_context_u32(data, offset, 0, "SubscribeCOVProperty process-id")?;
         offset = end;
 
         // [1] monitoredObjectIdentifier
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if tag.number != 1 {
-            return Err(Error::decoding(pos, "expected context 1 for object-id"));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::buffer_too_short(end, data.len()));
-        }
-        let monitored_object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
+        let (content, end) = decode_context(data, offset, 1, "SubscribeCOVProperty object-id")?;
+        let monitored_object_identifier = ObjectIdentifier::decode(content)?;
         offset = end;
 
         // [2] issueConfirmedNotifications (optional)
         let mut issue_confirmed_notifications = None;
         if offset < data.len() {
-            let (opt_data, new_offset) = tags::decode_optional_context(data, offset, 2)?;
-            if let Some(content) = opt_data {
-                issue_confirmed_notifications = Some(!content.is_empty() && content[0] != 0);
-                offset = new_offset;
+            let (tag, _) = tags::decode_tag(data, offset)?;
+            if tag.is_context(2) {
+                let (value, end) = decode_context_bool(
+                    data,
+                    offset,
+                    2,
+                    "SubscribeCOVProperty confirmed-notifications",
+                )?;
+                issue_confirmed_notifications = Some(value);
+                offset = end;
             }
         }
 
         // [3] lifetime (optional)
         let mut lifetime = None;
         if offset < data.len() {
-            let (opt_data, new_offset) = tags::decode_optional_context(data, offset, 3)?;
-            if let Some(content) = opt_data {
-                lifetime = Some(primitives::decode_unsigned(content)? as u32);
-                offset = new_offset;
+            let (tag, _) = tags::decode_tag(data, offset)?;
+            if tag.is_context(3) {
+                let (value, end) =
+                    decode_context_u32(data, offset, 3, "SubscribeCOVProperty lifetime")?;
+                lifetime = Some(value);
+                offset = end;
             }
         }
 
         // [4] monitoredPropertyIdentifier (BACnetPropertyReference)
         let (tag, pos) = tags::decode_tag(data, offset)?;
-        if tag.number != 4 {
+        if !tag.is_opening_tag(4) {
             return Err(Error::decoding(
-                pos,
-                "expected context 4 for monitored-property",
+                offset,
+                "SubscribeCOVProperty expected opening tag 4",
             ));
         }
-        offset = pos;
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::buffer_too_short(end, data.len()));
-        }
-        let monitored_property_identifier =
-            PropertyIdentifier::from_raw(primitives::decode_unsigned(&data[pos..end])? as u32);
+        let (monitored_property, end) = PropertyReference::decode(data, pos)?;
         offset = end;
-
-        // [1] propertyArrayIndex (optional)
-        let mut monitored_property_array_index = None;
-        if offset < data.len() {
-            let (opt_data, new_offset) = tags::decode_optional_context(data, offset, 1)?;
-            if let Some(content) = opt_data {
-                monitored_property_array_index = Some(primitives::decode_unsigned(content)? as u32);
-                offset = new_offset;
-            }
+        let (tag, end) = tags::decode_tag(data, offset)?;
+        if !tag.is_closing_tag(4) {
+            return Err(Error::decoding(
+                offset,
+                "SubscribeCOVProperty expected closing tag 4",
+            ));
         }
-
-        let (_tag, pos) = tags::decode_tag(data, offset)?;
-        offset = pos;
+        offset = end;
 
         // [5] covIncrement (optional)
         let mut cov_increment = None;
         if offset < data.len() {
-            let (opt_data, new_offset) = tags::decode_optional_context(data, offset, 5)?;
-            if let Some(content) = opt_data {
+            let (tag, _) = tags::decode_tag(data, offset)?;
+            if tag.is_context(5) {
+                let (content, end) =
+                    decode_context(data, offset, 5, "SubscribeCOVProperty COV increment")?;
                 cov_increment = Some(primitives::decode_real(content)?);
-                offset = new_offset;
+                offset = end;
             }
         }
-        let _ = offset; // suppress unused
+        if offset != data.len() {
+            return Err(Error::decoding(
+                offset,
+                "SubscribeCOVProperty has trailing data",
+            ));
+        }
 
         Ok(Self {
             subscriber_process_identifier,
             monitored_object_identifier,
             issue_confirmed_notifications,
             lifetime,
-            monitored_property_identifier,
-            monitored_property_array_index,
+            monitored_property_identifier: monitored_property.property_identifier,
+            monitored_property_array_index: monitored_property.property_array_index,
             cov_increment,
         })
     }
@@ -287,100 +274,13 @@ impl COVNotificationRequest {
     }
 
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
-
-        // [0] subscriber-process-identifier
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(
-                pos,
-                "COVNotification truncated at process-id",
-            ));
-        }
-        let subscriber_process_identifier = primitives::decode_unsigned(&data[pos..end])? as u32;
-        offset = end;
-
-        // [1] initiating-device-identifier
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(
-                pos,
-                "COVNotification truncated at device-id",
-            ));
-        }
-        let initiating_device_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-        offset = end;
-
-        // [2] monitored-object-identifier
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(
-                pos,
-                "COVNotification truncated at monitored-id",
-            ));
-        }
-        let monitored_object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-        offset = end;
-
-        // [3] time-remaining
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(
-                pos,
-                "COVNotification truncated at time-remaining",
-            ));
-        }
-        let time_remaining = primitives::decode_unsigned(&data[pos..end])? as u32;
-        offset = end;
-
-        // [4] list-of-values (opening tag 4)
-        let (tag, tag_end) = tags::decode_tag(data, offset)?;
-        if !tag.is_opening_tag(4) {
-            return Err(Error::decoding(
-                offset,
-                "COVNotification expected opening tag 4",
-            ));
-        }
-        offset = tag_end;
-
-        let mut values = Vec::new();
-        loop {
-            if offset >= data.len() {
-                return Err(Error::decoding(
-                    offset,
-                    "COVNotification missing closing tag 4",
-                ));
-            }
-            if values.len() >= MAX_DECODED_ITEMS {
-                return Err(Error::decoding(
-                    offset,
-                    "COVNotification values exceeds max",
-                ));
-            }
-            let (tag, tag_end) = tags::decode_tag(data, offset)?;
-            if tag.is_closing_tag(4) {
-                offset = tag_end;
-                break;
-            }
-            let (pv, new_offset) = BACnetPropertyValue::decode(data, offset)?;
-            values.push(pv);
-            offset = new_offset;
-        }
-        let _ = offset;
-
-        Ok(Self {
-            subscriber_process_identifier,
-            initiating_device_identifier,
-            monitored_object_identifier,
-            time_remaining,
-            list_of_values: values,
-        })
+        Self::decode_detailed(data).map_err(COVNotificationDecodeError::into_error)
     }
 }
+
+#[cfg(test)]
+#[path = "cov_width_tests.rs"]
+mod width_tests;
 
 #[cfg(test)]
 mod tests {
@@ -507,6 +407,167 @@ mod tests {
     #[test]
     fn test_decode_cov_notification_empty_input() {
         assert!(COVNotificationRequest::decode(&[]).is_err());
+        assert_eq!(
+            COVNotificationRequest::decode_detailed(&[])
+                .unwrap_err()
+                .reject_reason(),
+            RejectReason::MISSING_REQUIRED_PARAMETER
+        );
+    }
+
+    #[test]
+    fn test_decode_cov_notification_classifies_missing_and_invalid_tags() {
+        // A valid [0] process identifier followed by EOF is still missing a
+        // later mandatory service argument.
+        assert_eq!(
+            COVNotificationRequest::decode_detailed(&[0x09, 0x01])
+                .unwrap_err()
+                .reject_reason(),
+            RejectReason::MISSING_REQUIRED_PARAMETER
+        );
+        // Context [7] cannot begin this service request.
+        assert_eq!(
+            COVNotificationRequest::decode_detailed(&[0x79, 0x01])
+                .unwrap_err()
+                .reject_reason(),
+            RejectReason::INVALID_TAG
+        );
+        // A present ObjectIdentifier with an invalid wire width has invalid
+        // data encoding rather than a missing argument.
+        assert_eq!(
+            COVNotificationRequest::decode_detailed(&[0x09, 0x01, 0x1B, 0x01, 0x02, 0x03])
+                .unwrap_err()
+                .reject_reason(),
+            RejectReason::INVALID_DATA_ENCODING
+        );
+        // Unsigned values use the smallest possible encoding.
+        assert_eq!(
+            COVNotificationRequest::decode_detailed(&[0x0A, 0x00, 0x01])
+                .unwrap_err()
+                .reject_reason(),
+            RejectReason::INVALID_DATA_ENCODING
+        );
+    }
+
+    #[test]
+    fn test_decode_cov_notification_rejects_empty_list_of_values() {
+        let req = COVNotificationRequest {
+            subscriber_process_identifier: 1,
+            initiating_device_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap(),
+            monitored_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1)
+                .unwrap(),
+            time_remaining: 60,
+            list_of_values: Vec::new(),
+        };
+        let mut buf = BytesMut::new();
+        req.encode(&mut buf);
+
+        assert_eq!(
+            COVNotificationRequest::decode_detailed(&buf)
+                .unwrap_err()
+                .reject_reason(),
+            RejectReason::PARAMETER_OUT_OF_RANGE
+        );
+    }
+
+    #[test]
+    fn test_decode_cov_notification_classifies_nested_invalid_tag() {
+        let req = COVNotificationRequest {
+            subscriber_process_identifier: 1,
+            initiating_device_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap(),
+            monitored_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1)
+                .unwrap(),
+            time_remaining: 60,
+            list_of_values: vec![BACnetPropertyValue {
+                property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                property_array_index: None,
+                value: vec![0x21, 0x01],
+                priority: None,
+            }],
+        };
+        let mut buf = BytesMut::new();
+        req.encode(&mut buf);
+        let list_start = buf.iter().position(|byte| *byte == 0x4E).unwrap();
+        buf[list_start + 1] = 0x79;
+
+        assert_eq!(
+            COVNotificationRequest::decode_detailed(&buf)
+                .unwrap_err()
+                .reject_reason(),
+            RejectReason::INVALID_TAG
+        );
+    }
+
+    #[test]
+    fn test_decode_cov_notification_enforces_value_cap() {
+        let value = BACnetPropertyValue {
+            property_identifier: PropertyIdentifier::PRESENT_VALUE,
+            property_array_index: None,
+            value: vec![0x21, 0x01],
+            priority: None,
+        };
+        let mut req = COVNotificationRequest {
+            subscriber_process_identifier: 1,
+            initiating_device_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap(),
+            monitored_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1)
+                .unwrap(),
+            time_remaining: 60,
+            list_of_values: vec![value.clone(); MAX_DECODED_ITEMS],
+        };
+        let mut buf = BytesMut::new();
+        req.encode(&mut buf);
+        assert_eq!(
+            COVNotificationRequest::decode_detailed(&buf)
+                .unwrap()
+                .list_of_values
+                .len(),
+            MAX_DECODED_ITEMS
+        );
+
+        req.list_of_values.push(value);
+        buf.clear();
+        req.encode(&mut buf);
+        assert_eq!(
+            COVNotificationRequest::decode_detailed(&buf)
+                .unwrap_err()
+                .reject_reason(),
+            RejectReason::BUFFER_OVERFLOW
+        );
+    }
+
+    #[test]
+    fn test_decode_cov_notification_classifies_trailing_arguments() {
+        let req = COVNotificationRequest {
+            subscriber_process_identifier: 1,
+            initiating_device_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap(),
+            monitored_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1)
+                .unwrap(),
+            time_remaining: 60,
+            list_of_values: vec![BACnetPropertyValue {
+                property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                property_array_index: None,
+                value: vec![0x44, 0x42, 0x90, 0x00, 0x00],
+                priority: None,
+            }],
+        };
+        let mut buf = BytesMut::new();
+        req.encode(&mut buf);
+        buf.extend_from_slice(&[0x59, 0x01]);
+        assert_eq!(
+            COVNotificationRequest::decode_detailed(&buf)
+                .unwrap_err()
+                .reject_reason(),
+            RejectReason::TOO_MANY_ARGUMENTS
+        );
+
+        buf.truncate(buf.len() - 2);
+        buf.extend_from_slice(&[0xFF]);
+        assert_eq!(
+            COVNotificationRequest::decode_detailed(&buf)
+                .unwrap_err()
+                .reject_reason(),
+            RejectReason::INVALID_TAG
+        );
     }
 
     #[test]

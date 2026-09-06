@@ -12,11 +12,16 @@ categories = ["network-programming", "no-std"]
 [features]
 default = ["std"]
 std = []
+serde = ["dep:serde", "serde/alloc"]
 
 [dependencies]
 bitflags = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

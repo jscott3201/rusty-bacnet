@@ -25,6 +25,13 @@ gpiocdev = { version = "0.8", optional = true }
 libc = { workspace = true }
 getrandom = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Networking_WinSock",
+    "Win32_System_IO",
+] }
+
 [features]
 default = []
 ipv6 = []
@@ -32,6 +39,10 @@ sc-tls = ["tokio-tungstenite", "tokio-rustls", "rustls", "futures-util"]
 serial = ["tokio-serial", "tokio/io-util"]
 serial-gpio = ["serial", "gpiocdev"]
 ethernet = []
+
+[dev-dependencies]
+rcgen.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

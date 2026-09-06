@@ -16,7 +16,13 @@ impl BACnetClient {
         sc_client_key=None,
         sc_heartbeat_interval_ms=None,
         sc_heartbeat_timeout_ms=None,
-        ipv6_interface=None
+        ipv6_interface=None,
+        *,
+        serial_port=None,
+        mstp_baud=38400,
+        mstp_mac=1,
+        mstp_max_master=127,
+        mstp_max_info_frames=1
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -33,6 +39,11 @@ impl BACnetClient {
         sc_heartbeat_interval_ms: Option<u64>,
         sc_heartbeat_timeout_ms: Option<u64>,
         ipv6_interface: Option<String>,
+        serial_port: Option<String>,
+        mstp_baud: u32,
+        mstp_mac: u8,
+        mstp_max_master: u8,
+        mstp_max_info_frames: u8,
     ) -> Self {
         Self {
             inner: Arc::new(Mutex::new(None)),
@@ -49,6 +60,11 @@ impl BACnetClient {
             sc_heartbeat_interval_ms,
             sc_heartbeat_timeout_ms,
             ipv6_interface,
+            serial_port,
+            mstp_baud,
+            mstp_mac,
+            mstp_max_master,
+            mstp_max_info_frames,
         }
     }
 
@@ -69,9 +85,14 @@ impl BACnetClient {
         let sc_heartbeat_interval_ms = slf.borrow().sc_heartbeat_interval_ms;
         let sc_heartbeat_timeout_ms = slf.borrow().sc_heartbeat_timeout_ms;
         let ipv6_interface = slf.borrow().ipv6_interface.clone();
+        let serial_port = slf.borrow().serial_port.clone();
+        let mstp_baud = slf.borrow().mstp_baud;
+        let mstp_mac = slf.borrow().mstp_mac;
+        let mstp_max_master = slf.borrow().mstp_max_master;
+        let mstp_max_info_frames = slf.borrow().mstp_max_info_frames;
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let transport: AnyTransport<NoSerial> = match transport_type.as_str() {
+            let transport: AnyTransport<crate::mstp_py::PySerial> = match transport_type.as_str() {
                 "bip" => {
                     let interface: Ipv4Addr = interface_str
                         .parse()
@@ -121,9 +142,16 @@ impl BACnetClient {
                     }
                     AnyTransport::Sc(Box::new(sc))
                 }
+                "mstp" => crate::mstp_py::build_mstp_transport(
+                    serial_port.as_deref(),
+                    mstp_baud,
+                    mstp_mac,
+                    mstp_max_master,
+                    mstp_max_info_frames,
+                )?,
                 other => {
                     return Err(PyRuntimeError::new_err(format!(
-                        "unknown transport: '{other}'. Use 'bip', 'ipv6', or 'sc'"
+                        "unknown transport: '{other}'. Use 'bip', 'ipv6', 'sc', or 'mstp'"
                     )));
                 }
             };

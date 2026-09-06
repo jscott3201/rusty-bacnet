@@ -19,7 +19,13 @@ impl BACnetServer {
         sc_heartbeat_timeout_ms=None,
         ipv6_interface=None,
         dcc_password=None,
-        reinit_password=None
+        reinit_password=None,
+        *,
+        serial_port=None,
+        mstp_baud=38400,
+        mstp_mac=1,
+        mstp_max_master=127,
+        mstp_max_info_frames=1
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -39,6 +45,11 @@ impl BACnetServer {
         ipv6_interface: Option<String>,
         dcc_password: Option<String>,
         reinit_password: Option<String>,
+        serial_port: Option<String>,
+        mstp_baud: u32,
+        mstp_mac: u8,
+        mstp_max_master: u8,
+        mstp_max_info_frames: u8,
     ) -> Self {
         Self {
             inner: Arc::new(Mutex::new(None)),
@@ -56,11 +67,22 @@ impl BACnetServer {
             sc_heartbeat_interval_ms,
             sc_heartbeat_timeout_ms,
             ipv6_interface,
+            serial_port,
+            mstp_baud,
+            mstp_mac,
+            mstp_max_master,
+            mstp_max_info_frames,
             dcc_password,
             reinit_password,
             started: Arc::new(AtomicBool::new(false)),
             pending_objects: std::sync::Mutex::new(Vec::new()),
         }
+    }
+
+    /// Test seam for verifying that fallible startup leaves registrations intact.
+    #[doc(hidden)]
+    fn _pending_registration_count(&self) -> PyResult<usize> {
+        Ok(self.lock_pending()?.len())
     }
 
     /// Add an Analog Input object to the server (before starting).
@@ -186,9 +208,16 @@ impl BACnetServer {
     }
 
     /// Add an Audit Log object to the server (before starting).
-    #[pyo3(signature = (instance, name, buffer_size=100))]
-    fn add_audit_log(&self, instance: u32, name: &str, buffer_size: u32) -> PyResult<()> {
-        let al = AuditLogObject::new(instance, name, buffer_size).map_err(to_py_err)?;
+    #[pyo3(signature = (instance, name, storage_path, buffer_size=100))]
+    fn add_audit_log(
+        &self,
+        instance: u32,
+        name: &str,
+        storage_path: &str,
+        buffer_size: u32,
+    ) -> PyResult<()> {
+        let storage = Arc::new(FileAuditLogPersistence::new(storage_path).map_err(to_py_err)?);
+        let al = AuditLogObject::new(instance, name, buffer_size, storage).map_err(to_py_err)?;
         self.push_pending(Box::new(al))
     }
 
@@ -287,17 +316,16 @@ impl BACnetServer {
         self.push_pending(Box::new(obj))
     }
 
-    /// Add a Notification Forwarder object to the server (before starting).
-    #[pyo3(signature = (instance, name))]
-    fn add_notification_forwarder(&self, instance: u32, name: &str) -> PyResult<()> {
-        let obj = NotificationForwarderObject::new(instance, name).map_err(to_py_err)?;
-        self.push_pending(Box::new(obj))
-    }
-
     /// Add an Alert Enrollment object to the server (before starting).
-    #[pyo3(signature = (instance, name))]
-    fn add_alert_enrollment(&self, instance: u32, name: &str) -> PyResult<()> {
-        let obj = AlertEnrollmentObject::new(instance, name).map_err(to_py_err)?;
+    #[pyo3(signature = (instance, name, initial_source))]
+    fn add_alert_enrollment(
+        &self,
+        instance: u32,
+        name: &str,
+        initial_source: PyObjectIdentifier,
+    ) -> PyResult<()> {
+        let obj = AlertEnrollmentObject::new(instance, name, initial_source.to_rust())
+            .map_err(to_py_err)?;
         self.push_pending(Box::new(obj))
     }
 
@@ -498,17 +526,41 @@ impl BACnetServer {
         self.push_pending(Box::new(obj))
     }
 
-    /// Add a Channel object to the server (before starting).
-    #[pyo3(signature = (instance, name, channel_number))]
-    fn add_channel(&self, instance: u32, name: &str, channel_number: u32) -> PyResult<()> {
-        let obj = ChannelObject::new(instance, name, channel_number).map_err(to_py_err)?;
-        self.push_pending(Box::new(obj))
-    }
-
-    /// Add a Staging object to the server (before starting).
-    #[pyo3(signature = (instance, name, num_stages))]
-    fn add_staging(&self, instance: u32, name: &str, num_stages: usize) -> PyResult<()> {
-        let obj = StagingObject::new(instance, name, num_stages).map_err(to_py_err)?;
+    /// Add an explicitly configured local-target Staging object before starting.
+    #[pyo3(signature = (
+        instance,
+        name,
+        present_value,
+        min_present_value,
+        units,
+        priority_for_writing,
+        stages,
+        target_references,
+        stage_names=None
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn add_staging(
+        &self,
+        instance: u32,
+        name: &str,
+        present_value: f32,
+        min_present_value: f32,
+        units: u32,
+        priority_for_writing: u8,
+        stages: Vec<(f32, Vec<bool>, f32)>,
+        target_references: Vec<PyObjectIdentifier>,
+        stage_names: Option<Vec<String>>,
+    ) -> PyResult<()> {
+        let config = staging_config(
+            present_value,
+            min_present_value,
+            units,
+            priority_for_writing,
+            stages,
+            target_references,
+            stage_names,
+        );
+        let obj = StagingObject::new(instance, name, config).map_err(to_py_err)?;
         self.push_pending(Box::new(obj))
     }
 
@@ -533,3 +585,41 @@ impl BACnetServer {
         self.push_pending(Box::new(obj))
     }
 }
+
+#[allow(clippy::too_many_arguments)]
+fn staging_config(
+    present_value: f32,
+    min_present_value: f32,
+    units: u32,
+    priority_for_writing: u8,
+    stages: Vec<(f32, Vec<bool>, f32)>,
+    target_references: Vec<PyObjectIdentifier>,
+    stage_names: Option<Vec<String>>,
+) -> StagingConfig {
+    StagingConfig {
+        present_value,
+        min_present_value,
+        units,
+        priority_for_writing,
+        stages: stages
+            .into_iter()
+            .map(|(limit, values, deadband)| BACnetStageLimitValue {
+                limit,
+                values,
+                deadband,
+            })
+            .collect(),
+        target_references: target_references
+            .into_iter()
+            .map(|reference| BACnetDeviceObjectReference {
+                device_identifier: None,
+                object_identifier: reference.to_rust(),
+            })
+            .collect(),
+        stage_names,
+    }
+}
+
+#[cfg(test)]
+#[path = "registration_tests.rs"]
+mod tests;

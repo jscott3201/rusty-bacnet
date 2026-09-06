@@ -280,6 +280,7 @@ bacnet_enum! {
     const TOO_MANY_ARGUMENTS = 7;
     const UNDEFINED_ENUMERATION = 8;
     const UNRECOGNIZED_SERVICE = 9;
+    const INVALID_DATA_ENCODING = 10;
 }
 
 bacnet_enum! {

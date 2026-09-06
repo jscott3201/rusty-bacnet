@@ -302,13 +302,9 @@ impl BACnetObject for PulseConverterObject {
             p if p == PropertyIdentifier::COV_INCREMENT => {
                 Ok(PropertyValue::Real(self.cov_increment))
             }
-            p if p == PropertyIdentifier::INPUT_REFERENCE => match &self.input_reference {
-                Some(r) => Ok(PropertyValue::List(vec![
-                    PropertyValue::ObjectIdentifier(r.object_identifier),
-                    PropertyValue::Enumerated(r.property_identifier),
-                ])),
-                None => Ok(PropertyValue::Null),
-            },
+            p if p == PropertyIdentifier::INPUT_REFERENCE => Ok(
+                crate::reference::reference_read_value(&self.input_reference),
+            ),
             p if p == PropertyIdentifier::EVENT_STATE => {
                 Ok(PropertyValue::Enumerated(self.event_state))
             }
@@ -337,6 +333,9 @@ impl BACnetObject for PulseConverterObject {
         }
         match property {
             p if p == PropertyIdentifier::PRESENT_VALUE => {
+                if !self.out_of_service {
+                    return Err(common::write_access_denied_error());
+                }
                 if let PropertyValue::Real(v) = value {
                     common::reject_non_finite(v)?;
                     self.present_value = v;
@@ -363,24 +362,15 @@ impl BACnetObject for PulseConverterObject {
                     Err(common::invalid_data_type_error())
                 }
             }
-            p if p == PropertyIdentifier::INPUT_REFERENCE => match value {
-                PropertyValue::Null => {
-                    self.input_reference = None;
-                    Ok(())
-                }
-                PropertyValue::List(ref items) if items.len() >= 2 => {
-                    if let (PropertyValue::ObjectIdentifier(oid), PropertyValue::Enumerated(prop)) =
-                        (&items[0], &items[1])
-                    {
-                        self.input_reference =
-                            Some(BACnetObjectPropertyReference::new(*oid, *prop));
-                        Ok(())
-                    } else {
-                        Err(common::invalid_data_type_error())
-                    }
-                }
-                _ => Err(common::invalid_data_type_error()),
-            },
+            // Clause 12.23 Input_Reference (BACnetObjectPropertyReference):
+            // shared arm decode — legacy local List and framed network forms.
+            p if p == PropertyIdentifier::INPUT_REFERENCE => {
+                self.input_reference = crate::reference::decode_reference_write(
+                    &value,
+                    crate::reference::ReferenceFrame::Bare,
+                )?;
+                Ok(())
+            }
             _ => Err(common::write_access_denied_error()),
         }
     }
@@ -412,11 +402,32 @@ impl BACnetObject for PulseConverterObject {
     fn cov_increment(&self) -> Option<f32> {
         Some(self.cov_increment)
     }
+
+    /// Mirror the static `write_property` routes (PICS truth invariant):
+    /// PRESENT_VALUE is advertised because its route is available while OOS;
+    /// this method does not report current-state authorization. OBJECT_NAME is
+    /// not advertised because no arm routes it.
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        matches!(
+            property,
+            PropertyIdentifier::PRESENT_VALUE
+                | PropertyIdentifier::SCALE_FACTOR
+                | PropertyIdentifier::ADJUST_VALUE
+                | PropertyIdentifier::INPUT_REFERENCE
+                | PropertyIdentifier::DESCRIPTION
+                | PropertyIdentifier::OUT_OF_SERVICE
+                | PropertyIdentifier::COV_INCREMENT
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+#[path = "pulse_converter_policy_tests.rs"]
+mod pulse_converter_policy_tests;
 
 #[cfg(test)]
 mod tests {
@@ -547,8 +558,15 @@ mod tests {
     }
 
     #[test]
-    fn pulse_converter_read_write_present_value() {
+    fn pulse_converter_read_write_present_value_while_out_of_service() {
         let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+        pc.write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(true),
+            None,
+        )
+        .unwrap();
         pc.write_property(
             PropertyIdentifier::PRESENT_VALUE,
             None,
@@ -669,5 +687,84 @@ mod tests {
         assert!(list.contains(&PropertyIdentifier::ADJUST_VALUE));
         assert!(list.contains(&PropertyIdentifier::COV_INCREMENT));
         assert!(list.contains(&PropertyIdentifier::INPUT_REFERENCE));
+    }
+
+    // --- #182: framed (context-tagged) Input_Reference writes ---
+
+    #[test]
+    fn pulse_converter_write_framed_indexed_input_reference_lands() {
+        let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+        let oid = ObjectIdentifier::new(ObjectType::ACCUMULATOR, 1).unwrap();
+        let prop_raw = PropertyIdentifier::PRESENT_VALUE.to_raw();
+        let r = BACnetObjectPropertyReference::new_indexed(oid, prop_raw, 4);
+        let mut buf = bytes::BytesMut::new();
+        bacnet_encoding::constructed::encode_object_property_reference(&mut buf, &r);
+        pc.write_property(
+            PropertyIdentifier::INPUT_REFERENCE,
+            None,
+            PropertyValue::ApplicationData(buf.to_vec()),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            pc.read_property(PropertyIdentifier::INPUT_REFERENCE, None)
+                .unwrap(),
+            PropertyValue::List(vec![
+                PropertyValue::ObjectIdentifier(oid),
+                PropertyValue::Enumerated(prop_raw),
+                PropertyValue::Unsigned(4),
+            ])
+        );
+        // Null clears it again.
+        pc.write_property(
+            PropertyIdentifier::INPUT_REFERENCE,
+            None,
+            PropertyValue::Null,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            pc.read_property(PropertyIdentifier::INPUT_REFERENCE, None)
+                .unwrap(),
+            PropertyValue::Null
+        );
+    }
+
+    #[test]
+    fn pulse_converter_write_malformed_framed_input_reference_rejected() {
+        let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+        // [0] object-identifier alone — property-identifier missing.
+        let mut buf = bytes::BytesMut::new();
+        bacnet_encoding::primitives::encode_ctx_object_id(
+            &mut buf,
+            0,
+            &ObjectIdentifier::new(ObjectType::ACCUMULATOR, 1).unwrap(),
+        );
+        match pc
+            .write_property(
+                PropertyIdentifier::INPUT_REFERENCE,
+                None,
+                PropertyValue::ApplicationData(buf.to_vec()),
+                None,
+            )
+            .unwrap_err()
+        {
+            Error::Protocol { class, code } => {
+                assert_eq!(
+                    class,
+                    bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
+                );
+                assert_eq!(
+                    code,
+                    bacnet_types::enums::ErrorCode::INVALID_DATA_ENCODING.to_raw() as u32
+                );
+            }
+            other => panic!("expected PROPERTY/INVALID_DATA_ENCODING, got {other:?}"),
+        }
+        assert_eq!(
+            pc.read_property(PropertyIdentifier::INPUT_REFERENCE, None)
+                .unwrap(),
+            PropertyValue::Null
+        );
     }
 }

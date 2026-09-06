@@ -6,12 +6,16 @@ use super::*;
 /// BACnet Credential Data Input object (type 37).
 ///
 /// Represents a credential reader device (card reader, biometric scanner, etc.).
-/// Present value indicates the authentication status.
+/// Its Present_Value is a BACnetAuthenticationFactor *structure* (Clause
+/// 12.36), not an enumerated status: Authentication_Status — the
+/// BACnetAuthenticationStatus property whose values run 0=not-ready,
+/// 1=ready, … — belongs to the Access Point object (Clause 12.31,
+/// Table 12-36).
 pub struct CredentialDataInputObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    present_value: u32,              // AuthenticationStatus: 0=notReady, 1=waiting
+    present_value: u32, // BACnetAuthenticationFactor structure (12.36), stored raw
     update_time: ([u8; 4], [u8; 4]), // (Date, Time) as raw bytes
     supported_formats: Vec<u64>,
     supported_format_classes: Vec<u64>,
@@ -28,7 +32,7 @@ impl CredentialDataInputObject {
             oid,
             name: name.into(),
             description: String::new(),
-            present_value: 0, // notReady
+            present_value: 0, // empty factor placeholder (see field note)
             update_time: ([0xFF, 0xFF, 0xFF, 0xFF], [0xFF, 0xFF, 0xFF, 0xFF]),
             supported_formats: Vec::new(),
             supported_format_classes: Vec::new(),

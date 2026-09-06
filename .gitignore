@@ -25,6 +25,9 @@ dist/
 
 # AI assistants
 codex-id.json
+claude-id.json
+_codex-briefs/
+codex-overnight-status.md
 .claude/
 CLAUDE.md
 .copilot/
@@ -40,6 +43,9 @@ mcp.json
 # Proprietary spec
 _spec/
 
+# Local conformance artifacts
+/conformance/
+
 # OS
 .DS_Store
 Thumbs.db
@@ -50,8 +56,3 @@ Thumbs.db
 *.swp
 *.swo
 *~
-
-# JavaScript/WASM
-node_modules/
-pkg/
-*.tgz

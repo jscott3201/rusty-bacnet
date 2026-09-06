@@ -128,6 +128,7 @@ fn handle_data_not_expecting_reply_unicast() {
     let received = rx.try_recv().unwrap();
     assert_eq!(received.npdu, npdu_data);
     assert_eq!(received.source_mac.as_slice(), &[0u8]);
+    assert!(!received.link_layer_group);
 }
 
 #[test]
@@ -152,6 +153,7 @@ fn handle_data_not_expecting_reply_broadcast() {
     assert!(node.reply_rx.is_none());
     let received = rx.try_recv().unwrap();
     assert_eq!(received.source_mac.as_slice(), &[5u8]);
+    assert!(received.link_layer_group);
 }
 
 #[test]
@@ -180,6 +182,7 @@ fn handle_data_expecting_reply() {
 
     let received = rx.try_recv().unwrap();
     assert_eq!(received.npdu, vec![0x01, 0x00, 0x30]);
+    assert!(!received.link_layer_group);
 }
 
 #[test]
@@ -238,6 +241,9 @@ fn use_token_sends_queued_data() {
     };
     let mut node = MasterNode::new(config).unwrap();
     node.state = MasterState::UseToken;
+    node.next_station = 1; // known successor so DoneWithToken can SendToken
+    node.poll_station = 0;
+    node.token_count = 0;
     node.queue_npdu(5, Bytes::from_static(&[0x01, 0x00, 0x30]))
         .unwrap();
     node.queue_npdu(BROADCAST_MAC, Bytes::from_static(&[0x01, 0x20]))
@@ -254,11 +260,11 @@ fn use_token_sends_queued_data() {
     assert_eq!(frame.frame_type, FrameType::BACnetDataNotExpectingReply);
     assert_eq!(frame.destination, BROADCAST_MAC);
 
-    // Third call: no more data, pass token
+    // Third call: no more data, pass token to known NS
     let frame = node.use_token();
     assert_eq!(frame.frame_type, FrameType::Token);
+    assert_eq!(frame.destination, 1);
 }
-
 #[test]
 fn use_token_respects_max_info_frames() {
     let config = MstpConfig {
@@ -269,6 +275,9 @@ fn use_token_respects_max_info_frames() {
     };
     let mut node = MasterNode::new(config).unwrap();
     node.state = MasterState::UseToken;
+    node.next_station = 1;
+    node.poll_station = 0;
+    node.token_count = 0;
     node.queue_npdu(5, Bytes::from_static(&[0x01])).unwrap();
     node.queue_npdu(6, Bytes::from_static(&[0x02])).unwrap();
 
@@ -279,16 +288,17 @@ fn use_token_respects_max_info_frames() {
             || frame.frame_type == FrameType::BACnetDataNotExpectingReply
     );
 
-    // Second call: frame_count >= max_info_frames, passes token
+    // Second call: frame_count >= max_info_frames → DoneWithToken → Token to NS
     let frame = node.use_token();
     assert_eq!(frame.frame_type, FrameType::Token);
+    assert_eq!(frame.destination, 1);
 
     // Data should still be in queue
     assert_eq!(node.tx_queue.len(), 1);
 }
-
 #[test]
 fn poll_for_master_after_npoll_tokens() {
+    // NS unknown (NS==TS): DONE_WITH_TOKEN → NextStationUnknown → PFM to TS+1
     let config = MstpConfig {
         this_station: 0,
         max_master: 127,
@@ -296,13 +306,15 @@ fn poll_for_master_after_npoll_tokens() {
         baud_rate: 9600,
     };
     let mut node = MasterNode::new(config).unwrap();
-    node.state = MasterState::UseToken;
-    node.token_count = NPOLL; // Trigger poll
+    node.state = MasterState::DoneWithToken;
+    node.token_count = NPOLL;
+    node.frame_count = node.config.max_info_frames;
 
-    let frame = node.use_token();
+    let frame = node.done_with_token();
     assert_eq!(frame.frame_type, FrameType::PollForMaster);
+    assert_eq!(frame.destination, 1);
     assert_eq!(node.state, MasterState::PollForMaster);
-    assert_eq!(node.token_count, 0);
+    assert_eq!(node.poll_station, 1);
 }
 
 #[test]
@@ -345,16 +357,13 @@ fn poll_timeout_advances_poll_station() {
     };
     let mut node = MasterNode::new(config).unwrap();
     node.state = MasterState::PollForMaster;
-    // Start polling from station 1
+    node.next_station = 0; // unknown successor — keep scanning
     node.poll_station = 1;
 
-    // MAX_POLL_RETRIES timeouts for station 1
-    for _ in 0..MAX_POLL_RETRIES {
-        let frame = node.poll_timeout();
-        assert_eq!(frame.frame_type, FrameType::PollForMaster);
-    }
-    // Should have moved to station 2
+    let frame = node.poll_timeout();
+    assert_eq!(frame.frame_type, FrameType::PollForMaster);
     assert_eq!(node.poll_station, 2);
+    assert_eq!(frame.destination, 2);
 }
 
 #[test]
@@ -367,15 +376,16 @@ fn poll_timeout_sole_master() {
     };
     let mut node = MasterNode::new(config).unwrap();
     node.state = MasterState::PollForMaster;
+    node.next_station = 0;
     node.poll_station = 1;
 
-    // Timeout for station 1, MAX_POLL_RETRIES times
-    for _ in 0..MAX_POLL_RETRIES {
-        node.poll_timeout();
-    }
-    // poll_station wraps to 0 (== this_station), sole master declared
-    assert_eq!(node.state, MasterState::UseToken);
+    // Timeout for station 1 → next_ps wraps to TS → DeclareSoleMaster (no Token 0→0)
+    let frame = node.poll_timeout();
     assert!(node.sole_master);
+    assert_eq!(node.state, MasterState::PollForMaster);
+    // Sole master restart / maintenance emits PFM, never Token TS→TS
+    assert_eq!(frame.frame_type, FrameType::PollForMaster);
+    assert_ne!(frame.destination, frame.source);
 }
 
 #[test]
@@ -543,12 +553,8 @@ async fn transport_rejects_bad_mac() {
 
 #[test]
 fn test_no_token_timeout_claims_token() {
-    // Simulate the NoToken -> sole master flow without the transport loop.
-    //
-    // Flow:
-    //   Idle timeout -> enter NoToken, send 1st PFM, retry_token_count=0
-    //   NoToken timeout #1 -> retry_token_count(0) < N_RETRY_TOKEN(1), send 2nd PFM, count=1
-    //   NoToken timeout #2 -> retry_token_count(1) >= N_RETRY_TOKEN(1), claim sole master
+    // Sole master must not emit Token TS→TS. After DeclareSoleMaster,
+    // DONE_WITH_TOKEN reuses / restarts maintenance via PFM.
     let config = MstpConfig {
         this_station: 5,
         max_master: 127,
@@ -556,32 +562,23 @@ fn test_no_token_timeout_claims_token() {
         baud_rate: 9600,
     };
     let mut node = MasterNode::new(config).unwrap();
-
-    // Simulate: Idle -> NoToken (first timeout sends 1st PFM)
-    node.state = MasterState::NoToken;
-    node.retry_token_count = 0;
-
-    // First retry (retry_token_count=0 < N_RETRY_TOKEN=1)
-    assert!(node.retry_token_count < N_RETRY_TOKEN);
-    node.retry_token_count += 1;
-    assert_eq!(node.retry_token_count, 1);
-
-    // After N_RETRY_TOKEN retries, declare sole master
-    assert!(node.retry_token_count >= N_RETRY_TOKEN);
     node.sole_master = true;
-    node.next_station = node.config.this_station;
-    node.state = MasterState::UseToken;
-    node.frame_count = 0;
+    node.next_station = 5;
+    node.poll_station = 5;
     node.token_count = 0;
+    node.state = MasterState::DoneWithToken;
+    node.frame_count = node.config.max_info_frames;
 
-    assert!(node.sole_master);
-    assert_eq!(node.next_station, 5);
-    assert_eq!(node.state, MasterState::UseToken);
-
-    // Use token should pass to self (sole master)
-    let frame = node.use_token();
-    assert_eq!(frame.frame_type, FrameType::Token);
-    assert_eq!(frame.destination, 5); // pass to self
+    let frame = node.done_with_token();
+    assert_ne!(
+        (frame.frame_type, frame.destination),
+        (FrameType::Token, 5),
+        "forbidden self-token"
+    );
+    assert!(
+        frame.frame_type == FrameType::PollForMaster || node.state == MasterState::UseToken,
+        "sole master continues without Token TS→TS"
+    );
 }
 
 #[test]
@@ -607,12 +604,17 @@ fn test_wait_for_reply_state_after_data_expecting_reply() {
     node.state = MasterState::WaitForReply;
     assert_eq!(node.state, MasterState::WaitForReply);
 
-    // On timeout in WaitForReply, we pass the token
-    let token = node.pass_token();
+    // On timeout in WaitForReply, DONE_WITH_TOKEN (not unconditional pass_token)
+    node.next_station = 5;
+    node.poll_station = 1;
+    node.token_count = 0;
+    node.frame_count = node.config.max_info_frames;
+    node.state = MasterState::DoneWithToken;
+    let token = node.done_with_token();
     assert_eq!(token.frame_type, FrameType::Token);
+    assert_eq!(token.destination, 5);
     assert_eq!(node.state, MasterState::PassToken);
 }
-
 #[test]
 fn test_answer_data_request_reply_channel() {
     let (tx, mut rx) = mpsc::channel(16);
@@ -654,8 +656,8 @@ fn test_answer_data_request_reply_channel() {
 
 #[test]
 fn test_poll_for_master_scan_range() {
-    // Station 0, next_station=5, max_master=10
-    // Should poll starting at 6 (next_addr(5, 10)), scanning 6..=10, 0 would be us so stop
+    // TS=0, NS=5, Max_Master=10 — maintenance candidates are 1..=4 only
+    // (advance PS from TS toward NS; never begin at NS+1).
     let config = MstpConfig {
         this_station: 0,
         max_master: 10,
@@ -664,53 +666,25 @@ fn test_poll_for_master_scan_range() {
     };
     let mut node = MasterNode::new(config).unwrap();
     node.next_station = 5;
-    node.state = MasterState::UseToken;
-    node.token_count = NPOLL;
+    node.poll_station = 0;
+    node.state = MasterState::DoneWithToken;
+    node.token_count = NPOLL.saturating_sub(1);
+    node.frame_count = node.config.max_info_frames;
 
-    // use_token triggers PollForMaster at poll_station = next_addr(5, 10) = 6
-    let frame = node.use_token();
+    let frame = node.done_with_token();
     assert_eq!(frame.frame_type, FrameType::PollForMaster);
-    assert_eq!(node.poll_station, 6);
-    assert_eq!(frame.destination, 6);
+    assert_eq!(node.poll_station, 1);
+    assert_eq!(frame.destination, 1);
 
-    // Each station takes MAX_POLL_RETRIES timeouts to exhaust, then advances.
-    // Station 6: 3 retries -> advance to 7
-    for _ in 0..MAX_POLL_RETRIES {
-        node.poll_timeout();
-    }
-    assert_eq!(node.poll_station, 7);
-
-    // Station 7: 3 retries -> advance to 8
-    for _ in 0..MAX_POLL_RETRIES {
-        node.poll_timeout();
-    }
-    assert_eq!(node.poll_station, 8);
-
-    // Station 8: 3 retries -> advance to 9
-    for _ in 0..MAX_POLL_RETRIES {
-        node.poll_timeout();
-    }
-    assert_eq!(node.poll_station, 9);
-
-    // Station 9: 3 retries -> advance to 10
-    for _ in 0..MAX_POLL_RETRIES {
-        node.poll_timeout();
-    }
-    assert_eq!(node.poll_station, 10);
-
-    // Station 10: 3 retries -> advance to next_addr(10, 10) = 0 == this_station
-    // poll_timeout detects this_station match — since next_station=5 (not TS),
-    // we have a known successor, pass token to them.
-    for _ in 0..MAX_POLL_RETRIES {
-        node.poll_timeout();
-    }
-    assert_eq!(node.state, MasterState::PassToken);
+    // One timeout → Token to known NS (not whole-space scan in one token use)
+    let token = node.poll_timeout();
+    assert_eq!(token.frame_type, FrameType::Token);
+    assert_eq!(token.destination, 5);
 }
 
 #[test]
 fn test_poll_for_master_scan_range_adjacent() {
-    // When next_station is adjacent (this_station=0, next_station=1, max_master=1),
-    // poll_station = next_addr(1, 1) = 0 == this_station, so no gap to scan
+    // NS == TS+1: ResetMaintenancePFM / SendToken — no gap to poll
     let config = MstpConfig {
         this_station: 0,
         max_master: 1,
@@ -719,19 +693,21 @@ fn test_poll_for_master_scan_range_adjacent() {
     };
     let mut node = MasterNode::new(config).unwrap();
     node.next_station = 1;
-    node.state = MasterState::UseToken;
-    node.token_count = NPOLL;
+    node.poll_station = 0;
+    node.state = MasterState::DoneWithToken;
+    node.token_count = NPOLL.saturating_sub(1);
+    node.frame_count = node.config.max_info_frames;
 
-    // use_token should just pass token since no gap
-    let frame = node.use_token();
+    let frame = node.done_with_token();
     assert_eq!(frame.frame_type, FrameType::Token);
-    assert_eq!(node.state, MasterState::PassToken);
+    assert_eq!(frame.destination, 1);
+    assert_eq!(node.poll_station, 0);
 }
 
 #[test]
 fn mstp_frame_buf_max_size() {
-    // The maximum valid MS/TP frame is: 2 (preamble) + 6 (header) + 1497 (data) + 2 (CRC16) = 1507
-    assert_eq!(MSTP_MAX_FRAME_BUF, 1507);
+    // Standard frame: 2 (preamble) + 6 (header) + 501 (data) + 2 (CRC16).
+    assert_eq!(MSTP_MAX_FRAME_BUF, 511);
 }
 
 #[test]
@@ -780,6 +756,12 @@ fn pending_reply_source_stored_on_data_expecting_reply() {
 }
 
 #[test]
+fn t_turnaround_rounds_up_to_full_bit_time() {
+    assert_eq!(calculate_t_turnaround_us(9600), 4167);
+    assert_eq!(calculate_t_turnaround_us(38_400), 1042);
+}
+
+#[test]
 fn t_slot_baud_rate_9600() {
     assert_eq!(calculate_t_slot_ms(9600), 10);
 }
@@ -809,4 +791,20 @@ fn t_slot_stored_on_master_node() {
     };
     let node = MasterNode::new(config).unwrap();
     assert_eq!(node.t_slot_ms, 10);
+}
+
+/// #360: X'FF' is the MS/TP broadcast spelling; anything else is a station.
+#[test]
+fn is_broadcast_mac_is_xff() {
+    let (serial_a, _serial_b) = LoopbackSerial::pair();
+    let config = MstpConfig {
+        this_station: 42,
+        max_master: 127,
+        max_info_frames: 1,
+        baud_rate: 9600,
+    };
+    let transport = MstpTransport::new(serial_a, config);
+    assert!(transport.is_broadcast_mac(&[0xFF]));
+    assert!(!transport.is_broadcast_mac(&[42]));
+    assert!(!transport.is_broadcast_mac(&[0xFF, 0xFF]));
 }

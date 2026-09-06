@@ -18,13 +18,20 @@ pub const PREAMBLE: [u8; 2] = [0x55, 0xFF];
 /// Header length after preamble: frame_type(1) + dest(1) + src(1) + length(2) + header_crc(1).
 pub const HEADER_LENGTH: usize = 6;
 
-/// Maximum NPDU data length per MS/TP extended frame.
-/// Standard frames are limited to MAX_STANDARD_MPDU_DATA (501 bytes).
-pub const MAX_MPDU_DATA: usize = 1497;
-
 /// Maximum NPDU data length per standard MS/TP frame.
-/// Legacy devices only support this smaller limit.
 pub const MAX_STANDARD_MPDU_DATA: usize = 501;
+
+/// Maximum NPDU data length supported by this non-encoded MS/TP codec.
+///
+/// This remains as the public compatibility name for
+/// [`MAX_STANDARD_MPDU_DATA`]. COBS-encoded frame types 32..=127 are not supported.
+pub const MAX_MPDU_DATA: usize = MAX_STANDARD_MPDU_DATA;
+
+const DATA_CRC_LENGTH: usize = 2;
+
+/// Maximum wire length supported by this standard-frame codec.
+pub(crate) const MAX_STANDARD_FRAME_LENGTH: usize =
+    PREAMBLE.len() + HEADER_LENGTH + MAX_STANDARD_MPDU_DATA + DATA_CRC_LENGTH;
 
 /// Broadcast MAC address.
 pub const BROADCAST_MAC: u8 = 0xFF;
@@ -97,6 +104,10 @@ impl FrameType {
     }
 }
 
+fn is_unsupported_cobs_frame_type(raw: u8) -> bool {
+    (0x20..=0x7F).contains(&raw)
+}
+
 /// A decoded MS/TP frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MstpFrame {
@@ -111,7 +122,8 @@ pub struct MstpFrame {
 // CRC-8 (Header CRC)
 // ---------------------------------------------------------------------------
 
-/// CRC-8 lookup table.
+/// BACnet Clause 9.6 Frame Header CRC — reflected poly `G(x)=x^8+x^7+1` → `0x81`.
+/// (Prior incorrect table used `0xE0`, which passes self-round-trip but rejects live trunk frames.)
 const CRC8_TABLE: [u8; 256] = {
     let mut table = [0u8; 256];
     let mut i = 0usize;
@@ -120,7 +132,7 @@ const CRC8_TABLE: [u8; 256] = {
         let mut j = 0;
         while j < 8 {
             if crc & 1 != 0 {
-                crc = (crc >> 1) ^ 0xE0;
+                crc = (crc >> 1) ^ 0x81;
             } else {
                 crc >>= 1;
             }
@@ -132,13 +144,25 @@ const CRC8_TABLE: [u8; 256] = {
     table
 };
 
-/// Compute CRC-8 over the given data. Initial value 0xFF, result inverted.
+/// Good header-CRC receiver residual (Clause 9.6), including the CRC octet.
+pub const HEADER_CRC_RESIDUAL: u8 = 0x55;
+
+/// Compute CRC-8 over the given data. Initial value 0xFF, result ones-complemented.
 pub fn crc8(data: &[u8]) -> u8 {
     let mut crc: u8 = 0xFF;
     for &b in data {
         crc = CRC8_TABLE[(crc ^ b) as usize];
     }
     !crc
+}
+
+/// Running header CRC including the transmitted CRC octet (no final invert).
+pub fn crc8_accumulate_all(data_with_crc: &[u8]) -> u8 {
+    let mut crc: u8 = 0xFF;
+    for &b in data_with_crc {
+        crc = CRC8_TABLE[(crc ^ b) as usize];
+    }
+    crc
 }
 
 /// Verify CRC-8: recomputes CRC over data (excluding last byte) and compares
@@ -155,7 +179,8 @@ pub fn crc8_valid(data_with_crc: &[u8]) -> bool {
 // CRC-16 (Data CRC)
 // ---------------------------------------------------------------------------
 
-/// CRC-16 lookup table.
+/// BACnet Clause 9.6 Data CRC — CRC-16-CCITT reflected poly `0x8408`.
+/// (Prior incorrect table used Modbus `0xA001`.)
 const CRC16_TABLE: [u16; 256] = {
     let mut table = [0u16; 256];
     let mut i = 0usize;
@@ -164,7 +189,7 @@ const CRC16_TABLE: [u16; 256] = {
         let mut j = 0;
         while j < 8 {
             if crc & 1 != 0 {
-                crc = (crc >> 1) ^ 0xA001;
+                crc = (crc >> 1) ^ 0x8408;
             } else {
                 crc >>= 1;
             }
@@ -176,7 +201,10 @@ const CRC16_TABLE: [u16; 256] = {
     table
 };
 
-/// Compute CRC-16 over the given data. Initial value 0xFFFF, result inverted.
+/// Good data-CRC receiver residual (Clause 9.6), including the CRC octets.
+pub const DATA_CRC_RESIDUAL: u16 = 0xF0B8;
+
+/// Compute CRC-16 over the given data. Initial value 0xFFFF, result ones-complemented.
 pub fn crc16(data: &[u8]) -> u16 {
     let mut crc: u16 = 0xFFFF;
     for &b in data {
@@ -185,8 +213,17 @@ pub fn crc16(data: &[u8]) -> u16 {
     !crc
 }
 
+/// Running data CRC including the transmitted CRC octets (no final invert).
+pub fn crc16_accumulate_all(data_with_crc: &[u8]) -> u16 {
+    let mut crc: u16 = 0xFFFF;
+    for &b in data_with_crc {
+        crc = (crc >> 8) ^ CRC16_TABLE[((crc ^ b as u16) & 0xFF) as usize];
+    }
+    crc
+}
+
 /// Verify CRC-16: recomputes CRC over data (excluding last 2 bytes) and compares
-/// to the stored CRC (little-endian).
+/// to the stored CRC (little-endian; LS octet first on the wire).
 pub fn crc16_valid(data_with_crc: &[u8]) -> bool {
     if data_with_crc.len() < 3 {
         return false;
@@ -208,15 +245,22 @@ pub fn encode_frame(
     frame: &MstpFrame,
 ) -> Result<(), bacnet_types::error::Error> {
     let data_len = frame.data.len();
-    if data_len > MAX_MPDU_DATA {
+    let frame_type = frame.frame_type.to_raw();
+    if is_unsupported_cobs_frame_type(frame_type) {
+        return Err(bacnet_types::error::Error::Encoding(format!(
+            "MS/TP COBS-encoded frame type {frame_type} is unsupported"
+        )));
+    }
+    if data_len > MAX_STANDARD_MPDU_DATA {
         return Err(bacnet_types::error::Error::Encoding(format!(
             "MS/TP data length {} exceeds maximum {}",
-            data_len, MAX_MPDU_DATA
+            data_len, MAX_STANDARD_MPDU_DATA
         )));
     }
 
     // Reserve space
-    let total = 2 + HEADER_LENGTH + data_len + if data_len > 0 { 2 } else { 0 };
+    let total =
+        PREAMBLE.len() + HEADER_LENGTH + data_len + if data_len > 0 { DATA_CRC_LENGTH } else { 0 };
     buf.reserve(total);
 
     // Preamble
@@ -224,7 +268,7 @@ pub fn encode_frame(
 
     // Header: frame_type, dest, src, length(2)
     let header = [
-        frame.frame_type.to_raw(),
+        frame_type,
         frame.destination,
         frame.source,
         (data_len >> 8) as u8,
@@ -244,6 +288,113 @@ pub fn encode_frame(
         buf.put_u8((dcrc >> 8) as u8);
     }
     Ok(())
+}
+
+/// Result of incremental/streaming MS/TP frame decode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StreamDecode {
+    /// A complete, validated frame was decoded.
+    Complete { frame: MstpFrame, consumed: usize },
+    /// More bytes are required before a decode decision can be made.
+    NeedMore,
+    /// The buffer contains invalid data; discard at least `discard` bytes and resync.
+    Invalid { discard: usize },
+}
+
+/// Incrementally decode an MS/TP frame from a receive buffer (starting at the preamble).
+///
+/// Unlike [`decode_frame`], incomplete input returns [`StreamDecode::NeedMore`] instead of
+/// an error. Real corruption (bad CRC, invalid header) returns [`StreamDecode::Invalid`].
+pub fn decode_frame_stream(data: &[u8]) -> StreamDecode {
+    if data.is_empty() {
+        return StreamDecode::NeedMore;
+    }
+
+    if data[0] != PREAMBLE[0] {
+        return StreamDecode::Invalid { discard: 1 };
+    }
+    if data.len() < 2 {
+        return StreamDecode::NeedMore;
+    }
+    if data[1] != PREAMBLE[1] {
+        return StreamDecode::Invalid { discard: 1 };
+    }
+
+    // Preamble(2) + header fields(5) + header_crc(1)
+    if data.len() < 2 + HEADER_LENGTH {
+        return StreamDecode::NeedMore;
+    }
+
+    if !crc8_valid(&data[2..8]) {
+        return StreamDecode::Invalid { discard: 1 };
+    }
+
+    if is_unsupported_cobs_frame_type(data[2]) {
+        return StreamDecode::Invalid { discard: 1 };
+    }
+
+    let frame_type = FrameType::from_raw(data[2]);
+    let destination = data[3];
+    let source = data[4];
+
+    if source > MAX_MASTER && source != BROADCAST_MAC {
+        return StreamDecode::Invalid { discard: 1 };
+    }
+    if source == BROADCAST_MAC {
+        return StreamDecode::Invalid { discard: 1 };
+    }
+
+    let data_length = ((data[5] as usize) << 8) | (data[6] as usize);
+    if data_length > MAX_STANDARD_MPDU_DATA {
+        return StreamDecode::Invalid { discard: 1 };
+    }
+
+    let mut consumed = 2 + HEADER_LENGTH;
+
+    if data_length > 0 {
+        let needed = consumed + data_length + DATA_CRC_LENGTH;
+        if data.len() < needed {
+            return StreamDecode::NeedMore;
+        }
+
+        if !crc16_valid(&data[consumed..consumed + data_length + DATA_CRC_LENGTH]) {
+            return StreamDecode::Invalid { discard: needed };
+        }
+
+        let payload = Bytes::copy_from_slice(&data[consumed..consumed + data_length]);
+        consumed += data_length + DATA_CRC_LENGTH;
+
+        StreamDecode::Complete {
+            frame: MstpFrame {
+                frame_type,
+                destination,
+                source,
+                data: payload,
+            },
+            consumed,
+        }
+    } else {
+        StreamDecode::Complete {
+            frame: MstpFrame {
+                frame_type,
+                destination,
+                source,
+                data: Bytes::new(),
+            },
+            consumed,
+        }
+    }
+}
+
+/// When no full preamble is found, retain a trailing lone `0x55` for the next chunk.
+pub fn retain_lone_preamble_byte(buf: &mut Vec<u8>) {
+    if buf.last() == Some(&PREAMBLE[0]) {
+        let lone = PREAMBLE[0];
+        buf.clear();
+        buf.push(lone);
+    } else {
+        buf.clear();
+    }
 }
 
 /// Decode an MS/TP frame from raw bytes (starting at the preamble).
@@ -271,6 +422,13 @@ pub fn decode_frame(data: &[u8]) -> Result<(MstpFrame, usize), Error> {
         return Err(Error::decoding(7, "MS/TP header CRC mismatch"));
     }
 
+    if is_unsupported_cobs_frame_type(data[2]) {
+        return Err(Error::decoding(
+            2,
+            format!("MS/TP COBS-encoded frame type {} is unsupported", data[2]),
+        ));
+    }
+
     let frame_type = FrameType::from_raw(data[2]);
     let destination = data[3];
     let source = data[4];
@@ -294,12 +452,12 @@ pub fn decode_frame(data: &[u8]) -> Result<(MstpFrame, usize), Error> {
 
     let data_length = ((data[5] as usize) << 8) | (data[6] as usize);
 
-    if data_length > MAX_MPDU_DATA {
+    if data_length > MAX_STANDARD_MPDU_DATA {
         return Err(Error::decoding(
             5,
             format!(
                 "MS/TP data length {} exceeds maximum {}",
-                data_length, MAX_MPDU_DATA
+                data_length, MAX_STANDARD_MPDU_DATA
             ),
         ));
     }
@@ -308,7 +466,7 @@ pub fn decode_frame(data: &[u8]) -> Result<(MstpFrame, usize), Error> {
 
     let frame_data = if data_length > 0 {
         // Need data + 2-byte CRC
-        let needed = consumed + data_length + 2;
+        let needed = consumed + data_length + DATA_CRC_LENGTH;
         if data.len() < needed {
             return Err(Error::decoding(
                 consumed,
@@ -321,7 +479,7 @@ pub fn decode_frame(data: &[u8]) -> Result<(MstpFrame, usize), Error> {
         }
 
         // Verify data CRC (covers data bytes + 2 CRC bytes)
-        if !crc16_valid(&data[consumed..consumed + data_length + 2]) {
+        if !crc16_valid(&data[consumed..consumed + data_length + DATA_CRC_LENGTH]) {
             return Err(Error::decoding(
                 consumed + data_length,
                 "MS/TP data CRC mismatch",
@@ -329,7 +487,7 @@ pub fn decode_frame(data: &[u8]) -> Result<(MstpFrame, usize), Error> {
         }
 
         let payload = Bytes::copy_from_slice(&data[consumed..consumed + data_length]);
-        consumed += data_length + 2;
+        consumed += data_length + DATA_CRC_LENGTH;
         payload
     } else {
         Bytes::new()
@@ -352,379 +510,5 @@ pub fn find_preamble(data: &[u8]) -> Option<usize> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    // -----------------------------------------------------------------------
-    // CRC tests
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn crc8_known_value() {
-        // Token frame header: type=0x00, dest=0x01, src=0x00, len=0x0000
-        let header = [0x00, 0x01, 0x00, 0x00, 0x00];
-        let crc = crc8(&header);
-        // Verify by appending CRC and checking validity
-        let mut with_crc = header.to_vec();
-        with_crc.push(crc);
-        assert!(crc8_valid(&with_crc));
-    }
-
-    #[test]
-    fn crc8_validate_round_trip() {
-        let data = [0x05, 0xFF, 0x03, 0x00, 0x0C];
-        let crc = crc8(&data);
-        let mut with_crc = data.to_vec();
-        with_crc.push(crc);
-        assert!(crc8_valid(&with_crc));
-    }
-
-    #[test]
-    fn crc8_invalid_detects_corruption() {
-        let data = [0x05, 0xFF, 0x03, 0x00, 0x0C];
-        let crc = crc8(&data);
-        let mut with_crc = data.to_vec();
-        with_crc.push(crc ^ 0x01); // corrupt
-        assert!(!crc8_valid(&with_crc));
-    }
-
-    #[test]
-    fn crc16_known_value() {
-        let data = [0x01, 0x00, 0x10, 0x02];
-        let crc = crc16(&data);
-        let mut with_crc = data.to_vec();
-        with_crc.push(crc as u8);
-        with_crc.push((crc >> 8) as u8);
-        assert!(crc16_valid(&with_crc));
-    }
-
-    #[test]
-    fn crc16_validate_round_trip() {
-        let data = vec![0xAA; 100];
-        let crc = crc16(&data);
-        let mut with_crc = data;
-        with_crc.push(crc as u8);
-        with_crc.push((crc >> 8) as u8);
-        assert!(crc16_valid(&with_crc));
-    }
-
-    #[test]
-    fn crc16_invalid_detects_corruption() {
-        let data = [0x01, 0x02, 0x03];
-        let crc = crc16(&data);
-        let mut with_crc = data.to_vec();
-        with_crc.push(crc as u8);
-        with_crc.push((crc >> 8) as u8 ^ 0x01); // corrupt
-        assert!(!crc16_valid(&with_crc));
-    }
-
-    // -----------------------------------------------------------------------
-    // Frame encode/decode tests
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn token_frame_round_trip() {
-        let frame = MstpFrame {
-            frame_type: FrameType::Token,
-            destination: 1,
-            source: 0,
-            data: Bytes::new(),
-        };
-        let mut buf = BytesMut::new();
-        encode_frame(&mut buf, &frame).unwrap();
-
-        // Token has no data, so: preamble(2) + header(5) + crc(1) = 8
-        assert_eq!(buf.len(), 8);
-        assert_eq!(&buf[..2], &PREAMBLE);
-
-        let (decoded, consumed) = decode_frame(&buf).unwrap();
-        assert_eq!(consumed, 8);
-        assert_eq!(decoded, frame);
-    }
-
-    #[test]
-    fn poll_for_master_round_trip() {
-        let frame = MstpFrame {
-            frame_type: FrameType::PollForMaster,
-            destination: 42,
-            source: 0,
-            data: Bytes::new(),
-        };
-        let mut buf = BytesMut::new();
-        encode_frame(&mut buf, &frame).unwrap();
-
-        let (decoded, _) = decode_frame(&buf).unwrap();
-        assert_eq!(decoded, frame);
-    }
-
-    #[test]
-    fn data_expecting_reply_round_trip() {
-        let npdu = vec![0x01, 0x00, 0x10, 0x02, 0x03, 0x04, 0x05];
-        let frame = MstpFrame {
-            frame_type: FrameType::BACnetDataExpectingReply,
-            destination: 5,
-            source: 0,
-            data: Bytes::from(npdu.clone()),
-        };
-        let mut buf = BytesMut::new();
-        encode_frame(&mut buf, &frame).unwrap();
-
-        // preamble(2) + header(5) + hcrc(1) + data(7) + dcrc(2) = 17
-        assert_eq!(buf.len(), 17);
-
-        let (decoded, consumed) = decode_frame(&buf).unwrap();
-        assert_eq!(consumed, 17);
-        assert_eq!(decoded.frame_type, FrameType::BACnetDataExpectingReply);
-        assert_eq!(decoded.destination, 5);
-        assert_eq!(decoded.source, 0);
-        assert_eq!(decoded.data, npdu);
-    }
-
-    #[test]
-    fn data_not_expecting_reply_round_trip() {
-        let npdu = vec![0x01, 0x20, 0xFF, 0xFF, 0x00, 0xFF, 0x10, 0x08];
-        let frame = MstpFrame {
-            frame_type: FrameType::BACnetDataNotExpectingReply,
-            destination: BROADCAST_MAC,
-            source: 3,
-            data: Bytes::from(npdu.clone()),
-        };
-        let mut buf = BytesMut::new();
-        encode_frame(&mut buf, &frame).unwrap();
-
-        let (decoded, _) = decode_frame(&buf).unwrap();
-        assert_eq!(decoded, frame);
-    }
-
-    #[test]
-    fn broadcast_destination() {
-        let frame = MstpFrame {
-            frame_type: FrameType::BACnetDataNotExpectingReply,
-            destination: BROADCAST_MAC,
-            source: 10,
-            data: Bytes::from_static(&[0x01, 0x00]),
-        };
-        let mut buf = BytesMut::new();
-        encode_frame(&mut buf, &frame).unwrap();
-
-        let (decoded, _) = decode_frame(&buf).unwrap();
-        assert_eq!(decoded.destination, BROADCAST_MAC);
-    }
-
-    #[test]
-    fn reply_to_poll_for_master_round_trip() {
-        let frame = MstpFrame {
-            frame_type: FrameType::ReplyToPollForMaster,
-            destination: 0,
-            source: 42,
-            data: Bytes::new(),
-        };
-        let mut buf = BytesMut::new();
-        encode_frame(&mut buf, &frame).unwrap();
-
-        let (decoded, _) = decode_frame(&buf).unwrap();
-        assert_eq!(decoded, frame);
-    }
-
-    #[test]
-    fn test_request_with_data_round_trip() {
-        let test_data = vec![0xDE, 0xAD, 0xBE, 0xEF];
-        let frame = MstpFrame {
-            frame_type: FrameType::TestRequest,
-            destination: 5,
-            source: 0,
-            data: Bytes::from(test_data.clone()),
-        };
-        let mut buf = BytesMut::new();
-        encode_frame(&mut buf, &frame).unwrap();
-
-        let (decoded, _) = decode_frame(&buf).unwrap();
-        assert_eq!(decoded.data, test_data);
-    }
-
-    #[test]
-    fn decode_too_short() {
-        assert!(decode_frame(&[0x55, 0xFF, 0x00]).is_err());
-    }
-
-    #[test]
-    fn decode_bad_preamble() {
-        let data = [0x00, 0xFF, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00];
-        assert!(decode_frame(&data).is_err());
-    }
-
-    #[test]
-    fn decode_bad_header_crc() {
-        let mut buf = BytesMut::new();
-        let frame = MstpFrame {
-            frame_type: FrameType::Token,
-            destination: 1,
-            source: 0,
-            data: Bytes::new(),
-        };
-        encode_frame(&mut buf, &frame).unwrap();
-        // Corrupt header CRC (byte 7)
-        buf[7] ^= 0xFF;
-        assert!(decode_frame(&buf).is_err());
-    }
-
-    #[test]
-    fn decode_bad_data_crc() {
-        let mut buf = BytesMut::new();
-        let frame = MstpFrame {
-            frame_type: FrameType::BACnetDataNotExpectingReply,
-            destination: 1,
-            source: 0,
-            data: Bytes::from_static(&[0x01, 0x00]),
-        };
-        encode_frame(&mut buf, &frame).unwrap();
-        // Corrupt last byte (data CRC high)
-        let last = buf.len() - 1;
-        buf[last] ^= 0xFF;
-        assert!(decode_frame(&buf).is_err());
-    }
-
-    #[test]
-    fn decode_truncated_data() {
-        let mut buf = BytesMut::new();
-        let frame = MstpFrame {
-            frame_type: FrameType::BACnetDataExpectingReply,
-            destination: 5,
-            source: 0,
-            data: Bytes::from_static(&[0x01, 0x02, 0x03, 0x04]),
-        };
-        encode_frame(&mut buf, &frame).unwrap();
-        // Truncate: remove data CRC
-        buf.truncate(buf.len() - 2);
-        assert!(decode_frame(&buf).is_err());
-    }
-
-    #[test]
-    fn find_preamble_at_start() {
-        let data = [0x55, 0xFF, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00];
-        assert_eq!(find_preamble(&data), Some(0));
-    }
-
-    #[test]
-    fn find_preamble_with_garbage() {
-        let data = [0x00, 0x00, 0x12, 0x55, 0xFF, 0x00, 0x01, 0x00];
-        assert_eq!(find_preamble(&data), Some(3));
-    }
-
-    #[test]
-    fn find_preamble_none() {
-        let data = [0x00, 0x55, 0x00, 0xFF, 0x01];
-        assert_eq!(find_preamble(&data), None);
-    }
-
-    #[test]
-    fn frame_type_round_trip() {
-        for raw in 0..=0x07 {
-            let ft = FrameType::from_raw(raw);
-            assert_eq!(ft.to_raw(), raw);
-        }
-        // Unknown type
-        let ft = FrameType::from_raw(0x42);
-        assert_eq!(ft.to_raw(), 0x42);
-        assert_eq!(ft, FrameType::Unknown(0x42));
-    }
-
-    #[test]
-    fn frame_type_has_data() {
-        assert!(!FrameType::Token.has_data());
-        assert!(!FrameType::PollForMaster.has_data());
-        assert!(!FrameType::ReplyToPollForMaster.has_data());
-        assert!(FrameType::TestRequest.has_data());
-        assert!(FrameType::TestResponse.has_data());
-        assert!(FrameType::BACnetDataExpectingReply.has_data());
-        assert!(FrameType::BACnetDataNotExpectingReply.has_data());
-        assert!(!FrameType::ReplyPostponed.has_data());
-    }
-
-    #[test]
-    fn large_data_frame() {
-        // Near-maximum data size
-        let npdu = vec![0xAA; 1024];
-        let frame = MstpFrame {
-            frame_type: FrameType::BACnetDataNotExpectingReply,
-            destination: BROADCAST_MAC,
-            source: 0,
-            data: Bytes::from(npdu.clone()),
-        };
-        let mut buf = BytesMut::new();
-        encode_frame(&mut buf, &frame).unwrap();
-
-        let (decoded, _) = decode_frame(&buf).unwrap();
-        assert_eq!(decoded.data, npdu);
-    }
-
-    #[test]
-    fn encode_oversized_data_returns_error() {
-        let frame = MstpFrame {
-            frame_type: FrameType::BACnetDataNotExpectingReply,
-            destination: 1,
-            source: 0,
-            data: Bytes::from_static(&[0xAA; MAX_MPDU_DATA + 1]),
-        };
-        let mut buf = BytesMut::new();
-        assert!(encode_frame(&mut buf, &frame).is_err());
-    }
-
-    #[test]
-    fn decode_rejects_source_above_max_master() {
-        // Encode a valid frame then patch the source to 128 (above MAX_MASTER=127)
-        let frame = MstpFrame {
-            frame_type: FrameType::Token,
-            destination: 1,
-            source: 0,
-            data: Bytes::new(),
-        };
-        let mut buf = BytesMut::new();
-        encode_frame(&mut buf, &frame).unwrap();
-
-        // Patch source byte (offset 4) to 128
-        buf[4] = 128;
-        // Recompute header CRC (bytes 2..7, CRC at byte 7)
-        let header_crc = crc8(&buf[2..7]);
-        buf[7] = header_crc;
-
-        assert!(decode_frame(&buf).is_err());
-    }
-
-    #[test]
-    fn decode_rejects_broadcast_source() {
-        // Encode a valid frame then patch the source to BROADCAST_MAC (0xFF)
-        let frame = MstpFrame {
-            frame_type: FrameType::Token,
-            destination: 1,
-            source: 0,
-            data: Bytes::new(),
-        };
-        let mut buf = BytesMut::new();
-        encode_frame(&mut buf, &frame).unwrap();
-
-        // Patch source byte to 0xFF
-        buf[4] = BROADCAST_MAC;
-        // Recompute header CRC
-        let header_crc = crc8(&buf[2..7]);
-        buf[7] = header_crc;
-
-        assert!(decode_frame(&buf).is_err());
-    }
-
-    #[test]
-    fn decode_accepts_max_master_source() {
-        // Source = MAX_MASTER (127) should be valid
-        let frame = MstpFrame {
-            frame_type: FrameType::Token,
-            destination: 1,
-            source: MAX_MASTER,
-            data: Bytes::new(),
-        };
-        let mut buf = BytesMut::new();
-        encode_frame(&mut buf, &frame).unwrap();
-
-        let (decoded, _) = decode_frame(&buf).unwrap();
-        assert_eq!(decoded.source, MAX_MASTER);
-    }
-}
+#[path = "mstp_frame_tests.rs"]
+mod tests;

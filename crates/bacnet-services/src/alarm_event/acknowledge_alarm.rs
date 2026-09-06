@@ -1,5 +1,14 @@
 use super::*;
 
+use crate::common::{decode_context, decode_context_u32};
+
+fn decode_acknowledgment_source(content: &[u8]) -> Result<String, Error> {
+    if content.is_empty() {
+        return primitives::decode_character_string(content);
+    }
+    Ok(primitives::decode_character_string(content).unwrap_or_default())
+}
+
 // ---------------------------------------------------------------------------
 // AcknowledgeAlarm
 // ---------------------------------------------------------------------------
@@ -25,11 +34,11 @@ impl AcknowledgeAlarmRequest {
         // [2] eventStateAcknowledged
         primitives::encode_ctx_enumerated(buf, 2, self.event_state_acknowledged);
         // [3] timestamp
-        primitives::encode_timestamp(buf, 3, &self.timestamp);
+        primitives::encode_timestamp(buf, 3, &self.timestamp)?;
         // [4] acknowledgmentSource
         primitives::encode_ctx_character_string(buf, 4, &self.acknowledgment_source)?;
         // [5] timeOfAcknowledgment
-        primitives::encode_timestamp(buf, 5, &self.time_of_acknowledgment);
+        primitives::encode_timestamp(buf, 5, &self.time_of_acknowledgment)?;
         Ok(())
     }
 
@@ -37,39 +46,18 @@ impl AcknowledgeAlarmRequest {
         let mut offset = 0;
 
         // [0]
-        let (_tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + _tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(
-                pos,
-                "AcknowledgeAlarm truncated at process-id",
-            ));
-        }
-        let acknowledging_process_identifier = primitives::decode_unsigned(&data[pos..end])? as u32;
+        let (acknowledging_process_identifier, end) =
+            decode_context_u32(data, offset, 0, "AcknowledgeAlarm process-id")?;
         offset = end;
 
         // [1]
-        let (_tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + _tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(
-                pos,
-                "AcknowledgeAlarm truncated at object-id",
-            ));
-        }
-        let event_object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
+        let (content, end) = decode_context(data, offset, 1, "AcknowledgeAlarm object-id")?;
+        let event_object_identifier = ObjectIdentifier::decode(content)?;
         offset = end;
 
         // [2]
-        let (_tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + _tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(
-                pos,
-                "AcknowledgeAlarm truncated at event-state",
-            ));
-        }
-        let event_state_acknowledged = primitives::decode_unsigned(&data[pos..end])? as u32;
+        let (event_state_acknowledged, end) =
+            decode_context_u32(data, offset, 2, "AcknowledgeAlarm event-state")?;
         offset = end;
 
         // [3] timestamp
@@ -77,21 +65,19 @@ impl AcknowledgeAlarmRequest {
         offset = new_offset;
 
         // [4] acknowledgmentSource
-        let (opt_data, _new_offset) = tags::decode_optional_context(data, offset, 4)?;
-        let acknowledgment_source = match opt_data {
-            Some(content) => primitives::decode_character_string(content)?,
-            None => {
-                return Err(Error::decoding(
-                    offset,
-                    "AcknowledgeAlarm missing required acknowledgment-source [4]",
-                ))
-            }
-        };
-
-        offset = _new_offset;
+        let (content, end) =
+            decode_context(data, offset, 4, "AcknowledgeAlarm acknowledgment-source")?;
+        let acknowledgment_source = decode_acknowledgment_source(content)?;
+        offset = end;
 
         // [5] timeOfAcknowledgment
-        let (time_of_acknowledgment, _new_offset) = primitives::decode_timestamp(data, offset, 5)?;
+        let (time_of_acknowledgment, new_offset) = primitives::decode_timestamp(data, offset, 5)?;
+        if new_offset != data.len() {
+            return Err(Error::decoding(
+                new_offset,
+                "AcknowledgeAlarm trailing data after request",
+            ));
+        }
 
         Ok(Self {
             acknowledging_process_identifier,

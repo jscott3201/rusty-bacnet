@@ -108,6 +108,17 @@ async fn dcc_disable_initiation_allows_rp_blocks_cov() {
         .await
         .unwrap();
 
+    let initial_notification = tokio::time::timeout(Duration::from_secs(2), cov_rx.recv())
+        .await
+        .expect("Timed out waiting for initial COV notification")
+        .expect("COV channel closed");
+    assert_eq!(
+        initial_notification
+            .notification
+            .monitored_object_identifier,
+        ao_oid
+    );
+
     // Write to trigger a COV notification (should fire normally)
     let mut value_buf = bytes::BytesMut::new();
     bacnet_encoding::primitives::encode_app_real(&mut value_buf, 50.0);
@@ -124,11 +135,11 @@ async fn dcc_disable_initiation_allows_rp_blocks_cov() {
         .unwrap();
 
     // Should receive COV notification
-    let notification = tokio::time::timeout(Duration::from_secs(2), cov_rx.recv())
+    let received = tokio::time::timeout(Duration::from_secs(2), cov_rx.recv())
         .await
         .expect("Timed out waiting for COV notification")
         .expect("COV channel closed");
-    assert_eq!(notification.monitored_object_identifier, ao_oid);
+    assert_eq!(received.notification.monitored_object_identifier, ao_oid);
 
     // Now set DCC DISABLE_INITIATION
     client
@@ -210,6 +221,17 @@ async fn dcc_enable_restores_normal_operation() {
         .await
         .unwrap();
 
+    let initial_notification = tokio::time::timeout(Duration::from_secs(2), cov_rx.recv())
+        .await
+        .expect("Timed out waiting for initial COV notification")
+        .expect("COV channel closed");
+    assert_eq!(
+        initial_notification
+            .notification
+            .monitored_object_identifier,
+        ao_oid
+    );
+
     // Disable initiation
     client
         .device_communication_control(&server_mac, EnableDisable::DISABLE_INITIATION, None, None)
@@ -260,11 +282,11 @@ async fn dcc_enable_restores_normal_operation() {
         .await
         .unwrap();
 
-    let notification = tokio::time::timeout(Duration::from_secs(2), cov_rx.recv())
+    let received = tokio::time::timeout(Duration::from_secs(2), cov_rx.recv())
         .await
         .expect("Timed out waiting for COV notification after re-enable")
         .expect("COV channel closed");
-    assert_eq!(notification.monitored_object_identifier, ao_oid);
+    assert_eq!(received.notification.monitored_object_identifier, ao_oid);
 
     client.stop().await.unwrap();
     server.stop().await.unwrap();

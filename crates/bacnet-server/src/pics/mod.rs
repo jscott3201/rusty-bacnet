@@ -7,7 +7,11 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use bacnet_objects::database::ObjectDatabase;
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_objects::device::EXECUTED_SERVICES;
+use bacnet_objects::property_metadata::PropertyConformance;
+use bacnet_types::bitstring::ServicesSupported;
+use bacnet_types::enums::{ObjectType, PropertyIdentifier, ServiceSupported};
+use bacnet_types::primitives::PropertyValue;
 
 use crate::server::ServerConfig;
 
@@ -274,27 +278,40 @@ impl<'a> PicsGenerator<'a> {
         for (raw_type, objects) in &by_type {
             let object_type = ObjectType::from_raw(*raw_type);
             let representative = objects[0];
-            let all_props = representative.property_list();
-            let required = representative.required_properties();
-
-            let supported_properties = all_props
-                .iter()
-                .map(|&pid| {
-                    let is_required = required.contains(&pid);
-                    let writable = Self::is_writable_property(object_type, pid);
-                    PropertySupport {
-                        property_id: pid,
+            let metadata = representative.property_metadata();
+            let supported_properties = if metadata.is_empty() {
+                let all_props = representative.property_list();
+                let required = representative.required_properties();
+                all_props
+                    .iter()
+                    .map(|&property_id| {
+                        let is_required = required.contains(&property_id);
+                        PropertySupport {
+                            property_id,
+                            access: PropertyAccess {
+                                readable: true,
+                                writable: representative.is_writable_property(property_id),
+                                optional: !is_required,
+                            },
+                        }
+                    })
+                    .collect()
+            } else {
+                metadata
+                    .iter()
+                    .map(|row| PropertySupport {
+                        property_id: row.property_identifier,
                         access: PropertyAccess {
                             readable: true,
-                            writable,
-                            optional: !is_required,
+                            writable: row.write_capability.is_writable(),
+                            optional: row.conformance == PropertyConformance::Optional,
                         },
-                    }
-                })
-                .collect();
+                    })
+                    .collect()
+            };
 
-            let createable = Self::is_createable(object_type);
-            let deleteable = Self::is_deleteable(object_type);
+            let createable = representative.is_createable();
+            let deleteable = representative.is_deleteable();
 
             result.push(ObjectTypeSupport {
                 object_type,
@@ -306,106 +323,72 @@ impl<'a> PicsGenerator<'a> {
         result
     }
 
-    /// Heuristic for commonly writable properties.
-    fn is_writable_property(object_type: ObjectType, pid: PropertyIdentifier) -> bool {
-        if pid == PropertyIdentifier::OBJECT_IDENTIFIER
-            || pid == PropertyIdentifier::OBJECT_TYPE
-            || pid == PropertyIdentifier::PROPERTY_LIST
-            || pid == PropertyIdentifier::STATUS_FLAGS
-        {
-            return false;
-        }
-
-        if pid == PropertyIdentifier::OBJECT_NAME {
-            return true;
-        }
-
-        if pid == PropertyIdentifier::PRESENT_VALUE {
-            return object_type != ObjectType::ANALOG_INPUT
-                && object_type != ObjectType::BINARY_INPUT
-                && object_type != ObjectType::MULTI_STATE_INPUT;
-        }
-
-        pid == PropertyIdentifier::DESCRIPTION
-            || pid == PropertyIdentifier::OUT_OF_SERVICE
-            || pid == PropertyIdentifier::COV_INCREMENT
-            || pid == PropertyIdentifier::HIGH_LIMIT
-            || pid == PropertyIdentifier::LOW_LIMIT
-            || pid == PropertyIdentifier::DEADBAND
-            || pid == PropertyIdentifier::NOTIFICATION_CLASS
-    }
-
-    fn is_createable(object_type: ObjectType) -> bool {
-        object_type != ObjectType::DEVICE && object_type != ObjectType::NETWORK_PORT
-    }
-
-    fn is_deleteable(object_type: ObjectType) -> bool {
-        object_type != ObjectType::DEVICE && object_type != ObjectType::NETWORK_PORT
-    }
-
     /// Build the service support list based on what the server actually handles.
+    /// Services this server initiates (the PICS initiator column): replies
+    /// and notifications constructed outbound by `bacnet-server`. Distinct
+    /// from [`EXECUTED_SERVICES`], which Clause 12.11 ties to execution.
+    const INITIATED_SERVICES: &'static [ServiceSupported] = &[
+        ServiceSupported::I_AM,
+        ServiceSupported::I_HAVE,
+        ServiceSupported::CONFIRMED_COV_NOTIFICATION,
+        ServiceSupported::CONFIRMED_EVENT_NOTIFICATION,
+        ServiceSupported::UNCONFIRMED_COV_NOTIFICATION,
+        ServiceSupported::UNCONFIRMED_EVENT_NOTIFICATION,
+        ServiceSupported::CONFIRMED_COV_NOTIFICATION_MULTIPLE,
+        ServiceSupported::UNCONFIRMED_COV_NOTIFICATION_MULTIPLE,
+    ];
+
     fn build_services(&self) -> Vec<ServiceSupport> {
-        let mut services = Vec::new();
-
-        let executor_services = [
-            "ReadProperty",
-            "WriteProperty",
-            "ReadPropertyMultiple",
-            "WritePropertyMultiple",
-            "SubscribeCOV",
-            "SubscribeCOVProperty",
-            "CreateObject",
-            "DeleteObject",
-            "DeviceCommunicationControl",
-            "ReinitializeDevice",
-            "GetEventInformation",
-            "AcknowledgeAlarm",
-            "ReadRange",
-            "AtomicReadFile",
-            "AtomicWriteFile",
-            "AddListElement",
-            "RemoveListElement",
-        ];
-
-        let initiator_services = ["ConfirmedCOVNotification", "ConfirmedEventNotification"];
-
-        let unconfirmed_executor = [
-            "WhoIs",
-            "WhoHas",
-            "TimeSynchronization",
-            "UTCTimeSynchronization",
-        ];
-
-        let unconfirmed_initiator = [
-            "I-Am",
-            "I-Have",
-            "UnconfirmedCOVNotification",
-            "UnconfirmedEventNotification",
-        ];
-
-        let mut service_map: BTreeMap<&str, (bool, bool)> = BTreeMap::new();
-        for name in &executor_services {
-            service_map.entry(name).or_default().1 = true;
-        }
-        for name in &initiator_services {
-            service_map.entry(name).or_default().0 = true;
-        }
-        for name in &unconfirmed_executor {
-            service_map.entry(name).or_default().1 = true;
-        }
-        for name in &unconfirmed_initiator {
-            service_map.entry(name).or_default().0 = true;
-        }
-
-        for (name, (initiator, executor)) in &service_map {
-            services.push(ServiceSupport {
-                service_name: (*name).to_string(),
-                initiator: *initiator,
-                executor: *executor,
+        // Prefer the effective Device bit string so runtime modes such as an
+        // explicitly clockless server cannot drift from generated PICS. The
+        // static dispatch contract remains the fallback for databases without
+        // a readable Device service property, filtered by database clock mode.
+        let effective_executed = self
+            .db
+            .iter_objects()
+            .filter(|(oid, _)| oid.object_type() == ObjectType::DEVICE)
+            .find_map(|(_, device)| {
+                match device
+                    .read_property(PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED, None)
+                    .ok()?
+                {
+                    PropertyValue::BitString { data, .. } => {
+                        Some(ServicesSupported::from_bacnet(&data))
+                    }
+                    _ => None,
+                }
             });
+        let mut service_map: BTreeMap<&'static str, (bool, bool)> = BTreeMap::new();
+        let clock_available = self.db.clock_frame().is_some();
+        let executed: Box<dyn Iterator<Item = ServiceSupported> + '_> = match &effective_executed {
+            Some(services) => Box::new(services.iter()),
+            None => Box::new(EXECUTED_SERVICES.iter().copied().filter(move |service| {
+                clock_available
+                    || (*service != ServiceSupported::TIME_SYNCHRONIZATION
+                        && *service != ServiceSupported::UTC_TIME_SYNCHRONIZATION)
+            })),
+        };
+        for service in executed {
+            service_map
+                .entry(service_display_name(service))
+                .or_default()
+                .1 = true;
+        }
+        for service in Self::INITIATED_SERVICES {
+            service_map
+                .entry(service_display_name(*service))
+                .or_default()
+                .0 = true;
         }
 
-        services
+        service_map
+            .into_iter()
+            .map(|(name, (initiator, executor))| ServiceSupport {
+                service_name: name.to_string(),
+                initiator,
+                executor,
+            })
+            .collect()
     }
 }
 
@@ -631,5 +614,67 @@ pub fn generate_pics(
 
 // ─────────────────────────────── Tests ─────────────────────────────────────
 
+/// PICS display name for a `BACnetServicesSupported` bit position.
+fn service_display_name(service: ServiceSupported) -> &'static str {
+    match service.to_raw() {
+        0 => "AcknowledgeAlarm",
+        1 => "ConfirmedCOVNotification",
+        2 => "ConfirmedEventNotification",
+        3 => "GetAlarmSummary",
+        4 => "GetEnrollmentSummary",
+        5 => "SubscribeCOV",
+        6 => "AtomicReadFile",
+        7 => "AtomicWriteFile",
+        8 => "AddListElement",
+        9 => "RemoveListElement",
+        10 => "CreateObject",
+        11 => "DeleteObject",
+        12 => "ReadProperty",
+        14 => "ReadPropertyMultiple",
+        15 => "WriteProperty",
+        16 => "WritePropertyMultiple",
+        17 => "DeviceCommunicationControl",
+        18 => "ConfirmedPrivateTransfer",
+        19 => "ConfirmedTextMessage",
+        20 => "ReinitializeDevice",
+        21 => "VT-Open",
+        22 => "VT-Close",
+        23 => "VT-Data",
+        26 => "I-Am",
+        27 => "I-Have",
+        28 => "UnconfirmedCOVNotification",
+        29 => "UnconfirmedEventNotification",
+        30 => "UnconfirmedPrivateTransfer",
+        31 => "UnconfirmedTextMessage",
+        32 => "TimeSynchronization",
+        33 => "WhoHas",
+        34 => "WhoIs",
+        35 => "ReadRange",
+        36 => "UTCTimeSynchronization",
+        37 => "LifeSafetyOperation",
+        38 => "SubscribeCOVProperty",
+        39 => "GetEventInformation",
+        40 => "WriteGroup",
+        41 => "SubscribeCOVPropertyMultiple",
+        42 => "ConfirmedCOVNotificationMultiple",
+        43 => "UnconfirmedCOVNotificationMultiple",
+        44 => "ConfirmedAuditNotification",
+        45 => "AuditLogQuery",
+        46 => "UnconfirmedAuditNotification",
+        47 => "Who-Am-I",
+        48 => "You-Are",
+        _ => "Unknown",
+    }
+}
+
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod property_metadata_tests;
+
+#[cfg(test)]
+mod acked_transitions_policy_tests;
+
+#[cfg(test)]
+mod truth_source_tests;

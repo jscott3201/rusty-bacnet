@@ -1,12 +1,14 @@
 //! Fault detection / reliability evaluation.
 //!
-//! The [`FaultDetector`] periodically evaluates each object's reliability,
-//! checking for OVER_RANGE, UNDER_RANGE (analog objects), and optionally
-//! COMMUNICATION_FAILURE (staleness timeout).
+//! The [`FaultDetector`] periodically invokes each object's opt-in,
+//! object-owned reliability evaluation hook.
+
+use std::collections::HashMap;
+use std::sync::Mutex;
 
 use bacnet_objects::database::ObjectDatabase;
-use bacnet_types::enums::{ObjectType, PropertyIdentifier, Reliability};
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_objects::traits::ReliabilityEvaluation;
+use bacnet_types::primitives::ObjectIdentifier;
 
 /// A reliability change detected by the fault detector.
 #[derive(Debug, Clone, PartialEq)]
@@ -21,19 +23,23 @@ pub struct ReliabilityChange {
 
 /// Fault detection engine.
 ///
-/// Call [`FaultDetector::evaluate`] periodically (e.g. every 10 s) against
-/// the object database.  It returns a list of objects whose reliability
-/// changed so the caller can update them.
+/// Call [`FaultDetector::evaluate`] periodically (the bundled server uses a
+/// 10-second interval) against the object database. Every object is visited;
+/// objects opt in by overriding
+/// [`BACnetObject::evaluate_reliability_internal`](bacnet_objects::traits::BACnetObject::evaluate_reliability_internal).
+/// The default object hook is a no-op.
 pub struct FaultDetector {
     /// Timeout after which an object is considered to have a communication
-    /// failure.  Set to `None` to disable communication-failure detection.
+    /// failure. Set to `None` to disable communication-failure detection.
     pub comm_timeout: Option<std::time::Duration>,
+    warned_internal_failures: Mutex<HashMap<ObjectIdentifier, String>>,
 }
 
 impl Default for FaultDetector {
     fn default() -> Self {
         Self {
             comm_timeout: Some(std::time::Duration::from_secs(60)),
+            warned_internal_failures: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -41,279 +47,656 @@ impl Default for FaultDetector {
 impl FaultDetector {
     /// Create a new fault detector with the given communication timeout.
     pub fn new(comm_timeout: Option<std::time::Duration>) -> Self {
-        Self { comm_timeout }
+        Self {
+            comm_timeout,
+            warned_internal_failures: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn should_warn_internal_failure(&self, oid: ObjectIdentifier, error: &str) -> bool {
+        let mut warned = self
+            .warned_internal_failures
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if warned.get(&oid).is_some_and(|previous| previous == error) {
+            false
+        } else {
+            warned.insert(oid, error.to_owned());
+            true
+        }
+    }
+
+    fn clear_internal_failure(&self, oid: &ObjectIdentifier) {
+        self.warned_internal_failures
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(oid);
+    }
+
+    fn prune_internal_failures(&self, db: &ObjectDatabase) {
+        self.warned_internal_failures
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retain(|oid, _| db.get(oid).is_some());
     }
 
     /// Evaluate reliability for all objects in the database.
     ///
-    /// For each analog object (AI, AO, AV) that has `MIN_PRES_VALUE` and
-    /// `MAX_PRES_VALUE` properties, the present value is compared against
-    /// those limits.  If out of range the reliability is set to
-    /// `OVER_RANGE` or `UNDER_RANGE`; otherwise `NO_FAULT_DETECTED`.
+    /// Each object owns both the decision and any mutation. Engineering
+    /// `Min_Pres_Value` / `Max_Pres_Value` metadata is not a reliability fault
+    /// algorithm. Only a successful hook result of
+    /// [`ReliabilityEvaluation::Changed`] produces a [`ReliabilityChange`].
+    /// Hook errors are rate-limited per object and produce no change record.
     ///
-    /// Returns a list of changes that were applied to the database.
+    /// Returns a list of changes that object hooks successfully applied.
     pub fn evaluate(&self, db: &mut ObjectDatabase) -> Vec<ReliabilityChange> {
-        let analog_types = [
-            ObjectType::ANALOG_INPUT,
-            ObjectType::ANALOG_OUTPUT,
-            ObjectType::ANALOG_VALUE,
-        ];
-
-        let mut updates: Vec<(ObjectIdentifier, u32, u32)> = Vec::new();
-
-        for &obj_type in &analog_types {
-            let oids = db.find_by_type(obj_type);
-            for oid in oids {
-                if let Some(obj) = db.get(&oid) {
-                    let current_reliability =
-                        match obj.read_property(PropertyIdentifier::RELIABILITY, None) {
-                            Ok(PropertyValue::Enumerated(v)) => v,
-                            _ => 0,
-                        };
-
-                    let present_value =
-                        match obj.read_property(PropertyIdentifier::PRESENT_VALUE, None) {
-                            Ok(PropertyValue::Real(v)) => v,
-                            _ => continue,
-                        };
-
-                    let min_pres = obj
-                        .read_property(PropertyIdentifier::MIN_PRES_VALUE, None)
-                        .ok()
-                        .and_then(|v| match v {
-                            PropertyValue::Real(f) => Some(f),
-                            _ => None,
-                        });
-
-                    let max_pres = obj
-                        .read_property(PropertyIdentifier::MAX_PRES_VALUE, None)
-                        .ok()
-                        .and_then(|v| match v {
-                            PropertyValue::Real(f) => Some(f),
-                            _ => None,
-                        });
-
-                    let new_reliability = if let Some(max) = max_pres {
-                        if present_value > max {
-                            Reliability::OVER_RANGE.to_raw()
-                        } else if let Some(min) = min_pres {
-                            if present_value < min {
-                                Reliability::UNDER_RANGE.to_raw()
-                            } else {
-                                Reliability::NO_FAULT_DETECTED.to_raw()
-                            }
-                        } else {
-                            Reliability::NO_FAULT_DETECTED.to_raw()
-                        }
-                    } else if let Some(min) = min_pres {
-                        if present_value < min {
-                            Reliability::UNDER_RANGE.to_raw()
-                        } else {
-                            Reliability::NO_FAULT_DETECTED.to_raw()
-                        }
-                    } else {
-                        continue;
-                    };
-
-                    if new_reliability != current_reliability {
-                        updates.push((oid, current_reliability, new_reliability));
+        let mut changes = Vec::new();
+        db.for_each_object_mut(|oid, object| {
+            if object.reliability_evaluation_inhibited_internal() {
+                self.clear_internal_failure(&oid);
+                return;
+            }
+            match object.evaluate_reliability_internal() {
+                Ok(ReliabilityEvaluation::Unchanged) => {
+                    self.clear_internal_failure(&oid);
+                }
+                Ok(ReliabilityEvaluation::Changed {
+                    old_reliability,
+                    new_reliability,
+                }) => {
+                    self.clear_internal_failure(&oid);
+                    changes.push(ReliabilityChange {
+                        object_id: oid,
+                        old_reliability,
+                        new_reliability,
+                    });
+                }
+                Err(error) => {
+                    let error_text = error.to_string();
+                    if self.should_warn_internal_failure(oid, &error_text) {
+                        tracing::warn!(
+                            object = %oid,
+                            error = %error,
+                            "Fault detection object-owned reliability evaluation failed"
+                        );
                     }
                 }
             }
-        }
-
-        let mut changes = Vec::new();
-        for (oid, old_rel, new_rel) in updates {
-            if let Some(obj) = db.get_mut(&oid) {
-                if obj
-                    .write_property(
-                        PropertyIdentifier::RELIABILITY,
-                        None,
-                        PropertyValue::Enumerated(new_rel),
-                        None,
-                    )
-                    .is_ok()
-                {
-                    changes.push(ReliabilityChange {
-                        object_id: oid,
-                        old_reliability: old_rel,
-                        new_reliability: new_rel,
-                    });
-                }
-            }
-        }
-
+        });
+        self.prune_internal_failures(db);
         changes
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::borrow::Cow;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
+
     use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
+    use bacnet_objects::traits::BACnetObject;
+    use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliability};
+    use bacnet_types::error::Error;
+    use bacnet_types::primitives::PropertyValue;
+    use tracing::span::{Attributes, Id, Record};
+    use tracing::{Event, Level, Metadata, Subscriber};
 
-    /// Helper: build an ObjectDatabase with a single AI that has min/max limits.
-    fn db_with_analog_input(
-        present_value: f32,
-        min_pres: Option<f32>,
-        max_pres: Option<f32>,
-    ) -> ObjectDatabase {
-        let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
-        ai.set_present_value(present_value);
-        if let Some(min) = min_pres {
-            ai.set_min_pres_value(min);
+    use super::*;
+
+    const HOOK_ERROR: &str = "test reliability hook failed";
+
+    struct WarningCounter {
+        warnings: Arc<AtomicUsize>,
+    }
+
+    impl Subscriber for WarningCounter {
+        fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+            *metadata.level() == Level::WARN
         }
-        if let Some(max) = max_pres {
-            ai.set_max_pres_value(max);
+
+        fn new_span(&self, _span: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
         }
+
+        fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+        fn event(&self, event: &Event<'_>) {
+            if *event.metadata().level() == Level::WARN {
+                self.warnings.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        fn enter(&self, _span: &Id) {}
+
+        fn exit(&self, _span: &Id) {}
+    }
+
+    fn with_warning_counter(test: impl FnOnce(&AtomicUsize)) {
+        let warnings = Arc::new(AtomicUsize::new(0));
+        let subscriber = WarningCounter {
+            warnings: Arc::clone(&warnings),
+        };
+        tracing::subscriber::with_default(subscriber, || test(warnings.as_ref()));
+    }
+
+    fn read_reliability(db: &ObjectDatabase, oid: ObjectIdentifier) -> u32 {
+        match db
+            .get(&oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::RELIABILITY, None)
+            .unwrap()
+        {
+            PropertyValue::Enumerated(value) => value,
+            other => panic!("expected Enumerated Reliability, got {other:?}"),
+        }
+    }
+
+    struct OptInReliabilityObject {
+        oid: ObjectIdentifier,
+        name: String,
+        reliability: u32,
+        target_reliability: u32,
+        fail: Arc<AtomicBool>,
+    }
+
+    impl OptInReliabilityObject {
+        fn new(instance: u32, name: &str, target_reliability: u32, fail: Arc<AtomicBool>) -> Self {
+            Self {
+                oid: ObjectIdentifier::new(ObjectType::BINARY_INPUT, instance).unwrap(),
+                name: name.to_owned(),
+                reliability: Reliability::NO_FAULT_DETECTED.to_raw(),
+                target_reliability,
+                fail,
+            }
+        }
+    }
+
+    impl BACnetObject for OptInReliabilityObject {
+        fn object_identifier(&self) -> ObjectIdentifier {
+            self.oid
+        }
+
+        fn object_name(&self) -> &str {
+            &self.name
+        }
+
+        fn read_property(
+            &self,
+            property: PropertyIdentifier,
+            _array_index: Option<u32>,
+        ) -> Result<PropertyValue, Error> {
+            if property == PropertyIdentifier::RELIABILITY {
+                Ok(PropertyValue::Enumerated(self.reliability))
+            } else {
+                Err(Error::Encoding("test property is unsupported".into()))
+            }
+        }
+
+        fn write_property(
+            &mut self,
+            _property: PropertyIdentifier,
+            _array_index: Option<u32>,
+            _value: PropertyValue,
+            _priority: Option<u8>,
+        ) -> Result<(), Error> {
+            Err(Error::Encoding("test object is read-only".into()))
+        }
+
+        fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
+            Cow::Borrowed(&[PropertyIdentifier::RELIABILITY])
+        }
+
+        fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {
+            if self.fail.load(Ordering::SeqCst) {
+                return Err(Error::Encoding(HOOK_ERROR.into()));
+            }
+            if self.reliability == self.target_reliability {
+                return Ok(ReliabilityEvaluation::Unchanged);
+            }
+
+            let old_reliability = self.reliability;
+            self.reliability = self.target_reliability;
+            Ok(ReliabilityEvaluation::Changed {
+                old_reliability,
+                new_reliability: self.reliability,
+            })
+        }
+    }
+
+    struct InhibitedProbeObject {
+        oid: ObjectIdentifier,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl BACnetObject for InhibitedProbeObject {
+        fn object_identifier(&self) -> ObjectIdentifier {
+            self.oid
+        }
+
+        fn object_name(&self) -> &str {
+            "inhibited-probe"
+        }
+
+        fn read_property(
+            &self,
+            _property: PropertyIdentifier,
+            _array_index: Option<u32>,
+        ) -> Result<PropertyValue, Error> {
+            Err(Error::Encoding("test property is unsupported".into()))
+        }
+
+        fn write_property(
+            &mut self,
+            _property: PropertyIdentifier,
+            _array_index: Option<u32>,
+            _value: PropertyValue,
+            _priority: Option<u8>,
+        ) -> Result<(), Error> {
+            Err(Error::Encoding("test object is read-only".into()))
+        }
+
+        fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
+            Cow::Borrowed(&[])
+        }
+
+        fn reliability_evaluation_inhibited_internal(&self) -> bool {
+            true
+        }
+
+        fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(Error::Encoding(HOOK_ERROR.into()))
+        }
+    }
+
+    #[test]
+    fn inhibited_object_skips_hook_and_clears_stale_failure_warning() {
+        let detector = FaultDetector::default();
+        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 77).unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
         let mut db = ObjectDatabase::new();
-        db.add(Box::new(ai)).unwrap();
-        db
-    }
+        db.add(Box::new(InhibitedProbeObject {
+            oid,
+            calls: Arc::clone(&calls),
+        }))
+        .unwrap();
+        assert!(detector.should_warn_internal_failure(oid, HOOK_ERROR));
 
-    #[test]
-    fn no_fault_when_in_range() {
-        let mut db = db_with_analog_input(50.0, Some(0.0), Some(100.0));
-        let detector = FaultDetector::default();
-        let changes = detector.evaluate(&mut db);
-        assert!(changes.is_empty(), "no change expected for in-range value");
-    }
-
-    #[test]
-    fn over_range_detected() {
-        let mut db = db_with_analog_input(150.0, Some(0.0), Some(100.0));
-        let detector = FaultDetector::default();
-        let changes = detector.evaluate(&mut db);
-        assert_eq!(changes.len(), 1);
-        assert_eq!(changes[0].new_reliability, Reliability::OVER_RANGE.to_raw());
-        assert_eq!(
-            changes[0].old_reliability,
-            Reliability::NO_FAULT_DETECTED.to_raw()
+        assert!(detector.evaluate(&mut db).is_empty());
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "inhibited hook was called");
+        assert!(
+            detector.should_warn_internal_failure(oid, HOOK_ERROR),
+            "inhibition must clear an old warning so recovery cannot leave stale state"
         );
     }
 
     #[test]
-    fn under_range_detected() {
-        let mut db = db_with_analog_input(-10.0, Some(0.0), Some(100.0));
+    fn identical_internal_failure_warning_is_suppressed_until_state_changes() {
         let detector = FaultDetector::default();
-        let changes = detector.evaluate(&mut db);
-        assert_eq!(changes.len(), 1);
-        assert_eq!(
-            changes[0].new_reliability,
-            Reliability::UNDER_RANGE.to_raw()
-        );
-    }
-
-    #[test]
-    fn returns_to_no_fault_after_correction() {
-        let mut db = db_with_analog_input(150.0, Some(0.0), Some(100.0));
-        let detector = FaultDetector::default();
-
-        // First evaluation: over-range
-        let changes = detector.evaluate(&mut db);
-        assert_eq!(changes.len(), 1);
-        assert_eq!(changes[0].new_reliability, Reliability::OVER_RANGE.to_raw());
-
-        // Correct the value back in range
         let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-        let obj = db.get_mut(&oid).unwrap();
-        obj.write_property(
+
+        assert!(detector.should_warn_internal_failure(oid, "first error"));
+        assert!(!detector.should_warn_internal_failure(oid, "first error"));
+        assert!(detector.should_warn_internal_failure(oid, "different error"));
+        assert!(!detector.should_warn_internal_failure(oid, "different error"));
+
+        detector.clear_internal_failure(&oid);
+        assert!(detector.should_warn_internal_failure(oid, "first error"));
+    }
+
+    #[test]
+    fn stock_analog_engineering_bounds_never_change_reliability() {
+        let mut db = ObjectDatabase::new();
+
+        let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+        ai.set_min_pres_value(0.0);
+        ai.set_max_pres_value(100.0);
+        ai.set_present_value(200.0);
+        let ai_oid = ai.object_identifier();
+        db.add(Box::new(ai)).unwrap();
+
+        let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+        ao.set_min_pres_value(0.0);
+        ao.set_max_pres_value(100.0);
+        ao.write_property(
             PropertyIdentifier::PRESENT_VALUE,
             None,
-            PropertyValue::Real(50.0),
+            PropertyValue::Real(150.0),
+            Some(8),
+        )
+        .unwrap();
+        let ao_oid = ao.object_identifier();
+        db.add(Box::new(ao)).unwrap();
+
+        let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+        av.set_min_pres_value(0.0);
+        av.set_max_pres_value(100.0);
+        av.set_present_value(-10.0);
+        let av_oid = av.object_identifier();
+        db.add(Box::new(av)).unwrap();
+
+        let changes = FaultDetector::default().evaluate(&mut db);
+
+        assert!(changes.is_empty());
+        for oid in [ai_oid, ao_oid, av_oid] {
+            assert_eq!(
+                read_reliability(&db, oid),
+                Reliability::NO_FAULT_DETECTED.to_raw()
+            );
+        }
+        let ao = db.get(&ao_oid).unwrap();
+        assert_eq!(
+            ao.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+                .unwrap(),
+            PropertyValue::Real(150.0)
+        );
+        assert_eq!(
+            ao.read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(8))
+                .unwrap(),
+            PropertyValue::Real(150.0)
+        );
+    }
+
+    #[test]
+    fn configured_ai_and_av_changes_are_recorded_and_seen_by_intrinsic_fault_observation() {
+        let mut db = ObjectDatabase::new();
+
+        let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+        ai.configure_fault_out_of_range(10.0, 20.0).unwrap();
+        ai.set_present_value(21.0);
+        let ai_oid = ai.object_identifier();
+        db.add(Box::new(ai)).unwrap();
+
+        let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+        av.configure_fault_out_of_range(10.0, 20.0).unwrap();
+        av.write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(9.0),
+            Some(8),
+        )
+        .unwrap();
+        let av_oid = av.object_identifier();
+        db.add(Box::new(av)).unwrap();
+
+        let detector = FaultDetector::default();
+        let changes = detector.evaluate(&mut db);
+        assert_eq!(changes.len(), 2);
+        assert!(changes.contains(&ReliabilityChange {
+            object_id: ai_oid,
+            old_reliability: Reliability::NO_FAULT_DETECTED.to_raw(),
+            new_reliability: Reliability::OVER_RANGE.to_raw(),
+        }));
+        assert!(changes.contains(&ReliabilityChange {
+            object_id: av_oid,
+            old_reliability: Reliability::NO_FAULT_DETECTED.to_raw(),
+            new_reliability: Reliability::UNDER_RANGE.to_raw(),
+        }));
+        assert!(detector.evaluate(&mut db).is_empty());
+
+        for oid in [ai_oid, av_oid] {
+            let proposal = db
+                .get_mut(&oid)
+                .unwrap()
+                .evaluate_intrinsic_reporting()
+                .expect("range Reliability must be observed as an intrinsic fault");
+            assert_eq!(proposal.change.from, EventState::NORMAL);
+            assert_eq!(proposal.change.to, EventState::FAULT);
+        }
+    }
+
+    // The public sensor setters intentionally retain their debug assertions.
+    // This release-only test exercises the production path where those setters
+    // can receive non-finite application data without changing their API.
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn non_finite_configured_analogs_create_no_change_and_keep_owned_faults() {
+        let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+        ai.configure_fault_out_of_range(10.0, 20.0).unwrap();
+        ai.set_present_value(21.0);
+        ai.evaluate_reliability_internal().unwrap();
+        ai.set_present_value(f32::NAN);
+        let ai_oid = ai.object_identifier();
+
+        let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+        av.configure_fault_out_of_range(10.0, 20.0).unwrap();
+        av.set_present_value(9.0);
+        av.evaluate_reliability_internal().unwrap();
+        av.set_present_value(f32::INFINITY);
+        let av_oid = av.object_identifier();
+
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(ai)).unwrap();
+        db.add(Box::new(av)).unwrap();
+        let detector = FaultDetector::default();
+
+        assert!(detector.evaluate(&mut db).is_empty());
+        assert!(detector.evaluate(&mut db).is_empty());
+        assert_eq!(
+            read_reliability(&db, ai_oid),
+            Reliability::OVER_RANGE.to_raw()
+        );
+        assert_eq!(
+            read_reliability(&db, av_oid),
+            Reliability::UNDER_RANGE.to_raw()
+        );
+
+        let ai = db.get_mut(&ai_oid).unwrap();
+        ai.write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(true),
             None,
         )
-        // AI write needs out_of_service=true
-        .unwrap_or_else(|_| {
-            obj.write_property(
+        .unwrap();
+        ai.write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(9.0),
+            None,
+        )
+        .unwrap();
+        ai.write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(false),
+            None,
+        )
+        .unwrap();
+        db.get_mut(&av_oid)
+            .unwrap()
+            .write_property(
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+                PropertyValue::Real(21.0),
+                Some(8),
+            )
+            .unwrap();
+
+        let changes = detector.evaluate(&mut db);
+        assert_eq!(changes.len(), 2);
+        assert!(changes.contains(&ReliabilityChange {
+            object_id: ai_oid,
+            old_reliability: Reliability::OVER_RANGE.to_raw(),
+            new_reliability: Reliability::UNDER_RANGE.to_raw(),
+        }));
+        assert!(changes.contains(&ReliabilityChange {
+            object_id: av_oid,
+            old_reliability: Reliability::UNDER_RANGE.to_raw(),
+            new_reliability: Reliability::OVER_RANGE.to_raw(),
+        }));
+    }
+
+    #[test]
+    fn existing_nonzero_in_service_reliability_is_preserved() {
+        let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+        ai.set_min_pres_value(0.0);
+        ai.set_max_pres_value(100.0);
+        ai.set_present_value(50.0);
+        ai.set_reliability_internal(Reliability::NO_SENSOR.to_raw())
+            .unwrap();
+        let oid = ai.object_identifier();
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(ai)).unwrap();
+
+        assert!(FaultDetector::default().evaluate(&mut db).is_empty());
+        assert_eq!(read_reliability(&db, oid), Reliability::NO_SENSOR.to_raw());
+    }
+
+    #[test]
+    fn out_of_service_client_write_and_restore_remain_object_owned() {
+        let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+        ai.set_reliability_internal(Reliability::OVER_RANGE.to_raw())
+            .unwrap();
+        let oid = ai.object_identifier();
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(ai)).unwrap();
+
+        let object = db.get_mut(&oid).unwrap();
+        object
+            .write_property(
                 PropertyIdentifier::OUT_OF_SERVICE,
                 None,
                 PropertyValue::Boolean(true),
                 None,
             )
             .unwrap();
-            obj.write_property(
-                PropertyIdentifier::PRESENT_VALUE,
+        object
+            .write_property(
+                PropertyIdentifier::RELIABILITY,
                 None,
-                PropertyValue::Real(50.0),
+                PropertyValue::Enumerated(Reliability::NO_SENSOR.to_raw()),
                 None,
             )
             .unwrap();
-        });
 
-        // Second evaluation: back to no-fault
-        let changes = detector.evaluate(&mut db);
-        assert_eq!(changes.len(), 1);
-        assert_eq!(
-            changes[0].new_reliability,
-            Reliability::NO_FAULT_DETECTED.to_raw()
-        );
+        assert!(FaultDetector::default().evaluate(&mut db).is_empty());
+        assert_eq!(read_reliability(&db, oid), Reliability::NO_SENSOR.to_raw());
+
+        db.get_mut(&oid)
+            .unwrap()
+            .write_property(
+                PropertyIdentifier::OUT_OF_SERVICE,
+                None,
+                PropertyValue::Boolean(false),
+                None,
+            )
+            .unwrap();
+        assert_eq!(read_reliability(&db, oid), Reliability::OVER_RANGE.to_raw());
     }
 
     #[test]
-    fn no_limits_means_no_evaluation() {
-        // AI without min/max limits — detector should skip it entirely
-        let mut db = db_with_analog_input(999.0, None, None);
-        let detector = FaultDetector::default();
-        let changes = detector.evaluate(&mut db);
-        assert!(changes.is_empty());
-    }
-
-    #[test]
-    fn max_only_over_range() {
-        let mut db = db_with_analog_input(200.0, None, Some(100.0));
-        let detector = FaultDetector::default();
-        let changes = detector.evaluate(&mut db);
-        assert_eq!(changes.len(), 1);
-        assert_eq!(changes[0].new_reliability, Reliability::OVER_RANGE.to_raw());
-    }
-
-    #[test]
-    fn min_only_under_range() {
-        let mut db = db_with_analog_input(-5.0, Some(0.0), None);
-        let detector = FaultDetector::default();
-        let changes = detector.evaluate(&mut db);
-        assert_eq!(changes.len(), 1);
-        assert_eq!(
-            changes[0].new_reliability,
-            Reliability::UNDER_RANGE.to_raw()
-        );
-    }
-
-    #[test]
-    fn no_change_emitted_when_already_faulted() {
-        let mut db = db_with_analog_input(150.0, Some(0.0), Some(100.0));
-        let detector = FaultDetector::default();
-
-        // First run: change detected
-        let changes = detector.evaluate(&mut db);
-        assert_eq!(changes.len(), 1);
-
-        // Second run: same fault, no new change
-        let changes = detector.evaluate(&mut db);
-        assert!(changes.is_empty());
-    }
-
-    #[test]
-    fn evaluates_multiple_analog_types() {
+    fn only_hook_returned_changed_creates_a_change_record() {
+        let fail = Arc::new(AtomicBool::new(false));
+        let object =
+            OptInReliabilityObject::new(1, "custom-hook", Reliability::NO_SENSOR.to_raw(), fail);
+        let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
-
-        let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
-        ai.set_present_value(200.0);
-        ai.set_max_pres_value(100.0);
-        db.add(Box::new(ai)).unwrap();
-
-        let ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
-        // AO starts at 0.0 — in range with no limits, so skipped
-        db.add(Box::new(ao)).unwrap();
-
-        let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
-        av.set_present_value(-10.0);
-        av.set_min_pres_value(0.0);
-        db.add(Box::new(av)).unwrap();
-
+        db.add(Box::new(object)).unwrap();
         let detector = FaultDetector::default();
-        let changes = detector.evaluate(&mut db);
-        assert_eq!(changes.len(), 2);
+        assert!(detector.should_warn_internal_failure(oid, HOOK_ERROR));
+
+        assert_eq!(
+            detector.evaluate(&mut db),
+            vec![ReliabilityChange {
+                object_id: oid,
+                old_reliability: Reliability::NO_FAULT_DETECTED.to_raw(),
+                new_reliability: Reliability::NO_SENSOR.to_raw(),
+            }]
+        );
+        assert_eq!(read_reliability(&db, oid), Reliability::NO_SENSOR.to_raw());
+        assert!(detector.should_warn_internal_failure(oid, HOOK_ERROR));
+        assert!(detector.evaluate(&mut db).is_empty());
+        assert!(detector.should_warn_internal_failure(oid, HOOK_ERROR));
+    }
+
+    #[test]
+    fn failing_hook_warning_is_rate_limited_and_restored_after_recovery() {
+        let fail = Arc::new(AtomicBool::new(true));
+        let object = OptInReliabilityObject::new(
+            1,
+            "failing-hook",
+            Reliability::NO_SENSOR.to_raw(),
+            Arc::clone(&fail),
+        );
+        let oid = object.object_identifier();
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(object)).unwrap();
+        let detector = FaultDetector::default();
+
+        with_warning_counter(|warnings| {
+            assert!(detector.evaluate(&mut db).is_empty());
+            assert_eq!(warnings.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                read_reliability(&db, oid),
+                Reliability::NO_FAULT_DETECTED.to_raw()
+            );
+
+            assert!(detector.evaluate(&mut db).is_empty());
+            assert_eq!(warnings.load(Ordering::SeqCst), 1);
+
+            fail.store(false, Ordering::SeqCst);
+            assert_eq!(
+                detector.evaluate(&mut db),
+                vec![ReliabilityChange {
+                    object_id: oid,
+                    old_reliability: Reliability::NO_FAULT_DETECTED.to_raw(),
+                    new_reliability: Reliability::NO_SENSOR.to_raw(),
+                }]
+            );
+            assert_eq!(warnings.load(Ordering::SeqCst), 1);
+
+            fail.store(true, Ordering::SeqCst);
+            assert!(detector.evaluate(&mut db).is_empty());
+            assert_eq!(warnings.load(Ordering::SeqCst), 2);
+
+            fail.store(false, Ordering::SeqCst);
+            assert!(detector.evaluate(&mut db).is_empty());
+            assert_eq!(warnings.load(Ordering::SeqCst), 2);
+
+            fail.store(true, Ordering::SeqCst);
+            assert!(detector.evaluate(&mut db).is_empty());
+            assert_eq!(warnings.load(Ordering::SeqCst), 3);
+        });
+    }
+
+    #[test]
+    fn deleted_failure_warning_is_pruned_and_oid_reuse_warns() {
+        let fail = Arc::new(AtomicBool::new(true));
+        let object = OptInReliabilityObject::new(
+            1,
+            "removed-failing-hook",
+            Reliability::NO_FAULT_DETECTED.to_raw(),
+            Arc::clone(&fail),
+        );
+        let oid = object.object_identifier();
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(object)).unwrap();
+        let detector = FaultDetector::default();
+
+        with_warning_counter(|warnings| {
+            assert!(detector.evaluate(&mut db).is_empty());
+            assert_eq!(warnings.load(Ordering::SeqCst), 1);
+
+            assert!(detector.evaluate(&mut db).is_empty());
+            assert_eq!(warnings.load(Ordering::SeqCst), 1);
+
+            assert!(db.remove(&oid).is_some());
+            assert!(detector.evaluate(&mut db).is_empty());
+            assert_eq!(warnings.load(Ordering::SeqCst), 1);
+
+            db.add(Box::new(OptInReliabilityObject::new(
+                1,
+                "replacement-failing-hook",
+                Reliability::NO_FAULT_DETECTED.to_raw(),
+                fail,
+            )))
+            .unwrap();
+            assert!(detector.evaluate(&mut db).is_empty());
+            assert_eq!(warnings.load(Ordering::SeqCst), 2);
+        });
     }
 }

@@ -71,6 +71,20 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
         }
     }
 
+    fn abort(&mut self) {
+        match self {
+            Self::Bip(t) => t.abort(),
+            Self::Mstp(t) => t.abort(),
+            #[cfg(feature = "ipv6")]
+            Self::Bip6(t) => t.abort(),
+            #[cfg(all(feature = "ethernet", target_os = "linux"))]
+            Self::Ethernet(t) => t.abort(),
+            #[cfg(feature = "sc-tls")]
+            Self::Sc(t) => t.abort(),
+            Self::Loopback(t) => t.abort(),
+        }
+    }
+
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
         match self {
             Self::Bip(t) => t.send_unicast(npdu, mac).await,
@@ -197,6 +211,20 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
             #[cfg(feature = "sc-tls")]
             Self::Sc(t) => t.max_apdu_length(),
             Self::Loopback(t) => t.max_apdu_length(),
+        }
+    }
+
+    fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
+        match self {
+            Self::Bip(t) => t.is_broadcast_mac(mac),
+            Self::Mstp(t) => t.is_broadcast_mac(mac),
+            #[cfg(feature = "ipv6")]
+            Self::Bip6(t) => t.is_broadcast_mac(mac),
+            #[cfg(all(feature = "ethernet", target_os = "linux"))]
+            Self::Ethernet(t) => t.is_broadcast_mac(mac),
+            #[cfg(feature = "sc-tls")]
+            Self::Sc(t) => t.is_broadcast_mac(mac),
+            Self::Loopback(t) => t.is_broadcast_mac(mac),
         }
     }
 }

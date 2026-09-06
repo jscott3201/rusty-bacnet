@@ -20,6 +20,8 @@ use bytes::{BufMut, Bytes, BytesMut};
 use crate::primitives;
 use crate::tags;
 
+mod wpm_error;
+
 // ---------------------------------------------------------------------------
 // Max-segments encoding
 // ---------------------------------------------------------------------------
@@ -37,18 +39,37 @@ const MAX_SEGMENTS_DECODE: [Option<u8>; 8] = [
     Some(255), // 7 = >64 segments accepted
 ];
 
-/// Encode a max-segments value to a 3-bit field.
-fn encode_max_segments(value: Option<u8>) -> u8 {
+/// Validate a configured maximum segment count for a Confirmed-Request header.
+///
+/// Clause 20.1.2.4 has no encoding for a finite capacity below two segments.
+/// To decline segmented responses, set `segmented-response-accepted = false`
+/// and use `None` rather than `Some(1)`.
+pub fn validate_max_segments(value: Option<u8>) -> Result<(), Error> {
     match value {
-        None => 0,
-        Some(2) => 1,
-        Some(4) => 2,
-        Some(8) => 3,
-        Some(16) => 4,
-        Some(32) => 5,
-        Some(64) => 6,
-        Some(_) => 7, // >64
+        Some(value @ 0..=1) => Err(Error::Encoding(format!(
+            "invalid max-segments-accepted {value}; expected 2..=255 or unspecified"
+        ))),
+        _ => Ok(()),
     }
+}
+
+/// Encode a max-segments value to a 3-bit field.
+///
+/// Finite counts that fall between the Clause 20.1.2.4 rungs are rounded down
+/// so the wire header never promises more receive capacity than configured.
+fn encode_max_segments(value: Option<u8>) -> Result<u8, Error> {
+    validate_max_segments(value)?;
+    Ok(match value {
+        None => 0,
+        Some(2..=3) => 1,
+        Some(4..=7) => 2,
+        Some(8..=15) => 3,
+        Some(16..=31) => 4,
+        Some(32..=63) => 5,
+        Some(64) => 6,
+        Some(65..=u8::MAX) => 7, // >64
+        Some(0..=1) => unreachable!("validated above"),
+    })
 }
 
 /// Decode a 3-bit max-segments field.
@@ -56,12 +77,44 @@ fn decode_max_segments(value: u8) -> Option<u8> {
     MAX_SEGMENTS_DECODE[(value & 0x07) as usize]
 }
 
+/// The segment count a configured `max-segments-accepted` actually promises a peer.
+///
+/// Clause 20.1.2.4 carries this parameter in three bits, and only B'001'
+/// through B'110' name a number (2, 4, 8, 16, 32, 64). B'000' is "Unspecified
+/// number of segments accepted" and B'111' is "Greater than 64 segments
+/// accepted" — neither tells the peer a limit, so both yield `None`.
+///
+/// This deliberately round-trips through the wire encoding rather than reading
+/// `configured` directly: a value such as `Some(100)` encodes as B'111', so the
+/// peer was told "Greater than 64 segments accepted", not "100". Answering
+/// from the configured number would claim a promise that was never sent.
+/// Invalid finite capacities below two yield `None`; APDU encoding and client
+/// startup reject those values through [`validate_max_segments`].
+pub fn advertised_max_segments(configured: Option<u8>) -> Option<u8> {
+    let encoded = encode_max_segments(configured).ok()?;
+    match decode_max_segments(encoded) {
+        // The B'111' sentinel — "Greater than 64 segments accepted", which is
+        // open-ended rather than a bound.
+        Some(255) => None,
+        decoded => decoded,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Max-APDU-length encoding
 // ---------------------------------------------------------------------------
 
+/// MinimumMessageSize: the smallest APDU any BACnet device accepts.
+///
+/// Clause 20.1.2.5 spells the lowest max-APDU-length-accepted code, `B'0000'`,
+/// as "Up to MinimumMessageSize (50 octets)"; Clause 12.11.18 requires
+/// `Max_APDU_Length_Accepted` to be "greater than or equal to 50"; and Clause
+/// 5.2.1.2 requires the size accepted by a remote peer to be "at least 50
+/// octets".
+pub const MINIMUM_MESSAGE_SIZE: u16 = 50;
+
 /// Decoded max-APDU-length values indexed by the 4-bit field.
-const MAX_APDU_DECODE: [u16; 6] = [50, 128, 206, 480, 1024, 1476];
+const MAX_APDU_DECODE: [u16; 6] = [MINIMUM_MESSAGE_SIZE, 128, 206, 480, 1024, 1476];
 
 /// Return true when `value` is one of the BACnet max-APDU-length encodings
 /// defined by ASHRAE 135-2020 Clause 20.1.2.5.
@@ -218,10 +271,7 @@ pub fn encode_apdu(buf: &mut BytesMut, apdu: &Apdu) -> Result<(), Error> {
         }
         Apdu::ComplexAck(pdu) => encode_complex_ack(buf, pdu),
         Apdu::SegmentAck(pdu) => encode_segment_ack(buf, pdu),
-        Apdu::Error(pdu) => {
-            encode_error(buf, pdu);
-            Ok(())
-        }
+        Apdu::Error(pdu) => encode_error(buf, pdu),
         Apdu::Reject(pdu) => {
             encode_reject(buf, pdu);
             Ok(())
@@ -234,6 +284,9 @@ pub fn encode_apdu(buf: &mut BytesMut, apdu: &Apdu) -> Result<(), Error> {
 }
 
 fn encode_confirmed_request(buf: &mut BytesMut, pdu: &ConfirmedRequest) -> Result<(), Error> {
+    let max_segments = encode_max_segments(pdu.max_segments)?;
+    let max_apdu = encode_max_apdu(pdu.max_apdu_length)?;
+
     let mut byte0 = PduType::CONFIRMED_REQUEST.to_raw() << 4;
     if pdu.segmented {
         byte0 |= 0x08;
@@ -246,8 +299,7 @@ fn encode_confirmed_request(buf: &mut BytesMut, pdu: &ConfirmedRequest) -> Resul
     }
     buf.put_u8(byte0);
 
-    let byte1 =
-        (encode_max_segments(pdu.max_segments) << 4) | encode_max_apdu(pdu.max_apdu_length)?;
+    let byte1 = (max_segments << 4) | max_apdu;
     buf.put_u8(byte1);
 
     buf.put_u8(pdu.invoke_id);
@@ -330,15 +382,36 @@ fn valid_window_size(field: &str, value: u8) -> Result<u8, Error> {
     }
 }
 
-fn encode_error(buf: &mut BytesMut, pdu: &ErrorPdu) {
+fn encode_error(buf: &mut BytesMut, pdu: &ErrorPdu) -> Result<(), Error> {
+    let formal = if pdu.service_choice == ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE {
+        // A legacy generic WPM Error may carry arbitrary service data beginning
+        // with context [0]. Only suppress the generic pair for a complete,
+        // structurally valid formal service body.
+        wpm_error::decode_formal_body(&pdu.error_data).unwrap_or(None)
+    } else {
+        None
+    };
+    if let Some((error_class, error_code)) = formal {
+        if error_class != pdu.error_class || error_code != pdu.error_code {
+            return Err(Error::Encoding(
+                "formal WPM Error body disagrees with ErrorPdu class/code".into(),
+            ));
+        }
+    }
+
     buf.put_u8(PduType::ERROR.to_raw() << 4);
     buf.put_u8(pdu.invoke_id);
     buf.put_u8(pdu.service_choice.to_raw());
-    primitives::encode_app_enumerated(buf, pdu.error_class.to_raw() as u32);
-    primitives::encode_app_enumerated(buf, pdu.error_code.to_raw() as u32);
-    if !pdu.error_data.is_empty() {
+    if formal.is_some() {
         buf.put_slice(&pdu.error_data);
+    } else {
+        primitives::encode_app_enumerated(buf, pdu.error_class.to_raw() as u32);
+        primitives::encode_app_enumerated(buf, pdu.error_code.to_raw() as u32);
+        if !pdu.error_data.is_empty() {
+            buf.put_slice(&pdu.error_data);
+        }
     }
+    Ok(())
 }
 
 fn encode_reject(buf: &mut BytesMut, pdu: &RejectPdu) {
@@ -552,6 +625,18 @@ fn decode_error(data: Bytes) -> Result<ErrorPdu, Error> {
     let invoke_id = data[1];
     let service_choice = ConfirmedServiceChoice::from_raw(data[2]);
 
+    if service_choice == ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE {
+        if let Some((error_class, error_code)) = wpm_error::decode_formal_body(&data[3..])? {
+            return Ok(ErrorPdu {
+                invoke_id,
+                service_choice,
+                error_class,
+                error_code,
+                error_data: data.slice(3..),
+            });
+        }
+    }
+
     let mut offset = 3;
     let (tag, tag_end) = tags::decode_tag(&data, offset)?;
     if tag.class != tags::TagClass::Application || tag.number != tags::app_tag::ENUMERATED {
@@ -569,7 +654,13 @@ fn decode_error(data: Bytes) -> Result<ErrorPdu, Error> {
             "ErrorPDU truncated at error class",
         ));
     }
-    let error_class_raw = primitives::decode_unsigned(&data[tag_end..class_end])? as u16;
+    let error_class_raw = primitives::decode_unsigned(&data[tag_end..class_end])?;
+    let error_class_raw = u16::try_from(error_class_raw).map_err(|_| {
+        Error::decoding(
+            tag_end,
+            format!("ErrorPDU error class {error_class_raw} exceeds u16"),
+        )
+    })?;
     offset = class_end;
 
     let (tag, tag_end) = tags::decode_tag(&data, offset)?;
@@ -585,7 +676,13 @@ fn decode_error(data: Bytes) -> Result<ErrorPdu, Error> {
     if code_end > data.len() {
         return Err(Error::decoding(tag_end, "ErrorPDU truncated at error code"));
     }
-    let error_code_raw = primitives::decode_unsigned(&data[tag_end..code_end])? as u16;
+    let error_code_raw = primitives::decode_unsigned(&data[tag_end..code_end])?;
+    let error_code_raw = u16::try_from(error_code_raw).map_err(|_| {
+        Error::decoding(
+            tag_end,
+            format!("ErrorPDU error code {error_code_raw} exceeds u16"),
+        )
+    })?;
     offset = code_end;
 
     let error_data = if offset < data.len() {
@@ -633,3 +730,5 @@ fn decode_abort(data: Bytes) -> Result<AbortPdu, Error> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod wpm_error_tests;

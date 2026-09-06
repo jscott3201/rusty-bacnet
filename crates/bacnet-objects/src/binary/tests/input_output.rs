@@ -225,6 +225,63 @@ fn bo_read_reliability_default() {
     assert_eq!(val, PropertyValue::Enumerated(0)); // NO_FAULT_DETECTED
 }
 
+#[test]
+fn bi_detection_enable_resets_and_gates_intrinsic_reporting() {
+    let mut bi = BinaryInputObject::new(1, "BI-1").unwrap();
+    assert_eq!(
+        bi.read_property(PropertyIdentifier::EVENT_DETECTION_ENABLE, None)
+            .unwrap(),
+        PropertyValue::Boolean(true)
+    );
+    bi.event_detector.alarm_values = vec![1];
+    bi.event_detector.time_delay = 2;
+    bi.set_present_value(1);
+    assert_eq!(bi.evaluate_intrinsic_reporting(), None);
+    assert!(bi.event_detector.pending.is_some());
+
+    bi.event_detector.event_state = bacnet_types::enums::EventState::OFFNORMAL;
+    bi.event_detector.acked_transitions = 0;
+    bi.event_detector.fault_reliability = Some(1);
+    bi.write_property(
+        PropertyIdentifier::EVENT_DETECTION_ENABLE,
+        None,
+        PropertyValue::Boolean(false),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(
+        bi.read_property(PropertyIdentifier::EVENT_DETECTION_ENABLE, None)
+            .unwrap(),
+        PropertyValue::Boolean(false)
+    );
+    assert_eq!(
+        bi.read_property(PropertyIdentifier::EVENT_STATE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(bacnet_types::enums::EventState::NORMAL.to_raw())
+    );
+    assert_eq!(
+        bi.read_property(PropertyIdentifier::ACKED_TRANSITIONS, None)
+            .unwrap(),
+        PropertyValue::BitString {
+            unused_bits: 5,
+            data: vec![0xe0],
+        }
+    );
+    assert!(bi.event_detector.pending.is_none());
+    assert!(bi.event_detector.fault_reliability.is_none());
+    assert_eq!(bi.evaluate_intrinsic_reporting(), None);
+    assert_eq!(bi.tick_intrinsic_reporting(), None);
+    assert!(
+        bi.event_detector.pending.is_none(),
+        "evaluate/tick re-armed a countdown while detection is disabled"
+    );
+    assert!(bi
+        .property_list()
+        .contains(&PropertyIdentifier::EVENT_DETECTION_ENABLE));
+    assert!(bi.is_writable_property(PropertyIdentifier::EVENT_DETECTION_ENABLE));
+}
+
 // --- Priority array bounds tests (BinaryOutput) ---
 
 #[test]
@@ -451,4 +508,136 @@ fn bo_direct_priority_array_index_17_error() {
         None,
     );
     assert!(result.is_err());
+}
+
+// ── Trait capability method tests (issue #115 shared truth source) ──────────
+
+#[test]
+fn bi_is_createable_matches_factory() {
+    use crate::traits::BACnetObject;
+    let bi = BinaryInputObject::new(1, "bi-1").unwrap();
+    assert!(bi.is_createable(), "BinaryInput is factory-constructable");
+}
+
+#[test]
+fn bi_is_writable_property_mirrors_write_property() {
+    use crate::traits::BACnetObject;
+    let bi = BinaryInputObject::new(1, "bi-1").unwrap();
+    // BI accepts PRESENT_VALUE (when OOS), ACTIVE/INACTIVE_TEXT, common set.
+    assert!(bi.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
+    assert!(bi.is_writable_property(PropertyIdentifier::ACTIVE_TEXT));
+    assert!(bi.is_writable_property(PropertyIdentifier::INACTIVE_TEXT));
+    assert!(bi.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
+    assert!(bi.is_writable_property(PropertyIdentifier::OBJECT_NAME));
+    assert!(bi.is_writable_property(PropertyIdentifier::DESCRIPTION));
+    // Writable since #229: Clause 12.6 requires the supported Event_Enable
+    // value set to include (T, T, T); writability is this stack's route to
+    // that minimum, since the detectors default to (F, F, F) and had no
+    // other commissioning path.
+    assert!(bi.is_writable_property(PropertyIdentifier::EVENT_ENABLE));
+    assert!(bi.is_writable_property(PropertyIdentifier::NOTIFICATION_CLASS));
+    assert!(bi.is_writable_property(PropertyIdentifier::NOTIFY_TYPE));
+    assert!(bi.is_writable_property(PropertyIdentifier::TIME_DELAY));
+    // ACKED_TRANSITIONS stays read-only: the alarm-acknowledgment process
+    // maintains it from event-state transitions and acknowledgment
+    // indications, never a property write.
+    assert!(!bi.is_writable_property(PropertyIdentifier::ACKED_TRANSITIONS));
+    // Not commandable.
+    assert!(!bi.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
+}
+
+#[test]
+fn bo_is_createable_matches_factory() {
+    use crate::traits::BACnetObject;
+    let bo = BinaryOutputObject::new(1, "bo-1").unwrap();
+    assert!(bo.is_createable(), "BinaryOutput is factory-constructable");
+}
+
+#[test]
+fn bo_is_writable_property_mirrors_write_property() {
+    use crate::traits::BACnetObject;
+    let bo = BinaryOutputObject::new(1, "bo-1").unwrap();
+    // Commandable.
+    assert!(bo.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
+    assert!(bo.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
+    // Text + common.
+    assert!(bo.is_writable_property(PropertyIdentifier::ACTIVE_TEXT));
+    assert!(bo.is_writable_property(PropertyIdentifier::INACTIVE_TEXT));
+    assert!(bo.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
+    // Writable since #222: Clause 12.7 requires the supported Event_Enable
+    // value set to include (T, T, T); writability is this stack's route to
+    // that minimum, since the detectors default to (F, F, F) and had no
+    // other commissioning path.
+    assert!(bo.is_writable_property(PropertyIdentifier::EVENT_ENABLE));
+}
+
+/// #270: a BinaryOutput Relinquish_Default write is validated like a
+/// commanded Present_Value (BinaryPV 0/1) and — with an all-NULL priority
+/// array — Present_Value immediately resolves to the written default.
+#[test]
+fn bo_relinquish_default_write_recaptures_present_value() {
+    let bo = BinaryOutputObject::new(1, "BO-1");
+    let mut bo = bo.unwrap();
+    assert!(bo.is_writable_property(PropertyIdentifier::RELINQUISH_DEFAULT));
+
+    bo.write_property(
+        PropertyIdentifier::RELINQUISH_DEFAULT,
+        None,
+        PropertyValue::Enumerated(1),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        bo.read_property(PropertyIdentifier::RELINQUISH_DEFAULT, None)
+            .unwrap(),
+        PropertyValue::Enumerated(1)
+    );
+    assert_eq!(
+        bo.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(1),
+        "with an empty priority array, PV must resolve to the written default"
+    );
+
+    // A live command still outranks the default; relinquishing falls back to
+    // the written default.
+    bo.write_property(
+        PropertyIdentifier::PRESENT_VALUE,
+        None,
+        PropertyValue::Enumerated(0),
+        Some(8),
+    )
+    .unwrap();
+    assert_eq!(
+        bo.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(0)
+    );
+    bo.write_property(
+        PropertyIdentifier::PRESENT_VALUE,
+        None,
+        PropertyValue::Null,
+        Some(8),
+    )
+    .unwrap();
+    assert_eq!(
+        bo.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(1)
+    );
+
+    for value in [PropertyValue::Enumerated(5), PropertyValue::Unsigned(1)] {
+        assert!(bo
+            .write_property(PropertyIdentifier::RELINQUISH_DEFAULT, None, value, None)
+            .is_err());
+        assert_eq!(
+            bo.read_property(PropertyIdentifier::RELINQUISH_DEFAULT, None)
+                .unwrap(),
+            PropertyValue::Enumerated(1)
+        );
+    }
+
+    // The local setter shares the validation.
+    assert!(bo.set_relinquish_default(2).is_err());
+    bo.set_relinquish_default(1).unwrap();
 }

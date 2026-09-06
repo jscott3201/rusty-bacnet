@@ -26,6 +26,9 @@ pub struct LoopObject {
     update_interval: u32,
     out_of_service: bool,
     reliability: u32,
+    /// Evaluated Reliability saved while a client simulation owns the property
+    /// (Out_Of_Service TRUE); restored on the return to service.
+    reliability_before_out_of_service: Option<u32>,
     status_flags: StatusFlags,
     controlled_variable_reference: Option<BACnetObjectPropertyReference>,
     manipulated_variable_reference: Option<BACnetObjectPropertyReference>,
@@ -48,6 +51,7 @@ impl LoopObject {
             update_interval: 1000, // milliseconds
             out_of_service: false,
             reliability: 0,
+            reliability_before_out_of_service: None,
             status_flags: StatusFlags::empty(),
             controlled_variable_reference: None,
             manipulated_variable_reference: None,
@@ -141,31 +145,15 @@ impl BACnetObject for LoopObject {
             p if p == PropertyIdentifier::OUT_OF_SERVICE => {
                 Ok(PropertyValue::Boolean(self.out_of_service))
             }
-            p if p == PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE => {
-                match &self.controlled_variable_reference {
-                    Some(r) => Ok(PropertyValue::List(vec![
-                        PropertyValue::ObjectIdentifier(r.object_identifier),
-                        PropertyValue::Enumerated(r.property_identifier),
-                    ])),
-                    None => Ok(PropertyValue::Null),
-                }
-            }
-            p if p == PropertyIdentifier::MANIPULATED_VARIABLE_REFERENCE => {
-                match &self.manipulated_variable_reference {
-                    Some(r) => Ok(PropertyValue::List(vec![
-                        PropertyValue::ObjectIdentifier(r.object_identifier),
-                        PropertyValue::Enumerated(r.property_identifier),
-                    ])),
-                    None => Ok(PropertyValue::Null),
-                }
-            }
-            p if p == PropertyIdentifier::SETPOINT_REFERENCE => match &self.setpoint_reference {
-                Some(r) => Ok(PropertyValue::List(vec![
-                    PropertyValue::ObjectIdentifier(r.object_identifier),
-                    PropertyValue::Enumerated(r.property_identifier),
-                ])),
-                None => Ok(PropertyValue::Null),
-            },
+            p if p == PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE => Ok(
+                crate::reference::reference_read_value(&self.controlled_variable_reference),
+            ),
+            p if p == PropertyIdentifier::MANIPULATED_VARIABLE_REFERENCE => Ok(
+                crate::reference::reference_read_value(&self.manipulated_variable_reference),
+            ),
+            p if p == PropertyIdentifier::SETPOINT_REFERENCE => Ok(
+                crate::reference::reference_read_value(&self.setpoint_reference),
+            ),
             p if p == PropertyIdentifier::PROPERTY_LIST => {
                 read_property_list_property(&self.property_list(), array_index)
             }
@@ -183,6 +171,15 @@ impl BACnetObject for LoopObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        if let Some(result) = common::write_out_of_service_with_reliability_restore(
+            &mut self.out_of_service,
+            &mut self.reliability,
+            &mut self.reliability_before_out_of_service,
+            property,
+            &value,
+        ) {
+            return result;
+        }
         match property {
             p if p == PropertyIdentifier::SETPOINT => {
                 if let PropertyValue::Real(v) = value {
@@ -238,19 +235,26 @@ impl BACnetObject for LoopObject {
                     code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
                 })
             }
+            // Clause 12.17 Table 12-20 lists Reliability O7, whose footnote reads
+            // "These properties are required to be writable when Out_Of_Service
+            // is TRUE", and the Out_Of_Service property text then narrows the grant:
+            // while TRUE, "the Present_Value property and the Reliability property,
+            // if present and capable of taking on values other than
+            // NO_FAULT_DETECTED, shall be writable to allow simulating specific
+            // conditions or for testing purposes". In service the property is owned
+            // by the algorithm, so a network write is refused here; the internal
+            // evaluator route is `set_reliability_internal` with the complementary
+            // guard, and Out_Of_Service saves/restores the evaluated value (handled
+            // above the match).
             p if p == PropertyIdentifier::RELIABILITY => {
-                if let PropertyValue::Enumerated(v) = value {
-                    self.reliability = v;
-                    return Ok(());
+                if !self.out_of_service {
+                    return Err(common::write_access_denied_error());
                 }
-                Err(Error::Protocol {
-                    class: ErrorClass::PROPERTY.to_raw() as u32,
-                    code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
-                })
-            }
-            p if p == PropertyIdentifier::OUT_OF_SERVICE => {
-                if let PropertyValue::Boolean(v) = value {
-                    self.out_of_service = v;
+                if let PropertyValue::Enumerated(v) = value {
+                    if !common::is_reliability_value_valid(v) {
+                        return Err(common::value_out_of_range_error());
+                    }
+                    self.reliability = v;
                     return Ok(());
                 }
                 Err(Error::Protocol {
@@ -268,75 +272,34 @@ impl BACnetObject for LoopObject {
                     code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
                 })
             }
-            p if p == PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE => match value {
-                PropertyValue::Null => {
-                    self.controlled_variable_reference = None;
-                    Ok(())
-                }
-                PropertyValue::List(ref items) if items.len() >= 2 => {
-                    if let (PropertyValue::ObjectIdentifier(oid), PropertyValue::Enumerated(prop)) =
-                        (&items[0], &items[1])
-                    {
-                        self.controlled_variable_reference =
-                            Some(BACnetObjectPropertyReference::new(*oid, *prop));
-                        return Ok(());
-                    }
-                    Err(Error::Protocol {
-                        class: ErrorClass::PROPERTY.to_raw() as u32,
-                        code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
-                    })
-                }
-                _ => Err(Error::Protocol {
-                    class: ErrorClass::PROPERTY.to_raw() as u32,
-                    code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
-                }),
-            },
-            p if p == PropertyIdentifier::MANIPULATED_VARIABLE_REFERENCE => match value {
-                PropertyValue::Null => {
-                    self.manipulated_variable_reference = None;
-                    Ok(())
-                }
-                PropertyValue::List(ref items) if items.len() >= 2 => {
-                    if let (PropertyValue::ObjectIdentifier(oid), PropertyValue::Enumerated(prop)) =
-                        (&items[0], &items[1])
-                    {
-                        self.manipulated_variable_reference =
-                            Some(BACnetObjectPropertyReference::new(*oid, *prop));
-                        return Ok(());
-                    }
-                    Err(Error::Protocol {
-                        class: ErrorClass::PROPERTY.to_raw() as u32,
-                        code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
-                    })
-                }
-                _ => Err(Error::Protocol {
-                    class: ErrorClass::PROPERTY.to_raw() as u32,
-                    code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
-                }),
-            },
-            p if p == PropertyIdentifier::SETPOINT_REFERENCE => match value {
-                PropertyValue::Null => {
-                    self.setpoint_reference = None;
-                    Ok(())
-                }
-                PropertyValue::List(ref items) if items.len() >= 2 => {
-                    if let (PropertyValue::ObjectIdentifier(oid), PropertyValue::Enumerated(prop)) =
-                        (&items[0], &items[1])
-                    {
-                        self.setpoint_reference =
-                            Some(BACnetObjectPropertyReference::new(*oid, *prop));
-                        return Ok(());
-                    }
-                    Err(Error::Protocol {
-                        class: ErrorClass::PROPERTY.to_raw() as u32,
-                        code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
-                    })
-                }
-                _ => Err(Error::Protocol {
-                    class: ErrorClass::PROPERTY.to_raw() as u32,
-                    code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
-                }),
-            },
+            // Clause 12.17 / Clause 21 BACnetObjectPropertyReference: the
+            // write value decodes via the shared arm helper — legacy local
+            // List and framed network (context-tagged members) forms both
+            // land strictly; see reference.rs.
+            p if p == PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE => {
+                self.controlled_variable_reference = crate::reference::decode_reference_write(
+                    &value,
+                    crate::reference::ReferenceFrame::Bare,
+                )?;
+                Ok(())
+            }
+            p if p == PropertyIdentifier::MANIPULATED_VARIABLE_REFERENCE => {
+                self.manipulated_variable_reference = crate::reference::decode_reference_write(
+                    &value,
+                    crate::reference::ReferenceFrame::Bare,
+                )?;
+                Ok(())
+            }
+            // Setpoint_Reference is typed BACnetSetpointReference (Clause
+            // 12.17): the reference may additionally arrive inside the
+            // production's opening/closing tag [0] frame on the wire.
+            p if p == PropertyIdentifier::SETPOINT_REFERENCE => {
+                self.setpoint_reference = crate::reference::decode_reference_write(
+                    &value,
+                    crate::reference::ReferenceFrame::Setpoint,
+                )?;
+                Ok(())
+            }
             _ => Err(Error::Protocol {
                 class: ErrorClass::PROPERTY.to_raw() as u32,
                 code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
@@ -370,6 +333,40 @@ impl BACnetObject for LoopObject {
 
     fn supports_cov(&self) -> bool {
         true
+    }
+
+    fn set_reliability_internal(&mut self, reliability: u32) -> Result<(), Error> {
+        // While Out_Of_Service is TRUE the client owns the simulated value;
+        // an internal write would clobber the simulation (Clause 12.17
+        // Out_Of_Service paragraph: Reliability is "decoupled from the
+        // algorithm"), so it is refused until the object returns to service.
+        if self.out_of_service {
+            return Err(common::write_access_denied_error());
+        }
+        if !common::is_reliability_value_valid(reliability) {
+            return Err(common::value_out_of_range_error());
+        }
+        self.reliability = reliability;
+        Ok(())
+    }
+
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        // Mirrors the LoopObject `write_property` arms so the PICS and
+        // runtime dispatch share one truth source.
+        matches!(
+            property,
+            PropertyIdentifier::SETPOINT
+                | PropertyIdentifier::PROPORTIONAL_CONSTANT
+                | PropertyIdentifier::INTEGRAL_CONSTANT
+                | PropertyIdentifier::DERIVATIVE_CONSTANT
+                | PropertyIdentifier::UPDATE_INTERVAL
+                | PropertyIdentifier::RELIABILITY
+                | PropertyIdentifier::OUT_OF_SERVICE
+                | PropertyIdentifier::DESCRIPTION
+                | PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE
+                | PropertyIdentifier::MANIPULATED_VARIABLE_REFERENCE
+                | PropertyIdentifier::SETPOINT_REFERENCE
+        )
     }
 }
 
@@ -506,60 +503,24 @@ mod tests {
     }
 
     #[test]
-    fn loop_set_controlled_variable_reference_read_back() {
-        let mut lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+    fn loop_set_references_read_back() {
         let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 5).unwrap();
         let prop_raw = PropertyIdentifier::PRESENT_VALUE.to_raw();
+        let expect = PropertyValue::List(vec![
+            PropertyValue::ObjectIdentifier(oid),
+            PropertyValue::Enumerated(prop_raw),
+        ]);
+        let mut lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
         lo.set_controlled_variable_reference(BACnetObjectPropertyReference::new(oid, prop_raw));
-
-        let val = lo
-            .read_property(PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE, None)
-            .unwrap();
-        assert_eq!(
-            val,
-            PropertyValue::List(vec![
-                PropertyValue::ObjectIdentifier(oid),
-                PropertyValue::Enumerated(prop_raw),
-            ])
-        );
-    }
-
-    #[test]
-    fn loop_set_manipulated_variable_reference_read_back() {
-        let mut lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
-        let oid = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 3).unwrap();
-        let prop_raw = PropertyIdentifier::PRESENT_VALUE.to_raw();
         lo.set_manipulated_variable_reference(BACnetObjectPropertyReference::new(oid, prop_raw));
-
-        let val = lo
-            .read_property(PropertyIdentifier::MANIPULATED_VARIABLE_REFERENCE, None)
-            .unwrap();
-        assert_eq!(
-            val,
-            PropertyValue::List(vec![
-                PropertyValue::ObjectIdentifier(oid),
-                PropertyValue::Enumerated(prop_raw),
-            ])
-        );
-    }
-
-    #[test]
-    fn loop_set_setpoint_reference_read_back() {
-        let mut lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
-        let oid = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 10).unwrap();
-        let prop_raw = PropertyIdentifier::PRESENT_VALUE.to_raw();
         lo.set_setpoint_reference(BACnetObjectPropertyReference::new(oid, prop_raw));
-
-        let val = lo
-            .read_property(PropertyIdentifier::SETPOINT_REFERENCE, None)
-            .unwrap();
-        assert_eq!(
-            val,
-            PropertyValue::List(vec![
-                PropertyValue::ObjectIdentifier(oid),
-                PropertyValue::Enumerated(prop_raw),
-            ])
-        );
+        for property in [
+            PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE,
+            PropertyIdentifier::MANIPULATED_VARIABLE_REFERENCE,
+            PropertyIdentifier::SETPOINT_REFERENCE,
+        ] {
+            assert_eq!(lo.read_property(property, None).unwrap(), expect);
+        }
     }
 
     #[test]
@@ -640,5 +601,174 @@ mod tests {
             None,
         );
         assert!(result.is_err());
+    }
+
+    // --- #182: framed (context-tagged) reference writes ---
+
+    fn framed_reference(r: &BACnetObjectPropertyReference) -> PropertyValue {
+        let mut buf = bytes::BytesMut::new();
+        bacnet_encoding::constructed::encode_object_property_reference(&mut buf, r);
+        PropertyValue::ApplicationData(buf.to_vec())
+    }
+
+    #[test]
+    fn loop_write_framed_indexed_reference_reads_back_with_index() {
+        let mut lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 7).unwrap();
+        let r = BACnetObjectPropertyReference::new_indexed(
+            oid,
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+            3,
+        );
+        lo.write_property(
+            PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE,
+            None,
+            framed_reference(&r),
+            None,
+        )
+        .unwrap();
+        // The optional array-index member is carried through to the read form.
+        assert_eq!(
+            lo.read_property(PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE, None)
+                .unwrap(),
+            PropertyValue::List(vec![
+                PropertyValue::ObjectIdentifier(oid),
+                PropertyValue::Enumerated(PropertyIdentifier::PRESENT_VALUE.to_raw()),
+                PropertyValue::Unsigned(3),
+            ])
+        );
+    }
+
+    #[test]
+    fn loop_write_setpoint_reference_accepts_bacnetsetpointreference_frame() {
+        let mut lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+        let oid = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 10).unwrap();
+        let r = BACnetObjectPropertyReference::new(oid, PropertyIdentifier::PRESENT_VALUE.to_raw());
+        let mut buf = bytes::BytesMut::new();
+        bacnet_encoding::constructed::encode_setpoint_reference(&mut buf, &r);
+        lo.write_property(
+            PropertyIdentifier::SETPOINT_REFERENCE,
+            None,
+            PropertyValue::ApplicationData(buf.to_vec()),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            lo.read_property(PropertyIdentifier::SETPOINT_REFERENCE, None)
+                .unwrap(),
+            PropertyValue::List(vec![
+                PropertyValue::ObjectIdentifier(oid),
+                PropertyValue::Enumerated(PropertyIdentifier::PRESENT_VALUE.to_raw()),
+            ])
+        );
+    }
+
+    #[test]
+    fn loop_write_device_qualified_reference_rejected_and_preserves() {
+        let mut lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 7).unwrap();
+        let prop_raw = PropertyIdentifier::PRESENT_VALUE.to_raw();
+        lo.set_controlled_variable_reference(BACnetObjectPropertyReference::new(oid, prop_raw));
+        // [0] oid / [1] prop / [3] device: device qualification is not part of
+        // the Loop reference production — INVALID_DATA_ENCODING, no change.
+        let mut buf = bytes::BytesMut::new();
+        bacnet_encoding::constructed::encode_object_property_reference(
+            &mut buf,
+            &BACnetObjectPropertyReference::new(oid, prop_raw),
+        );
+        bacnet_encoding::primitives::encode_ctx_object_id(
+            &mut buf,
+            3,
+            &ObjectIdentifier::new(ObjectType::DEVICE, 77).unwrap(),
+        );
+        let err = lo
+            .write_property(
+                PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE,
+                None,
+                PropertyValue::ApplicationData(buf.to_vec()),
+                None,
+            )
+            .unwrap_err();
+        match err {
+            Error::Protocol { class, code } => {
+                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+                assert_eq!(code, ErrorCode::INVALID_DATA_ENCODING.to_raw() as u32);
+            }
+            other => panic!("expected PROPERTY/INVALID_DATA_ENCODING, got {other:?}"),
+        }
+        assert_eq!(
+            lo.read_property(PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE, None)
+                .unwrap(),
+            PropertyValue::List(vec![
+                PropertyValue::ObjectIdentifier(oid),
+                PropertyValue::Enumerated(prop_raw),
+            ])
+        );
+    }
+
+    #[test]
+    fn loop_write_empty_setpoint_frame_clears_reference() {
+        let mut lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+        let oid = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 10).unwrap();
+        let r = BACnetObjectPropertyReference::new(oid, PropertyIdentifier::PRESENT_VALUE.to_raw());
+        let mut buf = bytes::BytesMut::new();
+        bacnet_encoding::constructed::encode_setpoint_reference(&mut buf, &r);
+        lo.write_property(
+            PropertyIdentifier::SETPOINT_REFERENCE,
+            None,
+            PropertyValue::ApplicationData(buf.to_vec()),
+            None,
+        )
+        .unwrap();
+        assert_ne!(
+            lo.read_property(PropertyIdentifier::SETPOINT_REFERENCE, None)
+                .unwrap(),
+            PropertyValue::Null
+        );
+
+        // 0x0E 0x0F: BACnetSetpointReference with its OPTIONAL member absent —
+        // Clause 12.17 defines the absence as "fixed setpoint", so a
+        // conformant peer clearing the reference this way must be accepted,
+        // exactly like a Null write (pinned over the wire in the server's
+        // `reference_writes` tests).
+        lo.write_property(
+            PropertyIdentifier::SETPOINT_REFERENCE,
+            None,
+            PropertyValue::ApplicationData(vec![0x0E, 0x0F]),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            lo.read_property(PropertyIdentifier::SETPOINT_REFERENCE, None)
+                .unwrap(),
+            PropertyValue::Null
+        );
+    }
+
+    #[test]
+    fn loop_write_local_list_with_index_still_accepted() {
+        let mut lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 7).unwrap();
+        let prop_raw = PropertyIdentifier::PRESENT_VALUE.to_raw();
+        lo.write_property(
+            PropertyIdentifier::SETPOINT_REFERENCE,
+            None,
+            PropertyValue::List(vec![
+                PropertyValue::ObjectIdentifier(oid),
+                PropertyValue::Enumerated(prop_raw),
+                PropertyValue::Unsigned(9),
+            ]),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            lo.read_property(PropertyIdentifier::SETPOINT_REFERENCE, None)
+                .unwrap(),
+            PropertyValue::List(vec![
+                PropertyValue::ObjectIdentifier(oid),
+                PropertyValue::Enumerated(prop_raw),
+                PropertyValue::Unsigned(9),
+            ])
+        );
     }
 }

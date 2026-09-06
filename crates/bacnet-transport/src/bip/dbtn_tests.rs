@@ -94,6 +94,7 @@ async fn dbtn_registered_foreign_device_fans_out_without_origin_echo() {
         received.source_mac.as_slice(),
         &encode_bip_mac(sender.0, sender.1)
     );
+    assert!(received.link_layer_group);
 
     for (label, socket) in [
         ("local broadcast", &local_broadcast_sink),

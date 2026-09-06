@@ -165,36 +165,23 @@ impl BACnetObject for AveragingObject {
         {
             return result;
         }
+        // Clause 12.5 Table 12-5 types Object_Property_Reference as
+        // BACnetDeviceObjectPropertyReference, and the object text leaves
+        // referencing an object in a DIFFERENT device explicit ("Optionally,
+        // the object property to be sampled may exist in a different BACnet
+        // device") — this implementation samples local objects only, so the
+        // shared arm helper decodes with the local-only
+        // BACnetObjectPropertyReference framing: a device-qualified member
+        // [3] refuses INVALID_DATA_ENCODING instead of silently dropping the
+        // device, and the flat form keeps its historical Unsigned members
+        // (both Unsigned and Enumerated are accepted there; see
+        // reference.rs).
         if property == PropertyIdentifier::OBJECT_PROPERTY_REFERENCE {
-            match value {
-                PropertyValue::Null => {
-                    self.object_property_reference = None;
-                    return Ok(());
-                }
-                PropertyValue::List(ref items) if items.len() >= 2 => {
-                    if let (PropertyValue::ObjectIdentifier(oid), PropertyValue::Unsigned(prop)) =
-                        (&items[0], &items[1])
-                    {
-                        let array_index = if items.len() > 2 {
-                            if let PropertyValue::Unsigned(idx) = &items[2] {
-                                Some(*idx as u32)
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        };
-                        self.object_property_reference = Some(if let Some(idx) = array_index {
-                            BACnetObjectPropertyReference::new_indexed(*oid, *prop as u32, idx)
-                        } else {
-                            BACnetObjectPropertyReference::new(*oid, *prop as u32)
-                        });
-                        return Ok(());
-                    }
-                    return Err(common::invalid_data_type_error());
-                }
-                _ => return Err(common::invalid_data_type_error()),
-            }
+            self.object_property_reference = crate::reference::decode_reference_write(
+                &value,
+                crate::reference::ReferenceFrame::Bare,
+            )?;
+            return Ok(());
         }
         Err(common::write_access_denied_error())
     }
@@ -218,6 +205,20 @@ impl BACnetObject for AveragingObject {
             PropertyIdentifier::EVENT_STATE,
         ];
         Cow::Borrowed(PROPS)
+    }
+
+    /// Mirror the `write_property` arms exactly (PICS truth invariant):
+    /// Averaging accepts OBJECT_PROPERTY_REFERENCE plus the shared
+    /// DESCRIPTION / OUT_OF_SERVICE routes. OBJECT_NAME is NOT advertised:
+    /// unlike the historical default's blanket claim, no arm routes it (a
+    /// network write falls through to WRITE_ACCESS_DENIED).
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        matches!(
+            property,
+            PropertyIdentifier::OBJECT_PROPERTY_REFERENCE
+                | PropertyIdentifier::DESCRIPTION
+                | PropertyIdentifier::OUT_OF_SERVICE
+        )
     }
 }
 
@@ -482,6 +483,196 @@ mod tests {
             avg.read_property(PropertyIdentifier::PRESENT_VALUE, None)
                 .unwrap(),
             PropertyValue::Real(42.0)
+        );
+    }
+
+    // --- #182 adversary blocker: strict shared decode on the reference arm ---
+
+    #[test]
+    fn averaging_reference_write_accepts_exact_shapes_and_both_member_typings() {
+        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 7).unwrap();
+        let pv_raw = PropertyIdentifier::PRESENT_VALUE.to_raw();
+        for (label, members, expect_indexed) in [
+            (
+                "2-member Unsigned (historical flat form)",
+                vec![
+                    PropertyValue::ObjectIdentifier(oid),
+                    PropertyValue::Unsigned(pv_raw as u64),
+                ],
+                None,
+            ),
+            (
+                "2-member Enumerated (Loop-family flat form)",
+                vec![
+                    PropertyValue::ObjectIdentifier(oid),
+                    PropertyValue::Enumerated(pv_raw),
+                ],
+                None,
+            ),
+            (
+                "3-member indexed",
+                vec![
+                    PropertyValue::ObjectIdentifier(oid),
+                    PropertyValue::Unsigned(pv_raw as u64),
+                    PropertyValue::Unsigned(4),
+                ],
+                Some(4),
+            ),
+        ] {
+            let mut avg = AveragingObject::new(1, "AVG-1").unwrap();
+            avg.write_property(
+                PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
+                None,
+                PropertyValue::List(members),
+                None,
+            )
+            .unwrap_or_else(|e| panic!("{label}: must be accepted: {e:?}"));
+            let mut expected = vec![
+                PropertyValue::ObjectIdentifier(oid),
+                PropertyValue::Unsigned(pv_raw as u64),
+            ];
+            if let Some(idx) = expect_indexed {
+                expected.push(PropertyValue::Unsigned(idx as u64));
+            }
+            assert_eq!(
+                avg.read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
+                    .unwrap(),
+                PropertyValue::List(expected),
+                "{label}: read-back fidelity"
+            );
+        }
+    }
+
+    #[test]
+    fn averaging_reference_write_rejects_bad_shapes_and_preserves_state() {
+        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 7).unwrap();
+        let pv_raw = PropertyIdentifier::PRESENT_VALUE.to_raw();
+        let baseline = PropertyValue::List(vec![
+            PropertyValue::ObjectIdentifier(oid),
+            PropertyValue::Unsigned(pv_raw as u64),
+        ]);
+
+        // A framed device-qualified write ([3] device-identifier): the
+        // Clause 12.5 typing is BACnetDeviceObjectPropertyReference but the
+        // remote-sample path is the standard's OPTIONAL branch, unmodeled
+        // here — refused INVALID_DATA_ENCODING rather than silently
+        // local-izing.
+        let mut framed_device = bytes::BytesMut::new();
+        bacnet_encoding::constructed::encode_object_property_reference(
+            &mut framed_device,
+            &BACnetObjectPropertyReference::new(oid, pv_raw),
+        );
+        bacnet_encoding::primitives::encode_ctx_object_id(
+            &mut framed_device,
+            3,
+            &ObjectIdentifier::new(ObjectType::DEVICE, 42).unwrap(),
+        );
+
+        let cases: Vec<(PropertyValue, bacnet_types::enums::ErrorCode, &str)> = vec![
+            (
+                PropertyValue::List(vec![
+                    PropertyValue::ObjectIdentifier(oid),
+                    PropertyValue::Unsigned(pv_raw as u64),
+                    PropertyValue::Unsigned(2),
+                    PropertyValue::Unsigned(9), // 4th member: silently dropped pre-fix
+                ]),
+                bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE,
+                "4-member list",
+            ),
+            (
+                PropertyValue::List(vec![
+                    PropertyValue::ObjectIdentifier(oid),
+                    PropertyValue::Unsigned(pv_raw as u64),
+                    PropertyValue::Real(2.0), // non-Unsigned 3rd: retyped to no-index pre-fix
+                ]),
+                bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE,
+                "wrong-typed third member",
+            ),
+            (
+                PropertyValue::List(vec![
+                    PropertyValue::Unsigned(1),
+                    PropertyValue::Unsigned(pv_raw as u64),
+                ]),
+                bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE,
+                "non-ObjectIdentifier first member",
+            ),
+            (
+                PropertyValue::List(vec![
+                    PropertyValue::ObjectIdentifier(oid),
+                    PropertyValue::Unsigned(u64::MAX), // > 4 octets: `as u32` truncated pre-fix
+                ]),
+                bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE,
+                "oversized Unsigned property member",
+            ),
+            (
+                PropertyValue::ApplicationData(framed_device.to_vec()),
+                bacnet_types::enums::ErrorCode::INVALID_DATA_ENCODING,
+                "device-qualified framed reference",
+            ),
+        ];
+
+        for (value, expected_code, label) in cases {
+            let mut avg = AveragingObject::new(1, "AVG-1").unwrap();
+            avg.write_property(
+                PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
+                None,
+                baseline.clone(),
+                None,
+            )
+            .unwrap();
+            let err = avg
+                .write_property(
+                    PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
+                    None,
+                    value,
+                    None,
+                )
+                .expect_err(label);
+            match err {
+                Error::Protocol { class, code } => {
+                    assert_eq!(
+                        class,
+                        bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32,
+                        "{label}: wrong class"
+                    );
+                    assert_eq!(code, expected_code.to_raw() as u32, "{label}: wrong code");
+                }
+                other => panic!("{label}: expected Property error, got {other:?}"),
+            }
+            assert_eq!(
+                avg.read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
+                    .unwrap(),
+                baseline,
+                "{label}: refused write must leave the stored reference untouched"
+            );
+        }
+    }
+
+    #[test]
+    fn averaging_reference_write_accepts_the_framed_local_form() {
+        let mut avg = AveragingObject::new(1, "AVG-1").unwrap();
+        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 7).unwrap();
+        let pv_raw = PropertyIdentifier::PRESENT_VALUE.to_raw();
+        let mut framed = bytes::BytesMut::new();
+        bacnet_encoding::constructed::encode_object_property_reference(
+            &mut framed,
+            &BACnetObjectPropertyReference::new_indexed(oid, pv_raw, 2),
+        );
+        avg.write_property(
+            PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
+            None,
+            PropertyValue::ApplicationData(framed.to_vec()),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            avg.read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
+                .unwrap(),
+            PropertyValue::List(vec![
+                PropertyValue::ObjectIdentifier(oid),
+                PropertyValue::Unsigned(pv_raw as u64),
+                PropertyValue::Unsigned(2),
+            ])
         );
     }
 }

@@ -2,6 +2,7 @@
 
 Demonstrates:
 - Starting a BACnet/IP server with multiple object types
+- Preloading stream- and record-access File objects before start
 - Reading and writing properties from a client
 - ReadPropertyMultiple for efficient bulk reads
 - Device discovery via WhoIs/IAm
@@ -35,6 +36,11 @@ async def main():
     server.add_binary_output(instance=1, name="Fan Enable")
     server.add_binary_value(instance=1, name="Override Mode")
     server.add_multistate_value(instance=1, name="Operating Mode", number_of_states=4)
+    server.add_file(instance=1, name="Controller Config", file_type="text/plain")
+    server.set_file_data(instance=1, data=b"mode=occupied\n")
+    server.add_file(instance=2, name="Startup Records")
+    server.set_file_access_method(instance=2, access_method="record")
+    server.set_file_records(instance=2, records=[b"boot", b"ready"])
 
     await server.start()
     addr = await server.local_address()

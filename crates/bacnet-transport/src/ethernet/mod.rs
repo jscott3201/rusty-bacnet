@@ -6,6 +6,7 @@
 //! Platform: Linux only (AF_PACKET raw sockets). Feature-gated behind `ethernet`.
 
 use bacnet_types::error::Error;
+#[cfg(target_os = "linux")]
 use bacnet_types::MacAddr;
 use bytes::{BufMut, Bytes, BytesMut};
 
@@ -41,6 +42,11 @@ pub const MIN_ETHERNET_PAYLOAD: usize = 46;
 
 /// BACnet broadcast MAC (all 0xFF).
 pub const ETHERNET_BROADCAST: [u8; 6] = [0xFF; 6];
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn is_ethernet_group(destination: &[u8; 6]) -> bool {
+    destination[0] & 0x01 != 0
+}
 
 /// A decoded BACnet Ethernet LLC frame.
 #[derive(Debug, Clone)]
@@ -693,6 +699,7 @@ mod transport {
                                         .try_send(ReceivedNpdu {
                                             npdu: frame.payload.clone(),
                                             source_mac: MacAddr::from(frame.source),
+                                            link_layer_group: is_ethernet_group(&frame.destination),
                                             data_attributes: Vec::new(),
                                             reply_tx: None,
                                         })
@@ -801,6 +808,10 @@ mod transport {
 
         fn local_mac(&self) -> &[u8] {
             &self.local_mac
+        }
+
+        fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
+            mac == ETHERNET_BROADCAST
         }
 
         fn max_apdu_length(&self) -> u16 {

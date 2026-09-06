@@ -70,15 +70,22 @@ impl YouAreRequest {
 
         // [0] vendorID
         let (tag, pos) = tags::decode_tag(data, offset)?;
+        if !tag.is_context(0) {
+            return Err(Error::decoding(offset, "YouAre expected context tag 0"));
+        }
         let end = pos + tag.length as usize;
         if end > data.len() {
             return Err(Error::decoding(pos, "YouAre truncated at vendor-id"));
         }
-        let vendor_id = primitives::decode_unsigned(&data[pos..end])? as u16;
+        let vendor_id = u16::try_from(primitives::decode_unsigned(&data[pos..end])?)
+            .map_err(|_| Error::decoding(pos, "YouAre vendor-id exceeds u16"))?;
         offset = end;
 
         // [1] modelName
         let (tag, pos) = tags::decode_tag(data, offset)?;
+        if !tag.is_context(1) {
+            return Err(Error::decoding(offset, "YouAre expected context tag 1"));
+        }
         let end = pos + tag.length as usize;
         if end > data.len() {
             return Err(Error::decoding(pos, "YouAre truncated at model-name"));
@@ -88,6 +95,9 @@ impl YouAreRequest {
 
         // [2] serialNumber
         let (tag, pos) = tags::decode_tag(data, offset)?;
+        if !tag.is_context(2) {
+            return Err(Error::decoding(offset, "YouAre expected context tag 2"));
+        }
         let end = pos + tag.length as usize;
         if end > data.len() {
             return Err(Error::decoding(pos, "YouAre truncated at serial-number"));
@@ -130,6 +140,19 @@ impl YouAreRequest {
 mod tests {
     use super::*;
     use bacnet_types::enums::ObjectType;
+
+    fn encode_required_fields(
+        vendor_tag: u8,
+        vendor_id: u64,
+        model_tag: u8,
+        serial_tag: u8,
+    ) -> BytesMut {
+        let mut buf = BytesMut::new();
+        primitives::encode_ctx_unsigned(&mut buf, vendor_tag, vendor_id);
+        primitives::encode_ctx_character_string(&mut buf, model_tag, "M").unwrap();
+        primitives::encode_ctx_character_string(&mut buf, serial_tag, "S").unwrap();
+        buf
+    }
 
     #[test]
     fn who_am_i_round_trip() {
@@ -175,6 +198,35 @@ mod tests {
         req.encode(&mut buf).unwrap();
         let decoded = YouAreRequest::decode(&buf).unwrap();
         assert_eq!(req, decoded);
+    }
+
+    #[test]
+    fn you_are_vendor_id_must_fit_u16() {
+        let maximum = encode_required_fields(0, u64::from(u16::MAX), 1, 2);
+        assert_eq!(YouAreRequest::decode(&maximum).unwrap().vendor_id, u16::MAX);
+
+        let mut leading_zero = BytesMut::new();
+        tags::encode_tag(&mut leading_zero, 0, tags::TagClass::Context, 3);
+        leading_zero.extend_from_slice(&[0x00, 0xff, 0xff]);
+        primitives::encode_ctx_character_string(&mut leading_zero, 1, "M").unwrap();
+        primitives::encode_ctx_character_string(&mut leading_zero, 2, "S").unwrap();
+        assert_eq!(
+            YouAreRequest::decode(&leading_zero).unwrap().vendor_id,
+            u16::MAX
+        );
+
+        for value in [u64::from(u16::MAX) + 1, 65_537, u64::MAX] {
+            let data = encode_required_fields(0, value, 1, 2);
+            assert!(YouAreRequest::decode(&data).is_err());
+        }
+    }
+
+    #[test]
+    fn you_are_requires_mandatory_context_tags() {
+        for (vendor_tag, model_tag, serial_tag) in [(1, 1, 2), (0, 2, 2), (0, 1, 1)] {
+            let data = encode_required_fields(vendor_tag, 42, model_tag, serial_tag);
+            assert!(YouAreRequest::decode(&data).is_err());
+        }
     }
 
     #[test]

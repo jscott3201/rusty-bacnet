@@ -10,6 +10,10 @@ use bytes::BytesMut;
 
 use crate::common::MAX_DECODED_ITEMS;
 
+fn is_application_tag(tag: &tags::Tag, header: u8, number: u8, max_lvt: u8) -> bool {
+    tag.class == tags::TagClass::Application && tag.number == number && header & 0x07 <= max_lvt
+}
+
 // ---------------------------------------------------------------------------
 // VTOpenRequest / VTOpenAck
 // ---------------------------------------------------------------------------
@@ -29,11 +33,17 @@ impl VTOpenRequest {
 
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let (tag, pos) = tags::decode_tag(data, 0)?;
+        if !is_application_tag(&tag, data[0], tags::app_tag::ENUMERATED, 5) {
+            return Err(Error::decoding(0, "VTOpen expected application Enumerated"));
+        }
         let end = pos + tag.length as usize;
         if end > data.len() {
             return Err(Error::decoding(pos, "VTOpen truncated at vt-class"));
         }
-        let vt_class = primitives::decode_unsigned(&data[pos..end])? as u32;
+        let vt_class_raw = primitives::decode_unsigned(&data[pos..end])?;
+        let vt_class = u32::try_from(vt_class_raw).map_err(|_| {
+            Error::decoding(pos, format!("VTOpen vt-class {vt_class_raw} exceeds u32"))
+        })?;
         Ok(Self { vt_class })
     }
 }
@@ -53,6 +63,12 @@ impl VTOpenAck {
 
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let (tag, pos) = tags::decode_tag(data, 0)?;
+        if !is_application_tag(&tag, data[0], tags::app_tag::UNSIGNED, 5) {
+            return Err(Error::decoding(
+                0,
+                "VTOpenAck expected application Unsigned",
+            ));
+        }
         let end = pos + tag.length as usize;
         if end > data.len() {
             return Err(Error::decoding(
@@ -60,7 +76,13 @@ impl VTOpenAck {
                 "VTOpenAck truncated at session-identifier",
             ));
         }
-        let id = primitives::decode_unsigned(&data[pos..end])? as u8;
+        let id_raw = primitives::decode_unsigned(&data[pos..end])?;
+        let id = u8::try_from(id_raw).map_err(|_| {
+            Error::decoding(
+                pos,
+                format!("VTOpenAck session-identifier {id_raw} exceeds u8"),
+            )
+        })?;
         Ok(Self {
             remote_vt_session_identifier: id,
         })
@@ -94,6 +116,12 @@ impl VTCloseRequest {
                 return Err(Error::decoding(offset, "VTClose too many session IDs"));
             }
             let (tag, pos) = tags::decode_tag(data, offset)?;
+            if !is_application_tag(&tag, data[offset], tags::app_tag::UNSIGNED, 5) {
+                return Err(Error::decoding(
+                    offset,
+                    "VTClose expected application Unsigned",
+                ));
+            }
             let end = pos + tag.length as usize;
             if end > data.len() {
                 return Err(Error::decoding(
@@ -101,7 +129,13 @@ impl VTCloseRequest {
                     "VTClose truncated at session-identifier",
                 ));
             }
-            ids.push(primitives::decode_unsigned(&data[pos..end])? as u8);
+            let id_raw = primitives::decode_unsigned(&data[pos..end])?;
+            ids.push(u8::try_from(id_raw).map_err(|_| {
+                Error::decoding(
+                    pos,
+                    format!("VTClose session-identifier {id_raw} exceeds u8"),
+                )
+            })?);
             offset = end;
         }
         Ok(Self {
@@ -135,6 +169,12 @@ impl VTDataRequest {
         let mut offset = 0;
 
         let (tag, pos) = tags::decode_tag(data, offset)?;
+        if !is_application_tag(&tag, data[offset], tags::app_tag::UNSIGNED, 5) {
+            return Err(Error::decoding(
+                offset,
+                "VTData expected application Unsigned session-identifier",
+            ));
+        }
         let end = pos + tag.length as usize;
         if end > data.len() {
             return Err(Error::decoding(
@@ -142,10 +182,22 @@ impl VTDataRequest {
                 "VTData truncated at session-identifier",
             ));
         }
-        let vt_session_identifier = primitives::decode_unsigned(&data[pos..end])? as u8;
+        let vt_session_identifier_raw = primitives::decode_unsigned(&data[pos..end])?;
+        let vt_session_identifier = u8::try_from(vt_session_identifier_raw).map_err(|_| {
+            Error::decoding(
+                pos,
+                format!("VTData session-identifier {vt_session_identifier_raw} exceeds u8"),
+            )
+        })?;
         offset = end;
 
         let (tag, pos) = tags::decode_tag(data, offset)?;
+        if !is_application_tag(&tag, data[offset], tags::app_tag::OCTET_STRING, 5) {
+            return Err(Error::decoding(
+                offset,
+                "VTData expected application OctetString",
+            ));
+        }
         let end = pos + tag.length as usize;
         if end > data.len() {
             return Err(Error::decoding(pos, "VTData truncated at new-data"));
@@ -154,6 +206,12 @@ impl VTDataRequest {
         offset = end;
 
         let (tag, pos) = tags::decode_tag(data, offset)?;
+        if !is_application_tag(&tag, data[offset], tags::app_tag::BOOLEAN, 1) {
+            return Err(Error::decoding(
+                offset,
+                "VTData expected application Boolean",
+            ));
+        }
         let vt_data_flag = tag.length != 0;
         let _ = pos;
 
@@ -202,7 +260,17 @@ impl VTDataAck {
         if offset < data.len() {
             let (opt, new_off) = tags::decode_optional_context(data, offset, 1)?;
             if let Some(content) = opt {
-                accepted_octet_count = Some(primitives::decode_unsigned(content)? as u32);
+                let accepted_octet_count_raw = primitives::decode_unsigned(content)?;
+                accepted_octet_count = Some(u32::try_from(accepted_octet_count_raw).map_err(
+                    |_| {
+                        Error::decoding(
+                            offset,
+                            format!(
+                                "VTDataAck accepted-octet-count {accepted_octet_count_raw} exceeds u32"
+                            ),
+                        )
+                    },
+                )?);
                 offset = new_off;
             }
         }
@@ -218,6 +286,20 @@ impl VTDataAck {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn encode_application_unsigned(tag_number: u8, value: u64) -> BytesMut {
+        let mut buf = BytesMut::new();
+        primitives::encode_app_unsigned(&mut buf, value);
+        buf[0] = (tag_number << 4) | (buf[0] & 0x0f);
+        buf
+    }
+
+    fn encode_vt_data(session_identifier: u64) -> BytesMut {
+        let mut buf = encode_application_unsigned(tags::app_tag::UNSIGNED, session_identifier);
+        primitives::encode_app_octet_string(&mut buf, &[0x01]);
+        primitives::encode_app_boolean(&mut buf, false);
+        buf
+    }
 
     #[test]
     fn vt_open_round_trip() {
@@ -237,6 +319,61 @@ mod tests {
         ack.encode(&mut buf);
         let decoded = VTOpenAck::decode(&buf).unwrap();
         assert_eq!(ack, decoded);
+    }
+
+    #[test]
+    fn vt_open_values_must_fit_field_widths() {
+        let maximum = encode_application_unsigned(tags::app_tag::ENUMERATED, u64::from(u32::MAX));
+        assert_eq!(VTOpenRequest::decode(&maximum).unwrap().vt_class, u32::MAX);
+
+        let mut leading_zero = BytesMut::new();
+        tags::encode_tag(
+            &mut leading_zero,
+            tags::app_tag::ENUMERATED,
+            tags::TagClass::Application,
+            5,
+        );
+        leading_zero.extend_from_slice(&[0, 0xff, 0xff, 0xff, 0xff]);
+        assert_eq!(
+            VTOpenRequest::decode(&leading_zero).unwrap().vt_class,
+            u32::MAX
+        );
+
+        for value in [u64::from(u32::MAX) + 1, u64::MAX] {
+            let encoded = encode_application_unsigned(tags::app_tag::ENUMERATED, value);
+            assert!(VTOpenRequest::decode(&encoded).is_err());
+        }
+    }
+
+    #[test]
+    fn vt_open_ack_identifier_must_fit_u8() {
+        let maximum = encode_application_unsigned(tags::app_tag::UNSIGNED, u64::from(u8::MAX));
+        assert_eq!(
+            VTOpenAck::decode(&maximum)
+                .unwrap()
+                .remote_vt_session_identifier,
+            u8::MAX
+        );
+
+        let mut leading_zero = BytesMut::new();
+        tags::encode_tag(
+            &mut leading_zero,
+            tags::app_tag::UNSIGNED,
+            tags::TagClass::Application,
+            2,
+        );
+        leading_zero.extend_from_slice(&[0, 0xff]);
+        assert_eq!(
+            VTOpenAck::decode(&leading_zero)
+                .unwrap()
+                .remote_vt_session_identifier,
+            u8::MAX
+        );
+
+        for value in [256, 257, u64::MAX] {
+            let encoded = encode_application_unsigned(tags::app_tag::UNSIGNED, value);
+            assert!(VTOpenAck::decode(&encoded).is_err());
+        }
     }
 
     #[test]
@@ -260,6 +397,28 @@ mod tests {
         assert!(buf.is_empty());
         let decoded = VTCloseRequest::decode(&buf).unwrap();
         assert_eq!(req, decoded);
+    }
+
+    #[test]
+    fn vt_close_identifiers_must_fit_u8() {
+        let mut overflow = encode_application_unsigned(tags::app_tag::UNSIGNED, 1);
+        overflow.extend_from_slice(&encode_application_unsigned(tags::app_tag::UNSIGNED, 256));
+        assert!(VTCloseRequest::decode(&overflow).is_err());
+
+        let mut leading_zero = BytesMut::new();
+        tags::encode_tag(
+            &mut leading_zero,
+            tags::app_tag::UNSIGNED,
+            tags::TagClass::Application,
+            2,
+        );
+        leading_zero.extend_from_slice(&[0, 0xff]);
+        assert_eq!(
+            VTCloseRequest::decode(&leading_zero)
+                .unwrap()
+                .list_of_remote_vt_session_identifiers,
+            [u8::MAX]
+        );
     }
 
     #[test]
@@ -289,6 +448,30 @@ mod tests {
     }
 
     #[test]
+    fn vt_data_identifier_must_fit_u8() {
+        for value in [256, 257, u64::MAX] {
+            assert!(VTDataRequest::decode(&encode_vt_data(value)).is_err());
+        }
+
+        let mut leading_zero = BytesMut::new();
+        tags::encode_tag(
+            &mut leading_zero,
+            tags::app_tag::UNSIGNED,
+            tags::TagClass::Application,
+            2,
+        );
+        leading_zero.extend_from_slice(&[0, 0xff]);
+        primitives::encode_app_octet_string(&mut leading_zero, &[0x01]);
+        primitives::encode_app_boolean(&mut leading_zero, false);
+        assert_eq!(
+            VTDataRequest::decode(&leading_zero)
+                .unwrap()
+                .vt_session_identifier,
+            u8::MAX
+        );
+    }
+
+    #[test]
     fn vt_data_ack_round_trip() {
         let ack = VTDataAck {
             all_new_data_accepted: Some(true),
@@ -311,6 +494,66 @@ mod tests {
         assert!(buf.is_empty());
         let decoded = VTDataAck::decode(&buf).unwrap();
         assert_eq!(ack, decoded);
+    }
+
+    #[test]
+    fn vt_data_ack_count_must_fit_u32() {
+        for value in [u64::from(u32::MAX) + 1, u64::MAX] {
+            let mut encoded = BytesMut::new();
+            primitives::encode_ctx_unsigned(&mut encoded, 1, value);
+            assert!(VTDataAck::decode(&encoded).is_err());
+        }
+
+        let mut leading_zero = BytesMut::new();
+        tags::encode_tag(&mut leading_zero, 1, tags::TagClass::Context, 5);
+        leading_zero.extend_from_slice(&[0, 0xff, 0xff, 0xff, 0xff]);
+        assert_eq!(
+            VTDataAck::decode(&leading_zero)
+                .unwrap()
+                .accepted_octet_count,
+            Some(u32::MAX)
+        );
+    }
+
+    #[test]
+    fn vt_decoders_require_application_field_tags() {
+        let open_wrong_tag = encode_application_unsigned(tags::app_tag::UNSIGNED, 1);
+        assert!(VTOpenRequest::decode(&open_wrong_tag).is_err());
+
+        let open_ack_wrong_tag = encode_application_unsigned(tags::app_tag::ENUMERATED, 1);
+        assert!(VTOpenAck::decode(&open_ack_wrong_tag).is_err());
+        assert!(VTCloseRequest::decode(&open_ack_wrong_tag).is_err());
+
+        let mut data_wrong_session = encode_application_unsigned(tags::app_tag::ENUMERATED, 1);
+        primitives::encode_app_octet_string(&mut data_wrong_session, &[0x01]);
+        primitives::encode_app_boolean(&mut data_wrong_session, false);
+        assert!(VTDataRequest::decode(&data_wrong_session).is_err());
+
+        let mut data_wrong_octets = encode_application_unsigned(tags::app_tag::UNSIGNED, 1);
+        primitives::encode_app_character_string(&mut data_wrong_octets, "x").unwrap();
+        primitives::encode_app_boolean(&mut data_wrong_octets, false);
+        assert!(VTDataRequest::decode(&data_wrong_octets).is_err());
+
+        let mut data_wrong_boolean = encode_application_unsigned(tags::app_tag::UNSIGNED, 1);
+        primitives::encode_app_octet_string(&mut data_wrong_boolean, &[0x01]);
+        primitives::encode_app_unsigned(&mut data_wrong_boolean, 1);
+        assert!(VTDataRequest::decode(&data_wrong_boolean).is_err());
+    }
+
+    #[test]
+    fn vt_decoders_reject_reserved_application_lvt_forms() {
+        assert!(VTOpenRequest::decode(&[0x96, 0x01, 0x00]).is_err());
+        assert!(VTOpenAck::decode(&[0x26, 0x01, 0x00]).is_err());
+        assert!(VTCloseRequest::decode(&[0x26, 0x01, 0x00]).is_err());
+
+        let mut data = BytesMut::from(&[0x26, 0x01, 0x00][..]);
+        primitives::encode_app_octet_string(&mut data, &[0x01]);
+        primitives::encode_app_boolean(&mut data, false);
+        assert!(VTDataRequest::decode(&data).is_err());
+
+        let mut invalid_boolean = encode_vt_data(1);
+        *invalid_boolean.last_mut().unwrap() = 0x12;
+        assert!(VTDataRequest::decode(&invalid_boolean).is_err());
     }
 
     #[test]

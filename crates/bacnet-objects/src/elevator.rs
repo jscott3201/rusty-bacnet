@@ -4,10 +4,12 @@
 //! - EscalatorObject (type 58): represents an escalator
 //! - LiftObject (type 59): represents a single lift/elevator car
 
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    EscalatorFault, EscalatorMode, EscalatorOperationDirection, ObjectType, PropertyIdentifier,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
-use std::borrow::Cow;
+use std::{borrow::Cow, collections::HashSet};
 
 use crate::common::{self, read_common_properties};
 use crate::traits::BACnetObject;
@@ -176,18 +178,22 @@ pub struct EscalatorObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    /// Escalator mode (Enumerated: 0=unknown, 1=stop, 2=up, 3=down, 4=inspection).
-    escalator_mode: u32,
-    /// List of fault signal codes (Unsigned).
-    fault_signals: Vec<u64>,
+    /// Escalator mode (BACnetEscalatorMode, Clause 21); proprietary extensions
+    /// (Clause 23.1) are preserved as raw values.
+    escalator_mode: EscalatorMode,
+    /// Fault signal set (BACnetEscalatorFault, Clause 21).
+    fault_signals: Vec<EscalatorFault>,
     /// Energy meter reading (Real).
     energy_meter: f32,
     /// Energy meter reference (stored as raw bytes).
     energy_meter_ref: Vec<u8>,
     /// Power mode (Boolean).
     power_mode: bool,
-    /// Operation direction (Enumerated: 0=unknown, 1=up, 2=down, 3=stopped).
-    operation_direction: u32,
+    /// Operation direction (BACnetEscalatorOperationDirection, Clause 21);
+    /// proprietary extensions (Clause 23.1) are preserved as raw values.
+    operation_direction: EscalatorOperationDirection,
+    /// Passenger alarm state (Boolean).
+    passenger_alarm: bool,
     status_flags: StatusFlags,
     out_of_service: bool,
     reliability: u32,
@@ -201,12 +207,13 @@ impl EscalatorObject {
             oid,
             name: name.into(),
             description: String::new(),
-            escalator_mode: 0, // unknown
+            escalator_mode: EscalatorMode::UNKNOWN,
             fault_signals: Vec::new(),
             energy_meter: 0.0,
             energy_meter_ref: Vec::new(),
             power_mode: false,
-            operation_direction: 0, // unknown
+            operation_direction: EscalatorOperationDirection::UNKNOWN,
+            passenger_alarm: false,
             status_flags: StatusFlags::empty(),
             out_of_service: false,
             reliability: 0,
@@ -236,13 +243,13 @@ impl BACnetObject for EscalatorObject {
                 Ok(PropertyValue::Enumerated(ObjectType::ESCALATOR.to_raw()))
             }
             p if p == PropertyIdentifier::ESCALATOR_MODE => {
-                Ok(PropertyValue::Enumerated(self.escalator_mode))
+                Ok(PropertyValue::Enumerated(self.escalator_mode.to_raw()))
             }
             p if p == PropertyIdentifier::FAULT_SIGNALS => {
                 let items: Vec<PropertyValue> = self
                     .fault_signals
                     .iter()
-                    .map(|v| PropertyValue::Unsigned(*v))
+                    .map(|v| PropertyValue::Enumerated(v.to_raw()))
                     .collect();
                 Ok(PropertyValue::List(items))
             }
@@ -254,7 +261,10 @@ impl BACnetObject for EscalatorObject {
             }
             p if p == PropertyIdentifier::POWER_MODE => Ok(PropertyValue::Boolean(self.power_mode)),
             p if p == PropertyIdentifier::OPERATION_DIRECTION => {
-                Ok(PropertyValue::Enumerated(self.operation_direction))
+                Ok(PropertyValue::Enumerated(self.operation_direction.to_raw()))
+            }
+            p if p == PropertyIdentifier::PASSENGER_ALARM => {
+                Ok(PropertyValue::Boolean(self.passenger_alarm))
             }
             _ => Err(common::unknown_property_error()),
         }
@@ -276,12 +286,23 @@ impl BACnetObject for EscalatorObject {
             return result;
         }
         match property {
+            p if p == PropertyIdentifier::POWER_MODE => {
+                if let PropertyValue::Boolean(v) = value {
+                    self.power_mode = v;
+                    Ok(())
+                } else {
+                    Err(common::invalid_data_type_error())
+                }
+            }
             p if p == PropertyIdentifier::ESCALATOR_MODE => {
                 if let PropertyValue::Enumerated(v) = value {
-                    if v > 4 {
+                    let named = EscalatorMode::ALL_NAMED
+                        .iter()
+                        .any(|&(_, value)| value.to_raw() == v);
+                    if !(named || (1024..=65535).contains(&v)) {
                         return Err(common::value_out_of_range_error());
                     }
-                    self.escalator_mode = v;
+                    self.escalator_mode = EscalatorMode::from_raw(v);
                     Ok(())
                 } else {
                     Err(common::invalid_data_type_error())
@@ -289,10 +310,65 @@ impl BACnetObject for EscalatorObject {
             }
             p if p == PropertyIdentifier::OPERATION_DIRECTION => {
                 if let PropertyValue::Enumerated(v) = value {
-                    if v > 3 {
+                    // Accept the six named values of the Clause 21
+                    // BACnetEscalatorOperationDirection production plus
+                    // proprietary extensions (Clause 23.1: 1024..=65535);
+                    // 6..=1023 is reserved and undefined in the 2020
+                    // production. Validate before mutating so a refused
+                    // write leaves the prior value intact.
+                    let named = EscalatorOperationDirection::ALL_NAMED
+                        .iter()
+                        .any(|&(_, value)| value.to_raw() == v);
+                    if !(named || (1024..=65535).contains(&v)) {
                         return Err(common::value_out_of_range_error());
                     }
-                    self.operation_direction = v;
+                    self.operation_direction = EscalatorOperationDirection::from_raw(v);
+                    Ok(())
+                } else {
+                    Err(common::invalid_data_type_error())
+                }
+            }
+            p if p == PropertyIdentifier::ENERGY_METER => {
+                if let PropertyValue::Real(v) = value {
+                    if !v.is_finite() {
+                        return Err(common::value_out_of_range_error());
+                    }
+                    self.energy_meter = v;
+                    Ok(())
+                } else {
+                    Err(common::invalid_data_type_error())
+                }
+            }
+            p if p == PropertyIdentifier::FAULT_SIGNALS => {
+                let values = match value {
+                    PropertyValue::Enumerated(v) => vec![PropertyValue::Enumerated(v)],
+                    PropertyValue::List(values) => values,
+                    _ => return Err(common::invalid_data_type_error()),
+                };
+                let mut faults = Vec::with_capacity(values.len());
+                let mut seen = HashSet::with_capacity(values.len());
+                for value in values {
+                    let PropertyValue::Enumerated(raw) = value else {
+                        return Err(common::invalid_data_type_error());
+                    };
+                    let named = EscalatorFault::ALL_NAMED
+                        .iter()
+                        .any(|&(_, value)| value.to_raw() == raw);
+                    if !(named || (1024..=65535).contains(&raw)) {
+                        return Err(common::value_out_of_range_error());
+                    }
+                    let fault = EscalatorFault::from_raw(raw);
+                    if !seen.insert(fault) {
+                        return Err(common::value_out_of_range_error());
+                    }
+                    faults.push(fault);
+                }
+                self.fault_signals = faults;
+                Ok(())
+            }
+            p if p == PropertyIdentifier::PASSENGER_ALARM => {
+                if let PropertyValue::Boolean(v) = value {
+                    self.passenger_alarm = v;
                     Ok(())
                 } else {
                     Err(common::invalid_data_type_error())
@@ -314,11 +390,26 @@ impl BACnetObject for EscalatorObject {
             PropertyIdentifier::ENERGY_METER_REF,
             PropertyIdentifier::POWER_MODE,
             PropertyIdentifier::OPERATION_DIRECTION,
+            PropertyIdentifier::PASSENGER_ALARM,
             PropertyIdentifier::STATUS_FLAGS,
             PropertyIdentifier::OUT_OF_SERVICE,
             PropertyIdentifier::RELIABILITY,
         ];
         Cow::Borrowed(PROPS)
+    }
+
+    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+        matches!(
+            property,
+            PropertyIdentifier::DESCRIPTION
+                | PropertyIdentifier::OUT_OF_SERVICE
+                | PropertyIdentifier::POWER_MODE
+                | PropertyIdentifier::OPERATION_DIRECTION
+                | PropertyIdentifier::ESCALATOR_MODE
+                | PropertyIdentifier::ENERGY_METER
+                | PropertyIdentifier::FAULT_SIGNALS
+                | PropertyIdentifier::PASSENGER_ALARM
+        )
     }
 }
 
@@ -523,265 +614,4 @@ impl BACnetObject for LiftObject {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    // --- ElevatorGroupObject ---
-
-    #[test]
-    fn elevator_group_create_and_read_defaults() {
-        let eg = ElevatorGroupObject::new(1, "EG-1").unwrap();
-        assert_eq!(eg.object_name(), "EG-1");
-        assert_eq!(
-            eg.read_property(PropertyIdentifier::GROUP_ID, None)
-                .unwrap(),
-            PropertyValue::Unsigned(0)
-        );
-        assert_eq!(
-            eg.read_property(PropertyIdentifier::GROUP_MEMBERS, None)
-                .unwrap(),
-            PropertyValue::List(vec![])
-        );
-        assert_eq!(
-            eg.read_property(PropertyIdentifier::GROUP_MODE, None)
-                .unwrap(),
-            PropertyValue::Enumerated(0) // Unknown
-        );
-    }
-
-    #[test]
-    fn elevator_group_object_type() {
-        let eg = ElevatorGroupObject::new(1, "EG-1").unwrap();
-        assert_eq!(
-            eg.read_property(PropertyIdentifier::OBJECT_TYPE, None)
-                .unwrap(),
-            PropertyValue::Enumerated(ObjectType::ELEVATOR_GROUP.to_raw())
-        );
-    }
-
-    #[test]
-    fn elevator_group_add_members() {
-        let mut eg = ElevatorGroupObject::new(1, "EG-1").unwrap();
-        let lift1 = ObjectIdentifier::new(ObjectType::LIFT, 1).unwrap();
-        let lift2 = ObjectIdentifier::new(ObjectType::LIFT, 2).unwrap();
-        eg.add_member(lift1);
-        eg.add_member(lift2);
-        assert_eq!(
-            eg.read_property(PropertyIdentifier::GROUP_MEMBERS, None)
-                .unwrap(),
-            PropertyValue::List(vec![
-                PropertyValue::ObjectIdentifier(lift1),
-                PropertyValue::ObjectIdentifier(lift2),
-            ])
-        );
-    }
-
-    #[test]
-    fn elevator_group_read_landing_calls() {
-        let eg = ElevatorGroupObject::new(1, "EG-1").unwrap();
-        assert_eq!(
-            eg.read_property(PropertyIdentifier::LANDING_CALLS, None)
-                .unwrap(),
-            PropertyValue::Unsigned(0)
-        );
-    }
-
-    #[test]
-    fn elevator_group_property_list() {
-        let eg = ElevatorGroupObject::new(1, "EG-1").unwrap();
-        let list = eg.property_list();
-        assert!(list.contains(&PropertyIdentifier::GROUP_ID));
-        assert!(list.contains(&PropertyIdentifier::GROUP_MEMBERS));
-        assert!(list.contains(&PropertyIdentifier::GROUP_MODE));
-        assert!(list.contains(&PropertyIdentifier::LANDING_CALLS));
-        assert!(list.contains(&PropertyIdentifier::LANDING_CALL_CONTROL));
-        assert!(list.contains(&PropertyIdentifier::STATUS_FLAGS));
-    }
-
-    // --- EscalatorObject ---
-
-    #[test]
-    fn escalator_create_and_read_defaults() {
-        let esc = EscalatorObject::new(1, "ESC-1").unwrap();
-        assert_eq!(esc.object_name(), "ESC-1");
-        assert_eq!(
-            esc.read_property(PropertyIdentifier::ESCALATOR_MODE, None)
-                .unwrap(),
-            PropertyValue::Enumerated(0) // unknown
-        );
-        assert_eq!(
-            esc.read_property(PropertyIdentifier::ENERGY_METER, None)
-                .unwrap(),
-            PropertyValue::Real(0.0)
-        );
-        assert_eq!(
-            esc.read_property(PropertyIdentifier::POWER_MODE, None)
-                .unwrap(),
-            PropertyValue::Boolean(false)
-        );
-    }
-
-    #[test]
-    fn escalator_object_type() {
-        let esc = EscalatorObject::new(1, "ESC-1").unwrap();
-        assert_eq!(
-            esc.read_property(PropertyIdentifier::OBJECT_TYPE, None)
-                .unwrap(),
-            PropertyValue::Enumerated(ObjectType::ESCALATOR.to_raw())
-        );
-    }
-
-    #[test]
-    fn escalator_read_operation_direction() {
-        let esc = EscalatorObject::new(1, "ESC-1").unwrap();
-        assert_eq!(
-            esc.read_property(PropertyIdentifier::OPERATION_DIRECTION, None)
-                .unwrap(),
-            PropertyValue::Enumerated(0) // unknown
-        );
-    }
-
-    #[test]
-    fn escalator_read_fault_signals() {
-        let esc = EscalatorObject::new(1, "ESC-1").unwrap();
-        assert_eq!(
-            esc.read_property(PropertyIdentifier::FAULT_SIGNALS, None)
-                .unwrap(),
-            PropertyValue::List(vec![])
-        );
-    }
-
-    #[test]
-    fn escalator_property_list() {
-        let esc = EscalatorObject::new(1, "ESC-1").unwrap();
-        let list = esc.property_list();
-        assert!(list.contains(&PropertyIdentifier::ESCALATOR_MODE));
-        assert!(list.contains(&PropertyIdentifier::FAULT_SIGNALS));
-        assert!(list.contains(&PropertyIdentifier::ENERGY_METER));
-        assert!(list.contains(&PropertyIdentifier::ENERGY_METER_REF));
-        assert!(list.contains(&PropertyIdentifier::POWER_MODE));
-        assert!(list.contains(&PropertyIdentifier::OPERATION_DIRECTION));
-        assert!(list.contains(&PropertyIdentifier::STATUS_FLAGS));
-    }
-
-    // --- LiftObject ---
-
-    #[test]
-    fn lift_create_and_read_defaults() {
-        let lift = LiftObject::new(1, "LIFT-1", 10).unwrap();
-        assert_eq!(lift.object_name(), "LIFT-1");
-        assert_eq!(
-            lift.read_property(PropertyIdentifier::TRACKING_VALUE, None)
-                .unwrap(),
-            PropertyValue::Unsigned(1)
-        );
-        assert_eq!(
-            lift.read_property(PropertyIdentifier::CAR_POSITION, None)
-                .unwrap(),
-            PropertyValue::Unsigned(1)
-        );
-        assert_eq!(
-            lift.read_property(PropertyIdentifier::CAR_MOVING_DIRECTION, None)
-                .unwrap(),
-            PropertyValue::Enumerated(1) // stopped
-        );
-    }
-
-    #[test]
-    fn lift_object_type() {
-        let lift = LiftObject::new(1, "LIFT-1", 5).unwrap();
-        assert_eq!(
-            lift.read_property(PropertyIdentifier::OBJECT_TYPE, None)
-                .unwrap(),
-            PropertyValue::Enumerated(ObjectType::LIFT.to_raw())
-        );
-    }
-
-    #[test]
-    fn lift_floor_text() {
-        let lift = LiftObject::new(1, "LIFT-1", 3).unwrap();
-        assert_eq!(
-            lift.read_property(PropertyIdentifier::FLOOR_TEXT, None)
-                .unwrap(),
-            PropertyValue::List(vec![
-                PropertyValue::CharacterString("Floor 1".into()),
-                PropertyValue::CharacterString("Floor 2".into()),
-                PropertyValue::CharacterString("Floor 3".into()),
-            ])
-        );
-    }
-
-    #[test]
-    fn lift_read_car_load() {
-        let lift = LiftObject::new(1, "LIFT-1", 5).unwrap();
-        assert_eq!(
-            lift.read_property(PropertyIdentifier::CAR_LOAD, None)
-                .unwrap(),
-            PropertyValue::Unsigned(0)
-        );
-    }
-
-    #[test]
-    fn lift_write_tracking_value() {
-        let mut lift = LiftObject::new(1, "LIFT-1", 10).unwrap();
-        lift.write_property(
-            PropertyIdentifier::TRACKING_VALUE,
-            None,
-            PropertyValue::Unsigned(5),
-            None,
-        )
-        .unwrap();
-        assert_eq!(
-            lift.read_property(PropertyIdentifier::TRACKING_VALUE, None)
-                .unwrap(),
-            PropertyValue::Unsigned(5)
-        );
-    }
-
-    #[test]
-    fn lift_write_car_load_out_of_range() {
-        let mut lift = LiftObject::new(1, "LIFT-1", 5).unwrap();
-        let result = lift.write_property(
-            PropertyIdentifier::CAR_LOAD,
-            None,
-            PropertyValue::Unsigned(101),
-            None,
-        );
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn lift_read_landing_doors() {
-        let lift = LiftObject::new(1, "LIFT-1", 8).unwrap();
-        assert_eq!(
-            lift.read_property(PropertyIdentifier::LANDING_DOOR_STATUS, None)
-                .unwrap(),
-            PropertyValue::Unsigned(8)
-        );
-    }
-
-    #[test]
-    fn lift_read_energy_meter() {
-        let lift = LiftObject::new(1, "LIFT-1", 5).unwrap();
-        assert_eq!(
-            lift.read_property(PropertyIdentifier::ENERGY_METER, None)
-                .unwrap(),
-            PropertyValue::Real(0.0)
-        );
-    }
-
-    #[test]
-    fn lift_property_list() {
-        let lift = LiftObject::new(1, "LIFT-1", 5).unwrap();
-        let list = lift.property_list();
-        assert!(list.contains(&PropertyIdentifier::TRACKING_VALUE));
-        assert!(list.contains(&PropertyIdentifier::CAR_POSITION));
-        assert!(list.contains(&PropertyIdentifier::CAR_MOVING_DIRECTION));
-        assert!(list.contains(&PropertyIdentifier::CAR_DOOR_STATUS));
-        assert!(list.contains(&PropertyIdentifier::CAR_LOAD));
-        assert!(list.contains(&PropertyIdentifier::LANDING_DOOR_STATUS));
-        assert!(list.contains(&PropertyIdentifier::FLOOR_TEXT));
-        assert!(list.contains(&PropertyIdentifier::ENERGY_METER));
-        assert!(list.contains(&PropertyIdentifier::STATUS_FLAGS));
-    }
-}
+mod tests;

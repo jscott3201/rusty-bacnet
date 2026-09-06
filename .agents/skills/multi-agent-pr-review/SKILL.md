@@ -25,12 +25,12 @@ Do not nitpick style unless it hides a real defect. Do not rubber-stamp. Do not 
 
 ## Subagent orchestration rules
 
-Use subagents when the task benefits from context isolation, parallel exploration, independent verification, or specialized expertise. Do not spawn subagents for a one-shot formatting task.
+Delegate bounded independent questions in parallel when useful root work can proceed alongside them. Use only the roles needed for the decision; the list below is a menu, not a mandatory panel. Handle small or tightly coupled work locally. Children do not delegate. Use configured models and the running harness's supported collaboration tools.
 
 When spawning subagents, pass this minimum packet:
 
 1. Objective: one sentence describing the question to answer.
-2. Scope: files, folders, PR diff, services, packages, or docs to inspect.
+2. Scope: exact revision and files/symbols or supplied artifact; include the root-resolved Codebase Memory project/root and coverage notes for repository source work, otherwise mark it not applicable.
 3. Constraints: read-only vs write, commands allowed, network/doc lookup allowed, and timeout.
 4. Required evidence: exact files/symbols/commands/sources to cite.
 5. Output schema: use the schema requested by the skill.
@@ -38,7 +38,7 @@ When spawning subagents, pass this minimum packet:
 Parent-agent responsibilities:
 
 - Assign non-overlapping scopes when possible.
-- Wait for all requested subagents unless a blocking failure makes remaining work irrelevant.
+- Advance independent root work while agents run; collect required results before dependent decisions. Reuse compatible agents and successful exact-target validation; do not duplicate builds or run competing benchmarks.
 - Cross-check subagent conclusions against each other.
 - Resolve conflicts explicitly. Do not silently choose the more confident subagent.
 - Produce one synthesized result with a risk-ranked decision, not a paste of raw subagent notes.
@@ -56,7 +56,7 @@ Parent-agent responsibilities:
 
 1. Establish base and head. If a VCS is available, identify changed files and commits; otherwise review the supplied patch.
 2. Classify the change type: feature, fix, refactor, dependency, config, migration, docs, test, release, or mixed.
-3. Spawn subagents with non-overlapping review lenses and concrete output schemas.
+3. For a supplied PR delivery target, use `pr-gate-loop` and its required immutable reviewers; do not start a second review cycle here. For local diffs or review-only work, use only independent review lenses justified by the change and never invent PR metadata.
 4. Deduplicate findings, discard speculative issues without evidence, and escalate only actionable risks.
 5. Return review findings in severity order with exact reproduction or verification steps.
 
@@ -104,14 +104,6 @@ approve | request changes | comment only | inconclusive
 |---|---|---|
 ```
 
-## Useful shared references
+## Local references
 
-When this package is copied whole, use these templates as needed:
-
-- `shared/references/evidence-ledger-template.md`
-- `shared/references/review-report-template.md`
-- `shared/references/research-brief-template.md`
-- `shared/references/spec-compliance-matrix-template.md`
-- `shared/references/benchmark-report-template.md`
-- `shared/references/review-severity-rubric.md`
-- `shared/references/safe-research-practices.md`
+Use [output contracts](references/output-contracts.md) and the [severity rubric](references/severity-rubric.md) when useful. For delivery review, the active `pr-gate-loop` target, severity vocabulary, and stopping rules take precedence.

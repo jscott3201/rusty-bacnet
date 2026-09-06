@@ -21,39 +21,35 @@ pub(super) fn from_data_options(msg: &ScMessage) -> Vec<DataAttribute> {
         .collect()
 }
 
-pub(super) fn unsupported_must_understand_data_option(msg: &ScMessage) -> Option<&ScOption> {
+pub(super) fn unsupported_must_understand_destination_option(msg: &ScMessage) -> Option<&ScOption> {
     if msg.function != ScFunction::EncapsulatedNpdu {
         return None;
     }
 
-    msg.data_options
+    msg.dest_options
         .iter()
-        .find(|option| option.must_understand && !is_understood_data_option(option))
+        .find(|option| option.must_understand)
 }
 
-pub(super) fn option_header_marker(option: &ScOption) -> u8 {
-    let mut marker = option.option_type & 0x1F;
-    if option.must_understand {
-        marker |= 0x40;
-    }
-    if !option.data.is_empty() {
-        marker |= 0x20;
-    }
-    marker
-}
-
-pub(super) async fn reject_unsupported_must_understand_data_option<W: WebSocketPort>(
+pub(super) async fn reject_unsupported_must_understand_destination_option<W: WebSocketPort>(
     msg: &ScMessage,
+    error_header_marker: Option<u8>,
     ws: &W,
 ) -> bool {
-    let Some(option) = unsupported_must_understand_data_option(msg) else {
+    let Some(option) = unsupported_must_understand_destination_option(msg) else {
         return false;
     };
 
-    let marker = option_header_marker(option);
+    let Some(marker) = error_header_marker else {
+        warn!(
+            option_type = option.option_type,
+            "BACnet/SC failed to recover unsupported Destination Option marker"
+        );
+        return true;
+    };
     warn!(
         option_type = option.option_type,
-        marker, "BACnet/SC unsupported Must Understand Data Option"
+        marker, "BACnet/SC unsupported Must Understand Destination Option"
     );
 
     if msg.destination_vmac != Some(BROADCAST_VMAC) {
@@ -61,23 +57,25 @@ pub(super) async fn reject_unsupported_must_understand_data_option<W: WebSocketP
             msg.message_id,
             msg.function,
             marker,
+            msg.originating_vmac,
             ErrorClass::COMMUNICATION,
             ErrorCode::HEADER_NOT_UNDERSTOOD,
         );
         let mut nak_buf = BytesMut::new();
         encode_sc_message(&mut nak_buf, &nak);
         if let Err(e) = ws.send(&nak_buf).await {
-            warn!("BACnet/SC data option NAK send error: {}", e);
+            warn!("BACnet/SC destination option NAK send error: {}", e);
         }
     }
 
     true
 }
 
-fn build_bvlc_result_nak(
+pub(super) fn build_bvlc_result_nak(
     message_id: u16,
     result_for: ScFunction,
     error_header_marker: u8,
+    destination_vmac: Option<crate::sc_frame::Vmac>,
     error_class: ErrorClass,
     error_code: ErrorCode,
 ) -> ScMessage {
@@ -87,7 +85,7 @@ fn build_bvlc_result_nak(
         function: ScFunction::Result,
         message_id,
         originating_vmac: None,
-        destination_vmac: None,
+        destination_vmac,
         dest_options: Vec::new(),
         data_options: Vec::new(),
         payload: Bytes::from(vec![
@@ -102,10 +100,6 @@ fn build_bvlc_result_nak(
     }
 }
 
-fn is_understood_data_option(option: &ScOption) -> bool {
-    option.option_type == SECURE_PATH_OPTION_TYPE
-}
-
 pub(super) fn to_data_options(data_attributes: &[DataAttribute]) -> Result<Vec<ScOption>, Error> {
     if data_attributes.len() > MAX_SC_DATA_ATTRIBUTES {
         return Err(Error::Encoding(format!(
@@ -113,28 +107,38 @@ pub(super) fn to_data_options(data_attributes: &[DataAttribute]) -> Result<Vec<S
         )));
     }
 
-    data_attributes
-        .iter()
-        .map(|attribute| {
-            if !(1..=31).contains(&attribute.option_type) {
-                return Err(Error::Encoding(format!(
-                    "BACnet/SC Data Option type must be 1..31, got {}",
-                    attribute.option_type
-                )));
-            }
-            if attribute.data.len() > u16::MAX as usize {
-                return Err(Error::Encoding(format!(
-                    "BACnet/SC Data Option type {} payload length {} exceeds 65535",
-                    attribute.option_type,
-                    attribute.data.len()
-                )));
-            }
+    for attribute in data_attributes {
+        if !(1..=31).contains(&attribute.option_type) {
+            return Err(Error::Encoding(format!(
+                "BACnet/SC Data Option type must be 1..31, got {}",
+                attribute.option_type
+            )));
+        }
+        if attribute.option_type == SECURE_PATH_OPTION_TYPE && !attribute.must_understand {
+            return Err(Error::Encoding(
+                "BACnet/SC Secure Path Data Option must set Must Understand".into(),
+            ));
+        }
+        if attribute.option_type == SECURE_PATH_OPTION_TYPE && !attribute.data.is_empty() {
+            return Err(Error::Encoding(
+                "BACnet/SC Secure Path Data Option must not contain Header Data".into(),
+            ));
+        }
+        if attribute.data.len() > u16::MAX as usize {
+            return Err(Error::Encoding(format!(
+                "BACnet/SC Data Option type {} payload length {} exceeds 65535",
+                attribute.option_type,
+                attribute.data.len()
+            )));
+        }
+    }
 
-            Ok(ScOption {
-                option_type: attribute.option_type,
-                must_understand: attribute.must_understand,
-                data: attribute.data.clone(),
-            })
+    Ok(data_attributes
+        .iter()
+        .map(|attribute| ScOption {
+            option_type: attribute.option_type,
+            must_understand: attribute.must_understand,
+            data: attribute.data.clone(),
         })
-        .collect()
+        .collect())
 }

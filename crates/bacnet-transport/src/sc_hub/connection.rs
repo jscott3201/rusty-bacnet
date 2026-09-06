@@ -1,152 +1,66 @@
 //! Connection acceptance and WebSocket upgrade loop for the BACnet/SC hub.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use tokio::time::Instant;
 
-use bytes::{Bytes, BytesMut};
-use futures_util::{SinkExt, StreamExt};
+use futures_util::StreamExt;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tokio_rustls::TlsAcceptor;
-use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, warn};
 
-use crate::sc_frame::{encode_sc_message, ScFunction, ScMessage, Vmac, BACNET_SC_HUB_SUBPROTOCOL};
+use crate::sc_frame::{Vmac, BACNET_SC_HUB_SUBPROTOCOL};
 
-use super::heartbeat::{hub_heartbeat_sweep_decision, HubHeartbeatSweepDecision};
-use super::helpers::{
-    now_secs, offers_websocket_subprotocol, websocket_subprotocol_error_response,
-};
-use super::{handle_client, Clients, DeviceUuid, WsSink};
+use super::heartbeat;
+use super::helpers::{offers_websocket_subprotocol, websocket_subprotocol_error_response};
+use super::{handle_client, Clients, DeviceUuid};
 
 // ---------------------------------------------------------------------------
 // Accept loop
 // ---------------------------------------------------------------------------
 
-// Closure passed to `accept_hdr_async` returns the upstream tungstenite
-// `ErrorResponse`, whose size is fixed by the library. The clippy lint can't
-// be addressed without changing the foreign signature.
-#[allow(clippy::result_large_err)]
-pub(super) async fn accept_loop(
+pub(super) async fn accept_loop_with_counter(
     listener: TcpListener,
     tls_acceptor: TlsAcceptor,
-    hub_vmac: Vmac,
-    hub_uuid: DeviceUuid,
+    hub: (Vmac, DeviceUuid),
     clients: Clients,
+    timeouts: super::ScHubHandshakeTimeouts,
+    active_connections: Arc<AtomicUsize>,
+    tasks: super::tasks::Tasks,
 ) {
-    // Track active TCP connections (pre-handshake) to limit DoS surface.
-    let active_connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let _abort_on_exit = tasks.abort_on_exit();
+    let (hub_vmac, hub_uuid) = hub;
+    let mut shutdown = tasks.subscribe();
+    // All active accepted connections count, including established clients.
     const MAX_ACTIVE_CONNECTIONS: usize = 512;
 
     // Heartbeat sweep: periodically check for idle clients and send HeartbeatRequest.
-    // Per Annex AB.6.3, peers initiate heartbeats to detect idle/dead connections.
+    // Existing hub-originated liveness probe is a local extension. It does not
+    // implement or replace the initiating node's Annex AB.6.3 keepalive duty.
     const HEARTBEAT_CHECK_INTERVAL_SECS: u64 = 30;
-    const HEARTBEAT_IDLE_THRESHOLD_SECS: u64 = 60;
-    const HEARTBEAT_ACK_TIMEOUT_SECS: u64 = 5;
     {
         let clients_for_hb = clients.clone();
         let next_msg_id = std::sync::atomic::AtomicU16::new(0x8000); // hub message IDs start high
-        tokio::spawn(async move {
+        tasks.spawner().spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(
                 HEARTBEAT_CHECK_INTERVAL_SECS,
             ));
             loop {
                 interval.tick().await;
-                let now = now_secs();
-                let mut timed_out_clients = Vec::new();
-                let idle_clients: Vec<(Vmac, Arc<Mutex<WsSink>>)> = {
-                    let map = clients_for_hb.lock().await;
-                    map.iter().fold(Vec::new(), |mut idle, (vmac, c)| {
-                        let last = c.last_activity.load(std::sync::atomic::Ordering::Acquire);
-                        let pending = c
-                            .pending_heartbeat_id
-                            .load(std::sync::atomic::Ordering::Acquire);
-                        let pending_since = c
-                            .pending_heartbeat_sent_at
-                            .load(std::sync::atomic::Ordering::Acquire);
-                        match hub_heartbeat_sweep_decision(
-                            now,
-                            last,
-                            pending,
-                            pending_since,
-                            HEARTBEAT_IDLE_THRESHOLD_SECS,
-                            HEARTBEAT_ACK_TIMEOUT_SECS,
-                        ) {
-                            HubHeartbeatSweepDecision::Keep => {}
-                            HubHeartbeatSweepDecision::SendRequest => {
-                                idle.push((*vmac, Arc::clone(&c.sink)));
-                            }
-                            HubHeartbeatSweepDecision::RemoveTimedOut => {
-                                timed_out_clients.push((*vmac, Arc::clone(&c.sink)));
-                            }
-                        }
-                        idle
-                    })
-                };
-
-                for (vmac, sink) in timed_out_clients {
-                    warn!("Hub: heartbeat ACK timed out for {vmac:02x?}, removing client");
-                    let mut map = clients_for_hb.lock().await;
-                    if map
-                        .get(&vmac)
-                        .is_some_and(|client| Arc::ptr_eq(&client.sink, &sink))
-                    {
-                        if let Some(client) = map.remove(&vmac) {
-                            client
-                                .closed
-                                .store(true, std::sync::atomic::Ordering::Release);
-                            client.close_notify.notify_waiters();
-                        }
-                    }
-                }
-
-                for (vmac, sink) in idle_clients {
-                    let msg_id = next_msg_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    let hb = ScMessage {
-                        function: ScFunction::HeartbeatRequest,
-                        message_id: msg_id,
-                        originating_vmac: None,
-                        destination_vmac: None,
-                        dest_options: Vec::new(),
-                        data_options: Vec::new(),
-                        payload: Bytes::new(),
-                    };
-                    let mut buf = BytesMut::new();
-                    encode_sc_message(&mut buf, &hb);
-                    let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                        let mut w = sink.lock().await;
-                        w.send(Message::Binary(buf.to_vec().into())).await
-                    })
-                    .await;
-                    if let Err(_) | Ok(Err(_)) = result {
-                        warn!("Hub: heartbeat send failed for {vmac:02x?}, removing client");
-                        let mut map = clients_for_hb.lock().await;
-                        if map
-                            .get(&vmac)
-                            .is_some_and(|client| Arc::ptr_eq(&client.sink, &sink))
-                        {
-                            map.remove(&vmac);
-                        }
-                    } else {
-                        let map = clients_for_hb.lock().await;
-                        if let Some(client) = map
-                            .get(&vmac)
-                            .filter(|client| Arc::ptr_eq(&client.sink, &sink))
-                        {
-                            client
-                                .pending_heartbeat_id
-                                .store(msg_id, std::sync::atomic::Ordering::Release);
-                            client
-                                .pending_heartbeat_sent_at
-                                .store(now, std::sync::atomic::Ordering::Release);
-                        }
-                    }
-                }
+                heartbeat::sweep(&clients_for_hb, &next_msg_id, &heartbeat::SocketIo).await;
             }
         });
     }
 
     loop {
-        let (tcp_stream, peer_addr) = match listener.accept().await {
+        let accepted = tokio::select! {
+            biased;
+            _ = shutdown.wait_for(|requested| *requested) => break,
+            _ = tasks.reap() => continue,
+            accepted = listener.accept() => accepted,
+        };
+        let (tcp_stream, peer_addr) = match accepted {
             Ok(v) => v,
             Err(e) => {
                 warn!("Hub accept error: {e}");
@@ -154,71 +68,137 @@ pub(super) async fn accept_loop(
             }
         };
 
-        // Reject if too many pre-handshake connections
+        // Reject when the total active accepted-connection cap is reached
         let current = active_connections.load(std::sync::atomic::Ordering::Relaxed);
         if current >= MAX_ACTIVE_CONNECTIONS {
             warn!("Hub: rejecting connection from {peer_addr} — max active connections ({MAX_ACTIVE_CONNECTIONS}) reached");
             drop(tcp_stream);
             continue;
         }
-        active_connections.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let admission = Admission::new(active_connections.clone(), timeouts.tls());
 
         debug!("Hub: new TCP connection from {peer_addr}");
 
         let acceptor = tls_acceptor.clone();
         let clients = clients.clone();
-        let conn_counter = active_connections.clone();
 
-        tokio::spawn(async move {
-            // Decrement connection counter when this task exits (any path).
-            struct ConnGuard(std::sync::Arc<std::sync::atomic::AtomicUsize>);
-            impl Drop for ConnGuard {
-                fn drop(&mut self) {
-                    self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-                }
-            }
-            let _guard = ConnGuard(conn_counter);
-            // TLS handshake
-            let tls_stream = match acceptor.accept(tcp_stream).await {
-                Ok(s) => s,
-                Err(e) => {
-                    warn!("Hub TLS handshake failed for {peer_addr}: {e}");
-                    return;
-                }
-            };
-
-            // WebSocket upgrade — require and echo the BACnet/SC hub subprotocol.
-            let ws_stream = match tokio_tungstenite::accept_hdr_async(
-                tls_stream,
-                |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
-                 mut response: tokio_tungstenite::tungstenite::handshake::server::Response|
-                 -> Result<
-                    tokio_tungstenite::tungstenite::handshake::server::Response,
-                    tokio_tungstenite::tungstenite::handshake::server::ErrorResponse,
-                > {
-                    if !offers_websocket_subprotocol(request, BACNET_SC_HUB_SUBPROTOCOL) {
-                        return Err(websocket_subprotocol_error_response());
-                    }
-                    response.headers_mut().insert(
-                        "Sec-WebSocket-Protocol",
-                        BACNET_SC_HUB_SUBPROTOCOL.parse().unwrap(),
-                    );
-                    Ok(response)
-                },
-            )
-            .await
-            {
-                Ok(ws) => ws,
-                Err(e) => {
-                    warn!("Hub WebSocket upgrade failed for {peer_addr}: {e}");
-                    return;
-                }
-            };
-
-            let (write, read) = ws_stream.split();
-            let write = Arc::new(Mutex::new(write));
-
-            handle_client(peer_addr, hub_vmac, hub_uuid, read, write, clients).await;
-        });
+        tasks.spawner().spawn(serve_connection(
+            tcp_stream,
+            peer_addr,
+            acceptor,
+            (hub_vmac, hub_uuid),
+            clients,
+            timeouts,
+            admission,
+        ));
     }
+    drop(listener);
+    tasks.drain().await;
+    // Cancellation skips per-client tail cleanup. No owned mutator remains.
+    clients.lock().await.clear();
+}
+
+/// Owned from admission through the entire accepted task, even before first poll.
+pub(super) struct Admission {
+    counter: Arc<AtomicUsize>,
+    tls_deadline: Instant,
+}
+
+impl Admission {
+    pub(super) fn new(counter: Arc<AtomicUsize>, tls: std::time::Duration) -> Self {
+        let tls_deadline = Instant::now() + tls;
+        counter.fetch_add(1, Ordering::Relaxed);
+        Self {
+            counter,
+            tls_deadline,
+        }
+    }
+}
+
+impl Drop for Admission {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+// Tungstenite fixes the callback ErrorResponse size.
+#[allow(clippy::result_large_err)]
+pub(super) async fn serve_connection(
+    tcp_stream: tokio::net::TcpStream,
+    peer_addr: std::net::SocketAddr,
+    acceptor: TlsAcceptor,
+    hub: (Vmac, DeviceUuid),
+    clients: Clients,
+    timeouts: super::ScHubHandshakeTimeouts,
+    admission: Admission,
+) {
+    let (hub_vmac, hub_uuid) = hub;
+    let tls_deadline = admission.tls_deadline;
+    // TLS handshake
+    let tls_stream = match super::deadlines::before(tls_deadline, acceptor.accept(tcp_stream)).await
+    {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => {
+            warn!("Hub TLS handshake failed for {peer_addr}: {e}");
+            return;
+        }
+        Err(()) => {
+            debug!("Hub TLS handshake deadline expired for {peer_addr}");
+            return;
+        }
+    };
+
+    // WebSocket upgrade — require and echo the BACnet/SC hub subprotocol.
+    let upgrade_deadline = tokio::time::Instant::now() + timeouts.websocket_upgrade();
+    let ws_stream = match super::deadlines::before(
+        upgrade_deadline,
+        tokio_tungstenite::accept_hdr_async_with_config(
+            tls_stream,
+            |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+             mut response: tokio_tungstenite::tungstenite::handshake::server::Response|
+             -> Result<
+                tokio_tungstenite::tungstenite::handshake::server::Response,
+                tokio_tungstenite::tungstenite::handshake::server::ErrorResponse,
+            > {
+                if !offers_websocket_subprotocol(request, BACNET_SC_HUB_SUBPROTOCOL) {
+                    return Err(websocket_subprotocol_error_response());
+                }
+                response.headers_mut().insert(
+                    "Sec-WebSocket-Protocol",
+                    BACNET_SC_HUB_SUBPROTOCOL.parse().unwrap(),
+                );
+                Ok(response)
+            },
+            Some(crate::sc_limits::websocket(
+                crate::sc_limits::DEFAULT_MAX_BVLC_LENGTH as usize,
+            )),
+        ),
+    )
+    .await
+    {
+        Ok(Ok(ws)) => ws,
+        Ok(Err(e)) => {
+            warn!("Hub WebSocket upgrade failed for {peer_addr}: {e}");
+            return;
+        }
+        Err(()) => {
+            debug!("Hub WebSocket upgrade deadline expired for {peer_addr}");
+            return;
+        }
+    };
+
+    let connect_deadline = tokio::time::Instant::now() + timeouts.connect_request();
+    let (write, read) = ws_stream.split();
+    let write = Arc::new(Mutex::new(write));
+
+    handle_client(
+        peer_addr,
+        hub_vmac,
+        hub_uuid,
+        read,
+        write,
+        clients,
+        connect_deadline,
+    )
+    .await;
 }

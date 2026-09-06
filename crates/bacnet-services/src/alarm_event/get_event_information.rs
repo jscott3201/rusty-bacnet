@@ -1,4 +1,41 @@
 use super::*;
+use crate::common::{decode_context, decode_context_bool, decode_context_u32};
+
+fn decode_event_transition_bits(
+    data: &[u8],
+    offset: usize,
+    expected_tag: u8,
+    field: &str,
+) -> Result<(u8, usize), Error> {
+    let (content, end) = decode_context(data, offset, expected_tag, field)?;
+    if content.len() != 2 || content[0] != 5 || content[1] & 0x1f != 0 {
+        return Err(Error::decoding(
+            offset,
+            format!("{field} must contain three bits with zero padding"),
+        ));
+    }
+    Ok((bacnet_types::bitstring::unpack_octet(&content[1..], 3), end))
+}
+
+fn decode_application_u32(data: &[u8], offset: usize, field: &str) -> Result<(u32, usize), Error> {
+    let (tag, pos) = tags::decode_tag(data, offset)?;
+    if tag.class != tags::TagClass::Application || tag.number != tags::app_tag::UNSIGNED {
+        return Err(Error::decoding(
+            offset,
+            format!("{field} expected application Unsigned"),
+        ));
+    }
+    let end = pos
+        .checked_add(tag.length as usize)
+        .ok_or_else(|| Error::decoding(pos, format!("{field} length overflow")))?;
+    if end > data.len() {
+        return Err(Error::decoding(pos, format!("{field} truncated")));
+    }
+    let value = primitives::decode_unsigned(&data[pos..end])?;
+    let value = u32::try_from(value)
+        .map_err(|_| Error::decoding(offset, format!("{field} exceeds u32")))?;
+    Ok((value, end))
+}
 
 // GetEventInformation
 // ---------------------------------------------------------------------------
@@ -22,12 +59,19 @@ impl GetEventInformationRequest {
                 last_received_object_identifier: None,
             });
         }
-        let (opt_data, _) = tags::decode_optional_context(data, 0, 0)?;
-        let last_received_object_identifier = if let Some(content) = opt_data {
-            Some(ObjectIdentifier::decode(content)?)
-        } else {
-            None
-        };
+        let (content, end) = decode_context(
+            data,
+            0,
+            0,
+            "GetEventInformation last-received-object-identifier",
+        )?;
+        if end != data.len() {
+            return Err(Error::decoding(
+                end,
+                "GetEventInformation request contains trailing data",
+            ));
+        }
+        let last_received_object_identifier = Some(ObjectIdentifier::decode(content)?);
         Ok(Self {
             last_received_object_identifier,
         })
@@ -62,168 +106,107 @@ pub struct EventSummary {
 impl GetEventInformationAck {
     /// Decode a GetEventInformationAck from wire bytes.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
-
-        // [0] listOfEventSummaries — opening tag
-        let (tag, pos) = tags::decode_tag(data, offset)?;
+        let (tag, mut offset) = tags::decode_tag(data, 0)?;
         if !tag.is_opening_tag(0) {
-            return Err(Error::decoding(offset, "expected opening tag [0]"));
+            return Err(Error::decoding(
+                0,
+                "GetEventInformation ACK expected opening tag 0",
+            ));
         }
-        offset = pos;
 
         let mut list_of_event_summaries = Vec::new();
-
-        // Parse event summaries until closing tag [0]
         loop {
-            let (tag, _) = tags::decode_tag(data, offset)?;
+            let (tag, next) = tags::decode_tag(data, offset)?;
             if tag.is_closing_tag(0) {
-                // advance past the closing tag byte(s)
-                let (_, close_pos) = tags::decode_tag(data, offset)?;
-                offset = close_pos;
+                offset = next;
                 break;
             }
-
-            // [0] objectIdentifier
-            let (tag, pos) = tags::decode_tag(data, offset)?;
-            let end = pos + tag.length as usize;
-            if end > data.len() {
-                return Err(Error::decoding(pos, "GetEventInfoAck truncated at oid"));
-            }
-            let object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-            offset = end;
-
-            // [1] eventState
-            let (tag, pos) = tags::decode_tag(data, offset)?;
-            let end = pos + tag.length as usize;
-            if end > data.len() {
+            if list_of_event_summaries.len() >= MAX_DECODED_ITEMS {
                 return Err(Error::decoding(
-                    pos,
-                    "GetEventInfoAck truncated at eventState",
+                    offset,
+                    format!("GetEventInformation ACK exceeds {MAX_DECODED_ITEMS} event summaries"),
                 ));
             }
-            let event_state = primitives::decode_unsigned(&data[pos..end])? as u32;
+
+            let (content, end) =
+                decode_context(data, offset, 0, "GetEventInformation ACK object-identifier")?;
+            let object_identifier = ObjectIdentifier::decode(content)?;
             offset = end;
 
-            // [2] acknowledgedTransitions (3-bit bitstring)
-            let (tag, pos) = tags::decode_tag(data, offset)?;
-            let end = pos + tag.length as usize;
-            if end > data.len() {
-                return Err(Error::decoding(pos, "truncated at ackedTransitions"));
-            }
-            // Content: [unused_bits_count, bit_data...]
-            let acknowledged_transitions = if end > pos + 1 { data[pos + 1] >> 5 } else { 0 };
+            let (event_state, end) =
+                decode_context_u32(data, offset, 1, "GetEventInformation ACK event-state")?;
             offset = end;
 
-            // [3] eventTimeStamps — opening tag
-            let (tag, pos) = tags::decode_tag(data, offset)?;
+            let (acknowledged_transitions, end) = decode_event_transition_bits(
+                data,
+                offset,
+                2,
+                "GetEventInformation ACK acknowledged-transitions",
+            )?;
+            offset = end;
+
+            let (tag, next) = tags::decode_tag(data, offset)?;
             if !tag.is_opening_tag(3) {
-                return Err(Error::decoding(offset, "expected opening tag [3]"));
+                return Err(Error::decoding(
+                    offset,
+                    "GetEventInformation ACK expected opening tag 3 for event-timestamps",
+                ));
             }
-            offset = pos;
+            offset = next;
             let mut event_timestamps = [
                 BACnetTimeStamp::SequenceNumber(0),
                 BACnetTimeStamp::SequenceNumber(0),
                 BACnetTimeStamp::SequenceNumber(0),
             ];
             for ts in &mut event_timestamps {
-                let (inner_tag, inner_pos) = tags::decode_tag(data, offset)?;
-                if inner_tag.is_opening_tag(0) {
-                    // Time choice [0] { application Time }
-                    offset = inner_pos;
-                    let (app_tag, app_pos) = tags::decode_tag(data, offset)?;
-                    let end = app_pos + app_tag.length as usize;
-                    if end > data.len() {
-                        return Err(Error::decoding(app_pos, "truncated timestamp time"));
-                    }
-                    *ts = BACnetTimeStamp::Time(Time::decode(&data[app_pos..end])?);
-                    offset = end;
-                    // closing tag [0]
-                    let (_, close_pos) = tags::decode_tag(data, offset)?;
-                    offset = close_pos;
-                } else if inner_tag.is_context(1) {
-                    // SequenceNumber choice [1]
-                    let end = inner_pos + inner_tag.length as usize;
-                    if end > data.len() {
-                        return Err(Error::decoding(inner_pos, "truncated timestamp seqnum"));
-                    }
-                    *ts = BACnetTimeStamp::SequenceNumber(primitives::decode_unsigned(
-                        &data[inner_pos..end],
-                    )?);
-                    offset = end;
-                } else if inner_tag.is_opening_tag(2) {
-                    // DateTime choice [2] { Date, Time }
-                    offset = inner_pos;
-                    let (d_tag, d_pos) = tags::decode_tag(data, offset)?;
-                    let d_end = d_pos + d_tag.length as usize;
-                    if d_end > data.len() {
-                        return Err(Error::decoding(d_pos, "truncated datetime date"));
-                    }
-                    let date = Date::decode(&data[d_pos..d_end])?;
-                    offset = d_end;
-                    let (t_tag, t_pos) = tags::decode_tag(data, offset)?;
-                    let t_end = t_pos + t_tag.length as usize;
-                    if t_end > data.len() {
-                        return Err(Error::decoding(t_pos, "truncated datetime time"));
-                    }
-                    let time = Time::decode(&data[t_pos..t_end])?;
-                    offset = t_end;
-                    *ts = BACnetTimeStamp::DateTime { date, time };
-                    // closing tag [2]
-                    let (_, close_pos) = tags::decode_tag(data, offset)?;
-                    offset = close_pos;
-                } else {
-                    return Err(Error::decoding(offset, "unexpected timestamp choice"));
-                }
+                let (decoded_ts, new_offset) = primitives::decode_timestamp_choice(data, offset)?;
+                *ts = decoded_ts;
+                offset = new_offset;
             }
-            // closing tag [3]
-            let (tag, _) = tags::decode_tag(data, offset)?;
+            let (tag, next) = tags::decode_tag(data, offset)?;
             if !tag.is_closing_tag(3) {
-                return Err(Error::decoding(offset, "expected closing tag [3]"));
+                return Err(Error::decoding(
+                    offset,
+                    "GetEventInformation ACK expected closing tag 3 for event-timestamps",
+                ));
             }
-            let (_, close_pos) = tags::decode_tag(data, offset)?;
-            offset = close_pos;
+            offset = next;
 
-            // [4] notifyType
-            let (tag, pos) = tags::decode_tag(data, offset)?;
-            let end = pos + tag.length as usize;
-            if end > data.len() {
-                return Err(Error::decoding(pos, "truncated at notifyType"));
-            }
-            let notify_type = primitives::decode_unsigned(&data[pos..end])? as u32;
+            let (notify_type, end) =
+                decode_context_u32(data, offset, 4, "GetEventInformation ACK notify-type")?;
             offset = end;
 
-            // [5] eventEnable (3-bit bitstring)
-            let (tag, pos) = tags::decode_tag(data, offset)?;
-            let end = pos + tag.length as usize;
-            if end > data.len() {
-                return Err(Error::decoding(pos, "truncated at eventEnable"));
-            }
-            let event_enable = if end > pos + 1 { data[pos + 1] >> 5 } else { 0 };
+            let (event_enable, end) = decode_event_transition_bits(
+                data,
+                offset,
+                5,
+                "GetEventInformation ACK event-enable",
+            )?;
             offset = end;
 
-            // [6] eventPriorities — opening tag
-            let (tag, pos) = tags::decode_tag(data, offset)?;
+            let (tag, next) = tags::decode_tag(data, offset)?;
             if !tag.is_opening_tag(6) {
-                return Err(Error::decoding(offset, "expected opening tag [6]"));
+                return Err(Error::decoding(
+                    offset,
+                    "GetEventInformation ACK expected opening tag 6 for event-priorities",
+                ));
             }
-            offset = pos;
+            offset = next;
             let mut event_priorities = [0u32; 3];
             for pri in &mut event_priorities {
-                let (tag, pos) = tags::decode_tag(data, offset)?;
-                let end = pos + tag.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(pos, "truncated priority"));
-                }
-                *pri = primitives::decode_unsigned(&data[pos..end])? as u32;
+                let (value, end) =
+                    decode_application_u32(data, offset, "GetEventInformation ACK event-priority")?;
+                *pri = value;
                 offset = end;
             }
-            // closing tag [6]
-            let (tag, _) = tags::decode_tag(data, offset)?;
+            let (tag, next) = tags::decode_tag(data, offset)?;
             if !tag.is_closing_tag(6) {
-                return Err(Error::decoding(offset, "expected closing tag [6]"));
+                return Err(Error::decoding(
+                    offset,
+                    "GetEventInformation ACK expected closing tag 6 for event-priorities",
+                ));
             }
-            let (_, close_pos) = tags::decode_tag(data, offset)?;
-            offset = close_pos;
+            offset = next;
 
             list_of_event_summaries.push(EventSummary {
                 object_identifier,
@@ -237,13 +220,14 @@ impl GetEventInformationAck {
             });
         }
 
-        // [1] moreEvents
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "truncated at moreEvents"));
+        let (more_events, end) =
+            decode_context_bool(data, offset, 1, "GetEventInformation ACK more-events")?;
+        if end != data.len() {
+            return Err(Error::decoding(
+                end,
+                "GetEventInformation ACK contains trailing data",
+            ));
         }
-        let more_events = data[pos] != 0;
 
         Ok(Self {
             list_of_event_summaries,
@@ -251,7 +235,7 @@ impl GetEventInformationAck {
         })
     }
 
-    pub fn encode(&self, buf: &mut BytesMut) {
+    pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         // [0] listOfEventSummaries
         tags::encode_opening_tag(buf, 0);
         for summary in &self.list_of_event_summaries {
@@ -260,34 +244,33 @@ impl GetEventInformationAck {
             // [1] eventState
             primitives::encode_ctx_enumerated(buf, 1, summary.event_state);
             // [2] acknowledgedTransitions (3-bit bitstring)
-            primitives::encode_ctx_bit_string(buf, 2, 5, &[summary.acknowledged_transitions << 5]);
+            primitives::encode_ctx_bit_string(
+                buf,
+                2,
+                5,
+                &[bacnet_types::bitstring::pack_octet(
+                    summary.acknowledged_transitions,
+                )],
+            );
             // [3] eventTimeStamps (SEQUENCE OF 3 BACnetTimeStamp)
             tags::encode_opening_tag(buf, 3);
             for ts in &summary.event_timestamps {
-                // Each timestamp is encoded as a bare CHOICE (no extra wrapping)
-                // within the SEQUENCE OF
-                match ts {
-                    BACnetTimeStamp::Time(t) => {
-                        tags::encode_opening_tag(buf, 0);
-                        primitives::encode_app_time(buf, t);
-                        tags::encode_closing_tag(buf, 0);
-                    }
-                    BACnetTimeStamp::SequenceNumber(n) => {
-                        primitives::encode_ctx_unsigned(buf, 1, *n);
-                    }
-                    BACnetTimeStamp::DateTime { date, time } => {
-                        tags::encode_opening_tag(buf, 2);
-                        primitives::encode_app_date(buf, date);
-                        primitives::encode_app_time(buf, time);
-                        tags::encode_closing_tag(buf, 2);
-                    }
-                }
+                // Each timestamp is a bare CHOICE item of the SEQUENCE OF
+                // (no extra wrapping) — encoded by the shared primitives
+                // codec so this service and every other timestamp producer
+                // agree on the wire bytes.
+                primitives::encode_timestamp_choice(buf, ts)?;
             }
             tags::encode_closing_tag(buf, 3);
             // [4] notifyType
             primitives::encode_ctx_enumerated(buf, 4, summary.notify_type);
             // [5] eventEnable (3-bit bitstring)
-            primitives::encode_ctx_bit_string(buf, 5, 5, &[summary.event_enable << 5]);
+            primitives::encode_ctx_bit_string(
+                buf,
+                5,
+                5,
+                &[bacnet_types::bitstring::pack_octet(summary.event_enable)],
+            );
             // [6] eventPriorities (SEQUENCE OF 3 Unsigned)
             tags::encode_opening_tag(buf, 6);
             for &p in &summary.event_priorities {
@@ -298,5 +281,6 @@ impl GetEventInformationAck {
         tags::encode_closing_tag(buf, 0);
         // [1] moreEvents
         primitives::encode_ctx_boolean(buf, 1, self.more_events);
+        Ok(())
     }
 }

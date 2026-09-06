@@ -9,7 +9,7 @@
 //! - AccessZone (type 36)
 //! - CredentialDataInput (type 37)
 
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{DoorValue, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
 use std::borrow::Cow;

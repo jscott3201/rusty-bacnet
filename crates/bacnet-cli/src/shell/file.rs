@@ -30,7 +30,7 @@ pub(super) async fn handle_file_read<T: TransportPort + 'static>(
 ) {
     if args.len() < 2 {
         output::print_error(
-            "Usage: file-read <target> <file-instance> [--start N] [--count N] [--output PATH]",
+            "Usage: file-read <target> <file-instance> [--access stream|record] [--start N] [--count N] [--output PATH]",
         );
         return;
     }
@@ -50,10 +50,28 @@ pub(super) async fn handle_file_read<T: TransportPort + 'static>(
     };
     let mut start = 0i32;
     let mut count = 1024u32;
+    let mut access = crate::args::FileReadAccess::Stream;
     let mut output_path: Option<String> = None;
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {
+            "--access" => {
+                if i + 1 < args.len() {
+                    access = match args[i + 1].as_str() {
+                        "stream" => crate::args::FileReadAccess::Stream,
+                        "record" => crate::args::FileReadAccess::Record,
+                        _ => {
+                            output::print_error("--access requires stream or record");
+                            return;
+                        }
+                    };
+                    i += 2;
+                    continue;
+                } else {
+                    output::print_error("--access requires a value");
+                    return;
+                }
+            }
             "--start" => {
                 if i + 1 < args.len() {
                     match args[i + 1].parse::<i32>() {
@@ -104,6 +122,7 @@ pub(super) async fn handle_file_read<T: TransportPort + 'static>(
         client,
         &mac,
         file_instance,
+        access,
         start,
         count,
         output_path.as_deref(),

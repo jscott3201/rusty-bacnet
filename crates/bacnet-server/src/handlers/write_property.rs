@@ -1,87 +1,256 @@
 use super::*;
 
-/// Handle a WritePropertyMultiple request.
+/// Validate database-owned Object_Name uniqueness before mutation.
+fn check_and_prepare_name_write(
+    db: &ObjectDatabase,
+    oid: &ObjectIdentifier,
+    value: &PropertyValue,
+) -> Result<(), Error> {
+    if let PropertyValue::CharacterString(new_name) = value {
+        db.check_name_available(oid, new_name)?;
+    }
+    Ok(())
+}
+
+/// Rich WPM result retained inside the server boundary.
+pub(crate) enum WritePropertyMultipleOutcome {
+    Success {
+        committed_oids: Vec<ObjectIdentifier>,
+    },
+    Error {
+        error: Error,
+        first_failed_write_attempt: BACnetObjectPropertyReference,
+        committed_oids: Vec<ObjectIdentifier>,
+    },
+    Reject {
+        reason: RejectReason,
+    },
+}
+
+/// Handle WPM while preserving the historical direct handler projection.
 ///
-/// Validates all properties first, then commits atomically. If any write fails,
-/// all previously applied writes are rolled back. Returns the written object identifiers.
+/// The complete successful prefix remains committed if a later attempt fails.
 pub fn handle_write_property_multiple(
     db: &mut ObjectDatabase,
     service_data: &[u8],
 ) -> Result<Vec<ObjectIdentifier>, Error> {
-    let request = WritePropertyMultipleRequest::decode(service_data)?;
+    let mut snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::default();
+    match handle_write_property_multiple_detailed(db, service_data, &mut snapshots) {
+        WritePropertyMultipleOutcome::Success { committed_oids } => Ok(committed_oids),
+        WritePropertyMultipleOutcome::Error { error, .. } => Err(error),
+        WritePropertyMultipleOutcome::Reject { reason } => Err(Error::Reject {
+            reason: reason.to_raw(),
+        }),
+    }
+}
 
-    // Validate: decode all values and verify objects exist.
-    #[allow(clippy::type_complexity)]
-    let mut decoded_writes: Vec<(
-        ObjectIdentifier,
-        PropertyIdentifier,
-        Option<u32>,
-        PropertyValue,
-        Option<u8>,
-    )> = Vec::new();
+/// Execute WPM incrementally in wire order for server dispatch.
+pub(crate) fn handle_write_property_multiple_detailed(
+    db: &mut ObjectDatabase,
+    service_data: &[u8],
+    snapshots: &mut crate::life_safety_cov::LifeSafetyCovSnapshots,
+) -> WritePropertyMultipleOutcome {
+    let mut cursor = WritePropertyMultipleCursor::new(service_data);
+    let mut committed_oids = Vec::new();
 
-    for spec in &request.list_of_write_access_specs {
-        let oid = spec.object_identifier;
-        if db.get(&oid).is_none() {
-            return Err(Error::Protocol {
-                class: ErrorClass::OBJECT.to_raw() as u32,
-                code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
-            });
+    loop {
+        let event = match cursor.next_event() {
+            Ok(Some(event)) => event,
+            Ok(None) => {
+                return WritePropertyMultipleOutcome::Success { committed_oids };
+            }
+            Err(cursor_error) if committed_oids.is_empty() => {
+                return WritePropertyMultipleOutcome::Reject {
+                    reason: cursor_error.reject_reason,
+                };
+            }
+            Err(cursor_error) => {
+                return WritePropertyMultipleOutcome::Error {
+                    error: protocol_error(ErrorClass::SERVICES, ErrorCode::INVALID_TAG),
+                    first_failed_write_attempt: cursor_error
+                        .first_failed_write_attempt
+                        .unwrap_or_else(wpm_undecodable_coordinate),
+                    committed_oids,
+                };
+            }
+        };
+        let WritePropertyMultipleEvent::WriteAttempt(attempt) = event else {
+            continue;
+        };
+        let reference = attempt.reference;
+        let oid = reference.object_identifier;
+        let property = PropertyIdentifier::from_raw(reference.property_identifier);
+
+        let Some(object) = db.get(&oid) else {
+            return semantic_failure(
+                protocol_error(ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT),
+                reference,
+                committed_oids,
+            );
+        };
+        if reference.property_array_index.is_some() && !object.is_array_property(property) {
+            return semantic_failure(
+                protocol_error(ErrorClass::PROPERTY, ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+                reference,
+                committed_oids,
+            );
         }
-        for prop in &spec.list_of_properties {
-            let (value, _) = bacnet_encoding::primitives::decode_application_value(&prop.value, 0)?;
-            decoded_writes.push((
-                oid,
-                prop.property_identifier,
-                prop.property_array_index,
+        let value = match decode_write_property_value(
+            property,
+            reference.property_array_index,
+            &attempt.value,
+        ) {
+            Ok(value) => value,
+            Err(error) => return semantic_failure(error, reference, committed_oids),
+        };
+        if property == PropertyIdentifier::OBJECT_NAME {
+            if let Err(error) = check_and_prepare_name_write(db, &oid, &value) {
+                return semantic_failure(error, reference, committed_oids);
+            }
+        }
+
+        snapshots.capture_before_write(db, oid);
+        let write = db
+            .get_mut(&oid)
+            .expect("existence checked above")
+            .write_property(
+                property,
+                reference.property_array_index,
                 value,
-                prop.priority,
-            ));
+                attempt.priority,
+            );
+        if let Err(error) = write {
+            return semantic_failure(error, reference, committed_oids);
+        }
+        if property == PropertyIdentifier::OBJECT_NAME {
+            db.update_name_index(&oid);
+        }
+        if !committed_oids.contains(&oid) {
+            committed_oids.push(oid);
         }
     }
+}
 
-    // Commit: apply all writes, rolling back on failure.
-    let mut applied: Vec<(
-        ObjectIdentifier,
-        PropertyIdentifier,
-        Option<u32>,
-        PropertyValue,
-    )> = Vec::new();
+fn semantic_failure(
+    error: Error,
+    first_failed_write_attempt: BACnetObjectPropertyReference,
+    committed_oids: Vec<ObjectIdentifier>,
+) -> WritePropertyMultipleOutcome {
+    WritePropertyMultipleOutcome::Error {
+        error,
+        first_failed_write_attempt,
+        committed_oids,
+    }
+}
 
-    for (oid, prop_id, array_index, value, priority) in &decoded_writes {
-        let object = db.get_mut(oid).unwrap();
-        // Save old value for rollback (best-effort; read may fail for write-only props).
-        let old_value = object.read_property(*prop_id, *array_index).ok();
-        match object.write_property(*prop_id, *array_index, value.clone(), *priority) {
-            Ok(()) => {
-                if let Some(old) = old_value {
-                    applied.push((*oid, *prop_id, *array_index, old));
-                }
+fn protocol_error(class: ErrorClass, code: ErrorCode) -> Error {
+    Error::Protocol {
+        class: class.to_raw() as u32,
+        code: code.to_raw() as u32,
+    }
+}
+
+fn wpm_undecodable_coordinate() -> BACnetObjectPropertyReference {
+    BACnetObjectPropertyReference {
+        // Clause 15.10 fixes instance 4194303. DEVICE / ALL / no index is the
+        // repository's local policy for the remaining undecodable coordinates.
+        object_identifier: ObjectIdentifier::new(
+            ObjectType::DEVICE,
+            ObjectIdentifier::MAX_INSTANCE,
+        )
+        .expect("the wildcard instance is valid service vocabulary"),
+        property_identifier: PropertyIdentifier::ALL.to_raw(),
+        property_array_index: None,
+    }
+}
+
+/// PROPERTY / INVALID_DATA_ENCODING for an undecodable propertyValue payload.
+fn invalid_data_encoding_error() -> Error {
+    protocol_error(ErrorClass::PROPERTY, ErrorCode::INVALID_DATA_ENCODING)
+}
+
+/// Decode the complete propertyValue payload handed to an object write arm.
+pub(crate) fn decode_write_property_value(
+    property: PropertyIdentifier,
+    array_index: Option<u32>,
+    bytes: &[u8],
+) -> Result<PropertyValue, Error> {
+    if property == PropertyIdentifier::EVENT_PARAMETERS && bytes.starts_with(&[0xfe, 0xff]) {
+        use bacnet_types::constructed::BACnetEventParameter;
+
+        return match bacnet_encoding::constructed::decode_event_parameter(bytes, 0) {
+            Ok((BACnetEventParameter::Opaque { tag, data }, consumed))
+                if tag == u8::MAX && consumed == bytes.len() =>
+            {
+                Ok(PropertyValue::OctetString(data))
             }
-            Err(e) => {
-                for (rb_oid, rb_prop, rb_idx, rb_val) in applied.into_iter().rev() {
-                    if let Some(obj) = db.get_mut(&rb_oid) {
-                        let _ = obj.write_property(rb_prop, rb_idx, rb_val, None);
-                    }
-                }
-                return Err(e);
-            }
-        }
+            _ => Err(invalid_data_encoding_error()),
+        };
     }
-
-    let mut written_oids = Vec::new();
-    for (oid, _, _, _, _) in &decoded_writes {
-        if !written_oids.contains(oid) {
-            written_oids.push(*oid);
-        }
+    if property == PropertyIdentifier::RECIPIENT_LIST {
+        return Ok(PropertyValue::ApplicationData(bytes.to_vec()));
     }
+    if array_index != Some(0) && property == PropertyIdentifier::STAGES {
+        return decode_structured_array(bytes, array_index, |data, offset| {
+            bacnet_encoding::constructed::decode_stage_limit_value(data, offset).map(|(_, end)| end)
+        });
+    }
+    if array_index != Some(0) && property == PropertyIdentifier::TARGET_REFERENCES {
+        return decode_structured_array(bytes, array_index, |data, offset| {
+            bacnet_encoding::constructed::decode_device_object_reference(data, offset)
+                .map(|(_, end)| end)
+        });
+    }
+    let mut values = Vec::new();
+    let mut offset = 0;
+    while offset < bytes.len() {
+        let (value, new_offset) =
+            bacnet_encoding::primitives::decode_application_value(bytes, offset)
+                .map_err(|_| invalid_data_encoding_error())?;
+        values.push(value);
+        offset = new_offset;
+    }
+    match values.len() {
+        0 if property == PropertyIdentifier::FAULT_SIGNALS => Ok(PropertyValue::List(values)),
+        0 => Err(invalid_data_encoding_error()),
+        1 => Ok(values.pop().expect("one element present")),
+        _ => Ok(PropertyValue::List(values)),
+    }
+}
 
-    Ok(written_oids)
+fn decode_structured_array<F>(
+    bytes: &[u8],
+    array_index: Option<u32>,
+    mut decode: F,
+) -> Result<PropertyValue, Error>
+where
+    F: FnMut(&[u8], usize) -> Result<usize, Error>,
+{
+    let mut values = Vec::new();
+    let mut offset = 0;
+    while offset < bytes.len() {
+        if values.len() >= 10_000 {
+            return Err(invalid_data_encoding_error());
+        }
+        let start = offset;
+        offset = decode(bytes, offset).map_err(|_| invalid_data_encoding_error())?;
+        if offset <= start || offset > bytes.len() {
+            return Err(invalid_data_encoding_error());
+        }
+        values.push(PropertyValue::ApplicationData(
+            bytes[start..offset].to_vec(),
+        ));
+    }
+    if array_index.is_some() {
+        if values.len() == 1 {
+            return Ok(values.pop().unwrap());
+        }
+        return Err(invalid_data_encoding_error());
+    }
+    Ok(PropertyValue::List(values))
 }
 
 /// Handle a WriteProperty request.
-///
-/// Returns the written object identifier for COV/event notifications.
 pub fn handle_write_property(
     db: &mut ObjectDatabase,
     service_data: &[u8],
@@ -89,20 +258,41 @@ pub fn handle_write_property(
     let request = WritePropertyRequest::decode(service_data)?;
     let oid = request.object_identifier;
 
-    let object = db.get_mut(&oid).ok_or(Error::Protocol {
-        class: ErrorClass::OBJECT.to_raw() as u32,
-        code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
-    })?;
-
-    let (value, _) =
-        bacnet_encoding::primitives::decode_application_value(&request.property_value, 0)?;
-
-    object.write_property(
+    if db.get(&oid).is_none() {
+        return Err(protocol_error(
+            ErrorClass::OBJECT,
+            ErrorCode::UNKNOWN_OBJECT,
+        ));
+    }
+    if request.property_array_index.is_some()
+        && !db
+            .get(&oid)
+            .expect("existence checked above")
+            .is_array_property(request.property_identifier)
+    {
+        return Err(protocol_error(
+            ErrorClass::PROPERTY,
+            ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+        ));
+    }
+    let value = decode_write_property_value(
         request.property_identifier,
         request.property_array_index,
-        value,
-        request.priority,
+        &request.property_value,
     )?;
-
+    if request.property_identifier == PropertyIdentifier::OBJECT_NAME {
+        check_and_prepare_name_write(db, &oid, &value)?;
+    }
+    db.get_mut(&oid)
+        .expect("existence checked above")
+        .write_property(
+            request.property_identifier,
+            request.property_array_index,
+            value,
+            request.priority,
+        )?;
+    if request.property_identifier == PropertyIdentifier::OBJECT_NAME {
+        db.update_name_index(&oid);
+    }
     Ok(oid)
 }

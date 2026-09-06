@@ -60,8 +60,17 @@ use bacnet_types::error::Error;
 // Protocol error from a remote device
 let e = Error::Protocol { class: 2, code: 31 }; // ErrorClass(2)=PROPERTY, ErrorCode(31)=UNKNOWN_PROPERTY
 
-// Other variants: Timeout, Reject, Abort, Io, Encoding, InvalidState, etc.
+// Other variants: Timeout, Reject, Abort, RoutedPathTooLong,
+// RoutedPathCapacityExceeded, Encoding, etc.
 ```
+
+`Error::RoutedPathTooLong { dnet }` identifies the destination network from a
+matching network-layer rejection; it does not claim an exact supported length.
+`Error::RoutedPathCapacityExceeded { capacity }` reports that all bounded path
+state is protected by a held/waiting gate or configured/learned evidence, so a
+new path was rejected before transaction registration or frame emission.
+`Error` is a public enum, so these variants can require new arms in downstream
+exhaustive matches. Matchers with a wildcard arm are unaffected.
 
 ---
 
@@ -139,7 +148,9 @@ let spec = ReadAccessSpecification {
 ```rust
 use bacnet_services::cov::{
     SubscribeCOVRequest, COVNotificationRequest, UnsubscribeCOVRequest,
-    SubscribeCOVPropertyMultipleRequest,
+};
+use bacnet_services::cov_multiple::{
+    COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
 };
 ```
 
@@ -231,10 +242,18 @@ use bacnet_services::vt::{VtOpenRequest, VtCloseRequest, VtDataRequest};
 
 ```rust
 use bacnet_services::audit::{
-    ConfirmedAuditNotificationRequest, UnconfirmedAuditNotificationRequest,
-    AuditLogQueryRequest,
+    AuditLogQueryAck, AuditLogQueryRequest, AuditNotificationRequest,
+    AuditPropertyReference, BACnetAuditLogQueryParameters, BACnetAuditNotification,
 };
 ```
+
+These models encode the Clause 21 field and tag productions within the
+library's `u64` Unsigned implementation limit. In particular,
+`AuditLogQueryRequest::start_at_sequence_number` is `Option<u32>`, and each
+query alternative contains `successful_actions_only: bool`. Clause 13.19
+instead describes `Unsigned64` and `BACnetSuccessFilter`; that internal
+Standard conflict remains unresolved pending authoritative addendum or errata
+research, so these codecs are not an unqualified Clause 13.19 support claim.
 
 ---
 
@@ -341,6 +360,19 @@ serial.enable_kernel_rs485(
     0,      // delay_after_send_us
 )?;
 ```
+
+Both delay arguments remain in microseconds but must be exact multiples of 1000:
+zero is valid, and `1000` requests one millisecond. The Linux ABI stores whole
+milliseconds, so fractional-millisecond requests return an error before any ioctl
+instead of being rounded.
+
+After applying the configuration, the method reads it back with `TIOCGRS485` and
+checks that RS-485 is enabled with the requested RTS polarity and delays. Drivers
+may reject or sanitize unsupported settings; set/readback failures and mismatches
+return an error. A mismatch reports the effective flags and millisecond delays.
+A readback or verification error can occur after the hardware configuration has
+changed; the method does not roll back or retry. Success logs the verified effective
+settings. See the [Linux RS-485 userspace ABI](https://cdn.kernel.org/doc/html/latest/driver-api/serial/serial-rs485.html).
 
 #### GPIO Direction Control (RS-485 Hats)
 
@@ -481,7 +513,7 @@ let obj = db.get(&oid);                // Option<&dyn BACnetObject>
 let obj = db.get_mut(&oid);            // Option<&mut Box<dyn BACnetObject>>
 ```
 
-### Object Types (64)
+### Object Types (62)
 
 #### Core I/O (9)
 
@@ -497,16 +529,25 @@ let obj = db.get_mut(&oid);            // Option<&mut Box<dyn BACnetObject>>
 | `MultiStateOutputObject` | `::new(instance, name, number_of_states)` |
 | `MultiStateValueObject` | `::new(instance, name, number_of_states)` |
 
-#### Schedule & Notification (6)
+#### Schedule & Notification (5)
 
 | Type | Constructor |
 |------|-------------|
 | `CalendarObject` | `::new(instance, name)` |
 | `ScheduleObject` | `::new(instance, name, default_value)` |
 | `NotificationClass` | `::new(instance, name)` |
-| `NotificationForwarderObject` | `::new(instance, name)` |
-| `AlertEnrollmentObject` | `::new(instance, name)` |
+| `AlertEnrollmentObject` | `::new(instance, name, initial_source)` |
 | `EventEnrollmentObject` | `::new(instance, name, event_type)` |
+
+`AlertEnrollmentObject::new` now requires the initial
+`bacnet_types::primitives::ObjectIdentifier` reported by `Present_Value`.
+This is an intentional breaking correction: migrate two-argument callers by
+passing the object that most recently provided an alert. Use
+`record_alert_source(source)` to update only that source identity; the helper
+does not evaluate an alert or update event, timestamp, acknowledgement, or
+notification state. The served Table 12-61 surface no longer includes the
+previous compatibility-only `Status_Flags`, `Out_Of_Service`, or `Reliability`
+properties.
 
 #### Logging & Trending (5)
 
@@ -515,10 +556,10 @@ let obj = db.get_mut(&oid);            // Option<&mut Box<dyn BACnetObject>>
 | `TrendLogObject` | `::new(instance, name, buffer_size)` |
 | `TrendLogMultipleObject` | `::new(instance, name, buffer_size)` |
 | `EventLogObject` | `::new(instance, name, buffer_size)` |
-| `AuditLogObject` | `::new(instance, name, buffer_size)` |
+| `AuditLogObject` | `::new(instance, name, buffer_size, persistence)` |
 | `AuditReporterObject` | `::new(instance, name)` |
 
-#### Building Control (8)
+#### Building Control (7)
 
 | Type | Constructor |
 |------|-------------|
@@ -528,8 +569,66 @@ let obj = db.get_mut(&oid);            // Option<&mut Box<dyn BACnetObject>>
 | `LoadControlObject` | `::new(instance, name)` |
 | `ProgramObject` | `::new(instance, name)` |
 | `AveragingObject` | `::new(instance, name)` |
-| `ChannelObject` | `::new(instance, name, channel_number)` |
-| `StagingObject` | `::new(instance, name, num_stages)` |
+| `StagingObject` | `::new(instance, name, StagingConfig { ... })` |
+
+Staging uses an explicit atomic configuration; the former stage-count-only
+constructor is intentionally removed because it could not create a valid
+ladder or target mapping. To migrate to 0.11.0, replace that argument with a
+`StagingConfig` containing the initial value, minimum, units, priority, at least
+two ordered stages, and local target references. Each stage's `values` must
+have one entry per target; optional `stage_names` must have one name per stage.
+Construction returns an error for invalid configuration, so preserve the
+fallible result handling:
+
+```rust
+use bacnet_objects::staging::{StagingConfig, StagingObject};
+use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
+use bacnet_types::enums::ObjectType;
+use bacnet_types::primitives::ObjectIdentifier;
+
+let target = BACnetDeviceObjectReference {
+    device_identifier: None,
+    object_identifier: ObjectIdentifier::new(ObjectType::BINARY_OUTPUT, 1)?,
+};
+let staging = StagingObject::new(
+    1,
+    "Two-stage fan",
+    StagingConfig {
+        present_value: 5.0,
+        min_present_value: 0.0,
+        units: 62,
+        priority_for_writing: 8,
+        stages: vec![
+            BACnetStageLimitValue {
+                limit: 10.0,
+                values: vec![false],
+                deadband: 1.0,
+            },
+            BACnetStageLimitValue {
+                limit: 20.0,
+                values: vec![true],
+                deadband: 1.0,
+            },
+        ],
+        target_references: vec![target],
+        stage_names: Some(vec!["Off".into(), "On".into()]),
+    },
+)?;
+# Ok::<(), bacnet_types::error::Error>(())
+```
+
+Staging targets are local-only Binary Output, Binary Value, or Binary Lighting
+Output objects. The server applies stage changes through its ordinary local
+write notification path at `priority_for_writing`, completing the bounded local
+plan during write handling without remote I/O. A target failure sets source
+`Reliability` to `UNRELIABLE_OTHER`; a later fully successful current plan
+clears it. `Out_Of_Service` decouples targets while preserving PV/stage
+evaluation, and returning to service reapplies the selected stage. Network
+writes may replace individual or whole `Stages`, `Target_References`, and
+configured `Stage_Names` arrays, but array lengths are fixed after construction
+so coupled configuration cannot pass through an invalid intermediate shape.
+`Max_Pres_Value` is derived from the final stage limit. Staging does not
+advertise intrinsic reporting or COV.
 
 #### Lighting & Color (4)
 
@@ -644,6 +743,57 @@ let client = BACnetClient::sc_builder()
 
 `BACnetClient::builder()` is an alias for `bip_builder()`.
 
+### Routed Confirmed-Request Limits
+
+Routed confirmed requests size each outgoing APDU to the smallest applicable
+peer, local-transport, and routed-path allowance before registering a
+transaction or emitting a frame. The local allowance retains the transport's
+live maximum and the current routed destination-header cost. The routed-path
+allowance is an NPDU limit: an unknown path starts from a conservative
+228-octet NPDU envelope, then subtracts the forwarded header containing both
+the destination address and the client's actual local source MAC. For example,
+six-octet destination and source addresses leave 207 APDU octets.
+
+Applications with path-specific evidence can configure the NPDU envelope
+without changing `ClientConfig`:
+
+```rust
+client
+    .configure_routed_path_max_npdu(&router_mac, dnet, 1497)
+    .await?;
+
+// Restore the conservative unknown-path policy.
+client.clear_routed_path_limit(&router_mac, dnet).await?;
+```
+
+State is keyed by the immediate router MAC together with DNET. One confirmed
+request at a time owns that path; requests through a different router or to a
+different DNET remain independent, and direct requests bypass this state. A
+matching Reject-Message-To-Network reason 4 completes only the active owner as
+`Error::RoutedPathTooLong { dnet }` and records the attempted NPDU length as an
+exclusive upper bound. Learned negative evidence lasts for the client lifetime
+and has no widening TTL. Both configuration methods wait for an active owner;
+configuring replaces the prior value and deliberately resets learned evidence,
+while clearing removes configured and learned evidence. Active Clause 19.4
+path probing and cache persistence across process restarts are not provided.
+
+The client retains at most 256 routed-path entries. At capacity it
+deterministically reclaims the least-recently-used entry only when it has no
+configured or learned evidence and its gate has neither an owner nor waiters.
+Configured and learned safety evidence is never silently evicted. If no entry
+is safely reclaimable, the operation returns
+`Error::RoutedPathCapacityExceeded { capacity: 256 }` before TSM registration
+or frame emission.
+
+An ambiguously terminated send (including cancellation, timeout, or send
+failure) quarantines its path for the configured APDU timeout multiplied by
+the configured attempt count. The same-path gate remains exclusive during
+that interval, and network controls already observed at ingress before the
+next generation activates are discarded using a monotonic ingress sequence.
+A source-correlated terminal response after one attempted frame can end the
+generation without quarantine; multi-frame or retried generations remain
+conservative.
+
 ### Property Access
 
 ```rust
@@ -672,7 +822,33 @@ client.write_property_multiple(&mac, specs).await?;
 client.subscribe_cov(&mac, process_id, oid, true, Some(300)).await?;
 
 // Subscribe to multiple properties at once
-client.subscribe_cov_property_multiple(&mac, process_id, specs, Some(10), Some(true)).await?;
+let cov_specs = vec![COVSubscriptionSpecification {
+    monitored_object_identifier: oid,
+    list_of_cov_references: vec![COVReference {
+        monitored_property: PropertyReference {
+            property_identifier: PropertyIdentifier::PRESENT_VALUE,
+            property_array_index: None,
+        },
+        cov_increment: Some(0.5),
+        timestamped: true,
+    }],
+}];
+let request = SubscribeCOVPropertyMultipleRequest {
+    subscriber_process_identifier: process_id,
+    issue_confirmed_notifications: true,
+    lifetime: Some(300),
+    max_notification_delay: Some(10),
+    list_of_cov_subscription_specifications: cov_specs,
+};
+let mut service_data = bytes::BytesMut::new();
+request.try_encode(&mut service_data)?;
+client
+    .confirmed_request(
+        &mac,
+        ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE,
+        &service_data,
+    )
+    .await?;
 
 // Receive notifications (broadcast channel — multiple consumers OK)
 let mut rx = client.cov_notifications();
@@ -726,9 +902,16 @@ client.life_safety_operation(&mac, process_id, "operator", LifeSafetyOperation::
 ### File Services
 
 ```rust
-let raw = client.atomic_read_file(&mac, file_oid, FileAccessMethod::Stream { file_start_position: 0, requested_octet_count: 1024 }).await?;
+let access = FileAccessMethod::Stream { file_start_position: 0, requested_octet_count: 1024 };
+let raw = client.atomic_read_file(&mac, file_oid, access.clone()).await?;
+let ack = client.atomic_read_file_decoded(&mac, file_oid, access).await?;
 client.atomic_write_file(&mac, file_oid, FileWriteAccessMethod::Stream { file_start_position: 0, file_data: data }).await?;
 ```
+
+`atomic_read_file` remains the compatibility API for the raw encoded ACK payload.
+`atomic_read_file_decoded` performs one request, decodes its `AtomicReadFileAck`,
+and validates that the ACK access arm matches the request and does not exceed
+the requested window. It does not iterate an entire file.
 
 ### ReadRange
 
@@ -774,10 +957,80 @@ let raw = client.vt_data(&mac, session_id, &data, data_flag).await?;
 ### Audit Services
 
 ```rust
-let raw = client.confirmed_audit_notification(&mac, service_data).await?;
-client.unconfirmed_audit_notification(&mac, service_data).await?;
-let raw = client.audit_log_query(&mac, ack_filter, query_options).await?;
+use bacnet_services::audit::{
+    AuditLogQueryAck, AuditLogQueryRequest, AuditNotificationRequest,
+};
+use bacnet_types::enums::{ConfirmedServiceChoice, UnconfirmedServiceChoice};
+use bytes::BytesMut;
+
+let notification_request: AuditNotificationRequest = /* build typed request */;
+let mut service_data = BytesMut::new();
+notification_request.try_encode(&mut service_data)?;
+client.confirmed_request(
+    &mac,
+    ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION,
+    &service_data,
+).await?;
+
+client.unconfirmed_request(
+    &mac,
+    UnconfirmedServiceChoice::UNCONFIRMED_AUDIT_NOTIFICATION,
+    &service_data,
+).await?;
+
+let query_request: AuditLogQueryRequest = /* build typed request */;
+let mut query_data = BytesMut::new();
+query_request.try_encode(&mut query_data)?;
+let raw_ack = client.confirmed_request(
+    &mac,
+    ConfirmedServiceChoice::AUDIT_LOG_QUERY,
+    &query_data,
+).await?;
+let query_ack = AuditLogQueryAck::decode(&raw_ack)?;
 ```
+
+These remain generic-client examples. The bundled server executes
+AuditLogQuery against the retained in-memory snapshot of an explicitly backed
+`AuditLogObject`, returning newest-first typed records through the existing
+ComplexACK segmentation path. ConfirmedAuditNotification and
+UnconfirmedAuditNotification receipt are available only when the server is
+configured with exactly one `audit_notification_sink` and the corresponding
+fast `audit_notification_authorizer` or
+`unconfirmed_audit_notification_authorizer`; missing, false, or panicking
+policy fails closed. Each policy receives the immediate MAC, optional routed
+NPDU source, configured sink, and decoded request separately from the
+peer-reported payload; only the confirmed context has an invoke ID. Accepted
+lists merge or create records atomically through the sink's durable backend.
+For the built-in `AuditLogObject`, a successful confirmed receipt also stores
+its complete exact-request identity and Unix UTC completion timestamp in that
+same snapshot transaction. The 60-second / 256-entry ledger survives a reopen;
+retained duplicates are discarded before authorization without a SimpleACK
+replay. Entries expire at 60 seconds, and a stored future timestamp fails open
+rather than suppressing indefinitely. The general process-local confirmed-
+request tracker remains the pending/session guard.
+
+`AuditLogSnapshot::completed_receipts` is part of the public custom-persistence
+snapshot contract. `FileAuditLogPersistence` writes schema v2, reads schema v1
+as an empty receipt ledger, rejects unknown future versions, and retains the
+existing two-slot generation/checksum recovery policy. When migrating a custom
+`AuditLogPersistence` implementation to 0.11.0, add `completed_receipts: Vec::new()`
+to newly constructed snapshots and when decoding an older format without
+receipts. Thereafter, `commit` must durably store the supplied receipt ledger
+and records in the same atomic snapshot, and `load` must restore both. Dropping
+or separately committing the ledger loses confirmed-request duplicate
+protection after a reopen. The built-in file backend needs no separate v1
+conversion: it writes v2 on the next successful commit.
+
+Back up both `.slot0` and `.slot1` files before the first v2 commit. A reader that
+supports only v1 cannot read v2 snapshots; rolling back to such an implementation
+requires restoring a compatible backup and loses changes made after that backup.
+
+Unconfirmed receipt never emits a response and never writes the confirmed ledger.
+Synchronous persistence under the database writer is an intentional availability
+limitation. Query authorization, sustained rate limiting, producer/report
+generation, forwarding, multi-log routing policy, failures-only filtering, and
+a wrap-safe 64-bit continuation are not provided. Executed-service bit 46
+represents receipt only; no Audit Reporting BIBB, including AR-L-A, is claimed.
 
 ---
 
@@ -803,6 +1056,11 @@ let server = BACnetServer::bip_builder()
     .interface(Ipv4Addr::UNSPECIFIED)
     .port(0xBAC0)
     .broadcast_address(Ipv4Addr::BROADCAST)
+    .life_safety_operation_authorizer(|context| {
+        // Use authenticated deployment identity where available; the
+        // Requesting Source string is peer-controlled descriptive text.
+        allowed_life_safety_peer(&context.source_mac, context.source_network.as_ref())
+    })
     .build()
     .await?;
 
@@ -828,6 +1086,39 @@ server.stop().await?;
 
 `BACnetServer::builder()` is an alias for `bip_builder()`.
 
+Inbound LifeSafetyOperation is fail-closed unless an authorizer is configured.
+The built-in Life Safety Point and Zone objects execute the six silence and
+unsilence operations. `RESET`, `RESET_ALARM`, and `RESET_FAULT` execute only
+through a configured application-owned Point/Zone reset executor after exact
+`Operation_Expected` arming; omitted commit fields remain unchanged and no
+physical state is inferred. Exact confirmed duplicates are discarded silently
+by the bounded process-local request tracker, so irreversible actuation still
+requires application-owned idempotency across tracker expiry or restart.
+
+Trusted runtime logic can arm or rearm a Life Safety object through
+`BACnetServer::set_life_safety_operation_expected_local`. The lower-level
+`BACnetObject::set_life_safety_operation_expected_internal` channel also remains
+available to custom database owners. Protocol WriteProperty and
+WritePropertyMultiple cannot forge `Operation_Expected` or `Silenced`.
+
+The additive `BACnetObject::apply_life_safety_operation_detailed` result carries
+the existing `LifeSafetyOperationEffect` plus ordered actual property deltas;
+its default delegates to the legacy hook and reports no guessed properties.
+The bundled server uses those deltas, trusted rearm readback, and exact WP/WPM/
+`write_local`/live-Schedule pre/post readback to route Life Safety COV after
+unlocking and after the service ACK where applicable.
+Whole-object reports are exactly `Present_Value` plus `Status_Flags` and trigger
+only when either changes. Property reports are the subscribed property plus one
+`Status_Flags` and trigger when either changes. Point property COV supports
+`Present_Value`, `Status_Flags`, `Tracking_Value`, `Silenced`, and
+`Operation_Expected`; Zone supports the same set without its unmodeled
+`Tracking_Value`, which is rejected with `PROPERTY / NOT_COV_PROPERTY`.
+Low-level object setters still bypass server notification ownership.
+
+This is a bounded operational-state slice, not complete Life Safety Point/Zone
+table, metadata, PICS/BIBB, profile, accepted-mode, reliability/tracking, or
+intrinsic `CHANGE_OF_LIFE_SAFETY` event-algorithm conformance.
+
 ### Handled Services
 
 The server automatically dispatches:
@@ -841,7 +1132,9 @@ The server automatically dispatches:
 - GetEventInformation, AcknowledgeAlarm
 - GetAlarmSummary, GetEnrollmentSummary
 - ConfirmedTextMessage
-- LifeSafetyOperation
+- LifeSafetyOperation (authorized silence/unsilence; reset via configured application executor)
+- ConfirmedAuditNotification (explicit sink and fail-closed authorizer; process-local duplicate detection)
+- AuditLogQuery (retained records; no query authorization or failures-only mode)
 - ReadRange
 - AtomicReadFile, AtomicWriteFile
 - AddListElement, RemoveListElement
@@ -850,8 +1143,8 @@ The server automatically dispatches:
 - WhoIs / IAm
 - WhoHas / IHave
 - TimeSynchronization, UTCTimeSynchronization
-- WriteGroup
 - UnconfirmedTextMessage
+- UnconfirmedAuditNotification (explicit sink and distinct fail-closed authorizer; no response or duplicate tracking)
 
 **Outgoing (server-initiated):**
 - COV notifications (confirmed and unconfirmed, with ServerTsm retry for confirmed)
@@ -876,6 +1169,8 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | `Error::Timeout(msg)` | APDU retry exhausted |
 | `Error::Reject { reason }` | Remote device rejected request |
 | `Error::Abort { reason }` | Remote device aborted request |
+| `Error::RoutedPathTooLong { dnet }` | Router rejected the active message as too long for DNET |
+| `Error::RoutedPathCapacityExceeded { capacity }` | No routed-path entry can be allocated without discarding protected safety state |
 | `Error::Encoding(msg)` | Malformed packet |
 | `Error::Io(io_error)` | Transport I/O failure |
 

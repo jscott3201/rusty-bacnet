@@ -15,6 +15,8 @@ bacnet-services       Service request/response structs (RP, WP, RPM, COV, etc.)
     |         |
     |     bacnet-network      Network layer, BACnetRouter, RouterTable
     |         |
+    |     bacnet-endpoint-core  Private endpoint lifecycle, ingress, egress, coordination
+    |         |
     +---> bacnet-objects      BACnetObject trait, ObjectDatabase, object implementations
     |         |
     |     bacnet-client       Async BACnet client (TSM, segmentation, discovery)
@@ -23,10 +25,9 @@ bacnet-services       Service request/response structs (RP, WP, RPM, COV, etc.)
     +---> bacnet-cli          Interactive shell and CLI tool
     |
     +---> rusty-bacnet        Python bindings (PyO3)
-          bacnet-wasm         WASM/JS BACnet/SC thin client
 ```
 
-The bottom rows are "application" crates — they compose the library crates into user-facing tools. They are excluded from `default-members` in the workspace to avoid pulling in their heavy dependencies (clap, pyo3, wasm-bindgen) during normal development.
+The bottom rows are "application" crates — they compose the library crates into user-facing tools. They are excluded from `default-members` in the workspace to avoid pulling in their heavy dependencies (clap, pyo3) during normal development.
 
 The HTTP/MCP gateway and BTL compliance test harness now live in dedicated repositories:
 - [`rusty-bacnet-mcp`](https://github.com/jscott3201/rusty-bacnet-mcp) — Axum REST API + rmcp MCP server
@@ -44,14 +45,14 @@ Physical network (UDP socket / WebSocket / serial port)
     v
 TransportPort::start() -> mpsc::Receiver<ReceivedNpdu>
     |  Decodes data-link framing (BVLL for BIP, BVLC-SC for SC, MS/TP frames)
-    |  Extracts NPDU bytes + source MAC address + optional data attributes
+    |  Extracts NPDU bytes + source MAC + raw link-layer group provenance + attributes
     v
 NetworkLayer::start() -> mpsc::Receiver<ReceivedApdu>
     |  Decodes NPDU header (version, control, DNET/DADR/SNET/SADR)
     |  Filters: drops messages not for this device (wrong DNET)
-    |  Extracts APDU bytes + source network/address info + data attributes
+    |  Extracts APDU bytes + source addressing + raw/effective group facts + attributes
     v
-Client dispatch task / Server dispatch task
+Optional private EndpointIngress classifier / Client dispatch task / Server dispatch task
     |  Decodes APDU header (PDU type, service choice, invoke ID)
     |  Routes to appropriate handler
     v
@@ -84,7 +85,7 @@ Loopback (local client/server) ─┘      |
 
 The router receives NPDUs from all transports, checks the destination network number in the NPDU header, and forwards to the appropriate transport. Messages for the local device (DNET matches a loopback port) are delivered to the client/server.
 
-Data attributes are carried on `ReceivedNpdu` and `ReceivedApdu`, and attribute-aware send helpers are available on `TransportPort` and `NetworkLayer`. BACnet/SC maps inbound Annex AB Data Options to these attributes and maps outbound attributes back to SC Data Options. Native BACnet/SC and the WASM browser receive loop treat valid Secure Path Data Option type 1 as understood, reject unsupported Must Understand Data Options before NPDU delivery, return a BVLC-Result NAK for non-broadcast traffic, drop broadcast traffic without a result, and preserve unsupported non-Must-Understand Data Options as attributes. The WASM client exposes incoming attributes through raw NPDU callback metadata, rejects malformed Secure Path Data Options before delivery, and can send broadcast or destination-VMAC raw NPDUs with Data Options. The router preserves inbound data attributes when forwarding unicast or broadcast NPDUs across attribute-capable transports, while data links that do not support attributes expose an empty list on receive and ignore attributes on send.
+Data attributes are carried on `ReceivedNpdu` and `ReceivedApdu`, and attribute-aware send helpers are available on `TransportPort` and `NetworkLayer`. `ReceivedApdu.link_layer_group` preserves whether the incoming data-link destination was a group address, while `ReceivedApdu.is_group` describes the effective BACnet network destination; a routed unicast can therefore have `link_layer_group == true` and `is_group == false`. BACnet/SC maps every inbound Annex AB Data Option to these attributes and maps outbound attributes back to SC Data Options. Unknown Data Options do not block NPDU delivery. For received Encapsulated-NPDUs, an unsupported Must Understand Destination Option returns a BVLC-Result NAK with the original option marker to the unicast source through the hub and drops broadcast without a result. This message-level NAK does not close the source connection. A Destination Option without Must Understand does not block delivery. The current `DataAttribute.must_understand` field stores the Data Option bit-6 value, but Addendum 135-2020cf Every Segment behavior is not implemented. The router preserves inbound data attributes when forwarding unicast or broadcast NPDUs across attribute-capable transports, while data links that do not support attributes expose an empty list on receive and ignore attributes on send.
 
 ## Transport Abstraction
 
@@ -100,6 +101,8 @@ pub trait TransportPort: Send + Sync {
     fn max_apdu_length(&self) -> u16;  // BIP/SC: 1476, MS/TP: 480
 }
 ```
+
+`TransportPort` owns data-link framing and link-specific controls. `NetworkLayer` owns NPDU addressing and APDU delivery forms. The private `bacnet-endpoint-core` runtime can own one network lifecycle and expose bounded ingress and network-service egress to application-role adapters; those role handles cannot start or stop the network or transport. This foundation does not add a public combined endpoint API, and it does not claim that B/IP and BACnet/SC operate together as one device.
 
 MAC address format varies by transport:
 - **BIP**: 6 bytes (4-byte IPv4 + 2-byte port, big-endian)
@@ -176,7 +179,8 @@ The `BACnetServer` spawns several background tasks:
 | Dispatch | Receives APDUs, routes to service handlers | Event-driven |
 | COV purge | Removes expired COV subscriptions | 60s |
 | Fault detection | Evaluates analog objects for over/under-range | 10s |
-| Event enrollment | Processes intrinsic reporting algorithms | 10s |
+| Intrinsic reporting | Advances Time_Delay countdowns and fires confirmed transitions via `tick_intrinsic_reporting` | 1s |
+| Event enrollment | Evaluates Event Enrollment objects against their monitored properties | 10s |
 | Trend log | Records data samples for trend log objects | Per-object interval |
 | Schedule tick | Evaluates weekly schedules and exception dates | 60s |
 

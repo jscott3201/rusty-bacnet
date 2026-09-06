@@ -17,11 +17,15 @@ use tracing::{debug, warn};
 use crate::bbmd::{self, BbmdState, BdtEntry, FdtEntryWire};
 use crate::bvll::{decode_bip_mac, decode_bvll, encode_bip_mac, encode_bvll, BvllMessage};
 use crate::port::{ReceivedNpdu, TransportPort};
+use crate::udp_metadata::{DestinationReceiver, IpVersion};
 use bacnet_types::enums::{BvlcFunction, BvlcResultCode};
 use bacnet_types::error::Error;
 
 mod io;
-use io::{handle_bvll_message, resolve_local_ip, send_register_foreign_device, RecvContext};
+use io::{
+    handle_bvll_message, original_destination_matches, resolve_local_ip,
+    send_register_foreign_device, RecvContext,
+};
 
 /// Default BACnet/IP port (0xBAC0 = 47808).
 pub const DEFAULT_BACNET_PORT: u16 = 0xBAC0;
@@ -233,6 +237,24 @@ impl BipTransport {
         })
     }
 
+    fn abort_background_tasks(&mut self) -> Vec<JoinHandle<()>> {
+        let mut tasks = Vec::new();
+        if let Some(task) = self.registration_task.take() {
+            task.abort();
+            tasks.push(task);
+        }
+        if let Some(task) = self.bbmd_fdt_purge_task.take() {
+            task.abort();
+            tasks.push(task);
+        }
+        if let Some(task) = self.recv_task.take() {
+            task.abort();
+            tasks.push(task);
+        }
+        self.socket = None;
+        tasks
+    }
+
     /// Send a raw BVLC management request and await the response.
     async fn bvlc_request(
         &self,
@@ -415,14 +437,30 @@ impl TransportPort for BipTransport {
         let bind_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, self.port);
         socket2.bind(&bind_addr.into()).map_err(Error::Transport)?;
 
+        let destination_receiver =
+            DestinationReceiver::configure(&socket2, IpVersion::V4).map_err(Error::Transport)?;
+
         let std_socket: std::net::UdpSocket = socket2.into();
         let socket = UdpSocket::from_std(std_socket).map_err(Error::Transport)?;
 
-        let local_ip = if self.interface.is_unspecified() {
+        let wildcard_bind = self.interface.is_unspecified();
+        let local_ip = if wildcard_bind {
             resolve_local_ip().unwrap_or(Ipv4Addr::LOCALHOST)
         } else {
             self.interface
         };
+        let local_unicast_ips = if wildcard_bind {
+            crate::local_addresses::ipv4()
+        } else {
+            vec![local_ip]
+        };
+        #[cfg(unix)]
+        if wildcard_bind && local_unicast_ips.is_empty() {
+            return Err(Error::Transport(std::io::Error::new(
+                std::io::ErrorKind::AddrNotAvailable,
+                "could not enumerate local IPv4 addresses for wildcard ingress",
+            )));
+        }
 
         let local_port = socket.local_addr().map_err(Error::Transport)?.port();
         self.port = local_port;
@@ -484,16 +522,36 @@ impl TransportPort for BipTransport {
         let recv_task = tokio::spawn(async move {
             let mut recv_buf = vec![0u8; 2048];
             loop {
-                match recv_ctx.socket.recv_from(&mut recv_buf).await {
-                    Ok((len, addr)) => {
-                        let data = &recv_buf[..len];
+                match destination_receiver
+                    .recv_from(&recv_ctx.socket, &mut recv_buf)
+                    .await
+                {
+                    Ok(received) => {
+                        let data = &recv_buf[..received.len];
                         match decode_bvll(data) {
                             Ok(msg) => {
-                                let sender_addr = if let std::net::SocketAddr::V4(v4) = addr {
-                                    (v4.ip().octets(), v4.port())
-                                } else {
+                                if !original_destination_matches(
+                                    msg.function,
+                                    received.destination,
+                                    local_ip,
+                                    recv_ctx.broadcast_addr,
+                                    &local_unicast_ips,
+                                    wildcard_bind,
+                                    received.os_group_delivery,
+                                ) {
+                                    debug!(
+                                        function = msg.function.to_raw(),
+                                        destination = %received.destination,
+                                        "Dropping BVLL/IP destination mismatch"
+                                    );
                                     continue;
-                                };
+                                }
+                                let sender_addr =
+                                    if let std::net::SocketAddr::V4(v4) = received.peer {
+                                        (v4.ip().octets(), v4.port())
+                                    } else {
+                                        continue;
+                                    };
 
                                 handle_bvll_message(&msg, sender_addr, &recv_ctx).await;
                             }
@@ -501,6 +559,9 @@ impl TransportPort for BipTransport {
                                 warn!(error = %e, "Failed to decode BVLL frame");
                             }
                         }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                        debug!(error = %e, "Dropping UDP datagram with invalid destination metadata");
                     }
                     Err(e) => {
                         warn!(error = %e, "UDP recv error");
@@ -540,20 +601,14 @@ impl TransportPort for BipTransport {
     }
 
     async fn stop(&mut self) -> Result<(), Error> {
-        if let Some(task) = self.registration_task.take() {
-            task.abort();
+        for task in self.abort_background_tasks() {
             let _ = task.await;
         }
-        if let Some(task) = self.bbmd_fdt_purge_task.take() {
-            task.abort();
-            let _ = task.await;
-        }
-        if let Some(task) = self.recv_task.take() {
-            task.abort();
-            let _ = task.await;
-        }
-        self.socket = None;
         Ok(())
+    }
+
+    fn abort(&mut self) {
+        let _ = self.abort_background_tasks();
     }
 
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
@@ -600,6 +655,22 @@ impl TransportPort for BipTransport {
 
     fn local_mac(&self) -> &[u8] {
         &self.local_mac
+    }
+
+    fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
+        // Clause J.1.2's B/IP broadcast address is the configured broadcast
+        // IP ("all 1's in the host portion") together with this port's UDP
+        // port — a broadcast IP at a different port belongs to a different
+        // B/IP network and must not be folded into this link's broadcast.
+        mac.len() == 6
+            && mac[..4] == self.broadcast_address.octets()
+            && mac[4..] == self.port.to_be_bytes()
+    }
+}
+
+impl Drop for BipTransport {
+    fn drop(&mut self) {
+        self.abort();
     }
 }
 

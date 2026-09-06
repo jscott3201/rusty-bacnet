@@ -10,17 +10,93 @@ fn encode_to_vec(apdu: &Apdu) -> Vec<u8> {
 
 #[test]
 fn max_segments_round_trip() {
-    assert_eq!(decode_max_segments(encode_max_segments(None)), None);
-    assert_eq!(decode_max_segments(encode_max_segments(Some(2))), Some(2));
-    assert_eq!(decode_max_segments(encode_max_segments(Some(4))), Some(4));
-    assert_eq!(decode_max_segments(encode_max_segments(Some(8))), Some(8));
-    assert_eq!(decode_max_segments(encode_max_segments(Some(16))), Some(16));
-    assert_eq!(decode_max_segments(encode_max_segments(Some(32))), Some(32));
-    assert_eq!(decode_max_segments(encode_max_segments(Some(64))), Some(64));
     assert_eq!(
-        decode_max_segments(encode_max_segments(Some(100))),
+        decode_max_segments(encode_max_segments(None).unwrap()),
+        None
+    );
+    assert_eq!(
+        decode_max_segments(encode_max_segments(Some(2)).unwrap()),
+        Some(2)
+    );
+    assert_eq!(
+        decode_max_segments(encode_max_segments(Some(4)).unwrap()),
+        Some(4)
+    );
+    assert_eq!(
+        decode_max_segments(encode_max_segments(Some(8)).unwrap()),
+        Some(8)
+    );
+    assert_eq!(
+        decode_max_segments(encode_max_segments(Some(16)).unwrap()),
+        Some(16)
+    );
+    assert_eq!(
+        decode_max_segments(encode_max_segments(Some(32)).unwrap()),
+        Some(32)
+    );
+    assert_eq!(
+        decode_max_segments(encode_max_segments(Some(64)).unwrap()),
+        Some(64)
+    );
+    assert_eq!(
+        decode_max_segments(encode_max_segments(Some(100)).unwrap()),
         Some(255)
     );
+}
+
+#[test]
+fn max_segments_non_rungs_round_down_without_over_advertising() {
+    for (configured, advertised) in [(3, 2), (5, 4), (7, 4), (9, 8), (17, 16), (33, 32), (63, 32)] {
+        assert_eq!(
+            decode_max_segments(encode_max_segments(Some(configured)).unwrap()),
+            Some(advertised),
+            "configured maximum {configured} must not advertise a larger finite capacity"
+        );
+    }
+}
+
+#[test]
+fn greater_than_64_code_is_only_used_for_true_greater_than_64_values() {
+    for configured in 2..=64 {
+        let encoded = encode_max_segments(Some(configured)).unwrap();
+        assert_ne!(
+            encoded, 7,
+            "{configured} must not encode as greater than 64"
+        );
+        assert!(
+            decode_max_segments(encoded).unwrap() <= configured,
+            "the encoded rung must not exceed the configured capacity"
+        );
+    }
+
+    for configured in 65..=u8::MAX {
+        assert_eq!(encode_max_segments(Some(configured)).unwrap(), 7);
+    }
+}
+
+#[test]
+fn confirmed_request_rejects_max_segments_below_protocol_minimum() {
+    for invalid in [0, 1] {
+        let pdu = Apdu::ConfirmedRequest(ConfirmedRequest {
+            segmented: false,
+            more_follows: false,
+            segmented_response_accepted: true,
+            max_segments: Some(invalid),
+            max_apdu_length: 1476,
+            invoke_id: 1,
+            sequence_number: None,
+            proposed_window_size: None,
+            service_choice: ConfirmedServiceChoice::READ_PROPERTY,
+            service_request: Bytes::new(),
+        });
+
+        let mut buf = BytesMut::new();
+        assert!(
+            encode_apdu(&mut buf, &pdu).is_err(),
+            "max-segments-accepted={invalid} must not be encoded as greater than 64"
+        );
+        assert!(buf.is_empty(), "validation must precede output mutation");
+    }
 }
 
 #[test]
@@ -304,6 +380,49 @@ fn error_with_trailing_data_round_trip() {
     let encoded = encode_to_vec(&apdu);
     let decoded = decode_apdu(Bytes::from(encoded)).unwrap();
     assert_eq!(apdu, decoded);
+}
+
+#[test]
+fn error_enumerated_values_must_fit_u16() {
+    let encode_error = |error_class, error_code| {
+        let mut buf = BytesMut::with_capacity(16);
+        buf.put_u8(0x50);
+        buf.put_u8(1);
+        buf.put_u8(ConfirmedServiceChoice::READ_PROPERTY.to_raw());
+        primitives::encode_app_enumerated(&mut buf, error_class);
+        primitives::encode_app_enumerated(&mut buf, error_code);
+        buf.freeze()
+    };
+
+    for (error_class, error_code, field, value) in
+        [(65_536, 0, "class", 65_536), (0, 65_537, "code", 65_537)]
+    {
+        let error = decode_apdu(encode_error(error_class, error_code)).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("ErrorPDU error {field} {value}")),
+            "unexpected error for error {field} {value}: {error}"
+        );
+    }
+
+    let decoded = decode_apdu(encode_error(u16::MAX as u32, u16::MAX as u32)).unwrap();
+    let Apdu::Error(decoded) = decoded else {
+        panic!("expected ErrorPDU");
+    };
+    assert_eq!(decoded.error_class.to_raw(), u16::MAX);
+    assert_eq!(decoded.error_code.to_raw(), u16::MAX);
+
+    // Three-octet representations of numeric class 2 and code 32 remain valid.
+    let decoded = decode_apdu(Bytes::from_static(&[
+        0x50, 1, 12, 0x93, 0, 0, 2, 0x93, 0, 0, 32,
+    ]))
+    .unwrap();
+    let Apdu::Error(decoded) = decoded else {
+        panic!("expected ErrorPDU");
+    };
+    assert_eq!(decoded.error_class, ErrorClass::PROPERTY);
+    assert_eq!(decoded.error_code, ErrorCode::UNKNOWN_PROPERTY);
 }
 
 // --- Reject ---

@@ -79,7 +79,9 @@ impl CreateObjectRequest {
         }
 
         let object_specifier = if tag.is_context(0) {
-            let raw = primitives::decode_unsigned(&data[pos..end])? as u32;
+            let raw = primitives::decode_unsigned(&data[pos..end])?;
+            let raw = u32::try_from(raw)
+                .map_err(|_| Error::decoding(pos, "CreateObject object-type exceeds u32"))?;
             ObjectSpecifier::Type(ObjectType::from_raw(raw))
         } else if tag.is_context(1) {
             ObjectSpecifier::Identifier(ObjectIdentifier::decode(&data[pos..end])?)
@@ -113,18 +115,28 @@ impl CreateObjectRequest {
                             "CreateObject missing closing tag 1",
                         ));
                     }
+                    let (tag, closing_end) = tags::decode_tag(data, offset)?;
+                    if tag.is_closing_tag(1) {
+                        offset = closing_end;
+                        break;
+                    }
                     if values.len() >= MAX_DECODED_ITEMS {
                         return Err(Error::decoding(offset, "CreateObject values exceeds max"));
                     }
-                    let (tag, _tag_end) = tags::decode_tag(data, offset)?;
-                    if tag.is_closing_tag(1) {
-                        break;
-                    }
-                    let (pv, new_offset) = BACnetPropertyValue::decode(data, offset)?;
+                    let (pv, new_offset) = BACnetPropertyValue::decode_in_list(data, offset, 1)?;
                     values.push(pv);
                     offset = new_offset;
                 }
+            } else {
+                return Err(Error::decoding(
+                    offset,
+                    "CreateObject expected opening tag 1",
+                ));
             }
+        }
+
+        if offset != data.len() {
+            return Err(Error::decoding(offset, "CreateObject has trailing data"));
         }
 
         Ok(Self {
@@ -167,6 +179,14 @@ mod tests {
     use super::*;
     use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 
+    fn create_object_type_bytes(object_type: &[u8]) -> BytesMut {
+        let mut buf = BytesMut::new();
+        tags::encode_opening_tag(&mut buf, 0);
+        primitives::encode_ctx_octet_string(&mut buf, 0, object_type);
+        tags::encode_closing_tag(&mut buf, 0);
+        buf
+    }
+
     #[test]
     fn create_object_by_type_round_trip() {
         let req = CreateObjectRequest {
@@ -196,6 +216,73 @@ mod tests {
         req.encode(&mut buf);
         let decoded = CreateObjectRequest::decode(&buf).unwrap();
         assert_eq!(req, decoded);
+    }
+
+    #[test]
+    fn create_object_type_must_fit_u32() {
+        let max_with_leading_zero = [0, 0xFF, 0xFF, 0xFF, 0xFF];
+        let decoded =
+            CreateObjectRequest::decode(&create_object_type_bytes(&max_with_leading_zero)).unwrap();
+        assert_eq!(
+            decoded.object_specifier,
+            ObjectSpecifier::Type(ObjectType::from_raw(u32::MAX))
+        );
+
+        for overflow in [u32::MAX as u64 + 1, u64::MAX] {
+            assert!(CreateObjectRequest::decode(&create_object_type_bytes(
+                &overflow.to_be_bytes(),
+            ))
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn create_object_rejects_unexpected_or_trailing_fields() {
+        let encoded = create_object_type_bytes(&[0]);
+
+        let mut empty_values = encoded.clone();
+        tags::encode_opening_tag(&mut empty_values, 1);
+        tags::encode_closing_tag(&mut empty_values, 1);
+        assert!(CreateObjectRequest::decode(&empty_values).is_ok());
+
+        let mut unexpected = encoded.clone();
+        primitives::encode_ctx_unsigned(&mut unexpected, 1, 1);
+        assert!(CreateObjectRequest::decode(&unexpected).is_err());
+
+        let mut trailing = empty_values;
+        primitives::encode_app_null(&mut trailing);
+        assert!(CreateObjectRequest::decode(&trailing).is_err());
+    }
+
+    #[test]
+    fn create_object_accepts_exact_initial_value_limit() {
+        let value = BACnetPropertyValue {
+            property_identifier: PropertyIdentifier::PRESENT_VALUE,
+            property_array_index: None,
+            value: vec![0],
+            priority: None,
+        };
+        let request = CreateObjectRequest {
+            object_specifier: ObjectSpecifier::Type(ObjectType::ANALOG_INPUT),
+            list_of_initial_values: vec![value.clone(); MAX_DECODED_ITEMS],
+        };
+        let mut encoded = BytesMut::new();
+        request.encode(&mut encoded);
+        assert_eq!(
+            CreateObjectRequest::decode(&encoded)
+                .unwrap()
+                .list_of_initial_values
+                .len(),
+            MAX_DECODED_ITEMS
+        );
+
+        let request = CreateObjectRequest {
+            object_specifier: ObjectSpecifier::Type(ObjectType::ANALOG_INPUT),
+            list_of_initial_values: vec![value; MAX_DECODED_ITEMS + 1],
+        };
+        encoded.clear();
+        request.encode(&mut encoded);
+        assert!(CreateObjectRequest::decode(&encoded).is_err());
     }
 
     #[test]

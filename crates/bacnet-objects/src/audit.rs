@@ -1,73 +1,402 @@
-//! AuditLog (type 62) and AuditReporter (type 61) objects per Addendum 135-2016bj.
+//! AuditLog (type 61) and AuditReporter (type 62) objects per Addendum 135-2016bj.
 
 use std::borrow::Cow;
 use std::collections::VecDeque;
+use std::sync::Arc;
 
-use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
+use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
+use bacnet_types::constructed::{
+    BACnetAuditLogDatum, BACnetAuditLogQueryParameters, BACnetAuditLogRecord,
+    BACnetAuditLogRecordResult, BACnetAuditNotification, BACnetRecipient,
+};
+use bacnet_types::enums::{
+    AuditLevel, ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier, Reliability,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
+use crate::clock::ClockReader;
 use crate::common::read_property_list_property;
-use crate::traits::BACnetObject;
+use crate::property_metadata::PropertyMetadata;
+use crate::traits::{BACnetObject, WritePropertyRollback};
 
-// ---------------------------------------------------------------------------
-// AuditLog (type 62)
-// ---------------------------------------------------------------------------
+mod notification;
+mod persistence;
+mod receipt;
+mod reporter_metadata;
+pub use notification::AuditLogNotificationSink;
+use persistence::{validate_record, validate_snapshot};
+pub use persistence::{
+    AuditLogPersistence, AuditLogSnapshot, FileAuditLogPersistence, MAX_AUDIT_RECORDS,
+};
+pub use receipt::{
+    CompletedAuditReceipt, ConfirmedAuditNotificationOutcome, MAX_AUDIT_RECEIPT_KEY_BYTES,
+    MAX_COMPLETED_AUDIT_RECEIPTS,
+};
 
-/// A single audit log record.
-#[derive(Debug, Clone)]
-pub struct AuditRecord {
-    pub timestamp_secs: u64,
-    pub description: String,
+/// One owned page returned by an object-level AuditLogQuery capability.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AuditLogQueryPage {
+    /// Matching records in newest-first retained insertion order.
+    pub records: Vec<BACnetAuditLogRecordResult>,
+    /// Whether a complete retained-buffer scan found no unreturned match.
+    pub no_more_items: bool,
 }
 
-/// BACnet AuditLog object — stores audit trail records in a ring buffer.
+/// Read-only query capability for an object's retained Audit Log records.
+///
+/// Implementations return owned pages so the server can release its object
+/// database read guard before building and encoding the ComplexACK. This
+/// interface never performs persistence I/O or mutates the log.
+pub trait AuditLogStorage: Send + Sync {
+    /// Filter and page the currently retained in-memory records.
+    ///
+    /// A present start is the existing Clause-21 `Unsigned32` model and admits
+    /// only literal sequence identities below it. This intentionally does not
+    /// add a modular cursor across `u64::MAX -> 1`.
+    fn query(
+        &self,
+        parameters: &BACnetAuditLogQueryParameters,
+        start_at_sequence_number: Option<u32>,
+        requested_count: u16,
+    ) -> AuditLogQueryPage;
+}
+
+// ---------------------------------------------------------------------------
+// AuditLog (type 61)
+// ---------------------------------------------------------------------------
+
+/// BACnet AuditLog object with explicit application-owned durable storage.
 pub struct AuditLogObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
     log_enable: bool,
     buffer_size: u32,
-    buffer: VecDeque<AuditRecord>,
+    buffer: VecDeque<BACnetAuditLogRecordResult>,
+    completed_receipts: Vec<CompletedAuditReceipt>,
     total_record_count: u64,
     status_flags: StatusFlags,
+    generation: u64,
+    persistence: Arc<dyn AuditLogPersistence>,
+    clock: Option<Arc<dyn ClockReader>>,
 }
 
+struct AuditLogWriteRollback {
+    snapshot: AuditLogSnapshot,
+}
+
+const LOG_DISABLED_STATUS: u8 = 0b001;
+const BUFFER_PURGED_STATUS: u8 = 0b010;
+
 impl AuditLogObject {
-    pub fn new(instance: u32, name: impl Into<String>, buffer_size: u32) -> Result<Self, Error> {
+    /// Open or initialize one AuditLog using the explicitly supplied storage.
+    pub fn new(
+        instance: u32,
+        name: impl Into<String>,
+        buffer_size: u32,
+        persistence: Arc<dyn AuditLogPersistence>,
+    ) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::AUDIT_LOG, instance)?;
+        if buffer_size > MAX_AUDIT_RECORDS {
+            return Err(Error::OutOfRange(format!(
+                "AuditLog capacity {buffer_size} exceeds {MAX_AUDIT_RECORDS}"
+            )));
+        }
+        let snapshot = match persistence.load(oid)? {
+            Some(snapshot) => {
+                if snapshot.object_identifier != oid || snapshot.capacity != buffer_size {
+                    return Err(Error::Encoding(
+                        "AuditLog persisted identity or capacity does not match configuration"
+                            .into(),
+                    ));
+                }
+                validate_snapshot(&snapshot)?;
+                snapshot
+            }
+            None => {
+                let snapshot = AuditLogSnapshot {
+                    object_identifier: oid,
+                    generation: 1,
+                    capacity: buffer_size,
+                    log_enable: true,
+                    total_record_count: 0,
+                    records: Vec::new(),
+                    completed_receipts: Vec::new(),
+                };
+                validate_snapshot(&snapshot)?;
+                persistence.commit(&snapshot)?;
+                snapshot
+            }
+        };
         Ok(Self {
             oid,
             name: name.into(),
             description: String::new(),
-            log_enable: true,
-            buffer_size,
-            buffer: VecDeque::new(),
-            total_record_count: 0,
+            log_enable: snapshot.log_enable,
+            buffer_size: snapshot.capacity,
+            buffer: snapshot.records.into(),
+            completed_receipts: snapshot.completed_receipts,
+            total_record_count: snapshot.total_record_count,
             status_flags: StatusFlags::empty(),
+            generation: snapshot.generation,
+            persistence,
+            clock: None,
         })
     }
 
-    /// Add an audit record to the log.
-    pub fn add_record(&mut self, record: AuditRecord) {
+    /// Append one application-supplied record when logging is enabled.
+    pub fn add_record(&mut self, record: BACnetAuditLogRecord) -> Result<Option<u64>, Error> {
         if !self.log_enable {
-            return;
+            return Ok(None);
         }
-        if self.buffer.len() >= self.buffer_size as usize {
-            self.buffer.pop_front();
-        }
-        self.buffer.push_back(record);
-        self.total_record_count += 1;
+        validate_record(&record)?;
+        let mut prospective = self.snapshot_for_next_generation()?;
+        let sequence_number = append_record(&mut prospective, record);
+        self.commit_and_apply(prospective)?;
+        Ok(Some(sequence_number))
     }
 
     /// Get the current buffer contents.
-    pub fn records(&self) -> &VecDeque<AuditRecord> {
+    pub fn records(&self) -> &VecDeque<BACnetAuditLogRecordResult> {
         &self.buffer
+    }
+
+    /// Configured and persisted ring capacity.
+    pub fn buffer_size(&self) -> u32 {
+        self.buffer_size
+    }
+
+    /// Persisted logging enable policy.
+    pub fn log_enable(&self) -> bool {
+        self.log_enable
+    }
+
+    /// Monotonic record identity counter with BACnet MAX-to-one wrap.
+    pub fn total_record_count(&self) -> u64 {
+        self.total_record_count
+    }
+
+    /// Current durable snapshot generation.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Clear buffered records and append the internal BUFFER_PURGED status.
+    fn purge(&mut self) -> Result<u64, Error> {
+        let timestamp = self.valid_timestamp()?;
+        let mut prospective = self.snapshot_for_next_generation()?;
+        prospective.records.clear();
+        let sequence_number = append_record(
+            &mut prospective,
+            BACnetAuditLogRecord {
+                timestamp,
+                datum: BACnetAuditLogDatum::LogStatus(BUFFER_PURGED_STATUS),
+            },
+        );
+        self.commit_and_apply(prospective)?;
+        Ok(sequence_number)
     }
 
     /// Set the description string.
     pub fn set_description(&mut self, desc: impl Into<String>) {
         self.description = desc.into();
+    }
+
+    fn valid_timestamp(
+        &self,
+    ) -> Result<
+        (
+            bacnet_types::primitives::Date,
+            bacnet_types::primitives::Time,
+        ),
+        Error,
+    > {
+        let frame = self
+            .clock
+            .as_ref()
+            .and_then(|clock| clock.read_clock())
+            .filter(|frame| frame.is_valid_actual_datetime())
+            .ok_or(Error::Protocol {
+                class: ErrorClass::DEVICE.to_raw() as u32,
+                code: ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32,
+            })?;
+        Ok((frame.local_date, frame.local_time))
+    }
+
+    fn snapshot_for_next_generation(&self) -> Result<AuditLogSnapshot, Error> {
+        let generation = self
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| Error::OutOfRange("AuditLog persistence generation exhausted".into()))?;
+        let mut snapshot = self.current_snapshot();
+        snapshot.generation = generation;
+        Ok(snapshot)
+    }
+
+    fn current_snapshot(&self) -> AuditLogSnapshot {
+        AuditLogSnapshot {
+            object_identifier: self.oid,
+            generation: self.generation,
+            capacity: self.buffer_size,
+            log_enable: self.log_enable,
+            total_record_count: self.total_record_count,
+            records: self.buffer.iter().cloned().collect(),
+            completed_receipts: self.completed_receipts.clone(),
+        }
+    }
+
+    fn commit_and_apply(&mut self, snapshot: AuditLogSnapshot) -> Result<(), Error> {
+        validate_snapshot(&snapshot)?;
+        self.persistence.commit(&snapshot)?;
+        self.generation = snapshot.generation;
+        self.log_enable = snapshot.log_enable;
+        self.total_record_count = snapshot.total_record_count;
+        self.buffer = snapshot.records.into();
+        self.completed_receipts = snapshot.completed_receipts;
+        Ok(())
+    }
+}
+
+fn append_record(snapshot: &mut AuditLogSnapshot, record: BACnetAuditLogRecord) -> u64 {
+    let sequence_number = if snapshot.total_record_count == u64::MAX {
+        1
+    } else {
+        snapshot.total_record_count + 1
+    };
+    snapshot.total_record_count = sequence_number;
+    if snapshot.capacity != 0 {
+        if snapshot.records.len() >= snapshot.capacity as usize {
+            snapshot.records.remove(0);
+        }
+        snapshot.records.push(BACnetAuditLogRecordResult {
+            sequence_number,
+            record,
+        });
+    }
+    sequence_number
+}
+
+fn recipient_matches(
+    actual: &BACnetRecipient,
+    required_identifier: ObjectIdentifier,
+    optional_address: Option<&bacnet_types::constructed::BACnetAddress>,
+) -> bool {
+    match actual {
+        BACnetRecipient::Device(identifier) => *identifier == required_identifier,
+        BACnetRecipient::Address(address) => {
+            optional_address.is_some_and(|filter| address == filter)
+        }
+    }
+}
+
+fn operation_matches(
+    notification: &BACnetAuditNotification,
+    operations: Option<bacnet_types::bitstring::AuditOperationFlags>,
+    successful_actions_only: bool,
+) -> bool {
+    operations.is_none_or(|flags| flags.contains(notification.operation))
+        && (!successful_actions_only || notification.result.is_none())
+}
+
+fn query_matches(
+    notification: &BACnetAuditNotification,
+    parameters: &BACnetAuditLogQueryParameters,
+) -> bool {
+    match parameters {
+        BACnetAuditLogQueryParameters::ByTarget {
+            target_device_identifier,
+            target_device_address,
+            target_object_identifier,
+            target_property_identifier,
+            target_array_index,
+            target_priority,
+            operations,
+            successful_actions_only,
+        } => {
+            recipient_matches(
+                &notification.target_device,
+                *target_device_identifier,
+                target_device_address.as_ref(),
+            ) && target_object_identifier
+                .is_none_or(|filter| notification.target_object == Some(filter))
+                && target_property_identifier.is_none_or(|filter| {
+                    notification.target_property.as_ref().is_some_and(|property| {
+                        property.property_identifier == filter
+                    })
+                })
+                && target_array_index.is_none_or(|filter| {
+                    notification.target_property.as_ref().is_some_and(|property| {
+                        property.property_array_index == Some(filter)
+                    })
+                })
+                // Clause 13.19 says a record without Priority matches any
+                // requested Target Priority.
+                && target_priority.is_none_or(|filter| {
+                    notification
+                        .target_priority
+                        .is_none_or(|priority| priority == filter)
+                })
+                && operation_matches(notification, *operations, *successful_actions_only)
+        }
+        BACnetAuditLogQueryParameters::BySource {
+            source_device_identifier,
+            source_device_address,
+            source_object_identifier,
+            operations,
+            successful_actions_only,
+        } => {
+            recipient_matches(
+                &notification.source_device,
+                *source_device_identifier,
+                source_device_address.as_ref(),
+            ) && source_object_identifier
+                .is_none_or(|filter| notification.source_object == Some(filter))
+                && operation_matches(notification, *operations, *successful_actions_only)
+        }
+    }
+}
+
+impl AuditLogStorage for AuditLogObject {
+    fn query(
+        &self,
+        parameters: &BACnetAuditLogQueryParameters,
+        start_at_sequence_number: Option<u32>,
+        requested_count: u16,
+    ) -> AuditLogQueryPage {
+        let limit = usize::from(requested_count).min(MAX_AUDIT_RECORDS as usize);
+        let mut records = Vec::with_capacity(limit.min(self.buffer.len()));
+        let mut unreturned_match = false;
+
+        // The ring is stored oldest-to-newest. Reverse insertion order is the
+        // query order even across sequence wrap; numeric sorting would turn
+        // retained [MAX, 1] into the wrong chronology.
+        for result in self.buffer.iter().rev() {
+            if start_at_sequence_number
+                .is_some_and(|start| result.sequence_number >= u64::from(start))
+            {
+                continue;
+            }
+            let BACnetAuditLogDatum::AuditNotification(notification) = &result.record.datum else {
+                continue;
+            };
+            if !query_matches(notification, parameters) {
+                continue;
+            }
+            if records.len() < limit {
+                records.push(result.clone());
+            } else {
+                // Keep scanning the complete retained snapshot so a full page
+                // can still truthfully distinguish exhaustion from a later
+                // eligible match. This also defines count=0.
+                unreturned_match = true;
+            }
+        }
+
+        AuditLogQueryPage {
+            records,
+            no_more_items: !unreturned_match,
+        }
     }
 }
 
@@ -132,7 +461,24 @@ impl BACnetObject for AuditLogObject {
     ) -> Result<(), Error> {
         if property == PropertyIdentifier::LOG_ENABLE {
             if let PropertyValue::Boolean(v) = value {
-                self.log_enable = v;
+                if v == self.log_enable {
+                    return Ok(());
+                }
+                let timestamp = self.valid_timestamp()?;
+                let mut prospective = self.snapshot_for_next_generation()?;
+                prospective.log_enable = v;
+                append_record(
+                    &mut prospective,
+                    BACnetAuditLogRecord {
+                        timestamp,
+                        datum: BACnetAuditLogDatum::LogStatus(if v {
+                            0
+                        } else {
+                            LOG_DISABLED_STATUS
+                        }),
+                    },
+                );
+                self.commit_and_apply(prospective)?;
                 return Ok(());
             }
             return Err(Error::Protocol {
@@ -141,13 +487,9 @@ impl BACnetObject for AuditLogObject {
             });
         }
         if property == PropertyIdentifier::RECORD_COUNT {
-            if let PropertyValue::Unsigned(0) = value {
-                self.buffer.clear();
-                return Ok(());
-            }
             return Err(Error::Protocol {
                 class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
+                code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
             });
         }
         if property == PropertyIdentifier::DESCRIPTION {
@@ -181,10 +523,56 @@ impl BACnetObject for AuditLogObject {
         ];
         Cow::Borrowed(PROPS)
     }
+
+    fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
+        self.clock = clock;
+    }
+
+    fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {
+        Some(self)
+    }
+
+    fn audit_log_notification_sink_internal(
+        &mut self,
+    ) -> Option<&mut dyn AuditLogNotificationSink> {
+        Some(self)
+    }
+
+    fn capture_write_property_rollback(
+        &mut self,
+        property: PropertyIdentifier,
+        value: &PropertyValue,
+    ) -> Option<WritePropertyRollback> {
+        let PropertyValue::Boolean(requested) = value else {
+            return None;
+        };
+        (property == PropertyIdentifier::LOG_ENABLE && *requested != self.log_enable).then(|| {
+            WritePropertyRollback::new(AuditLogWriteRollback {
+                snapshot: self.current_snapshot(),
+            })
+        })
+    }
+
+    fn restore_write_property_rollback(
+        &mut self,
+        rollback: WritePropertyRollback,
+    ) -> Result<(), Error> {
+        let mut snapshot = rollback.downcast::<AuditLogWriteRollback>()?.snapshot;
+        if snapshot.object_identifier != self.oid || snapshot.capacity != self.buffer_size {
+            return Err(Error::Encoding(
+                "AuditLog rollback snapshot does not belong to this object".into(),
+            ));
+        }
+        snapshot.generation = self
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| Error::OutOfRange("AuditLog persistence generation exhausted".into()))?;
+        self.commit_and_apply(snapshot)
+    }
 }
 
 // ---------------------------------------------------------------------------
-// AuditReporter (type 61)
+// AuditReporter (type 62)
 // ---------------------------------------------------------------------------
 
 /// BACnet AuditReporter object — configures which audit notifications to send.
@@ -193,6 +581,10 @@ pub struct AuditReporterObject {
     name: String,
     description: String,
     status_flags: StatusFlags,
+    audit_level: AuditLevel,
+    auditable_operations: AuditOperationFlags,
+    audit_priority_filter: BACnetPriorityFilter,
+    issue_confirmed_notifications: bool,
 }
 
 impl AuditReporterObject {
@@ -203,12 +595,42 @@ impl AuditReporterObject {
             name: name.into(),
             description: String::new(),
             status_flags: StatusFlags::empty(),
+            audit_level: AuditLevel::NONE,
+            auditable_operations: AuditOperationFlags::empty(),
+            audit_priority_filter: BACnetPriorityFilter::all(),
+            issue_confirmed_notifications: false,
         })
     }
 
     /// Set the description string.
     pub fn set_description(&mut self, desc: impl Into<String>) {
         self.description = desc.into();
+    }
+
+    /// Set the locally managed audit level.
+    pub fn set_audit_level(&mut self, level: AuditLevel) -> Result<(), Error> {
+        if level == AuditLevel::DEFAULT {
+            return Err(Error::OutOfRange(
+                "Audit Reporter audit level must not be DEFAULT".into(),
+            ));
+        }
+        self.audit_level = level;
+        Ok(())
+    }
+
+    /// Set the locally managed operation filter.
+    pub fn set_auditable_operations(&mut self, operations: AuditOperationFlags) {
+        self.auditable_operations = operations;
+    }
+
+    /// Set the locally managed command-priority filter.
+    pub fn set_audit_priority_filter(&mut self, filter: BACnetPriorityFilter) {
+        self.audit_priority_filter = filter;
+    }
+
+    /// Select confirmed or unconfirmed audit notifications for future producers.
+    pub fn set_issue_confirmed_notifications(&mut self, confirmed: bool) {
+        self.issue_confirmed_notifications = confirmed;
     }
 }
 
@@ -219,6 +641,10 @@ impl BACnetObject for AuditReporterObject {
 
     fn object_name(&self) -> &str {
         &self.name
+    }
+
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        Cow::Borrowed(reporter_metadata::AUDIT_REPORTER_PROPERTIES)
     }
 
     fn read_property(
@@ -243,7 +669,29 @@ impl BACnetObject for AuditReporterObject {
                 unused_bits: 4,
                 data: vec![self.status_flags.bits() << 4],
             }),
-            p if p == PropertyIdentifier::EVENT_STATE => Ok(PropertyValue::Enumerated(0)),
+            p if p == PropertyIdentifier::RELIABILITY => Ok(PropertyValue::Enumerated(
+                Reliability::NO_FAULT_DETECTED.to_raw(),
+            )),
+            p if p == PropertyIdentifier::EVENT_STATE => {
+                Ok(PropertyValue::Enumerated(EventState::NORMAL.to_raw()))
+            }
+            p if p == PropertyIdentifier::AUDIT_LEVEL => {
+                Ok(PropertyValue::Enumerated(self.audit_level.to_raw()))
+            }
+            p if p == PropertyIdentifier::AUDIT_SOURCE_REPORTER => {
+                Ok(PropertyValue::Boolean(false))
+            }
+            p if p == PropertyIdentifier::AUDITABLE_OPERATIONS => {
+                let (unused_bits, data) = self.auditable_operations.to_bacnet();
+                Ok(PropertyValue::BitString { unused_bits, data })
+            }
+            p if p == PropertyIdentifier::AUDIT_PRIORITY_FILTER => {
+                let (unused_bits, data) = self.audit_priority_filter.to_bacnet();
+                Ok(PropertyValue::BitString { unused_bits, data })
+            }
+            p if p == PropertyIdentifier::ISSUE_CONFIRMED_NOTIFICATIONS => {
+                Ok(PropertyValue::Boolean(self.issue_confirmed_notifications))
+            }
             p if p == PropertyIdentifier::PROPERTY_LIST => {
                 read_property_list_property(&self.property_list(), array_index)
             }
@@ -278,123 +726,28 @@ impl BACnetObject for AuditReporterObject {
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::EVENT_STATE,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(
+            reporter_metadata::AUDIT_REPORTER_PROPERTIES,
+        )
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+#[path = "audit/tests.rs"]
+mod tests;
 
-    // --- AuditLog ---
+#[cfg(test)]
+#[path = "audit/query_tests.rs"]
+mod query_tests;
 
-    #[test]
-    fn audit_log_add_records() {
-        let mut al = AuditLogObject::new(1, "AL-1", 100).unwrap();
-        al.add_record(AuditRecord {
-            timestamp_secs: 1000,
-            description: "User login".into(),
-        });
-        assert_eq!(al.records().len(), 1);
-        assert_eq!(
-            al.read_property(PropertyIdentifier::RECORD_COUNT, None)
-                .unwrap(),
-            PropertyValue::Unsigned(1)
-        );
-    }
+#[cfg(test)]
+#[path = "audit/notification_tests.rs"]
+mod notification_tests;
 
-    #[test]
-    fn audit_log_ring_buffer() {
-        let mut al = AuditLogObject::new(1, "AL-1", 2).unwrap();
-        for i in 0..4 {
-            al.add_record(AuditRecord {
-                timestamp_secs: i * 60,
-                description: format!("Event {i}"),
-            });
-        }
-        assert_eq!(al.records().len(), 2);
-        assert_eq!(al.records()[0].description, "Event 2");
-        assert_eq!(
-            al.read_property(PropertyIdentifier::TOTAL_RECORD_COUNT, None)
-                .unwrap(),
-            PropertyValue::Unsigned(4)
-        );
-    }
+#[cfg(test)]
+#[path = "audit/receipt_tests.rs"]
+mod receipt_tests;
 
-    #[test]
-    fn audit_log_disable() {
-        let mut al = AuditLogObject::new(1, "AL-1", 100).unwrap();
-        al.write_property(
-            PropertyIdentifier::LOG_ENABLE,
-            None,
-            PropertyValue::Boolean(false),
-            None,
-        )
-        .unwrap();
-        al.add_record(AuditRecord {
-            timestamp_secs: 1000,
-            description: "Should not appear".into(),
-        });
-        assert_eq!(al.records().len(), 0);
-    }
-
-    #[test]
-    fn audit_log_clear() {
-        let mut al = AuditLogObject::new(1, "AL-1", 100).unwrap();
-        al.add_record(AuditRecord {
-            timestamp_secs: 1000,
-            description: "Event".into(),
-        });
-        al.write_property(
-            PropertyIdentifier::RECORD_COUNT,
-            None,
-            PropertyValue::Unsigned(0),
-            None,
-        )
-        .unwrap();
-        assert_eq!(al.records().len(), 0);
-    }
-
-    #[test]
-    fn audit_log_read_object_type() {
-        let al = AuditLogObject::new(1, "AL-1", 100).unwrap();
-        assert_eq!(
-            al.read_property(PropertyIdentifier::OBJECT_TYPE, None)
-                .unwrap(),
-            PropertyValue::Enumerated(ObjectType::AUDIT_LOG.to_raw())
-        );
-    }
-
-    // --- AuditReporter ---
-
-    #[test]
-    fn audit_reporter_read_object_type() {
-        let ar = AuditReporterObject::new(1, "AR-1").unwrap();
-        assert_eq!(
-            ar.read_property(PropertyIdentifier::OBJECT_TYPE, None)
-                .unwrap(),
-            PropertyValue::Enumerated(ObjectType::AUDIT_REPORTER.to_raw())
-        );
-    }
-
-    #[test]
-    fn audit_reporter_write_denied() {
-        let mut ar = AuditReporterObject::new(1, "AR-1").unwrap();
-        assert!(ar
-            .write_property(
-                PropertyIdentifier::OBJECT_NAME,
-                None,
-                PropertyValue::CharacterString("new".into()),
-                None,
-            )
-            .is_err());
-    }
-}
+#[cfg(test)]
+#[path = "audit/persistence_receipt_tests.rs"]
+mod persistence_receipt_tests;

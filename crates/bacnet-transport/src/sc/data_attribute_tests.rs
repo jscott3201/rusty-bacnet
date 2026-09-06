@@ -3,7 +3,7 @@ use crate::sc_frame::{decode_sc_bvlc_result, ScBvlcResult, ScOption};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use tokio::time::{timeout, Duration};
 
-async fn hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
+pub(super) async fn hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
     let data = ws_hub.recv().await.unwrap();
     let req = decode_sc_message(&data).unwrap();
     assert_eq!(req.function, ScFunction::ConnectRequest);
@@ -28,23 +28,24 @@ async fn hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
     ws_hub.send(&buf).await.unwrap();
 }
 
-fn encapsulated_npdu_with_data_option(
+fn encapsulated_npdu_with_options(
     message_id: u16,
     destination_vmac: Option<Vmac>,
-    option: ScOption,
+    dest_options: Vec<ScOption>,
+    data_options: Vec<ScOption>,
 ) -> ScMessage {
     ScMessage {
         function: ScFunction::EncapsulatedNpdu,
         message_id,
         originating_vmac: Some([0x10; 6]),
         destination_vmac,
-        dest_options: Vec::new(),
-        data_options: vec![option],
+        dest_options,
+        data_options,
         payload: Bytes::from_static(&[0x01, 0x00, 0x30]),
     }
 }
 
-async fn start_transport() -> (
+pub(super) async fn start_transport() -> (
     ScTransport<LoopbackWebSocket>,
     mpsc::Receiver<ReceivedNpdu>,
     LoopbackWebSocket,
@@ -62,14 +63,20 @@ async fn start_transport() -> (
 }
 
 #[tokio::test]
-async fn unsupported_must_understand_data_option_unicast_returns_nak() {
+async fn unsupported_must_understand_destination_option_unicast_returns_nak() {
     let (mut transport, mut rx, ws_hub) = start_transport().await;
     let option = ScOption {
         option_type: 2,
         must_understand: true,
         data: Vec::new(),
     };
-    let msg = encapsulated_npdu_with_data_option(0x2233, None, option);
+    let trailing_option = ScOption {
+        option_type: 31,
+        must_understand: false,
+        data: Vec::new(),
+    };
+    let msg =
+        encapsulated_npdu_with_options(0x2233, None, vec![option, trailing_option], Vec::new());
     let mut buf = BytesMut::new();
     encode_sc_message(&mut buf, &msg);
     ws_hub.send(&buf).await.unwrap();
@@ -80,12 +87,14 @@ async fn unsupported_must_understand_data_option_unicast_returns_nak() {
         .unwrap();
     let nak = decode_sc_message(&nak_data).unwrap();
     assert_eq!(nak.message_id, msg.message_id);
+    assert_eq!(nak.originating_vmac, None);
+    assert_eq!(nak.destination_vmac, msg.originating_vmac);
     assert_eq!(nak.data_options.len(), 0);
     assert_eq!(
         decode_sc_bvlc_result(&nak).unwrap(),
         ScBvlcResult::Nak {
             result_for: ScFunction::EncapsulatedNpdu,
-            error_header_marker: 0x42,
+            error_header_marker: 0xC2,
             error_class: ErrorClass::COMMUNICATION.to_raw(),
             error_code: ErrorCode::HEADER_NOT_UNDERSTOOD.to_raw(),
             error_details: String::new(),
@@ -99,14 +108,57 @@ async fn unsupported_must_understand_data_option_unicast_returns_nak() {
 }
 
 #[tokio::test]
-async fn unsupported_must_understand_data_option_broadcast_drops_without_nak() {
+async fn unsupported_destination_option_preserves_empty_header_data_marker() {
+    let (mut transport, mut rx, ws_hub) = start_transport().await;
+    let msg = encapsulated_npdu_with_options(
+        0x2244,
+        None,
+        vec![ScOption {
+            option_type: 2,
+            must_understand: true,
+            data: Vec::new(),
+        }],
+        Vec::new(),
+    );
+    let mut buf = BytesMut::new();
+    encode_sc_message(&mut buf, &msg);
+
+    let mut wire = buf.to_vec();
+    assert_eq!(wire[10], 0x42);
+    wire[10] |= 0x20;
+    wire.splice(11..11, [0, 0]);
+    ws_hub.send(&wire).await.unwrap();
+
+    let nak_data = timeout(Duration::from_secs(1), ws_hub.recv())
+        .await
+        .expect("timed out waiting for BVLC-Result NAK")
+        .unwrap();
+    let nak = decode_sc_message(&nak_data).unwrap();
+    assert_eq!(
+        decode_sc_bvlc_result(&nak).unwrap(),
+        ScBvlcResult::Nak {
+            result_for: ScFunction::EncapsulatedNpdu,
+            error_header_marker: 0x62,
+            error_class: ErrorClass::COMMUNICATION.to_raw(),
+            error_code: ErrorCode::HEADER_NOT_UNDERSTOOD.to_raw(),
+            error_details: String::new(),
+        }
+    );
+    assert!(timeout(Duration::from_millis(50), rx.recv()).await.is_err());
+
+    transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn unsupported_must_understand_destination_option_broadcast_drops_without_nak() {
     let (mut transport, mut rx, ws_hub) = start_transport().await;
     let option = ScOption {
         option_type: 31,
         must_understand: true,
         data: vec![0x12, 0x34, 0x56],
     };
-    let msg = encapsulated_npdu_with_data_option(0x3344, Some(BROADCAST_VMAC), option);
+    let msg =
+        encapsulated_npdu_with_options(0x3344, Some(BROADCAST_VMAC), vec![option], Vec::new());
     let mut buf = BytesMut::new();
     encode_sc_message(&mut buf, &msg);
     ws_hub.send(&buf).await.unwrap();
@@ -122,14 +174,14 @@ async fn unsupported_must_understand_data_option_broadcast_drops_without_nak() {
 }
 
 #[tokio::test]
-async fn unsupported_non_must_understand_data_option_is_preserved() {
+async fn must_understand_data_option_is_preserved() {
     let (mut transport, mut rx, ws_hub) = start_transport().await;
     let option = ScOption {
         option_type: 2,
-        must_understand: false,
+        must_understand: true,
         data: vec![0xAA],
     };
-    let msg = encapsulated_npdu_with_data_option(0x4455, None, option.clone());
+    let msg = encapsulated_npdu_with_options(0x4455, None, Vec::new(), vec![option.clone()]);
     let mut buf = BytesMut::new();
     encode_sc_message(&mut buf, &msg);
     ws_hub.send(&buf).await.unwrap();
@@ -151,4 +203,119 @@ async fn unsupported_non_must_understand_data_option_is_preserved() {
         .is_err());
 
     transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn non_must_understand_destination_option_allows_delivery() {
+    let (mut transport, mut rx, ws_hub) = start_transport().await;
+    let option = ScOption {
+        option_type: 31,
+        must_understand: false,
+        data: vec![0x12, 0x34],
+    };
+    let msg = encapsulated_npdu_with_options(0x5566, None, vec![option], Vec::new());
+    let mut buf = BytesMut::new();
+    encode_sc_message(&mut buf, &msg);
+    ws_hub.send(&buf).await.unwrap();
+
+    let received = timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .expect("timed out waiting for SC NPDU")
+        .expect("SC NPDU channel closed");
+    assert_eq!(received.npdu, msg.payload);
+    assert!(received.data_attributes.is_empty());
+    assert!(timeout(Duration::from_millis(50), ws_hub.recv())
+        .await
+        .is_err());
+
+    transport.stop().await.unwrap();
+}
+
+#[test]
+fn secure_path_without_must_understand_is_rejected_before_state_mutation() {
+    let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
+    conn.state = ScConnectionState::Connected;
+    let message_id_before = conn.next_message_id;
+    let state_before = conn.state;
+    let attribute = DataAttribute {
+        option_type: 1,
+        must_understand: false,
+        data: Vec::new(),
+    };
+
+    let err = conn
+        .build_encapsulated_npdu_with_data_attributes([0x02; 6], &[0x01, 0x02], &[attribute])
+        .unwrap_err();
+
+    match err {
+        Error::Encoding(message) => assert!(message.contains("Must Understand")),
+        other => panic!("expected encoding error, got {other}"),
+    }
+    assert_eq!(conn.next_message_id, message_id_before);
+    assert_eq!(conn.state, state_before);
+}
+
+#[test]
+fn secure_path_with_header_data_is_rejected_before_state_mutation() {
+    let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
+    conn.state = ScConnectionState::Connected;
+    let message_id_before = conn.next_message_id;
+    let state_before = conn.state;
+    let attribute = DataAttribute {
+        option_type: 1,
+        must_understand: true,
+        data: vec![0xAA],
+    };
+
+    let err = conn
+        .build_encapsulated_npdu_with_data_attributes([0x02; 6], &[0x01, 0x02], &[attribute])
+        .unwrap_err();
+
+    match err {
+        Error::Encoding(message) => assert!(message.contains("Header Data")),
+        other => panic!("expected encoding error, got {other}"),
+    }
+    assert_eq!(conn.next_message_id, message_id_before);
+    assert_eq!(conn.state, state_before);
+}
+
+#[tokio::test]
+async fn invalid_secure_path_options_are_rejected_before_websocket_emission() {
+    let cases = [
+        (
+            DataAttribute {
+                option_type: 1,
+                must_understand: false,
+                data: Vec::new(),
+            },
+            "Must Understand",
+        ),
+        (
+            DataAttribute {
+                option_type: 1,
+                must_understand: true,
+                data: vec![0xAA],
+            },
+            "Header Data",
+        ),
+    ];
+
+    for (attribute, expected_message) in cases {
+        let (mut transport, _rx, ws_hub) = start_transport().await;
+
+        let err = transport
+            .send_unicast_with_data_attributes(&[0x01, 0x02], &[0x02; 6], &[attribute])
+            .await
+            .unwrap_err();
+
+        match err {
+            Error::Encoding(message) => assert!(message.contains(expected_message)),
+            other => panic!("expected encoding error, got {other}"),
+        }
+        assert!(timeout(Duration::from_millis(50), ws_hub.recv())
+            .await
+            .is_err());
+
+        transport.stop().await.unwrap();
+    }
 }

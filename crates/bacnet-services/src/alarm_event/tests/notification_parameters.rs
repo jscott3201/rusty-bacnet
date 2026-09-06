@@ -147,19 +147,6 @@ fn notification_params_buffer_ready_round_trip() {
 }
 
 #[test]
-fn notification_params_none_round_trip() {
-    let params = NotificationParameters::NoneParams;
-    let req = make_event_req(Some(params));
-    let mut buf = BytesMut::new();
-    req.encode(&mut buf).unwrap();
-    let decoded = EventNotificationRequest::decode(&buf).unwrap();
-    assert_eq!(
-        decoded.event_values,
-        Some(NotificationParameters::NoneParams)
-    );
-}
-
-#[test]
 fn notification_params_unsigned_range_round_trip() {
     let params = NotificationParameters::UnsignedRange {
         exceeding_value: 500,
@@ -217,7 +204,14 @@ fn get_event_information_ack_round_trip() {
         more_events: true,
     };
     let mut buf = BytesMut::new();
-    ack.encode(&mut buf);
+    ack.encode(&mut buf).unwrap();
+    // Wire-byte check, not just a round trip: internal 0b101 must appear as
+    // its MSB-first octet 0xA0 (a symmetric encode/decode inversion would
+    // still round-trip, so the raw byte is the only witness — Clause 20.2.10).
+    assert!(
+        buf.iter().any(|&b| b == 0xA0),
+        "encoded ACK should contain the MSB-first acknowledged-transitions octet 0xA0"
+    );
     let decoded = GetEventInformationAck::decode(&buf).unwrap();
     assert_eq!(decoded.list_of_event_summaries.len(), 1);
     assert!(decoded.more_events);
@@ -346,7 +340,7 @@ fn notification_params_extended_round_trip() {
     let params = NotificationParameters::Extended {
         vendor_id: 42,
         extended_event_type: 7,
-        parameters: vec![0x01, 0x02, 0x03],
+        parameters: vec![0x63, 0x01, 0x02, 0x03],
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
@@ -361,7 +355,7 @@ fn notification_params_extended_round_trip() {
         } => {
             assert_eq!(vendor_id, 42);
             assert_eq!(extended_event_type, 7);
-            assert_eq!(parameters, vec![0x01, 0x02, 0x03]);
+            assert_eq!(parameters, vec![0x63, 0x01, 0x02, 0x03]);
         }
         other => panic!("expected Extended, got {:?}", other),
     }
@@ -371,10 +365,10 @@ fn notification_params_extended_round_trip() {
 fn notification_params_access_event_round_trip() {
     use bacnet_types::primitives::{Date, Time};
 
-    let cred = BACnetDeviceObjectPropertyReference::new_local(
-        ObjectIdentifier::new(ObjectType::ACCESS_CREDENTIAL, 1).unwrap(),
-        85, // PRESENT_VALUE
-    );
+    let cred = BACnetDeviceObjectReference {
+        device_identifier: None,
+        object_identifier: ObjectIdentifier::new(ObjectType::ACCESS_CREDENTIAL, 1).unwrap(),
+    };
     let params = NotificationParameters::AccessEvent {
         access_event: 5,
         status_flags: 0b1000,
@@ -394,7 +388,7 @@ fn notification_params_access_event_round_trip() {
             },
         ),
         access_credential: cred.clone(),
-        authentication_factor: vec![0xAB, 0xCD],
+        authentication_factor: Some(vec![0x09, 0x01, 0x19, 0x02, 0x2a, 0xab, 0xcd]),
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
@@ -416,7 +410,10 @@ fn notification_params_access_event_round_trip() {
             assert_eq!(access_event_time.0.year, 124);
             assert_eq!(access_event_time.1.hour, 10);
             assert_eq!(access_credential, cred);
-            assert_eq!(authentication_factor, vec![0xAB, 0xCD]);
+            assert_eq!(
+                authentication_factor,
+                Some(vec![0x09, 0x01, 0x19, 0x02, 0x2a, 0xab, 0xcd])
+            );
         }
         other => panic!("expected AccessEvent, got {:?}", other),
     }
@@ -538,7 +535,7 @@ fn notification_params_change_of_characterstring_round_trip() {
 #[test]
 fn notification_params_change_of_status_flags_round_trip() {
     let params = NotificationParameters::ChangeOfStatusFlags {
-        present_value: vec![0x91, 0x03],
+        present_value: Some(vec![0x91, 0x03]),
         referenced_flags: 0b1010,
     };
     let req = make_event_req(Some(params));
@@ -551,7 +548,7 @@ fn notification_params_change_of_status_flags_round_trip() {
             present_value,
             referenced_flags,
         } => {
-            assert_eq!(present_value, vec![0x91, 0x03]);
+            assert_eq!(present_value, Some(vec![0x91, 0x03]));
             assert_eq!(referenced_flags, 0b1010);
         }
         other => panic!("expected ChangeOfStatusFlags, got {:?}", other),
@@ -563,7 +560,7 @@ fn notification_params_change_of_reliability_round_trip() {
     let params = NotificationParameters::ChangeOfReliability {
         reliability: 7,
         status_flags: 0b0100,
-        property_values: vec![0x01, 0x02],
+        property_values: vec![0x21, 0x02],
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
@@ -578,7 +575,7 @@ fn notification_params_change_of_reliability_round_trip() {
         } => {
             assert_eq!(reliability, 7);
             assert_eq!(status_flags, 0b0100);
-            assert_eq!(property_values, vec![0x01, 0x02]);
+            assert_eq!(property_values, vec![0x21, 0x02]);
         }
         other => panic!("expected ChangeOfReliability, got {:?}", other),
     }
@@ -628,9 +625,9 @@ fn notification_params_change_of_timer_round_trip() {
                 hundredths: 0,
             },
         ),
-        last_state_change: 0,
-        initial_timeout: 300,
-        expiration_time: (
+        last_state_change: Some(0),
+        initial_timeout: Some(300),
+        expiration_time: Some((
             Date {
                 year: 124,
                 month: 3,
@@ -643,7 +640,7 @@ fn notification_params_change_of_timer_round_trip() {
                 second: 0,
                 hundredths: 0,
             },
-        ),
+        )),
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
@@ -663,8 +660,9 @@ fn notification_params_change_of_timer_round_trip() {
             assert_eq!(status_flags, 0b1000);
             assert_eq!(update_time.0.year, 124);
             assert_eq!(update_time.1.hour, 8);
-            assert_eq!(last_state_change, 0);
-            assert_eq!(initial_timeout, 300);
+            assert_eq!(last_state_change, Some(0));
+            assert_eq!(initial_timeout, Some(300));
+            let expiration_time = expiration_time.unwrap();
             assert_eq!(expiration_time.0.year, 124);
             assert_eq!(expiration_time.1.minute, 5);
         }
@@ -679,7 +677,7 @@ fn get_event_information_ack_empty_list() {
         more_events: false,
     };
     let mut buf = BytesMut::new();
-    ack.encode(&mut buf);
+    ack.encode(&mut buf).unwrap();
     let decoded = GetEventInformationAck::decode(&buf).unwrap();
     assert!(decoded.list_of_event_summaries.is_empty());
     assert!(!decoded.more_events);

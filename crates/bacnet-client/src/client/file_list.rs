@@ -1,5 +1,96 @@
 use super::*;
 
+fn validate_read_range_ack(
+    request: &bacnet_services::read_range::ReadRangeRequest,
+    ack: &bacnet_services::read_range::ReadRangeAck,
+) -> Result<(), Error> {
+    if ack.object_identifier != request.object_identifier {
+        return Err(Error::decoding(
+            0,
+            "ReadRange ACK object identifier does not match the request",
+        ));
+    }
+    if ack.property_identifier != request.property_identifier {
+        return Err(Error::decoding(
+            0,
+            "ReadRange ACK property identifier does not match the request",
+        ));
+    }
+    if ack.property_array_index != request.property_array_index {
+        return Err(Error::decoding(
+            0,
+            "ReadRange ACK array index does not match the request",
+        ));
+    }
+
+    let sequence_range = matches!(
+        request.range.as_ref(),
+        Some(
+            bacnet_services::read_range::RangeSpec::BySequenceNumber { .. }
+                | bacnet_services::read_range::RangeSpec::ByTime { .. }
+        )
+    );
+    match (sequence_range, ack.item_count, ack.first_sequence_number) {
+        (true, 1.., Some(1..)) | (true, 0, None) | (false, _, None) => {}
+        (true, 1.., _) => {
+            return Err(Error::decoding(
+                0,
+                "nonempty ReadRange By Sequence/Time ACK requires a nonzero first sequence number",
+            ));
+        }
+        _ => {
+            return Err(Error::decoding(
+                0,
+                "ReadRange ACK first sequence number is invalid for the request range",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_atomic_read_file_ack(
+    request: &bacnet_services::file::FileAccessMethod,
+    ack: &bacnet_services::file::AtomicReadFileAck,
+) -> Result<(), Error> {
+    use bacnet_services::file::{FileAccessMethod, FileReadAckMethod};
+
+    match (request, &ack.access) {
+        (
+            FileAccessMethod::Stream {
+                requested_octet_count,
+                ..
+            },
+            FileReadAckMethod::Stream { file_data, .. },
+        ) if file_data.len() <= *requested_octet_count as usize => Ok(()),
+        (FileAccessMethod::Stream { .. }, FileReadAckMethod::Stream { .. }) => Err(
+            Error::decoding(0, "AtomicReadFile ACK exceeds the requested octet window"),
+        ),
+        (
+            FileAccessMethod::Record {
+                requested_record_count,
+                ..
+            },
+            FileReadAckMethod::Record {
+                returned_record_count,
+                file_record_data,
+                ..
+            },
+        ) if returned_record_count <= requested_record_count
+            && *returned_record_count as usize == file_record_data.len() =>
+        {
+            Ok(())
+        }
+        (FileAccessMethod::Record { .. }, FileReadAckMethod::Record { .. }) => Err(
+            Error::decoding(0, "AtomicReadFile ACK exceeds the requested record window"),
+        ),
+        _ => Err(Error::decoding(
+            0,
+            "AtomicReadFile ACK access method does not match the request",
+        )),
+    }
+}
+
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Get event information from a remote device.
     pub async fn get_event_information(
@@ -23,7 +114,35 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         .await
     }
 
+    /// Send a caller-supplied AcknowledgeAlarm request without fabricating fields.
+    pub async fn acknowledge_alarm_request(
+        &self,
+        destination_mac: &[u8],
+        request: &bacnet_services::alarm_event::AcknowledgeAlarmRequest,
+    ) -> Result<(), Error> {
+        let mut buf = BytesMut::new();
+        request.encode(&mut buf)?;
+
+        let _ = self
+            .confirmed_request(
+                destination_mac,
+                ConfirmedServiceChoice::ACKNOWLEDGE_ALARM,
+                &buf,
+            )
+            .await?;
+
+        Ok(())
+    }
+
     /// Acknowledge an alarm on a remote device.
+    ///
+    /// This compatibility helper fabricates sequence-zero timestamps, which
+    /// are not a valid general correlation mechanism. Use
+    /// [`Self::acknowledge_alarm_request`] with the original notification's
+    /// exact timestamp and a caller-selected acknowledgment time.
+    #[deprecated(
+        note = "use acknowledge_alarm_request with caller-supplied correlation timestamps"
+    )]
     pub async fn acknowledge_alarm(
         &self,
         destination_mac: &[u8],
@@ -42,18 +161,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             acknowledgment_source: acknowledgment_source.to_string(),
             time_of_acknowledgment: bacnet_types::primitives::BACnetTimeStamp::SequenceNumber(0),
         };
-        let mut buf = BytesMut::new();
-        request.encode(&mut buf)?;
-
-        let _ = self
-            .confirmed_request(
-                destination_mac,
-                ConfirmedServiceChoice::ACKNOWLEDGE_ALARM,
-                &buf,
-            )
-            .await?;
-
-        Ok(())
+        self.acknowledge_alarm_request(destination_mac, &request)
+            .await
     }
 
     /// Read a range of items from a list or log-buffer property.
@@ -80,7 +189,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .confirmed_request(destination_mac, ConfirmedServiceChoice::READ_RANGE, &buf)
             .await?;
 
-        ReadRangeAck::decode(&response_data)
+        let ack = ReadRangeAck::decode(&response_data)?;
+        validate_read_range_ack(&request, &ack)?;
+        Ok(ack)
     }
 
     /// Read file data from a remote device (stream or record access).
@@ -105,6 +216,27 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             &buf,
         )
         .await
+    }
+
+    /// Read and strictly decode one AtomicReadFile ACK window.
+    ///
+    /// This additive typed boundary validates that the ACK uses the requested
+    /// stream/record access arm and does not return more octets or records than
+    /// requested. Use [`Self::atomic_read_file`] when the raw encoded service
+    /// payload is required for compatibility.
+    pub async fn atomic_read_file_decoded(
+        &self,
+        destination_mac: &[u8],
+        file_identifier: bacnet_types::primitives::ObjectIdentifier,
+        access: bacnet_services::file::FileAccessMethod,
+    ) -> Result<bacnet_services::file::AtomicReadFileAck, Error> {
+        let requested_access = access.clone();
+        let response = self
+            .atomic_read_file(destination_mac, file_identifier, access)
+            .await?;
+        let ack = bacnet_services::file::AtomicReadFileAck::decode(&response)?;
+        validate_atomic_read_file_ack(&requested_access, &ack)?;
+        Ok(ack)
     }
 
     /// Write file data to a remote device (stream or record access).
@@ -193,3 +325,101 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bacnet_services::read_range::{RangeSpec, ReadRangeAck, ReadRangeRequest};
+    use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+    use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
+
+    fn request(range: Option<RangeSpec>) -> ReadRangeRequest {
+        ReadRangeRequest {
+            object_identifier: ObjectIdentifier::new(ObjectType::TREND_LOG, 1).unwrap(),
+            property_identifier: PropertyIdentifier::LOG_BUFFER,
+            property_array_index: Some(1),
+            range,
+        }
+    }
+
+    fn ack(request: &ReadRangeRequest, item_count: u32, first: Option<u32>) -> ReadRangeAck {
+        ReadRangeAck {
+            object_identifier: request.object_identifier,
+            property_identifier: request.property_identifier,
+            property_array_index: request.property_array_index,
+            result_flags: (true, true, false),
+            item_count,
+            item_data: Vec::new(),
+            first_sequence_number: first,
+        }
+    }
+
+    #[test]
+    fn read_range_ack_must_echo_the_request() {
+        let request = request(Some(RangeSpec::ByPosition {
+            reference_index: 1,
+            count: 1,
+        }));
+        let valid = ack(&request, 1, None);
+        assert!(validate_read_range_ack(&request, &valid).is_ok());
+
+        let mut wrong_object = valid.clone();
+        wrong_object.object_identifier = ObjectIdentifier::new(ObjectType::TREND_LOG, 2).unwrap();
+        assert!(validate_read_range_ack(&request, &wrong_object).is_err());
+
+        let mut wrong_property = valid.clone();
+        wrong_property.property_identifier = PropertyIdentifier::PRESENT_VALUE;
+        assert!(validate_read_range_ack(&request, &wrong_property).is_err());
+
+        let mut wrong_index = valid;
+        wrong_index.property_array_index = Some(2);
+        assert!(validate_read_range_ack(&request, &wrong_index).is_err());
+    }
+
+    #[test]
+    fn first_sequence_number_must_match_the_requested_range() {
+        let by_sequence = request(Some(RangeSpec::BySequenceNumber {
+            reference_seq: 1,
+            count: 1,
+        }));
+        assert!(validate_read_range_ack(&by_sequence, &ack(&by_sequence, 1, Some(1))).is_ok());
+        assert!(validate_read_range_ack(&by_sequence, &ack(&by_sequence, 1, None)).is_err());
+        assert!(validate_read_range_ack(&by_sequence, &ack(&by_sequence, 1, Some(0))).is_err());
+        assert!(validate_read_range_ack(&by_sequence, &ack(&by_sequence, 0, None)).is_ok());
+        assert!(validate_read_range_ack(&by_sequence, &ack(&by_sequence, 0, Some(1))).is_err());
+
+        let by_time = request(Some(RangeSpec::ByTime {
+            reference_time: (
+                Date {
+                    year: 126,
+                    month: 3,
+                    day: 1,
+                    day_of_week: 7,
+                },
+                Time {
+                    hour: 14,
+                    minute: 30,
+                    second: 0,
+                    hundredths: 0,
+                },
+            ),
+            count: 1,
+        }));
+        assert!(validate_read_range_ack(&by_time, &ack(&by_time, 1, Some(1))).is_ok());
+        assert!(validate_read_range_ack(&by_time, &ack(&by_time, 1, None)).is_err());
+        assert!(validate_read_range_ack(&by_time, &ack(&by_time, 1, Some(0))).is_err());
+
+        let by_position = request(Some(RangeSpec::ByPosition {
+            reference_index: 1,
+            count: 1,
+        }));
+        assert!(validate_read_range_ack(&by_position, &ack(&by_position, 1, Some(1))).is_err());
+
+        let no_range = request(None);
+        assert!(validate_read_range_ack(&no_range, &ack(&no_range, 1, Some(1))).is_err());
+    }
+}
+
+#[cfg(test)]
+#[path = "file_list_decoded_tests.rs"]
+mod decoded_tests;

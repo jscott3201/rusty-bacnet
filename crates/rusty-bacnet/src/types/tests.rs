@@ -32,6 +32,53 @@ fn parse_address_hex_mac() {
 }
 
 #[test]
+fn parse_address_mstp_peer_boundaries() {
+    for mac in [0, 127, 128, 254] {
+        assert_eq!(parse_address(&mac.to_string()).unwrap(), vec![mac as u8]);
+        assert_eq!(
+            parse_address(&format!("mstp:{mac}")).unwrap(),
+            vec![mac as u8]
+        );
+    }
+}
+
+#[test]
+fn parse_address_rejects_mstp_broadcast_and_out_of_range_peers() {
+    for address in ["255", "mstp:255"] {
+        let err = parse_address(address).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "ValueError: MS/TP peer address 255 is broadcast, not a unicast peer"
+        );
+    }
+    for address in ["256", "mstp:256", "99999999999999999999"] {
+        let err = parse_address(address).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "ValueError: MS/TP peer address must be in 0..=254"
+        );
+    }
+}
+
+#[test]
+fn parse_address_rejects_malformed_and_negative_mstp_peers_explicitly() {
+    for address in ["mstp:", "mstp:not-a-number"] {
+        let err = parse_address(address).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "ValueError: MS/TP peer address must be a decimal integer in 0..=254"
+        );
+    }
+    for address in ["-1", "mstp:-1"] {
+        let err = parse_address(address).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "ValueError: MS/TP peer address must be in 0..=254"
+        );
+    }
+}
+
+#[test]
 fn parse_address_rejects_garbage() {
     assert!(parse_address("not_an_address").is_err());
 }

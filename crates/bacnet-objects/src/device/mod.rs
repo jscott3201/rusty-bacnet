@@ -6,14 +6,80 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use bacnet_types::constructed::BACnetCOVSubscription;
-use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier, Segmentation};
+use bacnet_types::enums::{
+    ErrorClass, ErrorCode, ObjectType, PropertyIdentifier, Segmentation, ServiceSupported,
+};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
+use crate::clock::{ClockFrame, ClockReader};
 use crate::common::read_property_list_property;
 use crate::traits::BACnetObject;
+
+/// Every service the bundled `bacnet-server` dispatch executes, as
+/// `BACnetServicesSupported` bit positions (Clause 21).
+///
+/// Default source for `Protocol_Services_Supported`, which Clause 12.11 ties
+/// to services *executed* — the server's initiate-only services (I-Am,
+/// I-Have, COV/event notifications) are deliberately absent. Kept in lockstep
+/// with the dispatch arms by `bacnet-server`'s executed-services cross-check
+/// test; deployments with a different dispatch surface override via
+/// [`DeviceObject::set_services_supported`].
+pub const EXECUTED_SERVICES: &[ServiceSupported] = &[
+    ServiceSupported::ACKNOWLEDGE_ALARM,
+    ServiceSupported::GET_ALARM_SUMMARY,
+    ServiceSupported::GET_ENROLLMENT_SUMMARY,
+    ServiceSupported::SUBSCRIBE_COV,
+    ServiceSupported::ATOMIC_READ_FILE,
+    ServiceSupported::ATOMIC_WRITE_FILE,
+    ServiceSupported::ADD_LIST_ELEMENT,
+    ServiceSupported::REMOVE_LIST_ELEMENT,
+    ServiceSupported::CREATE_OBJECT,
+    ServiceSupported::DELETE_OBJECT,
+    ServiceSupported::READ_PROPERTY,
+    ServiceSupported::READ_PROPERTY_MULTIPLE,
+    ServiceSupported::WRITE_PROPERTY,
+    ServiceSupported::WRITE_PROPERTY_MULTIPLE,
+    ServiceSupported::DEVICE_COMMUNICATION_CONTROL,
+    ServiceSupported::CONFIRMED_TEXT_MESSAGE,
+    ServiceSupported::REINITIALIZE_DEVICE,
+    ServiceSupported::UNCONFIRMED_TEXT_MESSAGE,
+    ServiceSupported::TIME_SYNCHRONIZATION,
+    ServiceSupported::WHO_HAS,
+    ServiceSupported::WHO_IS,
+    ServiceSupported::READ_RANGE,
+    ServiceSupported::UTC_TIME_SYNCHRONIZATION,
+    // Executes authorized silence/unsilence operations. Built-in reset execution
+    // stays unsupported pending application-executor and replay semantics.
+    ServiceSupported::LIFE_SAFETY_OPERATION,
+    ServiceSupported::SUBSCRIBE_COV_PROPERTY,
+    ServiceSupported::GET_EVENT_INFORMATION,
+    ServiceSupported::SUBSCRIBE_COV_PROPERTY_MULTIPLE,
+    ServiceSupported::CONFIRMED_AUDIT_NOTIFICATION,
+    ServiceSupported::UNCONFIRMED_AUDIT_NOTIFICATION,
+    ServiceSupported::AUDIT_LOG_QUERY,
+];
+
+/// Number of bits in the `BACnetServicesSupported` production: bits 0..=48
+/// (you-Are is the highest defined bit, Clause 21).
+const SERVICES_SUPPORTED_BITS: usize = 49;
+
+/// Build the `Protocol_Services_Supported` bit string from a service set,
+/// sized for the full production (7 octets, 7 unused bits) and packed
+/// MSB-first per Clause 20.2.10: bit N at byte N/8, position 7-(N%8).
+fn compute_services_supported(services: &[ServiceSupported]) -> Vec<u8> {
+    let mut bits = vec![0u8; SERVICES_SUPPORTED_BITS.div_ceil(8)];
+    for service in services {
+        let n = service.to_raw() as usize;
+        if n < SERVICES_SUPPORTED_BITS {
+            bits[n / 8] |= 0x80 >> (n % 8);
+        }
+    }
+    bits
+}
 
 /// Build a BACnet bitstring representing supported object types.
 /// Each type N sets bit at byte N/8, position 7-(N%8) (MSB-first within each byte).
@@ -84,9 +150,10 @@ pub struct DeviceObject {
     /// Protocol_Object_Types_Supported — bitstring indicating which object
     /// types this device supports (one bit per type, MSB-first within each byte).
     protocol_object_types_supported: Vec<u8>,
-    /// Protocol_Services_Supported — bitstring indicating which services
-    /// this device supports (one bit per service, MSB-first within each byte).
-    protocol_services_supported: Vec<u8>,
+    /// Configured executed services before clock-availability filtering.
+    configured_services_supported: Vec<ServiceSupported>,
+    /// Shared dynamic clock sample source. `None` is explicitly clockless.
+    clock: Option<Arc<dyn ClockReader>>,
     /// Active COV subscriptions maintained by the server.
     active_cov_subscriptions: Vec<BACnetCOVSubscription>,
 }
@@ -172,32 +239,6 @@ impl DeviceObject {
             PropertyValue::List(Vec::new()),
         );
 
-        // Placeholder values updated by the server's time sync or system clock.
-        properties.insert(
-            PropertyIdentifier::LOCAL_DATE,
-            PropertyValue::Date(Date {
-                year: 126, // 2026 - 1900
-                month: 3,
-                day: 18,
-                day_of_week: 3, // Wednesday
-            }),
-        );
-        properties.insert(
-            PropertyIdentifier::LOCAL_TIME,
-            PropertyValue::Time(Time {
-                hour: 12,
-                minute: 0,
-                second: 0,
-                hundredths: 0,
-            }),
-        );
-
-        // UTC_Offset: signed integer minutes from UTC (e.g., -300 for EST).
-        properties.insert(
-            PropertyIdentifier::UTC_OFFSET,
-            PropertyValue::Signed(0), // UTC
-        );
-
         // Last_Restart_Reason: 0=unknown, 1=coldstart, 2=warmstart, etc.
         properties.insert(
             PropertyIdentifier::LAST_RESTART_REASON,
@@ -212,9 +253,14 @@ impl DeviceObject {
 
         // Max_Segments_Accepted — only included when segmentation is supported.
         if config.segmentation_supported != Segmentation::NONE {
+            let max_segments_accepted = if config.segmentation_supported == Segmentation::TRANSMIT {
+                1
+            } else {
+                65
+            };
             properties.insert(
                 PropertyIdentifier::MAX_SEGMENTS_ACCEPTED,
-                PropertyValue::Unsigned(65), // default: more than 64 segments
+                PropertyValue::Unsigned(max_segments_accepted),
             );
         }
 
@@ -272,9 +318,7 @@ impl DeviceObject {
             ObjectType::POSITIVE_INTEGER_VALUE.to_raw(),
             ObjectType::TIMEPATTERN_VALUE.to_raw(),
             ObjectType::TIME_VALUE.to_raw(),
-            ObjectType::NOTIFICATION_FORWARDER.to_raw(),
             ObjectType::ALERT_ENROLLMENT.to_raw(),
-            ObjectType::CHANNEL.to_raw(),
             ObjectType::LIGHTING_OUTPUT.to_raw(),
             ObjectType::BINARY_LIGHTING_OUTPUT.to_raw(),
             ObjectType::NETWORK_PORT.to_raw(),
@@ -282,33 +326,19 @@ impl DeviceObject {
             ObjectType::ESCALATOR.to_raw(),
             ObjectType::LIFT.to_raw(),
             ObjectType::STAGING.to_raw(),
-            ObjectType::AUDIT_REPORTER.to_raw(),
             ObjectType::AUDIT_LOG.to_raw(),
+            ObjectType::AUDIT_REPORTER.to_raw(),
             ObjectType::COLOR.to_raw(),
             ObjectType::COLOR_TEMPERATURE.to_raw(),
         ]);
-
-        // Protocol_Services_Supported: 6 bytes (48 bits).  Bits set for
-        // services we handle:
-        //   0=AcknowledgeAlarm, 2=ConfirmedEventNotification,
-        //   5=SubscribeCOV, 12=ReadProperty, 14=ReadPropertyMultiple,
-        //   15=WriteProperty, 16=WritePropertyMultiple,
-        //   26=IAm, 27=IHave, 29=UnconfirmedCOVNotification,
-        //   31=WhoHas, 32=WhoIs
-        //   Byte 0: bits 0,2,5 → 0xA4
-        //   Byte 1: bits 12,14,15 → 0x0B
-        //   Byte 2: bit 16 → 0x80
-        //   Byte 3: bits 26,27,29,31 → 0x35
-        //   Byte 4: bit 32 → 0x80
-        //   Byte 5: 0x00
-        let protocol_services_supported = vec![0xA4, 0x0B, 0x80, 0x35, 0x80, 0x00];
 
         Ok(Self {
             oid,
             properties,
             object_list: vec![oid], // Device itself is always in the list
             protocol_object_types_supported,
-            protocol_services_supported,
+            configured_services_supported: EXECUTED_SERVICES.to_vec(),
+            clock: None,
             active_cov_subscriptions: Vec::new(),
         })
     }
@@ -316,6 +346,16 @@ impl DeviceObject {
     /// Update the object-list with the current database contents.
     pub fn set_object_list(&mut self, oids: Vec<ObjectIdentifier>) {
         self.object_list = oids;
+    }
+
+    /// Replace the advertised executed-service set (`Protocol_Services_Supported`,
+    /// Clause 12.11). For deployments whose dispatch surface differs from the
+    /// bundled server's [`EXECUTED_SERVICES`].
+    ///
+    /// The production is closed at you-Are (bit 48); values past it are not
+    /// representable and are dropped.
+    pub fn set_services_supported(&mut self, services: &[ServiceSupported]) {
+        self.configured_services_supported = services.to_vec();
     }
 
     /// Get the device instance number.
@@ -339,6 +379,25 @@ impl DeviceObject {
     /// Add a single COV subscription.
     pub fn add_cov_subscription(&mut self, sub: BACnetCOVSubscription) {
         self.active_cov_subscriptions.push(sub);
+    }
+
+    fn clock_frame(&self) -> Option<ClockFrame> {
+        self.clock.as_ref()?.read_clock()
+    }
+
+    fn services_supported(&self) -> Vec<u8> {
+        let clock_available = self.clock_frame().is_some();
+        let services = self
+            .configured_services_supported
+            .iter()
+            .copied()
+            .filter(|service| {
+                clock_available
+                    || (*service != ServiceSupported::TIME_SYNCHRONIZATION
+                        && *service != ServiceSupported::UTC_TIME_SYNCHRONIZATION)
+            })
+            .collect::<Vec<_>>();
+        compute_services_supported(&services)
     }
 }
 
@@ -391,6 +450,30 @@ impl BACnetObject for DeviceObject {
             return read_property_list_property(&self.property_list(), array_index);
         }
 
+        if matches!(
+            property,
+            PropertyIdentifier::LOCAL_DATE
+                | PropertyIdentifier::LOCAL_TIME
+                | PropertyIdentifier::UTC_OFFSET
+                | PropertyIdentifier::DAYLIGHT_SAVINGS_STATUS
+        ) {
+            let frame = self.clock_frame().ok_or(Error::Protocol {
+                class: ErrorClass::PROPERTY.to_raw() as u32,
+                code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+            })?;
+            return Ok(match property {
+                PropertyIdentifier::LOCAL_DATE => PropertyValue::Date(frame.local_date),
+                PropertyIdentifier::LOCAL_TIME => PropertyValue::Time(frame.local_time),
+                PropertyIdentifier::UTC_OFFSET => {
+                    PropertyValue::Signed(i32::from(frame.utc_offset))
+                }
+                PropertyIdentifier::DAYLIGHT_SAVINGS_STATUS => {
+                    PropertyValue::Boolean(frame.daylight_savings_status)
+                }
+                _ => unreachable!(),
+            });
+        }
+
         if property == PropertyIdentifier::PROTOCOL_OBJECT_TYPES_SUPPORTED {
             let num_bytes = self.protocol_object_types_supported.len();
             let total_bits = num_bytes * 8;
@@ -412,33 +495,21 @@ impl BACnetObject for DeviceObject {
         }
 
         if property == PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED {
-            // 6 bytes = 48 bits; 41 defined (services 0-40), 7 unused bits
+            let services_supported = self.services_supported();
+            let unused = (services_supported.len() * 8 - SERVICES_SUPPORTED_BITS) as u8;
             return Ok(PropertyValue::BitString {
-                unused_bits: 7,
-                data: self.protocol_services_supported.clone(),
+                unused_bits: unused,
+                data: services_supported,
             });
         }
 
         if property == PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS {
-            let elements: Vec<PropertyValue> = self
-                .active_cov_subscriptions
-                .iter()
-                .map(|sub| {
-                    let mut entry = vec![
-                        PropertyValue::ObjectIdentifier(
-                            sub.monitored_property_reference.object_identifier,
-                        ),
-                        PropertyValue::Unsigned(sub.recipient.process_identifier as u64),
-                        PropertyValue::Boolean(sub.issue_confirmed_notifications),
-                        PropertyValue::Unsigned(sub.time_remaining as u64),
-                    ];
-                    if let Some(inc) = sub.cov_increment {
-                        entry.push(PropertyValue::Real(inc));
-                    }
-                    PropertyValue::List(entry)
-                })
-                .collect();
-            return Ok(PropertyValue::List(elements));
+            let mut buf = bytes::BytesMut::new();
+            bacnet_encoding::constructed::encode_cov_subscription_list(
+                &mut buf,
+                &self.active_cov_subscriptions,
+            );
+            return Ok(PropertyValue::ApplicationData(buf.to_vec()));
         }
 
         self.properties
@@ -480,8 +551,28 @@ impl BACnetObject for DeviceObject {
         props.push(PropertyIdentifier::PROTOCOL_OBJECT_TYPES_SUPPORTED);
         props.push(PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED);
         props.push(PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS);
+        if self.clock_frame().is_some() {
+            props.extend([
+                PropertyIdentifier::LOCAL_DATE,
+                PropertyIdentifier::LOCAL_TIME,
+                PropertyIdentifier::UTC_OFFSET,
+                PropertyIdentifier::DAYLIGHT_SAVINGS_STATUS,
+            ]);
+        }
         props.sort_by_key(|p| p.to_raw());
         Cow::Owned(props)
+    }
+
+    /// Device is not createable or deleteable at runtime.
+    fn is_createable(&self) -> bool {
+        false
+    }
+    fn is_deleteable(&self) -> bool {
+        false
+    }
+
+    fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
+        self.clock = clock;
     }
 }
 

@@ -14,7 +14,7 @@ bacnet_enum! {
     const IPV4 = 5;
     const ZIGBEE = 6;
     const VIRTUAL = 7;
-    /// Removed in protocol revision 16.
+    /// Removed in version 1, revision 18 (Clause 21 production comment).
     const NON_BACNET = 8;
     const IPV6 = 9;
     const SERIAL = 10;

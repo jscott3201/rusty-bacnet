@@ -239,6 +239,17 @@ async fn cov_subscribe_then_cancel() {
         .await
         .unwrap();
 
+    let initial_notification = tokio::time::timeout(Duration::from_secs(2), cov_rx.recv())
+        .await
+        .expect("Timed out waiting for initial COV notification")
+        .expect("COV channel closed");
+    assert_eq!(
+        initial_notification
+            .notification
+            .monitored_object_identifier,
+        ao_oid
+    );
+
     // 2. Write a value to trigger a notification (confirm subscription is active)
     let mut value_buf = bytes::BytesMut::new();
     bacnet_encoding::primitives::encode_app_real(&mut value_buf, 50.0);
@@ -255,11 +266,11 @@ async fn cov_subscribe_then_cancel() {
         .unwrap();
 
     // Should receive the COV notification
-    let notification = tokio::time::timeout(Duration::from_secs(2), cov_rx.recv())
+    let received = tokio::time::timeout(Duration::from_secs(2), cov_rx.recv())
         .await
         .expect("Timed out waiting for COV notification")
         .expect("COV channel closed");
-    assert_eq!(notification.monitored_object_identifier, ao_oid);
+    assert_eq!(received.notification.monitored_object_identifier, ao_oid);
 
     // 3. Cancel the subscription
     client

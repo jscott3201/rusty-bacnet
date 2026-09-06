@@ -8,6 +8,23 @@ use bacnet_types::error::Error;
 use bytes::Bytes;
 use std::collections::HashMap;
 
+/// Return whether `sequence_number` is a duplicate in the current incomplete window.
+///
+/// This is the modulo-256 predicate from ANSI/ASHRAE 135-2020 Clause 5.4.2.2,
+/// as corrected by Addendum 135-2020ch. `initial_sequence_number` is the last
+/// sequence number in the previously completed window, and
+/// `last_sequence_number` is the last segment accepted in order. When those
+/// values are equal, no segment has been accepted in the current window and
+/// the predicate returns `false`.
+pub fn duplicate_in_window(
+    sequence_number: u8,
+    initial_sequence_number: u8,
+    last_sequence_number: u8,
+) -> bool {
+    let received_count = last_sequence_number.wrapping_sub(initial_sequence_number);
+    received_count != 0 && sequence_number.wrapping_sub(initial_sequence_number) <= received_count
+}
+
 /// PDU types that affect segmentation overhead calculation.
 ///
 /// Named `SegmentedPduType` to avoid collision with `bacnet_types::enums::PduType`.
@@ -32,15 +49,19 @@ pub fn max_segment_payload(max_apdu_length: u16, pdu_type: SegmentedPduType) -> 
 
 /// Split a payload into segments of at most `max_segment_size` bytes.
 ///
-/// Always returns at least one segment (possibly empty).
+/// Returns at least one segment (possibly empty) whenever `max_segment_size`
+/// leaves room for one. A zero segment size is an error even for an empty
+/// payload: a segment still costs its PDU header, so a peer whose maximum APDU
+/// cannot hold that header cannot receive a segment at all. Returning a single
+/// empty segment there produced a frame larger than the peer had advertised.
 pub fn split_payload(payload: &[u8], max_segment_size: usize) -> Result<Vec<Bytes>, Error> {
-    if payload.is_empty() {
-        return Ok(vec![Bytes::new()]);
-    }
     if max_segment_size == 0 {
         return Err(Error::Segmentation(
-            "non-empty payload cannot be segmented with max segment size 0".into(),
+            "payload cannot be segmented with max segment size 0".into(),
         ));
+    }
+    if payload.is_empty() {
+        return Ok(vec![Bytes::new()]);
     }
     let segments: Vec<Bytes> = payload
         .chunks(max_segment_size)
@@ -149,6 +170,35 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_in_window_matches_addendum_examples() {
+        assert!(duplicate_in_window(0, 0, 1));
+        assert!(duplicate_in_window(1, 0, 1));
+        assert!(!duplicate_in_window(2, 0, 1));
+        assert!(!duplicate_in_window(3, 0, 1));
+    }
+
+    #[test]
+    fn duplicate_in_window_is_false_before_current_window_receives_a_segment() {
+        assert!(!duplicate_in_window(0, 0, 0));
+        assert!(!duplicate_in_window(255, 0, 0));
+    }
+
+    #[test]
+    fn duplicate_in_window_uses_modulo_256_arithmetic() {
+        assert!(duplicate_in_window(255, 254, 0));
+        assert!(duplicate_in_window(0, 254, 0));
+        assert!(!duplicate_in_window(1, 254, 0));
+    }
+
+    #[test]
+    fn duplicate_in_window_does_not_apply_ordinary_sequence_ordering() {
+        assert!(duplicate_in_window(255, 250, 2));
+        assert!(duplicate_in_window(1, 250, 2));
+        assert!(!duplicate_in_window(249, 250, 2));
+        assert!(!duplicate_in_window(3, 250, 2));
+    }
+
+    #[test]
     fn max_segment_payload_complex_ack() {
         assert_eq!(max_segment_payload(480, SegmentedPduType::ComplexAck), 475);
         assert_eq!(
@@ -189,6 +239,16 @@ mod tests {
         let segments = split_payload(&[], 100).unwrap();
         assert_eq!(segments.len(), 1);
         assert!(segments[0].is_empty());
+    }
+
+    /// An empty payload is still a segment, and a segment still costs a PDU
+    /// header, so zero capacity cannot carry one. This used to return a single
+    /// empty segment because the empty-payload shortcut ran before the
+    /// zero-size check — which let the client emit a six-octet segmented
+    /// Confirmed-Request to a peer whose advertised maximum was smaller.
+    #[test]
+    fn split_empty_payload_zero_segment_size_errors() {
+        assert!(split_payload(&[], 0).is_err());
     }
 
     #[test]

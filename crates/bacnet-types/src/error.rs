@@ -5,7 +5,7 @@
 //! and timeouts.
 
 #[cfg(not(feature = "std"))]
-use alloc::string::String;
+use alloc::{format, string::String};
 #[cfg(feature = "std")]
 use std::time::Duration;
 
@@ -53,6 +53,20 @@ pub enum Error {
     Abort {
         /// Abort reason value.
         reason: u8,
+    },
+
+    /// A router reported that the active message was too long for a routed path.
+    #[error("message is too long for routed path to DNET {dnet}")]
+    RoutedPathTooLong {
+        /// Destination network rejected by the router.
+        dnet: u16,
+    },
+
+    /// The client cannot safely allocate state for another routed path.
+    #[error("routed path state capacity of {capacity} entries is exhausted")]
+    RoutedPathCapacityExceeded {
+        /// Maximum number of immediate-router/DNET path entries retained.
+        capacity: usize,
     },
 
     /// Error encoding a PDU.
@@ -156,5 +170,17 @@ mod tests {
     fn timeout_error_display() {
         let err = Error::Timeout(Duration::from_secs(3));
         assert!(err.to_string().contains("3s"));
+    }
+
+    #[test]
+    fn routed_path_too_long_display_preserves_dnet() {
+        let err = Error::RoutedPathTooLong { dnet: 1234 };
+        assert!(err.to_string().contains("1234"));
+    }
+
+    #[test]
+    fn routed_path_capacity_display_preserves_bound() {
+        let err = Error::RoutedPathCapacityExceeded { capacity: 256 };
+        assert!(err.to_string().contains("256"));
     }
 }

@@ -1,5 +1,7 @@
 name = "codebase-mapper"
 description = "Read-only repository explorer for architecture, execution paths, ownership, dependencies, and validation surfaces. Use before planning, reviews, or edits."
+model = "gpt-5.6-luna"
+model_reasoning_effort = "high"
 sandbox_mode = "read-only"
 developer_instructions = """
 You are a read-only codebase mapping specialist.

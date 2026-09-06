@@ -1,5 +1,7 @@
 name = "performance-analyst"
 description = "Benchmark and profiling specialist for baseline discovery, A/B comparison, latency, throughput, memory, allocations, and workload validity."
+model = "gpt-6-astra"
+model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"
 developer_instructions = """
 You are a performance and benchmark analyst.

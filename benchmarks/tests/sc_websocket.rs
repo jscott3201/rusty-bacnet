@@ -3,12 +3,15 @@
 use std::time::Duration;
 
 use bacnet_benchmarks::sc_helpers::{
-    generate_test_certs, make_client_tls_config, start_sc_hub, CertMaterial,
+    generate_test_certs, make_client_tls_config, make_sc_transport, start_sc_hub, CertMaterial,
 };
+use bacnet_transport::port::TransportPort;
+use bacnet_transport::sc::ScConnectionState;
 use bacnet_transport::sc_frame::{
     decode_sc_bvlc_result, decode_sc_message, encode_sc_message, ScBvlcResult, ScFunction,
     ScMessage, ScOption, Vmac, BACNET_SC_HUB_SUBPROTOCOL, BROADCAST_VMAC,
 };
+use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bytes::{Bytes, BytesMut};
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
@@ -175,6 +178,92 @@ async fn sc_websocket_hub_relays_unicast_unknown_and_broadcast_with_vmac_rules()
         assert_eq!(relayed.payload, broadcast.payload);
     }
     assert_no_sc_message(&mut ws_a).await;
+
+    hub.stop().await;
+}
+
+#[tokio::test]
+async fn sc_websocket_routes_destination_option_nak_to_originating_node() {
+    let certs = generate_test_certs();
+    let (mut hub, url) = start_sc_hub(&certs, [0x10; 6]).await;
+
+    let vmac_a = [0xA5; 6];
+    let vmac_b = [0xB5; 6];
+    let mut ws_a = connect_sc_client(&url, &certs, vmac_a).await;
+    let mut transport_b = make_sc_transport(&url, &certs, vmac_b).await;
+    let mut rx_b = transport_b.start().await.unwrap();
+
+    let request = ScMessage {
+        function: ScFunction::EncapsulatedNpdu,
+        message_id: 0x2201,
+        originating_vmac: None,
+        destination_vmac: Some(vmac_b),
+        dest_options: vec![ScOption {
+            option_type: 2,
+            must_understand: true,
+            data: Vec::new(),
+        }],
+        data_options: Vec::new(),
+        payload: Bytes::from_static(&[0x01, 0x20, 0x30]),
+    };
+    let mut request_wire = BytesMut::new();
+    encode_sc_message(&mut request_wire, &request);
+    assert_eq!(request_wire[10], 0x42);
+    request_wire[10] = 0x62;
+    let mut request_wire = request_wire.to_vec();
+    request_wire.splice(11..11, [0, 0]);
+    ws_a.send(Message::Binary(request_wire.into()))
+        .await
+        .unwrap();
+
+    let relayed_result = recv_sc_message(&mut ws_a).await;
+    assert_eq!(relayed_result.function, ScFunction::Result);
+    assert_eq!(relayed_result.message_id, request.message_id);
+    assert_eq!(relayed_result.originating_vmac, Some(vmac_b));
+    assert_eq!(relayed_result.destination_vmac, None);
+    assert_eq!(
+        decode_sc_bvlc_result(&relayed_result).unwrap(),
+        ScBvlcResult::Nak {
+            result_for: ScFunction::EncapsulatedNpdu,
+            error_header_marker: 0x62,
+            error_class: ErrorClass::COMMUNICATION.to_raw(),
+            error_code: ErrorCode::HEADER_NOT_UNDERSTOOD.to_raw(),
+            error_details: String::new(),
+        }
+    );
+    assert!(tokio::time::timeout(Duration::from_millis(50), rx_b.recv())
+        .await
+        .is_err());
+    assert_eq!(
+        transport_b.connection().unwrap().lock().await.state,
+        ScConnectionState::Connected
+    );
+
+    transport_b.stop().await.unwrap();
+    hub.stop().await;
+}
+
+#[tokio::test]
+async fn sc_websocket_hub_drops_peer_result_for_other_function() {
+    let certs = generate_test_certs();
+    let (mut hub, url) = start_sc_hub(&certs, [0x10; 6]).await;
+
+    let vmac_a = [0xA6; 6];
+    let mut ws_a = connect_sc_client(&url, &certs, vmac_a).await;
+    let mut ws_b = connect_sc_client(&url, &certs, [0xB6; 6]).await;
+    let result = ScMessage {
+        function: ScFunction::Result,
+        message_id: 0x2202,
+        originating_vmac: None,
+        destination_vmac: Some(vmac_a),
+        dest_options: Vec::new(),
+        data_options: Vec::new(),
+        payload: Bytes::from_static(&[0x06, 0x01, 0x00, 0x00, 0x07, 0x00, 0x01]),
+    };
+    send_sc_message(&mut ws_b, &result).await;
+
+    assert_no_sc_message(&mut ws_a).await;
+    assert_no_sc_message(&mut ws_b).await;
 
     hub.stop().await;
 }

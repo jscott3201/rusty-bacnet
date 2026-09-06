@@ -142,6 +142,18 @@ pub fn handle_create_object(
                 return Err(e);
             }
         };
+        // Route Object_Name initial values through the database name index,
+        // matching the WriteProperty handlers: reject a duplicate up front and
+        // refresh the index after a successful rename. (The created object was
+        // added under its default name, so the index must follow a rename.)
+        if pv.property_identifier == PropertyIdentifier::OBJECT_NAME {
+            if let PropertyValue::CharacterString(ref new_name) = value {
+                if let Err(e) = db.check_name_available(&created_oid, new_name) {
+                    db.remove(&created_oid);
+                    return Err(e);
+                }
+            }
+        }
         if let Some(obj) = db.get_mut(&created_oid) {
             if let Err(e) = obj.write_property(
                 pv.property_identifier,
@@ -153,6 +165,11 @@ pub fn handle_create_object(
                 return Err(e);
             }
         }
+        // A successful Object_Name write changed the object's name field;
+        // resync the database name index to the new name.
+        if pv.property_identifier == PropertyIdentifier::OBJECT_NAME {
+            db.update_name_index(&created_oid);
+        }
     }
 
     bacnet_encoding::primitives::encode_app_object_id(buf, &created_oid);
@@ -162,15 +179,21 @@ pub fn handle_create_object(
 /// Handle a DeleteObject request.
 ///
 /// Removes the object from the database. Returns an error if the object
-/// doesn't exist or is the Device object (which cannot be deleted).
+/// doesn't exist or is an object type that cannot be deleted at runtime
+/// (Device and NetworkPort, which model the running node itself). The set
+/// of non-deleteable types is kept in sync with `BACnetObject::is_deleteable`
+/// so PICS and runtime dispatch share one truth source.
 pub fn handle_delete_object(db: &mut ObjectDatabase, service_data: &[u8]) -> Result<(), Error> {
     let request = DeleteObjectRequest::decode(service_data)?;
 
-    if request.object_identifier.object_type() == ObjectType::DEVICE {
-        return Err(Error::Protocol {
-            class: ErrorClass::OBJECT.to_raw() as u32,
-            code: ErrorCode::OBJECT_DELETION_NOT_PERMITTED.to_raw() as u32,
-        });
+    match request.object_identifier.object_type() {
+        ObjectType::DEVICE | ObjectType::NETWORK_PORT => {
+            return Err(Error::Protocol {
+                class: ErrorClass::OBJECT.to_raw() as u32,
+                code: ErrorCode::OBJECT_DELETION_NOT_PERMITTED.to_raw() as u32,
+            });
+        }
+        _ => {}
     }
 
     db.remove(&request.object_identifier)

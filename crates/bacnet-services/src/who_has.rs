@@ -56,7 +56,13 @@ impl WhoHasRequest {
         let mut low_limit = None;
         let (opt, new_offset) = tags::decode_optional_context(data, offset, 0)?;
         if let Some(content) = opt {
-            low_limit = Some(primitives::decode_unsigned(content)? as u32);
+            let low_limit_raw = primitives::decode_unsigned(content)?;
+            low_limit = Some(u32::try_from(low_limit_raw).map_err(|_| {
+                Error::decoding(
+                    offset,
+                    format!("WhoHas low-limit {low_limit_raw} exceeds u32"),
+                )
+            })?);
             offset = new_offset;
         }
 
@@ -64,7 +70,13 @@ impl WhoHasRequest {
         let mut high_limit = None;
         let (opt, new_offset) = tags::decode_optional_context(data, offset, 1)?;
         if let Some(content) = opt {
-            high_limit = Some(primitives::decode_unsigned(content)? as u32);
+            let high_limit_raw = primitives::decode_unsigned(content)?;
+            high_limit = Some(u32::try_from(high_limit_raw).map_err(|_| {
+                Error::decoding(
+                    offset,
+                    format!("WhoHas high-limit {high_limit_raw} exceeds u32"),
+                )
+            })?);
             offset = new_offset;
         }
 
@@ -180,6 +192,43 @@ mod tests {
         req.encode(&mut buf).unwrap();
         let decoded = WhoHasRequest::decode(&buf).unwrap();
         assert_eq!(req, decoded);
+    }
+
+    #[test]
+    fn who_has_limits_must_fit_u32() {
+        let object_identifier = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+        let encode_request = |low, high| {
+            let mut buf = BytesMut::new();
+            primitives::encode_ctx_unsigned(&mut buf, 0, low);
+            primitives::encode_ctx_unsigned(&mut buf, 1, high);
+            primitives::encode_ctx_object_id(&mut buf, 2, &object_identifier);
+            buf
+        };
+
+        for (low, high, field, value) in [
+            (4_294_967_296, 4_294_967_296, "low-limit", 4_294_967_296_u64),
+            (1, 4_294_967_297, "high-limit", 4_294_967_297),
+            (u64::MAX, u64::MAX, "low-limit", u64::MAX),
+        ] {
+            let encoded = encode_request(low, high);
+            let error = WhoHasRequest::decode(&encoded).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("WhoHas {field} {value}")),
+                "unexpected error for {field} {value}: {error}"
+            );
+        }
+
+        let mut leading_zero = BytesMut::new();
+        for tag_number in [0, 1] {
+            tags::encode_tag(&mut leading_zero, tag_number, tags::TagClass::Context, 5);
+            leading_zero.extend_from_slice(&[0, 0xff, 0xff, 0xff, 0xff]);
+        }
+        primitives::encode_ctx_object_id(&mut leading_zero, 2, &object_identifier);
+        let decoded = WhoHasRequest::decode(&leading_zero).unwrap();
+        assert_eq!(decoded.low_limit, Some(u32::MAX));
+        assert_eq!(decoded.high_limit, Some(u32::MAX));
     }
 
     #[test]

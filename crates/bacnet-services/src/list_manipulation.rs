@@ -39,6 +39,12 @@ impl ListElementRequest {
 
         // [0] objectIdentifier
         let (tag, pos) = tags::decode_tag(data, offset)?;
+        if !tag.is_context(0) {
+            return Err(Error::decoding(
+                offset,
+                "ListElement request expected context tag 0",
+            ));
+        }
         let end = pos + tag.length as usize;
         if end > data.len() {
             return Err(Error::buffer_too_short(end, data.len()));
@@ -48,25 +54,49 @@ impl ListElementRequest {
 
         // [1] propertyIdentifier
         let (tag, pos) = tags::decode_tag(data, offset)?;
+        if !tag.is_context(1) {
+            return Err(Error::decoding(
+                offset,
+                "ListElement request expected context tag 1",
+            ));
+        }
         let end = pos + tag.length as usize;
         if end > data.len() {
             return Err(Error::buffer_too_short(end, data.len()));
         }
-        let property_identifier =
-            PropertyIdentifier::from_raw(primitives::decode_unsigned(&data[pos..end])? as u32);
+        let property_identifier = primitives::decode_unsigned(&data[pos..end])?;
+        let property_identifier = u32::try_from(property_identifier)
+            .map(PropertyIdentifier::from_raw)
+            .map_err(|_| Error::decoding(pos, "ListElement property-id exceeds u32"))?;
         offset = end;
 
         // [2] propertyArrayIndex (optional)
         let mut property_array_index = None;
         let (opt_data, new_offset) = tags::decode_optional_context(data, offset, 2)?;
         if let Some(content) = opt_data {
-            property_array_index = Some(primitives::decode_unsigned(content)? as u32);
+            let value = primitives::decode_unsigned(content)?;
+            property_array_index = Some(
+                u32::try_from(value)
+                    .map_err(|_| Error::decoding(offset, "ListElement array-index exceeds u32"))?,
+            );
             offset = new_offset;
         }
 
         // [3] listOfElements
-        let (_tag, tag_end) = tags::decode_tag(data, offset)?;
-        let (content, _) = tags::extract_context_value(data, tag_end, 3)?;
+        let (tag, tag_end) = tags::decode_tag(data, offset)?;
+        if !tag.is_opening_tag(3) {
+            return Err(Error::decoding(
+                offset,
+                "ListElement request expected opening tag 3",
+            ));
+        }
+        let (content, offset) = tags::extract_context_value(data, tag_end, 3)?;
+        if offset != data.len() {
+            return Err(Error::decoding(
+                offset,
+                "ListElement request has trailing data",
+            ));
+        }
         let list_of_elements = content.to_vec();
 
         Ok(Self {
@@ -82,6 +112,20 @@ impl ListElementRequest {
 mod tests {
     use super::*;
     use bacnet_types::enums::ObjectType;
+
+    fn request_with_property_fields(property: &[u8], array_index: Option<&[u8]>) -> BytesMut {
+        let mut buf = BytesMut::new();
+        let object = ObjectIdentifier::new(ObjectType::NOTIFICATION_CLASS, 1).unwrap();
+        primitives::encode_ctx_object_id(&mut buf, 0, &object);
+        primitives::encode_ctx_octet_string(&mut buf, 1, property);
+        if let Some(array_index) = array_index {
+            primitives::encode_ctx_octet_string(&mut buf, 2, array_index);
+        }
+        tags::encode_opening_tag(&mut buf, 3);
+        primitives::encode_app_null(&mut buf);
+        tags::encode_closing_tag(&mut buf, 3);
+        buf
+    }
 
     #[test]
     fn add_list_element_round_trip() {
@@ -116,6 +160,53 @@ mod tests {
         let decoded = ListElementRequest::decode(&buf).unwrap();
         assert_eq!(decoded.property_array_index, Some(3));
         assert_eq!(decoded.list_of_elements, elements);
+    }
+
+    #[test]
+    fn list_element_values_must_fit_u32() {
+        let max_with_leading_zero = [0, 0xFF, 0xFF, 0xFF, 0xFF];
+        let encoded =
+            request_with_property_fields(&max_with_leading_zero, Some(&max_with_leading_zero));
+        let decoded = ListElementRequest::decode(&encoded).unwrap();
+        assert_eq!(decoded.property_identifier.to_raw(), u32::MAX);
+        assert_eq!(decoded.property_array_index, Some(u32::MAX));
+
+        for overflow in [u32::MAX as u64 + 1, u64::MAX] {
+            let overflow = overflow.to_be_bytes();
+            assert!(
+                ListElementRequest::decode(&request_with_property_fields(&overflow, None)).is_err()
+            );
+            assert!(ListElementRequest::decode(&request_with_property_fields(
+                &[1],
+                Some(&overflow),
+            ))
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn list_element_requires_owned_tags_and_complete_payload() {
+        let encoded = request_with_property_fields(&[85], None);
+        let (object_tag, object_pos) = tags::decode_tag(&encoded, 0).unwrap();
+        let property_offset = object_pos + object_tag.length as usize;
+        let (property_tag, property_pos) = tags::decode_tag(&encoded, property_offset).unwrap();
+        let list_offset = property_pos + property_tag.length as usize;
+
+        let mut wrong_object = encoded.clone();
+        wrong_object[0] = 0x1C;
+        assert!(ListElementRequest::decode(&wrong_object).is_err());
+
+        let mut wrong_property = encoded.clone();
+        wrong_property[property_offset] = 0x29;
+        assert!(ListElementRequest::decode(&wrong_property).is_err());
+
+        let mut wrong_list = encoded.clone();
+        wrong_list[list_offset] = 0x4E;
+        assert!(ListElementRequest::decode(&wrong_list).is_err());
+
+        let mut trailing = encoded;
+        primitives::encode_app_null(&mut trailing);
+        assert!(ListElementRequest::decode(&trailing).is_err());
     }
 
     // -----------------------------------------------------------------------

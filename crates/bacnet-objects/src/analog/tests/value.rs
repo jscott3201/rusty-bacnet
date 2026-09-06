@@ -344,7 +344,7 @@ fn av_intrinsic_reporting_normal_to_high_limit_to_normal() {
         None,
         PropertyValue::BitString {
             unused_bits: 5,
-            data: vec![0x07 << 5],
+            data: vec![0xE0], // all transitions, MSB-first
         },
         None,
     )
@@ -356,7 +356,9 @@ fn av_intrinsic_reporting_normal_to_high_limit_to_normal() {
 
     // Go above high limit
     av.set_present_value(81.0);
-    let change = av.evaluate_intrinsic_reporting().unwrap();
+    let proposal = av.evaluate_intrinsic_reporting().unwrap();
+    let outcome = crate::event::commit_test_proposal(&mut av, proposal);
+    let change = outcome.change;
     assert_eq!(change.from, EventState::NORMAL);
     assert_eq!(change.to, EventState::HIGH_LIMIT);
 
@@ -369,7 +371,7 @@ fn av_intrinsic_reporting_normal_to_high_limit_to_normal() {
 
     // Drop below deadband threshold → back to NORMAL
     av.set_present_value(77.0);
-    let change = av.evaluate_intrinsic_reporting().unwrap();
+    let change = av.evaluate_intrinsic_reporting().unwrap().change;
     assert_eq!(change.to, EventState::NORMAL);
 }
 
@@ -412,7 +414,7 @@ fn av_intrinsic_reporting_after_priority_write() {
         None,
         PropertyValue::BitString {
             unused_bits: 5,
-            data: vec![0x07 << 5],
+            data: vec![0xE0], // all transitions, MSB-first
         },
         None,
     )
@@ -426,7 +428,7 @@ fn av_intrinsic_reporting_after_priority_write() {
         Some(8),
     )
     .unwrap();
-    let change = av.evaluate_intrinsic_reporting().unwrap();
+    let change = av.evaluate_intrinsic_reporting().unwrap().change;
     assert_eq!(change.to, EventState::HIGH_LIMIT);
 }
 
@@ -598,4 +600,81 @@ fn ai_property_list_invalid_index_returns_error() {
     let count = ai.property_list().len() as u32;
     let result = ai.read_property(PropertyIdentifier::PROPERTY_LIST, Some(count + 1));
     assert!(result.is_err());
+}
+
+// ── Trait capability method tests (issue #115 shared truth source) ──────────
+
+#[test]
+fn av_is_not_createable_matches_factory() {
+    use crate::traits::BACnetObject;
+    let av = AnalogValueObject::new(1, "av-1", 95).unwrap();
+    // handle_create_object has NO branch for ANALOG_VALUE — it falls through
+    // to UNSUPPORTED_OBJECT_TYPE. PICS must not advertise createability.
+    assert!(!av.is_createable(), "AnalogValue must NOT be createable");
+}
+
+#[test]
+fn av_is_writable_property_mirrors_write_property() {
+    use crate::traits::BACnetObject;
+    let av = AnalogValueObject::new(1, "av-1", 95).unwrap();
+    // Commandable (same as AO).
+    assert!(av.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
+    assert!(av.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
+    // Event properties.
+    assert!(av.is_writable_property(PropertyIdentifier::LIMIT_ENABLE));
+    assert!(av.is_writable_property(PropertyIdentifier::NOTIFY_TYPE));
+    assert!(av.is_writable_property(PropertyIdentifier::TIME_DELAY));
+    // #270: RELINQUISH_DEFAULT grew a validated write arm.
+    assert!(av.is_writable_property(PropertyIdentifier::RELINQUISH_DEFAULT));
+    // Universal read-only.
+    assert!(!av.is_writable_property(PropertyIdentifier::STATUS_FLAGS));
+}
+
+/// #270: a Relinquish_Default write is validated like a commanded
+/// Present_Value (finite Real) and — with an all-NULL priority array —
+/// Present_Value immediately resolves to the written default.
+#[test]
+fn av_relinquish_default_write_recaptures_present_value() {
+    let mut av = AnalogValueObject::new(1, "av-1", 95).unwrap();
+    av.write_property(
+        PropertyIdentifier::RELINQUISH_DEFAULT,
+        None,
+        PropertyValue::Real(21.5),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        av.read_property(PropertyIdentifier::RELINQUISH_DEFAULT, None)
+            .unwrap(),
+        PropertyValue::Real(21.5)
+    );
+    assert_eq!(
+        av.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Real(21.5),
+        "with an empty priority array, PV must resolve to the written default"
+    );
+
+    for value in [PropertyValue::Real(f32::NAN), PropertyValue::Unsigned(21)] {
+        assert!(
+            av.write_property(PropertyIdentifier::RELINQUISH_DEFAULT, None, value, None)
+                .is_err(),
+            "invalid Relinquish_Default write must refuse"
+        );
+    }
+    assert_eq!(
+        av.read_property(PropertyIdentifier::RELINQUISH_DEFAULT, None)
+            .unwrap(),
+        PropertyValue::Real(21.5),
+        "refused writes must leave Relinquish_Default untouched"
+    );
+
+    // The local setter shares the validation.
+    assert!(av.set_relinquish_default(f32::INFINITY).is_err());
+    av.set_relinquish_default(3.5).unwrap();
+    assert_eq!(
+        av.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Real(3.5)
+    );
 }

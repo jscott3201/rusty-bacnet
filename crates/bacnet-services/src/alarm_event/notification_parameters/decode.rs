@@ -1,10 +1,32 @@
+use super::decode_helpers::{
+    closing_tag_start, decode_context_status_flags, decode_context_u16, decode_context_value,
+    finish_variant as check_variant_end,
+};
 use super::decode_timer::{decode_change_of_discrete_value, decode_change_of_timer};
+use super::structured::{decode_access_event, decode_complex_event_type};
 use super::*;
+use crate::common::{decode_context, decode_context_u32};
+use bacnet_encoding::constructed::validate_tlv_sequence;
 
 impl NotificationParameters {
-    /// Decode notification parameters from a position just past the opening
-    /// tag of the eventValues wrapper.
+    /// Decode one notification-parameter choice, with an optional enclosing `[12]` close.
     pub fn decode(data: &[u8], offset: usize) -> Result<Self, Error> {
+        let end = closing_tag_start(data, data.len(), 12, "NotificationParameters event-values")
+            .unwrap_or(data.len());
+        Self::decode_impl(data, offset, end)
+    }
+
+    pub(crate) fn decode_bounded(data: &[u8], offset: usize, end: usize) -> Result<Self, Error> {
+        Self::decode_impl(data, offset, end)
+    }
+
+    fn decode_impl(data: &[u8], offset: usize, end: usize) -> Result<Self, Error> {
+        let data = data
+            .get(..end)
+            .ok_or_else(|| Error::decoding(end, "NotificationParameters boundary exceeds input"))?;
+        let framed = data.get(offset..).ok_or_else(|| {
+            Error::decoding(offset, "NotificationParameters offset exceeds input")
+        })?;
         // Peek the inner opening tag to determine the variant
         if offset >= data.len() {
             return Err(Error::decoding(
@@ -20,6 +42,25 @@ impl NotificationParameters {
             ));
         }
         let variant_tag = inner_tag.number;
+        if variant_tag == 6 {
+            let (_, next) = tags::extract_context_value(data, inner_start, 6)?;
+            if next != data.len() {
+                return Err(Error::decoding(
+                    next,
+                    "ComplexEventType has trailing encoded fields",
+                ));
+            }
+        } else {
+            validate_tlv_sequence(framed, "NotificationParameters")?;
+        }
+        let variant_body_end = closing_tag_start(
+            data,
+            data.len(),
+            variant_tag,
+            "NotificationParameters variant",
+        )?;
+        let finish_variant =
+            |value, consumed| check_variant_end(value, consumed, variant_body_end, variant_tag);
 
         match variant_tag {
             // [1] Change of state
@@ -42,16 +83,15 @@ impl NotificationParameters {
                 }
                 pos = cp;
                 // [1] status-flags
-                let (sf_tag, sf_pos) = tags::decode_tag(data, pos)?;
-                let sf_end = sf_pos + sf_tag.length as usize;
-                if sf_end > data.len() {
-                    return Err(Error::decoding(sf_pos, "ChangeOfState: truncated flags"));
-                }
-                let status_flags = decode_status_flags(&data[sf_pos..sf_end]);
-                Ok(Self::ChangeOfState {
-                    new_state,
-                    status_flags,
-                })
+                let (status_flags, pos) =
+                    decode_context_status_flags(data, pos, 1, "ChangeOfState status-flags")?;
+                finish_variant(
+                    Self::ChangeOfState {
+                        new_state,
+                        status_flags,
+                    },
+                    pos,
+                )
             }
             // [2] Change of value
             2 => {
@@ -66,28 +106,36 @@ impl NotificationParameters {
                 }
                 pos = p;
                 // Peek CHOICE tag
-                let (choice_tag, choice_pos) = tags::decode_tag(data, pos)?;
-                let new_value = if choice_tag.number == 0 {
-                    // [0] changed-bits
-                    let end = choice_pos + choice_tag.length as usize;
-                    if end > data.len() {
-                        return Err(Error::decoding(choice_pos, "ChangeOfValue: truncated bits"));
+                let (choice_tag, _) = tags::decode_tag(data, pos)?;
+                let new_value = match choice_tag.number {
+                    0 if choice_tag.is_context(0) => {
+                        let ((unused_bits, data), end) = decode_context_value(
+                            data,
+                            pos,
+                            0,
+                            "ChangeOfValue changed-bits",
+                            primitives::decode_bit_string,
+                        )?;
+                        pos = end;
+                        ChangeOfValueChoice::ChangedBits { unused_bits, data }
                     }
-                    let (unused, bits) = primitives::decode_bit_string(&data[choice_pos..end])?;
-                    pos = end;
-                    ChangeOfValueChoice::ChangedBits {
-                        unused_bits: unused,
-                        data: bits,
+                    1 if choice_tag.is_context(1) => {
+                        let (value, end) = decode_context_value(
+                            data,
+                            pos,
+                            1,
+                            "ChangeOfValue changed-value",
+                            primitives::decode_real,
+                        )?;
+                        pos = end;
+                        ChangeOfValueChoice::ChangedValue(value)
                     }
-                } else {
-                    // [1] changed-value (Real)
-                    let end = choice_pos + choice_tag.length as usize;
-                    if end > data.len() {
-                        return Err(Error::decoding(choice_pos, "ChangeOfValue: truncated real"));
+                    _ => {
+                        return Err(Error::decoding(
+                            pos,
+                            "ChangeOfValue: expected context choice [0] or [1]",
+                        ));
                     }
-                    let v = primitives::decode_real(&data[choice_pos..end])?;
-                    pos = end;
-                    ChangeOfValueChoice::ChangedValue(v)
                 };
                 // Closing tag [0]
                 let (ct, cp) = tags::decode_tag(data, pos)?;
@@ -96,59 +144,57 @@ impl NotificationParameters {
                 }
                 pos = cp;
                 // [1] status-flags
-                let (sf_tag, sf_pos) = tags::decode_tag(data, pos)?;
-                let sf_end = sf_pos + sf_tag.length as usize;
-                if sf_end > data.len() {
-                    return Err(Error::decoding(sf_pos, "ChangeOfValue: truncated flags"));
-                }
-                let status_flags = decode_status_flags(&data[sf_pos..sf_end]);
-                Ok(Self::ChangeOfValue {
-                    new_value,
-                    status_flags,
-                })
+                let (status_flags, pos) =
+                    decode_context_status_flags(data, pos, 1, "ChangeOfValue status-flags")?;
+                finish_variant(
+                    Self::ChangeOfValue {
+                        new_value,
+                        status_flags,
+                    },
+                    pos,
+                )
             }
             // [5] Out of range
             5 => {
-                let mut pos = inner_start;
                 // [0] exceeding-value
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(p, "OutOfRange: truncated exceeding_value"));
-                }
-                let exceeding_value = primitives::decode_real(&data[p..end])?;
-                pos = end;
+                let (exceeding_value, pos) = decode_context_value(
+                    data,
+                    inner_start,
+                    0,
+                    "OutOfRange exceeding-value",
+                    primitives::decode_real,
+                )?;
                 // [1] status-flags
-                let (sf_tag, sf_pos) = tags::decode_tag(data, pos)?;
-                let sf_end = sf_pos + sf_tag.length as usize;
-                if sf_end > data.len() {
-                    return Err(Error::decoding(sf_pos, "OutOfRange: truncated flags"));
-                }
-                let status_flags = decode_status_flags(&data[sf_pos..sf_end]);
-                pos = sf_end;
+                let (status_flags, pos) =
+                    decode_context_status_flags(data, pos, 1, "OutOfRange status-flags")?;
                 // [2] deadband
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(p, "OutOfRange: truncated deadband"));
-                }
-                let deadband = primitives::decode_real(&data[p..end])?;
-                pos = end;
+                let (deadband, pos) = decode_context_value(
+                    data,
+                    pos,
+                    2,
+                    "OutOfRange deadband",
+                    primitives::decode_real,
+                )?;
                 // [3] exceeded-limit
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(p, "OutOfRange: truncated exceeded_limit"));
-                }
-                let exceeded_limit = primitives::decode_real(&data[p..end])?;
-                let _ = (pos, end);
-                Ok(Self::OutOfRange {
-                    exceeding_value,
-                    status_flags,
-                    deadband,
-                    exceeded_limit,
-                })
+                let (exceeded_limit, pos) = decode_context_value(
+                    data,
+                    pos,
+                    3,
+                    "OutOfRange exceeded-limit",
+                    primitives::decode_real,
+                )?;
+                finish_variant(
+                    Self::OutOfRange {
+                        exceeding_value,
+                        status_flags,
+                        deadband,
+                        exceeded_limit,
+                    },
+                    pos,
+                )
             }
+            // [6] Complex event type
+            6 => decode_complex_event_type(data, inner_start, variant_body_end),
             // [10] Buffer ready
             10 => {
                 let mut pos = inner_start;
@@ -169,97 +215,70 @@ impl NotificationParameters {
                 }
                 pos = cp;
                 // [1] previous-notification
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        p,
-                        "BufferReady: truncated previous_notification",
-                    ));
-                }
-                let previous_notification = primitives::decode_unsigned(&data[p..end])? as u32;
-                pos = end;
+                let (previous_notification, pos) =
+                    decode_context_u32(data, pos, 1, "BufferReady previous-notification")?;
                 // [2] current-notification
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        p,
-                        "BufferReady: truncated current_notification",
-                    ));
-                }
-                let current_notification = primitives::decode_unsigned(&data[p..end])? as u32;
-                let _ = (pos, end);
-                Ok(Self::BufferReady {
-                    buffer_property,
-                    previous_notification,
-                    current_notification,
-                })
+                let (current_notification, end) =
+                    decode_context_u32(data, pos, 2, "BufferReady current-notification")?;
+                finish_variant(
+                    Self::BufferReady {
+                        buffer_property,
+                        previous_notification,
+                        current_notification,
+                    },
+                    end,
+                )
             }
             // [11] Unsigned range
             11 => {
-                let mut pos = inner_start;
                 // [0] exceeding-value
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        p,
-                        "UnsignedRange: truncated exceeding_value",
-                    ));
-                }
-                let exceeding_value = primitives::decode_unsigned(&data[p..end])?;
-                pos = end;
+                let (exceeding_value, pos) = decode_context_value(
+                    data,
+                    inner_start,
+                    0,
+                    "UnsignedRange exceeding-value",
+                    primitives::decode_unsigned,
+                )?;
                 // [1] status-flags
-                let (sf_tag, sf_pos) = tags::decode_tag(data, pos)?;
-                let sf_end = sf_pos + sf_tag.length as usize;
-                if sf_end > data.len() {
-                    return Err(Error::decoding(sf_pos, "UnsignedRange: truncated flags"));
-                }
-                let status_flags = decode_status_flags(&data[sf_pos..sf_end]);
-                pos = sf_end;
+                let (status_flags, pos) =
+                    decode_context_status_flags(data, pos, 1, "UnsignedRange status-flags")?;
                 // [2] exceeded-limit
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        p,
-                        "UnsignedRange: truncated exceeded_limit",
-                    ));
-                }
-                let exceeded_limit = primitives::decode_unsigned(&data[p..end])?;
-                let _ = (pos, end);
-                Ok(Self::UnsignedRange {
-                    exceeding_value,
-                    status_flags,
-                    exceeded_limit,
-                })
+                let (exceeded_limit, pos) = decode_context_value(
+                    data,
+                    pos,
+                    2,
+                    "UnsignedRange exceeded-limit",
+                    primitives::decode_unsigned,
+                )?;
+                finish_variant(
+                    Self::UnsignedRange {
+                        exceeding_value,
+                        status_flags,
+                        exceeded_limit,
+                    },
+                    pos,
+                )
             }
             // [0] Change of bitstring
             0 => {
-                let mut pos = inner_start;
                 // [0] referenced-bitstring
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(p, "ChangeOfBitstring: truncated bitstring"));
-                }
-                let (unused, bits) = primitives::decode_bit_string(&data[p..end])?;
-                pos = end;
+                let ((unused, bits), pos) = decode_context_value(
+                    data,
+                    inner_start,
+                    0,
+                    "ChangeOfBitstring referenced-bitstring",
+                    primitives::decode_bit_string,
+                )?;
                 // [1] status-flags
-                let (sf_tag, sf_pos) = tags::decode_tag(data, pos)?;
-                let sf_end = sf_pos + sf_tag.length as usize;
-                if sf_end > data.len() {
-                    return Err(Error::decoding(
-                        sf_pos,
-                        "ChangeOfBitstring: truncated flags",
-                    ));
-                }
-                let status_flags = decode_status_flags(&data[sf_pos..sf_end]);
-                Ok(Self::ChangeOfBitstring {
-                    referenced_bitstring: (unused, bits),
-                    status_flags,
-                })
+                let (status_flags, pos) =
+                    decode_context_status_flags(data, pos, 1, "ChangeOfBitstring status-flags")?;
+                finish_variant(
+                    Self::ChangeOfBitstring {
+                        referenced_bitstring: (unused, bits),
+                        status_flags,
+                    },
+                    pos,
+                )
             }
             // [3] Command failure
             3 => {
@@ -272,379 +291,236 @@ impl NotificationParameters {
                 let (command_value, after) = extract_raw_context(data, p, 0)?;
                 pos = after;
                 // [1] status-flags
-                let (sf_tag, sf_pos) = tags::decode_tag(data, pos)?;
-                let sf_end = sf_pos + sf_tag.length as usize;
-                if sf_end > data.len() {
-                    return Err(Error::decoding(sf_pos, "CommandFailure: truncated flags"));
-                }
-                let status_flags = decode_status_flags(&data[sf_pos..sf_end]);
-                pos = sf_end;
+                let (status_flags, pos) =
+                    decode_context_status_flags(data, pos, 1, "CommandFailure status-flags")?;
                 // [2] feedback-value — opening/closing, raw
                 let (t, p) = tags::decode_tag(data, pos)?;
                 if !t.is_opening || t.number != 2 {
                     return Err(Error::decoding(pos, "CommandFailure: expected opening [2]"));
                 }
-                let (feedback_value, _after) = extract_raw_context(data, p, 2)?;
-                Ok(Self::CommandFailure {
-                    command_value,
-                    status_flags,
-                    feedback_value,
-                })
+                let (feedback_value, after) = extract_raw_context(data, p, 2)?;
+                finish_variant(
+                    Self::CommandFailure {
+                        command_value,
+                        status_flags,
+                        feedback_value,
+                    },
+                    after,
+                )
             }
             // [4] Floating limit
             4 => {
-                let mut pos = inner_start;
                 // [0] reference-value
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        p,
-                        "FloatingLimit: truncated reference_value",
-                    ));
-                }
-                let reference_value = primitives::decode_real(&data[p..end])?;
-                pos = end;
+                let (reference_value, pos) = decode_context_value(
+                    data,
+                    inner_start,
+                    0,
+                    "FloatingLimit reference-value",
+                    primitives::decode_real,
+                )?;
                 // [1] status-flags
-                let (sf_tag, sf_pos) = tags::decode_tag(data, pos)?;
-                let sf_end = sf_pos + sf_tag.length as usize;
-                if sf_end > data.len() {
-                    return Err(Error::decoding(sf_pos, "FloatingLimit: truncated flags"));
-                }
-                let status_flags = decode_status_flags(&data[sf_pos..sf_end]);
-                pos = sf_end;
+                let (status_flags, pos) =
+                    decode_context_status_flags(data, pos, 1, "FloatingLimit status-flags")?;
                 // [2] setpoint-value
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        p,
-                        "FloatingLimit: truncated setpoint_value",
-                    ));
-                }
-                let setpoint_value = primitives::decode_real(&data[p..end])?;
-                pos = end;
+                let (setpoint_value, pos) = decode_context_value(
+                    data,
+                    pos,
+                    2,
+                    "FloatingLimit setpoint-value",
+                    primitives::decode_real,
+                )?;
                 // [3] error-limit
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(p, "FloatingLimit: truncated error_limit"));
-                }
-                let error_limit = primitives::decode_real(&data[p..end])?;
-                let _ = (pos, end);
-                Ok(Self::FloatingLimit {
-                    reference_value,
-                    status_flags,
-                    setpoint_value,
-                    error_limit,
-                })
+                let (error_limit, pos) = decode_context_value(
+                    data,
+                    pos,
+                    3,
+                    "FloatingLimit error-limit",
+                    primitives::decode_real,
+                )?;
+                finish_variant(
+                    Self::FloatingLimit {
+                        reference_value,
+                        status_flags,
+                        setpoint_value,
+                        error_limit,
+                    },
+                    pos,
+                )
             }
             // [8] Change of life safety
             8 => {
-                let mut pos = inner_start;
-                // [0] new-state
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
+                let (new_state, pos) =
+                    decode_context_u32(data, inner_start, 0, "ChangeOfLifeSafety new-state")?;
+                let (new_mode, pos) =
+                    decode_context_u32(data, pos, 1, "ChangeOfLifeSafety new-mode")?;
+                let flags_offset = pos;
+                let (flags, pos) = decode_context(data, pos, 2, "ChangeOfLifeSafety status-flags")?;
+                let [4, bits] = flags else {
                     return Err(Error::decoding(
-                        p,
-                        "ChangeOfLifeSafety: truncated new_state",
+                        flags_offset,
+                        "ChangeOfLifeSafety status-flags must contain four bits",
+                    ));
+                };
+                if bits & 0x0f != 0 {
+                    return Err(Error::decoding(
+                        flags_offset,
+                        "ChangeOfLifeSafety status-flags must have zero padding",
                     ));
                 }
-                let new_state = primitives::decode_unsigned(&data[p..end])? as u32;
-                pos = end;
-                // [1] new-mode
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(p, "ChangeOfLifeSafety: truncated new_mode"));
-                }
-                let new_mode = primitives::decode_unsigned(&data[p..end])? as u32;
-                pos = end;
-                // [2] status-flags
-                let (sf_tag, sf_pos) = tags::decode_tag(data, pos)?;
-                let sf_end = sf_pos + sf_tag.length as usize;
-                if sf_end > data.len() {
-                    return Err(Error::decoding(
-                        sf_pos,
-                        "ChangeOfLifeSafety: truncated flags",
-                    ));
-                }
-                let status_flags = decode_status_flags(&data[sf_pos..sf_end]);
-                pos = sf_end;
-                // [3] operation-expected
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        p,
-                        "ChangeOfLifeSafety: truncated operation_expected",
-                    ));
-                }
-                let operation_expected = primitives::decode_unsigned(&data[p..end])? as u32;
-                let _ = (pos, end);
-                Ok(Self::ChangeOfLifeSafety {
-                    new_state,
-                    new_mode,
-                    status_flags,
-                    operation_expected,
-                })
+                let status_flags = bits >> 4;
+                let (operation_expected, pos) =
+                    decode_context_u32(data, pos, 3, "ChangeOfLifeSafety operation-expected")?;
+                finish_variant(
+                    Self::ChangeOfLifeSafety {
+                        new_state,
+                        new_mode,
+                        status_flags,
+                        operation_expected,
+                    },
+                    pos,
+                )
             }
             // [9] Extended
             9 => {
-                let mut pos = inner_start;
                 // [0] vendor-id
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(p, "Extended: truncated vendor_id"));
-                }
-                let vendor_id = primitives::decode_unsigned(&data[p..end])? as u16;
-                pos = end;
+                let (vendor_id, pos) =
+                    decode_context_u16(data, inner_start, 0, "Extended vendor-id")?;
                 // [1] extended-event-type
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        p,
-                        "Extended: truncated extended_event_type",
-                    ));
-                }
-                let extended_event_type = primitives::decode_unsigned(&data[p..end])? as u32;
-                pos = end;
+                let (extended_event_type, pos) =
+                    decode_context_u32(data, pos, 1, "Extended extended-event-type")?;
                 // [2] parameters — opening/closing, raw
                 let (t, p) = tags::decode_tag(data, pos)?;
-                if !t.is_opening || t.number != 2 {
+                if !t.is_opening_tag(2) {
                     return Err(Error::decoding(pos, "Extended: expected opening [2]"));
                 }
-                let (parameters, _after) = extract_raw_context(data, p, 2)?;
-                Ok(Self::Extended {
-                    vendor_id,
-                    extended_event_type,
-                    parameters,
-                })
+                let (parameters, after) = extract_raw_context(data, p, 2)?;
+                finish_variant(
+                    Self::Extended {
+                        vendor_id,
+                        extended_event_type,
+                        parameters,
+                    },
+                    after,
+                )
             }
             // [13] Access event
-            13 => {
-                let mut pos = inner_start;
-                // [0] access-event
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(p, "AccessEvent: truncated access_event"));
-                }
-                let access_event = primitives::decode_unsigned(&data[p..end])? as u32;
-                pos = end;
-                // [1] status-flags
-                let (sf_tag, sf_pos) = tags::decode_tag(data, pos)?;
-                let sf_end = sf_pos + sf_tag.length as usize;
-                if sf_end > data.len() {
-                    return Err(Error::decoding(sf_pos, "AccessEvent: truncated flags"));
-                }
-                let status_flags = decode_status_flags(&data[sf_pos..sf_end]);
-                pos = sf_end;
-                // [2] access-event-tag
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        p,
-                        "AccessEvent: truncated access_event_tag",
-                    ));
-                }
-                let access_event_tag = primitives::decode_unsigned(&data[p..end])? as u32;
-                pos = end;
-                // [3] access-event-time: BACnetTimeStamp (DateTime)
-                let (ts, new_pos) = primitives::decode_timestamp(data, pos, 3)?;
-                pos = new_pos;
-                let access_event_time = match ts {
-                    BACnetTimeStamp::DateTime { date, time } => (date, time),
-                    _ => {
-                        return Err(Error::decoding(
-                            pos,
-                            "AccessEvent: expected DateTime timestamp",
-                        ))
-                    }
-                };
-                // [4] access-credential: BACnetDeviceObjectPropertyReference
-                let (t, p) = tags::decode_tag(data, pos)?;
-                if !t.is_opening || t.number != 4 {
-                    return Err(Error::decoding(
-                        pos,
-                        "AccessEvent: expected opening [4] for access-credential",
-                    ));
-                }
-                pos = p;
-                let access_credential = decode_device_obj_prop_ref(data, &mut pos)?;
-                let (ct, cp) = tags::decode_tag(data, pos)?;
-                if !ct.is_closing || ct.number != 4 {
-                    return Err(Error::decoding(pos, "AccessEvent: expected closing [4]"));
-                }
-                pos = cp;
-                // [5] authentication-factor — opening/closing, raw
-                let (t, p) = tags::decode_tag(data, pos)?;
-                if !t.is_opening || t.number != 5 {
-                    return Err(Error::decoding(
-                        pos,
-                        "AccessEvent: expected opening [5] for authentication-factor",
-                    ));
-                }
-                let (authentication_factor, _after) = extract_raw_context(data, p, 5)?;
-                Ok(Self::AccessEvent {
-                    access_event,
-                    status_flags,
-                    access_event_tag,
-                    access_event_time,
-                    access_credential,
-                    authentication_factor,
-                })
-            }
+            13 => decode_access_event(data, inner_start, variant_body_end),
             // [14] Double out of range
             14 => {
-                let mut pos = inner_start;
                 // [0] exceeding-value
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        p,
-                        "DoubleOutOfRange: truncated exceeding_value",
-                    ));
-                }
-                let exceeding_value = primitives::decode_double(&data[p..end])?;
-                pos = end;
+                let (exceeding_value, pos) = decode_context_value(
+                    data,
+                    inner_start,
+                    0,
+                    "DoubleOutOfRange exceeding-value",
+                    primitives::decode_double,
+                )?;
                 // [1] status-flags
-                let (sf_tag, sf_pos) = tags::decode_tag(data, pos)?;
-                let sf_end = sf_pos + sf_tag.length as usize;
-                if sf_end > data.len() {
-                    return Err(Error::decoding(sf_pos, "DoubleOutOfRange: truncated flags"));
-                }
-                let status_flags = decode_status_flags(&data[sf_pos..sf_end]);
-                pos = sf_end;
+                let (status_flags, pos) =
+                    decode_context_status_flags(data, pos, 1, "DoubleOutOfRange status-flags")?;
                 // [2] deadband
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(p, "DoubleOutOfRange: truncated deadband"));
-                }
-                let deadband = primitives::decode_double(&data[p..end])?;
-                pos = end;
+                let (deadband, pos) = decode_context_value(
+                    data,
+                    pos,
+                    2,
+                    "DoubleOutOfRange deadband",
+                    primitives::decode_double,
+                )?;
                 // [3] exceeded-limit
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        p,
-                        "DoubleOutOfRange: truncated exceeded_limit",
-                    ));
-                }
-                let exceeded_limit = primitives::decode_double(&data[p..end])?;
-                let _ = (pos, end);
-                Ok(Self::DoubleOutOfRange {
-                    exceeding_value,
-                    status_flags,
-                    deadband,
-                    exceeded_limit,
-                })
+                let (exceeded_limit, pos) = decode_context_value(
+                    data,
+                    pos,
+                    3,
+                    "DoubleOutOfRange exceeded-limit",
+                    primitives::decode_double,
+                )?;
+                finish_variant(
+                    Self::DoubleOutOfRange {
+                        exceeding_value,
+                        status_flags,
+                        deadband,
+                        exceeded_limit,
+                    },
+                    pos,
+                )
             }
             // [15] Signed out of range
             15 => {
-                let mut pos = inner_start;
                 // [0] exceeding-value
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        p,
-                        "SignedOutOfRange: truncated exceeding_value",
-                    ));
-                }
-                let exceeding_value = primitives::decode_signed(&data[p..end])?;
-                pos = end;
+                let (exceeding_value, pos) = decode_context_value(
+                    data,
+                    inner_start,
+                    0,
+                    "SignedOutOfRange exceeding-value",
+                    primitives::decode_signed,
+                )?;
                 // [1] status-flags
-                let (sf_tag, sf_pos) = tags::decode_tag(data, pos)?;
-                let sf_end = sf_pos + sf_tag.length as usize;
-                if sf_end > data.len() {
-                    return Err(Error::decoding(sf_pos, "SignedOutOfRange: truncated flags"));
-                }
-                let status_flags = decode_status_flags(&data[sf_pos..sf_end]);
-                pos = sf_end;
+                let (status_flags, pos) =
+                    decode_context_status_flags(data, pos, 1, "SignedOutOfRange status-flags")?;
                 // [2] deadband
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(p, "SignedOutOfRange: truncated deadband"));
-                }
-                let deadband = primitives::decode_unsigned(&data[p..end])?;
-                pos = end;
+                let (deadband, pos) = decode_context_value(
+                    data,
+                    pos,
+                    2,
+                    "SignedOutOfRange deadband",
+                    primitives::decode_unsigned,
+                )?;
                 // [3] exceeded-limit
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        p,
-                        "SignedOutOfRange: truncated exceeded_limit",
-                    ));
-                }
-                let exceeded_limit = primitives::decode_signed(&data[p..end])?;
-                let _ = (pos, end);
-                Ok(Self::SignedOutOfRange {
-                    exceeding_value,
-                    status_flags,
-                    deadband,
-                    exceeded_limit,
-                })
+                let (exceeded_limit, pos) = decode_context_value(
+                    data,
+                    pos,
+                    3,
+                    "SignedOutOfRange exceeded-limit",
+                    primitives::decode_signed,
+                )?;
+                finish_variant(
+                    Self::SignedOutOfRange {
+                        exceeding_value,
+                        status_flags,
+                        deadband,
+                        exceeded_limit,
+                    },
+                    pos,
+                )
             }
             // [16] Unsigned out of range
             16 => {
-                let mut pos = inner_start;
                 // [0] exceeding-value
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        p,
-                        "UnsignedOutOfRange: truncated exceeding_value",
-                    ));
-                }
-                let exceeding_value = primitives::decode_unsigned(&data[p..end])?;
-                pos = end;
+                let (exceeding_value, pos) = decode_context_value(
+                    data,
+                    inner_start,
+                    0,
+                    "UnsignedOutOfRange exceeding-value",
+                    primitives::decode_unsigned,
+                )?;
                 // [1] status-flags
-                let (sf_tag, sf_pos) = tags::decode_tag(data, pos)?;
-                let sf_end = sf_pos + sf_tag.length as usize;
-                if sf_end > data.len() {
-                    return Err(Error::decoding(
-                        sf_pos,
-                        "UnsignedOutOfRange: truncated flags",
-                    ));
-                }
-                let status_flags = decode_status_flags(&data[sf_pos..sf_end]);
-                pos = sf_end;
+                let (status_flags, pos) =
+                    decode_context_status_flags(data, pos, 1, "UnsignedOutOfRange status-flags")?;
                 // [2] deadband
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(p, "UnsignedOutOfRange: truncated deadband"));
-                }
-                let deadband = primitives::decode_unsigned(&data[p..end])?;
-                pos = end;
+                let (deadband, pos) = decode_context_value(
+                    data,
+                    pos,
+                    2,
+                    "UnsignedOutOfRange deadband",
+                    primitives::decode_unsigned,
+                )?;
                 // [3] exceeded-limit
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        p,
-                        "UnsignedOutOfRange: truncated exceeded_limit",
-                    ));
-                }
-                let exceeded_limit = primitives::decode_unsigned(&data[p..end])?;
-                let _ = (pos, end);
-                Ok(Self::UnsignedOutOfRange {
-                    exceeding_value,
-                    status_flags,
-                    deadband,
-                    exceeded_limit,
-                })
+                let (exceeded_limit, pos) = decode_context_value(
+                    data,
+                    pos,
+                    3,
+                    "UnsignedOutOfRange exceeded-limit",
+                    primitives::decode_unsigned,
+                )?;
+                finish_variant(
+                    Self::UnsignedOutOfRange {
+                        exceeding_value,
+                        status_flags,
+                        deadband,
+                        exceeded_limit,
+                    },
+                    pos,
+                )
             }
             // [17] Change of characterstring
             17 => {
@@ -662,18 +538,14 @@ impl NotificationParameters {
                 };
                 pos = new_pos;
                 // [1] status-flags
-                let (sf_tag, sf_pos) = tags::decode_tag(data, pos)?;
-                let sf_end = sf_pos + sf_tag.length as usize;
-                if sf_end > data.len() {
-                    return Err(Error::decoding(
-                        sf_pos,
-                        "ChangeOfCharacterstring: truncated flags",
-                    ));
-                }
-                let status_flags = decode_status_flags(&data[sf_pos..sf_end]);
-                pos = sf_end;
+                let (status_flags, pos) = decode_context_status_flags(
+                    data,
+                    pos,
+                    1,
+                    "ChangeOfCharacterstring status-flags",
+                )?;
                 // [2] alarm-value
-                let (opt_data, _new_pos) = tags::decode_optional_context(data, pos, 2)?;
+                let (opt_data, new_pos) = tags::decode_optional_context(data, pos, 2)?;
                 let alarm_value = match opt_data {
                     Some(content) => primitives::decode_character_string(content)?,
                     None => {
@@ -683,86 +555,72 @@ impl NotificationParameters {
                         ))
                     }
                 };
-                Ok(Self::ChangeOfCharacterstring {
-                    changed_value,
-                    status_flags,
-                    alarm_value,
-                })
+                finish_variant(
+                    Self::ChangeOfCharacterstring {
+                        changed_value,
+                        status_flags,
+                        alarm_value,
+                    },
+                    new_pos,
+                )
             }
             // [18] Change of status flags
             18 => {
                 let mut pos = inner_start;
-                // [0] present-value — opening/closing, raw
+                // [0] present-value — opening/closing, raw, optional
                 let (t, p) = tags::decode_tag(data, pos)?;
-                if !t.is_opening || t.number != 0 {
-                    return Err(Error::decoding(
-                        pos,
-                        "ChangeOfStatusFlags: expected opening [0]",
-                    ));
-                }
-                let (present_value, after) = extract_raw_context(data, p, 0)?;
-                pos = after;
+                let present_value = if t.is_opening_tag(0) {
+                    let (value, after) = extract_raw_context(data, p, 0)?;
+                    pos = after;
+                    Some(value)
+                } else {
+                    None
+                };
                 // [1] referenced-flags
-                let (sf_tag, sf_pos) = tags::decode_tag(data, pos)?;
-                let sf_end = sf_pos + sf_tag.length as usize;
-                if sf_end > data.len() {
-                    return Err(Error::decoding(
-                        sf_pos,
-                        "ChangeOfStatusFlags: truncated flags",
-                    ));
-                }
-                let referenced_flags = decode_status_flags(&data[sf_pos..sf_end]);
-                Ok(Self::ChangeOfStatusFlags {
-                    present_value,
-                    referenced_flags,
-                })
+                let (referenced_flags, pos) = decode_context_status_flags(
+                    data,
+                    pos,
+                    1,
+                    "ChangeOfStatusFlags referenced-flags",
+                )?;
+                finish_variant(
+                    Self::ChangeOfStatusFlags {
+                        present_value,
+                        referenced_flags,
+                    },
+                    pos,
+                )
             }
             // [19] Change of reliability
             19 => {
-                let mut pos = inner_start;
                 // [0] reliability
-                let (t, p) = tags::decode_tag(data, pos)?;
-                let end = p + t.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(
-                        p,
-                        "ChangeOfReliability: truncated reliability",
-                    ));
-                }
-                let reliability = primitives::decode_unsigned(&data[p..end])? as u32;
-                pos = end;
+                let (reliability, pos) =
+                    decode_context_u32(data, inner_start, 0, "ChangeOfReliability reliability")?;
                 // [1] status-flags
-                let (sf_tag, sf_pos) = tags::decode_tag(data, pos)?;
-                let sf_end = sf_pos + sf_tag.length as usize;
-                if sf_end > data.len() {
-                    return Err(Error::decoding(
-                        sf_pos,
-                        "ChangeOfReliability: truncated flags",
-                    ));
-                }
-                let status_flags = decode_status_flags(&data[sf_pos..sf_end]);
-                pos = sf_end;
+                let (status_flags, pos) =
+                    decode_context_status_flags(data, pos, 1, "ChangeOfReliability status-flags")?;
                 // [2] property-values — opening/closing, raw
                 let (t, p) = tags::decode_tag(data, pos)?;
-                if !t.is_opening || t.number != 2 {
+                if !t.is_opening_tag(2) {
                     return Err(Error::decoding(
                         pos,
                         "ChangeOfReliability: expected opening [2]",
                     ));
                 }
-                let (property_values, _after) = extract_raw_context(data, p, 2)?;
-                Ok(Self::ChangeOfReliability {
-                    reliability,
-                    status_flags,
-                    property_values,
-                })
+                let (property_values, after) = extract_raw_context(data, p, 2)?;
+                finish_variant(
+                    Self::ChangeOfReliability {
+                        reliability,
+                        status_flags,
+                        property_values,
+                    },
+                    after,
+                )
             }
-            // [20] None
-            20 => Ok(Self::NoneParams),
             // [21] Change of discrete value
-            21 => decode_change_of_discrete_value(data, inner_start),
+            21 => decode_change_of_discrete_value(data, inner_start, variant_body_end),
             // [22] Change of timer
-            22 => decode_change_of_timer(data, inner_start),
+            22 => decode_change_of_timer(data, inner_start, variant_body_end),
             other => Err(Error::decoding(
                 offset,
                 format!("NotificationParameters variant [{other}] unknown"),

@@ -206,6 +206,10 @@ pub fn format_property_value(value: &PropertyValue) -> String {
             let formatted: Vec<String> = items.iter().map(format_property_value).collect();
             format!("[{}]", formatted.join(", "))
         }
+        PropertyValue::ApplicationData(bytes) => {
+            let hex: Vec<String> = bytes.iter().map(|b| format!("{b:02x}")).collect();
+            format!("application-data([{}])", hex.join(" "))
+        }
     }
 }
 

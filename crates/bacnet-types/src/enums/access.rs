@@ -12,7 +12,7 @@ bacnet_enum! {
     const FORCED_OPEN = 3;
     const TAMPER = 4;
     const DOOR_FAULT = 5;
-    const LOCK_FAULT = 6;
+    const LOCK_DOWN = 6;
     const FREE_ACCESS = 7;
     const EGRESS_OPEN = 8;
 }
@@ -24,6 +24,13 @@ bacnet_enum! {
     const CLOSED = 0;
     const OPENED = 1;
     const UNKNOWN = 2;
+    const DOOR_FAULT = 3;
+    const UNUSED = 4;
+    const NONE = 5;
+    const CLOSING = 6;
+    const OPENING = 7;
+    const SAFETY_LOCKED = 8;
+    const LIMITED_OPENED = 9;
 }
 
 bacnet_enum! {
@@ -44,6 +51,16 @@ bacnet_enum! {
     const SECURED = 0;
     const UNSECURED = 1;
     const UNKNOWN = 2;
+}
+
+bacnet_enum! {
+    /// BACnet door command for Access Door present values (Clause 21).
+    pub struct DoorValue(u32);
+
+    const LOCK = 0;
+    const UNLOCK = 1;
+    const PULSE_UNLOCK = 2;
+    const EXTENDED_PULSE_UNLOCK = 3;
 }
 
 bacnet_enum! {
@@ -134,6 +151,20 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
+    /// BACnet authentication status: the Access Point object's
+    /// Authentication_Status property (Table 12-36; Clause 21 production).
+    pub struct AuthenticationStatus(u32);
+
+    const NOT_READY = 0;
+    const READY = 1;
+    const DISABLED = 2;
+    const WAITING_FOR_AUTHENTICATION_FACTOR = 3;
+    const WAITING_FOR_ACCOMPANIMENT = 4;
+    const WAITING_FOR_VERIFICATION = 5;
+    const IN_PROGRESS = 6;
+}
+
+bacnet_enum! {
     /// BACnet access user type (Clause 12.35).
     pub struct AccessUserType(u32);
 
@@ -155,10 +186,36 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
+    /// BACnet authorization check a credential is exempt from (Clause 21).
+    pub struct AuthorizationExemption(u32);
+
+    const PASSBACK = 0;
+    const OCCUPANCY_CHECK = 1;
+    const ACCESS_RIGHTS = 2;
+    const LOCKOUT = 3;
+    const DENY = 4;
+    const VERIFICATION = 5;
+    const AUTHORIZATION_DELAY = 6;
+}
+
+bacnet_enum! {
     /// BACnet access passback mode (Clause 12.32).
     pub struct AccessPassbackMode(u32);
 
     const PASSBACK_OFF = 0;
     const HARD_PASSBACK = 1;
     const SOFT_PASSBACK = 2;
+}
+
+bacnet_enum! {
+    /// BACnet access zone occupancy state (Clause 21).
+    pub struct AccessZoneOccupancyState(u32);
+
+    const NORMAL = 0;
+    const BELOW_LOWER_LIMIT = 1;
+    const AT_LOWER_LIMIT = 2;
+    const AT_UPPER_LIMIT = 3;
+    const ABOVE_UPPER_LIMIT = 4;
+    const DISABLED = 5;
+    const NOT_SUPPORTED = 6;
 }

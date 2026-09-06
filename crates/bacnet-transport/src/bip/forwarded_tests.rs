@@ -85,6 +85,7 @@ async fn forwarded_npdu_from_bdt_peer_uses_originating_source_mac() {
         received.source_mac.as_slice(),
         &encode_bip_mac(origin.0, origin.1)
     );
+    assert!(received.link_layer_group);
 
     let local_frame = recv_bvll(&local_broadcast_sink).await;
     assert_eq!(local_frame.function, BvlcFunction::FORWARDED_NPDU);

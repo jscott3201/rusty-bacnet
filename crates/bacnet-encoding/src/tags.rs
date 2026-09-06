@@ -178,12 +178,21 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
         TagClass::Application
     };
     let lvt = initial & 0x07;
+    if class == TagClass::Application && lvt > 5 {
+        return Err(Error::decoding(offset, "reserved application tag L/V/T"));
+    }
 
     if tag_number == 0x0F {
         if pos >= data.len() {
             return Err(Error::decoding(pos, "truncated extended tag number"));
         }
         tag_number = data[pos];
+        if !(15..=254).contains(&tag_number) {
+            return Err(Error::decoding(
+                pos,
+                format!("invalid extended tag number {tag_number}"),
+            ));
+        }
         pos += 1;
     }
 
@@ -224,12 +233,24 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
         pos += 1;
 
         match ext {
-            0..=253 => ext as u32,
+            0..=4 => {
+                return Err(Error::decoding(
+                    pos - 1,
+                    format!("non-canonical extended tag length {ext}"),
+                ));
+            }
+            5..=253 => ext as u32,
             254 => {
                 if pos + 2 > data.len() {
                     return Err(Error::decoding(pos, "truncated 2-byte extended length"));
                 }
                 let len = u16::from_be_bytes([data[pos], data[pos + 1]]) as u32;
+                if len < 254 {
+                    return Err(Error::decoding(
+                        pos,
+                        format!("non-canonical 2-byte extended tag length {len}"),
+                    ));
+                }
                 pos += 2;
                 len
             }
@@ -239,6 +260,12 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
                 }
                 let len =
                     u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+                if len < 65_536 {
+                    return Err(Error::decoding(
+                        pos,
+                        format!("non-canonical 4-byte extended tag length {len}"),
+                    ));
+                }
                 pos += 4;
                 len
             }
@@ -278,13 +305,14 @@ pub fn extract_context_value(
     let value_start = offset;
     let mut pos = offset;
     let mut depth: usize = 1;
+    let mut open_tags = [0u8; MAX_CONTEXT_NESTING_DEPTH];
+    open_tags[0] = tag_number;
 
     while depth > 0 && pos < data.len() {
         let (tag, new_pos) = decode_tag(data, pos)?;
 
         if tag.is_opening {
-            depth += 1;
-            if depth > MAX_CONTEXT_NESTING_DEPTH {
+            if depth == MAX_CONTEXT_NESTING_DEPTH {
                 return Err(Error::decoding(
                     pos,
                     format!(
@@ -292,19 +320,22 @@ pub fn extract_context_value(
                     ),
                 ));
             }
+            open_tags[depth] = tag.number;
+            depth += 1;
             pos = new_pos;
         } else if tag.is_closing {
+            let expected = open_tags[depth - 1];
+            if tag.number != expected {
+                return Err(Error::decoding(
+                    pos,
+                    format!(
+                        "closing tag {} does not match opening tag {expected}",
+                        tag.number
+                    ),
+                ));
+            }
             depth -= 1;
             if depth == 0 {
-                if tag.number != tag_number {
-                    return Err(Error::decoding(
-                        pos,
-                        format!(
-                            "closing tag {} does not match opening tag {tag_number}",
-                            tag.number
-                        ),
-                    ));
-                }
                 let value_end = pos;
                 return Ok((&data[value_start..value_end], new_pos));
             }
@@ -330,6 +361,60 @@ pub fn extract_context_value(
 
     Err(Error::decoding(
         offset,
+        format!("missing closing tag {tag_number}"),
+    ))
+}
+
+/// Extract raw bytes enclosed by a context opening/closing tag pair WITHOUT
+/// parsing the enclosed content as BACnet tags.
+///
+/// [`extract_context_value`] walks the content as well-formed TLVs, which is
+/// the correct way to skip an unknown *conformant* constructed value (Clause
+/// 20.2.1.6 rule (d)). This raw scanner is only for compatibility payloads
+/// whose contract explicitly permits non-TLV bytes. It is not safe for a
+/// `SEQUENCE OF CHOICE`: a primitive value can contain a closing-tag octet.
+/// The scan balances raw opening/closing octets for `tag_number`.
+///
+/// `offset` points just past the opening tag for `tag_number`. Returns the
+/// enclosed bytes and the offset past the closing tag octet(s).
+///
+/// Known limitation: a payload that itself contains the target tag's opening
+/// or closing octet pattern (e.g. as unrelated content bytes) unbalances the
+/// walk; such payloads cannot round-trip through this path.
+pub fn extract_raw_context<'a>(
+    data: &'a [u8],
+    offset: usize,
+    tag_number: u8,
+) -> Result<(&'a [u8], usize), Error> {
+    let wide = tag_number > 14;
+    let open_first = if wide { 0xFE } else { (tag_number << 4) | 0x0E };
+    let close_first = if wide { 0xFF } else { (tag_number << 4) | 0x0F };
+    let width = if wide { 2 } else { 1 };
+
+    let value_start = offset;
+    let mut pos = offset;
+    let mut depth: usize = 1;
+
+    while pos < data.len() {
+        let b = data[pos];
+        if b == open_first && (!wide || data.get(pos + 1) == Some(&tag_number)) {
+            depth += 1;
+            pos += width;
+            continue;
+        }
+        if b == close_first && (!wide || data.get(pos + 1) == Some(&tag_number)) {
+            depth -= 1;
+            if depth == 0 {
+                return Ok((&data[value_start..pos], pos + width));
+            }
+            pos += width;
+            continue;
+        }
+        pos += 1;
+    }
+
+    Err(Error::decoding(
+        value_start,
         format!("missing closing tag {tag_number}"),
     ))
 }
@@ -605,6 +690,49 @@ mod tests {
         assert_eq!(pos, 4);
     }
 
+    // --- extract_raw_context ---
+
+    #[test]
+    fn extract_raw_context_non_tlv_payload() {
+        // Payload bytes that are NOT well-formed TLVs must pass through
+        // verbatim (this is the whole point of the raw scanner).
+        let data = [0x9E, 0xDE, 0xAD, 0xBE, 0xEF, 0x9F];
+        let (value, pos) = extract_raw_context(&data, 1, 9).unwrap();
+        assert_eq!(value, &[0xDE, 0xAD, 0xBE, 0xEF]);
+        assert_eq!(pos, 6);
+    }
+
+    #[test]
+    fn extract_raw_context_nested_same_tag() {
+        // opening 2, opening 2, payload, closing 2, more payload, closing 2
+        let data = [0x2E, 0x2E, 0x01, 0x2F, 0x02, 0x2F];
+        let (value, pos) = extract_raw_context(&data, 1, 2).unwrap();
+        assert_eq!(value, &[0x2E, 0x01, 0x2F, 0x02]);
+        assert_eq!(pos, 6);
+    }
+
+    #[test]
+    fn extract_raw_context_extended_tag() {
+        // Extended tag 200: 0xFE 0xC8 ... 0xFF 0xC8.
+        let data = [0xFE, 200, 0x01, 0x02, 0xFF, 200];
+        let (value, pos) = extract_raw_context(&data, 2, 200).unwrap();
+        assert_eq!(value, &[0x01, 0x02]);
+        assert_eq!(pos, 6);
+    }
+
+    #[test]
+    fn extract_raw_context_missing_closing() {
+        let data = [0x9E, 0xDE, 0xAD];
+        assert!(extract_raw_context(&data, 1, 9).is_err());
+    }
+
+    #[test]
+    fn extract_raw_context_truncated_extended_closing() {
+        // 0xFF at the very end with no tag-number octet — not a closing.
+        let data = [0xFE, 200, 0x01, 0x02, 0xFF];
+        assert!(extract_raw_context(&data, 2, 200).is_err());
+    }
+
     #[test]
     fn extract_context_value_nested() {
         // Opening tag 0, opening tag 1, data, closing tag 1, closing tag 0
@@ -658,6 +786,13 @@ mod tests {
     fn extract_context_value_mismatched_closing_tag() {
         // Opening tag 0, data, closing tag 1 (mismatch!)
         let data = [0x0E, 0x21, 42, 0x1F]; // open 0, data, close 1
+        assert!(extract_context_value(&data, 1, 0).is_err());
+    }
+
+    #[test]
+    fn extract_context_value_mismatched_nested_closing_tag() {
+        // Opening tag 0, opening tag 1, closing tag 2, closing tag 0.
+        let data = [0x0E, 0x1E, 0x2F, 0x0F];
         assert!(extract_context_value(&data, 1, 0).is_err());
     }
 

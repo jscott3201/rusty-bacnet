@@ -17,7 +17,7 @@ pub const BVLC6_HEADER_LENGTH: usize = 7;
 /// BVLC-IPv6 unicast header length: type(1) + function(1) + length(2) + source-vmac(3) + dest-vmac(3).
 pub const BVLC6_UNICAST_HEADER_LENGTH: usize = 10;
 
-/// Maximum number of VMAC collision resolution retries before giving up (Annex U.5).
+/// Maximum number of random VMAC regenerations before startup fails (Annex U.5/H.7.2).
 pub const MAX_VMAC_RETRIES: u32 = 3;
 
 /// BVLC-IPv6 function codes per Annex U.
@@ -106,13 +106,19 @@ pub struct Bvlc6Frame {
 
 mod frame;
 pub use frame::*;
+mod ingress;
 mod port;
+mod vmac_table;
 pub use port::{
-    decode_bip6_mac, encode_bip6_mac, generate_random_vmac, Bip6BroadcastScope,
-    Bip6ForeignDeviceConfig, Bip6Transport, BACNET_IPV6_MULTICAST,
-    BACNET_IPV6_MULTICAST_LINK_LOCAL, BACNET_IPV6_MULTICAST_ORG_LOCAL,
+    decode_bip6_mac, encode_bip6_mac, Bip6BroadcastScope, Bip6ForeignDeviceConfig, Bip6Transport,
+    BACNET_IPV6_MULTICAST, BACNET_IPV6_MULTICAST_LINK_LOCAL, BACNET_IPV6_MULTICAST_ORG_LOCAL,
     BACNET_IPV6_MULTICAST_SITE_LOCAL, DEFAULT_BACNET6_PORT,
 };
+pub use vmac_table::generate_random_vmac;
 
 #[cfg(test)]
+mod safety_tests;
+#[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod vmac_generation_tests;

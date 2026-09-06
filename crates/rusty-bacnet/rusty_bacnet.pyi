@@ -6,7 +6,7 @@ as class attributes; vendor-proprietary values are available via ``from_raw()``.
 
 from __future__ import annotations
 
-from typing import Any, Optional, Union
+from typing import Any, Literal, NotRequired, Optional, TypedDict, Union
 
 
 # ---------------------------------------------------------------------------
@@ -433,6 +433,39 @@ class ErrorCode:
     def __hash__(self) -> int: ...
 
 
+class AuditOperation:
+    """BACnet audit operation.
+
+    Typed Audit request mappings accept standard values 0..15 and proprietary
+    values 32..63. ``from_raw()`` remains a lossless enum-wrapper constructor;
+    reserved or wider values are rejected when used in a request mapping.
+    """
+
+    READ: AuditOperation
+    WRITE: AuditOperation
+    CREATE: AuditOperation
+    DELETE: AuditOperation
+    LIFE_SAFETY: AuditOperation
+    ACKNOWLEDGE_ALARM: AuditOperation
+    DEVICE_DISABLE_COMM: AuditOperation
+    DEVICE_ENABLE_COMM: AuditOperation
+    DEVICE_RESET: AuditOperation
+    DEVICE_BACKUP: AuditOperation
+    DEVICE_RESTORE: AuditOperation
+    SUBSCRIPTION: AuditOperation
+    NOTIFICATION: AuditOperation
+    AUDITING_FAILURE: AuditOperation
+    NETWORK_CHANGES: AuditOperation
+    GENERAL: AuditOperation
+
+    @staticmethod
+    def from_raw(value: int) -> AuditOperation: ...
+    def to_raw(self) -> int: ...
+    def __repr__(self) -> str: ...
+    def __eq__(self, other: object) -> bool: ...
+    def __hash__(self) -> int: ...
+
+
 class EnableDisable:
     """BACnet DeviceCommunicationControl enable/disable options (Clause 16.4)."""
 
@@ -496,6 +529,23 @@ class EventState:
 
     @staticmethod
     def from_raw(value: int) -> EventState: ...
+    def to_raw(self) -> int: ...
+    def __repr__(self) -> str: ...
+    def __eq__(self, other: object) -> bool: ...
+    def __hash__(self) -> int: ...
+
+
+class EnrollmentSummaryEventStateFilter:
+    """GetEnrollmentSummary event-state filter (Clause 13.11.1.1)."""
+
+    OFFNORMAL: EnrollmentSummaryEventStateFilter
+    FAULT: EnrollmentSummaryEventStateFilter
+    NORMAL: EnrollmentSummaryEventStateFilter
+    ALL: EnrollmentSummaryEventStateFilter
+    ACTIVE: EnrollmentSummaryEventStateFilter
+
+    @staticmethod
+    def from_raw(value: int) -> EnrollmentSummaryEventStateFilter: ...
     def to_raw(self) -> int: ...
     def __repr__(self) -> str: ...
     def __eq__(self, other: object) -> bool: ...
@@ -590,6 +640,196 @@ class ObjectIdentifier:
     def __hash__(self) -> int: ...
 
 
+class BACnetTimeStamp:
+    """Lossless BACnetTimeStamp CHOICE.
+
+    Time components accept their normal BACnet ranges or 255 for unspecified.
+    Date accepts full years 1900..2154 or 255 for unspecified, months 1..14,
+    days 1..34, and days-of-week 1..7; each non-year date field also accepts
+    255 for unspecified. Supplied values are never normalized.
+    """
+
+    @staticmethod
+    def sequence_number(value: int) -> BACnetTimeStamp:
+        """Construct the Sequence Number CHOICE with a value in 0..65535."""
+        ...
+    @staticmethod
+    def time(
+        hour: int, minute: int, second: int, hundredths: int
+    ) -> BACnetTimeStamp:
+        """Construct the Time CHOICE."""
+        ...
+    @staticmethod
+    def date_time(
+        date: tuple[int, int, int, int],
+        time: tuple[int, int, int, int],
+    ) -> BACnetTimeStamp:
+        """Construct DateTime from ``(full_year, month, day, day_of_week)`` and Time tuples."""
+        ...
+
+    @property
+    def kind(self) -> str:
+        """Selected CHOICE: ``sequence_number``, ``time``, or ``date_time``."""
+        ...
+
+    @property
+    def value(
+        self,
+    ) -> int | tuple[int, int, int, int] | tuple[
+        tuple[int, int, int, int], tuple[int, int, int, int]
+    ]:
+        """Exact selected value, using a full year for the Date tuple."""
+        ...
+
+    def __repr__(self) -> str: ...
+    def __eq__(self, other: object) -> bool: ...
+
+
+class AuditRecipientDevice(TypedDict):
+    """Audit recipient selected by Device object identifier."""
+
+    kind: Literal["device"]
+    object_identifier: ObjectIdentifier
+
+
+class AuditRecipientAddress(TypedDict):
+    """Audit recipient selected by BACnet network and MAC address."""
+
+    kind: Literal["address"]
+    network_number: int
+    mac_address: bytes
+
+
+AuditRecipientInput = AuditRecipientDevice | AuditRecipientAddress
+
+
+class AuditPropertyReference(TypedDict):
+    property_identifier: PropertyIdentifier
+    property_array_index: NotRequired[int | None]
+
+
+class AuditNotificationInput(TypedDict):
+    source_device: AuditRecipientInput
+    operation: AuditOperation
+    target_device: AuditRecipientInput
+    source_timestamp: NotRequired[BACnetTimeStamp | None]
+    target_timestamp: NotRequired[BACnetTimeStamp | None]
+    source_object: NotRequired[ObjectIdentifier | None]
+    source_comment: NotRequired[str | None]
+    target_comment: NotRequired[str | None]
+    invoke_id: NotRequired[int | None]
+    source_user_id: NotRequired[int | None]
+    source_user_role: NotRequired[int | None]
+    target_object: NotRequired[ObjectIdentifier | None]
+    target_property: NotRequired[AuditPropertyReference | None]
+    target_priority: NotRequired[int | None]
+    target_value: NotRequired[bytes | None]
+    current_value: NotRequired[bytes | None]
+    result: NotRequired[tuple[ErrorClass, ErrorCode] | None]
+
+
+class AuditNotificationRequestInput(TypedDict):
+    notifications: list[AuditNotificationInput]
+
+
+class AuditLogQueryByTargetInput(TypedDict):
+    kind: Literal["by_target"]
+    target_device_identifier: ObjectIdentifier
+    successful_actions_only: bool
+    target_device_address: NotRequired[AuditRecipientAddress | None]
+    target_object_identifier: NotRequired[ObjectIdentifier | None]
+    target_property_identifier: NotRequired[PropertyIdentifier | None]
+    target_array_index: NotRequired[int | None]
+    target_priority: NotRequired[int | None]
+    operations: NotRequired[int | None]
+
+
+class AuditLogQueryBySourceInput(TypedDict):
+    kind: Literal["by_source"]
+    source_device_identifier: ObjectIdentifier
+    successful_actions_only: bool
+    source_device_address: NotRequired[AuditRecipientAddress | None]
+    source_object_identifier: NotRequired[ObjectIdentifier | None]
+    operations: NotRequired[int | None]
+
+
+AuditLogQueryParametersInput = AuditLogQueryByTargetInput | AuditLogQueryBySourceInput
+
+
+class AuditLogQueryRequestInput(TypedDict):
+    audit_log: ObjectIdentifier
+    query_parameters: AuditLogQueryParametersInput
+    requested_count: int
+    start_at_sequence_number: NotRequired[int | None]
+
+
+BACnetDateTime = tuple[
+    tuple[int, int, int, int],
+    tuple[int, int, int, int],
+]
+
+
+class AuditPropertyReferenceResult(TypedDict):
+    property_identifier: PropertyIdentifier
+    property_array_index: int | None
+
+
+class AuditNotification(TypedDict):
+    """Canonical return mapping for a decoded Audit notification."""
+
+    source_timestamp: BACnetTimeStamp | None
+    target_timestamp: BACnetTimeStamp | None
+    source_device: AuditRecipientInput
+    source_object: ObjectIdentifier | None
+    operation: AuditOperation
+    source_comment: str | None
+    target_comment: str | None
+    invoke_id: int | None
+    source_user_id: int | None
+    source_user_role: int | None
+    target_device: AuditRecipientInput
+    target_object: ObjectIdentifier | None
+    target_property: AuditPropertyReferenceResult | None
+    target_priority: int | None
+    target_value: bytes | None
+    current_value: bytes | None
+    result: tuple[ErrorClass, ErrorCode] | None
+
+
+class AuditLogStatusDatum(TypedDict):
+    kind: Literal["log_status"]
+    log_status: int
+
+
+class AuditNotificationDatum(TypedDict):
+    kind: Literal["audit_notification"]
+    audit_notification: AuditNotification
+
+
+class AuditTimeChangeDatum(TypedDict):
+    kind: Literal["time_change"]
+    time_change: float
+
+
+AuditLogDatum = AuditLogStatusDatum | AuditNotificationDatum | AuditTimeChangeDatum
+
+
+class AuditLogRecord(TypedDict):
+    timestamp: BACnetDateTime
+    datum: AuditLogDatum
+
+
+class AuditLogRecordResult(TypedDict):
+    sequence_number: int
+    record: AuditLogRecord
+
+
+class AuditLogQueryAck(TypedDict):
+    audit_log: ObjectIdentifier
+    records: list[AuditLogRecordResult]
+    no_more_items: bool
+
+
 class PropertyValue:
     """A decoded BACnet property value with tag and Python-native value.
 
@@ -638,6 +878,10 @@ class PropertyValue:
     @staticmethod
     def list(items: list[PropertyValue]) -> PropertyValue:
         """Create a List (array) value from a list of PropertyValue items."""
+        ...
+    @staticmethod
+    def application_data(bytes: bytes) -> PropertyValue:
+        """Create an ApplicationData value from pre-encoded application-layer bytes (e.g. a framed BACnetEventParameter)."""
         ...
 
     @property
@@ -703,6 +947,18 @@ class CovNotification:
     def time_remaining(self) -> int: ...
 
     @property
+    def delivery(self) -> str: ...
+
+    @property
+    def source_mac(self) -> bytes: ...
+
+    @property
+    def source_network(self) -> Optional[int]: ...
+
+    @property
+    def source_address(self) -> Optional[bytes]: ...
+
+    @property
     def values(self) -> Any:
         """List of property value change entries."""
         ...
@@ -764,7 +1020,7 @@ class BACnetClient:
     """Async BACnet client for reading/writing properties on remote devices.
 
     Supports BACnet/IP (``"bip"``), BACnet/IPv6 (``"ipv6"``),
-    and BACnet/SC (``"sc"``) transports.
+    BACnet/SC (``"sc"``), and BACnet MS/TP (``"mstp"``) transports.
 
     Usage::
 
@@ -773,6 +1029,10 @@ class BACnetClient:
             devices = await client.discovered_devices()
             value = await client.read_property("192.168.1.100:47808", oid, pid)
             print(value.tag, value.value)
+
+        # MS/TP peer address is a station MAC string ("7" or "mstp:7")
+        async with BACnetClient(transport="mstp", serial_port="/dev/ttyUSB0", mstp_mac=3) as client:
+            value = await client.read_property("7", oid, pid)
     """
 
     def __init__(
@@ -790,6 +1050,12 @@ class BACnetClient:
         sc_heartbeat_interval_ms: Optional[int] = None,
         sc_heartbeat_timeout_ms: Optional[int] = None,
         ipv6_interface: Optional[str] = None,
+        *,
+        serial_port: Optional[str] = None,
+        mstp_baud: int = 38400,
+        mstp_mac: int = 1,
+        mstp_max_master: int = 127,
+        mstp_max_info_frames: int = 1,
     ) -> None: ...
 
     async def __aenter__(self) -> BACnetClient: ...
@@ -1074,12 +1340,16 @@ class BACnetClient:
                 list[tuple[PropertyIdentifier, Optional[int], Optional[float], bool]],
             ]
         ],
+        issue_confirmed_notifications: bool,
         max_notification_delay: Optional[int] = None,
-        issue_confirmed_notifications: Optional[bool] = None,
+        lifetime: Optional[int] = None,
     ) -> None:
         """Subscribe to COV notifications for multiple properties on multiple objects.
 
         ``specs`` is ``[(object_id, [(property_id, array_index, cov_increment, timestamped), ...]), ...]``.
+        ``issue_confirmed_notifications`` is required, including for cancellation requests.
+        For subscriptions and re-subscriptions, ``lifetime`` and ``max_notification_delay`` are both required.
+        For whole-context cancellations, pass an empty ``specs`` list and omit both fields.
         """
         ...
 
@@ -1135,6 +1405,23 @@ class BACnetClient:
 
     # --- Alarms and events ---
 
+    async def acknowledge_alarm_request(
+        self,
+        address: str,
+        acknowledging_process_identifier: int,
+        event_object_identifier: ObjectIdentifier,
+        event_state_acknowledged: int,
+        timestamp: BACnetTimeStamp,
+        acknowledgment_source: str,
+        time_of_acknowledgment: BACnetTimeStamp,
+    ) -> None:
+        """Acknowledge an alarm with exact caller-supplied BACnetTimeStamp values.
+
+        ``timestamp`` must echo the original event notification timestamp;
+        ``time_of_acknowledgment`` is selected by the caller.
+        """
+        ...
+
     async def acknowledge_alarm(
         self,
         address: str,
@@ -1143,7 +1430,11 @@ class BACnetClient:
         event_state_acknowledged: int,
         acknowledgment_source: str,
     ) -> None:
-        """Acknowledge an alarm on a remote device."""
+        """Deprecated compatibility method.
+
+        This method fabricates sequence-number zero for both timestamps. Use
+        ``acknowledge_alarm_request`` for a lossless request.
+        """
         ...
 
     async def get_event_information(
@@ -1166,7 +1457,7 @@ class BACnetClient:
         self,
         address: str,
         acknowledgment_filter: int = 0,
-        event_state_filter: Optional[EventState] = None,
+        event_state_filter: Optional[EnrollmentSummaryEventStateFilter] = None,
         event_type_filter: Optional[EventType] = None,
         min_priority: Optional[int] = None,
         max_priority: Optional[int] = None,
@@ -1175,7 +1466,8 @@ class BACnetClient:
         """Get enrollment summary from a remote device.
 
         Returns ``[{"object_id": ObjectIdentifier, "event_type": EventType,
-        "event_state": EventState, "priority": int, "notification_class": int}, ...]``.
+        "event_state": EventState, "priority": int,
+        "notification_class": Optional[int]}, ...]``.
         """
         ...
 
@@ -1365,25 +1657,60 @@ class BACnetClient:
 
     # --- Audit ---
 
+    async def confirmed_audit_notification_typed(
+        self,
+        address: str,
+        request: AuditNotificationRequestInput,
+    ) -> None:
+        """Send a validated mapping through the native confirmed Audit helper."""
+        ...
+
+    async def unconfirmed_audit_notification_typed(
+        self,
+        address: str,
+        request: AuditNotificationRequestInput,
+    ) -> None:
+        """Send a validated mapping through the native unconfirmed Audit helper."""
+        ...
+
+    async def audit_log_query_typed(
+        self,
+        address: str,
+        request: AuditLogQueryRequestInput,
+    ) -> AuditLogQueryAck:
+        """Send a typed Audit Log query and return a canonical decoded mapping."""
+        ...
+
     async def confirmed_audit_notification(
         self, address: str, service_data: bytes
     ) -> None:
-        """Send a ConfirmedAuditNotification (raw service data)."""
+        """Send a pre-encoded Clause 21 ConfirmedAuditNotification payload.
+
+        This is a raw escape hatch; the bundled server does not execute the
+        service.
+        """
         ...
 
     async def unconfirmed_audit_notification(
         self, address: str, service_data: bytes
     ) -> None:
-        """Send an UnconfirmedAuditNotification (raw service data)."""
+        """Send a pre-encoded Clause 21 UnconfirmedAuditNotification payload.
+
+        This is a raw escape hatch; the bundled server does not execute the
+        service.
+        """
         ...
 
     async def audit_log_query(
         self,
         address: str,
-        acknowledgment_filter: int,
-        query_options_raw: bytes = b"",
+        service_data: bytes,
     ) -> bytes:
-        """Send an AuditLogQuery request. Returns raw response bytes."""
+        """Send a pre-encoded Clause 21 AuditLogQuery payload.
+
+        This raw escape hatch returns the peer's response payload. The bundled
+        server does not execute the service.
+        """
         ...
 
     # --- Lifecycle ---
@@ -1425,6 +1752,12 @@ class BACnetServer:
         ipv6_interface: Optional[str] = None,
         dcc_password: Optional[str] = None,
         reinit_password: Optional[str] = None,
+        *,
+        serial_port: Optional[str] = None,
+        mstp_baud: int = 38400,
+        mstp_mac: int = 1,
+        mstp_max_master: int = 127,
+        mstp_max_info_frames: int = 1,
     ) -> None: ...
 
     # --- Analog objects ---
@@ -1457,9 +1790,8 @@ class BACnetServer:
     def add_trend_log(self, instance: int, name: str, buffer_size: int = 100) -> None: ...
     def add_trend_log_multiple(self, instance: int, name: str, buffer_size: int = 100) -> None: ...
     def add_event_log(self, instance: int, name: str, buffer_size: int = 100) -> None: ...
-    def add_audit_log(self, instance: int, name: str, buffer_size: int = 100) -> None: ...
+    def add_audit_log(self, instance: int, name: str, storage_path: str, buffer_size: int = 100) -> None: ...
     def add_audit_reporter(self, instance: int, name: str) -> None: ...
-    def add_notification_forwarder(self, instance: int, name: str) -> None: ...
 
     # --- Control/PID ---
     def add_loop(self, instance: int, name: str, output_units: int = 62) -> None: ...
@@ -1471,7 +1803,6 @@ class BACnetServer:
     # --- Lighting ---
     def add_lighting_output(self, instance: int, name: str) -> None: ...
     def add_binary_lighting_output(self, instance: int, name: str) -> None: ...
-    def add_channel(self, instance: int, name: str, channel_number: int) -> None: ...
 
     # --- Life safety ---
     def add_life_safety_point(self, instance: int, name: str) -> None: ...
@@ -1490,14 +1821,28 @@ class BACnetServer:
     def add_access_user(self, instance: int, name: str) -> None: ...
     def add_access_zone(self, instance: int, name: str) -> None: ...
     def add_credential_data_input(self, instance: int, name: str) -> None: ...
-    def add_alert_enrollment(self, instance: int, name: str) -> None: ...
+    def add_alert_enrollment(
+        self, instance: int, name: str, initial_source: ObjectIdentifier
+    ) -> None: ...
     def add_event_enrollment(self, instance: int, name: str, event_type: int = 0) -> None: ...
 
     # --- Building/transportation ---
     def add_elevator_group(self, instance: int, name: str) -> None: ...
     def add_escalator(self, instance: int, name: str) -> None: ...
     def add_lift(self, instance: int, name: str, num_floors: int) -> None: ...
-    def add_staging(self, instance: int, name: str, num_stages: int) -> None: ...
+    def add_staging(
+        self,
+        instance: int,
+        name: str,
+        present_value: float,
+        min_present_value: float,
+        units: int,
+        priority_for_writing: int,
+        stages: list[tuple[float, list[bool], float]],
+        target_references: list[ObjectIdentifier],
+        stage_names: list[str] | None = None,
+    ) -> None:
+        """Add a validated local-target Staging object before start()."""
 
     # --- Averaging ---
     def add_averaging(self, instance: int, name: str) -> None: ...
@@ -1516,6 +1861,40 @@ class BACnetServer:
 
     # --- Files/network ---
     def add_file(self, instance: int, name: str, file_type: str = "application/octet-stream") -> None: ...
+    def set_file_access_method(self, /, instance: int, access_method: str) -> None:
+        """Select ``"stream"`` or ``"record"`` on a pending built-in File.
+
+        This synchronous operation is valid only before ``start()``. Select the
+        access method before loading the corresponding payload; changing modes
+        does not convert stream data to records or vice versa.
+        """
+        ...
+    def set_file_data(self, /, instance: int, data: bytes) -> None:
+        """Copy bytes into a pending stream-access built-in File before ``start()``."""
+        ...
+    def get_file_data(self, /, instance: int) -> bytes:
+        """Return a fresh bytes copy from a pending stream File before ``start()``."""
+        ...
+    def set_file_records(self, /, instance: int, records: list[bytes]) -> None:
+        """Copy records into a pending record-access built-in File before ``start()``."""
+        ...
+    def get_file_records(self, /, instance: int) -> list[bytes]:
+        """Return a fresh list and fresh bytes from a pending record File before ``start()``."""
+        ...
+    def set_max_file_size(self, /, instance: int, max_octets: int) -> int:
+        """Set and return the effective octet growth cap before ``start()``.
+
+        The built-in File clamp is authoritative. This does not truncate
+        preloaded content.
+        """
+        ...
+    def set_max_record_count(self, /, instance: int, max_records: int) -> int:
+        """Set and return the effective record growth cap before ``start()``.
+
+        The built-in File clamp is authoritative. This does not truncate
+        preloaded records.
+        """
+        ...
     def add_network_port(self, instance: int, name: str, network_type: int = 0) -> None: ...
 
     # --- Server lifecycle ---
@@ -1550,6 +1929,22 @@ class BACnetServer:
         array_index: Optional[int] = None,
     ) -> None:
         """Write a property on a local object."""
+        ...
+
+    async def set_present_value_local(
+        self,
+        object_id: ObjectIdentifier,
+        value: PropertyValue,
+    ) -> None:
+        """Update Present_Value through the narrow, non-generic application Input authority.
+
+        Accepted values are a finite REAL for Analog Input, logical Enumerated 0/1
+        (INACTIVE/ACTIVE) for Binary Input, and Unsigned 1..=Number_Of_States for
+        Multi-state Input. Binary values are BACnet logical values after Polarity,
+        not raw hardware/interface levels. An Input with Out_Of_Service set rejects
+        this update to preserve network simulation ownership. Other object types are
+        not writable through this method.
+        """
         ...
 
     async def comm_state(self) -> int:

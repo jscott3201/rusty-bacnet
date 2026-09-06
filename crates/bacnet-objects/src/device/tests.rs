@@ -1,4 +1,49 @@
 use super::*;
+use crate::clock::{ClockFrame, ClockReader};
+use bacnet_types::primitives::{Date, Time};
+use std::sync::{Arc, Mutex};
+
+#[derive(Clone)]
+struct FakeClock(Arc<Mutex<Option<ClockFrame>>>);
+
+impl FakeClock {
+    fn new(frame: ClockFrame) -> Self {
+        Self(Arc::new(Mutex::new(Some(frame))))
+    }
+
+    fn set(&self, frame: ClockFrame) {
+        *self.0.lock().unwrap() = Some(frame);
+    }
+}
+
+impl ClockReader for FakeClock {
+    fn read_clock(&self) -> Option<ClockFrame> {
+        *self.0.lock().ok()?
+    }
+}
+
+fn clock_frame(hour: u8, minute: u8) -> ClockFrame {
+    ClockFrame {
+        local_date: Date {
+            year: 126,
+            month: 8,
+            day: 26,
+            day_of_week: 3,
+        },
+        local_time: Time {
+            hour,
+            minute,
+            second: 30,
+            hundredths: 25,
+        },
+        utc_offset: 300,
+        daylight_savings_status: true,
+    }
+}
+
+fn bind_clock(device: &mut DeviceObject, clock: FakeClock) {
+    device.bind_clock_internal(Some(Arc::new(clock)));
+}
 
 fn make_device() -> DeviceObject {
     DeviceObject::new(DeviceConfig {
@@ -53,6 +98,61 @@ fn read_max_apdu_length() {
         .read_property(PropertyIdentifier::MAX_APDU_LENGTH_ACCEPTED, None)
         .unwrap();
     assert_eq!(val, PropertyValue::Unsigned(1476));
+}
+
+#[test]
+fn mode_derived_max_segments_accepted() {
+    let cases = [
+        ("none", Segmentation::NONE, None),
+        ("transmit", Segmentation::TRANSMIT, Some(1)),
+        ("receive", Segmentation::RECEIVE, Some(65)),
+        ("both", Segmentation::BOTH, Some(65)),
+        ("unknown", Segmentation::from_raw(64), Some(65)),
+    ];
+
+    for (name, segmentation, expected_max_segments) in cases {
+        let dev = DeviceObject::new(DeviceConfig {
+            segmentation_supported: segmentation,
+            ..DeviceConfig::default()
+        })
+        .unwrap();
+
+        assert_eq!(
+            dev.read_property(PropertyIdentifier::SEGMENTATION_SUPPORTED, None)
+                .unwrap(),
+            PropertyValue::Enumerated(segmentation.to_raw() as u32),
+            "{name} segmentation readback"
+        );
+
+        let PropertyValue::List(property_list) = dev
+            .read_property(PropertyIdentifier::PROPERTY_LIST, None)
+            .unwrap()
+        else {
+            panic!("{name} Property_List was not a list");
+        };
+        assert_eq!(
+            property_list.contains(&PropertyValue::Enumerated(
+                PropertyIdentifier::MAX_SEGMENTS_ACCEPTED.to_raw(),
+            )),
+            expected_max_segments.is_some(),
+            "{name} Property_List presence"
+        );
+
+        let max_segments = dev.read_property(PropertyIdentifier::MAX_SEGMENTS_ACCEPTED, None);
+        match expected_max_segments {
+            Some(expected) => assert_eq!(
+                max_segments.unwrap(),
+                PropertyValue::Unsigned(expected),
+                "{name} Max_Segments_Accepted"
+            ),
+            None => assert!(matches!(
+                max_segments,
+                Err(Error::Protocol { class, code })
+                    if class == ErrorClass::PROPERTY.to_raw() as u32
+                        && code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32
+            )),
+        }
+    }
 }
 
 #[test]
@@ -206,25 +306,11 @@ fn read_protocol_object_types_supported() {
     match val {
         PropertyValue::BitString { unused_bits, data } => {
             assert_eq!(unused_bits, 7);
-            assert_eq!(data.len(), 9);
-            // Byte 0 (types 0-7): all set
-            assert_eq!(data[0], 0xFF);
-            // Byte 1 (types 8-15): all set
-            assert_eq!(data[1], 0xFF);
-            // Byte 2 (types 16-23): all set
-            assert_eq!(data[2], 0xFF);
-            // Byte 3 (types 24-31): all set
-            assert_eq!(data[3], 0xFF);
-            // Byte 4 (types 32-39): 32-37,39 set; 38 (NetworkSecurity) unset
-            assert_eq!(data[4], 0xFD);
-            // Byte 5 (types 40-47): all set
-            assert_eq!(data[5], 0xFF);
-            // Byte 6 (types 48-55): all set
-            assert_eq!(data[6], 0xFF);
-            // Byte 7 (types 56-63): all set (56-62 + Color=63)
-            assert_eq!(data[7], 0xFF);
-            // Byte 8 (type 64): ColorTemperature set, 7 unused bits
-            assert_eq!(data[8], 0x80);
+            assert_eq!(
+                data,
+                vec![0xFF, 0xFF, 0xFF, 0xFF, 0xFD, 0xFF, 0xEB, 0xFF, 0x80],
+                "types 51 and 53 must stay clear while types 50, 52, 54, and 64 remain set"
+            );
         }
         _ => panic!("Expected BitString"),
     }
@@ -232,23 +318,134 @@ fn read_protocol_object_types_supported() {
 
 #[test]
 fn read_protocol_services_supported() {
-    let dev = make_device();
+    use bacnet_types::bitstring::ServicesSupported;
+    use bacnet_types::enums::ServiceSupported;
+
+    let mut dev = make_device();
+    bind_clock(&mut dev, FakeClock::new(clock_frame(12, 0)));
     let val = dev
         .read_property(PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED, None)
         .unwrap();
     match val {
         PropertyValue::BitString { unused_bits, data } => {
+            // Full Clause 21 production: bits 0..=48 → 7 octets, 7 unused.
             assert_eq!(unused_bits, 7);
-            assert_eq!(data.len(), 6);
-            // Byte 0: services 0,2,5
-            assert_eq!(data[0], 0xA4);
-            // Byte 1: services 12,14,15
-            assert_eq!(data[1], 0x0B);
-            // Byte 4: service 32 (WhoIs)
-            assert_eq!(data[4], 0x80);
+            assert_eq!(data.len(), 7);
+
+            let ss = ServicesSupported::from_bacnet(&data);
+            for service in EXECUTED_SERVICES {
+                assert!(ss.contains(*service), "missing {service}");
+            }
+            assert_eq!(
+                ss.iter().count(),
+                EXECUTED_SERVICES.len(),
+                "no bits beyond EXECUTED_SERVICES may be set"
+            );
+
+            // Semantic pins from #192: divergent-numbering services land on
+            // their bit-35+ positions (impossible in the old 41-bit string)…
+            assert!(ss.contains(ServiceSupported::WHO_IS));
+            assert!(ss.contains(ServiceSupported::READ_RANGE));
+            assert!(ss.contains(ServiceSupported::SUBSCRIBE_COV_PROPERTY_MULTIPLE));
+            assert!(ss.contains(ServiceSupported::UNCONFIRMED_AUDIT_NOTIFICATION));
+            assert!(!ss.contains(ServiceSupported::WRITE_GROUP));
+            // …and initiate-only services are not declared as executed.
+            assert!(!ss.contains(ServiceSupported::I_AM));
+            assert!(!ss.contains(ServiceSupported::I_HAVE));
+            assert!(!ss.contains(ServiceSupported::CONFIRMED_EVENT_NOTIFICATION));
+            assert!(!ss.contains(ServiceSupported::UNCONFIRMED_COV_NOTIFICATION));
         }
         _ => panic!("Expected BitString"),
     }
+}
+
+#[test]
+fn clockless_device_omits_clock_properties_and_sync_services() {
+    use bacnet_types::bitstring::ServicesSupported;
+
+    let dev = make_device();
+    let props = dev.property_list();
+    for property in [
+        PropertyIdentifier::LOCAL_DATE,
+        PropertyIdentifier::LOCAL_TIME,
+        PropertyIdentifier::UTC_OFFSET,
+        PropertyIdentifier::DAYLIGHT_SAVINGS_STATUS,
+    ] {
+        assert!(!props.contains(&property));
+        assert!(matches!(
+            dev.read_property(property, None),
+            Err(Error::Protocol { class, code })
+                if class == ErrorClass::PROPERTY.to_raw() as u32
+                    && code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32
+        ));
+    }
+
+    let PropertyValue::BitString { data, .. } = dev
+        .read_property(PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED, None)
+        .unwrap()
+    else {
+        panic!("Expected BitString");
+    };
+    let services = ServicesSupported::from_bacnet(&data);
+    assert!(!services.contains(ServiceSupported::TIME_SYNCHRONIZATION));
+    assert!(!services.contains(ServiceSupported::UTC_TIME_SYNCHRONIZATION));
+}
+
+#[test]
+fn bound_device_reads_one_advancing_clock_source() {
+    let mut dev = make_device();
+    let clock = FakeClock::new(clock_frame(9, 15));
+    bind_clock(&mut dev, clock.clone());
+
+    assert_eq!(
+        dev.read_property(PropertyIdentifier::LOCAL_TIME, None)
+            .unwrap(),
+        PropertyValue::Time(clock_frame(9, 15).local_time)
+    );
+    assert_eq!(
+        dev.read_property(PropertyIdentifier::UTC_OFFSET, None)
+            .unwrap(),
+        PropertyValue::Signed(300)
+    );
+    assert_eq!(
+        dev.read_property(PropertyIdentifier::DAYLIGHT_SAVINGS_STATUS, None)
+            .unwrap(),
+        PropertyValue::Boolean(true)
+    );
+
+    clock.set(clock_frame(9, 16));
+    assert_eq!(
+        dev.read_property(PropertyIdentifier::LOCAL_TIME, None)
+            .unwrap(),
+        PropertyValue::Time(clock_frame(9, 16).local_time)
+    );
+    for property in [
+        PropertyIdentifier::LOCAL_DATE,
+        PropertyIdentifier::LOCAL_TIME,
+        PropertyIdentifier::UTC_OFFSET,
+        PropertyIdentifier::DAYLIGHT_SAVINGS_STATUS,
+    ] {
+        assert!(dev.property_list().contains(&property));
+    }
+}
+
+#[test]
+fn set_services_supported_overrides_default() {
+    use bacnet_types::bitstring::ServicesSupported;
+    use bacnet_types::enums::ServiceSupported;
+
+    let mut dev = make_device();
+    dev.set_services_supported(&[ServiceSupported::READ_PROPERTY]);
+    let val = dev
+        .read_property(PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED, None)
+        .unwrap();
+    let PropertyValue::BitString { unused_bits, data } = val else {
+        panic!("Expected BitString");
+    };
+    assert_eq!((unused_bits, data.len()), (7, 7));
+    let ss = ServicesSupported::from_bacnet(&data);
+    assert!(ss.contains(ServiceSupported::READ_PROPERTY));
+    assert_eq!(ss.iter().count(), 1);
 }
 
 #[test]
@@ -257,7 +454,7 @@ fn active_cov_subscriptions_default_empty() {
     let val = dev
         .read_property(PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS, None)
         .unwrap();
-    assert_eq!(val, PropertyValue::List(vec![]));
+    assert_eq!(val, PropertyValue::ApplicationData(Vec::new()));
 }
 
 #[test]
@@ -276,18 +473,15 @@ fn active_cov_subscriptions_after_add() {
     };
 
     let mut dev = make_device();
-    let dev_oid = ObjectIdentifier::new(ObjectType::DEVICE, 200).unwrap();
-    let ai_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    let dev_oid = ObjectIdentifier::new(ObjectType::DEVICE, 7).unwrap();
+    let ao_oid = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 3).unwrap();
 
     dev.add_cov_subscription(BACnetCOVSubscription {
         recipient: BACnetRecipientProcess {
             recipient: BACnetRecipient::Device(dev_oid),
             process_identifier: 7,
         },
-        monitored_property_reference: BACnetObjectPropertyReference::new(
-            ai_oid,
-            PropertyIdentifier::PRESENT_VALUE.to_raw(),
-        ),
+        monitored_property_reference: BACnetObjectPropertyReference::new_indexed(ao_oid, 87, 2),
         issue_confirmed_notifications: true,
         time_remaining: 300,
         cov_increment: Some(0.5),
@@ -296,23 +490,14 @@ fn active_cov_subscriptions_after_add() {
     let val = dev
         .read_property(PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS, None)
         .unwrap();
-    match val {
-        PropertyValue::List(subs) => {
-            assert_eq!(subs.len(), 1);
-            match &subs[0] {
-                PropertyValue::List(entry) => {
-                    assert_eq!(entry.len(), 5); // includes cov_increment
-                    assert_eq!(entry[0], PropertyValue::ObjectIdentifier(ai_oid));
-                    assert_eq!(entry[1], PropertyValue::Unsigned(7));
-                    assert_eq!(entry[2], PropertyValue::Boolean(true));
-                    assert_eq!(entry[3], PropertyValue::Unsigned(300));
-                    assert_eq!(entry[4], PropertyValue::Real(0.5));
-                }
-                _ => panic!("Expected List entry"),
-            }
-        }
-        _ => panic!("Expected List"),
-    }
+    assert_eq!(
+        val,
+        PropertyValue::ApplicationData(vec![
+            0x0E, 0x0E, 0x0C, 0x02, 0x00, 0x00, 0x07, 0x0F, 0x19, 0x07, 0x0F, 0x1E, 0x0C, 0x00,
+            0x40, 0x00, 0x03, 0x19, 0x57, 0x29, 0x02, 0x1F, 0x29, 0x01, 0x3A, 0x01, 0x2C, 0x4C,
+            0x3F, 0x00, 0x00, 0x00,
+        ])
+    );
 }
 
 #[test]
@@ -323,17 +508,19 @@ fn active_cov_subscriptions_without_increment() {
     };
 
     let mut dev = make_device();
-    let dev_oid = ObjectIdentifier::new(ObjectType::DEVICE, 50).unwrap();
     let bv_oid = ObjectIdentifier::new(ObjectType::BINARY_VALUE, 3).unwrap();
 
     dev.add_cov_subscription(BACnetCOVSubscription {
         recipient: BACnetRecipientProcess {
-            recipient: BACnetRecipient::Device(dev_oid),
-            process_identifier: 1,
+            recipient: BACnetRecipient::Address(bacnet_types::constructed::BACnetAddress {
+                network_number: 0x1234,
+                mac_address: bacnet_types::MacAddr::from_slice(&[0xAA, 0xBB]),
+            }),
+            process_identifier: 9,
         },
         monitored_property_reference: BACnetObjectPropertyReference::new(
             bv_oid,
-            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+            PropertyIdentifier::STATUS_FLAGS.to_raw(),
         ),
         issue_confirmed_notifications: false,
         time_remaining: 0,
@@ -343,19 +530,13 @@ fn active_cov_subscriptions_without_increment() {
     let val = dev
         .read_property(PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS, None)
         .unwrap();
-    match val {
-        PropertyValue::List(subs) => {
-            assert_eq!(subs.len(), 1);
-            match &subs[0] {
-                PropertyValue::List(entry) => {
-                    assert_eq!(entry.len(), 4); // no cov_increment
-                    assert_eq!(entry[2], PropertyValue::Boolean(false));
-                }
-                _ => panic!("Expected List entry"),
-            }
-        }
-        _ => panic!("Expected List"),
-    }
+    assert_eq!(
+        val,
+        PropertyValue::ApplicationData(vec![
+            0x0E, 0x0E, 0x1E, 0x22, 0x12, 0x34, 0x62, 0xAA, 0xBB, 0x1F, 0x0F, 0x19, 0x09, 0x0F,
+            0x1E, 0x0C, 0x01, 0x40, 0x00, 0x03, 0x19, 0x6F, 0x1F, 0x29, 0x00, 0x39, 0x00,
+        ])
+    );
 }
 
 #[test]
@@ -364,7 +545,7 @@ fn active_cov_subscriptions_write_denied() {
     let result = dev.write_property(
         PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS,
         None,
-        PropertyValue::List(vec![]),
+        PropertyValue::ApplicationData(Vec::new()),
         None,
     );
     assert!(result.is_err());
@@ -409,22 +590,22 @@ fn set_active_cov_subscriptions_replaces() {
         time_remaining: 200,
         cov_increment: Some(1.0),
     };
-    dev.set_active_cov_subscriptions(vec![sub1, sub2]);
+    let subscriptions = vec![sub1, sub2];
+    let mut expected = bytes::BytesMut::new();
+    bacnet_encoding::constructed::encode_cov_subscription_list(&mut expected, &subscriptions);
+    dev.set_active_cov_subscriptions(subscriptions);
 
     let val = dev
         .read_property(PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS, None)
         .unwrap();
-    match val {
-        PropertyValue::List(subs) => assert_eq!(subs.len(), 2),
-        _ => panic!("Expected List"),
-    }
+    assert_eq!(val, PropertyValue::ApplicationData(expected.to_vec()));
 
     // Replace with empty
     dev.set_active_cov_subscriptions(vec![]);
     let val = dev
         .read_property(PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS, None)
         .unwrap();
-    assert_eq!(val, PropertyValue::List(vec![]));
+    assert_eq!(val, PropertyValue::ApplicationData(Vec::new()));
 }
 
 #[test]

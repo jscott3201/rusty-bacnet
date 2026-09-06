@@ -4,6 +4,21 @@ use super::super::*;
 impl BACnetServer {
     /// Start the server. It will begin responding to BACnet requests.
     fn start<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        // MS/TP serial open is synchronous and must succeed before pending
+        // registrations are moved into the startup future.
+        let mut mstp_transport: Option<AnyTransport<crate::mstp_py::PySerial>> =
+            if self.transport_type == "mstp" {
+                Some(crate::mstp_py::build_mstp_transport(
+                    self.serial_port.as_deref(),
+                    self.mstp_baud,
+                    self.mstp_mac,
+                    self.mstp_max_master,
+                    self.mstp_max_info_frames,
+                )?)
+            } else {
+                None
+            };
+
         let inner = self.inner.clone();
         let started = self.started.clone();
         let device_instance = self.device_instance;
@@ -23,7 +38,6 @@ impl BACnetServer {
         let dcc_password = self.dcc_password.clone();
         let reinit_password = self.reinit_password.clone();
 
-        // Take pending objects (synchronous, before async block)
         let objects: Vec<Box<dyn BACnetObject + Send>> = {
             let mut guard = self.lock_pending()?;
             guard.drain(..).collect()
@@ -64,7 +78,7 @@ impl BACnetServer {
             })?;
 
             // Build transport based on type
-            let transport: AnyTransport<NoSerial> = match transport_type.as_str() {
+            let transport: AnyTransport<crate::mstp_py::PySerial> = match transport_type.as_str() {
                 "bip" => {
                     let interface: Ipv4Addr = interface_str
                         .parse()
@@ -114,9 +128,12 @@ impl BACnetServer {
                     }
                     AnyTransport::Sc(Box::new(sc))
                 }
+                "mstp" => mstp_transport
+                    .take()
+                    .ok_or_else(|| PyRuntimeError::new_err("MS/TP transport was not prepared"))?,
                 other => {
                     return Err(PyRuntimeError::new_err(format!(
-                        "unknown transport: '{other}'. Use 'bip', 'ipv6', or 'sc'"
+                        "unknown transport: '{other}'. Use 'bip', 'ipv6', 'sc', or 'mstp'"
                     )));
                 }
             };
@@ -189,6 +206,15 @@ impl BACnetServer {
                     let port = u16::from_be_bytes([mac[16], mac[17]]);
                     Ok(format!("[{ip}]:{port}"))
                 }
+                "mstp" => {
+                    if mac.len() != 1 {
+                        return Err(PyRuntimeError::new_err(format!(
+                            "unexpected MS/TP MAC length: {}",
+                            mac.len()
+                        )));
+                    }
+                    Ok(mac[0].to_string())
+                }
                 _ => {
                     // SC, Ethernet, or other: hex-encode
                     Ok(mac
@@ -236,6 +262,24 @@ impl BACnetServer {
     }
 
     /// Write a property on a local object in the server's database.
+    ///
+    /// Delegates to the server-owned [`write_local`](server::BACnetServer::write_local)
+    /// entry point so a local write fires the same post-write COV and event
+    /// notifications as a network `WriteProperty`. `OBJECT_NAME` writes are
+    /// routed through the database name index — a duplicate name is rejected
+    /// up front and a successful rename refreshes the index — so local writes
+    /// obey the same uniqueness and lookup invariants as the network handlers.
+    ///
+    /// Errors are surfaced as [`BacnetProtocolError`] (with `error_class`/
+    /// `error_code`) for parity with the network path — e.g. an unknown object
+    /// yields `UNKNOWN_OBJECT` rather than a generic `RuntimeError`.
+    ///
+    /// The server lock is held for the whole call (including the post-write
+    /// COV/event sends), so concurrent Python calls on the same `BACnetServer`
+    /// serialize behind a local write. This is deliberate: it prevents a
+    /// `stop()` racing the notification sends mid-flight. A confirmed-COV send
+    /// to an unresponsive subscriber can therefore stall other Python calls
+    /// for up to the COV retry timeout.
     #[pyo3(signature = (object_id, property_id, value, priority=None, array_index=None))]
     #[allow(clippy::too_many_arguments)]
     fn write_property_local<'py>(
@@ -253,20 +297,44 @@ impl BACnetServer {
         let prop_value = value.inner;
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let db_arc = {
-                let guard = inner.lock().await;
-                let srv = guard
-                    .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
-                srv.database().clone()
-            };
-            let mut db = db_arc.write().await;
-            let obj = db
-                .get_mut(&oid)
-                .ok_or_else(|| PyRuntimeError::new_err(format!("object {oid} not found")))?;
-            obj.write_property(pid, array_index, prop_value, priority)
-                .map_err(to_py_err)?;
-            Ok(())
+            // Hold the server guard for the duration of the call: `write_local`
+            // borrows `srv` and runs the post-write COV/event trigger path,
+            // so the server must stay alive across the await.
+            let guard = inner.lock().await;
+            let srv = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
+            srv.write_local(&oid, pid, array_index, prop_value, priority)
+                .await
+                .map_err(to_py_err)
+        })
+    }
+
+    /// Update Present_Value for an application-owned Input object.
+    ///
+    /// This is the narrow Input-only route for finite Analog Input REAL values,
+    /// logical Binary Input Enumerated 0/1 values, and in-range Multi-state
+    /// Input Unsigned values. The object implementation owns validation and
+    /// Out_Of_Service simulation exclusivity.
+    #[pyo3(signature = (object_id, value))]
+    fn set_present_value_local<'py>(
+        &self,
+        py: Python<'py>,
+        object_id: PyObjectIdentifier,
+        value: PyPropertyValue,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        let oid = object_id.to_rust();
+        let prop_value = value.inner;
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let srv = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
+            srv.set_present_value_local(&oid, prop_value)
+                .await
+                .map_err(to_py_err)
         })
     }
 

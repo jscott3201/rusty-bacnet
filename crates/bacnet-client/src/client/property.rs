@@ -100,7 +100,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         bacnet_services::read_property::ReadPropertyACK::decode(&response_data)
     }
 
-    /// Write a property on a remote device.
+    /// Read multiple properties from one or more objects on a remote device.
     pub async fn read_property_multiple(
         &self,
         destination_mac: &[u8],
@@ -125,7 +125,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         ReadPropertyMultipleACK::decode(&response_data)
     }
 
-    /// Write multiple properties on one or more objects on a remote device.
+    /// Read multiple properties from a discovered device, auto-routing if needed.
     pub async fn read_property_multiple_from_device(
         &self,
         device_instance: u32,
@@ -158,7 +158,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
     }
 
-    /// Write a property on a discovered device, auto-routing if needed.
+    /// Read one property from multiple discovered devices concurrently.
+    ///
+    /// All reads are dispatched concurrently (up to `max_concurrent`,
+    /// default 32). Results are returned in completion order.
     pub async fn read_property_from_devices(
         &self,
         requests: Vec<DeviceReadRequest>,
@@ -217,10 +220,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await
     }
 
-    /// Write a property on multiple devices concurrently.
-    ///
-    /// All writes are dispatched concurrently (up to `max_concurrent`,
-    /// default 32). Results are returned in completion order.
+    /// Write a property on a remote device.
     pub async fn write_property(
         &self,
         destination_mac: &[u8],
@@ -253,7 +253,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         Ok(())
     }
 
-    /// Read multiple properties from one or more objects on a remote device.
+    /// Write multiple properties on one or more objects on a remote device.
     pub async fn write_property_multiple(
         &self,
         destination_mac: &[u8],
@@ -282,7 +282,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     // Auto-routing _from_device variants (RPM, WP, WPM)
     // -----------------------------------------------------------------------
 
-    /// Read multiple properties from a discovered device, auto-routing if needed.
+    /// Write a property on a discovered device, auto-routing if needed.
     pub async fn write_property_to_device(
         &self,
         device_instance: u32,
@@ -361,6 +361,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             self.write_property_multiple(&mac, specs).await
         }
     }
+
+    /// Write one property on multiple discovered devices concurrently.
+    ///
+    /// All writes are dispatched concurrently (up to `max_concurrent`,
+    /// default 32). Results are returned in completion order.
     pub async fn write_property_to_devices(
         &self,
         requests: Vec<DeviceWriteRequest>,
@@ -390,5 +395,85 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .buffer_unordered(concurrency)
             .collect()
             .await
+    }
+}
+
+#[cfg(test)]
+mod doc_tests {
+    const SOURCE: &str = include_str!("property.rs");
+
+    fn doc_block_for(fn_name: &str) -> String {
+        let needle = format!("pub async fn {fn_name}(");
+        let lines: Vec<_> = SOURCE.lines().collect();
+        let signature_index = lines
+            .iter()
+            .position(|line| line.trim_start().starts_with(&needle))
+            .unwrap_or_else(|| panic!("missing function {fn_name}"));
+        let mut docs = Vec::new();
+        let mut index = signature_index;
+        while index > 0 {
+            index -= 1;
+            let line = lines[index].trim_start();
+            if let Some(doc) = line.strip_prefix("///") {
+                docs.push(doc.trim());
+            } else {
+                break;
+            }
+        }
+        docs.reverse();
+        docs.join(" ")
+    }
+
+    #[test]
+    fn property_method_docblocks_match_their_methods() {
+        let cases = [
+            (
+                "read_property_multiple",
+                "Read multiple properties from one or more objects on a remote device.",
+                "Write",
+            ),
+            (
+                "read_property_multiple_from_device",
+                "Read multiple properties from a discovered device, auto-routing if needed.",
+                "Write",
+            ),
+            (
+                "read_property_from_devices",
+                "Read one property from multiple discovered devices concurrently.",
+                "Write",
+            ),
+            (
+                "write_property",
+                "Write a property on a remote device.",
+                "multiple devices concurrently",
+            ),
+            (
+                "write_property_multiple",
+                "Write multiple properties on one or more objects on a remote device.",
+                "Read",
+            ),
+            (
+                "write_property_to_device",
+                "Write a property on a discovered device, auto-routing if needed.",
+                "Read",
+            ),
+            (
+                "write_property_to_devices",
+                "Write one property on multiple discovered devices concurrently.",
+                "Read",
+            ),
+        ];
+
+        for (fn_name, expected, forbidden) in cases {
+            let docs = doc_block_for(fn_name);
+            assert!(
+                docs.contains(expected),
+                "{fn_name} docs did not contain expected text: {docs}"
+            );
+            assert!(
+                !docs.contains(forbidden),
+                "{fn_name} docs still contain misattributed text: {docs}"
+            );
+        }
     }
 }

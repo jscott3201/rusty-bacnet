@@ -14,7 +14,7 @@ use bacnet_objects::access_control::{
 };
 use bacnet_objects::accumulator::{AccumulatorObject, PulseConverterObject};
 use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
-use bacnet_objects::audit::{AuditLogObject, AuditReporterObject};
+use bacnet_objects::audit::{AuditLogObject, AuditReporterObject, FileAuditLogPersistence};
 use bacnet_objects::averaging::AveragingObject;
 use bacnet_objects::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use bacnet_objects::command::CommandObject;
@@ -24,10 +24,9 @@ use bacnet_objects::elevator::{ElevatorGroupObject, EscalatorObject, LiftObject}
 use bacnet_objects::event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject};
 use bacnet_objects::event_log::EventLogObject;
 use bacnet_objects::file::FileObject;
-use bacnet_objects::forwarder::NotificationForwarderObject;
 use bacnet_objects::group::{GlobalGroupObject, GroupObject, StructuredViewObject};
 use bacnet_objects::life_safety::{LifeSafetyPointObject, LifeSafetyZoneObject};
-use bacnet_objects::lighting::{BinaryLightingOutputObject, ChannelObject, LightingOutputObject};
+use bacnet_objects::lighting::{BinaryLightingOutputObject, LightingOutputObject};
 use bacnet_objects::load_control::LoadControlObject;
 use bacnet_objects::loop_obj::LoopObject;
 use bacnet_objects::multistate::{
@@ -37,7 +36,7 @@ use bacnet_objects::network_port::NetworkPortObject;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::program::ProgramObject;
 use bacnet_objects::schedule::{CalendarObject, ScheduleObject};
-use bacnet_objects::staging::StagingObject;
+use bacnet_objects::staging::{StagingConfig, StagingObject};
 use bacnet_objects::timer::TimerObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_objects::trend::{TrendLogMultipleObject, TrendLogObject};
@@ -51,7 +50,7 @@ use bacnet_server::server;
 use bacnet_transport::any::AnyTransport;
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::bip6::Bip6Transport;
-use bacnet_transport::mstp::NoSerial;
+use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
 use bacnet_types::primitives::PropertyValue;
 
 use crate::errors::to_py_err;
@@ -72,9 +71,10 @@ use crate::types::{PyObjectIdentifier, PyPropertyIdentifier, PyPropertyValue};
 /// - `"bip"` (default): BACnet/IP over UDP
 /// - `"ipv6"`: BACnet/IPv6 over UDP multicast
 /// - `"sc"`: BACnet/SC over TLS WebSocket (requires `sc_hub`, `sc_vmac`)
+/// - `"mstp"`: BACnet MS/TP over RS-485 (requires `serial_port`)
 #[pyclass(name = "BACnetServer")]
 pub struct BACnetServer {
-    inner: Arc<Mutex<Option<server::BACnetServer<AnyTransport<NoSerial>>>>>,
+    inner: Arc<Mutex<Option<server::BACnetServer<AnyTransport<crate::mstp_py::PySerial>>>>>,
     device_instance: u32,
     device_name: String,
     transport_type: String,
@@ -92,6 +92,12 @@ pub struct BACnetServer {
     sc_heartbeat_timeout_ms: Option<u64>,
     // IPv6 config
     ipv6_interface: Option<String>,
+    // MS/TP config
+    serial_port: Option<String>,
+    mstp_baud: u32,
+    mstp_mac: u8,
+    mstp_max_master: u8,
+    mstp_max_info_frames: u8,
     // Passwords
     dcc_password: Option<String>,
     reinit_password: Option<String>,
@@ -126,6 +132,7 @@ impl BACnetServer {
 }
 
 mod server_methods {
+    mod file_configuration;
     mod lifecycle;
     mod registration;
 }

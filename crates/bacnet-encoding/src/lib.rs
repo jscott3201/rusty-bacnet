@@ -7,7 +7,11 @@
 //! - NPDU encode/decode (Clause 6)
 
 pub mod apdu;
+pub mod constructed;
 pub mod npdu;
 pub mod primitives;
 pub mod segmentation;
 pub mod tags;
+
+#[cfg(test)]
+mod tags_canonical_tests;

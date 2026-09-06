@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
+use bacnet_encoding::npdu::NpduAddress;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
@@ -12,6 +13,8 @@ use bacnet_types::MacAddr;
 pub struct CovSubscription {
     /// MAC address of the subscriber.
     pub subscriber_mac: MacAddr,
+    /// Routed source address when the subscriber is behind a BACnet router.
+    pub subscriber_network: Option<NpduAddress>,
     /// Process identifier chosen by the subscriber.
     pub subscriber_process_identifier: u32,
     /// The object being monitored.
@@ -29,13 +32,32 @@ pub struct CovSubscription {
     pub monitored_property_array_index: Option<u32>,
     /// COV increment override (SubscribeCOVProperty only).
     pub cov_increment: Option<f32>,
+    /// Notification service family used for this subscription.
+    pub notification_kind: CovNotificationKind,
+    /// Whether COVNotificationMultiple values should include timeOfChange.
+    pub timestamped: bool,
+}
+
+/// COV notification service family for a stored subscription.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CovNotificationKind {
+    /// COVNotification / ConfirmedCOVNotification.
+    Single,
+    /// COVNotificationMultiple / ConfirmedCOVNotificationMultiple.
+    Multiple,
 }
 
 /// Key for uniquely identifying a subscription:
-/// (subscriber_mac, process_id, monitored_object, monitored_property).
+/// (subscriber endpoint, process_id, monitored_object, monitored_property).
 /// Including monitored_property ensures SubscribeCOV (whole-object) and
 /// SubscribeCOVProperty (per-property) coexist as independent subscriptions.
-type SubKey = (MacAddr, u32, ObjectIdentifier, Option<PropertyIdentifier>);
+type SubKey = (
+    MacAddr,
+    Option<NpduAddress>,
+    u32,
+    ObjectIdentifier,
+    Option<PropertyIdentifier>,
+);
 
 /// Table of active COV subscriptions.
 #[derive(Debug, Default)]
@@ -54,11 +76,30 @@ impl CovSubscriptionTable {
     pub fn subscribe(&mut self, sub: CovSubscription) {
         let key = (
             sub.subscriber_mac.clone(),
+            sub.subscriber_network.clone(),
             sub.subscriber_process_identifier,
             sub.monitored_object_identifier,
             sub.monitored_property,
         );
         self.subs.insert(key, sub);
+    }
+
+    /// Whether a subscription key is already present.
+    pub fn contains(
+        &self,
+        mac: &MacAddr,
+        network: Option<&NpduAddress>,
+        process_id: u32,
+        monitored_object: ObjectIdentifier,
+        monitored_property: Option<PropertyIdentifier>,
+    ) -> bool {
+        self.subs.contains_key(&(
+            mac.clone(),
+            network.cloned(),
+            process_id,
+            monitored_object,
+            monitored_property,
+        ))
     }
 
     /// Remove a subscription by subscriber MAC, process identifier, and monitored object.
@@ -68,7 +109,24 @@ impl CovSubscriptionTable {
         process_id: u32,
         monitored_object: ObjectIdentifier,
     ) -> bool {
-        let key = (MacAddr::from_slice(mac), process_id, monitored_object, None);
+        self.unsubscribe_at(mac, None, process_id, monitored_object)
+    }
+
+    /// Remove a whole-object subscription for a specific subscriber endpoint.
+    pub fn unsubscribe_at(
+        &mut self,
+        mac: &[u8],
+        network: Option<&NpduAddress>,
+        process_id: u32,
+        monitored_object: ObjectIdentifier,
+    ) -> bool {
+        let key = (
+            MacAddr::from_slice(mac),
+            network.cloned(),
+            process_id,
+            monitored_object,
+            None,
+        );
         self.subs.remove(&key).is_some()
     }
 
@@ -80,8 +138,21 @@ impl CovSubscriptionTable {
         monitored_object: ObjectIdentifier,
         monitored_property: PropertyIdentifier,
     ) -> bool {
+        self.unsubscribe_property_at(mac, None, process_id, monitored_object, monitored_property)
+    }
+
+    /// Unsubscribe a per-property subscription for a specific subscriber endpoint.
+    pub fn unsubscribe_property_at(
+        &mut self,
+        mac: &[u8],
+        network: Option<&NpduAddress>,
+        process_id: u32,
+        monitored_object: ObjectIdentifier,
+        monitored_property: PropertyIdentifier,
+    ) -> bool {
         let key = (
             MacAddr::from_slice(mac),
+            network.cloned(),
             process_id,
             monitored_object,
             Some(monitored_property),
@@ -89,9 +160,71 @@ impl CovSubscriptionTable {
         self.subs.remove(&key).is_some()
     }
 
+    /// Remove every COV-multiple subscription in a subscriber context.
+    pub fn unsubscribe_cov_multiple_context(
+        &mut self,
+        mac: &[u8],
+        network: Option<&NpduAddress>,
+        process_id: u32,
+        confirmed: bool,
+    ) {
+        let mac = MacAddr::from_slice(mac);
+        self.subs.retain(|_, sub| {
+            !(sub.notification_kind == CovNotificationKind::Multiple
+                && sub.subscriber_mac == mac
+                && sub.subscriber_network == network.cloned()
+                && sub.subscriber_process_identifier == process_id
+                && sub.issue_confirmed_notifications == confirmed)
+        });
+    }
+
+    /// Remove one property from a COV-multiple subscriber context.
+    pub fn unsubscribe_cov_multiple_property_at(
+        &mut self,
+        mac: &[u8],
+        network: Option<&NpduAddress>,
+        process_id: u32,
+        confirmed: bool,
+        monitored_object: ObjectIdentifier,
+        monitored_property: PropertyIdentifier,
+    ) {
+        let mac = MacAddr::from_slice(mac);
+        self.subs.retain(|_, sub| {
+            !(sub.notification_kind == CovNotificationKind::Multiple
+                && sub.subscriber_mac == mac
+                && sub.subscriber_network == network.cloned()
+                && sub.subscriber_process_identifier == process_id
+                && sub.issue_confirmed_notifications == confirmed
+                && sub.monitored_object_identifier == monitored_object
+                && sub.monitored_property == Some(monitored_property))
+        });
+    }
+
+    /// Refresh the lifetime for an existing COV-multiple subscriber context.
+    pub fn refresh_cov_multiple_context_lifetime(
+        &mut self,
+        mac: &[u8],
+        network: Option<&NpduAddress>,
+        process_id: u32,
+        confirmed: bool,
+        expires_at: Option<Instant>,
+    ) {
+        let mac = MacAddr::from_slice(mac);
+        for sub in self.subs.values_mut() {
+            if sub.notification_kind == CovNotificationKind::Multiple
+                && sub.subscriber_mac == mac
+                && sub.subscriber_network == network.cloned()
+                && sub.subscriber_process_identifier == process_id
+                && sub.issue_confirmed_notifications == confirmed
+            {
+                sub.expires_at = expires_at;
+            }
+        }
+    }
+
     /// Remove all subscriptions for a given object (used on DeleteObject).
     pub fn remove_for_object(&mut self, oid: ObjectIdentifier) {
-        self.subs.retain(|k, _| k.2 != oid);
+        self.subs.retain(|k, _| k.3 != oid);
     }
 
     /// Get all active (non-expired) subscriptions for a given object.
@@ -109,6 +242,7 @@ impl CovSubscriptionTable {
     pub fn set_last_notified_value(
         &mut self,
         mac: &[u8],
+        network: Option<&NpduAddress>,
         process_id: u32,
         monitored_object: ObjectIdentifier,
         monitored_property: Option<PropertyIdentifier>,
@@ -116,6 +250,7 @@ impl CovSubscriptionTable {
     ) {
         let key = (
             MacAddr::from_slice(mac),
+            network.cloned(),
             process_id,
             monitored_object,
             monitored_property,
@@ -185,6 +320,7 @@ mod tests {
     fn make_sub(mac: &[u8], process_id: u32, oid: ObjectIdentifier) -> CovSubscription {
         CovSubscription {
             subscriber_mac: MacAddr::from_slice(mac),
+            subscriber_network: None,
             subscriber_process_identifier: process_id,
             monitored_object_identifier: oid,
             issue_confirmed_notifications: false,
@@ -193,6 +329,8 @@ mod tests {
             monitored_property: None,
             monitored_property_array_index: None,
             cov_increment: None,
+            notification_kind: CovNotificationKind::Single,
+            timestamped: false,
         }
     }
 
@@ -302,7 +440,7 @@ mod tests {
     fn set_last_notified_value_updates() {
         let mut table = CovSubscriptionTable::new();
         table.subscribe(make_sub(&[1, 2, 3], 1, ai1()));
-        table.set_last_notified_value(&[1, 2, 3], 1, ai1(), None, 72.5);
+        table.set_last_notified_value(&[1, 2, 3], None, 1, ai1(), None, 72.5);
 
         let subs = table.subscriptions_for(&ai1());
         assert_eq!(subs[0].last_notified_value, Some(72.5));
@@ -348,6 +486,68 @@ mod tests {
         let purged = table.purge_expired();
         assert_eq!(purged, 1);
         assert_eq!(table.len(), 1);
+    }
+
+    #[test]
+    fn cov_multiple_context_lifetime_refreshes_and_expires() {
+        let mut table = CovSubscriptionTable::new();
+        let original_expiry = Instant::now() + Duration::from_secs(30);
+        let refreshed_expiry = Instant::now() + Duration::from_secs(60);
+
+        let mut present_value = make_sub(&[1, 2, 3], 1, ai1());
+        present_value.notification_kind = CovNotificationKind::Multiple;
+        present_value.monitored_property = Some(PropertyIdentifier::PRESENT_VALUE);
+        present_value.expires_at = Some(original_expiry);
+        table.subscribe(present_value);
+
+        let mut status_flags = make_sub(&[1, 2, 3], 1, ai1());
+        status_flags.notification_kind = CovNotificationKind::Multiple;
+        status_flags.monitored_property = Some(PropertyIdentifier::STATUS_FLAGS);
+        status_flags.expires_at = Some(original_expiry);
+        table.subscribe(status_flags);
+
+        let mut single = make_sub(&[1, 2, 3], 1, ai1());
+        single.expires_at = Some(original_expiry);
+        table.subscribe(single);
+
+        table.refresh_cov_multiple_context_lifetime(
+            &[1, 2, 3],
+            None,
+            1,
+            false,
+            Some(refreshed_expiry),
+        );
+
+        let multiple_expiries: Vec<_> = table
+            .subs
+            .values()
+            .filter(|sub| sub.notification_kind == CovNotificationKind::Multiple)
+            .map(|sub| sub.expires_at)
+            .collect();
+        assert_eq!(
+            multiple_expiries,
+            vec![Some(refreshed_expiry), Some(refreshed_expiry)]
+        );
+        assert!(table
+            .subs
+            .values()
+            .any(|sub| sub.notification_kind == CovNotificationKind::Single
+                && sub.expires_at == Some(original_expiry)));
+
+        table.refresh_cov_multiple_context_lifetime(
+            &[1, 2, 3],
+            None,
+            1,
+            false,
+            Some(Instant::now() - Duration::from_secs(1)),
+        );
+
+        assert_eq!(table.purge_expired(), 2);
+        assert_eq!(table.len(), 1);
+        assert!(table.subs.values().all(|sub| {
+            sub.notification_kind == CovNotificationKind::Single
+                && sub.expires_at == Some(original_expiry)
+        }));
     }
 
     #[test]

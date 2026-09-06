@@ -12,7 +12,20 @@
 use bacnet_types::error::Error;
 use bytes::{BufMut, Bytes, BytesMut};
 
+mod connect;
+mod control;
 mod result;
+
+pub(crate) use connect::connect_message_error;
+#[cfg(feature = "sc-tls")]
+pub(crate) use connect::validate_connect_request;
+pub(crate) use control::{control_envelope_error, validate_control, ControlRecipient};
+
+#[cfg(test)]
+pub(crate) mod heartbeat_test_support;
+
+#[cfg(test)]
+pub(crate) mod connect_test_support;
 
 pub use result::{decode_sc_bvlc_result, ScBvlcResult};
 
@@ -156,6 +169,14 @@ pub const UNKNOWN_VMAC: Vmac = [0x00; 6];
 /// Check if a VMAC is the broadcast address (all 0xFF).
 pub fn is_broadcast_vmac(vmac: &Vmac) -> bool {
     *vmac == BROADCAST_VMAC
+}
+
+/// Check if a VMAC has the Clause H.7.3 Random-48 shape.
+///
+/// A Random-48 VMAC is six octets with the least significant four bits of the
+/// first octet fixed at B'0010' (X'2'); the remaining 44 bits are random.
+pub fn is_valid_random48_vmac(vmac: &Vmac) -> bool {
+    vmac[0] & 0x0F == 0x02
 }
 
 /// A single BACnet/SC header option.
@@ -370,6 +391,51 @@ fn decode_sc_options(data: &[u8], offset: &mut usize) -> Result<Vec<ScOption>, E
         }
     }
     Ok(options)
+}
+
+/// Reads the wire marker because [`ScOption`] does not retain chain position or
+/// an empty Header Data field after decoding.
+pub(crate) fn first_must_understand_destination_option_marker(data: &[u8]) -> Option<u8> {
+    if data.len() < SC_MIN_HEADER || !ScControl::has_valid_reserved_bits(data[1]) {
+        return None;
+    }
+
+    let control = ScControl::from_byte(data[1]);
+    if !control.has_dest_options {
+        return None;
+    }
+
+    let mut offset = SC_MIN_HEADER;
+    if control.has_originating_vmac {
+        offset = offset.checked_add(6)?;
+    }
+    if control.has_destination_vmac {
+        offset = offset.checked_add(6)?;
+    }
+
+    loop {
+        let marker = *data.get(offset)?;
+        if !is_valid_sc_option_type(marker & 0x1F) {
+            return None;
+        }
+        offset = offset.checked_add(1)?;
+
+        if marker & 0x20 != 0 {
+            let length_bytes = data.get(offset..offset.checked_add(2)?)?;
+            let length = u16::from_be_bytes([length_bytes[0], length_bytes[1]]) as usize;
+            offset = offset.checked_add(2)?.checked_add(length)?;
+            if offset > data.len() {
+                return None;
+            }
+        }
+
+        if marker & 0x40 != 0 {
+            return Some(marker);
+        }
+        if marker & 0x80 == 0 {
+            return None;
+        }
+    }
 }
 
 #[cfg(test)]

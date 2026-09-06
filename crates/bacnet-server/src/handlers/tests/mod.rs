@@ -1,6 +1,7 @@
 use super::*;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::traits::BACnetObject;
+use bacnet_services::wpm::WritePropertyMultipleRequest;
 
 fn make_db_with_ai() -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
@@ -10,8 +11,17 @@ fn make_db_with_ai() -> ObjectDatabase {
     db
 }
 
-fn make_db_with_device_and_ai() -> ObjectDatabase {
+fn make_db_with_msi() -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
+    db.add(Box::new(
+        bacnet_objects::multistate::MultiStateInputObject::new(1, "MSI-1", 3).unwrap(),
+    ))
+    .unwrap();
+    db
+}
+
+fn make_db_with_device_and_ai() -> ObjectDatabase {
+    let mut db = crate::server::clocked_test_database();
     let device = bacnet_objects::device::DeviceObject::new(bacnet_objects::device::DeviceConfig {
         instance: 1,
         name: "TestDevice".into(),
@@ -24,9 +34,45 @@ fn make_db_with_device_and_ai() -> ObjectDatabase {
     db
 }
 
+mod acknowledge_alarm;
+mod acknowledge_alarm_ee;
+mod alarm_summary_projection;
+mod alert_enrollment;
+mod array_index_gating;
 mod async_dcc;
+mod audit_log_query;
+mod binary_lighting_operations;
+mod binary_lighting_relinquish_default;
+mod cov_multiple_parameters;
+mod detection_enable_summary;
 mod device_event;
+mod enrollment_summary_filters;
+mod enrollment_summary_recipients;
+mod enrollment_summary_strict;
+mod enrollment_summary_support;
+mod escalator_writes;
+mod file_access_method;
+mod file_empty_eof;
+mod file_metadata;
+mod file_persistence;
+mod file_storage_hook;
+mod framed_properties;
+mod get_event_information_projection;
+mod life_safety_cov;
+mod life_safety_operation;
+mod life_safety_reset;
+mod multi_element_writes;
 mod passwords;
+mod property_metadata;
+mod pulse_converter_writes;
+mod read_event_arrays;
+mod read_range;
+mod read_range_time;
 mod read_rpm;
+mod reference_writes;
+mod staging_writes;
 mod wpm_create_alarm;
+mod wpm_prefix_commit;
 mod write_cov_who;
+mod write_property_name;
+mod write_validation;

@@ -1,5 +1,7 @@
 name = "bacnet-safety-interop-reviewer"
 description = "Read-only reviewer for malformed packets, fail-closed behavior, broadcast/routing safety, resource caps, timeouts, concurrency, and operational interop risks."
+model = "gpt-6-astra"
+model_reasoning_effort = "xhigh"
 sandbox_mode = "read-only"
 developer_instructions = """
 You are a BACnet safety and interoperability reviewer for rusty-bacnet.

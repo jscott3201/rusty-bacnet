@@ -8,18 +8,47 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 use bytes::BytesMut;
 
-/// Decode a tag and validate the resulting slice bounds.
-fn checked_slice<'a>(
-    content: &'a [u8],
+use crate::common::{decode_context, decode_context_u32};
+
+fn decode_application<'a>(
+    data: &'a [u8],
     offset: usize,
-    context: &str,
+    expected_tag: u8,
+    field: &str,
 ) -> Result<(&'a [u8], usize), Error> {
-    let (t, p) = tags::decode_tag(content, offset)?;
-    let end = p + t.length as usize;
-    if end > content.len() {
-        return Err(Error::decoding(p, format!("{context} truncated")));
+    let (tag, pos) = tags::decode_tag(data, offset)?;
+    if tag.class != tags::TagClass::Application || tag.number != expected_tag {
+        return Err(Error::decoding(
+            offset,
+            format!("{field} expected application tag {expected_tag}"),
+        ));
     }
-    Ok((&content[p..end], end))
+    let end = pos
+        .checked_add(tag.length as usize)
+        .ok_or_else(|| Error::decoding(pos, format!("{field} length overflow")))?;
+    if end > data.len() {
+        return Err(Error::decoding(pos, format!("{field} truncated")));
+    }
+    Ok((&data[pos..end], end))
+}
+
+fn decode_application_u32(data: &[u8], offset: usize, field: &str) -> Result<(u32, usize), Error> {
+    let (content, end) = decode_application(data, offset, tags::app_tag::UNSIGNED, field)?;
+    let value = primitives::decode_unsigned(content)?;
+    let value = u32::try_from(value)
+        .map_err(|_| Error::decoding(offset, format!("{field} exceeds u32")))?;
+    Ok((value, end))
+}
+
+fn decode_count(data: &[u8], offset: usize, field: &str) -> Result<(i32, usize), Error> {
+    let (content, end) = decode_application(data, offset, tags::app_tag::SIGNED, field)?;
+    let value = primitives::decode_signed(content)?;
+    let value = i16::try_from(value)
+        .map_err(|_| Error::decoding(offset, format!("{field} exceeds INTEGER16")))?;
+    if value == 0 {
+        return Err(Error::decoding(offset, format!("{field} may not be zero")));
+    }
+    Ok((i32::from(value), end))
 }
 
 /// ReadRange-Request service parameters.
@@ -95,37 +124,40 @@ impl ReadRangeRequest {
         let mut offset = 0;
 
         // [0] objectIdentifier
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(
-                pos,
-                "ReadRange request truncated at object-id",
-            ));
-        }
-        let object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
+        let (content, end) = decode_context(data, offset, 0, "ReadRange request object-id")?;
+        let object_identifier = ObjectIdentifier::decode(content)?;
         offset = end;
 
         // [1] propertyIdentifier
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
+        let (property_identifier, end) =
+            decode_context_u32(data, offset, 1, "ReadRange request property-id")?;
+        let property_identifier = PropertyIdentifier::from_raw(property_identifier);
+        if matches!(
+            property_identifier,
+            PropertyIdentifier::ALL | PropertyIdentifier::REQUIRED | PropertyIdentifier::OPTIONAL
+        ) {
             return Err(Error::decoding(
-                pos,
-                "ReadRange request truncated at property-id",
+                offset,
+                "ReadRange request property-id may not be ALL, REQUIRED, or OPTIONAL",
             ));
         }
-        let property_identifier =
-            PropertyIdentifier::from_raw(primitives::decode_unsigned(&data[pos..end])? as u32);
         offset = end;
 
         // [2] propertyArrayIndex (optional)
         let mut property_array_index = None;
         if offset < data.len() {
-            let (opt_data, new_offset) = tags::decode_optional_context(data, offset, 2)?;
-            if let Some(content) = opt_data {
-                property_array_index = Some(primitives::decode_unsigned(content)? as u32);
-                offset = new_offset;
+            let (tag, _) = tags::decode_tag(data, offset)?;
+            if tag.is_context(2) {
+                let (index, end) =
+                    decode_context_u32(data, offset, 2, "ReadRange request array-index")?;
+                if index == 0 {
+                    return Err(Error::decoding(
+                        offset,
+                        "ReadRange request array-index may not be zero",
+                    ));
+                }
+                property_array_index = Some(index);
+                offset = end;
             }
         }
 
@@ -136,12 +168,16 @@ impl ReadRangeRequest {
             if tag.is_opening_tag(3) {
                 // byPosition
                 let (content, new_offset) = tags::extract_context_value(data, tag_end, 3)?;
-                let (slice, inner_offset) =
-                    checked_slice(content, 0, "ReadRange byPosition reference-index")?;
-                let reference_index = primitives::decode_unsigned(slice)? as u32;
-                let (slice, _) =
-                    checked_slice(content, inner_offset, "ReadRange byPosition count")?;
-                let count = primitives::decode_signed(slice)?;
+                let (reference_index, inner_offset) =
+                    decode_application_u32(content, 0, "ReadRange byPosition reference-index")?;
+                let (count, inner_offset) =
+                    decode_count(content, inner_offset, "ReadRange byPosition count")?;
+                if inner_offset != content.len() {
+                    return Err(Error::decoding(
+                        inner_offset,
+                        "ReadRange byPosition has trailing data",
+                    ));
+                }
                 range = Some(RangeSpec::ByPosition {
                     reference_index,
                     count,
@@ -150,12 +186,16 @@ impl ReadRangeRequest {
             } else if tag.is_opening_tag(6) {
                 // bySequenceNumber
                 let (content, new_offset) = tags::extract_context_value(data, tag_end, 6)?;
-                let (slice, inner_offset) =
-                    checked_slice(content, 0, "ReadRange bySequenceNumber reference-seq")?;
-                let reference_seq = primitives::decode_unsigned(slice)? as u32;
-                let (slice, _) =
-                    checked_slice(content, inner_offset, "ReadRange bySequenceNumber count")?;
-                let count = primitives::decode_signed(slice)?;
+                let (reference_seq, inner_offset) =
+                    decode_application_u32(content, 0, "ReadRange bySequenceNumber reference-seq")?;
+                let (count, inner_offset) =
+                    decode_count(content, inner_offset, "ReadRange bySequenceNumber count")?;
+                if inner_offset != content.len() {
+                    return Err(Error::decoding(
+                        inner_offset,
+                        "ReadRange bySequenceNumber has trailing data",
+                    ));
+                }
                 range = Some(RangeSpec::BySequenceNumber {
                     reference_seq,
                     count,
@@ -164,31 +204,55 @@ impl ReadRangeRequest {
             } else if tag.is_opening_tag(7) {
                 // byTime
                 let (content, new_offset) = tags::extract_context_value(data, tag_end, 7)?;
-                let (slice, inner_offset) = checked_slice(content, 0, "ReadRange byTime date")?;
-                let date = Date::decode(slice)?;
-                let (slice, inner_offset) =
-                    checked_slice(content, inner_offset, "ReadRange byTime time")?;
-                let time = Time::decode(slice)?;
-                let (slice, _) = checked_slice(content, inner_offset, "ReadRange byTime count")?;
-                let count = primitives::decode_signed(slice)?;
+                let (date, inner_offset) =
+                    decode_application(content, 0, tags::app_tag::DATE, "ReadRange byTime date")?;
+                let date = Date::decode(date)?;
+                let (time, inner_offset) = decode_application(
+                    content,
+                    inner_offset,
+                    tags::app_tag::TIME,
+                    "ReadRange byTime time",
+                )?;
+                let time = Time::decode(time)?;
+                if date.year == Date::UNSPECIFIED
+                    || !(1..=12).contains(&date.month)
+                    || !(1..=31).contains(&date.day)
+                    || !(1..=7).contains(&date.day_of_week)
+                    || !(0..=23).contains(&time.hour)
+                    || !(0..=59).contains(&time.minute)
+                    || !(0..=59).contains(&time.second)
+                    || !(0..=99).contains(&time.hundredths)
+                {
+                    return Err(Error::decoding(
+                        inner_offset,
+                        "ReadRange byTime requires a specific datetime",
+                    ));
+                }
+                let (count, inner_offset) =
+                    decode_count(content, inner_offset, "ReadRange byTime count")?;
+                if inner_offset != content.len() {
+                    return Err(Error::decoding(
+                        inner_offset,
+                        "ReadRange byTime has trailing data",
+                    ));
+                }
                 range = Some(RangeSpec::ByTime {
                     reference_time: (date, time),
                     count,
                 });
                 offset = new_offset;
+            } else {
+                return Err(Error::decoding(
+                    offset,
+                    "ReadRange request has invalid range choice",
+                ));
             }
         }
-        let _ = offset;
-
-        if let Some(ref r) = range {
-            let count = match r {
-                RangeSpec::ByPosition { count, .. } => *count,
-                RangeSpec::BySequenceNumber { count, .. } => *count,
-                RangeSpec::ByTime { count, .. } => *count,
-            };
-            if count == 0 {
-                return Err(Error::Encoding("ReadRange count may not be zero".into()));
-            }
+        if offset != data.len() {
+            return Err(Error::decoding(
+                offset,
+                "ReadRange request has trailing data",
+            ));
         }
 
         Ok(Self {
@@ -253,77 +317,87 @@ impl ReadRangeAck {
         let mut offset = 0;
 
         // [0] objectIdentifier
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "ReadRange ACK truncated at object-id"));
-        }
-        let object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
+        let (content, end) = decode_context(data, offset, 0, "ReadRange ACK object-id")?;
+        let object_identifier = ObjectIdentifier::decode(content)?;
         offset = end;
 
         // [1] propertyIdentifier
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(
-                pos,
-                "ReadRange ACK truncated at property-id",
-            ));
-        }
-        let property_identifier =
-            PropertyIdentifier::from_raw(primitives::decode_unsigned(&data[pos..end])? as u32);
+        let (property_identifier, end) =
+            decode_context_u32(data, offset, 1, "ReadRange ACK property-id")?;
+        let property_identifier = PropertyIdentifier::from_raw(property_identifier);
         offset = end;
 
         // [2] propertyArrayIndex (optional)
         let mut property_array_index = None;
-        let (opt_data, new_offset) = tags::decode_optional_context(data, offset, 2)?;
-        if let Some(content) = opt_data {
-            property_array_index = Some(primitives::decode_unsigned(content)? as u32);
-            offset = new_offset;
+        if offset < data.len() {
+            let (tag, _) = tags::decode_tag(data, offset)?;
+            if tag.is_context(2) {
+                let (index, end) =
+                    decode_context_u32(data, offset, 2, "ReadRange ACK array-index")?;
+                property_array_index = Some(index);
+                offset = end;
+            }
         }
 
         // [3] resultFlags
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
+        let (content, end) = decode_context(data, offset, 3, "ReadRange ACK result-flags")?;
+        let (unused_bits, bits) = primitives::decode_bit_string(content)?;
+        if unused_bits != 5 || bits.len() != 1 || bits[0] & 0x1f != 0 {
             return Err(Error::decoding(
-                pos,
-                "ReadRange ACK truncated at result-flags",
+                offset,
+                "ReadRange ACK result-flags must contain three bits with zero padding",
             ));
         }
-        let (_, bits) = primitives::decode_bit_string(&data[pos..end])?;
-        let b = bits.first().copied().unwrap_or(0);
+        let b = bits[0];
         let result_flags = (b & 0x80 != 0, b & 0x40 != 0, b & 0x20 != 0);
         offset = end;
 
         // [4] itemCount
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(
-                pos,
-                "ReadRange ACK truncated at item-count",
-            ));
-        }
-        let item_count = primitives::decode_unsigned(&data[pos..end])? as u32;
+        let (item_count, end) = decode_context_u32(data, offset, 4, "ReadRange ACK item-count")?;
         offset = end;
 
         // [5] itemData
-        let (_tag, tag_end) = tags::decode_tag(data, offset)?;
-        let (content, _new_offset) = tags::extract_context_value(data, tag_end, 5)?;
+        let (tag, tag_end) = tags::decode_tag(data, offset)?;
+        if !tag.is_opening_tag(5) {
+            return Err(Error::decoding(
+                offset,
+                "ReadRange ACK item-data expected opening tag 5",
+            ));
+        }
+        let (content, new_offset) = tags::extract_context_value(data, tag_end, 5)?;
+        if (item_count == 0) != content.is_empty() {
+            return Err(Error::decoding(
+                offset,
+                "ReadRange ACK item-count contradicts empty item-data",
+            ));
+        }
         let item_data = content.to_vec();
-        let mut new_offset = _new_offset;
+        offset = new_offset;
 
         // [6] firstSequenceNumber (optional)
         let mut first_sequence_number = None;
-        if new_offset < data.len() {
-            let (opt_data, after) = tags::decode_optional_context(data, new_offset, 6)?;
-            if let Some(content) = opt_data {
-                first_sequence_number = Some(primitives::decode_unsigned(content)? as u32);
-                new_offset = after;
+        if offset < data.len() {
+            let (tag, _) = tags::decode_tag(data, offset)?;
+            if !tag.is_context(6) {
+                return Err(Error::decoding(
+                    offset,
+                    "ReadRange ACK expected context tag 6 for first-sequence-number",
+                ));
             }
+            if item_count == 0 {
+                return Err(Error::decoding(
+                    offset,
+                    "ReadRange ACK first-sequence-number requires a nonzero item-count",
+                ));
+            }
+            let (sequence_number, end) =
+                decode_context_u32(data, offset, 6, "ReadRange ACK first-sequence-number")?;
+            first_sequence_number = Some(sequence_number);
+            offset = end;
         }
-        let _ = new_offset;
+        if offset != data.len() {
+            return Err(Error::decoding(offset, "ReadRange ACK has trailing data"));
+        }
 
         Ok(Self {
             object_identifier,
@@ -336,6 +410,10 @@ impl ReadRangeAck {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "read_range_width_tests.rs"]
+mod width_tests;
 
 #[cfg(test)]
 mod tests {

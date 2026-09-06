@@ -15,6 +15,7 @@ bacnet-encoding.workspace = true
 bacnet-services.workspace = true
 bacnet-transport.workspace = true
 bacnet-network.workspace = true
+bacnet-endpoint-core.workspace = true
 bytes.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["net", "rt", "sync", "macros", "time"] }
@@ -27,7 +28,7 @@ sc-tls = ["bacnet-transport/sc-tls", "tokio-rustls"]
 
 [dev-dependencies]
 bacnet-objects.workspace = true
-tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync", "macros", "time"] }
+tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync", "macros", "time", "test-util"] }
 
 [lints]
 workspace = true

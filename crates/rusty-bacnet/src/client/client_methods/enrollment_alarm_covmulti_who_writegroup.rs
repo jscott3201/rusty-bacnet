@@ -17,11 +17,11 @@ impl BACnetClient {
         py: Python<'py>,
         address: String,
         acknowledgment_filter: u32,
-        event_state_filter: Option<PyEventState>,
+        event_state_filter: Option<PyEnrollmentSummaryEventStateFilter>,
         event_type_filter: Option<PyEventType>,
         min_priority: Option<u8>,
         max_priority: Option<u8>,
-        notification_class_filter: Option<u16>,
+        notification_class_filter: Option<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         let es = event_state_filter.map(|e| e.to_rust());
@@ -51,7 +51,7 @@ impl BACnetClient {
                 notification_class_filter,
             };
             let mut buf = BytesMut::new();
-            req.encode(&mut buf);
+            req.try_encode(&mut buf).map_err(to_py_err)?;
             let resp = c
                 .confirmed_request(&mac, ConfirmedServiceChoice::GET_ENROLLMENT_SUMMARY, &buf)
                 .await
@@ -147,7 +147,10 @@ impl BACnetClient {
     ///
     /// `specs` is a list of `(ObjectIdentifier, [(PropertyIdentifier, array_index, cov_increment, timestamped), ...])`.
     /// `cov_increment` is an optional float; `timestamped` is a bool.
-    #[pyo3(signature = (address, subscriber_process_identifier, specs, max_notification_delay=None, issue_confirmed_notifications=None))]
+    /// `issue_confirmed_notifications` is required, including for cancellations.
+    /// For subscriptions and re-subscriptions, `lifetime` and `max_notification_delay` are both required.
+    /// A whole-context cancellation uses an empty `specs` list and omits both timing fields.
+    #[pyo3(signature = (address, subscriber_process_identifier, specs, issue_confirmed_notifications, max_notification_delay=None, lifetime=None))]
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn subscribe_cov_property_multiple<'py>(
         &self,
@@ -158,9 +161,29 @@ impl BACnetClient {
             PyObjectIdentifier,
             Vec<(PyPropertyIdentifier, Option<u32>, Option<f32>, bool)>,
         )>,
+        issue_confirmed_notifications: bool,
         max_notification_delay: Option<u32>,
-        issue_confirmed_notifications: Option<bool>,
+        lifetime: Option<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        match (lifetime, max_notification_delay) {
+            (None, None) => {}
+            (Some(lifetime), Some(max_delay)) => {
+                if lifetime == 0 {
+                    return Err(PyValueError::new_err("lifetime must be non-zero"));
+                }
+                if max_delay > 3600 || max_delay >= lifetime {
+                    return Err(PyValueError::new_err(
+                        "max_notification_delay must be <= 3600 and less than lifetime",
+                    ));
+                }
+            }
+            _ => {
+                return Err(PyValueError::new_err(
+                    "lifetime and max_notification_delay must be both present or both absent",
+                ));
+            }
+        }
+
         let inner = self.inner.clone();
         let rust_specs: Vec<COVSubscriptionSpecification> = specs
             .into_iter()
@@ -190,12 +213,13 @@ impl BACnetClient {
             };
             let req = SubscribeCOVPropertyMultipleRequest {
                 subscriber_process_identifier,
-                max_notification_delay,
                 issue_confirmed_notifications,
+                lifetime,
+                max_notification_delay,
                 list_of_cov_subscription_specifications: rust_specs,
             };
             let mut buf = BytesMut::new();
-            req.encode(&mut buf);
+            req.try_encode(&mut buf).map_err(to_py_err)?;
             c.confirmed_request(
                 &mac,
                 ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE,

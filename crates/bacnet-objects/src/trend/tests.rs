@@ -1,5 +1,25 @@
 use super::*;
+use crate::clock::{ClockFrame, ClockReader};
+use bacnet_types::constructed::LogDatum;
 use bacnet_types::primitives::{Date, Time};
+use std::sync::Arc;
+
+struct FixedClock;
+
+impl ClockReader for FixedClock {
+    fn read_clock(&self) -> Option<ClockFrame> {
+        Some(ClockFrame {
+            local_date: make_record(9, 0.0).date,
+            local_time: make_record(9, 0.0).time,
+            utc_offset: 0,
+            daylight_savings_status: false,
+        })
+    }
+}
+
+fn bind_clock(object: &mut dyn BACnetObject) {
+    object.bind_clock_internal(Some(Arc::new(FixedClock)));
+}
 
 fn make_record(hour: u8, value: f32) -> BACnetLogRecord {
     BACnetLogRecord {
@@ -69,6 +89,7 @@ fn trendlog_ring_buffer_wraps() {
 #[test]
 fn trendlog_stop_when_full() {
     let mut tl = TrendLogObject::new(1, "TL-1", 2).unwrap();
+    bind_clock(&mut tl);
     tl.write_property(
         PropertyIdentifier::STOP_WHEN_FULL,
         None,
@@ -80,12 +101,17 @@ fn trendlog_stop_when_full() {
         tl.add_record(make_record(i, i as f32));
     }
     assert_eq!(tl.records().len(), 2);
-    assert_eq!(tl.total_record_count, 2); // Only 2 accepted
+    assert_eq!(
+        tl.read_property(PropertyIdentifier::TOTAL_RECORD_COUNT, None)
+            .unwrap(),
+        PropertyValue::Unsigned(2)
+    ); // Only 2 accepted
 }
 
 #[test]
 fn trendlog_disable_logging() {
     let mut tl = TrendLogObject::new(1, "TL-1", 100).unwrap();
+    bind_clock(&mut tl);
     tl.write_property(
         PropertyIdentifier::LOG_ENABLE,
         None,
@@ -94,12 +120,14 @@ fn trendlog_disable_logging() {
     )
     .unwrap();
     tl.add_record(make_record(10, 72.5));
-    assert_eq!(tl.records().len(), 0);
+    assert_eq!(tl.records().len(), 1);
+    assert_eq!(tl.records()[0].log_datum, LogDatum::LogStatus(0b001));
 }
 
 #[test]
 fn trendlog_clear_buffer() {
     let mut tl = TrendLogObject::new(1, "TL-1", 100).unwrap();
+    bind_clock(&mut tl);
     tl.add_record(make_record(10, 72.5));
     assert_eq!(tl.records().len(), 1);
     tl.write_property(
@@ -109,7 +137,8 @@ fn trendlog_clear_buffer() {
         None,
     )
     .unwrap();
-    assert_eq!(tl.records().len(), 0);
+    assert_eq!(tl.records().len(), 1);
+    assert_eq!(tl.records()[0].log_datum, LogDatum::LogStatus(0b010));
 }
 
 #[test]
@@ -208,6 +237,7 @@ fn trendlog_log_buffer_empty() {
 #[test]
 fn trendlog_log_buffer_overflow_stop_when_full() {
     let mut tl = TrendLogObject::new(1, "TL-1", 3).unwrap();
+    bind_clock(&mut tl);
     tl.write_property(
         PropertyIdentifier::STOP_WHEN_FULL,
         None,
@@ -230,7 +260,13 @@ fn trendlog_log_buffer_overflow_stop_when_full() {
             panic!("Expected List");
         }
         if let PropertyValue::List(fields) = &records[2] {
-            assert_eq!(fields[2], PropertyValue::Real(20.0));
+            assert_eq!(
+                fields[2],
+                PropertyValue::BitString {
+                    unused_bits: 5,
+                    data: vec![0b0010_0000],
+                }
+            );
         } else {
             panic!("Expected List");
         }
@@ -502,6 +538,7 @@ fn trendlog_multiple_empty_property_references() {
 #[test]
 fn trendlog_multiple_write_log_enable() {
     let mut tlm = TrendLogMultipleObject::new(1, "TLM-1", 100).unwrap();
+    bind_clock(&mut tlm);
     tlm.write_property(
         PropertyIdentifier::LOG_ENABLE,
         None,
@@ -516,5 +553,88 @@ fn trendlog_multiple_write_log_enable() {
     );
     // Records should not be added when disabled
     tlm.add_record(make_record(10, 72.5));
-    assert_eq!(tlm.records().len(), 0);
+    assert_eq!(tlm.records().len(), 1);
+    assert_eq!(tlm.records()[0].log_datum, LogDatum::LogStatus(0b001));
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Reliability writability pins (#240 sweep)
+// ──────────────────────────────────────────────────────────────────────────
+
+/// Clause 12.25 Table 12-29 lists Reliability as plain O with no writability
+/// footnote, and the Trend Log Reliability_Evaluation_Inhibit paragraph ends at
+/// "shall have the value NO_FAULT_DETECTED." — unlike the Schedule (Clause
+/// 12.24) and intrinsic-reporting objects it does NOT carry the "...unless
+/// Out_Of_Service is TRUE and an alternate value has been written to the
+/// Reliability property" provision. The log owns the property as a logging
+/// status/fault indication, so no-write is the conformant posture; a client
+/// write is refused PROPERTY / WRITE_ACCESS_DENIED in and out of service.
+#[test]
+fn trendlog_reliability_is_not_network_writable() {
+    let mut tl = TrendLogObject::new(1, "TL-1", 100).unwrap();
+    assert!(!tl.is_writable_property(PropertyIdentifier::RELIABILITY));
+
+    for context in ["in service", "out of service"] {
+        let result = tl.write_property(
+            PropertyIdentifier::RELIABILITY,
+            None,
+            PropertyValue::Enumerated(1),
+            None,
+        );
+        match result.expect_err("Reliability write must be refused") {
+            Error::Protocol { class, code } => {
+                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32, "{context}");
+                assert_eq!(
+                    code,
+                    ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+                    "{context}"
+                );
+            }
+            other => panic!("expected PROPERTY / WRITE_ACCESS_DENIED, got {other:?}"),
+        }
+        assert_eq!(
+            tl.read_property(PropertyIdentifier::RELIABILITY, None)
+                .unwrap(),
+            PropertyValue::Enumerated(0),
+            "a refused write must leave Reliability untouched ({context})"
+        );
+
+        tl.write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(true),
+            None,
+        )
+        .expect("Out_Of_Service stays writable");
+    }
+}
+
+/// Clause 12.30 Table 12-35 lists Reliability as plain O with the same
+/// no-provision Reliability_Evaluation_Inhibit text as the Trend Log, so
+/// Trend Log Multiple keeps the trait-default denial and this pin documents
+/// that the absence of a write arm is deliberate, not an omission.
+#[test]
+fn trendlog_multiple_reliability_is_not_network_writable() {
+    let mut tlm = TrendLogMultipleObject::new(1, "TLM-1", 100).unwrap();
+    assert!(!tlm.is_writable_property(PropertyIdentifier::RELIABILITY));
+
+    let result = tlm.write_property(
+        PropertyIdentifier::RELIABILITY,
+        None,
+        PropertyValue::Enumerated(1),
+        None,
+    );
+    match result.expect_err("Reliability write must be refused") {
+        Error::Protocol { class, code } => {
+            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+            assert_eq!(code, ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32);
+        }
+        other => panic!("expected PROPERTY / WRITE_ACCESS_DENIED, got {other:?}"),
+    }
+    assert_eq!(
+        tlm.read_property(PropertyIdentifier::RELIABILITY, None)
+            .unwrap(),
+        PropertyValue::Enumerated(0),
+        "a refused write must leave Reliability untouched"
+    );
 }

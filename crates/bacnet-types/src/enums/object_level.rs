@@ -45,7 +45,7 @@ bacnet_enum! {
     const PROCESS_ERROR = 8;
     const MULTI_STATE_FAULT = 9;
     const CONFIGURATION_ERROR = 10;
-    // 11: removed from standard
+    // 11: reserved for a future addendum (135-2020 BACnetReliability production)
     const COMMUNICATION_FAILURE = 12;
     const MEMBER_FAULT = 13;
     const MONITORED_OBJECT_FAULT = 14;
@@ -59,6 +59,7 @@ bacnet_enum! {
     const PROPRIETARY_COMMAND_FAILURE = 22;
     const FAULTS_LISTED = 23;
     const REFERENCED_OBJECT_FAULT = 24;
+    const MULTI_STATE_OUT_OF_RANGE = 25;
 }
 
 bacnet_enum! {
@@ -71,6 +72,21 @@ bacnet_enum! {
     const DOWNLOAD_IN_PROGRESS = 3;
     const NON_OPERATIONAL = 4;
     const BACKUP_IN_PROGRESS = 5;
+}
+
+bacnet_enum! {
+    /// BACnet restart reason for a Device's Last_Restart_Reason (Clause 12.11).
+    pub struct RestartReason(u32);
+
+    const UNKNOWN = 0;
+    const COLDSTART = 1;
+    const WARMSTART = 2;
+    const DETECTED_POWER_LOST = 3;
+    const DETECTED_POWERED_OFF = 4;
+    const HARDWARE_WATCHDOG = 5;
+    const SOFTWARE_WATCHDOG = 6;
+    const SUSPENDED = 7;
+    const ACTIVATE_CHANGES = 8;
 }
 
 bacnet_enum! {
@@ -98,11 +114,13 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
-    /// BACnet file access method (Clause 12.12).
+    /// BACnet file access method (Clause 21 production; File object,
+    /// Clause 12.13). Wire order mirrors the production: record-access
+    /// precedes stream-access.
     pub struct FileAccessMethod(u32);
 
-    const STREAM_ACCESS = 0;
-    const RECORD_ACCESS = 1;
+    const RECORD_ACCESS = 0;
+    const STREAM_ACCESS = 1;
 }
 
 bacnet_enum! {
@@ -130,6 +148,17 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
+    /// BACnet program error for Reason_For_Halt (Clause 12.22).
+    pub struct ProgramError(u32);
+
+    const NORMAL = 0;
+    const LOAD_FAILED = 1;
+    const INTERNAL = 2;
+    const PROGRAM = 3;
+    const OTHER = 4;
+}
+
+bacnet_enum! {
     /// BACnet action (Clause 12.17).
     pub struct Action(u32);
 
@@ -147,7 +176,10 @@ bacnet_enum! {
     const COMMAND_FAILURE = 3;
     const FLOATING_LIMIT = 4;
     const OUT_OF_RANGE = 5;
-    // 6-7: reserved
+    // 6: kept clear for proprietary event types — the parameters ride the
+    //    complex-event-type CHOICE [6] of BACnetNotificationParameters, so
+    //    the enumeration itself assigns no tag-6 enumerand (Clause 21).
+    // 7: context tag 7 is deprecated (Clause 21 production comment).
     const CHANGE_OF_LIFE_SAFETY = 8;
     const EXTENDED = 9;
     const BUFFER_READY = 10;
@@ -163,6 +195,20 @@ bacnet_enum! {
     const NONE = 20;
     const CHANGE_OF_DISCRETE_VALUE = 21;
     const CHANGE_OF_TIMER = 22;
+}
+
+bacnet_enum! {
+    /// BACnet fault algorithm type (Clause 21.6).
+    pub struct FaultType(u32);
+
+    const NONE = 0;
+    const FAULT_CHARACTERSTRING = 1;
+    const FAULT_EXTENDED = 2;
+    const FAULT_LIFE_SAFETY = 3;
+    const FAULT_STATE = 4;
+    const FAULT_STATUS_FLAGS = 5;
+    const FAULT_OUT_OF_RANGE = 6;
+    const FAULT_LISTED = 7;
 }
 
 bacnet_enum! {
@@ -183,6 +229,8 @@ bacnet_enum! {
     const PREPARING_FOR_RESTORE = 2;
     const PERFORMING_A_BACKUP = 3;
     const PERFORMING_A_RESTORE = 4;
+    const BACKUP_FAILURE = 5;
+    const RESTORE_FAILURE = 6;
 }
 
 bacnet_enum! {

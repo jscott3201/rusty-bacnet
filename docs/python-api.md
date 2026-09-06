@@ -671,7 +671,7 @@ result = await client.read_range(
 )
 ```
 
-Return dict keys: `"object_id"`, `"property_id"`, `"array_index"`, `"result_flags"` (tuple of 3 bools), `"item_count"` (int), `"item_data"` (bytes).
+Return dict keys: `"object_id"`, `"property_id"`, `"array_index"`, `"result_flags"` (tuple of 3 bools), `"item_count"` (int), `"item_data"` (bytes), and `"first_sequence_number"` (int or `None`).
 
 ---
 
@@ -844,29 +844,35 @@ Get a summary of all active alarms on a device.
 raw = await client.get_alarm_summary("192.168.1.100:47808")
 ```
 
-#### `get_enrollment_summary(address, acknowledgment_filter, event_state_filter=None, event_type_filter=None, min_priority=None, max_priority=None, notification_class_filter=None) -> bytes`
+#### `get_enrollment_summary(address, acknowledgment_filter, event_state_filter=None, event_type_filter=None, min_priority=None, max_priority=None, notification_class_filter=None) -> list[dict]`
 
 Get enrollment summary with filters.
 
 ```python
-from rusty_bacnet import EventState, EventType
+from rusty_bacnet import EnrollmentSummaryEventStateFilter
 
-raw = await client.get_enrollment_summary(
+summaries = await client.get_enrollment_summary(
     "192.168.1.100:47808",
     acknowledgment_filter=0,                        # 0=all, 1=acked, 2=not-acked
-    event_state_filter=EventState.OFFNORMAL,
+    event_state_filter=EnrollmentSummaryEventStateFilter.OFFNORMAL,
     min_priority=0,
     max_priority=255,
 )
 ```
 
+Each result dictionary contains `object_id`, `event_type`, `event_state`,
+`priority`, and `notification_class`. The notification class is `None` when
+the peer omits that optional ACK member; an explicit class zero remains `0`.
+
 ---
 
 ### COV Property Multiple
 
-#### `subscribe_cov_property_multiple(address, subscriber_process_identifier, specs, max_notification_delay=None, issue_confirmed_notifications=None)`
+#### `subscribe_cov_property_multiple(address, subscriber_process_identifier, specs, issue_confirmed_notifications, max_notification_delay=None, lifetime=None)`
 
-Subscribe to COV on multiple properties across multiple objects.
+Subscribe to COV on multiple properties across multiple objects. `issue_confirmed_notifications` is now a required `bool`, including for cancellation requests. This is a breaking Python call-signature change; callers should pass it by keyword as shown below. For subscriptions and re-subscriptions, pass both `lifetime` and `max_notification_delay`. For whole-context cancellations, pass `specs=[]` and omit both timing fields.
+
+Each object specification supplied for a subscription must contain at least one property reference. `PropertyIdentifier.ALL`, `PropertyIdentifier.OPTIONAL`, and `PropertyIdentifier.REQUIRED` are not valid COV references; invalid specifications raise an exception before a request is sent.
 
 ```python
 await client.subscribe_cov_property_multiple(
@@ -882,8 +888,9 @@ await client.subscribe_cov_property_multiple(
             (PropertyIdentifier.PRESENT_VALUE, None, None, True),
         ]),
     ],
-    max_notification_delay=10,
     issue_confirmed_notifications=True,
+    max_notification_delay=10,
+    lifetime=300,
 )
 ```
 
@@ -945,12 +952,131 @@ raw = await client.vt_data(
 
 ### Audit Services
 
-#### `confirmed_audit_notification(address, service_data) -> bytes`
+The additive `_typed` methods accept dictionaries (or other Python mappings)
+described by the installed `TypedDict` stubs. They convert into the native Rust
+Audit request models before transport; the native client helpers remain the
+only service encoder, transaction coordinator, and strict query-ACK decoder.
+The mapping objects, wrapper values, and address string are not modified.
 
-Send a confirmed audit notification.
+`AuditOperation` is the one Audit runtime wrapper. Its named constants are the
+standard operations 0 through 15. `AuditOperation.from_raw()` remains lossless,
+but request mappings accept only standard operations 0..15 or proprietary
+operations 32..63; reserved 16..31 and values above 63 are rejected.
+
+Recipients are discriminated mappings:
 
 ```python
-raw = await client.confirmed_audit_notification(
+device = {"kind": "device", "object_identifier": device_oid}
+address = {
+    "kind": "address",
+    "network_number": 5,  # Unsigned16
+    "mac_address": b"\x01\x02",
+}
+```
+
+An `AuditNotificationInput` requires `source_device`, `operation`, and
+`target_device`. Its optional keys are `source_timestamp`, `target_timestamp`,
+`source_object`, `source_comment`, `target_comment`, `invoke_id`,
+`source_user_id`, `source_user_role`, `target_object`, `target_property`,
+`target_priority`, `target_value`, `current_value`, and `result`.
+`target_property` uses `property_identifier` and optional
+`property_array_index`; `result` is an `(ErrorClass, ErrorCode)` tuple.
+`target_value` and `current_value` are `bytes | None` containing structurally
+valid raw `ABSTRACT-SYNTAX.&Type` values, not `PropertyValue` objects.
+
+#### `confirmed_audit_notification_typed(address, request) -> None`
+
+Send one or more structured notifications and wait for the confirmed response.
+The `notifications` list must contain 1..10,000 items.
+
+```python
+from rusty_bacnet import AuditOperation
+
+await client.confirmed_audit_notification_typed(
+    "192.168.1.100:47808",
+    {
+        "notifications": [
+            {
+                "source_device": device,
+                "operation": AuditOperation.WRITE,
+                "target_device": device,
+                "target_property": {
+                    "property_identifier": PropertyIdentifier.PRESENT_VALUE,
+                },
+                "target_priority": 8,
+            }
+        ]
+    },
+)
+```
+
+#### `unconfirmed_audit_notification_typed(address, request) -> None`
+
+Send the same mapping contract without waiting for a response.
+
+#### `audit_log_query_typed(address, request) -> AuditLogQueryAck`
+
+The request requires `audit_log`, discriminated `query_parameters`, and an
+Unsigned16 `requested_count`; `start_at_sequence_number` is an optional
+Unsigned32. Query parameters use `kind: "by_target"` with required
+`target_device_identifier`, or `kind: "by_source"` with required
+`source_device_identifier`. Both require `successful_actions_only`. Optional
+fields follow the installed `AuditLogQueryByTargetInput` and
+`AuditLogQueryBySourceInput` definitions. `operations` is an integer bit mask:
+bits 0..15 and 32..63 are permitted, while reserved bits 16..31, negative
+values, and masks wider than 64 bits are rejected.
+
+```python
+ack = await client.audit_log_query_typed(
+    "192.168.1.100:47808",
+    {
+        "audit_log": ObjectIdentifier(ObjectType.AUDIT_LOG, 1),
+        "query_parameters": {
+            "kind": "by_target",
+            "target_device_identifier": ObjectIdentifier(ObjectType.DEVICE, 100),
+            "operations": 1 << AuditOperation.WRITE.to_raw(),
+            "successful_actions_only": True,
+        },
+        "requested_count": 100,
+    },
+)
+```
+
+The ACK always has exactly `audit_log`, `records`, and `no_more_items`. Each
+record result has `sequence_number` and `record`; each record has `timestamp`
+and `datum`. `timestamp` is `(date, time)`, where date is
+`(full_year, month, day, day_of_week)` and time is
+`(hour, minute, second, hundredths)`, matching the established
+`BACnetTimeStamp.date_time(...).value` convention. Datum mappings use `kind`
+values `"log_status"`, `"audit_notification"`, or `"time_change"`, with a
+same-named payload key. Nested notifications use the canonical field names
+listed above and include every optional key with either its decoded value or
+`None`. ACK projection is all-or-error and never returns a partial mapping.
+
+All mappings reject unknown keys. A non-mapping container, wrong field
+container, or wrong wrapper/value type raises `TypeError`; missing required
+keys, bad discriminators, reserved values, and out-of-range integers raise
+`ValueError`. Native validation, transport, and protocol failures use the
+existing `BacnetError` hierarchy. Validation and native encoding complete
+before an APDU can be sent.
+
+This boundary follows the Standard 135-2020 Audit query, notification, actor,
+and formal type productions. It preserves the qualified Clause 21 model's
+Unsigned32 start sequence and mandatory Boolean success filter despite the
+known conflicting service-clause description; it does not add notification
+generation policy, authorization, persistence, or conformance claims.
+
+#### Raw Audit escape hatches
+
+#### `confirmed_audit_notification(address, service_data)`
+
+Send a confirmed audit notification. `service_data` is a raw escape hatch: the
+caller must supply a complete AuditNotification-Request service payload encoded
+to the Standard 135-2020 Clause 21 production. The method returns `None` after
+the peer acknowledges the request.
+
+```python
+await client.confirmed_audit_notification(
     "192.168.1.100:47808",
     service_data=encoded_audit_bytes,
 )
@@ -958,7 +1084,9 @@ raw = await client.confirmed_audit_notification(
 
 #### `unconfirmed_audit_notification(address, service_data)`
 
-Send an unconfirmed audit notification (fire-and-forget).
+Send an unconfirmed audit notification (fire-and-forget). `service_data` is a
+raw escape hatch and must contain the complete Clause 21
+AuditNotification-Request service payload.
 
 ```python
 await client.unconfirmed_audit_notification(
@@ -967,17 +1095,28 @@ await client.unconfirmed_audit_notification(
 )
 ```
 
-#### `audit_log_query(address, acknowledgment_filter, query_options_raw) -> bytes`
+#### `audit_log_query(address, service_data) -> bytes`
 
-Query the audit log.
+Send an audit log query and return the peer's raw response service payload.
+`service_data` is a raw escape hatch and must contain the complete Clause 21
+AuditLogQuery-Request service payload.
 
 ```python
 raw = await client.audit_log_query(
     "192.168.1.100:47808",
-    acknowledgment_filter=0,
-    query_options_raw=encoded_query_bytes,
+    service_data=encoded_query_bytes,
 )
 ```
+
+These three methods remain signature- and byte-compatible generic outbound
+paths. They do not validate the caller-provided payload. A bundled server with an
+explicitly persisted Audit Log object can execute the raw AuditLogQuery payload
+against its retained in-memory records and return a raw typed ACK payload. The
+Rust server API can also receive ConfirmedAuditNotification when an application
+explicitly configures one sink and a fail-closed authorizer. The Python server
+does not expose that receiver configuration. The typed client boundary does not
+weaken that authorization or add query authorization, producer behavior,
+forwarding, or durable idempotency.
 
 ---
 
@@ -1042,10 +1181,20 @@ server.add_multistate_value(instance=1, name="Season", number_of_states=4)
 server.add_calendar(instance=1, name="Holiday Calendar")
 server.add_schedule(instance=1, name="Occupancy Schedule")
 server.add_notification_class(instance=1, name="Critical Alarms", notification_class=1)
-server.add_notification_forwarder(instance=1, name="Forwarder")
-server.add_alert_enrollment(instance=1, name="Alert")
+server.add_alert_enrollment(
+    instance=1,
+    name="Alert",
+    initial_source=ObjectIdentifier(ObjectType.ANALOG_INPUT, 1),
+)
 server.add_event_enrollment(instance=1, name="Event", event_type=0)
 ```
+
+`initial_source` is required and becomes the Alert Enrollment object's
+read-only `Present_Value`. This is an intentional breaking correction; there
+is no sentinel/default source. The served Table 12-61 surface also removes the
+former `Status_Flags`, `Out_Of_Service`, and `Reliability` compatibility
+properties. This models source ownership only and does not add an Alert
+evaluator or notification-generation flow.
 
 #### Logging & Trending
 
@@ -1053,9 +1202,18 @@ server.add_event_enrollment(instance=1, name="Event", event_type=0)
 server.add_trend_log(instance=1, name="Temp Log", buffer_size=1000)
 server.add_trend_log_multiple(instance=1, name="Multi Log", buffer_size=1000)
 server.add_event_log(instance=1, name="Event Log", buffer_size=500)
-server.add_audit_log(instance=1, name="Audit Trail", buffer_size=500)
+server.add_audit_log(
+    instance=1,
+    name="Audit Trail",
+    storage_path="/application/state/audit-trail",
+    buffer_size=500,
+)
 server.add_audit_reporter(instance=1, name="Reporter")
 ```
+
+`storage_path` is application-owned and produces two sibling snapshot files
+with `.slot0` and `.slot1` suffixes. Reuse the same path when reopening that
+Audit Log; the server does not infer a global or working-directory location.
 
 #### Building Control
 
@@ -1066,9 +1224,31 @@ server.add_timer(instance=1, name="Timer")
 server.add_load_control(instance=1, name="Load Control")
 server.add_program(instance=1, name="Program")
 server.add_averaging(instance=1, name="Averaging")
-server.add_channel(instance=1, name="Channel", channel_number=1)
-server.add_staging(instance=1, name="Staging", num_stages=4)
+server.add_staging(
+    instance=1,
+    name="Two-stage fan",
+    present_value=5.0,
+    min_present_value=0.0,
+    units=62,
+    priority_for_writing=8,
+    # Each tuple is (limit, target value bits, deadband).
+    stages=[(10.0, [False], 1.0), (20.0, [True], 1.0)],
+    # References are always local and must be BO, BV, or BLO objects.
+    target_references=[ObjectIdentifier(ObjectType.BINARY_OUTPUT, 1)],
+    stage_names=["Off", "On"],
+)
 ```
+
+`add_staging` validates the complete ladder and target mapping atomically; it
+does not invent stage limits, deadbands, names, priorities, or targets. Each
+stage's bit list must have the same length as `target_references`, and remote
+device references are not exposed by this local-only Python boundary. Runtime
+array writes retain their configured lengths so the coupled arrays never pass
+through a partially configured state. Local target writes complete during
+write handling; failures set source Reliability to `UNRELIABLE_OTHER` until a
+current plan succeeds. `Out_Of_Service` decouples targets and returning to
+service reapplies the current stage. Staging does not advertise intrinsic
+reporting or COV.
 
 #### Lighting
 
@@ -1083,6 +1263,11 @@ server.add_binary_lighting_output(instance=1, name="On/Off Light")
 server.add_life_safety_point(instance=1, name="Smoke Detector")
 server.add_life_safety_zone(instance=1, name="Floor 3 Zone")
 ```
+
+Python-hosted servers currently expose no LifeSafetyOperation authorization or
+trusted `Operation_Expected` state channel. Inbound LifeSafetyOperation is
+therefore fail-closed (`SERVICES / SERVICE_REQUEST_DENIED`) for these objects.
+Use the Rust server API when authorized silence/unsilence execution is required.
 
 #### Access Control
 
@@ -1135,8 +1320,33 @@ server.add_date_time_pattern_value(instance=1, name="Schedule Pattern")
 server.add_accumulator(instance=1, name="kWh Meter", units=70)      # 70 = kilowatt-hours
 server.add_pulse_converter(instance=1, name="Pulse Count", units=95) # 95 = counts
 server.add_file(instance=1, name="Config File", file_type="text/plain")
+server.set_file_data(instance=1, data=b"mode=occupied\n")
+
+server.add_file(instance=2, name="Record File")
+server.set_file_access_method(instance=2, access_method="record")
+server.set_file_records(instance=2, records=[b"first", b"second"])
 server.add_network_port(instance=1, name="BIP Port", network_type=0)
 ```
+
+The seven File configuration methods are synchronous and operate only on a
+pending built-in File before `start()`:
+
+- `set_file_access_method(instance, access_method)` accepts only `"stream"` or
+  `"record"`. Select the mode before loading its corresponding payload; a mode
+  change preserves both stored channels and does not convert between them.
+- `set_file_data` / `get_file_data` require stream mode.
+- `set_file_records` / `get_file_records` require record mode.
+- `set_max_file_size` and `set_max_record_count` return the effective value
+  after the built-in File clamp. These are growth limits for later
+  AtomicWriteFile requests; lowering a cap does not truncate preloaded content.
+
+Inputs are copied. Getters return a fresh `bytes`, or a fresh `list` containing
+fresh `bytes`, so later Python-side mutation cannot alter Rust storage.
+Preloading is trusted local configuration and is independent of `Read_Only`;
+network clients read and write runtime content through AtomicReadFile and
+AtomicWriteFile, where `Read_Only`, access method, caps, and all-or-failure
+behavior remain enforced. These methods do not mutate a live database and do
+not persist File content across stop/restart.
 
 ### Lifecycle
 
@@ -1199,7 +1409,7 @@ All BACnet errors are raised as Python exceptions:
 | Exception | Meaning |
 |-----------|---------|
 | `BacnetError` | Base exception for all BACnet errors |
-| `BacnetProtocolError` | Remote device returned a BACnet error (class + code) |
+| `BacnetProtocolError` | A remote or local BACnet protocol check returned an error (class + code) |
 | `BacnetTimeoutError` | Request timed out (APDU retries exhausted) |
 | `BacnetRejectError` | Remote device rejected the request |
 | `BacnetAbortError` | Remote device aborted the request |

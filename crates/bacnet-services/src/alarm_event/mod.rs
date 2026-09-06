@@ -1,16 +1,18 @@
-//! Alarm and event services per ASHRAE 135-2020 Clauses 13.2–13.9.
+//! Alarm and event services per ASHRAE 135-2020 Clauses 13.5, 13.8-13.9, and 13.12.
 //!
-//! - AcknowledgeAlarm (Clause 13.3)
-//! - ConfirmedEventNotification / UnconfirmedEventNotification (Clause 13.5/13.6)
-//! - GetEventInformation (Clause 13.9)
+//! - AcknowledgeAlarm (Clause 13.5)
+//! - ConfirmedEventNotification / UnconfirmedEventNotification (Clauses 13.8-13.9)
+//! - GetEventInformation (Clause 13.12)
 
 use bacnet_encoding::{primitives, tags};
-use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetPropertyStates};
+use bacnet_types::constructed::{
+    BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference, BACnetPropertyStates,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, Time};
 use bytes::BytesMut;
 
-use crate::common::MAX_DECODED_ITEMS;
+use crate::common::{BACnetPropertyValue, MAX_DECODED_ITEMS};
 
 mod acknowledge_alarm;
 mod event_notification;

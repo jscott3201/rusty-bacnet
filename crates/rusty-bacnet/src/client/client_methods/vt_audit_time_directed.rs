@@ -112,7 +112,9 @@ impl BACnetClient {
 
     /// Send a ConfirmedAuditNotification request (raw service data).
     ///
-    /// `service_data` is the pre-encoded AuditNotification-Request payload.
+    /// `service_data` must be a complete, pre-encoded Clause 21
+    /// AuditNotification-Request payload. This is a raw escape hatch and does
+    /// not imply that the bundled server executes the service.
     #[pyo3(signature = (address, service_data))]
     fn confirmed_audit_notification<'py>(
         &self,
@@ -140,7 +142,36 @@ impl BACnetClient {
         })
     }
 
+    /// Send a ConfirmedAuditNotification from a validated Python mapping.
+    #[pyo3(signature = (address, request))]
+    fn confirmed_audit_notification_typed<'py>(
+        &self,
+        py: Python<'py>,
+        address: String,
+        request: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let request = audit_notification_request_from_py(request)?;
+        let inner = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let mac = parse_address(&address)?;
+            let c = {
+                let guard = inner.lock().await;
+                Arc::clone(guard.as_ref().ok_or_else(|| {
+                    PyRuntimeError::new_err("client not started — use 'async with'")
+                })?)
+            };
+            c.confirmed_audit_notification(&mac, &request)
+                .await
+                .map_err(to_py_err)?;
+            Ok(Python::attach(|py| py.None()))
+        })
+    }
+
     /// Send an UnconfirmedAuditNotification request (raw service data).
+    ///
+    /// `service_data` must be a complete, pre-encoded Clause 21
+    /// AuditNotification-Request payload. This is a raw escape hatch and does
+    /// not imply that the bundled server executes the service.
     #[pyo3(signature = (address, service_data))]
     fn unconfirmed_audit_notification<'py>(
         &self,
@@ -168,14 +199,42 @@ impl BACnetClient {
         })
     }
 
-    /// Send an AuditLogQuery request. Returns raw response bytes.
-    #[pyo3(signature = (address, acknowledgment_filter, query_options_raw=vec![]))]
+    /// Send an UnconfirmedAuditNotification from a validated Python mapping.
+    #[pyo3(signature = (address, request))]
+    fn unconfirmed_audit_notification_typed<'py>(
+        &self,
+        py: Python<'py>,
+        address: String,
+        request: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let request = audit_notification_request_from_py(request)?;
+        let inner = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let mac = parse_address(&address)?;
+            let c = {
+                let guard = inner.lock().await;
+                Arc::clone(guard.as_ref().ok_or_else(|| {
+                    PyRuntimeError::new_err("client not started — use 'async with'")
+                })?)
+            };
+            c.unconfirmed_audit_notification(&mac, &request)
+                .await
+                .map_err(to_py_err)?;
+            Ok(Python::attach(|py| py.None()))
+        })
+    }
+
+    /// Send an AuditLogQuery request (raw service data). Returns raw response bytes.
+    ///
+    /// `service_data` must be a complete, pre-encoded Clause 21
+    /// AuditLogQuery-Request payload. This is a raw escape hatch and does not
+    /// imply that the bundled server executes the service.
+    #[pyo3(signature = (address, service_data))]
     fn audit_log_query<'py>(
         &self,
         py: Python<'py>,
         address: String,
-        acknowledgment_filter: u32,
-        query_options_raw: Vec<u8>,
+        service_data: Vec<u8>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -186,17 +245,34 @@ impl BACnetClient {
                     PyRuntimeError::new_err("client not started — use 'async with'")
                 })?)
             };
-            let req = AuditLogQueryRequest {
-                acknowledgment_filter,
-                query_options_raw,
-            };
-            let mut buf = BytesMut::new();
-            req.encode(&mut buf);
             let resp = c
-                .confirmed_request(&mac, ConfirmedServiceChoice::AUDIT_LOG_QUERY, &buf)
+                .confirmed_request(&mac, ConfirmedServiceChoice::AUDIT_LOG_QUERY, &service_data)
                 .await
                 .map_err(to_py_err)?;
             Python::attach(|py| Ok(PyBytes::new(py, &resp).into_any().unbind()))
+        })
+    }
+
+    /// Send an AuditLogQuery from a validated mapping and return a typed mapping ACK.
+    #[pyo3(signature = (address, request))]
+    fn audit_log_query_typed<'py>(
+        &self,
+        py: Python<'py>,
+        address: String,
+        request: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let request = audit_log_query_request_from_py(request)?;
+        let inner = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let mac = parse_address(&address)?;
+            let c = {
+                let guard = inner.lock().await;
+                Arc::clone(guard.as_ref().ok_or_else(|| {
+                    PyRuntimeError::new_err("client not started — use 'async with'")
+                })?)
+            };
+            let ack = c.audit_log_query(&mac, &request).await.map_err(to_py_err)?;
+            Python::attach(|py| audit_log_query_ack_to_py(py, &ack))
         })
     }
 
