@@ -79,7 +79,7 @@ pub(super) struct RecvContext {
     pub(super) broadcast_addr: Ipv4Addr,
     pub(super) broadcast_port: u16,
     pub(super) pending_bvlc_response: Arc<Mutex<Option<PendingBvlcResponse>>>,
-    pub(super) management_limiter: std::sync::Mutex<ManagementRateLimiter>,
+    pub(super) management_limiter: Arc<std::sync::Mutex<ManagementRateLimiter>>,
     #[cfg(test)]
     pub(super) force_dbtn_forward_failure: bool,
 }
@@ -375,7 +375,23 @@ pub(super) async fn handle_bvll_message(
                 let state = bbmd.lock().await;
                 let mut payload = BytesMut::new();
                 state.encode_bdt(&mut payload);
-                let mut buf = BytesMut::with_capacity(4 + payload.len());
+                drop(state);
+                let resp_len = 4 + payload.len();
+                let allowed = match ctx.management_limiter.lock() {
+                    Ok(mut limiter) => limiter.check_and_record_bdt_response(sender.0, resp_len),
+                    Err(poison) => poison
+                        .into_inner()
+                        .check_and_record_bdt_response(sender.0, resp_len),
+                };
+                if !allowed {
+                    debug!(
+                        ip = %Ipv4Addr::from(sender.0),
+                        bytes = resp_len,
+                        "Throttling Read-BDT response due to amplification budget"
+                    );
+                    return;
+                }
+                let mut buf = BytesMut::with_capacity(resp_len);
                 match encode_bvll(
                     &mut buf,
                     BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE_ACK,
@@ -414,7 +430,22 @@ pub(super) async fn handle_bvll_message(
                 let mut payload = BytesMut::new();
                 state.encode_fdt(&mut payload);
                 drop(state);
-                let mut buf = BytesMut::with_capacity(4 + payload.len());
+                let resp_len = 4 + payload.len();
+                let allowed = match ctx.management_limiter.lock() {
+                    Ok(mut limiter) => limiter.check_and_record_fdt_response(sender.0, resp_len),
+                    Err(poison) => poison
+                        .into_inner()
+                        .check_and_record_fdt_response(sender.0, resp_len),
+                };
+                if !allowed {
+                    debug!(
+                        ip = %Ipv4Addr::from(sender.0),
+                        bytes = resp_len,
+                        "Throttling Read-FDT response due to amplification budget"
+                    );
+                    return;
+                }
+                let mut buf = BytesMut::with_capacity(resp_len);
                 match encode_bvll(
                     &mut buf,
                     BvlcFunction::READ_FOREIGN_DEVICE_TABLE_ACK,

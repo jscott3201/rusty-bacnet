@@ -72,7 +72,7 @@ async fn dbtn_registered_foreign_device_fans_out_without_origin_echo() {
         broadcast_addr: Ipv4Addr::LOCALHOST,
         broadcast_port: local_broadcast_port,
         pending_bvlc_response: Arc::new(Mutex::new(None)),
-        management_limiter: std::sync::Mutex::new(ManagementRateLimiter::new()),
+        management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
         force_dbtn_forward_failure: false,
     };
     let sender = (Ipv4Addr::LOCALHOST.octets(), origin_fd_port);
@@ -146,7 +146,7 @@ async fn dbtn_registered_foreign_device_naks_when_forwarding_fails() {
         broadcast_addr: Ipv4Addr::LOCALHOST,
         broadcast_port: local_port,
         pending_bvlc_response: Arc::new(Mutex::new(None)),
-        management_limiter: std::sync::Mutex::new(ManagementRateLimiter::new()),
+        management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
         force_dbtn_forward_failure: true,
     };
     let sender = (Ipv4Addr::LOCALHOST.octets(), origin_fd_port);

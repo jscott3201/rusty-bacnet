@@ -131,6 +131,11 @@ pub fn decode_fdt(data: &[u8]) -> Result<Vec<FdtEntryWire>, Error> {
         ));
     }
     let count = data.len() / FDT_ENTRY_SIZE;
+    if count > BbmdState::MAX_FDT_ENTRIES {
+        let max = BbmdState::MAX_FDT_ENTRIES;
+        let msg = format!("FDT entry count {count} exceeds maximum of {max}");
+        return Err(Error::decoding(0, msg));
+    }
     let mut entries = Vec::with_capacity(count);
     for chunk in data.chunks_exact(FDT_ENTRY_SIZE) {
         entries.push(FdtEntryWire {
@@ -285,7 +290,7 @@ impl BbmdState {
     // -----------------------------------------------------------------------
 
     /// Maximum number of entries in the Foreign Device Table.
-    const MAX_FDT_ENTRIES: usize = 512;
+    pub const MAX_FDT_ENTRIES: usize = 128;
 
     /// Register or re-register a foreign device.
     pub fn register_foreign_device(&mut self, ip: [u8; 4], port: u16, ttl: u16) -> BvlcResultCode {

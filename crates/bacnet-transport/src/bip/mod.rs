@@ -27,6 +27,7 @@ use io::{
     handle_bvll_message, original_destination_matches, resolve_local_ip,
     send_register_foreign_device, RecvContext,
 };
+pub use rate_limit::ManagementCounters;
 use rate_limit::ManagementRateLimiter;
 
 /// Default BACnet/IP port (0xBAC0 = 47808).
@@ -141,6 +142,8 @@ pub struct BipTransport {
     /// (wire format, 10 bytes per entry) at startup. Inbound Write-BDT does
     /// not update this file.
     bdt_persist_path: Option<std::path::PathBuf>,
+    /// Management request and response rate limiter.
+    management_limiter: Arc<std::sync::Mutex<ManagementRateLimiter>>,
 }
 
 impl BipTransport {
@@ -164,6 +167,7 @@ impl BipTransport {
             registration_task: None,
             pending_bvlc_response: Arc::new(Mutex::new(None)),
             bdt_persist_path: None,
+            management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
         }
     }
 
@@ -206,6 +210,14 @@ impl BipTransport {
     /// Get the BBMD state (if BBMD mode is enabled).
     pub fn bbmd_state(&self) -> Option<&Arc<Mutex<BbmdState>>> {
         self.bbmd.as_ref()
+    }
+
+    /// Return the operational BBMD management counters.
+    pub fn management_counters(&self) -> ManagementCounters {
+        match self.management_limiter.lock() {
+            Ok(limiter) => limiter.counters(),
+            Err(poison) => poison.into_inner().counters(),
+        }
     }
 
     /// Timeout for BVLC management response waiting.
@@ -535,7 +547,7 @@ impl TransportPort for BipTransport {
             broadcast_addr: self.broadcast_address,
             broadcast_port: self.port,
             pending_bvlc_response: self.pending_bvlc_response.clone(),
-            management_limiter: std::sync::Mutex::new(ManagementRateLimiter::new()),
+            management_limiter: Arc::clone(&self.management_limiter),
             #[cfg(test)]
             force_dbtn_forward_failure: false,
         };
@@ -713,5 +725,7 @@ mod npdu_addressing_tests;
 mod original_tests;
 #[cfg(test)]
 mod rate_limit_tests;
+#[cfg(test)]
+mod response_amplification_tests;
 #[cfg(test)]
 mod tests;
