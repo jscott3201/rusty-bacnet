@@ -253,17 +253,22 @@ pub(super) async fn handle_bvll_message(
                     let after = state.fdt_counters().destinations_deduplicated;
                     (targets, after.saturating_sub(before))
                 };
+                if needs_local_broadcast {
+                    let local_dest = SocketAddrV4::new(ctx.broadcast_addr, ctx.broadcast_port);
+                    let _ = send_forwarded_npdu(
+                        &ctx.socket,
+                        local_dest,
+                        orig_ip,
+                        orig_port,
+                        &msg.payload,
+                    )
+                    .await;
+                }
                 if let Some(fanout) = &ctx.fanout {
-                    let mut addrs: Vec<SocketAddrV4> = fdt_targets
+                    let addrs: Vec<SocketAddrV4> = fdt_targets
                         .into_iter()
                         .map(|(ip, port)| SocketAddrV4::new(Ipv4Addr::from(ip), port))
                         .collect();
-                    if needs_local_broadcast {
-                        let local_dest = SocketAddrV4::new(ctx.broadcast_addr, ctx.broadcast_port);
-                        if !addrs.contains(&local_dest) {
-                            addrs.push(local_dest);
-                        }
-                    }
                     fanout.dispatch_forwarded_npdu(
                         orig_ip,
                         orig_port,
@@ -275,19 +280,6 @@ pub(super) async fn handle_bvll_message(
                     let _ =
                         forward_npdu(&ctx.socket, &msg.payload, orig_ip, orig_port, &fdt_targets)
                             .await;
-
-                    // Full-mask BDT peers forward by unicast; masked peers forward by directed broadcast.
-                    if needs_local_broadcast {
-                        let dest = SocketAddrV4::new(ctx.broadcast_addr, ctx.broadcast_port);
-                        let _ = send_forwarded_npdu(
-                            &ctx.socket,
-                            dest,
-                            orig_ip,
-                            orig_port,
-                            &msg.payload,
-                        )
-                        .await;
-                    }
                 }
             } else {
                 // Non-BBMD: use originating address as source_mac (spec J.2.5).
@@ -353,57 +345,39 @@ pub(super) async fn handle_bvll_message(
                     (targets, after.saturating_sub(before))
                 };
 
-                if let Some(fanout) = &ctx.fanout {
-                    let mut addrs: Vec<SocketAddrV4> = targets
+                let local_dest = SocketAddrV4::new(ctx.broadcast_addr, ctx.broadcast_port);
+                let local_ok = if should_force_dbtn_forward_failure(ctx) {
+                    warn!("Forced DBTN forwarding failure");
+                    false
+                } else {
+                    send_forwarded_npdu(&ctx.socket, local_dest, sender.0, sender.1, &msg.payload)
+                        .await
+                };
+
+                let remote_ok = if let Some(fanout) = &ctx.fanout {
+                    let addrs: Vec<SocketAddrV4> = targets
                         .into_iter()
                         .map(|(ip, port)| SocketAddrV4::new(Ipv4Addr::from(ip), port))
                         .collect();
-                    let local_dest = SocketAddrV4::new(ctx.broadcast_addr, ctx.broadcast_port);
-                    if !addrs.contains(&local_dest) {
-                        addrs.push(local_dest);
-                    }
-                    let forwarding_ok = if should_force_dbtn_forward_failure(ctx) {
-                        warn!("Forced DBTN forwarding failure");
-                        false
-                    } else {
-                        fanout.dispatch_forwarded_npdu(
-                            sender.0,
-                            sender.1,
-                            &msg.payload,
-                            addrs,
-                            dedup_count,
-                        )
-                    };
-                    if !forwarding_ok {
-                        send_bvlc_result(
-                            &ctx.socket,
-                            sender,
-                            BvlcResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK_NAK,
-                        )
-                        .await;
-                    }
+                    fanout.dispatch_forwarded_npdu(
+                        sender.0,
+                        sender.1,
+                        &msg.payload,
+                        addrs,
+                        dedup_count,
+                    )
                 } else {
-                    let mut forwarding_ok =
-                        forward_npdu(&ctx.socket, &msg.payload, sender.0, sender.1, &targets).await;
+                    forward_npdu(&ctx.socket, &msg.payload, sender.0, sender.1, &targets).await
+                };
 
-                    // Broadcast locally as Forwarded-NPDU
-                    let dest = SocketAddrV4::new(ctx.broadcast_addr, ctx.broadcast_port);
-                    forwarding_ok &= if should_force_dbtn_forward_failure(ctx) {
-                        warn!("Forced DBTN forwarding failure");
-                        false
-                    } else {
-                        send_forwarded_npdu(&ctx.socket, dest, sender.0, sender.1, &msg.payload)
-                            .await
-                    };
-
-                    if !forwarding_ok {
-                        send_bvlc_result(
-                            &ctx.socket,
-                            sender,
-                            BvlcResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK_NAK,
-                        )
-                        .await;
-                    }
+                let forwarding_ok = local_ok && remote_ok;
+                if !forwarding_ok {
+                    send_bvlc_result(
+                        &ctx.socket,
+                        sender,
+                        BvlcResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK_NAK,
+                    )
+                    .await;
                 }
             } else {
                 // Non-BBMD: reject with NAK (spec J.4.5)

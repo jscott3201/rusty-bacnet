@@ -275,6 +275,7 @@ impl BipTransport {
 
     /// Set the broadcast forwarding fanout policy and rate limits.
     pub fn set_fanout_policy(&mut self, policy: FanoutPolicy) {
+        let policy = policy.sanitized();
         if let Ok(mut limiter) = self.fanout_limiter.lock() {
             limiter.set_policy(policy.clone());
         }
@@ -605,7 +606,7 @@ impl TransportPort for BipTransport {
 
         let (npdu_tx, rx) = mpsc::channel(NPDU_CHANNEL_CAPACITY);
 
-        let (fanout_tx, fanout_rx) = mpsc::channel(self.fanout_policy.queue_capacity);
+        let (fanout_tx, fanout_rx) = mpsc::channel(self.fanout_policy.queue_capacity.max(1));
         let fanout_task = tokio::spawn(fanout::run_fanout_worker(
             Arc::clone(&socket),
             fanout_rx,

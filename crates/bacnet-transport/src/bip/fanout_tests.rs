@@ -4,7 +4,7 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use tokio::net::UdpSocket;
 use tokio::time::timeout;
 
@@ -13,7 +13,7 @@ use super::*;
 use crate::bbmd::{BdtEntry, ForeignDevicePolicy};
 use crate::bvll::{decode_bip_mac, decode_bvll, encode_bvll, BvllMessage};
 use crate::port::TransportPort;
-use bacnet_types::enums::BvlcFunction;
+use bacnet_types::enums::{BvlcFunction, BvlcResultCode};
 
 async fn recv_bvll(socket: &UdpSocket) -> BvllMessage {
     let mut recv_buf = [0u8; 2048];
@@ -386,4 +386,155 @@ async fn fanout_counters_accurately_track_all_metrics() {
     assert_eq!(counters.packets_throttled, 1);
 
     bbmd.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn dbtn_delivers_local_subnet_broadcast_under_tight_fanout_budget() {
+    let bbmd_socket = Arc::new(
+        UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap(),
+    );
+    let local_port = bbmd_socket.local_addr().unwrap().port();
+    let local_broadcast_sink = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let local_broadcast_port = local_broadcast_sink.local_addr().unwrap().port();
+
+    let bdt_peer_sink = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let bdt_peer_port = bdt_peer_sink.local_addr().unwrap().port();
+
+    let extra_bdt_sink = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let extra_bdt_port = extra_bdt_sink.local_addr().unwrap().port();
+
+    let origin_fd_sink = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let origin_fd_port = origin_fd_sink.local_addr().unwrap().port();
+
+    let (npdu_tx, _npdu_rx) = mpsc::channel(1);
+
+    let mut state = BbmdState::new(Ipv4Addr::LOCALHOST.octets(), local_port);
+    state.enable_foreign_device_registration(ForeignDevicePolicy::default());
+    state
+        .set_bdt(vec![
+            BdtEntry {
+                ip: Ipv4Addr::LOCALHOST.octets(),
+                port: bdt_peer_port,
+                broadcast_mask: [255, 255, 255, 255],
+            },
+            BdtEntry {
+                ip: Ipv4Addr::LOCALHOST.octets(),
+                port: extra_bdt_port,
+                broadcast_mask: [255, 255, 255, 255],
+            },
+        ])
+        .unwrap();
+    assert_eq!(
+        state.register_foreign_device(Ipv4Addr::LOCALHOST.octets(), origin_fd_port, 60),
+        BvlcResultCode::SUCCESSFUL_COMPLETION
+    );
+
+    // Tight fanout policy: max 1 remote target per input broadcast
+    let policy = FanoutPolicy {
+        max_fanout_per_input: 1,
+        ..FanoutPolicy::default()
+    };
+    let (fanout_tx, fanout_rx) = mpsc::channel(policy.queue_capacity);
+    let fanout_counters = Arc::new(fanout::AtomicFanoutCounters::default());
+    let fanout_limiter = Arc::new(std::sync::Mutex::new(fanout::FanoutRateLimiter::new(
+        policy,
+    )));
+    let _worker_task = tokio::spawn(fanout::run_fanout_worker(
+        Arc::clone(&bbmd_socket),
+        fanout_rx,
+        Arc::clone(&fanout_counters),
+    ));
+    let fanout_dispatcher =
+        fanout::FanoutDispatcher::new(fanout_tx, fanout_limiter, Arc::clone(&fanout_counters));
+
+    let ctx = RecvContext {
+        local_mac: encode_bip_mac(Ipv4Addr::LOCALHOST.octets(), local_port),
+        socket: bbmd_socket,
+        npdu_tx,
+        bbmd: Some(Arc::new(Mutex::new(state))),
+        broadcast_addr: Ipv4Addr::LOCALHOST,
+        broadcast_port: local_broadcast_port,
+        pending_bvlc_response: Arc::new(Mutex::new(None)),
+        management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
+        fanout: Some(fanout_dispatcher),
+        force_dbtn_forward_failure: false,
+    };
+
+    let sender = (Ipv4Addr::LOCALHOST.octets(), origin_fd_port);
+    let msg = BvllMessage {
+        function: BvlcFunction::DISTRIBUTE_BROADCAST_TO_NETWORK,
+        payload: Bytes::from_static(&[0x01, 0x20, 0xDE, 0xAD, 0xBE, 0xEF]),
+        originating_ip: None,
+        originating_port: None,
+    };
+
+    handle_bvll_message(&msg, sender, &ctx).await;
+
+    // 1. Mandatory local subnet broadcast MUST be received
+    let local_frame = recv_bvll(&local_broadcast_sink).await;
+    assert_eq!(local_frame.function, BvlcFunction::FORWARDED_NPDU);
+    assert_eq!(local_frame.payload.as_ref(), msg.payload.as_ref());
+    assert_eq!(local_frame.originating_ip, Some(sender.0));
+    assert_eq!(local_frame.originating_port, Some(sender.1));
+
+    // 2. Exactly one remote BDT peer receives the frame (due to max_fanout_per_input: 1)
+    let peer_frame = recv_bvll(&bdt_peer_sink).await;
+    assert_eq!(peer_frame.function, BvlcFunction::FORWARDED_NPDU);
+    assert_eq!(peer_frame.payload.as_ref(), msg.payload.as_ref());
+
+    // 3. The second remote BDT peer was throttled
+    assert_no_bvll(&extra_bdt_sink, "extra BDT peer throttled").await;
+
+    // 4. Verify telemetry counters
+    let counters = fanout_counters.snapshot();
+    assert_eq!(counters.packets_forwarded, 1);
+    assert_eq!(counters.packets_throttled, 1);
+}
+
+#[tokio::test]
+async fn fanout_policy_zero_queue_capacity_does_not_panic() {
+    let policy = FanoutPolicy {
+        queue_capacity: 0,
+        ..FanoutPolicy::default()
+    };
+    assert_eq!(policy.sanitized().queue_capacity, 1);
+
+    let mut bbmd = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
+    bbmd.set_fanout_policy(policy);
+    let start_res = bbmd.start().await;
+    assert!(
+        start_res.is_ok(),
+        "BipTransport::start() must not panic with queue_capacity: 0"
+    );
+    bbmd.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn fanout_worker_records_send_errors_in_telemetry() {
+    let socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+    let (tx, rx) = mpsc::channel(4);
+    let counters = Arc::new(fanout::AtomicFanoutCounters::default());
+    let worker = tokio::spawn(fanout::run_fanout_worker(socket, rx, Arc::clone(&counters)));
+
+    let job = fanout::FanoutJob {
+        frame: bytes::Bytes::from_static(b"test"),
+        targets: vec![SocketAddrV4::new(Ipv4Addr::new(255, 255, 255, 255), 47808)],
+    };
+    tx.send(job).await.unwrap();
+    drop(tx);
+    worker.await.unwrap();
+
+    let snap = counters.snapshot();
+    assert_eq!(snap.send_errors, 1);
+    assert_eq!(snap.packets_forwarded, 0);
 }

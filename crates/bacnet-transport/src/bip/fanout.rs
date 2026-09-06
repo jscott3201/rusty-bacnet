@@ -33,6 +33,15 @@ pub struct FanoutPolicy {
     pub queue_capacity: usize,
 }
 
+impl FanoutPolicy {
+    /// Return a copy of this policy with valid parameters (queue capacity clamped to at least 1).
+    pub fn sanitized(&self) -> Self {
+        let mut policy = self.clone();
+        policy.queue_capacity = policy.queue_capacity.max(1);
+        policy
+    }
+}
+
 impl Default for FanoutPolicy {
     fn default() -> Self {
         Self {
@@ -58,6 +67,8 @@ pub struct FanoutCounters {
     pub destinations_deduplicated: u64,
     /// Number of fanout forwarding jobs dropped due to work queue overflow.
     pub queue_overflow_drops: u64,
+    /// Number of errors encountered while sending forwarded packets.
+    pub send_errors: u64,
 }
 
 /// Atomic storage for thread-safe operational counters.
@@ -68,6 +79,7 @@ pub(crate) struct AtomicFanoutCounters {
     pub(crate) packets_throttled: AtomicU64,
     pub(crate) destinations_deduplicated: AtomicU64,
     pub(crate) queue_overflow_drops: AtomicU64,
+    pub(crate) send_errors: AtomicU64,
 }
 
 impl AtomicFanoutCounters {
@@ -78,6 +90,7 @@ impl AtomicFanoutCounters {
             packets_throttled: self.packets_throttled.load(Ordering::Relaxed),
             destinations_deduplicated: self.destinations_deduplicated.load(Ordering::Relaxed),
             queue_overflow_drops: self.queue_overflow_drops.load(Ordering::Relaxed),
+            send_errors: self.send_errors.load(Ordering::Relaxed),
         }
     }
 }
@@ -328,6 +341,7 @@ pub(crate) async fn run_fanout_worker(
                         .fetch_add(bytes_sent as u64, Ordering::Relaxed);
                 }
                 Err(e) => {
+                    counters.send_errors.fetch_add(1, Ordering::Relaxed);
                     warn!(error = %e, %dest, "BIP BBMD: failed to send forwarded NPDU");
                 }
             }
