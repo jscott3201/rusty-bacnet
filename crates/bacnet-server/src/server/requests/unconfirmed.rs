@@ -5,6 +5,7 @@
 
 use super::super::*;
 use bacnet_services::device_mgmt::TimeSynchronizationRequest;
+use bacnet_services::who_has::{WhoHasObject, WhoHasRequest};
 
 #[cfg(test)]
 /// Every unconfirmed service choice with an inbound execution arm in
@@ -22,6 +23,7 @@ pub(crate) const EXECUTED_UNCONFIRMED: &[UnconfirmedServiceChoice] = &[
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Handle an unconfirmed request (e.g., WhoIs).
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::server) async fn handle_unconfirmed_request(
         db: &Arc<RwLock<ObjectDatabase>>,
         network: &Arc<NetworkLayer<T>>,
@@ -29,6 +31,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         clock: Option<&Arc<ServerClock>>,
         comm_state: &Arc<AtomicU8>,
         device_bindings: &Arc<RwLock<DeviceBindingTable>>,
+        discovery_limiter: &Arc<DiscoveryLimiter>,
         req: UnconfirmedRequestPdu,
         received: &bacnet_network::layer::ReceivedApdu,
     ) {
@@ -106,29 +109,75 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     let mut buf = BytesMut::new();
                     encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
 
-                    if let Some(ref source_net) = received.source_network {
-                        if let Err(e) = network
-                            .send_apdu_routed(
-                                &buf,
-                                source_net.network,
-                                &source_net.mac_address,
-                                &received.source_mac,
-                                false,
-                                NetworkPriority::NORMAL,
-                            )
-                            .await
-                        {
-                            warn!(error = %e, "Failed to route IAm back to remote requester");
-                        }
-                    } else if let Err(e) = network
-                        .broadcast_apdu(&buf, false, NetworkPriority::NORMAL)
-                        .await
-                    {
-                        warn!(error = %e, "Failed to send IAm broadcast");
+                    let now = Instant::now();
+                    let is_unicast = !received.is_group && !received.link_layer_group;
+                    let (res, directed) = if let Some(ref source_net) = received.source_network {
+                        (
+                            network
+                                .send_apdu_routed(
+                                    &buf,
+                                    source_net.network,
+                                    &source_net.mac_address,
+                                    &received.source_mac,
+                                    false,
+                                    NetworkPriority::NORMAL,
+                                )
+                                .await,
+                            true,
+                        )
+                    } else if config.discovery_policy.prefer_directed_responses || is_unicast {
+                        (
+                            network
+                                .send_apdu(
+                                    &buf,
+                                    &received.source_mac,
+                                    false,
+                                    NetworkPriority::NORMAL,
+                                )
+                                .await,
+                            true,
+                        )
+                    } else {
+                        (
+                            network
+                                .broadcast_apdu(&buf, false, NetworkPriority::NORMAL)
+                                .await,
+                            false,
+                        )
+                    };
+
+                    if let Err(e) = res {
+                        warn!(error = %e, directed, "Failed to send IAm");
+                    } else {
+                        discovery_limiter.record_i_am_sent(
+                            buf.len(),
+                            directed,
+                            &received.source_mac,
+                            received.source_network.as_ref(),
+                            now,
+                        );
                     }
                 }
             }
         } else if req.service_choice == UnconfirmedServiceChoice::WHO_HAS {
+            let who_has = match WhoHasRequest::decode(&req.service_request) {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!(error = %e, "Failed to decode WhoHas");
+                    return;
+                }
+            };
+
+            let target = match &who_has.object {
+                WhoHasObject::Identifier(oid) => WhoHasTarget::Id(*oid),
+                WhoHasObject::Name(name) => WhoHasTarget::Name(name.clone()),
+            };
+
+            let now = Instant::now();
+            if discovery_limiter.is_negative_who_has(&target, now) {
+                return;
+            }
+
             let db = db.read().await;
             let device_oid = db
                 .list_objects()
@@ -150,15 +199,71 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             let mut buf = BytesMut::new();
                             encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
 
-                            if let Err(e) = network
-                                .broadcast_apdu(&buf, false, NetworkPriority::NORMAL)
-                                .await
-                            {
-                                warn!(error = %e, "Failed to send IHave broadcast");
+                            if !discovery_limiter.try_consume_who_has_response(
+                                &target,
+                                received,
+                                buf.len(),
+                                now,
+                            ) {
+                                return;
+                            }
+
+                            let is_unicast = !received.is_group && !received.link_layer_group;
+                            let (res, directed) =
+                                if let Some(ref source_net) = received.source_network {
+                                    (
+                                        network
+                                            .send_apdu_routed(
+                                                &buf,
+                                                source_net.network,
+                                                &source_net.mac_address,
+                                                &received.source_mac,
+                                                false,
+                                                NetworkPriority::NORMAL,
+                                            )
+                                            .await,
+                                        true,
+                                    )
+                                } else if config.discovery_policy.prefer_directed_responses
+                                    || is_unicast
+                                {
+                                    (
+                                        network
+                                            .send_apdu(
+                                                &buf,
+                                                &received.source_mac,
+                                                false,
+                                                NetworkPriority::NORMAL,
+                                            )
+                                            .await,
+                                        true,
+                                    )
+                                } else {
+                                    (
+                                        network
+                                            .broadcast_apdu(&buf, false, NetworkPriority::NORMAL)
+                                            .await,
+                                        false,
+                                    )
+                                };
+
+                            if let Err(e) = res {
+                                warn!(error = %e, directed, "Failed to send IHave");
+                            } else {
+                                discovery_limiter.record_i_have_sent(
+                                    buf.len(),
+                                    directed,
+                                    &target,
+                                    &received.source_mac,
+                                    received.source_network.as_ref(),
+                                    now,
+                                );
                             }
                         }
                     }
-                    Ok(None) => {}
+                    Ok(None) => {
+                        discovery_limiter.record_negative_who_has(target, now);
+                    }
                     Err(e) => {
                         warn!(error = %e, "Failed to decode WhoHas");
                     }

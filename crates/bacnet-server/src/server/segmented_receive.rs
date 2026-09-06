@@ -29,7 +29,7 @@ fn payload_fits(saved: Option<usize>, additional: usize) -> bool {
 /// Owns all active payload storage and its accounting. The mutable encoding
 /// receiver never escapes: server saves are append-only, ordered, and charged
 /// exactly once, while the first request template contains metadata only.
-pub(super) struct RequestPayload {
+pub(crate) struct RequestPayload {
     receiver: SegmentReceiver,
     first: ConfirmedRequestPdu,
     saved_payload_bytes: usize,

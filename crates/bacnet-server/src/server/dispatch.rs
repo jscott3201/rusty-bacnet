@@ -94,6 +94,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         dcc_timer: &Arc<Mutex<Option<JoinHandle<()>>>>,
         config: &Arc<ServerConfig>,
         clock: &Option<Arc<ServerClock>>,
+        discovery_limiter: &Arc<DiscoveryLimiter>,
         source_mac: &[u8],
         apdu: Apdu,
         mut received: bacnet_network::layer::ReceivedApdu,
@@ -140,12 +141,65 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 });
             }
             Apdu::UnconfirmedRequest(req) => {
+                let comm = comm_state.load(Ordering::Acquire);
+                if comm == 1 {
+                    debug!("Dropping unconfirmed service: DCC is DISABLE");
+                    return;
+                }
+
+                let now = Instant::now();
+                if req.service_choice == UnconfirmedServiceChoice::WHO_IS {
+                    match discovery_limiter.pre_check_who_is(&req.service_request, &received, now) {
+                        PreCheckDecision::Admit => {}
+                        PreCheckDecision::OutOfRange => {
+                            debug!("WhoIs instance range does not include local device; dropped");
+                            return;
+                        }
+                        PreCheckDecision::Coalesced => {
+                            debug!("WhoIs duplicate coalesced within window");
+                            return;
+                        }
+                        PreCheckDecision::ThrottledSource => {
+                            debug!("WhoIs throttled: source rate/byte limit exceeded");
+                            return;
+                        }
+                        PreCheckDecision::ThrottledGlobal => {
+                            debug!("WhoIs throttled: global rate/byte limit exceeded");
+                            return;
+                        }
+                        PreCheckDecision::DecodeError => {}
+                    }
+                } else if req.service_choice == UnconfirmedServiceChoice::WHO_HAS {
+                    match discovery_limiter.pre_check_who_has(&req.service_request, &received, now)
+                    {
+                        PreCheckDecision::Admit => {}
+                        PreCheckDecision::OutOfRange => {
+                            debug!("WhoHas instance range does not include local device; dropped");
+                            return;
+                        }
+                        PreCheckDecision::Coalesced => {
+                            debug!("WhoHas duplicate/negative coalesced within window");
+                            return;
+                        }
+                        PreCheckDecision::ThrottledSource => {
+                            debug!("WhoHas throttled: source rate/byte limit exceeded");
+                            return;
+                        }
+                        PreCheckDecision::ThrottledGlobal => {
+                            debug!("WhoHas throttled: global rate/byte limit exceeded");
+                            return;
+                        }
+                        PreCheckDecision::DecodeError => {}
+                    }
+                }
+
                 let db = Arc::clone(db);
                 let network = Arc::clone(network);
                 let config = Arc::clone(config);
                 let clock = clock.clone();
                 let comm_state = Arc::clone(comm_state);
                 let device_bindings = Arc::clone(device_bindings);
+                let discovery_limiter = Arc::clone(discovery_limiter);
                 tokio::spawn(async move {
                     Self::handle_unconfirmed_request(
                         &db,
@@ -154,6 +208,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         clock.as_ref(),
                         &comm_state,
                         &device_bindings,
+                        &discovery_limiter,
                         req,
                         &received,
                     )

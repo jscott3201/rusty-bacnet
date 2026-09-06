@@ -67,6 +67,7 @@ async fn dispatch_unconfirmed(
 ) {
     let network = Arc::new(NetworkLayer::new(CountingTransport { sends }));
     let bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
+    let discovery_limiter = Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), None));
     BACnetServer::<CountingTransport>::handle_unconfirmed_request(
         db,
         &network,
@@ -74,6 +75,7 @@ async fn dispatch_unconfirmed(
         None,
         comm_state,
         &bindings,
+        &discovery_limiter,
         UnconfirmedRequestPdu {
             service_choice: UnconfirmedServiceChoice::UNCONFIRMED_AUDIT_NOTIFICATION,
             service_request,

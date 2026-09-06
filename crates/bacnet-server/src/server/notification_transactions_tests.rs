@@ -404,6 +404,7 @@ async fn dispatch_keeps_segment_and_complex_acks_out_of_notification_completion(
             &dcc_timer,
             &config,
             &None,
+            &Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), None)),
             source_mac.as_slice(),
             apdu,
             bacnet_network::layer::ReceivedApdu {

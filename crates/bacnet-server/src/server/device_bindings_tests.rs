@@ -320,6 +320,7 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
     let config = ServerConfig::default();
     let comm_state = Arc::new(AtomicU8::new(0));
     let bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
+    let discovery_limiter = Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), None));
     let local_device = device(100);
     let routed_device = device(101);
 
@@ -330,6 +331,7 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
         None,
         &comm_state,
         &bindings,
+        &discovery_limiter,
         i_am_request(local_device),
         &received(LOCAL_PEER, None),
     )
@@ -341,6 +343,7 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
         None,
         &comm_state,
         &bindings,
+        &discovery_limiter,
         i_am_request(routed_device),
         &received(
             ROUTER,
@@ -379,6 +382,7 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
         None,
         &comm_state,
         &bindings,
+        &discovery_limiter,
         i_am_request(ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap()),
         &received(LOCAL_PEER, None),
     )
@@ -390,6 +394,7 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
         None,
         &comm_state,
         &bindings,
+        &discovery_limiter,
         UnconfirmedRequestPdu {
             service_choice: UnconfirmedServiceChoice::I_AM,
             service_request: Bytes::from_static(&[0xFF]),
@@ -407,6 +412,7 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
         None,
         &comm_state,
         &bindings,
+        &discovery_limiter,
         i_am_request(local_device),
         &received(UPDATED_PEER, None),
     )
@@ -418,6 +424,7 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
         None,
         &comm_state,
         &bindings,
+        &discovery_limiter,
         i_am_request(device(102)),
         &received(LOCAL_PEER, None),
     )

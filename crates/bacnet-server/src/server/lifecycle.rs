@@ -64,6 +64,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let local_mac = MacAddr::from_slice(network.local_mac());
 
         let network = Arc::new(network);
+        let device_instance = db
+            .list_objects()
+            .into_iter()
+            .find(|oid| oid.object_type() == ObjectType::DEVICE)
+            .map(|oid| oid.instance_number());
+        let discovery_limiter = Arc::new(DiscoveryLimiter::new(
+            config.discovery_policy.sanitized(),
+            device_instance,
+        ));
         let db = Arc::new(RwLock::new(db));
         let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
         let seg_ack_senders: Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>> =
@@ -92,6 +101,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let dcc_timer_dispatch = Arc::clone(&dcc_timer);
         let config_dispatch = Arc::new(config.clone());
         let clock_dispatch = clock.clone();
+        let discovery_limiter_dispatch = Arc::clone(&discovery_limiter);
 
         let dispatch_task = tokio::spawn(async move {
             let mut apdu_rx = apdu_rx;
@@ -405,36 +415,37 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                                     "Reassembled segmented ConfirmedRequest"
                                                 );
                                                 Self::dispatch(
-	                                                    &db_dispatch,
-	                                                    &network_dispatch,
-                                    &cov_dispatch,
-                                    &seg_ack_dispatch,
-                                    &seg_send_permits_dispatch,
-                                    &cov_in_flight_dispatch,
-                                    &server_tsm_dispatch,
+                                                    &db_dispatch,
+                                                    &network_dispatch,
+                                                    &cov_dispatch,
+                                                    &seg_ack_dispatch,
+                                                    &seg_send_permits_dispatch,
+                                                    &cov_in_flight_dispatch,
+                                                    &server_tsm_dispatch,
                                                     &notification_transactions_dispatch,
-	                                                    &confirmed_request_tracker_dispatch,
-	                                                    &device_bindings_dispatch,
-	                                                    &comm_state_dispatch,
-	                                                    &dcc_timer_dispatch,
-	                                                    &config_dispatch,
-	                                                    &clock_dispatch,
-	                                                    &source_mac,
-	                                                    Apdu::ConfirmedRequest(reassembled),
-	                                                    received.take().unwrap_or_else(|| {
-	                                                        warn!("received consumed twice - using empty fallback");
-	                                                        bacnet_network::layer::ReceivedApdu {
-	                                                            apdu: bytes::Bytes::new(),
-	                                                            source_mac: bacnet_types::MacAddr::new(),
-	                                                            source_network: None,
-	                                                            link_layer_group: false,
-	                                                            is_group: false,
-	                                                            data_attributes: Vec::new(),
-	                                                            reply_tx: None,
-	                                                        }
-	                                                    }),
-	                                                )
-	                                                .await;
+                                                    &confirmed_request_tracker_dispatch,
+                                                    &device_bindings_dispatch,
+                                                    &comm_state_dispatch,
+                                                    &dcc_timer_dispatch,
+                                                    &config_dispatch,
+                                                    &clock_dispatch,
+                                                    &discovery_limiter_dispatch,
+                                                    &source_mac,
+                                                    Apdu::ConfirmedRequest(reassembled),
+                                                    received.take().unwrap_or_else(|| {
+                                                        warn!("received consumed twice - using empty fallback");
+                                                        bacnet_network::layer::ReceivedApdu {
+                                                            apdu: bytes::Bytes::new(),
+                                                            source_mac: bacnet_types::MacAddr::new(),
+                                                            source_network: None,
+                                                            link_layer_group: false,
+                                                            is_group: false,
+                                                            data_attributes: Vec::new(),
+                                                            reply_tx: None,
+                                                        }
+                                                    }),
+                                                )
+                                                .await;
                                             }
                                             Err(e) => {
                                                 warn!(
@@ -470,6 +481,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 &dcc_timer_dispatch,
                                 &config_dispatch,
                                 &clock_dispatch,
+                                &discovery_limiter_dispatch,
                                 &source_mac,
                                 decoded,
                                 received.take().unwrap_or_else(|| {
@@ -701,6 +713,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         let server = Self {
             config,
+            discovery_limiter,
             _clock: clock,
             network,
             db,
@@ -810,52 +823,4 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let db = self.db.read().await;
         crate::pics::PicsGenerator::new(&db, &self.config, pics_config).generate()
     }
-
-    /// Broadcast an I-Am for this server's Device object using the bound transport socket.
-    pub async fn broadcast_i_am(&self) -> Result<(), Error> {
-        broadcast_i_am_from(&self.config, &self.db, &self.network).await
-    }
-}
-
-impl<T: TransportPort + 'static> IAmBroadcaster<T> {
-    /// Broadcast an I-Am for this server's Device object using the bound transport socket.
-    pub async fn broadcast_i_am(&self) -> Result<(), Error> {
-        broadcast_i_am_from(&self.config, &self.db, &self.network).await
-    }
-}
-
-async fn broadcast_i_am_from<T: TransportPort + 'static>(
-    config: &ServerConfig,
-    db: &Arc<RwLock<ObjectDatabase>>,
-    network: &Arc<NetworkLayer<T>>,
-) -> Result<(), Error> {
-    let device_oid = {
-        let db = db.read().await;
-        db.list_objects()
-            .into_iter()
-            .find(|oid| oid.object_type() == ObjectType::DEVICE)
-            .ok_or_else(|| Error::Encoding("no Device object in database".into()))?
-    };
-
-    let i_am = IAmRequest {
-        object_identifier: device_oid,
-        max_apdu_length: config.max_apdu_length,
-        segmentation_supported: config.segmentation_supported,
-        vendor_id: config.vendor_id,
-    };
-
-    let mut service_buf = BytesMut::new();
-    i_am.encode(&mut service_buf);
-
-    let pdu = Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
-        service_choice: UnconfirmedServiceChoice::I_AM,
-        service_request: service_buf.freeze(),
-    });
-
-    let mut buf = BytesMut::new();
-    encode_apdu(&mut buf, &pdu)?;
-
-    network
-        .broadcast_apdu(&buf, false, NetworkPriority::NORMAL)
-        .await
 }

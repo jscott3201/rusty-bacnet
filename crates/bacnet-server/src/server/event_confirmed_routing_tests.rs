@@ -258,6 +258,7 @@ impl Harness {
             &Arc::new(Mutex::new(None::<JoinHandle<()>>)),
             &Arc::new(ServerConfig::default()),
             &None,
+            &Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), None)),
             source_mac,
             apdu,
             bacnet_network::layer::ReceivedApdu {

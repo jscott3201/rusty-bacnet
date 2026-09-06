@@ -6,7 +6,9 @@
 
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU8, Ordering};
+#[cfg(test)]
+pub(crate) use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -360,6 +362,8 @@ pub struct ServerConfig {
     /// A value of `0` is clamped to one second. Ignored when
     /// [`enable_event_enrollment`](Self::enable_event_enrollment) is false.
     pub event_enrollment_interval_secs: u64,
+    /// Discovery rate-limiting and duplicate suppression policy.
+    pub discovery_policy: DiscoveryPolicy,
 }
 
 impl std::fmt::Debug for ServerConfig {
@@ -409,6 +413,7 @@ impl std::fmt::Debug for ServerConfig {
                 "event_enrollment_interval_secs",
                 &self.event_enrollment_interval_secs,
             )
+            .field("discovery_policy", &self.discovery_policy)
             .finish()
     }
 }
@@ -433,6 +438,7 @@ impl Default for ServerConfig {
             enable_fault_detection: false,
             enable_event_enrollment: true,
             event_enrollment_interval_secs: 10,
+            discovery_policy: DiscoveryPolicy::default(),
         }
     }
 }
@@ -548,6 +554,12 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
     /// Set the vendor identifier (used in IAm responses and protocol operations).
     pub fn vendor_id(mut self, id: u16) -> Self {
         self.config.vendor_id = id;
+        self
+    }
+
+    /// Set the discovery rate-limiting and duplicate suppression policy.
+    pub fn discovery_policy(mut self, policy: DiscoveryPolicy) -> Self {
+        self.config.discovery_policy = policy;
         self
     }
 
@@ -692,6 +704,12 @@ impl BipServerBuilder {
         self
     }
 
+    /// Set the discovery rate-limiting and duplicate suppression policy.
+    pub fn discovery_policy(mut self, policy: DiscoveryPolicy) -> Self {
+        self.config.discovery_policy = policy;
+        self
+    }
+
     /// Build and start the server, constructing a BipTransport from the config.
     pub async fn build(self) -> Result<BACnetServer<BipTransport>, Error> {
         let transport = BipTransport::new(
@@ -710,161 +728,10 @@ impl BipServerBuilder {
     }
 }
 
-/// Key for tracking segmented transactions by peer and invoke ID.
-type SegKey = (MacAddr, Option<NpduAddress>, u8);
-
-fn segmented_transaction_key(
-    source_mac: &[u8],
-    source_network: Option<&NpduAddress>,
-    invoke_id: u8,
-) -> SegKey {
-    match source_network {
-        Some(address)
-            if (1..=0xFFFE).contains(&address.network) && !address.mac_address.is_empty() =>
-        {
-            (MacAddr::new(), Some(address.clone()), invoke_id)
-        }
-        _ => (
-            MacAddr::from_slice(source_mac),
-            source_network.cloned(),
-            invoke_id,
-        ),
-    }
-}
-
-#[derive(Debug)]
-enum SegmentedSendEvent {
-    SegmentAck(SegmentAckPdu),
-    Abort(AbortPdu),
-}
-
-#[derive(Debug, Clone)]
-enum SegmentedSendControlEvent {
-    Abort(AbortPdu),
-    Cancel,
-}
-
-struct SegmentedSendHandle {
-    segment_ack_tx: mpsc::Sender<SegmentAckPdu>,
-    control_tx: watch::Sender<Option<SegmentedSendControlEvent>>,
-    closed: AtomicBool,
-    current_sequence: AtomicU16,
-    total_segments: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SegmentAckDisposition {
-    Advance,
-    Retransmit,
-}
-
-fn segment_ack_disposition(
-    ack: &SegmentAckPdu,
-    current: usize,
-    total_segments: usize,
-) -> Option<SegmentAckDisposition> {
-    if current >= total_segments {
-        return None;
-    }
-
-    let ack_seq = ack.sequence_number as usize;
-    if ack_seq >= total_segments {
-        return None;
-    }
-
-    // Clause 5.4.4.2 treats either ACK flavor's sequence number as the last
-    // segment accepted. A NAK for the preceding segment asks for `current`
-    // again; a NAK for `current` confirms it and advances the send window.
-    if ack_seq == current {
-        Some(SegmentAckDisposition::Advance)
-    } else if ack.negative_ack && current.checked_sub(1) == Some(ack_seq) {
-        Some(SegmentAckDisposition::Retransmit)
-    } else {
-        None
-    }
-}
-
-impl SegmentedSendHandle {
-    fn new(
-        segment_ack_tx: mpsc::Sender<SegmentAckPdu>,
-        control_tx: watch::Sender<Option<SegmentedSendControlEvent>>,
-        total_segments: usize,
-    ) -> Self {
-        Self {
-            segment_ack_tx,
-            control_tx,
-            closed: AtomicBool::new(false),
-            current_sequence: AtomicU16::new(u16::MAX),
-            total_segments,
-        }
-    }
-
-    fn accepts_segment_ack(&self, ack: &SegmentAckPdu) -> bool {
-        if ack.sent_by_server || self.closed.load(Ordering::Acquire) {
-            return false;
-        }
-
-        let current = self.current_sequence.load(Ordering::Acquire) as usize;
-        if current >= self.total_segments {
-            return false;
-        }
-
-        segment_ack_disposition(ack, current, self.total_segments).is_some()
-    }
-
-    fn send_control(&self, event: SegmentedSendControlEvent) {
-        self.closed.store(true, Ordering::Release);
-        self.control_tx.send_replace(Some(event));
-    }
-
-    fn same_channel(&self, sender: &mpsc::Sender<SegmentAckPdu>) -> bool {
-        self.segment_ack_tx.same_channel(sender)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct SegmentedSendOptions {
-    segment_timeout: Duration,
-    max_retries: u8,
-}
-
-impl Default for SegmentedSendOptions {
-    fn default() -> Self {
-        Self {
-            segment_timeout: DEFAULT_APDU_SEGMENT_TIMEOUT,
-            max_retries: DEFAULT_APDU_SEGMENT_RETRIES,
-        }
-    }
-}
-
-struct SegmentedRequestState {
-    payload: segmented_receive::RequestPayload,
-    last_activity: Instant,
-    /// Last successfully saved new in-order segment, independent of SegmentTimer.
-    last_progress: Instant,
-    expected_seq: u8,
-    /// Last sequence number in the previously completed receive window.
-    initial_sequence_number: u8,
-    /// Duplicates silently discarded in the current receive window.
-    duplicate_count: u8,
-    /// Last segment accepted in order (Clause 5.4.2 LastSequenceNumber).
-    last_acked_seq: u8,
-    window_pos: u8,
-    actual_window_size: u8,
-    /// Monotonic count of segments accepted in order (#364).
-    ///
-    /// The reassembly total. `expected_seq` cannot serve: Clause 20.1.2.7
-    /// makes the sequence number modulo 256, so a 260-segment request ends at
-    /// sequence 3 and `seq + 1` names a four-segment total. This counter also
-    /// carries the overrun cap — acceptance is strictly in order, so it
-    /// reaches [`MAX_REQUEST_SEGMENTS`] exactly when the sequence number is
-    /// about to wrap onto stored segment 0.
-    accepted_segments: usize,
-}
-
 /// BACnet server with APDU dispatch and service handling.
 pub struct BACnetServer<T: TransportPort> {
     config: ServerConfig,
+    discovery_limiter: Arc<DiscoveryLimiter>,
     /// Server-owned clock controller; absent in explicit clockless mode.
     _clock: Option<Arc<ServerClock>>,
     /// Shared network layer (also held by dispatch task; read by
@@ -958,6 +825,9 @@ mod cov_encoding;
 mod cov_notifications;
 mod cov_snapshot;
 mod device_bindings;
+mod discovery;
+pub use discovery::{DiscoveryCounters, DiscoveryPolicy};
+pub(crate) use discovery::{DiscoveryLimiter, PreCheckDecision, WhoHasTarget};
 mod dispatch;
 mod event_enrollment_lifecycle;
 mod event_message_policy;
@@ -982,6 +852,8 @@ pub use sc_builder::ScServerBuilder;
 mod responses;
 mod segmentation;
 mod segmented_receive;
+mod segmented_send;
+pub(crate) use segmented_send::*;
 mod shutdown;
 
 #[cfg(test)]
@@ -998,6 +870,8 @@ mod dcc_event_detection_tests;
 mod device_bindings_tests;
 #[cfg(test)]
 mod device_recipient_routing_tests;
+#[cfg(test)]
+mod discovery_tests;
 #[cfg(test)]
 mod event_confirmed_routing_tests;
 #[cfg(test)]
@@ -1029,5 +903,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             transport: None,
             configured_device_bindings: Vec::new(),
         }
+    }
+
+    /// Get a snapshot of discovery rate-limiting counters.
+    pub fn discovery_counters(&self) -> DiscoveryCounters {
+        self.discovery_limiter.counters()
     }
 }
