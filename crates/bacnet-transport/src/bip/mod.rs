@@ -22,8 +22,10 @@ use crate::udp_metadata::{DestinationReceiver, IpVersion};
 use bacnet_types::enums::{BvlcFunction, BvlcResultCode};
 use bacnet_types::error::Error;
 
+mod fanout;
 mod io;
 mod rate_limit;
+pub use fanout::{FanoutCounters, FanoutPolicy};
 use io::{
     handle_bvll_message, original_destination_matches, resolve_local_ip,
     send_register_foreign_device, RecvContext,
@@ -146,6 +148,14 @@ pub struct BipTransport {
     bdt_persist_path: Option<std::path::PathBuf>,
     /// Management request and response rate limiter.
     management_limiter: Arc<std::sync::Mutex<ManagementRateLimiter>>,
+    /// Broadcast forwarding fanout policy.
+    fanout_policy: FanoutPolicy,
+    /// Background worker task for broadcast forwarding.
+    fanout_task: Option<JoinHandle<()>>,
+    /// Operational counters for broadcast forwarding fanout.
+    fanout_counters: Arc<fanout::AtomicFanoutCounters>,
+    /// Rate limiter for broadcast forwarding fanout.
+    fanout_limiter: Arc<std::sync::Mutex<fanout::FanoutRateLimiter>>,
 }
 
 impl BipTransport {
@@ -155,6 +165,11 @@ impl BipTransport {
     /// - `port`: UDP port (default 47808 / 0xBAC0)
     /// - `broadcast_address`: Directed broadcast address (e.g., `255.255.255.255`)
     pub fn new(interface: Ipv4Addr, port: u16, broadcast_address: Ipv4Addr) -> Self {
+        let fanout_policy = FanoutPolicy::default();
+        let fanout_limiter = Arc::new(std::sync::Mutex::new(fanout::FanoutRateLimiter::new(
+            fanout_policy.clone(),
+        )));
+        let fanout_counters = Arc::new(fanout::AtomicFanoutCounters::default());
         Self {
             interface,
             port,
@@ -170,6 +185,10 @@ impl BipTransport {
             pending_bvlc_response: Arc::new(Mutex::new(None)),
             bdt_persist_path: None,
             management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
+            fanout_policy,
+            fanout_task: None,
+            fanout_counters,
+            fanout_limiter,
         }
     }
 
@@ -249,6 +268,19 @@ impl BipTransport {
         }
     }
 
+    /// Return the operational broadcast forwarding fanout counters.
+    pub fn fanout_counters(&self) -> FanoutCounters {
+        self.fanout_counters.snapshot()
+    }
+
+    /// Set the broadcast forwarding fanout policy and rate limits.
+    pub fn set_fanout_policy(&mut self, policy: FanoutPolicy) {
+        if let Ok(mut limiter) = self.fanout_limiter.lock() {
+            limiter.set_policy(policy.clone());
+        }
+        self.fanout_policy = policy;
+    }
+
     /// Timeout for BVLC management response waiting.
     const BVLC_RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -291,6 +323,10 @@ impl BipTransport {
             tasks.push(task);
         }
         if let Some(task) = self.bbmd_fdt_purge_task.take() {
+            task.abort();
+            tasks.push(task);
+        }
+        if let Some(task) = self.fanout_task.take() {
             task.abort();
             tasks.push(task);
         }
@@ -569,6 +605,20 @@ impl TransportPort for BipTransport {
 
         let (npdu_tx, rx) = mpsc::channel(NPDU_CHANNEL_CAPACITY);
 
+        let (fanout_tx, fanout_rx) = mpsc::channel(self.fanout_policy.queue_capacity);
+        let fanout_task = tokio::spawn(fanout::run_fanout_worker(
+            Arc::clone(&socket),
+            fanout_rx,
+            Arc::clone(&self.fanout_counters),
+        ));
+        self.fanout_task = Some(fanout_task);
+
+        let fanout_dispatcher = fanout::FanoutDispatcher::new(
+            fanout_tx,
+            Arc::clone(&self.fanout_limiter),
+            Arc::clone(&self.fanout_counters),
+        );
+
         let recv_ctx = RecvContext {
             local_mac: self.local_mac,
             socket: Arc::clone(&socket),
@@ -578,6 +628,7 @@ impl TransportPort for BipTransport {
             broadcast_port: self.port,
             pending_bvlc_response: self.pending_bvlc_response.clone(),
             management_limiter: Arc::clone(&self.management_limiter),
+            fanout: Some(fanout_dispatcher),
             #[cfg(test)]
             force_dbtn_forward_failure: false,
         };
@@ -743,6 +794,8 @@ mod acl_tests;
 mod bdt_persistence_tests;
 #[cfg(test)]
 mod dbtn_tests;
+#[cfg(test)]
+mod fanout_tests;
 #[cfg(test)]
 mod fdt_tests;
 #[cfg(test)]

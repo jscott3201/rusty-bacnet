@@ -4,7 +4,8 @@
 //! invalid or conflicting candidates must fail transactionally with an
 //! `Error::Encoding`-style error and preserve the committed table.
 
-use super::{BbmdState, BdtEntry};
+use super::{BbmdState, BdtEntry, ForeignDevicePolicy};
+use bacnet_types::enums::BvlcResultCode;
 use bacnet_types::error::Error;
 
 const PORT: u16 = 0xBAC0;
@@ -291,4 +292,72 @@ fn relocated_forwarded_npdu_skips_local_broadcast_for_directed_peer() {
 fn relocated_forwarded_npdu_skips_local_broadcast_for_unknown_peer() {
     let bbmd = make_bbmd();
     assert!(!bbmd.forwarded_npdu_needs_local_broadcast([10, 0, 0, 1], PORT));
+}
+
+#[test]
+fn rejects_wide_broadcast_prefix_under_slash_8() {
+    let mut bbmd = make_bbmd();
+    // /7 mask (254.0.0.0) is wider than /8 and must be rejected
+    let err7 = bbmd
+        .set_bdt(vec![entry([10, 0, 0, 5], PORT, [254, 0, 0, 0])])
+        .unwrap_err();
+    assert_encoding_error(err7, "wide");
+
+    // /1 mask (128.0.0.0) is wider than /8 and must be rejected
+    let err1 = bbmd
+        .set_bdt(vec![entry([10, 0, 0, 5], PORT, [128, 0, 0, 0])])
+        .unwrap_err();
+    assert_encoding_error(err1, "wide");
+
+    // Valid /8 mask (255.0.0.0) with non-255.255.255.255 directed broadcast is accepted
+    let ok8 = entry([10, 0, 0, 1], PORT, [255, 0, 0, 0]);
+    bbmd.set_bdt(vec![ok8.clone()]).unwrap();
+    assert!(bbmd.bdt().contains(&ok8));
+}
+
+#[test]
+fn rejects_resolved_limited_broadcast_at_slash_8() {
+    let mut bbmd = make_bbmd();
+    // /8 mask with IP 255.x.y.z resolves to 255.255.255.255, which is rejected
+    let err = bbmd
+        .set_bdt(vec![entry([255, 0, 0, 1], PORT, [255, 0, 0, 0])])
+        .unwrap_err();
+    assert_encoding_error(err, "limited");
+}
+
+#[test]
+fn forwarding_targets_deduplicates_overlapping_bdt_and_fdt() {
+    let mut bbmd = make_bbmd();
+    // Two BDT entries resolving to 192.168.7.255:PORT
+    let first_bdt = entry([192, 168, 7, 10], PORT, MASK_24);
+    let second_bdt = entry([192, 168, 7, 20], PORT, MASK_24);
+    bbmd.set_bdt(vec![first_bdt, second_bdt]).unwrap();
+
+    // Foreign device matching the same directed broadcast IP and port
+    bbmd.enable_foreign_device_registration(ForeignDevicePolicy::default());
+    assert_eq!(
+        bbmd.register_foreign_device([192, 168, 7, 255], PORT, 60),
+        BvlcResultCode::SUCCESSFUL_COMPLETION
+    );
+
+    // Also register an independent foreign device
+    assert_eq!(
+        bbmd.register_foreign_device([10, 0, 0, 99], PORT, 60),
+        BvlcResultCode::SUCCESSFUL_COMPLETION
+    );
+
+    let targets = bbmd.forwarding_targets([172, 16, 0, 1], PORT);
+    assert_eq!(
+        targets.len(),
+        2,
+        "directed broadcast and independent foreign device must be emitted once each: {targets:?}"
+    );
+    assert_eq!(targets[0], ([192, 168, 7, 255], PORT));
+    assert_eq!(targets[1], ([10, 0, 0, 99], PORT));
+
+    assert_eq!(
+        bbmd.fdt_counters().destinations_deduplicated,
+        2,
+        "1 BDT duplicate + 1 FDT duplicate must be counted"
+    );
 }

@@ -3,7 +3,7 @@
 //! Manages the Broadcast Distribution Table (BDT) and Foreign Device Table
 //! (FDT) per ASHRAE 135-2020 Annex J. Pure state/logic — no async or I/O.
 
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::{hash_map::Entry, HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use bacnet_types::enums::BvlcResultCode;
@@ -92,6 +92,8 @@ fn validate_bdt_entry(e: &BdtEntry) -> Result<(), Error> {
         "multicast IP"
     } else if prefix == 33 {
         "non-contiguous mask"
+    } else if prefix < 8 {
+        "mask prefix too wide (< /8) or limited-broadcast target"
     } else if prefix < 32 && ip & host == 0 {
         "subnet network address"
     } else if prefix < 32 && ip | mask == u32::MAX {
@@ -556,6 +558,7 @@ impl BbmdState {
     ) -> Vec<([u8; 4], u16)> {
         self.purge_expired_at(now);
         let mut targets = Vec::new();
+        let mut seen = HashSet::new();
 
         for entry in &self.bdt {
             // Skip self
@@ -572,10 +575,36 @@ impl BbmdState {
                 entry.ip[2] | !entry.broadcast_mask[2],
                 entry.ip[3] | !entry.broadcast_mask[3],
             ];
-            targets.push((directed_broadcast, entry.port));
+            let target = (directed_broadcast, entry.port);
+            if !seen.insert(target) {
+                self.counters.destinations_deduplicated += 1;
+            } else {
+                targets.push(target);
+            }
         }
 
-        targets.extend(self.fdt_forwarding_targets_at(exclude_ip, exclude_port, now));
+        let max_fdt_fanout = self
+            .foreign_device_policy
+            .as_ref()
+            .map_or(32, |p| p.max_fdt_fanout);
+
+        let mut fdt_count = 0;
+        for entry in &self.fdt {
+            if entry.ip == exclude_ip && entry.port == exclude_port {
+                continue;
+            }
+            let target = (entry.ip, entry.port);
+            if !seen.insert(target) {
+                self.counters.destinations_deduplicated += 1;
+                continue;
+            }
+            if fdt_count >= max_fdt_fanout {
+                self.counters.fanout_budget_reached += 1;
+                break;
+            }
+            targets.push(target);
+            fdt_count += 1;
+        }
 
         targets
     }
@@ -608,15 +637,21 @@ impl BbmdState {
             .map_or(32, |p| p.max_fdt_fanout);
 
         let mut targets = Vec::new();
+        let mut seen = HashSet::new();
         for entry in &self.fdt {
             if entry.ip == exclude_ip && entry.port == exclude_port {
+                continue;
+            }
+            let target = (entry.ip, entry.port);
+            if !seen.insert(target) {
+                self.counters.destinations_deduplicated += 1;
                 continue;
             }
             if targets.len() >= max_fdt_fanout {
                 self.counters.fanout_budget_reached += 1;
                 break;
             }
-            targets.push((entry.ip, entry.port));
+            targets.push(target);
         }
 
         targets

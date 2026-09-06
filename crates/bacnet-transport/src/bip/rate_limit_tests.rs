@@ -54,6 +54,7 @@ fn test_ctx(
         broadcast_port: local_port,
         pending_bvlc_response: Arc::new(Mutex::new(None)),
         management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
+        fanout: None,
         force_dbtn_forward_failure: false,
     }
 }
@@ -320,6 +321,7 @@ async fn rate_limit_discards_malformed_and_unauthorized_before_normal_handling()
         broadcast_port: local_port,
         pending_bvlc_response: Arc::new(Mutex::new(None)),
         management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
+        fanout: None,
         force_dbtn_forward_failure: false,
     };
 

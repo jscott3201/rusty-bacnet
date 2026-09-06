@@ -141,6 +141,7 @@ async fn original_unicast_npdu_uses_udp_sender_source_mac_and_ignores_self() {
         broadcast_port: local_port,
         pending_bvlc_response: Arc::new(Mutex::new(None)),
         management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
+        fanout: None,
         force_dbtn_forward_failure: false,
     };
     let sender = ([192, 0, 2, 30], 0xBAC0);
@@ -218,6 +219,7 @@ async fn original_broadcast_npdu_bbmd_forwards_to_bdt_and_fdt_without_local_echo
         broadcast_port: local_broadcast_port,
         pending_bvlc_response: Arc::new(Mutex::new(None)),
         management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
+        fanout: None,
         force_dbtn_forward_failure: false,
     };
     let msg = BvllMessage {

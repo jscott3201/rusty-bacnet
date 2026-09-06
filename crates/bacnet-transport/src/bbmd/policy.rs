@@ -69,6 +69,8 @@ pub struct FdtCounters {
     pub capacity_exhausted: u64,
     /// Number of times the broadcast forwarding fanout budget for FDT targets was reached.
     pub fanout_budget_reached: u64,
+    /// Number of duplicate forwarding destinations skipped during resolution.
+    pub destinations_deduplicated: u64,
 }
 
 /// Window-based registration rate limiter for foreign device registrations.

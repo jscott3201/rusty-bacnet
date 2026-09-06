@@ -7,10 +7,11 @@ use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
 
 use bacnet_transport::bbmd::ForeignDevicePolicy;
-use bacnet_transport::bip::{BipTransport, ForeignDeviceConfig};
+use bacnet_transport::bip::{BipTransport, FanoutPolicy, ForeignDeviceConfig};
 use bacnet_transport::bvll::decode_bip_mac;
 use bacnet_transport::port::TransportPort;
 
+use crate::stress::harness::current_rss_kb;
 use crate::stress::output::{DegradationPoint, LatencyRecorder};
 
 pub async fn run(duration_secs: u64, steps: &[u64]) -> Vec<DegradationPoint> {
@@ -18,6 +19,8 @@ pub async fn run(duration_secs: u64, steps: &[u64]) -> Vec<DegradationPoint> {
 
     for &count in steps {
         eprintln!("--- {} foreign devices ---", count);
+
+        let rss_before = current_rss_kb();
 
         // Start BBMD
         let mut bbmd = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
@@ -29,12 +32,20 @@ pub async fn run(duration_secs: u64, steps: &[u64]) -> Vec<DegradationPoint> {
             registration_rate_global: 2000,
             ..Default::default()
         });
-        let _bbmd_rx = bbmd.start().await.unwrap();
+        bbmd.set_fanout_policy(FanoutPolicy {
+            max_fanout_per_input: 128,
+            max_packets_per_sec_global: 4096,
+            max_bytes_per_sec_global: 2_000_000,
+            max_packets_per_sec_per_origin: 512,
+            queue_capacity: 512,
+        });
+        let mut bbmd_rx = bbmd.start().await.unwrap();
         let bbmd_mac = bbmd.local_mac().to_vec();
         let (bbmd_ip, bbmd_port) = decode_bip_mac(&bbmd_mac).unwrap();
 
         // Register N foreign devices
         let mut fds = Vec::new();
+        let mut fd_rxs = Vec::new();
         let mut fd_errors = 0u64;
 
         for _ in 0..count {
@@ -45,7 +56,10 @@ pub async fn run(duration_secs: u64, steps: &[u64]) -> Vec<DegradationPoint> {
                 ttl: 600,
             });
             match fd.start().await {
-                Ok(_rx) => fds.push(fd),
+                Ok(rx) => {
+                    fds.push(fd);
+                    fd_rxs.push(rx);
+                }
                 Err(e) => {
                     eprintln!("  FD registration error: {}", e);
                     fd_errors += 1;
@@ -56,6 +70,11 @@ pub async fn run(duration_secs: u64, steps: &[u64]) -> Vec<DegradationPoint> {
         // Wait for registrations to complete
         tokio::time::sleep(Duration::from_millis(200)).await;
 
+        // Drain registration messages from bbmd_rx
+        while let Ok(Some(_)) =
+            tokio::time::timeout(Duration::from_millis(10), bbmd_rx.recv()).await
+        {}
+
         // Verify FDT size
         if let Some(state) = bbmd.bbmd_state() {
             let mut st = state.lock().await;
@@ -65,6 +84,7 @@ pub async fn run(duration_secs: u64, steps: &[u64]) -> Vec<DegradationPoint> {
 
         // Measure broadcast distribution: each FD sends a broadcast
         let mut recorder = LatencyRecorder::new();
+        let mut recv_recorder = LatencyRecorder::new();
         let deadline = Instant::now() + Duration::from_secs(duration_secs);
         let test_npdu = vec![0x01, 0x00, 0x10, 0x08]; // Minimal NPDU + WhoIs
 
@@ -76,6 +96,20 @@ pub async fn run(duration_secs: u64, steps: &[u64]) -> Vec<DegradationPoint> {
                 Ok(_) => {
                     recorder.record_success(start);
                     sends += 1;
+                    if fd_rxs.len() > 1 {
+                        let target_idx = (fd_idx + 1) % fd_rxs.len();
+                        let recv_start = Instant::now();
+                        if let Ok(Some(_)) = tokio::time::timeout(
+                            Duration::from_millis(10),
+                            fd_rxs[target_idx].recv(),
+                        )
+                        .await
+                        {
+                            recv_recorder.record_success(recv_start);
+                        } else {
+                            recv_recorder.record_failure();
+                        }
+                    }
                 }
                 Err(_) => recorder.record_failure(),
             }
@@ -84,15 +118,34 @@ pub async fn run(duration_secs: u64, steps: &[u64]) -> Vec<DegradationPoint> {
         }
 
         let stats = recorder.stats();
+        let recv_stats = recv_recorder.stats();
         let throughput = recorder.successful() as f64 / duration_secs as f64;
+        let fanout_stats = bbmd.fanout_counters();
+        let rss_after = current_rss_kb();
 
         eprintln!(
-            "  sends={} errors={} throughput={:.0}/s p50={}µs p99={}µs",
+            "  sends={} errors={} throughput={:.0}/s send_p50={}µs send_p99={}µs",
             recorder.successful(),
             recorder.failed() + fd_errors,
             throughput,
             stats.p50,
             stats.p99,
+        );
+        eprintln!(
+            "  fanout: forwarded={} ({} bytes) throttled={} deduped={} drops={}",
+            fanout_stats.packets_forwarded,
+            fanout_stats.bytes_forwarded,
+            fanout_stats.packets_throttled,
+            fanout_stats.destinations_deduplicated,
+            fanout_stats.queue_overflow_drops,
+        );
+        eprintln!(
+            "  recv latency: p50={}µs p99={}µs | memory: {}KB → {}KB (delta: {:+}KB)",
+            recv_stats.p50,
+            recv_stats.p99,
+            rss_before,
+            rss_after,
+            rss_after as i64 - rss_before as i64,
         );
 
         curve.push(DegradationPoint {
@@ -100,7 +153,7 @@ pub async fn run(duration_secs: u64, steps: &[u64]) -> Vec<DegradationPoint> {
             p50_us: stats.p50,
             p99_us: stats.p99,
             throughput,
-            errors: recorder.failed() + fd_errors,
+            errors: recorder.failed() + fd_errors + fanout_stats.queue_overflow_drops,
         });
 
         // Cleanup

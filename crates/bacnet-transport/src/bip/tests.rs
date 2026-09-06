@@ -118,6 +118,7 @@ async fn pending_bvlc_response_requires_sender_and_expected_function() {
         broadcast_port: 47808,
         pending_bvlc_response: pending_bvlc_response.clone(),
         management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
+        fanout: None,
         force_dbtn_forward_failure: false,
     };
 
