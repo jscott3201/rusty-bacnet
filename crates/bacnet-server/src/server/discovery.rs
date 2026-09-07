@@ -81,24 +81,19 @@ impl DiscoveryPolicy {
             global_burst_capacity: u32::MAX,
             source_burst_capacity: u32::MAX,
             reserved_capacity: 0,
-            reserved_sources: Vec::new(),
             coalesce_window: Duration::ZERO,
             prefer_directed_responses: false,
-            max_tracked_sources: 256,
+            ..Default::default()
         }
     }
 
     /// Return a sanitized copy with valid burst and capacity bounds.
     pub fn sanitized(&self) -> Self {
         let mut policy = self.clone();
-        if policy.max_responses_per_sec_global > 0
-            && policy.max_responses_per_sec_global != u32::MAX
-        {
+        if (1..u32::MAX).contains(&policy.max_responses_per_sec_global) {
             policy.global_burst_capacity = policy.global_burst_capacity.max(1);
         }
-        if policy.max_responses_per_sec_per_source > 0
-            && policy.max_responses_per_sec_per_source != u32::MAX
-        {
+        if (1..u32::MAX).contains(&policy.max_responses_per_sec_per_source) {
             policy.source_burst_capacity = policy.source_burst_capacity.max(1);
         }
         policy.reserved_capacity = policy.reserved_capacity.min(policy.global_burst_capacity);
@@ -159,30 +154,8 @@ impl AtomicDiscoveryCounters {
     }
 
     #[inline]
-    pub(crate) fn inc_who_is(&self) {
-        self.who_is_received.fetch_add(1, Ordering::Relaxed);
-    }
-
-    #[inline]
-    pub(crate) fn inc_who_has(&self) {
-        self.who_has_received.fetch_add(1, Ordering::Relaxed);
-    }
-
-    #[inline]
-    pub(crate) fn inc_coalesced(&self) {
-        self.requests_coalesced.fetch_add(1, Ordering::Relaxed);
-    }
-
-    #[inline]
-    pub(crate) fn inc_throttled_source(&self) {
-        self.responses_throttled_source
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    #[inline]
-    pub(crate) fn inc_throttled_global(&self) {
-        self.responses_throttled_global
-            .fetch_add(1, Ordering::Relaxed);
+    pub(crate) fn inc(&self, c: &AtomicU64) {
+        c.fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn record_sent(&self, bytes: usize, directed: bool, is_who_is: bool) {
@@ -214,8 +187,8 @@ pub(crate) struct SourceKey {
 }
 
 impl SourceKey {
-    pub(crate) fn from_received(received: &ReceivedApdu) -> Self {
-        if let Some(ref net) = received.source_network {
+    pub(crate) fn from_parts(source_mac: &MacAddr, source_network: Option<&NpduAddress>) -> Self {
+        if let Some(ref net) = source_network {
             if (1..=0xFFFE).contains(&net.network) && !net.mac_address.is_empty() {
                 return Self {
                     network: net.network,
@@ -225,8 +198,12 @@ impl SourceKey {
         }
         Self {
             network: 0,
-            mac: received.source_mac.clone(),
+            mac: source_mac.clone(),
         }
+    }
+
+    pub(crate) fn from_received(received: &ReceivedApdu) -> Self {
+        Self::from_parts(&received.source_mac, received.source_network.as_ref())
     }
 }
 
@@ -249,16 +226,18 @@ fn refill_bucket(
     burst: u32,
     now: Instant,
 ) {
-    if rate == u32::MAX {
-        *tokens = burst as f64;
-        *byte_tokens = byte_rate as f64;
-        *last_refill = now;
-        return;
-    }
     let elapsed = now.saturating_duration_since(*last_refill).as_secs_f64();
     if elapsed > 0.0 {
-        *tokens = (*tokens + elapsed * (rate as f64)).min(burst as f64);
-        *byte_tokens = (*byte_tokens + elapsed * (byte_rate as f64)).min(byte_rate as f64);
+        *tokens = if rate == u32::MAX {
+            burst as f64
+        } else {
+            (*tokens + elapsed * (rate as f64)).min(burst as f64)
+        };
+        *byte_tokens = if byte_rate == usize::MAX {
+            byte_rate as f64
+        } else {
+            (*byte_tokens + elapsed * (byte_rate as f64)).min(byte_rate as f64)
+        };
         *last_refill = now;
     }
 }
@@ -277,15 +256,16 @@ impl SourceState {
     }
 
     fn has_capacity(&self, policy: &DiscoveryPolicy, bytes: usize) -> bool {
-        if policy.max_responses_per_sec_per_source == u32::MAX {
-            return true;
-        }
-        self.byte_tokens >= bytes as f64 && self.tokens >= 1.0
+        (policy.max_responses_per_sec_per_source == u32::MAX || self.tokens >= 1.0)
+            && (policy.max_bytes_per_sec_per_source == usize::MAX
+                || self.byte_tokens >= bytes as f64)
     }
 
     fn deduct(&mut self, policy: &DiscoveryPolicy, bytes: usize) {
         if policy.max_responses_per_sec_per_source != u32::MAX {
             self.tokens -= 1.0;
+        }
+        if policy.max_bytes_per_sec_per_source != usize::MAX {
             self.byte_tokens -= bytes as f64;
         }
     }
@@ -321,23 +301,24 @@ impl DiscoveryState {
         is_reserved: bool,
         bytes: usize,
     ) -> bool {
-        if policy.max_responses_per_sec_global == u32::MAX {
-            return true;
-        }
-        if self.global_byte_tokens < bytes as f64 {
-            return false;
-        }
-        let required = if is_reserved {
-            1.0
-        } else {
-            1.0 + policy.reserved_capacity as f64
+        let count_ok = policy.max_responses_per_sec_global == u32::MAX || {
+            let req = if is_reserved {
+                1.0
+            } else {
+                1.0 + policy.reserved_capacity as f64
+            };
+            self.global_tokens >= req
         };
-        self.global_tokens >= required
+        count_ok
+            && (policy.max_bytes_per_sec_global == usize::MAX
+                || self.global_byte_tokens >= bytes as f64)
     }
 
     fn deduct_global(&mut self, policy: &DiscoveryPolicy, bytes: usize) {
         if policy.max_responses_per_sec_global != u32::MAX {
             self.global_tokens -= 1.0;
+        }
+        if policy.max_bytes_per_sec_global != usize::MAX {
             self.global_byte_tokens -= bytes as f64;
         }
     }
@@ -348,7 +329,9 @@ impl DiscoveryState {
         key: &SourceKey,
         now: Instant,
     ) -> &mut SourceState {
-        ensure_source_capacity(self, policy, now);
+        if !self.sources.contains_key(key) {
+            ensure_source_capacity(self, policy, now);
+        }
         let src = self
             .sources
             .entry(key.clone())
@@ -375,15 +358,18 @@ impl DiscoveryState {
         if policy.coalesce_window.is_zero() {
             return false;
         }
-        let is_recent = |opt: Option<&Instant>| {
-            opt.is_some_and(|ts| now.saturating_duration_since(*ts) < policy.coalesce_window)
-        };
-        is_recent(self.negative_who_has.get(target))
-            || (is_broadcast && is_recent(self.last_broadcast_who_has.get(target)))
+        let is_recent = |ts: &Instant| now.saturating_duration_since(*ts) < policy.coalesce_window;
+        self.negative_who_has.get(target).is_some_and(is_recent)
+            || (is_broadcast
+                && self
+                    .last_broadcast_who_has
+                    .get(target)
+                    .is_some_and(is_recent))
             || self
                 .sources
                 .get(key)
-                .is_some_and(|s| is_recent(s.last_who_has.get(target)))
+                .and_then(|s| s.last_who_has.get(target))
+                .is_some_and(is_recent)
     }
 }
 
@@ -394,19 +380,14 @@ impl AtomicDeviceInstance {
     const PRESENT_BIT: u64 = 0x1_0000_0000;
 
     fn new(opt: Option<u32>) -> Self {
-        Self(AtomicU64::new(match opt {
-            Some(i) => Self::PRESENT_BIT | (i as u64),
-            None => 0,
-        }))
+        Self(AtomicU64::new(
+            opt.map_or(0, |i| Self::PRESENT_BIT | (i as u64)),
+        ))
     }
 
     fn load(&self, order: Ordering) -> Option<u32> {
         let val = self.0.load(order);
-        if val & Self::PRESENT_BIT != 0 {
-            Some(val as u32)
-        } else {
-            None
-        }
+        (val & Self::PRESENT_BIT != 0).then_some(val as u32)
     }
 }
 
@@ -458,9 +439,29 @@ impl DiscoveryLimiter {
         &self.policy
     }
 
+    #[cfg(test)]
+    pub(crate) fn negative_who_has_count(&self) -> usize {
+        self.state.lock().unwrap().negative_who_has.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn source_byte_tokens(
+        &self,
+        source_mac: &MacAddr,
+        source_network: Option<&NpduAddress>,
+    ) -> Option<f64> {
+        let key = SourceKey::from_parts(source_mac, source_network);
+        self.state
+            .lock()
+            .unwrap()
+            .sources
+            .get(&key)
+            .map(|s| s.byte_tokens)
+    }
+
     fn check_instance_in_range(&self, low: Option<u32>, high: Option<u32>) -> bool {
         match (self.device_instance.load(Ordering::Acquire), low, high) {
-            (Some(inst), Some(low), Some(high)) => inst >= low && inst <= high,
+            (Some(inst), Some(l), Some(h)) => inst >= l && inst <= h,
             (Some(_), _, _) => true,
             (None, _, _) => false,
         }
@@ -477,7 +478,7 @@ impl DiscoveryLimiter {
             Err(_) => return PreCheckDecision::DecodeError,
         };
 
-        self.counters.inc_who_is();
+        self.counters.inc(&self.counters.who_is_received);
 
         if !self.check_instance_in_range(who_is.low_limit, who_is.high_limit) {
             return PreCheckDecision::OutOfRange;
@@ -489,18 +490,16 @@ impl DiscoveryLimiter {
 
         // 1. Coalescing check
         if !self.policy.coalesce_window.is_zero() {
-            let is_recent = |opt: Option<Instant>| {
-                opt.is_some_and(|ts| {
-                    now.saturating_duration_since(ts) < self.policy.coalesce_window
-                })
-            };
-            if (is_broadcast && is_recent(state.last_broadcast_who_is))
-                || state
-                    .sources
-                    .get(&source_key)
-                    .is_some_and(|s| is_recent(s.last_who_is))
-            {
-                self.counters.inc_coalesced();
+            let is_recent =
+                |ts: &Instant| now.saturating_duration_since(*ts) < self.policy.coalesce_window;
+            let bcast = is_broadcast && state.last_broadcast_who_is.as_ref().is_some_and(is_recent);
+            let src = state
+                .sources
+                .get(&source_key)
+                .and_then(|s| s.last_who_is.as_ref())
+                .is_some_and(is_recent);
+            if bcast || src {
+                self.counters.inc(&self.counters.requests_coalesced);
                 return PreCheckDecision::Coalesced;
             }
         }
@@ -511,22 +510,20 @@ impl DiscoveryLimiter {
         const ESTIMATED_I_AM_BYTES: usize = 64;
 
         if !state.has_global_capacity(&self.policy, is_reserved, ESTIMATED_I_AM_BYTES) {
-            self.counters.inc_throttled_global();
+            self.counters.inc(&self.counters.responses_throttled_global);
             return PreCheckDecision::ThrottledGlobal;
         }
 
-        let policy = self.policy.clone();
-        let src = state.get_or_create_source_mut(&policy, &source_key, now);
-        if !src.has_capacity(&policy, ESTIMATED_I_AM_BYTES) {
-            self.counters.inc_throttled_source();
+        let src = state.get_or_create_source_mut(&self.policy, &source_key, now);
+        if !src.has_capacity(&self.policy, ESTIMATED_I_AM_BYTES) {
+            self.counters.inc(&self.counters.responses_throttled_source);
             return PreCheckDecision::ThrottledSource;
         }
 
-        state.deduct_global(&policy, ESTIMATED_I_AM_BYTES);
-        let src = state.get_or_create_source_mut(&policy, &source_key, now);
-        src.deduct(&policy, ESTIMATED_I_AM_BYTES);
+        src.deduct(&self.policy, ESTIMATED_I_AM_BYTES);
         src.last_activity = now;
         src.last_who_is = Some(now);
+        state.deduct_global(&self.policy, ESTIMATED_I_AM_BYTES);
         if is_broadcast && !self.policy.prefer_directed_responses {
             state.last_broadcast_who_is = Some(now);
         }
@@ -548,15 +545,12 @@ impl DiscoveryLimiter {
         let delta = (actual_bytes as f64) - (ESTIMATED_I_AM_BYTES as f64);
         let mut state = self.state.lock().unwrap();
         if delta != 0.0 {
-            if self.policy.max_responses_per_sec_global != u32::MAX {
+            if self.policy.max_bytes_per_sec_global != usize::MAX {
                 state.global_byte_tokens = (state.global_byte_tokens - delta).max(0.0);
             }
-            let key = SourceKey {
-                network: source_network.map(|n| n.network).unwrap_or(0),
-                mac: source_mac.clone(),
-            };
+            let key = SourceKey::from_parts(source_mac, source_network);
             if let Some(src) = state.sources.get_mut(&key) {
-                if self.policy.max_responses_per_sec_per_source != u32::MAX {
+                if self.policy.max_bytes_per_sec_per_source != usize::MAX {
                     src.byte_tokens = (src.byte_tokens - delta).max(0.0);
                 }
             }
@@ -577,15 +571,15 @@ impl DiscoveryLimiter {
             Err(_) => return PreCheckDecision::DecodeError,
         };
 
-        self.counters.inc_who_has();
+        self.counters.inc(&self.counters.who_has_received);
 
         if !self.check_instance_in_range(who_has.low_limit, who_has.high_limit) {
             return PreCheckDecision::OutOfRange;
         }
 
-        let target = match &who_has.object {
-            WhoHasObject::Identifier(oid) => WhoHasTarget::Id(*oid),
-            WhoHasObject::Name(name) => WhoHasTarget::Name(name.clone()),
+        let target = match who_has.object {
+            WhoHasObject::Identifier(oid) => WhoHasTarget::Id(oid),
+            WhoHasObject::Name(name) => WhoHasTarget::Name(name),
         };
 
         let is_broadcast = received.is_group || received.link_layer_group;
@@ -593,7 +587,7 @@ impl DiscoveryLimiter {
         let mut state = self.state.lock().unwrap();
 
         if state.is_coalesced_who_has(&self.policy, &target, &source_key, is_broadcast, now) {
-            self.counters.inc_coalesced();
+            self.counters.inc(&self.counters.requests_coalesced);
             return PreCheckDecision::Coalesced;
         }
 
@@ -602,14 +596,13 @@ impl DiscoveryLimiter {
         const ESTIMATED_I_HAVE_BYTES: usize = 64;
 
         if !state.has_global_capacity(&self.policy, is_reserved, ESTIMATED_I_HAVE_BYTES) {
-            self.counters.inc_throttled_global();
+            self.counters.inc(&self.counters.responses_throttled_global);
             return PreCheckDecision::ThrottledGlobal;
         }
 
-        let policy = self.policy.clone();
-        let src = state.get_or_create_source_mut(&policy, &source_key, now);
-        if !src.has_capacity(&policy, ESTIMATED_I_HAVE_BYTES) {
-            self.counters.inc_throttled_source();
+        let src = state.get_or_create_source_mut(&self.policy, &source_key, now);
+        if !src.has_capacity(&self.policy, ESTIMATED_I_HAVE_BYTES) {
+            self.counters.inc(&self.counters.responses_throttled_source);
             return PreCheckDecision::ThrottledSource;
         }
 
@@ -630,12 +623,24 @@ impl DiscoveryLimiter {
     }
 
     pub(crate) fn record_negative_who_has(&self, target: WhoHasTarget, now: Instant) {
+        const MAX_NEGATIVE_WHO_HAS: usize = 512;
         let mut state = self.state.lock().unwrap();
-        if state.negative_who_has.len() > 512 {
+        if state.negative_who_has.len() >= MAX_NEGATIVE_WHO_HAS {
             let window = self.policy.coalesce_window;
             state
                 .negative_who_has
                 .retain(|_, ts| now.saturating_duration_since(*ts) < window);
+        }
+        while state.negative_who_has.len() >= MAX_NEGATIVE_WHO_HAS {
+            let Some(oldest) = state
+                .negative_who_has
+                .iter()
+                .min_by_key(|(_, ts)| *ts)
+                .map(|(k, _)| k.clone())
+            else {
+                break;
+            };
+            state.negative_who_has.remove(&oldest);
         }
         state.negative_who_has.insert(target, now);
     }
@@ -652,7 +657,7 @@ impl DiscoveryLimiter {
         let is_broadcast = received.is_group || received.link_layer_group;
 
         if state.is_coalesced_who_has(&self.policy, target, &source_key, is_broadcast, now) {
-            self.counters.inc_coalesced();
+            self.counters.inc(&self.counters.requests_coalesced);
             return false;
         }
 
@@ -660,22 +665,20 @@ impl DiscoveryLimiter {
         let is_reserved = is_source_reserved(&self.policy, &source_key, received);
 
         if !state.has_global_capacity(&self.policy, is_reserved, response_bytes) {
-            self.counters.inc_throttled_global();
+            self.counters.inc(&self.counters.responses_throttled_global);
             return false;
         }
 
-        let policy = self.policy.clone();
-        let src = state.get_or_create_source_mut(&policy, &source_key, now);
-        if !src.has_capacity(&policy, response_bytes) {
-            self.counters.inc_throttled_source();
+        let src = state.get_or_create_source_mut(&self.policy, &source_key, now);
+        if !src.has_capacity(&self.policy, response_bytes) {
+            self.counters.inc(&self.counters.responses_throttled_source);
             return false;
         }
 
-        state.deduct_global(&policy, response_bytes);
-        let src = state.get_or_create_source_mut(&policy, &source_key, now);
-        src.deduct(&policy, response_bytes);
+        src.deduct(&self.policy, response_bytes);
         src.last_activity = now;
         src.last_who_has.insert(target.clone(), now);
+        state.deduct_global(&self.policy, response_bytes);
         if is_broadcast && !self.policy.prefer_directed_responses {
             state.last_broadcast_who_has.insert(target.clone(), now);
         }
@@ -701,15 +704,11 @@ impl DiscoveryLimiter {
     }
 }
 
-fn is_source_reserved(
-    policy: &DiscoveryPolicy,
-    source_key: &SourceKey,
-    received: &ReceivedApdu,
-) -> bool {
+fn is_source_reserved(policy: &DiscoveryPolicy, key: &SourceKey, recv: &ReceivedApdu) -> bool {
     policy
         .reserved_sources
         .iter()
-        .any(|r| r == &source_key.mac || r == &received.source_mac)
+        .any(|r| r == &key.mac || r == &recv.source_mac)
 }
 
 fn ensure_source_capacity(state: &mut DiscoveryState, policy: &DiscoveryPolicy, now: Instant) {
@@ -720,16 +719,15 @@ fn ensure_source_capacity(state: &mut DiscoveryState, policy: &DiscoveryPolicy, 
         now.saturating_duration_since(src.last_activity) < Duration::from_secs(10)
     });
     while state.sources.len() >= policy.max_tracked_sources {
-        let oldest = state
+        let Some(key) = state
             .sources
             .iter()
             .min_by_key(|(_, src)| src.last_activity)
-            .map(|(k, _)| k.clone());
-        if let Some(key) = oldest {
-            state.sources.remove(&key);
-        } else {
+            .map(|(k, _)| k.clone())
+        else {
             break;
-        }
+        };
+        state.sources.remove(&key);
     }
 }
 

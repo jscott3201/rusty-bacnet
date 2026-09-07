@@ -2,7 +2,7 @@
 //! and directed responses (Issue #534).
 
 use std::sync::{Arc as StdArc, Mutex as StdMutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bytes::{Bytes, BytesMut};
 use tokio::sync::mpsc;
@@ -19,7 +19,8 @@ use bacnet_services::who_has::{WhoHasObject, WhoHasRequest};
 use bacnet_services::who_is::WhoIsRequest;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
 use bacnet_types::enums::{
-    ConfirmedServiceChoice, NetworkPriority, PropertyIdentifier, UnconfirmedServiceChoice,
+    ConfirmedServiceChoice, NetworkPriority, ObjectType, PropertyIdentifier,
+    UnconfirmedServiceChoice,
 };
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
@@ -89,6 +90,31 @@ impl TransportPort for MockDiscoveryTransport {
     }
 }
 
+fn wrap_apdu(apdu: Bytes, source_mac: &[u8], routed: Option<(u16, &[u8])>) -> ReceivedNpdu {
+    let npdu = Npdu {
+        is_network_message: false,
+        expecting_reply: false,
+        priority: NetworkPriority::NORMAL,
+        destination: None,
+        source: routed.map(|(net, mac)| NpduAddress {
+            network: net,
+            mac_address: MacAddr::from_slice(mac),
+        }),
+        hop_count: 255,
+        payload: apdu,
+        ..Npdu::default()
+    };
+    let mut raw_buf = BytesMut::new();
+    encode_npdu(&mut raw_buf, &npdu).unwrap();
+    ReceivedNpdu {
+        npdu: raw_buf.freeze(),
+        source_mac: MacAddr::from_slice(source_mac),
+        link_layer_group: false,
+        data_attributes: Vec::new(),
+        reply_tx: None,
+    }
+}
+
 fn build_who_is_npdu(
     low: Option<u32>,
     high: Option<u32>,
@@ -107,30 +133,7 @@ fn build_who_is_npdu(
         service_request: service_buf.freeze(),
     });
     encode_apdu(&mut apdu_buf, &pdu).unwrap();
-
-    let npdu = Npdu {
-        is_network_message: false,
-        expecting_reply: false,
-        priority: NetworkPriority::NORMAL,
-        destination: None,
-        source: routed.map(|(net, mac)| NpduAddress {
-            network: net,
-            mac_address: MacAddr::from_slice(mac),
-        }),
-        hop_count: 255,
-        payload: apdu_buf.freeze(),
-        ..Npdu::default()
-    };
-    let mut raw_buf = BytesMut::new();
-    encode_npdu(&mut raw_buf, &npdu).unwrap();
-
-    ReceivedNpdu {
-        npdu: raw_buf.freeze(),
-        source_mac: MacAddr::from_slice(source_mac),
-        link_layer_group: false,
-        data_attributes: Vec::new(),
-        reply_tx: None,
-    }
+    wrap_apdu(apdu_buf.freeze(), source_mac, routed)
 }
 
 fn build_who_has_npdu(
@@ -153,30 +156,7 @@ fn build_who_has_npdu(
     });
     let mut apdu_buf = BytesMut::new();
     encode_apdu(&mut apdu_buf, &pdu).unwrap();
-
-    let npdu = Npdu {
-        is_network_message: false,
-        expecting_reply: false,
-        priority: NetworkPriority::NORMAL,
-        destination: None,
-        source: routed.map(|(net, mac)| NpduAddress {
-            network: net,
-            mac_address: MacAddr::from_slice(mac),
-        }),
-        hop_count: 255,
-        payload: apdu_buf.freeze(),
-        ..Npdu::default()
-    };
-    let mut raw_buf = BytesMut::new();
-    encode_npdu(&mut raw_buf, &npdu).unwrap();
-
-    ReceivedNpdu {
-        npdu: raw_buf.freeze(),
-        source_mac: MacAddr::from_slice(source_mac),
-        link_layer_group: false,
-        data_attributes: Vec::new(),
-        reply_tx: None,
-    }
+    wrap_apdu(apdu_buf.freeze(), source_mac, routed)
 }
 
 async fn spawn_test_server(
@@ -649,4 +629,167 @@ async fn test_directed_vs_broadcast_and_routed_npdu() {
     assert_eq!(server2.discovery_counters().directed_responses_sent, 1);
 
     server2.stop().await.unwrap();
+}
+
+fn mock_received(
+    source_mac: &[u8],
+    routed: Option<(u16, &[u8])>,
+) -> bacnet_network::layer::ReceivedApdu {
+    bacnet_network::layer::ReceivedApdu {
+        apdu: Bytes::new(),
+        source_mac: MacAddr::from_slice(source_mac),
+        source_network: routed.map(|(net, mac)| NpduAddress {
+            network: net,
+            mac_address: MacAddr::from_slice(mac),
+        }),
+        link_layer_group: false,
+        is_group: false,
+        data_attributes: Vec::new(),
+        reply_tx: None,
+    }
+}
+
+fn encode_who_is_req(low: Option<u32>, high: Option<u32>) -> Vec<u8> {
+    let mut buf = BytesMut::new();
+    WhoIsRequest {
+        low_limit: low,
+        high_limit: high,
+    }
+    .encode(&mut buf);
+    buf.to_vec()
+}
+
+#[test]
+fn test_exhausted_source_throttled_when_max_tracked_sources_reached() {
+    let policy = DiscoveryPolicy {
+        source_burst_capacity: 1,
+        max_responses_per_sec_per_source: 1,
+        max_tracked_sources: 2,
+        coalesce_window: Duration::ZERO,
+        ..DiscoveryPolicy::default()
+    };
+    let limiter = DiscoveryLimiter::new(policy, Some(100));
+    let req = encode_who_is_req(None, None);
+    let now = Instant::now();
+    let src_a = mock_received(&[0x0A, 0x00, 0x00, 0x01], None);
+    let src_b = mock_received(&[0x0A, 0x00, 0x00, 0x02], None);
+
+    assert_eq!(
+        limiter.pre_check_who_is(&req, &src_a, now),
+        PreCheckDecision::Admit
+    );
+    assert_eq!(
+        limiter.pre_check_who_is(&req, &src_b, now),
+        PreCheckDecision::Admit
+    );
+    assert_eq!(
+        limiter.pre_check_who_is(&req, &src_a, now),
+        PreCheckDecision::ThrottledSource
+    );
+    assert_eq!(limiter.counters().responses_throttled_source, 1);
+}
+
+#[test]
+fn test_routed_who_is_byte_accounting_uses_remote_mac() {
+    let policy = DiscoveryPolicy {
+        max_bytes_per_sec_per_source: 100,
+        source_burst_capacity: 10,
+        max_responses_per_sec_per_source: 10,
+        coalesce_window: Duration::ZERO,
+        ..DiscoveryPolicy::default()
+    };
+    let limiter = DiscoveryLimiter::new(policy, Some(100));
+    let req = encode_who_is_req(None, None);
+    let now = Instant::now();
+    let routed = mock_received(&[0x0A, 0x00, 0x00, 0xFE], Some((200, &[0x11, 0x22])));
+
+    assert_eq!(
+        limiter.pre_check_who_is(&req, &routed, now),
+        PreCheckDecision::Admit
+    );
+    limiter.record_i_am_sent(
+        34,
+        true,
+        &routed.source_mac,
+        routed.source_network.as_ref(),
+        now,
+    );
+
+    let byte_tokens = limiter
+        .source_byte_tokens(&routed.source_mac, routed.source_network.as_ref())
+        .expect("routed source state must exist");
+    assert!(
+        (byte_tokens - 66.0).abs() < 1e-4,
+        "Expected 66 byte tokens, got {byte_tokens}"
+    );
+}
+
+#[test]
+fn test_independent_byte_tokens_enforced_when_response_count_unlimited() {
+    let now = Instant::now();
+    let src = mock_received(&[0x0A, 0x00, 0x00, 0x01], None);
+    let req = encode_who_is_req(None, None);
+
+    let check = |max_g, b_g, max_s, b_s| {
+        let lim = DiscoveryLimiter::new(
+            DiscoveryPolicy {
+                max_responses_per_sec_global: max_g,
+                max_bytes_per_sec_global: b_g,
+                max_responses_per_sec_per_source: max_s,
+                max_bytes_per_sec_per_source: b_s,
+                global_burst_capacity: max_g,
+                source_burst_capacity: max_s,
+                reserved_capacity: 0,
+                coalesce_window: Duration::ZERO,
+                ..DiscoveryPolicy::default()
+            },
+            Some(100),
+        );
+        (
+            lim.pre_check_who_is(&req, &src, now),
+            lim.pre_check_who_is(&req, &src, now),
+        )
+    };
+
+    // 1. Unlimited count, per-source byte limited
+    assert_eq!(
+        check(u32::MAX, usize::MAX, u32::MAX, 100),
+        (PreCheckDecision::Admit, PreCheckDecision::ThrottledSource)
+    );
+    // 2. Unlimited count, global byte limited
+    assert_eq!(
+        check(u32::MAX, 100, u32::MAX, usize::MAX),
+        (PreCheckDecision::Admit, PreCheckDecision::ThrottledGlobal)
+    );
+    // 3. Unlimited bytes, global count limited
+    assert_eq!(
+        check(1, usize::MAX, u32::MAX, usize::MAX),
+        (PreCheckDecision::Admit, PreCheckDecision::ThrottledGlobal)
+    );
+}
+
+#[test]
+fn test_negative_who_has_cache_strictly_bounded_to_512() {
+    let limiter = DiscoveryLimiter::new(
+        DiscoveryPolicy {
+            coalesce_window: Duration::from_secs(60),
+            ..DiscoveryPolicy::default()
+        },
+        Some(100),
+    );
+    let base = Instant::now();
+
+    for i in 0..600 {
+        let target = WhoHasTarget::Id(ObjectIdentifier::new(ObjectType::ANALOG_INPUT, i).unwrap());
+        limiter.record_negative_who_has(target, base + Duration::from_millis(i as u64));
+    }
+
+    assert_eq!(limiter.negative_who_has_count(), 512);
+
+    let check_time = base + Duration::from_millis(600);
+    let target_0 = WhoHasTarget::Id(ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 0).unwrap());
+    assert!(!limiter.is_negative_who_has(&target_0, check_time));
+    let target_599 =
+        WhoHasTarget::Id(ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 599).unwrap());
+    assert!(limiter.is_negative_who_has(&target_599, check_time));
 }
