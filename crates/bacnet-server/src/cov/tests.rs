@@ -245,3 +245,91 @@ fn purge_expired_returns_zero_when_none_expired() {
     assert_eq!(purged, 0);
     assert_eq!(table.len(), 1);
 }
+
+#[test]
+fn default_policy_allows_1024th_subscription() {
+    let mut table = CovSubscriptionTable::new();
+    let oid = ai1();
+    // 16 peers * 64 subscriptions each = 1024 subscriptions
+    for peer_idx in 0..16u8 {
+        let mac = [192, 168, 1, peer_idx];
+        let peer_key = CovPeerKey::direct(MacAddr::from_slice(&mac));
+        for proc_id in 0..64u32 {
+            table
+                .check_admission(&peer_key, false, None)
+                .expect("subscription admitted");
+            let mut sub = make_sub(&mac, proc_id, oid);
+            sub.expires_at = Some(Instant::now() + Duration::from_secs(300));
+            table.subscribe(sub);
+        }
+    }
+    assert_eq!(table.len(), 1024);
+
+    // 1025th subscription from a 17th peer fails due to global capacity
+    let mac17 = [192, 168, 1, 17];
+    let peer17 = CovPeerKey::direct(MacAddr::from_slice(&mac17));
+    assert!(table.check_admission(&peer17, false, None).is_err());
+}
+
+#[test]
+fn effective_unreserved_capacity_respects_reserved_peers() {
+    let mut policy = CovPolicy {
+        max_subscriptions_global: 100,
+        reserved_capacity: 20,
+        reserved_peers: Vec::new(),
+        ..Default::default()
+    };
+    // No reserved peers -> full global capacity available
+    assert_eq!(policy.effective_unreserved_capacity(), 100);
+
+    // With reserved peers -> reserved capacity is deducted
+    policy.reserved_peers.push(MacAddr::from_slice(&[1, 2, 3]));
+    assert_eq!(policy.effective_unreserved_capacity(), 80);
+
+    // If reserved_capacity is 0 -> full global capacity
+    policy.reserved_capacity = 0;
+    assert_eq!(policy.effective_unreserved_capacity(), 100);
+}
+
+#[test]
+fn in_flight_tracker_does_not_leak_zero_count_entries_on_failure() {
+    let tracker = Arc::new(CovInFlightTracker::default());
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(0));
+    let peer = CovPeerKey::direct(MacAddr::from_slice(&[1, 2, 3, 4]));
+
+    // Acquisition fails due to global pool exhausted
+    let err = tracker
+        .try_acquire(peer.clone(), 10, &semaphore)
+        .unwrap_err();
+    assert_eq!(err, InFlightAcquireError::GlobalPoolExhausted);
+    assert_eq!(tracker.active_peer_count(), 0);
+
+    // Acquisition fails due to peer limit exceeded (max_per_peer = 0)
+    let semaphore2 = Arc::new(tokio::sync::Semaphore::new(10));
+    let peer2 = CovPeerKey::direct(MacAddr::from_slice(&[5, 6, 7, 8]));
+    let err2 = tracker.try_acquire(peer2, 0, &semaphore2).unwrap_err();
+    assert_eq!(err2, InFlightAcquireError::PeerLimitExceeded);
+    assert_eq!(tracker.active_peer_count(), 0);
+}
+
+#[test]
+fn expired_subscriptions_immediately_release_quota_on_admission() {
+    let policy = CovPolicy {
+        max_subscriptions_per_peer: 1,
+        ..Default::default()
+    };
+    let mut table =
+        CovSubscriptionTable::with_policy(policy, Arc::new(AtomicCovCounters::default()));
+    let peer = CovPeerKey::direct(MacAddr::from_slice(&[1, 2, 3]));
+
+    // Create a subscription with an expiry in the past
+    let mut sub = make_sub(&[1, 2, 3], 1, ai1());
+    sub.expires_at = Some(Instant::now() - Duration::from_secs(5));
+    table.subscribe(sub);
+    assert_eq!(table.len(), 1);
+
+    // Admitting a new subscription from the same peer immediately purges the expired subscription
+    // and succeeds, rather than being rejected by per-peer quota!
+    assert!(table.check_admission(&peer, false, None).is_ok());
+    assert_eq!(table.len(), 0);
+}

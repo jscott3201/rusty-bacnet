@@ -22,6 +22,33 @@ impl EventBudget {
         }
     }
 
+    pub(super) fn with_limits(max_notifications: usize, max_bytes: usize) -> Self {
+        Self {
+            max_notifications,
+            max_bytes,
+            notifications_sent: 0,
+            bytes_sent: 0,
+        }
+    }
+
+    pub(super) fn remaining_notifications(&self) -> usize {
+        self.max_notifications
+            .saturating_sub(self.notifications_sent)
+    }
+
+    pub(super) fn remaining_bytes(&self) -> usize {
+        self.max_bytes.saturating_sub(self.bytes_sent)
+    }
+
+    pub(super) fn is_exhausted(&self) -> bool {
+        self.notifications_sent >= self.max_notifications || self.bytes_sent >= self.max_bytes
+    }
+
+    #[allow(dead_code)]
+    pub(super) fn has_capacity(&self) -> bool {
+        !self.is_exhausted()
+    }
+
     pub(super) fn try_consume(&mut self, bytes: usize) -> bool {
         if self.notifications_sent >= self.max_notifications {
             return false;
@@ -32,6 +59,19 @@ impl EventBudget {
         self.notifications_sent += 1;
         self.bytes_sent = self.bytes_sent.saturating_add(bytes);
         true
+    }
+
+    #[allow(dead_code)]
+    pub(super) fn refund(&mut self, bytes: usize) {
+        self.notifications_sent = self.notifications_sent.saturating_sub(1);
+        self.bytes_sent = self.bytes_sent.saturating_sub(bytes);
+    }
+
+    pub(super) fn consume_sub_budget(&mut self, sub_budget: &EventBudget) {
+        self.notifications_sent = self
+            .notifications_sent
+            .saturating_add(sub_budget.notifications_sent);
+        self.bytes_sent = self.bytes_sent.saturating_add(sub_budget.bytes_sent);
     }
 }
 
@@ -121,7 +161,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         if comm_state.load(Ordering::Acquire) >= 1 {
             return;
         }
-        let (subs, counters, in_flight_tracker) = {
+        let (subs, counters, in_flight_tracker, dispatch_turn) = {
             let mut table = cov_table.write().await;
             (
                 table
@@ -131,6 +171,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     .collect::<Vec<_>>(),
                 Arc::clone(table.counters()),
                 Arc::clone(table.in_flight_tracker()),
+                table.next_dispatch_turn(),
             )
         };
 
@@ -144,38 +185,115 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         let mut budget = EventBudget::new(&config.cov_policy);
 
-        Self::fire_cov_notifications_for_subscriptions(
-            db,
-            network,
-            cov_table,
-            cov_in_flight,
-            &in_flight_tracker,
-            &counters,
-            notification_transactions,
-            config,
-            oid,
-            &single_subs,
-            snapshot,
-            &mut budget,
-        )
-        .await;
+        if single_subs.is_empty() {
+            Self::fire_cov_notification_multiple_for_subscriptions(
+                db,
+                network,
+                cov_table,
+                cov_in_flight,
+                &in_flight_tracker,
+                &counters,
+                notification_transactions,
+                comm_state,
+                config,
+                Some(oid),
+                &multiple_subs,
+                snapshot,
+                &mut budget,
+            )
+            .await;
+        } else if multiple_subs.is_empty() {
+            Self::fire_cov_notifications_for_subscriptions(
+                db,
+                network,
+                cov_table,
+                cov_in_flight,
+                &in_flight_tracker,
+                &counters,
+                notification_transactions,
+                config,
+                oid,
+                &single_subs,
+                snapshot,
+                &mut budget,
+            )
+            .await;
+        } else {
+            let single_first = dispatch_turn % 2 == 0;
+            let first_notif_cap = (budget.remaining_notifications() + 1) / 2;
+            let first_bytes_cap = (budget.remaining_bytes() + 1) / 2;
+            let mut first_budget = EventBudget::with_limits(first_notif_cap, first_bytes_cap);
 
-        Self::fire_cov_notification_multiple_for_subscriptions(
-            db,
-            network,
-            cov_table,
-            cov_in_flight,
-            &in_flight_tracker,
-            &counters,
-            notification_transactions,
-            comm_state,
-            config,
-            Some(oid),
-            &multiple_subs,
-            snapshot,
-            &mut budget,
-        )
-        .await;
+            if single_first {
+                Self::fire_cov_notifications_for_subscriptions(
+                    db,
+                    network,
+                    cov_table,
+                    cov_in_flight,
+                    &in_flight_tracker,
+                    &counters,
+                    notification_transactions,
+                    config,
+                    oid,
+                    &single_subs,
+                    snapshot,
+                    &mut first_budget,
+                )
+                .await;
+                budget.consume_sub_budget(&first_budget);
+
+                Self::fire_cov_notification_multiple_for_subscriptions(
+                    db,
+                    network,
+                    cov_table,
+                    cov_in_flight,
+                    &in_flight_tracker,
+                    &counters,
+                    notification_transactions,
+                    comm_state,
+                    config,
+                    Some(oid),
+                    &multiple_subs,
+                    snapshot,
+                    &mut budget,
+                )
+                .await;
+            } else {
+                Self::fire_cov_notification_multiple_for_subscriptions(
+                    db,
+                    network,
+                    cov_table,
+                    cov_in_flight,
+                    &in_flight_tracker,
+                    &counters,
+                    notification_transactions,
+                    comm_state,
+                    config,
+                    Some(oid),
+                    &multiple_subs,
+                    snapshot,
+                    &mut first_budget,
+                )
+                .await;
+                budget.consume_sub_budget(&first_budget);
+
+                Self::fire_cov_notifications_for_subscriptions(
+                    db,
+                    network,
+                    cov_table,
+                    cov_in_flight,
+                    &in_flight_tracker,
+                    &counters,
+                    notification_transactions,
+                    config,
+                    oid,
+                    &single_subs,
+                    snapshot,
+                    &mut budget,
+                )
+                .await;
+            }
+        }
     }
 
     /// Fire the initial COV notification for a newly accepted subscription.
@@ -236,6 +354,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         snapshot: Option<&dyn bacnet_objects::traits::BACnetObject>,
         budget: &mut EventBudget,
     ) {
+        if budget.is_exhausted() {
+            return;
+        }
+
         let device_oid = {
             let db = db.read().await;
             db.list_objects()
@@ -299,6 +421,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             ) {
                 continue;
             }
+
+            if budget.is_exhausted() {
+                counters
+                    .notifications_throttled_fanout
+                    .fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
+
             let time_remaining = sub.expires_at.map_or(0, |exp| {
                 exp.saturating_duration_since(Instant::now()).as_secs() as u32
             });
@@ -339,6 +469,27 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             notification.encode(&mut service_buf);
 
             if sub.issue_confirmed_notifications {
+                let guard = match in_flight_tracker.try_acquire(
+                    sub.peer_key(),
+                    config.cov_policy.max_confirmed_in_flight_per_peer,
+                    cov_in_flight,
+                ) {
+                    Ok(guard) => guard,
+                    Err(InFlightAcquireError::PeerLimitExceeded) => {
+                        counters
+                            .notifications_throttled_peer
+                            .fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+                    Err(InFlightAcquireError::GlobalPoolExhausted) => {
+                        warn!(
+                            object = ?oid,
+                            "255 confirmed COV notifications in-flight, skipping notification"
+                        );
+                        continue;
+                    }
+                };
+
                 let (operation, result_rx) = match notification_transactions.reserve(
                     Self::canonical_cov_peer(sub),
                     ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION,
@@ -377,27 +528,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         .fetch_add(1, Ordering::Relaxed);
                     continue;
                 }
-
-                let guard = match in_flight_tracker.try_acquire(
-                    sub.peer_key(),
-                    config.cov_policy.max_confirmed_in_flight_per_peer,
-                    cov_in_flight,
-                ) {
-                    Ok(guard) => guard,
-                    Err(InFlightAcquireError::PeerLimitExceeded) => {
-                        counters
-                            .notifications_throttled_peer
-                            .fetch_add(1, Ordering::Relaxed);
-                        continue;
-                    }
-                    Err(InFlightAcquireError::GlobalPoolExhausted) => {
-                        warn!(
-                            object = ?oid,
-                            "255 confirmed COV notifications in-flight, skipping notification"
-                        );
-                        continue;
-                    }
-                };
 
                 counters.notifications_sent.fetch_add(1, Ordering::Relaxed);
                 counters

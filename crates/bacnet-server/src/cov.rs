@@ -84,6 +84,7 @@ pub struct CovSubscriptionTable {
     policy: CovPolicy,
     counters: Arc<AtomicCovCounters>,
     in_flight: Arc<CovInFlightTracker>,
+    dispatch_turn: usize,
 }
 
 impl Default for CovSubscriptionTable {
@@ -107,7 +108,15 @@ impl CovSubscriptionTable {
             policy: policy.sanitized(),
             counters,
             in_flight: Arc::new(CovInFlightTracker::default()),
+            dispatch_turn: 0,
         }
+    }
+
+    /// Return the next notification dispatch turn counter (wrapping).
+    pub(crate) fn next_dispatch_turn(&mut self) -> usize {
+        let turn = self.dispatch_turn;
+        self.dispatch_turn = self.dispatch_turn.wrapping_add(1);
+        turn
     }
 
     /// Get a reference to the active COV policy.
@@ -453,11 +462,13 @@ impl CovSubscriptionTable {
 
     /// Check admission for a single subscription request against policy quotas.
     pub fn check_admission(
-        &self,
+        &mut self,
         peer: &CovPeerKey,
         is_indefinite: bool,
         existing: Option<&CovSubscription>,
     ) -> Result<(), Error> {
+        self.purge_expired();
+
         if is_indefinite && !self.policy.allow_indefinite_subscriptions {
             self.counters
                 .subscriptions_rejected_indefinite
@@ -489,11 +500,13 @@ impl CovSubscriptionTable {
 
     /// Check admission for a batch of subscriptions against policy quotas.
     pub fn check_admission_multiple(
-        &self,
+        &mut self,
         peer: &CovPeerKey,
         new_count: usize,
         new_indefinite: usize,
     ) -> Result<(), Error> {
+        self.purge_expired();
+
         if new_indefinite > 0 {
             if !self.policy.allow_indefinite_subscriptions {
                 self.counters
@@ -542,10 +555,7 @@ impl CovSubscriptionTable {
         }
 
         if !self.policy.is_peer_reserved(peer) {
-            let unreserved_capacity = self
-                .policy
-                .max_subscriptions_global
-                .saturating_sub(self.policy.reserved_capacity);
+            let unreserved_capacity = self.policy.effective_unreserved_capacity();
             if self.subs.len() + new_count > unreserved_capacity {
                 self.counters
                     .subscriptions_rejected_capacity

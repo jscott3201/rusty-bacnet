@@ -93,16 +93,20 @@ pub(crate) fn handle_subscribe_cov_with_initial_endpoint(
         }
     });
 
-    let existing = table.get_subscription(
-        &MacAddr::from_slice(source_mac),
-        source_network,
-        request.subscriber_process_identifier,
-        request.monitored_object_identifier,
-        None,
-    );
+    table.purge_expired();
+
+    let existing = table
+        .get_subscription(
+            &MacAddr::from_slice(source_mac),
+            source_network,
+            request.subscriber_process_identifier,
+            request.monitored_object_identifier,
+            None,
+        )
+        .cloned();
     let peer_key = CovPeerKey::from_endpoint(&MacAddr::from_slice(source_mac), source_network);
     let is_indefinite = expires_at.is_none();
-    table.check_admission(&peer_key, is_indefinite, existing)?;
+    table.check_admission(&peer_key, is_indefinite, existing.as_ref())?;
 
     let subscription = CovSubscription {
         subscriber_mac: MacAddr::from_slice(source_mac),
@@ -194,16 +198,20 @@ pub(crate) fn handle_subscribe_cov_property_with_initial_endpoint(
         }
     });
 
-    let existing = table.get_subscription(
-        &MacAddr::from_slice(source_mac),
-        source_network,
-        request.subscriber_process_identifier,
-        request.monitored_object_identifier,
-        Some(request.monitored_property_identifier),
-    );
+    table.purge_expired();
+
+    let existing = table
+        .get_subscription(
+            &MacAddr::from_slice(source_mac),
+            source_network,
+            request.subscriber_process_identifier,
+            request.monitored_object_identifier,
+            Some(request.monitored_property_identifier),
+        )
+        .cloned();
     let peer_key = CovPeerKey::from_endpoint(&MacAddr::from_slice(source_mac), source_network);
     let is_indefinite = expires_at.is_none();
-    table.check_admission(&peer_key, is_indefinite, existing)?;
+    table.check_admission(&peer_key, is_indefinite, existing.as_ref())?;
 
     let subscription = CovSubscription {
         subscriber_mac: MacAddr::from_slice(source_mac),
@@ -416,6 +424,8 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
         ))
     });
     subscriptions.reverse();
+
+    table.purge_expired();
 
     let peer_key = CovPeerKey::from_endpoint(&subscriber_mac, source_network);
     table.check_admission_multiple(&peer_key, new_keys.len(), 0)?;

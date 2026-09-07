@@ -881,6 +881,8 @@ mod audit_log_query_tests;
 #[cfg(test)]
 mod binary_lighting_task_tests;
 #[cfg(test)]
+mod cov_budget_tests;
+#[cfg(test)]
 mod cov_notifications_tests;
 #[cfg(test)]
 mod cov_quota_tests;

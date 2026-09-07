@@ -79,6 +79,19 @@ impl CovPolicy {
     pub fn is_peer_reserved(&self, peer: &CovPeerKey) -> bool {
         self.reserved_peers.contains(peer.mac())
     }
+
+    /// Return the effective unreserved capacity available to unreserved peers.
+    ///
+    /// When `reserved_peers` is empty or `reserved_capacity` is 0, no capacity is
+    /// set aside, and the entire global capacity is available to unreserved peers.
+    pub fn effective_unreserved_capacity(&self) -> usize {
+        if self.reserved_peers.is_empty() || self.reserved_capacity == 0 {
+            self.max_subscriptions_global
+        } else {
+            self.max_subscriptions_global
+                .saturating_sub(self.reserved_capacity)
+        }
+    }
 }
 
 /// Telemetry counters for COV operations.
@@ -231,6 +244,14 @@ pub struct CovInFlightGuard {
     _global_permit: OwnedSemaphorePermit,
 }
 
+impl std::fmt::Debug for CovInFlightGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CovInFlightGuard")
+            .field("peer", &self.peer)
+            .finish()
+    }
+}
+
 impl Drop for CovInFlightGuard {
     fn drop(&mut self) {
         self.tracker.release(&self.peer);
@@ -246,20 +267,25 @@ impl CovInFlightTracker {
         global_semaphore: &Arc<Semaphore>,
     ) -> Result<CovInFlightGuard, InFlightAcquireError> {
         let mut guard = self.peer_in_flight.lock().unwrap();
-        let current = guard.entry(peer.clone()).or_insert(0);
-        if *current >= max_per_peer {
+        let current = guard.get(&peer).copied().unwrap_or(0);
+        if current >= max_per_peer {
             return Err(InFlightAcquireError::PeerLimitExceeded);
         }
         let global_permit = match global_semaphore.clone().try_acquire_owned() {
             Ok(permit) => permit,
             Err(_) => return Err(InFlightAcquireError::GlobalPoolExhausted),
         };
-        *current += 1;
+        guard.insert(peer.clone(), current + 1);
         Ok(CovInFlightGuard {
             peer,
             tracker: Arc::clone(self),
             _global_permit: global_permit,
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn active_peer_count(&self) -> usize {
+        self.peer_in_flight.lock().unwrap().len()
     }
 
     fn release(&self, peer: &CovPeerKey) {

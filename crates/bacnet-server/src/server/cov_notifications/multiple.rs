@@ -61,6 +61,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return;
         }
 
+        if budget.is_exhausted() {
+            return;
+        }
+
         let mut grouped: HashMap<(TsmPeer, u32, bool), Vec<CovSubscription>> = HashMap::new();
 
         if let Some(oid) = changed_oid {
@@ -142,6 +146,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         budget: &mut EventBudget,
     ) {
         if subscriptions.is_empty() {
+            return;
+        }
+
+        if budget.is_exhausted() {
+            counters
+                .notifications_throttled_fanout
+                .fetch_add(1, Ordering::Relaxed);
             return;
         }
 
@@ -259,6 +270,24 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         };
 
         if representative.issue_confirmed_notifications {
+            let guard = match in_flight_tracker.try_acquire(
+                representative.peer_key(),
+                config.cov_policy.max_confirmed_in_flight_per_peer,
+                cov_in_flight,
+            ) {
+                Ok(guard) => guard,
+                Err(InFlightAcquireError::PeerLimitExceeded) => {
+                    counters
+                        .notifications_throttled_peer
+                        .fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+                Err(InFlightAcquireError::GlobalPoolExhausted) => {
+                    warn!("255 confirmed COV notifications in-flight, skipping COVNotificationMultiple");
+                    return;
+                }
+            };
+
             let (operation, result_rx) = match notification_transactions.reserve(
                 Self::canonical_cov_peer(representative),
                 ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE,
@@ -289,24 +318,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     .fetch_add(1, Ordering::Relaxed);
                 return;
             }
-
-            let guard = match in_flight_tracker.try_acquire(
-                representative.peer_key(),
-                config.cov_policy.max_confirmed_in_flight_per_peer,
-                cov_in_flight,
-            ) {
-                Ok(guard) => guard,
-                Err(InFlightAcquireError::PeerLimitExceeded) => {
-                    counters
-                        .notifications_throttled_peer
-                        .fetch_add(1, Ordering::Relaxed);
-                    return;
-                }
-                Err(InFlightAcquireError::GlobalPoolExhausted) => {
-                    warn!("255 confirmed COV notifications in-flight, skipping COVNotificationMultiple");
-                    return;
-                }
-            };
 
             counters.notifications_sent.fetch_add(1, Ordering::Relaxed);
             counters
