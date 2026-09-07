@@ -34,7 +34,7 @@ use bacnet_types::MacAddr;
 
 use bytes::BytesMut;
 
-use crate::cov::{CovNotificationKind, CovSubscription, CovSubscriptionTable};
+use crate::cov::{CovNotificationKind, CovPeerKey, CovSubscription, CovSubscriptionTable};
 
 mod alarm_event;
 mod audit_log_query;

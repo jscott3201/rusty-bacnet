@@ -74,7 +74,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             device_instance,
         ));
         let db = Arc::new(RwLock::new(db));
-        let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
+        let cov_counters = Arc::new(crate::cov::AtomicCovCounters::default());
+        let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::with_policy(
+            config.cov_policy.clone(),
+            Arc::clone(&cov_counters),
+        )));
         let seg_ack_senders: Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
@@ -718,6 +722,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             network,
             db,
             cov_table,
+            cov_counters,
             seg_ack_senders,
             seg_send_permits,
             cov_in_flight,

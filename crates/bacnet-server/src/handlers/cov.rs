@@ -1,7 +1,5 @@
 use super::*;
 
-const MAX_COV_SUBSCRIPTIONS: usize = 1024;
-
 fn cov_property_error(code: ErrorCode) -> Error {
     Error::Protocol {
         class: ErrorClass::PROPERTY.to_raw() as u32,
@@ -87,21 +85,6 @@ pub(crate) fn handle_subscribe_cov_with_initial_endpoint(
         _ => {}
     }
 
-    if table.len() >= MAX_COV_SUBSCRIPTIONS
-        && !table.contains(
-            &MacAddr::from_slice(source_mac),
-            source_network,
-            request.subscriber_process_identifier,
-            request.monitored_object_identifier,
-            None,
-        )
-    {
-        return Err(Error::Protocol {
-            class: ErrorClass::RESOURCES.to_raw() as u32,
-            code: ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32,
-        });
-    }
-
     let expires_at = request.lifetime.and_then(|secs| {
         if secs == 0 {
             None
@@ -109,6 +92,17 @@ pub(crate) fn handle_subscribe_cov_with_initial_endpoint(
             Some(Instant::now() + Duration::from_secs(secs as u64))
         }
     });
+
+    let existing = table.get_subscription(
+        &MacAddr::from_slice(source_mac),
+        source_network,
+        request.subscriber_process_identifier,
+        request.monitored_object_identifier,
+        None,
+    );
+    let peer_key = CovPeerKey::from_endpoint(&MacAddr::from_slice(source_mac), source_network);
+    let is_indefinite = expires_at.is_none();
+    table.check_admission(&peer_key, is_indefinite, existing)?;
 
     let subscription = CovSubscription {
         subscriber_mac: MacAddr::from_slice(source_mac),
@@ -192,21 +186,6 @@ pub(crate) fn handle_subscribe_cov_property_with_initial_endpoint(
         request.monitored_property_array_index,
     )?;
 
-    if table.len() >= MAX_COV_SUBSCRIPTIONS
-        && !table.contains(
-            &MacAddr::from_slice(source_mac),
-            source_network,
-            request.subscriber_process_identifier,
-            request.monitored_object_identifier,
-            Some(request.monitored_property_identifier),
-        )
-    {
-        return Err(Error::Protocol {
-            class: ErrorClass::RESOURCES.to_raw() as u32,
-            code: ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32,
-        });
-    }
-
     let expires_at = request.lifetime.and_then(|secs| {
         if secs == 0 {
             None
@@ -214,6 +193,17 @@ pub(crate) fn handle_subscribe_cov_property_with_initial_endpoint(
             Some(Instant::now() + Duration::from_secs(secs as u64))
         }
     });
+
+    let existing = table.get_subscription(
+        &MacAddr::from_slice(source_mac),
+        source_network,
+        request.subscriber_process_identifier,
+        request.monitored_object_identifier,
+        Some(request.monitored_property_identifier),
+    );
+    let peer_key = CovPeerKey::from_endpoint(&MacAddr::from_slice(source_mac), source_network);
+    let is_indefinite = expires_at.is_none();
+    table.check_admission(&peer_key, is_indefinite, existing)?;
 
     let subscription = CovSubscription {
         subscriber_mac: MacAddr::from_slice(source_mac),
@@ -427,12 +417,8 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
     });
     subscriptions.reverse();
 
-    if table.len() + new_keys.len() > MAX_COV_SUBSCRIPTIONS {
-        return Err(Error::Protocol {
-            class: ErrorClass::RESOURCES.to_raw() as u32,
-            code: ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32,
-        });
-    }
+    let peer_key = CovPeerKey::from_endpoint(&subscriber_mac, source_network);
+    table.check_admission_multiple(&peer_key, new_keys.len(), 0)?;
 
     table.refresh_cov_multiple_context_lifetime(
         source_mac,

@@ -56,6 +56,7 @@ use crate::audit_notification::{
     UnconfirmedAuditNotificationAuthorizationContext, UnconfirmedAuditNotificationAuthorizer,
     MAX_AUDIT_NOTIFICATIONS, MAX_AUDIT_NOTIFICATION_BYTES,
 };
+pub use crate::cov::{CovCounters, CovPolicy};
 use crate::cov::{CovNotificationKind, CovSubscription, CovSubscriptionTable};
 use crate::handlers;
 use crate::life_safety::{LifeSafetyOperationAuthorizationContext, LifeSafetyOperationAuthorizer};
@@ -364,6 +365,8 @@ pub struct ServerConfig {
     pub event_enrollment_interval_secs: u64,
     /// Discovery rate-limiting and duplicate suppression policy.
     pub discovery_policy: DiscoveryPolicy,
+    /// COV quota, rate accounting, and notification work budget policy.
+    pub cov_policy: CovPolicy,
 }
 
 impl std::fmt::Debug for ServerConfig {
@@ -414,6 +417,7 @@ impl std::fmt::Debug for ServerConfig {
                 &self.event_enrollment_interval_secs,
             )
             .field("discovery_policy", &self.discovery_policy)
+            .field("cov_policy", &self.cov_policy)
             .finish()
     }
 }
@@ -439,6 +443,7 @@ impl Default for ServerConfig {
             enable_event_enrollment: true,
             event_enrollment_interval_secs: 10,
             discovery_policy: DiscoveryPolicy::default(),
+            cov_policy: CovPolicy::default(),
         }
     }
 }
@@ -560,6 +565,12 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
     /// Set the discovery rate-limiting and duplicate suppression policy.
     pub fn discovery_policy(mut self, policy: DiscoveryPolicy) -> Self {
         self.config.discovery_policy = policy;
+        self
+    }
+
+    /// Set the COV quota and notification work budget policy.
+    pub fn cov_policy(mut self, policy: CovPolicy) -> Self {
+        self.config.cov_policy = policy;
         self
     }
 
@@ -710,6 +721,12 @@ impl BipServerBuilder {
         self
     }
 
+    /// Set the COV quota and notification work budget policy.
+    pub fn cov_policy(mut self, policy: CovPolicy) -> Self {
+        self.config.cov_policy = policy;
+        self
+    }
+
     /// Build and start the server, constructing a BipTransport from the config.
     pub async fn build(self) -> Result<BACnetServer<BipTransport>, Error> {
         let transport = BipTransport::new(
@@ -742,6 +759,7 @@ pub struct BACnetServer<T: TransportPort> {
     /// COV subscription table (also held by dispatch task; read by
     /// [`write_local`](Self::write_local) to fire post-write notifications).
     cov_table: Arc<RwLock<CovSubscriptionTable>>,
+    cov_counters: Arc<crate::cov::AtomicCovCounters>,
     /// Channels for routing segmented-send events to in-progress segmented sends.
     #[allow(dead_code)]
     seg_ack_senders: Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>>,
@@ -865,6 +883,8 @@ mod binary_lighting_task_tests;
 #[cfg(test)]
 mod cov_notifications_tests;
 #[cfg(test)]
+mod cov_quota_tests;
+#[cfg(test)]
 mod dcc_event_detection_tests;
 #[cfg(test)]
 mod device_bindings_tests;
@@ -908,5 +928,20 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Get a snapshot of discovery rate-limiting counters.
     pub fn discovery_counters(&self) -> DiscoveryCounters {
         self.discovery_limiter.counters()
+    }
+
+    /// Get a snapshot of COV operational and telemetry counters.
+    pub fn cov_counters(&self) -> CovCounters {
+        self.cov_counters.snapshot()
+    }
+
+    /// Purge all active COV subscriptions for a peer, deterministically releasing its quota.
+    pub async fn remove_peer_subscriptions(
+        &self,
+        mac: &[u8],
+        network: Option<&NpduAddress>,
+    ) -> usize {
+        let mut table = self.cov_table.write().await;
+        table.remove_peer_subscriptions(mac, network)
     }
 }

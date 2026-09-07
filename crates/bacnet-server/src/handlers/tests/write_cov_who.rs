@@ -92,9 +92,16 @@ fn subscribe_cov_property_handler_returns_initial_subscription() {
 
 #[test]
 fn subscribe_cov_update_existing_entry_allowed_at_capacity() {
+    use crate::cov::{AtomicCovCounters, CovPolicy};
     let db = make_db_with_ai();
-    let mut table = CovSubscriptionTable::new();
     let mac = vec![192, 168, 1, 1, 0xBA, 0xC0];
+    let mut table = CovSubscriptionTable::with_policy(
+        CovPolicy {
+            reserved_peers: vec![MacAddr::from_slice(&mac)],
+            ..Default::default()
+        },
+        std::sync::Arc::new(AtomicCovCounters::default()),
+    );
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
 
     for instance in 0..1023 {

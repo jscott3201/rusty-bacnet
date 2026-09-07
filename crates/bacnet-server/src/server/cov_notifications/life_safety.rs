@@ -42,16 +42,28 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .into_iter()
             .partition(|sub| sub.notification_kind == CovNotificationKind::Single);
 
+        let (counters, in_flight_tracker) = {
+            let table = cov_table.read().await;
+            (
+                Arc::clone(table.counters()),
+                Arc::clone(table.in_flight_tracker()),
+            )
+        };
+        let mut budget = EventBudget::new(&config.cov_policy);
+
         Self::fire_cov_notifications_for_subscriptions(
             db,
             network,
             cov_table,
             cov_in_flight,
+            &in_flight_tracker,
+            &counters,
             notification_transactions,
             config,
             oid,
             &single_subs,
             None,
+            &mut budget,
         )
         .await;
         Self::fire_cov_notification_multiple_for_subscriptions(
@@ -59,12 +71,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             network,
             cov_table,
             cov_in_flight,
+            &in_flight_tracker,
+            &counters,
             notification_transactions,
             comm_state,
             config,
             Some(oid),
             &multiple_subs,
             None,
+            &mut budget,
         )
         .await;
     }
