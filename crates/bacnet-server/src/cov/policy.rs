@@ -17,8 +17,10 @@ pub struct CovPolicy {
     pub max_subscriptions_per_peer: usize,
     /// Number of subscription slots reserved for reserved peers.
     pub reserved_capacity: usize,
-    /// List of MAC addresses of peers permitted to use reserved subscription capacity.
+    /// List of MAC addresses of direct peers permitted to use reserved subscription capacity.
     pub reserved_peers: Vec<MacAddr>,
+    /// List of canonical peer keys permitted to use reserved subscription capacity.
+    pub reserved_peer_keys: Vec<CovPeerKey>,
     /// Whether indefinite (infinite lifetime) subscriptions are permitted.
     pub allow_indefinite_subscriptions: bool,
     /// Maximum number of indefinite subscriptions allowed for a single peer.
@@ -38,6 +40,7 @@ impl Default for CovPolicy {
             max_subscriptions_per_peer: 64,
             reserved_capacity: 64,
             reserved_peers: Vec::new(),
+            reserved_peer_keys: Vec::new(),
             allow_indefinite_subscriptions: true,
             max_indefinite_per_peer: 16,
             max_notifications_per_event: 64,
@@ -55,6 +58,7 @@ impl CovPolicy {
             max_subscriptions_per_peer: usize::MAX,
             reserved_capacity: 0,
             reserved_peers: Vec::new(),
+            reserved_peer_keys: Vec::new(),
             allow_indefinite_subscriptions: true,
             max_indefinite_per_peer: usize::MAX,
             max_notifications_per_event: usize::MAX,
@@ -77,15 +81,24 @@ impl CovPolicy {
 
     /// Check if a peer is in the reserved peers list.
     pub fn is_peer_reserved(&self, peer: &CovPeerKey) -> bool {
-        self.reserved_peers.contains(peer.mac())
+        if self.reserved_peer_keys.contains(peer) {
+            return true;
+        }
+        match peer {
+            CovPeerKey::Direct(mac) => self.reserved_peers.contains(mac),
+            CovPeerKey::Routed(_, _) => false,
+        }
     }
 
     /// Return the effective unreserved capacity available to unreserved peers.
     ///
-    /// When `reserved_peers` is empty or `reserved_capacity` is 0, no capacity is
-    /// set aside, and the entire global capacity is available to unreserved peers.
+    /// When neither `reserved_peers` nor `reserved_peer_keys` is configured or
+    /// `reserved_capacity` is 0, no capacity is set aside, and the entire global
+    /// capacity is available to unreserved peers.
     pub fn effective_unreserved_capacity(&self) -> usize {
-        if self.reserved_peers.is_empty() || self.reserved_capacity == 0 {
+        if (self.reserved_peers.is_empty() && self.reserved_peer_keys.is_empty())
+            || self.reserved_capacity == 0
+        {
             self.max_subscriptions_global
         } else {
             self.max_subscriptions_global
@@ -219,6 +232,12 @@ impl CovPeerKey {
             Self::Direct(mac) => mac,
             Self::Routed(_, mac) => mac,
         }
+    }
+}
+
+impl From<MacAddr> for CovPeerKey {
+    fn from(mac: MacAddr) -> Self {
+        Self::Direct(mac)
     }
 }
 

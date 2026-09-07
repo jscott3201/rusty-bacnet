@@ -156,6 +156,12 @@ impl ScServerBuilder {
         self
     }
 
+    /// Set the COV quota and notification work budget policy.
+    pub fn cov_policy(mut self, policy: CovPolicy) -> Self {
+        self.config.cov_policy = policy;
+        self
+    }
+
     /// Connect to the hub and start the server.
     ///
     /// Reconnect configuration is validated before binding-table construction,
@@ -277,5 +283,15 @@ mod tests {
                 Err(Error::Encoding(message)) if message == "SC server builder: tls_config is required"
             ));
         }
+    }
+
+    #[test]
+    fn sc_server_builder_cov_policy_configures_server_config() {
+        let policy = CovPolicy {
+            max_subscriptions_per_peer: 12,
+            ..CovPolicy::default()
+        };
+        let builder = BACnetServer::sc_builder().cov_policy(policy.clone());
+        assert_eq!(builder.config.cov_policy, policy);
     }
 }

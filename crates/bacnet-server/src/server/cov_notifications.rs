@@ -220,8 +220,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .await;
         } else {
             let single_first = dispatch_turn % 2 == 0;
-            let first_notif_cap = (budget.remaining_notifications() + 1) / 2;
-            let first_bytes_cap = (budget.remaining_bytes() + 1) / 2;
+            let rem_notifs = budget.remaining_notifications();
+            let first_notif_cap = (rem_notifs / 2) + (rem_notifs % 2);
+            let rem_bytes = budget.remaining_bytes();
+            let first_bytes_cap = (rem_bytes / 2) + (rem_bytes % 2);
             let mut first_budget = EventBudget::with_limits(first_notif_cap, first_bytes_cap);
 
             if single_first {

@@ -333,3 +333,27 @@ fn expired_subscriptions_immediately_release_quota_on_admission() {
     assert!(table.check_admission(&peer, false, None).is_ok());
     assert_eq!(table.len(), 0);
 }
+
+#[test]
+fn is_peer_reserved_checks_canonical_peer_identity() {
+    let direct_mac = MacAddr::from_slice(&[1, 2, 3]);
+    let policy = CovPolicy {
+        reserved_peers: vec![direct_mac.clone()],
+        reserved_peer_keys: vec![CovPeerKey::routed(10, direct_mac.clone())],
+        ..Default::default()
+    };
+
+    // Direct peer matching reserved_peers is reserved
+    assert!(policy.is_peer_reserved(&CovPeerKey::direct(direct_mac.clone())));
+
+    // Routed peer on network 10 matching reserved_peer_keys is reserved
+    assert!(policy.is_peer_reserved(&CovPeerKey::routed(10, direct_mac.clone())));
+
+    // Routed peer on different network (20) with same MAC is NOT reserved
+    assert!(!policy.is_peer_reserved(&CovPeerKey::routed(20, direct_mac.clone())));
+
+    // Unconfigured direct peer is NOT reserved
+    let other_mac = MacAddr::from_slice(&[4, 5, 6]);
+    assert!(!policy.is_peer_reserved(&CovPeerKey::direct(other_mac.clone())));
+    assert!(!policy.is_peer_reserved(&CovPeerKey::routed(10, other_mac)));
+}

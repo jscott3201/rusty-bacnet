@@ -353,6 +353,7 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
     }
     let expires_at = Some(Instant::now() + Duration::from_secs(lifetime as u64));
     let subscriber_mac = MacAddr::from_slice(source_mac);
+    table.purge_expired();
     let mut subscriptions = Vec::new();
     let mut new_keys = HashSet::new();
 
@@ -424,8 +425,6 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
         ))
     });
     subscriptions.reverse();
-
-    table.purge_expired();
 
     let peer_key = CovPeerKey::from_endpoint(&subscriber_mac, source_network);
     table.check_admission_multiple(&peer_key, new_keys.len(), 0)?;
