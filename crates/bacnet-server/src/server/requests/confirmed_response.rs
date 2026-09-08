@@ -53,12 +53,51 @@ pub(super) fn error_fields(error: &Error) -> (ErrorClass, ErrorCode) {
 
 /// Send one non-segmented confirmed-service response through its existing
 /// transport or reply-channel path.
-pub(super) async fn send_unsegmented_response<T: TransportPort + 'static>(
+pub(in crate::server) async fn send_unsegmented_response<T: TransportPort + 'static>(
     network: &NetworkLayer<T>,
     response: &Apdu,
     source_mac: &[u8],
     source_network: Option<&NpduAddress>,
     reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
+) {
+    send_response(
+        network,
+        response,
+        source_mac,
+        source_network,
+        reply_tx,
+        true,
+    )
+    .await;
+}
+
+/// Overload work shares the identical wire path without per-rejection error
+/// logging. Admission/fallback telemetry is bounded and does not imply send success.
+pub(in crate::server) async fn send_overload_response<T: TransportPort + 'static>(
+    network: &NetworkLayer<T>,
+    response: &Apdu,
+    source_mac: &[u8],
+    source_network: Option<&NpduAddress>,
+    reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
+) {
+    send_response(
+        network,
+        response,
+        source_mac,
+        source_network,
+        reply_tx,
+        false,
+    )
+    .await;
+}
+
+async fn send_response<T: TransportPort + 'static>(
+    network: &NetworkLayer<T>,
+    response: &Apdu,
+    source_mac: &[u8],
+    source_network: Option<&NpduAddress>,
+    reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
+    log_errors: bool,
 ) {
     let mut buf = BytesMut::new();
     encode_apdu(&mut buf, response).expect("valid APDU encoding");
@@ -81,7 +120,9 @@ pub(super) async fn send_unsegmented_response<T: TransportPort + 'static>(
                 let _ = tx.send(npdu_buf.freeze());
             }
             Err(error) => {
-                warn!(%error, "Failed to encode NPDU for MS/TP reply");
+                if log_errors {
+                    warn!(%error, "Failed to encode NPDU for MS/TP reply");
+                }
                 if let Err(error) = BACnetServer::<T>::send_confirmed_response_apdu(
                     network,
                     &apdu_bytes,
@@ -90,7 +131,9 @@ pub(super) async fn send_unsegmented_response<T: TransportPort + 'static>(
                 )
                 .await
                 {
-                    warn!(%error, "Failed to send response");
+                    if log_errors {
+                        warn!(%error, "Failed to send response");
+                    }
                 }
             }
         }
@@ -98,7 +141,9 @@ pub(super) async fn send_unsegmented_response<T: TransportPort + 'static>(
         BACnetServer::<T>::send_confirmed_response_apdu(network, &buf, source_mac, source_network)
             .await
     {
-        warn!(%error, "Failed to send response");
+        if log_errors {
+            warn!(%error, "Failed to send response");
+        }
     }
 }
 

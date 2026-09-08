@@ -1724,6 +1724,21 @@ class BACnetClient:
 # Server
 # ---------------------------------------------------------------------------
 
+class RequestAdmissionCounters(TypedDict):
+    """Independent counter samples, not a transactionally atomic aggregate."""
+    confirmed_active: int
+    confirmed_admitted_total: int
+    confirmed_overloaded_total: int
+    confirmed_shutdown_rejected_total: int
+    unconfirmed_active: int
+    unconfirmed_admitted_total: int
+    unconfirmed_overloaded_total: int
+    unconfirmed_shutdown_rejected_total: int
+    abort_active: int
+    abort_admitted_total: int
+    confirmed_fallback_dropped_total: int
+    abort_shutdown_rejected_total: int
+
 class BACnetServer:
     """BACnet server that hosts objects and responds to client requests.
 
@@ -1758,6 +1773,8 @@ class BACnetServer:
         mstp_mac: int = 1,
         mstp_max_master: int = 127,
         mstp_max_info_frames: int = 1,
+        max_confirmed_in_flight: int = 64,
+        max_unconfirmed_in_flight: int = 32,
     ) -> None: ...
 
     # --- Analog objects ---
@@ -1949,6 +1966,13 @@ class BACnetServer:
 
     async def comm_state(self) -> int:
         """Get the DeviceCommunicationControl state (0=Enable, 1=Disable, 2=DisableInitiation)."""
+        ...
+
+    async def request_admission_counters(self) -> RequestAdmissionCounters:
+        """Sample counters; RuntimeError before start and after stop.
+
+        Admitted totals count registered work, not successful response sends.
+        """
         ...
 
 

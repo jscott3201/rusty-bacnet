@@ -43,6 +43,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             ))
         })?;
         validate_max_apdu_length(max_apdu)?;
+        let request_tasks = super::request_tasks::RequestTasks::for_server(&config)?;
 
         if config.vendor_id == 0 {
             warn!("vendor_id is 0 (ASHRAE reserved); set a valid vendor ID for production use");
@@ -106,7 +107,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let clock_dispatch = clock.clone();
         let discovery_limiter_dispatch = Arc::clone(&discovery_limiter);
 
-        let request_tasks = Arc::new(super::request_tasks::RequestTasks::default());
         let requests = Arc::clone(&request_tasks);
         let dispatch_task = tokio::spawn(async move {
             let mut seg_receivers: HashMap<SegKey, SegmentedRequestState> = HashMap::new();

@@ -14,6 +14,9 @@ mod dcc_timer_tests;
 #[path = "notification_worker_tests.rs"]
 mod notification_worker_tests;
 
+#[path = "request_admission_tests.rs"]
+mod request_admission_tests;
+
 struct SendGuard(Option<oneshot::Sender<()>>);
 
 impl Drop for SendGuard {
@@ -29,8 +32,10 @@ pub(super) struct HeldTransport {
     started: mpsc::UnboundedSender<oneshot::Receiver<()>>,
     release: Arc<Notify>,
     panic_next: AtomicBool,
+    fail_next: AtomicBool,
     pass_cov: AtomicBool,
     frames: std::sync::Mutex<Vec<Apdu>>,
+    routes: std::sync::Mutex<Vec<(Option<NpduAddress>, MacAddr)>>,
 }
 
 impl TransportPort for HeldTransport {
@@ -42,8 +47,12 @@ impl TransportPort for HeldTransport {
         Ok(())
     }
 
-    async fn send_unicast(&self, npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
+    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
         let decoded = decode_npdu(Bytes::copy_from_slice(npdu)).unwrap();
+        self.routes
+            .lock()
+            .unwrap()
+            .push((decoded.destination.clone(), MacAddr::from_slice(mac)));
         let apdu = apdu::decode_apdu(decoded.payload).unwrap();
         let segment_ack = matches!(apdu, Apdu::SegmentAck(_));
         let cov = matches!(&apdu, Apdu::ConfirmedRequest(request)
@@ -63,6 +72,9 @@ impl TransportPort for HeldTransport {
             !self.panic_next.swap(false, Ordering::AcqRel),
             "injected handler panic"
         );
+        if self.fail_next.swap(false, Ordering::AcqRel) {
+            return Err(Error::Encoding("injected send error".into()));
+        }
         Ok(())
     }
 
@@ -90,6 +102,24 @@ async fn fixture_with_name(
     mpsc::Sender<ReceivedNpdu>,
     mpsc::UnboundedReceiver<oneshot::Receiver<()>>,
 ) {
+    fixture_with_config(
+        name,
+        ServerConfig {
+            segmentation_supported: Segmentation::BOTH,
+            ..ServerConfig::default()
+        },
+    )
+    .await
+}
+
+async fn fixture_with_config(
+    name: &str,
+    config: ServerConfig,
+) -> (
+    BACnetServer<HeldTransport>,
+    mpsc::Sender<ReceivedNpdu>,
+    mpsc::UnboundedReceiver<oneshot::Receiver<()>>,
+) {
     let (tx, rx) = mpsc::channel(16);
     let (started, observations) = mpsc::unbounded_channel();
     let transport = HeldTransport {
@@ -97,8 +127,10 @@ async fn fixture_with_name(
         started,
         release: Arc::new(Notify::new()),
         panic_next: AtomicBool::new(false),
+        fail_next: AtomicBool::new(false),
         pass_cov: AtomicBool::new(false),
         frames: std::sync::Mutex::new(Vec::new()),
+        routes: std::sync::Mutex::new(Vec::new()),
     };
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
@@ -109,10 +141,6 @@ async fn fixture_with_name(
         .unwrap(),
     ))
     .unwrap();
-    let config = ServerConfig {
-        segmentation_supported: Segmentation::BOTH,
-        ..ServerConfig::default()
-    };
     let server = BACnetServer::start(config, db, transport).await.unwrap();
     (server, tx, observations)
 }
@@ -157,6 +185,7 @@ fn confirmed(segmented: bool) -> Apdu {
 
 async fn stop_releases_handler(request: Apdu) {
     let (mut server, tx, mut started) = fixture().await;
+    let is_confirmed = matches!(request, Apdu::ConfirmedRequest(_));
     inject(&tx, request).await;
     let mut released = tokio::time::timeout(Duration::from_secs(2), started.recv())
         .await
@@ -166,7 +195,16 @@ async fn stop_releases_handler(request: Apdu) {
         released.try_recv(),
         Err(oneshot::error::TryRecvError::Empty)
     ));
+    let counters = server.request_admission_counters();
+    assert_eq!(counters.confirmed_admitted_total, u64::from(is_confirmed));
+    assert_eq!(
+        counters.unconfirmed_admitted_total,
+        u64::from(!is_confirmed)
+    );
+    assert_eq!(counters.confirmed_active + counters.unconfirmed_active, 1);
     server.stop().await.unwrap();
+    let counters = server.request_admission_counters();
+    assert_eq!(counters.confirmed_active + counters.unconfirmed_active, 0);
     assert_eq!(
         released.try_recv(),
         Ok(()),

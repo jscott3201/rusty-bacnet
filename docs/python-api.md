@@ -1700,3 +1700,19 @@ server = BACnetServer(
 
 Production BACnet/SC clients validate the configured heartbeat interval as `3000..=300000`
 ms and require `sc_heartbeat_timeout_ms` to be greater than the interval.
+
+## Request admission limits
+
+`BACnetServer(...)` accepts keyword-only `max_confirmed_in_flight=64` and
+`max_unconfirmed_in_flight=32`. Both must be positive; zero is rejected during
+construction, before any transport opens. These provisional defaults bound
+top-level handler concurrency, not all server work or per-peer fairness.
+
+`await server.request_admission_counters()` returns a stable typed dictionary
+of independent active/admitted/overload/shutdown counters, including the
+separate eight-worker Abort pool and its counted confirmed-drop fallback.
+Like `comm_state()`, this accessor raises `RuntimeError` before start and after
+stop. Admission totals do not imply successful response sends.
+
+See [server request admission](request-admission.md) for exact fields, accepted
+ranges, overload behavior, and the known extreme-overload/conformance limitation.

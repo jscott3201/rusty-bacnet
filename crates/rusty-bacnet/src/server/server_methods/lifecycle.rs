@@ -37,6 +37,7 @@ impl BACnetServer {
         let ipv6_interface = self.ipv6_interface.clone();
         let dcc_password = self.dcc_password.clone();
         let reinit_password = self.reinit_password.clone();
+        let request_admission_policy = self.request_admission_policy;
 
         let objects: Vec<Box<dyn BACnetObject + Send>> = {
             let mut guard = self.lock_pending()?;
@@ -140,6 +141,7 @@ impl BACnetServer {
 
             let mut builder = server::BACnetServer::generic_builder()
                 .database(db)
+                .request_admission_policy(request_admission_policy)
                 .transport(transport);
             if let Some(pw) = dcc_password {
                 builder = builder.dcc_password(pw);

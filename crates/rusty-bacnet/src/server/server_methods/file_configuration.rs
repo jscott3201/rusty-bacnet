@@ -202,6 +202,7 @@ mod tests {
             mstp_max_info_frames: 1,
             dcc_password: None,
             reinit_password: None,
+            request_admission_policy: server::RequestAdmissionPolicy::default(),
             started: Arc::new(AtomicBool::new(false)),
             pending_objects: std::sync::Mutex::new(Vec::new()),
         }

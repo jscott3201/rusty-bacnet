@@ -1,3 +1,4 @@
+use super::request_admission::{Class, Rejection};
 use super::*;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
@@ -102,7 +103,29 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ) {
         match apdu {
             Apdu::ConfirmedRequest(req) => {
-                let reply_tx = received.reply_tx.take();
+                let pending = match confirmed_request_tracker.begin(
+                    source_mac,
+                    received.source_network.as_ref(),
+                    req.clone(),
+                ) {
+                    ConfirmedRequestAdmission::Duplicate => return,
+                    ConfirmedRequestAdmission::New(pending) => pending,
+                };
+                if comm_state.load(Ordering::Acquire) == 1
+                    && req.service_choice != ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL
+                    && req.service_choice != ConfirmedServiceChoice::REINITIALIZE_DEVICE
+                {
+                    // Preserve the existing DCC discard and duplicate retention.
+                    pending.complete();
+                    return;
+                }
+                let invoke_id = req.invoke_id;
+                let service_choice = req.service_choice;
+                let abort_comm_state = Arc::clone(comm_state);
+                let abort_network = Arc::clone(network);
+                let abort_mac = MacAddr::from_slice(source_mac);
+                let abort_source = received.source_network.clone();
+                let mut reply_tx = received.reply_tx.take();
                 let db = Arc::clone(db);
                 let network = Arc::clone(network);
                 let cov_table = Arc::clone(cov_table);
@@ -111,7 +134,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let cov_in_flight = Arc::clone(cov_in_flight);
                 let server_tsm = Arc::clone(server_tsm);
                 let notification_transactions = Arc::clone(notification_transactions);
-                let confirmed_request_tracker = Arc::clone(confirmed_request_tracker);
                 let device_bindings = Arc::clone(device_bindings);
                 let comm_state = Arc::clone(comm_state);
                 let dcc_timer = Arc::clone(dcc_timer);
@@ -119,29 +141,61 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let source_mac = MacAddr::from_slice(source_mac);
                 let source_network = received.source_network.clone();
                 let descendants = request_tasks.spawner();
-                request_tasks.spawn(async move {
-                    Self::handle_confirmed_request(
-                        &db,
-                        &network,
-                        &cov_table,
-                        &seg_ack_senders,
-                        &seg_send_permits,
-                        &cov_in_flight,
-                        &server_tsm,
-                        &notification_transactions,
-                        &confirmed_request_tracker,
-                        &device_bindings,
-                        &comm_state,
-                        &dcc_timer,
-                        &config,
-                        &descendants,
-                        &source_mac,
-                        source_network,
-                        req,
-                        reply_tx,
-                    )
-                    .await;
+                let result = request_tasks.try_spawn(Class::Confirmed, || {
+                    let reply_tx = reply_tx.take();
+                    async move {
+                        Self::handle_admitted_confirmed_request(
+                            &db,
+                            &network,
+                            &cov_table,
+                            &seg_ack_senders,
+                            &seg_send_permits,
+                            &cov_in_flight,
+                            &server_tsm,
+                            &notification_transactions,
+                            &device_bindings,
+                            &comm_state,
+                            &dcc_timer,
+                            &config,
+                            &descendants,
+                            &source_mac,
+                            source_network,
+                            req,
+                            reply_tx,
+                        )
+                        .await;
+                        pending.complete();
+                    }
                 });
+                if result == Err(Rejection::Overloaded) {
+                    // ASHRAE 135-2020 §§5.4.5.3, 18.10: resource exhaustion
+                    // before service execution is reported by a server Abort.
+                    // Eight owned sends bound this response work. If all are
+                    // busy, the counted silent drop is a known local limitation.
+                    let _ = request_tasks.try_spawn(Class::Abort, || async move {
+                        // Match the handler's first-poll DCC check as well as
+                        // dispatch's precheck if DCC changed after registration.
+                        if abort_comm_state.load(Ordering::Acquire) == 1
+                            && service_choice
+                                != ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL
+                            && service_choice != ConfirmedServiceChoice::REINITIALIZE_DEVICE
+                        {
+                            return;
+                        }
+                        requests::confirmed_response::send_overload_response(
+                            &abort_network,
+                            &Apdu::Abort(AbortPdu {
+                                sent_by_server: true,
+                                invoke_id,
+                                abort_reason: AbortReason::OUT_OF_RESOURCES,
+                            }),
+                            &abort_mac,
+                            abort_source.as_ref(),
+                            reply_tx,
+                        )
+                        .await;
+                    });
+                }
             }
             Apdu::UnconfirmedRequest(req) => {
                 let comm = comm_state.load(Ordering::Acquire);
@@ -203,7 +257,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let comm_state = Arc::clone(comm_state);
                 let device_bindings = Arc::clone(device_bindings);
                 let discovery_limiter = Arc::clone(discovery_limiter);
-                request_tasks.spawn(async move {
+                let _ = request_tasks.try_spawn(Class::Unconfirmed, || async move {
                     Self::handle_unconfirmed_request(
                         &db,
                         &network,

@@ -101,6 +101,7 @@ pub struct BACnetServer {
     // Passwords
     dcc_password: Option<String>,
     reinit_password: Option<String>,
+    request_admission_policy: server::RequestAdmissionPolicy,
     /// Whether the server has been started.
     started: Arc<AtomicBool>,
     /// Objects to add before starting. Cleared after start.
@@ -135,4 +136,5 @@ mod server_methods {
     mod file_configuration;
     mod lifecycle;
     mod registration;
+    mod request_admission;
 }

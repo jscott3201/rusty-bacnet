@@ -185,6 +185,8 @@ impl ScServerBuilder {
             .tls_config
             .ok_or_else(|| Error::Encoding("SC server builder: tls_config is required".into()))?;
 
+        self.config.request_admission_policy.validate()?;
+
         let ws = bacnet_transport::sc_tls::TlsWebSocket::connect(&self.hub_url, tls_config.clone())
             .await?;
 
@@ -293,5 +295,38 @@ mod tests {
         };
         let builder = BACnetServer::sc_builder().cov_policy(policy.clone());
         assert_eq!(builder.config.cov_policy, policy);
+    }
+
+    #[tokio::test]
+    async fn admission_sc_invalid_policy_precedes_dial_and_preserves_reconnect_precedence() {
+        for bad in [0, usize::MAX] {
+            let policy = RequestAdmissionPolicy {
+                max_confirmed_in_flight: 1,
+                max_unconfirmed_in_flight: bad,
+            };
+            let tls = tokio_rustls::rustls::ClientConfig::builder()
+                .with_root_certificates(tokio_rustls::rustls::RootCertStore::empty())
+                .with_no_client_auth();
+            let error = BACnetServer::sc_builder()
+                .hub_url("not-a-websocket-url")
+                .tls_config(Arc::new(tls))
+                .request_admission_policy(policy)
+                .build()
+                .await
+                .err()
+                .unwrap();
+            assert!(matches!(error, Error::Encoding(m) if m.contains("max_unconfirmed_in_flight")));
+            let error = BACnetServer::sc_builder()
+                .request_admission_policy(policy)
+                .reconnect(ScReconnectConfig {
+                    initial_delay_ms: 0,
+                    ..Default::default()
+                })
+                .build()
+                .await
+                .err()
+                .unwrap();
+            assert!(matches!(error, Error::OutOfRange(m) if m.contains("reconnect")));
+        }
     }
 }

@@ -25,7 +25,9 @@ impl BACnetServer {
         mstp_baud=38400,
         mstp_mac=1,
         mstp_max_master=127,
-        mstp_max_info_frames=1
+        mstp_max_info_frames=1,
+        max_confirmed_in_flight=64,
+        max_unconfirmed_in_flight=32
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -50,8 +52,17 @@ impl BACnetServer {
         mstp_mac: u8,
         mstp_max_master: u8,
         mstp_max_info_frames: u8,
-    ) -> Self {
-        Self {
+        max_confirmed_in_flight: usize,
+        max_unconfirmed_in_flight: usize,
+    ) -> PyResult<Self> {
+        let request_admission_policy = server::RequestAdmissionPolicy {
+            max_confirmed_in_flight,
+            max_unconfirmed_in_flight,
+        };
+        request_admission_policy
+            .validate()
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        Ok(Self {
             inner: Arc::new(Mutex::new(None)),
             device_instance,
             device_name: device_name.to_string(),
@@ -74,9 +85,10 @@ impl BACnetServer {
             mstp_max_info_frames,
             dcc_password,
             reinit_password,
+            request_admission_policy,
             started: Arc::new(AtomicBool::new(false)),
             pending_objects: std::sync::Mutex::new(Vec::new()),
-        }
+        })
     }
 
     /// Test seam for verifying that fallible startup leaves registrations intact.

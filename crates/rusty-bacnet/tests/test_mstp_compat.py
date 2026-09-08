@@ -61,6 +61,9 @@ MSTP_KEYWORD_ONLY = [
     "mstp_max_master",
     "mstp_max_info_frames",
 ]
+SERVER_KEYWORD_ONLY = MSTP_KEYWORD_ONLY + [
+    "max_confirmed_in_flight", "max_unconfirmed_in_flight"
+]
 SUPPORTED_BAUD_RATES = (9_600, 19_200, 38_400, 57_600, 76_800, 115_200)
 SUPPORTED_BAUD_ERROR = (
     "mstp_baud must be one of 9600, 19200, 38400, 57600, 76800, or 115200"
@@ -149,12 +152,12 @@ class SignatureCompatibilityTests(unittest.TestCase):
 
     def test_runtime_and_stub_signatures_match_compatibility_contract(self) -> None:
         self.assert_signature(BACnetClient, CLIENT_POSITIONAL, MSTP_KEYWORD_ONLY)
-        self.assert_signature(BACnetServer, SERVER_POSITIONAL, MSTP_KEYWORD_ONLY)
+        self.assert_signature(BACnetServer, SERVER_POSITIONAL, SERVER_KEYWORD_ONLY)
         self.assertEqual(
             stub_signature("BACnetClient"), (CLIENT_POSITIONAL, MSTP_KEYWORD_ONLY)
         )
         self.assertEqual(
-            stub_signature("BACnetServer"), (SERVER_POSITIONAL, MSTP_KEYWORD_ONLY)
+            stub_signature("BACnetServer"), (SERVER_POSITIONAL, SERVER_KEYWORD_ONLY)
         )
 
     def test_old_positional_password_order_remains_accepted(self) -> None:

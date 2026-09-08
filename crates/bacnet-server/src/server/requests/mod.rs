@@ -3,7 +3,7 @@ use super::*;
 mod acknowledge_alarm;
 mod audit_notification;
 mod confirmed;
-mod confirmed_response;
+pub(super) mod confirmed_response;
 mod endpoint_responder;
 #[cfg(test)]
 #[path = "endpoint_shared_runtime_tests.rs"]
@@ -20,7 +20,7 @@ pub(crate) use self::{executed::EXECUTED_CONFIRMED, unconfirmed::EXECUTED_UNCONF
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Handle one admitted confirmed request.
     #[allow(clippy::too_many_arguments)]
-    async fn handle_admitted_confirmed_request(
+    pub(in crate::server) async fn handle_admitted_confirmed_request(
         db: &Arc<RwLock<ObjectDatabase>>,
         network: &Arc<NetworkLayer<T>>,
         cov_table: &Arc<RwLock<CovSubscriptionTable>>,

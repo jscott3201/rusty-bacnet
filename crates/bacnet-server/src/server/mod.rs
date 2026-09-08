@@ -367,6 +367,8 @@ pub struct ServerConfig {
     pub discovery_policy: DiscoveryPolicy,
     /// COV quota, rate accounting, and notification work budget policy.
     pub cov_policy: CovPolicy,
+    /// Positive independent top-level request handler limits.
+    pub request_admission_policy: RequestAdmissionPolicy,
 }
 
 impl std::fmt::Debug for ServerConfig {
@@ -418,6 +420,7 @@ impl std::fmt::Debug for ServerConfig {
             )
             .field("discovery_policy", &self.discovery_policy)
             .field("cov_policy", &self.cov_policy)
+            .field("request_admission_policy", &self.request_admission_policy)
             .finish()
     }
 }
@@ -444,6 +447,7 @@ impl Default for ServerConfig {
             event_enrollment_interval_secs: 10,
             discovery_policy: DiscoveryPolicy::default(),
             cov_policy: CovPolicy::default(),
+            request_admission_policy: RequestAdmissionPolicy::default(),
         }
     }
 }
@@ -873,7 +877,9 @@ mod segmentation;
 mod segmented_receive;
 mod segmented_send;
 pub(crate) use segmented_send::*;
+mod request_admission;
 mod request_tasks;
+pub use request_admission::{RequestAdmissionCounters, RequestAdmissionPolicy};
 mod shutdown;
 
 #[cfg(test)]

@@ -170,6 +170,25 @@ async fn segmented_worker_blocked_send_does_not_block_inline_ack_or_abort() {
         .get(&segmented_transaction_key(&[1], None, 7))
         .unwrap()
         .clone();
+    assert_eq!(
+        server.request_admission_counters().confirmed_admitted_total,
+        1
+    );
+    assert_eq!(
+        server.request_admission_counters().confirmed_active,
+        0,
+        "segmented child must not retain or reacquire the top-level slot"
+    );
+    // Fill the confirmed class with held real handlers before routing controls.
+    for id in 20..84 {
+        let Apdu::ConfirmedRequest(mut request) = confirmed(false) else {
+            unreachable!()
+        };
+        request.invoke_id = id;
+        inject(&tx, Apdu::ConfirmedRequest(request)).await;
+        started_send(&mut started).await;
+    }
+    assert_eq!(server.request_admission_counters().confirmed_active, 64);
     inject(
         &tx,
         Apdu::SegmentAck(SegmentAckPdu {
