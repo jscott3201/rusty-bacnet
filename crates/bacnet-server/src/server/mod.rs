@@ -272,6 +272,8 @@ pub struct TimeSyncData {
 /// Server configuration.
 #[derive(Clone)]
 pub struct ServerConfig {
+    /// Per-service GetAlarmSummary database scan and encoded response limits.
+    pub get_alarm_summary_budget: GetAlarmSummaryBudget,
     /// Per-service RPM work and encoded response limits (finite by default).
     pub read_property_multiple_budget: ReadPropertyMultipleBudget,
     /// Local interface to bind.
@@ -376,6 +378,7 @@ pub struct ServerConfig {
 impl std::fmt::Debug for ServerConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ServerConfig")
+            .field("get_alarm_summary_budget", &self.get_alarm_summary_budget)
             .field(
                 "read_property_multiple_budget",
                 &self.read_property_multiple_budget,
@@ -436,6 +439,7 @@ impl Default for ServerConfig {
         Self {
             interface: Ipv4Addr::UNSPECIFIED,
             read_property_multiple_budget: ReadPropertyMultipleBudget::default(),
+            get_alarm_summary_budget: GetAlarmSummaryBudget::default(),
             port: 0xBAC0,
             broadcast_address: Ipv4Addr::BROADCAST,
             max_apdu_length: 1476,
@@ -887,6 +891,8 @@ pub(crate) use segmented_send::*;
 mod request_admission;
 mod rpm_budget;
 pub use rpm_budget::ReadPropertyMultipleBudget;
+mod alarm_summary_budget;
+pub use alarm_summary_budget::GetAlarmSummaryBudget;
 mod request_peer;
 mod request_tasks;
 pub use request_admission::{RequestAdmissionCounters, RequestAdmissionPolicy};

@@ -33,7 +33,9 @@ impl BACnetServer {
         confirmed_recovery_reserve=4,
         max_recovery_in_flight_per_peer=1,
         rpm_max_result_elements=256,
-        rpm_max_service_ack_bytes=16384
+        rpm_max_service_ack_bytes=16384,
+        alarm_summary_max_objects=4096,
+        alarm_summary_max_service_ack_bytes=16384
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -66,6 +68,8 @@ impl BACnetServer {
         max_recovery_in_flight_per_peer: usize,
         rpm_max_result_elements: usize,
         rpm_max_service_ack_bytes: usize,
+        alarm_summary_max_objects: usize,
+        alarm_summary_max_service_ack_bytes: usize,
     ) -> PyResult<Self> {
         let request_admission_policy = server::RequestAdmissionPolicy {
             max_confirmed_in_flight,
@@ -83,6 +87,13 @@ impl BACnetServer {
             max_service_ack_bytes: rpm_max_service_ack_bytes,
         };
         read_property_multiple_budget
+            .validate()
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        let get_alarm_summary_budget = server::GetAlarmSummaryBudget {
+            max_objects: alarm_summary_max_objects,
+            max_service_ack_bytes: alarm_summary_max_service_ack_bytes,
+        };
+        get_alarm_summary_budget
             .validate()
             .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
         Ok(Self {
@@ -110,6 +121,7 @@ impl BACnetServer {
             reinit_password,
             request_admission_policy,
             read_property_multiple_budget,
+            get_alarm_summary_budget,
             started: Arc::new(AtomicBool::new(false)),
             pending_objects: std::sync::Mutex::new(Vec::new()),
         })

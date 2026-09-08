@@ -39,6 +39,7 @@ impl BACnetServer {
         let reinit_password = self.reinit_password.clone();
         let request_admission_policy = self.request_admission_policy;
         let read_property_multiple_budget = self.read_property_multiple_budget;
+        let get_alarm_summary_budget = self.get_alarm_summary_budget;
 
         let objects: Vec<Box<dyn BACnetObject + Send>> = {
             let mut guard = self.lock_pending()?;
@@ -144,6 +145,7 @@ impl BACnetServer {
                 .database(db)
                 .request_admission_policy(request_admission_policy)
                 .read_property_multiple_budget(read_property_multiple_budget)
+                .get_alarm_summary_budget(get_alarm_summary_budget)
                 .transport(transport);
             if let Some(pw) = dcc_password {
                 builder = builder.dcc_password(pw);

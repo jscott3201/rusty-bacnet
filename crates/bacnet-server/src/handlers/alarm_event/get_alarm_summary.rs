@@ -102,6 +102,54 @@ pub fn handle_get_alarm_summary(db: &ObjectDatabase, buf: &mut BytesMut) -> Resu
     Ok(())
 }
 
+#[derive(Debug)]
+pub(crate) enum AlarmSummaryFailure {
+    Work,
+    Bytes,
+    Service(Error),
+}
+
+/// Transactional service encoding under the caller's database read guard.
+pub(crate) fn handle_get_alarm_summary_budgeted(
+    db: &ObjectDatabase,
+    buf: &mut BytesMut,
+    budget: crate::server::GetAlarmSummaryBudget,
+) -> Result<(), AlarmSummaryFailure> {
+    use bacnet_services::alarm_summary::{AlarmSummaryEntry, GetAlarmSummaryAck};
+
+    // This is deliberately all objects, before ANY object callback or projection.
+    if db.len() > budget.max_objects {
+        return Err(AlarmSummaryFailure::Work);
+    }
+    let mut scratch = BytesMut::new();
+    let mut entry_buf = BytesMut::new();
+    for (_, object) in db.iter_objects() {
+        let projection =
+            match AlarmSummaryProjection::read(object).map_err(AlarmSummaryFailure::Service)? {
+                AlarmSummaryProjectionResult::NotEventInitiating
+                | AlarmSummaryProjectionResult::Excluded => continue,
+                AlarmSummaryProjectionResult::Projected(projection) => projection,
+            };
+        // Strict projection bounds this triple: object ID, u32 enum, three bits.
+        // Reuse the service codec, retaining only one entry rather than the set.
+        entry_buf.clear();
+        GetAlarmSummaryAck {
+            entries: vec![AlarmSummaryEntry {
+                object_identifier: projection.object_identifier,
+                alarm_state: EventState::from_raw(projection.event_state),
+                acknowledged_transitions: projection.acknowledged_transitions,
+            }],
+        }
+        .encode(&mut entry_buf);
+        if entry_buf.len() > budget.max_service_ack_bytes - scratch.len() {
+            return Err(AlarmSummaryFailure::Bytes);
+        }
+        scratch.extend_from_slice(&entry_buf);
+    }
+    buf.extend_from_slice(&scratch);
+    Ok(())
+}
+
 fn read_required(
     object: &dyn BACnetObject,
     object_identifier: ObjectIdentifier,

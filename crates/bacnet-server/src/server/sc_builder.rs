@@ -187,6 +187,7 @@ impl ScServerBuilder {
 
         self.config.request_admission_policy.validate()?;
         self.config.read_property_multiple_budget.validate()?;
+        self.config.get_alarm_summary_budget.validate()?;
 
         let ws = bacnet_transport::sc_tls::TlsWebSocket::connect(&self.hub_url, tls_config.clone())
             .await?;
@@ -227,6 +228,32 @@ impl ScServerBuilder {
 mod tests {
     use super::*;
     use bacnet_transport::sc::ScReconnectConfig;
+
+    #[tokio::test]
+    async fn alarm_summary_sc_budget_validation_before_dial() {
+        for budget in [
+            GetAlarmSummaryBudget {
+                max_objects: 0,
+                ..Default::default()
+            },
+            GetAlarmSummaryBudget {
+                max_service_ack_bytes: 0,
+                ..Default::default()
+            },
+        ] {
+            let tls = tokio_rustls::rustls::ClientConfig::builder()
+                .with_root_certificates(tokio_rustls::rustls::RootCertStore::empty())
+                .with_no_client_auth();
+            let builder = BACnetServer::sc_builder()
+                .hub_url("not-a-websocket-url")
+                .tls_config(Arc::new(tls))
+                .get_alarm_summary_budget(budget);
+            assert_eq!(builder.config.get_alarm_summary_budget, budget);
+            assert!(
+                matches!(builder.build().await.err(), Some(Error::Encoding(m)) if m.contains("alarm_summary_max_"))
+            );
+        }
+    }
 
     #[tokio::test]
     async fn rpm_sc_budget_validation_before_dial() {

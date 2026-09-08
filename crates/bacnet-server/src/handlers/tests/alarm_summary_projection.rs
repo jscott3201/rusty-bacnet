@@ -5,6 +5,9 @@ use bacnet_types::enums::NotifyType;
 
 use super::*;
 
+#[path = "alarm_summary_budget.rs"]
+mod budget;
+
 struct AlarmSummaryFixture {
     oid: ObjectIdentifier,
     name: String,
@@ -106,7 +109,21 @@ fn transition_bits(bits: u8) -> PropertyValue {
 
 fn response(db: &ObjectDatabase) -> Result<GetAlarmSummaryAck, Error> {
     let mut encoded = BytesMut::new();
-    handle_get_alarm_summary(db, &mut encoded)?;
+    let legacy = handle_get_alarm_summary(db, &mut encoded);
+    let mut bounded = BytesMut::new();
+    let result = handle_get_alarm_summary_budgeted(
+        db,
+        &mut bounded,
+        crate::server::GetAlarmSummaryBudget::default(),
+    );
+    match (&legacy, &result) {
+        (Ok(()), Ok(())) => assert_eq!(encoded, bounded),
+        (Err(expected), Err(AlarmSummaryFailure::Service(actual))) => {
+            assert_eq!(expected.to_string(), actual.to_string())
+        }
+        other => panic!("bounded/legacy projection drift: {other:?}"),
+    }
+    legacy?;
     GetAlarmSummaryAck::decode(&encoded)
 }
 

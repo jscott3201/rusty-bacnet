@@ -1,6 +1,7 @@
 use super::*;
 
 mod acknowledge_alarm;
+mod alarm_summary;
 mod audit_notification;
 mod confirmed;
 pub(super) mod confirmed_response;
@@ -355,12 +356,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
             s if s == ConfirmedServiceChoice::GET_ALARM_SUMMARY => {
-                let mut buf = BytesMut::new();
                 let db = db.read().await;
-                match handlers::handle_get_alarm_summary(&db, &mut buf) {
-                    Ok(()) => complex_ack(buf),
-                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
-                }
+                Self::alarm_summary_response(&db, invoke_id, config.get_alarm_summary_budget)
             }
             s if s == ConfirmedServiceChoice::GET_ENROLLMENT_SUMMARY => {
                 let mut buf = BytesMut::new();

@@ -1703,6 +1703,15 @@ ms and require `sc_heartbeat_timeout_ms` to be greater than the interval.
 
 ## Request admission limits
 
+GetAlarmSummary has positive keyword-only `alarm_summary_max_objects=4096`
+and `alarm_summary_max_service_ack_bytes=16384`. The work preflight includes
+all database objects, even non-alarming objects, before any projection callback.
+Overflow returns whole-service server Abort OUT_OF_RESOURCES; encoded service
+byte overflow returns BUFFER_OVERFLOW, never a partial successful ACK. Bytes
+exclude APDU/NPDU and are independent of peer APDU size. See
+[GetAlarmSummary budgets](alarm-summary-budget.md) for migration, preserved
+segmentation, error behavior and precise callback/allocation exclusions.
+
 RPM additionally has independent, positive keyword-only constructor limits:
 `rpm_max_result_elements=256` and `rpm_max_service_ack_bytes=16384`.
 Whole-request expanded-result overflow returns server Abort OUT_OF_RESOURCES

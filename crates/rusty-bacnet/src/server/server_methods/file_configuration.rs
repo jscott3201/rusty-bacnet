@@ -204,6 +204,7 @@ mod tests {
             reinit_password: None,
             request_admission_policy: server::RequestAdmissionPolicy::default(),
             read_property_multiple_budget: server::ReadPropertyMultipleBudget::default(),
+            get_alarm_summary_budget: server::GetAlarmSummaryBudget::default(),
             started: Arc::new(AtomicBool::new(false)),
             pending_objects: std::sync::Mutex::new(Vec::new()),
         }

@@ -44,6 +44,7 @@ impl RequestTasks {
         // Retain admission validation precedence; both policies must be valid
         // before the lifecycle starts a transport or exposes a request owner.
         config.read_property_multiple_budget.validate()?;
+        config.get_alarm_summary_budget.validate()?;
         Ok(Arc::new(tasks))
     }
 
