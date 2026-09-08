@@ -90,7 +90,7 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
-    /// BACnet enable/disable (Clause 16.4).
+    /// BACnet enable/disable (Clause 16.1).
     pub struct EnableDisable(u32);
 
     const ENABLE = 0;

@@ -1,6 +1,6 @@
 //! Device management services per ASHRAE 135-2020 Clauses 15-16.
 //!
-//! - DeviceCommunicationControl (Clause 15.4)
+//! - DeviceCommunicationControl (Clause 16.1)
 //! - ReinitializeDevice (Clause 15.4)
 //! - TimeSynchronization (§16.7)
 //! - UTCTimeSynchronization (§16.8)

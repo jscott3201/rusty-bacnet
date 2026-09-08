@@ -1,26 +1,28 @@
 use super::*;
 
 // ---------------------------------------------------------------------------
-// DeviceCommunicationControl enforcement tests (Clause 16.4.3)
+// DeviceCommunicationControl enforcement tests (Clause 16.1)
 // ---------------------------------------------------------------------------
 
 /// DCC DISABLE (deprecated in 2020 spec) is rejected with SERVICE_REQUEST_DENIED.
 #[tokio::test]
-async fn dcc_disable_sets_comm_state() {
+async fn dcc_disable_rejected_without_changing_comm_state() {
     use bacnet_types::enums::EnableDisable;
 
     let mut server = make_server().await;
     let mut client = make_client().await;
     let server_mac = server.local_mac().to_vec();
 
-    // Clause 16.1: DISABLE sets comm_state to 1 (per spec, all three values are supported)
+    // Clause 16.1: the deprecated DISABLE request is ignored with an error.
     let result = client
         .device_communication_control(&server_mac, EnableDisable::DISABLE, None, None)
         .await;
-    assert!(result.is_ok(), "DCC DISABLE should succeed per Clause 16.1");
-
-    // Server should be in DISABLE state (1)
-    assert_eq!(server.comm_state(), 1);
+    assert!(
+        matches!(result, Err(bacnet_types::error::Error::Protocol { class, code })
+        if class == bacnet_types::enums::ErrorClass::SERVICES.to_raw() as u32
+            && code == bacnet_types::enums::ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32)
+    );
+    assert_eq!(server.comm_state(), 0);
 
     // Re-enable should work (DCC is allowed even when disabled)
     let result = client

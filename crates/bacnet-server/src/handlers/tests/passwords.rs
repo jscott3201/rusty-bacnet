@@ -1,8 +1,69 @@
 use super::*;
 
 // -----------------------------------------------------------------------
-// Password validation tests (Clause 16.4.1 / 16.4.2)
+// Password validation tests (DCC: Clause 16.1)
 // -----------------------------------------------------------------------
+
+#[test]
+fn dcc_disable_rejection_preserves_state_and_password_precedence() {
+    for initial in [0, 1, 2] {
+        for duration in [None, Some(0), Some(5)] {
+            for (configured, supplied, class, code) in [
+                (
+                    None,
+                    None,
+                    ErrorClass::SERVICES,
+                    ErrorCode::SERVICE_REQUEST_DENIED,
+                ),
+                (
+                    None,
+                    Some("anything"),
+                    ErrorClass::SERVICES,
+                    ErrorCode::SERVICE_REQUEST_DENIED,
+                ),
+                (
+                    Some("secret"),
+                    Some("secret"),
+                    ErrorClass::SERVICES,
+                    ErrorCode::SERVICE_REQUEST_DENIED,
+                ),
+                (
+                    Some("secret"),
+                    None,
+                    ErrorClass::SECURITY,
+                    ErrorCode::PASSWORD_FAILURE,
+                ),
+                (
+                    Some("secret"),
+                    Some("wrong"),
+                    ErrorClass::SECURITY,
+                    ErrorCode::PASSWORD_FAILURE,
+                ),
+            ] {
+                let comm_state = AtomicU8::new(initial);
+                let request = DeviceCommunicationControlRequest {
+                    time_duration: duration,
+                    enable_disable: EnableDisable::DISABLE,
+                    password: supplied.map(str::to_owned),
+                };
+                let mut buf = BytesMut::new();
+                request.encode(&mut buf).unwrap();
+                let err = handle_device_communication_control(
+                    &buf,
+                    &comm_state,
+                    &configured.map(str::to_owned),
+                )
+                .unwrap_err();
+                assert!(
+                    matches!(err, Error::Protocol { class: actual_class, code: actual_code }
+                    if actual_class == class.to_raw() as u32 && actual_code == code.to_raw() as u32),
+                    "unexpected error: {err:?}"
+                );
+                assert_eq!(comm_state.load(Ordering::Acquire), initial);
+            }
+        }
+    }
+}
 
 #[test]
 fn dcc_correct_password_accepted() {

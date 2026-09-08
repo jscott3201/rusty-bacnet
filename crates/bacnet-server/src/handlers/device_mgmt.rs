@@ -46,7 +46,12 @@ pub fn handle_device_communication_control(
     let new_state = if request.enable_disable == EnableDisable::ENABLE {
         0u8
     } else if request.enable_disable == EnableDisable::DISABLE {
-        1u8
+        // ASHRAE 135-2020 Clause 16.1: reject deprecated DISABLE after
+        // password validation, without changing state or the caller's timer.
+        return Err(Error::Protocol {
+            class: ErrorClass::SERVICES.to_raw() as u32,
+            code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
+        });
     } else if request.enable_disable == EnableDisable::DISABLE_INITIATION {
         2u8
     } else {

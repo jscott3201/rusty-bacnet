@@ -1,5 +1,9 @@
 use super::*;
 
+#[cfg(test)]
+#[path = "dcc_tests.rs"]
+mod dcc_tests;
+
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Atomically admit a confirmed request before DCC, service decoding,
     /// authorization, mutation, side effects, or response construction.
