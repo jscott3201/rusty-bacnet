@@ -14,6 +14,7 @@ from rusty_bacnet import BACnetServer
 
 
 FIELDS = {
+    "recovery_active", "recovery_admitted_total", "recovery_overloaded_total",
     "confirmed_global_overloaded_total", "confirmed_peer_overloaded_total",
     "unconfirmed_global_overloaded_total", "unconfirmed_peer_overloaded_total",
     "confirmed_active", "confirmed_admitted_total", "confirmed_overloaded_total",
@@ -34,7 +35,8 @@ class AdmissionSignatureTests(unittest.TestCase):
         defaults = dict(zip((a.arg for a in constructor.args.kwonlyargs), constructor.args.kw_defaults))
         signature = inspect.signature(BACnetServer)
         for name, value in [("max_confirmed_in_flight", 64), ("max_unconfirmed_in_flight", 32),
-                            ("max_confirmed_in_flight_per_peer", 16), ("max_unconfirmed_in_flight_per_peer", 8)]:
+                            ("max_confirmed_in_flight_per_peer", 16), ("max_unconfirmed_in_flight_per_peer", 8),
+                            ("confirmed_recovery_reserve", 4), ("max_recovery_in_flight_per_peer", 1)]:
             self.assertEqual(signature.parameters[name].kind, inspect.Parameter.KEYWORD_ONLY)
             self.assertEqual(signature.parameters[name].default, value)
             default = defaults[name]
@@ -59,6 +61,8 @@ class AdmissionSignatureTests(unittest.TestCase):
                     invalid = {name: 1.5}
                     BACnetServer(123, transport=transport, **invalid)
                 valid: dict[str, Any] = {name: 2}
+                if name == "max_confirmed_in_flight":
+                    valid["confirmed_recovery_reserve"] = 0
                 BACnetServer(123, transport=transport, **valid)
 
 
@@ -72,7 +76,8 @@ class AdmissionRuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.server = BACnetServer(123, interface="127.0.0.1", port=0,
                                   broadcast_address="127.0.0.1",
-                                  max_confirmed_in_flight=1, max_unconfirmed_in_flight=2)
+                                  max_confirmed_in_flight=1, max_unconfirmed_in_flight=2,
+                                  confirmed_recovery_reserve=0)
         self.server.add_analog_value(1, "Admission AV")
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(("127.0.0.1", 0))

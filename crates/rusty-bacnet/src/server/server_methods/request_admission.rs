@@ -16,6 +16,12 @@ impl BACnetServer {
             };
             // Owned Rust data only; no Python borrow or server guard escapes.
             Ok(std::collections::HashMap::from([
+                ("recovery_active", counters.recovery_active as u64),
+                ("recovery_admitted_total", counters.recovery_admitted_total),
+                (
+                    "recovery_overloaded_total",
+                    counters.recovery_overloaded_total,
+                ),
                 (
                     "confirmed_global_overloaded_total",
                     counters.confirmed_global_overloaded_total,

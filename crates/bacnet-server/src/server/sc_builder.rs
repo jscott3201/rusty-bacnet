@@ -302,6 +302,7 @@ mod tests {
         for bad in [0, usize::MAX] {
             let policy = RequestAdmissionPolicy {
                 max_confirmed_in_flight: 1,
+                confirmed_recovery_reserve: 0,
                 max_unconfirmed_in_flight: bad,
                 ..Default::default()
             };
@@ -317,6 +318,41 @@ mod tests {
                 .err()
                 .unwrap();
             assert!(matches!(error, Error::Encoding(m) if m.contains("max_unconfirmed_in_flight")));
+            let error = BACnetServer::sc_builder()
+                .request_admission_policy(policy)
+                .reconnect(ScReconnectConfig {
+                    initial_delay_ms: 0,
+                    ..Default::default()
+                })
+                .build()
+                .await
+                .err()
+                .unwrap();
+            assert!(matches!(error, Error::OutOfRange(m) if m.contains("reconnect")));
+        }
+    }
+
+    #[tokio::test]
+    async fn admission_sc_invalid_policy_recovery_precedes_dial() {
+        for reserve in [64, 65] {
+            let policy = RequestAdmissionPolicy {
+                confirmed_recovery_reserve: reserve,
+                ..Default::default()
+            };
+            let tls = tokio_rustls::rustls::ClientConfig::builder()
+                .with_root_certificates(tokio_rustls::rustls::RootCertStore::empty())
+                .with_no_client_auth();
+            let error = BACnetServer::sc_builder()
+                .hub_url("not-a-websocket-url")
+                .tls_config(Arc::new(tls))
+                .request_admission_policy(policy)
+                .build()
+                .await
+                .err()
+                .unwrap();
+            assert!(
+                matches!(error, Error::Encoding(m) if m.contains("confirmed_recovery_reserve"))
+            );
             let error = BACnetServer::sc_builder()
                 .request_admission_policy(policy)
                 .reconnect(ScReconnectConfig {

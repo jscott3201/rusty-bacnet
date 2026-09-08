@@ -116,6 +116,8 @@ async fn peer_admission_logical_identity_and_duplicate_fallback_matrix() {
 async fn peer_admission_independent_classes_origins_and_global_first() {
     let owner = RequestTasks::new(RequestAdmissionPolicy {
         max_confirmed_in_flight: 2,
+        confirmed_recovery_reserve: 0,
+        max_recovery_in_flight_per_peer: 1,
         max_unconfirmed_in_flight: 2,
         max_confirmed_in_flight_per_peer: 1,
         max_unconfirmed_in_flight_per_peer: 1,
@@ -383,6 +385,7 @@ async fn peer_admission_positive_validation_generic_bip_and_tiny_global() {
     }
     let owner = RequestTasks::new(RequestAdmissionPolicy {
         max_confirmed_in_flight: 1,
+        confirmed_recovery_reserve: 0,
         max_unconfirmed_in_flight: 1,
         ..Default::default()
     })

@@ -4,6 +4,9 @@ use crate::server::request_admission::{Class, Rejection};
 #[path = "peer_admission_tests.rs"]
 mod peer_admission_tests;
 
+#[path = "recovery_admission_tests.rs"]
+mod recovery_admission_tests;
+
 async fn small_fixture() -> (
     BACnetServer<HeldTransport>,
     mpsc::Sender<ReceivedNpdu>,
@@ -14,6 +17,7 @@ async fn small_fixture() -> (
         ServerConfig {
             request_admission_policy: RequestAdmissionPolicy {
                 max_confirmed_in_flight: 1,
+                confirmed_recovery_reserve: 0,
                 max_unconfirmed_in_flight: 1,
                 ..Default::default()
             },
@@ -94,6 +98,7 @@ async fn admission_default_confirmed_limit_rejects_before_handler() {
         ServerConfig {
             request_admission_policy: RequestAdmissionPolicy {
                 max_confirmed_in_flight_per_peer: 64,
+                confirmed_recovery_reserve: 0,
                 ..Default::default()
             },
             ..Default::default()
@@ -334,6 +339,7 @@ async fn admission_panic_releases_real_handler_and_abort_and_allows_retry() {
 async fn admission_guards_not_joinset_length_and_closed_not_overload() {
     let owner = crate::server::request_tasks::RequestTasks::new(RequestAdmissionPolicy {
         max_confirmed_in_flight: 1,
+        confirmed_recovery_reserve: 0,
         max_unconfirmed_in_flight: 1,
         ..Default::default()
     })

@@ -29,7 +29,9 @@ impl BACnetServer {
         max_confirmed_in_flight=64,
         max_unconfirmed_in_flight=32,
         max_confirmed_in_flight_per_peer=16,
-        max_unconfirmed_in_flight_per_peer=8
+        max_unconfirmed_in_flight_per_peer=8,
+        confirmed_recovery_reserve=4,
+        max_recovery_in_flight_per_peer=1
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -58,12 +60,16 @@ impl BACnetServer {
         max_unconfirmed_in_flight: usize,
         max_confirmed_in_flight_per_peer: usize,
         max_unconfirmed_in_flight_per_peer: usize,
+        confirmed_recovery_reserve: usize,
+        max_recovery_in_flight_per_peer: usize,
     ) -> PyResult<Self> {
         let request_admission_policy = server::RequestAdmissionPolicy {
             max_confirmed_in_flight,
             max_unconfirmed_in_flight,
             max_confirmed_in_flight_per_peer,
             max_unconfirmed_in_flight_per_peer,
+            confirmed_recovery_reserve,
+            max_recovery_in_flight_per_peer,
         };
         request_admission_policy
             .validate()

@@ -63,7 +63,8 @@ MSTP_KEYWORD_ONLY = [
 ]
 SERVER_KEYWORD_ONLY = MSTP_KEYWORD_ONLY + [
     "max_confirmed_in_flight", "max_unconfirmed_in_flight",
-    "max_confirmed_in_flight_per_peer", "max_unconfirmed_in_flight_per_peer"
+    "max_confirmed_in_flight_per_peer", "max_unconfirmed_in_flight_per_peer",
+    "confirmed_recovery_reserve", "max_recovery_in_flight_per_peer"
 ]
 SUPPORTED_BAUD_RATES = (9_600, 19_200, 38_400, 57_600, 76_800, 115_200)
 SUPPORTED_BAUD_ERROR = (

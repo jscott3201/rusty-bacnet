@@ -1726,6 +1726,9 @@ class BACnetClient:
 
 class RequestAdmissionCounters(TypedDict):
     """Independent counter samples, not a transactionally atomic aggregate."""
+    recovery_active: int
+    recovery_admitted_total: int
+    recovery_overloaded_total: int
     confirmed_active: int
     confirmed_admitted_total: int
     confirmed_overloaded_total: int
@@ -1781,6 +1784,8 @@ class BACnetServer:
         max_unconfirmed_in_flight: int = 32,
         max_confirmed_in_flight_per_peer: int = 16,
         max_unconfirmed_in_flight_per_peer: int = 8,
+        confirmed_recovery_reserve: int = 4,
+        max_recovery_in_flight_per_peer: int = 1,
     ) -> None: ...
 
     # --- Analog objects ---

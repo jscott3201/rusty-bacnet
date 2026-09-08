@@ -167,6 +167,7 @@ async fn segmented_worker_blocked_send_does_not_block_inline_ack_or_abort() {
             segmentation_supported: Segmentation::BOTH,
             request_admission_policy: RequestAdmissionPolicy {
                 max_confirmed_in_flight_per_peer: 64,
+                confirmed_recovery_reserve: 0,
                 ..Default::default()
             },
             ..Default::default()

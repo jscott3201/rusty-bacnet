@@ -143,7 +143,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let descendants = request_tasks.spawner();
                 let peer =
                     super::request_peer::canonical_requester(&source_mac, source_network.as_ref());
-                let result = request_tasks.try_spawn(Class::Confirmed, peer.clone(), || {
+                let class = super::request_admission::confirmed_class(
+                    req.service_choice,
+                    &req.service_request,
+                );
+                let result = request_tasks.try_spawn(class, peer.clone(), || {
                     let reply_tx = reply_tx.take();
                     async move {
                         Self::handle_admitted_confirmed_request(

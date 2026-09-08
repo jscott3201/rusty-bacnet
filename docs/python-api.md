@@ -1705,18 +1705,26 @@ ms and require `sc_heartbeat_timeout_ms` to be greater than the interval.
 
 `BACnetServer(...)` accepts keyword-only `max_confirmed_in_flight=64` and
 `max_unconfirmed_in_flight=32`, followed by keyword-only
-`max_confirmed_in_flight_per_peer=16` and `max_unconfirmed_in_flight_per_peer=8`.
+`max_confirmed_in_flight_per_peer=16`, `max_unconfirmed_in_flight_per_peer=8`,
+`confirmed_recovery_reserve=4`, and `max_recovery_in_flight_per_peer=1`.
 Existing positional arguments and global defaults are unchanged.
-All must be positive and within the native semaphore range; zero is rejected during
+All except the reserve must be positive and within the native semaphore range; zero is rejected during
 construction, before any transport opens. These provisional defaults bound
 top-level handler concurrency, not all server work or per-peer fairness.
 Each effective peer cap is the smaller of its configured cap and global cap;
-global=1 with peer defaults is valid. A valid routed network (1..65534) and
+the reserve must satisfy `0 <= reserve < max_confirmed_in_flight`. Thus global=1
+requires explicit reserve=0, and custom globals <=4 must specify a smaller reserve.
+Reserve=0 makes ENABLE ordinary, not denied. A valid routed network (1..65534) and
 nonempty source MAC identify the logical peer, otherwise the immediate MAC does.
 On SC, the supplied VMAC/logical source is not an authenticated principal.
 Identity multiplication/spoofing can exhaust global capacity; quotas do not
-guarantee availability once that capacity is full. Critical-service reservations
-and work/response budgets remain deferred.
+guarantee availability once that capacity is full. The default confirmed total64
+is strictly partitioned into ordinary60/protected4 with no lending in either
+direction. Only decoder-accepted DCC ENABLE is protected; existing password checks
+still apply in the handler, so wrong/missing required passwords can consume a slot
+before PASSWORD_FAILURE. Total confirmed peer16 includes both partitions, with
+an additional protected peer1 cap. A peer already at total16 can be denied ENABLE.
+Other critical-service reservations and work/response budgets remain deferred.
 
 `await server.request_admission_counters()` returns a stable typed dictionary
 of independent active/admitted/overload/shutdown counters, including the
@@ -1725,7 +1733,10 @@ Like `comm_state()`, this accessor raises `RuntimeError` before start and after
 stop. Admission totals do not imply successful response sends.
 The additive `confirmed_global_overloaded_total`, `confirmed_peer_overloaded_total`,
 `unconfirmed_global_overloaded_total`, and `unconfirmed_peer_overloaded_total`
-fields classify rejections global-first. Each aggregate overload total equals
+fields classify rejections partition/global-first. New `recovery_active`,
+`recovery_admitted_total`, and `recovery_overloaded_total` are protected subsets;
+existing confirmed aggregates include both partitions. They remain zero when the
+reserve is zero. Each aggregate overload total equals
 its two reason totals at quiescence; independently sampled snapshots are not
 atomic. No peer identity history is exposed.
 
