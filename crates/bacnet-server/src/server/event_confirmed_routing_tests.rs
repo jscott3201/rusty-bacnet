@@ -259,6 +259,7 @@ impl Harness {
             &Arc::new(ServerConfig::default()),
             &None,
             &Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), None)),
+            &super::request_tasks::RequestTasks::default(),
             source_mac,
             apdu,
             bacnet_network::layer::ReceivedApdu {

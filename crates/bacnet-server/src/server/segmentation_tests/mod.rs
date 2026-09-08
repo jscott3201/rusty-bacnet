@@ -294,6 +294,7 @@ async fn dispatch_test_apdu_from_network<T: TransportPort + 'static>(
         &config,
         &None,
         &Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), None)),
+        &super::request_tasks::RequestTasks::default(),
         source_mac.as_slice(),
         apdu,
         bacnet_network::layer::ReceivedApdu {

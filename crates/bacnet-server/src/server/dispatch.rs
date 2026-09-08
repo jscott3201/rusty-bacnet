@@ -95,6 +95,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         config: &Arc<ServerConfig>,
         clock: &Option<Arc<ServerClock>>,
         discovery_limiter: &Arc<DiscoveryLimiter>,
+        request_tasks: &super::request_tasks::RequestTasks,
         source_mac: &[u8],
         apdu: Apdu,
         mut received: bacnet_network::layer::ReceivedApdu,
@@ -117,7 +118,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let config = Arc::clone(config);
                 let source_mac = MacAddr::from_slice(source_mac);
                 let source_network = received.source_network.clone();
-                tokio::spawn(async move {
+                request_tasks.spawn(async move {
                     Self::handle_confirmed_request(
                         &db,
                         &network,
@@ -200,7 +201,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let comm_state = Arc::clone(comm_state);
                 let device_bindings = Arc::clone(device_bindings);
                 let discovery_limiter = Arc::clone(discovery_limiter);
-                tokio::spawn(async move {
+                request_tasks.spawn(async move {
                     Self::handle_unconfirmed_request(
                         &db,
                         &network,

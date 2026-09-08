@@ -786,6 +786,7 @@ pub struct BACnetServer<T: TransportPort> {
     #[allow(dead_code)]
     dcc_timer: Arc<Mutex<Option<JoinHandle<()>>>>,
     dispatch_task: Option<JoinHandle<()>>,
+    request_tasks: Arc<request_tasks::RequestTasks>,
     cov_purge_task: Option<JoinHandle<()>>,
     fault_detection_task: Option<JoinHandle<()>>,
     event_enrollment_task: Option<JoinHandle<()>>,
@@ -872,6 +873,7 @@ mod segmentation;
 mod segmented_receive;
 mod segmented_send;
 pub(crate) use segmented_send::*;
+mod request_tasks;
 mod shutdown;
 
 #[cfg(test)]

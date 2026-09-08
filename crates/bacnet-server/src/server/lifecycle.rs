@@ -107,11 +107,23 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let clock_dispatch = clock.clone();
         let discovery_limiter_dispatch = Arc::clone(&discovery_limiter);
 
+        let request_tasks = Arc::new(super::request_tasks::RequestTasks::default());
+        let requests = Arc::clone(&request_tasks);
         let dispatch_task = tokio::spawn(async move {
             let mut apdu_rx = apdu_rx;
             let mut seg_receivers: HashMap<SegKey, SegmentedRequestState> = HashMap::new();
 
-            while let Some(received) = apdu_rx.recv().await {
+            loop {
+                let received = tokio::select! {
+                    result = requests.join_next(), if !requests.is_empty() => {
+                        super::request_tasks::RequestTasks::observe(result);
+                        continue;
+                    }
+                    received = apdu_rx.recv() => match received {
+                        Some(received) => received,
+                        None => break,
+                    },
+                };
                 let now = Instant::now();
                 super::segmented_receive::expire_segmented_requests(&mut seg_receivers, now);
 
@@ -434,6 +446,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                                     &config_dispatch,
                                                     &clock_dispatch,
                                                     &discovery_limiter_dispatch,
+                                                    &requests,
                                                     &source_mac,
                                                     Apdu::ConfirmedRequest(reassembled),
                                                     received.take().unwrap_or_else(|| {
@@ -486,6 +499,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 &config_dispatch,
                                 &clock_dispatch,
                                 &discovery_limiter_dispatch,
+                                &requests,
                                 &source_mac,
                                 decoded,
                                 received.take().unwrap_or_else(|| {
@@ -508,6 +522,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         warn!(error = %e, "Server failed to decode received APDU");
                     }
                 }
+            }
+            while let Some(result) = requests.join_next().await {
+                super::request_tasks::RequestTasks::observe(Some(result));
             }
         });
 
@@ -733,6 +750,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             comm_state,
             dcc_timer,
             dispatch_task: Some(dispatch_task),
+            request_tasks,
             cov_purge_task: Some(cov_purge_task),
             fault_detection_task,
             event_enrollment_task,
