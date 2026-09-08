@@ -60,7 +60,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         db.set_monotonic_clock_internal(Some(monotonic_clock));
 
         let mut network = NetworkLayer::new(transport);
-        let apdu_rx = network.start().await?;
+        let mut apdu_rx = network.start().await?;
         let local_mac = MacAddr::from_slice(network.local_mac());
 
         let network = Arc::new(network);
@@ -109,9 +109,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let request_tasks = Arc::new(super::request_tasks::RequestTasks::default());
         let requests = Arc::clone(&request_tasks);
         let dispatch_task = tokio::spawn(async move {
-            let mut apdu_rx = apdu_rx;
             let mut seg_receivers: HashMap<SegKey, SegmentedRequestState> = HashMap::new();
             let mut notifications_open = true;
+            let mut ingress_open = true;
 
             loop {
                 let received = tokio::select! {
@@ -124,10 +124,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         super::request_tasks::RequestTasks::observe(result);
                         continue;
                     }
-                    received = apdu_rx.recv() => match received {
+                    received = apdu_rx.recv(), if ingress_open => match received {
                         Some(received) => received,
-                        None => break,
+                        None => {
+                            // Local/periodic notification producers outlive ingress.
+                            // Keep both join consumers active, but never poll EOF again.
+                            ingress_open = false;
+                            seg_receivers.clear();
+                            continue;
+                        }
                     },
+                    else => break,
                 };
                 let now = Instant::now();
                 super::segmented_receive::expire_segmented_requests(&mut seg_receivers, now);
@@ -527,9 +534,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         warn!(error = %e, "Server failed to decode received APDU");
                     }
                 }
-            }
-            while let Some(result) = requests.join_next().await {
-                super::request_tasks::RequestTasks::observe(Some(result));
             }
         });
 

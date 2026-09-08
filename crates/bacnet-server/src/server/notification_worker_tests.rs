@@ -1,6 +1,104 @@
 use super::*;
 use bacnet_objects::analog::AnalogOutputObject;
 
+async fn reap_after_ingress_closure(hold_request: bool) {
+    let (mut server, ingress, mut started) = fixture().await;
+    let mut request_released = if hold_request {
+        inject(&ingress, confirmed(false)).await;
+        Some(started.recv().await.unwrap())
+    } else {
+        None
+    };
+    // Close the real NPDU input, which closes the network layer's APDU sender.
+    // Keep the server and its outbound producers alive.
+    drop(ingress);
+    server
+        .network
+        .transport()
+        .pass_cov
+        .store(true, Ordering::Release);
+    for batch in 0..2 {
+        tokio::time::pause();
+        if batch == 0 {
+            fire_cov(&server, CovNotificationKind::Single).await;
+        } else {
+            server
+                .write_local(
+                    &ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap(),
+                    PropertyIdentifier::PRESENT_VALUE,
+                    None,
+                    PropertyValue::Real(42.0),
+                    Some(16),
+                )
+                .await
+                .unwrap();
+        }
+        // No ACK can arrive after ingress closure. Drive the unchanged retry
+        // sequence to ordinary exhaustion, observing every real transport send.
+        for _ in 0..=DEFAULT_APDU_RETRIES {
+            let released = tokio::time::timeout(Duration::from_secs(2), started.recv())
+                .await
+                .unwrap()
+                .expect("outbound COV admission stopped with ingress");
+            released.await.unwrap();
+            assert!(
+                matches!(server.network.transport().frames.lock().unwrap().last(),
+                Some(Apdu::ConfirmedRequest(request))
+                    if request.service_choice == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION)
+            );
+            tokio::time::advance(Duration::from_millis(server.config.cov_retry_timeout_ms)).await;
+        }
+        tokio::time::resume();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !server.notification_transactions.workers_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("completed notification retained after ingress closure");
+        assert_eq!(server.notification_transactions.active_count(), 0);
+        assert_eq!(server.cov_in_flight.available_permits(), 255);
+        assert_eq!(
+            server
+                .cov_table
+                .read()
+                .await
+                .in_flight_tracker()
+                .active_peer_count(),
+            0
+        );
+        assert!(!server.notification_transactions.is_closed());
+        assert!(!server.dispatch_task.as_ref().unwrap().is_finished());
+        if let Some(released) = request_released.as_mut() {
+            assert!(matches!(
+                released.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ));
+            assert!(
+                !server.request_tasks.is_empty(),
+                "request must remain blocked during notification reaping"
+            );
+        }
+    }
+    if let Some(released) = request_released {
+        server.network.transport().release.notify_one();
+        released.await.unwrap();
+        wait_reaped(&server).await;
+    }
+    server.stop().await.unwrap();
+    assert!(server.notification_transactions.workers_empty());
+}
+
+#[tokio::test]
+async fn notification_worker_reaps_after_ingress_closure() {
+    reap_after_ingress_closure(false).await;
+}
+
+#[tokio::test]
+async fn notification_worker_reaps_after_ingress_closure_with_blocked_request() {
+    reap_after_ingress_closure(true).await;
+}
+
 async fn fire_event(server: &BACnetServer<HeldTransport>) {
     use crate::server::event_recipient_routing_tests::{address_recipient, destination_for};
     use bacnet_objects::analog::AnalogInputObject;

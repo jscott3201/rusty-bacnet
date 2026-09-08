@@ -29,6 +29,7 @@ struct HeldTransport {
     started: mpsc::UnboundedSender<oneshot::Receiver<()>>,
     release: Arc<Notify>,
     panic_next: AtomicBool,
+    pass_cov: AtomicBool,
     frames: std::sync::Mutex<Vec<Apdu>>,
 }
 
@@ -45,6 +46,8 @@ impl TransportPort for HeldTransport {
         let decoded = decode_npdu(Bytes::copy_from_slice(npdu)).unwrap();
         let apdu = apdu::decode_apdu(decoded.payload).unwrap();
         let segment_ack = matches!(apdu, Apdu::SegmentAck(_));
+        let cov = matches!(&apdu, Apdu::ConfirmedRequest(request)
+            if request.service_choice == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION);
         self.frames.lock().unwrap().push(apdu);
         if segment_ack {
             return Ok(());
@@ -52,6 +55,9 @@ impl TransportPort for HeldTransport {
         let (tx, rx) = oneshot::channel();
         let _guard = SendGuard(Some(tx));
         self.started.send(rx).unwrap();
+        if cov && self.pass_cov.load(Ordering::Acquire) {
+            return Ok(());
+        }
         self.release.notified().await;
         assert!(
             !self.panic_next.swap(false, Ordering::AcqRel),
@@ -91,6 +97,7 @@ async fn fixture_with_name(
         started,
         release: Arc::new(Notify::new()),
         panic_next: AtomicBool::new(false),
+        pass_cov: AtomicBool::new(false),
         frames: std::sync::Mutex::new(Vec::new()),
     };
     let mut db = ObjectDatabase::new();
