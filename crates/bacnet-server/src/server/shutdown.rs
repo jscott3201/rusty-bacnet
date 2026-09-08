@@ -19,6 +19,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         while let Some(result) = self.request_tasks.join_next().await {
             super::request_tasks::RequestTasks::observe(Some(result));
         }
+        {
+            let mut timer = self.dcc_timer.lock().await;
+            super::dcc_timer::cancel(&mut timer).await;
+        }
         if let Some(task) = self.fault_detection_task.take() {
             task.abort();
             let _ = task.await;

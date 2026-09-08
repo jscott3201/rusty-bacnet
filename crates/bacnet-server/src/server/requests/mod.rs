@@ -271,32 +271,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
             s if s == ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL => {
-                match handlers::handle_device_communication_control(
-                    &req.service_request,
+                match super::dcc_timer::replace(
+                    dcc_timer,
                     comm_state,
+                    &req.service_request,
                     &config.dcc_password,
-                ) {
-                    Ok((_state, duration)) => {
-                        if let Some(prev) = dcc_timer.lock().await.take() {
-                            prev.abort();
-                        }
-                        if let Some(minutes) = duration {
-                            let comm = Arc::clone(comm_state);
-                            let handle = tokio::spawn(async move {
-                                tokio::time::sleep(std::time::Duration::from_secs(
-                                    minutes as u64 * 60,
-                                ))
-                                .await;
-                                comm.store(0, Ordering::Release);
-                                tracing::debug!(
-                                    "DCC timer expired after {} min, state reverted to ENABLE",
-                                    minutes
-                                );
-                            });
-                            *dcc_timer.lock().await = Some(handle);
-                        }
-                        simple_ack()
-                    }
+                )
+                .await
+                {
+                    Ok(()) => simple_ack(),
                     Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
                 }
             }

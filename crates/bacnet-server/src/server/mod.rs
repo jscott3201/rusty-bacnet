@@ -781,9 +781,8 @@ pub struct BACnetServer<T: TransportPort> {
     device_bindings: Arc<RwLock<DeviceBindingTable>>,
     /// Communication state: 0 = Enable, 1 = Disable, 2 = DisableInitiation.
     comm_state: Arc<AtomicU8>,
-    /// Handle for the DCC auto-re-enable timer. A new DCC request aborts
-    /// any previous timer.
-    #[allow(dead_code)]
+    /// DCC timer owner and replacement/expiry serialization boundary.
+    /// Valid replacement and explicit stop abort and join before clearing it.
     dcc_timer: Arc<Mutex<Option<JoinHandle<()>>>>,
     dispatch_task: Option<JoinHandle<()>>,
     request_tasks: Arc<request_tasks::RequestTasks>,
@@ -843,6 +842,7 @@ mod cov_clock;
 mod cov_encoding;
 mod cov_notifications;
 mod cov_snapshot;
+mod dcc_timer;
 mod device_bindings;
 mod discovery;
 pub use discovery::{DiscoveryCounters, DiscoveryPolicy};
