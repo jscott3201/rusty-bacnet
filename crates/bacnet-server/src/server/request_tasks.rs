@@ -40,7 +40,11 @@ impl RequestTasks {
     pub(super) fn for_server(
         config: &super::ServerConfig,
     ) -> Result<Arc<Self>, bacnet_types::error::Error> {
-        Self::new(config.request_admission_policy).map(Arc::new)
+        let tasks = Self::new(config.request_admission_policy)?;
+        // Retain admission validation precedence; both policies must be valid
+        // before the lifecycle starts a transport or exposes a request owner.
+        config.read_property_multiple_budget.validate()?;
+        Ok(Arc::new(tasks))
     }
 
     pub(super) fn new(policy: RequestAdmissionPolicy) -> Result<Self, bacnet_types::error::Error> {

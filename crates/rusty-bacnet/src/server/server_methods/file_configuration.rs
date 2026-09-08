@@ -203,6 +203,7 @@ mod tests {
             dcc_password: None,
             reinit_password: None,
             request_admission_policy: server::RequestAdmissionPolicy::default(),
+            read_property_multiple_budget: server::ReadPropertyMultipleBudget::default(),
             started: Arc::new(AtomicBool::new(false)),
             pending_objects: std::sync::Mutex::new(Vec::new()),
         }

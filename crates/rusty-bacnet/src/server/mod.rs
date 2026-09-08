@@ -102,6 +102,7 @@ pub struct BACnetServer {
     dcc_password: Option<String>,
     reinit_password: Option<String>,
     request_admission_policy: server::RequestAdmissionPolicy,
+    read_property_multiple_budget: server::ReadPropertyMultipleBudget,
     /// Whether the server has been started.
     started: Arc<AtomicBool>,
     /// Objects to add before starting. Cleared after start.

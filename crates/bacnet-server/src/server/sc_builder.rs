@@ -186,6 +186,7 @@ impl ScServerBuilder {
             .ok_or_else(|| Error::Encoding("SC server builder: tls_config is required".into()))?;
 
         self.config.request_admission_policy.validate()?;
+        self.config.read_property_multiple_budget.validate()?;
 
         let ws = bacnet_transport::sc_tls::TlsWebSocket::connect(&self.hub_url, tls_config.clone())
             .await?;
@@ -226,6 +227,38 @@ impl ScServerBuilder {
 mod tests {
     use super::*;
     use bacnet_transport::sc::ScReconnectConfig;
+
+    #[tokio::test]
+    async fn rpm_sc_budget_validation_before_dial() {
+        for budget in [
+            ReadPropertyMultipleBudget {
+                max_result_elements: 0,
+                ..Default::default()
+            },
+            ReadPropertyMultipleBudget {
+                max_service_ack_bytes: 0,
+                ..Default::default()
+            },
+        ] {
+            let tls = tokio_rustls::rustls::ClientConfig::builder()
+                .with_root_certificates(tokio_rustls::rustls::RootCertStore::empty())
+                .with_no_client_auth();
+            let builder = BACnetServer::sc_builder()
+                .hub_url("not-a-websocket-url")
+                .tls_config(Arc::new(tls))
+                .read_property_multiple_budget(budget);
+            assert_eq!(builder.config.read_property_multiple_budget, budget);
+            let error = builder.build().await.err().unwrap();
+            assert!(matches!(error, Error::Encoding(m) if m.contains("rpm_max_")));
+            let error = BACnetServer::sc_builder()
+                .read_property_multiple_budget(budget)
+                .build()
+                .await
+                .err()
+                .unwrap();
+            assert!(matches!(error, Error::Encoding(m) if m.contains("tls_config")));
+        }
+    }
 
     #[tokio::test]
     async fn sc_server_builder_rejects_invalid_reconnect_before_tls_and_bindings() {

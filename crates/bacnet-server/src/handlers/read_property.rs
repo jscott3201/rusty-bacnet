@@ -49,7 +49,10 @@ pub fn handle_read_property(
 }
 
 /// Resolve Device wildcard instance 4194303 to the actual Device object.
-fn resolve_device_wildcard(db: &ObjectDatabase, oid: &ObjectIdentifier) -> ObjectIdentifier {
+pub(super) fn resolve_device_wildcard(
+    db: &ObjectDatabase,
+    oid: &ObjectIdentifier,
+) -> ObjectIdentifier {
     if oid.object_type() == ObjectType::DEVICE && oid.instance_number() == 4194303 {
         for candidate in db.list_objects() {
             if candidate.object_type() == ObjectType::DEVICE {
@@ -115,6 +118,8 @@ fn expand_property_reference(
 /// Handle a ReadPropertyMultiple request.
 ///
 /// Per-property errors are returned inline rather than failing the entire request.
+/// This legacy low-level helper has no configured service budget. Configured
+/// `BACnetServer` dispatch uses a separate bounded implementation.
 pub fn handle_read_property_multiple(
     db: &ObjectDatabase,
     service_data: &[u8],

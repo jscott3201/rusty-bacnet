@@ -272,6 +272,8 @@ pub struct TimeSyncData {
 /// Server configuration.
 #[derive(Clone)]
 pub struct ServerConfig {
+    /// Per-service RPM work and encoded response limits (finite by default).
+    pub read_property_multiple_budget: ReadPropertyMultipleBudget,
     /// Local interface to bind.
     pub interface: Ipv4Addr,
     /// UDP port (default 0xBAC0 = 47808).
@@ -374,6 +376,10 @@ pub struct ServerConfig {
 impl std::fmt::Debug for ServerConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ServerConfig")
+            .field(
+                "read_property_multiple_budget",
+                &self.read_property_multiple_budget,
+            )
             .field("interface", &self.interface)
             .field("port", &self.port)
             .field("broadcast_address", &self.broadcast_address)
@@ -429,6 +435,7 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             interface: Ipv4Addr::UNSPECIFIED,
+            read_property_multiple_budget: ReadPropertyMultipleBudget::default(),
             port: 0xBAC0,
             broadcast_address: Ipv4Addr::BROADCAST,
             max_apdu_length: 1476,
@@ -878,6 +885,8 @@ mod segmented_receive;
 mod segmented_send;
 pub(crate) use segmented_send::*;
 mod request_admission;
+mod rpm_budget;
+pub use rpm_budget::ReadPropertyMultipleBudget;
 mod request_peer;
 mod request_tasks;
 pub use request_admission::{RequestAdmissionCounters, RequestAdmissionPolicy};

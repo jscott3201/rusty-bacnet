@@ -139,34 +139,47 @@ pub struct ReadPropertyMultipleACK {
     pub list_of_read_access_results: Vec<ReadAccessResult>,
 }
 
+impl ReadAccessResult {
+    /// Encode an object's identifier and opening list-of-results tag.
+    pub fn encode_header(buf: &mut BytesMut, object_identifier: &ObjectIdentifier) {
+        primitives::encode_ctx_object_id(buf, 0, object_identifier);
+        tags::encode_opening_tag(buf, 1);
+    }
+
+    /// Encode the closing list-of-results tag.
+    pub fn encode_footer(buf: &mut BytesMut) {
+        tags::encode_closing_tag(buf, 1);
+    }
+}
+
+impl ReadResultElement {
+    /// Encode one result, preserving value-over-error precedence.
+    pub fn encode(&self, buf: &mut BytesMut) {
+        primitives::encode_ctx_unsigned(buf, 2, self.property_identifier.to_raw() as u64);
+        if let Some(idx) = self.property_array_index {
+            primitives::encode_ctx_unsigned(buf, 3, idx as u64);
+        }
+        if let Some(ref value) = self.property_value {
+            tags::encode_opening_tag(buf, 4);
+            buf.extend_from_slice(value);
+            tags::encode_closing_tag(buf, 4);
+        } else if let Some((class, code)) = self.error {
+            tags::encode_opening_tag(buf, 5);
+            primitives::encode_app_enumerated(buf, class.to_raw() as u32);
+            primitives::encode_app_enumerated(buf, code.to_raw() as u32);
+            tags::encode_closing_tag(buf, 5);
+        }
+    }
+}
+
 impl ReadPropertyMultipleACK {
     pub fn encode(&self, buf: &mut BytesMut) {
         for result in &self.list_of_read_access_results {
-            // [0] object-identifier
-            primitives::encode_ctx_object_id(buf, 0, &result.object_identifier);
-            // [1] list-of-results (opening/closing)
-            tags::encode_opening_tag(buf, 1);
+            ReadAccessResult::encode_header(buf, &result.object_identifier);
             for elem in &result.list_of_results {
-                // [2] property-identifier
-                primitives::encode_ctx_unsigned(buf, 2, elem.property_identifier.to_raw() as u64);
-                // [3] property-array-index (optional)
-                if let Some(idx) = elem.property_array_index {
-                    primitives::encode_ctx_unsigned(buf, 3, idx as u64);
-                }
-                if let Some(ref value) = elem.property_value {
-                    // [4] property-value (opening/closing)
-                    tags::encode_opening_tag(buf, 4);
-                    buf.extend_from_slice(value);
-                    tags::encode_closing_tag(buf, 4);
-                } else if let Some((class, code)) = elem.error {
-                    // [5] property-access-error (opening/closing)
-                    tags::encode_opening_tag(buf, 5);
-                    primitives::encode_app_enumerated(buf, class.to_raw() as u32);
-                    primitives::encode_app_enumerated(buf, code.to_raw() as u32);
-                    tags::encode_closing_tag(buf, 5);
-                }
+                elem.encode(buf);
             }
-            tags::encode_closing_tag(buf, 1);
+            ReadAccessResult::encode_footer(buf);
         }
     }
 

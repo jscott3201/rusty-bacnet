@@ -17,6 +17,9 @@ mod notification_worker_tests;
 #[path = "request_admission_tests.rs"]
 mod request_admission_tests;
 
+#[path = "rpm_wire_tests.rs"]
+mod rpm_wire_tests;
+
 struct SendGuard(Option<oneshot::Sender<()>>);
 
 impl Drop for SendGuard {

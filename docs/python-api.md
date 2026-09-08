@@ -1703,6 +1703,17 @@ ms and require `sc_heartbeat_timeout_ms` to be greater than the interval.
 
 ## Request admission limits
 
+RPM additionally has independent, positive keyword-only constructor limits:
+`rpm_max_result_elements=256` and `rpm_max_service_ack_bytes=16384`.
+Whole-request expanded-result overflow returns server Abort OUT_OF_RESOURCES
+before handler property reads. Accumulated encoded service-ACK overflow returns
+server Abort BUFFER_OVERFLOW, without a partial ACK; previous read side effects
+are not rolled back. Zero raises `ValueError`, negative/native-overflow values
+raise `OverflowError`, before any transport startup. These limits do not bound
+decoder/metadata allocations, individual property reads or value encodings,
+allocator capacity, or whole-process memory. See [RPM budgets](rpm-budget.md)
+for counting rules, Rust configuration, compatibility, and protocol rationale.
+
 `BACnetServer(...)` accepts keyword-only `max_confirmed_in_flight=64` and
 `max_unconfirmed_in_flight=32`, followed by keyword-only
 `max_confirmed_in_flight_per_peer=16`, `max_unconfirmed_in_flight_per_peer=8`,

@@ -1786,6 +1786,8 @@ class BACnetServer:
         max_unconfirmed_in_flight_per_peer: int = 8,
         confirmed_recovery_reserve: int = 4,
         max_recovery_in_flight_per_peer: int = 1,
+        rpm_max_result_elements: int = 256,
+        rpm_max_service_ack_bytes: int = 16384,
     ) -> None: ...
 
     # --- Analog objects ---

@@ -129,13 +129,25 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
             s if s == ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE => {
                 let db = db.read().await;
-                match handlers::handle_read_property_multiple(
+                match handlers::handle_rpm_budgeted(
                     &db,
                     &req.service_request,
                     &mut ack_buf,
+                    config.read_property_multiple_budget,
                 ) {
                     Ok(()) => complex_ack(ack_buf),
-                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
+                    Err(handlers::RpmFailure::Service(e)) => {
+                        Self::error_apdu_from_error(invoke_id, service_choice, &e)
+                    }
+                    Err(failure) => Apdu::Abort(AbortPdu {
+                        sent_by_server: true,
+                        invoke_id,
+                        abort_reason: match failure {
+                            handlers::RpmFailure::Work => AbortReason::OUT_OF_RESOURCES,
+                            handlers::RpmFailure::Bytes => AbortReason::BUFFER_OVERFLOW,
+                            handlers::RpmFailure::Service(_) => unreachable!(),
+                        },
+                    }),
                 }
             }
             s if s == ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE => {
