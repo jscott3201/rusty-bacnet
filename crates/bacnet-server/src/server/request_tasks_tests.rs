@@ -11,6 +11,9 @@ mod segmented_worker_tests;
 #[path = "dcc_timer_tests.rs"]
 mod dcc_timer_tests;
 
+#[path = "notification_worker_tests.rs"]
+mod notification_worker_tests;
+
 struct SendGuard(Option<oneshot::Sender<()>>);
 
 impl Drop for SendGuard {

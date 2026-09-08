@@ -562,7 +562,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let tsm = Arc::clone(server_tsm);
                 let timeout = Duration::from_millis(retry_timeout_ms);
                 let apdu_retries = DEFAULT_APDU_RETRIES;
-                tokio::spawn(async move {
+                notification_transactions.spawn(async move {
                     let result = run_notification_worker(
                         operation,
                         result_rx,

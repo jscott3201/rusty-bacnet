@@ -345,7 +345,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let sub = representative.clone();
             let apdu_timeout = Duration::from_millis(config.cov_retry_timeout_ms);
             let apdu_retries = DEFAULT_APDU_RETRIES;
-            tokio::spawn(async move {
+            notification_transactions.spawn(async move {
                 let _guard = guard;
                 let result = run_notification_worker(
                     operation,

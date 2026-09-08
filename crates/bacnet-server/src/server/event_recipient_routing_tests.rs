@@ -164,12 +164,13 @@ pub(super) async fn distribute_from_database_with_bindings(
 
     let db = Arc::new(RwLock::new(db));
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    let notifications = NotificationTransactions::new();
     BACnetServer::<RoutingTransport>::build_and_send_event_notification_with_bindings(
         &db,
         &network,
         &comm_state,
         &server_tsm,
-        &NotificationTransactions::new(),
+        &notifications,
         &device_bindings,
         &oid,
         (
@@ -188,6 +189,10 @@ pub(super) async fn distribute_from_database_with_bindings(
     // Yield until the spawned task has reached its first send.
     for _ in 0..16 {
         tokio::task::yield_now().await;
+    }
+    notifications.close();
+    while let Some(result) = notifications.join_next().await {
+        NotificationTransactions::observe(Some(result));
     }
 
     let broadcasts = broadcasts.lock().unwrap().clone();

@@ -8,6 +8,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Stop the server.
     pub async fn stop(&mut self) -> Result<(), Error> {
         self.request_tasks.close();
+        // Seal both reservations and worker admission before quiescing any
+        // producer; abort also interrupts workers suspended in async send.
         self.notification_transactions.close();
         // Keep the handle in self until joined: cancellation must not detach
         // dispatch and allow a later stop to race its join consumer.
@@ -50,6 +52,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         if let Some(task) = self.cov_purge_task.take() {
             task.abort();
             let _ = task.await;
+        }
+        // Dispatch has relinquished the sole join-consumer role. Retain the
+        // set in self across await so a cancelled stop can finish this drain.
+        while let Some(result) = self.notification_transactions.join_next().await {
+            NotificationTransactions::observe(Some(result));
         }
         Ok(())
     }

@@ -111,9 +111,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let dispatch_task = tokio::spawn(async move {
             let mut apdu_rx = apdu_rx;
             let mut seg_receivers: HashMap<SegKey, SegmentedRequestState> = HashMap::new();
+            let mut notifications_open = true;
 
             loop {
                 let received = tokio::select! {
+                    result = notification_transactions_dispatch.join_next(), if notifications_open => {
+                        notifications_open = result.is_some();
+                        NotificationTransactions::observe(result);
+                        continue;
+                    }
                     result = requests.join_next(), if !requests.is_empty() => {
                         super::request_tasks::RequestTasks::observe(result);
                         continue;

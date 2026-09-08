@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::fmt;
-use std::future::Future;
+use std::future::{poll_fn, Future};
 use std::sync::{Arc, Mutex};
+use std::task::{Poll, Waker};
 
 use bacnet_encoding::apdu::Apdu;
 use bacnet_encoding::npdu::NpduAddress;
@@ -11,9 +12,14 @@ use bacnet_endpoint_core::coordinator::{
 };
 use bacnet_types::enums::ConfirmedServiceChoice;
 use tokio::sync::oneshot;
+use tokio::task::{JoinError, JoinSet};
 use tokio::time::Duration;
 
 use super::CovAckResult;
+
+#[cfg(test)]
+#[path = "notification_worker_owner_tests.rs"]
+mod notification_worker_owner_tests;
 
 #[derive(Debug)]
 pub(super) enum NotificationReserveError {
@@ -48,6 +54,19 @@ struct NotificationState {
 }
 
 pub(super) struct NotificationTransactions {
+    core: Arc<NotificationCore>,
+    workers: Mutex<NotificationWorkers>,
+}
+
+#[derive(Default)]
+struct NotificationWorkers {
+    closed: bool,
+    tasks: JoinSet<()>,
+    waiter: Option<Waker>,
+}
+
+// Operations retain transaction state, never the owner of their JoinSet.
+struct NotificationCore {
     coordinator: Arc<OutboundTransactionCoordinator>,
     state: Mutex<NotificationState>,
 }
@@ -59,14 +78,122 @@ impl NotificationTransactions {
 
     pub(super) fn with_coordinator(coordinator: Arc<OutboundTransactionCoordinator>) -> Arc<Self> {
         Arc::new(Self {
-            coordinator,
-            state: Mutex::new(NotificationState {
-                closed: false,
-                pending: HashMap::new(),
+            core: Arc::new(NotificationCore {
+                coordinator,
+                state: Mutex::new(NotificationState {
+                    closed: false,
+                    pending: HashMap::new(),
+                }),
             }),
+            workers: Mutex::new(NotificationWorkers::default()),
         })
     }
 
+    pub(super) fn spawn(&self, task: impl Future<Output = ()> + Send + 'static) {
+        let mut workers = self.workers.lock().unwrap();
+        if workers.closed {
+            // A rejected future may own an operation and resource guards.
+            drop(workers);
+            drop(task);
+            return;
+        }
+        workers.tasks.spawn(task);
+        let waiter = workers.waiter.take();
+        drop(workers);
+        if let Some(waiter) = waiter {
+            waiter.wake();
+        }
+    }
+
+    pub(super) fn close(&self) {
+        let mut workers = self.workers.lock().unwrap();
+        // Serialize worker registration with transaction sealing. Reservation
+        // uses only the core; no future can bypass closed worker admission.
+        self.core.close();
+        workers.closed = true;
+        workers.tasks.abort_all();
+        let waiter = workers.waiter.take();
+        drop(workers);
+        if let Some(waiter) = waiter {
+            waiter.wake();
+        }
+    }
+
+    /// Dispatch is the sole consumer until joined by stop. An empty open set
+    /// waits for producer admission, including when ingress is idle. Cancelling
+    /// this future retains every outstanding join in the owner.
+    pub(super) async fn join_next(&self) -> Option<Result<(), JoinError>> {
+        poll_fn(|cx| {
+            let mut workers = self.workers.lock().unwrap();
+            match workers.tasks.poll_join_next(cx) {
+                Poll::Ready(None) if !workers.closed => {
+                    workers.waiter = Some(cx.waker().clone());
+                    Poll::Pending
+                }
+                result => result,
+            }
+        })
+        .await
+    }
+
+    pub(super) fn observe(result: Option<Result<(), JoinError>>) {
+        if let Some(Err(error)) = result {
+            if !error.is_cancelled() {
+                tracing::warn!(%error, "Confirmed notification worker failed");
+            }
+        }
+    }
+
+    pub(super) fn reserve(
+        &self,
+        peer: CanonicalPeer,
+        service_choice: ConfirmedServiceChoice,
+    ) -> Result<(NotificationOperation, oneshot::Receiver<CovAckResult>), NotificationReserveError>
+    {
+        self.core.reserve(peer, service_choice)
+    }
+
+    pub(super) fn admit_terminal(
+        &self,
+        immediate_source: &[u8],
+        routed_source: Option<&NpduAddress>,
+        apdu: &Apdu,
+    ) -> bool {
+        self.core
+            .admit_terminal(immediate_source, routed_source, apdu)
+    }
+
+    #[cfg(test)]
+    pub(super) fn complete_pre_admitted(&self, admission: Admission, apdu: &Apdu) -> bool {
+        self.core.complete_pre_admitted(admission, apdu)
+    }
+
+    #[cfg(test)]
+    pub(super) fn workers_empty(&self) -> bool {
+        self.workers.lock().unwrap().tasks.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(super) fn active_count(&self) -> usize {
+        self.core.coordinator.active_count().unwrap_or(usize::MAX)
+    }
+
+    #[cfg(test)]
+    pub(super) fn is_closed(&self) -> bool {
+        self.core
+            .state
+            .lock()
+            .map(|state| state.closed)
+            .unwrap_or(true)
+    }
+
+    #[cfg(test)]
+    pub(super) fn release_token_for_test(&self, token: LeaseToken) {
+        self.core.release(token);
+    }
+}
+
+impl NotificationCore {
     pub(super) fn reserve(
         self: &Arc<Self>,
         peer: CanonicalPeer,
@@ -205,21 +332,6 @@ impl NotificationTransactions {
         }
         let _ = self.coordinator.cancel(token);
     }
-
-    #[cfg(test)]
-    pub(super) fn active_count(&self) -> usize {
-        self.coordinator.active_count().unwrap_or(usize::MAX)
-    }
-
-    #[cfg(test)]
-    pub(super) fn is_closed(&self) -> bool {
-        self.state.lock().map(|state| state.closed).unwrap_or(true)
-    }
-
-    #[cfg(test)]
-    pub(super) fn release_token_for_test(&self, token: LeaseToken) {
-        self.release(token);
-    }
 }
 
 impl Drop for NotificationTransactions {
@@ -229,7 +341,7 @@ impl Drop for NotificationTransactions {
 }
 
 pub(super) struct NotificationOperation {
-    transactions: Arc<NotificationTransactions>,
+    transactions: Arc<NotificationCore>,
     token: LeaseToken,
     active: bool,
 }
