@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, watch};
@@ -12,6 +14,40 @@ use super::{DEFAULT_APDU_SEGMENT_RETRIES, DEFAULT_APDU_SEGMENT_TIMEOUT};
 
 /// Key for tracking segmented transactions by peer and invoke ID.
 pub(crate) type SegKey = (MacAddr, Option<NpduAddress>, u8);
+
+/// Short, synchronous registry sections permit cleanup during future drop.
+#[derive(Default)]
+pub(super) struct SegmentedSendRegistry(Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>);
+
+impl SegmentedSendRegistry {
+    pub(super) fn lock(&self) -> MutexGuard<'_, HashMap<SegKey, Arc<SegmentedSendHandle>>> {
+        // Map operations preserve their invariants if a caller unwinds. Cleanup
+        // must not panic again while dropping an already-panicking worker.
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+pub(super) struct SegmentedSendRegistration<'a> {
+    pub(super) registry: &'a SegmentedSendRegistry,
+    pub(super) key: SegKey,
+    pub(super) sender: mpsc::Sender<SegmentAckPdu>,
+    // Fields drop after Drop runs: removal always precedes permit release.
+    pub(super) _permit: tokio::sync::OwnedSemaphorePermit,
+}
+
+impl Drop for SegmentedSendRegistration<'_> {
+    fn drop(&mut self) {
+        let mut senders = self.registry.lock();
+        if senders
+            .get(&self.key)
+            .is_some_and(|entry| entry.same_channel(&self.sender))
+        {
+            senders.remove(&self.key);
+        }
+    }
+}
 
 pub(crate) fn segmented_transaction_key(
     source_mac: &[u8],

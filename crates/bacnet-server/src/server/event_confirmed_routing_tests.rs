@@ -247,7 +247,7 @@ impl Harness {
             &self.db,
             &self.network,
             &Arc::new(RwLock::new(CovSubscriptionTable::new())),
-            &Arc::new(Mutex::new(HashMap::new())),
+            &Arc::new(segmented_send::SegmentedSendRegistry::default()),
             &Arc::new(Semaphore::new(MAX_SEG_SENDERS)),
             &Arc::new(Semaphore::new(255)),
             &self.server_tsm,
@@ -259,7 +259,7 @@ impl Harness {
             &Arc::new(ServerConfig::default()),
             &None,
             &Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), None)),
-            &super::request_tasks::RequestTasks::default(),
+            &Arc::new(super::request_tasks::RequestTasks::default()),
             source_mac,
             apdu,
             bacnet_network::layer::ReceivedApdu {

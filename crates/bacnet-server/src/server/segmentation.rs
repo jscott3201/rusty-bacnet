@@ -10,6 +10,42 @@ enum SegmentedSendWaitResult {
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
+    /// Register without awaiting the transfer: parent notifications stay concurrent.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn spawn_segmented_complex_ack(
+        network: &Arc<NetworkLayer<T>>,
+        seg_ack_senders: &Arc<segmented_send::SegmentedSendRegistry>,
+        seg_send_permits: &Arc<Semaphore>,
+        request_tasks: &super::request_tasks::RequestTaskSpawner,
+        source_mac: &[u8],
+        source_network: Option<NpduAddress>,
+        invoke_id: u8,
+        service_choice: ConfirmedServiceChoice,
+        service_ack_data: Bytes,
+        client_max_apdu: u16,
+        client_max_segments: Option<u8>,
+    ) {
+        let network = Arc::clone(network);
+        let seg_ack_senders = Arc::clone(seg_ack_senders);
+        let seg_send_permits = Arc::clone(seg_send_permits);
+        let source_mac = MacAddr::from_slice(source_mac);
+        request_tasks.spawn(async move {
+            Self::send_segmented_complex_ack(
+                &network,
+                &seg_ack_senders,
+                &seg_send_permits,
+                &source_mac,
+                source_network.as_ref(),
+                invoke_id,
+                service_choice,
+                &service_ack_data,
+                client_max_apdu,
+                client_max_segments,
+            )
+            .await;
+        });
+    }
+
     /// Send a ComplexAck response using segmented transfer.
     ///
     /// Splits the service ack data into segments that fit within the client's
@@ -18,7 +54,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn send_segmented_complex_ack(
         network: &Arc<NetworkLayer<T>>,
-        seg_ack_senders: &Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>>,
+        seg_ack_senders: &Arc<segmented_send::SegmentedSendRegistry>,
         seg_send_permits: &Arc<Semaphore>,
         source_mac: &[u8],
         source_network: Option<&NpduAddress>,
@@ -47,7 +83,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn send_segmented_complex_ack_with_options(
         network: &Arc<NetworkLayer<T>>,
-        seg_ack_senders: &Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>>,
+        seg_ack_senders: &Arc<segmented_send::SegmentedSendRegistry>,
         seg_send_permits: &Arc<Semaphore>,
         source_mac: &[u8],
         source_network: Option<&NpduAddress>,
@@ -154,7 +190,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         ));
         let key = segmented_transaction_key(source_mac, source_network, invoke_id);
         let insert_result = {
-            let mut senders = seg_ack_senders.lock().await;
+            let mut senders = seg_ack_senders.lock();
             if !senders.contains_key(&key) && senders.len() >= MAX_SEG_SENDERS {
                 Err(())
             } else {
@@ -181,6 +217,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         .await;
                 return;
             }
+        };
+        let _registration = segmented_send::SegmentedSendRegistration {
+            registry: seg_ack_senders,
+            key,
+            sender: seg_ack_tx,
+            _permit: _sender_permit,
         };
         if let Some(replaced) = replaced {
             warn!(
@@ -388,16 +430,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         break 'send_segments;
                     }
                 }
-            }
-        }
-
-        {
-            let mut senders = seg_ack_senders.lock().await;
-            if senders
-                .get(&key)
-                .is_some_and(|sender| sender.same_channel(&seg_ack_tx))
-            {
-                senders.remove(&key);
             }
         }
     }

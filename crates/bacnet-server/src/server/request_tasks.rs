@@ -1,9 +1,9 @@
 use std::future::{poll_fn, Future};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, Weak};
 use tokio::task::{JoinError, JoinSet};
 
-/// Owns only the top-level inbound request handlers, not independent timers,
-/// notification workers or segmented-response workers started by services.
+/// Owns inbound request handlers and their independent segmented responses,
+/// not timers or notification workers started by services.
 #[derive(Default)]
 pub(super) struct RequestTasks(Mutex<State>);
 
@@ -13,7 +13,22 @@ struct State {
     tasks: JoinSet<()>,
 }
 
+/// Descendants must not keep their owning JoinSet alive through a cycle.
+pub(super) struct RequestTaskSpawner(Weak<RequestTasks>);
+
+impl RequestTaskSpawner {
+    pub(super) fn spawn(&self, task: impl Future<Output = ()> + Send + 'static) {
+        if let Some(owner) = self.0.upgrade() {
+            owner.spawn(task);
+        }
+    }
+}
+
 impl RequestTasks {
+    pub(super) fn spawner(self: &Arc<Self>) -> RequestTaskSpawner {
+        RequestTaskSpawner(Arc::downgrade(self))
+    }
+
     pub(super) fn spawn(&self, task: impl Future<Output = ()> + Send + 'static) {
         let mut state = self.0.lock().unwrap();
         // Admission and registration are one synchronous critical section.

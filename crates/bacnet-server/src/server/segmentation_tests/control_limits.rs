@@ -28,7 +28,7 @@ async fn non_rung_request_header_conservatively_bounds_server_response() {
     let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
         &sent,
     ))));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
     let source_mac = test_mac(9);
 
@@ -48,7 +48,7 @@ async fn non_rung_request_header_conservatively_bounds_server_response() {
 
     assert_eq!(sent_count(&sent), 1);
     assert_eq!(abort_reason(&sent, 0), AbortReason::BUFFER_OVERFLOW);
-    assert!(seg_ack_senders.lock().await.is_empty());
+    assert!(seg_ack_senders.lock().is_empty());
 }
 
 #[tokio::test]
@@ -57,7 +57,7 @@ async fn client_abort_routed_by_dispatch_terminates_segmented_complex_ack() {
     let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
         &sent,
     ))));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let source_mac = test_mac(10);
     let invoke_id = 0x4A;
     let key: SegKey = (source_mac.clone(), None, invoke_id);
@@ -96,7 +96,7 @@ async fn client_abort_routed_by_dispatch_terminates_segmented_complex_ack() {
         "server must not send a timeout Abort after client Abort"
     );
     assert!(
-        !seg_ack_senders.lock().await.contains_key(&key),
+        !seg_ack_senders.lock().contains_key(&key),
         "SegmentAck sender entry should be removed after client Abort"
     );
 }
@@ -111,7 +111,7 @@ async fn dispatch_accepts_segment_ack_before_send_future_returns() {
         Arc::clone(&first_send_started),
         Arc::clone(&release_first_send),
     )));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
     let source_mac = test_mac(13);
     let invoke_id = 0x4D;
@@ -170,7 +170,7 @@ async fn client_abort_is_prioritized_over_queued_segment_ack() {
         Arc::clone(&first_send_started),
         Arc::clone(&release_first_send),
     )));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
     let source_mac = test_mac(14);
     let invoke_id = 0x4E;
@@ -234,7 +234,7 @@ async fn client_abort_is_prioritized_over_queued_segment_ack() {
         "queued SegmentACK must not advance after client Abort"
     );
     assert!(
-        !seg_ack_senders.lock().await.contains_key(&key),
+        !seg_ack_senders.lock().contains_key(&key),
         "SegmentAck sender entry should be removed after prioritized client Abort"
     );
 }
@@ -249,7 +249,7 @@ async fn same_key_cancel_is_prioritized_over_queued_segment_ack() {
         Arc::clone(&first_send_started),
         Arc::clone(&release_first_send),
     )));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
     let source_mac = test_mac(15);
     let invoke_id = 0x4F;
@@ -342,7 +342,7 @@ async fn same_key_replacement_is_rejected_when_live_sender_permits_are_exhausted
         Arc::clone(&first_send_started),
         Arc::clone(&release_first_send),
     )));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let seg_send_permits = Arc::new(Semaphore::new(1));
     let source_mac = test_mac(16);
     let invoke_id = 0x50;
@@ -399,7 +399,7 @@ async fn same_key_replacement_is_rejected_when_live_sender_permits_are_exhausted
     assert_eq!(sent_count(&sent), 2);
     assert_eq!(abort_reason(&sent, 1), AbortReason::BUFFER_OVERFLOW);
     assert!(
-        seg_ack_senders.lock().await.contains_key(&key),
+        seg_ack_senders.lock().contains_key(&key),
         "rejected replacement must leave the original sender registered"
     );
 
@@ -420,7 +420,7 @@ async fn same_key_replacement_is_rejected_when_live_sender_permits_are_exhausted
         .expect("original sender should terminate after client Abort")
         .expect("original sender should not panic");
     assert!(
-        !seg_ack_senders.lock().await.contains_key(&key),
+        !seg_ack_senders.lock().contains_key(&key),
         "original sender should clean up after client Abort"
     );
 }
@@ -431,11 +431,11 @@ async fn segmented_complex_ack_rejects_new_sender_when_active_sender_limit_reach
     let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
         &sent,
     ))));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
 
     {
-        let mut senders = seg_ack_senders.lock().await;
+        let mut senders = seg_ack_senders.lock();
         for idx in 0..MAX_SEG_SENDERS {
             let (handle, _segment_rx, _control_rx) = fake_segmented_send_handle(1, 2, 0);
             senders.insert((test_mac(idx as u8), None, idx as u8), handle);
@@ -460,7 +460,7 @@ async fn segmented_complex_ack_rejects_new_sender_when_active_sender_limit_reach
 
     assert_eq!(sent_count(&sent), 1);
     assert_eq!(abort_reason(&sent, 0), AbortReason::BUFFER_OVERFLOW);
-    assert_eq!(seg_ack_senders.lock().await.len(), MAX_SEG_SENDERS);
+    assert_eq!(seg_ack_senders.lock().len(), MAX_SEG_SENDERS);
 }
 
 #[tokio::test]
@@ -469,7 +469,7 @@ async fn dispatch_returns_when_segment_ack_queue_is_full() {
     let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
         &sent,
     ))));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let source_mac = test_mac(13);
     let invoke_id = 0x4D;
     let key: SegKey = (source_mac.clone(), None, invoke_id);
@@ -478,7 +478,7 @@ async fn dispatch_returns_when_segment_ack_queue_is_full() {
         .segment_ack_tx
         .try_send(segment_ack(invoke_id, false, 0))
         .expect("test queue should accept one SegmentACK");
-    seg_ack_senders.lock().await.insert(key, handle);
+    seg_ack_senders.lock().insert(key, handle);
 
     tokio::time::timeout(
         Duration::from_millis(50),
@@ -499,7 +499,7 @@ async fn dispatch_client_abort_not_blocked_by_full_segment_ack_queue() {
     let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
         &sent,
     ))));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let source_mac = test_mac(14);
     let invoke_id = 0x4E;
     let key: SegKey = (source_mac.clone(), None, invoke_id);
@@ -508,7 +508,7 @@ async fn dispatch_client_abort_not_blocked_by_full_segment_ack_queue() {
         .segment_ack_tx
         .try_send(segment_ack(invoke_id, false, 0))
         .expect("test queue should accept one SegmentACK");
-    seg_ack_senders.lock().await.insert(key, handle);
+    seg_ack_senders.lock().insert(key, handle);
 
     tokio::time::timeout(
         Duration::from_millis(50),
@@ -546,7 +546,7 @@ async fn same_key_replacement_does_not_wait_for_full_old_queue() {
     let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
         &sent,
     ))));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let source_mac = test_mac(15);
     let invoke_id = 0x4F;
     let key: SegKey = (source_mac.clone(), None, invoke_id);
@@ -555,7 +555,7 @@ async fn same_key_replacement_does_not_wait_for_full_old_queue() {
         .segment_ack_tx
         .try_send(segment_ack(invoke_id, false, 0))
         .expect("test queue should accept one SegmentACK");
-    seg_ack_senders.lock().await.insert(key, old_handle);
+    seg_ack_senders.lock().insert(key, old_handle);
 
     let replacement = spawn_segmented_complex_ack_with_options(
         Arc::clone(&network),

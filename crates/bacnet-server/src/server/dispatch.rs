@@ -22,12 +22,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     }
 
     async fn route_segmented_send_event(
-        seg_ack_senders: &Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>>,
+        seg_ack_senders: &Arc<segmented_send::SegmentedSendRegistry>,
         key: SegKey,
         event: SegmentedSendEvent,
     ) -> bool {
         let handle = {
-            let senders = seg_ack_senders.lock().await;
+            let senders = seg_ack_senders.lock();
             senders.get(&key).cloned()
         };
 
@@ -83,7 +83,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         db: &Arc<RwLock<ObjectDatabase>>,
         network: &Arc<NetworkLayer<T>>,
         cov_table: &Arc<RwLock<CovSubscriptionTable>>,
-        seg_ack_senders: &Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>>,
+        seg_ack_senders: &Arc<segmented_send::SegmentedSendRegistry>,
         seg_send_permits: &Arc<Semaphore>,
         cov_in_flight: &Arc<Semaphore>,
         server_tsm: &Arc<Mutex<ServerTsm>>,
@@ -95,7 +95,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         config: &Arc<ServerConfig>,
         clock: &Option<Arc<ServerClock>>,
         discovery_limiter: &Arc<DiscoveryLimiter>,
-        request_tasks: &super::request_tasks::RequestTasks,
+        request_tasks: &Arc<super::request_tasks::RequestTasks>,
         source_mac: &[u8],
         apdu: Apdu,
         mut received: bacnet_network::layer::ReceivedApdu,
@@ -118,6 +118,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let config = Arc::clone(config);
                 let source_mac = MacAddr::from_slice(source_mac);
                 let source_network = received.source_network.clone();
+                let descendants = request_tasks.spawner();
                 request_tasks.spawn(async move {
                     Self::handle_confirmed_request(
                         &db,
@@ -133,6 +134,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         &comm_state,
                         &dcc_timer,
                         &config,
+                        &descendants,
                         &source_mac,
                         source_network,
                         req,

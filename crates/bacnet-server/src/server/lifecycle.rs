@@ -79,8 +79,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             config.cov_policy.clone(),
             Arc::clone(&cov_counters),
         )));
-        let seg_ack_senders: Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+        let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
         let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
 
         let cov_in_flight = Arc::new(Semaphore::new(255));

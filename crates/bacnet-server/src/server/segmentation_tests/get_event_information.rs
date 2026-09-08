@@ -159,8 +159,9 @@ async fn dispatch(
     local_max_apdu: u32,
 ) -> (
     SentFrames,
-    Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>>,
+    Arc<segmented_send::SegmentedSendRegistry>,
     MacAddr,
+    Arc<crate::server::request_tasks::RequestTasks>,
 ) {
     let sent = SentFrames::default();
     let network = Arc::new(NetworkLayer::new(RecordingTransport::new(Arc::clone(
@@ -168,7 +169,7 @@ async fn dispatch(
     ))));
     let db = Arc::new(RwLock::new(database()));
     let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
     let cov_in_flight = Arc::new(Semaphore::new(1));
     let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
@@ -183,6 +184,7 @@ async fn dispatch(
         ..ServerConfig::default()
     };
     let source_mac = test_mac(41);
+    let request_tasks = Arc::new(crate::server::request_tasks::RequestTasks::default());
 
     BACnetServer::<RecordingTransport>::handle_confirmed_request(
         &db,
@@ -198,6 +200,7 @@ async fn dispatch(
         &comm_state,
         &dcc_timer,
         &config,
+        &request_tasks.spawner(),
         source_mac.as_slice(),
         None,
         ConfirmedRequestPdu {
@@ -216,14 +219,14 @@ async fn dispatch(
     )
     .await;
 
-    (sent, seg_ack_senders, source_mac)
+    (sent, seg_ack_senders, source_mac, request_tasks)
 }
 
 #[tokio::test]
 async fn first_summary_over_unsegmented_budget_uses_existing_segmentation_abort() {
     assert!(unsegmented_apdu_len(full_service_ack()) > 50);
     for (client_max_apdu, local_max_apdu) in [(50, 1476), (480, 50)] {
-        let (sent, _, _) =
+        let (sent, _, _, _owner) =
             dispatch(Segmentation::NONE, false, client_max_apdu, local_max_apdu).await;
         wait_for_sent_len(&sent, 1).await;
         assert_eq!(sent_count(&sent), 1);
@@ -238,7 +241,12 @@ async fn first_summary_over_unsegmented_budget_uses_existing_segmentation_abort(
 async fn segmentation_capable_dispatch_retains_the_complete_service_ack() {
     let expected = full_service_ack();
     assert!(unsegmented_apdu_len(expected.clone()) > 50);
-    let (sent, seg_ack_senders, source_mac) = dispatch(Segmentation::BOTH, true, 50, 1476).await;
+    let (sent, seg_ack_senders, source_mac, owner) = tokio::time::timeout(
+        Duration::from_secs(1),
+        dispatch(Segmentation::BOTH, true, 50, 1476),
+    )
+    .await
+    .expect("parent must return without awaiting segmented response ACKs");
     let key = segmented_transaction_key(&source_mac, None, INVOKE_ID);
     let mut reconstructed = BytesMut::new();
     let mut index = 0usize;
@@ -268,4 +276,6 @@ async fn segmentation_capable_dispatch_retains_the_complete_service_ack() {
     }
 
     assert_eq!(reconstructed.freeze(), expected);
+    owner.close();
+    while owner.join_next().await.is_some() {}
 }

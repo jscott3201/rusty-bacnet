@@ -6,7 +6,7 @@ async fn routed_source_segment_ack_and_abort_match_across_immediate_routers() {
     let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
         &sent,
     ))));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
     let router_a = test_mac(16);
     let router_b = test_mac(17);
@@ -112,7 +112,7 @@ async fn routed_source_segment_ack_and_abort_match_across_immediate_routers() {
         3,
         "server must not send a timeout Abort after matching routed client Abort"
     );
-    assert!(seg_ack_senders.lock().await.is_empty());
+    assert!(seg_ack_senders.lock().is_empty());
 }
 
 #[tokio::test]
@@ -121,7 +121,7 @@ async fn dispatch_ack_flood_does_not_drop_valid_segment_ack() {
     let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
         &sent,
     ))));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let source_mac = test_mac(11);
     let invoke_id = 0x4B;
     let handle = spawn_segmented_complex_ack(
@@ -163,7 +163,7 @@ async fn overlapping_same_peer_invoke_id_cancels_old_segmented_sender() {
     let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
         &sent,
     ))));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let source_mac = test_mac(12);
     let invoke_id = 0x4C;
     let first = spawn_segmented_complex_ack_with_options(
@@ -213,7 +213,7 @@ async fn routed_same_peer_replacement_cancels_old_sender_across_routers() {
     let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
         &sent,
     ))));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
     let router_a = test_mac(18);
     let router_b = test_mac(19);
@@ -256,7 +256,7 @@ async fn routed_same_peer_replacement_cancels_old_sender_across_routers() {
         .expect("new routed path should cancel the older canonical sender")
         .expect("older segmented sender should not panic");
     assert_eq!(
-        seg_ack_senders.lock().await.len(),
+        seg_ack_senders.lock().len(),
         1,
         "older sender cleanup must retain its replacement"
     );
@@ -277,6 +277,6 @@ async fn routed_same_peer_replacement_cancels_old_sender_across_routers() {
         .await
         .expect("Abort on either routed path should terminate the replacement")
         .expect("replacement segmented sender should not panic");
-    assert!(seg_ack_senders.lock().await.is_empty());
+    assert!(seg_ack_senders.lock().is_empty());
     assert_eq!(sent_count(&sent), 2);
 }

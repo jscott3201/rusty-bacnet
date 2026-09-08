@@ -61,7 +61,7 @@ async fn dispatch_life_safety_operation_with_tracker(
         Ipv4Addr::BROADCAST,
     )));
     let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
     let cov_in_flight = Arc::new(Semaphore::new(1));
     let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
@@ -99,6 +99,7 @@ async fn dispatch_life_safety_operation_with_tracker(
         &comm_state,
         &dcc_timer,
         &config,
+        &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
         &source_mac,
         source_network,
         confirmed,

@@ -762,7 +762,7 @@ pub struct BACnetServer<T: TransportPort> {
     cov_counters: Arc<crate::cov::AtomicCovCounters>,
     /// Channels for routing segmented-send events to in-progress segmented sends.
     #[allow(dead_code)]
-    seg_ack_senders: Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>>,
+    seg_ack_senders: Arc<segmented_send::SegmentedSendRegistry>,
     /// Permits that cap live segmented response sender tasks, including
     /// cancelled senders that have not yet exited a transport send.
     #[allow(dead_code)]

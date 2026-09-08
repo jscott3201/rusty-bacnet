@@ -617,7 +617,7 @@ async fn reply_tx_response_preserves_routed_npdu_destination() {
     )));
     let db = Arc::new(RwLock::new(ObjectDatabase::new()));
     let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
     let cov_in_flight = Arc::new(Semaphore::new(1));
     let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
@@ -660,6 +660,7 @@ async fn reply_tx_response_preserves_routed_npdu_destination() {
         &comm_state,
         &dcc_timer,
         &config,
+        &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
         &source_mac,
         Some(routed_source.clone()),
         req,

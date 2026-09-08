@@ -373,7 +373,7 @@ async fn dispatch_keeps_segment_and_complex_acks_out_of_notification_completion(
     let network = Arc::new(NetworkLayer::new(IdleTransport::default()));
     let db = Arc::new(RwLock::new(ObjectDatabase::new()));
     let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
     let cov_in_flight = Arc::new(Semaphore::new(255));
     let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
@@ -405,7 +405,7 @@ async fn dispatch_keeps_segment_and_complex_acks_out_of_notification_completion(
             &config,
             &None,
             &Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), None)),
-            &super::request_tasks::RequestTasks::default(),
+            &Arc::new(super::request_tasks::RequestTasks::default()),
             source_mac.as_slice(),
             apdu,
             bacnet_network::layer::ReceivedApdu {

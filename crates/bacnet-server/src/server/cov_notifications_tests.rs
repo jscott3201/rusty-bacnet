@@ -200,7 +200,7 @@ async fn routed_segmented_complex_ack_preserves_npdu_destination() {
     let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
         &sent,
     ))));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
     let router_mac = MacAddr::from_slice(&[192, 168, 1, 1, 0xBA, 0xC0]);
     let remote = NpduAddress {

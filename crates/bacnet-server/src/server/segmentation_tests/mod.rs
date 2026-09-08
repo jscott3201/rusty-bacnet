@@ -117,7 +117,7 @@ fn test_mac(byte: u8) -> MacAddr {
 
 fn spawn_segmented_complex_ack(
     network: Arc<NetworkLayer<RecordingTransport>>,
-    seg_ack_senders: Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>>,
+    seg_ack_senders: Arc<segmented_send::SegmentedSendRegistry>,
     source_mac: MacAddr,
     invoke_id: u8,
     service_ack_data: Vec<u8>,
@@ -136,7 +136,7 @@ fn spawn_segmented_complex_ack(
 
 fn spawn_segmented_complex_ack_from_network(
     network: Arc<NetworkLayer<RecordingTransport>>,
-    seg_ack_senders: Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>>,
+    seg_ack_senders: Arc<segmented_send::SegmentedSendRegistry>,
     seg_send_permits: Arc<Semaphore>,
     source_mac: MacAddr,
     source_network: Option<NpduAddress>,
@@ -167,7 +167,7 @@ struct SegmentedSendTestRequest {
 
 fn spawn_segmented_complex_ack_from_network_with_options(
     network: Arc<NetworkLayer<RecordingTransport>>,
-    seg_ack_senders: Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>>,
+    seg_ack_senders: Arc<segmented_send::SegmentedSendRegistry>,
     seg_send_permits: Arc<Semaphore>,
     request: SegmentedSendTestRequest,
 ) -> JoinHandle<()> {
@@ -191,7 +191,7 @@ fn spawn_segmented_complex_ack_from_network_with_options(
 
 fn spawn_segmented_complex_ack_with_options(
     network: Arc<NetworkLayer<RecordingTransport>>,
-    seg_ack_senders: Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>>,
+    seg_ack_senders: Arc<segmented_send::SegmentedSendRegistry>,
     source_mac: MacAddr,
     invoke_id: u8,
     service_ack_data: Vec<u8>,
@@ -228,13 +228,13 @@ async fn wait_for_sent_len(sent: &SentFrames, expected: usize) {
 }
 
 async fn send_segment_ack(
-    seg_ack_senders: &Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>>,
+    seg_ack_senders: &Arc<segmented_send::SegmentedSendRegistry>,
     key: &SegKey,
     ack: SegmentAckPdu,
 ) {
     let handle = tokio::time::timeout(Duration::from_secs(1), async {
         loop {
-            if let Some(handle) = seg_ack_senders.lock().await.get(key).cloned() {
+            if let Some(handle) = seg_ack_senders.lock().get(key).cloned() {
                 return handle;
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
@@ -252,7 +252,7 @@ async fn send_segment_ack(
 
 async fn dispatch_test_apdu<T: TransportPort + 'static>(
     network: &Arc<NetworkLayer<T>>,
-    seg_ack_senders: &Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>>,
+    seg_ack_senders: &Arc<segmented_send::SegmentedSendRegistry>,
     source_mac: &MacAddr,
     apdu: Apdu,
 ) {
@@ -261,7 +261,7 @@ async fn dispatch_test_apdu<T: TransportPort + 'static>(
 
 async fn dispatch_test_apdu_from_network<T: TransportPort + 'static>(
     network: &Arc<NetworkLayer<T>>,
-    seg_ack_senders: &Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>>,
+    seg_ack_senders: &Arc<segmented_send::SegmentedSendRegistry>,
     source_mac: &MacAddr,
     source_network: Option<NpduAddress>,
     apdu: Apdu,
@@ -294,7 +294,7 @@ async fn dispatch_test_apdu_from_network<T: TransportPort + 'static>(
         &config,
         &None,
         &Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), None)),
-        &super::request_tasks::RequestTasks::default(),
+        &Arc::new(super::request_tasks::RequestTasks::default()),
         source_mac.as_slice(),
         apdu,
         bacnet_network::layer::ReceivedApdu {

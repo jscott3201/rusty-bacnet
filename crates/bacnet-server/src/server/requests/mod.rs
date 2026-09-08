@@ -24,7 +24,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         db: &Arc<RwLock<ObjectDatabase>>,
         network: &Arc<NetworkLayer<T>>,
         cov_table: &Arc<RwLock<CovSubscriptionTable>>,
-        seg_ack_senders: &Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>>,
+        seg_ack_senders: &Arc<segmented_send::SegmentedSendRegistry>,
         seg_send_permits: &Arc<Semaphore>,
         cov_in_flight: &Arc<Semaphore>,
         server_tsm: &Arc<Mutex<ServerTsm>>,
@@ -33,6 +33,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         comm_state: &Arc<AtomicU8>,
         dcc_timer: &Arc<Mutex<Option<JoinHandle<()>>>>,
         config: &ServerConfig,
+        request_tasks: &super::request_tasks::RequestTaskSpawner,
         source_mac: &[u8],
         source_network: Option<NpduAddress>,
         req: bacnet_encoding::apdu::ConfirmedRequest,
@@ -564,26 +565,19 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         warn!(error = %e, "Failed to send Abort for segmentation-not-supported");
                     }
                 } else {
-                    let network = Arc::clone(network);
-                    let seg_ack_senders = Arc::clone(seg_ack_senders);
-                    let seg_send_permits = Arc::clone(seg_send_permits);
-                    let source_mac = MacAddr::from_slice(source_mac);
-                    let service_ack_data = ack.service_ack.clone();
-                    tokio::spawn(async move {
-                        Self::send_segmented_complex_ack(
-                            &network,
-                            &seg_ack_senders,
-                            &seg_send_permits,
-                            &source_mac,
-                            source_network.as_ref(),
-                            invoke_id,
-                            service_choice,
-                            &service_ack_data,
-                            effective_max_apdu,
-                            client_max_segments,
-                        )
-                        .await;
-                    });
+                    Self::spawn_segmented_complex_ack(
+                        network,
+                        seg_ack_senders,
+                        seg_send_permits,
+                        request_tasks,
+                        source_mac,
+                        source_network,
+                        invoke_id,
+                        service_choice,
+                        ack.service_ack.clone(),
+                        effective_max_apdu,
+                        client_max_segments,
+                    );
                 }
 
                 for oid in &written_oids {

@@ -5,6 +5,9 @@ use bacnet_transport::port::ReceivedNpdu;
 use bytes::Bytes;
 use tokio::sync::{mpsc, oneshot, Notify};
 
+#[path = "segmented_worker_tests.rs"]
+mod segmented_worker_tests;
+
 struct SendGuard(Option<oneshot::Sender<()>>);
 
 impl Drop for SendGuard {
@@ -20,6 +23,7 @@ struct HeldTransport {
     started: mpsc::UnboundedSender<oneshot::Receiver<()>>,
     release: Arc<Notify>,
     panic_next: AtomicBool,
+    frames: std::sync::Mutex<Vec<Apdu>>,
 }
 
 impl TransportPort for HeldTransport {
@@ -33,10 +37,10 @@ impl TransportPort for HeldTransport {
 
     async fn send_unicast(&self, npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
         let decoded = decode_npdu(Bytes::copy_from_slice(npdu)).unwrap();
-        if matches!(
-            apdu::decode_apdu(decoded.payload).unwrap(),
-            Apdu::SegmentAck(_)
-        ) {
+        let apdu = apdu::decode_apdu(decoded.payload).unwrap();
+        let segment_ack = matches!(apdu, Apdu::SegmentAck(_));
+        self.frames.lock().unwrap().push(apdu);
+        if segment_ack {
             return Ok(());
         }
         let (tx, rx) = oneshot::channel();
@@ -64,6 +68,16 @@ async fn fixture() -> (
     mpsc::Sender<ReceivedNpdu>,
     mpsc::UnboundedReceiver<oneshot::Receiver<()>>,
 ) {
+    fixture_with_name("BACnet Device").await
+}
+
+async fn fixture_with_name(
+    name: &str,
+) -> (
+    BACnetServer<HeldTransport>,
+    mpsc::Sender<ReceivedNpdu>,
+    mpsc::UnboundedReceiver<oneshot::Receiver<()>>,
+) {
     let (tx, rx) = mpsc::channel(16);
     let (started, observations) = mpsc::unbounded_channel();
     let transport = HeldTransport {
@@ -71,10 +85,17 @@ async fn fixture() -> (
         started,
         release: Arc::new(Notify::new()),
         panic_next: AtomicBool::new(false),
+        frames: std::sync::Mutex::new(Vec::new()),
     };
     let mut db = ObjectDatabase::new();
-    db.add(Box::new(DeviceObject::new(Default::default()).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        DeviceObject::new(bacnet_objects::device::DeviceConfig {
+            name: name.into(),
+            ..Default::default()
+        })
+        .unwrap(),
+    ))
+    .unwrap();
     let config = ServerConfig {
         segmentation_supported: Segmentation::BOTH,
         ..ServerConfig::default()

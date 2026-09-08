@@ -77,7 +77,7 @@ async fn projection_operational_problem_dispatches_error_apdu() {
         Ipv4Addr::BROADCAST,
     )));
     let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
     let cov_in_flight = Arc::new(Semaphore::new(1));
     let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
@@ -114,6 +114,7 @@ async fn projection_operational_problem_dispatches_error_apdu() {
         &comm_state,
         &dcc_timer,
         &ServerConfig::default(),
+        &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
         &MacAddr::from_slice(&[1]),
         None,
         confirmed,
