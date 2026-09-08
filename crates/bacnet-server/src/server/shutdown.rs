@@ -4,6 +4,20 @@ use super::*;
 #[path = "request_tasks_tests.rs"]
 mod request_tasks_tests;
 
+#[cfg(test)]
+#[path = "producer_shutdown_tests.rs"]
+mod producer_shutdown_tests;
+
+async fn stop_producer(slot: &mut Option<JoinHandle<()>>) {
+    // Borrow across the join so cancellation leaves the handle recoverable.
+    // Clear synchronously after completion: a later stop must not poll it twice.
+    if let Some(task) = slot.as_mut() {
+        task.abort();
+        let _ = task.await;
+    }
+    *slot = None;
+}
+
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Stop the server.
     pub async fn stop(&mut self) -> Result<(), Error> {
@@ -25,34 +39,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let mut timer = self.dcc_timer.lock().await;
             super::dcc_timer::cancel(&mut timer).await;
         }
-        if let Some(task) = self.fault_detection_task.take() {
-            task.abort();
-            let _ = task.await;
-        }
-        if let Some(task) = self.event_enrollment_task.take() {
-            task.abort();
-            let _ = task.await;
-        }
-        if let Some(task) = self.trend_log_task.take() {
-            task.abort();
-            let _ = task.await;
-        }
-        if let Some(task) = self.schedule_tick_task.take() {
-            task.abort();
-            let _ = task.await;
-        }
-        if let Some(task) = self.intrinsic_reporting_task.take() {
-            task.abort();
-            let _ = task.await;
-        }
-        if let Some(task) = self.binary_lighting_operation_task.take() {
-            task.abort();
-            let _ = task.await;
-        }
-        if let Some(task) = self.cov_purge_task.take() {
-            task.abort();
-            let _ = task.await;
-        }
+        stop_producer(&mut self.fault_detection_task).await;
+        stop_producer(&mut self.event_enrollment_task).await;
+        stop_producer(&mut self.trend_log_task).await;
+        stop_producer(&mut self.schedule_tick_task).await;
+        stop_producer(&mut self.intrinsic_reporting_task).await;
+        stop_producer(&mut self.binary_lighting_operation_task).await;
+        stop_producer(&mut self.cov_purge_task).await;
         // Dispatch has relinquished the sole join-consumer role. Retain the
         // set in self across await so a cancelled stop can finish this drain.
         while let Some(result) = self.notification_transactions.join_next().await {

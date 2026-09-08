@@ -24,7 +24,7 @@ impl Drop for SendGuard {
     }
 }
 
-struct HeldTransport {
+pub(super) struct HeldTransport {
     incoming: Option<mpsc::Receiver<ReceivedNpdu>>,
     started: mpsc::UnboundedSender<oneshot::Receiver<()>>,
     release: Arc<Notify>,
@@ -75,7 +75,7 @@ impl TransportPort for HeldTransport {
     }
 }
 
-async fn fixture() -> (
+pub(super) async fn fixture() -> (
     BACnetServer<HeldTransport>,
     mpsc::Sender<ReceivedNpdu>,
     mpsc::UnboundedReceiver<oneshot::Receiver<()>>,
