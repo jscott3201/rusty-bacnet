@@ -61,7 +61,10 @@ fn expand(
                 }
             }
             _ => {
-                let required = object.required_properties();
+                // Preserve legacy expected-linear selection even when every
+                // row is required and the result budget never cuts the scan.
+                let required: HashSet<PropertyIdentifier> =
+                    object.required_properties().iter().copied().collect();
                 for &property in object.property_list().iter() {
                     if !required.contains(&property) {
                         visit(property)?;
