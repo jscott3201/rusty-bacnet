@@ -32,6 +32,11 @@ impl RequestTaskSpawner {
 }
 
 impl RequestTasks {
+    #[cfg(test)]
+    pub(super) fn peer_entries(&self) -> [usize; 3] {
+        self.1.peer_entries()
+    }
+
     pub(super) fn for_server(
         config: &super::ServerConfig,
     ) -> Result<Arc<Self>, bacnet_types::error::Error> {
@@ -51,10 +56,11 @@ impl RequestTasks {
     pub(super) fn try_spawn<F: Future<Output = ()> + Send + 'static>(
         &self,
         class: Class,
+        peer: super::request_peer::CanonicalRequester,
         make: impl FnOnce() -> F,
     ) -> Result<(), Rejection> {
         let mut state = self.0.lock().unwrap();
-        let guard = self.1.try_enter(class, state.closed)?;
+        let guard = self.1.try_enter(class, peer, state.closed)?;
         let task = make();
         state.tasks.spawn(async move {
             let _guard = guard;

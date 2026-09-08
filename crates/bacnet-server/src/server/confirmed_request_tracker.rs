@@ -2,9 +2,9 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use super::request_peer::{canonical_requester, CanonicalRequester};
 use bacnet_encoding::apdu::ConfirmedRequest;
 use bacnet_encoding::npdu::NpduAddress;
-use bacnet_types::MacAddr;
 
 /// Local retention and resource policy for exact confirmed-request detection.
 ///
@@ -17,12 +17,6 @@ use bacnet_types::MacAddr;
 const COMPLETED_RETENTION: Duration = Duration::from_secs(60);
 const MAX_ENTRIES: usize = 256;
 const MAX_TRACKED_SERVICE_REQUEST_BYTES: usize = 64 * 1024;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum CanonicalRequester {
-    Direct(MacAddr),
-    Routed(NpduAddress),
-}
 
 struct Entry {
     id: u64,
@@ -177,23 +171,13 @@ impl Drop for PendingConfirmedRequest {
     }
 }
 
-fn canonical_requester(
-    source_mac: &[u8],
-    source_network: Option<&NpduAddress>,
-) -> CanonicalRequester {
-    source_network
-        .filter(|source| (1..=0xfffe).contains(&source.network) && !source.mac_address.is_empty())
-        .cloned()
-        .map(CanonicalRequester::Routed)
-        .unwrap_or_else(|| CanonicalRequester::Direct(MacAddr::from_slice(source_mac)))
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Barrier;
 
     use bacnet_types::enums::ConfirmedServiceChoice;
+    use bacnet_types::MacAddr;
     use bytes::Bytes;
 
     use super::*;

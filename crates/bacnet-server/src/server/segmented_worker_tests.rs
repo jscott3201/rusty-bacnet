@@ -161,7 +161,18 @@ async fn segmented_worker_production_panic_is_reaped_and_cleans_registry() {
 
 #[tokio::test]
 async fn segmented_worker_blocked_send_does_not_block_inline_ack_or_abort() {
-    let (mut server, tx, mut started) = fixture_with_name(&"x".repeat(100)).await;
+    let (mut server, tx, mut started) = fixture_with_config(
+        &"x".repeat(100),
+        ServerConfig {
+            segmentation_supported: Segmentation::BOTH,
+            request_admission_policy: RequestAdmissionPolicy {
+                max_confirmed_in_flight_per_peer: 64,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .await;
     inject(&tx, oversized_request()).await;
     let mut released = started_send(&mut started).await;
     let handle = server
@@ -179,6 +190,7 @@ async fn segmented_worker_blocked_send_does_not_block_inline_ack_or_abort() {
         0,
         "segmented child must not retain or reacquire the top-level slot"
     );
+    assert_eq!(server.request_tasks.peer_entries(), [0; 3]);
     // Fill the confirmed class with held real handlers before routing controls.
     for id in 20..84 {
         let Apdu::ConfirmedRequest(mut request) = confirmed(false) else {

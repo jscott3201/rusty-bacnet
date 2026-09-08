@@ -202,9 +202,14 @@ async fn stop_releases_handler(request: Apdu) {
         u64::from(!is_confirmed)
     );
     assert_eq!(counters.confirmed_active + counters.unconfirmed_active, 1);
+    assert_eq!(
+        server.request_tasks.peer_entries(),
+        if is_confirmed { [1, 0, 0] } else { [0, 1, 0] }
+    );
     server.stop().await.unwrap();
     let counters = server.request_admission_counters();
     assert_eq!(counters.confirmed_active + counters.unconfirmed_active, 0);
+    assert_eq!(server.request_tasks.peer_entries(), [0; 3]);
     assert_eq!(
         released.try_recv(),
         Ok(()),

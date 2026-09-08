@@ -1729,10 +1729,14 @@ class RequestAdmissionCounters(TypedDict):
     confirmed_active: int
     confirmed_admitted_total: int
     confirmed_overloaded_total: int
+    confirmed_global_overloaded_total: int
+    confirmed_peer_overloaded_total: int
     confirmed_shutdown_rejected_total: int
     unconfirmed_active: int
     unconfirmed_admitted_total: int
     unconfirmed_overloaded_total: int
+    unconfirmed_global_overloaded_total: int
+    unconfirmed_peer_overloaded_total: int
     unconfirmed_shutdown_rejected_total: int
     abort_active: int
     abort_admitted_total: int
@@ -1775,6 +1779,8 @@ class BACnetServer:
         mstp_max_info_frames: int = 1,
         max_confirmed_in_flight: int = 64,
         max_unconfirmed_in_flight: int = 32,
+        max_confirmed_in_flight_per_peer: int = 16,
+        max_unconfirmed_in_flight_per_peer: int = 8,
     ) -> None: ...
 
     # --- Analog objects ---

@@ -878,6 +878,7 @@ mod segmented_receive;
 mod segmented_send;
 pub(crate) use segmented_send::*;
 mod request_admission;
+mod request_peer;
 mod request_tasks;
 pub use request_admission::{RequestAdmissionCounters, RequestAdmissionPolicy};
 mod shutdown;

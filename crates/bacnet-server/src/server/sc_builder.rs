@@ -303,6 +303,7 @@ mod tests {
             let policy = RequestAdmissionPolicy {
                 max_confirmed_in_flight: 1,
                 max_unconfirmed_in_flight: bad,
+                ..Default::default()
             };
             let tls = tokio_rustls::rustls::ClientConfig::builder()
                 .with_root_certificates(tokio_rustls::rustls::RootCertStore::empty())
@@ -327,6 +328,32 @@ mod tests {
                 .err()
                 .unwrap();
             assert!(matches!(error, Error::OutOfRange(m) if m.contains("reconnect")));
+        }
+    }
+
+    #[tokio::test]
+    async fn admission_sc_invalid_policy_peer_limits_precede_dial() {
+        for confirmed in [true, false] {
+            for bad in [0, usize::MAX] {
+                let mut policy = RequestAdmissionPolicy::default();
+                let name = if confirmed {
+                    policy.max_confirmed_in_flight_per_peer = bad;
+                    "max_confirmed_in_flight_per_peer"
+                } else {
+                    policy.max_unconfirmed_in_flight_per_peer = bad;
+                    "max_unconfirmed_in_flight_per_peer"
+                };
+                let tls = tokio_rustls::rustls::ClientConfig::builder()
+                    .with_root_certificates(tokio_rustls::rustls::RootCertStore::empty())
+                    .with_no_client_auth();
+                let builder = BACnetServer::sc_builder()
+                    .hub_url("not-a-websocket-url")
+                    .tls_config(Arc::new(tls))
+                    .request_admission_policy(policy);
+                assert_eq!(builder.config.request_admission_policy, policy);
+                let error = builder.build().await.err().unwrap();
+                assert!(matches!(error, Error::Encoding(m) if m.contains(name)));
+            }
         }
     }
 }

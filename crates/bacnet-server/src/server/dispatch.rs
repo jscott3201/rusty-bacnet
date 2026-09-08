@@ -141,7 +141,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let source_mac = MacAddr::from_slice(source_mac);
                 let source_network = received.source_network.clone();
                 let descendants = request_tasks.spawner();
-                let result = request_tasks.try_spawn(Class::Confirmed, || {
+                let peer =
+                    super::request_peer::canonical_requester(&source_mac, source_network.as_ref());
+                let result = request_tasks.try_spawn(Class::Confirmed, peer.clone(), || {
                     let reply_tx = reply_tx.take();
                     async move {
                         Self::handle_admitted_confirmed_request(
@@ -172,7 +174,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     // before service execution is reported by a server Abort.
                     // Eight owned sends bound this response work. If all are
                     // busy, the counted silent drop is a known local limitation.
-                    let _ = request_tasks.try_spawn(Class::Abort, || async move {
+                    let _ = request_tasks.try_spawn(Class::Abort, peer, || async move {
                         // Match the handler's first-poll DCC check as well as
                         // dispatch's precheck if DCC changed after registration.
                         if abort_comm_state.load(Ordering::Acquire) == 1
@@ -257,7 +259,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let comm_state = Arc::clone(comm_state);
                 let device_bindings = Arc::clone(device_bindings);
                 let discovery_limiter = Arc::clone(discovery_limiter);
-                let _ = request_tasks.try_spawn(Class::Unconfirmed, || async move {
+                let peer = super::request_peer::canonical_requester(
+                    source_mac,
+                    received.source_network.as_ref(),
+                );
+                let _ = request_tasks.try_spawn(Class::Unconfirmed, peer, || async move {
                     Self::handle_unconfirmed_request(
                         &db,
                         &network,

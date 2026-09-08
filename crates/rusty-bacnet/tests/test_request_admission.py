@@ -14,6 +14,8 @@ from rusty_bacnet import BACnetServer
 
 
 FIELDS = {
+    "confirmed_global_overloaded_total", "confirmed_peer_overloaded_total",
+    "unconfirmed_global_overloaded_total", "unconfirmed_peer_overloaded_total",
     "confirmed_active", "confirmed_admitted_total", "confirmed_overloaded_total",
     "confirmed_shutdown_rejected_total", "unconfirmed_active",
     "unconfirmed_admitted_total", "unconfirmed_overloaded_total",
@@ -31,7 +33,8 @@ class AdmissionSignatureTests(unittest.TestCase):
         constructor = next(n for n in server.body if isinstance(n, ast.FunctionDef) and n.name == "__init__")
         defaults = dict(zip((a.arg for a in constructor.args.kwonlyargs), constructor.args.kw_defaults))
         signature = inspect.signature(BACnetServer)
-        for name, value in [("max_confirmed_in_flight", 64), ("max_unconfirmed_in_flight", 32)]:
+        for name, value in [("max_confirmed_in_flight", 64), ("max_unconfirmed_in_flight", 32),
+                            ("max_confirmed_in_flight_per_peer", 16), ("max_unconfirmed_in_flight_per_peer", 8)]:
             self.assertEqual(signature.parameters[name].kind, inspect.Parameter.KEYWORD_ONLY)
             self.assertEqual(signature.parameters[name].default, value)
             default = defaults[name]
@@ -45,7 +48,8 @@ class AdmissionSignatureTests(unittest.TestCase):
 
     def test_invalid_limits_rejected_at_constructor_for_all_transports(self):
         for transport in ["bip", "ipv6", "sc", "mstp"]:
-            for name in ["max_confirmed_in_flight", "max_unconfirmed_in_flight"]:
+            for name in ["max_confirmed_in_flight", "max_unconfirmed_in_flight",
+                         "max_confirmed_in_flight_per_peer", "max_unconfirmed_in_flight_per_peer"]:
                 for value, error in [(0, ValueError), (-1, OverflowError), (1 << 200, OverflowError), ((1 << 64) - 1, ValueError)]:
                     with self.subTest(transport=transport, name=name, value=value):
                         with self.assertRaises(error):

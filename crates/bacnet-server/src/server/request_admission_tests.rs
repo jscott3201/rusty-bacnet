@@ -1,6 +1,9 @@
 use super::*;
 use crate::server::request_admission::{Class, Rejection};
 
+#[path = "peer_admission_tests.rs"]
+mod peer_admission_tests;
+
 async fn small_fixture() -> (
     BACnetServer<HeldTransport>,
     mpsc::Sender<ReceivedNpdu>,
@@ -12,6 +15,7 @@ async fn small_fixture() -> (
             request_admission_policy: RequestAdmissionPolicy {
                 max_confirmed_in_flight: 1,
                 max_unconfirmed_in_flight: 1,
+                ..Default::default()
             },
             discovery_policy: DiscoveryPolicy::unlimited(),
             segmentation_supported: Segmentation::BOTH,
@@ -85,7 +89,17 @@ fn request(id: u8) -> Apdu {
 
 #[tokio::test]
 async fn admission_default_confirmed_limit_rejects_before_handler() {
-    let (mut server, tx, mut started) = fixture().await;
+    let (mut server, tx, mut started) = fixture_with_config(
+        "global admission",
+        ServerConfig {
+            request_admission_policy: RequestAdmissionPolicy {
+                max_confirmed_in_flight_per_peer: 64,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .await;
     for id in 0..65 {
         inject(&tx, request(id)).await;
         tokio::time::timeout(Duration::from_secs(2), started.recv())
@@ -321,19 +335,30 @@ async fn admission_guards_not_joinset_length_and_closed_not_overload() {
     let owner = crate::server::request_tasks::RequestTasks::new(RequestAdmissionPolicy {
         max_confirmed_in_flight: 1,
         max_unconfirmed_in_flight: 1,
+        ..Default::default()
     })
     .unwrap();
     for class in [Class::Confirmed, Class::Unconfirmed, Class::Abort] {
         let (tx, rx) = oneshot::channel();
         owner
-            .try_spawn(class, || async move {
-                tx.send(()).unwrap();
-            })
+            .try_spawn(
+                class,
+                crate::server::request_peer::canonical_requester(&[1], None),
+                || async move {
+                    tx.send(()).unwrap();
+                },
+            )
             .unwrap();
         rx.await.unwrap();
         // One yield lets the guard drop, but deliberately never reap the set.
         tokio::task::yield_now().await;
-        owner.try_spawn(class, || async {}).unwrap();
+        owner
+            .try_spawn(
+                class,
+                crate::server::request_peer::canonical_requester(&[1], None),
+                || async {},
+            )
+            .unwrap();
     }
     owner.close();
     while !owner.is_empty() {
@@ -341,7 +366,11 @@ async fn admission_guards_not_joinset_length_and_closed_not_overload() {
     }
     for class in [Class::Confirmed, Class::Unconfirmed, Class::Abort] {
         assert_eq!(
-            owner.try_spawn(class, || async { panic!("closed task ran") }),
+            owner.try_spawn(
+                class,
+                crate::server::request_peer::canonical_requester(&[1], None),
+                || async { panic!("closed task ran") }
+            ),
             Err(Rejection::Closed)
         );
     }
@@ -386,6 +415,7 @@ fn admission_policy_validates_zero_upper_bound_and_defaults() {
     RequestAdmissionPolicy {
         max_confirmed_in_flight: Semaphore::MAX_PERMITS,
         max_unconfirmed_in_flight: 1,
+        ..Default::default()
     }
     .validate()
     .unwrap();
@@ -503,6 +533,7 @@ async fn admission_invalid_direct_generic_bip_before_transport_start() {
         let policy = RequestAdmissionPolicy {
             max_confirmed_in_flight: bad,
             max_unconfirmed_in_flight: 1,
+            ..Default::default()
         };
         let started = Arc::new(AtomicBool::new(false));
         let error = BACnetServer::start(
@@ -544,6 +575,10 @@ async fn admission_default_unconfirmed_limit_is_32_without_waiters() {
         "admission",
         ServerConfig {
             discovery_policy: DiscoveryPolicy::unlimited(),
+            request_admission_policy: RequestAdmissionPolicy {
+                max_unconfirmed_in_flight_per_peer: 32,
+                ..Default::default()
+            },
             ..Default::default()
         },
     )
@@ -572,10 +607,20 @@ async fn admission_every_class_releases_on_panic_and_before_first_poll_cancellat
     for class in [Class::Confirmed, Class::Unconfirmed, Class::Abort] {
         let owner = crate::server::request_tasks::RequestTasks::default();
         owner
-            .try_spawn(class, || async { panic!("injected class panic") })
+            .try_spawn(
+                class,
+                crate::server::request_peer::canonical_requester(&[1], None),
+                || async { panic!("injected class panic") },
+            )
             .unwrap();
         assert!(owner.join_next().await.unwrap().unwrap_err().is_panic());
-        owner.try_spawn(class, std::future::pending).unwrap();
+        owner
+            .try_spawn(
+                class,
+                crate::server::request_peer::canonical_requester(&[1], None),
+                std::future::pending,
+            )
+            .unwrap();
         owner.close();
         assert!(owner.join_next().await.unwrap().unwrap_err().is_cancelled());
         let c = owner.counters();
