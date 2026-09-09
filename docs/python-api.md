@@ -1749,7 +1749,14 @@ Ordinary peer capacity is clamped to global minus reserve; recovery peer capacit
 is clamped only to reserve, no longer to the ordinary peer setting. For example,
 ordinary peer1/recovery peer3/reserve3 permit 1+3 if global room exists. Reserve0
 retains shared ordinary accounting with the ordinary peer cap clamped to global.
-Other critical-service reservations and work/response budgets remain deferred.
+DCC ENABLE is the sole designated critical service in the owner-accepted bounded
+#521 scope; other services have no recovery reserve. Seven service-specific
+budgets are delivered, not blanket-deferred. See the
+[acceptance/evidence matrix](request-admission.md#bounded-acceptance-and-evidence)
+and [service budget index](request-admission.md#delivered-service-budgets) for
+the completed scope, configuration/migration links and precise exclusions.
+This acceptance is not a general fairness, all-configurations availability,
+total-work or whole-memory guarantee; #522 remains separate and open.
 
 `await server.request_admission_counters()` returns a stable typed dictionary
 of independent active/admitted/overload/shutdown counters, including the

@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Bound server request admission with configurable global/logical-peer quotas,
+  inclusive counters and deterministic overload handling, including the known
+  counted-drop fallback when all eight owned Abort workers are busy. Explicit stop
+  joins owned requests, Abort workers, known descendants and producers. DCC ENABLE
+  has a strict recovery reserve and independent per-peer quota (default 16 ordinary
+  plus 1 recovery in either arrival order). The owner-accepted bounded #521 scope
+  is complete, not a general fairness, availability or full-conformance guarantee;
+  see the [acceptance/evidence matrix](docs/request-admission.md#bounded-acceptance-and-evidence).
+- Add local payload/cardinality/retained-response budgets for RPM,
+  GetAlarmSummary, GetEnrollmentSummary, AtomicReadFile, ReadRange,
+  GetEventInformation and AtomicWriteFile. See the
+  [service budget index](docs/request-admission.md#delivered-service-budgets)
+  for defaults, precise exclusions and per-service compatibility migrations.
+
+### Migration notes
+
+- Review [request admission configuration and migrations](docs/request-admission.md):
+  Rust public struct expansions affect exhaustive literals/patterns, small custom
+  global limits need an explicit smaller or zero reserve, and independent ordinary
+  and recovery peer quotas replace the former inclusive confirmed peer ceiling.
+  Python additions remain keyword-only. Service budget documents linked above
+  describe new `ServerConfig` fields and limits that large requests may need raised.
+
 ## [0.11.0] - 2026-09-06
 
 ### Release highlights
