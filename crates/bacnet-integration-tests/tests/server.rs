@@ -23,6 +23,12 @@ use tokio::time::Duration;
 
 /// Build a server with a Device, an AnalogInput, and a BinaryValue.
 async fn make_server() -> BACnetServer<BipTransport> {
+    make_server_with_dcc_policy(bacnet_server::server::DccPolicy::default()).await
+}
+
+async fn make_server_with_dcc_policy(
+    policy: bacnet_server::server::DccPolicy,
+) -> BACnetServer<BipTransport> {
     let mut db = ObjectDatabase::new();
 
     // Device object (instance 1234)
@@ -54,6 +60,7 @@ async fn make_server() -> BACnetServer<BipTransport> {
     db.add(Box::new(bv)).unwrap();
 
     BACnetServer::bip_builder()
+        .dcc_policy(policy)
         .interface(Ipv4Addr::LOCALHOST)
         .port(0) // ephemeral
         .broadcast_address(Ipv4Addr::LOCALHOST)

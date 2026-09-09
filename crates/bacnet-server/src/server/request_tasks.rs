@@ -44,6 +44,7 @@ impl RequestTasks {
         // Retain admission validation precedence; both policies must be valid
         // before the lifecycle starts a transport or exposes a request owner.
         config.read_property_multiple_budget.validate()?;
+        config.dcc_policy.validate(&config.dcc_password)?;
         config.get_alarm_summary_budget.validate()?;
         config.get_enrollment_summary_budget.validate()?;
         config.atomic_read_file_budget.validate()?;

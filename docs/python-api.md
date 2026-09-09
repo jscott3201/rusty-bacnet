@@ -1147,7 +1147,8 @@ server = BACnetServer(
     broadcast_address="255.255.255.255",
     transport="bip",             # "bip", "ipv6", or "sc"
     # SC options same as BACnetClient
-    dcc_password=None,           # password for DeviceCommunicationControl
+    dcc_password=None,           # password alone does not enable DCC
+    dcc_policy="deny_all",       # keyword-only; explicit require_password or INSECURE legacy_permissive
     reinit_password=None,        # password for ReinitializeDevice
 )
 ```
@@ -1740,7 +1741,8 @@ On SC, the supplied VMAC/logical source is not an authenticated principal.
 Identity multiplication/spoofing can exhaust global capacity; quotas do not
 guarantee availability once that capacity is full. The default confirmed total64
 is strictly partitioned into ordinary60/protected4 with no lending in either
-direction. Only decoder-accepted DCC ENABLE is protected; existing password checks
+direction. Only decoder-accepted DCC ENABLE is protected; [local DCC policy](dcc-policy.md)
+defaults to denial without changing eligibility. Existing password checks
 still apply in the handler, so wrong/missing required passwords can consume a slot
 before PASSWORD_FAILURE. Ordinary peer16 and protected peer1 are independent:
 the same peer can hold 16+1 handlers in either arrival order. This replaces the

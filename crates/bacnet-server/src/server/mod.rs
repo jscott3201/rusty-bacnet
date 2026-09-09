@@ -330,6 +330,8 @@ pub struct ServerConfig {
     pub unconfirmed_audit_notification_authorizer: Option<UnconfirmedAuditNotificationAuthorizer>,
     /// Optional password required for DeviceCommunicationControl.
     pub dcc_password: Option<String>,
+    /// Local DCC authorization. Supplying a password alone does not enable DCC.
+    pub dcc_policy: DccPolicy,
     /// Optional password required for ReinitializeDevice.
     pub reinit_password: Option<String>,
     /// Enable periodic fault detection / reliability evaluation.
@@ -438,6 +440,7 @@ impl std::fmt::Debug for ServerConfig {
                     .map(|_| "<callback>"),
             )
             .field("dcc_password", &self.dcc_password.as_ref().map(|_| "***"))
+            .field("dcc_policy", &self.dcc_policy)
             .field(
                 "reinit_password",
                 &self.reinit_password.as_ref().map(|_| "***"),
@@ -478,6 +481,7 @@ impl Default for ServerConfig {
             audit_notification_authorizer: None,
             unconfirmed_audit_notification_authorizer: None,
             dcc_password: None,
+            dcc_policy: DccPolicy::default(),
             reinit_password: None,
             enable_fault_detection: false,
             enable_event_enrollment: true,
@@ -883,7 +887,9 @@ mod cov_clock;
 mod cov_encoding;
 mod cov_notifications;
 mod cov_snapshot;
+mod dcc_policy;
 mod dcc_timer;
+pub use dcc_policy::DccPolicy;
 mod device_bindings;
 mod discovery;
 pub use discovery::{DiscoveryCounters, DiscoveryPolicy};

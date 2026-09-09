@@ -4,6 +4,11 @@ use crate::server::request_tasks::RequestTasks;
 use bacnet_services::device_mgmt::DeviceCommunicationControlRequest;
 use bacnet_types::enums::EnableDisable;
 
+#[path = "dcc_policy_tests.rs"]
+mod dcc_policy_tests;
+
+use dcc_policy_tests::legacy_fixture as fixture;
+
 fn peer(id: u8) -> crate::server::request_peer::CanonicalRequester {
     canonical_requester(&[id], None)
 }
@@ -625,6 +630,7 @@ async fn recovery_classification_is_not_password_authorization() {
         "recovery",
         ServerConfig {
             dcc_password: Some("required".into()),
+            dcc_policy: DccPolicy::RequirePassword,
             ..Default::default()
         },
     )

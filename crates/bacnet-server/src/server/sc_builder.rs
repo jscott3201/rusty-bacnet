@@ -96,6 +96,12 @@ impl ScServerBuilder {
         self
     }
 
+    /// Select explicit local DCC authorization (default: deny all).
+    pub fn dcc_policy(mut self, policy: DccPolicy) -> Self {
+        self.config.dcc_policy = policy;
+        self
+    }
+
     /// Set the password required for ReinitializeDevice requests.
     pub fn reinit_password(mut self, password: impl Into<String>) -> Self {
         self.config.reinit_password = Some(password.into());
@@ -186,6 +192,7 @@ impl ScServerBuilder {
             .ok_or_else(|| Error::Encoding("SC server builder: tls_config is required".into()))?;
 
         self.config.request_admission_policy.validate()?;
+        self.config.dcc_policy.validate(&self.config.dcc_password)?;
         self.config.read_property_multiple_budget.validate()?;
         self.config.get_alarm_summary_budget.validate()?;
         self.config.get_enrollment_summary_budget.validate()?;

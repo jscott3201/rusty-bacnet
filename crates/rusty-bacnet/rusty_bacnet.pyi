@@ -1775,6 +1775,7 @@ class BACnetServer:
         dcc_password: Optional[str] = None,
         reinit_password: Optional[str] = None,
         *,
+        dcc_policy: str = "deny_all",
         serial_port: Optional[str] = None,
         mstp_baud: int = 38400,
         mstp_mac: int = 1,

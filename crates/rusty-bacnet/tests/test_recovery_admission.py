@@ -45,6 +45,7 @@ class RecoveryNativeTests(unittest.IsolatedAsyncioTestCase):
         for reserve in [0, 1]:
             server = BACnetServer(123, interface="127.0.0.1", port=0,
                                   broadcast_address="127.0.0.1", dcc_password="required",
+                                  dcc_policy="require_password",
                                   max_confirmed_in_flight=2, confirmed_recovery_reserve=reserve,
                                   max_recovery_in_flight_per_peer=1)
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

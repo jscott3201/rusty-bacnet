@@ -293,6 +293,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     comm_state,
                     &req.service_request,
                     &config.dcc_password,
+                    config.dcc_policy,
                 )
                 .await
                 {

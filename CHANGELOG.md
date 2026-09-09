@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Default configured-server DCC authorization to deny all, even with a correct
+  configured password. Add explicit Rust `DccPolicy` and Python keyword-only
+  `dcc_policy` modes; deprecated DISABLE remains denied in every mode.
+
 - Bound server request admission with configurable global/logical-peer quotas,
   inclusive counters and deterministic overload handling, including the known
   counted-drop fallback when all eight owned Abort workers are busy. Explicit stop
@@ -24,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for defaults, precise exclusions and per-service compatibility migrations.
 
 ### Migration notes
+
+- DCC password configuration alone no longer enables the service. Explicitly
+  select `RequirePassword` / `"require_password"` with a nonempty password, or
+  the **INSECURE** `LegacyPermissive` / `"legacy_permissive"` compatibility mode.
+  Exhaustive Rust `ServerConfig` literals need the new `dcc_policy` field.
+  See [DCC policy](docs/dcc-policy.md) for precedence and unchanged timer limits.
 
 - Review [request admission configuration and migrations](docs/request-admission.md):
   Rust public struct expansions affect exhaustive literals/patterns, small custom

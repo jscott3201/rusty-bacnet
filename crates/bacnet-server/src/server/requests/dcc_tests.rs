@@ -16,7 +16,10 @@ async fn dispatch(
         dcc_timer,
         mode,
         duration,
-        &ServerConfig::default(),
+        &ServerConfig {
+            dcc_policy: DccPolicy::LegacyPermissive,
+            ..Default::default()
+        },
     )
     .await
 }
@@ -28,6 +31,18 @@ async fn dispatch_with_config(
     duration: Option<u16>,
     config: &ServerConfig,
 ) -> Apdu {
+    dispatch_wire(comm_state, dcc_timer, mode, duration, config, None, None).await
+}
+
+async fn dispatch_wire(
+    comm_state: &Arc<AtomicU8>,
+    dcc_timer: &Arc<Mutex<Option<JoinHandle<()>>>>,
+    mode: EnableDisable,
+    duration: Option<u16>,
+    config: &ServerConfig,
+    password: Option<&str>,
+    source: Option<NpduAddress>,
+) -> Apdu {
     let network = Arc::new(NetworkLayer::new(BipTransport::new(
         Ipv4Addr::LOCALHOST,
         0,
@@ -37,7 +52,7 @@ async fn dispatch_with_config(
     DeviceCommunicationControlRequest {
         time_duration: duration,
         enable_disable: mode,
-        password: None,
+        password: password.map(str::to_owned),
     }
     .encode(&mut data)
     .unwrap();
@@ -70,7 +85,7 @@ async fn dispatch_with_config(
         config,
         &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
         &[127, 0, 0, 1, 0xba, 0xc0],
-        None,
+        source,
         request,
         Some(tx),
     )
@@ -90,6 +105,135 @@ fn assert_denied(apdu: Apdu) {
     );
     assert_eq!(error.error_class, ErrorClass::SERVICES);
     assert_eq!(error.error_code, ErrorCode::SERVICE_REQUEST_DENIED);
+}
+
+#[tokio::test(start_paused = true)]
+async fn dcc_default_denies_valid_modes_without_live_mutation() {
+    for mode in [EnableDisable::ENABLE, EnableDisable::DISABLE_INITIATION] {
+        for initial in [0, 1, 2] {
+            for duration in [None, Some(0), Some(1)] {
+                let state = Arc::new(AtomicU8::new(initial));
+                let timer = Arc::new(Mutex::new(None));
+                let response =
+                    dispatch_with_config(&state, &timer, mode, duration, &ServerConfig::default())
+                        .await;
+                assert_eq!(state.load(Ordering::Acquire), initial);
+                assert!(timer.lock().await.is_none());
+                assert_denied(response);
+            }
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn dcc_policy_wire_password_precedence_direct_and_routed() {
+    for policy in [
+        DccPolicy::DenyAll,
+        DccPolicy::RequirePassword,
+        DccPolicy::LegacyPermissive,
+    ] {
+        for configured in [None, Some("required")] {
+            if policy == DccPolicy::RequirePassword && configured.is_none() {
+                continue;
+            }
+            let config = ServerConfig {
+                dcc_policy: policy,
+                dcc_password: configured.map(str::to_owned),
+                ..Default::default()
+            };
+            for password in [None, Some("wrong"), Some("required")] {
+                for mode in [
+                    EnableDisable::ENABLE,
+                    EnableDisable::DISABLE_INITIATION,
+                    EnableDisable::DISABLE,
+                ] {
+                    for routed in [false, true] {
+                        for duration in [None, Some(0), Some(2)] {
+                            let state = Arc::new(AtomicU8::new(1));
+                            let timer = Arc::new(Mutex::new(None));
+                            let source = routed.then(|| NpduAddress {
+                                network: 7,
+                                mac_address: MacAddr::from_slice(&[42]),
+                            });
+                            let response = dispatch_wire(
+                                &state, &timer, mode, duration, &config, password, source,
+                            )
+                            .await;
+                            let bad_password = configured.is_some() && password != configured;
+                            if bad_password {
+                                assert!(
+                                    matches!(response, Apdu::Error(e) if e.error_class == ErrorClass::SECURITY && e.error_code == ErrorCode::PASSWORD_FAILURE)
+                                );
+                            } else if policy == DccPolicy::DenyAll || mode == EnableDisable::DISABLE
+                            {
+                                assert_denied(response);
+                            } else {
+                                assert!(matches!(response, Apdu::SimpleAck(_)));
+                                assert_eq!(
+                                    state.load(Ordering::Acquire),
+                                    if mode == EnableDisable::ENABLE { 0 } else { 2 }
+                                );
+                                assert_eq!(timer.lock().await.is_some(), duration.is_some());
+                                super::super::super::dcc_timer::cancel(&mut *timer.lock().await)
+                                    .await;
+                                continue;
+                            }
+                            assert_eq!(state.load(Ordering::Acquire), 1);
+                            assert!(timer.lock().await.is_none());
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn dcc_default_denials_preserve_timer_even_with_expiry_waiting_for_lock() {
+    for pending_expiry in [false, true] {
+        let state = Arc::new(AtomicU8::new(0));
+        let timer = Arc::new(Mutex::new(None));
+        assert!(matches!(
+            dispatch(&state, &timer, EnableDisable::DISABLE_INITIATION, Some(1)).await,
+            Apdu::SimpleAck(_)
+        ));
+        tokio::task::yield_now().await;
+        let slot = timer.lock().await;
+        let id = slot.as_ref().unwrap().id();
+        advance(Duration::from_secs(if pending_expiry { 60 } else { 30 })).await;
+        tokio::task::yield_now().await;
+        for mode in [
+            EnableDisable::ENABLE,
+            EnableDisable::DISABLE_INITIATION,
+            EnableDisable::DISABLE,
+        ] {
+            for duration in [None, Some(0), Some(5)] {
+                for password in [None, Some("required")] {
+                    let config = ServerConfig {
+                        dcc_password: password.map(str::to_owned),
+                        ..Default::default()
+                    };
+                    // Holding the live lock proves rejection cannot wait for or mutate it.
+                    assert_denied(
+                        dispatch_wire(&state, &timer, mode, duration, &config, password, None)
+                            .await,
+                    );
+                    assert_eq!(state.load(Ordering::Acquire), 2);
+                    assert_eq!(slot.as_ref().unwrap().id(), id);
+                }
+            }
+        }
+        drop(slot);
+        if !pending_expiry {
+            advance(Duration::from_secs(29)).await;
+            tokio::task::yield_now().await;
+            assert_eq!(state.load(Ordering::Acquire), 2);
+            advance(Duration::from_secs(1)).await;
+        }
+        let task = timer.lock().await.take().unwrap();
+        task.await.unwrap();
+        assert_eq!(state.load(Ordering::Acquire), 0);
+    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -136,6 +280,61 @@ fn held_timer() -> (JoinHandle<()>, oneshot::Receiver<()>) {
         std::future::pending::<()>().await;
     });
     (handle, rx)
+}
+
+#[tokio::test(start_paused = true)]
+async fn dcc_require_password_preserves_replacement_expiry_and_enable_timer_semantics() {
+    let config = ServerConfig {
+        dcc_policy: DccPolicy::RequirePassword,
+        dcc_password: Some("required".into()),
+        ..Default::default()
+    };
+    let state = Arc::new(AtomicU8::new(0));
+    let timer = Arc::new(Mutex::new(None));
+    for (mode, duration) in [
+        (EnableDisable::DISABLE_INITIATION, Some(1)),
+        (EnableDisable::DISABLE_INITIATION, Some(2)),
+        (EnableDisable::ENABLE, Some(2)),
+        (EnableDisable::DISABLE_INITIATION, None),
+        (EnableDisable::ENABLE, None),
+        (EnableDisable::DISABLE_INITIATION, Some(0)),
+    ] {
+        let previous = timer.lock().await.as_ref().map(JoinHandle::abort_handle);
+        assert!(matches!(
+            dispatch_wire(
+                &state,
+                &timer,
+                mode,
+                duration,
+                &config,
+                Some("required"),
+                None
+            )
+            .await,
+            Apdu::SimpleAck(_)
+        ));
+        if let Some(previous) = previous {
+            assert!(previous.is_finished());
+        }
+        assert_eq!(
+            state.load(Ordering::Acquire),
+            if mode == EnableDisable::ENABLE { 0 } else { 2 }
+        );
+        assert_eq!(timer.lock().await.is_some(), duration.is_some());
+        tokio::task::yield_now().await;
+        if duration == Some(0) {
+            let task = timer.lock().await.take().unwrap();
+            task.await.unwrap();
+            assert_eq!(state.load(Ordering::Acquire), 0);
+        } else {
+            advance(Duration::from_secs(30)).await;
+            tokio::task::yield_now().await;
+            assert_eq!(
+                state.load(Ordering::Acquire),
+                if mode == EnableDisable::ENABLE { 0 } else { 2 }
+            );
+        }
+    }
 }
 
 #[tokio::test(start_paused = true)]

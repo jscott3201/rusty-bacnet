@@ -2,6 +2,21 @@ use super::*;
 use bacnet_services::device_mgmt::DeviceCommunicationControlRequest;
 use bacnet_types::enums::EnableDisable;
 
+async fn fixture() -> (
+    BACnetServer<HeldTransport>,
+    mpsc::Sender<ReceivedNpdu>,
+    mpsc::UnboundedReceiver<oneshot::Receiver<()>>,
+) {
+    fixture_with_config(
+        "DCC timer",
+        ServerConfig {
+            dcc_policy: DccPolicy::LegacyPermissive,
+            ..Default::default()
+        },
+    )
+    .await
+}
+
 async fn activate(tx: &mpsc::Sender<ReceivedNpdu>) {
     let mut data = BytesMut::new();
     DeviceCommunicationControlRequest {

@@ -1,5 +1,9 @@
 use super::*;
 
+async fn make_server() -> BACnetServer<BipTransport> {
+    make_server_with_dcc_policy(bacnet_server::server::DccPolicy::LegacyPermissive).await
+}
+
 // ---------------------------------------------------------------------------
 // DeviceCommunicationControl enforcement tests (Clause 16.1)
 // ---------------------------------------------------------------------------
@@ -92,6 +96,7 @@ async fn dcc_disable_initiation_allows_rp_blocks_cov() {
     db.add(Box::new(dev)).unwrap();
 
     let mut server = BACnetServer::bip_builder()
+        .dcc_policy(bacnet_server::server::DccPolicy::LegacyPermissive)
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .database(db)
@@ -205,6 +210,7 @@ async fn dcc_enable_restores_normal_operation() {
     db.add(Box::new(dev)).unwrap();
 
     let mut server = BACnetServer::bip_builder()
+        .dcc_policy(bacnet_server::server::DccPolicy::LegacyPermissive)
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .database(db)

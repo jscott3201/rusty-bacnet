@@ -64,7 +64,9 @@ Classification is **not authorization**: existing handler password checks remain
 authoritative. Decode-valid ENABLE with a wrong or missing required password can
 briefly occupy a protected slot and return PASSWORD_FAILURE. Capacity exhaustion
 still produces the existing Abort before handler execution or password validation.
-No authentication or default-deny behavior changes.
+The separate [DCC policy](dcc-policy.md) now defaults to denial after these
+checks. Decode-valid ENABLE remains eligible regardless of policy; admission is
+not authorization and policy denial does not change live communications or timers.
 
 Neither partition lends capacity: ordinary requests cannot use free protected
 slots; protected requests cannot fall back to free ordinary slots when `R > 0`.
@@ -236,8 +238,9 @@ Explicit stop joins the owned task families above, not async Drop or all server
 work regardless of transport and opaque blocking behavior.
 
 [#522](https://github.com/jscott3201/rusty-bacnet/issues/522) remains open and separate:
-authentication/default-deny policy and deprecated DCC DISABLE handling are not
-implemented by this work. Deferred production EventLog integration, Audit/#125,
+deprecated DISABLE rejection and [default-deny local policy](dcc-policy.md) are
+delivered separately; source authorization, audit and rate policy remain future
+work. Deferred production EventLog integration, Audit/#125,
 additional #181 EventEnrollment fault families, and GATE0007/SC restrictions are
 unchanged. Accepted exclusions do not automatically create follow-up tasks or
 reopen the bounded #521 scope.

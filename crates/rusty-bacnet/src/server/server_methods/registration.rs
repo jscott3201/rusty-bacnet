@@ -21,6 +21,7 @@ impl BACnetServer {
         dcc_password=None,
         reinit_password=None,
         *,
+        dcc_policy="deny_all",
         serial_port=None,
         mstp_baud=38400,
         mstp_mac=1,
@@ -68,6 +69,7 @@ impl BACnetServer {
         ipv6_interface: Option<String>,
         dcc_password: Option<String>,
         reinit_password: Option<String>,
+        dcc_policy: &str,
         serial_port: Option<String>,
         mstp_baud: u32,
         mstp_mac: u8,
@@ -97,6 +99,19 @@ impl BACnetServer {
         event_information_max_returned_summaries: usize,
         event_information_max_service_ack_bytes: usize,
     ) -> PyResult<Self> {
+        let dcc_policy = match dcc_policy {
+            "deny_all" => server::DccPolicy::DenyAll,
+            "require_password" => server::DccPolicy::RequirePassword,
+            "legacy_permissive" => server::DccPolicy::LegacyPermissive,
+            _ => {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "dcc_policy must be 'deny_all', 'require_password', or 'legacy_permissive'",
+                ))
+            }
+        };
+        dcc_policy
+            .validate(&dcc_password)
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
         let request_admission_policy = server::RequestAdmissionPolicy {
             max_confirmed_in_flight,
             max_unconfirmed_in_flight,
@@ -182,6 +197,7 @@ impl BACnetServer {
             mstp_max_master,
             mstp_max_info_frames,
             dcc_password,
+            dcc_policy,
             reinit_password,
             request_admission_policy,
             read_property_multiple_budget,

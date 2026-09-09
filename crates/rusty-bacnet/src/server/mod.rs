@@ -100,6 +100,7 @@ pub struct BACnetServer {
     mstp_max_info_frames: u8,
     // Passwords
     dcc_password: Option<String>,
+    dcc_policy: server::DccPolicy,
     reinit_password: Option<String>,
     request_admission_policy: server::RequestAdmissionPolicy,
     read_property_multiple_budget: server::ReadPropertyMultipleBudget,

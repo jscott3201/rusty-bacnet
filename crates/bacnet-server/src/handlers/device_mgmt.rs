@@ -36,10 +36,26 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 ///
 /// Updates the communication state and returns the requested state plus
 /// optional duration (minutes) for auto-revert.
+/// This unconfigured helper retains legacy optional-password authorization;
+/// configured servers apply their separate local DCC policy.
 pub fn handle_device_communication_control(
     service_data: &[u8],
     comm_state: &AtomicU8,
     dcc_password: &Option<String>,
+) -> Result<(EnableDisable, Option<u16>), Error> {
+    handle_device_communication_control_with_policy(
+        service_data,
+        comm_state,
+        dcc_password,
+        crate::server::DccPolicy::LegacyPermissive,
+    )
+}
+
+pub(crate) fn handle_device_communication_control_with_policy(
+    service_data: &[u8],
+    comm_state: &AtomicU8,
+    dcc_password: &Option<String>,
+    policy: crate::server::DccPolicy,
 ) -> Result<(EnableDisable, Option<u16>), Error> {
     let request = DeviceCommunicationControlRequest::decode(service_data)?;
     validate_password(dcc_password, &request.password)?;
@@ -57,6 +73,12 @@ pub fn handle_device_communication_control(
     } else {
         return Err(Error::Encoding("unknown EnableDisable value".into()));
     };
+    if policy == crate::server::DccPolicy::DenyAll {
+        return Err(Error::Protocol {
+            class: ErrorClass::SERVICES.to_raw() as u32,
+            code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
+        });
+    }
     comm_state.store(new_state, Ordering::Release);
     tracing::debug!(
         "DeviceCommunicationControl: state set to {:?} ({}), duration={:?} min",

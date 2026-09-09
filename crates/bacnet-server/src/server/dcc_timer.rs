@@ -15,13 +15,18 @@ pub(super) async fn replace(
     comm_state: &Arc<AtomicU8>,
     service_data: &[u8],
     password: &Option<String>,
+    policy: DccPolicy,
 ) -> Result<(), Error> {
     // The synchronous handler validates and writes only this temporary state.
     // Preserve its public contract and validation precedence, without changing
     // live state before an await that cancellation could interrupt.
     let proposed = AtomicU8::new(0);
-    let (_, duration) =
-        handlers::handle_device_communication_control(service_data, &proposed, password)?;
+    let (_, duration) = handlers::handle_device_communication_control_with_policy(
+        service_data,
+        &proposed,
+        password,
+        policy,
+    )?;
     let mut slot = timer.lock().await;
     cancel(&mut slot).await;
     // Replacement, expiry, and shutdown share this linearization boundary.
