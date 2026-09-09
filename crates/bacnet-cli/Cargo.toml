@@ -33,7 +33,6 @@ rustyline = "18"
 # SC-TLS optional deps
 tokio-rustls = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
-rustls-native-certs = { workspace = true, optional = true }
 rustls-pki-types = { version = "1", optional = true }
 
 # Pcap optional deps
@@ -46,6 +45,8 @@ if-addrs = "0.15"
 [dev-dependencies]
 bacnet-objects.workspace = true
 bacnet-server.workspace = true
+rcgen.workspace = true
+futures-util.workspace = true
 
 [features]
 default = []
@@ -54,7 +55,6 @@ sc-tls = [
     "bacnet-transport/sc-tls",
     "tokio-rustls",
     "rustls",
-    "rustls-native-certs",
     "rustls-pki-types",
 ]
 pcap = ["dep:pcap", "dep:ctrlc", "dep:libc"]

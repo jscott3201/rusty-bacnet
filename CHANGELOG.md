@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **CLI SC trust compatibility change:** `bacnet --sc` client invocations now
+  require `--sc-ca <FILE>` with explicit usable site CA PEM certificate(s), in
+  addition to the existing operational cert/key and SC identity arguments.
+  Native/system roots are no longer loaded; there is no environment-trust or
+  insecure fallback. Local file/configuration failures, including mismatched
+  cert/key, fail before dial. Help/version, non-SC transports and capture paths
+  without a client stay independent of SC files. TLS 1.3-only remains; public Rust
+  TLS configuration APIs are unchanged and #513 remains partial. See the
+  [CLI migration and test scope](docs/CLI.md#transport-variants).
+
 - **Python SC node compatibility change:** `BACnetClient` and `BACnetServer`
   with `transport="sc"` now require nonempty `sc_ca_cert`, `sc_client_cert`, and
   `sc_client_key` paths at construction (`ValueError` otherwise). Positional

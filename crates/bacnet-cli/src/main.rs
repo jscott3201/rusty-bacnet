@@ -24,7 +24,7 @@ mod transport;
 use args::{Cli, Command};
 use output::OutputFormat;
 
-fn setup_tracing(verbosity: u8) {
+fn setup_tracing(verbosity: u8, sc: bool) {
     use tracing_subscriber::EnvFilter;
     let filter = match verbosity {
         0 => "warn",
@@ -32,10 +32,15 @@ fn setup_tracing(verbosity: u8) {
         2 => "debug",
         _ => "trace",
     };
-    tracing_subscriber::fmt()
+    let subscriber = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new(filter))
-        .with_target(false)
-        .init();
+        .with_target(false);
+    if sc {
+        // SC close/handshake diagnostics must not corrupt a JSON result.
+        subscriber.with_writer(std::io::stderr).init();
+    } else {
+        subscriber.init();
+    }
 }
 
 fn resolve_format(cli: &Cli) -> OutputFormat {
@@ -443,7 +448,7 @@ use interface::pick_interface;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
-    setup_tracing(cli.verbose);
+    setup_tracing(cli.verbose, cli.sc);
     let format = resolve_format(&cli);
 
     let ipv6_interface = cli
@@ -475,6 +480,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         timeout_ms: cli.timeout,
         sc: cli.sc,
         sc_url: cli.sc_url.clone(),
+        sc_ca: cli.sc_ca.clone(),
         sc_cert: cli.sc_cert.clone(),
         sc_key: cli.sc_key.clone(),
         sc_vmac: cli.sc_vmac,

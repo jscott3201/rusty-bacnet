@@ -31,6 +31,7 @@ cargo install bacnet-cli --features sc-tls
 | `--device-instance <N>` | | Device instance for BIP6 VMAC derivation |
 | `--sc` | | Use BACnet/SC transport |
 | `--sc-url <URL>` | | SC hub WebSocket URL |
+| `--sc-ca <FILE>` | required for SC | Trusted site CA certificate(s) in PEM; no system-root fallback |
 | `--sc-cert <FILE>` | | SC TLS certificate PEM |
 | `--sc-key <FILE>` | | SC TLS private key PEM |
 | `--sc-vmac <HEX>` | | SC local VMAC as 12 hex digits or separated bytes |
@@ -421,8 +422,32 @@ bacnet --ipv6 discover
 bacnet --ipv6 read [fe80::1]:47808 ai:1 pv
 
 # BACnet/SC (requires sc-tls feature)
-bacnet --sc --sc-url wss://hub:443 --sc-cert cert.pem --sc-key key.pem --sc-vmac 22:01:02:03:04:05 --sc-device-uuid 00112233-4455-6677-8899-aabbccddeeff read 00:01:02:03:04:05 ai:1 pv
+bacnet --sc --sc-url wss://hub:443 --sc-ca site-ca.pem --sc-cert cert.pem --sc-key key.pem --sc-vmac 22:01:02:03:04:05 --sc-device-uuid 00112233-4455-6677-8899-aabbccddeeff discover
 ```
+
+**SC trust migration:** Existing `bacnet --sc` client invocations must now add
+`--sc-ca <FILE>`, naming a nonempty, usable site CA PEM file. Only certificates
+in that file become trust anchors: system roots and environment trust settings
+are not fallback sources, and there is no insecure opt-in. Keep supplying the
+operational `--sc-cert` and matching `--sc-key`, hub URL, non-reserved local VMAC,
+and nonzero device UUID. Global flags can appear before or after the subcommand;
+quote paths containing spaces in a shell. TLS 1.3-only remains local policy.
+
+SC construction rejects missing/empty CA paths, unreadable/empty/malformed or
+unusable CA PEM, and invalid or mismatched local cert/key before DNS/TCP dialing.
+Failures retain nonzero exit status and stderr diagnostics, not a successful JSON
+result. SC tracing (including connection-close warnings) also goes to stderr so
+it cannot corrupt JSON stdout. Peer trust and certificate validity dates are
+checked during TLS, not by an eager local date/issuer check. Help/version, capture
+paths that do not construct a client, and non-SC transports do not load SC files.
+A build without `sc-tls` still reports its rebuild advice without opening them.
+
+The CLI tests run the built executable against an ephemeral Rust mTLS SC hub and
+BACnet server, parse a known ReadProperty JSON value, and cover explicit/wrong
+site trust, credential failures, TLS 1.2 rejection, and pre-dial listener checks.
+This is bounded native CLI evidence, not full Annex AB security-profile or
+external-device interoperability certification. Caller-owned Rust library TLS
+configuration APIs are unchanged; #513 remains partial.
 
 ## Object Type Shorthand
 

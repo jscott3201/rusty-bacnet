@@ -7,6 +7,7 @@
 use std::{net::Ipv4Addr, path::PathBuf};
 
 use bacnet_types::primitives::BACnetTimeStamp;
+use clap::builder::{OsStringValueParser, TypedValueParser};
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -53,6 +54,12 @@ pub(crate) struct Cli {
     /// SC hub WebSocket URL.
     #[arg(long, global = true)]
     pub(crate) sc_url: Option<String>,
+
+    /// SC trusted site CA PEM file (required for SC; no system-root fallback).
+    // Validate emptiness only when constructing an SC client, not for discovery
+    // or a feature-disabled build. Preserve native OS path bytes.
+    #[arg(long, global = true, value_name = "FILE", value_parser = OsStringValueParser::new().map(PathBuf::from))]
+    pub(crate) sc_ca: Option<PathBuf>,
 
     /// SC TLS certificate PEM file.
     #[arg(long, global = true)]

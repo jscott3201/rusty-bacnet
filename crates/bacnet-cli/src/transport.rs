@@ -15,6 +15,7 @@ pub struct TransportArgs {
     pub timeout_ms: u64,
     pub sc: bool,
     pub sc_url: Option<String>,
+    pub sc_ca: Option<PathBuf>,
     pub sc_cert: Option<PathBuf>,
     pub sc_key: Option<PathBuf>,
     pub sc_vmac: Option<[u8; 6]>,
@@ -88,7 +89,7 @@ pub async fn build_bip_client(args: &TransportArgs) -> Result<BACnetClient<BipTr
 /// Build a BACnet/SC client from CLI transport arguments.
 ///
 /// Loads TLS certificates and private key from PEM files, constructs a TLS
-/// configuration using native root certificates, and builds the SC client.
+/// configuration trusting only the explicit site CA PEM, and builds the SC client.
 #[cfg(feature = "sc-tls")]
 pub async fn build_sc_client(
     args: &TransportArgs,
@@ -120,6 +121,30 @@ pub async fn build_sc_client(
     let sc_device_uuid = args
         .sc_device_uuid
         .ok_or_else(|| Error::Encoding("--sc-device-uuid is required for BACnet/SC".into()))?;
+    let ca_path = args
+        .sc_ca
+        .as_ref()
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or_else(|| {
+            Error::Encoding("--sc-ca <FILE> is required for BACnet/SC; supply a nonempty site CA PEM path (no system-root fallback)".into())
+        })?;
+
+    let mut root_store = RootCertStore::empty();
+    let ca_certs = CertificateDer::pem_file_iter(ca_path)
+        .map_err(|e| Error::Encoding(format!("failed to read --sc-ca PEM: {e}")))?;
+    for cert in ca_certs {
+        let cert =
+            cert.map_err(|e| Error::Encoding(format!("failed to parse --sc-ca PEM: {e}")))?;
+        root_store
+            .add(cert)
+            .map_err(|e| Error::Encoding(format!("unusable certificate in --sc-ca PEM: {e}")))?;
+    }
+    if root_store.is_empty() {
+        return Err(Error::Encoding(
+            "--sc-ca PEM contains no certificates; supply the trusted site CA certificate(s)"
+                .into(),
+        ));
+    }
 
     let certs = CertificateDer::pem_file_iter(cert_path)
         .map_err(|e| Error::Encoding(format!("failed to read cert PEM: {e}")))?
@@ -127,19 +152,6 @@ pub async fn build_sc_client(
         .map_err(|e| Error::Encoding(format!("failed to parse cert PEM: {e}")))?;
     let key = PrivateKeyDer::from_pem_file(key_path)
         .map_err(|e| Error::Encoding(format!("failed to read key PEM: {e}")))?;
-
-    let mut root_store = RootCertStore::empty();
-    let native_certs = rustls_native_certs::load_native_certs();
-    for cert in native_certs.certs {
-        root_store
-            .add(cert)
-            .map_err(|e| Error::Encoding(format!("failed to add native root cert: {e}")))?;
-    }
-    if root_store.is_empty() {
-        return Err(Error::Encoding(
-            "no native root certificates found — TLS connections will fail".into(),
-        ));
-    }
 
     let tls_config =
         rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
@@ -186,6 +198,7 @@ mod tests {
             timeout_ms: 6000,
             sc: true,
             sc_url: Some("wss://hub.example.com/bacnet".into()),
+            sc_ca: Some(PathBuf::from("site-ca.pem")),
             sc_cert: Some(PathBuf::from("cert.pem")),
             sc_key: Some(PathBuf::from("key.pem")),
             sc_vmac: Some([0x22, 0x01, 0x02, 0x03, 0x04, 0x05]),
