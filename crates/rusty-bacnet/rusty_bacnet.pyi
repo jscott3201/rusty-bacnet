@@ -1785,6 +1785,7 @@ class BACnetServer:
         *,
         dcc_policy: str = "deny_all",
         dcc_source_restriction: list[tuple[int | None, bytes]] | None = None,
+        dcc_disable_rate_limit: tuple[int, int] | None = None,
         serial_port: Optional[str] = None,
         mstp_baud: int = 38400,
         mstp_mac: int = 1,

@@ -111,6 +111,12 @@ impl ScServerBuilder {
         self
     }
 
+    /// Limit authorized DISABLE_INITIATION globally; None (default) disables it.
+    pub fn dcc_disable_rate_limit(mut self, limit: Option<super::DccDisableRateLimit>) -> Self {
+        self.config.dcc_disable_rate_limit = limit;
+        self
+    }
+
     /// Set the password required for ReinitializeDevice requests.
     pub fn reinit_password(mut self, password: impl Into<String>) -> Self {
         self.config.reinit_password = Some(password.into());

@@ -1150,9 +1150,21 @@ server = BACnetServer(
     dcc_password=None,           # password alone does not enable DCC
     dcc_policy="deny_all",       # keyword-only; explicit require_password or INSECURE legacy_permissive
     dcc_source_restriction=None, # optional list[(network_or_None, bytes)]; [] denies all; requires require_password
+    dcc_disable_rate_limit=None, # optional (capacity, refill_interval_ms); (3, 20000) enables default rate
     reinit_password=None,        # password for ReinitializeDevice
 )
 ```
+
+`dcc_disable_rate_limit` is keyword-only and defaults OFF. When configured, one
+global native-server bucket charges only authorized DISABLE_INITIATION requests;
+authorized ENABLE never checks, charges or resets it. Capacity must be 1–65535
+and refill interval 1–86400000 milliseconds (constructor validation). This does
+not enable DCC or limit password guessing/ingress traffic. Admission charges survive
+cancellation before commit; denial uses the existing policy-denied error/counter.
+Each successful `start()` creates a new native server and full bucket, including
+after `stop()` on the same Python object. An operator able to restart can reset
+the budget. See [DCC policy](dcc-policy.md#optional-global-disable_initiation-rate-policy)
+for exact timing, validation and exclusions.
 
 ### Adding Objects (before start)
 

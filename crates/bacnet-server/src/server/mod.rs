@@ -334,6 +334,8 @@ pub struct ServerConfig {
     pub dcc_policy: DccPolicy,
     /// Optional exact claimed-source restriction, valid only with RequirePassword.
     pub dcc_source_restriction: Option<DccSourceRestriction>,
+    /// Optional global DISABLE_INITIATION budget; does not enable DCC authorization.
+    pub dcc_disable_rate_limit: Option<DccDisableRateLimit>,
     /// Optional password required for ReinitializeDevice.
     pub reinit_password: Option<String>,
     /// Enable periodic fault detection / reliability evaluation.
@@ -444,6 +446,7 @@ impl std::fmt::Debug for ServerConfig {
             .field("dcc_password", &self.dcc_password.as_ref().map(|_| "***"))
             .field("dcc_policy", &self.dcc_policy)
             .field("dcc_source_restriction", &self.dcc_source_restriction)
+            .field("dcc_disable_rate_limit", &self.dcc_disable_rate_limit)
             .field(
                 "reinit_password",
                 &self.reinit_password.as_ref().map(|_| "***"),
@@ -486,6 +489,7 @@ impl Default for ServerConfig {
             dcc_password: None,
             dcc_policy: DccPolicy::default(),
             dcc_source_restriction: None,
+            dcc_disable_rate_limit: None,
             reinit_password: None,
             enable_fault_detection: false,
             enable_event_enrollment: true,
@@ -669,12 +673,6 @@ impl BipServerBuilder {
     pub fn device_binding(mut self, binding: DeviceBinding) -> Result<Self, Error> {
         register_configured_binding(&mut self.configured_device_bindings, binding)?;
         Ok(self)
-    }
-
-    /// Set the password required for DeviceCommunicationControl requests.
-    pub fn dcc_password(mut self, password: impl Into<String>) -> Self {
-        self.config.dcc_password = Some(password.into());
-        self
     }
 
     /// Set the password required for ReinitializeDevice requests.
@@ -886,8 +884,10 @@ mod cov_clock;
 mod cov_encoding;
 mod cov_notifications;
 mod cov_snapshot;
+mod dcc_disable_rate;
 pub(crate) mod dcc_outcomes;
 mod dcc_policy;
+pub use dcc_disable_rate::DccDisableRateLimit;
 mod dcc_timer;
 pub use dcc_outcomes::DccOutcomeCounters;
 pub use dcc_policy::{DccPolicy, DccSource, DccSourceRestriction};

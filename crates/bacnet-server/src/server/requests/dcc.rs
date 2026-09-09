@@ -1,5 +1,10 @@
 use super::*;
 
+#[cfg(test)]
+#[path = "dcc_disable_rate_tests.rs"]
+mod rate_tests;
+
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn response<T: TransportPort + 'static>(
     timer: &Arc<Mutex<Option<JoinHandle<()>>>>,
     comm_state: &Arc<AtomicU8>,
@@ -8,6 +13,7 @@ pub(super) async fn response<T: TransportPort + 'static>(
     req: &ConfirmedRequestPdu,
     source_mac: &[u8],
     source: Option<&NpduAddress>,
+    request_tasks: &super::super::request_tasks::RequestTaskSpawner,
 ) -> Apdu {
     let result = super::super::dcc_timer::replace(
         timer,
@@ -16,6 +22,7 @@ pub(super) async fn response<T: TransportPort + 'static>(
         config,
         source_mac,
         source,
+        request_tasks,
     )
     .await;
     // No await between validation failure/live commit and completion telemetry.

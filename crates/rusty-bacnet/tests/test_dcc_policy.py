@@ -9,6 +9,24 @@ from rusty_bacnet import BACnetServer
 
 
 class DccConstructorTests(unittest.TestCase):
+    def test_disable_rate_constructor_bounds_and_default(self):
+        parameter = inspect.signature(BACnetServer).parameters["dcc_disable_rate_limit"]
+        self.assertIsNone(parameter.default)
+        self.assertEqual(parameter.kind, inspect.Parameter.KEYWORD_ONLY)
+        for transport in ["bip", "ipv6", "sc", "mstp"]:
+            for invalid in [(0, 20000), (65536, 20000), (3, 0), (3, 86400001),
+                            (2**32 - 1, 20000), (3, 2**64 - 1)]:
+                with self.assertRaisesRegex(ValueError, "DCC disable rate"):
+                    BACnetServer(123, transport=transport, dcc_disable_rate_limit=invalid)
+            for valid in [None, (3, 20000), (1, 1), (65535, 86400000)]:
+                for policy in ["deny_all", "legacy_permissive", "require_password"]:
+                    BACnetServer(123, transport=transport, dcc_policy=policy,
+                                 dcc_password="required", dcc_disable_rate_limit=valid)
+        for invalid in [True, "bad", (), (3,), (3, 20, 1), (-1, 20000), (3, -1),
+                        (2**32, 20000), (3, 2**64), (3.5, 20000), (3, None)]:
+            with self.assertRaises((TypeError, ValueError, OverflowError)):
+                BACnetServer(123, dcc_disable_rate_limit=invalid)
+
     def test_source_restriction_validation_before_every_transport(self):
         parameter = inspect.signature(BACnetServer).parameters["dcc_source_restriction"]
         self.assertIsNone(parameter.default)
@@ -55,6 +73,61 @@ class DccConstructorTests(unittest.TestCase):
 
 
 class DccNativeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_disable_rate_global_native_lifetime_and_enable_exemption(self):
+        for policy in ["legacy_permissive", "require_password"]:
+            server = BACnetServer(123, interface="127.0.0.1", port=0,
+                                  broadcast_address="127.0.0.1", dcc_policy=policy,
+                                  dcc_password="required", dcc_disable_rate_limit=(3, 20000))
+            sockets = [socket.socket(socket.AF_INET, socket.SOCK_DGRAM) for _ in range(2)]
+            for sock in sockets:
+                sock.bind(("127.0.0.1", 0))
+                sock.setblocking(False)
+            try:
+                # Same Python wrapper, distinct native servers: restart resets budget.
+                for _ in range(2):
+                    await server.start()
+                    for invoke in range(1, 7):
+                        reply = await self.exchange(server, sockets[invoke % 2], invoke, 2,
+                                                    "required", invoke % 2 == 0)
+                        self.assertEqual(reply, bytes([0x20, invoke, 17]) if invoke <= 3 else
+                                         bytes([0x50, invoke, 17, 0x91, 5, 0x91, 29]))
+                    for invoke in range(7, 10):
+                        reply = await self.exchange(server, sockets[0], invoke, 0, "required", False)
+                        self.assertEqual(reply, bytes([0x20, invoke, 17]))
+                    self.assertEqual(await server.comm_state(), 0)
+                    reply = await self.exchange(server, sockets[1], 10, 2, "required", True)
+                    self.assertEqual(reply, bytes([0x50, 10, 17, 0x91, 5, 0x91, 29]))
+                    self.assertEqual(await server.comm_state(), 0)
+                    self.assertEqual(await server.dcc_outcome_counters(), dict(
+                        accepted_total=6, policy_denied_total=4, password_failure_total=0,
+                        deprecated_denied_total=0, malformed_total=0))
+                    self.assertEqual((await server.request_admission_counters())["recovery_admitted_total"], 3)
+                    await server.stop()
+            finally:
+                await server.stop()
+                for sock in sockets:
+                    sock.close()
+
+    async def test_disable_rate_password_deprecated_and_configurable_refill(self):
+        server = BACnetServer(123, interface="127.0.0.1", port=0,
+                              broadcast_address="127.0.0.1", dcc_policy="require_password",
+                              dcc_password="required", dcc_disable_rate_limit=(1, 200))
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind(("127.0.0.1", 0))
+        sock.setblocking(False)
+        try:
+            await server.start()
+            reply = await self.exchange(server, sock, 1, 2, "wrong", False)
+            self.assertEqual(reply, bytes([0x50, 1, 17, 0x91, 4, 0x91, 26]))
+            reply = await self.exchange(server, sock, 2, 1, "required", False)
+            self.assertEqual(reply, bytes([0x50, 2, 17, 0x91, 5, 0x91, 29]))
+            self.assertEqual((await self.exchange(server, sock, 3, 2, "required", False))[0], 0x20)
+            await asyncio.sleep(0.25)
+            self.assertEqual((await self.exchange(server, sock, 4, 2, "required", True))[0], 0x20)
+        finally:
+            await server.stop()
+            sock.close()
+
     async def test_source_restriction_direct_routed_and_outcomes(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.bind(("127.0.0.1", 0))

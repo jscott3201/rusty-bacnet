@@ -83,6 +83,9 @@ impl super::ServerConfig {
         if let Some(restriction) = &self.dcc_source_restriction {
             restriction.validate_policy(self.dcc_policy)?;
         }
+        if let Some(limit) = self.dcc_disable_rate_limit {
+            limit.validate()?;
+        }
         Ok(())
     }
 }
@@ -132,6 +135,12 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
 }
 
 impl BipServerBuilder {
+    /// Set the password required for DeviceCommunicationControl requests.
+    pub fn dcc_password(mut self, password: impl Into<String>) -> Self {
+        self.config.dcc_password = Some(password.into());
+        self
+    }
+
     /// Restrict claimed DCC sources; requires explicit RequirePassword policy.
     pub fn dcc_source_restriction(mut self, restriction: Option<DccSourceRestriction>) -> Self {
         self.config.dcc_source_restriction = restriction;

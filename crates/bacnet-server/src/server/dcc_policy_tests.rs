@@ -1,5 +1,102 @@
 use super::*;
 
+#[tokio::test]
+async fn dcc_disable_rate_validation_before_start() {
+    assert!(ServerConfig::default().dcc_disable_rate_limit.is_none());
+    for limit in [
+        DccDisableRateLimit {
+            capacity: 0,
+            ..Default::default()
+        },
+        DccDisableRateLimit {
+            capacity: 65536,
+            ..Default::default()
+        },
+        DccDisableRateLimit {
+            capacity: u32::MAX,
+            ..Default::default()
+        },
+        DccDisableRateLimit {
+            refill_interval_ms: 0,
+            ..Default::default()
+        },
+        DccDisableRateLimit {
+            refill_interval_ms: 86_400_001,
+            ..Default::default()
+        },
+        DccDisableRateLimit {
+            refill_interval_ms: u64::MAX,
+            ..Default::default()
+        },
+    ] {
+        assert!(limit.validate().is_err());
+        let started = Arc::new(AtomicBool::new(false));
+        let config = ServerConfig {
+            dcc_disable_rate_limit: Some(limit),
+            ..Default::default()
+        };
+        let error = BACnetServer::start(config, ObjectDatabase::new(), NeverStart(started.clone()))
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(error, Error::Encoding(m) if m.contains("DCC disable rate")));
+        assert!(BACnetServer::generic_builder()
+            .transport(NeverStart(started.clone()))
+            .dcc_disable_rate_limit(Some(limit))
+            .build()
+            .await
+            .is_err());
+        assert!(!started.load(Ordering::Acquire));
+        let error = BACnetServer::bip_builder()
+            .dcc_disable_rate_limit(Some(limit))
+            .build()
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(error, Error::Encoding(m) if m.contains("DCC disable rate")));
+    }
+    for limit in [
+        DccDisableRateLimit {
+            capacity: 1,
+            refill_interval_ms: 1,
+        },
+        DccDisableRateLimit {
+            capacity: 65535,
+            refill_interval_ms: 86_400_000,
+        },
+    ] {
+        assert!(limit.validate().is_ok());
+    }
+}
+
+#[cfg(feature = "sc-tls")]
+#[tokio::test]
+async fn dcc_disable_rate_validation_before_sc_dial() {
+    for limit in [
+        DccDisableRateLimit {
+            capacity: 0,
+            ..Default::default()
+        },
+        DccDisableRateLimit {
+            refill_interval_ms: u64::MAX,
+            ..Default::default()
+        },
+    ] {
+        let tls = tokio_rustls::rustls::ClientConfig::builder()
+            .with_root_certificates(tokio_rustls::rustls::RootCertStore::empty())
+            .with_no_client_auth();
+        let error = BACnetServer::sc_builder()
+            .hub_url("not-a-websocket-url")
+            .tls_config(Arc::new(tls))
+            .dcc_disable_rate_limit(Some(limit))
+            .build()
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(error, Error::Encoding(m) if m.contains("DCC disable rate")));
+    }
+}
+
 #[test]
 fn dcc_source_restriction_configuration_bounds() {
     for length in [0, 256, 65536] {

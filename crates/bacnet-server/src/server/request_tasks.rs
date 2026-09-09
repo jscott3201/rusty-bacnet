@@ -5,8 +5,13 @@ use std::sync::{Arc, Mutex, Weak};
 use tokio::task::{JoinError, JoinSet};
 
 /// Owns inbound request handlers and their independent segmented responses,
-/// not timers or notification workers started by services.
-pub(super) struct RequestTasks(Mutex<State>, Admission);
+/// not timers or notification workers started by services. The optional DCC
+/// bucket shares this native-server lifetime, independent of task registrations.
+pub(super) struct RequestTasks(
+    Mutex<State>,
+    Admission,
+    Option<super::dcc_disable_rate::Bucket>,
+);
 
 impl Default for RequestTasks {
     fn default() -> Self {
@@ -24,6 +29,15 @@ struct State {
 pub(super) struct RequestTaskSpawner(Weak<RequestTasks>);
 
 impl RequestTaskSpawner {
+    pub(super) fn admit_dcc_disable(&self) -> bool {
+        self.0.upgrade().is_some_and(|owner| {
+            owner
+                .2
+                .as_ref()
+                .is_none_or(super::dcc_disable_rate::Bucket::admit)
+        })
+    }
+
     pub(super) fn spawn(&self, task: impl Future<Output = ()> + Send + 'static) {
         if let Some(owner) = self.0.upgrade() {
             owner.spawn(task);
@@ -40,7 +54,7 @@ impl RequestTasks {
     pub(super) fn for_server(
         config: &super::ServerConfig,
     ) -> Result<Arc<Self>, bacnet_types::error::Error> {
-        let tasks = Self::new(config.request_admission_policy)?;
+        let mut tasks = Self::new(config.request_admission_policy)?;
         // Retain admission validation precedence; both policies must be valid
         // before the lifecycle starts a transport or exposes a request owner.
         config.read_property_multiple_budget.validate()?;
@@ -51,11 +65,19 @@ impl RequestTasks {
         config.atomic_write_file_budget.validate()?;
         config.read_range_budget.validate()?;
         config.get_event_information_budget.validate()?;
+        tasks.2 = config
+            .dcc_disable_rate_limit
+            .map(super::dcc_disable_rate::Bucket::new)
+            .transpose()?;
         Ok(Arc::new(tasks))
     }
 
     pub(super) fn new(policy: RequestAdmissionPolicy) -> Result<Self, bacnet_types::error::Error> {
-        Ok(Self(Mutex::new(State::default()), Admission::new(policy)?))
+        Ok(Self(
+            Mutex::new(State::default()),
+            Admission::new(policy)?,
+            None,
+        ))
     }
 
     pub(super) fn counters(&self) -> RequestAdmissionCounters {

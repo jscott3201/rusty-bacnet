@@ -15,7 +15,7 @@ LegacyPermissive does **not** bypass a configured password. Without one, any
 requester whose request reaches the handler can change communications. Do not
 mistake this compatibility option, a shared password, a routed address, or an SC
 VMAC for authenticated source identity. Exact address restriction below is not
-principal authentication. Full auditing and rate policy remain future work under
+principal authentication. Full auditing and broader abuse protection remain future work under
 the partial, separate #522 scope.
 
 ## Migration
@@ -70,15 +70,62 @@ Claimed addresses are spoofable and unauthenticated, **including SC VMACs**.
 An allowed address still needs the correct password; a shared password plus an
 address match does not establish principal identity or authenticated-SC provenance.
 
+### Optional global DISABLE_INITIATION rate policy
+
+`ServerConfig::dcc_disable_rate_limit: Option<DccDisableRateLimit>` defaults to
+`None` (**OFF**), preserving all existing authorization, including explicit
+LegacyPermissive. Generic, B/IP and SC builders expose `.dcc_disable_rate_limit(...)`.
+Use `Some(DccDisableRateLimit::default())` for an initial/maximum burst of **3**
+tokens and **one token per 20 seconds**. Public fields `capacity: u32` (1–65535)
+and `refill_interval_ms: u64` (1–86400000) are configurable local operator limits.
+Invalid values fail validation before transport startup/SC dialing. Exhaustive
+Rust config literals need `dcc_disable_rate_limit: None` or a default update.
+
+Python's keyword-only `dcc_disable_rate_limit: tuple[int, int] | None = None`
+accepts `(capacity, refill_interval_ms)`; pass `(3, 20000)` for the enabled defaults.
+The constructor validates and copies configuration before any transport work.
+Invalid bounds raise `ValueError`; wrong types raise `TypeError`, and integers
+outside the native unsigned representation may raise `OverflowError`.
+
+This is **one shared bucket per native server**, never a per-source table.
+All locally authorized DISABLE_INITIATION requests, including repeated requests
+with the same mode/duration and explicit LegacyPermissive requests, spend one token.
+Changing claimed direct/routed identities or immediate peers does not obtain a new
+budget. Enabling the limiter never enables DCC: DenyAll remains the default policy.
+Authorized **ENABLE is exempt**: it neither checks nor charges the bucket, nor
+resets its balance/refill progress. Existing #521 request-admission limits still apply.
+
+Refill uses Tokio monotonic elapsed time, with fractional nanosecond accounting,
+saturating at capacity and discarding surplus while full. Denied checks preserve
+elapsed progress. There is no refill task, wall-clock dependency or persistence.
+Admission and charge are serialized in one short blocking critical section with
+no await. **A charge is not refunded if the admitted handler is cancelled before
+the timer/state commit.** Such incomplete handlers still produce no completed-handler
+counter/event. Rate denial produces the existing SERVICES/SERVICE_REQUEST_DENIED,
+`policy_denied_total` and `policy_denied` DEBUG event without new telemetry fields.
+
+Each new native server starts full. Stop does not replenish that instance's bucket.
+Python stop drops the native server; each successful subsequent start on the same
+Python wrapper creates a **new native lifetime and fresh full bucket**. No bucket
+state is kept in the wrapper. An operator able to restart a server can reset the
+budget; this policy does not constrain that authority.
+
+This is not all-attempt, ingress, CPU, flood or password-guessing protection:
+decoding/password checks and earlier authorization denials remain unthrottled by
+this policy. It does not authenticate sources, provide fair allocation, or complete #522.
+
 ### Validation and timer order
 
 Existing admission, duplicate handling and DCC ingress discards are unchanged.
 After admission: decode, existing constant-time password check, deprecated DISABLE
-rejection, then local policy and optional source restriction for ENABLE/DISABLE_INITIATION, then live state/timer
+rejection, then local policy and optional source restriction for ENABLE/DISABLE_INITIATION,
+then optional rate admission for DISABLE_INITIATION, then live state/timer
 commit. Missing/wrong configured passwords return SECURITY/PASSWORD_FAILURE even
 under DenyAll or for DISABLE. Otherwise denied valid requests return
 SERVICES/SERVICE_REQUEST_DENIED. Unknown-mode decoding/encoding errors retain
 their existing precedence. Deprecated DISABLE remains denied in **every** policy.
+Malformed, wrong-password, deprecated-mode, DenyAll and source-denied requests
+never check or charge the rate bucket.
 
 Denial happens before the live timer lock, cancellation or state mutation.
 Repeated denied requests cannot create, cancel or extend a timer, including when
@@ -102,7 +149,7 @@ completed bounded #521 acceptance remain unchanged, not reopened.
 Local licensed ASHRAE 135-2020 §16.1 (printed 759–760) supplies the existing
 optional-password and deprecated-DISABLE rules; §18.6 (printed 795) describes
 SERVICE_REQUEST_DENIED for lack of authorization. The three configuration modes,
-nonempty startup requirement and deny-all default are operator policy, not new
+nonempty startup requirement, deny-all default and optional rate limits are operator policy, not new
 normative claims. This does not expand authenticated-SC, physical-transport,
 full-conformance, Audit/#125, EventLog integration, additional #181 fault-family
 or GATE0007 qualification.
@@ -145,10 +192,10 @@ BACnet Audit service. There is no internal history, queue, task, destination or
 new callback API; the Python accessor installs no logger/subscriber or trace
 bridge. Standard tracing subscribers are caller-owned and may filter, discard,
 backpressure, or perform arbitrary work. Event delivery, global concurrent
-ordering, rate limiting and flood resistance are not guaranteed. Counters and
+ordering, event-rate limiting and flood resistance are not guaranteed. Counters and
 events exclude duplicates, pre-handler admission/shutdown/Abort-fallback
 rejections, handlers cancelled before completion, timer expiry, and response
 delivery failures after commit. Existing admission counters cover their separate
 admission boundary. Source mismatch reuses `policy_denied_total` and the existing
 `policy_denied` DEBUG event/schema, without new counters. This remains partial
-#522 work, not full auditing, rate policy or principal authentication; #521 remains closed.
+#522 work, not full auditing, general abuse protection or principal authentication; #521 remains closed.

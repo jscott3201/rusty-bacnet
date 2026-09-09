@@ -17,11 +17,14 @@ pub(super) async fn replace(
     config: &ServerConfig,
     source_mac: &[u8],
     source: Option<&bacnet_encoding::npdu::NpduAddress>,
+    request_tasks: &super::request_tasks::RequestTaskSpawner,
 ) -> Result<dcc_outcomes::DccMetadata, handlers::device_mgmt::DccFailure> {
     // Decode and validate once, retaining only non-secret proposed state and
     // metadata. Never change live state before a cancellable await.
     let (mode, duration, proposed) =
         handlers::device_mgmt::validate_dcc(service_data, &config.dcc_password, config.dcc_policy)?;
+    // Short-circuit source refusal before touching the shared budget. ENABLE
+    // never checks it. A successful charge precedes every cancellable await.
     if config
         .dcc_source_restriction
         .as_ref()
@@ -29,6 +32,8 @@ pub(super) async fn replace(
             config.dcc_policy != DccPolicy::RequirePassword
                 || !restriction.allows(source_mac, source)
         })
+        || (mode == bacnet_types::enums::EnableDisable::DISABLE_INITIATION
+            && !request_tasks.admit_dcc_disable())
     {
         return Err(handlers::device_mgmt::DccFailure {
             error: Error::Protocol {
