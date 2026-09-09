@@ -146,6 +146,33 @@ completed bounded #521 acceptance remain unchanged, not reopened.
 
 ## Source and limits
 
+### Standalone SC loopback evidence
+
+`cargo test -p bacnet-server --locked --features sc-tls sc_dcc_mtls` exercises
+the real standalone `BACnetServer::sc_builder`, TLS WebSocket transport and SC
+hub on `127.0.0.1:0`. Test-only certificates and distinct endpoint keys are
+generated in memory. The hub requires client certificates; clients verify the
+hub certificate. Missing/untrusted client credentials and missing server trust
+are rejected, while trusted peers complete SC connection establishment and
+successful ReadProperty exchanges before DCC assertions.
+
+The tests check exact DCC response identity, error class/code and five-counter
+deltas: default denial (including a correct configured password), password
+precedence, deprecated DISABLE, explicit RequirePassword with exact direct VMAC
+or routed-source restrictions, an empty restriction, and the shared three-token
+disable budget. They cover earlier malformed/password/deprecated/source failures
+not consuming that budget, authorized ENABLE exemption without a reset, and
+repeated denials leaving state and the same live timer intact even with its lock
+held. Existing absent/zero/ENABLE-duration behavior is characterized, not corrected.
+Fixture shutdown is joined on success and on an injected assertion failure.
+
+Mutual TLS authenticates each TLS endpoint to the hub, **not a DCC principal to
+the BACnet server**. The server receives claimed VMAC/NPDU source addresses;
+these tests do not bind them to certificates. Matching routed claims through
+different certified peers demonstrate address-policy behavior, not principal
+authentication. This evidence does not qualify reconnect/failover, external
+interoperability, a combined endpoint, full auditing or completion of #522.
+
 Local licensed ASHRAE 135-2020 §16.1 (printed 759–760) supplies the existing
 optional-password and deprecated-DISABLE rules; §18.6 (printed 795) describes
 SERVICE_REQUEST_DENIED for lack of authorization. The three configuration modes,

@@ -1,5 +1,9 @@
 use super::*;
 
+#[cfg(test)]
+#[path = "sc_dcc_mtls_tests.rs"]
+mod dcc_mtls_tests;
+
 impl BACnetServer<bacnet_transport::sc::ScTransport<bacnet_transport::sc_tls::TlsWebSocket>> {
     /// Create an SC-specific builder that connects to a BACnet/SC hub.
     pub fn sc_builder() -> ScServerBuilder {

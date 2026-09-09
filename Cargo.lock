@@ -370,6 +370,8 @@ dependencies = [
  "bacnet-transport",
  "bacnet-types",
  "bytes",
+ "futures-util",
+ "rcgen",
  "tokio",
  "tokio-rustls",
  "tracing",
