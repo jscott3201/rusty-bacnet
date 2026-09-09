@@ -312,6 +312,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 event_information::response(
                     db,
                     &req,
+                    config.get_event_information_budget,
                     effective_max_apdu,
                     segmented_response_available,
                 )

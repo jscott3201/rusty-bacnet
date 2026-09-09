@@ -7,6 +7,9 @@ use bacnet_types::primitives::{Date, Time};
 
 use super::*;
 
+#[path = "event_information_budget_tests.rs"]
+mod configured;
+
 struct ProjectionFixture {
     oid: ObjectIdentifier,
     name: String,
@@ -174,7 +177,29 @@ fn response(
     budget: Option<usize>,
 ) -> Result<(GetEventInformationAck, usize), Error> {
     let mut encoded = BytesMut::new();
-    handle_get_event_information_with_budget(db, &request(cursor), &mut encoded, budget)?;
+    let result =
+        handle_get_event_information_with_budget(db, &request(cursor), &mut encoded, budget);
+    if budget.is_none() {
+        let mut configured = BytesMut::new();
+        let configured_result = handle_get_event_information_configured(
+            db,
+            &request(cursor),
+            &mut configured,
+            crate::server::GetEventInformationBudget {
+                max_objects: usize::MAX,
+                max_returned_summaries: usize::MAX,
+                max_service_ack_bytes: usize::MAX,
+            },
+        );
+        match (&result, configured_result) {
+            (Ok(()), Ok(())) => assert_eq!(encoded, configured),
+            (Err(expected), Err(EventInformationFailure::Service(actual))) => {
+                assert_eq!(expected.to_string(), actual.to_string())
+            }
+            (expected, actual) => panic!("legacy/configured mismatch: {expected:?} / {actual:?}"),
+        }
+    }
+    result?;
     Ok((GetEventInformationAck::decode(&encoded)?, encoded.len()))
 }
 

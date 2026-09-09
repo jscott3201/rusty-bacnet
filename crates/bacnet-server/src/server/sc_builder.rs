@@ -191,6 +191,7 @@ impl ScServerBuilder {
         self.config.get_enrollment_summary_budget.validate()?;
         self.config.atomic_read_file_budget.validate()?;
         self.config.read_range_budget.validate()?;
+        self.config.get_event_information_budget.validate()?;
 
         let ws = bacnet_transport::sc_tls::TlsWebSocket::connect(&self.hub_url, tls_config.clone())
             .await?;

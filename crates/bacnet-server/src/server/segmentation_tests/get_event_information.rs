@@ -163,6 +163,28 @@ async fn dispatch(
     MacAddr,
     Arc<crate::server::request_tasks::RequestTasks>,
 ) {
+    dispatch_with_budget(
+        segmentation,
+        client_accepts_segmented,
+        client_max_apdu,
+        local_max_apdu,
+        GetEventInformationBudget::default(),
+    )
+    .await
+}
+
+async fn dispatch_with_budget(
+    segmentation: Segmentation,
+    client_accepts_segmented: bool,
+    client_max_apdu: u16,
+    local_max_apdu: u32,
+    budget: GetEventInformationBudget,
+) -> (
+    SentFrames,
+    Arc<segmented_send::SegmentedSendRegistry>,
+    MacAddr,
+    Arc<crate::server::request_tasks::RequestTasks>,
+) {
     let sent = SentFrames::default();
     let network = Arc::new(NetworkLayer::new(RecordingTransport::new(Arc::clone(
         &sent,
@@ -179,6 +201,7 @@ async fn dispatch(
     let comm_state = Arc::new(AtomicU8::new(0));
     let dcc_timer = Arc::new(Mutex::new(None::<JoinHandle<()>>));
     let config = ServerConfig {
+        get_event_information_budget: budget,
         max_apdu_length: local_max_apdu,
         segmentation_supported: segmentation,
         ..ServerConfig::default()
@@ -223,17 +246,43 @@ async fn dispatch(
 }
 
 #[tokio::test]
-async fn first_summary_over_unsegmented_budget_uses_existing_segmentation_abort() {
+async fn first_summary_over_unsegmented_budget_uses_buffer_overflow_abort() {
     assert!(unsegmented_apdu_len(full_service_ack()) > 50);
     for (client_max_apdu, local_max_apdu) in [(50, 1476), (480, 50)] {
         let (sent, _, _, _owner) =
             dispatch(Segmentation::NONE, false, client_max_apdu, local_max_apdu).await;
         wait_for_sent_len(&sent, 1).await;
         assert_eq!(sent_count(&sent), 1);
-        assert_eq!(
-            abort_reason(&sent, 0),
-            AbortReason::SEGMENTATION_NOT_SUPPORTED
-        );
+        assert_eq!(abort_reason(&sent, 0), AbortReason::BUFFER_OVERFLOW);
+    }
+}
+
+#[tokio::test]
+async fn get_event_information_configured_abort_independent_of_segmentation() {
+    for segmentation in [Segmentation::NONE, Segmentation::BOTH] {
+        for (budget, expected) in [
+            (
+                GetEventInformationBudget {
+                    max_objects: 1,
+                    ..Default::default()
+                },
+                AbortReason::OUT_OF_RESOURCES,
+            ),
+            (
+                GetEventInformationBudget {
+                    max_service_ack_bytes: 4,
+                    ..Default::default()
+                },
+                AbortReason::BUFFER_OVERFLOW,
+            ),
+        ] {
+            let (sent, _, _, owner) =
+                dispatch_with_budget(segmentation, true, 50, 1476, budget).await;
+            wait_for_sent_len(&sent, 1).await;
+            assert_eq!(abort_reason(&sent, 0), expected);
+            owner.close();
+            while owner.join_next().await.is_some() {}
+        }
     }
 }
 

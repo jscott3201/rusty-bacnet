@@ -42,7 +42,10 @@ impl BACnetServer {
         atomic_read_file_max_requested_records=256,
         atomic_read_file_max_service_ack_bytes=16384,
         read_range_max_returned_items=256,
-        read_range_max_service_ack_bytes=16384
+        read_range_max_service_ack_bytes=16384,
+        event_information_max_objects=4096,
+        event_information_max_returned_summaries=256,
+        event_information_max_service_ack_bytes=16384
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -84,6 +87,9 @@ impl BACnetServer {
         atomic_read_file_max_service_ack_bytes: usize,
         read_range_max_returned_items: usize,
         read_range_max_service_ack_bytes: usize,
+        event_information_max_objects: usize,
+        event_information_max_returned_summaries: usize,
+        event_information_max_service_ack_bytes: usize,
     ) -> PyResult<Self> {
         let request_admission_policy = server::RequestAdmissionPolicy {
             max_confirmed_in_flight,
@@ -132,6 +138,14 @@ impl BACnetServer {
         read_range_budget
             .validate()
             .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        let get_event_information_budget = server::GetEventInformationBudget {
+            max_objects: event_information_max_objects,
+            max_returned_summaries: event_information_max_returned_summaries,
+            max_service_ack_bytes: event_information_max_service_ack_bytes,
+        };
+        get_event_information_budget
+            .validate()
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
         Ok(Self {
             inner: Arc::new(Mutex::new(None)),
             device_instance,
@@ -161,6 +175,7 @@ impl BACnetServer {
             get_enrollment_summary_budget,
             atomic_read_file_budget,
             read_range_budget,
+            get_event_information_budget,
             started: Arc::new(AtomicBool::new(false)),
             pending_objects: std::sync::Mutex::new(Vec::new()),
         })

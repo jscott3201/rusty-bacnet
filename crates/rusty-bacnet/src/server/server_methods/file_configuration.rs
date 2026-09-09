@@ -208,6 +208,7 @@ mod tests {
             get_enrollment_summary_budget: server::GetEnrollmentSummaryBudget::default(),
             atomic_read_file_budget: server::AtomicReadFileBudget::default(),
             read_range_budget: server::ReadRangeBudget::default(),
+            get_event_information_budget: server::GetEventInformationBudget::default(),
             started: Arc::new(AtomicBool::new(false)),
             pending_objects: std::sync::Mutex::new(Vec::new()),
         }

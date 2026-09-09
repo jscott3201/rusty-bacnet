@@ -4,6 +4,10 @@ use super::super::*;
 use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_objects::traits::BACnetObject;
 
+#[path = "event_information_page.rs"]
+mod page;
+pub(crate) use page::{handle_get_event_information_configured, EventInformationFailure};
+
 const EVENT_SUMMARY_SIGNATURE: [PropertyIdentifier; 6] = [
     PropertyIdentifier::EVENT_STATE,
     PropertyIdentifier::ACKED_TRANSITIONS,
@@ -116,8 +120,8 @@ impl From<EventSummaryProjection> for EventSummary {
 
 /// Handle a GetEventInformation request without service-level byte pagination.
 ///
-/// Server dispatch uses the budget-aware variant when segmented transmission is
-/// unavailable. This wrapper remains unbounded for existing direct callers.
+/// Server dispatch uses a separate configured admission and strict page policy.
+/// This wrapper remains unbounded for existing direct callers.
 pub fn handle_get_event_information(
     db: &ObjectDatabase,
     service_data: &[u8],
