@@ -1545,10 +1545,22 @@ hub = ScHub(
 )
 ```
 
-For Annex AB production deployments, pass `ca_cert` and configure each SC node
-with its own certificate/key pair. Omitting `ca_cert` leaves the hub in
-server-auth-only example mode, which is not claimed as BACnet/SC mTLS
-conformance evidence.
+`ca_cert` is required: omission, `None`, or an empty string raises `ValueError`
+at construction, before listening. Its fifth positional slot and `None` default
+remain for argument-layout compatibility only; there is no server-auth-only
+mode or insecure flag. Existing callers must supply the trusted issuer CA PEM
+file, not a peer leaf certificate. Configure each SC node with its own
+operational certificate/key pair and the CA that signs the hub certificate.
+
+`start()` validates the CA store and server certificate/key before binding;
+unreadable, empty, or malformed credentials and mismatched server keys raise
+`BacnetError`. The hub accepts only TLS 1.3 with verified client certificates.
+Missing, untrusted, expired, or not-yet-valid peer certificates are rejected.
+This addresses the Python hub admission boundary of Annex AB.7.4, not full
+security-profile conformance. CA membership does not authorize BACnet operations
+or bind a certificate to a claimed VMAC/Device UUID. Rust `ScHub` still accepts a
+caller-configured `TlsAcceptor`; Python client/server credential defaults remain
+unchanged and their required-credential migration is deferred under #513.
 
 ### Methods
 

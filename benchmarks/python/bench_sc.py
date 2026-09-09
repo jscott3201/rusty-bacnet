@@ -7,6 +7,7 @@ Architecture: ScHub (relay) ← BACnetServer (SC node) ← BACnetClient (SC node
 """
 
 import asyncio
+import ssl
 import time
 import psutil
 import pytest
@@ -52,11 +53,41 @@ async def sc_hub(certs):
         listen="127.0.0.1:0",
         cert=certs.server_cert,
         key=certs.server_key,
+        ca_cert=certs.ca_cert,
         vmac=b"\x00\x00\x00\x00\x00\x01",
     )
-    await hub.start()
-    yield hub
-    await hub.stop()
+    try:
+        await asyncio.wait_for(hub.start(), 5)
+        yield hub
+    finally:
+        await asyncio.wait_for(hub.stop(), 5)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_sc_mtls_preflight(sc_hub, certs):
+    """Qualify generated benchmark credentials, not latency or node UUIDs."""
+    port = int((await sc_hub.address()).rsplit(":", 1)[1])
+    for cert, key in [(certs.server_cert, certs.server_key),
+                      (certs.client_cert, certs.client_key)]:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.minimum_version = context.maximum_version = ssl.TLSVersion.TLSv1_3
+        context.load_verify_locations(certs.ca_cert)
+        context.load_cert_chain(cert, key)
+        reader, writer = await asyncio.wait_for(asyncio.open_connection(
+            "127.0.0.1", port, ssl=context, server_hostname="localhost"), 5)
+        try:
+            writer.write(
+                b"GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n"
+                b"Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
+                b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                b"Sec-WebSocket-Protocol: hub.bsc.bacnet.org\r\n\r\n")
+            await asyncio.wait_for(writer.drain(), 5)
+            response = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5)
+            assert response.startswith(b"HTTP/1.1 101")
+            assert writer.get_extra_info("ssl_object").version() == "TLSv1.3"
+        finally:
+            writer.close()
+            await asyncio.wait_for(writer.wait_closed(), 5)
 
 
 @pytest_asyncio.fixture(scope="module")
@@ -86,8 +117,8 @@ async def sc_client(sc_server, sc_hub, certs):
         sc_hub=hub_url,
         sc_vmac=b"\x00\x01\x02\x03\x04\x06",
         sc_ca_cert=certs.ca_cert,
-        sc_client_cert=certs.server_cert,
-        sc_client_key=certs.server_key,
+        sc_client_cert=certs.client_cert,
+        sc_client_key=certs.client_key,
     )
     await client.__aenter__()
     # Wait for hub handshake to complete

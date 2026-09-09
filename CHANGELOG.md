@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Python ScHub compatibility change:** `ca_cert` must explicitly name a usable
+  trusted issuer CA PEM file. Omission, `None`, and empty paths now raise
+  `ValueError` at construction; invalid files or mismatched server cert/key fail
+  in `start()` before bind. The fifth positional parameter is unchanged, but its
+  default no longer enables one-way TLS. Client verification and TLS 1.3 are
+  mandatory, with no insecure escape hatch. The Python SC benchmark now supplies
+  its generated CA. Rust caller-owned `TlsAcceptor` injection and Python node
+  credential defaults are unchanged; #513 remains partial. See
+  [ScHub](docs/python-api.md#schub).
+
 - Add a default-OFF optional global DCC DISABLE_INITIATION token bucket per native
   server. Enabled defaults are burst 3 and one token per 20 seconds; authorized
   ENABLE is exempt and earlier validation/authorization failures do not charge.

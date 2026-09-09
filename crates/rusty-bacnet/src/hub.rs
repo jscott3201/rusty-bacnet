@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use tokio::sync::Mutex;
 use tokio_rustls::TlsAcceptor;
@@ -23,7 +23,7 @@ use crate::errors::to_py_err;
 ///     listen="127.0.0.1:0",
 ///     cert="server.pem",
 ///     key="server.key",
-///     ca_cert="ca.pem",       # trusted issuer CA, enables mTLS
+///     ca_cert="ca.pem",       # required trusted issuer CA for mTLS
 ///     vmac=b"\x00\x00\x00\x00\x00\x01",
 /// )
 /// await hub.start()
@@ -37,7 +37,7 @@ pub struct PyScHub {
     listen: String,
     cert: String,
     key: String,
-    ca_cert: Option<String>,
+    ca_cert: String,
     vmac: [u8; 6],
     address: Arc<Mutex<Option<String>>>,
 }
@@ -50,8 +50,10 @@ impl PyScHub {
     ///     listen: Bind address, e.g. ``"127.0.0.1:0"`` for a random port.
     ///     cert: Path to server certificate PEM file.
     ///     key: Path to server private key PEM file.
-    ///     ca_cert: Optional path to issuer CA cert for mTLS (client certificate verification).
-    ///         Omitting this leaves the hub in server-auth-only example mode.
+    ///     ca_cert: Required nonempty path to trusted issuer CA PEM certificates.
+    ///         Omitted, None, or empty values raise ValueError. The default only
+    ///         preserves positional argument compatibility; it does not enable
+    ///         server-auth-only TLS. Files are validated by start() before bind.
     ///     vmac: 6-byte VMAC for the hub itself.
     #[new]
     #[pyo3(signature = (listen, cert, key, vmac, ca_cert=None))]
@@ -62,6 +64,9 @@ impl PyScHub {
         vmac: Vec<u8>,
         ca_cert: Option<String>,
     ) -> PyResult<Self> {
+        let ca_cert = ca_cert.filter(|path| !path.is_empty()).ok_or_else(|| {
+            PyValueError::new_err("ca_cert must be a nonempty CA certificate path for mutual TLS")
+        })?;
         if vmac.len() != 6 {
             return Err(PyRuntimeError::new_err("vmac must be exactly 6 bytes"));
         }
@@ -89,8 +94,8 @@ impl PyScHub {
         let address = self.address.clone();
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let server_tls = crate::tls::build_server_tls_config(&cert, &key, ca_cert.as_deref())
-                .map_err(to_py_err)?;
+            let server_tls =
+                crate::tls::build_server_tls_config(&cert, &key, &ca_cert).map_err(to_py_err)?;
 
             let acceptor = TlsAcceptor::from(server_tls);
 

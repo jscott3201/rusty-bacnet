@@ -2039,8 +2039,11 @@ class ScHub:
         print(await hub.url())
         await hub.stop()
 
-    Omitting ``ca_cert`` leaves the hub in server-auth-only example mode and is
-    not claimed as BACnet/SC mTLS conformance evidence.
+    ``ca_cert`` must name trusted issuer CA PEM certificates for mutual TLS.
+    Omitted, None, or empty values raise ValueError at construction. The None
+    default retains the existing positional layout only; there is no insecure
+    mode. Invalid/unreadable credentials raise BacnetError from start(), before
+    binding. Connections require TLS 1.3 and a valid trusted client certificate.
     """
 
     def __init__(
