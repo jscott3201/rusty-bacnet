@@ -49,6 +49,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             device_bindings,
             comm_state,
             dcc_timer,
+            &Arc::new(dcc_outcomes::DccOutcomes::default()),
             config,
             request_tasks,
             source_mac,

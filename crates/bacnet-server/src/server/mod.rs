@@ -829,6 +829,7 @@ pub struct BACnetServer<T: TransportPort> {
     /// DCC timer owner and replacement/expiry serialization boundary.
     /// Valid replacement and explicit stop abort and join before clearing it.
     dcc_timer: Arc<Mutex<Option<JoinHandle<()>>>>,
+    dcc_outcomes: Arc<dcc_outcomes::DccOutcomes>,
     dispatch_task: Option<JoinHandle<()>>,
     request_tasks: Arc<request_tasks::RequestTasks>,
     cov_purge_task: Option<JoinHandle<()>>,
@@ -887,8 +888,10 @@ mod cov_clock;
 mod cov_encoding;
 mod cov_notifications;
 mod cov_snapshot;
+pub(crate) mod dcc_outcomes;
 mod dcc_policy;
 mod dcc_timer;
+pub use dcc_outcomes::DccOutcomeCounters;
 pub use dcc_policy::DccPolicy;
 mod device_bindings;
 mod discovery;

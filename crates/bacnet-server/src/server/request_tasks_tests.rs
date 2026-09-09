@@ -8,6 +8,8 @@ use tokio::sync::{mpsc, oneshot, Notify};
 #[path = "segmented_worker_tests.rs"]
 mod segmented_worker_tests;
 
+#[path = "dcc_outcome_tests.rs"]
+mod dcc_outcome_tests;
 #[path = "dcc_timer_tests.rs"]
 mod dcc_timer_tests;
 

@@ -1,24 +1,9 @@
 use super::event_notifications::ResolvedIntrinsicTransition;
 use super::*;
 
-/// Resolve the configured Event Enrollment interval into a tick period.
-///
-/// `tokio::time::interval` panics on a zero period, and that panic would land
-/// inside a spawned task — `start` would still return `Ok` while enrollment
-/// evaluation was silently dead. A configured `0` is clamped to one second
-/// instead, matching how an invalid `vendor_id` is handled: warn loudly and
-/// keep the device running. Use `enable_event_enrollment(false)` to actually
-/// disable evaluation.
-pub(super) fn event_enrollment_period(secs: u64) -> Duration {
-    if secs == 0 {
-        warn!(
-            "event_enrollment_interval_secs is 0; clamping to 1s. \
-             Use enable_event_enrollment(false) to disable Event Enrollment evaluation"
-        );
-        return Duration::from_secs(1);
-    }
-    Duration::from_secs(secs)
-}
+#[path = "lifecycle_period.rs"]
+mod period;
+pub(super) use period::event_enrollment_period;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
     pub(super) async fn start_with_clock_mode_and_bindings(
@@ -90,6 +75,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let device_bindings = Arc::new(RwLock::new(device_bindings));
         let comm_state = Arc::new(AtomicU8::new(0)); // 0 = Enable (default)
         let dcc_timer: Arc<Mutex<Option<JoinHandle<()>>>> = Arc::new(Mutex::new(None));
+        let dcc_outcomes = Arc::new(dcc_outcomes::DccOutcomes::default());
+        let dcc_outcomes_dispatch = Arc::clone(&dcc_outcomes);
 
         let network_dispatch = Arc::clone(&network);
         let db_dispatch = Arc::clone(&db);
@@ -455,6 +442,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                                     &device_bindings_dispatch,
                                                     &comm_state_dispatch,
                                                     &dcc_timer_dispatch,
+                                                    &dcc_outcomes_dispatch,
                                                     &config_dispatch,
                                                     &clock_dispatch,
                                                     &discovery_limiter_dispatch,
@@ -508,6 +496,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 &device_bindings_dispatch,
                                 &comm_state_dispatch,
                                 &dcc_timer_dispatch,
+                                &dcc_outcomes_dispatch,
                                 &config_dispatch,
                                 &clock_dispatch,
                                 &discovery_limiter_dispatch,
@@ -758,6 +747,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             device_bindings,
             comm_state,
             dcc_timer,
+            dcc_outcomes,
             dispatch_task: Some(dispatch_task),
             request_tasks,
             cov_purge_task: Some(cov_purge_task),

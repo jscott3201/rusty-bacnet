@@ -291,6 +291,7 @@ async fn dispatch_test_apdu_from_network<T: TransportPort + 'static>(
         &device_bindings,
         &comm_state,
         &dcc_timer,
+        &Arc::new(dcc_outcomes::DccOutcomes::default()),
         &config,
         &None,
         &Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), None)),

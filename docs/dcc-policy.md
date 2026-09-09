@@ -73,3 +73,49 @@ nonempty startup requirement and deny-all default are operator policy, not new
 normative claims. This does not expand authenticated-SC, physical-transport,
 full-conformance, Audit/#125, EventLog integration, additional #181 fault-family
 or GATE0007 qualification.
+
+## Completed-handler observability
+
+Rust `BACnetServer::dcc_outcome_counters()` returns `DccOutcomeCounters`.
+Python `await server.dcc_outcome_counters()` returns the corresponding typed
+dictionary. Its five stable fields are `accepted_total`, `policy_denied_total`,
+`password_failure_total`, `deprecated_denied_total`, and `malformed_total`.
+Each is an independently sampled cumulative `u64` (Python `int`), saturating
+at `2**64 - 1`. New server lifetimes start at zero; snapshots are not an atomic
+whole view. Rust snapshots remain readable after stop; Python raises
+`RuntimeError("server not started")` before start and after stop.
+
+Exactly one counter increments per completed admitted DCC handler, independently
+of tracing filters. The dedicated structured DEBUG target
+`bacnet_server::dcc_outcome` emits one event at that same completion boundary,
+before response construction/send or any further await. `accepted` means live
+state/timer replacement committed, not successful response delivery or the
+current communication state. Other outcomes follow existing validation order:
+decode failure → `malformed`; configured password failure → `password_failure`;
+deprecated DISABLE → `deprecated_denied`; unknown mode → `malformed`; valid mode
+refused by local policy → `policy_denied`.
+
+Event fields are fixed: `outcome`, `invoke_id`, `service` (17), optional
+`decoded_mode` (raw u32) and `duration_minutes` (u16), `source_kind`
+(`claimed_direct` / `claimed_routed`), `claimed_source_mac`,
+`source_mac_truncated`, optional `claimed_snet`, `claimed_sadr`, and
+`sadr_truncated`. Missing routed SADR is an empty string, distinguished by source
+kind and absent SNET. Each address is at most 32 bytes rendered as 64 lowercase
+hex characters, with its own truncation flag. Both immediate and routed claims
+are included when present. These are untrusted address claims, **not** authenticated
+identity or canonical principals. Failed decoding exposes no decoded metadata.
+Passwords, password-presence flags, request/error text and payloads are excluded.
+No address formatting occurs when the DEBUG target is disabled.
+
+This is bounded local operational telemetry, **not** a durable audit log or
+BACnet Audit service. There is no internal history, queue, task, destination or
+new callback API; the Python accessor installs no logger/subscriber or trace
+bridge. Standard tracing subscribers are caller-owned and may filter, discard,
+backpressure, or perform arbitrary work. Event delivery, global concurrent
+ordering, rate limiting and flood resistance are not guaranteed. Counters and
+events exclude duplicates, pre-handler admission/shutdown/Abort-fallback
+rejections, handlers cancelled before completion, timer expiry, and response
+delivery failures after commit. Existing admission counters cover their separate
+admission boundary. No authorization, timer or wire-response policy is changed.
+This is partial #522 observability, not full auditing, rate policy or source-aware
+authorization; #521 remains closed.

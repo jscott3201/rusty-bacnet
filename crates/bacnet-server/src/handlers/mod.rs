@@ -40,7 +40,7 @@ mod alarm_event;
 mod audit_log_query;
 mod audit_notification;
 mod cov;
-mod device_mgmt;
+pub(crate) mod device_mgmt;
 mod file;
 mod list;
 mod object_mgmt;

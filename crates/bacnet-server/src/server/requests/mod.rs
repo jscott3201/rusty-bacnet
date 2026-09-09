@@ -7,6 +7,7 @@ mod atomic_write_file;
 mod audit_notification;
 mod confirmed;
 pub(super) mod confirmed_response;
+mod dcc;
 mod endpoint_responder;
 #[cfg(test)]
 #[path = "endpoint_shared_runtime_tests.rs"]
@@ -37,6 +38,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         device_bindings: &Arc<RwLock<DeviceBindingTable>>,
         comm_state: &Arc<AtomicU8>,
         dcc_timer: &Arc<Mutex<Option<JoinHandle<()>>>>,
+        dcc_outcomes: &Arc<dcc_outcomes::DccOutcomes>,
         config: &ServerConfig,
         request_tasks: &super::request_tasks::RequestTaskSpawner,
         source_mac: &[u8],
@@ -288,18 +290,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
             s if s == ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL => {
-                match super::dcc_timer::replace(
+                dcc::response::<T>(
                     dcc_timer,
                     comm_state,
-                    &req.service_request,
-                    &config.dcc_password,
-                    config.dcc_policy,
+                    dcc_outcomes,
+                    config,
+                    &req,
+                    source_mac,
+                    source_network.as_ref(),
                 )
                 .await
-                {
-                    Ok(()) => simple_ack(),
-                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
-                }
             }
             s if s == ConfirmedServiceChoice::REINITIALIZE_DEVICE => {
                 match handlers::handle_reinitialize_device(

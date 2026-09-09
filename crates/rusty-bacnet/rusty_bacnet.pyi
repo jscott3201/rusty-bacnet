@@ -1724,6 +1724,14 @@ class BACnetClient:
 # Server
 # ---------------------------------------------------------------------------
 
+class DccOutcomeCounters(TypedDict):
+    """Independent u64 lifetime totals, saturating at 2**64-1; not an audit log."""
+    accepted_total: int
+    policy_denied_total: int
+    password_failure_total: int
+    deprecated_denied_total: int
+    malformed_total: int
+
 class RequestAdmissionCounters(TypedDict):
     """Independent counter samples, not a transactionally atomic aggregate."""
     recovery_active: int
@@ -1995,6 +2003,16 @@ class BACnetServer:
 
     async def comm_state(self) -> int:
         """Get the DeviceCommunicationControl state (0=Enable, 1=Disable, 2=DisableInitiation)."""
+        ...
+
+    async def dcc_outcome_counters(self) -> DccOutcomeCounters:
+        """Sample completed admitted DCC handlers; zero on each new server lifetime.
+
+        Accepted means state/timer commit, not response delivery. Independent
+        samples are not an atomic aggregate. Excludes incomplete cancellation,
+        duplicates, pre-handler rejection and timer expiry. No trace bridge or
+        subscriber installation. Raises RuntimeError before start/after stop.
+        """
         ...
 
     async def request_admission_counters(self) -> RequestAdmissionCounters:

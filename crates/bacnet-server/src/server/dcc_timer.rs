@@ -16,22 +16,16 @@ pub(super) async fn replace(
     service_data: &[u8],
     password: &Option<String>,
     policy: DccPolicy,
-) -> Result<(), Error> {
-    // The synchronous handler validates and writes only this temporary state.
-    // Preserve its public contract and validation precedence, without changing
-    // live state before an await that cancellation could interrupt.
-    let proposed = AtomicU8::new(0);
-    let (_, duration) = handlers::handle_device_communication_control_with_policy(
-        service_data,
-        &proposed,
-        password,
-        policy,
-    )?;
+) -> Result<dcc_outcomes::DccMetadata, handlers::device_mgmt::DccFailure> {
+    // Decode and validate once, retaining only non-secret proposed state and
+    // metadata. Never change live state before a cancellable await.
+    let (mode, duration, proposed) =
+        handlers::device_mgmt::validate_dcc(service_data, password, policy)?;
     let mut slot = timer.lock().await;
     cancel(&mut slot).await;
     // Replacement, expiry, and shutdown share this linearization boundary.
     // No suspension between the live commit and installing the new owner.
-    comm_state.store(proposed.load(Ordering::Acquire), Ordering::Release);
+    comm_state.store(proposed, Ordering::Release);
     if let Some(minutes) = duration {
         let owner = Arc::downgrade(timer);
         let comm = Arc::clone(comm_state);
@@ -49,5 +43,8 @@ pub(super) async fn replace(
             }
         }));
     }
-    Ok(())
+    Ok(dcc_outcomes::DccMetadata {
+        mode: Some(mode.to_raw()),
+        duration,
+    })
 }

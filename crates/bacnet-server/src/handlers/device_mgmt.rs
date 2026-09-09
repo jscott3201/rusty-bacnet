@@ -57,36 +57,77 @@ pub(crate) fn handle_device_communication_control_with_policy(
     dcc_password: &Option<String>,
     policy: crate::server::DccPolicy,
 ) -> Result<(EnableDisable, Option<u16>), Error> {
-    let request = DeviceCommunicationControlRequest::decode(service_data)?;
-    validate_password(dcc_password, &request.password)?;
+    let validated = validate_dcc(service_data, dcc_password, policy).map_err(|f| f.error)?;
+    let (mode, duration, new_state) = validated;
+    comm_state.store(new_state, Ordering::Release);
+    tracing::debug!(
+        "DeviceCommunicationControl: state set to {:?} ({}), duration={:?} min",
+        mode,
+        new_state,
+        duration
+    );
+    Ok((mode, duration))
+}
+
+pub(crate) struct DccFailure {
+    pub error: Error,
+    pub outcome: crate::server::dcc_outcomes::DccOutcome,
+    pub metadata: crate::server::dcc_outcomes::DccMetadata,
+}
+
+pub(crate) fn validate_dcc(
+    service_data: &[u8],
+    dcc_password: &Option<String>,
+    policy: crate::server::DccPolicy,
+) -> Result<(EnableDisable, Option<u16>, u8), DccFailure> {
+    use crate::server::dcc_outcomes::{DccMetadata, DccOutcome};
+    let request =
+        DeviceCommunicationControlRequest::decode(service_data).map_err(|error| DccFailure {
+            error,
+            outcome: DccOutcome::Malformed,
+            metadata: DccMetadata::default(),
+        })?;
+    let metadata = DccMetadata {
+        mode: Some(request.enable_disable.to_raw()),
+        duration: request.time_duration,
+    };
+    let failure = |error, outcome| DccFailure {
+        error,
+        outcome,
+        metadata,
+    };
+    validate_password(dcc_password, &request.password)
+        .map_err(|e| failure(e, DccOutcome::PasswordFailure))?;
     let new_state = if request.enable_disable == EnableDisable::ENABLE {
         0u8
     } else if request.enable_disable == EnableDisable::DISABLE {
         // ASHRAE 135-2020 Clause 16.1: reject deprecated DISABLE after
         // password validation, without changing state or the caller's timer.
-        return Err(Error::Protocol {
-            class: ErrorClass::SERVICES.to_raw() as u32,
-            code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
-        });
+        return Err(failure(
+            Error::Protocol {
+                class: ErrorClass::SERVICES.to_raw() as u32,
+                code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
+            },
+            DccOutcome::DeprecatedDenied,
+        ));
     } else if request.enable_disable == EnableDisable::DISABLE_INITIATION {
         2u8
     } else {
-        return Err(Error::Encoding("unknown EnableDisable value".into()));
+        return Err(failure(
+            Error::Encoding("unknown EnableDisable value".into()),
+            DccOutcome::Malformed,
+        ));
     };
     if policy == crate::server::DccPolicy::DenyAll {
-        return Err(Error::Protocol {
-            class: ErrorClass::SERVICES.to_raw() as u32,
-            code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
-        });
+        return Err(failure(
+            Error::Protocol {
+                class: ErrorClass::SERVICES.to_raw() as u32,
+                code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
+            },
+            DccOutcome::PolicyDenied,
+        ));
     }
-    comm_state.store(new_state, Ordering::Release);
-    tracing::debug!(
-        "DeviceCommunicationControl: state set to {:?} ({}), duration={:?} min",
-        request.enable_disable,
-        new_state,
-        request.time_duration
-    );
-    Ok((request.enable_disable, request.time_duration))
+    Ok((request.enable_disable, request.time_duration, new_state))
 }
 
 /// Handle a ReinitializeDevice request.

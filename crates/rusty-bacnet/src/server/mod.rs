@@ -141,6 +141,7 @@ impl BACnetServer {
 }
 
 mod server_methods {
+    mod dcc_outcomes;
     mod file_configuration;
     mod lifecycle;
     mod registration;

@@ -4,6 +4,8 @@ use crate::server::request_admission::{Class, Rejection};
 #[path = "peer_admission_tests.rs"]
 mod peer_admission_tests;
 
+#[path = "dcc_outcome_admission_tests.rs"]
+mod dcc_outcome_admission_tests;
 #[path = "recovery_admission_tests.rs"]
 mod recovery_admission_tests;
 
@@ -48,6 +50,7 @@ async fn dispatch(
         &server.device_bindings,
         &server.comm_state,
         &server.dcc_timer,
+        &server.dcc_outcomes,
         &Arc::new(server.config.clone()),
         &server._clock,
         &server.discovery_limiter,
