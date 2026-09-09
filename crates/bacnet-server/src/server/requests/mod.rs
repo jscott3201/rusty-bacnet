@@ -14,6 +14,7 @@ mod enrollment_summary;
 mod event_information;
 #[cfg(test)]
 mod executed;
+mod read_range;
 mod unconfirmed;
 #[cfg(test)]
 mod unconfirmed_tests;
@@ -320,11 +321,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 acknowledge_alarm::response(db, &req, &mut accepted_acknowledgment).await
             }
             s if s == ConfirmedServiceChoice::READ_RANGE => {
-                let db = db.read().await;
-                match handlers::handle_read_range(&db, &req.service_request, &mut ack_buf) {
-                    Ok(()) => complex_ack(ack_buf),
-                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
-                }
+                read_range::response(
+                    db,
+                    &req,
+                    config.read_range_budget,
+                    effective_max_apdu,
+                    segmented_response_available,
+                )
+                .await
             }
             s if s == ConfirmedServiceChoice::ATOMIC_READ_FILE => {
                 let db = db.read().await;

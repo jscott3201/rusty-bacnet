@@ -46,7 +46,7 @@ pub(super) async fn response(
     }
 }
 
-fn unsegmented_complex_ack_service_budget(
+pub(super) fn unsegmented_complex_ack_service_budget(
     invoke_id: u8,
     service_choice: ConfirmedServiceChoice,
     max_apdu: u16,

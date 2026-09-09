@@ -10,6 +10,11 @@ use bacnet_services::read_range::{RangeSpec, ReadRangeAck, ReadRangeRequest};
 use bacnet_types::constructed::{BACnetLogRecord, LogDatum};
 use bacnet_types::primitives::{Date, Time};
 
+#[path = "read_range_pages.rs"]
+mod pages;
+#[path = "read_range_wire.rs"]
+mod wire;
+
 pub(super) const DATE: Date = Date {
     year: 126,
     month: 8,
@@ -199,6 +204,41 @@ fn by_position_is_one_based_signed_and_reports_exact_endpoints() {
         .unwrap();
         assert_ack(&ack, &[], (false, false, false), None);
     }
+}
+
+#[tokio::test]
+async fn read_range_default_257_returns_256_item_page() {
+    use crate::server::BACnetServer;
+    use bacnet_client::client::BACnetClient;
+    use std::net::Ipv4Addr;
+
+    let items = unsigned_items(&(0..257).collect::<Vec<_>>());
+    let (db, oid) = list_db(PropertyIdentifier::LOG_BUFFER, items.clone(), None);
+    let mut server = BACnetServer::bip_builder()
+        .interface(Ipv4Addr::LOCALHOST)
+        .port(0)
+        .database(db)
+        .build()
+        .await
+        .unwrap();
+    let mut client = BACnetClient::bip_builder()
+        .interface(Ipv4Addr::LOCALHOST)
+        .port(0)
+        .build()
+        .await
+        .unwrap();
+    let result = client
+        .read_range(
+            server.local_mac(),
+            oid,
+            PropertyIdentifier::LOG_BUFFER,
+            None,
+            None,
+        )
+        .await;
+    client.stop().await.unwrap();
+    server.stop().await.unwrap();
+    assert_ack(&result.unwrap(), &items[..256], (true, false, true), None);
 }
 
 #[test]

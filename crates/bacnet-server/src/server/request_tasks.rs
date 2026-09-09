@@ -47,6 +47,7 @@ impl RequestTasks {
         config.get_alarm_summary_budget.validate()?;
         config.get_enrollment_summary_budget.validate()?;
         config.atomic_read_file_budget.validate()?;
+        config.read_range_budget.validate()?;
         Ok(Arc::new(tasks))
     }
 

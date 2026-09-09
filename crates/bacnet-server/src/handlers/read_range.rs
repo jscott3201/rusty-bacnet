@@ -5,6 +5,10 @@ use bacnet_objects::log_buffer::LogRecordIdentity;
 use bacnet_services::read_range::{RangeSpec, ReadRangeAck, ReadRangeRequest};
 use bacnet_types::primitives::{Date, Time};
 
+#[path = "read_range_page.rs"]
+mod page;
+pub(crate) use page::ReadRangeFailure;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SignedRangeSelection {
     pub(super) range: Range<usize>,
@@ -175,6 +179,39 @@ pub fn handle_read_range(
     service_data: &[u8],
     response: &mut BytesMut,
 ) -> Result<(), Error> {
+    let selected = prepare_read_range(db, service_data)?;
+    append_read_range_ack_with(
+        &selected.request,
+        &selected.items,
+        &selected.selection,
+        selected.first_sequence_number,
+        response,
+        encode_property_value,
+    )
+}
+
+pub(crate) fn handle_read_range_budgeted(
+    db: &ObjectDatabase,
+    service_data: &[u8],
+    response: &mut BytesMut,
+    budget: crate::server::ReadRangeBudget,
+) -> Result<(), ReadRangeFailure> {
+    let selected = prepare_read_range(db, service_data).map_err(ReadRangeFailure::Service)?;
+    page::append_page_with(&selected, response, budget, encode_property_value)
+}
+
+struct PreparedReadRange {
+    request: ReadRangeRequest,
+    items: Vec<PropertyValue>,
+    selection: SignedRangeSelection,
+    first_sequence_number: Option<u32>,
+    identities: Option<Vec<LogRecordIdentity>>,
+}
+
+fn prepare_read_range(
+    db: &ObjectDatabase,
+    service_data: &[u8],
+) -> Result<PreparedReadRange, Error> {
     let request = ReadRangeRequest::decode(service_data)?;
     let object = db.get(&request.object_identifier).ok_or(Error::Protocol {
         class: ErrorClass::OBJECT.to_raw() as u32,
@@ -199,6 +236,7 @@ pub fn handle_read_range(
         }
     };
 
+    let mut resident_identities = None;
     let (selection, first_sequence_number) = match &request.range {
         None => (
             SignedRangeSelection::from_range(items.len(), 0..items.len()),
@@ -232,6 +270,7 @@ pub fn handle_read_range(
             let selection = select_signed_range(items.len(), reference, *count);
             let first_sequence_number = (!selection.range.is_empty())
                 .then(|| identities[selection.range.start].sequence_number());
+            resident_identities = Some(identities);
             (selection, first_sequence_number)
         }
         Some(RangeSpec::ByTime {
@@ -241,17 +280,21 @@ pub fn handle_read_range(
             if request.property_identifier != PropertyIdentifier::LOG_BUFFER {
                 return Err(list_item_not_timestamped());
             }
-            let identities = object.log_record_identities_internal();
-            select_time_range(items.len(), identities.as_deref(), *reference_time, *count)?
+            resident_identities = object.log_record_identities_internal();
+            select_time_range(
+                items.len(),
+                resident_identities.as_deref(),
+                *reference_time,
+                *count,
+            )?
         }
     };
 
-    append_read_range_ack_with(
-        &request,
-        &items,
-        &selection,
+    Ok(PreparedReadRange {
+        request,
+        items,
+        selection,
         first_sequence_number,
-        response,
-        encode_property_value,
-    )
+        identities: resident_identities,
+    })
 }

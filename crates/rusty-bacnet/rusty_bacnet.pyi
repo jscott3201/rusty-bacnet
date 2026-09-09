@@ -1795,6 +1795,8 @@ class BACnetServer:
         atomic_read_file_max_requested_stream_octets: int = 16384,
         atomic_read_file_max_requested_records: int = 256,
         atomic_read_file_max_service_ack_bytes: int = 16384,
+        read_range_max_returned_items: int = 256,
+        read_range_max_service_ack_bytes: int = 16384,
     ) -> None: ...
 
     # --- Analog objects ---

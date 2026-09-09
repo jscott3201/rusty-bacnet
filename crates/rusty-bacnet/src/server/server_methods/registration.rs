@@ -40,7 +40,9 @@ impl BACnetServer {
         enrollment_summary_max_service_ack_bytes=16384,
         atomic_read_file_max_requested_stream_octets=16384,
         atomic_read_file_max_requested_records=256,
-        atomic_read_file_max_service_ack_bytes=16384
+        atomic_read_file_max_service_ack_bytes=16384,
+        read_range_max_returned_items=256,
+        read_range_max_service_ack_bytes=16384
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -80,6 +82,8 @@ impl BACnetServer {
         atomic_read_file_max_requested_stream_octets: usize,
         atomic_read_file_max_requested_records: usize,
         atomic_read_file_max_service_ack_bytes: usize,
+        read_range_max_returned_items: usize,
+        read_range_max_service_ack_bytes: usize,
     ) -> PyResult<Self> {
         let request_admission_policy = server::RequestAdmissionPolicy {
             max_confirmed_in_flight,
@@ -121,6 +125,13 @@ impl BACnetServer {
         atomic_read_file_budget
             .validate()
             .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        let read_range_budget = server::ReadRangeBudget {
+            max_returned_items: read_range_max_returned_items,
+            max_service_ack_bytes: read_range_max_service_ack_bytes,
+        };
+        read_range_budget
+            .validate()
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
         Ok(Self {
             inner: Arc::new(Mutex::new(None)),
             device_instance,
@@ -149,6 +160,7 @@ impl BACnetServer {
             get_alarm_summary_budget,
             get_enrollment_summary_budget,
             atomic_read_file_budget,
+            read_range_budget,
             started: Arc::new(AtomicBool::new(false)),
             pending_objects: std::sync::Mutex::new(Vec::new()),
         })
