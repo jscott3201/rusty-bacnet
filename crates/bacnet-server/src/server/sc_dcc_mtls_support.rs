@@ -6,7 +6,7 @@ use bacnet_services::device_mgmt::DeviceCommunicationControlRequest;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_transport::sc::ScTransport;
-use bacnet_transport::sc_hub::ScHub;
+use bacnet_transport::sc_hub::{ScHub, ScHubHandshakeTimeouts, ScHubTlsConfig};
 use bacnet_transport::sc_tls::TlsWebSocket;
 use bacnet_types::enums::EnableDisable;
 use futures_util::FutureExt;
@@ -14,7 +14,6 @@ use rcgen::{CertificateParams, ExtendedKeyUsagePurpose, Issuer, KeyPair};
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use tokio_rustls::rustls::{self, pki_types::PrivatePkcs8KeyDer};
-use tokio_rustls::TlsAcceptor;
 
 pub(super) const SERVER: [u8; 6] = [2, 0, 0, 0, 0, 1];
 pub(super) const PEERS: [[u8; 6]; 2] = [[2, 0, 0, 0, 0, 2], [2, 0, 0, 0, 0, 3]];
@@ -31,7 +30,7 @@ pub(super) async fn bounded<T>(future: impl Future<Output = T>) -> T {
 // All keys stay in memory. Each endpoint has its own key/certificate, including
 // the BACnet server (a TLS client of the hub). No permissive verifier is used.
 pub(super) struct Certificates {
-    pub hub: Arc<rustls::ServerConfig>,
+    pub hub: ScHubTlsConfig,
     pub clients: Vec<Arc<rustls::ClientConfig>>,
     pub missing: Arc<rustls::ClientConfig>,
     pub untrusted: Arc<rustls::ClientConfig>,
@@ -59,13 +58,12 @@ impl Certificates {
             )
         };
         let (hub_cert, hub_key) = leaf("127.0.0.1", ExtendedKeyUsagePurpose::ServerAuth);
-        let verifier = rustls::server::WebPkiClientVerifier::builder(Arc::new(roots.clone()))
-            .build()
-            .unwrap();
-        let hub = rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_client_cert_verifier(verifier)
-            .with_single_cert(vec![hub_cert.clone()], hub_key.into())
-            .unwrap();
+        let hub = ScHubTlsConfig::from_der(
+            vec![ca.der().clone()],
+            vec![hub_cert.clone()],
+            hub_key.into(),
+        )
+        .unwrap();
         let mut certs = vec![hub_cert];
         let clients = (0..3)
             .map(|index| {
@@ -108,7 +106,7 @@ impl Certificates {
                 .with_client_auth_cert(vec![cert], key.into())
                 .unwrap();
         Self {
-            hub: Arc::new(hub),
+            hub,
             clients,
             missing: Arc::new(missing),
             untrusted: Arc::new(untrusted),
@@ -137,10 +135,12 @@ impl Fixture {
     }
 
     pub async fn hub(&mut self, certs: &Certificates) {
-        let hub = bounded(ScHub::start(
+        let hub = bounded(ScHub::start_with_tls_config(
             "127.0.0.1:0",
-            TlsAcceptor::from(certs.hub.clone()),
+            certs.hub.clone(),
             [2, 0, 0, 0, 0, 9],
+            [0; 16],
+            ScHubHandshakeTimeouts::default(),
         ))
         .await
         .unwrap();

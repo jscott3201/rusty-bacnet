@@ -6,7 +6,9 @@ use std::time::Duration;
 use bacnet_benchmarks::sc_helpers::*;
 use bacnet_transport::port::TransportPort;
 use bacnet_transport::sc::{ScConnectionState, ScTransport};
+use bacnet_transport::sc_hub::ScHubTlsConfig;
 use bacnet_transport::sc_tls::TlsWebSocket;
+use bacnet_types::error::Error;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::rustls;
 use tokio_rustls::rustls::pki_types::ServerName;
@@ -283,4 +285,120 @@ fn sc_tls_config_rejects_mismatched_cert_key_pairs() {
     let other = generate_test_certs();
     certs.client_key_pem = other.client_key_pem;
     assert!(try_make_client_tls_config_mtls(&certs).is_err());
+}
+
+// These are synchronous PEM/configuration tests: no runtime, socket or hub bind.
+// AQID is the deliberately invalid DER byte sequence [1, 2, 3], not a credential.
+const INVALID_CERT_DER_PEM: &str = "-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n";
+const MALFORMED_CERT_PEM: &str = "-----BEGIN CERTIFICATE-----\n!\n-----END CERTIFICATE-----\n";
+
+fn assert_hub_config_error(certs: &CertMaterial, expected: &str) {
+    let error = try_make_hub_tls_config(certs).unwrap_err();
+    assert!(
+        matches!(&error, Error::Encoding(message) if message.starts_with(expected)),
+        "expected {expected:?}, got {error}"
+    );
+}
+
+#[test]
+fn sc_hub_pem_config_owns_credentials_and_preserves_raw_helper_types() {
+    let mut certs = generate_test_certs();
+    // Valid multi-certificate material must not be mistaken for malformed tails.
+    certs.server_cert_pem.push_str(&certs.ca_cert_pem);
+    certs
+        .ca_cert_pem
+        .push_str(&generate_test_certs().ca_cert_pem);
+    let config: Result<ScHubTlsConfig, Error> = try_make_hub_tls_config(&certs);
+    let config = config.unwrap();
+    // Independent TLS acceptors keep their existing, non-sealed return types.
+    let _: Arc<rustls::ServerConfig> = make_server_tls_config_mtls(&certs);
+    let raw: Result<Arc<rustls::ServerConfig>, String> = try_make_server_tls_config_mtls(&certs);
+    raw.unwrap();
+    drop(certs);
+    assert_eq!(format!("{config:?}"), "ScHubTlsConfig { .. }");
+}
+
+#[test]
+fn sc_hub_pem_config_rejects_empty_or_malformed_ca() {
+    let mut certs = generate_test_certs();
+    let valid = certs.ca_cert_pem.clone();
+    for invalid in ["", "not a CA certificate"] {
+        certs.ca_cert_pem = invalid.into();
+        assert_hub_config_error(&certs, "no CA certificates found");
+    }
+    for invalid in [
+        MALFORMED_CERT_PEM.to_owned(),
+        format!("{valid}{MALFORMED_CERT_PEM}"),
+        format!("{MALFORMED_CERT_PEM}{valid}"),
+    ] {
+        certs.ca_cert_pem = invalid;
+        assert_hub_config_error(&certs, "failed to parse CA certificates:");
+    }
+}
+
+#[test]
+fn sc_hub_pem_config_rejects_empty_or_malformed_server_chain() {
+    let mut certs = generate_test_certs();
+    let valid = certs.server_cert_pem.clone();
+    for invalid in ["", "not a server certificate"] {
+        certs.server_cert_pem = invalid.into();
+        assert_hub_config_error(&certs, "no server certificates found");
+    }
+    for invalid in [
+        MALFORMED_CERT_PEM.to_owned(),
+        format!("{valid}{MALFORMED_CERT_PEM}"),
+        format!("{MALFORMED_CERT_PEM}{valid}"),
+    ] {
+        certs.server_cert_pem = invalid;
+        assert_hub_config_error(&certs, "failed to parse server certificates:");
+    }
+}
+
+#[test]
+fn sc_hub_pem_config_rejects_empty_or_malformed_key() {
+    let mut certs = generate_test_certs();
+    for invalid in [
+        "",
+        "not a private key",
+        "-----BEGIN PRIVATE KEY-----\n!\n-----END PRIVATE KEY-----\n",
+    ] {
+        certs.server_key_pem = invalid.into();
+        assert_hub_config_error(&certs, "failed to parse server key:");
+    }
+}
+
+#[test]
+fn sc_hub_pem_config_rejects_invalid_der_in_any_certificate_position() {
+    let mut certs = generate_test_certs();
+    let valid_ca = certs.ca_cert_pem.clone();
+    for invalid in [
+        INVALID_CERT_DER_PEM.to_owned(),
+        format!("{valid_ca}{INVALID_CERT_DER_PEM}"),
+        format!("{INVALID_CERT_DER_PEM}{valid_ca}"),
+    ] {
+        certs.ca_cert_pem = invalid;
+        assert_hub_config_error(&certs, "failed to add CA cert:");
+    }
+    certs.ca_cert_pem = valid_ca;
+    let valid_chain = certs.server_cert_pem.clone();
+    for invalid in [
+        INVALID_CERT_DER_PEM.to_owned(),
+        format!("{valid_chain}{INVALID_CERT_DER_PEM}"),
+        format!("{INVALID_CERT_DER_PEM}{valid_chain}"),
+    ] {
+        certs.server_cert_pem = invalid;
+        assert_hub_config_error(&certs, "TLS server config error:");
+    }
+}
+
+#[test]
+fn sc_hub_pem_config_rejects_unusable_or_mismatched_key() {
+    let mut certs = generate_test_certs();
+    certs.server_key_pem = "-----BEGIN PRIVATE KEY-----\nAQID\n-----END PRIVATE KEY-----\n".into();
+    assert_hub_config_error(&certs, "TLS server config error:");
+    certs.server_key_pem = generate_test_certs().server_key_pem;
+    assert_hub_config_error(
+        &certs,
+        "TLS server config error: keys may not be consistent: KeyMismatch",
+    );
 }

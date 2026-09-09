@@ -362,6 +362,15 @@ deadlines, and explicit stop. A raw TLS 1.2/server-auth-only characterization te
 deliberately remains valid. Installed Python tests separately exercise OpenSSL
 peers and ReadProperty; these are not hardware or full-profile certification.
 
+The already-mTLS benchmark hub launcher and the CLI ReadProperty and server SC-DCC
+test fixtures also use the validated hub path, retaining their UUIDs, timeouts,
+authentication modes and cleanup. The benchmark PEM loader has focused empty,
+malformed, mixed-valid/invalid DER and mismatched-key tests. Independent raw TLS
+peer helpers (including TLS-version negative controls) retain their existing
+signatures; this adoption does not retire raw configuration or change production
+CLI, node or Docker behavior. Benchmark targets are compile-checked, not new
+performance qualification.
+
 ### MS/TP (Serial RS-485)
 
 MS/TP is a token-passing protocol over RS-485 serial, commonly used for field-level BACnet devices. The serial I/O is abstracted behind the `SerialPort` trait, with three RS-485 direction control modes.

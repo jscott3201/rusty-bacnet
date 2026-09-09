@@ -10,8 +10,9 @@ use tokio_rustls::TlsAcceptor;
 
 use bacnet_transport::sc::ScTransport;
 use bacnet_transport::sc_frame::Vmac;
-use bacnet_transport::sc_hub::ScHub;
+use bacnet_transport::sc_hub::{ScHub, ScHubHandshakeTimeouts, ScHubTlsConfig};
 use bacnet_transport::sc_tls::TlsWebSocket;
+use bacnet_types::error::Error;
 
 /// Generated certificate material for testing.
 pub struct CertMaterial {
@@ -209,15 +210,15 @@ pub fn make_client_tls12_config(certs: &CertMaterial) -> Arc<rustls::ClientConfi
     Arc::new(config)
 }
 
-/// Build a rustls ServerConfig that requires client certificates (mTLS).
+/// Build a raw rustls ServerConfig that requires client certificates (mTLS).
 ///
-/// Per ASHRAE 135-2020 Annex AB.3, the hub verifies client certificates
-/// against the trusted CA to enforce mutual TLS authentication.
+/// Retained for independent TLS peers and compatibility. Already-mTLS hubs use
+/// [`try_make_hub_tls_config`] instead; this raw helper's contract is unchanged.
 pub fn make_server_tls_config_mtls(certs: &CertMaterial) -> Arc<rustls::ServerConfig> {
     try_make_server_tls_config_mtls(certs).unwrap()
 }
 
-/// Try to build a rustls ServerConfig that requires client certificates (mTLS).
+/// Try to build a raw mTLS ServerConfig for independent TLS peers and compatibility.
 pub fn try_make_server_tls_config_mtls(
     certs: &CertMaterial,
 ) -> Result<Arc<rustls::ServerConfig>, String> {
@@ -255,6 +256,22 @@ pub fn try_make_server_tls_config_mtls(
         .map_err(|e| e.to_string())?;
 
     Ok(Arc::new(config))
+}
+
+/// Parse in-memory PEM into owned DER and build validated SC hub TLS policy.
+///
+/// Returns configuration errors without binding or performing file/network I/O.
+/// Unlike the raw peer helper, validates every certificate in the hub chain.
+pub fn try_make_hub_tls_config(certs: &CertMaterial) -> Result<ScHubTlsConfig, Error> {
+    let cert_chain = CertificateDer::pem_slice_iter(certs.server_cert_pem.as_bytes())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| Error::Encoding(format!("failed to parse server certificates: {e}")))?;
+    let key = PrivateKeyDer::from_pem_slice(certs.server_key_pem.as_bytes())
+        .map_err(|e| Error::Encoding(format!("failed to parse server key: {e}")))?;
+    let ca_certs = CertificateDer::pem_slice_iter(certs.ca_cert_pem.as_bytes())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| Error::Encoding(format!("failed to parse CA certificates: {e}")))?;
+    ScHubTlsConfig::from_der(ca_certs, cert_chain, key)
 }
 
 /// Build a rustls ClientConfig that presents a client certificate (mTLS).
@@ -340,11 +357,16 @@ pub async fn make_sc_transport(
 
 /// Start an SC hub with mTLS (client certificate required).
 pub async fn start_sc_hub_mtls(certs: &CertMaterial, hub_vmac: Vmac) -> (ScHub, String) {
-    let tls_config = make_server_tls_config_mtls(certs);
-    let acceptor = TlsAcceptor::from(tls_config);
-    let hub = ScHub::start("127.0.0.1:0", acceptor, hub_vmac)
-        .await
-        .unwrap();
+    let tls_config = try_make_hub_tls_config(certs).unwrap();
+    let hub = ScHub::start_with_tls_config(
+        "127.0.0.1:0",
+        tls_config,
+        hub_vmac,
+        [0; 16],
+        ScHubHandshakeTimeouts::default(),
+    )
+    .await
+    .unwrap();
     let addr = hub.local_addr().unwrap();
     let url = format!("wss://localhost:{}", addr.port());
     (hub, url)

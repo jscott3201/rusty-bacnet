@@ -2,7 +2,11 @@ use super::{bounded, command, Files};
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_server::server::BACnetServer;
-use bacnet_transport::{sc::ScTransport, sc_hub::ScHub, sc_tls::TlsWebSocket};
+use bacnet_transport::{
+    sc::ScTransport,
+    sc_hub::{ScHub, ScHubHandshakeTimeouts, ScHubTlsConfig},
+    sc_tls::TlsWebSocket,
+};
 use futures_util::FutureExt;
 use rcgen::{Certificate, CertificateParams, ExtendedKeyUsagePurpose, Issuer, KeyPair};
 use rustls::pki_types::PrivatePkcs8KeyDer;
@@ -79,6 +83,17 @@ impl Site {
         )
     }
 
+    pub fn hub_tls_config(&self) -> ScHubTlsConfig {
+        let hub = self.leaf("127.0.0.1", ExtendedKeyUsagePurpose::ServerAuth, None);
+        ScHubTlsConfig::from_der(
+            vec![self.ca.der().clone()],
+            vec![hub.cert.der().clone()],
+            PrivatePkcs8KeyDer::from(hub.key.serialize_der()).into(),
+        )
+        .unwrap()
+    }
+
+    // Independent raw TLS peer, including the TLS 1.2 negative oracle.
     pub fn acceptor(&self, version: &'static rustls::SupportedProtocolVersion) -> TlsAcceptor {
         let hub = self.leaf("127.0.0.1", ExtendedKeyUsagePurpose::ServerAuth, None);
         let verifier = rustls::server::WebPkiClientVerifier::builder(Arc::new(self.roots()))
@@ -134,11 +149,12 @@ pub struct Fixture {
 impl Fixture {
     pub async fn start(&mut self, site: &Site) {
         self.hub = Some(
-            bounded(ScHub::start_with_uuid(
+            bounded(ScHub::start_with_tls_config(
                 "127.0.0.1:0",
-                site.acceptor(&rustls::version::TLS13),
+                site.hub_tls_config(),
                 [2, 0, 0, 0, 0, 9],
                 [9; 16],
+                ScHubHandshakeTimeouts::default(),
             ))
             .await
             .unwrap(),

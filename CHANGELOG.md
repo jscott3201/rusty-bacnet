@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Route the already-mTLS benchmark hub launcher and CLI/server SC test fixtures
+  through `ScHubTlsConfig`, preserving identity, timeout and lifecycle behavior.
+  Add focused benchmark PEM-loader validation tests; independent raw TLS peer
+  helpers and production CLI/node/Docker modes remain unchanged. This is further
+  opt-in adoption, not raw-API retirement, performance qualification or #513 closure.
+
 - **Opt-in native hub TLS configuration:** `ScHubTlsConfig::from_der` validates
   explicitly supplied, already loaded CA/chain/key DER without I/O, builds
   mandatory client verification and TLS 1.3-only local policy, and exposes no raw
