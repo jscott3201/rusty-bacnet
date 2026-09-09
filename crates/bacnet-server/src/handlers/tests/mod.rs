@@ -46,6 +46,7 @@ mod binary_lighting_relinquish_default;
 mod cov_multiple_parameters;
 mod detection_enable_summary;
 mod device_event;
+mod enrollment_summary_budget;
 mod enrollment_summary_filters;
 mod enrollment_summary_recipients;
 mod enrollment_summary_strict;

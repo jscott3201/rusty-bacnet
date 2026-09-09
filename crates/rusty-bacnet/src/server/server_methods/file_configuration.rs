@@ -205,6 +205,7 @@ mod tests {
             request_admission_policy: server::RequestAdmissionPolicy::default(),
             read_property_multiple_budget: server::ReadPropertyMultipleBudget::default(),
             get_alarm_summary_budget: server::GetAlarmSummaryBudget::default(),
+            get_enrollment_summary_budget: server::GetEnrollmentSummaryBudget::default(),
             started: Arc::new(AtomicBool::new(false)),
             pending_objects: std::sync::Mutex::new(Vec::new()),
         }

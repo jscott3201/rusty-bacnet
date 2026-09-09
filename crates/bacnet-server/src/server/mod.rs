@@ -274,6 +274,8 @@ pub struct TimeSyncData {
 pub struct ServerConfig {
     /// Per-service GetAlarmSummary database scan and encoded response limits.
     pub get_alarm_summary_budget: GetAlarmSummaryBudget,
+    /// Local complete-response limits for GetEnrollmentSummary.
+    pub get_enrollment_summary_budget: GetEnrollmentSummaryBudget,
     /// Per-service RPM work and encoded response limits (finite by default).
     pub read_property_multiple_budget: ReadPropertyMultipleBudget,
     /// Local interface to bind.
@@ -380,6 +382,10 @@ impl std::fmt::Debug for ServerConfig {
         f.debug_struct("ServerConfig")
             .field("get_alarm_summary_budget", &self.get_alarm_summary_budget)
             .field(
+                "get_enrollment_summary_budget",
+                &self.get_enrollment_summary_budget,
+            )
+            .field(
                 "read_property_multiple_budget",
                 &self.read_property_multiple_budget,
             )
@@ -440,6 +446,7 @@ impl Default for ServerConfig {
             interface: Ipv4Addr::UNSPECIFIED,
             read_property_multiple_budget: ReadPropertyMultipleBudget::default(),
             get_alarm_summary_budget: GetAlarmSummaryBudget::default(),
+            get_enrollment_summary_budget: GetEnrollmentSummaryBudget::default(),
             port: 0xBAC0,
             broadcast_address: Ipv4Addr::BROADCAST,
             max_apdu_length: 1476,
@@ -893,6 +900,10 @@ mod rpm_budget;
 pub use rpm_budget::ReadPropertyMultipleBudget;
 mod alarm_summary_budget;
 pub use alarm_summary_budget::GetAlarmSummaryBudget;
+mod enrollment_summary_budget;
+pub use enrollment_summary_budget::GetEnrollmentSummaryBudget;
+#[cfg(test)]
+mod enrollment_summary_tests;
 mod request_peer;
 mod request_tasks;
 pub use request_admission::{RequestAdmissionCounters, RequestAdmissionPolicy};

@@ -188,6 +188,7 @@ impl ScServerBuilder {
         self.config.request_admission_policy.validate()?;
         self.config.read_property_multiple_budget.validate()?;
         self.config.get_alarm_summary_budget.validate()?;
+        self.config.get_enrollment_summary_budget.validate()?;
 
         let ws = bacnet_transport::sc_tls::TlsWebSocket::connect(&self.hub_url, tls_config.clone())
             .await?;

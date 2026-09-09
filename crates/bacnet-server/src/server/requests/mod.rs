@@ -9,6 +9,7 @@ mod endpoint_responder;
 #[cfg(test)]
 #[path = "endpoint_shared_runtime_tests.rs"]
 mod endpoint_shared_runtime_tests;
+mod enrollment_summary;
 mod event_information;
 #[cfg(test)]
 mod executed;
@@ -360,12 +361,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 Self::alarm_summary_response(&db, invoke_id, config.get_alarm_summary_budget)
             }
             s if s == ConfirmedServiceChoice::GET_ENROLLMENT_SUMMARY => {
-                let mut buf = BytesMut::new();
                 let db = db.read().await;
-                match handlers::handle_get_enrollment_summary(&db, &req.service_request, &mut buf) {
-                    Ok(()) => complex_ack(buf),
-                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
-                }
+                Self::enrollment_summary_response(
+                    &db,
+                    invoke_id,
+                    &req.service_request,
+                    config.get_enrollment_summary_budget,
+                )
             }
             s if s == ConfirmedServiceChoice::AUDIT_LOG_QUERY => {
                 // Query under the read guard, then release it before ACK

@@ -20,8 +20,65 @@ pub fn handle_get_enrollment_summary(
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
     let request = GetEnrollmentSummaryRequest::decode(service_data)?;
-
     let mut entries = Vec::new();
+    visit_entries::<Error>(db, &request, |entry| {
+        entries.push(entry);
+        Ok(())
+    })?;
+    GetEnrollmentSummaryAck { entries }.encode(buf);
+    Ok(())
+}
+
+#[derive(Debug)]
+pub(crate) enum EnrollmentSummaryFailure {
+    Work,
+    Bytes,
+    Service(Error),
+}
+
+impl From<Error> for EnrollmentSummaryFailure {
+    fn from(error: Error) -> Self {
+        Self::Service(error)
+    }
+}
+
+/// Complete logical service ACK, transactional under the caller's database view.
+pub(crate) fn handle_get_enrollment_summary_budgeted(
+    db: &ObjectDatabase,
+    service_data: &[u8],
+    buf: &mut BytesMut,
+    budget: crate::server::GetEnrollmentSummaryBudget,
+) -> Result<(), EnrollmentSummaryFailure> {
+    // Preserve decoder errors even when the database cannot be admitted.
+    let request = GetEnrollmentSummaryRequest::decode(service_data)?;
+    if db.len() > budget.max_objects {
+        return Err(EnrollmentSummaryFailure::Work);
+    }
+    let mut scratch = BytesMut::new();
+    let mut entry_buf = BytesMut::new();
+    visit_entries::<EnrollmentSummaryFailure>(db, &request, |entry| {
+        entry_buf.clear();
+        // The ACK is a bare sequence: concatenated singleton encodings retain
+        // the complete-service wire shape without retaining all entries.
+        GetEnrollmentSummaryAck {
+            entries: vec![entry],
+        }
+        .encode(&mut entry_buf);
+        if entry_buf.len() > budget.max_service_ack_bytes - scratch.len() {
+            return Err(EnrollmentSummaryFailure::Bytes);
+        }
+        scratch.extend_from_slice(&entry_buf);
+        Ok(())
+    })?;
+    buf.extend_from_slice(&scratch);
+    Ok(())
+}
+
+fn visit_entries<E: From<Error>>(
+    db: &ObjectDatabase,
+    request: &GetEnrollmentSummaryRequest,
+    mut emit: impl FnMut(EnrollmentSummaryEntry) -> Result<(), E>,
+) -> Result<(), E> {
     for (_oid, object) in db.iter_objects() {
         let Some(capability) = object.enrollment_summary_capability_internal() else {
             continue;
@@ -41,7 +98,8 @@ pub fn handle_get_enrollment_summary(
                     return Err(operational_problem(
                         object_identifier,
                         "Event_Detection_Enable is not Boolean",
-                    ))
+                    )
+                    .into())
                 }
             }
         }
@@ -88,16 +146,15 @@ pub fn handle_get_enrollment_summary(
             continue;
         }
 
-        entries.push(EnrollmentSummaryEntry {
+        emit(EnrollmentSummaryEntry {
             object_identifier,
             event_type: capability.event_type,
             event_state,
             priority: class_projection.priority,
             notification_class: Some(notification_class),
-        });
+        })?;
     }
 
-    GetEnrollmentSummaryAck { entries }.encode(buf);
     Ok(())
 }
 

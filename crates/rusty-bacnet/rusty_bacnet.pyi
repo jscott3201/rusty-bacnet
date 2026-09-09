@@ -1790,6 +1790,8 @@ class BACnetServer:
         rpm_max_service_ack_bytes: int = 16384,
         alarm_summary_max_objects: int = 4096,
         alarm_summary_max_service_ack_bytes: int = 16384,
+        enrollment_summary_max_objects: int = 4096,
+        enrollment_summary_max_service_ack_bytes: int = 16384,
     ) -> None: ...
 
     # --- Analog objects ---

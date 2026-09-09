@@ -128,6 +128,28 @@ async fn alarm_summary_response(
     max_apdu_length: u16,
     segmented_response_accepted: bool,
 ) -> Apdu {
+    summary_response(
+        count,
+        malformed,
+        config,
+        max_apdu_length,
+        segmented_response_accepted,
+        ConfirmedServiceChoice::GET_ALARM_SUMMARY,
+        Bytes::new(),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn summary_response(
+    count: u32,
+    malformed: bool,
+    config: ServerConfig,
+    max_apdu_length: u16,
+    segmented_response_accepted: bool,
+    service_choice: ConfirmedServiceChoice,
+    service_request: Bytes,
+) -> Apdu {
     let mut database = ObjectDatabase::new();
     for instance in 1..=count {
         database
@@ -163,8 +185,8 @@ async fn alarm_summary_response(
         invoke_id: 0x50,
         sequence_number: None,
         proposed_window_size: None,
-        service_choice: ConfirmedServiceChoice::GET_ALARM_SUMMARY,
-        service_request: Bytes::new(),
+        service_choice,
+        service_request,
     };
     let (tx, rx) = oneshot::channel();
     let route = Some(NpduAddress {
@@ -197,6 +219,51 @@ async fn alarm_summary_response(
     let npdu = decode_npdu(rx.await.unwrap()).unwrap();
     assert_eq!(npdu.destination, route);
     decode_apdu(npdu.payload).unwrap()
+}
+
+#[tokio::test]
+async fn enrollment_summary_routed_work_abort_and_decode_error_precedence() {
+    for peer in [50, 480] {
+        for segmented in [false, true] {
+            let response = summary_response(
+                4097,
+                false,
+                ServerConfig::default(),
+                peer,
+                segmented,
+                ConfirmedServiceChoice::GET_ENROLLMENT_SUMMARY,
+                Bytes::from_static(&[9, 0]),
+            )
+            .await;
+            assert!(
+                matches!(response, Apdu::Abort(a) if a.sent_by_server && a.invoke_id == 0x50 && a.abort_reason == AbortReason::OUT_OF_RESOURCES)
+            );
+            for request in [&[0x19, 0][..], &[9, 3], &[9, 0, 0x4e, 9, 2, 0x19, 1, 0x4f]] {
+                let baseline = summary_response(
+                    0,
+                    false,
+                    ServerConfig::default(),
+                    peer,
+                    segmented,
+                    ConfirmedServiceChoice::GET_ENROLLMENT_SUMMARY,
+                    Bytes::copy_from_slice(request),
+                )
+                .await;
+                let over = summary_response(
+                    4097,
+                    false,
+                    ServerConfig::default(),
+                    peer,
+                    segmented,
+                    ConfirmedServiceChoice::GET_ENROLLMENT_SUMMARY,
+                    Bytes::copy_from_slice(request),
+                )
+                .await;
+                assert_eq!(format!("{baseline:?}"), format!("{over:?}"));
+                assert!(!matches!(over, Apdu::ComplexAck(_) | Apdu::Abort(_)));
+            }
+        }
+    }
 }
 
 #[tokio::test]

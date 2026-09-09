@@ -207,7 +207,22 @@ pub(super) fn response(
     let mut encoded_request = BytesMut::new();
     request.encode(&mut encoded_request);
     let mut encoded_ack = BytesMut::new();
-    handle_get_enrollment_summary(db, &encoded_request, &mut encoded_ack)?;
+    let legacy = handle_get_enrollment_summary(db, &encoded_request, &mut encoded_ack);
+    let mut bounded_ack = BytesMut::new();
+    let bounded = handle_get_enrollment_summary_budgeted(
+        db,
+        &encoded_request,
+        &mut bounded_ack,
+        crate::server::GetEnrollmentSummaryBudget::default(),
+    );
+    match (&legacy, bounded) {
+        (Ok(()), Ok(())) => assert_eq!(bounded_ack, encoded_ack),
+        (Err(expected), Err(EnrollmentSummaryFailure::Service(actual))) => {
+            assert_eq!(format!("{actual:?}"), format!("{expected:?}"))
+        }
+        (expected, actual) => panic!("legacy/budget parity: {expected:?} vs {actual:?}"),
+    }
+    legacy?;
     GetEnrollmentSummaryAck::decode(&encoded_ack)
 }
 
