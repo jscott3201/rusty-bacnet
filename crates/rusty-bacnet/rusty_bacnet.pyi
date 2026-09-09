@@ -1792,6 +1792,9 @@ class BACnetServer:
         alarm_summary_max_service_ack_bytes: int = 16384,
         enrollment_summary_max_objects: int = 4096,
         enrollment_summary_max_service_ack_bytes: int = 16384,
+        atomic_read_file_max_requested_stream_octets: int = 16384,
+        atomic_read_file_max_requested_records: int = 256,
+        atomic_read_file_max_service_ack_bytes: int = 16384,
     ) -> None: ...
 
     # --- Analog objects ---

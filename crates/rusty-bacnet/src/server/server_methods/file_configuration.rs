@@ -206,6 +206,7 @@ mod tests {
             read_property_multiple_budget: server::ReadPropertyMultipleBudget::default(),
             get_alarm_summary_budget: server::GetAlarmSummaryBudget::default(),
             get_enrollment_summary_budget: server::GetEnrollmentSummaryBudget::default(),
+            atomic_read_file_budget: server::AtomicReadFileBudget::default(),
             started: Arc::new(AtomicBool::new(false)),
             pending_objects: std::sync::Mutex::new(Vec::new()),
         }

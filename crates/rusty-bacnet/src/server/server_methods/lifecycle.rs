@@ -41,6 +41,7 @@ impl BACnetServer {
         let read_property_multiple_budget = self.read_property_multiple_budget;
         let get_alarm_summary_budget = self.get_alarm_summary_budget;
         let get_enrollment_summary_budget = self.get_enrollment_summary_budget;
+        let atomic_read_file_budget = self.atomic_read_file_budget;
 
         let objects: Vec<Box<dyn BACnetObject + Send>> = {
             let mut guard = self.lock_pending()?;
@@ -148,6 +149,7 @@ impl BACnetServer {
                 .read_property_multiple_budget(read_property_multiple_budget)
                 .get_alarm_summary_budget(get_alarm_summary_budget)
                 .get_enrollment_summary_budget(get_enrollment_summary_budget)
+                .atomic_read_file_budget(atomic_read_file_budget)
                 .transport(transport);
             if let Some(pw) = dcc_password {
                 builder = builder.dcc_password(pw);

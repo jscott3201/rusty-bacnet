@@ -740,3 +740,5 @@ mod ack_strict_tests;
 #[cfg(test)]
 #[path = "file_ack_roundtrip_tests.rs"]
 mod ack_roundtrip_tests;
+#[path = "file_ack_size.rs"]
+mod ack_size;

@@ -37,7 +37,10 @@ impl BACnetServer {
         alarm_summary_max_objects=4096,
         alarm_summary_max_service_ack_bytes=16384,
         enrollment_summary_max_objects=4096,
-        enrollment_summary_max_service_ack_bytes=16384
+        enrollment_summary_max_service_ack_bytes=16384,
+        atomic_read_file_max_requested_stream_octets=16384,
+        atomic_read_file_max_requested_records=256,
+        atomic_read_file_max_service_ack_bytes=16384
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -74,6 +77,9 @@ impl BACnetServer {
         alarm_summary_max_service_ack_bytes: usize,
         enrollment_summary_max_objects: usize,
         enrollment_summary_max_service_ack_bytes: usize,
+        atomic_read_file_max_requested_stream_octets: usize,
+        atomic_read_file_max_requested_records: usize,
+        atomic_read_file_max_service_ack_bytes: usize,
     ) -> PyResult<Self> {
         let request_admission_policy = server::RequestAdmissionPolicy {
             max_confirmed_in_flight,
@@ -107,6 +113,14 @@ impl BACnetServer {
         get_enrollment_summary_budget
             .validate()
             .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        let atomic_read_file_budget = server::AtomicReadFileBudget {
+            max_requested_stream_octets: atomic_read_file_max_requested_stream_octets,
+            max_requested_records: atomic_read_file_max_requested_records,
+            max_service_ack_bytes: atomic_read_file_max_service_ack_bytes,
+        };
+        atomic_read_file_budget
+            .validate()
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
         Ok(Self {
             inner: Arc::new(Mutex::new(None)),
             device_instance,
@@ -134,6 +148,7 @@ impl BACnetServer {
             read_property_multiple_budget,
             get_alarm_summary_budget,
             get_enrollment_summary_budget,
+            atomic_read_file_budget,
             started: Arc::new(AtomicBool::new(false)),
             pending_objects: std::sync::Mutex::new(Vec::new()),
         })

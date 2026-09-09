@@ -2,6 +2,7 @@ use super::*;
 
 mod acknowledge_alarm;
 mod alarm_summary;
+mod atomic_read_file;
 mod audit_notification;
 mod confirmed;
 pub(super) mod confirmed_response;
@@ -327,10 +328,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
             s if s == ConfirmedServiceChoice::ATOMIC_READ_FILE => {
                 let db = db.read().await;
-                match handlers::handle_atomic_read_file(&db, &req.service_request, &mut ack_buf) {
-                    Ok(()) => complex_ack(ack_buf),
-                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
-                }
+                Self::atomic_read_file_response(
+                    &db,
+                    invoke_id,
+                    &req.service_request,
+                    config.atomic_read_file_budget,
+                )
             }
             s if s == ConfirmedServiceChoice::ATOMIC_WRITE_FILE => {
                 let result = {

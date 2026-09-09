@@ -276,6 +276,8 @@ pub struct ServerConfig {
     pub get_alarm_summary_budget: GetAlarmSummaryBudget,
     /// Local complete-response limits for GetEnrollmentSummary.
     pub get_enrollment_summary_budget: GetEnrollmentSummaryBudget,
+    /// Local AtomicReadFile raw-count and complete service-ACK limits.
+    pub atomic_read_file_budget: AtomicReadFileBudget,
     /// Per-service RPM work and encoded response limits (finite by default).
     pub read_property_multiple_budget: ReadPropertyMultipleBudget,
     /// Local interface to bind.
@@ -385,6 +387,7 @@ impl std::fmt::Debug for ServerConfig {
                 "get_enrollment_summary_budget",
                 &self.get_enrollment_summary_budget,
             )
+            .field("atomic_read_file_budget", &self.atomic_read_file_budget)
             .field(
                 "read_property_multiple_budget",
                 &self.read_property_multiple_budget,
@@ -447,6 +450,7 @@ impl Default for ServerConfig {
             read_property_multiple_budget: ReadPropertyMultipleBudget::default(),
             get_alarm_summary_budget: GetAlarmSummaryBudget::default(),
             get_enrollment_summary_budget: GetEnrollmentSummaryBudget::default(),
+            atomic_read_file_budget: AtomicReadFileBudget::default(),
             port: 0xBAC0,
             broadcast_address: Ipv4Addr::BROADCAST,
             max_apdu_length: 1476,
@@ -900,8 +904,12 @@ mod rpm_budget;
 pub use rpm_budget::ReadPropertyMultipleBudget;
 mod alarm_summary_budget;
 pub use alarm_summary_budget::GetAlarmSummaryBudget;
+mod atomic_read_file_budget;
 mod enrollment_summary_budget;
+pub use atomic_read_file_budget::AtomicReadFileBudget;
 pub use enrollment_summary_budget::GetEnrollmentSummaryBudget;
+#[cfg(test)]
+mod atomic_read_file_tests;
 #[cfg(test)]
 mod enrollment_summary_tests;
 mod request_peer;

@@ -68,6 +68,8 @@ SERVER_KEYWORD_ONLY = MSTP_KEYWORD_ONLY + [
     "rpm_max_result_elements", "rpm_max_service_ack_bytes",
     "alarm_summary_max_objects", "alarm_summary_max_service_ack_bytes",
     "enrollment_summary_max_objects", "enrollment_summary_max_service_ack_bytes",
+    "atomic_read_file_max_requested_stream_octets", "atomic_read_file_max_requested_records",
+    "atomic_read_file_max_service_ack_bytes",
 ]
 SUPPORTED_BAUD_RATES = (9_600, 19_200, 38_400, 57_600, 76_800, 115_200)
 SUPPORTED_BAUD_ERROR = (

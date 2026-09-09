@@ -109,6 +109,42 @@ pub fn handle_atomic_read_file(
     service_data: &[u8],
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
+    read_file(db, service_data, buf, None).map_err(|failure| match failure {
+        AtomicReadFileFailure::Service(error) => error,
+        AtomicReadFileFailure::Budget(_) => unreachable!("unconfigured read has no budget"),
+    })
+}
+
+/// Keep local budget refusals distinct from pre-existing service/storage errors.
+#[derive(Debug)]
+pub(crate) enum AtomicReadFileFailure {
+    Service(Error),
+    Budget(bacnet_types::enums::AbortReason),
+}
+
+impl From<Error> for AtomicReadFileFailure {
+    fn from(error: Error) -> Self {
+        Self::Service(error)
+    }
+}
+
+/// Apply local request-count and complete service-ACK budgets, preserving the
+/// legacy handler's validation and storage-error precedence for admitted reads.
+pub(crate) fn handle_atomic_read_file_budgeted(
+    db: &ObjectDatabase,
+    service_data: &[u8],
+    buf: &mut BytesMut,
+    budget: crate::server::AtomicReadFileBudget,
+) -> Result<(), AtomicReadFileFailure> {
+    read_file(db, service_data, buf, Some(budget))
+}
+
+fn read_file(
+    db: &ObjectDatabase,
+    service_data: &[u8],
+    buf: &mut BytesMut,
+    budget: Option<crate::server::AtomicReadFileBudget>,
+) -> Result<(), AtomicReadFileFailure> {
     use bacnet_services::common::MAX_DECODED_ITEMS;
     use bacnet_services::file::{
         AtomicReadFileAck, AtomicReadFileRequest, FileAccessMethod, FileReadAckMethod,
@@ -117,7 +153,7 @@ pub fn handle_atomic_read_file(
     let request = AtomicReadFileRequest::decode(service_data)?;
 
     if request.file_identifier.object_type() != ObjectType::FILE {
-        return Err(inconsistent_object_type());
+        return Err(inconsistent_object_type().into());
     }
 
     let object = db
@@ -128,7 +164,7 @@ pub fn handle_atomic_read_file(
     // inaccessible for another reason" is refused before its properties are
     // consulted; an object without storage is that case.
     if object.file_storage_internal().is_none() {
-        return Err(file_access_denied());
+        return Err(file_access_denied().into());
     }
 
     // Clause 14.1: refuse a mismatched access method before any file read
@@ -152,6 +188,13 @@ pub fn handle_atomic_read_file(
         } => {
             let start =
                 u64::try_from(file_start_position).map_err(|_| invalid_file_start_position())?;
+            if budget.is_some_and(|b| {
+                u64::from(requested_octet_count) > b.max_requested_stream_octets as u64
+            }) {
+                return Err(AtomicReadFileFailure::Budget(
+                    bacnet_types::enums::AbortReason::OUT_OF_RESOURCES,
+                ));
+            }
             let read = storage.read_stream(start, u64::from(requested_octet_count))?;
             let ack = AtomicReadFileAck {
                 end_of_file: read.end_of_file,
@@ -160,7 +203,7 @@ pub fn handle_atomic_read_file(
                     file_data: read.data,
                 },
             };
-            ack.encode(buf);
+            encode_read_ack(&ack, buf, budget)?;
             Ok(())
         }
         FileAccessMethod::Record {
@@ -169,6 +212,13 @@ pub fn handle_atomic_read_file(
         } => {
             let start =
                 u64::try_from(file_start_record).map_err(|_| invalid_file_start_position())?;
+            if budget
+                .is_some_and(|b| u64::from(requested_record_count) > b.max_requested_records as u64)
+            {
+                return Err(AtomicReadFileFailure::Budget(
+                    bacnet_types::enums::AbortReason::OUT_OF_RESOURCES,
+                ));
+            }
             // The workspace's AtomicReadFile-ACK decoder accepts at most
             // MAX_DECODED_ITEMS records in one SEQUENCE OF, so one ACK never
             // carries more. A client sees 'Returned Record Count' below its
@@ -186,10 +236,26 @@ pub fn handle_atomic_read_file(
                     file_record_data: read.records,
                 },
             };
-            ack.encode(buf);
+            encode_read_ack(&ack, buf, budget)?;
             Ok(())
         }
     }
+}
+
+fn encode_read_ack(
+    ack: &bacnet_services::file::AtomicReadFileAck,
+    buf: &mut BytesMut,
+    budget: Option<crate::server::AtomicReadFileBudget>,
+) -> Result<(), AtomicReadFileFailure> {
+    if budget.is_some_and(|b| ack.encoded_len_bounded(b.max_service_ack_bytes).is_none()) {
+        return Err(AtomicReadFileFailure::Budget(
+            bacnet_types::enums::AbortReason::BUFFER_OVERFLOW,
+        ));
+    }
+    // All budget failures precede encoding: no payload copy or caller mutation
+    // is needed to size the owned storage result.
+    ack.encode(buf);
+    Ok(())
 }
 
 /// Handle an AtomicWriteFile request.
