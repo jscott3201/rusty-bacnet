@@ -206,6 +206,14 @@ impl BACnetServer {
         get_event_information_budget
             .validate()
             .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        if transport == "sc" {
+            crate::tls::required_sc_credentials(
+                sc_ca_cert.as_deref(),
+                sc_client_cert.as_deref(),
+                sc_client_key.as_deref(),
+            )
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        }
         Ok(Self {
             inner: Arc::new(Mutex::new(None)),
             device_instance,

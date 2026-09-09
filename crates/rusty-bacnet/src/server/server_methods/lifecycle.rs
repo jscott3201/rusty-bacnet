@@ -4,6 +4,20 @@ use super::super::*;
 impl BACnetServer {
     /// Start the server. It will begin responding to BACnet requests.
     fn start<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        // Local TLS failures must leave pending registrations available for retry.
+        // Load on each start, not in the constructor, so repaired files are used.
+        let sc_tls_config = if self.transport_type == "sc" {
+            Some(
+                crate::tls::build_client_tls_config(
+                    self.sc_ca_cert.as_deref(),
+                    self.sc_client_cert.as_deref(),
+                    self.sc_client_key.as_deref(),
+                )
+                .map_err(|e| PyRuntimeError::new_err(format!("TLS config error: {e}")))?,
+            )
+        } else {
+            None
+        };
         // MS/TP serial open is synchronous and must succeed before pending
         // registrations are moved into the startup future.
         let mut mstp_transport: Option<AnyTransport<crate::mstp_py::PySerial>> =
@@ -29,9 +43,6 @@ impl BACnetServer {
         let broadcast_str = self.broadcast_address.clone();
         let sc_hub = self.sc_hub.clone();
         let sc_vmac = self.sc_vmac.clone();
-        let sc_ca_cert = self.sc_ca_cert.clone();
-        let sc_client_cert = self.sc_client_cert.clone();
-        let sc_client_key = self.sc_client_key.clone();
         let sc_heartbeat_interval_ms = self.sc_heartbeat_interval_ms;
         let sc_heartbeat_timeout_ms = self.sc_heartbeat_timeout_ms;
         let ipv6_interface = self.ipv6_interface.clone();
@@ -119,12 +130,8 @@ impl BACnetServer {
                     let mut vmac = [0u8; 6];
                     vmac.copy_from_slice(&vmac_bytes);
 
-                    let tls_config = crate::tls::build_client_tls_config(
-                        sc_ca_cert.as_deref(),
-                        sc_client_cert.as_deref(),
-                        sc_client_key.as_deref(),
-                    )
-                    .map_err(|e| PyRuntimeError::new_err(format!("TLS config error: {e}")))?;
+                    let tls_config = sc_tls_config
+                        .ok_or_else(|| PyRuntimeError::new_err("SC TLS config was not prepared"))?;
 
                     let ws = bacnet_transport::sc_tls::TlsWebSocket::connect(&hub_url, tls_config)
                         .await

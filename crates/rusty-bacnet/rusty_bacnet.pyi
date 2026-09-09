@@ -1022,6 +1022,13 @@ class BACnetClient:
     Supports BACnet/IP (``"bip"``), BACnet/IPv6 (``"ipv6"``),
     BACnet/SC (``"sc"``), and BACnet MS/TP (``"mstp"``) transports.
 
+    For SC, sc_ca_cert, sc_client_cert, and sc_client_key must be nonempty
+    paths; omission, None, or empty strings raise ValueError at construction.
+    Their None defaults preserve non-SC use and positional layout only.
+    Async entry loads the explicit site CA and operational cert/key; invalid
+    TLS configuration raises RuntimeError before dialing. No system-root or
+    unauthenticated-client fallback is available.
+
     Usage::
 
         async with BACnetClient() as client:
@@ -1756,6 +1763,14 @@ class RequestAdmissionCounters(TypedDict):
 
 class BACnetServer:
     """BACnet server that hosts objects and responds to client requests.
+
+    For SC, sc_ca_cert, sc_client_cert, and sc_client_key must be nonempty
+    paths; omission, None, or empty strings raise ValueError at construction.
+    Their None defaults preserve non-SC use and positional layout only.
+    start() loads the explicit site CA and operational cert/key before dialing
+    or draining registrations. Local TLS configuration errors raise RuntimeError;
+    repair the files and retry on the same server. Later startup failures do not
+    have a general registration rollback guarantee.
 
     Usage::
 

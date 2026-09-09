@@ -264,9 +264,9 @@ client = BACnetClient(
     # SC options:
     sc_hub=None,                 # WebSocket hub URL
     sc_vmac=None,                # 6-byte VMAC
-    sc_ca_cert=None,             # CA certificate path
-    sc_client_cert=None,         # Client certificate path
-    sc_client_key=None,          # Client private key path
+    sc_ca_cert=None,             # Site CA PEM path (required for SC)
+    sc_client_cert=None,         # Operational certificate PEM path (required for SC)
+    sc_client_key=None,          # Matching private key PEM path (required for SC)
     sc_heartbeat_interval_ms=None,  # 3000..=300000 ms when configured
     sc_heartbeat_timeout_ms=None,   # must be greater than interval
 )
@@ -1559,8 +1559,9 @@ Missing, untrusted, expired, or not-yet-valid peer certificates are rejected.
 This addresses the Python hub admission boundary of Annex AB.7.4, not full
 security-profile conformance. CA membership does not authorize BACnet operations
 or bind a certificate to a claimed VMAC/Device UUID. Rust `ScHub` still accepts a
-caller-configured `TlsAcceptor`; Python client/server credential defaults remain
-unchanged and their required-credential migration is deferred under #513.
+caller-configured `TlsAcceptor`; caller-owned Rust TLS configurations remain
+outside this Python boundary, so #513 remains partial. Python nodes require the
+explicit credentials described [below](#bacnetsc-secure-connect).
 
 ### Methods
 
@@ -1697,6 +1698,32 @@ server = BACnetServer(
 ```
 
 ### BACnet/SC (Secure Connect)
+
+**Compatibility change:** both `BACnetClient` and `BACnetServer` require all of
+`sc_ca_cert`, `sc_client_cert`, and `sc_client_key` when `transport="sc"`.
+Omission, `None`, or an empty string raises `ValueError` at construction. Supply
+the installation's trusted CA PEM file and this node's operational certificate
+with its matching private key. There is no native/system-root fallback,
+certificate-less mode, or insecure flag. The `None` defaults and positional slots
+(including subsequent heartbeat, IPv6, and server password arguments) remain
+unchanged for non-SC use and argument-layout compatibility only.
+
+File I/O remains at startup: client async entry and server `start()` load and
+validate the files before TCP/DNS connection attempts. Unreadable, empty, malformed
+credentials and cert/key mismatch raise `RuntimeError` with `TLS config error:`.
+Server **local TLS configuration** failures leave pending object registrations
+intact; repair files at the same paths and retry `start()`. The client also reloads
+files on retry. This is not general startup rollback: later failures, including
+TLS peer rejection after dialing, retain existing lifecycle behavior and may
+consume server registrations. Preflight checks rustls configuration validity,
+not the local certificate's date or issuer against the site store; the remote
+peer validates that certificate during the real handshake.
+
+TLS 1.3-only remains the existing local policy. Base Standard 135-2020 Annex
+AB.7.4/AB.7.4.1.1 supplies the mutual-authentication and installation-credential
+context, but this change is not full security-profile conformance, certificate
+to VMAC/UUID authorization, or a change to hostname/revocation/issuer policy.
+Caller-owned Rust TLS configurations remain unchanged (#513 is still partial).
 
 ```python
 # Client connecting to a hub

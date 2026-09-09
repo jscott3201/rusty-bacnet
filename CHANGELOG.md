@@ -9,14 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Python SC node compatibility change:** `BACnetClient` and `BACnetServer`
+  with `transport="sc"` now require nonempty `sc_ca_cert`, `sc_client_cert`, and
+  `sc_client_key` paths at construction (`ValueError` otherwise). Positional
+  layout, `None` defaults for non-SC use, and other transports are unchanged.
+  Startup loads explicit site trust and matching operational credentials before
+  dialing, with existing `RuntimeError` TLS-config errors and no system-root or
+  unauthenticated-client fallback. Server local TLS preflight failures preserve
+  registrations for file repair/retry; later failures are not general rollback.
+  TLS 1.3-only remains. Caller-owned Rust TLS configurations are unchanged;
+  #513 remains partial. See [SC configuration](docs/python-api.md#bacnetsc-secure-connect).
+
 - **Python ScHub compatibility change:** `ca_cert` must explicitly name a usable
   trusted issuer CA PEM file. Omission, `None`, and empty paths now raise
   `ValueError` at construction; invalid files or mismatched server cert/key fail
   in `start()` before bind. The fifth positional parameter is unchanged, but its
   default no longer enables one-way TLS. Client verification and TLS 1.3 are
   mandatory, with no insecure escape hatch. The Python SC benchmark now supplies
-  its generated CA. Rust caller-owned `TlsAcceptor` injection and Python node
-  credential defaults are unchanged; #513 remains partial. See
+  its generated CA. Rust caller-owned `TlsAcceptor` injection is unchanged;
+  #513 remains partial. See
   [ScHub](docs/python-api.md#schub).
 
 - Add a default-OFF optional global DCC DISABLE_INITIATION token bucket per native

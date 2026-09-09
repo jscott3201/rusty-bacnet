@@ -70,8 +70,14 @@ use crate::types::{PyObjectIdentifier, PyPropertyIdentifier, PyPropertyValue};
 /// Supports multiple transports via the `transport` parameter:
 /// - `"bip"` (default): BACnet/IP over UDP
 /// - `"ipv6"`: BACnet/IPv6 over UDP multicast
-/// - `"sc"`: BACnet/SC over TLS WebSocket (requires `sc_hub`, `sc_vmac`)
+/// - `"sc"`: BACnet/SC over TLS WebSocket (requires `sc_hub`, `sc_vmac`,
+///   `sc_ca_cert`, `sc_client_cert`, and `sc_client_key`)
 /// - `"mstp"`: BACnet MS/TP over RS-485 (requires `serial_port`)
+///
+/// SC credential paths must be nonempty at construction (ValueError otherwise).
+/// start() loads the files before dialing or draining registrations; local TLS
+/// configuration errors raise RuntimeError and permit retry after file repair.
+/// Later startup failures retain existing behavior, not general rollback.
 #[pyclass(name = "BACnetServer")]
 pub struct BACnetServer {
     inner: Arc<Mutex<Option<server::BACnetServer<AnyTransport<crate::mstp_py::PySerial>>>>>,

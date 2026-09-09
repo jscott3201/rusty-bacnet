@@ -63,7 +63,8 @@ class AdmissionSignatureTests(unittest.TestCase):
                 valid: dict[str, Any] = {name: 2}
                 if name == "max_confirmed_in_flight":
                     valid["confirmed_recovery_reserve"] = 0
-                BACnetServer(123, transport=transport, **valid)
+                BACnetServer(123, transport=transport, **valid,
+                             sc_ca_cert="ca.pem", sc_client_cert="cert.pem", sc_client_key="key.pem")
 
 
 def packet(apdu: bytes) -> bytes:

@@ -21,7 +21,8 @@ class DccConstructorTests(unittest.TestCase):
             for valid in [None, (3, 20000), (1, 1), (65535, 86400000)]:
                 for policy in ["deny_all", "legacy_permissive", "require_password"]:
                     BACnetServer(123, transport=transport, dcc_policy=policy,
-                                 dcc_password="required", dcc_disable_rate_limit=valid)
+                                 dcc_password="required", dcc_disable_rate_limit=valid,
+                                 sc_ca_cert="ca.pem", sc_client_cert="cert.pem", sc_client_key="key.pem")
         for invalid in [True, "bad", (), (3,), (3, 20, 1), (-1, 20000), (3, -1),
                         (2**32, 20000), (3, 2**64), (3.5, 20000), (3, None)]:
             with self.assertRaises((TypeError, ValueError, OverflowError)):
@@ -44,7 +45,8 @@ class DccConstructorTests(unittest.TestCase):
                                  dcc_password="required", dcc_source_restriction=restriction)
             for restriction in [[], [(None, b"x")], [(65534, b"x" * 255)] * 256]:
                 BACnetServer(123, transport=transport, dcc_policy="require_password",
-                             dcc_password="required", dcc_source_restriction=restriction)
+                             dcc_password="required", dcc_source_restriction=restriction,
+                             sc_ca_cert="ca.pem", sc_client_cert="cert.pem", sc_client_key="key.pem")
         for invalid in [1, "bad", [(None, "bad")], [(65536, b"x")], [(-1, b"x")]]:
             with self.assertRaises((TypeError, ValueError, OverflowError)):
                 BACnetServer(123, dcc_policy="require_password", dcc_password="required",
@@ -66,10 +68,12 @@ class DccConstructorTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "nonempty dcc_password"):
                     BACnetServer(123, transport=transport, dcc_policy="require_password",
                                  dcc_password=password)
-            BACnetServer(123, transport=transport, dcc_policy="require_password", dcc_password="x")
+            BACnetServer(123, transport=transport, dcc_policy="require_password", dcc_password="x",
+                         sc_ca_cert="ca.pem", sc_client_cert="cert.pem", sc_client_key="key.pem")
             for policy in ["deny_all", "legacy_permissive"]:
                 for password in [None, "", "x" * 100]:
-                    BACnetServer(123, transport=transport, dcc_policy=policy, dcc_password=password)
+                    BACnetServer(123, transport=transport, dcc_policy=policy, dcc_password=password,
+                                 sc_ca_cert="ca.pem", sc_client_cert="cert.pem", sc_client_key="key.pem")
 
 
 class DccNativeTests(unittest.IsolatedAsyncioTestCase):

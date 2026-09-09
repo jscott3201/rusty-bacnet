@@ -62,8 +62,13 @@ use crate::types::{
 /// Supports multiple transports via the `transport` parameter:
 /// - `"bip"` (default): BACnet/IP over UDP
 /// - `"ipv6"`: BACnet/IPv6 over UDP multicast
-/// - `"sc"`: BACnet/SC over TLS WebSocket (requires `sc_hub`, `sc_vmac`)
+/// - `"sc"`: BACnet/SC over TLS WebSocket (requires `sc_hub`, `sc_vmac`,
+///   `sc_ca_cert`, `sc_client_cert`, and `sc_client_key`)
 /// - `"mstp"`: BACnet MS/TP over RS-485 (requires `serial_port`)
+///
+/// SC credential paths must be nonempty at construction (ValueError otherwise).
+/// Files are loaded on async entry; invalid TLS configuration raises RuntimeError
+/// before dialing. No system trust or unauthenticated-client fallback is used.
 #[pyclass(name = "BACnetClient")]
 pub struct BACnetClient {
     inner: ClientInner,

@@ -2208,7 +2208,6 @@ dependencies = [
  "bytes",
  "pyo3",
  "pyo3-async-runtimes",
- "rustls-native-certs",
  "tokio",
  "tokio-rustls",
 ]

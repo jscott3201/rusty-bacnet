@@ -28,7 +28,8 @@ class RpmConstructorTests(unittest.TestCase):
                             BACnetServer(123, transport=transport, **invalid)
                 # Configuration is not used as an allocation capacity or a semaphore limit.
                 positive: dict[str, Any] = {name: (1 << (8 * struct.calcsize("P"))) - 1}
-                BACnetServer(123, transport=transport, **positive)
+                BACnetServer(123, transport=transport, **positive,
+                             sc_ca_cert="ca.pem", sc_client_cert="cert.pem", sc_client_key="key.pem")
 
 
 class RpmNativeTests(unittest.IsolatedAsyncioTestCase):

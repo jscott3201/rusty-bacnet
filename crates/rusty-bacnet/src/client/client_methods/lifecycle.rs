@@ -44,8 +44,16 @@ impl BACnetClient {
         mstp_mac: u8,
         mstp_max_master: u8,
         mstp_max_info_frames: u8,
-    ) -> Self {
-        Self {
+    ) -> PyResult<Self> {
+        if transport == "sc" {
+            crate::tls::required_sc_credentials(
+                sc_ca_cert.as_deref(),
+                sc_client_cert.as_deref(),
+                sc_client_key.as_deref(),
+            )
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        }
+        Ok(Self {
             inner: Arc::new(Mutex::new(None)),
             transport_type: transport.to_string(),
             interface: interface.to_string(),
@@ -65,7 +73,7 @@ impl BACnetClient {
             mstp_mac,
             mstp_max_master,
             mstp_max_info_frames,
-        }
+        })
     }
 
     /// Start the client (called by `async with`).

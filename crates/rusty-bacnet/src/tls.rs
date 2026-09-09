@@ -55,7 +55,25 @@ pub fn build_server_tls_config(
     Ok(Arc::new(config))
 }
 
-/// Build a rustls ClientConfig from optional PEM file paths.
+/// Require explicit SC credential paths without performing file I/O.
+pub fn required_sc_credentials<'a>(
+    ca_cert_path: Option<&'a str>,
+    client_cert_path: Option<&'a str>,
+    client_key_path: Option<&'a str>,
+) -> Result<[&'a str; 3], Error> {
+    let required = |path: Option<&'a str>, name: &str| {
+        path.filter(|path| !path.is_empty()).ok_or_else(|| {
+            Error::Encoding(format!("{name} must be a nonempty path for SC mutual TLS"))
+        })
+    };
+    Ok([
+        required(ca_cert_path, "sc_ca_cert")?,
+        required(client_cert_path, "sc_client_cert")?,
+        required(client_key_path, "sc_client_key")?,
+    ])
+}
+
+/// Build a TLS 1.3 client config using only explicit site trust and credentials.
 pub fn build_client_tls_config(
     ca_cert_path: Option<&str>,
     client_cert_path: Option<&str>,
@@ -63,74 +81,41 @@ pub fn build_client_tls_config(
 ) -> Result<Arc<tokio_rustls::rustls::ClientConfig>, Error> {
     use tokio_rustls::rustls;
 
+    let [ca_path, cert_path, key_path] =
+        required_sc_credentials(ca_cert_path, client_cert_path, client_key_path)?;
     let mut root_store = rustls::RootCertStore::empty();
-
-    if let Some(ca_path) = ca_cert_path {
-        let ca_data = std::fs::read(ca_path)
-            .map_err(|e| Error::Encoding(format!("failed to read CA cert: {e}")))?;
-        let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&ca_data)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| Error::Encoding(format!("failed to parse CA cert: {e}")))?;
-        if certs.is_empty() {
-            return Err(Error::Encoding("no CA certificates found".into()));
-        }
-        for cert in certs {
-            root_store
-                .add(cert)
-                .map_err(|e| Error::Encoding(format!("failed to add CA cert: {e}")))?;
-        }
-    } else {
-        // Use system roots as fallback
-        let native_result = rustls_native_certs::load_native_certs();
-        if !native_result.errors.is_empty() {
-            eprintln!(
-                "Warning: some native TLS certificates could not be loaded: {:?}",
-                native_result.errors
-            );
-        }
-        if native_result.certs.is_empty() {
-            return Err(Error::Encoding(
-                "no native CA certificates could be loaded — provide ca_cert_path explicitly"
-                    .into(),
-            ));
-        }
-        for cert in native_result.certs {
-            let _ = root_store.add(cert);
-        }
+    let ca_data = std::fs::read(ca_path)
+        .map_err(|e| Error::Encoding(format!("failed to read CA cert: {e}")))?;
+    let ca_certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&ca_data)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| Error::Encoding(format!("failed to parse CA cert: {e}")))?;
+    if ca_certs.is_empty() {
+        return Err(Error::Encoding("no CA certificates found".into()));
+    }
+    for cert in ca_certs {
+        root_store
+            .add(cert)
+            .map_err(|e| Error::Encoding(format!("failed to add CA cert: {e}")))?;
     }
 
-    // BACnet/SC requires TLS 1.3 per spec AB.7.4
-    let builder = rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-        .with_root_certificates(root_store);
+    let cert_data = std::fs::read(cert_path)
+        .map_err(|e| Error::Encoding(format!("failed to read client cert: {e}")))?;
+    let key_data = std::fs::read(key_path)
+        .map_err(|e| Error::Encoding(format!("failed to read client key: {e}")))?;
+    let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&cert_data)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| Error::Encoding(format!("failed to parse client cert: {e}")))?;
+    if certs.is_empty() {
+        return Err(Error::Encoding("no client certificates found".into()));
+    }
+    let key = PrivateKeyDer::from_pem_slice(&key_data)
+        .map_err(|e| Error::Encoding(format!("failed to parse client key: {e}")))?;
 
-    let config = match (client_cert_path, client_key_path) {
-        (Some(cert_path), Some(key_path)) => {
-            let cert_data = std::fs::read(cert_path)
-                .map_err(|e| Error::Encoding(format!("failed to read client cert: {e}")))?;
-            let key_data = std::fs::read(key_path)
-                .map_err(|e| Error::Encoding(format!("failed to read client key: {e}")))?;
-
-            let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&cert_data)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| Error::Encoding(format!("failed to parse client cert: {e}")))?;
-            if certs.is_empty() {
-                return Err(Error::Encoding("no client certificates found".into()));
-            }
-
-            let key = PrivateKeyDer::from_pem_slice(&key_data)
-                .map_err(|e| Error::Encoding(format!("failed to parse client key: {e}")))?;
-
-            builder
-                .with_client_auth_cert(certs, key)
-                .map_err(|e| Error::Encoding(format!("TLS client auth error: {e}")))?
-        }
-        (None, None) => builder.with_no_client_auth(),
-        _ => {
-            return Err(Error::Encoding(
-                "sc_client_cert and sc_client_key must both be provided or both omitted".into(),
-            ));
-        }
-    };
+    // Retain the local TLS-1.3-only policy; AB.7.4 requires TLS 1.3 support.
+    let config = rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+        .with_root_certificates(root_store)
+        .with_client_auth_cert(certs, key)
+        .map_err(|e| Error::Encoding(format!("TLS client auth error: {e}")))?;
 
     Ok(Arc::new(config))
 }

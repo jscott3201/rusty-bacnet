@@ -1,22 +1,28 @@
-"""Installed-native Python hub authentication; no system trust or persistent keys.
+"""Installed-native Python hub/node authentication; no system trust or persistent keys.
 
 OpenSSL CLI creates a temporary site CA and distinct operational certificates.
-TLS negatives use the independent stdlib TLS client, not SC reconnect timeouts.
+TLS negatives use independent stdlib TLS peers, not SC reconnect timeouts.
 """
 import asyncio
 import inspect
+import itertools
 import os
 import socket
 import ssl
 import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
-from rusty_bacnet import BACnetServer, BacnetError, ScHub
+from rusty_bacnet import (
+    BACnetClient, BACnetServer, BacnetError, ObjectIdentifier, ObjectType,
+    PropertyIdentifier, ScHub,
+)
 
 
-class HubMtlsTests(unittest.IsolatedAsyncioTestCase):
+class MtlsFixture(unittest.IsolatedAsyncioTestCase):
+    """Shared fixture only: no inherited test methods or duplicate discovery."""
     @classmethod
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory(prefix="bacnet-hub-mtls-")
@@ -72,7 +78,7 @@ class HubMtlsTests(unittest.IsolatedAsyncioTestCase):
                      ca_cert=overrides.get("ca_cert", self.path("site.pem")))
 
     def websocket(self, address, peer=None, ca="site", version=ssl.TLSVersion.TLSv1_3,
-                  read_property=False):
+                  read_property=False, serve_ready=None, serve_done=None):
         """Bounded independent TLS + WebSocket handshake, including TLS 1.3 alerts.
 
         The post-handshake read matters: TLS 1.3 may report missing-client-cert
@@ -94,11 +100,11 @@ class HubMtlsTests(unittest.IsolatedAsyncioTestCase):
                     b"Sec-WebSocket-Protocol: hub.bsc.bacnet.org\r\n\r\n")
                 response = tls.recv(4096)
                 self.assertTrue(response.startswith(b"HTTP/1.1 101"), response)
-                if read_property:
-                    self.exchange_read_property(tls)
+                if read_property or serve_ready is not None:
+                    self.exchange_read_property(tls, serve_ready, serve_done)
                 return tls.version()
 
-    def exchange_read_property(self, tls):
+    def exchange_read_property(self, tls, serve_ready=None, serve_done=None):
         # Literal SC Connect-Request/Accept, modeled on sc_frame's independent
         # connect_test_support vectors. A nonzero UUID avoids the existing
         # all-zero default shared by Python BACnetClient/BACnetServer nodes.
@@ -133,6 +139,22 @@ class HubMtlsTests(unittest.IsolatedAsyncioTestCase):
         except TimeoutError as error:
             raise AssertionError("timed out waiting for SC ConnectAccept") from error
         self.assertEqual(accepted[:4], b"\x07\x00\x22\x33")
+        if serve_ready is not None:
+            assert serve_done is not None
+            serve_ready.set()
+            # Independently respond to a native client's ReadProperty AI0/PV.
+            for _ in range(8):
+                request = receive()
+                if request.endswith(b"\x0c\x0c\0\0\0\0\x19\x55"):
+                    self.assertEqual(request[:2], b"\x01\x08")
+                    self.assertEqual(request[4:10], b"\x02\0\0\0\0\2")
+                    self.assertEqual(request[10:13], b"\x01\x04\x02")
+                    invoke = request[14:15]
+                    send(b"\x01\x04\x22\x35" + b"\x02\0\0\0\0\2" + b"\x01\x00" +
+                         b"\x30" + invoke + b"\x0c\x0c\0\0\0\0\x19\x55\x3e\x44\x42\x91\0\0\x3f")
+                    self.assertTrue(serve_done.wait(3), "native client did not finish reading")
+                    return
+            self.fail("no ReadProperty request within bounded incoming frames")
         self.invoke = getattr(self, "invoke", 0) + 1
         invoke = bytes([self.invoke])
         # Encapsulated-NPDU to destination; hub supplies the originating VMAC.
@@ -153,6 +175,14 @@ class HubMtlsTests(unittest.IsolatedAsyncioTestCase):
                 return
         self.fail("no ReadProperty ACK within bounded incoming frames")
 
+    async def stop_hub(self, hub):
+        await asyncio.wait_for(hub.stop(), 5)
+
+    async def stop_server(self, server):
+        await asyncio.wait_for(server.stop(), 5)
+
+
+class HubMtlsTests(MtlsFixture):
     async def test_absent_ca_cannot_admit_certificate_less_peer(self):
         # Baseline behavioral RED: the old constructor starts, then permits an
         # unauthenticated TLS/WebSocket upgrade. New early validation is valid.
@@ -250,8 +280,199 @@ class HubMtlsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await asyncio.to_thread(self.websocket, address, "client"), "TLSv1.3")
         await barrier()
 
-    async def stop_hub(self, hub):
-        await asyncio.wait_for(hub.stop(), 5)
+class NodeCredentialTests(unittest.TestCase):
+    def test_sc_constructor_requires_each_credential(self):
+        # Genuine baseline RED: both existing APIs accepted missing credentials.
+        # This does not claim a bypass of the now-mandatory hub verification.
+        fields = ("sc_ca_cert", "sc_client_cert", "sc_client_key")
+        omitted = object()
+        for api, args in [(BACnetClient, ()), (BACnetServer, (3000,))]:
+            for values in itertools.product((omitted, None, "", "placeholder.pem"), repeat=3):
+                kwargs = {name: value for name, value in zip(fields, values) if value is not omitted}
+                with self.subTest(api=api.__name__, credentials=kwargs):
+                    if all(value == "placeholder.pem" for value in values):
+                        api(*args, transport="sc", **kwargs)
+                    else:
+                        with self.assertRaisesRegex(ValueError, "sc_.*(cert|key)"):
+                            api(*args, transport="sc", **kwargs)
 
-    async def stop_server(self, server):
-        await asyncio.wait_for(server.stop(), 5)
+    def test_non_sc_credentials_remain_optional_and_unread(self):
+        for api, args in [(BACnetClient, ()), (BACnetServer, (3000,))]:
+            for transport in ("bip", "ipv6", "mstp"):
+                for value in (None, "", "not-a-real-file.pem"):
+                    with self.subTest(api=api.__name__, transport=transport, value=value):
+                        api(*args, transport=transport, sc_ca_cert=value,
+                            sc_client_cert=value, sc_client_key=value)
+
+    def test_sc_positional_defaults_and_following_slots(self):
+        for api in (BACnetClient, BACnetServer):
+            params = inspect.signature(api).parameters
+            for name in ("sc_ca_cert", "sc_client_cert", "sc_client_key",
+                         "sc_heartbeat_interval_ms", "sc_heartbeat_timeout_ms", "ipv6_interface"):
+                self.assertIsNone(params[name].default)
+                self.assertEqual(params[name].kind, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        # Nonexistent paths are allowed until startup, including positional SC use.
+        BACnetClient("0.0.0.0", 0, "255.255.255.255", 6000, "sc", "wss://localhost:1",
+                     b"\x02\0\0\0\0\2", "ca.pem", "cert.pem", "key.pem", 30000, 60000, "::1")
+        BACnetServer(3000, "SC", "0.0.0.0", 0, "255.255.255.255", "sc", "wss://localhost:1",
+                     b"\x02\0\0\0\0\2", "ca.pem", "cert.pem", "key.pem", 30000, 60000, "::1",
+                     "dcc-password", "reinit-password")
+
+
+class NodeMtlsTests(MtlsFixture):
+    def node(self, api, url, **overrides):
+        kwargs = dict(transport="sc", sc_hub=url, sc_vmac=b"\x02\0\0\0\0\2",
+                      sc_ca_cert=self.path("site.pem"), sc_client_cert=self.path("server.pem"),
+                      sc_client_key=self.path("server.key"))
+        kwargs.update(overrides)
+        return api(*((3000,) if api is BACnetServer else ()), **kwargs)
+
+    async def start_node(self, node):
+        if isinstance(node, BACnetServer):
+            await asyncio.wait_for(node.start(), 5)
+        else:
+            self.assertIs(await asyncio.wait_for(node.__aenter__(), 5), node)
+
+    async def test_invalid_local_files_do_not_dial_or_drain(self):
+        cases = []
+        for field, label, read_error in [
+            ("sc_ca_cert", "CERTIFICATE", "CA cert"),
+            ("sc_client_cert", "CERTIFICATE", "client cert"),
+            ("sc_client_key", "PRIVATE KEY", "client key"),
+        ]:
+            for kind, contents in [("empty", ""), ("garbage", "not PEM"),
+                                   ("bad-base64", f"-----BEGIN {label}-----\n%%%\n-----END {label}-----\n"),
+                                   ("bad-der", f"-----BEGIN {label}-----\nYQ==\n-----END {label}-----\n")]:
+                name = f"{field}-{kind}.pem"
+                (self.root / name).write_text(contents)
+                cases.append(({field: self.path(name)}, "TLS config error:"))
+            cases.extend([({field: self.path("does-not-exist.pem")}, f"failed to read {read_error}"),
+                          ({field: str(self.root)}, f"failed to read {read_error}")])
+        cases.append(({"sc_client_key": self.path("client.key")}, "TLS client auth error"))
+        for api in (BACnetClient, BACnetServer):
+            for overrides, message in cases:
+                with self.subTest(api=api.__name__, overrides=overrides), socket.socket() as listener:
+                    listener.bind(("127.0.0.1", 0))
+                    listener.listen()
+                    listener.setblocking(False)
+                    address = listener.getsockname()
+                    node = self.node(api, f"wss://127.0.0.1:{address[1]}", **overrides)
+                    if isinstance(node, BACnetServer):
+                        node.add_analog_input(0, "Pending AI", 64, 72.5)
+                    try:
+                        with self.assertRaisesRegex(RuntimeError, message) as rejected:
+                            await self.start_node(node)
+                        self.assertTrue(str(rejected.exception).startswith("TLS config error:"))
+                        # A completed TCP dial would be queued even if immediately
+                        # closed. Check the live accept queue, not a dial timeout.
+                        with self.assertRaises(BlockingIOError):
+                            listener.accept()
+                        if isinstance(node, BACnetServer):
+                            self.assertEqual(getattr(node, "_pending_registration_count")(), 1)
+                    finally:
+                        await self.stop_server(node)
+                    # Qualify that this exact listener observes an actual dial.
+                    listener.settimeout(3)
+                    with socket.create_connection(address, timeout=3):
+                        accepted, _ = listener.accept()
+                        accepted.close()
+
+    async def test_server_repairs_files_and_serves_preserved_registration(self):
+        hub = self.hub()
+        self.addAsyncCleanup(self.stop_hub, hub)
+        await asyncio.wait_for(hub.start(), 3)
+        paths = {name: self.path(f"retry-{name}.pem") for name in
+                 ("sc_ca_cert", "sc_client_cert", "sc_client_key")}
+        node = self.node(BACnetServer, await hub.url(), **paths)
+        self.addAsyncCleanup(self.stop_server, node)
+        pending_count = getattr(node, "_pending_registration_count")
+        node.add_analog_input(0, "Preserved AI", 64, 72.5)
+        # Construction did not read these still-missing files. Repeated failures
+        # cannot consume registrations; each start reloads repaired credentials.
+        for field, source in [("sc_ca_cert", "site.pem"), ("sc_client_cert", "server.pem"),
+                              ("sc_client_key", "client.key")]:
+            with self.assertRaisesRegex(RuntimeError, "TLS config error:"):
+                await self.start_node(node)
+            self.assertEqual(pending_count(), 1)
+            Path(paths[field]).write_bytes((self.root / source).read_bytes())
+        with self.assertRaisesRegex(RuntimeError, "TLS client auth error"):
+            await self.start_node(node)
+        self.assertEqual(pending_count(), 1)
+        node.add_binary_input(1, "Added after failure")
+        Path(paths["sc_client_key"]).write_bytes((self.root / "server.key").read_bytes())
+        await self.start_node(node)
+        self.assertEqual(pending_count(), 0)
+        self.assertEqual(await asyncio.to_thread(self.websocket, await hub.address(), "client",
+                                                read_property=True), "TLSv1.3")
+
+    async def test_client_repairs_files_and_reads_through_trusted_hub(self):
+        hub = self.hub()
+        self.addAsyncCleanup(self.stop_hub, hub)
+        await asyncio.wait_for(hub.start(), 3)
+        key = self.root / "retry-client.key"
+        key.write_text("not a key")
+        node = self.node(BACnetClient, await hub.url(), sc_client_key=str(key))
+        self.addAsyncCleanup(self.stop_server, node)
+        with self.assertRaisesRegex(RuntimeError, "TLS config error:"):
+            await self.start_node(node)
+        key.write_bytes((self.root / "server.key").read_bytes())
+        await self.start_node(node)
+        ready = threading.Event()
+        done = threading.Event()
+        peer = asyncio.create_task(asyncio.to_thread(
+            self.websocket, await hub.address(), "client", serve_ready=ready, serve_done=done))
+        try:
+            self.assertTrue(await asyncio.to_thread(ready.wait, 3), "raw peer did not connect")
+            value = await asyncio.wait_for(node.read_property(
+                "02:00:00:00:00:03", ObjectIdentifier(ObjectType.ANALOG_INPUT, 0),
+                PropertyIdentifier.PRESENT_VALUE), 3)
+            self.assertEqual(value.value, 72.5)
+        finally:
+            # Socket operations have their own bounds; always join the worker.
+            done.set()
+            self.assertEqual(await peer, "TLSv1.3")
+
+    def rejected_tls_peer(self, listener, cert, trust, version):
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.minimum_version = ctx.maximum_version = version
+        ctx.load_cert_chain(self.path(f"{cert}.pem"), self.path(f"{cert}.key"))
+        ctx.load_verify_locations(self.path(f"{trust}.pem"))
+        ctx.verify_mode = ssl.CERT_REQUIRED
+        listener.settimeout(3)
+        tcp, _ = listener.accept()
+        with tcp:
+            tcp.settimeout(3)
+            with self.assertRaises(ssl.SSLError) as rejected:
+                with ctx.wrap_socket(tcp, server_side=True) as tls:
+                    # TLS 1.3 rejection may arrive after handshake completion.
+                    tls.recv(4096)
+            self.assertNotIsInstance(rejected.exception, ssl.SSLEOFError)
+            self.assertRegex(rejected.exception.reason, "ALERT|CERTIFICATE_VERIFY_FAILED|UNSUPPORTED_PROTOCOL")
+
+    async def test_nodes_reject_untrusted_or_inactive_peers_and_tls12(self):
+        # Independent TLS acceptor proves actual alerts, not SC timeout behavior.
+        cases = [(cert, "site", "server", ssl.TLSVersion.TLSv1_3)
+                 for cert in ("wrong", "expired", "future")]
+        cases += [("hub", "site", cert, ssl.TLSVersion.TLSv1_3)
+                  for cert in ("wrong", "expired", "future")]
+        cases += [("hub", "foreign", "server", ssl.TLSVersion.TLSv1_3),
+                  ("hub", "site", "server", ssl.TLSVersion.TLSv1_2)]
+        for api in (BACnetClient, BACnetServer):
+            for cert, trust, local, version in cases:
+                with self.subTest(api=api.__name__, cert=cert, trust=trust, local=local, version=version):
+                    with socket.socket() as listener:
+                        listener.bind(("127.0.0.1", 0))
+                        listener.listen()
+                        node = self.node(api, f"wss://localhost:{listener.getsockname()[1]}",
+                                         sc_client_cert=self.path(f"{local}.pem"),
+                                         sc_client_key=self.path(f"{local}.key"))
+                        peer = asyncio.create_task(asyncio.to_thread(
+                            self.rejected_tls_peer, listener, cert, trust, version))
+                        try:
+                            with self.assertRaises(BacnetError):
+                                await self.start_node(node)
+                        finally:
+                            try:
+                                await peer
+                            finally:
+                                await self.stop_server(node)
