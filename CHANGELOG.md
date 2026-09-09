@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Opt-in native hub TLS configuration:** `ScHubTlsConfig::from_der` validates
+  explicitly supplied, already loaded CA/chain/key DER without I/O, builds
+  mandatory client verification and TLS 1.3-only local policy, and exposes no raw
+  or mutable policy escape. `ScHub::start_with_tls_config` accepts caller UUID and
+  validated handshake timeouts while reusing the existing lifecycle. Python hub
+  startup delegates to this factory; its constructor, errors and file-loading
+  boundary stay compatible. All raw `TlsAcceptor` startup APIs remain unchanged,
+  without deprecation; Docker, CLI and node TLS APIs are not migrated. Native
+  preflight, compile-fail, real TLS/SC relay/deadline and installed Python tests
+  cover this partial migration, not full-profile conformance or #513 closure.
+  See [native hub configuration and limits](docs/rust-api.md#bacnetsc-hub).
+
 - **CLI SC trust compatibility change:** `bacnet --sc` client invocations now
   require `--sc-ca <FILE>` with explicit usable site CA PEM certificate(s), in
   addition to the existing operational cert/key and SC identity arguments.
@@ -16,7 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   insecure fallback. Local file/configuration failures, including mismatched
   cert/key, fail before dial. Help/version, non-SC transports and capture paths
   without a client stay independent of SC files. TLS 1.3-only remains; public Rust
-  TLS configuration APIs are unchanged and #513 remains partial. See the
+  caller-managed TLS configuration APIs remain compatible (the opt-in hub path
+  above is additive), and #513 remains partial. See the
   [CLI migration and test scope](docs/CLI.md#transport-variants).
 
 - **Python SC node compatibility change:** `BACnetClient` and `BACnetServer`

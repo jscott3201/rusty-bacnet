@@ -1558,8 +1558,16 @@ unreadable, empty, or malformed credentials and mismatched server keys raise
 Missing, untrusted, expired, or not-yet-valid peer certificates are rejected.
 This addresses the Python hub admission boundary of Annex AB.7.4, not full
 security-profile conformance. CA membership does not authorize BACnet operations
-or bind a certificate to a claimed VMAC/Device UUID. Rust `ScHub` still accepts a
-caller-configured `TlsAcceptor`; caller-owned Rust TLS configurations remain
+or bind a certificate to a claimed VMAC/Device UUID. Python startup loads/parses
+files and delegates policy construction to native `ScHubTlsConfig::from_der`, then
+uses `ScHub::start_with_tls_config` with the existing zero UUID and default phase
+timeouts. This is an internal integration, not a new Python signature or another
+certificate-less-access fix; required CA, error categories, file repair/retry and
+async lifecycle remain unchanged. Native construction does not itself load files
+or certify local certificate dates/issuer relationships.
+
+Rust also retains its caller-managed raw `TlsAcceptor` startup APIs alongside the
+[opt-in constrained path](rust-api.md#bacnetsc-hub). Arbitrary raw policy remains
 outside this Python boundary, so #513 remains partial. Python nodes require the
 explicit credentials described [below](#bacnetsc-secure-connect).
 

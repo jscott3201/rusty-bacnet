@@ -315,14 +315,52 @@ Production BACnet/SC transports validate heartbeat settings at `start()`: the in
 ### BACnet/SC Hub
 
 ```rust
-use bacnet_transport::sc_hub::ScHub;
+use bacnet_transport::sc_hub::{ScHub, ScHubHandshakeTimeouts, ScHubTlsConfig};
 
-let hub = ScHub::new(listen_addr, tls_acceptor, hub_vmac);
-let addr = hub.start().await?;  // Returns SocketAddr
-// hub.stop().await;
+// Owned, already loaded DER: Vec<CertificateDer<'static>> for both lists,
+// and PrivateKeyDer<'static> for hub_key. File loading belongs to the caller.
+let tls = ScHubTlsConfig::from_der(ca_certs, hub_cert_chain, hub_key)?;
+let mut hub = ScHub::start_with_tls_config(
+    listen_addr, tls, hub_vmac, hub_uuid, ScHubHandshakeTimeouts::default(),
+).await?;
+let addr = hub.local_addr().expect("started hub has a bound address");
+// ... use the hub ...
+hub.stop().await;
 ```
 
 The SC hub is a TLS WebSocket relay. Both clients and servers connect to it as spoke nodes. Messages are routed by VMAC address.
+
+With `sc-tls`, `ScHubTlsConfig` is an **opt-in** constrained native configuration:
+explicit nonempty CA trust anchors, mandatory WebPKI client verification, and
+TLS 1.3-only local policy. Its fallible `from_der` constructor performs no file or
+network I/O. Empty CA/chain, malformed DER (including a bad entry in an otherwise
+valid list), unusable keys, and certificate/key mismatch return `Error::Encoding`
+before startup can bind. The hub chain is leaf first. Configuration is private;
+clones share the same policy, with no mutable/raw accessor or unchecked conversion.
+The constructor uses the built-in aws-lc provider, not a caller-installed provider.
+
+`start_with_tls_config` preserves the supplied Device UUID and validated
+`ScHubHandshakeTimeouts`, using the existing hub lifecycle. Existing
+`start`, `start_with_uuid`, and `start_with_uuid_and_timeouts` still accept raw
+`TlsAcceptor` values without additional validation or deprecation. Their policy
+is **caller-managed**: the typed path makes no guarantee about arbitrary raw
+configurations. Existing node `ClientConfig`/`TlsWebSocket`, CLI and Docker modes
+are unchanged. Python hub startup now uses the typed path internally.
+
+Local configuration checks do not certify certificate dates or issuer
+relationships: peers verify certificates at handshake time using rustls trust
+anchors. Base Standard 135-2020 AB.7.4/AB.7.4.1.1 provides the mutual operational
+authentication and installation-credential context; TLS 1.3-*only* is local policy,
+not the Standard's TLS 1.3-*support* requirement. This does not add direct-issuer,
+revocation, SAN or certificate-to-VMAC/UUID policy, or close the full security
+profile gap (#513 remains partial).
+
+Evidence includes executable/compile-fail rustdoc, native preflight rejection,
+TLS 1.3 mutual authentication with Connect-Accept and relay barriers after missing,
+wrong-issuer, expired, not-yet-valid client and TLS 1.2 denials, custom phase
+deadlines, and explicit stop. A raw TLS 1.2/server-auth-only characterization test
+deliberately remains valid. Installed Python tests separately exercise OpenSSL
+peers and ReadProperty; these are not hardware or full-profile certification.
 
 ### MS/TP (Serial RS-485)
 
@@ -1217,21 +1255,29 @@ let client = BACnetClient::generic_builder().transport(transport).build().await?
 ### BACnet/SC with Hub
 
 ```rust
-use bacnet_transport::sc::ScTransport;
-use bacnet_transport::sc_hub::ScHub;
-use bacnet_transport::sc_tls::{TlsWebSocket, build_tls_config};
+use bacnet_client::client::BACnetClient;
+use bacnet_transport::sc_hub::{ScHub, ScHubHandshakeTimeouts, ScHubTlsConfig};
 
-// Start hub
-let hub = ScHub::new(listen_addr, tls_acceptor, [0xFF, 0, 0, 0, 0, 1]);
-let hub_addr = hub.start().await?;
+// Start the hub with already loaded site CA, hub chain, and matching key DER.
+let hub_tls = ScHubTlsConfig::from_der(ca_certs, hub_cert_chain, hub_key)?;
+let mut hub = ScHub::start_with_tls_config(
+    listen_addr, hub_tls, [0xFF, 0, 0, 0, 0, 1], hub_uuid,
+    ScHubHandshakeTimeouts::default(),
+).await?;
+let hub_addr = hub.local_addr().expect("started hub has a bound address");
 
-// Connect client to hub
-let client = BACnetClient::sc_builder()
+// The caller-managed client config must trust the hub and supply a client cert/key.
+// Use a persistent nonzero client_uuid, distinct from hub_uuid and every other peer.
+let mut client = BACnetClient::sc_builder()
     .hub_url(&format!("wss://127.0.0.1:{}", hub_addr.port()))
     .tls_config(tls_config)
     .vmac([0, 1, 2, 3, 4, 5])
+    .device_uuid(client_uuid)
     .build()
     .await?;
+// ... use the client ...
+client.stop().await?;
+hub.stop().await;
 ```
 
 ### MS/TP with USB Adapter

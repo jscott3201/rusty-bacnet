@@ -1,18 +1,17 @@
 //! TLS configuration helpers for Python bindings.
 
+use bacnet_transport::sc_hub::ScHubTlsConfig;
 use bacnet_types::error::Error;
 use std::sync::Arc;
 use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
-/// Build a TLS 1.3 server config requiring client certificates (for Python ScHub).
+/// Load Python hub credentials, then build the constrained native TLS policy.
 pub fn build_server_tls_config(
     cert_path: &str,
     key_path: &str,
     ca_cert_path: &str,
-) -> Result<Arc<tokio_rustls::rustls::ServerConfig>, Error> {
-    use tokio_rustls::rustls;
-
+) -> Result<ScHubTlsConfig, Error> {
     let cert_data = std::fs::read(cert_path)
         .map_err(|e| Error::Encoding(format!("failed to read server cert: {e}")))?;
     let key_data = std::fs::read(key_path)
@@ -32,27 +31,7 @@ pub fn build_server_tls_config(
     let ca_certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&ca_data)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| Error::Encoding(format!("failed to parse CA cert: {e}")))?;
-    if ca_certs.is_empty() {
-        return Err(Error::Encoding("no CA certificates found".into()));
-    }
-
-    let mut root_store = rustls::RootCertStore::empty();
-    for cert in ca_certs {
-        root_store
-            .add(cert)
-            .map_err(|e| Error::Encoding(format!("failed to add CA cert: {e}")))?;
-    }
-
-    let client_verifier = rustls::server::WebPkiClientVerifier::builder(Arc::new(root_store))
-        .build()
-        .map_err(|e| Error::Encoding(format!("failed to build client verifier: {e}")))?;
-
-    let config = rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-        .with_client_cert_verifier(client_verifier)
-        .with_single_cert(certs, key)
-        .map_err(|e| Error::Encoding(format!("TLS server config error: {e}")))?;
-
-    Ok(Arc::new(config))
+    ScHubTlsConfig::from_der(ca_certs, certs, key)
 }
 
 /// Require explicit SC credential paths without performing file I/O.

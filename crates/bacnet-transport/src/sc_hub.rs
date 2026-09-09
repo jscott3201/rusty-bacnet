@@ -35,8 +35,10 @@ mod relay_send;
 mod retirement;
 mod tasks;
 mod timeouts;
+mod tls_config;
 
 pub use timeouts::ScHubHandshakeTimeouts;
+pub use tls_config::ScHubTlsConfig;
 
 use client::HubClient;
 use helpers::*;
@@ -108,11 +110,39 @@ pub struct ScHub {
 }
 
 impl ScHub {
+    /// Start with opt-in validated TLS policy, a caller-specified Device UUID,
+    /// and independent validated handshake budgets.
+    ///
+    /// [`ScHubTlsConfig::from_der`] performs credential/configuration validation
+    /// without I/O before this method can bind. This delegates to the same hub
+    /// lifecycle as the caller-managed raw startup methods. Use [`Self::stop`]
+    /// to await worker cleanup. See [`ScHubTlsConfig`] for an executable example.
+    pub async fn start_with_tls_config(
+        bind_addr: &str,
+        tls_config: ScHubTlsConfig,
+        hub_vmac: Vmac,
+        hub_uuid: DeviceUuid,
+        timeouts: ScHubHandshakeTimeouts,
+    ) -> Result<Self, bacnet_types::error::Error> {
+        Self::start_with_uuid_and_timeouts(
+            bind_addr,
+            tls_config.into_acceptor(),
+            hub_vmac,
+            hub_uuid,
+            timeouts,
+        )
+        .await
+    }
+
     /// Start the hub, binding to `bind_addr` (e.g. `"127.0.0.1:0"` for a
     /// random port).
     ///
     /// The hub begins accepting TLS WebSocket connections immediately on a
     /// background task.
+    ///
+    /// TLS policy is entirely caller-managed: this does not validate the raw
+    /// acceptor's trust, client authentication, or protocol versions. Opt into
+    /// [`Self::start_with_tls_config`] for constrained policy.
     pub async fn start(
         bind_addr: &str,
         tls_acceptor: TlsAcceptor,
@@ -122,6 +152,7 @@ impl ScHub {
     }
 
     /// Start the hub with a specific Device UUID.
+    /// TLS policy remains caller-managed, as in [`Self::start`].
     pub async fn start_with_uuid(
         bind_addr: &str,
         tls_acceptor: TlsAcceptor,
@@ -140,6 +171,8 @@ impl ScHub {
 
     /// Start with a Device UUID and validated independent handshake budgets.
     /// Established connections are not governed by these budgets.
+    /// TLS policy remains caller-managed, as in [`Self::start`]; validated
+    /// timeouts do not validate the supplied TLS acceptor.
     ///
     /// ```no_run
     /// # async fn example(acceptor: tokio_rustls::TlsAcceptor) -> Result<(), bacnet_types::error::Error> {

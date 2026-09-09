@@ -9,9 +9,8 @@ use std::sync::Arc;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use tokio::sync::Mutex;
-use tokio_rustls::TlsAcceptor;
 
-use bacnet_transport::sc_hub::ScHub;
+use bacnet_transport::sc_hub::{ScHub, ScHubHandshakeTimeouts};
 
 use crate::errors::to_py_err;
 
@@ -97,11 +96,15 @@ impl PyScHub {
             let server_tls =
                 crate::tls::build_server_tls_config(&cert, &key, &ca_cert).map_err(to_py_err)?;
 
-            let acceptor = TlsAcceptor::from(server_tls);
-
-            let hub = ScHub::start(&listen, acceptor, vmac)
-                .await
-                .map_err(to_py_err)?;
+            let hub = ScHub::start_with_tls_config(
+                &listen,
+                server_tls,
+                vmac,
+                [0; 16],
+                ScHubHandshakeTimeouts::default(),
+            )
+            .await
+            .map_err(to_py_err)?;
 
             let addr = hub
                 .local_addr()
