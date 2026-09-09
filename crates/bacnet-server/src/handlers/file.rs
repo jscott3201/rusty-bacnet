@@ -262,8 +262,8 @@ fn encode_read_ack(
 ///
 /// The dispatcher holds the object database's write guard for the whole
 /// handler, so the gates, the write, and the ACK are one atomic operation
-/// per Clause 14. Every refusal the handler itself raises leaves both the
-/// object and the response buffer untouched; a storage that breaks the
+/// per Clause 14. Pre-write refusals do not invoke a storage write or modify
+/// caller output (metadata/hook side effects are excluded); a storage that breaks the
 /// [`FileStorage`](bacnet_objects::file::FileStorage) position contract
 /// can leave the object mutated and still draw DEVICE / INTERNAL_ERROR
 /// from the ACK conversion.
@@ -272,6 +272,40 @@ pub fn handle_atomic_write_file(
     service_data: &[u8],
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
+    write_file(db, service_data, buf, None).map_err(|failure| match failure {
+        AtomicWriteFileFailure::Service(error) => error,
+        AtomicWriteFileFailure::Budget => unreachable!("unconfigured write has no budget"),
+    })
+}
+
+/// A local admission refusal is not an opaque storage `Error::Abort`.
+#[derive(Debug)]
+pub(crate) enum AtomicWriteFileFailure {
+    Service(Error),
+    Budget,
+}
+
+impl From<Error> for AtomicWriteFileFailure {
+    fn from(error: Error) -> Self {
+        Self::Service(error)
+    }
+}
+
+pub(crate) fn handle_atomic_write_file_budgeted(
+    db: &mut ObjectDatabase,
+    service_data: &[u8],
+    buf: &mut BytesMut,
+    budget: crate::server::AtomicWriteFileBudget,
+) -> Result<(), AtomicWriteFileFailure> {
+    write_file(db, service_data, buf, Some(budget))
+}
+
+fn write_file(
+    db: &mut ObjectDatabase,
+    service_data: &[u8],
+    buf: &mut BytesMut,
+    budget: Option<crate::server::AtomicWriteFileBudget>,
+) -> Result<(), AtomicWriteFileFailure> {
     use bacnet_services::file::{
         AtomicWriteFileAck, AtomicWriteFileRequest, FileWriteAccessMethod, FileWriteAckMethod,
     };
@@ -290,12 +324,13 @@ pub fn handle_atomic_write_file(
         if *record_count as usize != file_record_data.len() {
             return Err(Error::Reject {
                 reason: RejectReason::MISSING_REQUIRED_PARAMETER.to_raw(),
-            });
+            }
+            .into());
         }
     }
 
     if request.file_identifier.object_type() != ObjectType::FILE {
-        return Err(inconsistent_object_type());
+        return Err(inconsistent_object_type().into());
     }
 
     let object = db
@@ -306,7 +341,7 @@ pub fn handle_atomic_write_file(
     // inaccessible for another reason" is refused before its properties are
     // consulted; an object without storage is that case.
     if object.file_storage_internal().is_none() {
-        return Err(file_access_denied());
+        return Err(file_access_denied().into());
     }
 
     // Clause 14.2.4.1 "Write to a read-only File". Reading the property
@@ -315,7 +350,7 @@ pub fn handle_atomic_write_file(
     // than as permission to write.
     match object.read_property(PropertyIdentifier::READ_ONLY, None) {
         Ok(PropertyValue::Boolean(false)) => {}
-        _ => return Err(file_access_denied()),
+        _ => return Err(file_access_denied().into()),
     }
 
     // Clause 14.2: refuse a mismatched access method before any mutation or
@@ -338,6 +373,9 @@ pub fn handle_atomic_write_file(
             file_data,
         } => {
             let start = write_start(file_start_position)?;
+            if budget.is_some_and(|b| file_data.len() > b.max_stream_payload_octets) {
+                return Err(AtomicWriteFileFailure::Budget);
+            }
             let actual = storage.write_stream(start, &file_data)?;
             let ack = AtomicWriteFileAck {
                 access: FileWriteAckMethod::Stream {
@@ -353,6 +391,15 @@ pub fn handle_atomic_write_file(
             ..
         } => {
             let start = write_start(file_start_record)?;
+            if budget.is_some_and(|b| {
+                file_record_data.len() > b.max_records
+                    || !record_payload_fits(
+                        file_record_data.iter().map(Vec::len),
+                        b.max_record_payload_bytes,
+                    )
+            }) {
+                return Err(AtomicWriteFileFailure::Budget);
+            }
             let actual = storage.write_records(start, &file_record_data)?;
             let ack = AtomicWriteFileAck {
                 access: FileWriteAckMethod::Record {
@@ -375,5 +422,34 @@ fn write_start(requested: i32) -> Result<FileWriteStart, Error> {
         position => u64::try_from(position)
             .map(FileWriteStart::At)
             .map_err(|_| invalid_file_start_position()),
+    }
+}
+
+/// Checked sum, stopping at the first excess without examining later lengths.
+fn record_payload_fits(lengths: impl IntoIterator<Item = usize>, cap: usize) -> bool {
+    let mut total = 0usize;
+    for len in lengths {
+        let Some(next) = total.checked_add(len).filter(|&next| next <= cap) else {
+            return false;
+        };
+        total = next;
+    }
+    true
+}
+
+#[cfg(test)]
+mod write_budget_arithmetic {
+    use super::record_payload_fits;
+
+    #[test]
+    fn atomic_write_file_checked_sum_and_early_stop() {
+        assert!(record_payload_fits([0, usize::MAX], usize::MAX));
+        assert!(!record_payload_fits([usize::MAX, 1], usize::MAX));
+        assert!(record_payload_fits([2, 3, 0], 5));
+        assert!(!record_payload_fits([2, 3], 4));
+        assert!(!record_payload_fits(
+            std::iter::once(6).chain(std::iter::from_fn(|| panic!("past excess"))),
+            5
+        ));
     }
 }

@@ -41,6 +41,9 @@ impl BACnetServer {
         atomic_read_file_max_requested_stream_octets=16384,
         atomic_read_file_max_requested_records=256,
         atomic_read_file_max_service_ack_bytes=16384,
+        atomic_write_file_max_stream_payload_octets=16384,
+        atomic_write_file_max_records=256,
+        atomic_write_file_max_record_payload_bytes=16384,
         read_range_max_returned_items=256,
         read_range_max_service_ack_bytes=16384,
         event_information_max_objects=4096,
@@ -85,6 +88,9 @@ impl BACnetServer {
         atomic_read_file_max_requested_stream_octets: usize,
         atomic_read_file_max_requested_records: usize,
         atomic_read_file_max_service_ack_bytes: usize,
+        atomic_write_file_max_stream_payload_octets: usize,
+        atomic_write_file_max_records: usize,
+        atomic_write_file_max_record_payload_bytes: usize,
         read_range_max_returned_items: usize,
         read_range_max_service_ack_bytes: usize,
         event_information_max_objects: usize,
@@ -135,6 +141,14 @@ impl BACnetServer {
             max_returned_items: read_range_max_returned_items,
             max_service_ack_bytes: read_range_max_service_ack_bytes,
         };
+        let atomic_write_file_budget = server::AtomicWriteFileBudget {
+            max_stream_payload_octets: atomic_write_file_max_stream_payload_octets,
+            max_records: atomic_write_file_max_records,
+            max_record_payload_bytes: atomic_write_file_max_record_payload_bytes,
+        };
+        atomic_write_file_budget
+            .validate()
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
         read_range_budget
             .validate()
             .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
@@ -174,6 +188,7 @@ impl BACnetServer {
             get_alarm_summary_budget,
             get_enrollment_summary_budget,
             atomic_read_file_budget,
+            atomic_write_file_budget,
             read_range_budget,
             get_event_information_budget,
             started: Arc::new(AtomicBool::new(false)),

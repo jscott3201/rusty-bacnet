@@ -3,6 +3,7 @@ use super::*;
 mod acknowledge_alarm;
 mod alarm_summary;
 mod atomic_read_file;
+mod atomic_write_file;
 mod audit_notification;
 mod confirmed;
 pub(super) mod confirmed_response;
@@ -341,14 +342,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 )
             }
             s if s == ConfirmedServiceChoice::ATOMIC_WRITE_FILE => {
-                let result = {
-                    let mut db = db.write().await;
-                    handlers::handle_atomic_write_file(&mut db, &req.service_request, &mut ack_buf)
-                };
-                match result {
-                    Ok(()) => complex_ack(ack_buf),
-                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
-                }
+                let mut db = db.write().await;
+                Self::atomic_write_file_response(
+                    &mut db,
+                    invoke_id,
+                    &req.service_request,
+                    config.atomic_write_file_budget,
+                )
             }
             s if s == ConfirmedServiceChoice::ADD_LIST_ELEMENT => {
                 let mut db = db.write().await;

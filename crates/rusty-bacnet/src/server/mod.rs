@@ -106,6 +106,7 @@ pub struct BACnetServer {
     get_alarm_summary_budget: server::GetAlarmSummaryBudget,
     get_enrollment_summary_budget: server::GetEnrollmentSummaryBudget,
     atomic_read_file_budget: server::AtomicReadFileBudget,
+    atomic_write_file_budget: server::AtomicWriteFileBudget,
     read_range_budget: server::ReadRangeBudget,
     get_event_information_budget: server::GetEventInformationBudget,
     /// Whether the server has been started.

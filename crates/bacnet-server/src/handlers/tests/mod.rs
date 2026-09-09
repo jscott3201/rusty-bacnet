@@ -41,6 +41,7 @@ mod alert_enrollment;
 mod array_index_gating;
 mod async_dcc;
 mod atomic_read_file_budget;
+mod atomic_write_file_budget;
 mod audit_log_query;
 mod binary_lighting_operations;
 mod binary_lighting_relinquish_default;

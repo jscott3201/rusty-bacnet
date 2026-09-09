@@ -42,6 +42,7 @@ impl BACnetServer {
         let get_alarm_summary_budget = self.get_alarm_summary_budget;
         let get_enrollment_summary_budget = self.get_enrollment_summary_budget;
         let atomic_read_file_budget = self.atomic_read_file_budget;
+        let atomic_write_file_budget = self.atomic_write_file_budget;
         let read_range_budget = self.read_range_budget;
         let get_event_information_budget = self.get_event_information_budget;
 
@@ -152,6 +153,7 @@ impl BACnetServer {
                 .get_alarm_summary_budget(get_alarm_summary_budget)
                 .get_enrollment_summary_budget(get_enrollment_summary_budget)
                 .atomic_read_file_budget(atomic_read_file_budget)
+                .atomic_write_file_budget(atomic_write_file_budget)
                 .read_range_budget(read_range_budget)
                 .get_event_information_budget(get_event_information_budget)
                 .transport(transport);

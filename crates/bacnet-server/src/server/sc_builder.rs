@@ -190,6 +190,7 @@ impl ScServerBuilder {
         self.config.get_alarm_summary_budget.validate()?;
         self.config.get_enrollment_summary_budget.validate()?;
         self.config.atomic_read_file_budget.validate()?;
+        self.config.atomic_write_file_budget.validate()?;
         self.config.read_range_budget.validate()?;
         self.config.get_event_information_budget.validate()?;
 

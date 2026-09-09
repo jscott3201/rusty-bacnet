@@ -278,6 +278,8 @@ pub struct ServerConfig {
     pub get_enrollment_summary_budget: GetEnrollmentSummaryBudget,
     /// Local AtomicReadFile raw-count and complete service-ACK limits.
     pub atomic_read_file_budget: AtomicReadFileBudget,
+    /// Local AtomicWriteFile payload admission limits.
+    pub atomic_write_file_budget: AtomicWriteFileBudget,
     /// ReadRange directional page item and logical service-byte limits.
     pub read_range_budget: ReadRangeBudget,
     /// GetEventInformation database admission and strict response-page limits.
@@ -392,6 +394,7 @@ impl std::fmt::Debug for ServerConfig {
                 &self.get_enrollment_summary_budget,
             )
             .field("atomic_read_file_budget", &self.atomic_read_file_budget)
+            .field("atomic_write_file_budget", &self.atomic_write_file_budget)
             .field("read_range_budget", &self.read_range_budget)
             .field(
                 "get_event_information_budget",
@@ -460,6 +463,7 @@ impl Default for ServerConfig {
             get_alarm_summary_budget: GetAlarmSummaryBudget::default(),
             get_enrollment_summary_budget: GetEnrollmentSummaryBudget::default(),
             atomic_read_file_budget: AtomicReadFileBudget::default(),
+            atomic_write_file_budget: AtomicWriteFileBudget::default(),
             read_range_budget: ReadRangeBudget::default(),
             get_event_information_budget: GetEventInformationBudget::default(),
             port: 0xBAC0,
@@ -916,15 +920,19 @@ pub use rpm_budget::ReadPropertyMultipleBudget;
 mod alarm_summary_budget;
 pub use alarm_summary_budget::GetAlarmSummaryBudget;
 mod atomic_read_file_budget;
+mod atomic_write_file_budget;
 mod read_range_budget;
 pub use read_range_budget::ReadRangeBudget;
 mod event_information_budget;
 pub use event_information_budget::GetEventInformationBudget;
 mod enrollment_summary_budget;
 pub use atomic_read_file_budget::AtomicReadFileBudget;
+pub use atomic_write_file_budget::AtomicWriteFileBudget;
 pub use enrollment_summary_budget::GetEnrollmentSummaryBudget;
 #[cfg(test)]
 mod atomic_read_file_tests;
+#[cfg(test)]
+mod atomic_write_file_tests;
 #[cfg(test)]
 mod enrollment_summary_tests;
 mod request_peer;

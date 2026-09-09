@@ -70,6 +70,8 @@ SERVER_KEYWORD_ONLY = MSTP_KEYWORD_ONLY + [
     "enrollment_summary_max_objects", "enrollment_summary_max_service_ack_bytes",
     "atomic_read_file_max_requested_stream_octets", "atomic_read_file_max_requested_records",
     "atomic_read_file_max_service_ack_bytes",
+    "atomic_write_file_max_stream_payload_octets", "atomic_write_file_max_records",
+    "atomic_write_file_max_record_payload_bytes",
     "read_range_max_returned_items", "read_range_max_service_ack_bytes",
     "event_information_max_objects", "event_information_max_returned_summaries",
     "event_information_max_service_ack_bytes",
