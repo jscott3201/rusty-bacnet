@@ -5,6 +5,149 @@ use bacnet_services::device_mgmt::DeviceCommunicationControlRequest;
 use bacnet_types::enums::EnableDisable;
 use tokio::time::{advance, Duration};
 
+#[tokio::test(start_paused = true)]
+async fn dcc_source_exact_full_bytes_and_fail_closed_wire() {
+    use crate::server::{DccSource, DccSourceRestriction};
+    let direct = vec![127, 0, 0, 1, 0xba, 0xc0];
+    let long = vec![42; 255];
+    let restrictions = [
+        None,
+        Some(DccSourceRestriction::new(vec![]).unwrap()),
+        Some(DccSourceRestriction::new(vec![DccSource::Direct(direct.clone())]).unwrap()),
+        Some(
+            DccSourceRestriction::new(vec![DccSource::Routed {
+                network: 7,
+                address: long.clone(),
+            }])
+            .unwrap(),
+        ),
+    ];
+    for (kind, restriction) in restrictions.into_iter().enumerate() {
+        let config = ServerConfig {
+            dcc_policy: DccPolicy::RequirePassword,
+            dcc_password: Some("required".into()),
+            dcc_source_restriction: restriction,
+            ..Default::default()
+        };
+        let mut different_tail = long.clone();
+        different_tail[254] = 43;
+        for (network, address, exact) in [
+            (7, long.clone(), true),
+            (8, long.clone(), false),
+            (7, different_tail, false),
+            (7, long[..32].to_vec(), false),
+            (7, direct.clone(), false),
+        ] {
+            for routed in [false, true] {
+                let source = routed.then(|| NpduAddress {
+                    network,
+                    mac_address: MacAddr::from_slice(&address),
+                });
+                let state = Arc::new(AtomicU8::new(1));
+                let timer = Arc::new(Mutex::new(None));
+                let response = dispatch_wire(
+                    &state,
+                    &timer,
+                    EnableDisable::ENABLE,
+                    None,
+                    &config,
+                    Some("required"),
+                    source,
+                )
+                .await;
+                let allowed = kind == 0 || (kind == 2 && !routed) || (kind == 3 && routed && exact);
+                if allowed {
+                    assert!(matches!(response, Apdu::SimpleAck(_)));
+                } else {
+                    assert_denied(response);
+                }
+                assert_eq!(state.load(Ordering::Acquire), if allowed { 0 } else { 1 });
+                assert!(timer.lock().await.is_none());
+            }
+        }
+    }
+    // Direct matching also uses full bytes, independently of the wire fixture's MAC.
+    for length in [1, 32, 33, 255] {
+        let address = vec![1; length];
+        let restriction =
+            DccSourceRestriction::new(vec![DccSource::Direct(address.clone())]).unwrap();
+        assert!(restriction.allows(&address, None));
+        let mut other = address.clone();
+        other[length - 1] = 2;
+        assert!(!restriction.allows(&other, None));
+        assert!(!restriction.allows(&address[..length - 1], None));
+        for (network, mac) in [
+            (0, address.clone()),
+            (65535, address.clone()),
+            (7, vec![]),
+            (7, vec![1; 256]),
+        ] {
+            assert!(!restriction.allows(
+                &address,
+                Some(&NpduAddress {
+                    network,
+                    mac_address: MacAddr::from_slice(&mac)
+                })
+            ));
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn dcc_source_denial_preserves_timer_and_error_precedence() {
+    use crate::server::DccSourceRestriction;
+    for pending_expiry in [false, true] {
+        let state = Arc::new(AtomicU8::new(0));
+        let timer = Arc::new(Mutex::new(None));
+        assert!(matches!(
+            dispatch(&state, &timer, EnableDisable::DISABLE_INITIATION, Some(1)).await,
+            Apdu::SimpleAck(_)
+        ));
+        tokio::task::yield_now().await;
+        let slot = timer.lock().await;
+        let id = slot.as_ref().unwrap().id();
+        advance(Duration::from_secs(if pending_expiry { 60 } else { 30 })).await;
+        let config = ServerConfig {
+            dcc_policy: DccPolicy::RequirePassword,
+            dcc_password: Some("required".into()),
+            dcc_source_restriction: Some(DccSourceRestriction::new(vec![]).unwrap()),
+            ..Default::default()
+        };
+        for mode in [
+            EnableDisable::ENABLE,
+            EnableDisable::DISABLE_INITIATION,
+            EnableDisable::DISABLE,
+        ] {
+            for duration in [None, Some(0), Some(5)] {
+                for password in [None, Some("wrong"), Some("required")] {
+                    let response =
+                        dispatch_wire(&state, &timer, mode, duration, &config, password, None)
+                            .await;
+                    if password == Some("required") {
+                        assert_denied(response);
+                    } else {
+                        assert!(
+                            matches!(response, Apdu::Error(e) if e.error_class == ErrorClass::SECURITY && e.error_code == ErrorCode::PASSWORD_FAILURE)
+                        );
+                    }
+                    assert_eq!(slot.as_ref().unwrap().id(), id);
+                    assert_eq!(state.load(Ordering::Acquire), 2);
+                }
+            }
+        }
+        drop(slot);
+        if !pending_expiry {
+            advance(Duration::from_secs(29)).await;
+            tokio::task::yield_now().await;
+            assert_eq!(state.load(Ordering::Acquire), 2);
+            advance(Duration::from_secs(1)).await;
+        }
+        let task = timer.lock().await.take().unwrap();
+        task.await.unwrap();
+        assert_eq!(state.load(Ordering::Acquire), 0);
+    }
+}
+
 async fn dispatch(
     comm_state: &Arc<AtomicU8>,
     dcc_timer: &Arc<Mutex<Option<JoinHandle<()>>>>,
@@ -287,6 +430,12 @@ async fn dcc_require_password_preserves_replacement_expiry_and_enable_timer_sema
     let config = ServerConfig {
         dcc_policy: DccPolicy::RequirePassword,
         dcc_password: Some("required".into()),
+        dcc_source_restriction: Some(
+            crate::server::DccSourceRestriction::new(vec![crate::server::DccSource::Direct(vec![
+                127, 0, 0, 1, 0xba, 0xc0,
+            ])])
+            .unwrap(),
+        ),
         ..Default::default()
     };
     let state = Arc::new(AtomicU8::new(0));

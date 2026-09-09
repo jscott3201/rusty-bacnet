@@ -202,6 +202,7 @@ mod tests {
             mstp_max_info_frames: 1,
             dcc_password: None,
             dcc_policy: server::DccPolicy::default(),
+            dcc_source_restriction: None,
             reinit_password: None,
             request_admission_policy: server::RequestAdmissionPolicy::default(),
             read_property_multiple_budget: server::ReadPropertyMultipleBudget::default(),

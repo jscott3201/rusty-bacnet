@@ -102,6 +102,15 @@ impl ScServerBuilder {
         self
     }
 
+    /// Restrict claimed DCC sources; requires explicit RequirePassword policy.
+    pub fn dcc_source_restriction(
+        mut self,
+        restriction: Option<super::DccSourceRestriction>,
+    ) -> Self {
+        self.config.dcc_source_restriction = restriction;
+        self
+    }
+
     /// Set the password required for ReinitializeDevice requests.
     pub fn reinit_password(mut self, password: impl Into<String>) -> Self {
         self.config.reinit_password = Some(password.into());
@@ -192,7 +201,7 @@ impl ScServerBuilder {
             .ok_or_else(|| Error::Encoding("SC server builder: tls_config is required".into()))?;
 
         self.config.request_admission_policy.validate()?;
-        self.config.dcc_policy.validate(&self.config.dcc_password)?;
+        self.config.validate_dcc_config()?;
         self.config.read_property_multiple_budget.validate()?;
         self.config.get_alarm_summary_budget.validate()?;
         self.config.get_enrollment_summary_budget.validate()?;

@@ -37,6 +37,7 @@ impl BACnetServer {
         let ipv6_interface = self.ipv6_interface.clone();
         let dcc_password = self.dcc_password.clone();
         let dcc_policy = self.dcc_policy;
+        let dcc_source_restriction = self.dcc_source_restriction.clone();
         let reinit_password = self.reinit_password.clone();
         let request_admission_policy = self.request_admission_policy;
         let read_property_multiple_budget = self.read_property_multiple_budget;
@@ -161,7 +162,9 @@ impl BACnetServer {
             if let Some(pw) = dcc_password {
                 builder = builder.dcc_password(pw);
             }
-            builder = builder.dcc_policy(dcc_policy);
+            builder = builder
+                .dcc_policy(dcc_policy)
+                .dcc_source_restriction(dcc_source_restriction);
             if let Some(pw) = reinit_password {
                 builder = builder.reinit_password(pw);
             }

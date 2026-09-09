@@ -332,6 +332,8 @@ pub struct ServerConfig {
     pub dcc_password: Option<String>,
     /// Local DCC authorization. Supplying a password alone does not enable DCC.
     pub dcc_policy: DccPolicy,
+    /// Optional exact claimed-source restriction, valid only with RequirePassword.
+    pub dcc_source_restriction: Option<DccSourceRestriction>,
     /// Optional password required for ReinitializeDevice.
     pub reinit_password: Option<String>,
     /// Enable periodic fault detection / reliability evaluation.
@@ -441,6 +443,7 @@ impl std::fmt::Debug for ServerConfig {
             )
             .field("dcc_password", &self.dcc_password.as_ref().map(|_| "***"))
             .field("dcc_policy", &self.dcc_policy)
+            .field("dcc_source_restriction", &self.dcc_source_restriction)
             .field(
                 "reinit_password",
                 &self.reinit_password.as_ref().map(|_| "***"),
@@ -482,6 +485,7 @@ impl Default for ServerConfig {
             unconfirmed_audit_notification_authorizer: None,
             dcc_password: None,
             dcc_policy: DccPolicy::default(),
+            dcc_source_restriction: None,
             reinit_password: None,
             enable_fault_detection: false,
             enable_event_enrollment: true,
@@ -518,12 +522,6 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
     pub fn device_binding(mut self, binding: DeviceBinding) -> Result<Self, Error> {
         register_configured_binding(&mut self.configured_device_bindings, binding)?;
         Ok(self)
-    }
-
-    /// Set the password required for DeviceCommunicationControl requests.
-    pub fn dcc_password(mut self, password: impl Into<String>) -> Self {
-        self.config.dcc_password = Some(password.into());
-        self
     }
 
     /// Set the password required for ReinitializeDevice requests.
@@ -892,7 +890,7 @@ pub(crate) mod dcc_outcomes;
 mod dcc_policy;
 mod dcc_timer;
 pub use dcc_outcomes::DccOutcomeCounters;
-pub use dcc_policy::DccPolicy;
+pub use dcc_policy::{DccPolicy, DccSource, DccSourceRestriction};
 mod device_bindings;
 mod discovery;
 pub use discovery::{DiscoveryCounters, DiscoveryPolicy};

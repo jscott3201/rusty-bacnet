@@ -14,8 +14,9 @@ not a BACnet-mandated default and not authentication of a source principal.
 LegacyPermissive does **not** bypass a configured password. Without one, any
 requester whose request reaches the handler can change communications. Do not
 mistake this compatibility option, a shared password, a routed address, or an SC
-VMAC for authenticated source identity. Source authorization, auditing and rate
-policy remain future work under the partial, separate #522 scope.
+VMAC for authenticated source identity. Exact address restriction below is not
+principal authentication. Full auditing and rate policy remain future work under
+the partial, separate #522 scope.
 
 ## Migration
 
@@ -39,9 +40,41 @@ ReinitializeDevice's separate password and handler are unchanged.
 
 ## Ordering and side effects
 
+### Optional exact-source restriction
+
+`ServerConfig::dcc_source_restriction` defaults to `None`, preserving existing
+policy behavior. Generic, B/IP and SC builders expose `.dcc_source_restriction(...)`.
+Use `Some(DccSourceRestriction::new(entries)?)` with `DccSource::Direct(Vec<u8>)`
+or `DccSource::Routed { network, address: Vec<u8> }`. Exhaustive Rust config
+literals need `dcc_source_restriction: None` (or a suitable default update).
+The validated list permits at most 256 entries and 1–255 octets per address;
+routed networks must be 1–65534. These are static local limits, not transport
+support promises. No CIDR, prefixes, ranges or dynamic callbacks are supported.
+
+Python's keyword-only `dcc_source_restriction` accepts `None` or a list of
+`(network_or_none, address_bytes)` tuples: for example `[(7, b"\x2a")]` permits
+the claimed routed address 42 on network 7; `[(None, b"\x7f\x00\x00\x01\xba\xc0")]`
+permits that exact direct IPv4-plus-UDP-port address. `[]` explicitly denies all
+sources; it is **not** equivalent to `None`. Configuration is copied at construction.
+Invalid limits raise `ValueError`, invalid types `TypeError`, and out-of-u16
+network values may raise `OverflowError`.
+
+A configured list, including empty, requires explicit `RequirePassword` and a
+nonempty password. Other policies reject configuration before transport startup
+or SC dialing (Python constructor, Rust build/start), never silently ignoring it.
+Direct entries only match requests without a routed source. Routed entries match
+the exact network and full source address, not the immediate router's MAC.
+Malformed routed identities fail closed rather than falling back to direct matching.
+All address bytes participate, independently of the 32-byte DEBUG truncation.
+Claimed addresses are spoofable and unauthenticated, **including SC VMACs**.
+An allowed address still needs the correct password; a shared password plus an
+address match does not establish principal identity or authenticated-SC provenance.
+
+### Validation and timer order
+
 Existing admission, duplicate handling and DCC ingress discards are unchanged.
 After admission: decode, existing constant-time password check, deprecated DISABLE
-rejection, then local policy for ENABLE/DISABLE_INITIATION, then live state/timer
+rejection, then local policy and optional source restriction for ENABLE/DISABLE_INITIATION, then live state/timer
 commit. Missing/wrong configured passwords return SECURITY/PASSWORD_FAILURE even
 under DenyAll or for DISABLE. Otherwise denied valid requests return
 SERVICES/SERVICE_REQUEST_DENIED. Unknown-mode decoding/encoding errors retain
@@ -59,7 +92,7 @@ change that existing implementation nuance. Explicit stop still cancels and
 joins the owned timer.
 
 Decode-accepted ENABLE remains eligible for protected recovery capacity regardless
-of policy or password. It can occupy that capacity until the handler denies it;
+of policy, password or source restriction. It can occupy that capacity until the handler denies it;
 there is no pre-admission authorization. Capacity exhaustion may still Abort
 before handler validation. [Request admission](request-admission.md) and the
 completed bounded #521 acceptance remain unchanged, not reopened.
@@ -116,6 +149,6 @@ ordering, rate limiting and flood resistance are not guaranteed. Counters and
 events exclude duplicates, pre-handler admission/shutdown/Abort-fallback
 rejections, handlers cancelled before completion, timer expiry, and response
 delivery failures after commit. Existing admission counters cover their separate
-admission boundary. No authorization, timer or wire-response policy is changed.
-This is partial #522 observability, not full auditing, rate policy or source-aware
-authorization; #521 remains closed.
+admission boundary. Source mismatch reuses `policy_denied_total` and the existing
+`policy_denied` DEBUG event/schema, without new counters. This remains partial
+#522 work, not full auditing, rate policy or principal authentication; #521 remains closed.

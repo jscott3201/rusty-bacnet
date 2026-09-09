@@ -22,6 +22,7 @@ impl BACnetServer {
         reinit_password=None,
         *,
         dcc_policy="deny_all",
+        dcc_source_restriction=None,
         serial_port=None,
         mstp_baud=38400,
         mstp_mac=1,
@@ -70,6 +71,7 @@ impl BACnetServer {
         dcc_password: Option<String>,
         reinit_password: Option<String>,
         dcc_policy: &str,
+        dcc_source_restriction: Option<Vec<(Option<u16>, Vec<u8>)>>,
         serial_port: Option<String>,
         mstp_baud: u32,
         mstp_mac: u8,
@@ -111,6 +113,22 @@ impl BACnetServer {
         };
         dcc_policy
             .validate(&dcc_password)
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        let dcc_source_restriction = dcc_source_restriction
+            .map(|entries| {
+                let restriction = server::DccSourceRestriction::new(
+                    entries
+                        .into_iter()
+                        .map(|(network, address)| match network {
+                            None => server::DccSource::Direct(address),
+                            Some(network) => server::DccSource::Routed { network, address },
+                        })
+                        .collect(),
+                )?;
+                restriction.validate_policy(dcc_policy)?;
+                Ok::<_, bacnet_types::error::Error>(restriction)
+            })
+            .transpose()
             .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
         let request_admission_policy = server::RequestAdmissionPolicy {
             max_confirmed_in_flight,
@@ -198,6 +216,7 @@ impl BACnetServer {
             mstp_max_info_frames,
             dcc_password,
             dcc_policy,
+            dcc_source_restriction,
             reinit_password,
             request_admission_policy,
             read_property_multiple_budget,

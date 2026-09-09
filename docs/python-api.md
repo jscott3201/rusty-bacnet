@@ -1149,6 +1149,7 @@ server = BACnetServer(
     # SC options same as BACnetClient
     dcc_password=None,           # password alone does not enable DCC
     dcc_policy="deny_all",       # keyword-only; explicit require_password or INSECURE legacy_permissive
+    dcc_source_restriction=None, # optional list[(network_or_None, bytes)]; [] denies all; requires require_password
     reinit_password=None,        # password for ReinitializeDevice
 )
 ```

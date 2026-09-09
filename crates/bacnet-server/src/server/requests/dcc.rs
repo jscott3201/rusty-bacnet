@@ -13,8 +13,9 @@ pub(super) async fn response<T: TransportPort + 'static>(
         timer,
         comm_state,
         &req.service_request,
-        &config.dcc_password,
-        config.dcc_policy,
+        config,
+        source_mac,
+        source,
     )
     .await;
     // No await between validation failure/live commit and completion telemetry.

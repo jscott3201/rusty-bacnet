@@ -30,6 +30,15 @@ fn request(mode: u32, password: Option<&str>, duration: Option<u16>) -> Confirme
 }
 
 async fn handle(server: &BACnetServer<HeldTransport>, req: ConfirmedRequestPdu) {
+    handle_source(server, req, &[1], None).await;
+}
+
+async fn handle_source(
+    server: &BACnetServer<HeldTransport>,
+    req: ConfirmedRequestPdu,
+    mac: &[u8],
+    source: Option<NpduAddress>,
+) {
     BACnetServer::handle_admitted_confirmed_request(
         &server.db,
         &server.network,
@@ -45,12 +54,91 @@ async fn handle(server: &BACnetServer<HeldTransport>, req: ConfirmedRequestPdu) 
         &server.dcc_outcomes,
         &server.config,
         &server.request_tasks.spawner(),
-        &[1],
-        None,
+        mac,
+        source,
         req,
         None,
     )
     .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn dcc_source_outcomes_exactly_once_precedence_and_malformed_routing() {
+    for (mode, password, expected) in [
+        (0, Some("required"), "policy_denied"),
+        (2, Some("required"), "policy_denied"),
+        (1, Some("required"), "deprecated_denied"),
+        (1, None, "password_failure"),
+        (99, Some("required"), "malformed"),
+    ] {
+        for (network, address) in [
+            (7, vec![2]),
+            (0, vec![1]),
+            (65535, vec![1]),
+            (7, vec![]),
+            (7, vec![1; 256]),
+        ] {
+            let (mut server, _, mut started) = fixture_with_config(
+                "source outcomes",
+                ServerConfig {
+                    dcc_policy: DccPolicy::RequirePassword,
+                    dcc_password: Some("required".into()),
+                    dcc_source_restriction: Some(
+                        DccSourceRestriction::new(vec![DccSource::Direct(vec![1])]).unwrap(),
+                    ),
+                    ..Default::default()
+                },
+            )
+            .await;
+            let capture = Capture::default();
+            {
+                let future = handle_source(
+                    &server,
+                    request(mode, password, None),
+                    &[1],
+                    Some(NpduAddress {
+                        network,
+                        mac_address: MacAddr::from_slice(&address),
+                    }),
+                )
+                .with_subscriber(capture.clone());
+                tokio::pin!(future);
+                // Valid response routing blocks on transport; malformed routing can
+                // fail response encoding immediately. Both follow completed denial.
+                poll_fn(|cx| {
+                    let _ = future.as_mut().poll(cx);
+                    Poll::Ready(())
+                })
+                .await;
+                let counts = server.dcc_outcome_counters();
+                assert_eq!(counts.accepted_total, 0);
+                assert_eq!(
+                    counts.policy_denied_total,
+                    u64::from(expected == "policy_denied")
+                );
+                assert_eq!(
+                    counts.password_failure_total,
+                    u64::from(expected == "password_failure")
+                );
+                assert_eq!(
+                    counts.deprecated_denied_total,
+                    u64::from(expected == "deprecated_denied")
+                );
+                assert_eq!(counts.malformed_total, u64::from(expected == "malformed"));
+                assert_eq!(server.comm_state(), 0);
+                assert!(server.dcc_timer.lock().await.is_none());
+                let events = capture.0.lock().unwrap();
+                assert_eq!(events.len(), 1);
+                assert_eq!(events[0]["outcome"], expected);
+                assert_eq!(events[0]["source_kind"], "claimed_routed");
+            }
+            let _ = started.try_recv();
+            let counts = server.dcc_outcome_counters();
+            server.stop().await.unwrap();
+            assert_eq!(server.dcc_outcome_counters(), counts);
+            assert_eq!(capture.0.lock().unwrap().len(), 1);
+        }
+    }
 }
 
 async fn poll_pending(future: std::pin::Pin<&mut impl Future<Output = ()>>) {

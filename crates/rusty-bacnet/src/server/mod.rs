@@ -101,6 +101,7 @@ pub struct BACnetServer {
     // Passwords
     dcc_password: Option<String>,
     dcc_policy: server::DccPolicy,
+    dcc_source_restriction: Option<server::DccSourceRestriction>,
     reinit_password: Option<String>,
     request_admission_policy: server::RequestAdmissionPolicy,
     read_property_multiple_budget: server::ReadPropertyMultipleBudget,

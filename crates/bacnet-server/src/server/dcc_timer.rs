@@ -14,13 +14,34 @@ pub(super) async fn replace(
     timer: &Arc<Mutex<Option<JoinHandle<()>>>>,
     comm_state: &Arc<AtomicU8>,
     service_data: &[u8],
-    password: &Option<String>,
-    policy: DccPolicy,
+    config: &ServerConfig,
+    source_mac: &[u8],
+    source: Option<&bacnet_encoding::npdu::NpduAddress>,
 ) -> Result<dcc_outcomes::DccMetadata, handlers::device_mgmt::DccFailure> {
     // Decode and validate once, retaining only non-secret proposed state and
     // metadata. Never change live state before a cancellable await.
     let (mode, duration, proposed) =
-        handlers::device_mgmt::validate_dcc(service_data, password, policy)?;
+        handlers::device_mgmt::validate_dcc(service_data, &config.dcc_password, config.dcc_policy)?;
+    if config
+        .dcc_source_restriction
+        .as_ref()
+        .is_some_and(|restriction| {
+            config.dcc_policy != DccPolicy::RequirePassword
+                || !restriction.allows(source_mac, source)
+        })
+    {
+        return Err(handlers::device_mgmt::DccFailure {
+            error: Error::Protocol {
+                class: ErrorClass::SERVICES.to_raw() as u32,
+                code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
+            },
+            outcome: dcc_outcomes::DccOutcome::PolicyDenied,
+            metadata: dcc_outcomes::DccMetadata {
+                mode: Some(mode.to_raw()),
+                duration,
+            },
+        });
+    }
     let mut slot = timer.lock().await;
     cancel(&mut slot).await;
     // Replacement, expiry, and shutdown share this linearization boundary.

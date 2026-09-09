@@ -9,6 +9,29 @@ from rusty_bacnet import BACnetServer
 
 
 class DccConstructorTests(unittest.TestCase):
+    def test_source_restriction_validation_before_every_transport(self):
+        parameter = inspect.signature(BACnetServer).parameters["dcc_source_restriction"]
+        self.assertIsNone(parameter.default)
+        self.assertEqual(parameter.kind, inspect.Parameter.KEYWORD_ONLY)
+        for transport in ["bip", "ipv6", "sc", "mstp"]:
+            for policy in ["deny_all", "legacy_permissive"]:
+                for restriction in [[], [(None, b"x")]]:
+                    with self.assertRaisesRegex(ValueError, "source restriction"):
+                        BACnetServer(123, transport=transport, dcc_policy=policy,
+                                     dcc_source_restriction=restriction)
+            for restriction in [[(None, b"")], [(None, b"x" * 256)], [(0, b"x")],
+                                [(65535, b"x")], [(7, b"")], [(None, b"x")] * 257]:
+                with self.assertRaises(ValueError):
+                    BACnetServer(123, transport=transport, dcc_policy="require_password",
+                                 dcc_password="required", dcc_source_restriction=restriction)
+            for restriction in [[], [(None, b"x")], [(65534, b"x" * 255)] * 256]:
+                BACnetServer(123, transport=transport, dcc_policy="require_password",
+                             dcc_password="required", dcc_source_restriction=restriction)
+        for invalid in [1, "bad", [(None, "bad")], [(65536, b"x")], [(-1, b"x")]]:
+            with self.assertRaises((TypeError, ValueError, OverflowError)):
+                BACnetServer(123, dcc_policy="require_password", dcc_password="required",
+                             dcc_source_restriction=invalid)
+
     def test_policy_validation_before_every_transport(self):
         parameter = inspect.signature(BACnetServer).parameters["dcc_policy"]
         self.assertEqual(parameter.default, "deny_all")
@@ -32,6 +55,50 @@ class DccConstructorTests(unittest.TestCase):
 
 
 class DccNativeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_source_restriction_direct_routed_and_outcomes(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind(("127.0.0.1", 0))
+        sock.setblocking(False)
+        direct = socket.inet_aton("127.0.0.1") + sock.getsockname()[1].to_bytes(2, "big")
+        restrictions: list[list[tuple[int | None, bytes]] | None] = [
+            None, [], [(None, direct)], [(7, b"\x2a")], [(8, b"\x2a")], [(7, b"\x2b")],
+        ]
+        try:
+            for kind, restriction in enumerate(restrictions):
+                server = BACnetServer(123, interface="127.0.0.1", port=0,
+                                      broadcast_address="127.0.0.1", dcc_policy="require_password",
+                                      dcc_password="required", dcc_source_restriction=restriction)
+                try:
+                    await server.start()
+                    invoke = 0
+                    expected = dict(accepted_total=0, policy_denied_total=0, password_failure_total=0,
+                                    deprecated_denied_total=0, malformed_total=0)
+                    for routed in [False, True]:
+                        for mode in [2, 0, 1]:
+                            for password in [None, "wrong", "required"]:
+                                invoke += 1
+                                before = await server.comm_state()
+                                reply = await self.exchange(server, sock, invoke, mode, password, routed)
+                                allowed = kind == 0 or (kind == 2 and not routed) or (kind == 3 and routed)
+                                outcome = ("password_failure" if password != "required" else
+                                           "deprecated_denied" if mode == 1 else
+                                           "policy_denied" if not allowed else "accepted")
+                                expected[outcome + "_total"] += 1
+                                if outcome == "accepted":
+                                    self.assertEqual(reply, bytes([0x20, invoke, 17]))
+                                    self.assertEqual(await server.comm_state(), mode)
+                                else:
+                                    bad = outcome == "password_failure"
+                                    self.assertEqual(reply, bytes([0x50, invoke, 17, 0x91,
+                                                                  4 if bad else 5, 0x91, 26 if bad else 29]))
+                                    self.assertEqual(await server.comm_state(), before)
+                                self.assertEqual(await server.dcc_outcome_counters(), expected)
+                    self.assertEqual((await server.request_admission_counters())["recovery_admitted_total"], 6)
+                finally:
+                    await server.stop()
+        finally:
+            sock.close()
+
     async def exchange(self, server, sock, invoke, mode, password, routed, duration=None):
         body = b"" if duration is None else bytes([0x09, duration])
         body += bytes([0x19, mode])

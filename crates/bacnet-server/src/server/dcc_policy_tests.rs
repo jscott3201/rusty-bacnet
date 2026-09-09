@@ -1,6 +1,117 @@
 use super::*;
 
 #[test]
+fn dcc_source_restriction_configuration_bounds() {
+    for length in [0, 256, 65536] {
+        assert!(DccSourceRestriction::new(vec![DccSource::Direct(vec![1; length])]).is_err());
+    }
+    for network in [0, 65535] {
+        assert!(DccSourceRestriction::new(vec![DccSource::Routed {
+            network,
+            address: vec![1]
+        }])
+        .is_err());
+    }
+    assert!(DccSourceRestriction::new(vec![DccSource::Direct(vec![1]); 257]).is_err());
+    assert!(DccSourceRestriction::new(vec![DccSource::Direct(vec![1; 255]); 256]).is_ok());
+    for entries in [vec![], vec![DccSource::Direct(vec![1])]] {
+        let restriction = DccSourceRestriction::new(entries).unwrap();
+        assert!(restriction
+            .validate_policy(DccPolicy::RequirePassword)
+            .is_ok());
+        for policy in [DccPolicy::DenyAll, DccPolicy::LegacyPermissive] {
+            assert!(restriction.validate_policy(policy).is_err());
+        }
+    }
+}
+
+#[tokio::test]
+async fn dcc_source_restriction_rejected_before_start() {
+    for policy in [DccPolicy::DenyAll, DccPolicy::LegacyPermissive] {
+        let restriction = Some(DccSourceRestriction::new(vec![]).unwrap());
+        let started = Arc::new(AtomicBool::new(false));
+        let config = ServerConfig {
+            dcc_policy: policy,
+            dcc_source_restriction: restriction.clone(),
+            ..Default::default()
+        };
+        let error = BACnetServer::start(config, ObjectDatabase::new(), NeverStart(started.clone()))
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(error, Error::Encoding(m) if m.contains("source restriction")));
+        assert!(BACnetServer::generic_builder()
+            .transport(NeverStart(started.clone()))
+            .dcc_policy(policy)
+            .dcc_source_restriction(restriction.clone())
+            .build()
+            .await
+            .is_err());
+        assert!(!started.load(Ordering::Acquire));
+        let error = BACnetServer::bip_builder()
+            .dcc_policy(policy)
+            .dcc_source_restriction(restriction)
+            .build()
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(error, Error::Encoding(m) if m.contains("source restriction")));
+    }
+}
+
+#[cfg(feature = "sc-tls")]
+#[tokio::test]
+async fn dcc_source_restriction_rejected_before_sc_dial() {
+    for policy in [DccPolicy::DenyAll, DccPolicy::LegacyPermissive] {
+        let tls = tokio_rustls::rustls::ClientConfig::builder()
+            .with_root_certificates(tokio_rustls::rustls::RootCertStore::empty())
+            .with_no_client_auth();
+        let error = BACnetServer::sc_builder()
+            .hub_url("not-a-websocket-url")
+            .tls_config(Arc::new(tls))
+            .dcc_policy(policy)
+            .dcc_source_restriction(Some(DccSourceRestriction::new(vec![]).unwrap()))
+            .build()
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(error, Error::Encoding(m) if m.contains("source restriction")));
+    }
+}
+
+#[tokio::test]
+async fn dcc_source_denied_enable_still_occupies_recovery() {
+    let (mut server, _, mut started) = fixture_with_config(
+        "source denial",
+        ServerConfig {
+            dcc_policy: DccPolicy::RequirePassword,
+            dcc_password: Some("required".into()),
+            dcc_source_restriction: Some(DccSourceRestriction::new(vec![]).unwrap()),
+            ..Default::default()
+        },
+    )
+    .await;
+    server.comm_state.store(2, Ordering::Release);
+    for id in 1..=2 {
+        dispatch(&server, enable(id, Some("required")), source(id), None).await;
+        observed(&mut started).await;
+        assert_eq!(server.comm_state(), 2);
+        assert!(server.dcc_timer.lock().await.is_none());
+        assert!(
+            matches!(server.network.transport().frames.lock().unwrap().last(), Some(Apdu::Error(e))
+            if e.error_class == ErrorClass::SERVICES && e.error_code == ErrorCode::SERVICE_REQUEST_DENIED)
+        );
+    }
+    assert_eq!(server.request_admission_counters().recovery_active, 2);
+    assert_eq!(
+        server.request_admission_counters().recovery_admitted_total,
+        2
+    );
+    assert_eq!(server.dcc_outcome_counters().policy_denied_total, 2);
+    server.stop().await.unwrap();
+}
+
+#[test]
 fn dcc_configured_validation_retains_decode_password_unknown_mode_precedence() {
     for policy in [
         DccPolicy::DenyAll,
