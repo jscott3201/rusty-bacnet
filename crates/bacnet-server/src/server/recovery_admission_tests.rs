@@ -8,6 +8,162 @@ fn peer(id: u8) -> crate::server::request_peer::CanonicalRequester {
     canonical_requester(&[id], None)
 }
 
+#[test]
+fn recovery_small_quota_table_release_refill_and_global_first() {
+    use crate::server::request_admission::Admission;
+
+    for global in 1..=6 {
+        for reserve in 0..global {
+            for normal_peer in 1..=7 {
+                for recovery_peer in 1..=7 {
+                    for recovery_first in [false, true] {
+                        let admission = Admission::new(RequestAdmissionPolicy {
+                            max_confirmed_in_flight: global,
+                            confirmed_recovery_reserve: reserve,
+                            max_confirmed_in_flight_per_peer: normal_peer,
+                            max_recovery_in_flight_per_peer: recovery_peer,
+                            ..Default::default()
+                        })
+                        .unwrap();
+                        let ordinary = normal_peer.min(global - reserve);
+                        let protected = recovery_peer.min(reserve);
+                        let order = if recovery_first {
+                            [(Class::Recovery, protected), (Class::Confirmed, ordinary)]
+                        } else {
+                            [(Class::Confirmed, ordinary), (Class::Recovery, protected)]
+                        };
+                        let mut held = Vec::new();
+                        let mut admitted = 0;
+                        let mut recovery_admitted = 0;
+                        for (class, count) in order {
+                            for _ in 0..count {
+                                held.push((
+                                    class,
+                                    Some(admission.try_enter(class, peer(1), false).unwrap()),
+                                ));
+                                admitted += 1;
+                                recovery_admitted += usize::from(matches!(class, Class::Recovery));
+                            }
+                        }
+                        let c = admission.snapshot();
+                        assert_eq!(
+                            (c.confirmed_active, c.recovery_active),
+                            (ordinary + protected, protected)
+                        );
+                        // Both partitions stay full at this peer while each slot is
+                        // independently released/refilled, including the opposite order.
+                        for (class, guard) in &mut held {
+                            let replacement = admission.try_enter(*class, peer(1), false);
+                            assert!(matches!(replacement, Err(Rejection::Overloaded)));
+                            // Drop exactly one guard without releasing the other class.
+                            drop(guard.take());
+                            *guard = Some(admission.try_enter(*class, peer(1), false).unwrap());
+                            admitted += 1;
+                            recovery_admitted += usize::from(matches!(class, Class::Recovery));
+                        }
+                        let before = admission.snapshot();
+                        for class in [Class::Confirmed, Class::Recovery] {
+                            assert!(matches!(
+                                admission.try_enter(class, peer(1), false),
+                                Err(Rejection::Overloaded)
+                            ));
+                        }
+                        let after = admission.snapshot();
+                        let global_denials = usize::from(ordinary == global - reserve)
+                            + usize::from(if reserve == 0 {
+                                ordinary == global
+                            } else {
+                                protected == reserve
+                            });
+                        assert_eq!(
+                            after.confirmed_global_overloaded_total
+                                - before.confirmed_global_overloaded_total,
+                            global_denials as u64
+                        );
+                        assert_eq!(
+                            after.confirmed_peer_overloaded_total
+                                - before.confirmed_peer_overloaded_total,
+                            (2 - global_denials) as u64
+                        );
+                        assert_eq!(after.confirmed_admitted_total, admitted);
+                        assert_eq!(after.recovery_admitted_total, recovery_admitted as u64);
+                        assert_eq!(
+                            after.confirmed_overloaded_total,
+                            after.confirmed_global_overloaded_total
+                                + after.confirmed_peer_overloaded_total
+                        );
+                        // Peer-denied temporary permits must be available to other peers.
+                        for (class, count) in [
+                            (Class::Confirmed, global - reserve - ordinary),
+                            (Class::Recovery, reserve - protected),
+                        ] {
+                            for id in 0..count {
+                                held.push((
+                                    class,
+                                    Some(
+                                        admission
+                                            .try_enter(class, peer(2 + id as u8), false)
+                                            .unwrap(),
+                                    ),
+                                ));
+                            }
+                        }
+                        assert_eq!(admission.snapshot().confirmed_active, global);
+                        for class in [Class::Confirmed, Class::Recovery] {
+                            assert!(matches!(
+                                admission.try_enter(class, peer(99), false),
+                                Err(Rejection::Overloaded)
+                            ));
+                        }
+                        drop(held);
+                        assert_eq!(admission.peer_entries(), [0; 3]);
+                        assert_eq!(admission.snapshot().confirmed_active, 0);
+                        assert_eq!(admission.snapshot().recovery_active, 0);
+                        // R=0 routes Recovery through the ordinary peer/global caps.
+                        let guard = admission
+                            .try_enter(Class::Recovery, peer(1), false)
+                            .unwrap();
+                        assert_eq!(
+                            admission.snapshot().recovery_active,
+                            usize::from(reserve != 0)
+                        );
+                        drop(guard);
+                        assert_eq!(admission.peer_entries(), [0; 3]);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn recovery_wire_same_peer_enable_with_sixteen_ordinary_held() {
+    let (mut server, tx, mut started) = fixture().await;
+    for id in 0..16 {
+        inject(&tx, request(id)).await;
+        observed(&mut started).await; // Transport barrier: ordinary handler stays live.
+    }
+    assert_eq!(server.request_admission_counters().confirmed_active, 16);
+    server.comm_state.store(1, Ordering::Release);
+    inject(&tx, enable(16, None)).await;
+    observed(&mut started).await;
+    assert!(
+        matches!(server.network.transport().frames.lock().unwrap().last(), Some(Apdu::SimpleAck(a)) if a.invoke_id == 16)
+    );
+    assert_eq!(server.comm_state.load(Ordering::Acquire), 0);
+    let c = server.request_admission_counters();
+    assert_eq!((c.confirmed_active, c.recovery_active), (17, 1));
+    assert_eq!(
+        (c.confirmed_admitted_total, c.recovery_admitted_total),
+        (17, 1)
+    );
+    assert_eq!(c.confirmed_overloaded_total, 0);
+    server.network.transport().release.notify_waiters();
+    wait_reaped(&server).await;
+    assert_eq!(server.request_tasks.peer_entries(), [0; 3]);
+    server.stop().await.unwrap();
+}
+
 #[tokio::test]
 async fn recovery_segmented_enable_charged_once_after_reassembly() {
     let (mut server, tx, mut started) = fixture().await;
@@ -93,6 +249,42 @@ async fn drain(owner: &RequestTasks) {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn recovery_spawn_close_race_reclaims_both_peer_maps() {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        for _ in 0..32 {
+            let owner = Arc::new(RequestTasks::default());
+            let barrier = Arc::new(tokio::sync::Barrier::new(3));
+            let mut writers = Vec::new();
+            for class in [Class::Confirmed, Class::Recovery] {
+                let owner = Arc::clone(&owner);
+                let barrier = Arc::clone(&barrier);
+                writers.push(tokio::spawn(async move {
+                    barrier.wait().await;
+                    owner.try_spawn(class, peer(1), std::future::pending)
+                }));
+            }
+            barrier.wait().await;
+            owner.close();
+            for writer in writers {
+                assert!(matches!(
+                    writer.await.unwrap(),
+                    Ok(()) | Err(Rejection::Closed)
+                ));
+            }
+            drain(&owner).await;
+            let c = owner.counters();
+            assert_eq!(
+                c.confirmed_admitted_total + c.confirmed_shutdown_rejected_total,
+                2
+            );
+            assert_eq!(c.confirmed_overloaded_total, 0);
+        }
+    })
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 async fn recovery_default_ordinary_partition_is_sixty_not_sixty_four() {
     let owner = RequestTasks::default();
@@ -163,19 +355,53 @@ async fn recovery_strict_partitions_no_lending_and_aggregate_counters() {
 }
 
 #[tokio::test]
-async fn recovery_peer_total_is_inclusive_and_protected_peer_is_additional() {
+async fn recovery_peer_quotas_are_independent_in_both_arrival_orders() {
+    fn hold(owner: &RequestTasks, class: Class, wait: oneshot::Receiver<()>) {
+        owner
+            .try_spawn(class, peer(1), || async move {
+                wait.await.unwrap();
+            })
+            .unwrap();
+    }
     for recovery_first in [false, true] {
         let owner = RequestTasks::default();
+        let (recovery_release, recovery_wait) = oneshot::channel::<()>();
+        let mut recovery_wait = Some(recovery_wait);
         if recovery_first {
-            owner
-                .try_spawn(Class::Recovery, peer(1), std::future::pending)
-                .unwrap();
+            hold(&owner, Class::Recovery, recovery_wait.take().unwrap());
         }
-        for _ in 0..if recovery_first { 15 } else { 16 } {
+        let (ordinary_release, ordinary_wait) = oneshot::channel::<()>();
+        hold(&owner, Class::Confirmed, ordinary_wait);
+        for _ in 0..15 {
             owner
                 .try_spawn(Class::Confirmed, peer(1), std::future::pending)
                 .unwrap();
         }
+        if !recovery_first {
+            hold(&owner, Class::Recovery, recovery_wait.take().unwrap());
+        }
+        ordinary_release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), owner.join_next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let c = owner.counters();
+        assert_eq!((c.confirmed_active, c.recovery_active), (16, 1));
+        owner
+            .try_spawn(Class::Confirmed, peer(1), std::future::pending)
+            .unwrap();
+        recovery_release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), owner.join_next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let c = owner.counters();
+        assert_eq!((c.confirmed_active, c.recovery_active), (16, 0));
+        owner
+            .try_spawn(Class::Recovery, peer(1), std::future::pending)
+            .unwrap();
         for class in [Class::Recovery, Class::Confirmed] {
             assert_eq!(
                 owner.try_spawn(class, peer(1), std::future::pending),
@@ -199,7 +425,7 @@ async fn recovery_peer_total_is_inclusive_and_protected_peer_is_additional() {
                 c.confirmed_peer_overloaded_total,
                 c.confirmed_global_overloaded_total
             ),
-            (18, 3, 0)
+            (19, 3, 0)
         );
         assert_eq!(c.recovery_overloaded_total, 2);
         drain(&owner).await;

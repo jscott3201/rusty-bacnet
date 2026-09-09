@@ -1742,8 +1742,13 @@ guarantee availability once that capacity is full. The default confirmed total64
 is strictly partitioned into ordinary60/protected4 with no lending in either
 direction. Only decoder-accepted DCC ENABLE is protected; existing password checks
 still apply in the handler, so wrong/missing required passwords can consume a slot
-before PASSWORD_FAILURE. Total confirmed peer16 includes both partitions, with
-an additional protected peer1 cap. A peer already at total16 can be denied ENABLE.
+before PASSWORD_FAILURE. Ordinary peer16 and protected peer1 are independent:
+the same peer can hold 16+1 handlers in either arrival order. This replaces the
+former inclusive peer16 policy without changing constructor fields or defaults.
+Ordinary peer capacity is clamped to global minus reserve; recovery peer capacity
+is clamped only to reserve, no longer to the ordinary peer setting. For example,
+ordinary peer1/recovery peer3/reserve3 permit 1+3 if global room exists. Reserve0
+retains shared ordinary accounting with the ordinary peer cap clamped to global.
 Other critical-service reservations and work/response budgets remain deferred.
 
 `await server.request_admission_counters()` returns a stable typed dictionary

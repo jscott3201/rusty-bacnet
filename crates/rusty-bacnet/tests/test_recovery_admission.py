@@ -30,12 +30,18 @@ class RecoveryConstructorTests(unittest.TestCase):
                     BACnetServer(123, transport=transport, **invalid)
             BACnetServer(123, transport=transport, max_confirmed_in_flight=1, confirmed_recovery_reserve=0)
             BACnetServer(123, transport=transport, max_confirmed_in_flight=2, confirmed_recovery_reserve=1)
+            # Independent quotas accept recovery peer > ordinary peer; Rust
+            # barrier tests prove simultaneous 1+3 holding, not this constructor.
+            BACnetServer(123, transport=transport, max_confirmed_in_flight=8,
+                         confirmed_recovery_reserve=3, max_confirmed_in_flight_per_peer=1,
+                         max_recovery_in_flight_per_peer=3)
 
 
 class RecoveryNativeTests(unittest.IsolatedAsyncioTestCase):
     async def test_wire_classification_password_and_zero_reserve_policy(self):
         # Sequential wire checks establish installed native policy propagation.
-        # Rust held-transport barriers provide deterministic 60/4 saturation.
+        # Rust held-transport barriers prove 60/4 and same-peer 16+1 saturation;
+        # sequential UDP replies cannot prove simultaneous independent quotas.
         for reserve in [0, 1]:
             server = BACnetServer(123, interface="127.0.0.1", port=0,
                                   broadcast_address="127.0.0.1", dcc_password="required",

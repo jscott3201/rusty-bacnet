@@ -2,9 +2,10 @@
 
 Each running server has independent, global limits for **top-level inbound
 handlers**: 64 confirmed and 32 unconfirmed by default, plus independent
-per-logical-peer limits of **16 confirmed and 8 unconfirmed**. Inside the confirmed
+per-logical-peer limits of **16 ordinary confirmed and 8 unconfirmed**. Inside the confirmed
 64, a strict **4-slot DCC ENABLE recovery reserve** leaves **60 ordinary slots**.
-The additional protected per-peer cap is **1**, not an addition to the total 16.
+The independent protected per-peer cap is **1**: one peer can hold **16 ordinary
+plus 1 recovery = 17 confirmed handlers**, regardless of arrival order.
 These finite defaults
 are provisional owner policy, not benchmark results or normative BACnet limits.
 
@@ -18,14 +19,25 @@ no greater than `tokio::sync::Semaphore::MAX_PERMITS`. Invalid values return an
 error before server transport startup (and before SC TLS dialing). Validation
 does not undo work already performed by a caller constructing its own transport.
 Existing route, APDU, and SC reconnect validation precedence is retained.
-The effective peer limit is `min(configured peer limit, global limit)` for each
-class. `confirmed_recovery_reserve` (default 4) must satisfy `0 <= R < G`, where
+The effective unconfirmed peer limit is `min(configured peer limit, global limit)`.
+`confirmed_recovery_reserve` (default 4) must satisfy `0 <= R < G`, where
 `G = max_confirmed_in_flight`. Zero disables protection: eligible ENABLE requests
 use ordinary capacity as before. A custom global limit of 4 or less must now
 explicitly configure reserve 0 or a smaller valid reserve. In particular, global
 1 requires reserve 0; default peer limits remain valid. There is no
-peer-less-than-or-equal-to-global validation requirement. The effective protected
-peer cap is `min(max_recovery_in_flight_per_peer, R, max_confirmed_in_flight_per_peer)`.
+peer-less-than-or-equal-to-global validation requirement. With protection enabled,
+the effective ordinary peer cap is `min(max_confirmed_in_flight_per_peer, G-R)`;
+the effective protected peer cap is `min(max_recovery_in_flight_per_peer, R)`.
+With `R=0`, both request classes use the ordinary peer cap
+`min(max_confirmed_in_flight_per_peer, G)`; the recovery peer setting must still be positive.
+
+**Semantic migration:** the former inclusive confirmed peer policy is replaced
+by independent ordinary and recovery quotas. Default numbers, constructors, and
+counter fields have not changed. Recovery is no longer clamped by the ordinary
+peer setting: for example ordinary peer=1, recovery peer=3 and R=3 now allow the
+same peer to hold 1 ordinary plus 3 recovery handlers if global room exists.
+Deployments relying on the former combined peer ceiling must account for the sum
+of the two effective caps; this is not an opt-in exemption or a fairness guarantee.
 
 Adding these two Rust policy fields and three recovery counter fields is a **source-breaking
 struct expansion** for exhaustive downstream literals/patterns. Policy literals
@@ -56,10 +68,11 @@ No authentication or default-deny behavior changes.
 
 Neither partition lends capacity: ordinary requests cannot use free protected
 slots; protected requests cannot fall back to free ordinary slots when `R > 0`.
-Total confirmed active handlers never exceed G. Both partitions share the existing
-total confirmed peer cap, so a peer with 16 ordinary handlers can still be denied
-ENABLE despite free protected capacity. Recovery availability is not promised for
-a peer already at its own total cap.
+Total confirmed active handlers never exceed G. Each partition checks only its
+own peer count: ordinary saturation at a peer does not deny eligible ENABLE when
+that peer's recovery quota and the global recovery partition have room, and held
+recovery handlers do not reduce its ordinary quota. Either exhausted recovery
+limit can still deny ENABLE; availability is not guaranteed.
 
 The server-private classifier first traverses borrowed tag contents and bounds
 optional password content before invoking the existing decoder. A decoded password
@@ -84,11 +97,11 @@ global pool. COV, reassembly, and endpoint-core identity contracts are not chang
   rejected work or capacity-waiting tasks is created. A slot lasts through the
   actual handler future, including awaited post-response work; completion,
   panic, and cancellation release it, even if its completed task is not reaped.
-  The sealed-owner check precedes partition acquisition, then the inclusive total
-  peer check, then the additional protected peer check. If partition and peer
+   The sealed-owner check precedes partition acquisition, then that partition's
+   peer check. If partition and peer
   capacities are both exhausted, the rejection is classified global/partition.
   Peer rejection releases the temporary global permit without counting admission.
-  Shared confirmed (ordinary plus protected), additional protected, and separate
+   Independent ordinary confirmed, protected, and
   unconfirmed maps contain only active peer counts, bounded by their quotas.
   Last-guard drop removes all its peer registrations before releasing its partition
   permit, including never-polled cancellation. There are no historical peer
@@ -136,7 +149,7 @@ stable fields, described by the shipped `RequestAdmissionCounters` TypedDict:
 | `confirmed_admitted_total`, `unconfirmed_admitted_total` | Cumulative handler registrations |
 | `confirmed_overloaded_total`, `unconfirmed_overloaded_total` | Capacity-rejected requests; unconfirmed requests are dropped |
 | `confirmed_global_overloaded_total`, `unconfirmed_global_overloaded_total` | Confirmed partition capacity or unconfirmed global capacity rejections, tested first |
-| `confirmed_peer_overloaded_total`, `unconfirmed_peer_overloaded_total` | Total/protected peer capacity rejections while partition/global capacity was available |
+| `confirmed_peer_overloaded_total`, `unconfirmed_peer_overloaded_total` | Relevant partition's peer capacity rejections while partition/global capacity was available |
 | `recovery_active`, `recovery_admitted_total`, `recovery_overloaded_total` | Protected subset of the corresponding confirmed aggregates; all zero when reserve is zero |
 | `confirmed_shutdown_rejected_total`, `unconfirmed_shutdown_rejected_total` | Registrations denied by the sealed task owner |
 | `abort_active` | Live overload Abort workers, at most eight |

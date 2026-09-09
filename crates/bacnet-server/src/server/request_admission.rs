@@ -20,8 +20,8 @@ pub struct RequestAdmissionPolicy {
     pub max_confirmed_in_flight: usize,
     /// Maximum concurrent unconfirmed handlers (default 32).
     pub max_unconfirmed_in_flight: usize,
-    /// Maximum concurrent confirmed handlers per logical peer (default 16).
-    /// The effective limit is the smaller of this and the global limit.
+    /// Maximum concurrent ordinary confirmed handlers per logical peer (default 16).
+    /// Clamped to global capacity minus the reserve; independent of recovery.
     pub max_confirmed_in_flight_per_peer: usize,
     /// Maximum concurrent unconfirmed handlers per logical peer (default 8).
     /// This partitions capacity by identity; it does not guarantee fairness.
@@ -29,8 +29,8 @@ pub struct RequestAdmissionPolicy {
     /// Strict DCC ENABLE partition inside the confirmed global limit (default 4).
     /// Zero disables protection; otherwise must be smaller than the global limit.
     pub confirmed_recovery_reserve: usize,
-    /// Additional protected per-peer limit (default 1), always positive.
-    /// The existing confirmed per-peer limit remains inclusive of both partitions.
+    /// Independent protected per-peer limit (default 1), always positive.
+    /// Clamped only to the reserve; zero reserve uses ordinary accounting instead.
     pub max_recovery_in_flight_per_peer: usize,
 }
 
@@ -101,7 +101,7 @@ pub struct RequestAdmissionCounters {
     pub confirmed_overloaded_total: u64,
     /// Confirmed capacity rejections classified partition-first (ordinary or protected).
     pub confirmed_global_overloaded_total: u64,
-    /// Confirmed rejections with a partition permit but no total/protected peer slot.
+    /// Confirmed rejections with a partition permit but no slot in that peer partition.
     pub confirmed_peer_overloaded_total: u64,
     /// Confirmed registrations rejected after shutdown sealed the owner.
     pub confirmed_shutdown_rejected_total: u64,
@@ -177,6 +177,7 @@ impl Pool {
 
 pub(super) struct Guard {
     pool: Arc<Pool>,
+    // Counters only: recovery never registers in the ordinary peer map.
     aggregate: Option<Arc<Pool>>,
     peer: Option<CanonicalRequester>,
     _permit: OwnedSemaphorePermit,
@@ -186,15 +187,15 @@ impl Drop for Guard {
     fn drop(&mut self) {
         // Remove registration before Rust drops _permit and releases global
         // capacity. This lock never acquires the task owner's lock.
-        for pool in std::iter::once(&self.pool).chain(self.aggregate.iter()) {
-            if let Some(peer) = &self.peer {
-                let mut peers = pool.peers.lock().unwrap_or_else(|e| e.into_inner());
-                let count = peers.get_mut(peer).expect("live peer registration");
-                *count -= 1;
-                if *count == 0 {
-                    peers.remove(peer);
-                }
+        if let Some(peer) = &self.peer {
+            let mut peers = self.pool.peers.lock().unwrap_or_else(|e| e.into_inner());
+            let count = peers.get_mut(peer).expect("live peer registration");
+            *count -= 1;
+            if *count == 0 {
+                peers.remove(peer);
             }
+        }
+        for pool in std::iter::once(&self.pool).chain(self.aggregate.iter()) {
             pool.active.fetch_sub(1, Ordering::Relaxed);
         }
     }
@@ -203,7 +204,10 @@ impl Drop for Guard {
 impl Admission {
     #[cfg(test)]
     pub(super) fn peer_entries(&self) -> [usize; 3] {
-        std::array::from_fn(|i| self.pools[i].peers.lock().unwrap().len())
+        let mut entries = std::array::from_fn(|i| self.pools[i].peers.lock().unwrap().len());
+        // Count entries in both confirmed maps, not distinct confirmed identities.
+        entries[0] += self.recovery.peers.lock().unwrap().len();
+        entries
     }
 
     pub(super) fn new(policy: RequestAdmissionPolicy) -> Result<Self, Error> {
@@ -214,7 +218,7 @@ impl Admission {
                     policy.max_confirmed_in_flight - policy.confirmed_recovery_reserve,
                     policy
                         .max_confirmed_in_flight_per_peer
-                        .min(policy.max_confirmed_in_flight),
+                        .min(policy.max_confirmed_in_flight - policy.confirmed_recovery_reserve),
                 ),
                 Pool::new(
                     policy.max_unconfirmed_in_flight,
@@ -228,8 +232,7 @@ impl Admission {
                 policy.confirmed_recovery_reserve,
                 policy
                     .max_recovery_in_flight_per_peer
-                    .min(policy.confirmed_recovery_reserve)
-                    .min(policy.max_confirmed_in_flight_per_peer),
+                    .min(policy.confirmed_recovery_reserve),
             ),
             recovery_enabled: policy.confirmed_recovery_reserve != 0,
         })
@@ -267,20 +270,9 @@ impl Admission {
             }
             Rejection::Overloaded
         })?;
-        // Spawn serialization belongs to RequestTasks. Hold the shared total map
-        // through both checks so no partial registration needs rollback. Drops
-        // never hold both maps simultaneously and never acquire the owner lock.
-        let mut total_peers =
-            aggregate.map(|total| total.peers.lock().unwrap_or_else(|e| e.into_inner()));
-        if let (Some(total), Some(peers)) = (aggregate, total_peers.as_ref()) {
-            if peers.get(&peer).copied().unwrap_or(0) >= total.peer_limit {
-                pool.overloaded.fetch_add(1, Ordering::Relaxed);
-                pool.peer_overloaded.fetch_add(1, Ordering::Relaxed);
-                total.overloaded.fetch_add(1, Ordering::Relaxed);
-                total.peer_overloaded.fetch_add(1, Ordering::Relaxed);
-                return Err(Rejection::Overloaded);
-            }
-        }
+        // Spawn serialization belongs to RequestTasks. Peer registrations are
+        // partition-local, while confirmed counters remain inclusive. Only one
+        // map is locked, so no cross-partition registration or rollback is needed.
         // Abort workers are global-only, with no peer registration or charge.
         let peer = if matches!(class, Class::Abort) {
             None
@@ -296,9 +288,6 @@ impl Admission {
                 return Err(Rejection::Overloaded);
             }
             *peers.entry(peer.clone()).or_default() += 1;
-            if let Some(peers) = total_peers.as_mut() {
-                *peers.entry(peer.clone()).or_default() += 1;
-            }
             Some(peer)
         };
         pool.active.fetch_add(1, Ordering::Relaxed);

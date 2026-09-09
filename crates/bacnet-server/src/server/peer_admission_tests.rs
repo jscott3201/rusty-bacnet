@@ -182,7 +182,12 @@ async fn peer_admission_independent_classes_origins_and_global_first() {
 
 #[tokio::test]
 async fn peer_admission_guard_cleanup_normal_panic_never_polled_and_unique_stream() {
-    for class in [Class::Confirmed, Class::Unconfirmed, Class::Abort] {
+    for class in [
+        Class::Confirmed,
+        Class::Unconfirmed,
+        Class::Abort,
+        Class::Recovery,
+    ] {
         let owner = RequestTasks::default();
         let peer = canonical_requester(b"peer", None);
         owner
