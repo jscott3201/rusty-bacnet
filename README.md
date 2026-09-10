@@ -141,6 +141,14 @@ asyncio.run(main())
 
 ## BACnet/SC with Hub (Python)
 
+> **Warning:** this sketch is illustrative, not a validated two-node end-to-end
+> example. The Python server and client currently share an all-zero Device UUID,
+> so connecting the second node can replace the first node's hub session even
+> with distinct VMACs. Persistent nonzero UUID API work is tracked separately in
+> [#517](https://github.com/jscott3201/rusty-bacnet/issues/517); the mTLS credential
+> fixes do not resolve it. Do not treat this sketch as working end-to-end evidence
+> until that work is delivered and the example is validated.
+
 ```python
 import asyncio
 from rusty_bacnet import BACnetClient, BACnetServer, ScHub
@@ -188,10 +196,19 @@ async def main():
 asyncio.run(main())
 ```
 
-For Annex AB production deployments, configure the hub with a trusted issuer CA
-(`ca_cert`) and configure every SC node with its own certificate/key pair.
-Omitting `ca_cert` leaves the hub in server-auth-only example mode, which is not
-claimed as BACnet/SC mTLS conformance evidence.
+`ScHub` requires a nonempty trusted issuer CA path (`ca_cert`); omission, `None`,
+or an empty string raises `ValueError` at construction, before file or network
+I/O. Python SC clients and servers likewise require explicit `sc_ca_cert`,
+`sc_client_cert`, and `sc_client_key` paths. Startup loads and validates the CA
+and matching certificate/key before the hub binds or a node dials. There is no
+insecure hub escape or system-root fallback for these built-in paths.
+
+See the [Python hub requirements](docs/python-api.md#schub),
+[node migration and local-policy limits](docs/python-api.md#bacnetsc-secure-connect),
+[Rust TLS migration](docs/rust-api.md#bacnetsc-hub), and
+[Docker credential provisioning](examples/docker/README.md).
+CA membership does not authorize BACnet operations or bind a certificate to a
+VMAC/Device UUID; credential hardening is not full Annex AB profile conformance.
 
 ## CLI Tool
 

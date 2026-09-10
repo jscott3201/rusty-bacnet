@@ -125,6 +125,10 @@ const FORBIDDEN_PUBLIC_CLAIMS: &[(&str, &str)] = &[
     ("README.md", "All standard BACnet objects"),
     ("README.md", "full API parity"),
     (
+        "README.md",
+        "Omitting `ca_cert` leaves the hub in server-auth-only example mode",
+    ),
+    (
         "Benchmarks.md",
         "All tests ran on localhost with zero errors unless noted.",
     ),
@@ -282,6 +286,53 @@ fn public_docs_avoid_unqualified_support_claims() {
         assert!(
             !body.contains(forbidden),
             "{path} contains unqualified support claim {forbidden:?}"
+        );
+    }
+}
+
+#[test]
+fn current_ledger_does_not_cite_retired_one_way_sc_benchmarks() {
+    let data = ledger();
+    let retired = [
+        "benchmarks/benches/sc_latency.rs",
+        "benchmarks/benches/sc_throughput.rs",
+    ];
+    for row in data["rows"].as_array().expect("rows should be an array") {
+        for anchor in row["benchmarks"]
+            .as_array()
+            .expect("benchmarks should be an array")
+        {
+            let anchor = anchor
+                .as_str()
+                .expect("benchmark anchor should be a string");
+            assert!(
+                !retired.contains(&anchor),
+                "{} cites retired benchmark {anchor}; historical results are not current anchors",
+                row["id"]
+            );
+        }
+    }
+}
+
+#[test]
+fn sc_credential_evidence_does_not_promote_the_full_security_profile() {
+    let data = ledger();
+    let rows = rows_by_id(&data);
+    let row = rows["BACNET-AB-SC-WEBSOCKET-TLS"];
+    assert_eq!(row["status"], "implementation-present-needs-security-tests");
+    let tests = row["negative_tests"]
+        .as_array()
+        .expect("negative tests should be an array");
+    for anchor in [
+        "crates/bacnet-transport/tests/sc_hub_tls.rs::typed_config_rejects_empty_ca_before_startup",
+        "crates/bacnet-transport/src/sc_tls/tls_config_tests.rs::node_tls_factory_requires_nonempty_ca_and_identity",
+        "crates/rusty-bacnet/tests/test_sc_hub_mtls.py::HubMtlsTests::test_invalid_files_fail_before_bind",
+        "crates/rusty-bacnet/tests/test_sc_hub_mtls.py::NodeMtlsTests::test_invalid_local_files_do_not_dial_or_drain",
+        "crates/bacnet-cli/tests/sc_ca.rs::missing_ca_rejected_before_dial",
+    ] {
+        assert!(
+            tests.iter().any(|test| test.as_str() == Some(anchor)),
+            "SC credential acceptance must retain preflight evidence: {anchor}"
         );
     }
 }

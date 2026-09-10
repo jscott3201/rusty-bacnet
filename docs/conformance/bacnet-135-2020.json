@@ -1854,9 +1854,7 @@
     "crates/bacnet-transport/src/sc_hub/connect_validation_tests.rs::connect_request_invalid_repeat_preserves_registration_activity_and_probe",
     "crates/bacnet-transport/src/sc_hub/connect_validation_tests.rs::connect_request_malformed_known_uuid_cannot_replace_live_owner"
    ],
-   "benchmarks": [
-    "benchmarks/benches/sc_latency.rs"
-   ],
+   "benchmarks": [],
    "public_claims": [
     "README BACnet/SC transport"
    ],
@@ -1901,9 +1899,7 @@
     "crates/bacnet-transport/src/sc/data_attribute_tests.rs::unsupported_destination_option_preserves_empty_header_data_marker",
     "benchmarks/tests/sc_websocket.rs::sc_websocket_hub_drops_peer_result_for_other_function"
    ],
-   "benchmarks": [
-    "benchmarks/benches/sc_latency.rs"
-   ],
+   "benchmarks": [],
    "public_claims": [
     "README BACnet/SC transport"
    ],
@@ -2075,8 +2071,6 @@
     "crates/bacnet-transport/src/sc_hub/retirement_io_tests.rs::target_retirement_cancels_inflight_send_before_io_completion"
    ],
    "benchmarks": [
-    "benchmarks/benches/sc_latency.rs",
-    "benchmarks/benches/sc_throughput.rs",
     "benchmarks/tests/sc_ws_memory.rs"
    ],
    "public_claims": [
@@ -2130,9 +2124,7 @@
     "crates/bacnet-transport/src/sc_hub/tests.rs::relay_limit_decision_rejects_oversized_encoded_bvlc",
     "crates/bacnet-transport/src/sc_hub/tests.rs::websocket_subprotocol_offer_rejects_direct_connection_protocol"
    ],
-   "benchmarks": [
-    "benchmarks/benches/sc_throughput.rs"
-   ],
+   "benchmarks": [],
    "public_claims": [
     "README BACnet/SC Hub",
     "docs/python-api.md ScHub"
@@ -2148,11 +2140,18 @@
    "code_anchors": [
     "crates/bacnet-transport/src/sc_frame.rs",
     "crates/bacnet-transport/src/sc_hub.rs",
+    "crates/bacnet-transport/src/sc_hub/tls_config.rs::ScHubTlsConfig::from_der",
     "crates/bacnet-transport/src/sc_tls.rs",
+    "crates/bacnet-transport/src/sc_tls/tls_config.rs::ScNodeTlsConfig::from_der",
+    "crates/bacnet-client/src/client/mod.rs::ScClientBuilder::tls_config",
+    "crates/bacnet-server/src/server/sc_builder.rs::ScServerBuilder::tls_config",
+    "crates/rusty-bacnet/src/hub.rs",
     "crates/rusty-bacnet/src/tls.rs",
+    "crates/bacnet-cli/src/transport.rs",
     "benchmarks/src/sc_helpers.rs",
     "benchmarks/src/bin/bacnet_sc_hub.rs",
-    "benchmarks/src/bin/bacnet_device.rs"
+    "benchmarks/src/bin/bacnet_device.rs",
+    "benchmarks/src/bin/sc/device.rs"
    ],
    "positive_tests": [
     "benchmarks/tests/sc_mtls.rs::sc_mtls_connection_succeeds",
@@ -2161,7 +2160,15 @@
     "benchmarks/tests/sc_websocket.rs::sc_websocket_hub_subprotocol_handshake_succeeds",
     "crates/bacnet-transport/src/sc_hub/tests.rs::websocket_subprotocol_offer_accepts_hub_protocol_in_list",
     "crates/bacnet-transport/src/sc_tls.rs::tests::parse_wss_uri_accepts_secure_websocket_scheme",
-    "crates/bacnet-transport/src/sc_tls.rs::tests::verify_hub_subprotocol_accepts_selected_hub_protocol"
+    "crates/bacnet-transport/src/sc_tls.rs::tests::verify_hub_subprotocol_accepts_selected_hub_protocol",
+    "crates/bacnet-transport/tests/sc_hub_tls.rs::strict_hub_start_family_requires_mutual_tls13_and_preserves_uuid",
+    "crates/bacnet-transport/src/sc_tls/node_tls_tests.rs::node_tls_local_contract_allows_trusted_server_without_certificate_request",
+    "crates/bacnet-transport/src/sc_tls/node_tls_tests.rs::node_tls_clones_preserve_normal_tls13_resumption",
+    "crates/rusty-bacnet/tests/test_sc_hub_mtls.py::NodeMtlsTests::test_server_repairs_files_and_serves_preserved_registration",
+    "crates/rusty-bacnet/tests/test_sc_hub_mtls.py::NodeMtlsTests::test_client_repairs_files_and_reads_through_trusted_hub",
+    "crates/bacnet-cli/tests/sc_handshake.rs::explicit_site_ca_read_property_and_untrusted_ca_rejection",
+    "benchmarks/tests/sc_binary/handshake.rs::actual_binaries_mutual_tls_reads_and_denials_recover",
+    "benchmarks/tests/sc_docker.rs::docker_pair_read_property"
    ],
    "negative_tests": [
     "benchmarks/tests/sc_mtls.rs::sc_mtls_rejects_expired_client_cert",
@@ -2180,7 +2187,20 @@
     "crates/bacnet-transport/src/sc_hub/tests.rs::websocket_subprotocol_offer_rejects_missing_hub_protocol",
     "crates/bacnet-transport/src/sc_tls.rs::tests::parse_wss_uri_rejects_non_websocket_scheme",
     "crates/bacnet-transport/src/sc_tls.rs::tests::parse_wss_uri_rejects_plain_websocket_scheme",
-    "crates/bacnet-transport/src/sc_tls.rs::tests::verify_hub_subprotocol_rejects_missing_or_wrong_protocol"
+    "crates/bacnet-transport/src/sc_tls.rs::tests::verify_hub_subprotocol_rejects_missing_or_wrong_protocol",
+    "crates/bacnet-transport/tests/sc_hub_tls.rs::typed_config_rejects_empty_ca_before_startup",
+    "crates/bacnet-transport/tests/sc_hub_tls.rs::typed_config_validates_all_der_and_key_inputs",
+    "crates/bacnet-transport/src/sc_tls/tls_config_tests.rs::node_tls_factory_requires_nonempty_ca_and_identity",
+    "crates/bacnet-transport/src/sc_tls/tls_config_tests.rs::node_tls_factory_rejects_malformed_der_in_every_position",
+    "crates/bacnet-transport/src/sc_tls/tls_config_tests.rs::node_tls_factory_rejects_unusable_and_mismatched_keys",
+    "crates/rusty-bacnet/tests/test_sc_hub_mtls.py::HubMtlsTests::test_constructor_signature_and_required_ca",
+    "crates/rusty-bacnet/tests/test_sc_hub_mtls.py::HubMtlsTests::test_invalid_files_fail_before_bind",
+    "crates/rusty-bacnet/tests/test_sc_hub_mtls.py::NodeCredentialTests::test_sc_constructor_requires_each_credential",
+    "crates/rusty-bacnet/tests/test_sc_hub_mtls.py::NodeMtlsTests::test_invalid_local_files_do_not_dial_or_drain",
+    "crates/bacnet-cli/tests/sc_ca.rs::missing_ca_rejected_before_dial",
+    "crates/bacnet-cli/tests/sc_ca.rs::invalid_local_files_never_reach_live_listener",
+    "benchmarks/tests/sc_binary/preflight.rs::discovery_and_retired_flags_are_read_only",
+    "benchmarks/tests/sc_binary/preflight.rs::files_der_ca_and_key_match_fail_before_bind_or_dial"
    ],
    "benchmarks": [
     "benchmarks/benches/sc_mtls_latency.rs",
@@ -2190,7 +2210,7 @@
     "README BACnet/SC WebSocket+TLS",
     "docs/python-api.md BACnet/SC"
    ],
-   "notes": "AB-04 adds native WebSocket evidence for configured-peer URI scheme rejection before dialing unless the scheme is wss, native initiating-peer verification that the selected hub subprotocol is hub.bsc.bacnet.org, accepting-hub rejection of missing/wrong subprotocol offers, successful real TLS WebSocket hub subprotocol negotiation, and real TLS WebSocket text-frame close with status 1003. Native and hub adapters already send BVLC-SC payloads as binary WebSocket frames and ignore Ping/Pong as optional WebSocket control traffic. AB-05 adds TLS 1.3-only native Python hub configuration, TLS 1.3-only benchmark/test helper configuration, generated-certificate evidence for valid mTLS, missing client certificate, wrong client issuer, expired/not-yet-valid client and server certificates, wrong server SAN, malformed PEM, mismatched cert/key pairs, explicit TLS 1.3 negotiation, and TLS 1.2-only client rejection. The benchmark SC hub now enforces client certificates when --ca is supplied. Direct WebSocket connections using dc.bsc.bacnet.org remain deferred/unsupported because direct connections are not implemented or publicly claimed. The combined AB.7 row remains implementation-present-needs-security-tests until TLS 1.3 application profile/cipher-suite evidence, revocation behavior when configured, production file-path helper tests, and any optional certificate identity policy are fully evidenced; server-auth-only examples remain documented as non-conformant example/benchmark mode."
+   "notes": "AB-04 retains pre-dial wss-only checks, hub.bsc.bacnet.org negotiation and negative offers, binary BVLC-SC sends, text close 1003 and optional Ping/Pong. AB-05 retains generated-certificate mTLS/TLS 1.3 negotiation and missing/wrong-issuer/expired/not-yet-valid peer, wrong SAN, malformed PEM, mismatched-key and TLS 1.2 denials. PRs #585–#592 (runtime assessed at 982cc9f) address #513's original entry-point configuration acceptance: mandatory ScHubTlsConfig/ScNodeTlsConfig, explicit nonempty CA and matching operational credentials, Python/CLI/standalone preflight before bind/dial, and strict hub peer verification. File-helper rejection/retry, real ReadProperty, installed native Python and isolated Docker pair evidence are delivered; this closeout does not rerun them. Insecure hub/example modes and sc_latency/sc_throughput were retired, not renamed or retained; historical benchmark numbers are not new mTLS measurements. The broad row remains implementation-present-needs-security-tests: TLS application-profile/cipher-suite evidence, revocation when configured and separate PKI/identity-profile work remain. No new addendum 135-2020cd validation, full Annex AB/PICS/BTL promotion, or direct-connection (dc.bsc.bacnet.org) support is claimed. Node credentials are offered when requested/compatible: a trusted server with no CertificateRequest can complete; normal resumption may omit certificate retransmission. Local configuration is not per-connection presentation proof or remote-verifier attestation; custom WebSocketPort implementations are outside the built-in guarantee. CA membership is not BACnet operation authorization or certificate-to-VMAC/UUID binding. Persistent nonzero UUID API work (#517) remains unresolved; the Python two-node sketch is illustrative, not validated end-to-end."
   },
   {
    "id": "BACNET-AB-SC-HEARTBEAT",
@@ -2225,9 +2245,7 @@
     "crates/bacnet-transport/src/sc_hub/heartbeat.rs::tests::sweep_removes_client_when_pending_heartbeat_exceeds_ack_timeout",
     "crates/bacnet-transport/src/sc_hub/heartbeat.rs::tests::heartbeat_ack_must_match_pending_message_id"
    ],
-   "benchmarks": [
-    "benchmarks/benches/sc_latency.rs"
-   ],
+   "benchmarks": [],
    "public_claims": [
     "docs/python-api.md sc_heartbeat_interval_ms",
     "docs/rust-api.md with_heartbeat_interval_ms"
