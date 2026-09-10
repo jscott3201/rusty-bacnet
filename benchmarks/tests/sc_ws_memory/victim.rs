@@ -38,7 +38,7 @@ pub fn run(role: &str) {
         if command == "dial" {
             id += 1;
             let url = setup["url"].as_str().unwrap().to_owned();
-            let config = make_client_tls_config_mtls(&certs);
+            let config = bacnet_benchmarks::sc_helpers::try_make_node_tls_config(&certs).unwrap();
             tasks.push(runtime.spawn(async move {
                 let ws = TlsWebSocket::connect(&url, config).await.unwrap();
                 let mut connection = ScConnection::new([0x22, 0, 0, 0, 0, id], [id; 16]);

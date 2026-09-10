@@ -135,7 +135,7 @@ The single server has stable VMAC `020000001388` and Device UUID
 node a unique nonzero UUID and a unique VMAC other than all-zero/all-ff; these
 are not inferred from the certificate or BACnet Device instance. The binary
 accepts 12/32 hex digits without separators. Public `ScServerBuilder` defaults
-and raw Rust TLS APIs are unchanged.
+are unchanged; the built-in Rust TLS driver now requires `ScNodeTlsConfig`.
 
 ## Rotation and teardown
 
@@ -162,7 +162,12 @@ direct-issuer policy, certificate-to-VMAC/UUID authorization, or physical-device
 interoperability (#513 remains partial). All public Rust hub startup now requires
 `ScHubTlsConfig`; this example already uses its compatible alias, without a change
 to provisioning or runtime behavior. Server-auth-only SC benchmark targets are
-retired; historical results remain. Public Rust node TLS policy is still caller-managed.
+retired; historical results remain. The device and smoke peer now use the shared
+strict local `ScNodeTlsConfig` factory without provisioning or CLI changes.
+Normal TLS resumption is preserved and may not retransmit certificates; a trusted
+server without CertificateRequest can complete without receiving node credentials.
+The paired strict hub requests and verifies credentials, but the node factory alone
+does not enforce that remote behavior or establish full-profile conformance.
 
 Sources: [OpenSSL req](https://docs.openssl.org/3.6/man1/openssl-req/),
 [extensions](https://docs.openssl.org/3.6/man5/x509v3_config/),

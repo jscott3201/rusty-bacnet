@@ -3,7 +3,6 @@
 #[allow(dead_code)]
 mod support;
 
-use bacnet_transport::sc_tls::TlsWebSocket;
 use futures_util::FutureExt;
 use rcgen::ExtendedKeyUsagePurpose::ClientAuth;
 use std::panic::AssertUnwindSafe;
@@ -76,6 +75,23 @@ async fn explicit_site_ca_read_property_and_untrusted_ca_rejection() {
             format!("{}{}", Site::new().ca.pem(), site.ca.pem()),
         );
         read_value(&files, &fixture.url, &leaf, &bundle, false).await;
+        // Preserve streaming CA error order: do not parse a later PEM block
+        // before validating the earlier DER entry. Neither is a usable CA.
+        let bad_der = "-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n";
+        let bad_pem = "-----BEGIN CERTIFICATE-----\n!\n-----END CERTIFICATE-----\n";
+        for (contents, expected) in [
+            (
+                format!("{bad_der}{bad_pem}"),
+                "unusable certificate in --sc-ca PEM",
+            ),
+            (format!("{bad_pem}{bad_der}"), "failed to parse --sc-ca PEM"),
+        ] {
+            let path = files.write("ordered-invalid-ca.pem", contents);
+            let mut cmd = cli(&files, &fixture.url, &leaf);
+            cmd.arg("--sc-ca").arg(path);
+            failure(&Process::spawn(read(&mut cmd)).output().await, expected);
+        }
+        read_value(&files, &fixture.url, &leaf, &ca, false).await;
     })
     .await;
 }
@@ -159,13 +175,25 @@ async fn hub_tls_verifier_requires_a_client_certificate() {
     // that the test hub's verifier really requires client authentication.
     let site = Site::new();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("wss://{}", listener.local_addr().unwrap());
     let acceptor = site.acceptor(&rustls::version::TLS13);
     let config = rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
         .with_root_certificates(site.roots())
         .with_no_client_auth();
     let (client, peer) = tokio::join!(
-        bounded(TlsWebSocket::connect(&url, Arc::new(config))),
+        bounded(async {
+            use tokio::io::AsyncReadExt;
+            let tcp = tokio::net::TcpStream::connect(listener.local_addr().unwrap())
+                .await
+                .unwrap();
+            let mut tls = tokio_rustls::TlsConnector::from(Arc::new(config))
+                .connect(
+                    rustls::pki_types::ServerName::try_from("127.0.0.1").unwrap(),
+                    tcp,
+                )
+                .await?;
+            // TLS 1.3 may deliver the server's client-auth alert after Finished.
+            tls.read(&mut [0; 1]).await
+        }),
         bounded(async {
             let (tcp, _) = listener.accept().await.unwrap();
             match acceptor.accept(tcp).await {
@@ -174,7 +202,7 @@ async fn hub_tls_verifier_requires_a_client_certificate() {
             }
         })
     );
-    assert!(client.is_err());
+    assert!(format!("{:?}", client.err().unwrap()).contains("CertificateRequired"));
     assert!(format!("{peer:?}").contains("NoCertificatesPresented"));
 }
 

@@ -37,7 +37,7 @@ async fn initiating_websocket_rejects_oversize_declared_frame_without_body() {
         ws
     };
     let url = format!("wss://localhost:{}", address.port());
-    let (server, node) = tokio::join!(server, TlsWebSocket::connect(&url, tls.client.clone()));
+    let (server, node) = tokio::join!(server, TlsWebSocket::connect(&url, tls.node.clone()));
     let node = node.unwrap();
     let outcome = tokio::time::timeout(Duration::from_millis(500), node.recv()).await;
     assert!(

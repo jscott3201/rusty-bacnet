@@ -100,7 +100,7 @@ pub(super) async fn initiating_pair() -> (WebSocketStream<TlsStream>, crate::sc_
     let url = format!("wss://localhost:{}", address.port());
     let (server, node) = tokio::join!(
         accept,
-        crate::sc_tls::TlsWebSocket::connect(&url, tls.client.clone())
+        crate::sc_tls::TlsWebSocket::connect(&url, tls.node.clone())
     );
     (server, node.unwrap())
 }

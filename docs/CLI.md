@@ -446,8 +446,12 @@ The CLI tests run the built executable against an ephemeral Rust mTLS SC hub and
 BACnet server, parse a known ReadProperty JSON value, and cover explicit/wrong
 site trust, credential failures, TLS 1.2 rejection, and pre-dial listener checks.
 This is bounded native CLI evidence, not full Annex AB security-profile or
-external-device interoperability certification. Caller-owned Rust library TLS
-configuration APIs are unchanged; #513 remains partial.
+external-device interoperability certification. The CLI now delegates local
+policy construction to `ScNodeTlsConfig`; CLI flags and error phases stay compatible
+despite the [Rust source break](rust-api.md#strict-local-node-tls-configuration).
+Credentials are offered when requested and compatible, not proof of remote hub
+verification. A trusted server without CertificateRequest can complete, and normal
+TLS resumption may not retransmit certificates. Issue #513 remains open/partial.
 
 ## Object Type Shorthand
 

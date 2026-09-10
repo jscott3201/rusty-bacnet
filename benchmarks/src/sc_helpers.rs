@@ -10,7 +10,7 @@ use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use bacnet_transport::sc::ScTransport;
 use bacnet_transport::sc_frame::Vmac;
 use bacnet_transport::sc_hub::{ScHub, ScHubHandshakeTimeouts, ScHubTlsConfig};
-use bacnet_transport::sc_tls::TlsWebSocket;
+use bacnet_transport::sc_tls::{ScNodeTlsConfig, TlsWebSocket};
 use bacnet_types::error::Error;
 
 /// Generated certificate material for testing.
@@ -246,7 +246,20 @@ pub fn try_make_hub_tls_config(certs: &CertMaterial) -> Result<ScHubTlsConfig, E
     ScHubTlsConfig::from_der(ca_certs, cert_chain, key)
 }
 
-/// Build a rustls ClientConfig that presents a client certificate (mTLS).
+/// Build the strict local node policy from in-memory PEM, without file/network I/O.
+pub fn try_make_node_tls_config(certs: &CertMaterial) -> Result<ScNodeTlsConfig, Error> {
+    let chain = CertificateDer::pem_slice_iter(certs.client_cert_pem.as_bytes())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| Error::Encoding(format!("failed to parse client certificates: {e}")))?;
+    let key = PrivateKeyDer::from_pem_slice(certs.client_key_pem.as_bytes())
+        .map_err(|e| Error::Encoding(format!("failed to parse client key: {e}")))?;
+    let ca = CertificateDer::pem_slice_iter(certs.ca_cert_pem.as_bytes())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| Error::Encoding(format!("failed to parse CA certificates: {e}")))?;
+    ScNodeTlsConfig::from_der(ca, chain, key)
+}
+
+/// Build a raw rustls ClientConfig with client credentials for independent peers.
 ///
 /// The client authenticates to the hub by including its certificate chain
 /// and private key, satisfying the hub's client-auth requirement.
@@ -327,7 +340,7 @@ pub async fn make_sc_transport_mtls(
     certs: &CertMaterial,
     vmac: Vmac,
 ) -> ScTransport<TlsWebSocket> {
-    let tls_config = make_client_tls_config_mtls(certs);
+    let tls_config = try_make_node_tls_config(certs).unwrap();
     let ws = TlsWebSocket::connect(hub_url, tls_config).await.unwrap();
     ScTransport::new(ws, vmac)
 }

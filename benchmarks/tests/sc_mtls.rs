@@ -7,22 +7,53 @@ use bacnet_benchmarks::sc_helpers::*;
 use bacnet_transport::port::TransportPort;
 use bacnet_transport::sc::{ScConnectionState, ScTransport};
 use bacnet_transport::sc_hub::ScHubTlsConfig;
-use bacnet_transport::sc_tls::TlsWebSocket;
+use bacnet_transport::sc_tls::{ScNodeTlsConfig, TlsWebSocket};
 use bacnet_types::error::Error;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::rustls;
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
+#[path = "sc_mtls/node_reconnect.rs"]
+mod node_reconnect;
+
 async fn assert_connect_fails(url: &str, tls_config: Arc<rustls::ClientConfig>, message: &str) {
     let result = tokio::time::timeout(
         Duration::from_secs(5),
-        TlsWebSocket::connect(url, tls_config),
+        tokio_tungstenite::connect_async_tls_with_config(
+            url,
+            None,
+            false,
+            Some(tokio_tungstenite::Connector::Rustls(tls_config)),
+        ),
     )
     .await
     .expect("TLS/WebSocket connect attempt timed out");
 
-    assert!(result.is_err(), "{message}");
+    let error = result.expect_err("invalid TLS peer was accepted");
+    assert!(
+        format!("{error:?}").contains(message),
+        "expected {message}, got {error:?}"
+    );
+}
+
+async fn assert_node_rejects_server(url: &str, tls: ScNodeTlsConfig, expected: &str) {
+    let error = tokio::time::timeout(Duration::from_secs(5), TlsWebSocket::connect(url, tls))
+        .await
+        .expect("node TLS attempt timed out")
+        .err()
+        .expect("invalid server was accepted");
+    assert!(matches!(
+        bacnet_transport::sc::ScConnectError::from_error(&error),
+        Some(bacnet_transport::sc::ScConnectError::WebSocket {
+            kind: bacnet_transport::sc::ScWebSocketErrorKind::TlsHandshake,
+            ..
+        })
+    ));
+    assert!(
+        error.to_string().contains(expected),
+        "expected {expected}, got {error:?}"
+    );
 }
 
 /// mTLS connection succeeds when the client presents a valid certificate
@@ -36,7 +67,7 @@ async fn sc_mtls_connection_succeeds() {
     let (mut hub, url) = start_sc_hub_mtls(&certs, hub_vmac).await;
 
     // Connect with mTLS client config (presents client cert).
-    let tls_config = make_client_tls_config_mtls(&certs);
+    let tls_config = try_make_node_tls_config(&certs).unwrap();
     let ws = TlsWebSocket::connect(&url, tls_config).await.unwrap();
     let mut transport = ScTransport::new(ws, client_vmac);
     let _rx = transport.start().await.unwrap();
@@ -62,13 +93,7 @@ async fn sc_mtls_rejects_unauthenticated_client() {
 
     // Connect WITHOUT a client certificate (standard non-mTLS config).
     let tls_config = make_client_tls_config(&certs);
-    let result = TlsWebSocket::connect(&url, tls_config).await;
-
-    // Should fail because the hub requires a client cert.
-    assert!(
-        result.is_err(),
-        "Expected TLS handshake to fail without client cert"
-    );
+    assert_connect_fails(&url, tls_config, "CertificateRequired").await;
 
     hub.stop().await;
 }
@@ -166,7 +191,10 @@ async fn sc_mtls_rejects_client_cert_from_wrong_ca() {
     assert_connect_fails(
         &url,
         make_client_tls_config_mtls_with_client_identity(&hub_certs, &wrong_client_certs),
-        "Expected mTLS hub to reject client cert signed by an untrusted CA",
+        // Both generated CAs have rcgen's same default subject; verification
+        // finds that subject but the wrong signing key produces BadSignature,
+        // mapped to DecryptError by rustls 0.23.42 (error.rs).
+        "DecryptError",
     )
     .await;
 
@@ -184,7 +212,7 @@ async fn sc_mtls_rejects_expired_client_cert() {
     assert_connect_fails(
         &url,
         make_client_tls_config_mtls(&certs),
-        "Expected mTLS hub to reject an expired client certificate",
+        "CertificateExpired",
     )
     .await;
 
@@ -202,7 +230,7 @@ async fn sc_mtls_rejects_not_yet_valid_client_cert() {
     assert_connect_fails(
         &url,
         make_client_tls_config_mtls(&certs),
-        "Expected mTLS hub to reject a not-yet-valid client certificate",
+        "CertificateExpired",
     )
     .await;
 
@@ -217,10 +245,10 @@ async fn sc_tls_rejects_expired_server_cert() {
 
     let (mut hub, url) = start_sc_hub_mtls(&certs, hub_vmac).await;
 
-    assert_connect_fails(
+    assert_node_rejects_server(
         &url,
-        make_client_tls_config_mtls(&certs),
-        "Expected BACnet/SC client to reject an expired server certificate",
+        try_make_node_tls_config(&certs).unwrap(),
+        "certificate expired",
     )
     .await;
 
@@ -235,10 +263,10 @@ async fn sc_tls_rejects_not_yet_valid_server_cert() {
 
     let (mut hub, url) = start_sc_hub_mtls(&certs, hub_vmac).await;
 
-    assert_connect_fails(
+    assert_node_rejects_server(
         &url,
-        make_client_tls_config_mtls(&certs),
-        "Expected BACnet/SC client to reject a not-yet-valid server certificate",
+        try_make_node_tls_config(&certs).unwrap(),
+        "not valid yet",
     )
     .await;
 
@@ -253,10 +281,10 @@ async fn sc_tls_rejects_wrong_server_name() {
 
     let (mut hub, url) = start_sc_hub_mtls(&certs, hub_vmac).await;
 
-    assert_connect_fails(
+    assert_node_rejects_server(
         &url,
-        make_client_tls_config_mtls(&certs),
-        "Expected BACnet/SC client to reject a server certificate with the wrong SAN",
+        try_make_node_tls_config(&certs).unwrap(),
+        "not valid for name",
     )
     .await;
 
@@ -304,6 +332,48 @@ fn sc_tls_config_rejects_mismatched_cert_key_pairs() {
 // AQID is the deliberately invalid DER byte sequence [1, 2, 3], not a credential.
 const INVALID_CERT_DER_PEM: &str = "-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n";
 const MALFORMED_CERT_PEM: &str = "-----BEGIN CERTIFICATE-----\n!\n-----END CERTIFICATE-----\n";
+
+#[test]
+fn node_tls_pem_loader_owns_material_and_retains_raw_peer_helper_contracts() {
+    let mut certs = generate_test_certs();
+    certs.client_cert_pem.push_str(&certs.ca_cert_pem);
+    let config = try_make_node_tls_config(&certs).unwrap();
+    let _: Arc<rustls::ClientConfig> = make_client_tls_config(&certs);
+    let _: Arc<rustls::ClientConfig> = make_client_tls_config_mtls(&certs);
+    let _: Result<Arc<rustls::ClientConfig>, String> = try_make_client_tls_config_mtls(&certs);
+    drop(certs);
+    assert_eq!(format!("{config:?}"), "ScNodeTlsConfig { .. }");
+}
+
+#[test]
+fn node_tls_pem_loader_rejects_empty_malformed_and_mixed_der_inputs() {
+    for field in ["ca", "chain", "key"] {
+        for invalid in ["", MALFORMED_CERT_PEM, INVALID_CERT_DER_PEM] {
+            let mut certs = generate_test_certs();
+            match field {
+                "ca" => certs.ca_cert_pem = invalid.into(),
+                "chain" => certs.client_cert_pem = invalid.into(),
+                _ => certs.client_key_pem = invalid.into(),
+            }
+            assert!(matches!(
+                try_make_node_tls_config(&certs),
+                Err(Error::Encoding(_))
+            ));
+        }
+    }
+    for ca in [false, true] {
+        let mut certs = generate_test_certs();
+        if ca {
+            certs.ca_cert_pem.push_str(INVALID_CERT_DER_PEM);
+        } else {
+            certs.client_cert_pem.push_str(INVALID_CERT_DER_PEM);
+        }
+        assert!(matches!(
+            try_make_node_tls_config(&certs),
+            Err(Error::Encoding(_))
+        ));
+    }
+}
 
 fn assert_hub_config_error(certs: &CertMaterial, expected: &str) {
     let error = try_make_hub_tls_config(certs).unwrap_err();

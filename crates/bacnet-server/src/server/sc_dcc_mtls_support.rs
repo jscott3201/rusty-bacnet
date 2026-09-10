@@ -7,7 +7,7 @@ use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_transport::sc::ScTransport;
 use bacnet_transport::sc_hub::{ScHub, ScHubHandshakeTimeouts, ScHubTlsConfig};
-use bacnet_transport::sc_tls::TlsWebSocket;
+use bacnet_transport::sc_tls::{ScNodeTlsConfig, TlsWebSocket};
 use bacnet_types::enums::EnableDisable;
 use futures_util::FutureExt;
 use rcgen::{CertificateParams, ExtendedKeyUsagePurpose, Issuer, KeyPair};
@@ -31,7 +31,7 @@ pub(super) async fn bounded<T>(future: impl Future<Output = T>) -> T {
 // the BACnet server (a TLS client of the hub). No permissive verifier is used.
 pub(super) struct Certificates {
     pub hub: ScHubTlsConfig,
-    pub clients: Vec<Arc<rustls::ClientConfig>>,
+    pub clients: Vec<ScNodeTlsConfig>,
     pub missing: Arc<rustls::ClientConfig>,
     pub untrusted: Arc<rustls::ClientConfig>,
     pub wrong_server_trust: Arc<rustls::ClientConfig>,
@@ -73,14 +73,7 @@ impl Certificates {
                 );
                 assert!(!certs.contains(&cert), "endpoint certificates must differ");
                 certs.push(cert.clone());
-                Arc::new(
-                    rustls::ClientConfig::builder_with_protocol_versions(&[
-                        &rustls::version::TLS13,
-                    ])
-                    .with_root_certificates(roots.clone())
-                    .with_client_auth_cert(vec![cert], key.into())
-                    .unwrap(),
-                )
+                ScNodeTlsConfig::from_der(vec![ca.der().clone()], vec![cert], key.into()).unwrap()
             })
             .collect();
         let missing =

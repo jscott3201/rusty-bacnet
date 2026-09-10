@@ -599,7 +599,7 @@ pub struct ScClientBuilder {
     config: ClientConfig,
     options: ClientOptions,
     hub_url: String,
-    tls_config: Option<std::sync::Arc<tokio_rustls::rustls::ClientConfig>>,
+    tls_config: Option<bacnet_transport::sc_tls::ScNodeTlsConfig>,
     vmac: bacnet_transport::sc_frame::Vmac,
     device_uuid: [u8; 16],
     heartbeat_interval_ms: u64,
@@ -615,11 +615,24 @@ impl ScClientBuilder {
         self
     }
 
-    /// Set the TLS client configuration.
-    pub fn tls_config(
-        mut self,
-        config: std::sync::Arc<tokio_rustls::rustls::ClientConfig>,
-    ) -> Self {
+    /// Set the validated local node TLS policy, shared across initial and
+    /// reconnect attempts (including normal TLS resumption).
+    ///
+    /// ```
+    /// use bacnet_client::client::{BACnetClient, ScClientBuilder};
+    /// use bacnet_transport::sc_tls::ScNodeTlsConfig;
+    /// fn configured(tls: ScNodeTlsConfig) -> ScClientBuilder {
+    ///     BACnetClient::sc_builder().tls_config(tls)
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail,E0308
+    /// use bacnet_client::client::BACnetClient;
+    /// fn raw(config: std::sync::Arc<tokio_rustls::rustls::ClientConfig>) {
+    ///     let _ = BACnetClient::sc_builder().tls_config(config);
+    /// }
+    /// ```
+    pub fn tls_config(mut self, config: bacnet_transport::sc_tls::ScNodeTlsConfig) -> Self {
         self.tls_config = Some(config);
         self
     }

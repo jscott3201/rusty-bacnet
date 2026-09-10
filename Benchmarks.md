@@ -83,7 +83,11 @@ are neither currently reproducible comparison-mode results nor mTLS conformance 
 ### 1.5 BACnet/SC — Mutual TLS (mTLS)
 
 The original `sc_mtls_latency` and `sc_mtls_throughput` targets remain unchanged.
-Strict-hub migration checks compile them, not measure them. The known all-zero
+Strict hub/node migration checks compile them, not measure them. Node helpers now
+use `ScNodeTlsConfig` with explicit trust and matching operational credentials;
+normal TLS resumption is preserved. This local policy does not prove an arbitrary
+remote hub requests/verifies a certificate (no-request handshakes can complete,
+and resumed connections may not retransmit certificates). The known all-zero
 node UUID collision in other default-based setups remains unfixed; this is not
 full benchmark runtime or performance qualification. The numeric results below
 are historical, including SC comparisons and takeaways elsewhere in this report.

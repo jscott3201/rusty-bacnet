@@ -1569,8 +1569,10 @@ or certify local certificate dates/issuer relationships.
 All public Rust hub startup now requires the [constrained configuration](rust-api.md#bacnetsc-hub);
 raw `TlsAcceptor` hub injection is retired by a Rust source-breaking change.
 Python already uses the compatible alias, so its signatures and behavior are unchanged.
-Rust node `ClientConfig`/`TlsWebSocket` remains caller-managed; #513 remains partial,
-not because of a public raw hub path. Python nodes require the
+Built-in Rust node APIs now require `ScNodeTlsConfig` too. This is an internal
+Python integration, not another certificate-less-access fix or a signature change.
+Issue #513 remains open for final acceptance assessment and remaining profile
+limits. Python nodes require the
 explicit credentials described [below](#bacnetsc-secure-connect).
 
 ### Methods
@@ -1733,7 +1735,12 @@ TLS 1.3-only remains the existing local policy. Base Standard 135-2020 Annex
 AB.7.4/AB.7.4.1.1 supplies the mutual-authentication and installation-credential
 context, but this change is not full security-profile conformance, certificate
 to VMAC/UUID authorization, or a change to hostname/revocation/issuer policy.
-Caller-owned Rust TLS configurations remain unchanged (#513 is still partial).
+The shared native `ScNodeTlsConfig::from_der` now constructs this local policy;
+Python interfaces and error categories remain unchanged. Normal TLS resumption is
+preserved and may not retransmit certificates. Credentials are offered if requested
+and compatible; a trusted server with no CertificateRequest can complete without
+receiving the node certificate. Local configuration does not attest an arbitrary
+remote hub's verification policy (#513 remains open/partial).
 
 ```python
 # Client connecting to a hub

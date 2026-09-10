@@ -1,8 +1,8 @@
 //! TLS configuration helpers for Python bindings.
 
 use bacnet_transport::sc_hub::ScHubTlsConfig;
+use bacnet_transport::sc_tls::ScNodeTlsConfig;
 use bacnet_types::error::Error;
-use std::sync::Arc;
 use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
@@ -57,7 +57,7 @@ pub fn build_client_tls_config(
     ca_cert_path: Option<&str>,
     client_cert_path: Option<&str>,
     client_key_path: Option<&str>,
-) -> Result<Arc<tokio_rustls::rustls::ClientConfig>, Error> {
+) -> Result<ScNodeTlsConfig, Error> {
     use tokio_rustls::rustls;
 
     let [ca_path, cert_path, key_path] =
@@ -71,9 +71,11 @@ pub fn build_client_tls_config(
     if ca_certs.is_empty() {
         return Err(Error::Encoding("no CA certificates found".into()));
     }
-    for cert in ca_certs {
+    // Retain CA validation before reading identity files, but construct the
+    // actual connection policy only through the shared native factory below.
+    for cert in &ca_certs {
         root_store
-            .add(cert)
+            .add(cert.clone())
             .map_err(|e| Error::Encoding(format!("failed to add CA cert: {e}")))?;
     }
 
@@ -90,11 +92,5 @@ pub fn build_client_tls_config(
     let key = PrivateKeyDer::from_pem_slice(&key_data)
         .map_err(|e| Error::Encoding(format!("failed to parse client key: {e}")))?;
 
-    // Retain the local TLS-1.3-only policy; AB.7.4 requires TLS 1.3 support.
-    let config = rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-        .with_root_certificates(root_store)
-        .with_client_auth_cert(certs, key)
-        .map_err(|e| Error::Encoding(format!("TLS client auth error: {e}")))?;
-
-    Ok(Arc::new(config))
+    ScNodeTlsConfig::from_der(ca_certs, certs, key)
 }

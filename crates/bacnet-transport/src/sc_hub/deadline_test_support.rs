@@ -90,6 +90,7 @@ pub(super) struct TestTls {
     pub acceptor: TlsAcceptor,
     pub hub_config: ScHubTlsConfig,
     pub client: Arc<rustls::ClientConfig>,
+    pub node: crate::sc_tls::ScNodeTlsConfig,
 }
 
 impl TestTls {
@@ -193,6 +194,12 @@ impl TestTls {
             )
             .unwrap(),
             client: Arc::new(client),
+            node: crate::sc_tls::ScNodeTlsConfig::from_der(
+                vec![ca_cert.der().clone()],
+                vec![client_cert.der().clone()],
+                PrivatePkcs8KeyDer::from(client_key.serialize_der()).into(),
+            )
+            .unwrap(),
         }
     }
 }

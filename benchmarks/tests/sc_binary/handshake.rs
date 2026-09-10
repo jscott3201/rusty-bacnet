@@ -2,7 +2,7 @@ use super::peer::Peer;
 use super::preflight::replace;
 use super::support::*;
 use bacnet_benchmarks::sc_helpers::*;
-use bacnet_transport::sc_tls::TlsWebSocket;
+use bacnet_transport::sc_tls::ScNodeTlsConfig;
 use rcgen::{CertificateParams, Issuer, KeyPair};
 use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use std::sync::Arc;
@@ -33,7 +33,7 @@ async fn good_pair(files: &Files, certs: &CertMaterial) {
     let url = hub.hub_url().await;
     let mut device = Process::start(&mut files.device(&url), files);
     device.ready("SC device connected").await;
-    let peer = Peer::connect(&url, make_client_tls_config_mtls(certs), 42).await;
+    let peer = Peer::connect(&url, try_make_node_tls_config(certs).unwrap(), 42).await;
     peer.read().await;
     assert!(device.child.try_wait().unwrap().is_none());
 }
@@ -98,7 +98,13 @@ async fn actual_binaries_mutual_tls_reads_and_denials_recover() {
         Some(rustls::ProtocolVersion::TLSv1_3)
     );
     drop(tls);
-    let peer = Peer::connect(&url, peer_tls, 42).await;
+    let node = ScNodeTlsConfig::from_der(
+        vec![CertificateDer::from_pem_slice(certs.ca_cert_pem.as_bytes()).unwrap()],
+        vec![CertificateDer::from_pem_slice(cert.as_bytes()).unwrap()],
+        PrivateKeyDer::from_pem_slice(key.as_bytes()).unwrap(),
+    )
+    .unwrap();
+    let peer = Peer::connect(&url, node, 42).await;
     peer.read().await;
     let wrong = generate_test_certs();
     let (expired, expired_key) = leaf("expired", ClientAuth, Some((2000, 2001)));
@@ -128,7 +134,14 @@ async fn actual_binaries_mutual_tls_reads_and_denials_recover() {
         ),
     ];
     for (tls, expected) in negatives {
-        let error = match bounded(TlsWebSocket::connect(&url, tls)).await {
+        let error = match bounded(tokio_tungstenite::connect_async_tls_with_config(
+            &url,
+            None,
+            false,
+            Some(tokio_tungstenite::Connector::Rustls(tls)),
+        ))
+        .await
+        {
             Ok(_) => panic!("invalid peer admitted"),
             Err(error) => error.to_string(),
         };

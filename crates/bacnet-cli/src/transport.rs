@@ -97,8 +97,7 @@ pub async fn build_sc_client(
     BACnetClient<bacnet_transport::sc::ScTransport<bacnet_transport::sc_tls::TlsWebSocket>>,
     Error,
 > {
-    use std::sync::Arc;
-
+    use bacnet_transport::sc_tls::ScNodeTlsConfig;
     use rustls::RootCertStore;
     use rustls_pki_types::pem::PemObject;
     use rustls_pki_types::{CertificateDer, PrivateKeyDer};
@@ -130,14 +129,18 @@ pub async fn build_sc_client(
         })?;
 
     let mut root_store = RootCertStore::empty();
-    let ca_certs = CertificateDer::pem_file_iter(ca_path)
+    let ca_iter = CertificateDer::pem_file_iter(ca_path)
         .map_err(|e| Error::Encoding(format!("failed to read --sc-ca PEM: {e}")))?;
-    for cert in ca_certs {
+    let mut ca_certs = Vec::new();
+    // Preserve CA error precedence before identity file I/O. The factory below
+    // owns the actual TLS policy; this store only validates the loaded input.
+    for cert in ca_iter {
         let cert =
             cert.map_err(|e| Error::Encoding(format!("failed to parse --sc-ca PEM: {e}")))?;
         root_store
-            .add(cert)
+            .add(cert.clone())
             .map_err(|e| Error::Encoding(format!("unusable certificate in --sc-ca PEM: {e}")))?;
+        ca_certs.push(cert);
     }
     if root_store.is_empty() {
         return Err(Error::Encoding(
@@ -153,15 +156,12 @@ pub async fn build_sc_client(
     let key = PrivateKeyDer::from_pem_file(key_path)
         .map_err(|e| Error::Encoding(format!("failed to read key PEM: {e}")))?;
 
-    let tls_config =
-        rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_root_certificates(root_store)
-            .with_client_auth_cert(certs, key)
-            .map_err(|e| Error::Encoding(format!("TLS config error: {e}")))?;
+    let tls_config = ScNodeTlsConfig::from_der(ca_certs, certs, key)
+        .map_err(|e| Error::Encoding(format!("TLS config error: {e}")))?;
 
     BACnetClient::sc_builder()
         .hub_url(hub_url)
-        .tls_config(Arc::new(tls_config))
+        .tls_config(tls_config)
         .vmac(sc_vmac)
         .device_uuid(sc_device_uuid)
         .apdu_timeout_ms(args.timeout_ms)

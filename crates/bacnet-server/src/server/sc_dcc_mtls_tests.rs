@@ -1,7 +1,5 @@
 //! Standalone SC service-path evidence, not certificate-bound DCC principals.
 use crate::server::*;
-use bacnet_transport::sc::{ScConnectError, ScWebSocketErrorKind};
-use bacnet_transport::sc_tls::TlsWebSocket;
 use bacnet_types::enums::EnableDisable;
 const DISABLE: EnableDisable = EnableDisable::DISABLE;
 const DISABLE_INITIATION: EnableDisable = EnableDisable::DISABLE_INITIATION;
@@ -16,23 +14,37 @@ async fn sc_dcc_mtls_requires_client_and_server_trust() {
     run(async |f| {
         let certs = Certificates::new();
         f.hub(&certs).await;
-        for tls in [&certs.missing, &certs.untrusted, &certs.wrong_server_trust] {
-            let result = bounded(TlsWebSocket::connect(&f.url, tls.clone())).await;
+        for (tls, expected) in [
+            (&certs.missing, "CertificateRequired"),
+            // Same default subject but a different signing key: BadSignature.
+            (&certs.untrusted, "DecryptError"),
+            (&certs.wrong_server_trust, "UnknownIssuer"),
+        ] {
+            let tcp = bounded(tokio::net::TcpStream::connect(
+                f.url.trim_start_matches("wss://"),
+            ))
+            .await
+            .unwrap();
+            let result = bounded(async {
+                use tokio::io::AsyncReadExt;
+                let mut tls = tokio_rustls::TlsConnector::from(tls.clone())
+                    .connect(
+                        tokio_rustls::rustls::pki_types::ServerName::try_from("127.0.0.1").unwrap(),
+                        tcp,
+                    )
+                    .await?;
+                // TLS 1.3's client-side Finished can precede the server's alert.
+                tls.read(&mut [0; 1]).await
+            })
+            .await;
             // TLS1.3 client authentication rejection may surface during the
             // WebSocket upgrade. A completed error, never a deadline, is required.
             let error = result
                 .err()
                 .expect("unauthenticated TLS endpoint was admitted");
             assert!(
-                matches!(
-                    ScConnectError::from_error(&error),
-                    Some(ScConnectError::WebSocket {
-                        kind: ScWebSocketErrorKind::TlsHandshake
-                            | ScWebSocketErrorKind::WebSocketHandshake,
-                        ..
-                    })
-                ),
-                "expected TLS/upgrade rejection, not a dial/timeout error: {error:?}"
+                format!("{error:?}").contains(expected),
+                "expected {expected}, got {error:?}"
             );
         }
         f.start(&certs, BACnetServer::sc_builder()).await;

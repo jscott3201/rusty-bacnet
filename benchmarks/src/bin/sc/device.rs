@@ -1,14 +1,14 @@
-//! Private standalone-device policy; public raw Rust TLS APIs remain unchanged.
+//! Standalone-device input validation and shared strict local node TLS policy.
 
 use super::credentials::{required, Credentials};
 use super::Args;
-use std::sync::Arc;
+use bacnet_transport::sc_tls::ScNodeTlsConfig;
 
 pub(super) struct ScConfig<'a> {
     pub url: &'a str,
     pub vmac: [u8; 6],
     pub uuid: [u8; 16],
-    pub tls: Arc<rustls::ClientConfig>,
+    pub tls: ScNodeTlsConfig,
 }
 
 impl<'a> ScConfig<'a> {
@@ -30,30 +30,13 @@ impl<'a> ScConfig<'a> {
             return Err("--sc-device-uuid must be nonzero and unique on this SC network".into());
         }
         let material = Credentials::load(ca, cert, key, ["--sc-ca", "--sc-cert", "--sc-key"])?;
-        let mut roots = rustls::RootCertStore::empty();
-        for cert in material.ca {
-            roots
-                .add(cert)
-                .map_err(|e| format!("--sc-ca: invalid CA certificate: {e}"))?;
-        }
-        for cert in &material.chain {
-            rustls::server::ParsedCertificate::try_from(cert)
-                .map_err(|e| format!("--sc-cert: invalid certificate DER: {e}"))?;
-        }
-        let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
-        // with_client_auth_cert validates the built-in provider's signing key
-        // against the leaf before TlsWebSocket can perform DNS or TCP I/O.
-        let tls = rustls::ClientConfig::builder_with_provider(provider)
-            .with_protocol_versions(&[&rustls::version::TLS13])
-            .map_err(|e| format!("SC TLS configuration: {e}"))?
-            .with_root_certificates(roots)
-            .with_client_auth_cert(material.chain, material.key)
-            .map_err(|e| format!("--sc-cert/--sc-key: invalid or mismatched credentials: {e}"))?;
+        let tls = ScNodeTlsConfig::from_der(material.ca, material.chain, material.key)
+            .map_err(|e| format!("--sc-ca/--sc-cert/--sc-key: SC TLS configuration: {e}"))?;
         Ok(Self {
             url,
             vmac,
             uuid,
-            tls: Arc::new(tls),
+            tls,
         })
     }
 }

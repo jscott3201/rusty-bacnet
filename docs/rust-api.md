@@ -301,8 +301,9 @@ let transport = Bip6Transport::new(
 
 ```rust
 use bacnet_transport::sc::ScTransport;
-use bacnet_transport::sc_tls::TlsWebSocket;
+use bacnet_transport::sc_tls::{ScNodeTlsConfig, TlsWebSocket};
 
+let tls_config = ScNodeTlsConfig::from_der(ca_certs, node_cert_chain, node_key)?;
 let ws = TlsWebSocket::connect("wss://hub:1234", tls_config).await?;
 let transport = ScTransport::new(ws, vmac)
     .with_heartbeat_interval_ms(30_000)
@@ -347,8 +348,8 @@ retired with no public unchecked escape. Names, argument order and return types
 are unchanged. `start` retains its all-zero Device UUID; the other methods retain
 the supplied UUID. Default or explicitly validated handshake budgets and lifecycle
 are preserved. `start_with_tls_config` remains a compatible full-control alias for
-`start_with_uuid_and_timeouts`. Node `ClientConfig`/`TlsWebSocket` APIs remain
-**caller-managed** and unchanged; the hub type does not constrain them.
+`start_with_uuid_and_timeouts`. Built-in node APIs separately require
+`ScNodeTlsConfig`, as described below; generic custom transports remain available.
 Python hub startup uses the typed path internally. The standalone benchmark
 hub/device and Docker SC pair now require explicit mTLS PEM files; see
 [Secure Docker migration](../examples/docker/README.md).
@@ -359,8 +360,8 @@ anchors. Base Standard 135-2020 AB.7.4/AB.7.4.1.1 provides the mutual operationa
 authentication and installation-credential context; TLS 1.3-*only* is local policy,
 not the Standard's TLS 1.3-*support* requirement. This does not add direct-issuer,
 revocation, SAN or certificate-to-VMAC/UUID policy, or close the full security
-profile gap (#513 remains partial, including caller-managed node policy, not a
-public raw hub startup path).
+profile gap (#513 remains open for final acceptance assessment and the remaining
+policy limits, not for a public raw hub startup path).
 
 Evidence includes executable/compile-fail rustdoc, native preflight rejection,
 TLS 1.3 mutual authentication with Connect-Accept and relay barriers after missing,
@@ -376,10 +377,48 @@ authentication modes and cleanup. The benchmark PEM loader has focused empty,
 malformed, mixed-valid/invalid DER and mismatched-key tests. Independent raw TLS
 peer helpers (including TLS-version negative controls) retain their existing
 signatures for independent peers, not public hub startup. The separate
-standalone/Docker migration does not change production CLI or node APIs.
+standalone/Docker migration did not change production CLI or node APIs; the
+subsequent built-in node API migration follows.
 Benchmark compilation and functional TLS tests are not new performance qualification.
 The server-auth-only `sc_latency`/`sc_throughput` targets are retired; the original
 mTLS targets remain, with historical results and limits in [Benchmarks](../Benchmarks.md).
+
+#### Strict local node TLS configuration
+
+**Rust source-breaking migration:** `TlsWebSocket::connect(url, config)`,
+`ScClientBuilder::tls_config(config)`, and `ScServerBuilder::tls_config(config)`
+now require `bacnet_transport::sc_tls::ScNodeTlsConfig`, not
+`Arc<rustls::ClientConfig>`. Names, argument order, return types, identity defaults,
+and lifecycle behavior are unchanged. Load owned DER at your application boundary:
+
+```rust
+use bacnet_transport::sc_tls::{ScNodeTlsConfig, TlsWebSocket};
+let tls = ScNodeTlsConfig::from_der(ca_certs, node_cert_chain, node_private_key)?;
+let ws = TlsWebSocket::connect(hub_url, tls.clone()).await?;
+// Or pass tls to BACnetClient::sc_builder().tls_config(tls), or
+// BACnetServer::sc_builder().tls_config(tls), then finish that builder.
+```
+
+The factory accepts nonempty explicit CA and leaf-first operational chains plus a
+matching usable key. It checks every DER entry before any I/O, uses the fixed
+built-in aws-lc provider, normal WebPKI server CA/name verification, and TLS 1.3
+only. It does not preflight local certificate dates, issuer relationships, EKU,
+or authorization. No raw constructor, getter, mutable access, or unchecked
+conversion exposes the underlying configuration. Clones share one configuration,
+including its verifier, identity resolver and normal resumption cache; reconnects
+do not rebuild it or disable tickets. Early-data policy is unchanged.
+
+**Local contract limit:** the node offers credentials when requested and compatible.
+A trusted TLS 1.3 server that sends no CertificateRequest can complete; resumed
+connections may not retransmit certificates. This does not attest that every
+connection presents an identity or that an arbitrary remote hub verifies it.
+The independent server-side no-request and Full→Resumed tests characterize this
+limit; strict hub and reconnect/failover tests cover the configured mTLS paths.
+`WebSocketPort`, `ScTransport`, and generic builders remain public and generic;
+other WebSocket implementations are outside this built-in driver guarantee.
+Python constructors, CLI flags, file-I/O/error phases, and Docker provisioning stay
+compatible; their existing node policy is consolidated internally. The local raw
+configuration gap is closed, not the full Annex AB profile or issue #513.
 
 ### MS/TP (Serial RS-485)
 
@@ -1285,7 +1324,10 @@ let mut hub = ScHub::start_with_tls_config(
 ).await?;
 let hub_addr = hub.local_addr().expect("started hub has a bound address");
 
-// The caller-managed client config must trust the hub and supply a client cert/key.
+// Build the node policy from separately loaded site trust and operational DER.
+let tls_config = bacnet_transport::sc_tls::ScNodeTlsConfig::from_der(
+    node_ca_certs, node_cert_chain, node_key,
+)?;
 // Use a persistent nonzero client_uuid, distinct from hub_uuid and every other peer.
 let mut client = BACnetClient::sc_builder()
     .hub_url(&format!("wss://127.0.0.1:{}", hub_addr.port()))

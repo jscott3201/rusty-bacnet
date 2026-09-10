@@ -5,7 +5,7 @@ use bacnet_server::server::BACnetServer;
 use bacnet_transport::{
     sc::ScTransport,
     sc_hub::{ScHub, ScHubHandshakeTimeouts, ScHubTlsConfig},
-    sc_tls::TlsWebSocket,
+    sc_tls::{ScNodeTlsConfig, TlsWebSocket},
 };
 use futures_util::FutureExt;
 use rcgen::{Certificate, CertificateParams, ExtendedKeyUsagePurpose, Issuer, KeyPair};
@@ -71,16 +71,13 @@ impl Site {
         roots
     }
 
-    pub fn client(&self, leaf: &Leaf) -> Arc<rustls::ClientConfig> {
-        Arc::new(
-            rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_root_certificates(self.roots())
-                .with_client_auth_cert(
-                    vec![leaf.cert.der().clone()],
-                    PrivatePkcs8KeyDer::from(leaf.key.serialize_der()).into(),
-                )
-                .unwrap(),
+    pub fn client(&self, leaf: &Leaf) -> ScNodeTlsConfig {
+        ScNodeTlsConfig::from_der(
+            vec![self.ca.der().clone()],
+            vec![leaf.cert.der().clone()],
+            PrivatePkcs8KeyDer::from(leaf.key.serialize_der()).into(),
         )
+        .unwrap()
     }
 
     pub fn hub_tls_config(&self) -> ScHubTlsConfig {

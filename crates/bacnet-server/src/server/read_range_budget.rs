@@ -138,12 +138,9 @@ mod tests {
             }
             #[cfg(feature = "sc-tls")]
             {
-                let tls = tokio_rustls::rustls::ClientConfig::builder()
-                    .with_root_certificates(tokio_rustls::rustls::RootCertStore::empty())
-                    .with_no_client_auth();
                 let error = BACnetServer::sc_builder()
                     .hub_url("not-a-websocket-url")
-                    .tls_config(Arc::new(tls))
+                    .tls_config(crate::server::sc_builder::test_tls_config())
                     .read_range_budget(budget)
                     .build()
                     .await

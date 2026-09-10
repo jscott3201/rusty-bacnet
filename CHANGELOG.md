@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking Rust node TLS API:** `TlsWebSocket::connect`,
+  `ScClientBuilder::tls_config`, and `ScServerBuilder::tls_config` require opaque
+  `ScNodeTlsConfig` rather than `Arc<rustls::ClientConfig>`. Construct from owned
+  CA/chain/key DER: explicit nonempty trust, all-entry syntax checks, matching
+  operational key, fixed aws-lc, normal server CA/name verification and TLS 1.3-only
+  local policy, before I/O. No raw/mutable escape. Clones and reconnects share the
+  same configuration and normal resumption cache; tickets/early-data policy remain.
+  This local contract supplies identity when requested and compatible, not proof
+  of presentation on every connection or remote hub verification. Trusted servers
+  without CertificateRequest can complete; resumption may not retransmit certs.
+  Generic custom WebSocket transports remain outside the built-in driver guarantee.
+  Python/CLI interfaces, file/error phases, Docker provisioning and hub policy stay
+  compatible. No local date/issuer/EKU/authorization preflight or full-profile claim;
+  #513 stays open pending final acceptance assessment. See the
+  [migration and limits](docs/rust-api.md#strict-local-node-tls-configuration).
+
 - **Breaking Rust hub TLS API:** `ScHub::start`, `start_with_uuid`, and
   `start_with_uuid_and_timeouts` now require `ScHubTlsConfig` as their second
   argument, not `TlsAcceptor`. All public hub startup enforces explicit CA trust,
@@ -22,7 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the old raw-policy characterization with strict-family runtime and compile-fail
   coverage; WebSocket tests now authenticate before testing WebSocket semantics.
   Python and Docker already use the alias and retain behavior/signatures. Node
-  `ClientConfig`/`TlsWebSocket` remains caller-managed. No full-profile, UUID fix,
+  `ClientConfig`/`TlsWebSocket` was left caller-managed by that hub change;
+  its subsequent migration is above. No full-profile, UUID fix,
   or performance claim; #513 remains partial, not for public raw hub startup.
   See [Rust migration and limits](docs/rust-api.md#bacnetsc-hub).
 
@@ -54,8 +71,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validated handshake timeouts while reusing the existing lifecycle. Python hub
   startup delegates to this factory; its constructor, errors and file-loading
   boundary stay compatible. The initial additive change left raw `TlsAcceptor`
-  startup APIs unchanged; their retirement is described above. Node TLS APIs are
-  not migrated. Docker's separate
+  startup APIs unchanged; their retirement is described above. That initial change
+  did not migrate node TLS APIs; the subsequent source break is above. Docker's separate
   standalone migration is described above. Native
   preflight, compile-fail, real TLS/SC relay/deadline and installed Python tests
   cover this partial migration, not full-profile conformance or #513 closure.
@@ -67,8 +84,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Native/system roots are no longer loaded; there is no environment-trust or
   insecure fallback. Local file/configuration failures, including mismatched
   cert/key, fail before dial. Help/version, non-SC transports and capture paths
-  without a client stay independent of SC files. TLS 1.3-only remains; public Rust
-  node TLS configuration APIs remain compatible (hub retirement is described
+  without a client stay independent of SC files. TLS 1.3-only remains; that CLI change
+  left Rust node TLS APIs compatible (subsequent node/hub retirement is described
   above), and #513 remains partial. See the
   [CLI migration and test scope](docs/CLI.md#transport-variants).
 

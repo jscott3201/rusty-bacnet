@@ -29,7 +29,7 @@ pub struct ScServerBuilder {
     db: ObjectDatabase,
     pub(super) configured_device_bindings: Vec<DeviceBinding>,
     hub_url: String,
-    tls_config: Option<std::sync::Arc<tokio_rustls::rustls::ClientConfig>>,
+    tls_config: Option<bacnet_transport::sc_tls::ScNodeTlsConfig>,
     vmac: bacnet_transport::sc_frame::Vmac,
     heartbeat_interval_ms: u64,
     heartbeat_timeout_ms: u64,
@@ -49,11 +49,24 @@ impl ScServerBuilder {
         self
     }
 
-    /// Set the TLS client configuration.
-    pub fn tls_config(
-        mut self,
-        config: std::sync::Arc<tokio_rustls::rustls::ClientConfig>,
-    ) -> Self {
+    /// Set the validated local node TLS policy, shared across initial and
+    /// reconnect attempts (including normal TLS resumption).
+    ///
+    /// ```
+    /// use bacnet_server::server::{BACnetServer, ScServerBuilder};
+    /// use bacnet_transport::sc_tls::ScNodeTlsConfig;
+    /// fn configured(tls: ScNodeTlsConfig) -> ScServerBuilder {
+    ///     BACnetServer::sc_builder().tls_config(tls)
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail,E0308
+    /// use bacnet_server::server::BACnetServer;
+    /// fn raw(config: std::sync::Arc<tokio_rustls::rustls::ClientConfig>) {
+    ///     let _ = BACnetServer::sc_builder().tls_config(config);
+    /// }
+    /// ```
+    pub fn tls_config(mut self, config: bacnet_transport::sc_tls::ScNodeTlsConfig) -> Self {
         self.tls_config = Some(config);
         self
     }
@@ -256,6 +269,19 @@ impl ScServerBuilder {
 }
 
 #[cfg(test)]
+pub(super) fn test_tls_config() -> bacnet_transport::sc_tls::ScNodeTlsConfig {
+    let rcgen::CertifiedKey { cert, signing_key } =
+        rcgen::generate_simple_self_signed(vec!["node".into()]).unwrap();
+    bacnet_transport::sc_tls::ScNodeTlsConfig::from_der(
+        vec![cert.der().clone()],
+        vec![cert.der().clone()],
+        tokio_rustls::rustls::pki_types::PrivatePkcs8KeyDer::from(signing_key.serialize_der())
+            .into(),
+    )
+    .unwrap()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use bacnet_transport::sc::ScReconnectConfig;
@@ -272,12 +298,9 @@ mod tests {
                 ..Default::default()
             },
         ] {
-            let tls = tokio_rustls::rustls::ClientConfig::builder()
-                .with_root_certificates(tokio_rustls::rustls::RootCertStore::empty())
-                .with_no_client_auth();
             let builder = BACnetServer::sc_builder()
                 .hub_url("not-a-websocket-url")
-                .tls_config(Arc::new(tls))
+                .tls_config(test_tls_config())
                 .get_alarm_summary_budget(budget);
             assert_eq!(builder.config.get_alarm_summary_budget, budget);
             assert!(
@@ -298,12 +321,9 @@ mod tests {
                 ..Default::default()
             },
         ] {
-            let tls = tokio_rustls::rustls::ClientConfig::builder()
-                .with_root_certificates(tokio_rustls::rustls::RootCertStore::empty())
-                .with_no_client_auth();
             let builder = BACnetServer::sc_builder()
                 .hub_url("not-a-websocket-url")
-                .tls_config(Arc::new(tls))
+                .tls_config(test_tls_config())
                 .read_property_multiple_budget(budget);
             assert_eq!(builder.config.read_property_multiple_budget, budget);
             let error = builder.build().await.err().unwrap();
@@ -397,12 +417,9 @@ mod tests {
                 max_unconfirmed_in_flight: bad,
                 ..Default::default()
             };
-            let tls = tokio_rustls::rustls::ClientConfig::builder()
-                .with_root_certificates(tokio_rustls::rustls::RootCertStore::empty())
-                .with_no_client_auth();
             let error = BACnetServer::sc_builder()
                 .hub_url("not-a-websocket-url")
-                .tls_config(Arc::new(tls))
+                .tls_config(test_tls_config())
                 .request_admission_policy(policy)
                 .build()
                 .await
@@ -430,12 +447,9 @@ mod tests {
                 confirmed_recovery_reserve: reserve,
                 ..Default::default()
             };
-            let tls = tokio_rustls::rustls::ClientConfig::builder()
-                .with_root_certificates(tokio_rustls::rustls::RootCertStore::empty())
-                .with_no_client_auth();
             let error = BACnetServer::sc_builder()
                 .hub_url("not-a-websocket-url")
-                .tls_config(Arc::new(tls))
+                .tls_config(test_tls_config())
                 .request_admission_policy(policy)
                 .build()
                 .await
@@ -470,12 +484,9 @@ mod tests {
                     policy.max_unconfirmed_in_flight_per_peer = bad;
                     "max_unconfirmed_in_flight_per_peer"
                 };
-                let tls = tokio_rustls::rustls::ClientConfig::builder()
-                    .with_root_certificates(tokio_rustls::rustls::RootCertStore::empty())
-                    .with_no_client_auth();
                 let builder = BACnetServer::sc_builder()
                     .hub_url("not-a-websocket-url")
-                    .tls_config(Arc::new(tls))
+                    .tls_config(test_tls_config())
                     .request_admission_policy(policy);
                 assert_eq!(builder.config.request_admission_policy, policy);
                 let error = builder.build().await.err().unwrap();

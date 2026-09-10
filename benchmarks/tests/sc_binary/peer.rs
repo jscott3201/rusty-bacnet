@@ -5,14 +5,13 @@ use bacnet_encoding::npdu::decode_npdu;
 use bacnet_services::read_property::ReadPropertyACK;
 use bacnet_transport::sc::WebSocketPort;
 use bacnet_transport::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, ScMessage};
-use bacnet_transport::sc_tls::TlsWebSocket;
+use bacnet_transport::sc_tls::{ScNodeTlsConfig, TlsWebSocket};
 use bytes::{Bytes, BytesMut};
-use std::sync::Arc;
 
 pub struct Peer(pub TlsWebSocket, std::cell::Cell<u8>);
 
 impl Peer {
-    pub async fn connect(url: &str, tls: Arc<rustls::ClientConfig>, id: u8) -> Self {
+    pub async fn connect(url: &str, tls: ScNodeTlsConfig, id: u8) -> Self {
         let peer = Self(
             bounded(TlsWebSocket::connect(url, tls)).await.unwrap(),
             std::cell::Cell::new(7),

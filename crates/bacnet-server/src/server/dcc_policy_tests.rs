@@ -82,12 +82,9 @@ async fn dcc_disable_rate_validation_before_sc_dial() {
             ..Default::default()
         },
     ] {
-        let tls = tokio_rustls::rustls::ClientConfig::builder()
-            .with_root_certificates(tokio_rustls::rustls::RootCertStore::empty())
-            .with_no_client_auth();
         let error = BACnetServer::sc_builder()
             .hub_url("not-a-websocket-url")
-            .tls_config(Arc::new(tls))
+            .tls_config(crate::server::sc_builder::test_tls_config())
             .dcc_disable_rate_limit(Some(limit))
             .build()
             .await
@@ -160,12 +157,9 @@ async fn dcc_source_restriction_rejected_before_start() {
 #[tokio::test]
 async fn dcc_source_restriction_rejected_before_sc_dial() {
     for policy in [DccPolicy::DenyAll, DccPolicy::LegacyPermissive] {
-        let tls = tokio_rustls::rustls::ClientConfig::builder()
-            .with_root_certificates(tokio_rustls::rustls::RootCertStore::empty())
-            .with_no_client_auth();
         let error = BACnetServer::sc_builder()
             .hub_url("not-a-websocket-url")
-            .tls_config(Arc::new(tls))
+            .tls_config(crate::server::sc_builder::test_tls_config())
             .dcc_policy(policy)
             .dcc_source_restriction(Some(DccSourceRestriction::new(vec![]).unwrap()))
             .build()
@@ -312,12 +306,9 @@ async fn dcc_require_password_rejected_before_start() {
 #[tokio::test]
 async fn dcc_require_password_rejected_before_sc_dial() {
     for password in [None, Some("")] {
-        let tls = tokio_rustls::rustls::ClientConfig::builder()
-            .with_root_certificates(tokio_rustls::rustls::RootCertStore::empty())
-            .with_no_client_auth();
         let mut builder = BACnetServer::sc_builder()
             .hub_url("not-a-websocket-url")
-            .tls_config(Arc::new(tls))
+            .tls_config(crate::server::sc_builder::test_tls_config())
             .dcc_policy(DccPolicy::RequirePassword);
         if let Some(password) = password {
             builder = builder.dcc_password(password);

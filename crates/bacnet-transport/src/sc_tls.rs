@@ -4,13 +4,13 @@
 //! with `rustls` TLS.  This is the production WebSocket driver used by
 //! [`crate::sc::ScTransport`] when connecting to a real BACnet/SC hub.
 
-use std::sync::Arc;
+mod tls_config;
+pub use tls_config::ScNodeTlsConfig;
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio_rustls::rustls::pki_types::ServerName;
-use tokio_rustls::TlsConnector;
 use tokio_tungstenite::tungstenite::Error as TungsteniteError;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
@@ -34,17 +34,25 @@ pub struct TlsWebSocket {
 impl TlsWebSocket {
     /// Connect to a WebSocket endpoint with TLS.
     ///
-    /// `url` should be a `wss://` URL.  The provided `tls_config` is used for
-    /// the underlying `rustls` TLS handshake.
+    /// `url` must be a `wss://` URL. The validated local policy supplies explicit
+    /// trust and operational credentials; see [`ScNodeTlsConfig`] for the
+    /// certificate-request and normal resumption limits.
     ///
-    /// Per spec AB.7.4, the `tls_config` should be configured for TLS 1.3 only:
-    /// ```ignore
-    /// ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
     /// ```
-    pub async fn connect(
-        url: &str,
-        tls_config: Arc<tokio_rustls::rustls::ClientConfig>,
-    ) -> Result<Self, Error> {
+    /// use bacnet_transport::sc_tls::{ScNodeTlsConfig, TlsWebSocket};
+    /// async fn connect(url: &str, tls: ScNodeTlsConfig)
+    ///     -> Result<TlsWebSocket, bacnet_types::error::Error> {
+    ///     TlsWebSocket::connect(url, tls).await
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail,E0308
+    /// use bacnet_transport::sc_tls::TlsWebSocket;
+    /// async fn raw(config: std::sync::Arc<rustls::ClientConfig>) {
+    ///     let _ = TlsWebSocket::connect("wss://localhost", config).await;
+    /// }
+    /// ```
+    pub async fn connect(url: &str, tls_config: ScNodeTlsConfig) -> Result<Self, Error> {
         let uri = parse_wss_uri(url)?;
         let addr = tcp_addr_from_uri(&uri)?;
         let server_name = tls_server_name_from_uri(&uri)?;
@@ -59,7 +67,8 @@ impl TlsWebSocket {
             .into_bacnet_error_with_io_kind(e.kind())
         })?;
 
-        let tls_stream = TlsConnector::from(tls_config)
+        let tls_stream = tls_config
+            .into_connector()
             .connect(server_name, socket)
             .await
             .map_err(|e| {
@@ -291,8 +300,13 @@ impl WebSocketPort for TlsWebSocket {
 }
 
 #[cfg(test)]
+#[path = "sc_tls/node_tls_tests.rs"]
+mod node_tls_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio_rustls::rustls::pki_types::pem::PemObject;
     use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
@@ -425,20 +439,11 @@ mod tests {
         ));
     }
 
-    fn test_tls_config() -> Arc<tokio_rustls::rustls::ClientConfig> {
-        Arc::new(
-            tokio_rustls::rustls::ClientConfig::builder_with_protocol_versions(&[
-                &tokio_rustls::rustls::version::TLS13,
-            ])
-            .with_root_certificates(tokio_rustls::rustls::RootCertStore::empty())
-            .with_no_client_auth(),
-        )
+    fn test_tls_config() -> ScNodeTlsConfig {
+        test_tls_pair().0
     }
 
-    fn test_tls_pair() -> (
-        Arc<tokio_rustls::rustls::ClientConfig>,
-        Arc<tokio_rustls::rustls::ServerConfig>,
-    ) {
+    pub(super) fn test_tls_pair() -> (ScNodeTlsConfig, Arc<tokio_rustls::rustls::ServerConfig>) {
         let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
 
         let mut ca_params =
@@ -466,21 +471,23 @@ mod tests {
         .with_single_cert(server_chain, server_key)
         .unwrap();
 
-        let mut roots = tokio_rustls::rustls::RootCertStore::empty();
         let ca_certs: Vec<CertificateDer<'static>> =
             CertificateDer::pem_slice_iter(ca_cert.pem().as_bytes())
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap();
-        for cert in ca_certs {
-            roots.add(cert).unwrap();
-        }
-        let client_config = tokio_rustls::rustls::ClientConfig::builder_with_protocol_versions(&[
-            &tokio_rustls::rustls::version::TLS13,
-        ])
-        .with_root_certificates(roots)
-        .with_no_client_auth();
+        let client_key = rcgen::KeyPair::generate().unwrap();
+        let client_cert = rcgen::CertificateParams::new(vec!["node".into()])
+            .unwrap()
+            .signed_by(&client_key, &ca_issuer)
+            .unwrap();
+        let client_config = ScNodeTlsConfig::from_der(
+            ca_certs,
+            vec![client_cert.der().clone()],
+            rustls::pki_types::PrivatePkcs8KeyDer::from(client_key.serialize_der()).into(),
+        )
+        .unwrap();
 
-        (Arc::new(client_config), Arc::new(server_config))
+        (client_config, Arc::new(server_config))
     }
 
     #[tokio::test]
