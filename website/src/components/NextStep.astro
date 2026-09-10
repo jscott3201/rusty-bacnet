@@ -1,0 +1,8 @@
+---
+interface Props { href: string; label: string; description: string; }
+const { href, label, description } = Astro.props;
+---
+<a class="rb-next-step" href={href}>
+  <span><small>CONTINUE</small><strong>{label}</strong><span>{description}</span></span>
+  <span aria-hidden="true">→</span>
+</a>

@@ -1,0 +1,33 @@
+---
+import { sitePath } from '../lib/site.mjs';
+interface Props { file: string; title: string; description: string; }
+const { file, title, description } = Astro.props;
+const src = sitePath(`diagrams/${file}`);
+const id = `diagram-${file.replace(/[^a-z0-9]/gi, '-')}`;
+---
+<rb-diagram class="rb-diagram">
+  <figure>
+    <div class="rb-diagram-image"><img src={src} alt={description} loading="lazy" /></div>
+    <figcaption>
+      <div><strong>{title}</strong><p>{description}</p></div>
+      <div class="rb-diagram-actions">
+        <button type="button" data-diagram-open hidden aria-haspopup="dialog">Expand diagram <span aria-hidden="true">↗</span></button>
+        <a href={src} target="_blank" rel="noopener">Original SVG <span class="rb-sr-only">(opens a new tab)</span></a>
+      </div>
+    </figcaption>
+  </figure>
+  <dialog data-pagefind-ignore class="rb-diagram-dialog" aria-labelledby={id}>
+    <header class="rb-diagram-header"><h2 id={id}>{title}</h2><form method="dialog"><button type="submit" aria-label="Close diagram">Close <span aria-hidden="true">×</span></button></form></header>
+    <div class="rb-diagram-toolbar">
+      <label>Zoom <input type="range" min="100" max="300" step="25" value="100" data-diagram-zoom /></label>
+      <output data-diagram-percent aria-live="polite">100%</output>
+      <button type="button" data-diagram-fit>Fit</button>
+      <a href={src} target="_blank" rel="noopener">Original SVG <span class="rb-sr-only">(opens a new tab)</span></a>
+    </div>
+    <div class="rb-diagram-viewport" tabindex="0" role="region" aria-label="Diagram; scroll to pan when zoomed">
+      <img src={src} alt={description} data-diagram-full />
+    </div>
+    <p class="rb-diagram-description">{description}</p>
+  </dialog>
+</rb-diagram>
+<script>import '../scripts/diagram-viewer.js';</script>

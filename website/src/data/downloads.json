@@ -1,0 +1,37 @@
+[
+  {
+    "os": "macOS",
+    "architecture": "Apple silicon",
+    "file": "bacnet-macos-arm64",
+    "features": "BACnet/SC",
+    "url": "https://github.com/jscott3201/rusty-bacnet/releases/download/v0.11.0/bacnet-macos-arm64"
+  },
+  {
+    "os": "macOS",
+    "architecture": "Intel",
+    "file": "bacnet-macos-amd64",
+    "features": "BACnet/SC",
+    "url": "https://github.com/jscott3201/rusty-bacnet/releases/download/v0.11.0/bacnet-macos-amd64"
+  },
+  {
+    "os": "Linux",
+    "architecture": "x86-64",
+    "file": "bacnet-linux-amd64",
+    "features": "BACnet/SC \u00b7 packet capture",
+    "url": "https://github.com/jscott3201/rusty-bacnet/releases/download/v0.11.0/bacnet-linux-amd64"
+  },
+  {
+    "os": "Linux",
+    "architecture": "ARM64",
+    "file": "bacnet-linux-arm64",
+    "features": "BACnet/SC \u00b7 packet capture",
+    "url": "https://github.com/jscott3201/rusty-bacnet/releases/download/v0.11.0/bacnet-linux-arm64"
+  },
+  {
+    "os": "Windows",
+    "architecture": "x86-64",
+    "file": "bacnet-windows-amd64.exe",
+    "features": "BACnet/SC",
+    "url": "https://github.com/jscott3201/rusty-bacnet/releases/download/v0.11.0/bacnet-windows-amd64.exe"
+  }
+]

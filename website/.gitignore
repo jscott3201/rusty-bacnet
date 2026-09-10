@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.astro/
+playwright-report/
+test-results/
+screenshots/
+public/raw/
+public/llms.txt
+public/examples/
+__pycache__/
+.venv/
+.DS_Store

@@ -1,0 +1,130 @@
+---
+title: "Try a local client/server lab"
+description: "Create a small BACnet/IP server, read one point on loopback, verify the result, and stop cleanly."
+---
+
+import { Code, Tabs, TabItem } from '@astrojs/starlight/components';
+import Diagram from '../../../components/Diagram.astro';
+import Checkpoint from '../../../components/Checkpoint.astro';
+import NextStep from '../../../components/NextStep.astro';
+import labSource from '../../../../examples/python/loopback_lab.py?raw';
+
+**No controller required.** This lab runs a real Rusty BACnet server and client on your machine. It reads an example analog input, checks the response, and closes both endpoints.
+
+Both endpoints bind to **127.0.0.1**. The script does not perform discovery, request a COV subscription, or write a remote property. It is a learning fixture, not a production server or a hardened multi-user service.
+
+<Diagram file="local-lab.svg" title="A complete read, on one machine" description="A Python client sends a directed ReadProperty request over loopback UDP to a local example server. Analog input 1 returns a real value of 72.5. The operating system assigns separate local ports; both endpoints then stop." />
+
+## 1. Prepare the Python environment
+
+Complete the **Python** path in [Install the tools](/rusty-bacnet/start/installation/). The script checks for `rusty-bacnet==0.11.0` before it starts. Run it with the interpreter from that environment.
+
+## 2. Save the lab script
+
+[Save loopback_lab.py](/rusty-bacnet/examples/loopback_lab.py) beside your `.venv` directory. The complete source is also available at the end of this page.
+
+```text
+my-bacnet-lab/
+  .venv/
+  loopback_lab.py
+```
+
+This example file belongs to the documentation package; it is not assumed to ship inside the installed Python wheel.
+
+## 3. Run one complete read
+
+<Tabs>
+<TabItem label="macOS / Linux">
+
+```sh
+.venv/bin/python loopback_lab.py
+```
+
+</TabItem>
+<TabItem label="Windows">
+
+```powershell
+.\.venv\Scripts\python.exe loopback_lab.py
+```
+
+</TabItem>
+</Tabs>
+
+Expected output, with an operating-system-assigned port:
+
+```text
+Example server: 127.0.0.1:<assigned-port>
+Read ai:1 present-value: real: 72.5
+PASS: directed local read; no remote property writes.
+Server stopped.
+```
+
+<Checkpoint title="Check the round trip">
+
+The script must print `real: 72.5`, print `PASS`, and exit successfully. A line announcing the server address alone is **not** a completed test. The value is an example temperature, not live telemetry; the server explicitly sets units to degrees Fahrenheit (`64`).
+
+</Checkpoint>
+
+The script uses `try/finally` to stop its server and an async context manager for its client. Startup and reads have finite timeouts. A failure returns a nonzero exit status instead of printing a success message.
+
+## 4. Optional: read the same server from the CLI
+
+After also installing the CLI, keep the example server open for five minutes:
+
+<Tabs>
+<TabItem label="macOS / Linux">
+
+```sh
+.venv/bin/python loopback_lab.py --serve --seconds 300
+```
+
+</TabItem>
+<TabItem label="Windows">
+
+```powershell
+.\.venv\Scripts\python.exe loopback_lab.py --serve --seconds 300
+```
+
+</TabItem>
+</Tabs>
+
+The script prints a **complete command containing the actual server port**. Copy that command into another terminal. Substitute the downloaded executable filename when `bacnet` is not on your PATH.
+
+The printed command sets the CLI's interface to `127.0.0.1` and its local port to `0`, while the target uses the server's assigned port. These are **different sockets**. Do not copy port zero into general discovery or persistent COV recipes.
+
+The server stops after the requested duration. Ctrl+C stops it earlier. This is an optional CLI extension of the tutorial; the Python-only round trip above does not require the CLI or libpcap.
+
+## When the lab does not pass
+
+| Symptom | Next check |
+|---|---|
+| `ModuleNotFoundError` or version mismatch | Use the environment's interpreter; verify its native import and package version. |
+| A shared-library error before the CLI starts | On the reviewed Linux release, check the libpcap runtime. Use Python-only mode to separate this from BACnet behavior. |
+| A bind error after setting `--port` | Return to the default `--port 0` or stop the process using that port. |
+| The client times out | Confirm the server is still running and use the address printed by this run, not an old terminal session. |
+| No `PASS` or no clean exit | Read the error message; do not treat server startup as a successful read. |
+
+Do not solve a failed local lab by replacing `127.0.0.1` with `0.0.0.0` or a building-network interface. Keep the fixture local and investigate the immediate error.
+
+## Complete source
+
+<details>
+<summary>Show the complete loopback_lab.py script</summary>
+
+<Code code={labSource} lang="python" title="loopback_lab.py" />
+
+</details>
+
+## What this demonstrates
+
+This exercises **one directed BACnet/IP property read** through the native extension, with application-owned sample data and bounded lifecycle handling. It does not establish discovery, routed operation, MS/TP timing, BACnet/SC security, or full conformance.
+
+During site integration, **all eight tutorial tests and the standalone lab passed on macOS 27.0 arm64 with CPython 3.12.13**, using the v0.11.0 cp312 wheel from the release workflow linked below. The optional **v0.11.0 macOS arm64 CLI** also read the loopback server's value (`72.5`) and units (`64`) through a separate ephemeral socket; the server stopped after its 30-second limit. These results cover these local tutorial flows, not PyPI availability, a general wheel/platform matrix, or physical-network interoperability.
+
+The supplied documentation handoff separately records an earlier Python-only round trip on **Linux x86-64, CPython 3.13, and the v0.11.0 release-workflow wheel**. Its Linux CLI extension was blocked by a missing libpcap runtime. That Linux loader limitation was not retested or cleared by the macOS result.
+
+<NextStep href="/rusty-bacnet/start/first-read/" label="Read a known, authorized device" description="Move from loopback to your actual interface and a specific target." />
+
+## Sources
+
+[Released server and client example](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/examples/python/bip_client_server.py) · [Python API](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/docs/python-api.md) · [Engineering units](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/crates/bacnet-types/src/enums/units.rs) · [Release build](https://github.com/jscott3201/rusty-bacnet/actions/runs/34003656261).

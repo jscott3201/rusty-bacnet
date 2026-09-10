@@ -1,0 +1,11 @@
+---
+import downloads from '../data/downloads.json';
+---
+<div class="rb-download-grid">
+  {downloads.map((item) => <a class="rb-download" href={item.url}>
+    <span class="rb-download-os">{item.os} <span aria-hidden="true">↓</span></span>
+    <strong>{item.architecture}</strong>
+    <code>{item.file}</code>
+    <small>Release build: {item.features}</small>
+  </a>)}
+</div>

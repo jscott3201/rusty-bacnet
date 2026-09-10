@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 590" role="img" aria-labelledby="title desc"><title id="title">An illustrative BACnet property read</title><desc id="desc">A command-line client sends a directed BACnet/IP read to an example controller. Analog input 1 returns a sample present value of 72.5. This is an illustration, not a live reading.</desc><defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse"><path d="M0 0 L8 4 L0 8" fill="none" stroke="#bb7955" stroke-width="1.3"/></marker></defs><style>text{font-family:Arial,Helvetica,sans-serif}.t{fill:#eff0e9;font-size:20px;font-weight:600}.s{fill:#b7c4be;font-size:15px}.k{fill:#eab696;font-size:13px;letter-spacing:1.5px;font-weight:600}.line{fill:none;stroke:#bb7955;stroke-width:2;marker-end:url(#arrow)}.box{fill:#21312e;stroke:#496159;stroke-width:1}</style>
+<rect width="700" height="590" rx="28" fill="#182923"/>
+<g stroke="#284039" stroke-width="1" opacity=".6"><path d="M40 0v590M100 0v590M160 0v590M220 0v590M280 0v590M340 0v590M400 0v590M460 0v590M520 0v590M580 0v590M640 0v590"/><path d="M0 70h700M0 130h700M0 190h700M0 250h700M0 310h700M0 370h700M0 430h700M0 490h700M0 550h700"/></g>
+<text x="38" y="45" class="k">FROM COMMAND TO POINT VALUE</text><text x="665" y="45" text-anchor="end" class="s">01 / IP</text>
+<rect x="38" y="76" width="624" height="130" rx="13" fill="#101e1a" stroke="#456257"/>
+<circle cx="60" cy="98" r="4" fill="#ce9974"/><circle cx="75" cy="98" r="4" fill="#839e8c"/><circle cx="90" cy="98" r="4" fill="#658076"/>
+<text x="60" y="137" class="s" style="font-family:monospace;font-size:17px;fill:#eff0e9">$ bacnet read 192.168.1.100 ai:1 pv</text>
+<text x="60" y="177" class="s">A directed read. No point value is changed.</text>
+<path d="M170 206v37h178v27" class="line"/>
+<text x="62" y="244" class="k">READ PROPERTY</text>
+<rect x="224" y="284" width="438" height="169" rx="14" class="box"/>
+<rect x="246" y="307" width="48" height="48" rx="10" fill="#3e554a"/><path d="M259 341v-20h20v20m-14-13h8m-8 6h8" fill="none" stroke="#c9d5c7" stroke-width="2"/>
+<text x="312" y="322" class="t">Example controller</text><text x="312" y="348" class="s">192.168.1.100:47808</text>
+<path d="M246 372h394" stroke="#496159"/>
+<text x="248" y="403" class="k">OBJECT</text><text x="440" y="403" class="k">PROPERTY</text>
+<text x="248" y="430" class="t">Analog input · 1</text><text x="440" y="430" class="t">Present value</text>
+<path d="M224 369H121v113" class="line"/>
+<rect x="38" y="487" width="624" height="66" rx="11" fill="#2a4236" stroke="#5f8169"/>
+<text x="60" y="527" class="t" style="font-size:29px;fill:#d8e9ca">72.5</text><text x="148" y="527" class="s">Sample value · read units separately</text>
+<text x="580" y="528" class="k">REPLY</text>
+<text x="38" y="576" class="s" style="font-size:12px">ILLUSTRATIVE TOPOLOGY · NOT LIVE TELEMETRY</text>
+</svg>

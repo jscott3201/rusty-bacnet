@@ -1,0 +1,12 @@
+---
+import DefaultFooter from '@astrojs/starlight/components/Footer.astro';
+import ThemeSelect from '@astrojs/starlight/components/ThemeSelect.astro';
+import { sitePath, release } from '../lib/site.mjs';
+---
+<DefaultFooter><slot /></DefaultFooter>
+{!Astro.locals.starlightRoute.hasSidebar && <div class="md:sl-hidden rb-splash-theme"><ThemeSelect /></div>}
+<p class="rb-doc-scope" data-pagefind-ignore>
+  Guides for v{release}. Pre-1.0 APIs; partial conformance.
+  <a href={sitePath('project/support/')}>Support &amp; limitations</a>
+</p>
+<script>import '../scripts/reveal-hash.js';</script>

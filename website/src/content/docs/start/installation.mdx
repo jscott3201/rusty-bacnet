@@ -1,0 +1,183 @@
+---
+title: "Install the tools"
+tableOfContents: false
+description: "Choose a CLI executable, a Python environment, or Rust crates. Verify the installation before connecting."
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import DownloadList from '../../../components/DownloadList.astro';
+import Checkpoint from '../../../components/Checkpoint.astro';
+import NextStep from '../../../components/NextStep.astro';
+
+**Choose one path.** Use the CLI to inspect, Python to automate, or Rust to embed. For the [local client/server lab](/rusty-bacnet/start/local-lab/), start with **Python**; the CLI is optional.
+
+<Tabs>
+<TabItem label="CLI">
+
+## Install a CLI executable
+
+Download the file for the **machine that will run the tool**. These are v0.11.0 release assets, not an automatic platform recommendation.
+
+<DownloadList />
+
+Windows ARM64 is not listed in this release. The feature labels reflect the release workflow, not a blanket transport or conformance guarantee.
+
+### Run it from the download directory
+
+<Tabs>
+<TabItem label="macOS / Linux">
+
+#### CLI on macOS or Linux
+
+For Apple silicon, after downloading `bacnet-macos-arm64`:
+
+```sh
+chmod +x ./bacnet-macos-arm64
+./bacnet-macos-arm64 --version
+./bacnet-macos-arm64 --help
+```
+
+On Intel Macs or Linux, substitute the exact filename you downloaded. Do not run a filename intended for another processor architecture.
+
+:::caution[Linux runtime dependency]
+The reviewed Linux release binary links to **libpcap**. On a machine without that library, even `--version` can fail with `libpcap.so.0.8: cannot open shared object file`. Install your distribution's libpcap runtime through its normal package manager, or build the basic CLI without the `pcap` feature below. A capture-enabled executable needs the library even when the command does not capture packets.
+:::
+
+</TabItem>
+<TabItem label="Windows">
+
+#### CLI on Windows
+
+In PowerShell, from the download directory:
+
+```powershell
+.\bacnet-windows-amd64.exe --version
+.\bacnet-windows-amd64.exe --help
+```
+
+The `.\` prefix means “run the file in this directory.” You do not need to change PowerShell's script-execution policy to run this executable. Follow your organization's executable approval process; do not disable operating-system protections to follow a tutorial.
+
+</TabItem>
+</Tabs>
+
+<Checkpoint title="Check the executable">
+
+The version should identify **0.11.0**, and `--help` should list the available commands. This checks the executable and its runtime dependencies; it does not send a BACnet discovery request.
+
+</Checkpoint>
+
+The guides use `bacnet` for readability. Rename the executable to `bacnet` / `bacnet.exe` and place it on your `PATH`, or substitute its downloaded filename in commands. On Windows, `Get-Command bacnet`; on macOS/Linux, `command -v bacnet` helps identify which executable will run.
+
+### Prefer a source build?
+
+With Rust **1.93 or later** and the toolchain's platform prerequisites installed:
+
+```sh
+cargo install bacnet-cli --version 0.11.0 --locked
+bacnet --version
+```
+
+That basic build does not enable packet capture. To include BACnet/SC without adding packet capture:
+
+```sh
+cargo install bacnet-cli --version 0.11.0 --locked --features sc-tls
+```
+
+`pcap` is a separate optional Cargo feature and needs native development dependencies when building. Add it only when packet capture is needed.
+
+<NextStep href="/rusty-bacnet/start/first-read/" label="Read a known device" description="Start with one authorized device and one property." />
+
+</TabItem>
+<TabItem label="Python">
+
+## Install the Python package
+
+The package is named `rusty-bacnet`; the import is `rusty_bacnet`. It does **not** install the documented `bacnet` CLI executable.
+
+The package minimum is Python 3.11. The reviewed release workflow builds ordinary CPython **3.11, 3.12, and 3.13** wheels. Start with one of those interpreters; newer or free-threaded Python builds are not implied by that minimum. These are build targets, not a promise that every machine has a compatible downloadable wheel.
+
+<Tabs>
+<TabItem label="macOS / Linux">
+
+### Python on macOS or Linux
+
+Check that `python3` is an appropriate interpreter, then create a local environment:
+
+```sh
+python3 --version
+python3 -m venv .venv
+.venv/bin/python -m pip install --only-binary=:all: rusty-bacnet==0.11.0
+```
+
+Verify that the native module loads, not just that package metadata exists:
+
+```sh
+.venv/bin/python -c "from rusty_bacnet import BACnetClient; from importlib.metadata import version; print(version('rusty-bacnet'))"
+```
+
+</TabItem>
+<TabItem label="Windows">
+
+### Python on Windows
+
+This example explicitly selects Python 3.13. Use an installed, supported interpreter:
+
+```powershell
+py -3.13 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --only-binary=:all: rusty-bacnet==0.11.0
+```
+
+```powershell
+.\.venv\Scripts\python.exe -c "from rusty_bacnet import BACnetClient; from importlib.metadata import version; print(version('rusty-bacnet'))"
+```
+
+Using the environment's interpreter directly avoids a separate activation step or an execution-policy change.
+
+</TabItem>
+</Tabs>
+
+<Checkpoint title="Check the import">
+
+The command prints `0.11.0` without an import or shared-library error. Use this **same environment's interpreter** for the next script.
+
+</Checkpoint>
+
+### “No matching distribution found”
+
+`--only-binary=:all:` deliberately prevents an unexpected native source build. Check the interpreter version, operating system, architecture, and configured package index. A missing wheel is not a BACnet network failure.
+
+A source build is a different installation path: it needs Rust and the native prerequisites for the release's PyO3/Maturin build. Review the [Python packaging source](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/crates/rusty-bacnet/pyproject.toml) before choosing it. Do not silently drop the binary-only option and call that an equivalent install.
+
+<NextStep href="/rusty-bacnet/start/local-lab/" label="Try the local client/server lab" description="Read an example point without a physical controller or building network." />
+
+</TabItem>
+<TabItem label="Rust">
+
+## Add the Rust crates
+
+Rust **1.93 or later** is the reviewed workspace minimum. Use the `bacnet-*` crates; `rusty-bacnet` is the Python package name, not the Rust client crate.
+
+Start with the exact release baseline while learning:
+
+```toml
+[dependencies]
+bacnet-client = "=0.11.0"
+bacnet-types = "=0.11.0"
+bacnet-encoding = "=0.11.0"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+Keep related BACnet crate versions aligned. Add transport features only when the application needs them. The [Rust quickstart](/rusty-bacnet/start/rust/) supplies a directed-read example and explains the address format.
+
+<NextStep href="/rusty-bacnet/start/rust/" label="Embed the Rust client" description="Build a small client, then choose the transport your application needs." />
+
+</TabItem>
+</Tabs>
+
+## Installation is not connectivity
+
+A working executable or Python import is the first checkpoint. Network reachability, certificate trust, and serial timing are separate checks. Start locally, then move to a known authorized device.
+
+## Sources and release scope
+
+Guides target **v0.11.0**. [Release assets](https://github.com/jscott3201/rusty-bacnet/releases/tag/v0.11.0) · [Release build matrix](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/.github/workflows/ci.yml) · [CLI feature flags](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/crates/bacnet-cli/Cargo.toml) · [Python packaging](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/crates/rusty-bacnet/pyproject.toml) · [Workspace minimum](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/Cargo.toml).

@@ -1,0 +1,98 @@
+[
+  {
+    "label": "Start here",
+    "items": [
+      {
+        "label": "Choose your path",
+        "slug": "start/choose-your-path"
+      },
+      {
+        "label": "Install the tools",
+        "slug": "start/installation"
+      },
+      {
+        "label": "Try a local lab",
+        "slug": "start/local-lab"
+      },
+      {
+        "label": "Read a known device",
+        "slug": "start/first-read"
+      },
+      {
+        "label": "Read with Python",
+        "slug": "start/python"
+      },
+      {
+        "label": "Embed with Rust",
+        "slug": "start/rust"
+      }
+    ]
+  },
+  {
+    "label": "Connect & operate",
+    "items": [
+      {
+        "label": "Connection settings",
+        "slug": "guides/configuration"
+      },
+      {
+        "label": "Discovery & addressing",
+        "slug": "guides/discovery"
+      },
+      {
+        "label": "BACnet/SC & certificates",
+        "slug": "guides/bacnet-sc"
+      },
+      {
+        "label": "MS/TP & RS-485",
+        "slug": "guides/mstp"
+      },
+      {
+        "label": "Observe changes with COV",
+        "slug": "guides/observe-changes"
+      },
+      {
+        "label": "Write & relinquish",
+        "slug": "guides/safe-writes"
+      }
+    ]
+  },
+  {
+    "label": "Reference",
+    "items": [
+      {
+        "label": "CLI commands",
+        "slug": "reference/cli"
+      },
+      {
+        "label": "Transport boundaries",
+        "slug": "reference/transports"
+      },
+      {
+        "label": "APIs & examples",
+        "slug": "reference/api"
+      }
+    ]
+  },
+  {
+    "label": "Help & project",
+    "items": [
+      {
+        "label": "Troubleshooting",
+        "slug": "help/troubleshooting"
+      },
+      {
+        "label": "Support & conformance",
+        "slug": "project/support"
+      },
+      {
+        "label": "Upgrade notes",
+        "slug": "project/upgrading"
+      },
+      {
+        "label": "Contribute",
+        "slug": "project/contributing"
+      }
+    ]
+  }
+]
