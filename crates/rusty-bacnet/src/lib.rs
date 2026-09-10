@@ -6,6 +6,7 @@ mod client;
 mod errors;
 mod hub;
 mod mstp_py;
+mod sc_identity;
 mod server;
 mod tls;
 mod types;

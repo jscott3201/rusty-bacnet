@@ -264,6 +264,7 @@ client = BACnetClient(
     # SC options:
     sc_hub=None,                 # WebSocket hub URL
     sc_vmac=None,                # 6-byte VMAC
+    sc_device_uuid=None,         # Keyword-only; persistent 16-byte nonzero UUID required for SC
     sc_ca_cert=None,             # Site CA PEM path (required for SC)
     sc_client_cert=None,         # Operational certificate PEM path (required for SC)
     sc_client_key=None,          # Matching private key PEM path (required for SC)
@@ -1611,8 +1612,14 @@ url = await hub.url()  # "wss://127.0.0.1:47900"
 
 ### Complete SC Example
 
+Provision distinct node identities as described under
+[SC Device UUID migration](#sc-device-uuid-migration); the explicit environment
+variables here contain those already-stored UUID strings, not new per-start IDs.
+
 ```python
 import asyncio
+import os
+from uuid import UUID
 from rusty_bacnet import (
     BACnetClient, BACnetServer, ScHub,
     ObjectType, ObjectIdentifier, PropertyIdentifier, PropertyValue,
@@ -1620,6 +1627,8 @@ from rusty_bacnet import (
 
 async def main():
     # 1. Start the SC hub
+    server_uuid = UUID(os.environ["SC_SERVER_DEVICE_UUID"]).bytes
+    client_uuid = UUID(os.environ["SC_CLIENT_DEVICE_UUID"]).bytes
     hub = ScHub(
         listen="127.0.0.1:0",
         cert="hub-cert.pem", key="hub-key.pem",
@@ -1636,6 +1645,7 @@ async def main():
         transport="sc",
         sc_hub=hub_url,
         sc_vmac=b"\x00\x01\x02\x03\x04\x05",
+        sc_device_uuid=server_uuid,
         sc_ca_cert="ca-cert.pem",
         sc_client_cert="server-cert.pem",
         sc_client_key="server-key.pem",
@@ -1648,6 +1658,7 @@ async def main():
         transport="sc",
         sc_hub=hub_url,
         sc_vmac=b"\x00\x02\x03\x04\x05\x06",
+        sc_device_uuid=client_uuid,
         sc_ca_cert="ca-cert.pem",
         sc_client_cert="client-cert.pem",
         sc_client_key="client-key.pem",
@@ -1711,6 +1722,50 @@ server = BACnetServer(
 
 ### BACnet/SC (Secure Connect)
 
+#### SC Device UUID migration
+
+Both `BACnetClient` and `BACnetServer` require the new **keyword-only**
+`sc_device_uuid` for `transport="sc"`. Supply exactly 16 bytes whose entire value
+is not zero. Omission, `None`, lengths such as 0/15/17, and all-zero values raise
+`ValueError` in the constructor **after existing credential-presence checks** and
+before certificate-file or network I/O. Accepted `bytes`/`bytearray` values are
+copied into an owned fixed-size array; later mutation of the input buffer cannot
+change the retained identity. UUID version/variant bits are not validated.
+
+This is an intentional SC runtime compatibility break. The shared signature keeps
+`sc_device_uuid=None` only for non-SC use; B/IP, IPv6, and MS/TP ignore the option
+like other SC-only configuration. All old positional slots, including heartbeat,
+IPv6, and server passwords, are unchanged. Existing SC callers must add the new
+keyword even when using the old positional credentials.
+
+Base Standard 135-2020 AB.1.5.3 calls for generation before first deployment,
+durable storage across restarts, and the same device UUID for the device's
+lifetime. **The caller owns all of this provisioning and persistence.** Load the
+same stored bytes into every fresh client/server object; do not call `uuid4()` or
+otherwise generate a new ID during startup. The library does not choose a path,
+store UUIDs, or detect a changed UUID without application-owned history. It cannot
+guarantee lifetime identity. Python nodes retain their existing lifecycle support:
+stop/start or recreate them with the persisted UUID; no automatic Python reconnect
+support is added or claimed.
+
+For illustration only, two independently provisioned **test** identities might be:
+
+```python
+from uuid import UUID
+# Test fixtures only. Production must load its own durably provisioned values.
+server_uuid = UUID("8e62ac46-d708-4226-9137-76a32b619315").bytes
+client_uuid = UUID("95dfe4ef-97f6-490d-9a2c-f2b4b0c0e682").bytes
+```
+
+Do not share a UUID between distinct devices. Same-UUID replacement at the hub is
+intentional (AB.6.2.3), including when a device's VMAC differs; it is not a promise
+that two same-UUID nodes coexist. Distinct UUIDs also need non-colliding VMACs.
+`ScHub`/Python `ScHub` UUID APIs, raw transport defaults and wire admission remain
+unchanged. #517 remains open; this node-first API work is not certificate-to-UUID
+binding, full identity-profile validation, or full Annex AB conformance.
+
+#### Required operational credentials
+
 **Compatibility change:** both `BACnetClient` and `BACnetServer` require all of
 `sc_ca_cert`, `sc_client_cert`, and `sc_client_key` when `transport="sc"`.
 Omission, `None`, or an empty string raises `ValueError` at construction. Supply
@@ -1748,6 +1803,7 @@ client = BACnetClient(
     transport="sc",
     sc_hub="wss://hub.example.com:47900",
     sc_vmac=b"\x00\x02\x03\x04\x05\x06",
+    sc_device_uuid=client_uuid,  # Loaded from caller-owned lifetime storage.
     sc_ca_cert="ca-cert.pem",
     sc_client_cert="client-cert.pem",
     sc_client_key="client-key.pem",
@@ -1762,6 +1818,7 @@ server = BACnetServer(
     transport="sc",
     sc_hub="wss://hub.example.com:47900",
     sc_vmac=b"\x00\x01\x02\x03\x04\x05",
+    sc_device_uuid=server_uuid,  # Distinct provisioned device, not a new ID per start.
     sc_ca_cert="ca-cert.pem",
     sc_client_cert="server-cert.pem",
     sc_client_key="server-key.pem",

@@ -1029,6 +1029,13 @@ class BACnetClient:
     TLS configuration raises RuntimeError before dialing. No system-root or
     unauthenticated-client fallback is available.
 
+    SC also requires keyword-only sc_device_uuid: exactly 16 bytes, not all zero,
+    copied at construction. Missing, None, wrong length, or all-zero values
+    raise ValueError after credential-presence validation, before file/network I/O.
+    Provision before deployment and durably reuse the same UUID for the device's
+    lifetime. No generation, persistence, change detection, or version/variant
+    enforcement is provided. Non-SC transports ignore this option.
+
     Usage::
 
         async with BACnetClient() as client:
@@ -1063,6 +1070,7 @@ class BACnetClient:
         mstp_mac: int = 1,
         mstp_max_master: int = 127,
         mstp_max_info_frames: int = 1,
+        sc_device_uuid: Optional[bytes | bytearray] = None,
     ) -> None: ...
 
     async def __aenter__(self) -> BACnetClient: ...
@@ -1772,6 +1780,13 @@ class BACnetServer:
     repair the files and retry on the same server. Later startup failures do not
     have a general registration rollback guarantee.
 
+    SC also requires keyword-only sc_device_uuid: exactly 16 bytes, not all zero,
+    copied at construction. Missing, None, wrong length, or all-zero values
+    raise ValueError after credential-presence validation, before file/network I/O.
+    Provision before deployment and durably reuse the same UUID for the device's
+    lifetime. No generation, persistence, change detection, or version/variant
+    enforcement is provided. Non-SC transports ignore this option.
+
     Usage::
 
         server = BACnetServer(device_instance=1234, device_name="My Device")
@@ -1829,6 +1844,7 @@ class BACnetServer:
         event_information_max_objects: int = 4096,
         event_information_max_returned_summaries: int = 256,
         event_information_max_service_ack_bytes: int = 16384,
+        sc_device_uuid: Optional[bytes | bytearray] = None,
     ) -> None: ...
 
     # --- Analog objects ---

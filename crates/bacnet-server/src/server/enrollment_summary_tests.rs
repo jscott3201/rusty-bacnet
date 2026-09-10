@@ -81,6 +81,7 @@ async fn enrollment_summary_defaults_and_all_builders_validate_before_start() {
             let result = BACnetServer::sc_builder()
                 .hub_url("not-a-websocket-url")
                 .tls_config(crate::server::sc_builder::test_tls_config())
+                .device_uuid(crate::server::sc_builder::TEST_DEVICE_UUID)
                 .get_enrollment_summary_budget(budget)
                 .build()
                 .await

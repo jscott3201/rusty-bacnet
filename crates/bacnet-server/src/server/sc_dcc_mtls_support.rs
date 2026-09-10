@@ -157,6 +157,7 @@ impl Fixture {
                     .hub_url(&self.url)
                     .tls_config(certs.clients[0].clone())
                     .vmac(SERVER)
+                    .device_uuid(sc_builder::TEST_DEVICE_UUID)
                     .database(db)
                     .build(),
             )

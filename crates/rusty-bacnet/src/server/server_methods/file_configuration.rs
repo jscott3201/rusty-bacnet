@@ -189,6 +189,7 @@ mod tests {
             broadcast_address: "255.255.255.255".into(),
             sc_hub: None,
             sc_vmac: None,
+            sc_device_uuid: [0; 16],
             sc_ca_cert: None,
             sc_client_cert: None,
             sc_client_key: None,

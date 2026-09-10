@@ -64,6 +64,7 @@ class AdmissionSignatureTests(unittest.TestCase):
                 if name == "max_confirmed_in_flight":
                     valid["confirmed_recovery_reserve"] = 0
                 BACnetServer(123, transport=transport, **valid,
+                             sc_device_uuid=bytes.fromhex("8e62ac46d7084226913776a32b619315"),
                              sc_ca_cert="ca.pem", sc_client_cert="cert.pem", sc_client_key="key.pem")
 
 

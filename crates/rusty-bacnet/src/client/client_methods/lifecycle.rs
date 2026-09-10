@@ -22,7 +22,8 @@ impl BACnetClient {
         mstp_baud=38400,
         mstp_mac=1,
         mstp_max_master=127,
-        mstp_max_info_frames=1
+        mstp_max_info_frames=1,
+        sc_device_uuid=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -44,6 +45,7 @@ impl BACnetClient {
         mstp_mac: u8,
         mstp_max_master: u8,
         mstp_max_info_frames: u8,
+        sc_device_uuid: Option<Vec<u8>>,
     ) -> PyResult<Self> {
         if transport == "sc" {
             crate::tls::required_sc_credentials(
@@ -53,6 +55,7 @@ impl BACnetClient {
             )
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         }
+        let sc_device_uuid = crate::sc_identity::device_uuid(transport, sc_device_uuid)?;
         Ok(Self {
             inner: Arc::new(Mutex::new(None)),
             transport_type: transport.to_string(),
@@ -62,6 +65,7 @@ impl BACnetClient {
             apdu_timeout_ms,
             sc_hub,
             sc_vmac,
+            sc_device_uuid,
             sc_ca_cert,
             sc_client_cert,
             sc_client_key,
@@ -87,6 +91,7 @@ impl BACnetClient {
         let timeout_ms = slf.borrow().apdu_timeout_ms;
         let sc_hub = slf.borrow().sc_hub.clone();
         let sc_vmac = slf.borrow().sc_vmac.clone();
+        let sc_device_uuid = slf.borrow().sc_device_uuid;
         let sc_ca_cert = slf.borrow().sc_ca_cert.clone();
         let sc_client_cert = slf.borrow().sc_client_cert.clone();
         let sc_client_key = slf.borrow().sc_client_key.clone();
@@ -141,7 +146,8 @@ impl BACnetClient {
                         .await
                         .map_err(to_py_err)?;
 
-                    let mut sc = bacnet_transport::sc::ScTransport::new(ws, vmac);
+                    let mut sc = bacnet_transport::sc::ScTransport::new(ws, vmac)
+                        .with_device_uuid(sc_device_uuid);
                     if let Some(ms) = sc_heartbeat_interval_ms {
                         sc = sc.with_heartbeat_interval_ms(ms);
                     }

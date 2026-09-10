@@ -141,19 +141,34 @@ asyncio.run(main())
 
 ## BACnet/SC with Hub (Python)
 
-> **Warning:** this sketch is illustrative, not a validated two-node end-to-end
-> example. The Python server and client currently share an all-zero Device UUID,
-> so connecting the second node can replace the first node's hub session even
-> with distinct VMACs. Persistent nonzero UUID API work is tracked separately in
-> [#517](https://github.com/jscott3201/rusty-bacnet/issues/517); the mTLS credential
-> fixes do not resolve it. Do not treat this sketch as working end-to-end evidence
-> until that work is delivered and the example is validated.
+Both Python SC nodes now require distinct, caller-provisioned nonzero 16-byte
+Device UUIDs. Generate each identity **before deployment**, store it durably in
+your application/deployment configuration, and supply the same bytes for that
+device's lifetime. Do not generate a new UUID at each start or share it between
+different devices. The example reads already-provisioned values from explicit
+environment variables; it does not generate or persist them. See the
+[migration contract and illustrative values](docs/python-api.md#sc-device-uuid-migration).
+
+> **Remaining identity limits:** `ScHub`/Python hub UUID configuration and raw
+> `ScTransport` defaults are unchanged. Node validation rejects missing/all-zero
+> UUIDs, not UUID version/variant bits; no certificate-to-UUID binding or durable
+> change detection is provided. [#517](https://github.com/jscott3201/rusty-bacnet/issues/517)
+> remains open. Generated-certificate installed-native tests cover the two-node
+> ReadProperty and same-identity replacement paths, not full Annex AB conformance
+> or your deployment's credentials and lifetime storage.
 
 ```python
 import asyncio
-from rusty_bacnet import BACnetClient, BACnetServer, ScHub
+import os
+from uuid import UUID
+from rusty_bacnet import (
+    BACnetClient, BACnetServer, ScHub,
+    ObjectIdentifier, ObjectType, PropertyIdentifier,
+)
 
 async def main():
+    server_uuid = UUID(os.environ["SC_SERVER_DEVICE_UUID"]).bytes
+    client_uuid = UUID(os.environ["SC_CLIENT_DEVICE_UUID"]).bytes
     # Start an SC hub (TLS WebSocket relay)
     hub = ScHub(
         listen="127.0.0.1:0",
@@ -169,6 +184,7 @@ async def main():
         device_instance=1000, device_name="SC Device",
         transport="sc", sc_hub=hub_url,
         sc_vmac=b"\x00\x01\x02\x03\x04\x05",
+        sc_device_uuid=server_uuid,
         sc_ca_cert="ca-cert.pem",
         sc_client_cert="server-cert.pem", sc_client_key="server-key.pem",
     )
@@ -179,6 +195,7 @@ async def main():
     async with BACnetClient(
         transport="sc", sc_hub=hub_url,
         sc_vmac=b"\x00\x02\x03\x04\x05\x06",
+        sc_device_uuid=client_uuid,
         sc_ca_cert="ca-cert.pem",
         sc_client_cert="client-cert.pem", sc_client_key="client-key.pem",
     ) as client:

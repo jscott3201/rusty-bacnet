@@ -14,6 +14,7 @@ impl BACnetServer<bacnet_transport::sc::ScTransport<bacnet_transport::sc_tls::Tl
             hub_url: String::new(),
             tls_config: None,
             vmac: [0; 6],
+            device_uuid: [0; 16],
             heartbeat_interval_ms: 30_000,
             heartbeat_timeout_ms: 60_000,
             reconnect: None,
@@ -24,6 +25,8 @@ impl BACnetServer<bacnet_transport::sc::ScTransport<bacnet_transport::sc_tls::Tl
 /// SC-specific server builder.
 ///
 /// Created by [`BACnetServer::sc_builder()`]. Requires the `sc-tls` feature.
+/// A caller-provisioned, nonzero [`device_uuid`](Self::device_uuid) and validated
+/// [`tls_config`](Self::tls_config) are required before `build` can connect.
 pub struct ScServerBuilder {
     pub(super) config: ServerConfig,
     db: ObjectDatabase,
@@ -31,6 +34,7 @@ pub struct ScServerBuilder {
     hub_url: String,
     tls_config: Option<bacnet_transport::sc_tls::ScNodeTlsConfig>,
     vmac: bacnet_transport::sc_frame::Vmac,
+    device_uuid: [u8; 16],
     heartbeat_interval_ms: u64,
     heartbeat_timeout_ms: u64,
     reconnect: Option<bacnet_transport::sc::ScReconnectConfig>,
@@ -74,6 +78,19 @@ impl ScServerBuilder {
     /// Set the local VMAC address.
     pub fn vmac(mut self, vmac: [u8; 6]) -> Self {
         self.vmac = vmac;
+        self
+    }
+
+    /// Set the caller-provisioned, persistent BACnet/SC device UUID.
+    ///
+    /// The caller must generate it before deployment, store it durably, and reuse
+    /// the same bytes for the device's lifetime, including restarts. Distinct
+    /// devices must not share a UUID. This builder neither generates nor stores
+    /// identities across lifecycles and cannot detect a changed provisioned UUID.
+    /// `build` rejects missing/all-zero UUIDs before dialing; it does not enforce
+    /// UUID version or variant bits.
+    pub fn device_uuid(mut self, uuid: [u8; 16]) -> Self {
+        self.device_uuid = uuid;
         self
     }
 
@@ -202,8 +219,8 @@ impl ScServerBuilder {
 
     /// Connect to the hub and start the server.
     ///
-    /// Reconnect configuration is validated before binding-table construction,
-    /// TLS lookup, or dialing, and again when the transport starts. An error
+    /// Reconnect configuration is validated before UUID validation, binding-table
+    /// construction, TLS lookup, or dialing, and again when the transport starts. An error
     /// still consumes this builder and drops its inputs; this does not promise
     /// generic endpoint rollback.
     pub async fn build(
@@ -214,6 +231,11 @@ impl ScServerBuilder {
     > {
         if let Some(config) = &self.reconnect {
             config.validate()?;
+        }
+        if self.device_uuid == [0; 16] {
+            return Err(Error::Encoding(
+                "SC server builder: device_uuid is required and must not be all zero".into(),
+            ));
         }
         DeviceBindingTable::from_configured(self.configured_device_bindings.clone(), |mac| {
             mac == bacnet_transport::sc_frame::BROADCAST_VMAC
@@ -237,6 +259,7 @@ impl ScServerBuilder {
             .await?;
 
         let mut transport = bacnet_transport::sc::ScTransport::new(ws, self.vmac)
+            .with_device_uuid(self.device_uuid)
             .with_heartbeat_interval_ms(self.heartbeat_interval_ms)
             .with_heartbeat_timeout_ms(self.heartbeat_timeout_ms);
         if let Some(rc) = self.reconnect {
@@ -269,6 +292,11 @@ impl ScServerBuilder {
 }
 
 #[cfg(test)]
+pub(super) const TEST_DEVICE_UUID: [u8; 16] = [
+    0x8e, 0x62, 0xac, 0x46, 0xd7, 0x08, 0x42, 0x26, 0x91, 0x37, 0x76, 0xa3, 0x2b, 0x61, 0x93, 0x15,
+];
+
+#[cfg(test)]
 pub(super) fn test_tls_config() -> bacnet_transport::sc_tls::ScNodeTlsConfig {
     let rcgen::CertifiedKey { cert, signing_key } =
         rcgen::generate_simple_self_signed(vec!["node".into()]).unwrap();
@@ -287,6 +315,42 @@ mod tests {
     use bacnet_transport::sc::ScReconnectConfig;
 
     #[tokio::test]
+    async fn sc_server_builder_requires_device_uuid_before_dial() {
+        for explicit_zero in [false, true] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let url = format!("wss://{}", listener.local_addr().unwrap());
+            let mut builder = BACnetServer::sc_builder()
+                .hub_url(&url)
+                .tls_config(test_tls_config());
+            if explicit_zero {
+                builder = builder.device_uuid([0; 16]);
+            }
+            let error = tokio::time::timeout(std::time::Duration::from_secs(1), builder.build())
+                .await
+                .expect("UUID failure must not wait for TLS/network I/O")
+                .err()
+                .expect("missing/zero UUID must fail before dialing");
+            assert!(
+                matches!(&error, Error::Encoding(message) if message == "SC server builder: device_uuid is required and must not be all zero"),
+                "expected UUID configuration error, got {error:?}"
+            );
+            assert_eq!(
+                listener.accept().unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock
+            );
+            // Qualify the same accept queue with a real connection.
+            let _probe = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+            let _accepted =
+                tokio::time::timeout(std::time::Duration::from_secs(1), listener.accept())
+                    .await
+                    .unwrap()
+                    .unwrap();
+        }
+    }
+
+    #[tokio::test]
     async fn alarm_summary_sc_budget_validation_before_dial() {
         for budget in [
             GetAlarmSummaryBudget {
@@ -301,6 +365,7 @@ mod tests {
             let builder = BACnetServer::sc_builder()
                 .hub_url("not-a-websocket-url")
                 .tls_config(test_tls_config())
+                .device_uuid(TEST_DEVICE_UUID)
                 .get_alarm_summary_budget(budget);
             assert_eq!(builder.config.get_alarm_summary_budget, budget);
             assert!(
@@ -324,11 +389,13 @@ mod tests {
             let builder = BACnetServer::sc_builder()
                 .hub_url("not-a-websocket-url")
                 .tls_config(test_tls_config())
+                .device_uuid(TEST_DEVICE_UUID)
                 .read_property_multiple_budget(budget);
             assert_eq!(builder.config.read_property_multiple_budget, budget);
             let error = builder.build().await.err().unwrap();
             assert!(matches!(error, Error::Encoding(m) if m.contains("rpm_max_")));
             let error = BACnetServer::sc_builder()
+                .device_uuid(TEST_DEVICE_UUID)
                 .read_property_multiple_budget(budget)
                 .build()
                 .await
@@ -387,7 +454,7 @@ mod tests {
                 max_retries: u32::MAX,
             }),
         ] {
-            let mut builder = BACnetServer::sc_builder();
+            let mut builder = BACnetServer::sc_builder().device_uuid(TEST_DEVICE_UUID);
             if let Some(config) = reconnect {
                 builder = builder.reconnect(config);
             }
@@ -420,6 +487,7 @@ mod tests {
             let error = BACnetServer::sc_builder()
                 .hub_url("not-a-websocket-url")
                 .tls_config(test_tls_config())
+                .device_uuid(TEST_DEVICE_UUID)
                 .request_admission_policy(policy)
                 .build()
                 .await
@@ -450,6 +518,7 @@ mod tests {
             let error = BACnetServer::sc_builder()
                 .hub_url("not-a-websocket-url")
                 .tls_config(test_tls_config())
+                .device_uuid(TEST_DEVICE_UUID)
                 .request_admission_policy(policy)
                 .build()
                 .await
@@ -487,6 +556,7 @@ mod tests {
                 let builder = BACnetServer::sc_builder()
                     .hub_url("not-a-websocket-url")
                     .tls_config(test_tls_config())
+                    .device_uuid(TEST_DEVICE_UUID)
                     .request_admission_policy(policy);
                 assert_eq!(builder.config.request_admission_policy, policy);
                 let error = builder.build().await.err().unwrap();

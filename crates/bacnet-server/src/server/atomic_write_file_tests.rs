@@ -210,6 +210,7 @@ async fn atomic_write_file_all_builders_validate_before_start_or_dial() {
             let result = BACnetServer::sc_builder()
                 .hub_url("not-a-websocket-url")
                 .tls_config(crate::server::sc_builder::test_tls_config())
+                .device_uuid(crate::server::sc_builder::TEST_DEVICE_UUID)
                 .atomic_write_file_budget(budget)
                 .build()
                 .await

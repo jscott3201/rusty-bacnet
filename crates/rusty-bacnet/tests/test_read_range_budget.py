@@ -29,6 +29,7 @@ class ReadRangeConstructorTests(unittest.TestCase):
                             BACnetServer(123, transport=transport, **{name: value})
                 positive: dict[str, Any] = {name: (1 << (8 * struct.calcsize("P"))) - 1}
                 BACnetServer(123, transport=transport, **positive,
+                             sc_device_uuid=bytes.fromhex("8e62ac46d7084226913776a32b619315"),
                              sc_ca_cert="ca.pem", sc_client_cert="cert.pem", sc_client_key="key.pem")
 
 

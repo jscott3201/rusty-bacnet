@@ -4,6 +4,8 @@ OpenSSL CLI creates a temporary site CA and distinct operational certificates.
 TLS negatives use independent stdlib TLS peers, not SC reconnect timeouts.
 """
 import asyncio
+import base64
+import hashlib
 import inspect
 import itertools
 import os
@@ -19,6 +21,10 @@ from rusty_bacnet import (
     BACnetClient, BACnetServer, BacnetError, ObjectIdentifier, ObjectType,
     PropertyIdentifier, ScHub,
 )
+
+# Deterministic test provisioning only, not defaults for deployed devices.
+SERVER_UUID = bytes.fromhex("8e62ac46d7084226913776a32b619315")
+CLIENT_UUID = bytes.fromhex("95dfe4ef97f6490d9a2cf2b4b0c0e682")
 
 
 class MtlsFixture(unittest.IsolatedAsyncioTestCase):
@@ -106,8 +112,7 @@ class MtlsFixture(unittest.IsolatedAsyncioTestCase):
 
     def exchange_read_property(self, tls, serve_ready=None, serve_done=None):
         # Literal SC Connect-Request/Accept, modeled on sc_frame's independent
-        # connect_test_support vectors. A nonzero UUID avoids the existing
-        # all-zero default shared by Python BACnetClient/BACnetServer nodes.
+        # connect_test_support vectors. This peer has its own provisioned UUID.
         def send(payload):
             self.assertLess(len(payload), 126)
             mask = os.urandom(4)
@@ -133,7 +138,7 @@ class MtlsFixture(unittest.IsolatedAsyncioTestCase):
             return exact(length)
 
         vmac = b"\x02\0\0\0\0\3"
-        send(b"\x06\x00\x22\x33" + vmac + b"\x01" * 16 + b"\x05\xc4\x05\xc4")
+        send(b"\x06\x00\x22\x33" + vmac + CLIENT_UUID + b"\x05\xc4\x05\xc4")
         try:
             accepted = receive()
         except TimeoutError as error:
@@ -253,6 +258,7 @@ class HubMtlsTests(MtlsFixture):
         await asyncio.wait_for(hub.start(), 3)
         url, address = await hub.url(), await hub.address()
         server = BACnetServer(3000, "MTLS server", transport="sc", sc_hub=url,
+                              sc_device_uuid=SERVER_UUID,
                               sc_vmac=b"\x02\0\0\0\0\2", sc_ca_cert=self.path("site.pem"),
                               sc_client_cert=self.path("server.pem"), sc_client_key=self.path("server.key"))
         self.addAsyncCleanup(self.stop_server, server)
@@ -291,7 +297,7 @@ class NodeCredentialTests(unittest.TestCase):
                 kwargs = {name: value for name, value in zip(fields, values) if value is not omitted}
                 with self.subTest(api=api.__name__, credentials=kwargs):
                     if all(value == "placeholder.pem" for value in values):
-                        api(*args, transport="sc", **kwargs)
+                        api(*args, transport="sc", sc_device_uuid=SERVER_UUID, **kwargs)
                     else:
                         with self.assertRaisesRegex(ValueError, "sc_.*(cert|key)"):
                             api(*args, transport="sc", **kwargs)
@@ -313,15 +319,17 @@ class NodeCredentialTests(unittest.TestCase):
                 self.assertEqual(params[name].kind, inspect.Parameter.POSITIONAL_OR_KEYWORD)
         # Nonexistent paths are allowed until startup, including positional SC use.
         BACnetClient("0.0.0.0", 0, "255.255.255.255", 6000, "sc", "wss://localhost:1",
-                     b"\x02\0\0\0\0\2", "ca.pem", "cert.pem", "key.pem", 30000, 60000, "::1")
+                     b"\x02\0\0\0\0\2", "ca.pem", "cert.pem", "key.pem", 30000, 60000, "::1",
+                     sc_device_uuid=CLIENT_UUID)
         BACnetServer(3000, "SC", "0.0.0.0", 0, "255.255.255.255", "sc", "wss://localhost:1",
                      b"\x02\0\0\0\0\2", "ca.pem", "cert.pem", "key.pem", 30000, 60000, "::1",
-                     "dcc-password", "reinit-password")
+                     "dcc-password", "reinit-password", sc_device_uuid=SERVER_UUID)
 
 
 class NodeMtlsTests(MtlsFixture):
     def node(self, api, url, **overrides):
         kwargs = dict(transport="sc", sc_hub=url, sc_vmac=b"\x02\0\0\0\0\2",
+                      sc_device_uuid=SERVER_UUID,
                       sc_ca_cert=self.path("site.pem"), sc_client_cert=self.path("server.pem"),
                       sc_client_key=self.path("server.key"))
         kwargs.update(overrides)
@@ -476,3 +484,182 @@ class NodeMtlsTests(MtlsFixture):
                                 await peer
                             finally:
                                 await self.stop_server(node)
+
+
+class NodeIdentityMtlsTests(MtlsFixture):
+    """Real native nodes, independent wire bytes, and intended hub replacement."""
+    def node(self, api, url, uuid, vmac=None):
+        server = api is BACnetServer
+        node = api(*((3000,) if server else ()), transport="sc", sc_hub=url,
+                   sc_vmac=vmac or b"\x02\0\0\0\0" + bytes([4 if server else 2]),
+                   sc_device_uuid=uuid, sc_ca_cert=self.path("site.pem"),
+                   sc_client_cert=self.path("server.pem" if server else "client.pem"),
+                   sc_client_key=self.path("server.key" if server else "client.key"))
+        self.addAsyncCleanup(self.stop_server, node)
+        if server:
+            node.add_analog_input(0, "Identity AI", 64, 72.5)
+        return node
+
+    async def start_node(self, node):
+        await asyncio.wait_for(node.start() if isinstance(node, BACnetServer)
+                               else node.__aenter__(), 5)
+
+    async def read_value(self, client):
+        value = await asyncio.wait_for(client.read_property(
+            "02:00:00:00:00:04", ObjectIdentifier(ObjectType.ANALOG_INPUT, 0),
+            PropertyIdentifier.PRESENT_VALUE), 3)
+        self.assertEqual(value.value, 72.5)
+
+    async def frame(self, reader, masked):
+        header = await asyncio.wait_for(reader.readexactly(2), 3)
+        self.assertTrue(header[0] & 0x80, "expected final frame")
+        self.assertEqual(bool(header[1] & 0x80), masked)
+        size = header[1] & 0x7f
+        if size == 126:
+            size = int.from_bytes(await asyncio.wait_for(reader.readexactly(2), 3), "big")
+        self.assertLess(size, 4096)
+        mask = await asyncio.wait_for(reader.readexactly(4), 3) if masked else None
+        payload = await asyncio.wait_for(reader.readexactly(size), 3)
+        if mask:
+            payload = bytes(value ^ mask[i % 4] for i, value in enumerate(payload))
+        return header[0] & 0x0f, payload
+
+    async def send_frame(self, writer, payload, masked=False, opcode=2):
+        self.assertLess(len(payload), 126)
+        mask = b"\x12\x34\x56\x78" if masked else b""
+        wire = bytes(value ^ mask[i % 4] for i, value in enumerate(payload)) if mask else payload
+        writer.write(bytes([0x80 | opcode, len(payload) | (0x80 if masked else 0)]) + mask + wire)
+        await asyncio.wait_for(writer.drain(), 3)
+
+    async def test_uuid_owned_wire_bytes_across_stop_start_and_recreation(self):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = context.maximum_version = ssl.TLSVersion.TLSv1_3
+        context.load_cert_chain(self.path("hub.pem"), self.path("hub.key"))
+        context.load_verify_locations(self.path("site.pem"))
+        context.verify_mode = ssl.CERT_REQUIRED
+        for api, uuid, vmac in [(BACnetClient, CLIENT_UUID, b"\x02\0\0\0\0\2"),
+                                (BACnetServer, SERVER_UUID, b"\x02\0\0\0\0\4")]:
+            tasks, observed = [], []
+
+            async def peer(reader, writer):
+                tasks.append(asyncio.current_task())
+                try:
+                    request = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 3)
+                    headers = dict(line.split(b":", 1) for line in request.split(b"\r\n")[1:] if b":" in line)
+                    key = next(value.strip() for name, value in headers.items()
+                               if name.lower() == b"sec-websocket-key")
+                    accept = base64.b64encode(hashlib.sha1(
+                        key + b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest())
+                    writer.write(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
+                                 b"Connection: Upgrade\r\nSec-WebSocket-Accept: " + accept +
+                                 b"\r\nSec-WebSocket-Protocol: hub.bsc.bacnet.org\r\n\r\n")
+                    await asyncio.wait_for(writer.drain(), 3)
+                    opcode, connect = await self.frame(reader, True)
+                    # Independent base-2020 AB.2.10 offsets, not a product decoder.
+                    self.assertEqual(opcode, 2)
+                    self.assertEqual(len(connect), 30)
+                    self.assertEqual(connect[:4], b"\x06\0\0\1")
+                    self.assertEqual(connect[4:10], vmac)
+                    self.assertEqual(connect[10:26], uuid)
+                    self.assertEqual(connect[26:], b"\x16\x49\x05\xc4")
+                    observed.append(connect[10:26])
+                    await self.send_frame(writer, b"\x07\0\0\1" + b"\x02\0\0\0\0\x09" +
+                                          bytes.fromhex("4a015cf2ec394d58ac2d11e1761ce86d") + b"\x05\xc4\x05\xc4")
+                    # Identity is established above. Drain until owned shutdown;
+                    # server stop/drop does not promise a graceful SC exchange.
+                    async def drain_until_closed():
+                        while await reader.read(4096):
+                            pass
+                    await asyncio.wait_for(drain_until_closed(), 3)
+                finally:
+                    writer.close()
+                    await asyncio.wait_for(writer.wait_closed(), 3)
+
+            listener = await asyncio.start_server(peer, "127.0.0.1", 0, ssl=context)
+            url = f"wss://localhost:{listener.sockets[0].getsockname()[1]}"
+            source = bytearray(uuid)
+            node = self.node(api, url, source)
+            source[:] = bytes(16)  # Cannot change retained configuration.
+            try:
+                for lifecycle in range(3):
+                    if lifecycle == 2:
+                        node = self.node(api, url, uuid)  # Fresh application object, same stored UUID.
+                    await self.start_node(node)
+                    await self.stop_server(node)
+                self.assertEqual(observed, [uuid] * 3)
+            finally:
+                await self.stop_server(node)
+                listener.close()
+                await listener.wait_closed()
+                # Bound every socket operation and join all owned peer tasks.
+                await asyncio.gather(*tasks)
+
+    async def incumbent(self, address, uuid):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.minimum_version = context.maximum_version = ssl.TLSVersion.TLSv1_3
+        context.load_verify_locations(self.path("site.pem"))
+        context.load_cert_chain(self.path("client.pem"), self.path("client.key"))
+        reader, writer = await asyncio.wait_for(asyncio.open_connection(
+            "127.0.0.1", int(address.rsplit(":", 1)[1]), ssl=context, server_hostname="localhost"), 3)
+        try:
+            writer.write(b"GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n"
+                         b"Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
+                         b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                         b"Sec-WebSocket-Protocol: hub.bsc.bacnet.org\r\n\r\n")
+            await asyncio.wait_for(writer.drain(), 3)
+            response = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 3)
+            self.assertTrue(response.startswith(b"HTTP/1.1 101"), response)
+            await self.send_frame(writer, b"\x06\0\x22\x33" + b"\x02\0\0\0\0\3" + uuid +
+                                  b"\x05\xc4\x05\xc4", masked=True)
+            opcode, accepted = await self.frame(reader, False)
+            self.assertEqual(opcode, 2)
+            self.assertEqual(accepted[:4], b"\x07\0\x22\x33")
+            return reader, writer
+        except BaseException:
+            writer.close()
+            await asyncio.wait_for(writer.wait_closed(), 3)
+            raise
+
+    async def test_distinct_nodes_and_same_uuid_replacement_leave_other_node_usable(self):
+        hub = self.hub()
+        self.addAsyncCleanup(self.stop_hub, hub)
+        await asyncio.wait_for(hub.start(), 3)
+        url, address = await hub.url(), await hub.address()
+        for api, uuid, other_api, other_uuid in [
+                (BACnetClient, CLIENT_UUID, BACnetServer, SERVER_UUID),
+                (BACnetServer, SERVER_UUID, BACnetClient, CLIENT_UUID)]:
+            other = self.node(other_api, url, other_uuid)
+            await self.start_node(other)
+            node = self.node(api, url, uuid)
+            try:
+                await self.start_node(node)
+                await self.read_value(node if api is BACnetClient else other)
+                await self.stop_server(node)
+                for lifecycle in range(2):
+                    reader, writer = await self.incumbent(address, uuid)
+                    try:
+                        # A fresh client resets its invoke IDs. Give it a fresh
+                        # VMAC so the surviving server's exact-request duplicate
+                        # cache is not this identity test's accidental subject.
+                        vmac = b"\x02\0\0\0\0" + bytes([5 + lifecycle]) if api is BACnetClient else None
+                        node = self.node(api, url, uuid, vmac)
+                        await self.start_node(node)
+                        # Same UUID with a different VMAC replaces the incumbent;
+                        # observe actual WebSocket Close, not a timeout/failed read.
+                        for _ in range(8):
+                            opcode, data = await self.frame(reader, False)
+                            if opcode == 8:
+                                self.assertEqual(data, b"")  # Hub's replacement Close(None).
+                                break
+                            self.assertEqual(opcode, 2)
+                            self.assertEqual(data[0], 1)
+                        else:
+                            self.fail("same-identity incumbent did not close")
+                        await self.read_value(node if api is BACnetClient else other)
+                    finally:
+                        writer.close()
+                        await asyncio.wait_for(writer.wait_closed(), 3)
+                        await self.stop_server(node)
+            finally:
+                await self.stop_server(node)
+                await self.stop_server(other)

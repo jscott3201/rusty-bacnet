@@ -61,6 +61,7 @@ MSTP_KEYWORD_ONLY = [
     "mstp_max_master",
     "mstp_max_info_frames",
 ]
+CLIENT_KEYWORD_ONLY = MSTP_KEYWORD_ONLY + ["sc_device_uuid"]
 SERVER_KEYWORD_ONLY = ["dcc_policy", "dcc_source_restriction", "dcc_disable_rate_limit"] + MSTP_KEYWORD_ONLY + [
     "max_confirmed_in_flight", "max_unconfirmed_in_flight",
     "max_confirmed_in_flight_per_peer", "max_unconfirmed_in_flight_per_peer",
@@ -75,6 +76,7 @@ SERVER_KEYWORD_ONLY = ["dcc_policy", "dcc_source_restriction", "dcc_disable_rate
     "read_range_max_returned_items", "read_range_max_service_ack_bytes",
     "event_information_max_objects", "event_information_max_returned_summaries",
     "event_information_max_service_ack_bytes",
+    "sc_device_uuid",
 ]
 SUPPORTED_BAUD_RATES = (9_600, 19_200, 38_400, 57_600, 76_800, 115_200)
 SUPPORTED_BAUD_ERROR = (
@@ -163,10 +165,10 @@ class SignatureCompatibilityTests(unittest.TestCase):
         )
 
     def test_runtime_and_stub_signatures_match_compatibility_contract(self) -> None:
-        self.assert_signature(BACnetClient, CLIENT_POSITIONAL, MSTP_KEYWORD_ONLY)
+        self.assert_signature(BACnetClient, CLIENT_POSITIONAL, CLIENT_KEYWORD_ONLY)
         self.assert_signature(BACnetServer, SERVER_POSITIONAL, SERVER_KEYWORD_ONLY)
         self.assertEqual(
-            stub_signature("BACnetClient"), (CLIENT_POSITIONAL, MSTP_KEYWORD_ONLY)
+            stub_signature("BACnetClient"), (CLIENT_POSITIONAL, CLIENT_KEYWORD_ONLY)
         )
         self.assertEqual(
             stub_signature("BACnetServer"), (SERVER_POSITIONAL, SERVER_KEYWORD_ONLY)

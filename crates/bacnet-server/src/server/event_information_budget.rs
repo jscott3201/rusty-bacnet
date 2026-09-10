@@ -161,6 +161,7 @@ mod tests {
                 let error = BACnetServer::sc_builder()
                     .hub_url("not-a-websocket-url")
                     .tls_config(crate::server::sc_builder::test_tls_config())
+                    .device_uuid(crate::server::sc_builder::TEST_DEVICE_UUID)
                     .get_event_information_budget(budget)
                     .build()
                     .await

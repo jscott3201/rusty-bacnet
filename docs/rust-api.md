@@ -833,6 +833,7 @@ let client = BACnetClient::sc_builder()
     .hub_url("wss://hub:1234")
     .tls_config(tls_config)
     .vmac([0, 1, 2, 3, 4, 5])
+    .device_uuid(client_uuid) // Already provisioned and durably stored by the caller.
     .build()
     .await?;
 ```
@@ -1166,6 +1167,7 @@ let server = BACnetServer::sc_builder()
     .hub_url("wss://hub:1234")
     .tls_config(tls_config)
     .vmac([0, 1, 2, 3, 4, 5])
+    .device_uuid(server_uuid) // Already provisioned; distinct from the client's UUID.
     .build()
     .await?;
 
@@ -1311,6 +1313,31 @@ let client = BACnetClient::generic_builder().transport(transport).build().await?
 ```
 
 ### BACnet/SC with Hub
+
+#### SC Device UUID migration
+
+`ScServerBuilder::device_uuid([u8; 16])` is now required at runtime: `build()`
+returns `Error::Encoding` for omitted/all-zero identity before dialing. Reconnect
+configuration is still checked first; the existing TLS/binding/budget checks
+retain their relative order. This is an intentional runtime compatibility break
+for SC server callers. The Rust SC client already requires a nonzero UUID; its
+identity and VMAC policy are unchanged.
+
+The application must generate the UUID before first deployment and durably store
+and reuse exactly the same bytes throughout the device's lifetime (base 2020
+AB.1.5.3). Pass that stored value each time you build the node; built-in reconnect
+reuses it. There is no runtime generation, guessed storage location, persistence
+backend, UUID version/variant enforcement, or lifetime-immutability guarantee.
+Without application storage/history the library cannot detect a changed UUID.
+
+Distinct devices need distinct UUIDs, independently of their Device instance and
+VMAC. Known UUIDs retain the existing intended connection replacement behavior
+(AB.6.2.3); two connections sharing one UUID are not expected to coexist. Examples
+of **test-only** distinct values are `8e62ac46-d708-4226-9137-76a32b619315` for a
+server and `95dfe4ef-97f6-490d-9a2c-f2b4b0c0e682` for a client. Do not deploy these
+shared demo identities; supply your own provisioned arrays. Hub/Python hub APIs,
+raw `ScTransport` defaults, wire admission, and VMAC rules are not changed by this
+slice. #517 remains open for the residual identity work; no PICS/profile promotion.
 
 ```rust
 use bacnet_client::client::BACnetClient;

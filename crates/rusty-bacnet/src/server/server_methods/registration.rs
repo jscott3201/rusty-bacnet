@@ -51,7 +51,8 @@ impl BACnetServer {
         read_range_max_service_ack_bytes=16384,
         event_information_max_objects=4096,
         event_information_max_returned_summaries=256,
-        event_information_max_service_ack_bytes=16384
+        event_information_max_service_ack_bytes=16384,
+        sc_device_uuid=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -102,6 +103,7 @@ impl BACnetServer {
         event_information_max_objects: usize,
         event_information_max_returned_summaries: usize,
         event_information_max_service_ack_bytes: usize,
+        sc_device_uuid: Option<Vec<u8>>,
     ) -> PyResult<Self> {
         let dcc_policy = match dcc_policy {
             "deny_all" => server::DccPolicy::DenyAll,
@@ -214,6 +216,7 @@ impl BACnetServer {
             )
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         }
+        let sc_device_uuid = crate::sc_identity::device_uuid(transport, sc_device_uuid)?;
         Ok(Self {
             inner: Arc::new(Mutex::new(None)),
             device_instance,
@@ -224,6 +227,7 @@ impl BACnetServer {
             broadcast_address: broadcast_address.to_string(),
             sc_hub,
             sc_vmac,
+            sc_device_uuid,
             sc_ca_cert,
             sc_client_cert,
             sc_client_key,

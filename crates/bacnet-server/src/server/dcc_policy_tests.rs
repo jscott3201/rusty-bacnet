@@ -85,6 +85,7 @@ async fn dcc_disable_rate_validation_before_sc_dial() {
         let error = BACnetServer::sc_builder()
             .hub_url("not-a-websocket-url")
             .tls_config(crate::server::sc_builder::test_tls_config())
+            .device_uuid(crate::server::sc_builder::TEST_DEVICE_UUID)
             .dcc_disable_rate_limit(Some(limit))
             .build()
             .await
@@ -160,6 +161,7 @@ async fn dcc_source_restriction_rejected_before_sc_dial() {
         let error = BACnetServer::sc_builder()
             .hub_url("not-a-websocket-url")
             .tls_config(crate::server::sc_builder::test_tls_config())
+            .device_uuid(crate::server::sc_builder::TEST_DEVICE_UUID)
             .dcc_policy(policy)
             .dcc_source_restriction(Some(DccSourceRestriction::new(vec![]).unwrap()))
             .build()
@@ -309,6 +311,7 @@ async fn dcc_require_password_rejected_before_sc_dial() {
         let mut builder = BACnetServer::sc_builder()
             .hub_url("not-a-websocket-url")
             .tls_config(crate::server::sc_builder::test_tls_config())
+            .device_uuid(crate::server::sc_builder::TEST_DEVICE_UUID)
             .dcc_policy(DccPolicy::RequirePassword);
         if let Some(password) = password {
             builder = builder.dcc_password(password);

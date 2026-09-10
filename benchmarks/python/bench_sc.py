@@ -98,6 +98,7 @@ async def sc_server(sc_hub, certs):
         3000, "SC-BenchServer", "127.0.0.1", 47900, "127.0.0.255", "sc",
         sc_hub=hub_url,
         sc_vmac=b"\x00\x01\x02\x03\x04\x05",
+        sc_device_uuid=bytes.fromhex("8e62ac46d7084226913776a32b619315"),  # Test identity only.
         sc_ca_cert=certs.ca_cert,
         sc_client_cert=certs.server_cert,
         sc_client_key=certs.server_key,
@@ -116,6 +117,7 @@ async def sc_client(sc_server, sc_hub, certs):
         "127.0.0.1", 47910, "127.0.0.255", 5000, "sc",
         sc_hub=hub_url,
         sc_vmac=b"\x00\x01\x02\x03\x04\x06",
+        sc_device_uuid=bytes.fromhex("95dfe4ef97f6490d9a2cf2b4b0c0e682"),  # Test identity only.
         sc_ca_cert=certs.ca_cert,
         sc_client_cert=certs.client_cert,
         sc_client_key=certs.client_key,

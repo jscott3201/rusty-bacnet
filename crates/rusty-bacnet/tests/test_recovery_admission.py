@@ -29,14 +29,17 @@ class RecoveryConstructorTests(unittest.TestCase):
                     invalid: dict[str, Any] = {name: 1.5}
                     BACnetServer(123, transport=transport, **invalid)
             BACnetServer(123, transport=transport, max_confirmed_in_flight=1, confirmed_recovery_reserve=0,
+                         sc_device_uuid=bytes.fromhex("8e62ac46d7084226913776a32b619315"),
                          sc_ca_cert="ca.pem", sc_client_cert="cert.pem", sc_client_key="key.pem")
             BACnetServer(123, transport=transport, max_confirmed_in_flight=2, confirmed_recovery_reserve=1,
+                         sc_device_uuid=bytes.fromhex("8e62ac46d7084226913776a32b619315"),
                          sc_ca_cert="ca.pem", sc_client_cert="cert.pem", sc_client_key="key.pem")
             # Independent quotas accept recovery peer > ordinary peer; Rust
             # barrier tests prove simultaneous 1+3 holding, not this constructor.
             BACnetServer(123, transport=transport, max_confirmed_in_flight=8,
                          confirmed_recovery_reserve=3, max_confirmed_in_flight_per_peer=1,
                          max_recovery_in_flight_per_peer=3,
+                         sc_device_uuid=bytes.fromhex("8e62ac46d7084226913776a32b619315"),
                          sc_ca_cert="ca.pem", sc_client_cert="cert.pem", sc_client_key="key.pem")
 
 

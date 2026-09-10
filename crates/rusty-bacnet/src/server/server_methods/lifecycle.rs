@@ -43,6 +43,7 @@ impl BACnetServer {
         let broadcast_str = self.broadcast_address.clone();
         let sc_hub = self.sc_hub.clone();
         let sc_vmac = self.sc_vmac.clone();
+        let sc_device_uuid = self.sc_device_uuid;
         let sc_heartbeat_interval_ms = self.sc_heartbeat_interval_ms;
         let sc_heartbeat_timeout_ms = self.sc_heartbeat_timeout_ms;
         let ipv6_interface = self.ipv6_interface.clone();
@@ -137,7 +138,8 @@ impl BACnetServer {
                         .await
                         .map_err(to_py_err)?;
 
-                    let mut sc = bacnet_transport::sc::ScTransport::new(ws, vmac);
+                    let mut sc = bacnet_transport::sc::ScTransport::new(ws, vmac)
+                        .with_device_uuid(sc_device_uuid);
                     if let Some(ms) = sc_heartbeat_interval_ms {
                         sc = sc.with_heartbeat_interval_ms(ms);
                     }

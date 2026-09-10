@@ -26,6 +26,12 @@ use tokio::{
 type Client = BACnetClient<ScTransport<TlsWebSocket>>;
 type Server = BACnetServer<ScTransport<TlsWebSocket>>;
 const SERVER: [u8; 6] = [2, 0, 0, 0, 0, 1];
+const SERVER_UUID: [u8; 16] = [
+    0x8e, 0x62, 0xac, 0x46, 0xd7, 0x08, 0x42, 0x26, 0x91, 0x37, 0x76, 0xa3, 0x2b, 0x61, 0x93, 0x15,
+];
+const CLIENT_UUID: [u8; 16] = [
+    0x95, 0xdf, 0xe4, 0xef, 0x97, 0xf6, 0x49, 0x0d, 0x9a, 0x2c, 0xf2, 0xb4, 0xb0, 0xc0, 0xe6, 0x82,
+];
 
 async fn bounded<T>(f: impl Future<Output = T>) -> T {
     tokio::time::timeout(Duration::from_secs(5), f)
@@ -123,6 +129,7 @@ impl Fixture {
                     .hub_url(url)
                     .tls_config(try_make_node_tls_config(certs).unwrap())
                     .vmac(SERVER)
+                    .device_uuid(SERVER_UUID)
                     .database(db)
                     .reconnect(reconnect())
                     .build(),
@@ -139,7 +146,7 @@ impl Fixture {
                     .hub_url(url)
                     .tls_config(try_make_node_tls_config(certs).unwrap())
                     .vmac([2; 6])
-                    .device_uuid([2; 16])
+                    .device_uuid(CLIENT_UUID)
                     .apdu_timeout_ms(100)
                     .apdu_retries(0)
                     .reconnect(reconnect())
@@ -233,7 +240,7 @@ async fn builder_redial(f: &mut Fixture, client_subject: bool) {
     }));
     f.proxy = Some(Proxy::new(vec![good, good, bad]).await);
     let proxy_url = f.proxy.as_ref().unwrap().url.clone();
-    // Exactly one zero-UUID ScServerBuilder; client and hub have distinct UUIDs.
+    // Independently provisioned node UUIDs survive each builder's redial.
     f.server(if client_subject { &url } else { &proxy_url }, &certs)
         .await;
     f.client(if client_subject { &proxy_url } else { &url }, &certs)
@@ -277,7 +284,7 @@ async fn node_tls_client_builder_preflight_keeps_existing_error_precedence() {
             .hub_url("not-a-websocket-url")
             .tls_config(tls.clone())
             .vmac([2; 6])
-            .device_uuid([2; 16]);
+            .device_uuid(CLIENT_UUID);
         let (builder, expected) = match case {
             0 => (builder.vmac([0; 6]), "unknown VMAC"),
             1 => (builder.max_segments(Some(1)), "max-segments-accepted"),
@@ -340,7 +347,7 @@ async fn node_tls_generic_failover_connector_cannot_bypass_typed_policy() {
                 .unwrap();
             let (events, mut outcomes) = mpsc::unbounded_channel();
             let transport = ScTransport::new(ws, [2; 6])
-                .with_device_uuid([2; 16])
+                .with_device_uuid(CLIENT_UUID)
                 .with_reconnect(ScReconnectConfig {
                     max_retries: 0,
                     ..reconnect()

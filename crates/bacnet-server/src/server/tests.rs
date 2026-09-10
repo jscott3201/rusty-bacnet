@@ -136,7 +136,10 @@ async fn sc_builder_rejects_broadcast_binding_before_tls_prerequisites() {
     let identifier = ObjectIdentifier::new(ObjectType::DEVICE, 46).unwrap();
     let binding =
         DeviceBinding::local(identifier, bacnet_transport::sc_frame::BROADCAST_VMAC).unwrap();
-    let builder = BACnetServer::sc_builder().device_binding(binding).unwrap();
+    let builder = BACnetServer::sc_builder()
+        .device_uuid(super::sc_builder::TEST_DEVICE_UUID)
+        .device_binding(binding)
+        .unwrap();
 
     let Err(error) = builder.build().await else {
         panic!("invalid SC binding unexpectedly started a server");

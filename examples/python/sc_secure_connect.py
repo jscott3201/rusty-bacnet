@@ -7,6 +7,12 @@ Demonstrates:
 - Reading properties via VMAC addressing
 
 Prerequisites:
+    Provision a distinct UUID for each node before first deployment and store it
+    durably for that device's lifetime. Set SC_SERVER_DEVICE_UUID and
+    SC_CLIENT_DEVICE_UUID from those stored values (UUID text). This example only
+    parses them; it never generates or persists identity. Do not share UUIDs or
+    generate a new one on each start. See docs/python-api.md#sc-device-uuid-migration.
+
     Generate TLS certificates first:
         openssl ecparam -genkey -name prime256v1 -out ca-key.pem
         openssl req -new -x509 -key ca-key.pem -out ca-cert.pem -days 365 -subj "/CN=BACnet CA"
@@ -17,6 +23,8 @@ Prerequisites:
 """
 
 import asyncio
+import os
+from uuid import UUID
 
 from rusty_bacnet import (
     BACnetClient,
@@ -30,6 +38,8 @@ from rusty_bacnet import (
 
 
 async def main():
+    server_uuid = UUID(os.environ["SC_SERVER_DEVICE_UUID"]).bytes
+    client_uuid = UUID(os.environ["SC_CLIENT_DEVICE_UUID"]).bytes
     # 1. Start the SC Hub
     hub = ScHub(
         listen="127.0.0.1:0",
@@ -49,6 +59,7 @@ async def main():
         transport="sc",
         sc_hub=hub_url,
         sc_vmac=b"\x00\x01\x02\x03\x04\x05",
+        sc_device_uuid=server_uuid,
         sc_ca_cert="ca-cert.pem",
         sc_client_cert="server-cert.pem",
         sc_client_key="server-key.pem",
@@ -63,6 +74,7 @@ async def main():
         transport="sc",
         sc_hub=hub_url,
         sc_vmac=b"\x00\x02\x03\x04\x05\x06",
+        sc_device_uuid=client_uuid,
         sc_ca_cert="ca-cert.pem",
         sc_client_cert="client-cert.pem",
         sc_client_key="client-key.pem",

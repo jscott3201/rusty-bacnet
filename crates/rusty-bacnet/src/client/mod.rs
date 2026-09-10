@@ -63,7 +63,7 @@ use crate::types::{
 /// - `"bip"` (default): BACnet/IP over UDP
 /// - `"ipv6"`: BACnet/IPv6 over UDP multicast
 /// - `"sc"`: BACnet/SC over TLS WebSocket (requires `sc_hub`, `sc_vmac`,
-///   `sc_ca_cert`, `sc_client_cert`, and `sc_client_key`)
+///   `sc_ca_cert`, `sc_client_cert`, `sc_client_key`, and persistent `sc_device_uuid`)
 /// - `"mstp"`: BACnet MS/TP over RS-485 (requires `serial_port`)
 ///
 /// SC credential paths must be nonempty at construction (ValueError otherwise).
@@ -81,6 +81,7 @@ pub struct BACnetClient {
     // SC config
     sc_hub: Option<String>,
     sc_vmac: Option<Vec<u8>>,
+    sc_device_uuid: [u8; 16],
     sc_ca_cert: Option<String>,
     sc_client_cert: Option<String>,
     sc_client_key: Option<String>,

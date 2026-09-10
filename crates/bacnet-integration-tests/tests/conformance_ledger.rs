@@ -338,6 +338,29 @@ fn sc_credential_evidence_does_not_promote_the_full_security_profile() {
 }
 
 #[test]
+fn sc_node_identity_evidence_keeps_caller_storage_and_hub_limits_explicit() {
+    let data = ledger();
+    let rows = rows_by_id(&data);
+    let row = rows["BACNET-AB-SC-WEBSOCKET-TLS"];
+    assert_eq!(row["status"], "implementation-present-needs-security-tests");
+    for anchor in [
+        "crates/rusty-bacnet/tests/test_sc_hub_mtls.py::NodeIdentityMtlsTests::test_uuid_owned_wire_bytes_across_stop_start_and_recreation",
+        "crates/rusty-bacnet/tests/test_sc_hub_mtls.py::NodeIdentityMtlsTests::test_distinct_nodes_and_same_uuid_replacement_leave_other_node_usable",
+        "benchmarks/tests/sc_mtls/node_identity.rs::sc_server_uuid_wire_bytes_survive_reconnect_and_fresh_builds",
+    ] {
+        assert!(row["positive_tests"].as_array().unwrap().iter().any(|test| test == anchor));
+    }
+    for body in [row["notes"].as_str().unwrap(), STANDARD_LEDGER] {
+        assert!(body.contains("#517 remains open"));
+        assert!(body.contains("changed UUIDs cannot be detected without application history"));
+        assert!(body.contains("Hub/Python hub APIs, raw transport defaults"));
+        assert!(
+            !body.contains("the Python two-node sketch is illustrative, not validated end-to-end")
+        );
+    }
+}
+
+#[test]
 fn public_claim_guard_rejects_missing_ledger_row() {
     let data = json!({"rows": []});
     let row_map = rows_by_id(&data);
