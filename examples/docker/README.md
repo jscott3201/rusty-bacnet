@@ -159,8 +159,10 @@ certificate verification. Configuring the device's credentials does not attest
 that an arbitrary remote hub requests or verifies its client certificate.
 This example does not certify the full BACnet/SC profile, revocation handling,
 direct-issuer policy, certificate-to-VMAC/UUID authorization, or physical-device
-interoperability (#513 remains partial). Other benchmark comparison modes and
-caller-managed public Rust TLS APIs are not retired by this example.
+interoperability (#513 remains partial). All public Rust hub startup now requires
+`ScHubTlsConfig`; this example already uses its compatible alias, without a change
+to provisioning or runtime behavior. Server-auth-only SC benchmark targets are
+retired; historical results remain. Public Rust node TLS policy is still caller-managed.
 
 Sources: [OpenSSL req](https://docs.openssl.org/3.6/man1/openssl-req/),
 [extensions](https://docs.openssl.org/3.6/man5/x509v3_config/),

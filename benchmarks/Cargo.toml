@@ -78,14 +78,6 @@ name = "bip6_throughput"
 harness = false
 
 [[bench]]
-name = "sc_latency"
-harness = false
-
-[[bench]]
-name = "sc_throughput"
-harness = false
-
-[[bench]]
 name = "sc_mtls_latency"
 harness = false
 

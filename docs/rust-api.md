@@ -330,7 +330,7 @@ hub.stop().await;
 
 The SC hub is a TLS WebSocket relay. Both clients and servers connect to it as spoke nodes. Messages are routed by VMAC address.
 
-With `sc-tls`, `ScHubTlsConfig` is an **opt-in** constrained native configuration:
+With `sc-tls`, every public hub startup requires `ScHubTlsConfig`:
 explicit nonempty CA trust anchors, mandatory WebPKI client verification, and
 TLS 1.3-only local policy. Its fallible `from_der` constructor performs no file or
 network I/O. Empty CA/chain, malformed DER (including a bad entry in an otherwise
@@ -339,12 +339,16 @@ before startup can bind. The hub chain is leaf first. Configuration is private;
 clones share the same policy, with no mutable/raw accessor or unchecked conversion.
 The constructor uses the built-in aws-lc provider, not a caller-installed provider.
 
-`start_with_tls_config` preserves the supplied Device UUID and validated
-`ScHubHandshakeTimeouts`, using the existing hub lifecycle. Existing
-`start`, `start_with_uuid`, and `start_with_uuid_and_timeouts` still accept raw
-`TlsAcceptor` values without additional validation or deprecation. Their policy
-is **caller-managed**: the typed path makes no guarantee about arbitrary raw
-configurations. Existing node `ClientConfig`/`TlsWebSocket` APIs are unchanged.
+**Rust source-breaking migration:** the second parameter of `start`,
+`start_with_uuid`, and `start_with_uuid_and_timeouts` is now `ScHubTlsConfig`, not
+`TlsAcceptor`. Construct it with `from_der`; raw hub injection, including custom
+verifiers/providers, TLS-version selection and arbitrary configuration knobs, is
+retired with no public unchecked escape. Names, argument order and return types
+are unchanged. `start` retains its all-zero Device UUID; the other methods retain
+the supplied UUID. Default or explicitly validated handshake budgets and lifecycle
+are preserved. `start_with_tls_config` remains a compatible full-control alias for
+`start_with_uuid_and_timeouts`. Node `ClientConfig`/`TlsWebSocket` APIs remain
+**caller-managed** and unchanged; the hub type does not constrain them.
 Python hub startup uses the typed path internally. The standalone benchmark
 hub/device and Docker SC pair now require explicit mTLS PEM files; see
 [Secure Docker migration](../examples/docker/README.md).
@@ -355,13 +359,15 @@ anchors. Base Standard 135-2020 AB.7.4/AB.7.4.1.1 provides the mutual operationa
 authentication and installation-credential context; TLS 1.3-*only* is local policy,
 not the Standard's TLS 1.3-*support* requirement. This does not add direct-issuer,
 revocation, SAN or certificate-to-VMAC/UUID policy, or close the full security
-profile gap (#513 remains partial).
+profile gap (#513 remains partial, including caller-managed node policy, not a
+public raw hub startup path).
 
 Evidence includes executable/compile-fail rustdoc, native preflight rejection,
 TLS 1.3 mutual authentication with Connect-Accept and relay barriers after missing,
 wrong-issuer, expired, not-yet-valid client and TLS 1.2 denials, custom phase
-deadlines, and explicit stop. A raw TLS 1.2/server-auth-only characterization test
-deliberately remains valid. Installed Python tests separately exercise OpenSSL
+deadlines, and explicit stop. All three formerly raw startup methods have live
+positive/negative coverage and wrong-argument-type compile-fail examples; the old
+TLS 1.2/server-auth-only characterization is intentionally retired. Installed Python tests separately exercise OpenSSL
 peers and ReadProperty; these are not hardware or full-profile certification.
 
 The already-mTLS benchmark hub launcher and the CLI ReadProperty and server SC-DCC
@@ -369,9 +375,11 @@ test fixtures also use the validated hub path, retaining their UUIDs, timeouts,
 authentication modes and cleanup. The benchmark PEM loader has focused empty,
 malformed, mixed-valid/invalid DER and mismatched-key tests. Independent raw TLS
 peer helpers (including TLS-version negative controls) retain their existing
-signatures; this adoption does not retire raw configuration. The separate
+signatures for independent peers, not public hub startup. The separate
 standalone/Docker migration does not change production CLI or node APIs.
 Benchmark compilation and functional TLS tests are not new performance qualification.
+The server-auth-only `sc_latency`/`sc_throughput` targets are retired; the original
+mTLS targets remain, with historical results and limits in [Benchmarks](../Benchmarks.md).
 
 ### MS/TP (Serial RS-485)
 

@@ -1,16 +1,16 @@
-//! External-consumer acceptance and raw-API compatibility for hub TLS policy.
+//! External-consumer acceptance of strict TLS policy across public hub startup.
 #![cfg(feature = "sc-tls")]
 
 mod hub_tls_support;
 
-use std::{panic::AssertUnwindSafe, sync::Arc, time::Duration};
+use std::{panic::AssertUnwindSafe, time::Duration};
 
 use bacnet_transport::sc_hub::{ScHub, ScHubHandshakeTimeouts, ScHubTlsConfig};
 use futures_util::{FutureExt, StreamExt};
 use hub_tls_support::*;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer, ServerName};
 use tokio::{io::AsyncReadExt, net::TcpStream};
-use tokio_rustls::{TlsAcceptor, TlsConnector};
+use tokio_rustls::TlsConnector;
 use tokio_tungstenite::tungstenite::Message;
 
 #[test]
@@ -123,13 +123,21 @@ async fn typed_hub(f: &Fixture, timeouts: ScHubHandshakeTimeouts) -> ScHub {
 async fn typed_hub_mutual_tls13_connect_relay_and_peer_denials() {
     let f = Fixture::new();
     let hub = typed_hub(&f, ScHubHandshakeTimeouts::default()).await;
+    assert_mutual_tls13_connect_relay_and_peer_denials(&f, hub, HUB_UUID).await;
+}
+
+async fn assert_mutual_tls13_connect_relay_and_peer_denials(
+    f: &Fixture,
+    hub: ScHub,
+    uuid: [u8; 16],
+) {
     let outcome = AssertUnwindSafe(async {
         let address = hub.local_addr().unwrap();
         let mut sender = websocket(address, f.client(Some(&f.good), &rustls::version::TLS13)).await;
         let mut recipient = websocket(address, f.client(Some(&f.good), &rustls::version::TLS13)).await;
         assert_eq!(sender.get_ref().get_ref().1.protocol_version(), Some(rustls::ProtocolVersion::TLSv1_3));
-        connect(&mut sender, 1, HUB_UUID).await;
-        connect(&mut recipient, 2, HUB_UUID).await;
+        connect(&mut sender, 1, uuid).await;
+        connect(&mut recipient, 2, uuid).await;
         relay(&mut sender, &mut recipient, 0).await;
         let cases = [
             (None, &rustls::version::TLS13, rustls::AlertDescription::CertificateRequired),
@@ -203,29 +211,20 @@ async fn typed_hub_honors_each_timeout_and_preserves_established_peers() {
 }
 
 #[tokio::test]
-async fn raw_hub_start_apis_preserve_caller_managed_tls() {
+async fn strict_hub_start_family_requires_mutual_tls13_and_preserves_uuid() {
     let fixture = Fixture::new();
-    // Deliberately TLS 1.2 and no client auth: raw APIs remain caller-managed.
-    let config = rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS12])
-        .with_no_client_auth()
-        .with_single_cert(
-            vec![fixture.server.cert.clone()],
-            fixture.server.key.clone_key(),
-        )
-        .unwrap();
-    let acceptor = TlsAcceptor::from(Arc::new(config));
+    let config = typed_config(&fixture);
     for api in 0..3 {
         let hub = bounded(async {
             match api {
-                0 => ScHub::start("127.0.0.1:0", acceptor.clone(), HUB_VMAC).await,
+                0 => ScHub::start("127.0.0.1:0", config.clone(), HUB_VMAC).await,
                 1 => {
-                    ScHub::start_with_uuid("127.0.0.1:0", acceptor.clone(), HUB_VMAC, HUB_UUID)
-                        .await
+                    ScHub::start_with_uuid("127.0.0.1:0", config.clone(), HUB_VMAC, HUB_UUID).await
                 }
                 _ => {
                     ScHub::start_with_uuid_and_timeouts(
                         "127.0.0.1:0",
-                        acceptor.clone(),
+                        config.clone(),
                         HUB_VMAC,
                         HUB_UUID,
                         ScHubHandshakeTimeouts::default(),
@@ -236,20 +235,11 @@ async fn raw_hub_start_apis_preserve_caller_managed_tls() {
         })
         .await
         .unwrap();
-        let outcome = AssertUnwindSafe(async {
-            let mut peer = websocket(
-                hub.local_addr().unwrap(),
-                fixture.client(None, &rustls::version::TLS12),
-            )
-            .await;
-            assert_eq!(
-                peer.get_ref().get_ref().1.protocol_version(),
-                Some(rustls::ProtocolVersion::TLSv1_2)
-            );
-            connect(&mut peer, 1, if api == 0 { [0; 16] } else { HUB_UUID }).await;
-        })
-        .catch_unwind()
+        assert_mutual_tls13_connect_relay_and_peer_denials(
+            &fixture,
+            hub,
+            if api == 0 { [0; 16] } else { HUB_UUID },
+        )
         .await;
-        finish(hub, outcome).await;
     }
 }

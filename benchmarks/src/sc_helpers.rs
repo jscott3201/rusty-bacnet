@@ -6,7 +6,6 @@ use rcgen::{date_time_ymd, CertificateParams, Issuer, KeyPair};
 use tokio_rustls::rustls;
 use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use tokio_rustls::TlsAcceptor;
 
 use bacnet_transport::sc::ScTransport;
 use bacnet_transport::sc_frame::Vmac;
@@ -135,33 +134,6 @@ fn apply_validity(params: &mut CertificateParams, validity: CertValidity) {
             params.not_after = date_time_ymd(4096, 1, 1);
         }
     }
-}
-
-/// Build a rustls ServerConfig from cert material.
-pub fn make_server_tls_config(certs: &CertMaterial) -> Arc<rustls::ServerConfig> {
-    try_make_server_tls_config(certs).unwrap()
-}
-
-/// Try to build a rustls ServerConfig from cert material.
-pub fn try_make_server_tls_config(
-    certs: &CertMaterial,
-) -> Result<Arc<rustls::ServerConfig>, String> {
-    let cert_chain: Vec<CertificateDer<'static>> =
-        CertificateDer::pem_slice_iter(certs.server_cert_pem.as_bytes())
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
-    if cert_chain.is_empty() {
-        return Err("no server certificates found".into());
-    }
-    let key = PrivateKeyDer::from_pem_slice(certs.server_key_pem.as_bytes())
-        .map_err(|e| e.to_string())?;
-
-    let config = rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-        .with_no_client_auth()
-        .with_single_cert(cert_chain, key)
-        .map_err(|e| e.to_string())?;
-
-    Ok(Arc::new(config))
 }
 
 /// Build a rustls ClientConfig that trusts the test CA.
@@ -330,29 +302,6 @@ pub fn try_make_client_tls_config_mtls_with_client_identity(
         .map_err(|e| e.to_string())?;
 
     Ok(Arc::new(config))
-}
-
-/// Start an SC hub on an ephemeral port.
-pub async fn start_sc_hub(certs: &CertMaterial, hub_vmac: Vmac) -> (ScHub, String) {
-    let tls_config = make_server_tls_config(certs);
-    let acceptor = TlsAcceptor::from(tls_config);
-    let hub = ScHub::start("127.0.0.1:0", acceptor, hub_vmac)
-        .await
-        .unwrap();
-    let addr = hub.local_addr().unwrap();
-    let url = format!("wss://localhost:{}", addr.port());
-    (hub, url)
-}
-
-/// Create an SC transport connected to the hub.
-pub async fn make_sc_transport(
-    hub_url: &str,
-    certs: &CertMaterial,
-    vmac: Vmac,
-) -> ScTransport<TlsWebSocket> {
-    let tls_config = make_client_tls_config(certs);
-    let ws = TlsWebSocket::connect(hub_url, tls_config).await.unwrap();
-    ScTransport::new(ws, vmac)
 }
 
 /// Start an SC hub with mTLS (client certificate required).

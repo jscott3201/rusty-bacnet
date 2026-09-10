@@ -60,7 +60,7 @@ fn hub_timeout_configuration_checks_phase_boundaries() {
 #[tokio::test]
 async fn hub_default_deadline_releases_silent_and_partial_tls() {
     let tls = TestTls::new();
-    let mut hub = ScHub::start("127.0.0.1:0", tls.acceptor, [0x10; 6])
+    let mut hub = ScHub::start("127.0.0.1:0", tls.hub_config, [0x10; 6])
         .await
         .unwrap();
     let mut silent = TcpStream::connect(hub.local_addr().unwrap()).await.unwrap();
@@ -101,7 +101,7 @@ async fn hub_http_upgrade_has_independent_deadline_after_tls_success() {
     .unwrap();
     let mut hub = ScHub::start_with_uuid_and_timeouts(
         "127.0.0.1:0",
-        tls.acceptor.clone(),
+        tls.hub_config.clone(),
         [0x10; 6],
         [0x10; 16],
         budgets,
@@ -147,7 +147,7 @@ async fn hub_upgraded_idle_peer_gets_close_at_connect_deadline() {
     .unwrap();
     let mut hub = ScHub::start_with_uuid_and_timeouts(
         "127.0.0.1:0",
-        tls.acceptor.clone(),
+        tls.hub_config.clone(),
         [0x10; 6],
         [0x10; 16],
         budgets,

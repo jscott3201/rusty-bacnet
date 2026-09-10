@@ -11,7 +11,6 @@ Suites:
   bip                    Criterion BIP latency and throughput suites
   bip-latency            Criterion BIP latency suite
   bip-throughput         Criterion BIP throughput suite
-  sc                     Criterion SC latency and throughput suites
   bbmd                   Stress BBMD foreign-device suite
   router                 Stress router forwarding suite
   segmentation           Stress segmentation suite
@@ -127,10 +126,6 @@ case "$suite" in
     ;;
   bip-throughput|bip_throughput)
     run_criterion bip_throughput
-    ;;
-  sc)
-    run_criterion sc_latency
-    run_criterion sc_throughput
     ;;
   bbmd)
     run_stress bbmd "1,3"

@@ -129,16 +129,29 @@ async fn sc_tls_rejects_tls12_only_client() {
     let certs = generate_test_certs();
     let hub_vmac = [0x20; 6];
 
-    let (mut hub, url) = start_sc_hub(&certs, hub_vmac).await;
-
-    assert_connect_fails(
-        &url,
-        make_client_tls12_config(&certs),
-        "Expected BACnet/SC TLS 1.3-only hub to reject a TLS 1.2-only client",
-    )
+    let (mut hub, _) = start_sc_hub_mtls(&certs, hub_vmac).await;
+    let result = tokio::time::timeout(Duration::from_secs(5), async {
+        let tcp = TcpStream::connect(hub.local_addr().unwrap()).await.unwrap();
+        TlsConnector::from(make_client_tls12_config(&certs))
+            .connect(ServerName::try_from("localhost").unwrap(), tcp)
+            .await
+    })
     .await;
-
     hub.stop().await;
+    let error = result
+        .expect("TLS version negotiation timed out")
+        .unwrap_err();
+    assert!(
+        matches!(
+            error
+                .get_ref()
+                .and_then(|e| e.downcast_ref::<rustls::Error>()),
+            Some(rustls::Error::AlertReceived(
+                rustls::AlertDescription::ProtocolVersion
+            ))
+        ),
+        "expected protocol-version alert, not client-auth refusal: {error:?}"
+    );
 }
 
 /// mTLS hub rejects a client certificate signed by a CA that the hub does not trust.

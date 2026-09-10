@@ -88,6 +88,7 @@ impl Drop for DeadlinePeer {
 
 pub(super) struct TestTls {
     pub acceptor: TlsAcceptor,
+    pub hub_config: ScHubTlsConfig,
     pub client: Arc<rustls::ClientConfig>,
 }
 
@@ -185,6 +186,12 @@ impl TestTls {
             .unwrap();
         Self {
             acceptor: TlsAcceptor::from(Arc::new(server)),
+            hub_config: ScHubTlsConfig::from_der(
+                vec![ca_cert.der().clone()],
+                vec![server_cert.der().clone()],
+                PrivatePkcs8KeyDer::from(server_key.serialize_der()).into(),
+            )
+            .unwrap(),
             client: Arc::new(client),
         }
     }

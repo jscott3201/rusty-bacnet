@@ -19,6 +19,7 @@ use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
+#[cfg(test)]
 use tokio_rustls::TlsAcceptor;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
@@ -110,12 +111,12 @@ pub struct ScHub {
 }
 
 impl ScHub {
-    /// Start with opt-in validated TLS policy, a caller-specified Device UUID,
-    /// and independent validated handshake budgets.
+    /// Compatible alias for [`Self::start_with_uuid_and_timeouts`], with validated
+    /// TLS policy, a caller-specified Device UUID, and independent handshake budgets.
     ///
     /// [`ScHubTlsConfig::from_der`] performs credential/configuration validation
-    /// without I/O before this method can bind. This delegates to the same hub
-    /// lifecycle as the caller-managed raw startup methods. Use [`Self::stop`]
+    /// without I/O before this method can bind. All public startup methods require
+    /// the same constrained policy and share one hub lifecycle. Use [`Self::stop`]
     /// to await worker cleanup. See [`ScHubTlsConfig`] for an executable example.
     pub async fn start_with_tls_config(
         bind_addr: &str,
@@ -124,14 +125,8 @@ impl ScHub {
         hub_uuid: DeviceUuid,
         timeouts: ScHubHandshakeTimeouts,
     ) -> Result<Self, bacnet_types::error::Error> {
-        Self::start_with_uuid_and_timeouts(
-            bind_addr,
-            tls_config.into_acceptor(),
-            hub_vmac,
-            hub_uuid,
-            timeouts,
-        )
-        .await
+        Self::start_with_uuid_and_timeouts(bind_addr, tls_config, hub_vmac, hub_uuid, timeouts)
+            .await
     }
 
     /// Start the hub, binding to `bind_addr` (e.g. `"127.0.0.1:0"` for a
@@ -140,28 +135,42 @@ impl ScHub {
     /// The hub begins accepting TLS WebSocket connections immediately on a
     /// background task.
     ///
-    /// TLS policy is entirely caller-managed: this does not validate the raw
-    /// acceptor's trust, client authentication, or protocol versions. Opt into
-    /// [`Self::start_with_tls_config`] for constrained policy.
+    /// Requires [`ScHubTlsConfig`]: explicit CA trust, mandatory client certificate
+    /// verification, and TLS 1.3-only local policy. Uses the all-zero Device UUID
+    /// and default handshake budgets. Raw TLS acceptors are not accepted:
+    ///
+    /// ```compile_fail,E0308
+    /// use bacnet_transport::sc_hub::ScHub;
+    /// async fn raw(acceptor: tokio_rustls::TlsAcceptor) {
+    ///     let _ = ScHub::start("127.0.0.1:0", acceptor, [0x12; 6]).await;
+    /// }
+    /// ```
     pub async fn start(
         bind_addr: &str,
-        tls_acceptor: TlsAcceptor,
+        tls_config: ScHubTlsConfig,
         hub_vmac: Vmac,
     ) -> Result<Self, bacnet_types::error::Error> {
-        Self::start_with_uuid(bind_addr, tls_acceptor, hub_vmac, [0u8; 16]).await
+        Self::start_with_uuid(bind_addr, tls_config, hub_vmac, [0u8; 16]).await
     }
 
     /// Start the hub with a specific Device UUID.
-    /// TLS policy remains caller-managed, as in [`Self::start`].
+    /// Requires the same constrained TLS policy as [`Self::start`].
+    ///
+    /// ```compile_fail,E0308
+    /// use bacnet_transport::sc_hub::ScHub;
+    /// async fn raw(acceptor: tokio_rustls::TlsAcceptor) {
+    ///     let _ = ScHub::start_with_uuid("127.0.0.1:0", acceptor, [0x12; 6], [0x34; 16]).await;
+    /// }
+    /// ```
     pub async fn start_with_uuid(
         bind_addr: &str,
-        tls_acceptor: TlsAcceptor,
+        tls_config: ScHubTlsConfig,
         hub_vmac: Vmac,
         hub_uuid: DeviceUuid,
     ) -> Result<Self, bacnet_types::error::Error> {
         Self::start_with_uuid_and_timeouts(
             bind_addr,
-            tls_acceptor,
+            tls_config,
             hub_vmac,
             hub_uuid,
             ScHubHandshakeTimeouts::default(),
@@ -171,30 +180,39 @@ impl ScHub {
 
     /// Start with a Device UUID and validated independent handshake budgets.
     /// Established connections are not governed by these budgets.
-    /// TLS policy remains caller-managed, as in [`Self::start`]; validated
-    /// timeouts do not validate the supplied TLS acceptor.
+    /// Requires the same constrained TLS policy as [`Self::start`].
     ///
     /// ```no_run
-    /// # async fn example(acceptor: tokio_rustls::TlsAcceptor) -> Result<(), bacnet_types::error::Error> {
+    /// # async fn example(tls: bacnet_transport::sc_hub::ScHubTlsConfig) -> Result<(), bacnet_types::error::Error> {
     /// use bacnet_transport::sc_hub::{ScHub, ScHubHandshakeTimeouts};
     /// use std::time::Duration;
     /// let budgets = ScHubHandshakeTimeouts::new(
     ///     Duration::from_secs(5), Duration::from_secs(5), Duration::from_secs(10),
     /// )?;
     /// let mut hub = ScHub::start_with_uuid_and_timeouts(
-    ///     "127.0.0.1:0", acceptor, [0x12; 6], [0x34; 16], budgets,
+    ///     "127.0.0.1:0", tls, [0x12; 6], [0x34; 16], budgets,
     /// ).await?;
     /// hub.stop().await;
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// ```compile_fail,E0308
+    /// use bacnet_transport::sc_hub::{ScHub, ScHubHandshakeTimeouts};
+    /// async fn raw(acceptor: tokio_rustls::TlsAcceptor) {
+    ///     let _ = ScHub::start_with_uuid_and_timeouts(
+    ///         "127.0.0.1:0", acceptor, [0x12; 6], [0x34; 16], ScHubHandshakeTimeouts::default(),
+    ///     ).await;
+    /// }
+    /// ```
     pub async fn start_with_uuid_and_timeouts(
         bind_addr: &str,
-        tls_acceptor: TlsAcceptor,
+        tls_config: ScHubTlsConfig,
         hub_vmac: Vmac,
         hub_uuid: DeviceUuid,
         timeouts: ScHubHandshakeTimeouts,
     ) -> Result<Self, bacnet_types::error::Error> {
+        let tls_acceptor = tls_config.into_acceptor();
         let listener = TcpListener::bind(bind_addr)
             .await
             .map_err(|e| bacnet_types::error::Error::Encoding(format!("Hub bind failed: {e}")))?;

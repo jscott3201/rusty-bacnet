@@ -1566,9 +1566,11 @@ certificate-less-access fix; required CA, error categories, file repair/retry an
 async lifecycle remain unchanged. Native construction does not itself load files
 or certify local certificate dates/issuer relationships.
 
-Rust also retains its caller-managed raw `TlsAcceptor` startup APIs alongside the
-[opt-in constrained path](rust-api.md#bacnetsc-hub). Arbitrary raw policy remains
-outside this Python boundary, so #513 remains partial. Python nodes require the
+All public Rust hub startup now requires the [constrained configuration](rust-api.md#bacnetsc-hub);
+raw `TlsAcceptor` hub injection is retired by a Rust source-breaking change.
+Python already uses the compatible alias, so its signatures and behavior are unchanged.
+Rust node `ClientConfig`/`TlsWebSocket` remains caller-managed; #513 remains partial,
+not because of a public raw hub path. Python nodes require the
 explicit credentials described [below](#bacnetsc-secure-connect).
 
 ### Methods

@@ -1,4 +1,4 @@
-//! Opt-in, immutable TLS policy for native hubs.
+//! Required, immutable TLS policy for native hubs.
 
 use std::{fmt, sync::Arc};
 
@@ -18,7 +18,8 @@ use tokio_rustls::TlsAcceptor;
 ///
 /// Clones share the same constrained configuration. There is no raw configuration
 /// getter, mutable access, or unchecked conversion from caller-managed TLS.
-/// Existing raw [`super::ScHub::start`] APIs remain independent and unchanged.
+/// All public [`super::ScHub`] startup methods require this policy. Node/client
+/// TLS configuration remains caller-managed and is not constrained by this type.
 ///
 /// An executable, in-memory example (applications normally load site credentials):
 ///
