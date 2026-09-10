@@ -344,8 +344,10 @@ The constructor uses the built-in aws-lc provider, not a caller-installed provid
 `start`, `start_with_uuid`, and `start_with_uuid_and_timeouts` still accept raw
 `TlsAcceptor` values without additional validation or deprecation. Their policy
 is **caller-managed**: the typed path makes no guarantee about arbitrary raw
-configurations. Existing node `ClientConfig`/`TlsWebSocket`, CLI and Docker modes
-are unchanged. Python hub startup now uses the typed path internally.
+configurations. Existing node `ClientConfig`/`TlsWebSocket` APIs are unchanged.
+Python hub startup uses the typed path internally. The standalone benchmark
+hub/device and Docker SC pair now require explicit mTLS PEM files; see
+[Secure Docker migration](../examples/docker/README.md).
 
 Local configuration checks do not certify certificate dates or issuer
 relationships: peers verify certificates at handshake time using rustls trust
@@ -367,9 +369,9 @@ test fixtures also use the validated hub path, retaining their UUIDs, timeouts,
 authentication modes and cleanup. The benchmark PEM loader has focused empty,
 malformed, mixed-valid/invalid DER and mismatched-key tests. Independent raw TLS
 peer helpers (including TLS-version negative controls) retain their existing
-signatures; this adoption does not retire raw configuration or change production
-CLI, node or Docker behavior. Benchmark targets are compile-checked, not new
-performance qualification.
+signatures; this adoption does not retire raw configuration. The separate
+standalone/Docker migration does not change production CLI or node APIs.
+Benchmark compilation and functional TLS tests are not new performance qualification.
 
 ### MS/TP (Serial RS-485)
 

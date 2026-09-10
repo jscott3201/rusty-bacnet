@@ -8,6 +8,7 @@
 #   foreign     172.20.4.0/24   Foreign device subnet
 #
 # Usage:
+#   Provision caller-owned PEM credentials first; see README.md.
 #   docker compose build
 #   docker compose up -d
 #   docker compose exec orchestrator stress-orchestrator
@@ -101,7 +102,33 @@ services:
     command:
       - bacnet-sc-hub
       - --listen=0.0.0.0:47809
-      - --self-signed
+      - --ca=/run/bacnet-sc/ca.pem
+      - --cert=/run/bacnet-sc/cert.pem
+      - --key=/run/bacnet-sc/key.pem
+    volumes:
+      - type: bind
+        source: ${SC_CERT_DIR:-./sc-certs}/ca.pem
+        target: /run/bacnet-sc/ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SC_CERT_DIR:-./sc-certs}/hub/cert.pem
+        target: /run/bacnet-sc/cert.pem
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SC_CERT_DIR:-./sc-certs}/hub/key.pem
+        target: /run/bacnet-sc/key.pem
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD-SHELL", "nc -w 1 127.0.0.1 47809 < /dev/null"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
     networks:
       bacnet-sc:
         ipv4_address: 172.20.3.2
@@ -116,12 +143,36 @@ services:
       - --sc-hub=wss://172.20.3.2:47809
       - --device-instance=5000
       - --objects=500
-      - --sc-no-verify
+      - --sc-ca=/run/bacnet-sc/ca.pem
+      - --sc-cert=/run/bacnet-sc/cert.pem
+      - --sc-key=/run/bacnet-sc/key.pem
+      - --sc-vmac=020000001388
+      - --sc-device-uuid=00000000000000000000000000001388
+    volumes:
+      - type: bind
+        source: ${SC_CERT_DIR:-./sc-certs}/ca.pem
+        target: /run/bacnet-sc/ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SC_CERT_DIR:-./sc-certs}/device/cert.pem
+        target: /run/bacnet-sc/cert.pem
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SC_CERT_DIR:-./sc-certs}/device/key.pem
+        target: /run/bacnet-sc/key.pem
+        read_only: true
+        bind:
+          create_host_path: false
     networks:
       bacnet-sc:
         ipv4_address: 172.20.3.10
     depends_on:
-      - sc-hub
+      sc-hub:
+        condition: service_healthy
 
   # ── Foreign device subnet ────────────────────────────────────────────────
   foreign-client:

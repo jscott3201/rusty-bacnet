@@ -4,7 +4,7 @@
 # Runtime stage copies them into a minimal Alpine image.
 
 # ── Builder ──────────────────────────────────────────────────────────────────
-FROM rust:1.93-alpine AS builder
+FROM rust:1.97.1-alpine AS builder
 
 RUN apk add --no-cache musl-dev cmake make perl gcc g++
 
@@ -12,7 +12,7 @@ WORKDIR /src
 COPY . .
 
 # Build all benchmark binaries in release mode (static musl linking).
-RUN cargo build --release -p bacnet-benchmarks \
+RUN cargo build --locked --release -p bacnet-benchmarks \
     --bin stress-test \
     --bin bacnet-device \
     --bin bacnet-router \

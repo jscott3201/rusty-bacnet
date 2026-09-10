@@ -5,3 +5,13 @@ docs/
 *.md
 .github/
 .dockerignore
+
+# COPY . must never bake local credentials into any build stage.
+**/sc-certs/
+**/*.pem
+**/*.key
+**/*.csr
+**/*.der
+**/*.p12
+**/*.pfx
+**/*.srl

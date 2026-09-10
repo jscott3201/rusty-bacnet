@@ -9,10 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Standalone/Docker SC compatibility change:** `bacnet-sc-hub` requires
+  caller-provided `--ca`, `--cert`, `--key`; `bacnet-device --transport=sc`
+  requires `--sc-ca`, `--sc-cert`, `--sc-key`, `--sc-hub`, `--sc-vmac` and
+  `--sc-device-uuid`. The paired topology uses mutual TLS 1.3: the hub requires
+  and verifies client certificates; the device validates the hub against its
+  explicit CA and URL name and configures a matching operational certificate/key
+  to offer for client authentication. These device settings do not attest what
+  an arbitrary remote hub verifies. Both validate local credentials before
+  networking. `--self-signed`/`--sc-no-verify` are rejected, not unsafe
+  modes. Compose mounts only each endpoint's own credentials as read-only files.
+  Provisioning is manual; see [development recipe and rotation](examples/docker/README.md).
+  Public raw Rust TLS APIs, other benchmark comparison modes and non-SC behavior
+  remain unchanged; no full-profile or performance qualification (#513 partial).
+
 - Route the already-mTLS benchmark hub launcher and CLI/server SC test fixtures
   through `ScHubTlsConfig`, preserving identity, timeout and lifecycle behavior.
   Add focused benchmark PEM-loader validation tests; independent raw TLS peer
-  helpers and production CLI/node/Docker modes remain unchanged. This is further
+  helpers and production CLI/node APIs remain unchanged. This was further
   opt-in adoption, not raw-API retirement, performance qualification or #513 closure.
 
 - **Opt-in native hub TLS configuration:** `ScHubTlsConfig::from_der` validates
@@ -22,7 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validated handshake timeouts while reusing the existing lifecycle. Python hub
   startup delegates to this factory; its constructor, errors and file-loading
   boundary stay compatible. All raw `TlsAcceptor` startup APIs remain unchanged,
-  without deprecation; Docker, CLI and node TLS APIs are not migrated. Native
+  without deprecation; CLI and node TLS APIs are not migrated. Docker's separate
+  standalone migration is described above. Native
   preflight, compile-fail, real TLS/SC relay/deadline and installed Python tests
   cover this partial migration, not full-profile conformance or #513 closure.
   See [native hub configuration and limits](docs/rust-api.md#bacnetsc-hub).

@@ -6,6 +6,16 @@ target/
 *.rmeta
 bench-output/
 
+# Local SC credentials and certificate build products (never commit private keys)
+examples/docker/sc-certs/
+*.pem
+*.key
+*.csr
+*.der
+*.p12
+*.pfx
+*.srl
+
 # Python
 *.pyo
 *.pyc

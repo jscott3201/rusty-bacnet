@@ -224,6 +224,12 @@ SC mTLS adds negligible overhead vs server-auth-only SC — the TLS handshake do
 
 > Platform: Alpine (aarch64 musl) | Docker Desktop | Static release binaries
 
+These results are historical, not performance evidence for the current secure
+Docker configuration. The standalone SC hub/device now require caller-provided
+CA/operational PEM files and explicit device VMAC/UUID; insecure flags are
+retired. Follow [Secure Docker setup](examples/docker/README.md) before starting
+the topology. Nothing automatically generates or renews credentials.
+
 ### 4.1 Topology
 
 5 Docker bridge networks, 9 services:
@@ -501,7 +507,8 @@ cargo run --release -p bacnet-benchmarks --bin stress-test -- router --steps 1,3
 cargo run --release -p bacnet-benchmarks --bin stress-test -- bbmd --steps 1,3 --duration 5
 cargo run --release -p bacnet-benchmarks --bin stress-test -- whois --steps 3,10,25 --duration 5
 
-# Docker cross-network (requires Docker)
+# Docker cross-network (requires Docker and manually provisioned SC credentials;
+# see examples/docker/README.md; these commands start the FULL topology)
 cd examples/docker
 docker compose build && docker compose up -d
 docker compose exec orchestrator stress-orchestrator --duration 5

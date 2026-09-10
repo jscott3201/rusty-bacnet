@@ -3,7 +3,11 @@
 //! Supports BIP and SC transports. Creates a server with N AnalogInput objects.
 
 use std::net::Ipv4Addr;
-use std::sync::Arc;
+
+#[path = "sc/credentials.rs"]
+mod credentials;
+#[path = "sc/device.rs"]
+mod sc_device;
 
 use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject};
 use bacnet_objects::binary::BinaryValueObject;
@@ -11,10 +15,16 @@ use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::bip::{BipTransport, ForeignDeviceConfig};
+use bacnet_transport::sc::ScTransport;
+use bacnet_transport::sc_tls::TlsWebSocket;
 use clap::Parser;
 
 #[derive(Parser)]
-#[command(name = "bacnet-device", about = "BACnet device for stress testing")]
+#[command(
+    name = "bacnet-device",
+    version,
+    about = "BACnet device for stress testing"
+)]
 struct Args {
     /// Transport type: bip or sc
     #[arg(long, default_value = "bip")]
@@ -40,13 +50,33 @@ struct Args {
     #[arg(long, default_value_t = 100)]
     objects: u32,
 
-    /// SC hub URL (SC only)
+    /// Required wss:// hub URL (SC only; TLS 1.3 mutual authentication)
     #[arg(long)]
     sc_hub: Option<String>,
 
-    /// Skip TLS certificate verification for SC (testing only)
-    #[arg(long)]
+    // Parse only to reject with migration instructions before any I/O.
+    #[arg(long, hide = true)]
     sc_no_verify: bool,
+
+    /// Required trusted hub CA PEM file (SC only; no system-root fallback)
+    #[arg(long, value_name = "FILE")]
+    sc_ca: Option<String>,
+
+    /// Required client certificate chain PEM file, leaf first (SC only)
+    #[arg(long, value_name = "FILE")]
+    sc_cert: Option<String>,
+
+    /// Required matching client private key PEM file (SC only)
+    #[arg(long, value_name = "FILE")]
+    sc_key: Option<String>,
+
+    /// Required unique SC VMAC: 12 hex digits, not all zero or all ff
+    #[arg(long, value_name = "HEX")]
+    sc_vmac: Option<String>,
+
+    /// Required unique nonzero SC Device UUID: 32 hex digits
+    #[arg(long, value_name = "HEX")]
+    sc_device_uuid: Option<String>,
 
     /// Register as foreign device at this BBMD address (ip:port)
     #[arg(long)]
@@ -94,8 +124,22 @@ fn format_mac(mac: &[u8]) -> String {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt::init();
     let args = Args::parse();
+    if args.sc_no_verify {
+        return Err("--sc-no-verify has been removed; supply --sc-ca, --sc-cert, --sc-key, --sc-hub, --sc-vmac and --sc-device-uuid (see examples/docker/README.md)".into());
+    }
+    let sc = if args.transport == "sc" {
+        Some(sc_device::ScConfig::load(&args)?)
+    } else {
+        None
+    };
+    if sc.is_some() {
+        tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .init();
+    } else {
+        tracing_subscriber::fmt::init();
+    }
     let db = make_db(args.device_instance, args.objects);
 
     match args.transport.as_str() {
@@ -141,31 +185,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             server.stop().await?;
         }
         "sc" => {
-            let hub_url = args.sc_hub.ok_or("--sc-hub is required for SC transport")?;
-
-            let tls_config = if args.sc_no_verify {
-                let config = tokio_rustls::rustls::ClientConfig::builder_with_protocol_versions(&[
-                    &tokio_rustls::rustls::version::TLS13,
-                ])
-                .dangerous()
-                .with_custom_certificate_verifier(Arc::new(NoVerify))
-                .with_no_client_auth();
-                Arc::new(config)
-            } else {
-                let root_store = tokio_rustls::rustls::RootCertStore::empty();
-                let config = tokio_rustls::rustls::ClientConfig::builder_with_protocol_versions(&[
-                    &tokio_rustls::rustls::version::TLS13,
-                ])
-                .with_root_certificates(root_store)
-                .with_no_client_auth();
-                Arc::new(config)
-            };
-
-            let vmac: [u8; 6] = rand::random();
-            let mut server = BACnetServer::sc_builder()
-                .hub_url(&hub_url)
-                .tls_config(tls_config)
-                .vmac(vmac)
+            let sc = sc.unwrap();
+            let hub_url = sc.url;
+            let vmac = sc.vmac;
+            let ws = TlsWebSocket::connect(hub_url, sc.tls).await?;
+            let transport = ScTransport::new(ws, vmac).with_device_uuid(sc.uuid);
+            let mut server = BACnetServer::generic_builder()
+                .transport(transport)
                 .database(db)
                 .build()
                 .await?;
@@ -188,52 +214,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
-}
-
-/// No-op TLS verifier for testing (skips certificate validation).
-#[derive(Debug)]
-struct NoVerify;
-
-impl tokio_rustls::rustls::client::danger::ServerCertVerifier for NoVerify {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &tokio_rustls::rustls::pki_types::CertificateDer<'_>,
-        _intermediates: &[tokio_rustls::rustls::pki_types::CertificateDer<'_>],
-        _server_name: &tokio_rustls::rustls::pki_types::ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: tokio_rustls::rustls::pki_types::UnixTime,
-    ) -> Result<tokio_rustls::rustls::client::danger::ServerCertVerified, tokio_rustls::rustls::Error>
-    {
-        Ok(tokio_rustls::rustls::client::danger::ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &tokio_rustls::rustls::pki_types::CertificateDer<'_>,
-        _dss: &tokio_rustls::rustls::DigitallySignedStruct,
-    ) -> Result<
-        tokio_rustls::rustls::client::danger::HandshakeSignatureValid,
-        tokio_rustls::rustls::Error,
-    > {
-        Ok(tokio_rustls::rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &tokio_rustls::rustls::pki_types::CertificateDer<'_>,
-        _dss: &tokio_rustls::rustls::DigitallySignedStruct,
-    ) -> Result<
-        tokio_rustls::rustls::client::danger::HandshakeSignatureValid,
-        tokio_rustls::rustls::Error,
-    > {
-        Ok(tokio_rustls::rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<tokio_rustls::rustls::SignatureScheme> {
-        tokio_rustls::rustls::crypto::aws_lc_rs::default_provider()
-            .signature_verification_algorithms
-            .supported_schemes()
-    }
 }
