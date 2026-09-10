@@ -139,6 +139,7 @@ fn failing_loopback_connector(
 
 async fn hub_accept<W: WebSocketPort>(ws_hub: &W, hub_vmac: Vmac) {
     let data = ws_hub.recv().await.unwrap();
+    super::tests::identity_tests::assert_request_uuid(&data, [1; 16]);
     let req = decode_sc_message(&data).unwrap();
     assert_eq!(req.function, ScFunction::ConnectRequest);
 
@@ -220,6 +221,7 @@ async fn sc_reconnect_redials_fresh_websocket_after_socket_teardown() {
     let redial_hub_vmac = [0x11; 6];
 
     let mut transport = ScTransport::new(primary_client, client_vmac)
+        .with_device_uuid([1; 16])
         .with_connect_timeout_ms(100)
         .with_test_heartbeat_timing_ms(5_000, 10_000)
         .with_connector(loopback_redial_connector(
@@ -287,6 +289,7 @@ async fn sc_failover_connector_dials_when_failover_is_needed() {
     let failover_hub_vmac = [0x20; 6];
 
     let mut transport = ScTransport::new(primary_client, client_vmac)
+        .with_device_uuid([1; 16])
         .with_connect_timeout_ms(100)
         .with_failover_connector(loopback_redial_connector(
             failover_dial_count.clone(),
@@ -336,6 +339,7 @@ async fn sc_primary_restore_connector_redials_primary_socket() {
     let failover_hub_vmac = [0x20; 6];
 
     let mut transport = ScTransport::new(primary_client, client_vmac)
+        .with_device_uuid([1; 16])
         .with_connect_timeout_ms(100)
         .with_heartbeat_interval_ms(5_000)
         .with_connector(loopback_redial_connector(
@@ -404,6 +408,7 @@ async fn sc_failover_connector_timeout_does_not_hang_start() {
     let failover_dial_count = Arc::new(AtomicUsize::new(0));
 
     let mut transport = ScTransport::new(primary_client, [0x01; 6])
+        .with_device_uuid([1; 16])
         .with_connect_timeout_ms(20)
         .with_failover_connector(hanging_redial_connector(failover_dial_count.clone()));
 
@@ -424,6 +429,7 @@ async fn sc_reconnect_connector_timeout_counts_as_failed_attempt() {
     let primary_hub_vmac = [0x10; 6];
 
     let mut transport = ScTransport::new(primary_client, client_vmac)
+        .with_device_uuid([1; 16])
         .with_connect_timeout_ms(20)
         .with_test_heartbeat_timing_ms(5_000, 10_000)
         .with_connector(hanging_redial_connector(redial_count.clone()))
@@ -469,6 +475,7 @@ async fn sc_primary_restore_connector_timeout_leaves_failover_send_path_active()
     let failover_hub_vmac = [0x20; 6];
 
     let mut transport = ScTransport::new(primary_client, client_vmac)
+        .with_device_uuid([1; 16])
         .with_connect_timeout_ms(50)
         .with_heartbeat_interval_ms(5_000)
         .with_connector(hanging_redial_connector(primary_dial_count.clone()))
@@ -519,6 +526,7 @@ async fn sc_failover_reconnect_exhaustion_does_not_redial_failover_again() {
     let failover_hub_vmac = [0x20; 6];
 
     let mut transport = ScTransport::new(primary_client, client_vmac)
+        .with_device_uuid([1; 16])
         .with_connect_timeout_ms(50)
         .with_test_heartbeat_timing_ms(5_000, 10_000)
         .with_connector(failing_loopback_connector())
@@ -582,6 +590,7 @@ async fn sc_primary_restore_publishes_before_hung_failover_disconnect_send() {
     let failover_hub_vmac = [0x20; 6];
 
     let mut transport = ScTransport::new(primary_client, client_vmac)
+        .with_device_uuid([1; 16])
         .with_connect_timeout_ms(750)
         .with_heartbeat_interval_ms(5_000)
         .with_connector(gate_send_redial_connector(
@@ -652,6 +661,7 @@ async fn sc_drop_aborts_hung_primary_restore_failover_disconnect() {
     let primary_hub_vmac = [0x10; 6];
     let failover_hub_vmac = [0x20; 6];
     let mut transport = ScTransport::new(primary_client, [0x01; 6])
+        .with_device_uuid([1; 16])
         .with_connect_timeout_ms(750)
         .with_heartbeat_interval_ms(5_000)
         .with_connector(gate_send_redial_connector(

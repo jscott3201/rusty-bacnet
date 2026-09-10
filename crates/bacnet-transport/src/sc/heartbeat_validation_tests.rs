@@ -24,8 +24,9 @@ pub(super) async fn start_timed() -> (
     LoopbackWebSocket,
 ) {
     let (client, ws) = LoopbackWebSocket::pair();
-    let mut transport =
-        ScTransport::new(client, [0x01; 6]).with_test_heartbeat_timing_ms(100, 1000);
+    let mut transport = ScTransport::new(client, [0x01; 6])
+        .with_device_uuid([1; 16])
+        .with_test_heartbeat_timing_ms(100, 1000);
     let (rx, ()) = tokio::join!(transport.start(), hub_accept(&ws, [0x10; 6]));
     (transport, rx.unwrap(), ws)
 }

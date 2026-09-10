@@ -149,10 +149,15 @@ different devices. The example reads already-provisioned values from explicit
 environment variables; it does not generate or persist them. See the
 [migration contract and illustrative values](docs/python-api.md#sc-device-uuid-migration).
 
-> **Remaining identity limits:** raw `ScTransport` defaults are unchanged.
+> **Identity boundary:** raw Rust `ScTransport::new(ws, vmac)` remains two-argument
+> and unconfigured; call `.with_device_uuid(...)` before `start()`. Startup rejects
+> missing/all-zero UUIDs and all-zero/all-ff local VMACs before **transport-owned**
+> I/O, not before the caller creates/dials `ws`. See the
+> [startup and retry limits](docs/rust-api.md#bacnetsc-client-transport).
 > Hub/node configuration validation rejects missing/all-zero
 > UUIDs, not UUID version/variant bits; no certificate-to-UUID binding or durable
-> change detection is provided. [#517](https://github.com/jscott3201/rusty-bacnet/issues/517)
+> change detection is provided. Later application mutation through Rust's public
+> `connection()` is outside the startup guard. [#517](https://github.com/jscott3201/rusty-bacnet/issues/517)
 > remains open. Generated-certificate installed-native tests cover the two-node
 > ReadProperty and same-identity replacement paths, not full Annex AB conformance
 > or your deployment's credentials and lifetime storage.

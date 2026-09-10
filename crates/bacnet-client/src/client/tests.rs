@@ -197,7 +197,7 @@ async fn client_drop_releases_sc_transport_socket() {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
     let client_vmac = [0x01; 6];
     let hub_vmac = [0x10; 6];
-    let transport = ScTransport::new(ws_client, client_vmac);
+    let transport = ScTransport::new(ws_client, client_vmac).with_device_uuid([1; 16]);
 
     let hub_task = tokio::spawn(async move {
         sc_hub_accept(&ws_hub, hub_vmac).await;

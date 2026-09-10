@@ -66,8 +66,9 @@ async fn sc_connection_state_changes_reports_connected_then_disconnected() {
     let client_vmac = [0x01; 6];
     let hub_vmac = [0x10; 6];
 
-    let mut transport =
-        ScTransport::new(ws_client, client_vmac).with_test_heartbeat_timing_ms(100, 300);
+    let mut transport = ScTransport::new(ws_client, client_vmac)
+        .with_device_uuid([1; 16])
+        .with_test_heartbeat_timing_ms(100, 300);
     let mut states = transport.connection_state_changes();
 
     let hub_task = tokio::spawn(async move {
@@ -100,7 +101,7 @@ async fn sc_connection_state_changes_reports_bvlc_result_disconnect_without_stal
     let client_vmac = [0x01; 6];
     let hub_vmac = [0x10; 6];
 
-    let mut transport = ScTransport::new(ws_client, client_vmac);
+    let mut transport = ScTransport::new(ws_client, client_vmac).with_device_uuid([1; 16]);
     let mut states = transport.connection_state_changes();
 
     let hub_task = tokio::spawn(async move {

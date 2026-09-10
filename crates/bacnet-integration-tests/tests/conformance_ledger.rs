@@ -356,7 +356,11 @@ fn sc_identity_evidence_keeps_caller_storage_and_raw_transport_limits_explicit()
     for body in [row["notes"].as_str().unwrap(), STANDARD_LEDGER] {
         assert!(body.contains("#517 remains open"));
         assert!(body.contains("changed UUIDs cannot be detected without application history"));
-        assert!(body.contains("Raw transport defaults, wire admission, peer replacement"));
+        assert!(body.contains("before transport-owned I/O or startup state changes"));
+        assert!(body.contains("same owned WebSocket"));
+        assert!(body.contains("not lifetime immutability"));
+        assert!(body.contains("later application mutation through public connection()"));
+        assert!(body.contains("Wire admission, peer replacement"));
         assert!(body.contains("hosting port VMAC and hosting device UUID"));
         assert!(body.contains("one shared Rust check"));
         assert!(body.contains("TEST-ONLY hub UUID"));
@@ -387,6 +391,28 @@ fn sc_hub_identity_evidence_retains_pre_io_checks_and_no_status_promotion() {
         19
     );
     assert_eq!(row["status"], "implementation-present-needs-security-tests");
+}
+
+#[test]
+fn sc_raw_identity_evidence_retains_startup_only_boundary() {
+    let data = ledger();
+    let rows = rows_by_id(&data);
+    let row = rows["BACNET-AB-SC-WEBSOCKET-TLS"];
+    for anchor in [
+        "crates/bacnet-transport/src/sc/identity_tests.rs::explicit_zero_uuid_rejected_without_io_and_repaired_on_same_socket",
+        "crates/bacnet-transport/src/sc/identity_tests.rs::zero_vmac_rejected_without_io_or_socket_consumption",
+        "crates/bacnet-transport/src/sc/identity_tests.rs::broadcast_vmac_rejected_without_io_or_socket_consumption",
+        "crates/bacnet-transport/src/sc/identity_tests.rs::reconnect_then_heartbeat_then_identity_error_precedence",
+    ] {
+        assert!(row["negative_tests"].as_array().unwrap().iter().any(|test| test == anchor));
+    }
+    let docs = read_repo_file("docs/rust-api.md");
+    assert!(
+        docs.contains("startup enforcement, not lifetime immutability")
+            || docs.contains("startup\nenforcement, not lifetime immutability")
+    );
+    assert!(docs.contains("cannot undo caller-owned WebSocket creation"));
+    assert!(docs.contains("There is no\nnew VMAC repair setter"));
 }
 
 #[test]

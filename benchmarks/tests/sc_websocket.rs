@@ -200,7 +200,9 @@ async fn sc_websocket_routes_destination_option_nak_to_originating_node() {
     let vmac_a = [0xA5; 6];
     let vmac_b = [0xB5; 6];
     let mut ws_a = connect_sc_client(&url, &certs, vmac_a).await;
-    let mut transport_b = make_sc_transport_mtls(&url, &certs, vmac_b).await;
+    let mut transport_b = make_sc_transport_mtls(&url, &certs, vmac_b)
+        .await
+        .with_device_uuid([2; 16]);
     let mut rx_b = transport_b.start().await.unwrap();
 
     let request = ScMessage {

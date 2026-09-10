@@ -1783,8 +1783,13 @@ Do not share a UUID between distinct devices. Same-UUID replacement at the hub i
 intentional (AB.6.2.3), including when a device's VMAC differs; it is not a promise
 that two same-UUID nodes coexist. Distinct UUIDs also need non-colliding VMACs.
 `ScHub` now requires its hosting device UUID and rejects reserved local VMACs,
-as described [above](#schub). Raw transport defaults and wire admission remain
-unchanged. #517 remains open; these local API checks are not certificate-to-UUID
+as described [above](#schub). The underlying raw Rust transport now requires a
+configured UUID and nonreserved local VMAC at start, before transport-owned I/O;
+it cannot undo a caller's prior WebSocket dial. Python signatures and earlier
+constructor preflights are unchanged. The raw guard is startup-only, not protection
+against later application mutation through Rust's public `connection()`; see the
+[Rust startup/retry limits](rust-api.md#bacnetsc-client-transport). Wire admission
+is unchanged. #517 remains open; these local API checks are not certificate-to-UUID
 binding, full identity-profile validation, or full Annex AB conformance.
 
 #### Required operational credentials

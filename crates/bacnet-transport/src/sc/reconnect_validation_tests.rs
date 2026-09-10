@@ -166,6 +166,7 @@ async fn zero_retries_skips_active_hub_retry_but_allows_initial_failover_and_res
     let dials = Arc::new(AtomicUsize::new(0));
     let (hub_tx, mut hub_rx) = mpsc::unbounded_channel();
     let mut transport = ScTransport::new(primary, [0x22; 6])
+        .with_device_uuid([1; 16])
         .with_failover(failover)
         .with_connect_timeout_ms(500)
         .with_reconnect(ScReconnectConfig {

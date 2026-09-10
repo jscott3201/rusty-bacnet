@@ -51,7 +51,7 @@ pub(super) async fn start_transport() -> (
     LoopbackWebSocket,
 ) {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
-    let mut transport = ScTransport::new(ws_client, [0x01; 6]);
+    let mut transport = ScTransport::new(ws_client, [0x01; 6]).with_device_uuid([1; 16]);
     let hub_task = tokio::spawn(async move {
         hub_accept(&ws_hub, [0x10; 6]).await;
         ws_hub

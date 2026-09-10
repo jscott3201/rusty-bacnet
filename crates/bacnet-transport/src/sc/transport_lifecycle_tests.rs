@@ -3,6 +3,7 @@ use bacnet_types::error::Error;
 
 async fn hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
     let data = ws_hub.recv().await.unwrap();
+    super::tests::identity_tests::assert_request_uuid(&data, [1; 16]);
     let req = decode_sc_message(&data).unwrap();
     assert_eq!(req.function, ScFunction::ConnectRequest);
 
@@ -60,7 +61,9 @@ async fn wait_for_hub_vmac(conn: &Arc<Mutex<ScConnection>>, expected: Vmac, time
 async fn sc_connect_timeout() {
     let (ws_client, _ws_server) = LoopbackWebSocket::pair();
     let vmac = [0x01; 6];
-    let mut transport = ScTransport::new(ws_client, vmac).with_connect_timeout_ms(200);
+    let mut transport = ScTransport::new(ws_client, vmac)
+        .with_device_uuid([1; 16])
+        .with_connect_timeout_ms(200);
     // Don't send ConnectAccept from server side; this should timeout.
     let result = transport.start().await;
     assert!(
@@ -76,7 +79,9 @@ async fn sc_connect_timeout() {
 async fn sc_connect_rejects_mismatched_accept_message_id() {
     let (ws_client, ws_server) = LoopbackWebSocket::pair();
     let vmac = [0x01; 6];
-    let mut transport = ScTransport::new(ws_client, vmac).with_connect_timeout_ms(5000);
+    let mut transport = ScTransport::new(ws_client, vmac)
+        .with_device_uuid([1; 16])
+        .with_connect_timeout_ms(5000);
 
     let hub_task = tokio::spawn(async move {
         let data = ws_server.recv().await.unwrap();
@@ -126,7 +131,9 @@ async fn sc_connect_rejects_mismatched_accept_message_id() {
 async fn sc_connect_decode_error_clears_pending_request() {
     let (ws_client, ws_server) = LoopbackWebSocket::pair();
     let vmac = [0x01; 6];
-    let mut transport = ScTransport::new(ws_client, vmac).with_connect_timeout_ms(5000);
+    let mut transport = ScTransport::new(ws_client, vmac)
+        .with_device_uuid([1; 16])
+        .with_connect_timeout_ms(5000);
 
     let hub_task = tokio::spawn(async move {
         let data = ws_server.recv().await.unwrap();
@@ -158,7 +165,9 @@ async fn sc_connect_send_error_clears_pending_request() {
     let (ws_client, ws_server) = LoopbackWebSocket::pair();
     drop(ws_server);
     let vmac = [0x01; 6];
-    let mut transport = ScTransport::new(ws_client, vmac).with_connect_timeout_ms(5000);
+    let mut transport = ScTransport::new(ws_client, vmac)
+        .with_device_uuid([1; 16])
+        .with_connect_timeout_ms(5000);
 
     let result = transport.start().await;
     assert!(result.is_err());
@@ -177,7 +186,9 @@ async fn sc_connect_send_error_clears_pending_request() {
 async fn sc_connect_recv_error_clears_pending_request() {
     let (ws_client, ws_server) = LoopbackWebSocket::pair();
     let vmac = [0x01; 6];
-    let mut transport = ScTransport::new(ws_client, vmac).with_connect_timeout_ms(5000);
+    let mut transport = ScTransport::new(ws_client, vmac)
+        .with_device_uuid([1; 16])
+        .with_connect_timeout_ms(5000);
 
     let hub_task = tokio::spawn(async move {
         let data = ws_server.recv().await.unwrap();
@@ -205,8 +216,9 @@ async fn sc_heartbeat_sent_periodically() {
     let client_vmac = [0x01; 6];
     let hub_vmac = [0x10; 6];
 
-    let mut transport =
-        ScTransport::new(ws_client, client_vmac).with_test_heartbeat_timing_ms(200, 5000);
+    let mut transport = ScTransport::new(ws_client, client_vmac)
+        .with_device_uuid([1; 16])
+        .with_test_heartbeat_timing_ms(200, 5000);
 
     // Hub accepts the connection, then we interact with the hub ws
     let hub_task = tokio::spawn(async move {
@@ -252,8 +264,9 @@ async fn sc_heartbeat_ack_requires_matching_message_id() {
     let client_vmac = [0x01; 6];
     let hub_vmac = [0x10; 6];
 
-    let mut transport =
-        ScTransport::new(ws_client, client_vmac).with_test_heartbeat_timing_ms(100, 300);
+    let mut transport = ScTransport::new(ws_client, client_vmac)
+        .with_device_uuid([1; 16])
+        .with_test_heartbeat_timing_ms(100, 300);
 
     let hub_task = tokio::spawn(async move {
         hub_accept(&ws_hub, hub_vmac).await;
@@ -301,8 +314,9 @@ async fn sc_heartbeat_ack_rejects_vmac_fields() {
     let client_vmac = [0x01; 6];
     let hub_vmac = [0x10; 6];
 
-    let mut transport =
-        ScTransport::new(ws_client, client_vmac).with_test_heartbeat_timing_ms(100, 300);
+    let mut transport = ScTransport::new(ws_client, client_vmac)
+        .with_device_uuid([1; 16])
+        .with_test_heartbeat_timing_ms(100, 300);
 
     let hub_task = tokio::spawn(async move {
         hub_accept(&ws_hub, hub_vmac).await;
@@ -350,8 +364,9 @@ async fn sc_inbound_bvlc_activity_defers_client_heartbeat() {
     let client_vmac = [0x01; 6];
     let hub_vmac = [0x10; 6];
 
-    let mut transport =
-        ScTransport::new(ws_client, client_vmac).with_test_heartbeat_timing_ms(100, 1000);
+    let mut transport = ScTransport::new(ws_client, client_vmac)
+        .with_device_uuid([1; 16])
+        .with_test_heartbeat_timing_ms(100, 1000);
 
     let hub_task = tokio::spawn(async move {
         hub_accept(&ws_hub, hub_vmac).await;
@@ -399,8 +414,9 @@ async fn sc_inbound_bvlc_activity_resets_heartbeat_timeout() {
     let client_vmac = [0x01; 6];
     let hub_vmac = [0x10; 6];
 
-    let mut transport =
-        ScTransport::new(ws_client, client_vmac).with_test_heartbeat_timing_ms(100, 300);
+    let mut transport = ScTransport::new(ws_client, client_vmac)
+        .with_device_uuid([1; 16])
+        .with_test_heartbeat_timing_ms(100, 300);
 
     let hub_task = tokio::spawn(async move {
         hub_accept(&ws_hub, hub_vmac).await;
@@ -456,8 +472,9 @@ async fn sc_heartbeat_timeout_disconnects() {
     let client_vmac = [0x01; 6];
     let hub_vmac = [0x10; 6];
 
-    let mut transport =
-        ScTransport::new(ws_client, client_vmac).with_test_heartbeat_timing_ms(100, 300);
+    let mut transport = ScTransport::new(ws_client, client_vmac)
+        .with_device_uuid([1; 16])
+        .with_test_heartbeat_timing_ms(100, 300);
 
     // Hub accepts the connection but will NOT respond to heartbeats
     let hub_task = tokio::spawn(async move {
@@ -484,6 +501,7 @@ async fn sc_heartbeat_timeout_disconnects() {
 async fn sc_start_rejects_heartbeat_interval_below_annex_ab_range() {
     let (ws_client, _ws_hub) = LoopbackWebSocket::pair();
     let mut transport = ScTransport::new(ws_client, [0x01; 6])
+        .with_device_uuid([1; 16])
         .with_heartbeat_interval_ms(2999)
         .with_heartbeat_timeout_ms(60_000);
 
@@ -501,6 +519,7 @@ async fn sc_start_rejects_heartbeat_interval_below_annex_ab_range() {
 async fn sc_start_rejects_heartbeat_disconnect_timeout_at_interval() {
     let (ws_client, _ws_hub) = LoopbackWebSocket::pair();
     let mut transport = ScTransport::new(ws_client, [0x01; 6])
+        .with_device_uuid([1; 16])
         .with_heartbeat_interval_ms(3_000)
         .with_heartbeat_timeout_ms(3_000);
 
@@ -518,7 +537,9 @@ async fn sc_start_rejects_heartbeat_disconnect_timeout_at_interval() {
 async fn sc_connect_succeeds_within_timeout() {
     let (ws_client, ws_server) = LoopbackWebSocket::pair();
     let vmac = [0x01; 6];
-    let mut transport = ScTransport::new(ws_client, vmac).with_connect_timeout_ms(5000);
+    let mut transport = ScTransport::new(ws_client, vmac)
+        .with_device_uuid([1; 16])
+        .with_connect_timeout_ms(5000);
 
     // Spawn hub accept in background
     let hub_task = tokio::spawn(async move {
@@ -569,6 +590,7 @@ async fn test_failover_on_primary_timeout() {
     let hub_vmac = [0x20; 6];
 
     let mut transport = ScTransport::new(primary_client, vmac)
+        .with_device_uuid([1; 16])
         .with_connect_timeout_ms(200)
         .with_failover(failover_client);
 
@@ -598,7 +620,9 @@ async fn test_no_failover_without_config() {
 
     let vmac = [0x01; 6];
     // No failover configured.
-    let mut transport = ScTransport::new(primary_client, vmac).with_connect_timeout_ms(200);
+    let mut transport = ScTransport::new(primary_client, vmac)
+        .with_device_uuid([1; 16])
+        .with_connect_timeout_ms(200);
 
     let result = transport.start().await;
     assert!(
@@ -617,6 +641,7 @@ async fn test_failover_primary_succeeds_no_failover_used() {
     let hub_vmac = [0x10; 6];
 
     let mut transport = ScTransport::new(primary_client, vmac)
+        .with_device_uuid([1; 16])
         .with_connect_timeout_ms(2000)
         .with_failover(failover_client);
 
@@ -649,6 +674,7 @@ async fn test_reconnect_exhaustion_uses_failover_and_send_path() {
     let failover_hub_vmac = [0x20; 6];
 
     let mut transport = ScTransport::new(primary_client, client_vmac)
+        .with_device_uuid([1; 16])
         .with_connect_timeout_ms(100)
         .with_heartbeat_interval_ms(5_000)
         .with_reconnect(ScReconnectConfig {
@@ -712,6 +738,7 @@ async fn test_failover_restores_primary_and_send_path() {
     let failover_hub_vmac = [0x20; 6];
 
     let mut transport = ScTransport::new(primary_client, client_vmac)
+        .with_device_uuid([1; 16])
         .with_connect_timeout_ms(100)
         .with_heartbeat_interval_ms(5_000)
         .with_reconnect(ScReconnectConfig {

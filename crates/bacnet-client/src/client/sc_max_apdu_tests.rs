@@ -331,6 +331,7 @@ async fn client_max_apdu_length_reflects_sc_failover_transport_limit() {
     let primary_hub_vmac = [0x10; 6];
     let failover_hub_vmac = [0x20; 6];
     let sc_transport = ScTransport::new(primary_client, [0x01; 6])
+        .with_device_uuid([1; 16])
         .with_connect_timeout_ms(100)
         .with_heartbeat_interval_ms(5_000)
         .with_reconnect(ScReconnectConfig {

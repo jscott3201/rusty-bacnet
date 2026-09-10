@@ -650,7 +650,8 @@ mod tests {
     async fn network_layer_drop_releases_sc_transport_socket() {
         let (ws_client, ws_hub) = LoopbackWebSocket::pair();
         let hub_vmac = [0x10; 6];
-        let mut net = NetworkLayer::new(ScTransport::new(ws_client, [0x01; 6]));
+        let mut net =
+            NetworkLayer::new(ScTransport::new(ws_client, [0x01; 6]).with_device_uuid([1; 16]));
 
         let hub_accept_task = tokio::spawn(async move {
             sc_hub_accept(&ws_hub, hub_vmac).await;
@@ -670,7 +671,8 @@ mod tests {
         let (ws_client, ws_hub) = LoopbackWebSocket::pair();
         let hub_vmac = [0x10; 6];
         let dest_vmac: Vmac = [0x02, 0x03, 0x04, 0x05, 0x06, 0x07];
-        let mut net = NetworkLayer::new(ScTransport::new(ws_client, [0x01; 6]));
+        let mut net =
+            NetworkLayer::new(ScTransport::new(ws_client, [0x01; 6]).with_device_uuid([1; 16]));
         let data_attributes = vec![
             DataAttribute {
                 option_type: 1,

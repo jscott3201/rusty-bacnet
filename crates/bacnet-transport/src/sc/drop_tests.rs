@@ -67,7 +67,7 @@ async fn start_loopback_sc(
     hub_vmac: Vmac,
 ) -> (ScTransport<LoopbackWebSocket>, LoopbackWebSocket) {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
-    let mut transport = ScTransport::new(ws_client, client_vmac);
+    let mut transport = ScTransport::new(ws_client, client_vmac).with_device_uuid([1; 16]);
     let hub_task = tokio::spawn(async move {
         hub_accept(&ws_hub, hub_vmac).await;
         ws_hub

@@ -154,11 +154,11 @@ async fn sc_to_sc_forwarding_preserves_data_attributes_as_data_options() {
     });
 
     let port_a = RouterPort {
-        transport: ScTransport::new(ws_client_a, [0x01; 6]),
+        transport: ScTransport::new(ws_client_a, [0x01; 6]).with_device_uuid([1; 16]),
         network_number: 1000,
     };
     let port_b = RouterPort {
-        transport: ScTransport::new(ws_client_b, [0x02; 6]),
+        transport: ScTransport::new(ws_client_b, [0x02; 6]).with_device_uuid([1; 16]),
         network_number: 2000,
     };
     let (mut router, _local_rx) = BACnetRouter::start(vec![port_a, port_b]).await.unwrap();

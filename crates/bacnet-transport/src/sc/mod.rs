@@ -4,10 +4,8 @@
 //! The actual WebSocket I/O is abstracted behind the [`WebSocketPort`] trait
 //! so the connection state machine can be tested without a TLS stack.
 
-use std::sync::{
-    atomic::{AtomicU16, Ordering},
-    Arc, Mutex as StdMutex,
-};
+use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 #[cfg(test)]
@@ -99,6 +97,9 @@ pub struct ScTransport<W: WebSocketPort> {
 }
 
 impl<W: WebSocketPort> ScTransport<W> {
+    /// Create an unstarted transport with an unconfigured, zero UUID placeholder.
+    /// Call [`Self::with_device_uuid`] before [`TransportPort::start`].
+    /// The supplied local VMAC must be neither all-zero nor broadcast.
     pub fn new(ws: W, local_vmac: Vmac) -> Self {
         let (state_tx, _) = watch::channel(ScConnectionState::Disconnected);
         Self {
@@ -123,7 +124,21 @@ impl<W: WebSocketPort> ScTransport<W> {
         }
     }
 
-    /// Set the device UUID (builder-style). Should be a persistent RFC 4122 UUID.
+    /// Configure the device UUID before start (builder-style).
+    ///
+    /// The caller must generate it before deployment and persist the same bytes
+    /// across restarts for the device's lifetime (Annex AB.1.5.3). No UUID is
+    /// generated here. Startup rejects only the all-zero UUID, not RFC version
+    /// or variant bits, and rejects only all-zero/broadcast local VMACs.
+    ///
+    /// After reconnect and heartbeat validation, [`TransportPort::start`] checks
+    /// identity before transport-owned I/O or startup state changes. These errors
+    /// retain both sockets; a UUID error can be repaired with this setter and
+    /// start retried on the same owned WebSocket. This cannot undo caller-owned
+    /// WebSocket creation or external dials (including work creating closures),
+    /// and is not generic endpoint rollback or a promise that every field has a
+    /// repair setter. It is startup enforcement, not lifetime immutability:
+    /// application mutation through [`Self::connection`] remains possible.
     pub fn with_device_uuid(mut self, uuid: [u8; 16]) -> Self {
         self.device_uuid = uuid;
         self
@@ -186,6 +201,9 @@ impl<W: WebSocketPort> ScTransport<W> {
     }
 
     /// Get the connection state (for testing/inspection).
+    ///
+    /// This exposes mutable connection fields, including identity. Startup
+    /// validation does not protect against later application mutation here.
     pub fn connection(&self) -> Option<&Arc<Mutex<ScConnection>>> {
         self.connection.as_ref()
     }
@@ -293,12 +311,17 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
             )?;
         }
 
+        if self.device_uuid == [0; 16] {
+            return Err(Error::Encoding("SC device UUID is all-zero".into()));
+        }
+        if self.local_vmac == [0; 6] || self.local_vmac == BROADCAST_VMAC {
+            return Err(Error::Encoding("SC VMAC is zero or broadcast".into()));
+        }
+
         let (npdu_tx, npdu_rx) = mpsc::channel(NPDU_CHANNEL_CAPACITY);
 
-        let conn = Arc::new(Mutex::new(ScConnection::new(
-            self.local_vmac,
-            self.device_uuid,
-        )));
+        let connection = ScConnection::new(self.local_vmac, self.device_uuid);
+        let conn = Arc::new(Mutex::new(connection));
         self.connection = Some(conn.clone());
 
         let primary_ws = self

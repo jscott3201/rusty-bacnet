@@ -93,7 +93,7 @@ async fn hub_drops_npdu_above_own_capacity_before_relay() {
 async fn node_and_hub_advertise_distinct_full_message_and_npdu_capacities() {
     use crate::port::TransportPort;
     let (mut server, node) = initiating_pair().await;
-    let mut transport = crate::sc::ScTransport::new(node, [0x22; 6]);
+    let mut transport = crate::sc::ScTransport::new(node, [0x22; 6]).with_device_uuid([1; 16]);
     let accept = async {
         let Message::Binary(wire) = server.next().await.unwrap().unwrap() else {
             panic!("expected ConnectRequest")
@@ -132,7 +132,7 @@ async fn initiating_runtime_limits_remain_mutable_below_adapter_ceiling() {
     use crate::port::TransportPort;
     use std::time::Duration;
     let (mut server, node) = initiating_pair().await;
-    let mut transport = crate::sc::ScTransport::new(node, [0x22; 6]);
+    let mut transport = crate::sc::ScTransport::new(node, [0x22; 6]).with_device_uuid([1; 16]);
     let accept = async {
         let Message::Binary(wire) = server.next().await.unwrap().unwrap() else {
             panic!("expected ConnectRequest")

@@ -198,8 +198,9 @@ async fn start_with_heartbeat_timing() -> (
     LoopbackWebSocket,
 ) {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
-    let mut transport =
-        ScTransport::new(ws_client, [0x01; 6]).with_test_heartbeat_timing_ms(100, 1000);
+    let mut transport = ScTransport::new(ws_client, [0x01; 6])
+        .with_device_uuid([1; 16])
+        .with_test_heartbeat_timing_ms(100, 1000);
     let (rx, ()) = tokio::join!(transport.start(), hub_accept(&ws_hub, [0x10; 6]));
     (transport, rx.unwrap(), ws_hub)
 }

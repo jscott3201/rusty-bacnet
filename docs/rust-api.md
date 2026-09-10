@@ -306,12 +306,35 @@ use bacnet_transport::sc_tls::{ScNodeTlsConfig, TlsWebSocket};
 let tls_config = ScNodeTlsConfig::from_der(ca_certs, node_cert_chain, node_key)?;
 let ws = TlsWebSocket::connect("wss://hub:1234", tls_config).await?;
 let transport = ScTransport::new(ws, vmac)
+    .with_device_uuid(device_uuid) // caller's already-provisioned, durable [u8; 16]
     .with_heartbeat_interval_ms(30_000)
     .with_heartbeat_timeout_ms(60_000);
 ```
 
 Production BACnet/SC transports validate heartbeat settings at `start()`: the interval must be
 `3_000..=300_000` ms, and the disconnect timeout must be greater than the interval.
+
+**Raw transport startup migration:** `new(ws, vmac)` remains two-argument and
+infallible, with a zero UUID placeholder while unstarted. `with_device_uuid` is
+required before `start()`: omitted/all-zero UUIDs and reserved all-zero/all-ff
+local VMACs return clear `Error::Encoding` configuration errors. Error precedence
+is reconnect configuration, heartbeat timing, then identity. No UUID version or
+variant bits, EUI-48 shape, or Random-48 shape are enforced by this guard.
+
+Identity failures precede transport-owned sends, receives, connector invocations,
+socket consumption, channel/task allocation, and startup state changes. Sockets
+are retained on repeated failure; correct a UUID with the existing consuming
+`with_device_uuid` setter and retry on the **same owned WebSocket**. There is no
+new VMAC repair setter. This cannot undo caller-owned WebSocket creation, dials,
+or external work used to construct connector closures, nor does it promise
+generic endpoint rollback or repairability of every configuration field.
+
+The caller owns predeployment UUID generation and durable same-byte lifetime
+reuse. Internal reconnect/failover/primary restore preserve the UUID, including
+when a duplicate-VMAC NAK legitimately reselects the VMAC. This is **startup
+enforcement, not lifetime immutability**: `connection()` still exposes mutable
+`ScConnection` identity fields to applications. Pure `ScConnection` codec/manual
+WebSocket use and later handshake validation are outside this guard.
 
 ### BACnet/SC Hub
 
@@ -1347,8 +1370,10 @@ of **test-only** distinct values are `8e62ac46-d708-4226-9137-76a32b619315` for 
 server and `95dfe4ef-97f6-490d-9a2c-f2b4b0c0e682` for a client. Do not deploy these
 shared demo identities; supply your own provisioned arrays. The hub also requires
 its hosting device's lifetime UUID: see [hub identity migration](#bacnetsc-hub).
-Raw `ScTransport` defaults, wire admission and remote-peer VMAC rules remain
-unchanged. #517 remains open for residual identity work; no PICS/profile promotion.
+Raw `ScTransport` now has the [startup guard](#bacnetsc-client-transport) above;
+wire admission and remote-peer VMAC rules remain unchanged. This does not move
+higher-level builder checks or promise that every local VMAC is rejected before
+dialing. #517 remains open for residual identity work; no PICS/profile promotion.
 
 ```rust
 use bacnet_client::client::BACnetClient;

@@ -59,7 +59,7 @@ async fn wait_for_transport_max_apdu_length(
 async fn sc_max_apdu_length_accounts_for_sc_and_npdu_headers() {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
     let hub_vmac = [0x10; 6];
-    let mut transport = ScTransport::new(ws_client, [0x01; 6]);
+    let mut transport = ScTransport::new(ws_client, [0x01; 6]).with_device_uuid([1; 16]);
 
     let hub_task = tokio::spawn(async move {
         accept_with_limits(&ws_hub, hub_vmac, 1476, 1476).await;
@@ -79,7 +79,7 @@ async fn sc_max_apdu_length_accounts_for_sc_and_npdu_headers() {
 async fn sc_max_apdu_length_reflects_negotiated_hub_npdu_limit() {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
     let hub_vmac = [0x10; 6];
-    let mut transport = ScTransport::new(ws_client, [0x01; 6]);
+    let mut transport = ScTransport::new(ws_client, [0x01; 6]).with_device_uuid([1; 16]);
     assert_eq!(transport.max_apdu_length(), 1476);
 
     let hub_task = tokio::spawn(async move {
@@ -103,6 +103,7 @@ async fn sc_max_apdu_length_updates_after_failover_handshake() {
     let primary_hub_vmac = [0x10; 6];
     let failover_hub_vmac = [0x20; 6];
     let mut transport = ScTransport::new(primary_client, [0x01; 6])
+        .with_device_uuid([1; 16])
         .with_connect_timeout_ms(100)
         .with_heartbeat_interval_ms(5_000)
         .with_reconnect(ScReconnectConfig {
@@ -142,7 +143,7 @@ async fn sc_max_apdu_length_updates_after_failover_handshake() {
 async fn sc_max_apdu_length_reflects_negotiated_hub_bvlc_limit() {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
     let hub_vmac = [0x10; 6];
-    let mut transport = ScTransport::new(ws_client, [0x01; 6]);
+    let mut transport = ScTransport::new(ws_client, [0x01; 6]).with_device_uuid([1; 16]);
 
     let hub_task = tokio::spawn(async move {
         accept_with_limits(&ws_hub, hub_vmac, 300, 1476).await;

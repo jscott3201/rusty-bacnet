@@ -335,7 +335,10 @@ pub async fn start_sc_hub_mtls(certs: &CertMaterial, hub_vmac: Vmac) -> (ScHub, 
     (hub, url)
 }
 
-/// Create an SC transport connected to the hub with mTLS client cert.
+/// Dial a WebSocket to the hub with mTLS, returning an UNSTARTED SC transport.
+/// Identity configuration is still pending: the caller must set an explicit
+/// device UUID before start. Distinct test devices on a hub need distinct UUIDs.
+/// Startup preflight cannot undo the WebSocket dial already performed here.
 pub async fn make_sc_transport_mtls(
     hub_url: &str,
     certs: &CertMaterial,

@@ -71,7 +71,7 @@ async fn sc_mtls_connection_succeeds() {
     // Connect with mTLS client config (presents client cert).
     let tls_config = try_make_node_tls_config(&certs).unwrap();
     let ws = TlsWebSocket::connect(&url, tls_config).await.unwrap();
-    let mut transport = ScTransport::new(ws, client_vmac);
+    let mut transport = ScTransport::new(ws, client_vmac).with_device_uuid([1; 16]);
     let _rx = transport.start().await.unwrap();
 
     // Verify connected state.
@@ -109,7 +109,9 @@ async fn sc_mtls_helpers_roundtrip() {
     let client_vmac = [0x02; 6];
 
     let (mut hub, url) = start_sc_hub_mtls(&certs, hub_vmac).await;
-    let mut transport = make_sc_transport_mtls(&url, &certs, client_vmac).await;
+    let mut transport = make_sc_transport_mtls(&url, &certs, client_vmac)
+        .await
+        .with_device_uuid([1; 16]);
     let _rx = transport.start().await.unwrap();
 
     let conn = transport.connection().unwrap();
@@ -118,6 +120,54 @@ async fn sc_mtls_helpers_roundtrip() {
     drop(c);
 
     transport.stop().await.unwrap();
+    hub.stop().await;
+}
+
+/// Two raw-helper callers must not evict each other through a shared UUID.
+#[tokio::test]
+async fn sc_mtls_helpers_distinct_devices_read_property() {
+    use bacnet_client::client::BACnetClient;
+    use bacnet_server::server::BACnetServer;
+    use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+    use bacnet_types::primitives::ObjectIdentifier;
+
+    let certs = generate_test_certs();
+    let (mut hub, url) = start_sc_hub_mtls(&certs, [0x10; 6]).await;
+    // Explicit, stable TEST-only identities, independent of VMAC/Device instance.
+    let server_transport = make_sc_transport_mtls(&url, &certs, [0x21; 6])
+        .await
+        .with_device_uuid([1; 16]);
+    let mut server = BACnetServer::generic_builder()
+        .transport(server_transport)
+        .database(bacnet_benchmarks::helpers::make_benchmark_db(123))
+        .build()
+        .await
+        .unwrap();
+    let client_transport = make_sc_transport_mtls(&url, &certs, [0x22; 6])
+        .await
+        .with_device_uuid([2; 16]);
+    let mut client = BACnetClient::generic_builder()
+        .transport(client_transport)
+        .apdu_timeout_ms(1000)
+        .apdu_retries(0)
+        .build()
+        .await
+        .unwrap();
+    let oid = ObjectIdentifier::new(ObjectType::DEVICE, 123).unwrap();
+    for _ in 0..2 {
+        let ack = client
+            .read_property(&[0x21; 6], oid, PropertyIdentifier::OBJECT_IDENTIFIER, None)
+            .await;
+        // Stop all owned resources even if the two-device coexistence regresses.
+        if ack.is_err() {
+            client.stop().await.unwrap();
+            server.stop().await.unwrap();
+            hub.stop().await;
+        }
+        assert_eq!(ack.unwrap().property_value, vec![0xc4, 0x02, 0, 0, 123]);
+    }
+    client.stop().await.unwrap();
+    server.stop().await.unwrap();
     hub.stop().await;
 }
 
