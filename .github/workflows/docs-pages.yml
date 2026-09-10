@@ -1,0 +1,122 @@
+name: Docs
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'website/**'
+      - '.github/workflows/docs-pages.yml'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the reviewed site from dev
+        type: boolean
+        default: false
+        required: true
+      expected_sha:
+        description: Full reviewed dev commit SHA (required when publish is true)
+        type: string
+        default: ''
+        required: false
+
+# PR checks cannot cancel a publication. Manual publications share one lane;
+# GitHub concurrency is not a FIFO queue, so dispatch one publication at a time.
+concurrency:
+  group: docs-pages-${{ github.event_name == 'workflow_dispatch' && inputs.publish == true && 'publish' || format('{0}-{1}', github.event_name, github.ref) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  validate:
+    name: Docs validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: website
+        shell: bash
+    env:
+      DOCS_TEST_PORT: '46329'
+    steps:
+      - name: Check out the event commit
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check publication request
+        id: publication-request
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish == true }}
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          test "$GITHUB_REPOSITORY" = 'jscott3201/rusty-bacnet'
+          test "$GITHUB_REF" = 'refs/heads/dev'
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+      - name: Set up Node 24
+        id: node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - name: Install locked website dependencies
+        id: dependencies
+        run: npm ci
+      - name: Install Chromium and Linux dependencies
+        id: browser
+        run: npx playwright install --with-deps chromium
+      - name: Check, test and build the production site
+        id: verify
+        run: npm run verify
+      - name: Retain browser failure evidence
+        id: reports
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: docs-browser-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            website/playwright-report
+            website/test-results
+          retention-days: 7
+          if-no-files-found: ignore
+          include-hidden-files: false
+      - name: Package only the validated static site
+        id: pages
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish == true && github.ref == 'refs/heads/dev' && github.repository == 'jscott3201/rusty-bacnet' }}
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
+        with:
+          name: github-pages
+          path: website/dist
+          retention-days: 1
+          include-hidden-files: false
+      - name: Record validated source and artifact
+        id: provenance
+        env:
+          PAGES_ARTIFACT_ID: ${{ steps.pages.outputs.artifact_id }}
+        run: |
+          printf 'Validated commit: %s\n\nPages artifact ID (empty for validation-only): %s\n' \
+            "$GITHUB_SHA" "$PAGES_ARTIFACT_ID" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Publish documentation
+    if: ${{ needs.validate.result == 'success' && github.event_name == 'workflow_dispatch' && inputs.publish == true && github.ref == 'refs/heads/dev' && github.repository == 'jscott3201/rusty-bacnet' }}
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # No checkout or rebuild: deploy-pages finds this run's named artifact,
+      # and fails if it is missing or ambiguous.
+      - name: Deploy the validated artifact
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5
+        with:
+          artifact_name: github-pages

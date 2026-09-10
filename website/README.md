@@ -17,8 +17,9 @@ npm run verify
 
 `verify` runs Astro checking, Node unit tests, the production build, and local
 Playwright/axe tests at 320, 390, 768, and 1440 CSS pixels. It does not run Python
-tests or publish anything. These Node checks are local evidence, not an existing
-repository CI job.
+tests or publish anything. The `Docs validation` CI job runs the same command on
+native Ubuntu with Node 24 and Chromium. Local results do not prove that a GitHub
+Actions run or Pages deployment succeeded.
 
 The build regenerates 19 plain Markdown exports, `llms.txt`, and the example
 download, then forces a content-layer sync. This prevents cached Markdown HTML
@@ -85,6 +86,92 @@ The release `bacnet-macos-arm64` executable also read value 72.5 and units 64
 from a 30-second loopback server that then stopped. This is bounded tutorial
 evidence, not PyPI, general wheel/platform, or physical-network qualification.
 
+## Docs CI and manual publication
+
+`.github/workflows/docs-pages.yml` validates pull requests targeting `dev` or
+`main` when `website/**` (including the workflow guard tests) or the workflow
+itself changes. It also accepts manual dispatches. There is no push, schedule,
+merge-triggered publication, or privileged pull-request workflow. The existing
+Rust CI gates remain separate and unchanged; this job runs no BACnet, Python or
+equipment tests. WebKit remains an optional local second-engine check.
+
+The validation job has only `contents: read`, checks out the fixed event SHA
+without persisting credentials, runs `npm ci`, installs Chromium with Linux
+dependencies, and runs the entire `npm run verify`. `npm test` includes maintained
+YAML contract guards and Bash expected-SHA cases; these and local `actionlint`
+are static/local evidence, not a substitute for an actual Linux Actions run.
+When editing the workflow, also run from the repository root:
+
+```sh
+actionlint .github/workflows/docs-pages.yml
+```
+
+Only a successful **manual** dispatch with `publish=true`, on `refs/heads/dev`,
+in `jscott3201/rusty-bacnet` can publish. Its `expected_sha` must be the full
+40-character lowercase reviewed `dev` SHA and must match the dispatch event SHA.
+It is a freeze check, not a checkout ref: a branch move before dispatch fails
+closed. A later branch move does not change the commit already being validated.
+Review and delivery gates remain a maintainer responsibility; this input does
+not prove approvals. PR validation uses GitHub's event (merge) SHA, not an
+arbitrarily supplied branch/head.
+
+The publish attempt packages **only `website/dist`**, after verification, as the
+`github-pages` artifact with one-day retention. Validation-only runs do not
+upload a Pages artifact. The separate deployment job requires successful
+validation, alone receives `pages: write` and `id-token: write`, and deploys that
+same run's named artifact with no checkout or rebuild. The pinned Pages actions
+fail for missing artifacts; deployment also rejects ambiguous artifact names.
+No source tree, dependencies, browser reports or private environments are sent
+as the public artifact. Browser failure reports and screenshots are separate
+Actions artifacts retained for seven days, with hidden files excluded.
+
+### Maintainer sequence (not evidence of publication)
+
+1. Review and merge this workflow only after the actual Linux `Docs validation`
+   job and existing five lean CI gates pass. Do not infer live CI from local tests.
+2. Once the workflow is on the default branch, dispatch **validation only** from
+   `dev`. `publish` defaults to false; `expected_sha` can be omitted:
+
+   ```sh
+   gh workflow run docs-pages.yml --repo jscott3201/rusty-bacnet --ref dev -f publish=false
+   ```
+
+   Identify the new run in Actions, confirm its `headSha`/source summary, successful
+   validation, skipped deployment and absence of a `github-pages` artifact.
+3. Before the first publication, the repository owner must set Pages **Source**
+   to **GitHub Actions** (`build_type=workflow`) and configure the `github-pages`
+   environment for **Selected branches: `dev` only**, not tags or all protected
+   branches. Leave the existing `release` environment unchanged. This workflow
+   does not change settings, add reviewers/wait timers, or run `configure-pages`;
+   Astro already has an explicit static `site` and project `base`.
+4. After review and validation gates, record the full approved `dev` commit and
+   dispatch with publication explicitly enabled (replace the placeholder):
+
+   ```sh
+   gh workflow run docs-pages.yml --repo jscott3201/rusty-bacnet --ref dev -f publish=true -f expected_sha=FULL_REVIEWED_DEV_SHA
+   ```
+
+   Verify the new run's `headSha` and summary equal the reviewed SHA. Record the
+   run ID, `github-pages` artifact ID from the validation summary, artifact digest
+   from the upload log, and deployment outcome/environment URL. Inspect the
+   artifact to confirm it contains the built static site, not repository files.
+   Confirm both jobs succeed; a green validation alone is not a publication.
+5. Verify the **returned deployment URL** in a browser: homepage, direct nested
+   route/reload, native search, theme/tabs, assets, raw Markdown, example download,
+   original SVGs, sitemap/canonical URLs and 404 recovery under `/rusty-bacnet/`.
+   Only after deployment and live checks may a **separate** follow-up add public
+   repository README/package links or replace the unpublished status above.
+
+Future deployments remain manual with the same sequence and reviewed SHA.
+PR runs may cancel older checks for that PR, never a publication. Manual publish
+runs share a non-cancelling concurrency group; validation-only dispatches have a
+separate lane. GitHub concurrency is not FIFO and may replace pending runs: send
+one publication at a time, inspect its outcome, and do not assume dispatch order
+is deployment order. If validation fails, fix/review rather than bypass checks.
+If the artifact expires or publication fails, inspect the failure and use a new
+reviewed dispatch to rebuild and revalidate; do not substitute another run's
+artifact or fetch a mutable branch in the deployment job.
+
 ## Maintenance boundaries
 
 - Preserve native Starlight navigation, Pagefind, tabs, theme selection and code
@@ -98,6 +185,7 @@ evidence, not PyPI, general wheel/platform, or physical-network qualification.
   diagram on a page.
 - Keep `public/raw/`, `public/examples/`, `public/llms.txt`, `dist/`, `.astro/`,
   dependency trees, screenshots and browser reports untracked.
-- No deployment workflow, Pages setting, repository README/package links, or
-  support-status database is introduced here. Publication and CI integration
-  require owner review and approval as a separate slice.
+- The docs workflow is approved for CI and manual publication only. Pages
+  settings and actual publication remain owner-operated; the workflow's presence
+  does not mean this site is live. Repository README/package public links remain
+  deferred until verified deployment. Do not introduce a support-status database.
