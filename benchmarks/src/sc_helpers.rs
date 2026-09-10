@@ -318,13 +318,14 @@ pub fn try_make_client_tls_config_mtls_with_client_identity(
 }
 
 /// Start an SC hub with mTLS (client certificate required).
+/// Uses a fixed TEST-ONLY hub UUID; not provisioning for deployed devices.
 pub async fn start_sc_hub_mtls(certs: &CertMaterial, hub_vmac: Vmac) -> (ScHub, String) {
     let tls_config = try_make_hub_tls_config(certs).unwrap();
     let hub = ScHub::start_with_tls_config(
         "127.0.0.1:0",
         tls_config,
         hub_vmac,
-        [0; 16],
+        [0x48; 16],
         ScHubHandshakeTimeouts::default(),
     )
     .await

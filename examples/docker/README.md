@@ -129,13 +129,31 @@ alone are not that verification. All non-SC services/networks retain their
 existing configuration. Rendering `docker compose config`, building images, or
 starting only non-SC services does not require globally supplied SC variables.
 
-The single server has stable VMAC `020000001388` and Device UUID
-`00000000000000000000000000001388`, distinct from the hub VMAC
-`000000000001`. The hub's existing zero UUID is retained. Give every additional
-node a unique nonzero UUID and a unique VMAC other than all-zero/all-ff; these
-are not inferred from the certificate or BACnet Device instance. The binary
-accepts 12/32 hex digits without separators. Public `ScServerBuilder` defaults
-are unchanged; the built-in Rust TLS driver now requires `ScNodeTlsConfig`.
+### Hub identity migration
+
+The standalone hub now requires `--device-uuid`: exactly 32 ASCII hex digits
+without separators, nonzero. Missing/empty/malformed/zero UUIDs fail before
+credential-file I/O or bind. Credential-presence diagnostics still run first;
+`--self-signed`, help and version retain their earlier behavior. Optional `--vmac`
+accepts 12 ASCII hex digits and defaults to the existing `000000000001`; all-zero
+and all-ff values are rejected. No UUID is generated or hardcoded in the binary.
+
+Compose explicitly supplies **stable TEST-ONLY fixtures**: hub-hosting device UUID
+`9a21f1641a15454d9ed7e3a2710d7001`, hub VMAC `000000000001`, and the unchanged
+server UUID `00000000000000000000000000001388`/VMAC `020000001388`. Replace demo
+UUIDs with your own unique identities before real deployment (for example in your
+explicit Compose command override). No extra environment variable is required for
+unrelated non-SC Compose commands. Reuse exactly the same provisioned UUID across
+restarts/recreation and credential rotation for each device's lifetime; the caller
+owns predeployment generation and durable storage (base 2020 AB.1.5.3).
+
+Connect-Accept advertises the hosting port VMAC and hosting device UUID (AB.2.11,
+AB.6). They are not inferred from certificates or Device instance numbers. Give
+each distinct device a unique UUID; same-UUID peer replacement remains intentional.
+The local hub rejects only zero UUID/reserved VMAC, not UUID version/variant or
+other VMAC bit patterns. No storage backend, change detection, certificate binding
+or full #517 closure is provided. The built-in Rust TLS driver still requires
+`ScNodeTlsConfig`; TLS and credential-mount policy are unchanged.
 
 ## Rotation and teardown
 

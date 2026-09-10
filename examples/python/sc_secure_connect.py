@@ -7,8 +7,9 @@ Demonstrates:
 - Reading properties via VMAC addressing
 
 Prerequisites:
-    Provision a distinct UUID for each node before first deployment and store it
-    durably for that device's lifetime. Set SC_SERVER_DEVICE_UUID and
+    Provision a distinct UUID for each node and hub-hosting device before first
+    deployment and store it durably for that device's lifetime. Set
+    SC_HUB_DEVICE_UUID, SC_SERVER_DEVICE_UUID and
     SC_CLIENT_DEVICE_UUID from those stored values (UUID text). This example only
     parses them; it never generates or persists identity. Do not share UUIDs or
     generate a new one on each start. See docs/python-api.md#sc-device-uuid-migration.
@@ -38,6 +39,7 @@ from rusty_bacnet import (
 
 
 async def main():
+    hub_uuid = UUID(os.environ["SC_HUB_DEVICE_UUID"]).bytes
     server_uuid = UUID(os.environ["SC_SERVER_DEVICE_UUID"]).bytes
     client_uuid = UUID(os.environ["SC_CLIENT_DEVICE_UUID"]).bytes
     # 1. Start the SC Hub
@@ -47,6 +49,7 @@ async def main():
         key="hub-key.pem",
         vmac=b"\xff\x00\x00\x00\x00\x01",
         ca_cert="ca-cert.pem",  # enable mTLS
+        device_uuid=hub_uuid,
     )
     await hub.start()
     hub_url = await hub.url()

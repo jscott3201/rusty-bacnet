@@ -338,7 +338,7 @@ fn sc_credential_evidence_does_not_promote_the_full_security_profile() {
 }
 
 #[test]
-fn sc_node_identity_evidence_keeps_caller_storage_and_hub_limits_explicit() {
+fn sc_identity_evidence_keeps_caller_storage_and_raw_transport_limits_explicit() {
     let data = ledger();
     let rows = rows_by_id(&data);
     let row = rows["BACNET-AB-SC-WEBSOCKET-TLS"];
@@ -347,17 +347,46 @@ fn sc_node_identity_evidence_keeps_caller_storage_and_hub_limits_explicit() {
         "crates/rusty-bacnet/tests/test_sc_hub_mtls.py::NodeIdentityMtlsTests::test_uuid_owned_wire_bytes_across_stop_start_and_recreation",
         "crates/rusty-bacnet/tests/test_sc_hub_mtls.py::NodeIdentityMtlsTests::test_distinct_nodes_and_same_uuid_replacement_leave_other_node_usable",
         "benchmarks/tests/sc_mtls/node_identity.rs::sc_server_uuid_wire_bytes_survive_reconnect_and_fresh_builds",
+        "crates/bacnet-transport/tests/sc_hub_tls.rs::local_hub_identity_wire_bytes_survive_fresh_start_on_every_api",
+        "crates/rusty-bacnet/tests/test_sc_hub_mtls.py::NodeIdentityMtlsTests::test_hub_owned_identity_survives_stop_start_and_fresh_object",
+        "benchmarks/tests/sc_binary/handshake.rs::hub_identity_is_explicit_and_stable_across_binary_restart",
     ] {
         assert!(row["positive_tests"].as_array().unwrap().iter().any(|test| test == anchor));
     }
     for body in [row["notes"].as_str().unwrap(), STANDARD_LEDGER] {
         assert!(body.contains("#517 remains open"));
         assert!(body.contains("changed UUIDs cannot be detected without application history"));
-        assert!(body.contains("Hub/Python hub APIs, raw transport defaults"));
+        assert!(body.contains("Raw transport defaults, wire admission, peer replacement"));
+        assert!(body.contains("hosting port VMAC and hosting device UUID"));
+        assert!(body.contains("one shared Rust check"));
+        assert!(body.contains("TEST-ONLY hub UUID"));
         assert!(
             !body.contains("the Python two-node sketch is illustrative, not validated end-to-end")
         );
     }
+}
+
+#[test]
+fn sc_hub_identity_evidence_retains_pre_io_checks_and_no_status_promotion() {
+    let data = ledger();
+    let rows = rows_by_id(&data);
+    let row = rows["BACNET-AB-SC-WEBSOCKET-TLS"];
+    for anchor in [
+        "crates/bacnet-transport/tests/sc_hub_tls.rs::local_hub_identity_rejected_before_bind_on_every_start_api",
+        "crates/rusty-bacnet/tests/test_sc_hub_identity.py::HubIdentityTests::test_uuid_required_length_zero_and_vmac_errors_precede_io",
+        "crates/rusty-bacnet/tests/test_sc_hub_identity.py::HubIdentityTests::test_installed_hub_stub_matches_runtime_keyword_contract",
+        "benchmarks/tests/sc_binary/preflight.rs::missing_empty_and_invalid_identity_precede_file_or_network_io",
+    ] {
+        assert!(row["negative_tests"].as_array().unwrap().iter().any(|test| test == anchor));
+    }
+    assert_eq!(rows.len(), 68);
+    assert_eq!(
+        rows.values()
+            .filter(|row| row["status"] == "supported-with-clause-evidence")
+            .count(),
+        19
+    );
+    assert_eq!(row["status"], "implementation-present-needs-security-tests");
 }
 
 #[test]

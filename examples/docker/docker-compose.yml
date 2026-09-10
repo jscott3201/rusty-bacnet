@@ -105,6 +105,9 @@ services:
       - --ca=/run/bacnet-sc/ca.pem
       - --cert=/run/bacnet-sc/cert.pem
       - --key=/run/bacnet-sc/key.pem
+      # Stable TEST-ONLY hosting device identity. Provision your own for deployment.
+      - --device-uuid=9a21f1641a15454d9ed7e3a2710d7001
+      - --vmac=000000000001
     volumes:
       - type: bind
         source: ${SC_CERT_DIR:-./sc-certs}/ca.pem

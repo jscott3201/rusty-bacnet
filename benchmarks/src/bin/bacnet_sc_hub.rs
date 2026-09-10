@@ -33,6 +33,15 @@ struct Args {
     /// Required trusted client CA certificate PEM file (no system-root fallback)
     #[arg(long, value_name = "FILE")]
     ca: Option<String>,
+
+    /// Required hosting device UUID: 32 ASCII hex digits, nonzero, no separators.
+    /// Provision before deployment and durably reuse for the device's lifetime.
+    #[arg(long, value_name = "HEX")]
+    device_uuid: Option<String>,
+
+    /// Hosting port VMAC: 12 ASCII hex digits; not all zero or all ff
+    #[arg(long, default_value = "000000000001", value_name = "HEX")]
+    vmac: String,
 }
 
 #[tokio::main]
@@ -44,18 +53,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ca = required(args.ca.as_deref(), "--ca")?;
     let cert = required(args.cert.as_deref(), "--cert")?;
     let key = required(args.key.as_deref(), "--key")?;
+    let uuid = hex(
+        required(args.device_uuid.as_deref(), "--device-uuid")?,
+        "--device-uuid",
+    )?;
+    if uuid == [0; 16] {
+        return Err("--device-uuid must be nonzero; provision and durably reuse the hosting device's lifetime UUID (see examples/docker/README.md)".into());
+    }
+    let vmac = hex(&args.vmac, "--vmac")?;
+    if vmac == [0; 6] || vmac == [0xff; 6] {
+        return Err("--vmac must not be unknown (all zero) or broadcast (all ff)".into());
+    }
     let material = Credentials::load(ca, cert, key, ["--ca", "--cert", "--key"])?;
     let tls = ScHubTlsConfig::from_der(material.ca, material.chain, material.key)?;
 
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .init();
-    // Retain the standalone hub's existing identity and handshake budgets.
+    // Retain the existing handshake budgets; identity is caller-provisioned.
     let mut hub = ScHub::start_with_tls_config(
         &args.listen,
         tls,
-        [0, 0, 0, 0, 0, 1],
-        [0; 16],
+        vmac,
+        uuid,
         ScHubHandshakeTimeouts::default(),
     )
     .await?;
@@ -67,4 +87,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     hub.stop().await;
     signal?;
     Ok(())
+}
+
+fn hex<const N: usize>(text: &str, flag: &str) -> Result<[u8; N], String> {
+    // Same input grammar as the standalone device; do not slice arbitrary UTF-8.
+    if text.len() != N * 2 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(format!(
+            "{flag}: expected {} hexadecimal digits without separators",
+            N * 2
+        ));
+    }
+    let mut bytes = [0; N];
+    for (byte, pair) in bytes.iter_mut().zip(text.as_bytes().chunks_exact(2)) {
+        let digit = |b: u8| {
+            if b.is_ascii_digit() {
+                b - b'0'
+            } else {
+                b.to_ascii_lowercase() - b'a' + 10
+            }
+        };
+        *byte = digit(pair[0]) * 16 + digit(pair[1]);
+    }
+    Ok(bytes)
 }

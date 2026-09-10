@@ -107,6 +107,80 @@ fn typed_config(f: &Fixture) -> ScHubTlsConfig {
     .unwrap()
 }
 
+async fn start_api(
+    api: u8,
+    address: &str,
+    config: ScHubTlsConfig,
+    vmac: [u8; 6],
+    uuid: [u8; 16],
+) -> Result<ScHub, bacnet_types::error::Error> {
+    match api {
+        0 => ScHub::start(address, config, vmac, uuid).await,
+        1 => ScHub::start_with_uuid(address, config, vmac, uuid).await,
+        2 => {
+            ScHub::start_with_uuid_and_timeouts(
+                address,
+                config,
+                vmac,
+                uuid,
+                ScHubHandshakeTimeouts::default(),
+            )
+            .await
+        }
+        3 => {
+            ScHub::start_with_tls_config(
+                address,
+                config,
+                vmac,
+                uuid,
+                ScHubHandshakeTimeouts::default(),
+            )
+            .await
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[tokio::test]
+async fn local_hub_identity_rejected_before_bind_on_every_start_api() {
+    let config = typed_config(&Fixture::new());
+    let occupied = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = occupied.local_addr().unwrap().to_string();
+    for api in 0..4 {
+        for (vmac, uuid, expected) in [
+            (HUB_VMAC, [0; 16], "hub device UUID must not be all zero"),
+            (
+                [0; 6],
+                HUB_UUID,
+                "hub VMAC must not be UNKNOWN or BROADCAST",
+            ),
+            (
+                [0xff; 6],
+                HUB_UUID,
+                "hub VMAC must not be UNKNOWN or BROADCAST",
+            ),
+        ] {
+            let error = bounded(start_api(api, &address, config.clone(), vmac, uuid))
+                .await
+                .err()
+                .expect("invalid local identity must fail");
+            assert!(
+                matches!(error, bacnet_types::error::Error::Encoding(ref text) if text == expected),
+                "API {api}, expected {expected}, got {error}"
+            );
+        }
+        // Valid configuration reaches the occupied listener: this is not a TLS
+        // fixture failure or a generic is_err() oracle masking a bind attempt.
+        let error = bounded(start_api(api, &address, config.clone(), HUB_VMAC, HUB_UUID))
+            .await
+            .err()
+            .expect("occupied address must fail");
+        assert!(
+            matches!(error, bacnet_types::error::Error::Encoding(ref text) if text.starts_with("Hub bind failed:"))
+        );
+    }
+}
+
 async fn typed_hub(f: &Fixture, timeouts: ScHubHandshakeTimeouts) -> ScHub {
     bounded(ScHub::start_with_tls_config(
         "127.0.0.1:0",
@@ -214,32 +288,48 @@ async fn typed_hub_honors_each_timeout_and_preserves_established_peers() {
 async fn strict_hub_start_family_requires_mutual_tls13_and_preserves_uuid() {
     let fixture = Fixture::new();
     let config = typed_config(&fixture);
-    for api in 0..3 {
-        let hub = bounded(async {
-            match api {
-                0 => ScHub::start("127.0.0.1:0", config.clone(), HUB_VMAC).await,
-                1 => {
-                    ScHub::start_with_uuid("127.0.0.1:0", config.clone(), HUB_VMAC, HUB_UUID).await
-                }
-                _ => {
-                    ScHub::start_with_uuid_and_timeouts(
-                        "127.0.0.1:0",
-                        config.clone(),
-                        HUB_VMAC,
-                        HUB_UUID,
-                        ScHubHandshakeTimeouts::default(),
-                    )
-                    .await
-                }
-            }
-        })
+    for api in 0..4 {
+        let hub = bounded(start_api(
+            api,
+            "127.0.0.1:0",
+            config.clone(),
+            HUB_VMAC,
+            HUB_UUID,
+        ))
         .await
         .unwrap();
-        assert_mutual_tls13_connect_relay_and_peer_denials(
-            &fixture,
-            hub,
-            if api == 0 { [0; 16] } else { HUB_UUID },
-        )
-        .await;
+        assert_mutual_tls13_connect_relay_and_peer_denials(&fixture, hub, HUB_UUID).await;
+    }
+}
+
+#[tokio::test]
+async fn local_hub_identity_wire_bytes_survive_fresh_start_on_every_api() {
+    let fixture = Fixture::new();
+    // Non-RFC-shaped, includes zero octets: only the whole-zero UUID is invalid.
+    let uuid = [0, 1, 2, 3, 4, 5, 0, 7, 0, 9, 10, 11, 12, 13, 14, 15];
+    // No general EUI/Random48 bit-shape policy is imposed on local configuration.
+    let vmac = [0xff, 0, 0, 0, 0, 0x51];
+    for api in 0..4 {
+        let mut address = "127.0.0.1:0".to_owned();
+        for _ in 0..3 {
+            let hub = bounded(start_api(api, &address, typed_config(&fixture), vmac, uuid))
+                .await
+                .unwrap();
+            address = hub.local_addr().unwrap().to_string();
+            let outcome = AssertUnwindSafe(async {
+                for id in 1..=2 {
+                    let mut peer = websocket(
+                        hub.local_addr().unwrap(),
+                        fixture.client(Some(&fixture.good), &rustls::version::TLS13),
+                    )
+                    .await;
+                    connect_with_hub_identity(&mut peer, id, vmac, uuid).await;
+                }
+            })
+            .catch_unwind()
+            .await;
+            // Stop joins workers and proves the same listener can be rebound.
+            finish(hub, outcome).await;
+        }
     }
 }

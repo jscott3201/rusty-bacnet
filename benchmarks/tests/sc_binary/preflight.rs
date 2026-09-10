@@ -28,7 +28,11 @@ async fn failure(cmd: &mut Command, files: &Files, expected: &str) {
 async fn discovery_and_retired_flags_are_read_only() {
     let files = Files::new();
     for (bin, retired, flags) in [
-        (HUB, "--self-signed", vec!["--ca", "--cert", "--key"]),
+        (
+            HUB,
+            "--self-signed",
+            vec!["--ca", "--cert", "--key", "--device-uuid", "--vmac"],
+        ),
         (
             DEVICE,
             "--sc-no-verify",
@@ -74,6 +78,7 @@ async fn missing_empty_and_invalid_identity_precede_file_or_network_io() {
                 ("--ca", "absent".into()),
                 ("--cert", "absent".into()),
                 ("--key", "absent".into()),
+                ("--device-uuid", HUB_UUID_HEX.into()),
             ]
         } else {
             vec![
@@ -114,6 +119,26 @@ async fn missing_empty_and_invalid_identity_precede_file_or_network_io() {
         let base = files.device(&url);
         let mut cmd = replace(&base, flag, invalid);
         failure(&mut cmd, &files, flag).await;
+    }
+    for (flag, invalid) in [
+        ("--device-uuid", "00000000000000000000000000000000"),
+        ("--device-uuid", "00000000000000000000000000000001ff"),
+        ("--device-uuid", "000000000000000000000000000001"),
+        ("--device-uuid", "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"),
+        ("--device-uuid", "9a21f164-1a15-454d-9ed7-e3a2710d7001"),
+        ("--device-uuid", "é0000000000000000000000000000000"),
+        ("--vmac", ""),
+        ("--vmac", "000000000000"),
+        ("--vmac", "ffffffffffff"),
+        ("--vmac", "é0000000000"),
+        ("--vmac", "gg0000000001"),
+        ("--vmac", "0000000001"),
+        ("--vmac", "00000000000001"),
+        ("--vmac", "00:00:00:00:00:01"),
+    ] {
+        let mut base = replace(&files.secure_hub(), "--listen", &address);
+        base.args(["--vmac", "000000000001"]);
+        failure(&mut replace(&base, flag, invalid), &files, flag).await;
     }
     assert!(listener.accept().now_or_never().is_none());
     // Same executable positive control: valid preflight really dials this oracle.

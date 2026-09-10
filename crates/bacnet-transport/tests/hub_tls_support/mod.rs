@@ -105,6 +105,10 @@ pub async fn websocket(address: SocketAddr, config: Arc<rustls::ClientConfig>) -
 }
 
 pub async fn connect(peer: &mut Peer, id: u8, uuid: [u8; 16]) {
+    connect_with_hub_identity(peer, id, HUB_VMAC, uuid).await;
+}
+
+pub async fn connect_with_hub_identity(peer: &mut Peer, id: u8, vmac: [u8; 6], uuid: [u8; 16]) {
     // Independent AB.2.10/11 wire vector: fixed 26-byte Connect payload.
     let mut request = vec![6, 0, 0x22, id];
     request.extend_from_slice(&[id; 6]);
@@ -117,7 +121,7 @@ pub async fn connect(peer: &mut Peer, id: u8, uuid: [u8; 16]) {
         panic!("expected SC Connect-Accept");
     };
     assert_eq!(&accepted[..4], &[7, 0, 0x22, id]);
-    assert_eq!(&accepted[4..10], &HUB_VMAC);
+    assert_eq!(&accepted[4..10], &vmac);
     assert_eq!(&accepted[10..26], &uuid);
     assert_eq!(accepted.len(), 30);
 }

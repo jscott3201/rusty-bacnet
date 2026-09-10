@@ -25,6 +25,8 @@ from rusty_bacnet import (
 # Deterministic test provisioning only, not defaults for deployed devices.
 SERVER_UUID = bytes.fromhex("8e62ac46d7084226913776a32b619315")
 CLIENT_UUID = bytes.fromhex("95dfe4ef97f6490d9a2cf2b4b0c0e682")
+HUB_UUID = bytes.fromhex("9a21f1641a15454d9ed7e3a2710d7001")
+HUB_VMAC = b"\x02\0\0\0\0\1"
 
 
 class MtlsFixture(unittest.IsolatedAsyncioTestCase):
@@ -80,8 +82,9 @@ class MtlsFixture(unittest.IsolatedAsyncioTestCase):
         return ScHub(listen=overrides.get("listen", "127.0.0.1:0"),
                      cert=overrides.get("cert", self.path("hub.pem")),
                      key=overrides.get("key", self.path("hub.key")),
-                     vmac=b"\x02\0\0\0\0\1",
-                     ca_cert=overrides.get("ca_cert", self.path("site.pem")))
+                     vmac=overrides.get("vmac", HUB_VMAC),
+                     ca_cert=overrides.get("ca_cert", self.path("site.pem")),
+                     device_uuid=overrides.get("device_uuid", HUB_UUID))
 
     def websocket(self, address, peer=None, ca="site", version=ssl.TLSVersion.TLSv1_3,
                   read_property=False, serve_ready=None, serve_done=None):
@@ -144,6 +147,9 @@ class MtlsFixture(unittest.IsolatedAsyncioTestCase):
         except TimeoutError as error:
             raise AssertionError("timed out waiting for SC ConnectAccept") from error
         self.assertEqual(accepted[:4], b"\x07\x00\x22\x33")
+        self.assertEqual(len(accepted), 30)
+        self.assertEqual(accepted[4:10], HUB_VMAC)
+        self.assertEqual(accepted[10:26], HUB_UUID)
         if serve_ready is not None:
             assert serve_done is not None
             serve_ready.set()
@@ -205,14 +211,16 @@ class HubMtlsTests(MtlsFixture):
 
     async def test_constructor_signature_and_required_ca(self):
         parameters = inspect.signature(ScHub).parameters
-        self.assertEqual(list(parameters), ["listen", "cert", "key", "vmac", "ca_cert"])
+        self.assertEqual(list(parameters), ["listen", "cert", "key", "vmac", "ca_cert", "device_uuid"])
         self.assertIsNone(parameters["ca_cert"].default)
         self.assertEqual(parameters["ca_cert"].kind, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        self.assertIsNone(parameters["device_uuid"].default)
+        self.assertEqual(parameters["device_uuid"].kind, inspect.Parameter.KEYWORD_ONLY)
         args = ("127.0.0.1:0", self.path("hub.pem"), self.path("hub.key"), b"\x02\0\0\0\0\1")
         for extra in [(), (None,), ("",)]:
             with self.subTest(extra=extra), self.assertRaisesRegex(ValueError, "ca_cert"):
                 ScHub(*args, *extra)
-        hub = ScHub(*args, self.path("site.pem"))
+        hub = ScHub(*args, self.path("site.pem"), device_uuid=HUB_UUID)
         self.assertIsNone(await hub.address())
         try:
             await asyncio.wait_for(hub.start(), 3)
@@ -594,7 +602,7 @@ class NodeIdentityMtlsTests(MtlsFixture):
                 # Bound every socket operation and join all owned peer tasks.
                 await asyncio.gather(*tasks)
 
-    async def incumbent(self, address, uuid):
+    async def incumbent(self, address, uuid, hub_vmac=HUB_VMAC, hub_uuid=HUB_UUID):
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         context.minimum_version = context.maximum_version = ssl.TLSVersion.TLSv1_3
         context.load_verify_locations(self.path("site.pem"))
@@ -614,11 +622,47 @@ class NodeIdentityMtlsTests(MtlsFixture):
             opcode, accepted = await self.frame(reader, False)
             self.assertEqual(opcode, 2)
             self.assertEqual(accepted[:4], b"\x07\0\x22\x33")
+            self.assertEqual(len(accepted), 30)
+            self.assertEqual(accepted[4:10], hub_vmac)
+            self.assertEqual(accepted[10:26], hub_uuid)
             return reader, writer
         except BaseException:
             writer.close()
             await asyncio.wait_for(writer.wait_closed(), 3)
             raise
+
+    async def test_hub_owned_identity_survives_stop_start_and_fresh_object(self):
+        # Sparse/non-RFC-shaped input proves only whole-zero is rejected. These
+        # are caller-provisioned test identities, not deployment defaults.
+        uuid = bytes.fromhex("000102030405000700090a0b0c0d0e0f")
+        vmac = b"\xff\0\0\0\0\x51"
+        source = bytearray(uuid)
+        hub = self.hub(device_uuid=source, vmac=vmac)
+        source[:] = bytes(16)
+        address = None
+        for lifecycle in range(3):
+            if lifecycle == 2:
+                hub = self.hub(listen=address, device_uuid=uuid, vmac=vmac)
+            try:
+                await asyncio.wait_for(hub.start(), 3)
+                address = await hub.address()
+                reader, writer = await self.incumbent(address, CLIENT_UUID, vmac, uuid)
+                try:
+                    # Exact Accept bytes are checked above. Observe actual worker
+                    # teardown while the peer is still connected, not timeout.
+                    await self.stop_hub(hub)
+                    self.assertEqual(await asyncio.wait_for(reader.read(1), 3), b"")
+                finally:
+                    writer.close()
+                    await asyncio.wait_for(writer.wait_closed(), 3)
+            finally:
+                await self.stop_hub(hub)
+            with socket.socket() as probe:
+                # Match Tokio's listener reuse policy; established TCP teardown
+                # may retain TIME_WAIT, which is not a live hub listener.
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                probe.bind(("127.0.0.1", int(address.rsplit(":", 1)[1])))
+                probe.listen()
 
     async def test_distinct_nodes_and_same_uuid_replacement_leave_other_node_usable(self):
         hub = self.hub()

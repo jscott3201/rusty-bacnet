@@ -141,16 +141,16 @@ asyncio.run(main())
 
 ## BACnet/SC with Hub (Python)
 
-Both Python SC nodes now require distinct, caller-provisioned nonzero 16-byte
-Device UUIDs. Generate each identity **before deployment**, store it durably in
+Both Python SC nodes and the hosting device of the hub require distinct,
+caller-provisioned nonzero 16-byte Device UUIDs. Generate each identity **before deployment**, store it durably in
 your application/deployment configuration, and supply the same bytes for that
 device's lifetime. Do not generate a new UUID at each start or share it between
 different devices. The example reads already-provisioned values from explicit
 environment variables; it does not generate or persist them. See the
 [migration contract and illustrative values](docs/python-api.md#sc-device-uuid-migration).
 
-> **Remaining identity limits:** `ScHub`/Python hub UUID configuration and raw
-> `ScTransport` defaults are unchanged. Node validation rejects missing/all-zero
+> **Remaining identity limits:** raw `ScTransport` defaults are unchanged.
+> Hub/node configuration validation rejects missing/all-zero
 > UUIDs, not UUID version/variant bits; no certificate-to-UUID binding or durable
 > change detection is provided. [#517](https://github.com/jscott3201/rusty-bacnet/issues/517)
 > remains open. Generated-certificate installed-native tests cover the two-node
@@ -167,6 +167,7 @@ from rusty_bacnet import (
 )
 
 async def main():
+    hub_uuid = UUID(os.environ["SC_HUB_DEVICE_UUID"]).bytes
     server_uuid = UUID(os.environ["SC_SERVER_DEVICE_UUID"]).bytes
     client_uuid = UUID(os.environ["SC_CLIENT_DEVICE_UUID"]).bytes
     # Start an SC hub (TLS WebSocket relay)
@@ -175,6 +176,7 @@ async def main():
         cert="hub-cert.pem", key="hub-key.pem",
         ca_cert="ca-cert.pem",
         vmac=b"\xff\x00\x00\x00\x00\x01",
+        device_uuid=hub_uuid,
     )
     await hub.start()
     hub_url = await hub.url()  # "wss://127.0.0.1:<port>"
@@ -219,6 +221,10 @@ I/O. Python SC clients and servers likewise require explicit `sc_ca_cert`,
 `sc_client_cert`, and `sc_client_key` paths. Startup loads and validates the CA
 and matching certificate/key before the hub binds or a node dials. There is no
 insecure hub escape or system-root fallback for these built-in paths.
+`ScHub` additionally requires keyword-only `device_uuid` (bytes/bytearray, copied),
+and rejects all-zero/all-ff local VMACs. Identity validation follows CA presence
+and precedes credential file I/O. All four Rust hub starts enforce the same local
+identity rule; `ScHub::start` now takes the UUID as its fourth argument.
 
 See the [Python hub requirements](docs/python-api.md#schub),
 [node migration and local-policy limits](docs/python-api.md#bacnetsc-secure-connect),

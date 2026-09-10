@@ -344,9 +344,19 @@ The constructor uses the built-in aws-lc provider, not a caller-installed provid
 `start_with_uuid`, and `start_with_uuid_and_timeouts` is now `ScHubTlsConfig`, not
 `TlsAcceptor`. Construct it with `from_der`; raw hub injection, including custom
 verifiers/providers, TLS-version selection and arbitrary configuration knobs, is
-retired with no public unchecked escape. Names, argument order and return types
-are unchanged. `start` retains its all-zero Device UUID; the other methods retain
-the supplied UUID. Default or explicitly validated handshake budgets and lifecycle
+retired with no public unchecked escape.
+
+**Hub identity source/runtime break:** `ScHub::start(bind, tls, vmac, uuid)` now
+requires the fourth UUID argument. All four public starts reject an all-zero
+16-byte UUID or reserved UNKNOWN (all-zero)/BROADCAST (all-ff) local VMAC with
+`Error::Encoding` before `TcpListener::bind`, through one shared enforcement point.
+The other three method names, argument order and return contracts are unchanged.
+No UUID version/variant or general VMAC bit-shape policy is added. Provision the
+hosting device UUID before deployment and durably reuse it for its lifetime
+(AB.1.5.3). Connect-Accept carries that device UUID and the hosting port's VMAC
+unchanged (AB.2.11, AB.6), not an identity generated per connection. Persistence,
+generation, detecting changed stored values and certificate binding belong outside
+this API. Default or explicitly validated handshake budgets and lifecycle
 are preserved. `start_with_tls_config` remains a compatible full-control alias for
 `start_with_uuid_and_timeouts`. Built-in node APIs separately require
 `ScNodeTlsConfig`, as described below; generic custom transports remain available.
@@ -372,7 +382,7 @@ TLS 1.2/server-auth-only characterization is intentionally retired. Installed Py
 peers and ReadProperty; these are not hardware or full-profile certification.
 
 The already-mTLS benchmark hub launcher and the CLI ReadProperty and server SC-DCC
-test fixtures also use the validated hub path, retaining their UUIDs, timeouts,
+test fixtures also use the validated hub path with explicit test UUIDs, retaining timeouts,
 authentication modes and cleanup. The benchmark PEM loader has focused empty,
 malformed, mixed-valid/invalid DER and mismatched-key tests. Independent raw TLS
 peer helpers (including TLS-version negative controls) retain their existing
@@ -1335,9 +1345,10 @@ VMAC. Known UUIDs retain the existing intended connection replacement behavior
 (AB.6.2.3); two connections sharing one UUID are not expected to coexist. Examples
 of **test-only** distinct values are `8e62ac46-d708-4226-9137-76a32b619315` for a
 server and `95dfe4ef-97f6-490d-9a2c-f2b4b0c0e682` for a client. Do not deploy these
-shared demo identities; supply your own provisioned arrays. Hub/Python hub APIs,
-raw `ScTransport` defaults, wire admission, and VMAC rules are not changed by this
-slice. #517 remains open for the residual identity work; no PICS/profile promotion.
+shared demo identities; supply your own provisioned arrays. The hub also requires
+its hosting device's lifetime UUID: see [hub identity migration](#bacnetsc-hub).
+Raw `ScTransport` defaults, wire admission and remote-peer VMAC rules remain
+unchanged. #517 remains open for residual identity work; no PICS/profile promotion.
 
 ```rust
 use bacnet_client::client::BACnetClient;

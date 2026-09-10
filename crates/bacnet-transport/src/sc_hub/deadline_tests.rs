@@ -60,7 +60,7 @@ fn hub_timeout_configuration_checks_phase_boundaries() {
 #[tokio::test]
 async fn hub_default_deadline_releases_silent_and_partial_tls() {
     let tls = TestTls::new();
-    let mut hub = ScHub::start("127.0.0.1:0", tls.hub_config, [0x10; 6])
+    let mut hub = ScHub::start("127.0.0.1:0", tls.hub_config, [0x10; 6], [0x10; 16])
         .await
         .unwrap();
     let mut silent = TcpStream::connect(hub.local_addr().unwrap()).await.unwrap();

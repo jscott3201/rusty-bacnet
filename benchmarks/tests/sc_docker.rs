@@ -16,13 +16,24 @@ async fn docker_pair_read_property() {
     let ca = required("SC_SMOKE_CA");
     let cert = required("SC_SMOKE_CERT");
     let key = required("SC_SMOKE_KEY");
+    let hex = |name| {
+        let text = required(name);
+        assert!(text.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert_eq!(text.len() % 2, 0);
+        text.as_bytes()
+            .chunks_exact(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+            .collect::<Vec<_>>()
+    };
+    let hub_vmac = hex("SC_SMOKE_HUB_VMAC").try_into().unwrap();
+    let hub_uuid = hex("SC_SMOKE_HUB_UUID").try_into().unwrap();
     let tls = ScNodeTlsConfig::from_der(
         support::pem(std::path::Path::new(&ca)),
         support::pem(std::path::Path::new(&cert)),
         PrivateKeyDer::from_pem_file(key).unwrap(),
     )
     .unwrap();
-    let peer = peer::Peer::connect(&url, tls, 42).await;
+    let peer = peer::Peer::connect_identity(&url, tls, 42, hub_vmac, hub_uuid).await;
     peer.read().await;
-    eprintln!("Verified mutual-TLS 1.3 SC Connect and Device:5000 / AI:1 ReadProperty values");
+    eprintln!("Verified mutual-TLS 1.3 exact hub VMAC/UUID Connect-Accept and Device:5000 / AI:1 ReadProperty values");
 }

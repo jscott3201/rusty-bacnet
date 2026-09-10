@@ -5,7 +5,7 @@ use std::time::Duration;
 #[tokio::test]
 async fn hub_stop_releases_established_peer_before_returning() {
     let tls = TestTls::new();
-    let mut hub = ScHub::start("127.0.0.1:0", tls.hub_config.clone(), [0x10; 6])
+    let mut hub = ScHub::start("127.0.0.1:0", tls.hub_config.clone(), [0x10; 6], [0x10; 16])
         .await
         .unwrap();
     let address = hub.local_addr().unwrap();
@@ -139,7 +139,7 @@ async fn drop_requests_eventual_cleanup_on_live_runtime() {
 async fn stop_and_drop_before_supervisor_first_poll_are_sticky() {
     let tls = TestTls::new();
     for stop in [true, false] {
-        let mut hub = ScHub::start("127.0.0.1:0", tls.hub_config.clone(), [0x10; 6])
+        let mut hub = ScHub::start("127.0.0.1:0", tls.hub_config.clone(), [0x10; 6], [0x10; 16])
             .await
             .unwrap();
         let address = hub.local_addr().unwrap();

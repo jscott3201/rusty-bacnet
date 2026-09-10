@@ -24,6 +24,7 @@ use crate::errors::to_py_err;
 ///     key="server.key",
 ///     ca_cert="ca.pem",       # required trusted issuer CA for mTLS
 ///     vmac=b"\x00\x00\x00\x00\x00\x01",
+///     device_uuid=provisioned_hub_uuid,  # caller's durable lifetime identity
 /// )
 /// await hub.start()
 /// print(f"Hub listening on {await hub.url()}")
@@ -38,6 +39,7 @@ pub struct PyScHub {
     key: String,
     ca_cert: String,
     vmac: [u8; 6],
+    device_uuid: [u8; 16],
     address: Arc<Mutex<Option<String>>>,
 }
 
@@ -53,15 +55,21 @@ impl PyScHub {
     ///         Omitted, None, or empty values raise ValueError. The default only
     ///         preserves positional argument compatibility; it does not enable
     ///         server-auth-only TLS. Files are validated by start() before bind.
-    ///     vmac: 6-byte VMAC for the hub itself.
+    ///     vmac: Hosting port's 6-byte VMAC, neither all zero nor all ff.
+    ///     device_uuid: Required keyword-only nonzero 16-byte hosting device UUID.
+    ///         Copied into owned storage. The caller must provision it before
+    ///         deployment and durably reuse it for the device's lifetime. No UUID
+    ///         generation, persistence, version/variant or certificate binding.
+    ///         Identity errors precede file I/O; ca_cert presence is checked first.
     #[new]
-    #[pyo3(signature = (listen, cert, key, vmac, ca_cert=None))]
+    #[pyo3(signature = (listen, cert, key, vmac, ca_cert=None, *, device_uuid=None))]
     fn new(
         listen: &str,
         cert: &str,
         key: &str,
         vmac: Vec<u8>,
         ca_cert: Option<String>,
+        device_uuid: Option<Vec<u8>>,
     ) -> PyResult<Self> {
         let ca_cert = ca_cert.filter(|path| !path.is_empty()).ok_or_else(|| {
             PyValueError::new_err("ca_cert must be a nonempty CA certificate path for mutual TLS")
@@ -71,6 +79,18 @@ impl PyScHub {
         }
         let mut vmac_arr = [0u8; 6];
         vmac_arr.copy_from_slice(&vmac);
+        if vmac_arr == [0; 6] || vmac_arr == [0xff; 6] {
+            return Err(PyValueError::new_err(
+                "vmac must not be UNKNOWN (all zero) or BROADCAST (all ff)",
+            ));
+        }
+        let device_uuid: [u8; 16] = device_uuid
+            .ok_or_else(|| PyValueError::new_err("device_uuid is required for ScHub"))?
+            .try_into()
+            .map_err(|_| PyValueError::new_err("device_uuid must be exactly 16 bytes"))?;
+        if device_uuid == [0; 16] {
+            return Err(PyValueError::new_err("device_uuid must not be all zero"));
+        }
         Ok(Self {
             inner: Arc::new(Mutex::new(None)),
             listen: listen.to_string(),
@@ -78,6 +98,7 @@ impl PyScHub {
             key: key.to_string(),
             ca_cert,
             vmac: vmac_arr,
+            device_uuid,
             address: Arc::new(Mutex::new(None)),
         })
     }
@@ -90,6 +111,7 @@ impl PyScHub {
         let key = self.key.clone();
         let ca_cert = self.ca_cert.clone();
         let vmac = self.vmac;
+        let device_uuid = self.device_uuid;
         let address = self.address.clone();
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -100,7 +122,7 @@ impl PyScHub {
                 &listen,
                 server_tls,
                 vmac,
-                [0; 16],
+                device_uuid,
                 ScHubHandshakeTimeouts::default(),
             )
             .await

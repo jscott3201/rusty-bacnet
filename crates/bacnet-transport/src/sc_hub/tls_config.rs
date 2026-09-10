@@ -22,6 +22,8 @@ use tokio_rustls::TlsAcceptor;
 /// TLS configuration remains caller-managed and is not constrained by this type.
 ///
 /// An executable, in-memory example (applications normally load site credentials):
+/// the fixed identity below is TEST-ONLY. Provision and durably reuse the hosting
+/// device UUID before deployment; all startup APIs reject zero UUID/reserved VMAC.
 ///
 /// ```
 /// use bacnet_transport::sc_hub::{ScHub, ScHubHandshakeTimeouts, ScHubTlsConfig};

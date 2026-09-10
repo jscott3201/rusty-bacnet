@@ -12,17 +12,38 @@ pub struct Peer(pub TlsWebSocket, std::cell::Cell<u8>);
 
 impl Peer {
     pub async fn connect(url: &str, tls: ScNodeTlsConfig, id: u8) -> Self {
+        Self::connect_identity(
+            url,
+            tls,
+            id,
+            super::support::HUB_VMAC,
+            super::support::HUB_UUID,
+        )
+        .await
+    }
+
+    pub async fn connect_identity(
+        url: &str,
+        tls: ScNodeTlsConfig,
+        id: u8,
+        hub_vmac: [u8; 6],
+        hub_uuid: [u8; 16],
+    ) -> Self {
         let peer = Self(
             bounded(TlsWebSocket::connect(url, tls)).await.unwrap(),
             std::cell::Cell::new(7),
         );
-        let mut payload = vec![id; 6];
+        // Literal AB.2.10/11 vector and offsets: no product Connect codec oracle.
+        let mut payload = vec![6, 0, 0, 1];
+        payload.extend_from_slice(&[id; 6]);
         payload.extend_from_slice(&[id; 16]);
         payload.extend_from_slice(&[0x05, 0xc4, 0x05, 0xc4]);
-        peer.send(ScFunction::ConnectRequest, None, &payload).await;
-        let message = peer.recv().await;
-        assert_eq!(message.function, ScFunction::ConnectAccept);
-        assert_eq!(message.message_id, 1);
+        bounded(peer.0.send(&payload)).await.unwrap();
+        let frame = bounded(peer.0.recv()).await.unwrap();
+        assert_eq!(frame.len(), 30);
+        assert_eq!(&frame[..4], &[7, 0, 0, 1]);
+        assert_eq!(&frame[4..10], &hub_vmac);
+        assert_eq!(&frame[10..26], &hub_uuid);
         peer
     }
 

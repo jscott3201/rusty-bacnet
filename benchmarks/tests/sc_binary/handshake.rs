@@ -39,6 +39,46 @@ async fn good_pair(files: &Files, certs: &CertMaterial) {
 }
 
 #[tokio::test]
+async fn hub_identity_is_explicit_and_stable_across_binary_restart() {
+    let files = Files::new();
+    let certs = generate_test_certs();
+    files.certs(&certs);
+    let uuid = [0, 1, 2, 3, 4, 5, 0, 7, 0, 9, 10, 11, 12, 13, 14, 15];
+    let vmac = [0xff, 0, 0, 0, 0, 0x51];
+    let mut address = "127.0.0.1:0".to_owned();
+    for _ in 0..3 {
+        let base = replace(
+            &files.secure_hub(),
+            "--device-uuid",
+            "000102030405000700090A0B0C0D0E0F",
+        );
+        let mut cmd = replace(&base, "--listen", &address);
+        cmd.args(["--vmac", "FF0000000051"]);
+        let mut hub = Process::start(&mut cmd, &files);
+        let url = hub.hub_url().await;
+        address = url.trim_start_matches("wss://").to_owned();
+        let mut device = Process::start(&mut files.device(&url), &files);
+        device.ready("SC device connected").await;
+        let peer = Peer::connect_identity(
+            &url,
+            try_make_node_tls_config(&certs).unwrap(),
+            42,
+            vmac,
+            uuid,
+        )
+        .await;
+        peer.read().await;
+        drop(peer);
+        drop(device);
+        // Kill-and-wait is explicit child reaping, not a timeout-only oracle.
+        hub.child.kill().unwrap();
+        assert!(!hub.wait().await.success());
+        drop(hub);
+        drop(tokio::net::TcpListener::bind(&address).await.unwrap());
+    }
+}
+
+#[tokio::test]
 async fn actual_binaries_mutual_tls_reads_and_denials_recover() {
     // Distinct signing CA, hub, device and peer keys, with explicit EKUs.
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();

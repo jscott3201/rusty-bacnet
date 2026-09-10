@@ -98,6 +98,13 @@ type Clients = Arc<Mutex<HashMap<Vmac, HubClient>>>;
 /// Connect-Request/Connect-Accept handshake, and relays messages between
 /// connected nodes.
 ///
+/// Every startup requires the hosting port's VMAC (neither UNKNOWN nor BROADCAST)
+/// and the hosting device's nonzero 16-byte UUID. The caller must provision the
+/// UUID before deployment and durably reuse it for the device's entire lifetime
+/// (AB.1.5.3). The hub neither generates nor persists identity, checks UUID
+/// version/variant bits, nor binds it to a certificate. Connect-Accept advertises
+/// these exact configured bytes (AB.2.11 and AB.6).
+///
 /// Dropping the hub requests eventual worker cleanup on a running Tokio runtime.
 /// Use [`Self::stop`] to await completion before reusing its resources.
 pub struct ScHub {
@@ -136,21 +143,23 @@ impl ScHub {
     /// background task.
     ///
     /// Requires [`ScHubTlsConfig`]: explicit CA trust, mandatory client certificate
-    /// verification, and TLS 1.3-only local policy. Uses the all-zero Device UUID
-    /// and default handshake budgets. Raw TLS acceptors are not accepted:
+    /// verification, and TLS 1.3-only local policy. Uses default handshake budgets.
+    /// A zero UUID or reserved local VMAC returns a configuration error before
+    /// binding, as on every public startup route. Raw TLS acceptors are not accepted:
     ///
     /// ```compile_fail,E0308
     /// use bacnet_transport::sc_hub::ScHub;
     /// async fn raw(acceptor: tokio_rustls::TlsAcceptor) {
-    ///     let _ = ScHub::start("127.0.0.1:0", acceptor, [0x12; 6]).await;
+    ///     let _ = ScHub::start("127.0.0.1:0", acceptor, [0x12; 6], [0x34; 16]).await;
     /// }
     /// ```
     pub async fn start(
         bind_addr: &str,
         tls_config: ScHubTlsConfig,
         hub_vmac: Vmac,
+        hub_uuid: DeviceUuid,
     ) -> Result<Self, bacnet_types::error::Error> {
-        Self::start_with_uuid(bind_addr, tls_config, hub_vmac, [0u8; 16]).await
+        Self::start_with_uuid(bind_addr, tls_config, hub_vmac, hub_uuid).await
     }
 
     /// Start the hub with a specific Device UUID.
@@ -212,6 +221,19 @@ impl ScHub {
         hub_uuid: DeviceUuid,
         timeouts: ScHubHandshakeTimeouts,
     ) -> Result<Self, bacnet_types::error::Error> {
+        // One local-identity enforcement point for all four public startup APIs.
+        // This deliberately does not change remote peer admission or UUID shape.
+        if hub_uuid == [0; 16] {
+            return Err(bacnet_types::error::Error::Encoding(
+                "hub device UUID must not be all zero".into(),
+            ));
+        }
+        if hub_vmac == crate::sc_frame::UNKNOWN_VMAC || hub_vmac == crate::sc_frame::BROADCAST_VMAC
+        {
+            return Err(bacnet_types::error::Error::Encoding(
+                "hub VMAC must not be UNKNOWN or BROADCAST".into(),
+            ));
+        }
         let tls_acceptor = tls_config.into_acceptor();
         let listener = TcpListener::bind(bind_addr)
             .await

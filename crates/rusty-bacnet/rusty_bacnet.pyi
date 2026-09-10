@@ -2065,7 +2065,8 @@ class ScHub:
 
     Usage::
 
-        hub = ScHub("0.0.0.0:47809", "cert.pem", "key.pem", b"\\x00" * 6, ca_cert="ca.pem")
+        hub = ScHub("0.0.0.0:47809", "cert.pem", "key.pem", b"\\x02\\x00\\x00\\x00\\x00\\x01",
+                    ca_cert="ca.pem", device_uuid=provisioned_hub_uuid)
         await hub.start()
         print(await hub.url())
         await hub.stop()
@@ -2075,6 +2076,15 @@ class ScHub:
     default retains the existing positional layout only; there is no insecure
     mode. Invalid/unreadable credentials raise BacnetError from start(), before
     binding. Connections require TLS 1.3 and a valid trusted client certificate.
+
+    ``device_uuid`` is required, keyword-only and copied from bytes/bytearray into
+    owned storage. Missing/None, wrong length or all-zero UUID raises ValueError
+    before file I/O. The caller provisions this hosting device identity before
+    deployment and durably reuses the same bytes for its entire lifetime, including
+    stop/start and fresh objects. No generation/storage or UUID-bit validation is
+    provided. The hosting port's ``vmac`` must be six bytes (RuntimeError for wrong
+    length), neither all zero nor all ff (ValueError). CA presence remains first,
+    then VMAC validation, then UUID. No certificate-to-identity binding is implied.
     """
 
     def __init__(
@@ -2084,6 +2094,8 @@ class ScHub:
         key: str,
         vmac: bytes,
         ca_cert: Optional[str] = None,
+        *,
+        device_uuid: Optional[Union[bytes, bytearray]] = None,
     ) -> None: ...
 
     async def start(self) -> None:

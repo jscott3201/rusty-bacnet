@@ -1536,6 +1536,8 @@ BACnet/SC Hub — a TLS WebSocket relay for BACnet Secure Connect. Both `BACnetC
 
 ```python
 from rusty_bacnet import ScHub
+from uuid import UUID
+import os
 
 hub = ScHub(
     listen="127.0.0.1:0",       # Bind address (port 0 = auto-assign)
@@ -1543,6 +1545,7 @@ hub = ScHub(
     key="hub-key.pem",           # Server TLS private key
     vmac=b"\xff\x00\x00\x00\x00\x01",  # Hub's 6-byte VMAC
     ca_cert="ca-cert.pem",       # Trusted issuer CA for mutual TLS
+    device_uuid=UUID(os.environ["SC_HUB_DEVICE_UUID"]).bytes,
 )
 ```
 
@@ -1553,6 +1556,22 @@ mode or insecure flag. Existing callers must supply the trusted issuer CA PEM
 file, not a peer leaf certificate. Configure each SC node with its own
 operational certificate/key pair and the CA that signs the hub certificate.
 
+**Hub identity migration:** `device_uuid` is a new required keyword-only option.
+Its `None` signature default preserves CA-first diagnostics, not a fallback UUID.
+Missing/None, lengths other than 16 bytes, and all-zero UUIDs raise `ValueError`.
+`bytes` and `bytearray` are copied into an owned 16-byte array; mutating the source
+cannot change identity. The existing five positional slots remain unchanged.
+After CA presence, the constructor checks VMAC length (the existing `RuntimeError`),
+reserved all-zero/all-ff VMACs (`ValueError`), then UUID, all before file I/O/bind.
+No additional VMAC bit-shape or UUID version/variant policy is imposed.
+
+The UUID identifies the hosting **device**, while VMAC identifies its hosting
+**port**; Connect-Accept carries their exact configured bytes (base 2020 AB.2.11,
+AB.6). The caller must provision the UUID before deployment and durably reuse it
+for the device's entire lifetime (AB.1.5.3), including same-object stop/start and
+fresh objects. No per-connection generation, storage backend, lifetime-history
+check, or certificate binding is provided. See [UUID provisioning](#sc-device-uuid-migration).
+
 `start()` validates the CA store and server certificate/key before binding;
 unreadable, empty, or malformed credentials and mismatched server keys raise
 `BacnetError`. The hub accepts only TLS 1.3 with verified client certificates.
@@ -1561,15 +1580,15 @@ This addresses the Python hub admission boundary of Annex AB.7.4, not full
 security-profile conformance. CA membership does not authorize BACnet operations
 or bind a certificate to a claimed VMAC/Device UUID. Python startup loads/parses
 files and delegates policy construction to native `ScHubTlsConfig::from_der`, then
-uses `ScHub::start_with_tls_config` with the existing zero UUID and default phase
-timeouts. This is an internal integration, not a new Python signature or another
-certificate-less-access fix; required CA, error categories, file repair/retry and
+uses `ScHub::start_with_tls_config` with the retained explicit UUID and default phase
+timeouts. The identity migration is not another certificate-less-access fix;
+required CA, credential error categories, file repair/retry and
 async lifecycle remain unchanged. Native construction does not itself load files
 or certify local certificate dates/issuer relationships.
 
 All public Rust hub startup now requires the [constrained configuration](rust-api.md#bacnetsc-hub);
 raw `TlsAcceptor` hub injection is retired by a Rust source-breaking change.
-Python already uses the compatible alias, so its signatures and behavior are unchanged.
+Python uses that alias and now passes its required owned hub identity.
 Built-in Rust node APIs now require `ScNodeTlsConfig` too. This is an internal
 Python integration, not another certificate-less-access fix or a signature change.
 Issue #513 remains open for final acceptance assessment and remaining profile
@@ -1612,7 +1631,7 @@ url = await hub.url()  # "wss://127.0.0.1:47900"
 
 ### Complete SC Example
 
-Provision distinct node identities as described under
+Provision distinct hub-hosting device and node identities as described under
 [SC Device UUID migration](#sc-device-uuid-migration); the explicit environment
 variables here contain those already-stored UUID strings, not new per-start IDs.
 
@@ -1627,6 +1646,7 @@ from rusty_bacnet import (
 
 async def main():
     # 1. Start the SC hub
+    hub_uuid = UUID(os.environ["SC_HUB_DEVICE_UUID"]).bytes
     server_uuid = UUID(os.environ["SC_SERVER_DEVICE_UUID"]).bytes
     client_uuid = UUID(os.environ["SC_CLIENT_DEVICE_UUID"]).bytes
     hub = ScHub(
@@ -1634,6 +1654,7 @@ async def main():
         cert="hub-cert.pem", key="hub-key.pem",
         ca_cert="ca-cert.pem",
         vmac=b"\xff\x00\x00\x00\x00\x01",
+        device_uuid=hub_uuid,
     )
     await hub.start()
     hub_url = await hub.url()
@@ -1741,18 +1762,19 @@ keyword even when using the old positional credentials.
 Base Standard 135-2020 AB.1.5.3 calls for generation before first deployment,
 durable storage across restarts, and the same device UUID for the device's
 lifetime. **The caller owns all of this provisioning and persistence.** Load the
-same stored bytes into every fresh client/server object; do not call `uuid4()` or
+same stored bytes into every fresh hub/client/server object; do not call `uuid4()` or
 otherwise generate a new ID during startup. The library does not choose a path,
 store UUIDs, or detect a changed UUID without application-owned history. It cannot
 guarantee lifetime identity. Python nodes retain their existing lifecycle support:
 stop/start or recreate them with the persisted UUID; no automatic Python reconnect
 support is added or claimed.
 
-For illustration only, two independently provisioned **test** identities might be:
+For illustration only, three independently provisioned **test** identities might be:
 
 ```python
 from uuid import UUID
 # Test fixtures only. Production must load its own durably provisioned values.
+hub_uuid = UUID("9a21f164-1a15-454d-9ed7-e3a2710d7001").bytes
 server_uuid = UUID("8e62ac46-d708-4226-9137-76a32b619315").bytes
 client_uuid = UUID("95dfe4ef-97f6-490d-9a2c-f2b4b0c0e682").bytes
 ```
@@ -1760,8 +1782,9 @@ client_uuid = UUID("95dfe4ef-97f6-490d-9a2c-f2b4b0c0e682").bytes
 Do not share a UUID between distinct devices. Same-UUID replacement at the hub is
 intentional (AB.6.2.3), including when a device's VMAC differs; it is not a promise
 that two same-UUID nodes coexist. Distinct UUIDs also need non-colliding VMACs.
-`ScHub`/Python `ScHub` UUID APIs, raw transport defaults and wire admission remain
-unchanged. #517 remains open; this node-first API work is not certificate-to-UUID
+`ScHub` now requires its hosting device UUID and rejects reserved local VMACs,
+as described [above](#schub). Raw transport defaults and wire admission remain
+unchanged. #517 remains open; these local API checks are not certificate-to-UUID
 binding, full identity-profile validation, or full Annex AB conformance.
 
 #### Required operational credentials

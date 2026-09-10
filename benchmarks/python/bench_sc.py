@@ -55,6 +55,7 @@ async def sc_hub(certs):
         key=certs.server_key,
         ca_cert=certs.ca_cert,
         vmac=b"\x00\x00\x00\x00\x00\x01",
+        device_uuid=bytes.fromhex("9a21f1641a15454d9ed7e3a2710d7001"),  # TEST ONLY
     )
     try:
         await asyncio.wait_for(hub.start(), 5)

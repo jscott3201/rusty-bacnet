@@ -8,6 +8,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 pub const DEADLINE: Duration = Duration::from_secs(10);
+// Fixed test provisioning, not deployment defaults. Also used by Compose smoke.
+pub const HUB_UUID_HEX: &str = "9a21f1641a15454d9ed7e3a2710d7001";
+pub const HUB_UUID: [u8; 16] = [
+    0x9a, 0x21, 0xf1, 0x64, 0x1a, 0x15, 0x45, 0x4d, 0x9e, 0xd7, 0xe3, 0xa2, 0x71, 0x0d, 0x70, 1,
+];
+pub const HUB_VMAC: [u8; 6] = [0, 0, 0, 0, 0, 1];
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 pub struct Files(pub PathBuf);
@@ -62,6 +68,7 @@ impl Files {
     pub fn hub(&self) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_bacnet-sc-hub"));
         cmd.args(["--listen", "127.0.0.1:0"])
+            .args(["--device-uuid", HUB_UUID_HEX])
             .arg("--cert")
             .arg(self.0.join("hub.pem"))
             .arg("--key")
@@ -161,8 +168,13 @@ impl Process {
         let end = Instant::now() + DEADLINE;
         loop {
             let (_, stderr) = self.output();
-            if let Some(line) = stderr.lines().find(|line| line.contains(marker)) {
-                return line.to_owned();
+            // A regular file can be observed midway through eprintln!'s writes.
+            // Never parse a partial readiness line as an address/VMAC.
+            if let Some(line) = stderr
+                .split_inclusive('\n')
+                .find(|line| line.ends_with('\n') && line.contains(marker))
+            {
+                return line.trim_end_matches('\n').to_owned();
             }
             assert!(
                 self.child.try_wait().unwrap().is_none(),

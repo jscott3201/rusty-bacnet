@@ -132,7 +132,7 @@ impl Fixture {
             "127.0.0.1:0",
             certs.hub.clone(),
             [2, 0, 0, 0, 0, 9],
-            [0; 16],
+            [9; 16], // Fixed test-only hosting device identity.
             ScHubHandshakeTimeouts::default(),
         ))
         .await
