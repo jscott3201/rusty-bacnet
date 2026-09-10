@@ -13,6 +13,41 @@
 - Addenda/errata status: No external addenda/errata check was performed. The local Standard 135-2020 source contract was reviewed for Clause 12.52 and Table 12-61, Clause 21 `BACnetNotifyType`, and Clause 15.7 RPM selector exclusions.
 - PR-0808 evidence row: `BACNET-12-ALERT-ENROLLMENT-TABLE-12-61` is `supported-with-clause-evidence` for the served object model only; it is not an Alert evaluator or notification-generation claim.
 
+## Received peer UUID admission
+
+Scoped supplement to `BACNET-AB-SC-CONNECTION-STATE` (Refs #517), superseding only
+the earlier slices' wire-admission exclusion. The machine-readable row adds
+focused code/test anchors; its historical tranche notes and global provenance
+remain unchanged. All 68 rows, 19 supported rows and existing statuses are retained.
+
+- **Local security policy:** reject all-zero Device UUIDs in received
+  Connect-Request at the hub, after TLS/WebSocket setup and before activity,
+  registry/capacity decisions, commit or replacement. This is a compatibility break
+  for legacy nil-request senders, not a pre-dial check or a claim that RFC 4122
+  leaves nil UUID syntax undefined. Nonzero bits remain opaque; no version/variant,
+  generation, lifetime storage or certificate binding is added. #517 remains open.
+- **Source:** licensed base Standard 135-2020 AB.1.5.2–3 (printed 1382/PDF 1384),
+  AB.2.10–11 (printed 1389–1390/PDF 1391–1392), and AB.3.1.2/.4/.5 (printed
+  1393–1394/PDF 1395–1396). The existing parameter-range classification returns
+  COMMUNICATION/PARAMETER_OUT_OF_RANGE (7/80) for eligible unicast and discards the
+  request. Length and forbidden-envelope checks still precede identity checks;
+  identity precedes unsupported MU. Multi-fault precedence and reserved-source
+  suppression remain repository interpretations, not new normative claims.
+- NAK addressing uses the envelope source, never the proposed payload VMAC/UUID;
+  marker zero and broadcast/reserved-envelope-source suppression remain. Nil plus
+  a colliding VMAC is a range error, not Duplicate-VMAC, so no Random-48 reseed.
+  A new malformed peer closes without admission/commit. Registered malformed
+  repeats preserve sink/identity, negotiated limits, heartbeat and activity.
+  Intended valid same-UUID replacement and valid-repeat handling remain unchanged.
+- Generic encode/decode and manual raw sending still permit nil syntax.
+  **Connect-Accept with a zero UUID is unchanged pending a separate response-policy
+  decision.** This slice does not broaden the node's existing silent-discard policy.
+- Independent wire vectors, request/accept and MU matrices, real mTLS rejection
+  and suppression, all 256 registered peers at capacity, repeated nil requests,
+  healthy relay, held-NAK absolute deadlines, and installed-native Python raw-peer
+  rejection plus surviving ReadProperty are the bounded acceptance evidence.
+  No full Annex AB/PICS/BTL, new addenda or performance claim is made.
+
 ## Status Taxonomy
 
 | Status | Meaning |

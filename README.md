@@ -162,6 +162,14 @@ environment variables; it does not generate or persist them. See the
 > ReadProperty and same-identity replacement paths, not full Annex AB conformance
 > or your deployment's credentials and lifetime storage.
 
+**Peer compatibility change:** after TLS/WebSocket establishment, the receiving
+hub rejects an all-zero Device UUID in Connect-Request before registration or
+replacement, using `COMMUNICATION/PARAMETER_OUT_OF_RANGE` (7/80), not a
+duplicate-VMAC error. Legacy raw senders must provision a nonzero identity.
+Nonzero UUID bits remain opaque; generic encoding/manual raw sending still work.
+Connect-Accept with a zero UUID is unchanged pending a separate response-policy
+decision. See the [receive boundary and evidence](docs/conformance/standard-135-2020-ledger.md#received-peer-uuid-admission).
+
 ```python
 import asyncio
 import os

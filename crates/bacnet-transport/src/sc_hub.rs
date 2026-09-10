@@ -369,6 +369,8 @@ mod heartbeat_test_support;
 mod heartbeat_tests;
 #[cfg(test)]
 mod heartbeat_validation_tests;
+#[cfg(test)]
+mod peer_uuid_tests;
 
 #[cfg(test)]
 mod ws_limits_tests;

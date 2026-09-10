@@ -134,6 +134,42 @@ pub(crate) fn invalid_connects(function: u8, local: [u8; 6]) -> Vec<InvalidConne
             invalid.nak = None;
         }
     }
+    if function == 6 {
+        cases.extend(zero_uuid_requests());
+    }
+    cases
+}
+
+pub(crate) fn zero_uuid_requests() -> Vec<InvalidConnect> {
+    let mut wire = valid_connect(6, [0x22; 6]);
+    wire[10..26].fill(0);
+    let payload = &wire[4..];
+    let mut cases = vec![
+        case("zero UUID", 0, &[], payload, None, 0, 80),
+        case("zero UUID precedes MU", 2, &[0x5e], payload, None, 0, 80),
+        case(
+            "zero UUID uses envelope source",
+            8,
+            &[0x44; 6],
+            payload,
+            Some([0x44; 6]),
+            0,
+            80,
+        ),
+    ];
+    for (control, fields) in [(4, [0xff; 6]), (8, [0; 6]), (8, [0xff; 6])] {
+        let mut suppressed = case(
+            "zero UUID suppressed reply",
+            control,
+            &fields,
+            payload,
+            None,
+            0,
+            80,
+        );
+        suppressed.nak = None;
+        cases.push(suppressed);
+    }
     cases
 }
 

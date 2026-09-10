@@ -432,6 +432,48 @@ fn public_claim_guard_rejects_missing_ledger_row() {
 }
 
 #[test]
+fn sc_peer_uuid_evidence_is_request_only_without_status_promotion() {
+    let data = ledger();
+    let rows = rows_by_id(&data);
+    let row = rows["BACNET-AB-SC-CONNECTION-STATE"];
+    assert_eq!(
+        row["status"],
+        "implementation-present-needs-state-machine-audit"
+    );
+    for anchor in [
+        "crates/bacnet-transport/src/sc_hub/peer_uuid_tests.rs::zero_uuid_mtls_request_never_reaches_admission",
+        "crates/bacnet-transport/src/sc_hub/peer_uuid_tests.rs::zero_uuid_mtls_collision_at_capacity_preserves_live_peers",
+        "crates/bacnet-transport/src/sc_hub/peer_uuid_tests.rs::zero_uuid_mtls_repeat_flood_preserves_activity_probe_and_registration",
+        "crates/rusty-bacnet/tests/test_sc_peer_uuid.py::PeerUuidTests::test_nil_request_nak_close_repeat_and_surviving_native_read",
+    ] {
+        assert!(row["negative_tests"].as_array().unwrap().iter().any(|test| test == anchor));
+    }
+    assert!(row["positive_tests"].as_array().unwrap().iter().any(|test| test ==
+        "crates/bacnet-transport/src/sc/connect_validation_tests.rs::connect_accept_zero_uuid_remains_valid"));
+    for phrase in [
+        "Local security policy",
+        "Nonzero bits remain opaque",
+        "#517 remains open",
+        "Connect-Accept with a zero UUID is unchanged",
+        "separate response-policy",
+        "manual raw sending still permit nil syntax",
+        "not a pre-dial check",
+    ] {
+        assert!(
+            STANDARD_LEDGER.contains(phrase),
+            "missing boundary: {phrase}"
+        );
+    }
+    assert_eq!(rows.len(), 68);
+    assert_eq!(
+        rows.values()
+            .filter(|row| row["status"] == "supported-with-clause-evidence")
+            .count(),
+        19
+    );
+}
+
+#[test]
 fn public_claim_guard_rejects_unknown_status_for_public_claim() {
     let data = json!({
         "rows": [{

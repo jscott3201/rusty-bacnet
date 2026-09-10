@@ -68,6 +68,43 @@ fn connect_accept_reserved_identity_is_transactional() {
 }
 
 #[tokio::test]
+async fn connect_accept_zero_uuid_remains_valid() {
+    let (ws, peer) = LoopbackWebSocket::pair();
+    let conn = Arc::new(Mutex::new(sentinel_connection()));
+    let task = tokio::spawn({
+        let conn = conn.clone();
+        async move { perform_handshake(&ws, &conn, None, 5000).await }
+    });
+    let request = decode_sc_message(&peer.recv().await.unwrap()).unwrap();
+    let mut accept = valid_connect(7, [0x22; 6]);
+    accept[2..4].copy_from_slice(&request.message_id.to_be_bytes());
+    accept[10..26].fill(0);
+    peer.send(&accept).await.unwrap();
+    task.await.unwrap().unwrap();
+    let conn = conn.lock().await;
+    assert_eq!(conn.state, ScConnectionState::Connected);
+    assert_eq!(conn.hub_device_uuid, Some([0; 16]));
+    assert_eq!(
+        (conn.hub_max_bvlc_length, conn.hub_max_apdu_length),
+        (8192, 4096)
+    );
+}
+
+#[test]
+fn zero_uuid_range_nak_does_not_reseed_vmac() {
+    let mut conn = sentinel_connection();
+    let id = conn.build_connect_request().message_id;
+    let before = conn.local_vmac;
+    let mut wire = vec![0, 0, 0, 0, 6, 1, 0, 0, 7, 0, 80];
+    wire[2..4].copy_from_slice(&id.to_be_bytes());
+    let result =
+        crate::sc_frame::decode_sc_bvlc_result(&decode_sc_message(&wire).unwrap()).unwrap();
+    assert!(!conn.handle_connect_result(id, &result).unwrap());
+    assert_eq!(conn.local_vmac, before);
+    assert_eq!(conn.state, ScConnectionState::Disconnected);
+}
+
+#[tokio::test]
 async fn connect_accept_reserved_identity_is_silently_discarded() {
     let (inner, peer) = LoopbackWebSocket::pair();
     let (receiving, mut received) = mpsc::unbounded_channel();

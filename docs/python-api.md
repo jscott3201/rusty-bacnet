@@ -1788,9 +1788,21 @@ configured UUID and nonreserved local VMAC at start, before transport-owned I/O;
 it cannot undo a caller's prior WebSocket dial. Python signatures and earlier
 constructor preflights are unchanged. The raw guard is startup-only, not protection
 against later application mutation through Rust's public `connection()`; see the
-[Rust startup/retry limits](rust-api.md#bacnetsc-client-transport). Wire admission
-is unchanged. #517 remains open; these local API checks are not certificate-to-UUID
+[Rust startup/retry limits](rust-api.md#bacnetsc-client-transport).
+#517 remains open; these local API checks are not certificate-to-UUID
 binding, full identity-profile validation, or full Annex AB conformance.
+
+**Receiving hub compatibility break:** legacy raw peers sending an all-zero UUID
+in Connect-Request are now rejected after TLS/WebSocket establishment, before
+registration, activity refresh or replacement. Eligible NAKs use
+`COMMUNICATION/PARAMETER_OUT_OF_RANGE` (7/80), not Duplicate-VMAC, with the existing
+reply-addressing/suppression rules. New malformed peers close; malformed repeats
+leave the registered peer's limits and heartbeat/activity state intact. Python
+constructors are unchanged by this receive check. Nonzero UUID bits remain opaque;
+generic Rust codecs and manual raw WebSocket sending still permit nil syntax.
+Connect-Accept with a zero UUID is unchanged pending a separate response-policy
+decision. This is local policy, not UUID-profile or lifetime-storage validation.
+See the [scoped evidence](conformance/standard-135-2020-ledger.md#received-peer-uuid-admission).
 
 #### Required operational credentials
 

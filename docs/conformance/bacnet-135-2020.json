@@ -1954,6 +1954,7 @@
    "code_anchors": [
     "crates/bacnet-transport/src/sc/mod.rs",
     "crates/bacnet-transport/src/sc/connect_result.rs",
+    "crates/bacnet-transport/src/sc_frame/connect.rs",
     "crates/bacnet-transport/src/sc/failover.rs",
     "crates/bacnet-transport/src/sc/handshake.rs",
     "crates/bacnet-transport/src/sc/random48.rs",
@@ -1984,6 +1985,8 @@
    ],
    "positive_tests": [
     "crates/bacnet-types/src/enums/tests.rs::bacnet_sc_error_code_values",
+    "crates/bacnet-transport/src/sc_frame/connect.rs::tests::nonzero_uuid_bits_remain_opaque",
+    "crates/bacnet-transport/src/sc/connect_validation_tests.rs::connect_accept_zero_uuid_remains_valid",
     "crates/bacnet-transport/src/sc/tests.rs::connect_accept_validates_message_id",
     "crates/bacnet-transport/src/sc/tests.rs::connect_accept_parses_device_uuid",
     "crates/bacnet-transport/src/sc/tests.rs::connect_accept_with_payload_sets_hub_max_bvlc_and_apdu",
@@ -2011,6 +2014,13 @@
    ],
    "negative_tests": [
     "crates/bacnet-transport/src/sc/tests.rs::connect_accept_rejects_wrong_message_id",
+    "crates/bacnet-transport/src/sc_frame/connect.rs::tests::zero_uuid_rejection_is_request_only_not_codec_policy",
+    "crates/bacnet-transport/src/sc_frame/connect.rs::tests::zero_uuid_precedence_keeps_accept_mu_error_and_request_range_error",
+    "crates/bacnet-transport/src/sc/connect_validation_tests.rs::zero_uuid_range_nak_does_not_reseed_vmac",
+    "crates/bacnet-transport/src/sc_hub/peer_uuid_tests.rs::zero_uuid_mtls_request_never_reaches_admission",
+    "crates/bacnet-transport/src/sc_hub/peer_uuid_tests.rs::zero_uuid_mtls_collision_at_capacity_preserves_live_peers",
+    "crates/bacnet-transport/src/sc_hub/peer_uuid_tests.rs::zero_uuid_mtls_repeat_flood_preserves_activity_probe_and_registration",
+    "crates/rusty-bacnet/tests/test_sc_peer_uuid.py::PeerUuidTests::test_nil_request_nak_close_repeat_and_surviving_native_read",
     "crates/bacnet-transport/src/sc/tests.rs::connect_accept_rejects_short_payload",
     "crates/bacnet-transport/src/sc/transport_lifecycle_tests.rs::sc_connect_rejects_mismatched_accept_message_id",
     "crates/bacnet-transport/src/sc/transport_lifecycle_tests.rs::sc_connect_decode_error_clears_pending_request",
@@ -2044,6 +2054,7 @@
     "crates/bacnet-transport/src/sc_hub/deadline_commit_tests.rs::connect_deadline_releases_held_registry_without_evicting_uuid_owner",
     "crates/bacnet-transport/src/sc_hub/deadline_commit_tests.rs::connect_deadline_exact_expiry_beats_ready_registry_and_request",
     "crates/bacnet-transport/src/sc_hub/deadline_commit_tests.rs::connect_deadline_bounds_preregistration_output_and_close_lock_waits",
+    "crates/bacnet-transport/src/sc_hub/deadline_commit_tests.rs::zero_uuid_flood_cannot_extend_blocked_nak_connect_deadline",
     "crates/bacnet-transport/src/sc_hub/deadline_commit_tests.rs::connect_deadline_ignores_nonqualifying_traffic_without_restart_or_starvation",
     "crates/bacnet-transport/src/sc_hub/deadline_capacity_tests.rs::hub_admission_abort_before_first_poll_reclaims_slot",
     "crates/bacnet-transport/src/sc_hub/deadline_capacity_tests.rs::hub_admission_abort_during_tls_reclaims_slot",

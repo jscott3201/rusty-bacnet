@@ -1371,9 +1371,22 @@ server and `95dfe4ef-97f6-490d-9a2c-f2b4b0c0e682` for a client. Do not deploy th
 shared demo identities; supply your own provisioned arrays. The hub also requires
 its hosting device's lifetime UUID: see [hub identity migration](#bacnetsc-hub).
 Raw `ScTransport` now has the [startup guard](#bacnetsc-client-transport) above;
-wire admission and remote-peer VMAC rules remain unchanged. This does not move
+remote-peer VMAC rules remain unchanged. This does not move
 higher-level builder checks or promise that every local VMAC is rejected before
 dialing. #517 remains open for residual identity work; no PICS/profile promotion.
+
+**Receiving hub compatibility break:** a received Connect-Request with an all-zero
+Device UUID now fails after TLS/WebSocket establishment and before admission,
+activity refresh or replacement. The existing eligible NAK is
+`COMMUNICATION/PARAMETER_OUT_OF_RANGE` (7/80), marker zero, not Duplicate-VMAC;
+reply addressing uses the envelope source and existing broadcast/reserved-source
+suppression. New malformed peers close; malformed repeats retain registration,
+negotiated limits and heartbeat/activity state. Legacy raw peers must supply a
+nonzero UUID. This local policy treats nonzero bits as opaque, including sparse
+or non-RFC-shaped values; generic encoding/decoding and manual raw sending still
+permit nil syntax. Connect-Accept with a zero UUID is unchanged pending a separate
+response-policy decision. No UUID version/variant, generation, storage or
+certificate-binding policy is added. See the [scoped evidence](conformance/standard-135-2020-ledger.md#received-peer-uuid-admission).
 
 ```rust
 use bacnet_client::client::BACnetClient;

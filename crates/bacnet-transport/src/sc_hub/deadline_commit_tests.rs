@@ -119,6 +119,7 @@ async fn connect_deadline_bounds_preregistration_output_and_close_lock_waits() {
     for message in [
         Message::Binary(vec![0x0A, 0, 0, 1].into()),
         Message::Binary(vec![6, 0, 0, 1].into()),
+        request([0x42; 6], [0; 16]),
         Message::Text("invalid text".into()),
     ] {
         let clients = clients();
@@ -178,4 +179,33 @@ async fn connect_deadline_ignores_nonqualifying_traffic_without_restart_or_starv
     poll_io(&mut peer.task).await.unwrap();
     assert!(matches!(peer.next().await, Message::Close(_)));
     assert!(clients.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn zero_uuid_flood_cannot_extend_blocked_nak_connect_deadline() {
+    let clients = clients();
+    let mut peer = DeadlinePeer::new(clients.clone(), Duration::from_secs(1)).await;
+    let held = peer.sink.clone().lock_owned().await;
+    tokio::time::pause();
+    let expires = peer.deadline.expires();
+    for _ in 0..9 {
+        peer.ws.send(request([0x42; 6], [0; 16])).await.unwrap();
+        until(|| peer.deadline.received.load(Ordering::Acquire) != 0).await;
+        tokio::time::advance(Duration::from_millis(100)).await;
+        assert!(!peer.deadline.admission_started.load(Ordering::Acquire));
+        assert!(!peer.deadline.is_committed());
+        assert_eq!(peer.deadline.expires(), expires);
+        assert!(clients.lock().await.is_empty());
+    }
+    tokio::time::advance(Duration::from_millis(102)).await;
+    until(|| peer.deadline.close_started.load(Ordering::Acquire)).await;
+    // The one existing Close grace includes the held sink, not another connect budget.
+    tokio::time::advance(Duration::from_millis(1002)).await;
+    poll_io(&mut peer.task).await.unwrap();
+    assert_eq!(peer.active.load(Ordering::Acquire), 0);
+    assert_eq!(peer.deadline.received.load(Ordering::Acquire), 1);
+    assert!(!peer.deadline.is_committed());
+    assert!(clients.lock().await.is_empty());
+    drop(held);
+    tokio::time::resume();
 }
