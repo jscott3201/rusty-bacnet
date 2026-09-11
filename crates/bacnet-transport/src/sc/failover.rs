@@ -23,7 +23,7 @@ pub(super) enum ActiveHub {
 }
 
 pub(super) async fn attempt_primary_restore<W: WebSocketPort>(
-    primary_ws: &Arc<W>,
+    primary_ws: Option<&Arc<W>>,
     primary_connector: Option<&WebSocketConnector<W>>,
     current_ws: &Arc<W>,
     active_ws: &Arc<Mutex<Arc<W>>>,
@@ -35,8 +35,12 @@ pub(super) async fn attempt_primary_restore<W: WebSocketPort>(
 ) -> Result<Arc<W>, Error> {
     let restored_ws = if let Some(connector) = primary_connector {
         Arc::new(dial_connector(connector, connect_timeout_ms).await?)
-    } else {
+    } else if let Some(primary_ws) = primary_ws {
         primary_ws.clone()
+    } else {
+        return Err(Error::Encoding(
+            "SC retired primary requires a fresh connector".into(),
+        ));
     };
     let probe_conn = Arc::new(Mutex::new(primary_probe_connection(conn).await));
     if let Err(e) = perform_handshake(&*restored_ws, &probe_conn, None, connect_timeout_ms).await {

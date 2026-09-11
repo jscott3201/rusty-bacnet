@@ -36,6 +36,8 @@ impl<W: WebSocketPort> ScTransport<W> {
         let mut dest_vmac = [0u8; 6];
         dest_vmac.copy_from_slice(mac);
 
+        // Admission is atomic with socket publication. An admitted send owns
+        // its Arc and may complete after retirement; it is not rolled back.
         let (ws, hub_max_bvlc_length, msg) = {
             let ws = ws_shared.lock().await;
             let mut c = conn.lock().await;

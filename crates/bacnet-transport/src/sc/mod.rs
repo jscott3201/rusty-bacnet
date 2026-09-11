@@ -18,10 +18,7 @@ use tracing::{debug, info, warn};
 use crate::port::{DataAttribute, ReceivedNpdu, TransportPort};
 #[cfg(test)]
 use crate::sc_frame::{decode_sc_bvlc_result, ScMessage};
-use crate::sc_frame::{
-    decode_sc_message, encode_sc_message, first_must_understand_destination_option_marker,
-    ScFunction, Vmac, BROADCAST_VMAC,
-};
+use crate::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, Vmac, BROADCAST_VMAC};
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 
@@ -37,10 +34,12 @@ mod heartbeat;
 mod loopback;
 mod random48;
 mod reconnect;
+mod recovery;
+mod rejection;
 mod send;
 mod source_admission;
 pub use connection::{ScConnection, ScConnectionState};
-use connector::{dial_failover_ws, dial_reconnect_ws, WebSocketConnector};
+use connector::{dial_failover_ws, WebSocketConnector};
 pub use errors::{ScConnectError, ScWebSocketErrorKind};
 use failover::{attempt_primary_restore, ActiveHub};
 use handshake::perform_handshake;
@@ -74,6 +73,15 @@ pub trait WebSocketPort: Send + Sync + 'static {
 // ---------------------------------------------------------------------------
 
 /// BACnet/SC transport implementing [`TransportPort`].
+///
+/// Node control/source/Must-Understand rejection NAKs use the remaining accepted-
+/// activity heartbeat budget. On expiry the send future is dropped and the socket
+/// is retired from transport-initiated I/O, including reconnect/primary restore.
+/// This local policy is not a deadline for other writes or a hard real-time bound:
+/// it requires a cooperative, timer-enabled runtime and available state locks.
+/// Buffered bytes and application sends admitted before disconnection are not
+/// rolled back. References (including the send slot until stop/drop or fresh
+/// publication) may retain the socket; retirement is not immediate OS closure.
 pub struct ScTransport<W: WebSocketPort> {
     ws: Option<W>,
     ws_shared: Option<Arc<Mutex<Arc<W>>>>, // current active WebSocket for send methods
@@ -187,7 +195,10 @@ impl<W: WebSocketPort> ScTransport<W> {
     /// When the BACnet/SC connection drops, the transport will attempt to reconnect
     /// using exponential backoff as configured. Configure [`Self::with_connector`]
     /// for true transport-level recovery from a dead WebSocket/TCP/TLS connection;
-    /// otherwise reconnect attempts can only reuse the current WebSocket object.
+    /// otherwise reconnect attempts can only reuse the current WebSocket object,
+    /// except after a rejection NAK exhausts its heartbeat budget. That socket
+    /// cannot be reused: recovery needs a fresh connector or unused failover
+    /// socket under the existing retry policy, or remains disconnected.
     /// The local VMAC is preserved across reconnections.
     ///
     /// [`TransportPort::start`] validates this configuration before any transport
@@ -396,7 +407,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
             .map(|cfg| cfg.initial_delay_ms.max(1))
             .unwrap_or(heartbeat_interval_ms.max(1));
 
-        let primary_ws = primary_ws.clone();
+        let mut primary_ws = Some(primary_ws.clone());
         let mut ws_clone = ws.clone();
         let mut active_hub = active_hub;
         let effective_max_apdu_length = self.effective_max_apdu_length.clone();
@@ -406,6 +417,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
             primary_restore_interval.tick().await;
 
             'transport: loop {
+                let mut current_reusable = true;
                 let mut hb_interval =
                     tokio::time::interval(Duration::from_millis(heartbeat_interval_ms));
                 hb_interval.tick().await; // consume the first immediate tick
@@ -437,8 +449,18 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                         }
                                     };
 
-                                    if control_admission::reject_invalid_control(&msg, &data, &*ws_clone).await {
-                                        continue;
+                                    match rejection::reject(
+                                        &msg, &data, &*ws_clone,
+                                        rejection::RejectionBudget::new(last_bvlc_received, heartbeat_timeout_ms),
+                                    ).await {
+                                        Ok(true) => continue,
+                                        Ok(false) => {},
+                                        Err(rejection::RejectionExpired) => {
+                                            warn!("BACnet/SC rejection NAK exhausted heartbeat budget — retiring socket");
+                                            current_reusable = false;
+                                            recovery::retire(&ws_clone, &mut primary_ws, &conn, &state_tx, &restore_disconnect_task).await;
+                                            break;
+                                        }
                                     }
 
                                     if msg.function == ScFunction::HeartbeatAck {
@@ -448,20 +470,6 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                         } else {
                                             warn!("BACnet/SC ignored unexpected Heartbeat-ACK");
                                         }
-                                        continue;
-                                    }
-
-                                    if source_admission::reject_invalid_npdu_source(&msg, &*ws_clone).await {
-                                        continue;
-                                    }
-
-                                    if data_attributes::reject_unsupported_must_understand_destination_option(
-                                        &msg,
-                                        first_must_understand_destination_option_marker(&data),
-                                        &*ws_clone,
-                                    )
-                                    .await
-                                    {
                                         continue;
                                     }
 
@@ -548,7 +556,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                 continue;
                             }
                             match attempt_primary_restore(
-                                &primary_ws,
+                                primary_ws.as_ref(),
                                 primary_connector.as_ref(),
                                 &ws_clone,
                                 &active_ws,
@@ -610,130 +618,26 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                     None => break 'transport,
                 };
 
-                warn!("SC transport disconnected, attempting reconnection");
-                let mut backoff = Duration::from_millis(config.initial_delay_ms);
-                let max_backoff = Duration::from_millis(config.max_delay_ms);
-
-                let mut reconnected = false;
-                for attempt in 1..=config.max_retries {
-                    tokio::time::sleep(backoff).await;
-
-                    if !conn.lock().await.connect_retry_allowed {
-                        warn!(attempt, "SC reconnection skipped without retry eligibility");
-                        break;
-                    }
-
-                    // Reset connection state, preserving VMAC and UUID
-                    {
-                        let mut c = conn.lock().await;
-                        c.reset_for_connect_retry();
-                        state_tx.send_replace(c.state);
-                    }
-
-                    let reconnect_ws = match dial_reconnect_ws(
-                        active_hub,
-                        &primary_connector,
-                        &failover_connector,
-                        connect_timeout_ms,
-                    )
+                let mut recovery = recovery::Recovery {
+                    config,
+                    primary_connector: &primary_connector,
+                    failover_connector: &failover_connector,
+                    failover_ws: &mut failover_ws,
+                    conn: &conn,
+                    active_ws: &active_ws,
+                    state_tx: &state_tx,
+                    connect_timeout_ms,
+                    effective_max_apdu_length: &effective_max_apdu_length,
+                };
+                match recovery
+                    .reconnect(&ws_clone, active_hub, current_reusable)
                     .await
-                    {
-                        Ok(Some(ws)) => ws,
-                        Ok(None) => ws_clone.clone(),
-                        Err(e) => {
-                            warn!(%e, attempt, "SC reconnection redial failed");
-                            backoff = (backoff * 2).min(max_backoff);
-                            continue;
-                        }
-                    };
-
-                    let probe_conn = connect_probe_from(&conn).await;
-                    match perform_handshake(&*reconnect_ws, &probe_conn, None, connect_timeout_ms)
-                        .await
-                    {
-                        Ok(()) => {
-                            publish_connected_ws(
-                                &conn,
-                                &active_ws,
-                                &reconnect_ws,
-                                &probe_conn,
-                                &state_tx,
-                                &effective_max_apdu_length,
-                            )
-                            .await;
-                            ws_clone = reconnect_ws;
-                            info!(attempt, "SC reconnected after backoff");
-                            reconnected = true;
-                            break;
-                        }
-                        Err(e) => {
-                            absorb_failed_connect_probe(&conn, &probe_conn).await;
-                            if !conn.lock().await.connect_retry_allowed {
-                                warn!(
-                                    %e,
-                                    attempt,
-                                    "SC reconnection failed without retry eligibility"
-                                );
-                                break;
-                            }
-                            warn!(%e, attempt, "SC reconnection failed, retrying in {:?}", backoff);
-                            backoff = (backoff * 2).min(max_backoff);
-                        }
-                    }
-                }
-
-                if !reconnected
-                    && active_hub == ActiveHub::Primary
-                    && conn.lock().await.connect_retry_allowed
                 {
-                    if let Some(failover) =
-                        dial_failover_ws(&failover_connector, &mut failover_ws, connect_timeout_ms)
-                            .await
-                    {
-                        warn!("SC primary reconnection exhausted, attempting failover hub");
-
-                        {
-                            let mut c = conn.lock().await;
-                            c.reset_for_connect_retry();
-                            state_tx.send_replace(c.state);
-                        }
-
-                        let probe_conn = connect_probe_from(&conn).await;
-                        match perform_handshake(&*failover, &probe_conn, None, connect_timeout_ms)
-                            .await
-                        {
-                            Ok(()) => {
-                                publish_connected_ws(
-                                    &conn,
-                                    &active_ws,
-                                    &failover,
-                                    &probe_conn,
-                                    &state_tx,
-                                    &effective_max_apdu_length,
-                                )
-                                .await;
-                                ws_clone = failover;
-                                active_hub = ActiveHub::Failover;
-                                info!("SC connected to failover hub after primary reconnect exhaustion");
-                                reconnected = true;
-                            }
-                            Err(e) => {
-                                absorb_failed_connect_probe(&conn, &probe_conn).await;
-                                warn!(%e, "SC failover connection failed");
-                            }
-                        }
+                    Some((ws, hub)) => {
+                        ws_clone = ws;
+                        active_hub = hub;
                     }
-                }
-
-                if !reconnected {
-                    warn!(
-                        max_retries = config.max_retries,
-                        "SC reconnection: max retries exhausted, giving up"
-                    );
-                    let mut c = conn.lock().await;
-                    c.state = ScConnectionState::Disconnected;
-                    state_tx.send_replace(c.state);
-                    break 'transport;
+                    None => break 'transport,
                 }
             }
         });
@@ -865,6 +769,9 @@ mod primary_restore_tests;
 
 #[cfg(test)]
 mod redial_tests;
+
+#[cfg(test)]
+mod rejection_deadline_tests;
 
 #[cfg(test)]
 mod reconnect_validation_tests;

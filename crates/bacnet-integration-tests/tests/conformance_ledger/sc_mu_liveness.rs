@@ -1,4 +1,4 @@
-//! MU ordering is bounded local evidence, not a broader status promotion.
+//! Node rejection evidence remains bounded local policy, not a status promotion.
 use super::*;
 
 #[test]
@@ -79,5 +79,93 @@ fn mu_liveness_evidence_preserves_scope_and_blocked_write_limitation() {
         assert!(normalized.contains(phrase), "{phrase}");
     }
     assert!(read_repo_file("CHANGELOG.md").contains("#mu-rejection-liveness-accounting"));
+    assert_eq!(sc_identity_closeout().matches("\n| A").count(), 6);
+}
+
+#[test]
+fn rejection_nak_budget_evidence_preserves_freshness_and_cancellation_limits() {
+    let data = ledger();
+    let rows = rows_by_id(&data);
+    let row = rows["BACNET-AB-SC-CONNECTION-STATE"];
+    let policy = row["rejection_nak_budget"].as_str().unwrap();
+    for phrase in [
+        "owner-approved local policy",
+        "remaining accepted-activity heartbeat budget",
+        "Silent/nonrejection",
+        "immediate errors",
+        "Fresh-only recovery",
+        "unused failover",
+        "caller contract",
+        "already-admitted application sends",
+        "not rolled back",
+        "not immediate OS closure",
+        "not OS backpressure",
+        "available state locks",
+        "Other write paths",
+        "open/partial",
+        "No full Annex AB claim",
+    ] {
+        assert!(policy.contains(phrase), "{phrase}");
+    }
+    let mut anchors = 0;
+    for field in ["positive_tests", "negative_tests"] {
+        for anchor in row[field].as_array().unwrap() {
+            let anchor = anchor.as_str().unwrap();
+            if !anchor.contains("rejection_deadline") {
+                continue;
+            }
+            let parts: Vec<_> = anchor.split("::").collect();
+            let source = read_repo_file(parts[0]);
+            let name = parts.last().unwrap();
+            assert!(
+                source.contains(&format!("fn {name}(")) || source.contains(&format!("def {name}(")),
+                "{anchor}"
+            );
+            anchors += 1;
+        }
+    }
+    assert_eq!(anchors, 17);
+    for path in [
+        "crates/bacnet-transport/src/sc/rejection.rs",
+        "crates/bacnet-transport/src/sc/recovery.rs",
+        "crates/bacnet-transport/src/sc_tls/rejection_deadline_tests.rs",
+    ] {
+        assert!(row["code_anchors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|anchor| anchor == path));
+    }
+    let section = STANDARD_LEDGER
+        .split_once("## Rejection NAK budget and fresh-only recovery\n")
+        .unwrap()
+        .1
+        .split("\n## ")
+        .next()
+        .unwrap();
+    let normalized = section.split_whitespace().collect::<Vec<_>>().join(" ");
+    for phrase in [
+        "Base Standard 135-2020",
+        "AB.3.1.4/.5",
+        "AB.6.1/.2",
+        "AB.6.3",
+        "remaining-parts",
+        "existing receive-drop",
+        "three blocked-NAK gaps",
+        "not immediate OS closure",
+        "not OS backpressure",
+        "not a hard real-time",
+        "60-second expiry",
+        "0.3.33",
+        "0.29.0",
+        "1.53.1",
+        "#519 remains open/partial",
+    ] {
+        // Remove emphasis solely for comparing words across Markdown markup.
+        assert!(normalized.replace("**", "").contains(phrase), "{phrase}");
+    }
+    assert!(
+        read_repo_file("CHANGELOG.md").contains("#rejection-nak-budget-and-fresh-only-recovery")
+    );
     assert_eq!(sc_identity_closeout().matches("\n| A").count(), 6);
 }

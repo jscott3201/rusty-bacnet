@@ -6,6 +6,7 @@ use tracing::warn;
 
 use crate::sc_frame::{encode_sc_message, ScFunction, ScMessage, Vmac, BROADCAST_VMAC};
 
+use super::rejection::{RejectionBudget, RejectionExpired};
 use super::{data_attributes::build_bvlc_result_nak, WebSocketPort};
 
 pub(super) fn hub_source(msg: &ScMessage) -> Option<Vmac> {
@@ -13,9 +14,13 @@ pub(super) fn hub_source(msg: &ScMessage) -> Option<Vmac> {
         .filter(|source| *source != [0; 6] && *source != BROADCAST_VMAC)
 }
 
-pub(super) async fn reject_invalid_npdu_source<W: WebSocketPort>(msg: &ScMessage, ws: &W) -> bool {
+pub(super) async fn reject_invalid_npdu_source<W: WebSocketPort>(
+    msg: &ScMessage,
+    ws: &W,
+    budget: RejectionBudget,
+) -> Result<bool, RejectionExpired> {
     if msg.function != ScFunction::EncapsulatedNpdu || hub_source(msg).is_some() {
-        return false;
+        return Ok(false);
     }
 
     // A hub-relayed NPDU carries the originating node's VMAC (AB.5.3.2–3).
@@ -34,10 +39,10 @@ pub(super) async fn reject_invalid_npdu_source<W: WebSocketPort>(msg: &ScMessage
         );
         let mut buf = BytesMut::new();
         encode_sc_message(&mut buf, &nak);
-        if let Err(e) = ws.send(&buf).await {
+        if let Err(e) = budget.send(ws, &buf).await? {
             warn!("BACnet/SC source admission NAK send error: {}", e);
         }
     }
 
-    true
+    Ok(true)
 }

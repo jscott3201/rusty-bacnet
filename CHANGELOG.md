@@ -9,12 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **SC rejection-NAK budget and fresh-only recovery (Refs #519):** node control,
+  source and unsupported-MU rejection NAKs now use the remaining accepted-activity
+  heartbeat budget, without a new timeout setting. Expiry drops the send future,
+  publishes Disconnected and retires that socket from further transport I/O,
+  including reconnect/primary restore. Recovery requires a fresh connector or
+  unused failover under the existing retry policy; no fresh option means staying
+  disconnected. Immediate send errors, wire bytes/silence and other write paths
+  are unchanged. Cancellation cannot roll back buffered bytes or already-admitted
+  application sends, and retirement is not immediate physical closure.
+  [Scoped evidence and runtime limitations](docs/conformance/standard-135-2020-ledger.md#rejection-nak-budget-and-fresh-only-recovery)
+  do not claim OS backpressure, hard real-time or full Annex AB conformance. #519 stays open/partial.
+
 - **SC MU-rejection liveness ordering (Refs #519):** unsupported Must Understand
   Destination Options on received NPDUs no longer refresh node activity or clear
   a pending heartbeat. Existing unicast NAKs, broadcast silence and Data Options
   behavior remain. This is [local admission policy](docs/conformance/standard-135-2020-ledger.md#mu-rejection-liveness-accounting),
-  not universal invalid-frame accounting. Timer progress still depends on receive
-  loop progress; blocked NAK writes/backpressure remain a follow-up. #519 stays open.
+  not universal invalid-frame accounting. At that slice, timer progress depended
+  on receive loop progress; the rejection-NAK budget supplement above now addresses
+  only those three NAK paths, not general write backpressure. #519 stays open.
 
 - **Accepting SC hub unsolicited-response silence (Refs #519):** discard
   Connect-Accept and Disconnect-ACK before activity or state changes, without

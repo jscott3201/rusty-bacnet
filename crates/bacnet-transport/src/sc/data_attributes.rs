@@ -5,6 +5,7 @@ use bacnet_types::error::Error;
 use bytes::{Bytes, BytesMut};
 use tracing::warn;
 
+use super::rejection::{RejectionBudget, RejectionExpired};
 use super::WebSocketPort;
 
 const MAX_SC_DATA_ATTRIBUTES: usize = 64;
@@ -35,9 +36,10 @@ pub(super) async fn reject_unsupported_must_understand_destination_option<W: Web
     msg: &ScMessage,
     error_header_marker: Option<u8>,
     ws: &W,
-) -> bool {
+    budget: RejectionBudget,
+) -> Result<bool, RejectionExpired> {
     let Some(option) = unsupported_must_understand_destination_option(msg) else {
-        return false;
+        return Ok(false);
     };
 
     let Some(marker) = error_header_marker else {
@@ -45,7 +47,7 @@ pub(super) async fn reject_unsupported_must_understand_destination_option<W: Web
             option_type = option.option_type,
             "BACnet/SC failed to recover unsupported Destination Option marker"
         );
-        return true;
+        return Ok(true);
     };
     warn!(
         option_type = option.option_type,
@@ -63,12 +65,12 @@ pub(super) async fn reject_unsupported_must_understand_destination_option<W: Web
         );
         let mut nak_buf = BytesMut::new();
         encode_sc_message(&mut nak_buf, &nak);
-        if let Err(e) = ws.send(&nak_buf).await {
+        if let Err(e) = budget.send(ws, &nak_buf).await? {
             warn!("BACnet/SC destination option NAK send error: {}", e);
         }
     }
 
-    true
+    Ok(true)
 }
 
 pub(super) fn build_bvlc_result_nak(

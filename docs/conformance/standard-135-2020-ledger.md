@@ -13,6 +13,72 @@
 - Addenda/errata status: No external addenda/errata check was performed. The local Standard 135-2020 source contract was reviewed for Clause 12.52 and Table 12-61, Clause 21 `BACnetNotifyType`, and Clause 15.7 RPM selector exclusions.
 - PR-0808 evidence row: `BACNET-12-ALERT-ENROLLMENT-TABLE-12-61` is `supported-with-clause-evidence` for the served object model only; it is not an Alert evaluator or notification-generation claim.
 
+## Rejection NAK budget and fresh-only recovery
+
+Current-dev scoped supplement to `BACNET-AB-SC-CONNECTION-STATE` (Refs #519).
+#519 remains open/partial. All 68 rows, 19 supported rows, statuses, global
+provenance, historical tranches and closed #513/#517 acceptance remain unchanged.
+This supersedes only the three blocked-NAK gaps in the MU slice below.
+
+- **Base Standard 135-2020:** AB.3.1.4/.5 (PDF 1395–1396 / printed 1393–1394)
+  provide the existing NAK context; response IDs/addressing and raw option markers
+  are unchanged. AB.6.1/.2 (PDF 1403–1405 / printed 1401–1403) describe reconnect
+  and failure/IDLE transitions. AB.6.3 (PDF 1407 / printed 1405) does **not**
+  prescribe this write budget or retirement policy. AB.3.1.4's remaining-parts
+  qualification and the existing receive-drop policy remain; no new whole-message
+  or full Annex AB conformance claim is made.
+- **Owner-approved local policy:** [rejection budget](../../crates/bacnet-transport/src/sc/rejection.rs)
+  bounds only actual control/source/unsupported-MU NAK sends by the original
+  accepted-activity heartbeat budget. Late/repeated rejected frames do not reset
+  it; elapsed budgets have no positive floor and cannot poll a send as fresh.
+  Checks before/after polling prevent accepting completion after the cutoff.
+  Large valid `u64` settings avoid new Instant-addition overflow by chunking timer
+  registration, not resetting the budget. Silent/nonrejection decisions never
+  acquire a deadline or fabricate an expiry. Immediate send errors retain their
+  existing log/discard behavior; rejected NPDUs do not refresh activity, clear a
+  pending probe or dispatch.
+- **Ownership/compatibility:** [retirement/recovery](../../crates/bacnet-transport/src/sc/recovery.rs)
+  publishes Disconnected before recovery, drops the NAK future, and prevents
+  further transport-initiated receive/write/handshake/stop/restore-disconnect on
+  that socket. The retained initial primary is removed only if it is the retired
+  socket; no unbounded poisoned-Arc history is kept. Existing connector factories
+  must supply fresh connections (a caller contract, not introspection of hidden
+  shared driver internals). Without a factory, the retired socket is **not reused**.
+  An unused preconfigured failover remains eligible. Existing retry eligibility,
+  limits, probe identity, publication and primary/failover recovery order remain;
+  no reconnect configuration means no automatic recovery. No fresh eligible
+  socket means remaining disconnected. Outstanding restore-disconnect work is
+  canceled and joined on retirement; new public sends fail or use a fresh
+  successfully published socket.
+- **Cancellation is not rollback:** futures-util **0.3.33** `SinkExt::send` feeds
+  then flushes; tokio-tungstenite/tungstenite **0.29.0** may retain accepted frames
+  and flush them on later I/O. Tokio **1.53.1** timeouts may poll immediately ready
+  futures even after a deadline. See the pinned [send source](https://docs.rs/futures-util/0.3.33/src/futures_util/sink/send.rs.html),
+  [sink implementation](https://docs.rs/tokio-tungstenite/0.29.0/src/tokio_tungstenite/lib.rs.html),
+  [write contract](https://docs.rs/tungstenite/0.29.0/tungstenite/protocol/struct.WebSocket.html#method.write)
+  and [timeout contract](https://docs.rs/tokio/1.53.1/tokio/time/fn.timeout_at.html).
+  Buffered bytes and application sends admitted before disconnection are not
+  rolled back; NAK success is not claimed at expiry. The send slot may retain an
+  old Arc until fresh publication or stop/drop, and external/in-flight references
+  may retain it longer: logical retirement is **not immediate OS closure**.
+- **Evidence/limits:** [real-clock deadline tests](../../crates/bacnet-transport/src/sc/rejection_deadline_tests.rs)
+  include compiled RED/GREEN, independent three-path wire vectors, full/remaining
+  budgets, strict cutoff, immediate errors, silence and huge accepted settings.
+  [Recovery tests](../../crates/bacnet-transport/src/sc/rejection_recovery_tests.rs)
+  track socket identity and simulate retained bytes to detect later flush/retry;
+  they cover fresh dials, unused failover, poisoned-primary restore prevention,
+  failed probes, public admission and task cleanup.
+  [Real TLS tests](../../crates/bacnet-transport/src/sc_tls/rejection_deadline_tests.rs)
+  gate the production write mutex using public Rust timing. This is **not OS
+  backpressure** proof. [Installed-native smoke](../../crates/rusty-bacnet/tests/test_sc_rejection_deadline.py)
+  exercises exact NAKs, healthy ReadProperty and explicit fresh starts, not the
+  default 60-second expiry or automatic native reconnect. Timing assumes a
+  cooperative, timer-enabled runtime and available public state locks, not a
+  hard real-time deadline under CPU starvation or an application-held connection
+  lock. Heartbeat Request/ACK, Disconnect-ACK and public-send deadlines, general
+  backpressure, Address-Resolution-ACK, general forwarding and graceful shutdown
+  remain excluded. No API/dependency/configuration or support promotion.
+
 ## MU-rejection liveness accounting
 
 Current-dev scoped supplement to `BACNET-AB-SC-CONNECTION-STATE` (Refs #519).
@@ -42,7 +108,8 @@ provenance, historical tranches and closed #513/#517 acceptance remain unchanged
   [TLS wire coverage](../../crates/bacnet-transport/src/sc_tls/mu_liveness_tests.rs)
   and [installed-native ReadProperty smoke](../../crates/rusty-bacnet/tests/test_sc_mu_liveness.py)
   exercise rejection and healthy recovery, not default native heartbeat expiry.
-- **Known limitation:** all timing claims require receive loop progress.
+- **Slice-time limitation:** before the rejection-NAK budget supplement above,
+  all timing claims required receive loop progress.
   `data_attributes.rs` awaits the NAK send inside the receive arm, as do existing
   source/control rejection helpers. `TlsWebSocket::send` awaits its write lock
   and sink without an explicit deadline. A blocked write can stall timer polling;
