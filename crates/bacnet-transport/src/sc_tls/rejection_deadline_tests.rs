@@ -68,6 +68,7 @@ async fn rejection_deadline_tls_production_write_lock_is_cancelled_without_later
         vec![1, 0, 0x22, 0x33, 1, 0, 0x30],
         mu,
         empty,
+        vec![0x42, 3, 0x22, 0x33, 0xE2, 0, 0, 0x1F, 0x7E, 0, 0],
     ] {
         tokio::time::timeout(Duration::from_secs(6), exercise(wire))
             .await

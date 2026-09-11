@@ -139,6 +139,14 @@ async fn fresh_redial_validates_probe(wire_index: usize) {
         transport.connection().unwrap().lock().await.hub_vmac,
         Some([0x66; 6])
     );
+    {
+        let conn = transport.connection().unwrap().lock().await;
+        // Existing retry reset clears peer identity; the failed probe must not
+        // commit its UUID or advertised 32/40 limits into that fresh state.
+        assert_eq!(conn.hub_device_uuid, None);
+        assert_eq!(conn.hub_max_bvlc_length, 1476);
+        assert_eq!(conn.hub_max_apdu_length, 1476);
+    }
     accept(&fresh, [0x11; 6], 32, 40).await;
     wait_for_state(&transport, ScConnectionState::Connected)
         .await
@@ -187,6 +195,12 @@ async fn fresh_redial_validates_probe(wire_index: usize) {
     );
     transport.stop().await.unwrap();
     assert_retired(&observed, old);
+}
+
+#[tokio::test]
+async fn unknown_function_rejection_deadline_fresh_redial_validates_probe_identity_limits_and_publication(
+) {
+    fresh_redial_validates_probe(4).await;
 }
 
 #[tokio::test]

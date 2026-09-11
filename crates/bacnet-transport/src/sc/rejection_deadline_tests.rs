@@ -106,7 +106,7 @@ impl WebSocketPort for GateSocket {
     }
 }
 
-fn expected_naks() -> [Vec<u8>; 4] {
+fn expected_naks() -> [Vec<u8>; 5] {
     let control = vec![0, 0, 0x22, 0x33, 0x0A, 1, 0, 0, 7, 0, 7];
     let source = vec![0, 0, 0x22, 0x33, 1, 1, 0, 0, 7, 0, 0x50];
     let mut mu = vec![0, 4, 0x22, 0x33];
@@ -115,7 +115,8 @@ fn expected_naks() -> [Vec<u8>; 4] {
     let mut empty = vec![0, 4, 0x22, 0x33];
     empty.extend_from_slice(&[0x22; 6]);
     empty.extend_from_slice(&[1, 1, 0, 0, 7, 0, 0x95]);
-    [control, source, mu, empty]
+    let unknown = vec![0, 0, 0x22, 0x33, 0x42, 1, 0, 0, 7, 0, 0x8F];
+    [control, source, mu, empty, unknown]
 }
 
 async fn within<F: std::future::Future>(future: F) -> F::Output {
@@ -146,7 +147,7 @@ async fn recv_function(hub: &LoopbackWebSocket, function: u8) -> Vec<u8> {
     .await
 }
 
-fn rejection_wires() -> [Vec<u8>; 4] {
+fn rejection_wires() -> [Vec<u8>; 5] {
     let control = vec![0x0A, 0, 0x22, 0x33, 0x42]; // forbidden heartbeat payload
     let source = vec![1, 0, 0x22, 0x33, 1, 0, 0x30]; // omitted originating VMAC
     let mut mu = vec![1, 0x0A, 0x22, 0x33];
@@ -154,7 +155,8 @@ fn rejection_wires() -> [Vec<u8>; 4] {
     mu.extend_from_slice(&[0xE2, 0, 0, 0x1F, 1, 0, 0x30]); // raw empty-data marker
     let mut empty = vec![1, 8, 0x22, 0x33];
     empty.extend_from_slice(&[0x22; 6]);
-    [control, source, mu, empty]
+    let unknown = vec![0x42, 3, 0x22, 0x33, 0xE2, 0, 0, 0x1F, 0x7E, 0, 0];
+    [control, source, mu, empty, unknown]
 }
 
 async fn started(
@@ -414,4 +416,28 @@ async fn rejection_deadline_checks_before_repoll_and_after_slow_completion() {
         1,
         "expired send was polled as fresh"
     );
+    // Keep the direct budget tests above and exercise all five admission paths
+    // through the same strict cutoff, including unknown MU/empty payloads.
+    for wire in rejection_wires() {
+        let msg = decode_sc_message(&wire).unwrap();
+        let slow = SlowReady(AtomicUsize::new(0));
+        assert_eq!(
+            super::rejection::reject(&msg, &wire, &slow, RejectionBudget::new(Instant::now(), 10))
+                .await,
+            Err(RejectionExpired)
+        );
+        assert_eq!(slow.0.load(Ordering::SeqCst), 1);
+        let ready = BecomesReady(AtomicUsize::new(0));
+        assert_eq!(
+            super::rejection::reject(
+                &msg,
+                &wire,
+                &ready,
+                RejectionBudget::new(Instant::now(), 10)
+            )
+            .await,
+            Err(RejectionExpired)
+        );
+        assert_eq!(ready.0.load(Ordering::SeqCst), 1);
+    }
 }

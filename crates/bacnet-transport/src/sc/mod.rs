@@ -39,6 +39,7 @@ mod recovery;
 mod rejection;
 mod send;
 mod source_admission;
+mod unknown_function;
 pub use connection::{ScConnection, ScConnectionState};
 use connector::{dial_failover_ws, WebSocketConnector};
 pub use errors::{ScConnectError, ScWebSocketErrorKind};
@@ -75,7 +76,7 @@ pub trait WebSocketPort: Send + Sync + 'static {
 
 /// BACnet/SC transport implementing [`TransportPort`].
 ///
-/// Node control/source/Must-Understand/missing-NPDU-payload rejection NAKs use the
+/// Node control/source/Must-Understand/missing-NPDU-payload/unknown-function NAKs use the
 /// remaining accepted-activity heartbeat budget. On expiry the send future is dropped and the socket
 /// is retired from transport-initiated I/O, including reconnect/primary restore.
 /// This local policy is not a deadline for other writes or a hard real-time bound:
@@ -474,7 +475,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                         continue;
                                     }
 
-                                    // Local admission policy: rejected NPDUs do not
+                                    // Local admission policy: rejected frames do not
                                     // refresh activity or retire an outstanding probe.
                                     last_bvlc_received = Instant::now();
                                     pending_heartbeat_id = None;
@@ -767,6 +768,9 @@ mod source_admission_tests;
 
 #[cfg(test)]
 mod empty_npdu_tests;
+
+#[cfg(test)]
+mod unknown_function_tests;
 
 #[cfg(test)]
 mod primary_restore_tests;

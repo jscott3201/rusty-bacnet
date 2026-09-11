@@ -1,4 +1,4 @@
-//! Owner-local write budget for node control/source/MU/missing-payload NAKs only.
+//! Owner-local budget for node control/source/MU/missing-payload/unknown NAKs only.
 //! Cancellation drops the send future, not bytes already buffered by the driver.
 
 use std::future::{poll_fn, Future};
@@ -92,5 +92,10 @@ pub(super) async fn reject<W: WebSocketPort>(
     {
         return Ok(true);
     }
-    super::empty_npdu::reject(msg, ws, budget).await
+    if super::empty_npdu::reject(msg, ws, budget).await? {
+        return Ok(true);
+    }
+    // All preceding gates exclude Unknown. Its identity wins over option or
+    // payload diagnostics without changing any known-function admission.
+    super::unknown_function::reject(msg, ws, budget).await
 }
