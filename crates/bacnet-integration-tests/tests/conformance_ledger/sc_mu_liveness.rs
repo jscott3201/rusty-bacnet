@@ -124,7 +124,7 @@ fn rejection_nak_budget_evidence_preserves_freshness_and_cancellation_limits() {
             anchors += 1;
         }
     }
-    assert_eq!(anchors, 18); // Original 17 plus the fourth-path fresh-recovery test.
+    assert_eq!(anchors, 19); // Original 17 plus fourth/fifth-path fresh-recovery tests.
     for path in [
         "crates/bacnet-transport/src/sc/rejection.rs",
         "crates/bacnet-transport/src/sc/recovery.rs",
@@ -226,5 +226,65 @@ fn empty_npdu_evidence_preserves_zero_only_scope_and_existing_lifecycle_owners()
     assert_eq!(count, 13);
     assert!(STANDARD_LEDGER.contains("## Empty Encapsulated-NPDU admission\n"));
     assert!(read_repo_file("CHANGELOG.md").contains("#empty-encapsulated-npdu-admission"));
+    assert_eq!(sc_identity_closeout().matches("\n| A").count(), 6);
+}
+
+#[test]
+fn unknown_function_evidence_preserves_node_only_scope_and_fifth_budget_path() {
+    let data = ledger();
+    let rows = rows_by_id(&data);
+    assert_eq!(rows.len(), 68);
+    assert_eq!(
+        rows.values()
+            .filter(|r| r["status"] == "supported-with-clause-evidence")
+            .count(),
+        19
+    );
+    let row = rows["BACNET-AB-SC-CONNECTION-STATE"];
+    assert_eq!(
+        row["status"],
+        "implementation-present-needs-state-machine-audit"
+    );
+    let policy = row["unknown_function_admission"].as_str().unwrap();
+    for phrase in [
+        "established NODE only",
+        "0x0D..0xFF",
+        "AB.3.1.5",
+        "7/143",
+        "marker zero",
+        "All explicit destinations",
+        "owner-local policy",
+        "Known 0x00..0x0C",
+        "Result-for-Unknown",
+        "handshake silence",
+        "Fifth node path",
+        "fresh-only recovery",
+        "raw fake hub to NODE",
+        "not native hub fallback",
+        "not immediate OS closure",
+        "No full Annex AB claim",
+    ] {
+        assert!(policy.contains(phrase), "{phrase}");
+    }
+    let mut count = 0;
+    for field in ["positive_tests", "negative_tests"] {
+        for anchor in row[field].as_array().unwrap() {
+            let anchor = anchor.as_str().unwrap();
+            if !anchor.contains("unknown_function") {
+                continue;
+            }
+            let parts: Vec<_> = anchor.split("::").collect();
+            let source = read_repo_file(parts[0]);
+            let name = parts.last().unwrap();
+            assert!(
+                source.contains(&format!("fn {name}(")) || source.contains(&format!("def {name}(")),
+                "{anchor}"
+            );
+            count += 1;
+        }
+    }
+    assert_eq!(count, 11);
+    assert!(STANDARD_LEDGER.contains("## Node unknown-function admission\n"));
+    assert!(read_repo_file("CHANGELOG.md").contains("#node-unknown-function-admission"));
     assert_eq!(sc_identity_closeout().matches("\n| A").count(), 6);
 }

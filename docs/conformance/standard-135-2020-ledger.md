@@ -13,6 +13,42 @@
 - Addenda/errata status: No external addenda/errata check was performed. The local Standard 135-2020 source contract was reviewed for Clause 12.52 and Table 12-61, Clause 21 `BACnetNotifyType`, and Clause 15.7 RPM selector exclusions.
 - PR-0808 evidence row: `BACNET-12-ALERT-ENROLLMENT-TABLE-12-61` is `supported-with-clause-evidence` for the served object model only; it is not an Alert evaluator or notification-generation claim.
 
+## Node unknown-function admission
+
+Current-dev scoped supplement to `BACNET-AB-SC-CONNECTION-STATE` (Refs #519).
+#519 remains open/partial; 68 rows /19 supported rows, statuses, global provenance,
+historical evidence and #517 A1–A6 remain unchanged. Only established NODE receive
+admission is changed; hub fallback/forwarding and handshake remain excluded.
+
+| Contract / source | Implementation | Evidence |
+|---|---|---|
+| Base Standard 135-2020 AB.3.1.5 (PDF1396 / printed1394): unknown unicast gets COMMUNICATION/BVLC_FUNCTION_UNKNOWN and is discarded. AB.2 (PDF1385 / printed1383) lists known 0x00..0x0C and prohibits broadcast responses. | [Private node guard](../../crates/bacnet-transport/src/sc/unknown_function.rs) admits only successful wire decodes of Unknown (0x0D..0xFF) to this rejection path. It does not interpret options, payload or NPCI. | [Independent raw vectors](../../crates/bacnet-transport/src/sc/unknown_function_tests.rs): compiled missing-NAK RED/GREEN, all 243 unknown codes, 0x0D/0x42/0xFF address/options/payload matrix and malformed generic-wire silence. |
+| AB.3.1.2/.3 (PDF1395 / printed1393), AB.2.4.1 (PDF1389 / printed1387): response address, original ID/ResultFor, marker zero for a non-option error. | Eligible unicast has no destination: absent origin returns connection-local; valid origin becomes response destination. Exact 7/143 (0x008F), no options/error detail. | Independent exact NAK bytes with ID zero/max, absent/valid origins, empty/nonempty payload, MU Destination/Data Options, MoreOptions and empty/nonempty HeaderData. |
+| AB.5.4 (PDF1403 / printed1401) drops explicit nonbroadcast destinations; AB.2 forbids broadcast replies. Reserved-origin suppression is owner-local policy. | Every explicit destination (broadcast/local/other/zero) and zero/broadcast origin is silently discarded without activity, probe or NPDU effects. Absent origin is allowed, not a missing NPDU source fault. | Ordered non-activity barriers detect extra replies/delivery; expired-budget tests prove silent decisions do not construct writes or fabricate expiry. |
+| Owner-local unknown-first diagnostic and no-activity policy, not a universal priority over AB.3.1.4 or universal invalid-frame accounting from AB.6.3 (PDF1407 / printed1405). | Existing control/source/MU/empty gates exclude Unknown; fifth guard runs before activity/pending clear. All known functions, including Proprietary and known-but-unhandled, retain existing behavior. | Real std::Instant bursts before/after the first probe, original timeout/probe preservation, matching ACK and valid NPDU recovery. Known-code controls, all-state direct handle_received purity (including IDs/queued ACK), handshake silence and Result-for-Unknown ACK/NAK/malformed fatal-policy checks. |
+
+- **Fifth bounded node path:** [RejectionBudget](../../crates/bacnet-transport/src/sc/rejection.rs)
+  keeps the full remaining accepted-activity budget, strict pre/post-poll cutoff,
+  huge-u64 safety and prompt send-error log/discard behavior. No per-frame timeout,
+  new setting, unbounded write or clock policy. [Deadline vectors](../../crates/bacnet-transport/src/sc/rejection_deadline_tests.rs)
+  and the [production TLS write-lock test](../../crates/bacnet-transport/src/sc_tls/rejection_deadline_tests.rs)
+  include the fifth path. [Fresh recovery](../../crates/bacnet-transport/src/sc/rejection_recovery_tests.rs)
+  adds an unknown case while retaining original MU/empty cases, failed-probe
+  identity/limit exclusion and no further transport I/O on the retired socket.
+  PR605's three-path and PR606's fourth-path evidence below remain slice-time evidence.
+- **Installed native DEV:** [raw fake hub to native node](../../crates/rusty-bacnet/tests/test_sc_unknown_function.py)
+  uses TLS1.3/client authentication, exact wire/silence, known-function controls,
+  healthy ReadProperty and explicit fresh starts. This is not the native hub's
+  fallback NAK. No Python short-heartbeat knob or native 60-second timing claim.
+- **Limits:** authenticated peer path only, not preauthentication/MITM. Cancellation
+  is not rollback; logical retirement is not immediate OS closure. Cooperative
+  runtime, available state locks and caller-supplied fresh connectors remain
+  assumptions. TLS lock evidence is not OS backpressure or hard real-time proof.
+  Public connection mutation, hub/general forwarding, known-function liveness,
+  handshake/probing, codec/raw send, all-write budgets, rate policy, graceful
+  shutdown, CI/dependencies and release qualification remain excluded.
+  No full Annex AB claim or support promotion.
+
 ## Empty Encapsulated-NPDU admission
 
 Current-dev scoped supplement to `BACNET-AB-SC-CONNECTION-STATE` (Refs #519).
@@ -60,7 +96,8 @@ Current-dev scoped supplement to `BACNET-AB-SC-CONNECTION-STATE` (Refs #519).
 #519 remains open/partial. All 68 rows, 19 supported rows, statuses, global
 provenance, historical tranches and closed #513/#517 acceptance remain unchanged.
 PR605 superseded only the three blocked-NAK gaps in the MU slice below; the
-empty-NPDU supplement above adds the fourth path without broadening other writes.
+empty-NPDU supplement adds the fourth path and the unknown-function supplement
+adds the fifth, without broadening other writes.
 
 - **Base Standard 135-2020:** AB.3.1.4/.5 (PDF 1395–1396 / printed 1393–1394)
   provide the existing NAK context; response IDs/addressing and raw option markers
@@ -70,14 +107,14 @@ empty-NPDU supplement above adds the fourth path without broadening other writes
   qualification and the existing receive-drop policy remain; no new whole-message
   or full Annex AB conformance claim is made.
 - **Owner-approved local policy:** [rejection budget](../../crates/bacnet-transport/src/sc/rejection.rs)
-  bounds actual control/source/unsupported-MU and now missing-NPDU-payload NAK sends by the original
+  bounds actual control/source/unsupported-MU/missing-NPDU-payload/unknown-function NAK sends by the original
   accepted-activity heartbeat budget. Late/repeated rejected frames do not reset
   it; elapsed budgets have no positive floor and cannot poll a send as fresh.
   Checks before/after polling prevent accepting completion after the cutoff.
   Large valid `u64` settings avoid new Instant-addition overflow by chunking timer
   registration, not resetting the budget. Silent/nonrejection decisions never
   acquire a deadline or fabricate an expiry. Immediate send errors retain their
-  existing log/discard behavior; rejected NPDUs do not refresh activity, clear a
+  existing log/discard behavior; rejected frames do not refresh activity, clear a
   pending probe or dispatch.
 - **Ownership/compatibility:** [retirement/recovery](../../crates/bacnet-transport/src/sc/recovery.rs)
   publishes Disconnected before recovery, drops the NAK future, and prevents
@@ -105,7 +142,7 @@ empty-NPDU supplement above adds the fourth path without broadening other writes
   may retain it longer: logical retirement is **not immediate OS closure**.
 - **Evidence/limits:** [real-clock deadline tests](../../crates/bacnet-transport/src/sc/rejection_deadline_tests.rs)
   retain PR605 compiled RED/GREEN evidence for its three paths; current vectors
-  additionally cover missing payload. Tests cover full/remaining
+  additionally cover missing payload and unknown functions. Tests cover full/remaining
   budgets, strict cutoff, immediate errors, silence and huge accepted settings.
   [Recovery tests](../../crates/bacnet-transport/src/sc/rejection_recovery_tests.rs)
   track socket identity and simulate retained bytes to detect later flush/retry;
