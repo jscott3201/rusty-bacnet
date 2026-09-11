@@ -3,6 +3,9 @@ use crate::sc_frame::{decode_sc_bvlc_result, ScBvlcResult, ScOption};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use tokio::time::{timeout, Duration};
 
+#[path = "mu_liveness_tests.rs"]
+mod mu_liveness_tests;
+
 pub(super) async fn hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
     let data = ws_hub.recv().await.unwrap();
     let req = decode_sc_message(&data).unwrap();

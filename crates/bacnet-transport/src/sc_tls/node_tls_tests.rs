@@ -6,6 +6,9 @@ use tokio_rustls::TlsAcceptor;
 #[path = "connect_accept_tests.rs"]
 mod connect_accept_tests;
 
+#[path = "mu_liveness_tests.rs"]
+mod mu_liveness_tests;
+
 async fn observe_connections(rounds: usize) -> Vec<HandshakeKind> {
     // An independent trusted server, deliberately NOT ScHub: no client verifier
     // and no CertificateRequest. This characterizes the local contract's limit.

@@ -455,9 +455,6 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                         continue;
                                     }
 
-                                    last_bvlc_received = Instant::now();
-                                    pending_heartbeat_id = None;
-
                                     if data_attributes::reject_unsupported_must_understand_destination_option(
                                         &msg,
                                         first_must_understand_destination_option_marker(&data),
@@ -467,6 +464,11 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                     {
                                         continue;
                                     }
+
+                                    // Local admission policy: MU-rejected NPDUs do not
+                                    // refresh activity or retire an outstanding probe.
+                                    last_bvlc_received = Instant::now();
+                                    pending_heartbeat_id = None;
 
                                     // Handle Heartbeat-Request with Heartbeat-ACK
                                     if msg.function == ScFunction::HeartbeatRequest {

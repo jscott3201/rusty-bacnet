@@ -1954,6 +1954,8 @@
    "code_anchors": [
     "crates/bacnet-transport/src/sc/mod.rs",
     "crates/bacnet-transport/src/sc/connect_result.rs",
+    "crates/bacnet-transport/src/sc/mu_liveness_tests.rs",
+    "crates/bacnet-transport/src/sc_tls/mu_liveness_tests.rs",
     "crates/bacnet-transport/src/sc_frame/connect.rs",
     "crates/bacnet-transport/src/sc_frame/connect_test_support.rs",
     "crates/bacnet-transport/src/sc_hub/peer_uuid_tests.rs",
@@ -1992,6 +1994,9 @@
    ],
    "positive_tests": [
     "crates/bacnet-types/src/enums/tests.rs::bacnet_sc_error_code_values",
+    "crates/bacnet-transport/src/sc/mu_liveness_tests.rs::mu_liveness_valid_npdu_data_options_and_heartbeat_request_restore_activity",
+    "crates/bacnet-transport/src/sc_tls/mu_liveness_tests.rs::mu_liveness_tls_wire_rejection_and_healthy_recovery",
+    "crates/rusty-bacnet/tests/test_sc_mu_liveness.py::MuLivenessTests::test_mu_rejection_then_healthy_native_read_property",
     "crates/bacnet-transport/src/sc_hub/response_silence_tests.rs::unsolicited_response_matrix_preserves_lease_activity_and_probe_then_recovers",
     "crates/rusty-bacnet/tests/test_sc_hub_response_silence.py::HubResponseSilenceTests::test_unsolicited_responses_preserve_native_hub_and_registration",
     "crates/bacnet-transport/src/sc_frame/connect.rs::tests::nonzero_uuid_bits_remain_opaque",
@@ -2120,8 +2125,12 @@
     "crates/bacnet-transport/src/sc_hub/retirement_io_tests.rs::nonterminal_relay_failures_preserve_registered_usable_target",
     "crates/bacnet-transport/src/sc_hub/retirement_io_tests.rs::delayed_terminal_failure_cannot_remove_replacement_after_registry_wait",
     "crates/bacnet-transport/src/sc_hub/retirement_io_tests.rs::heartbeat_send_failure_interrupts_source_relay_and_releases_admission",
-    "crates/bacnet-transport/src/sc_hub/retirement_io_tests.rs::target_retirement_cancels_inflight_send_before_io_completion"
+    "crates/bacnet-transport/src/sc_hub/retirement_io_tests.rs::target_retirement_cancels_inflight_send_before_io_completion",
+    "crates/bacnet-transport/src/sc/mu_liveness_tests.rs::mu_liveness_rejected_burst_preserves_pending_probe_and_matching_ack",
+    "crates/bacnet-transport/src/sc/mu_liveness_tests.rs::mu_liveness_rejected_traffic_keeps_original_idle_timeout_and_reconnects",
+    "crates/bacnet-transport/src/sc/mu_liveness_tests.rs::mu_liveness_source_and_control_admission_still_precede_mu"
    ],
+   "mu_rejection_liveness": "Refs #519, open/partial: owner-approved local admission policy excludes MU-rejected Encapsulated-NPDUs from activity refresh and pending-heartbeat clear/reseed, after existing control/source validation and ACK matching. Base 135-2020 AB.3.1.4 unicast COMMUNICATION/HEADER_NOT_UNDERSTOOD and broadcast silence, AB.3.1.2/.3 addressing/IDs, complete raw marker, MU-clear Destination Options and preserved Data Options are unchanged. AB.6.3 does not explicitly mandate universal invalid-frame accounting; no new whole-message conformance rule or change to existing receive-drop policy. Real-time tests prove original idle/timeout and matching Heartbeat-ACK/valid activity/redial recovery only while the receive loop progresses. Blocked NAK sends can stall timer polling: blocked-send/backpressure handling remains a follow-up, without timeout/cancellation/offload or adapter changes. Post-handle_received drop accounting, general forwarding/Address-Resolution-ACK and other functions remain excluded. See standard-135-2020-ledger.md#mu-rejection-liveness-accounting. No full Annex AB claim or support promotion; closed #513/#517 and historical tranches remain unchanged.",
    "unsolicited_response_admission": "Refs #519, open/partial: accepting hub silently discards only unsolicited Connect-Accept (0x07) and Disconnect-ACK (0x09) after generic decode/ownership checks and before activity or state changes, regardless of ID/envelope/options/payload. Base 135-2020 AB.2 forbids replies to responses; AB.2.11/.13 and AB.6.2.3 define peer responses and accepting states. No registration, UUID/limits change, replacement, pending-probe clear/reseed or original deadline extension. Exclusion from activity is scoped local liveness policy, not an AB.6.3 rule for every invalid message. Result relay and matching Heartbeat-ACK remain; Address-Resolution-ACK and general AB.5.1/AB.5.3.2 forwarding are excluded. No Disconnect-ACK waiter or graceful shutdown added. See standard-135-2020-ledger.md#accepting-hub-unsolicited-response-silence. No full Annex AB claim, support promotion or reopening of closed #513/#517 acceptance.",
    "zero_limit_admission": "Refs #519, open/partial: zero-only local receive policy for Connect-Request and Connect-Accept, not a universal minimum-capacity conformance claim. Eligible Requests receive COMMUNICATION/PARAMETER_OUT_OF_RANGE (7/80); Accepts are silently discarded under AB.2 with pending state, identity, peer limits and the original connect deadline preserved. All positive values remain compatible, including tiny/inverted pairs. Positive floors and relationship checks are deferred; defaults, adapter caps, independent outgoing budgets and generic zero codec syntax are unchanged. See standard-135-2020-ledger.md#received-zero-capacity-admission. Closed #517 acceptance and historical tranche evidence remain valid.",
    "benchmarks": [

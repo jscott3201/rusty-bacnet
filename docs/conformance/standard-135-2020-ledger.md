@@ -13,6 +13,46 @@
 - Addenda/errata status: No external addenda/errata check was performed. The local Standard 135-2020 source contract was reviewed for Clause 12.52 and Table 12-61, Clause 21 `BACnetNotifyType`, and Clause 15.7 RPM selector exclusions.
 - PR-0808 evidence row: `BACNET-12-ALERT-ENROLLMENT-TABLE-12-61` is `supported-with-clause-evidence` for the served object model only; it is not an Alert evaluator or notification-generation claim.
 
+## MU-rejection liveness accounting
+
+Current-dev scoped supplement to `BACNET-AB-SC-CONNECTION-STATE` (Refs #519).
+#519 remains open/partial. All 68 rows, 19 supported rows, statuses, global
+provenance, historical tranches and closed #513/#517 acceptance remain unchanged.
+
+- **Base Standard 135-2020 source:** AB.3.1.4 (PDF 1395–1396 / printed
+  1393–1394) requires COMMUNICATION/HEADER_NOT_UNDERSTOOD for an unsupported MU
+  Destination Option on unicast and no Result for broadcast. Unknown MU-clear
+  Destination Options are ignored; Data Options are forwarded unaltered.
+  AB.3.1.2/.3 on the same pages specify response addressing and echoed IDs.
+  AB.2 (PDF 1385 / printed 1383) supplies broadcast/response-silence context.
+- **Owner-approved local admission policy:** [node receive ordering](../../crates/bacnet-transport/src/sc/mod.rs)
+  now performs the existing MU rejection before refreshing accepted-BVLC activity
+  or clearing the pending heartbeat. AB.6.3 (PDF 1407 / printed 1405) does not
+  explicitly mandate universal invalid-frame accounting. This is not such a claim,
+  nor a new whole-message conformance rule: AB.3.1.4 also requires processing
+  remaining parts as required; this slice preserves the existing receive-drop
+  policy. Control/source validation and matching Heartbeat-ACK precedence remain.
+- **Evidence:** [real-time Rust regressions](../../crates/bacnet-transport/src/sc/mu_liveness_tests.rs)
+  cover independent marker variants (More Options, empty/nonempty Header Data,
+  multiple options), exact addressed NAKs, broadcast silence, no dispatch,
+  source/control precedence, unchanged pending probe, matching-ACK recovery,
+  original idle/timeout decisions under rejected traffic and actual state-watch
+  timeout/redial recovery. MU-clear Destination Options, MU Data Options, valid
+  NPDUs and Heartbeat-Request retain normal activity behavior.
+  [TLS wire coverage](../../crates/bacnet-transport/src/sc_tls/mu_liveness_tests.rs)
+  and [installed-native ReadProperty smoke](../../crates/rusty-bacnet/tests/test_sc_mu_liveness.py)
+  exercise rejection and healthy recovery, not default native heartbeat expiry.
+- **Known limitation:** all timing claims require receive loop progress.
+  `data_attributes.rs` awaits the NAK send inside the receive arm, as do existing
+  source/control rejection helpers. `TlsWebSocket::send` awaits its write lock
+  and sink without an explicit deadline. A blocked write can stall timer polling;
+  blocked-send/backpressure handling is a documented follow-up, not fixed here.
+  No timeout/cancellation/offload, adapter, clock, select-loop, retry-budget or
+  all-function deadline change is included. Post-`handle_received` drops retain
+  their existing activity accounting. General forwarding/Address-Resolution-ACK,
+  diagnostic-rate policies, capacity floors and graceful shutdown remain excluded.
+  No addenda, API, support promotion or full Annex AB claim is made.
+
 ## Accepting hub unsolicited-response silence
 
 Current-dev scoped supplement to `BACNET-AB-SC-CONNECTION-STATE` (Refs #519).

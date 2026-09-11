@@ -1,9 +1,8 @@
 //! Conformance ledger schema and public-claim guard tests.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::{fs, process::Command};
 
 use serde_json::{json, Value};
 
@@ -15,6 +14,8 @@ const STANDARD_LEDGER: &str = include_str!("../../../docs/conformance/standard-1
 
 #[path = "conformance_ledger/sc_hub_response_silence.rs"]
 mod sc_hub_response_silence;
+#[path = "conformance_ledger/sc_mu_liveness.rs"]
+mod sc_mu_liveness;
 #[path = "conformance_ledger/sc_zero_limits.rs"]
 mod sc_zero_limits;
 

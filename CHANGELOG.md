@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **SC MU-rejection liveness ordering (Refs #519):** unsupported Must Understand
+  Destination Options on received NPDUs no longer refresh node activity or clear
+  a pending heartbeat. Existing unicast NAKs, broadcast silence and Data Options
+  behavior remain. This is [local admission policy](docs/conformance/standard-135-2020-ledger.md#mu-rejection-liveness-accounting),
+  not universal invalid-frame accounting. Timer progress still depends on receive
+  loop progress; blocked NAK writes/backpressure remain a follow-up. #519 stays open.
+
 - **Accepting SC hub unsolicited-response silence (Refs #519):** discard
   Connect-Accept and Disconnect-ACK before activity or state changes, without
   replying, including malformed function-specific fields. Registration, peer
