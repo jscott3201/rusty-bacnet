@@ -126,7 +126,10 @@ pub(super) async fn relay_result(
             return ResultRelayDisposition::Continue;
         }
     };
-    if result_for != ScFunction::EncapsulatedNpdu {
+    if !matches!(
+        result_for,
+        ScFunction::EncapsulatedNpdu | ScFunction::Unknown(_)
+    ) {
         debug!(
             "Hub: peer Result for {:?} from {registered_vmac:02x?}, dropping",
             result_for
@@ -149,6 +152,11 @@ pub(super) async fn relay_result(
             return ResultRelayDisposition::Continue;
         }
     };
+
+    // Only the newly admitted family changes self-target behavior.
+    if matches!(result_for, ScFunction::Unknown(_)) && destination == registered_vmac {
+        return ResultRelayDisposition::Continue;
+    }
 
     let Some(relay_buf) = encode_hub_relay_frame(
         wire,

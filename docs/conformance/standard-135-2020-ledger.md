@@ -13,6 +13,46 @@
 - Addenda/errata status: No external addenda/errata check was performed. The local Standard 135-2020 source contract was reviewed for Clause 12.52 and Table 12-61, Clause 21 `BACnetNotifyType`, and Clause 15.7 RPM selector exclusions.
 - PR-0808 evidence row: `BACNET-12-ALERT-ENROLLMENT-TABLE-12-61` is `supported-with-clause-evidence` for the served object model only; it is not an Alert evaluator or notification-generation claim.
 
+## Hub Unknown transit and Result return
+
+Current-dev scoped supplement to `BACNET-AB-SC-CONNECTION-STATE` (Refs #519).
+#519 remains open/partial; 68 rows /19 supported rows, all statuses, global
+provenance, historical supplements and #517 A1–A6 remain unchanged. This slice
+selects only the Unknown family previously excluded from the node supplement.
+
+| Contract / source | Implementation | Evidence |
+|---|---|---|
+| Base Standard 135-2020 AB.5.1 (PDF1400 / printed1398), AB.5.3/.1 (PDF1401 / printed1399), AB.5.3.2/.3 (PDF1402 / printed1400): independent hub endpoint, matching-peer unicast or all-other-peer broadcast, no source echo, stamp origin and remove unicast/retain broadcast destination. AB.5.4 (PDF1403 / printed1401) describes the sending connector envelope; its receiving explicit-destination drop is a NODE rule. | [Hub handler](../../crates/bacnet-transport/src/sc_hub/handler.rs) classifies registered Unknown `0x0D..0xFF` with absent origin and present destination before activity. [Opaque relay](../../crates/bacnet-transport/src/sc_hub/unknown_transit.rs) reuses raw wire transformation, recipient capture and retirement-aware sends; missing/self targets are silent. | [Independent mTLS raw vectors](../../crates/bacnet-transport/src/sc_hub/unknown_transit_tests.rs): compiled RED/GREEN, all 243 codes, unicast/broadcast to two recipients, IDs zero/max, empty/nonempty bodies, MU/MoreOptions/empty HeaderData preserved exactly, no source echo. |
+| AB.3.1.5 (PDF1396 / printed1394), AB.3.1.2/.3 (PDF1395 / printed1393), AB.2 and AB.2.4.1: unknown local unicast NAK/discard, original raw ResultFor/ID, response address and marker zero; no broadcast response. | Destination-absent registered Unknown is local; pre-registration never transits, including explicit unicast destinations. Eligible 7/143 NAK has destination=valid origin or absent, no options/detail, same socket only. Explicit-origin registered transit, broadcast local rejection and reserved origins are silent. Unknown diagnostic priority and reserved-origin suppression are owner-local policy. | Address/options/body matrices, ordered no-fanout barriers and complete snapshots; pre-registration cannot commit/route to another peer and later valid Connect still works. Known fallback stays 7/150. |
+| Unknown body is opaque, not an NPDU; recipient encoded BVLC cap remains applicable. | No NPDU interpretation or Max-NPDU cap. Existing ingress cap remains; final wire length includes broadcast origin insertion. | Exact cap and cap+1, ingress 5705/5706, body over1497 with peer Max-NPDU=1, unicast and broadcast selective drops; Result BVLC cap exact/+1. |
+| AB.3.1.1/.2/.3: no Result-on-Result, response address and original ID. | [Result relay](../../crates/bacnet-transport/src/sc_hub/relay.rs) widens only ResultFor EncapsulatedNpdu to also Unknown; existing malformed/address/registration/ownership/limit/timeout guards remain, with Unknown-only self-drop. | Exact ACK and detailed UTF-8 NAK/options; invalid Result, broadcast, spoofed origin, missing/unknown/self target, pre-registration and other known ResultFor silence. |
+
+- **Activity and lifecycle are scoped local policy:** local/rejected/pre-registration
+  Unknown never refreshes activity. Accepted transit follows the existing NPDU
+  rule even for missing/oversized recipient drops; self-target drops occur before
+  activity. Pending heartbeat identity/deadline is never cleared or reseeded.
+  The fixed behavior is idle-probe deferral: pending ACK timeout was already
+  independent of activity, not an ACK-timeout-evasion fix or universal AB.6.3 rule.
+  [mTLS lifecycle tests](../../crates/bacnet-transport/src/sc_hub/unknown_transit_lifecycle_tests.rs)
+  cover held local NAK/transit/ACK/NAK return, source and target replacement or
+  retirement, healthy owners, joined stop, and held pre-registration NAK expiry
+  under the original absolute Connect deadline with capacity release/recovery.
+  Immediate local NAK send errors retain ignored-error/continue behavior. No new
+  global NAK deadline; broadcast keeps per-target 5s waits, unicast existing
+  retirement, Result its existing 5s wait.
+- **Installed native DEV:** [raw peer → public native hub → real native NODE → raw peer](../../crates/rusty-bacnet/tests/test_sc_hub_unknown_transit.py)
+  asserts the NAK origin is the NODE, not a hub-local fallback, plus original
+  function/ID, native broadcast silence, raw fanout/options/caps and healthy
+  ReadProperty before and after. NODE production and its ResultForUnknown fatal
+  policy remain unchanged.
+- **Limits:** authenticated TLS peers only. Cancellation is not rollback or
+  immediate physical closure; held-sink evidence is not OS backpressure. Existing
+  cooperative-runtime/state-lock assumptions remain. No native 60-second expiry,
+  preauthentication/MITM, release qualification or full Annex AB claim. General
+  known-function forwarding (Address-Resolution/Advertisement/Proprietary),
+  known-function liveness, all-write/rate policy, capacity/API/clock changes,
+  graceful shutdown and support promotion remain excluded.
+
 ## Node unknown-function admission
 
 Current-dev scoped supplement to `BACNET-AB-SC-CONNECTION-STATE` (Refs #519).
