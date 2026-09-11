@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **SC empty Encapsulated-NPDU admission (Refs #519):** node receive and registered
+  hub forwarding now discard zero-byte payloads before activity refresh. Eligible
+  unicast returns `COMMUNICATION/PAYLOAD_EXPECTED` (7/149), marker zero and the
+  request ID; broadcasts remain silent. Existing source/MU precedence, routing
+  silence and pre-registration hub behavior remain. One-byte payloads and generic
+  codec/raw-send syntax are unchanged; no NPCI/APDU validation is added. The new
+  node NAK is the fourth path using the existing remaining-activity budget and
+  fresh-only recovery; the hub retains its existing retirement supervisor, not a
+  new NAK deadline. [Scoped wire, liveness and installed-native evidence](docs/conformance/standard-135-2020-ledger.md#empty-encapsulated-npdu-admission)
+  does not promote support or claim full Annex AB conformance. #519 stays open/partial.
+
 - **SC rejection-NAK budget and fresh-only recovery (Refs #519):** node control,
   source and unsupported-MU rejection NAKs now use the remaining accepted-activity
   heartbeat budget, without a new timeout setting. Expiry drops the send future,
@@ -27,7 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   behavior remain. This is [local admission policy](docs/conformance/standard-135-2020-ledger.md#mu-rejection-liveness-accounting),
   not universal invalid-frame accounting. At that slice, timer progress depended
   on receive loop progress; the rejection-NAK budget supplement above now addresses
-  only those three NAK paths, not general write backpressure. #519 stays open.
+  those three original NAK paths, with the fourth empty-NPDU path added above,
+  not general write backpressure. #519 stays open.
 
 - **Accepting SC hub unsolicited-response silence (Refs #519):** discard
   Connect-Accept and Disconnect-ACK before activity or state changes, without

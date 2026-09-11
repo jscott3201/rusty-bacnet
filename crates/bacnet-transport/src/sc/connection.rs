@@ -248,6 +248,9 @@ impl ScConnection {
                     return None;
                 }
                 let source = source_admission::hub_source(msg)?;
+                if crate::sc_frame::missing_npdu_payload(msg) {
+                    return None;
+                }
                 Some((msg.payload.clone(), source))
             }
             ScFunction::HeartbeatRequest => None,

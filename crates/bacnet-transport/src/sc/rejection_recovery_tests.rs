@@ -95,6 +95,16 @@ async fn rejection_deadline_without_reconnect_does_not_dial_or_consume_failover(
 
 #[tokio::test]
 async fn rejection_deadline_fresh_redial_validates_probe_identity_limits_and_publication() {
+    fresh_redial_validates_probe(2).await;
+}
+
+#[tokio::test]
+async fn empty_npdu_rejection_deadline_fresh_redial_validates_probe_identity_limits_and_publication(
+) {
+    fresh_redial_validates_probe(3).await;
+}
+
+async fn fresh_redial_validates_probe(wire_index: usize) {
     let (client, hub, observed) = GateSocket::pair();
     let (tx, mut dials) = mpsc::unbounded_channel();
     let count = Arc::new(AtomicUsize::new(0));
@@ -108,7 +118,12 @@ async fn rejection_deadline_fresh_redial_validates_probe_identity_limits_and_pub
             async { Ok(client) }
         });
     let mut rx = started(&mut transport, &hub).await;
-    expire(&transport, &hub, &observed).await;
+    observed.hold_nak.store(true, Ordering::SeqCst);
+    hub.send(&rejection_wires()[wire_index]).await.unwrap();
+    wait_for_state(&transport, ScConnectionState::Disconnected)
+        .await
+        .unwrap();
+    assert_eq!(observed.nak_dropped.load(Ordering::SeqCst), 1);
     let old = snapshot(&observed);
     let (failed, failed_observed) = within(dials.recv()).await.unwrap();
     // Mismatched identity must not publish a fresh but unaccepted socket.

@@ -14,12 +14,14 @@ use bytes::{BufMut, Bytes, BytesMut};
 
 mod connect;
 mod control;
+mod npdu;
 mod result;
 
 pub(crate) use connect::connect_message_error;
 #[cfg(feature = "sc-tls")]
 pub(crate) use connect::validate_connect_request;
 pub(crate) use control::{control_envelope_error, validate_control, ControlRecipient};
+pub(crate) use npdu::missing_npdu_payload;
 
 #[cfg(test)]
 pub(crate) mod heartbeat_test_support;

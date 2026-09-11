@@ -1,4 +1,4 @@
-//! Owner-local write budget for the three node rejection NAKs only.
+//! Owner-local write budget for node control/source/MU/missing-payload NAKs only.
 //! Cancellation drops the send future, not bytes already buffered by the driver.
 
 use std::future::{poll_fn, Future};
@@ -82,11 +82,15 @@ pub(super) async fn reject<W: WebSocketPort>(
     if source_admission::reject_invalid_npdu_source(msg, ws, budget).await? {
         return Ok(true);
     }
-    data_attributes::reject_unsupported_must_understand_destination_option(
+    if data_attributes::reject_unsupported_must_understand_destination_option(
         msg,
         first_must_understand_destination_option_marker(wire),
         ws,
         budget,
     )
-    .await
+    .await?
+    {
+        return Ok(true);
+    }
+    super::empty_npdu::reject(msg, ws, budget).await
 }

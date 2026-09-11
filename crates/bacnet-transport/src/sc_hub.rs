@@ -377,6 +377,12 @@ mod response_silence_lifecycle_tests;
 mod response_silence_tests;
 
 #[cfg(test)]
+mod empty_npdu_tests;
+
+#[cfg(test)]
+mod empty_npdu_retirement_tests;
+
+#[cfg(test)]
 mod ws_limits_tests;
 
 #[cfg(test)]

@@ -30,6 +30,17 @@ class RejectionDeadlineTests(mtls.MtlsFixture):
         self.fail("no expected frame within the bounded I-Am drain")
 
     async def test_three_rejection_naks_then_read_property_on_each_fresh_native_socket(self):
+        source = b"\x22" * 6
+        rp = b"\x01\x04\x00\x03\x11\x0c\x0c\0\0\0\0\x19\x55"
+        await self.exercise_rejections((
+            (b"\x0a\0\x22\x33\x42", b"\0\0\x22\x33\x0a\1\0\0\7\0\7"),
+            (b"\x01\0\x22\x33" + rp, b"\0\0\x22\x33\1\1\0\0\7\0\x50"),
+            (b"\x01\x0a\x22\x33" + source + b"\xe2\0\0\x1f" + rp,
+             b"\0\4\x22\x33" + source + b"\1\1\xe2\0\7\0\x92"),
+        ))
+
+    async def exercise_rejections(self, cases):
+        """Real fake-hub seam shared with zero-payload tests, never a native hub."""
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.minimum_version = context.maximum_version = ssl.TLSVersion.TLSv1_3
         context.load_cert_chain(self.path("hub.pem"), self.path("hub.key"))
@@ -63,16 +74,15 @@ class RejectionDeadlineTests(mtls.MtlsFixture):
                 await self.send_frame(writer, b"\x07\0\0\1" + mtls.HUB_VMAC + mtls.HUB_UUID + b"\x05\xc4\x05\xc4")
                 # Independent RP AI0/PV bytes. Neither rejected NPDU may dispatch.
                 rp = b"\x01\x04\x00\x03\x11\x0c\x0c\0\0\0\0\x19\x55"
-                cases = (
-                    (b"\x0a\0\x22\x33\x42", b"\0\0\x22\x33\x0a\1\0\0\7\0\7"),
-                    (b"\x01\0\x22\x33" + rp, b"\0\0\x22\x33\1\1\0\0\7\0\x50"),
-                    (b"\x01\x0a\x22\x33" + source + b"\xe2\0\0\x1f" + rp,
-                     b"\0\4\x22\x33" + source + b"\1\1\xe2\0\7\0\x92"),
-                )
                 for rejected, nak in cases:
                     with self.subTest(function=rejected[0], flags=rejected[1]):
                         await self.send_frame(writer, rejected)
-                        self.assertEqual(await self.binary(reader), nak)
+                        if nak is not None:
+                            self.assertEqual(await self.binary(reader), nak)
+                        # Invalid-request barrier detects unexpected responses
+                        # without refreshing liveness or relying on a silence wait.
+                        await self.send_frame(writer, b"\x0a\0\x77\x88\x42")
+                        self.assertEqual(await self.binary(reader), b"\0\0\x77\x88\x0a\1\0\0\7\0\7")
                 await self.send_frame(writer, b"\x01\x08\x44\x55" + source + rp)
                 response = await self.binary(reader)
                 self.assertEqual(response[:2], b"\x01\x04")

@@ -27,6 +27,7 @@ mod connection;
 mod connector;
 mod control_admission;
 mod data_attributes;
+mod empty_npdu;
 mod errors;
 mod failover;
 mod handshake;
@@ -74,8 +75,8 @@ pub trait WebSocketPort: Send + Sync + 'static {
 
 /// BACnet/SC transport implementing [`TransportPort`].
 ///
-/// Node control/source/Must-Understand rejection NAKs use the remaining accepted-
-/// activity heartbeat budget. On expiry the send future is dropped and the socket
+/// Node control/source/Must-Understand/missing-NPDU-payload rejection NAKs use the
+/// remaining accepted-activity heartbeat budget. On expiry the send future is dropped and the socket
 /// is retired from transport-initiated I/O, including reconnect/primary restore.
 /// This local policy is not a deadline for other writes or a hard real-time bound:
 /// it requires a cooperative, timer-enabled runtime and available state locks.
@@ -473,7 +474,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                         continue;
                                     }
 
-                                    // Local admission policy: MU-rejected NPDUs do not
+                                    // Local admission policy: rejected NPDUs do not
                                     // refresh activity or retire an outstanding probe.
                                     last_bvlc_received = Instant::now();
                                     pending_heartbeat_id = None;
@@ -763,6 +764,9 @@ mod state_watch_tests;
 
 #[cfg(test)]
 mod source_admission_tests;
+
+#[cfg(test)]
+mod empty_npdu_tests;
 
 #[cfg(test)]
 mod primary_restore_tests;

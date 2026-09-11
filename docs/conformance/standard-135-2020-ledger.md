@@ -13,12 +13,54 @@
 - Addenda/errata status: No external addenda/errata check was performed. The local Standard 135-2020 source contract was reviewed for Clause 12.52 and Table 12-61, Clause 21 `BACnetNotifyType`, and Clause 15.7 RPM selector exclusions.
 - PR-0808 evidence row: `BACNET-12-ALERT-ENROLLMENT-TABLE-12-61` is `supported-with-clause-evidence` for the served object model only; it is not an Alert evaluator or notification-generation claim.
 
+## Empty Encapsulated-NPDU admission
+
+Current-dev scoped supplement to `BACNET-AB-SC-CONNECTION-STATE` (Refs #519).
+#519 remains open/partial; all 68 rows, 19 supported rows, statuses, global
+provenance, historical tranches and #517 A1–A6 acceptance remain unchanged.
+
+| Contract / source | Implementation | Evidence |
+|---|---|---|
+| Base Standard 135-2020 AB.2.5/.1 (PDF 1389 / printed 1387) requires an NPDU payload; AB.3.1.5 (PDF 1396 / printed 1394) specifies absent-required-payload rejection. | [Pure presence predicate](../../crates/bacnet-transport/src/sc_frame/npdu.rs), independent of generic codec syntax. Exactly zero, not a two-byte floor or NPCI/APDU decoding. | [Node vectors](../../crates/bacnet-transport/src/sc/empty_npdu_tests.rs): compiled RED delivery, GREEN, raw option boundaries, one-byte and valid-NPDU compatibility, metadata/source delivery, pure direct-state drop and codec preservation. |
+| AB.3.1.2/.3 (PDF 1395 / printed 1393), AB.2.4.1 (PDF 1389 / printed 1387): response address/ID, marker zero for a non-option error. AB.2 (PDF 1385 / printed 1383): broadcast silence. | [Node admission](../../crates/bacnet-transport/src/sc/empty_npdu.rs) after existing control/source/MU gates; eligible unicast replies to the valid originating VMAC with COMMUNICATION/PAYLOAD_EXPECTED (7/149, 0x0095). [Registered hub](../../crates/bacnet-transport/src/sc_hub/handler.rs) replies connection-locally, never to a spoofed source. | Exact independent NAK bytes, source/MU combined faults, broadcast silence, and [hub routing/options matrix](../../crates/bacnet-transport/src/sc_hub/empty_npdu_tests.rs). |
+| AB.5.4 (PDF 1403 / printed 1401): drop explicit nonbroadcast node destinations. Existing hub routing-envelope filters remain. | The new node guard is silent for explicit destinations. Registered hub empties with Originating VMAC or no Destination VMAC stay silent. Pre-registration OTHER behavior is unchanged. Hub options including MU remain opaque. | Node destination matrix; compiled RED hub relay; two-recipient no-fanout barriers, unknown/zero destinations, preregistration characterization and later Connect, exact positive option relay, healthy Result/heartbeat/disconnect. |
+| Owner-approved local admission policy, not universal invalid-frame accounting required by AB.6.3 (PDF 1407 / printed 1405). | Empty NPDUs cannot refresh activity or clear pending probes. [Direct connection](../../crates/bacnet-transport/src/sc/connection.rs) drops without mutation inside existing NPDU/state ownership; transport owns NAKs. | Real std::Instant node burst/timeout; hub activity/lease/identity/limits/probe snapshots and independent heartbeat sweep. |
+
+- **Fourth bounded node rejection path:** missing payload reuses the original
+  remaining accepted-activity budget, prompt-error behavior and logical retirement
+  / fresh-only recovery from PR605, after source then MU. No budget reset, fabricated
+  silent expiry, API change or all-writes guarantee. The [deadline suite](../../crates/bacnet-transport/src/sc/rejection_deadline_tests.rs)
+  and [production TLS write-lock gate](../../crates/bacnet-transport/src/sc_tls/rejection_deadline_tests.rs)
+  now include this fourth path; [fresh recovery](../../crates/bacnet-transport/src/sc/rejection_recovery_tests.rs)
+  also tests failed-probe exclusion and identity/limits publication for it.
+- **Hub lifecycle:** [mTLS held-NAK tests](../../crates/bacnet-transport/src/sc_hub/empty_npdu_retirement_tests.rs)
+  exercise existing sticky retirement and same-identity replacement interrupting
+  the supervised handler, with healthy recipients/replacement owners preserved.
+  Registered Connect deadlines remain retired; cleanup retains its existing
+  five-second close bound. No new global hub NAK deadline is claimed.
+- **Installed native DEV evidence:** [two independent seams](../../crates/rusty-bacnet/tests/test_sc_empty_npdu.py)
+  use the public native hub/server and raw mTLS clients to prove no forwarding,
+  then a raw fake hub sends empties directly toward a native NODE (not through the
+  hub guard again). Exact responses, healthy ReadProperty and explicit fresh starts
+  are tested. Rust supplies timing/non-delivery evidence; Python has no exposed
+  short default heartbeat knob and does not claim a native 60-second expiry test.
+- **Limits:** authenticated TLS peers, not preauthentication or MITM proof. Source/MU
+  order is preserved local behavior, not a newly asserted normative priority.
+  Cancellation is not rollback of buffered bytes or already-admitted sends;
+  logical retirement is not immediate OS closure. Cooperative runtime/state-lock
+  assumptions remain; TLS lock tests are not OS backpressure or hard real-time
+  proof. Positive payload validation, codec/encoding policy, pre-registration
+  oddities, other function/liveness/rate policies, Address-Resolution forwarding,
+  all-write budgets, graceful shutdown, CI/dependencies, performance and release
+  qualification remain excluded. No full Annex AB claim or support promotion.
+
 ## Rejection NAK budget and fresh-only recovery
 
 Current-dev scoped supplement to `BACNET-AB-SC-CONNECTION-STATE` (Refs #519).
 #519 remains open/partial. All 68 rows, 19 supported rows, statuses, global
 provenance, historical tranches and closed #513/#517 acceptance remain unchanged.
-This supersedes only the three blocked-NAK gaps in the MU slice below.
+PR605 superseded only the three blocked-NAK gaps in the MU slice below; the
+empty-NPDU supplement above adds the fourth path without broadening other writes.
 
 - **Base Standard 135-2020:** AB.3.1.4/.5 (PDF 1395–1396 / printed 1393–1394)
   provide the existing NAK context; response IDs/addressing and raw option markers
@@ -28,7 +70,7 @@ This supersedes only the three blocked-NAK gaps in the MU slice below.
   qualification and the existing receive-drop policy remain; no new whole-message
   or full Annex AB conformance claim is made.
 - **Owner-approved local policy:** [rejection budget](../../crates/bacnet-transport/src/sc/rejection.rs)
-  bounds only actual control/source/unsupported-MU NAK sends by the original
+  bounds actual control/source/unsupported-MU and now missing-NPDU-payload NAK sends by the original
   accepted-activity heartbeat budget. Late/repeated rejected frames do not reset
   it; elapsed budgets have no positive floor and cannot poll a send as fresh.
   Checks before/after polling prevent accepting completion after the cutoff.
@@ -62,7 +104,8 @@ This supersedes only the three blocked-NAK gaps in the MU slice below.
   old Arc until fresh publication or stop/drop, and external/in-flight references
   may retain it longer: logical retirement is **not immediate OS closure**.
 - **Evidence/limits:** [real-clock deadline tests](../../crates/bacnet-transport/src/sc/rejection_deadline_tests.rs)
-  include compiled RED/GREEN, independent three-path wire vectors, full/remaining
+  retain PR605 compiled RED/GREEN evidence for its three paths; current vectors
+  additionally cover missing payload. Tests cover full/remaining
   budgets, strict cutoff, immediate errors, silence and huge accepted settings.
   [Recovery tests](../../crates/bacnet-transport/src/sc/rejection_recovery_tests.rs)
   track socket identity and simulate retained bytes to detect later flush/retry;
