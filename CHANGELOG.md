@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Scoped SC Device UUID acceptance closeout (#517):** document the owner-approved
+  [six-criterion resolution and evidence](docs/conformance/standard-135-2020-ledger.md#device-identity-acceptance-closeout)
+  for startup/default/nil identity and peer admission. Runtime is unchanged;
+  existing proof is reused. Caller provisioning/durable lifetime storage remain
+  required; nonzero bits remain opaque, with raw/manual and post-start mutable
+  paths excluded. No RFC bit-profile, enforced lifetime or full Annex AB claim.
+  Issue closure belongs to this proposed closeout; earlier entries retain their
+  slice-time behavior and exclusions.
+
 - **Receiving hub peer identity compatibility break (Refs #517):** all-zero
   Device UUIDs in received Connect-Request now fail after TLS/WebSocket setup,
   before activity refresh, registration, capacity decisions or replacement.
@@ -20,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Generic codecs/manual raw sending still allow nil syntax. The Connect-Accept
   extension below supersedes this slice's original response-policy exclusion.
   No pre-dial peer check, certificate binding, persistence or full Annex AB claim;
-  #517 remains open. Earlier startup-only entries describe those slices' scope.
+  #517 remained open at slice time. Earlier startup-only entries describe those slices' scope.
 
 - **Receiving Connect-Accept identity compatibility break (Refs #517):** after
   TLS/WebSocket setup, initiating nodes silently discard an all-zero peer UUID.
@@ -31,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   policy reaches native Python SC client/server startup without API changes.
   Nonzero bits stay opaque; generic nil codec syntax and existing malformed
   Accept silence remain. No persistence, certificate binding, full Annex AB or
-  direct-connection claim; #517 remains open.
+  direct-connection claim; #517 remained open at slice time.
 
 - **Raw SC transport startup compatibility break (Refs #517):** the two-argument
   `ScTransport::new(ws, vmac)` retains its unstarted zero UUID placeholder, but
@@ -47,7 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mutation through public `connection()`. Pure codec/manual WebSocket use, later
   handshake validation, peer admission and internal reconnect/reseed behavior are
   unchanged. Raw runtime fixtures and mTLS benchmarks supply explicit test identities,
-  distinct for coexisting devices. #517 remains open; no full-profile promotion.
+  distinct for coexisting devices. #517 remained open at slice time; no full-profile promotion.
 
 - **Hub-local identity compatibility break (#517):** all four Rust `ScHub`
   startup APIs require a nonzero 16-byte hosting device UUID and reject reserved
@@ -62,7 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   predeployment generation and durable lifetime storage; exact Connect-Accept
   identities survive tested restarts/recreation. No auto-generation, storage,
   UUID-bit policy, certificate binding, remote-peer admission or node/raw transport
-  policy changes. #517 remains open; no conformance/status promotion.
+  policy changes. #517 remained open at slice time; no conformance/status promotion.
 
 - **SC node UUID runtime compatibility break:** `ScServerBuilder` now requires
   `.device_uuid([u8; 16])`; Python `BACnetClient`/`BACnetServer` require the new
@@ -75,7 +84,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it per start. There is no generation/storage backend, version/variant enforcement,
   or detection of changed persisted identity. Rust client identity policy, hubs,
   raw transport defaults, wire admission and VMAC policy are unchanged. Same-UUID
-  hub replacement is intentional. #517 remains open for residual identity work;
+  hub replacement is intentional. #517 remained open at slice time for residual identity work;
   no lifetime-storage or full-profile guarantee. See the
   [Python](docs/python-api.md#sc-device-uuid-migration) and
   [Rust](docs/rust-api.md#sc-device-uuid-migration) migration contracts.

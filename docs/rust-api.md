@@ -1373,7 +1373,9 @@ its hosting device's lifetime UUID: see [hub identity migration](#bacnetsc-hub).
 Raw `ScTransport` now has the [startup guard](#bacnetsc-client-transport) above;
 remote-peer VMAC rules remain unchanged. This does not move
 higher-level builder checks or promise that every local VMAC is rejected before
-dialing. #517 remains open for residual identity work; no PICS/profile promotion.
+dialing. The owner-approved [#517 acceptance closeout](conformance/standard-135-2020-ledger.md#device-identity-acceptance-closeout)
+resolves the scoped default/nil identity problem under these boundaries, not all
+low-level public paths or RFC bit-profile/lifetime enforcement; no PICS/profile promotion.
 
 **Receiving hub compatibility break:** a received Connect-Request with an all-zero
 Device UUID now fails after TLS/WebSocket establishment and before admission,

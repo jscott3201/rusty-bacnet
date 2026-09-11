@@ -25,7 +25,9 @@ remain unchanged. All 68 rows, 19 supported rows and existing statuses are retai
   registry/capacity decisions, commit or replacement. This is a compatibility break
   for legacy nil-request senders, not a pre-dial check or a claim that RFC 4122
   leaves nil UUID syntax undefined. Nonzero bits remain opaque; no version/variant,
-  generation, lifetime storage or certificate binding is added. #517 remains open.
+  generation, lifetime storage or certificate binding is added. The
+  [identity acceptance closeout](#device-identity-acceptance-closeout) below records
+  the owner-approved resolution without broadening this policy.
 - **Source:** licensed base Standard 135-2020 AB.1.5.2–3 (printed 1382/PDF 1384),
   AB.2.10–11 (printed 1389–1390/PDF 1391–1392), and AB.3.1.2/.4/.5 (printed
   1393–1394/PDF 1395–1396). The existing parameter-range classification returns
@@ -63,6 +65,75 @@ remain unchanged. All 68 rows, 19 supported rows and existing statuses are retai
   later-valid recovery and timeout. This is not a new connection-lifecycle or
   caller-owned storage guarantee; raw primary socket retention remains unchanged.
   No full Annex AB/PICS/BTL, new addenda or performance claim is made.
+
+### Device identity acceptance closeout
+
+**Owner-approved scoped resolution of [#517](https://github.com/jscott3201/rusty-bacnet/issues/517):**
+this proposed closeout accepts the delivered startup and received-peer guards,
+with caller-owned provisioning/storage and the exclusions below. Closing the
+scoped issue resolves accidental default/nil identity at those entry points and
+peer admission; it is not literal all-public-API coverage or a new runtime change.
+Issue closure is part of this proposed closeout, not a claim that GitHub is already
+closed before merge.
+
+**Runtime source baseline:**
+[`bde599405c38e2ceb62e23ee628a0f15d1ac9fe2`](https://github.com/jscott3201/rusty-bacnet/tree/bde599405c38e2ceb62e23ee628a0f15d1ac9fe2),
+unchanged by this docs/test closeout. Evidence below refers to that immutable
+runtime and the merged node [#594](https://github.com/jscott3201/rusty-bacnet/pull/594),
+hub [#595](https://github.com/jscott3201/rusty-bacnet/pull/595), raw-start
+[#596](https://github.com/jscott3201/rusty-bacnet/pull/596), Request
+[#597](https://github.com/jscott3201/rusty-bacnet/pull/597) and Accept
+[#600](https://github.com/jscott3201/rusty-bacnet/pull/600) slices. Python lifecycle
+methods below are in `NodeIdentityMtlsTests`.
+
+| ID | Acceptance criterion and disposition | Code/document contract | Existing test evidence |
+|---|---|---|---|
+| A1 | **Met within scope:** distinct nodes coexist with distinct UUIDs and non-colliding VMACs. | [Hub registration](../../crates/bacnet-transport/src/sc_hub/helpers.rs), `hub_client_registration_decision`, distinguishes UUID replacement from VMAC collision. | [`test_distinct_nodes_and_same_uuid_replacement_leave_other_node_usable`](../../crates/rusty-bacnet/tests/test_sc_hub_mtls.py) checks real ReadProperty `72.5` before/after replacement in both client/server roles. |
+| A2 | **Met at approved startup boundaries:** omitted/default/all-zero UUIDs are refused; not every low-level public path. | Rust fixed `[u8; 16]` types enforce length; [raw start](../../crates/bacnet-transport/src/sc/mod.rs) and the startup map below enforce nonzero identity before their owned I/O. Python [owned conversion](../../crates/rusty-bacnet/src/sc_identity.rs) also checks length. | [`test_sc_uuid_validation_precedes_file_and_socket_io`](../../crates/rusty-bacnet/tests/test_sc_node_identity.py), [`test_uuid_required_length_zero_and_vmac_errors_precede_io`](../../crates/rusty-bacnet/tests/test_sc_hub_identity.py) and [`local_hub_identity_rejected_before_bind_on_every_start_api`](../../crates/bacnet-transport/tests/sc_hub_tls.rs) cover missing/wrong-length/zero and no-dial/no-bind boundaries. |
+| A3 | **Met for supplied bytes:** reuse across supported lifecycle/reconnect and intended same-UUID replacement. This is not application disk-storage qualification. | [`reset_for_connect_retry`](../../crates/bacnet-transport/src/sc/reconnect.rs) preserves the local UUID; [hub registration](../../crates/bacnet-transport/src/sc_hub/helpers.rs) replaces the same UUID even with a different VMAC. | [`test_uuid_owned_wire_bytes_across_stop_start_and_recreation`](../../crates/rusty-bacnet/tests/test_sc_hub_mtls.py) mutates the input bytearray after copying and verifies three lifecycles; [`test_hub_owned_identity_survives_stop_start_and_fresh_object`](../../crates/rusty-bacnet/tests/test_sc_hub_mtls.py) checks exact Accept identity. A1 observes incumbent Close and a surviving other node. [Reconnect tests](../../crates/bacnet-transport/src/sc/reconnect_validation_tests.rs) retain UUID/limits through nil-Accept failover, failed primary probes and timeout/redial. |
+| A4 | **Met by the documented provisioning boundary alternative**, not changed-UUID detection after restart. | [Rust provisioning](../rust-api.md#sc-device-uuid-migration) and [Python provisioning](../python-api.md#sc-device-uuid-migration) require predeployment generation, durable storage and the same bytes for the device lifetime. No library backend/history or enforced lifetime immutability. | A3 proves in-memory reuse, not persistence. The [closeout documentation guard](../../crates/bacnet-integration-tests/tests/conformance_ledger.rs) checks this explicit alternative and the linked contracts; detection without application history is not claimed. |
+| A5 | **Met:** hub Connect-Accept carries the configured nonzero hosting device UUID. | All four [Rust hub starts](../../crates/bacnet-transport/src/sc_hub.rs) share pre-bind UUID/VMAC validation; [Accept emission](../../crates/bacnet-transport/src/sc_hub/handler.rs) uses that configured identity. | [`strict_hub_start_family_requires_mutual_tls13_and_preserves_uuid`](../../crates/bacnet-transport/tests/sc_hub_tls.rs), the A2 pre-bind test, and the A3 Python hub test check rejection and exact Accept UUID/VMAC. Request nil rejection and silent Accept discard are additional guards, not bit-profile proof. |
+| A6 | **Preserved:** existing Rust client #92 validation and type propagation. | [`validate_identity`](../../crates/bacnet-client/src/client/mod.rs) checks reserved VMACs then zero UUID before TLS lookup/dial; reconnect validation remains first. | [`sc_client_builder_sends_configured_vmac_and_device_uuid`](../../crates/bacnet-client/src/client/sc_builder_tests.rs), [`sc_client_builder_rejects_reserved_vmac_before_connect`](../../crates/bacnet-client/src/client/sc_builder_tests.rs) and [`sc_client_builder_rejects_broadcast_vmac_and_zero_device_uuid`](../../crates/bacnet-client/src/client/sc_builder_tests.rs). |
+
+**Startup map and exclusions:** [Rust client](../../crates/bacnet-client/src/client/mod.rs)
+validates VMAC/UUID before TLS dial; [Rust server](../../crates/bacnet-server/src/server/sc_builder.rs)
+validates UUID before binding-table lookup/TLS dial, but its VMAC validation may
+follow dialing. All four Rust hub starts validate UUID/VMAC before bind. Python
+node credential-presence checks and [hub CA-first checks](../../crates/rusty-bacnet/src/hub.rs)
+retain precedence before identity preflight/file I/O. The
+[`parse_sc_device_uuid_arg`](../../crates/bacnet-cli/src/transport.rs) CLI parser
+requires fixed-width hex and nonzero bytes; the standalone
+[hub](../../benchmarks/src/bin/bacnet_sc_hub.rs) and
+[device](../../benchmarks/src/bin/sc/device.rs) check identity before credential I/O.
+Raw `ScTransport::start` checks reconnect, heartbeat, then identity before owned
+I/O/socket-take, but cannot undo caller-owned WebSocket creation/dialing.
+`ScConnection::new`, `build_connect_request`, generic codec/manual raw sending and
+post-start mutation through `ScTransport::connection()`'s `Arc<Mutex<ScConnection>>`
+remain outside the guarantee. There is no new rollback or lifetime enforcement.
+
+**Source contract and deferred policy:** the unchanged licensed base 135-2020
+source review covers AB.1.5.3 (printed 1382/PDF 1384), AB.2's prohibition on replies
+to responses (printed 1383/PDF 1385), and AB.6.2 wait/replacement behavior (printed
+1401–1403/PDF 1403–1405). RFC 4122 defines structured
+[variant](https://www.rfc-editor.org/rfc/rfc4122.html#section-4.1.1) and
+[version](https://www.rfc-editor.org/rfc/rfc4122.html#section-4.1.3) fields and the
+[all-zero nil form](https://www.rfc-editor.org/rfc/rfc4122.html#section-4.1.7).
+The structural recommendation is **not fully implemented** as a bit filter:
+all nonzero 128-bit values remain opaque, including reserved variants. Nonzero is
+not an RFC 4122 bit-profile guarantee. Stronger structural enforcement is explicitly
+**deferred/excluded** by the owner, not marked as passed. Applications must provision
+an appropriate RFC 4122 identity before deployment, durably store it and reuse it
+for the device lifetime. No certificate binding, changed-identity history,
+full Annex AB/PICS/BTL, new addenda or RFC 9562 qualification is claimed.
+
+**Evidence reuse:** Runtime evidence is reused because runtime code is unchanged:
+PR #600's recorded checks include 4,479/4,492 Rust workspace passes and 85 installed
+Python tests with 1,163 subtests. This closeout adds documentation/anchor guards,
+with no fresh native/platform qualification, deployment-storage validation or
+conformance certification. The 68 rows, 19 supported rows, all statuses, source
+JSON and generated PICS/BIBBs/support summary, global August 13 review SHA and historical tranche
+evidence remain unchanged; slice-time open/exclusion notes below are historical,
+not the current issue disposition.
 
 ## Status Taxonomy
 

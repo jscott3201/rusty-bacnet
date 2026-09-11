@@ -157,8 +157,10 @@ environment variables; it does not generate or persist them. See the
 > Hub/node configuration validation rejects missing/all-zero
 > UUIDs, not UUID version/variant bits; no certificate-to-UUID binding or durable
 > change detection is provided. Later application mutation through Rust's public
-> `connection()` is outside the startup guard. [#517](https://github.com/jscott3201/rusty-bacnet/issues/517)
-> remains open. Generated-certificate installed-native tests cover the two-node
+> `connection()` is outside the startup guard. The owner-approved
+> [#517 acceptance closeout](docs/conformance/standard-135-2020-ledger.md#device-identity-acceptance-closeout)
+> resolves the scoped default/nil identity problem with these limits, not an RFC
+> bit-profile or enforced lifetime guarantee. Generated-certificate installed-native tests cover the two-node
 > ReadProperty and same-identity replacement paths, not full Annex AB conformance
 > or your deployment's credentials and lifetime storage.
 

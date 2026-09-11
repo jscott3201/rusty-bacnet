@@ -1789,7 +1789,9 @@ it cannot undo a caller's prior WebSocket dial. Python signatures and earlier
 constructor preflights are unchanged. The raw guard is startup-only, not protection
 against later application mutation through Rust's public `connection()`; see the
 [Rust startup/retry limits](rust-api.md#bacnetsc-client-transport).
-#517 remains open; these local API checks are not certificate-to-UUID
+The owner-approved [#517 acceptance closeout](conformance/standard-135-2020-ledger.md#device-identity-acceptance-closeout)
+resolves the scoped default/nil identity problem with caller-owned provisioning
+and storage. These local API checks are not certificate-to-UUID
 binding, full identity-profile validation, or full Annex AB conformance.
 
 **Receiving hub compatibility break:** legacy raw peers sending an all-zero UUID

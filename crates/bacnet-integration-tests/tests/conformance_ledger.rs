@@ -353,8 +353,9 @@ fn sc_identity_evidence_keeps_caller_storage_and_raw_transport_limits_explicit()
     ] {
         assert!(row["positive_tests"].as_array().unwrap().iter().any(|test| test == anchor));
     }
+    // The machine-readable tranche notes retain their slice-time issue status.
+    assert!(row["notes"].as_str().unwrap().contains("#517 remains open"));
     for body in [row["notes"].as_str().unwrap(), STANDARD_LEDGER] {
-        assert!(body.contains("#517 remains open"));
         assert!(body.contains("changed UUIDs cannot be detected without application history"));
         assert!(body.contains("before transport-owned I/O or startup state changes"));
         assert!(body.contains("same owned WebSocket"));
@@ -477,7 +478,7 @@ fn sc_peer_uuid_evidence_retains_silent_accept_policy_without_status_promotion()
     for phrase in [
         "Local security policy",
         "Nonzero bits remain opaque",
-        "#517 remains open",
+        "Owner-approved scoped resolution",
         "Connect-Accept with a zero UUID is silently discarded",
         "prohibits replies to response messages",
         "local diagnostic, not a wire NAK",
@@ -519,6 +520,97 @@ fn public_claim_guard_rejects_unknown_status_for_public_claim() {
     assert!(errors
         .iter()
         .any(|e| e.contains("unknown-pending-source-review")));
+}
+
+fn sc_identity_closeout() -> &'static str {
+    let heading = "### Device identity acceptance closeout\n";
+    let section = STANDARD_LEDGER.split_once(heading).unwrap();
+    section.1.split("\n## ").next().unwrap()
+}
+
+#[test]
+fn sc_identity_closeout_maps_six_criteria_without_promoting_excluded_guarantees() {
+    let body = sc_identity_closeout();
+    let criteria: Vec<_> = body.split("\n| A").skip(1).collect();
+    assert_eq!(criteria.len(), 6);
+    for (index, evidence) in [
+        "test_distinct_nodes_and_same_uuid_replacement_leave_other_node_usable",
+        "test_sc_uuid_validation_precedes_file_and_socket_io",
+        "test_uuid_owned_wire_bytes_across_stop_start_and_recreation",
+        "documented provisioning boundary",
+        "strict_hub_start_family_requires_mutual_tls13_and_preserves_uuid",
+        "sc_client_builder_sends_configured_vmac_and_device_uuid",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let row = criteria[index].lines().next().unwrap();
+        assert!(row.starts_with(&format!("{} |", index + 1)));
+        assert!(row.contains(evidence) && row.contains("]("), "{evidence}");
+    }
+    let normalized = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    for boundary in [
+        "proposed closeout",
+        "caller-owned provisioning/storage",
+        "non-colliding VMACs",
+        "all nonzero 128-bit values",
+        "deferred/excluded",
+        "not fully implemented",
+        "not literal all-public-API coverage",
+        "post-start mutation",
+        "cannot undo caller-owned WebSocket",
+        "VMAC validation may follow dialing",
+        "not application disk-storage qualification",
+        "Runtime evidence is reused",
+        "no fresh native/platform qualification",
+        "full Annex AB/PICS/BTL",
+        "bde599405c38e2ceb62e23ee628a0f15d1ac9fe2",
+    ] {
+        let present = normalized.contains(boundary);
+        assert!(present, "missing boundary: {boundary}");
+    }
+    for section in ["4.1.1", "4.1.3", "4.1.7"] {
+        let rfc = "https://www.rfc-editor.org/rfc/rfc4122.html";
+        assert!(body.contains(&format!("{rfc}#section-{section}")));
+    }
+    assert!(!body.contains("#517 remains open"));
+}
+
+#[test]
+fn sc_identity_closeout_links_and_symbol_anchors_resolve_offline() {
+    let target = "conformance/standard-135-2020-ledger.md#device-identity-acceptance-closeout";
+    for (doc, prefix) in [
+        ("README.md", "docs/"),
+        ("CHANGELOG.md", "docs/"),
+        ("docs/rust-api.md", ""),
+        ("docs/python-api.md", ""),
+    ] {
+        let link = format!("]({prefix}{target})");
+        assert!(read_repo_file(doc).contains(&link), "{doc}");
+    }
+    let links = sc_identity_closeout()
+        .split('[')
+        .filter_map(|s| s.split_once("]("));
+    for (label, link) in links {
+        let target = link.split(')').next().unwrap();
+        if target.starts_with("https://") {
+            continue;
+        }
+        let (path, anchor) = target.split_once('#').unwrap_or((target, ""));
+        let source = read_repo_file(&format!("docs/conformance/{path}"));
+        if !anchor.is_empty() {
+            // Both provisioning links target level-four, plain-word headings.
+            let heading = format!("#### {}", anchor.replace('-', " "));
+            let lower = source.to_lowercase();
+            assert!(lower.lines().any(|s| s == heading), "{target}");
+        }
+        if label.starts_with('`') {
+            let symbol = label.trim_matches('`');
+            let rust = source.contains(&format!("fn {symbol}("));
+            let python = source.contains(&format!("def {symbol}("));
+            assert!(rust || python, "missing {symbol} in {path}");
+        }
+    }
 }
 
 #[test]
