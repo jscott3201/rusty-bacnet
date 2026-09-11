@@ -128,14 +128,12 @@ pub(crate) fn invalid_connects(function: u8, local: [u8; 6]) -> Vec<InvalidConne
             cases.push(invalid);
         }
     }
+    cases.extend(zero_uuid_requests());
     for invalid in &mut cases {
         invalid.wire[0] = function;
         if function == 7 {
             invalid.nak = None;
         }
-    }
-    if function == 6 {
-        cases.extend(zero_uuid_requests());
     }
     cases
 }

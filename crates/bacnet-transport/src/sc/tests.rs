@@ -23,7 +23,7 @@ fn connection_flow() {
 
     let mut accept_payload = Vec::with_capacity(26);
     accept_payload.extend_from_slice(&[0x10; 6]); // hub VMAC
-    accept_payload.extend_from_slice(&[0u8; 16]); // hub UUID
+    accept_payload.extend_from_slice(&[0x33; 16]); // hub UUID
     accept_payload.extend_from_slice(&1476u16.to_be_bytes());
     accept_payload.extend_from_slice(&1476u16.to_be_bytes());
     let accept = ScMessage {
@@ -266,7 +266,7 @@ fn connect_accept_with_payload_sets_hub_max_bvlc_and_apdu() {
 
     let mut accept_payload = Vec::with_capacity(26);
     accept_payload.extend_from_slice(&[0x10; 6]); // hub VMAC
-    accept_payload.extend_from_slice(&[0u8; 16]); // hub Device UUID
+    accept_payload.extend_from_slice(&[0x33; 16]); // hub Device UUID
     accept_payload.extend_from_slice(&1200u16.to_be_bytes()); // Max-BVLC-Length
     accept_payload.extend_from_slice(&480u16.to_be_bytes()); // Max-NPDU-Length
 
@@ -438,7 +438,7 @@ async fn hub_accept_with_limits(
 
     let mut accept_payload = Vec::with_capacity(26);
     accept_payload.extend_from_slice(&hub_vmac);
-    accept_payload.extend_from_slice(&[0u8; 16]); // Device UUID
+    accept_payload.extend_from_slice(&[0x33; 16]); // Device UUID
     accept_payload.extend_from_slice(&max_bvlc.to_be_bytes());
     accept_payload.extend_from_slice(&max_npdu.to_be_bytes());
 
@@ -752,6 +752,7 @@ fn connect_accept_validates_message_id() {
     let req_id = req.message_id;
     let mut payload = vec![0u8; 26];
     payload[..6].fill(0x10); // non-reserved hub VMAC
+    payload[6..22].fill(0x33); // nonzero hub UUID
 
     let accept = ScMessage {
         function: ScFunction::ConnectAccept,
@@ -772,6 +773,7 @@ fn connect_accept_rejects_wrong_message_id() {
     let _req = conn.build_connect_request();
     let mut payload = vec![0u8; 26];
     payload[..6].fill(0x10); // isolate the correlation failure
+    payload[6..22].fill(0x33); // otherwise valid peer identity
 
     let accept = ScMessage {
         function: ScFunction::ConnectAccept,

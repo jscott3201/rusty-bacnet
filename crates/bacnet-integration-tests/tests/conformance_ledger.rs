@@ -432,7 +432,7 @@ fn public_claim_guard_rejects_missing_ledger_row() {
 }
 
 #[test]
-fn sc_peer_uuid_evidence_is_request_only_without_status_promotion() {
+fn sc_peer_uuid_evidence_retains_silent_accept_policy_without_status_promotion() {
     let data = ledger();
     let rows = rows_by_id(&data);
     let row = rows["BACNET-AB-SC-CONNECTION-STATE"];
@@ -441,21 +441,47 @@ fn sc_peer_uuid_evidence_is_request_only_without_status_promotion() {
         "implementation-present-needs-state-machine-audit"
     );
     for anchor in [
+        "crates/bacnet-transport/src/sc/connect_validation_tests.rs",
+        "crates/bacnet-transport/src/sc/reconnect_validation_tests.rs",
+        "crates/bacnet-transport/src/sc_tls/connect_accept_tests.rs",
+    ] {
+        assert!(row["code_anchors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|code| code == anchor));
+    }
+    for anchor in [
         "crates/bacnet-transport/src/sc_hub/peer_uuid_tests.rs::zero_uuid_mtls_request_never_reaches_admission",
         "crates/bacnet-transport/src/sc_hub/peer_uuid_tests.rs::zero_uuid_mtls_collision_at_capacity_preserves_live_peers",
         "crates/bacnet-transport/src/sc_hub/peer_uuid_tests.rs::zero_uuid_mtls_repeat_flood_preserves_activity_probe_and_registration",
         "crates/rusty-bacnet/tests/test_sc_peer_uuid.py::PeerUuidTests::test_nil_request_nak_close_repeat_and_surviving_native_read",
+        "crates/bacnet-transport/src/sc/connect_validation_tests.rs::connect_accept_zero_uuid_is_transactional_in_every_state",
+        "crates/bacnet-transport/src/sc/connect_validation_tests.rs::connect_accept_nil_only_and_flood_keep_absolute_deadline",
+        "crates/bacnet-transport/src/sc/connect_validation_tests.rs::connect_accept_nil_wrong_id_is_discarded_but_valid_wrong_id_is_terminal",
+        "crates/bacnet-transport/src/sc/reconnect_validation_tests.rs::nil_accept_failover_and_failed_primary_probe_preserve_active_identity_and_limits",
+        "crates/bacnet-transport/src/sc/reconnect_validation_tests.rs::nil_accept_reconnect_probe_times_out_then_redials_without_reseeding",
+        "crates/bacnet-transport/src/sc_tls/connect_accept_tests.rs::nil_accept_tls_expires_without_peer_identity_or_limits",
+        "crates/rusty-bacnet/tests/test_sc_accept_uuid.py::AcceptUuidTests::test_native_nodes_nil_accept_expires_without_connecting",
     ] {
         assert!(row["negative_tests"].as_array().unwrap().iter().any(|test| test == anchor));
     }
-    assert!(row["positive_tests"].as_array().unwrap().iter().any(|test| test ==
-        "crates/bacnet-transport/src/sc/connect_validation_tests.rs::connect_accept_zero_uuid_remains_valid"));
+    for anchor in [
+        "crates/bacnet-transport/src/sc_frame/connect.rs::tests::nonzero_uuid_bits_remain_opaque",
+        "crates/bacnet-transport/src/sc/connect_validation_tests.rs::connect_accept_invalid_matrix_waits_silently_for_valid_accept",
+        "crates/bacnet-transport/src/sc_tls/connect_accept_tests.rs::nil_accept_tls_is_silent_until_later_valid_accept",
+        "crates/rusty-bacnet/tests/test_sc_accept_uuid.py::AcceptUuidTests::test_native_nodes_wait_silently_then_accept_valid_uuid",
+    ] {
+        assert!(row["positive_tests"].as_array().unwrap().iter().any(|test| test == anchor));
+    }
     for phrase in [
         "Local security policy",
         "Nonzero bits remain opaque",
         "#517 remains open",
-        "Connect-Accept with a zero UUID is unchanged",
-        "separate response-policy",
+        "Connect-Accept with a zero UUID is silently discarded",
+        "prohibits replies to response messages",
+        "local diagnostic, not a wire NAK",
+        "without publishing Connected or resetting the absolute connect",
         "manual raw sending still permit nil syntax",
         "not a pre-dial check",
     ] {

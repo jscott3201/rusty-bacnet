@@ -10,7 +10,7 @@ async fn hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
 
     let mut accept_payload = Vec::with_capacity(26);
     accept_payload.extend_from_slice(&hub_vmac);
-    accept_payload.extend_from_slice(&[0u8; 16]);
+    accept_payload.extend_from_slice(&[0x33; 16]);
     accept_payload.extend_from_slice(&1476u16.to_be_bytes());
     accept_payload.extend_from_slice(&1476u16.to_be_bytes());
 
@@ -450,7 +450,7 @@ async fn sc_connect_duplicate_vmac_nak_retries_failover_with_new_vmac() {
 
         let mut accept_payload = Vec::with_capacity(26);
         accept_payload.extend_from_slice(&[0x20; 6]);
-        accept_payload.extend_from_slice(&[0u8; 16]);
+        accept_payload.extend_from_slice(&[0x33; 16]);
         accept_payload.extend_from_slice(&1476u16.to_be_bytes());
         accept_payload.extend_from_slice(&1476u16.to_be_bytes());
         let accept = ScMessage {

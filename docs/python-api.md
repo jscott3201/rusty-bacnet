@@ -1800,8 +1800,14 @@ reply-addressing/suppression rules. New malformed peers close; malformed repeats
 leave the registered peer's limits and heartbeat/activity state intact. Python
 constructors are unchanged by this receive check. Nonzero UUID bits remain opaque;
 generic Rust codecs and manual raw WebSocket sending still permit nil syntax.
-Connect-Accept with a zero UUID is unchanged pending a separate response-policy
-decision. This is local policy, not UUID-profile or lifetime-storage validation.
+Native `BACnetClient` async entry and `BACnetServer.start()` silently discard
+Connect-Accept with a zero UUID after TLS/WebSocket setup. AB.2 prohibits replies
+to response messages, so no NAK is sent. Invalid Accepts do not complete startup
+or install peer identity/limits and do not reset the original connect wait. A
+later valid Accept can complete that handshake; nil-only traffic times out.
+Generated-certificate installed-native tests cover both paths without changing
+Python signatures or exception mapping. This is local policy, not UUID-profile
+or lifetime-storage validation; post-handshake startup rollback is not expanded.
 See the [scoped evidence](conformance/standard-135-2020-ledger.md#received-peer-uuid-admission).
 
 #### Required operational credentials

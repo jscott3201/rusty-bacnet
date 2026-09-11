@@ -1384,8 +1384,15 @@ suppression. New malformed peers close; malformed repeats retain registration,
 negotiated limits and heartbeat/activity state. Legacy raw peers must supply a
 nonzero UUID. This local policy treats nonzero bits as opaque, including sparse
 or non-RFC-shaped values; generic encoding/decoding and manual raw sending still
-permit nil syntax. Connect-Accept with a zero UUID is unchanged pending a separate
-response-policy decision. No UUID version/variant, generation, storage or
+permit nil syntax. Initiating nodes silently discard Connect-Accept with a zero
+UUID after TLS/WebSocket setup. AB.2 forbids replies to response messages: the
+internal range classification is not a wire NAK. Rejection leaves pending state,
+peer identity/limits and local identity unchanged and does not restart the
+absolute connect wait. A later valid Accept can complete the same handshake;
+nil-only traffic times out. Invalid-plus-wrong-ID Accepts are discarded, while
+otherwise-valid wrong-ID Accepts retain the terminal mismatch error. Failed
+restoration probes do not replace the active failover or reseed the local VMAC.
+No UUID version/variant, generation, storage or
 certificate-binding policy is added. See the [scoped evidence](conformance/standard-135-2020-ledger.md#received-peer-uuid-admission).
 
 ```rust

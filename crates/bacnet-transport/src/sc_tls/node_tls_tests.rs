@@ -3,6 +3,9 @@ use rustls::{HandshakeKind, ProtocolVersion};
 use std::time::Duration;
 use tokio_rustls::TlsAcceptor;
 
+#[path = "connect_accept_tests.rs"]
+mod connect_accept_tests;
+
 async fn observe_connections(rounds: usize) -> Vec<HandshakeKind> {
     // An independent trusted server, deliberately NOT ScHub: no client verifier
     // and no CertificateRequest. This characterizes the local contract's limit.

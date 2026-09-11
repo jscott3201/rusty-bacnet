@@ -142,7 +142,7 @@ async fn hub_accept(hub: &LoopbackWebSocket, vmac: Vmac) {
     let request = decode_sc_message(&request).unwrap();
     assert_eq!(request.function, ScFunction::ConnectRequest);
     let mut payload = Vec::from(vmac);
-    payload.extend_from_slice(&[0; 16]);
+    payload.extend_from_slice(&[0x33; 16]);
     payload.extend_from_slice(&1476u16.to_be_bytes());
     payload.extend_from_slice(&1476u16.to_be_bytes());
     let accept = ScMessage {
@@ -250,4 +250,198 @@ async fn wait_for_hub<W: WebSocketPort>(transport: &ScTransport<W>, vmac: Vmac) 
     })
     .await
     .unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn nil_accept_failover_and_failed_primary_probe_preserve_active_identity_and_limits() {
+    use crate::sc_frame::connect_test_support::valid_connect;
+
+    let (primary, primary_hub) = LoopbackWebSocket::pair();
+    let (failover, failover_hub) = LoopbackWebSocket::pair();
+    let (hub_tx, mut hub_rx) = mpsc::unbounded_channel();
+    let vmac = [0x22; 6];
+    let uuid = [0x12; 16];
+    let mut transport = ScTransport::new(primary, vmac)
+        .with_device_uuid(uuid)
+        .with_failover(failover)
+        .with_connect_timeout_ms(500)
+        .with_reconnect(ScReconnectConfig {
+            initial_delay_ms: 1000,
+            max_delay_ms: 1000,
+            max_retries: 0,
+        })
+        .with_connector(move || {
+            let (client, hub) = LoopbackWebSocket::pair();
+            hub_tx.send(hub).unwrap();
+            async { Ok(client) }
+        });
+    let state = transport.connection_state_changes();
+    let primary_reject = async {
+        let request = primary_hub.recv().await.unwrap();
+        let mut nil = valid_connect(7, [0x10; 6]);
+        nil[2..4].copy_from_slice(&request[2..4]);
+        nil[10..26].fill(0);
+        primary_hub.send(&nil).await.unwrap();
+        // The raw primary socket is retained for restoration by this API;
+        // receiving nil must not produce a response during its connect wait.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), primary_hub.recv())
+                .await
+                .is_err()
+        );
+    };
+    let failover_accept = async {
+        let request = failover_hub.recv().await.unwrap();
+        assert_eq!(&request[4..10], &vmac);
+        assert_eq!(&request[10..26], &uuid);
+        let mut wire = valid_connect(7, [0x20; 6]);
+        wire[2..4].copy_from_slice(&request[2..4]);
+        wire[10..26].fill(0);
+        failover_hub.send(&wire).await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), failover_hub.recv())
+                .await
+                .is_err()
+        );
+        assert_eq!(*state.borrow(), ScConnectionState::Connecting);
+        wire[10..26].fill(0x33);
+        failover_hub.send(&wire).await.unwrap();
+    };
+    let (started, (), ()) = tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::join!(transport.start(), primary_reject, failover_accept)
+    })
+    .await
+    .unwrap();
+    let _rx = started.unwrap();
+    wait_for_hub(&transport, [0x20; 6]).await;
+    let conn = transport.connection().unwrap().clone();
+    let before = conn.lock().await.clone();
+    let effective_limit = transport.max_apdu_length();
+
+    let probe_hub = tokio::time::timeout(Duration::from_secs(2), hub_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let request = probe_hub.recv().await.unwrap();
+    assert_eq!(&request[4..10], &vmac);
+    assert_eq!(&request[10..26], &uuid);
+    let mut nil = valid_connect(7, [0x10; 6]);
+    nil[2..4].copy_from_slice(&request[2..4]);
+    nil[10..26].fill(0);
+    nil[26..30].copy_from_slice(&[0, 16, 0, 1]); // poison limits if committed early
+    probe_hub.send(&nil).await.unwrap();
+    // A failed nil-only restoration must neither publish the primary nor
+    // disconnect the failover. It must keep the failover's larger limits.
+    assert!(
+        tokio::time::timeout(Duration::from_secs(1), probe_hub.recv())
+            .await
+            .unwrap()
+            .is_err()
+    );
+    {
+        let after = conn.lock().await;
+        assert_eq!(after.state, ScConnectionState::Connected);
+        assert_eq!(after.local_vmac, before.local_vmac);
+        assert_eq!(after.device_uuid, before.device_uuid);
+        assert_eq!(after.hub_vmac, before.hub_vmac);
+        assert_eq!(after.hub_device_uuid, before.hub_device_uuid);
+        assert_eq!(after.hub_max_bvlc_length, before.hub_max_bvlc_length);
+        assert_eq!(after.hub_max_apdu_length, before.hub_max_apdu_length);
+        assert_eq!(after.next_message_id, before.next_message_id);
+        assert_eq!(
+            after.pending_connect_message_id,
+            before.pending_connect_message_id
+        );
+        assert_eq!(after.connect_retry_allowed, before.connect_retry_allowed);
+    }
+    assert_eq!(transport.max_apdu_length(), effective_limit);
+    transport
+        .send_unicast(&[1, 2, 3], &[0x44; 6])
+        .await
+        .unwrap();
+    let data = failover_hub.recv().await.unwrap();
+    assert_eq!(
+        data[0], 1,
+        "nil probe must not disconnect the active failover"
+    );
+    assert_eq!(&data[data.len() - 3..], &[1, 2, 3]);
+
+    let restored = tokio::time::timeout(Duration::from_secs(2), hub_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    hub_accept(&restored, [0x10; 6]).await;
+    wait_for_hub(&transport, [0x10; 6]).await;
+    assert_eq!(transport.local_mac(), vmac);
+    assert_eq!(conn.lock().await.device_uuid, uuid);
+    transport.stop().await.unwrap();
+    assert!(transport.recv_task.is_none());
+    assert!(transport.restore_disconnect_task.lock().unwrap().is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn nil_accept_reconnect_probe_times_out_then_redials_without_reseeding() {
+    use crate::sc_frame::connect_test_support::valid_connect;
+
+    let (primary, primary_hub) = LoopbackWebSocket::pair();
+    let (hub_tx, mut hub_rx) = mpsc::unbounded_channel();
+    let mut transport = ScTransport::new(primary, [0x22; 6])
+        .with_device_uuid([0x12; 16])
+        .with_connect_timeout_ms(500)
+        .with_reconnect(ScReconnectConfig {
+            initial_delay_ms: 1000,
+            max_delay_ms: 1000,
+            max_retries: 2,
+        })
+        .with_connector(move || {
+            let (client, hub) = LoopbackWebSocket::pair();
+            hub_tx.send(hub).unwrap();
+            async { Ok(client) }
+        });
+    let (started, ()) = tokio::join!(transport.start(), hub_accept(&primary_hub, [0x10; 6]));
+    let _rx = started.unwrap();
+    let state = transport.connection_state_changes();
+    let conn = transport.connection().unwrap().clone();
+    let before = conn.lock().await.clone();
+    drop(primary_hub);
+
+    let nil_hub = tokio::time::timeout(Duration::from_secs(2), hub_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let request = nil_hub.recv().await.unwrap();
+    assert_eq!(&request[4..10], &before.local_vmac);
+    assert_eq!(&request[10..26], &before.device_uuid);
+    let mut nil = valid_connect(7, [0x44; 6]);
+    nil[2..4].copy_from_slice(&request[2..4]);
+    nil[10..26].fill(0);
+    nil[26..30].copy_from_slice(&[0, 16, 0, 1]);
+    nil_hub.send(&nil).await.unwrap();
+    assert!(tokio::time::timeout(Duration::from_secs(1), nil_hub.recv())
+        .await
+        .unwrap()
+        .is_err());
+    assert_ne!(*state.borrow(), ScConnectionState::Connected);
+    {
+        let after = conn.lock().await;
+        assert_eq!(after.local_vmac, before.local_vmac);
+        assert_eq!(after.device_uuid, before.device_uuid);
+        assert_eq!(after.hub_max_bvlc_length, before.hub_max_bvlc_length);
+        assert_eq!(after.hub_max_apdu_length, before.hub_max_apdu_length);
+        assert_ne!(after.hub_device_uuid, Some([0; 16]));
+    }
+    let good_hub = tokio::time::timeout(Duration::from_secs(2), hub_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let request = good_hub.recv().await.unwrap();
+    assert_eq!(&request[4..10], &before.local_vmac);
+    assert_eq!(&request[10..26], &before.device_uuid);
+    let mut good = valid_connect(7, [0x44; 6]);
+    good[2..4].copy_from_slice(&request[2..4]);
+    good_hub.send(&good).await.unwrap();
+    wait_for_hub(&transport, [0x44; 6]).await;
+    assert_eq!(conn.lock().await.hub_device_uuid, Some([0x33; 16]));
+    transport.stop().await.unwrap();
+    assert!(transport.recv_task.is_none());
 }

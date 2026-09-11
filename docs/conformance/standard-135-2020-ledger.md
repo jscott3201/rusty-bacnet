@@ -40,12 +40,28 @@ remain unchanged. All 68 rows, 19 supported rows and existing statuses are retai
   repeats preserve sink/identity, negotiated limits, heartbeat and activity.
   Intended valid same-UUID replacement and valid-repeat handling remain unchanged.
 - Generic encode/decode and manual raw sending still permit nil syntax.
-  **Connect-Accept with a zero UUID is unchanged pending a separate response-policy
-  decision.** This slice does not broaden the node's existing silent-discard policy.
+  **Connect-Accept with a zero UUID is silently discarded** after TLS/WebSocket
+  setup, extending the local nonzero policy to initiating peers. AB.2 (printed
+  1383/PDF 1385) prohibits replies to response messages, including Connect-Accept;
+  the AB.3.1.5 range classification is a local diagnostic, not a wire NAK. This
+  retains the node's existing malformed-Accept silence, including envelope/MU
+  multi-fault cases. Nil precedes MU in local diagnostic selection.
+- Rejection preserves pending state, peer identity/limits, local UUID/VMAC and
+  retry fields, without publishing Connected or resetting the absolute connect
+  deadline. A later valid Accept can complete the same handshake; nil-only/flood
+  traffic expires the original wait (AB.6.2/.2, printed 1401–1403/PDF 1403–1405).
+  Invalid-plus-wrong-ID is discarded; valid-shape wrong-ID remains a terminal
+  mismatch. Failed primary probes preserve the active failover/send limits; nil
+  Accept never triggers the matching Connect-Request Duplicate-VMAC NAK reseed.
 - Independent wire vectors, request/accept and MU matrices, real mTLS rejection
   and suppression, all 256 registered peers at capacity, repeated nil requests,
   healthy relay, held-NAK absolute deadlines, and installed-native Python raw-peer
-  rejection plus surviving ReadProperty are the bounded acceptance evidence.
+  rejection plus surviving ReadProperty are the bounded Request evidence.
+  Accept evidence adds transactional state snapshots, every single UUID bit and
+  all-ones positives, paused-clock deadlines, failover/primary restoration, real
+  TLS/WebSocket vectors and installed-native Python client/server mTLS rejection,
+  later-valid recovery and timeout. This is not a new connection-lifecycle or
+  caller-owned storage guarantee; raw primary socket retention remains unchanged.
   No full Annex AB/PICS/BTL, new addenda or performance claim is made.
 
 ## Status Taxonomy

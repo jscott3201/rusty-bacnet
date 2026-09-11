@@ -25,9 +25,10 @@ pub(crate) fn connect_message_error(msg: &ScMessage) -> Option<ErrorCode> {
         Some(ErrorCode::INCONSISTENT_PARAMETERS)
     } else if msg.payload[..6] == [0; 6] || msg.payload[..6] == [0xff; 6] {
         Some(ErrorCode::PARAMETER_OUT_OF_RANGE)
-    } else if msg.function == ScFunction::ConnectRequest && msg.payload[6..22] == [0; 16] {
+    } else if msg.payload[6..22] == [0; 16] {
         // Local peer-admission policy, not UUID version/variant validation.
-        // Connect-Accept response policy is deliberately unchanged.
+        // For Connect-Accept this is only a local diagnostic: AB.2 forbids
+        // responding to response messages, so the handshake discards silently.
         Some(ErrorCode::PARAMETER_OUT_OF_RANGE)
     } else if msg.dest_options.iter().any(|option| option.must_understand) {
         // Known-option shape/placement validation remains separate work.
@@ -94,7 +95,7 @@ mod tests {
     use bytes::BytesMut;
 
     #[test]
-    fn zero_uuid_rejection_is_request_only_not_codec_policy() {
+    fn zero_uuid_rejection_is_receive_admission_not_codec_policy() {
         for function in [6, 7] {
             let mut wire = valid_connect(function, [0x22; 6]);
             wire[10..26].fill(0);
@@ -104,11 +105,7 @@ mod tests {
             assert_eq!(&encoded[..], wire, "generic syntax must preserve nil UUID");
             assert_eq!(
                 connect_message_error(&message),
-                if function == 6 {
-                    Some(ErrorCode::PARAMETER_OUT_OF_RANGE)
-                } else {
-                    None
-                },
+                Some(ErrorCode::PARAMETER_OUT_OF_RANGE),
                 "function {function}"
             );
         }
@@ -118,7 +115,7 @@ mod tests {
     fn nonzero_uuid_bits_remain_opaque() {
         for function in [6, 7] {
             for position in 0..16 {
-                for value in [1, 0x80, 0xff] {
+                for value in [1, 2, 4, 8, 0x10, 0x20, 0x40, 0x80, 0xff] {
                     let mut wire = valid_connect(function, [0x22; 6]);
                     wire[10..26].fill(0);
                     wire[10 + position] = value;
@@ -138,7 +135,7 @@ mod tests {
     }
 
     #[test]
-    fn zero_uuid_precedence_keeps_accept_mu_error_and_request_range_error() {
+    fn zero_uuid_precedes_mu_for_local_connect_diagnostics() {
         for function in [6, 7] {
             let mut wire = valid_connect(function, [0x22; 6]);
             wire[10..26].fill(0);
@@ -146,11 +143,7 @@ mod tests {
             wire.insert(4, 0x5e);
             assert_eq!(
                 connect_message_error(&decode_sc_message(&wire).unwrap()),
-                Some(if function == 6 {
-                    ErrorCode::PARAMETER_OUT_OF_RANGE
-                } else {
-                    ErrorCode::HEADER_NOT_UNDERSTOOD
-                })
+                Some(ErrorCode::PARAMETER_OUT_OF_RANGE)
             );
         }
     }

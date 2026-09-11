@@ -17,10 +17,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   malformed repeats preserve their existing registration and liveness state.
   This is local nonzero-identity policy, not UUID version/variant enforcement.
   Nonzero UUIDs remain opaque and intended same-UUID replacement remains.
-  Generic codecs/manual raw sending still allow nil syntax. Connect-Accept zero
-  UUID handling is unchanged pending a separate response-policy decision.
+  Generic codecs/manual raw sending still allow nil syntax. The Connect-Accept
+  extension below supersedes this slice's original response-policy exclusion.
   No pre-dial peer check, certificate binding, persistence or full Annex AB claim;
   #517 remains open. Earlier startup-only entries describe those slices' scope.
+
+- **Receiving Connect-Accept identity compatibility break (Refs #517):** after
+  TLS/WebSocket setup, initiating nodes silently discard an all-zero peer UUID.
+  Annex AB.2 prohibits responses to response messages, so no NAK is sent. Invalid
+  Accepts cannot publish Connected, peer identity or limits, reset the absolute
+  connect wait, or reseed the local VMAC. A later valid Accept can complete the
+  same handshake; nil-only traffic expires the original wait. This local nonzero
+  policy reaches native Python SC client/server startup without API changes.
+  Nonzero bits stay opaque; generic nil codec syntax and existing malformed
+  Accept silence remain. No persistence, certificate binding, full Annex AB or
+  direct-connection claim; #517 remains open.
 
 - **Raw SC transport startup compatibility break (Refs #517):** the two-argument
   `ScTransport::new(ws, vmac)` retains its unstarted zero UUID placeholder, but

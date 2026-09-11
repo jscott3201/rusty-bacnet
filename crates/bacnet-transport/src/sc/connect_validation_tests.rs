@@ -67,27 +67,29 @@ fn connect_accept_reserved_identity_is_transactional() {
     assert_unchanged(&conn, &before);
 }
 
-#[tokio::test]
-async fn connect_accept_zero_uuid_remains_valid() {
-    let (ws, peer) = LoopbackWebSocket::pair();
-    let conn = Arc::new(Mutex::new(sentinel_connection()));
-    let task = tokio::spawn({
-        let conn = conn.clone();
-        async move { perform_handshake(&ws, &conn, None, 5000).await }
-    });
-    let request = decode_sc_message(&peer.recv().await.unwrap()).unwrap();
-    let mut accept = valid_connect(7, [0x22; 6]);
-    accept[2..4].copy_from_slice(&request.message_id.to_be_bytes());
-    accept[10..26].fill(0);
-    peer.send(&accept).await.unwrap();
-    task.await.unwrap().unwrap();
-    let conn = conn.lock().await;
-    assert_eq!(conn.state, ScConnectionState::Connected);
-    assert_eq!(conn.hub_device_uuid, Some([0; 16]));
-    assert_eq!(
-        (conn.hub_max_bvlc_length, conn.hub_max_apdu_length),
-        (8192, 4096)
-    );
+#[test]
+fn connect_accept_zero_uuid_is_transactional_in_every_state() {
+    // Independent AB.2.11 vector: function/flags/ID, VMAC, nil UUID, limits.
+    let wire = [
+        7, 0, 0, 1, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0x20, 0, 0x10, 0,
+    ];
+    let accept = decode_sc_message(&wire).unwrap();
+    for state in [
+        ScConnectionState::Disconnected,
+        ScConnectionState::Connecting,
+        ScConnectionState::Connected,
+        ScConnectionState::Disconnecting,
+    ] {
+        let mut conn = sentinel_connection();
+        assert_eq!(conn.build_connect_request().message_id, 1);
+        conn.state = state;
+        conn.connect_retry_allowed = false;
+        conn.disconnect_ack_to_send = Some(conn.build_heartbeat_ack(42));
+        let before = conn.clone();
+        assert!(!conn.handle_connect_accept(&accept));
+        assert_unchanged(&conn, &before);
+    }
 }
 
 #[test]
@@ -164,19 +166,26 @@ async fn connect_accept_invalid_matrix_waits_silently_for_valid_accept() {
     let (receiving, mut received) = mpsc::unbounded_channel();
     let ws = ObservedWebSocket { inner, receiving };
     let conn = Arc::new(Mutex::new(sentinel_connection()));
+    let (states, mut state) = watch::channel(ScConnectionState::Disconnected);
     let task = tokio::spawn({
         let conn = conn.clone();
-        async move { perform_handshake(&ws, &conn, None, 5000).await }
+        async move { perform_handshake(&ws, &conn, Some(&states), 5000).await }
     });
     let request = decode_sc_message(&peer.recv().await.unwrap()).unwrap();
     next_receive(&mut received).await;
     let before = conn.lock().await.clone();
+    assert_eq!(*state.borrow_and_update(), ScConnectionState::Connecting);
     for case in invalid_connects(7, [0x02; 6]) {
         let mut wire = case.wire;
         wire[2..4].copy_from_slice(&request.message_id.to_be_bytes());
         peer.send(&wire).await.unwrap();
         next_receive(&mut received).await;
         assert_unchanged(&*conn.lock().await, &before);
+        assert!(
+            !state.has_changed().unwrap(),
+            "{} published state",
+            case.name
+        );
         assert!(
             timeout(Duration::from_millis(10), peer.recv())
                 .await
@@ -189,6 +198,7 @@ async fn connect_accept_invalid_matrix_waits_silently_for_valid_accept() {
     valid[2..4].copy_from_slice(&request.message_id.to_be_bytes());
     peer.send(&valid).await.unwrap();
     task.await.unwrap().unwrap();
+    assert_eq!(*state.borrow(), ScConnectionState::Connected);
     let conn = conn.lock().await;
     assert_eq!(conn.state, ScConnectionState::Connected);
     assert_eq!(conn.pending_connect_message_id, None);
@@ -230,4 +240,80 @@ async fn connect_accept_invalid_flood_keeps_absolute_deadline() {
     expected.state = ScConnectionState::Disconnected;
     expected.pending_connect_message_id = None;
     assert_unchanged(&*conn.lock().await, &expected);
+}
+
+#[tokio::test(start_paused = true)]
+async fn connect_accept_nil_only_and_flood_keep_absolute_deadline() {
+    for frames in [1, 9] {
+        let (inner, peer) = LoopbackWebSocket::pair();
+        let (receiving, mut received) = mpsc::unbounded_channel();
+        let ws = ObservedWebSocket { inner, receiving };
+        let conn = Arc::new(Mutex::new(sentinel_connection()));
+        let (states, mut state) = watch::channel(ScConnectionState::Disconnected);
+        let task = tokio::spawn({
+            let conn = conn.clone();
+            async move { perform_handshake(&ws, &conn, Some(&states), 1000).await }
+        });
+        let request = peer.recv().await.unwrap();
+        next_receive(&mut received).await;
+        let started = tokio::time::Instant::now();
+        let mut expected = conn.lock().await.clone();
+        assert_eq!(*state.borrow_and_update(), ScConnectionState::Connecting);
+        let mut nil = valid_connect(7, [0x22; 6]);
+        nil[2..4].copy_from_slice(&request[2..4]);
+        nil[10..26].fill(0);
+        for _ in 0..frames {
+            tokio::time::advance(Duration::from_millis(100)).await;
+            peer.send(&nil).await.unwrap();
+            next_receive(&mut received).await;
+            assert_unchanged(&*conn.lock().await, &expected);
+            assert!(!state.has_changed().unwrap());
+        }
+        tokio::time::advance(Duration::from_millis(1000 - frames * 100)).await;
+        assert!(
+            matches!(task.await.unwrap(), Err(Error::Timeout(d)) if d == Duration::from_secs(1))
+        );
+        assert_eq!(started.elapsed(), Duration::from_secs(1));
+        assert_eq!(*state.borrow(), ScConnectionState::Disconnected);
+        expected.state = ScConnectionState::Disconnected;
+        expected.pending_connect_message_id = None;
+        assert_unchanged(&*conn.lock().await, &expected);
+        // Once the owned socket drops, an empty channel proves no reply was queued.
+        assert!(peer.recv().await.is_err());
+    }
+}
+
+#[tokio::test]
+async fn connect_accept_nil_wrong_id_is_discarded_but_valid_wrong_id_is_terminal() {
+    let (inner, peer) = LoopbackWebSocket::pair();
+    let (receiving, mut received) = mpsc::unbounded_channel();
+    let ws = ObservedWebSocket { inner, receiving };
+    let conn = Arc::new(Mutex::new(sentinel_connection()));
+    let task = tokio::spawn({
+        let conn = conn.clone();
+        async move { perform_handshake(&ws, &conn, None, 5000).await }
+    });
+    let request = decode_sc_message(&peer.recv().await.unwrap()).unwrap();
+    next_receive(&mut received).await;
+    let mut expected = conn.lock().await.clone();
+    let mut accept = valid_connect(7, [0x22; 6]);
+    accept[2..4].copy_from_slice(&request.message_id.wrapping_add(1).to_be_bytes());
+    accept[10..26].fill(0);
+    peer.send(&accept).await.unwrap();
+    next_receive(&mut received).await;
+    assert_unchanged(&*conn.lock().await, &expected);
+    assert!(timeout(Duration::from_millis(10), peer.recv())
+        .await
+        .is_err());
+    accept[10..26].fill(0xff);
+    peer.send(&accept).await.unwrap();
+    let error = task.await.unwrap().unwrap_err();
+    assert_eq!(
+        ScConnectError::from_error(&error),
+        Some(&ScConnectError::ConnectAcceptMismatch)
+    );
+    expected.state = ScConnectionState::Disconnected;
+    expected.pending_connect_message_id = None;
+    assert_unchanged(&*conn.lock().await, &expected);
+    assert!(peer.recv().await.is_err());
 }

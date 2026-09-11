@@ -167,8 +167,11 @@ hub rejects an all-zero Device UUID in Connect-Request before registration or
 replacement, using `COMMUNICATION/PARAMETER_OUT_OF_RANGE` (7/80), not a
 duplicate-VMAC error. Legacy raw senders must provision a nonzero identity.
 Nonzero UUID bits remain opaque; generic encoding/manual raw sending still work.
-Connect-Accept with a zero UUID is unchanged pending a separate response-policy
-decision. See the [receive boundary and evidence](docs/conformance/standard-135-2020-ledger.md#received-peer-uuid-admission).
+Initiating nodes silently discard Connect-Accept with a zero UUID: no NAK or
+state/peer-limit commit, and no connect-deadline reset. A later valid Accept can
+complete the same handshake; otherwise the original wait expires. This post-TLS
+local policy also applies to Python SC client/server startup, without API changes.
+See the [receive boundary and evidence](docs/conformance/standard-135-2020-ledger.md#received-peer-uuid-admission).
 
 ```python
 import asyncio

@@ -104,7 +104,7 @@ async fn accept_sc_with_limits(
 
     let mut payload = Vec::with_capacity(26);
     payload.extend_from_slice(&hub_vmac);
-    payload.extend_from_slice(&[0u8; 16]);
+    payload.extend_from_slice(&[0x33; 16]);
     payload.extend_from_slice(&hub_max_bvlc_length.to_be_bytes());
     payload.extend_from_slice(&hub_max_npdu_length.to_be_bytes());
 
