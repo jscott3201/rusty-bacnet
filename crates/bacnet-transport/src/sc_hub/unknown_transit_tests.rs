@@ -54,6 +54,44 @@ pub(super) async fn stopped(hub: &mut CountedHub) {
     assert_eq!(hub.hub.tasks.len(), 0);
 }
 
+// Semantic matrices must not consume an entire real Connect deadline across
+// hundreds of cases. Each fresh fixture handles only two body/result variants.
+// The observer is registered before the source's five-second deadline starts.
+async fn matrix_pair(
+    tls: &TestTls,
+    registered: bool,
+    source_id: u8,
+    observer_id: u8,
+) -> (CountedHub, ControlledPeer, ControlledPeer) {
+    let hub = CountedHub::start(tls, ScHubHandshakeTimeouts::default()).await;
+    let mut observer = ControlledPeer::open(tls, &hub).await;
+    observer.connect(observer_id).await;
+    let mut source = ControlledPeer::open(tls, &hub).await;
+    if registered {
+        source.connect(source_id).await;
+    }
+    (hub, source, observer)
+}
+
+async fn matrix_receive(peer: &mut ControlledPeer, expected: &[u8], case: &str) {
+    let received = poll_io(peer.ws.next()).await;
+    assert!(
+        matches!(&received, Some(Ok(Message::Binary(data))) if data.as_ref() == expected),
+        "{case}: expected {expected:02x?}, got {received:?}; now={:?}, expires={:?}, \
+         expired={}, committed={}, received_frames={}",
+        tokio::time::Instant::now(),
+        peer.deadline.expires(),
+        peer.deadline.expired(),
+        peer.deadline.is_committed(),
+        peer.deadline.received.load(Ordering::Acquire),
+    );
+}
+
+async fn matrix_barrier(peer: &mut ControlledPeer, case: &str) {
+    send(peer, vec![8, 0, 0x55, 0x66, 0x42]).await;
+    matrix_receive(peer, &[0, 0, 0x55, 0x66, 8, 1, 0, 0, 7, 0, 7], case).await;
+}
+
 pub(super) async fn connect_limits(peer: &mut ControlledPeer, id: u8, bvlc: u16, npdu: u16) {
     let Message::Binary(wire) = request([id; 6], [id; 16]) else {
         unreachable!()
@@ -172,22 +210,8 @@ async fn unknown_transit_all_243_functions_unicast_broadcast_raw_options_no_echo
 async fn unknown_transit_local_preregistered_and_invalid_envelopes_no_state_effects() {
     use super::response_silence_tests::Snapshot;
     let tls = TestTls::new();
-    let mut hub = CountedHub::start(&tls, ScHubHandshakeTimeouts::default()).await;
-    let mut a = ControlledPeer::open(&tls, &hub).await;
-    let mut b = ControlledPeer::open(&tls, &hub).await;
-    b.connect(0x43).await;
-    let expires = a.deadline.expires();
+    let mut cases = [0; 2];
     for registered in [false, true] {
-        if registered {
-            a.connect(0x42).await;
-        }
-        let before: Vec<_> = hub
-            .clients
-            .lock()
-            .await
-            .iter()
-            .map(|(vmac, client)| (*vmac, Snapshot::capture(client)))
-            .collect();
         for function in [0x0D, 0x42, 0xFF] {
             for id in [0, u16::MAX] {
                 for origin in [None, Some([0x43; 6]), Some([0; 6]), Some(BROADCAST_VMAC)] {
@@ -206,23 +230,37 @@ async fn unknown_transit_local_preregistered_and_invalid_envelopes_no_state_effe
                         {
                             continue;
                         }
+                        let (mut hub, mut a, mut b) =
+                            matrix_pair(&tls, registered, 0x42, 0x43).await;
+                        let expires = a.deadline.expires();
+                        let before: Vec<_> = hub
+                            .clients
+                            .lock()
+                            .await
+                            .iter()
+                            .map(|(vmac, client)| (*vmac, Snapshot::capture(client)))
+                            .collect();
                         for body in [
                             &[0xE2, 0, 0, 0x1F, 0x7E, 0, 0][..],
                             &[0xE2, 0, 0, 0x1F, 0x7E, 0, 0, 0xFF][..],
                         ] {
+                            let case = format!("local registered={registered} function={function:#04x} id={id} origin={origin:02x?} dest={dest:02x?} body={body:02x?}");
                             send(&mut a, raw(function, id, origin, dest, 3, body)).await;
                             let eligible = (!registered || dest.is_none())
                                 && dest != Some(BROADCAST_VMAC)
                                 && origin != Some([0; 6])
                                 && origin != Some(BROADCAST_VMAC);
                             if eligible {
-                                assert_eq!(
-                                    recv(&mut a).await,
-                                    raw(0, id, None, origin, 0, &[function, 1, 0, 0, 7, 0, 143])
-                                );
+                                matrix_receive(
+                                    &mut a,
+                                    &raw(0, id, None, origin, 0, &[function, 1, 0, 0, 7, 0, 143]),
+                                    &format!("{case} source NAK"),
+                                )
+                                .await;
                             }
-                            barrier(&mut a).await;
-                            barrier(&mut b).await; // origin metadata never redirects the local NAK
+                            matrix_barrier(&mut a, &format!("{case} source barrier")).await;
+                            // Origin metadata never redirects the local NAK.
+                            matrix_barrier(&mut b, &format!("{case} observer barrier")).await;
                             assert_eq!(a.deadline.expires(), expires);
                             assert_eq!(a.deadline.is_committed(), registered);
                             let map = hub.clients.lock().await;
@@ -230,13 +268,24 @@ async fn unknown_transit_local_preregistered_and_invalid_envelopes_no_state_effe
                             for (vmac, snapshot) in &before {
                                 snapshot.unchanged(map.get(vmac).unwrap());
                             }
+                            cases[usize::from(registered)] += 1;
                         }
+                        if !registered {
+                            // The same socket can still Connect after local diagnostics.
+                            a.connect(0x42).await;
+                            assert!(a.deadline.is_committed());
+                            assert_eq!(a.deadline.expires(), expires);
+                            assert_eq!(hub.clients.lock().await.len(), 2);
+                        }
+                        stopped(&mut hub).await;
                     }
                 }
             }
         }
     }
+    assert_eq!(cases, [288, 240]);
     // Known-but-unhandled remains the old connection-local 7/150 fallback.
+    let (mut hub, mut a, mut b) = matrix_pair(&tls, true, 0x42, 0x43).await;
     for function in [2, 3, 4, 5, 12] {
         send(&mut a, raw(function, 7, None, Some([0x43; 6]), 0, &[])).await;
         assert_eq!(
@@ -326,46 +375,56 @@ async fn unknown_transit_encoded_caps_not_npdu_caps_and_ingress_boundary() {
 #[tokio::test]
 async fn unknown_transit_result_ack_nak_routing_and_invalid_result_silence() {
     let tls = TestTls::new();
-    let mut hub = CountedHub::start(&tls, ScHubHandshakeTimeouts::default()).await;
-    let mut a = ControlledPeer::open(&tls, &hub).await;
-    a.connect(0x42).await;
-    let mut b = ControlledPeer::open(&tls, &hub).await;
+    let mut cases = [0; 2];
     for registered in [false, true] {
-        if registered {
-            b.connect(0x43).await;
-        }
         for function in [0x0D, 0x42, 0xFF] {
             for id in [0, u16::MAX] {
-                for result in [
-                    vec![function, 0],
-                    vec![function, 1, 0xFE, 0, 7, 0, 143, b'x', 0xC3, 0xA9],
-                ] {
-                    let mut body = vec![0xFE, 0, 0, 0x1F]; // MU/MoreOptions/empty Header Data
-                    body.extend_from_slice(&result);
-                    for origin in [None, Some([0x42; 6]), Some([0; 6]), Some(BROADCAST_VMAC)] {
-                        for dest in [
-                            None,
-                            Some([0x42; 6]),
-                            Some([0x43; 6]),
-                            Some([0x77; 6]),
-                            Some([0; 6]),
-                            Some(BROADCAST_VMAC),
+                for origin in [None, Some([0x42; 6]), Some([0; 6]), Some(BROADCAST_VMAC)] {
+                    for dest in [
+                        None,
+                        Some([0x42; 6]),
+                        Some([0x43; 6]),
+                        Some([0x77; 6]),
+                        Some([0; 6]),
+                        Some(BROADCAST_VMAC),
+                    ] {
+                        let (mut hub, mut b, mut a) =
+                            matrix_pair(&tls, registered, 0x43, 0x42).await;
+                        let expires = b.deadline.expires();
+                        for result in [
+                            vec![function, 0],
+                            vec![function, 1, 0xFE, 0, 7, 0, 143, b'x', 0xC3, 0xA9],
                         ] {
+                            let mut body = vec![0xFE, 0, 0, 0x1F]; // MU/MoreOptions/empty Header Data
+                            body.extend_from_slice(&result);
+                            let case = format!("result registered={registered} function={function:#04x} id={id} origin={origin:02x?} dest={dest:02x?} body={body:02x?}");
                             send(&mut b, raw(0, id, origin, dest, 2, &body)).await;
                             if registered && origin.is_none() && dest == Some([0x42; 6]) {
-                                assert_eq!(
-                                    recv(&mut a).await,
-                                    raw(0, id, Some([0x43; 6]), None, 2, &body)
-                                );
+                                matrix_receive(
+                                    &mut a,
+                                    &raw(0, id, Some([0x43; 6]), None, 2, &body),
+                                    &format!("{case} observer relay"),
+                                )
+                                .await;
                             }
-                            barrier(&mut b).await;
-                            barrier(&mut a).await;
+                            matrix_barrier(&mut b, &format!("{case} source barrier")).await;
+                            matrix_barrier(&mut a, &format!("{case} observer barrier")).await;
+                            assert_eq!(b.deadline.expires(), expires);
+                            assert_eq!(b.deadline.is_committed(), registered);
+                            assert_eq!(
+                                hub.clients.lock().await.len(),
+                                if registered { 2 } else { 1 }
+                            );
+                            cases[usize::from(registered)] += 1;
                         }
+                        stopped(&mut hub).await;
                     }
                 }
             }
         }
     }
+    assert_eq!(cases, [288, 288]);
+    let (mut hub, mut b, mut a) = matrix_pair(&tls, true, 0x43, 0x42).await;
     for body in [
         vec![],
         vec![0x42],
