@@ -92,6 +92,17 @@ pub(super) async fn run(
             }
         }
 
+        // This accepting hub neither initiates Connect nor waits for a
+        // Disconnect-ACK. AB.2 forbids replying to these responses. Discard
+        // before admission/activity, even with invalid function-specific fields;
+        // they cannot establish a connection or satisfy a liveness probe.
+        if matches!(
+            sc_msg.function,
+            ScFunction::ConnectAccept | ScFunction::DisconnectAck
+        ) {
+            continue;
+        }
+
         if let Err(nak) = crate::sc_frame::validate_connect_request(&sc_msg, &data) {
             if let Some(nak) = nak {
                 if let Err(e) = write.lock().await.send(Message::Binary(nak)).await {
@@ -128,8 +139,8 @@ pub(super) async fn run(
             continue;
         }
 
-        // Decoded BVLC messages that pass Connect/control admission and local
-        // NPDU capacity checks count as activity.
+        // Decoded BVLC messages that pass response/Connect/control admission
+        // and local NPDU capacity checks count as activity.
         // WebSocket control, oversized, and undecodable frames do not.
         client_activity.store(now_secs(), std::sync::atomic::Ordering::Release);
 

@@ -371,6 +371,10 @@ mod heartbeat_tests;
 mod heartbeat_validation_tests;
 #[cfg(test)]
 mod peer_uuid_tests;
+#[cfg(test)]
+mod response_silence_lifecycle_tests;
+#[cfg(test)]
+mod response_silence_tests;
 
 #[cfg(test)]
 mod ws_limits_tests;

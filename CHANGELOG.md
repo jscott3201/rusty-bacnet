@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Accepting SC hub unsolicited-response silence (Refs #519):** discard
+  Connect-Accept and Disconnect-ACK before activity or state changes, without
+  replying, including malformed function-specific fields. Registration, peer
+  limits, pending probes and original deadlines remain intact. This is not a
+  blanket response filter: Result relay, matching Heartbeat-ACK and all other
+  function handling are unchanged. [Scoped evidence and local liveness policy](docs/conformance/standard-135-2020-ledger.md#accepting-hub-unsolicited-response-silence)
+  cover Rust and installed-native Python; #519 remains open/partial.
+
 - **Current-dev SC zero-limit receive compatibility change (Refs #519):**
   Connect-Request and Connect-Accept advertising zero Max-BVLC or Max-NPDU fail
   zero-only local policy after TLS/WebSocket setup. Eligible Requests receive

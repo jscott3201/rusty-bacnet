@@ -13,6 +13,46 @@
 - Addenda/errata status: No external addenda/errata check was performed. The local Standard 135-2020 source contract was reviewed for Clause 12.52 and Table 12-61, Clause 21 `BACnetNotifyType`, and Clause 15.7 RPM selector exclusions.
 - PR-0808 evidence row: `BACNET-12-ALERT-ENROLLMENT-TABLE-12-61` is `supported-with-clause-evidence` for the served object model only; it is not an Alert evaluator or notification-generation claim.
 
+## Accepting hub unsolicited-response silence
+
+Current-dev scoped supplement to `BACNET-AB-SC-CONNECTION-STATE` (Refs #519).
+Only unsolicited Connect-Accept (`0x07`) and Disconnect-ACK (`0x09`) at the
+accepting hub are included. #519 remains open/partial; the 68 rows, 19 supported
+rows, global provenance, historical tranches and closed #513/#517 acceptance
+are unchanged. This is not full Annex AB or universal response conformance.
+
+- **Base Standard 135-2020 source:** AB.2 (PDF 1385 / printed 1383) prohibits
+  replies to response messages. AB.2.11 and AB.2.13 (PDF 1391–1392 / printed
+  1389–1390) define these connection-peer responses. AB.6.2/AB.6.2.3 (PDF 1403,
+  1406–1407 / printed 1401, 1404–1405) give the accepting peer its connect wait
+  and state transitions; Disconnect-ACK belongs to Disconnecting. The current
+  hub has no Disconnect-ACK waiter: retirement uses WebSocket Close and stop
+  remains forceful. No graceful-disconnect state machine is added.
+- **Scoped local admission policy:** after generic decode and ownership checks,
+  [hub dispatch](../../crates/bacnet-transport/src/sc_hub/handler.rs) silently
+  discards these two functions before admission, activity refresh or dispatch,
+  regardless of ID, envelope, options or payload. No NAK, registration, UUID/
+  limits change, replacement, pending-probe clear/reseed or deadline extension
+  results. Excluding them from activity is owner-approved local liveness policy,
+  not a claim that AB.6.3 (PDF 1407 / printed 1405) forbids timer refresh for
+  every invalid message. Existing generic/control malformed-message silence stays.
+- **Evidence:** [independent raw wire/barrier tests](../../crates/bacnet-transport/src/sc_hub/response_silence_tests.rs)
+  cover valid and malformed fields/options/payloads including Must Understand,
+  zero/stale/matching IDs, before and after registration, exact lease/UUID/limits/
+  activity/probe preservation, original idle/probe expiry, and later valid
+  registration, Heartbeat-ACK, Heartbeat-Request, Disconnect-Request, NPDU and
+  Result relay. [Authenticated TLS lifecycle tests](../../crates/bacnet-transport/src/sc_hub/response_silence_lifecycle_tests.rs)
+  retain the absolute connect deadline under repeated responses, release its
+  admission, and preserve all 256 registry owners before genuine replacement
+  at capacity. [Installed-native public hub smoke](../../crates/rusty-bacnet/tests/test_sc_hub_response_silence.py)
+  checks ordered silence, subsequent registration and surviving ReadProperty.
+- **Exclusions:** Address-Resolution-ACK is not included: AB.5.1/AB.5.3.2 (PDF
+  1400/1402 / printed 1398/1400) require separate general forwarding analysis.
+  Result relay and matching Heartbeat-ACK retain their dedicated paths. Other
+  fallback behavior, node-wide liveness, direct connections, diagnostic-rate
+  policy, capacity floors, public APIs and raw codecs are unchanged. No addenda,
+  performance measurement, platform/release qualification or support promotion.
+
 ## Received zero-capacity admission
 
 Current-dev scoped supplement to `BACNET-AB-SC-CONNECTION-STATE` (Refs #519).

@@ -1974,6 +1974,8 @@
     "crates/bacnet-transport/src/sc_hub/deadlines.rs",
     "crates/bacnet-transport/src/sc_hub/timeouts.rs",
     "crates/bacnet-transport/src/sc_hub/handler.rs",
+    "crates/bacnet-transport/src/sc_hub/response_silence_tests.rs",
+    "crates/bacnet-transport/src/sc_hub/response_silence_lifecycle_tests.rs",
     "crates/bacnet-transport/src/sc_hub/deadline_tests.rs",
     "crates/bacnet-transport/src/sc_hub/deadline_commit_tests.rs",
     "crates/bacnet-transport/src/sc_hub/deadline_capacity_tests.rs",
@@ -1990,6 +1992,8 @@
    ],
    "positive_tests": [
     "crates/bacnet-types/src/enums/tests.rs::bacnet_sc_error_code_values",
+    "crates/bacnet-transport/src/sc_hub/response_silence_tests.rs::unsolicited_response_matrix_preserves_lease_activity_and_probe_then_recovers",
+    "crates/rusty-bacnet/tests/test_sc_hub_response_silence.py::HubResponseSilenceTests::test_unsolicited_responses_preserve_native_hub_and_registration",
     "crates/bacnet-transport/src/sc_frame/connect.rs::tests::nonzero_uuid_bits_remain_opaque",
     "crates/bacnet-transport/src/sc_frame/connect.rs::tests::positive_limits_remain_independent_without_a_serviceability_floor",
     "crates/bacnet-transport/src/sc/connect_validation_tests.rs::connect_accept_positive_limits_commit_without_normalization",
@@ -2026,6 +2030,11 @@
    ],
    "negative_tests": [
     "crates/bacnet-transport/src/sc/tests.rs::connect_accept_rejects_wrong_message_id",
+    "crates/bacnet-transport/src/sc_hub/response_silence_tests.rs::unsolicited_connect_accept_is_silent_before_and_after_registration",
+    "crates/bacnet-transport/src/sc_hub/response_silence_tests.rs::unsolicited_disconnect_ack_is_silent_before_and_after_registration",
+    "crates/bacnet-transport/src/sc_hub/response_silence_tests.rs::unsolicited_responses_do_not_defer_idle_probe_or_its_original_timeout",
+    "crates/bacnet-transport/src/sc_hub/response_silence_lifecycle_tests.rs::unsolicited_responses_mtls_keep_absolute_connect_deadline_and_release_admission",
+    "crates/bacnet-transport/src/sc_hub/response_silence_lifecycle_tests.rs::unsolicited_responses_at_capacity_preserve_owners_then_allow_real_replacement",
     "crates/bacnet-transport/src/sc_frame/connect.rs::tests::zero_uuid_rejection_is_receive_admission_not_codec_policy",
     "crates/bacnet-transport/src/sc_frame/connect.rs::tests::zero_limits_rejection_is_receive_admission_not_codec_policy",
     "crates/bacnet-transport/src/sc/connect_validation_tests.rs::connect_accept_zero_limits_is_transactional_in_every_state",
@@ -2113,6 +2122,7 @@
     "crates/bacnet-transport/src/sc_hub/retirement_io_tests.rs::heartbeat_send_failure_interrupts_source_relay_and_releases_admission",
     "crates/bacnet-transport/src/sc_hub/retirement_io_tests.rs::target_retirement_cancels_inflight_send_before_io_completion"
    ],
+   "unsolicited_response_admission": "Refs #519, open/partial: accepting hub silently discards only unsolicited Connect-Accept (0x07) and Disconnect-ACK (0x09) after generic decode/ownership checks and before activity or state changes, regardless of ID/envelope/options/payload. Base 135-2020 AB.2 forbids replies to responses; AB.2.11/.13 and AB.6.2.3 define peer responses and accepting states. No registration, UUID/limits change, replacement, pending-probe clear/reseed or original deadline extension. Exclusion from activity is scoped local liveness policy, not an AB.6.3 rule for every invalid message. Result relay and matching Heartbeat-ACK remain; Address-Resolution-ACK and general AB.5.1/AB.5.3.2 forwarding are excluded. No Disconnect-ACK waiter or graceful shutdown added. See standard-135-2020-ledger.md#accepting-hub-unsolicited-response-silence. No full Annex AB claim, support promotion or reopening of closed #513/#517 acceptance.",
    "zero_limit_admission": "Refs #519, open/partial: zero-only local receive policy for Connect-Request and Connect-Accept, not a universal minimum-capacity conformance claim. Eligible Requests receive COMMUNICATION/PARAMETER_OUT_OF_RANGE (7/80); Accepts are silently discarded under AB.2 with pending state, identity, peer limits and the original connect deadline preserved. All positive values remain compatible, including tiny/inverted pairs. Positive floors and relationship checks are deferred; defaults, adapter caps, independent outgoing budgets and generic zero codec syntax are unchanged. See standard-135-2020-ledger.md#received-zero-capacity-admission. Closed #517 acceptance and historical tranche evidence remain valid.",
    "benchmarks": [
     "benchmarks/tests/sc_ws_memory.rs"
