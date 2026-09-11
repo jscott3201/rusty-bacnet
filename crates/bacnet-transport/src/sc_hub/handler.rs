@@ -139,8 +139,30 @@ pub(super) async fn run(
             continue;
         }
 
-        // Decoded BVLC messages that pass response/Connect/control admission
-        // and local NPDU capacity checks count as activity.
+        if lease.vmac.is_some() && crate::sc_frame::missing_npdu_payload(&sc_msg) {
+            // Keep pre-registration behavior and routing-envelope silence. The
+            // hub does not interpret relayed destination options, including MU.
+            if let Ok(HubRelayTarget::Unicast(_)) = hub_relay_target(&sc_msg) {
+                let nak = build_bvlc_result_nak(
+                    sc_msg.message_id,
+                    sc_msg.function,
+                    ErrorClass::COMMUNICATION,
+                    ErrorCode::PAYLOAD_EXPECTED,
+                );
+                let mut buf = BytesMut::new();
+                encode_sc_message(&mut buf, &nak);
+                // Connection-local reply; existing registered retirement can
+                // interrupt this handler, not a new per-NAK hub deadline.
+                if let Err(e) = write.lock().await.send(Message::Binary(buf.freeze())).await {
+                    warn!("Hub: failed to send missing NPDU payload NAK to {peer_addr}: {e}");
+                    break;
+                }
+            }
+            continue;
+        }
+
+        // Decoded BVLC messages that pass response/Connect/control admission,
+        // registered NPDU payload presence and local capacity checks count as activity.
         // WebSocket control, oversized, and undecodable frames do not.
         client_activity.store(now_secs(), std::sync::atomic::Ordering::Release);
 

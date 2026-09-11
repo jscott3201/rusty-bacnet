@@ -106,13 +106,16 @@ impl WebSocketPort for GateSocket {
     }
 }
 
-fn expected_naks() -> [Vec<u8>; 3] {
+fn expected_naks() -> [Vec<u8>; 4] {
     let control = vec![0, 0, 0x22, 0x33, 0x0A, 1, 0, 0, 7, 0, 7];
     let source = vec![0, 0, 0x22, 0x33, 1, 1, 0, 0, 7, 0, 0x50];
     let mut mu = vec![0, 4, 0x22, 0x33];
     mu.extend_from_slice(&[0x22; 6]);
     mu.extend_from_slice(&[1, 1, 0xE2, 0, 7, 0, 0x92]);
-    [control, source, mu]
+    let mut empty = vec![0, 4, 0x22, 0x33];
+    empty.extend_from_slice(&[0x22; 6]);
+    empty.extend_from_slice(&[1, 1, 0, 0, 7, 0, 0x95]);
+    [control, source, mu, empty]
 }
 
 async fn within<F: std::future::Future>(future: F) -> F::Output {
@@ -143,13 +146,15 @@ async fn recv_function(hub: &LoopbackWebSocket, function: u8) -> Vec<u8> {
     .await
 }
 
-fn rejection_wires() -> [Vec<u8>; 3] {
+fn rejection_wires() -> [Vec<u8>; 4] {
     let control = vec![0x0A, 0, 0x22, 0x33, 0x42]; // forbidden heartbeat payload
     let source = vec![1, 0, 0x22, 0x33, 1, 0, 0x30]; // omitted originating VMAC
     let mut mu = vec![1, 0x0A, 0x22, 0x33];
     mu.extend_from_slice(&[0x22; 6]);
     mu.extend_from_slice(&[0xE2, 0, 0, 0x1F, 1, 0, 0x30]); // raw empty-data marker
-    [control, source, mu]
+    let mut empty = vec![1, 8, 0x22, 0x33];
+    empty.extend_from_slice(&[0x22; 6]);
+    [control, source, mu, empty]
 }
 
 async fn started(

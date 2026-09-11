@@ -61,10 +61,13 @@ async fn rejection_deadline_tls_production_write_lock_is_cancelled_without_later
     let mut mu = vec![1, 10, 0x22, 0x33];
     mu.extend_from_slice(&[0x22; 6]);
     mu.extend_from_slice(&[0xE2, 0, 0, 0x1F, 1, 0, 0x30]);
+    let mut empty = vec![1, 8, 0x22, 0x33];
+    empty.extend_from_slice(&[0x22; 6]);
     for wire in [
         vec![0x0A, 0, 0x22, 0x33, 0x42],
         vec![1, 0, 0x22, 0x33, 1, 0, 0x30],
         mu,
+        empty,
     ] {
         tokio::time::timeout(Duration::from_secs(6), exercise(wire))
             .await

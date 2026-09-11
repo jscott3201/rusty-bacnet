@@ -124,7 +124,7 @@ fn rejection_nak_budget_evidence_preserves_freshness_and_cancellation_limits() {
             anchors += 1;
         }
     }
-    assert_eq!(anchors, 17);
+    assert_eq!(anchors, 18); // Original 17 plus the fourth-path fresh-recovery test.
     for path in [
         "crates/bacnet-transport/src/sc/rejection.rs",
         "crates/bacnet-transport/src/sc/recovery.rs",
@@ -167,5 +167,64 @@ fn rejection_nak_budget_evidence_preserves_freshness_and_cancellation_limits() {
     assert!(
         read_repo_file("CHANGELOG.md").contains("#rejection-nak-budget-and-fresh-only-recovery")
     );
+    assert_eq!(sc_identity_closeout().matches("\n| A").count(), 6);
+}
+
+#[test]
+fn empty_npdu_evidence_preserves_zero_only_scope_and_existing_lifecycle_owners() {
+    let data = ledger();
+    let rows = rows_by_id(&data);
+    assert_eq!(rows.len(), 68);
+    assert_eq!(
+        rows.values()
+            .filter(|r| r["status"] == "supported-with-clause-evidence")
+            .count(),
+        19
+    );
+    assert_eq!(data["reviewed_at"], "2026-08-13");
+    assert_eq!(data["repo_sha"], "f485021f5cd7058ac406d57d3d317936cbe7b361");
+    let row = rows["BACNET-AB-SC-CONNECTION-STATE"];
+    assert_eq!(
+        row["status"],
+        "implementation-present-needs-state-machine-audit"
+    );
+    let policy = row["empty_npdu_admission"].as_str().unwrap();
+    for phrase in [
+        "AB.2.5/.1",
+        "AB.3.1.5",
+        "7/149",
+        "marker zero",
+        "source then MU",
+        "Pre-registration OTHER",
+        "One-byte compatibility",
+        "codec/raw-send syntax",
+        "fourth node path",
+        "fresh-only recovery",
+        "not a new global NAK deadline",
+        "two independent installed-native seams",
+        "No full Annex AB claim",
+    ] {
+        assert!(policy.contains(phrase), "{phrase}");
+    }
+    let mut count = 0;
+    for field in ["positive_tests", "negative_tests"] {
+        for anchor in row[field].as_array().unwrap() {
+            let anchor = anchor.as_str().unwrap();
+            if !anchor.contains("empty_npdu") {
+                continue;
+            }
+            let parts: Vec<_> = anchor.split("::").collect();
+            let source = read_repo_file(parts[0]);
+            let name = parts.last().unwrap();
+            assert!(
+                source.contains(&format!("fn {name}(")) || source.contains(&format!("def {name}(")),
+                "{anchor}"
+            );
+            count += 1;
+        }
+    }
+    assert_eq!(count, 13);
+    assert!(STANDARD_LEDGER.contains("## Empty Encapsulated-NPDU admission\n"));
+    assert!(read_repo_file("CHANGELOG.md").contains("#empty-encapsulated-npdu-admission"));
     assert_eq!(sc_identity_closeout().matches("\n| A").count(), 6);
 }
