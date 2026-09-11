@@ -161,7 +161,46 @@ pub(super) async fn run(
             continue;
         }
 
-        // Decoded BVLC messages that pass response/Connect/control admission,
+        if matches!(sc_msg.function, ScFunction::Unknown(_)) {
+            if let Some(registered_vmac) = lease.vmac.filter(|_| sc_msg.destination_vmac.is_some())
+            {
+                let Ok(target) = hub_relay_target(&sc_msg) else {
+                    // An explicit origin on transit is not trusted, even if it
+                    // names a valid peer. Never reflect a NAK for this envelope.
+                    continue;
+                };
+                if target == HubRelayTarget::Unicast(registered_vmac) {
+                    // Unknown-only no-echo rule: self drops do not count as activity.
+                    continue;
+                }
+                // Accepted transit follows the existing NPDU activity policy,
+                // including absent/oversized recipient drops. No probe mutation.
+                client_activity.store(now_secs(), Ordering::Release);
+                if super::unknown_transit::relay(
+                    &data,
+                    &sc_msg,
+                    registered_vmac,
+                    target,
+                    &clients,
+                    &write,
+                )
+                .await
+                    == ResultRelayDisposition::CloseSource
+                {
+                    break;
+                }
+            } else if let Some(nak) = super::unknown_transit::local_nak(&sc_msg) {
+                let mut buf = BytesMut::new();
+                encode_sc_message(&mut buf, &nak);
+                // Same socket only, including supplied response address metadata.
+                // Retain the fallback's ignored immediate send error and existing
+                // supervised retirement/absolute pre-registration deadline.
+                let _ = write.lock().await.send(Message::Binary(buf.freeze())).await;
+            }
+            continue;
+        }
+
+        // Decoded known BVLC messages that pass response/Connect/control admission,
         // registered NPDU payload presence and local capacity checks count as activity.
         // WebSocket control, oversized, and undecodable frames do not.
         client_activity.store(now_secs(), std::sync::atomic::Ordering::Release);

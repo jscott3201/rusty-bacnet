@@ -3,8 +3,8 @@
 //!
 //! The hub performs three duties:
 //! 1. **Connection handshake** — responds to `ConnectRequest` with `ConnectAccept`.
-//! 2. **Message relay** — forwards `EncapsulatedNpdu` and routed `Result`
-//!    messages to the destination VMAC.
+//! 2. **Message relay** — forwards `EncapsulatedNpdu`, addressed Unknown functions,
+//!    and their routed `Result` messages to the destination VMAC.
 //! 3. **Heartbeat** — responds to `HeartbeatRequest` with `HeartbeatAck`.
 
 use std::collections::HashMap;
@@ -37,6 +37,7 @@ mod retirement;
 mod tasks;
 mod timeouts;
 mod tls_config;
+mod unknown_transit;
 
 pub use timeouts::ScHubHandshakeTimeouts;
 pub use tls_config::ScHubTlsConfig;
@@ -410,3 +411,8 @@ mod retirement_io_tests;
 
 #[cfg(test)]
 mod retirement_capacity_tests;
+
+#[cfg(test)]
+mod unknown_transit_lifecycle_tests;
+#[cfg(test)]
+mod unknown_transit_tests;
