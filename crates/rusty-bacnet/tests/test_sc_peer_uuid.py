@@ -43,6 +43,9 @@ class PeerUuidTests(MtlsFixture):
         return await asyncio.wait_for(reader.readexactly(header[1]), 3)
 
     async def test_nil_request_nak_close_repeat_and_surviving_native_read(self):
+        await self.check_request(b"\x02\0\0\0\0\2" + bytes(16) + b"\x05\xc4\x05\xc4")
+
+    async def check_request(self, nil_payload):
         hub = self.hub()
         self.addAsyncCleanup(self.stop_hub, hub)
         await asyncio.wait_for(hub.start(), 3)
@@ -54,7 +57,6 @@ class PeerUuidTests(MtlsFixture):
         self.addAsyncCleanup(self.stop_server, server)
         server.add_analog_input(0, "AI-0", 64, 72.5)
         await asyncio.wait_for(server.start(), 5)
-        nil_payload = b"\x02\0\0\0\0\2" + bytes(16) + b"\x05\xc4\x05\xc4"
         nak = b"\0\0\x22\x33\x06\x01\0\0\x07\0\x50"
         # The proposed VMAC collides with the live server: range, not duplicate-VMAC.
         for fields, reply in [(b"\0", nak),

@@ -183,13 +183,29 @@ async fn connect_deadline_ignores_nonqualifying_traffic_without_restart_or_starv
 
 #[tokio::test]
 async fn zero_uuid_flood_cannot_extend_blocked_nak_connect_deadline() {
+    check_invalid_flood_blocked_nak_deadline(10..26).await;
+}
+
+#[tokio::test]
+async fn zero_limits_flood_cannot_extend_blocked_nak_connect_deadline() {
+    for field in [26..28, 28..30, 26..30] {
+        check_invalid_flood_blocked_nak_deadline(field).await;
+    }
+}
+
+async fn check_invalid_flood_blocked_nak_deadline(field: std::ops::Range<usize>) {
     let clients = clients();
     let mut peer = DeadlinePeer::new(clients.clone(), Duration::from_secs(1)).await;
     let held = peer.sink.clone().lock_owned().await;
     tokio::time::pause();
     let expires = peer.deadline.expires();
+    let mut wire = crate::sc_frame::connect_test_support::valid_connect(6, [0x42; 6]);
+    wire[field].fill(0);
     for _ in 0..9 {
-        peer.ws.send(request([0x42; 6], [0; 16])).await.unwrap();
+        peer.ws
+            .send(Message::Binary(wire.clone().into()))
+            .await
+            .unwrap();
         until(|| peer.deadline.received.load(Ordering::Acquire) != 0).await;
         tokio::time::advance(Duration::from_millis(100)).await;
         assert!(!peer.deadline.admission_started.load(Ordering::Acquire));

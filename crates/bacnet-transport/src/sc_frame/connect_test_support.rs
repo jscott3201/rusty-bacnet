@@ -129,6 +129,7 @@ pub(crate) fn invalid_connects(function: u8, local: [u8; 6]) -> Vec<InvalidConne
         }
     }
     cases.extend(zero_uuid_requests());
+    cases.extend(zero_limits_requests());
     for invalid in &mut cases {
         invalid.wire[0] = function;
         if function == 7 {
@@ -177,4 +178,55 @@ pub(crate) fn valid_connect_with_options(function: u8, vmac: [u8; 6]) -> Vec<u8>
     // Two well-formed, unknown MU-clear options of the same type.
     wire.splice(4..4, [0x9E, 0x3E, 0, 0]);
     wire
+}
+
+pub(crate) fn zero_limits_requests() -> Vec<InvalidConnect> {
+    let mut cases = Vec::new();
+    for limits in [[0, 0, 0x10, 0], [0x20, 0, 0, 0], [0; 4]] {
+        let mut wire = valid_connect(6, [0x22; 6]);
+        wire[26..30].copy_from_slice(&limits);
+        let payload = &wire[4..];
+        cases.push(case("zero limits", 0, &[], payload, None, 0, 80));
+        cases.push(case(
+            "zero limits precede MU",
+            2,
+            &[0x5e],
+            payload,
+            None,
+            0,
+            80,
+        ));
+        cases.push(case(
+            "zero limits with Data Options",
+            1,
+            &[0x1e],
+            payload,
+            None,
+            0,
+            80,
+        ));
+        cases.push(case(
+            "zero limits use envelope source",
+            8,
+            &[0x44; 6],
+            payload,
+            Some([0x44; 6]),
+            0,
+            80,
+        ));
+        for (control, fields) in [(4, [0xff; 6]), (8, [0; 6]), (8, [0xff; 6])] {
+            let mut suppressed = case(
+                "zero limits suppressed reply",
+                control,
+                &fields,
+                payload,
+                None,
+                0,
+                80,
+            );
+            suppressed.nak = None;
+            cases.push(suppressed);
+        }
+    }
+    cases
 }

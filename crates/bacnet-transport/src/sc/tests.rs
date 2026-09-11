@@ -753,6 +753,7 @@ fn connect_accept_validates_message_id() {
     let mut payload = vec![0u8; 26];
     payload[..6].fill(0x10); // non-reserved hub VMAC
     payload[6..22].fill(0x33); // nonzero hub UUID
+    payload[22..26].copy_from_slice(&[0x05, 0xc4, 0x05, 0xc4]); // positive capacities
 
     let accept = ScMessage {
         function: ScFunction::ConnectAccept,
@@ -774,6 +775,7 @@ fn connect_accept_rejects_wrong_message_id() {
     let mut payload = vec![0u8; 26];
     payload[..6].fill(0x10); // isolate the correlation failure
     payload[6..22].fill(0x33); // otherwise valid peer identity
+    payload[22..26].copy_from_slice(&[0x05, 0xc4, 0x05, 0xc4]); // isolate wrong ID
 
     let accept = ScMessage {
         function: ScFunction::ConnectAccept,

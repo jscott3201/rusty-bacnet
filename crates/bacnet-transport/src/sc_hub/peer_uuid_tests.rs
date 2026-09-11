@@ -3,7 +3,9 @@
 use super::deadline_test_support::{poll_io, request, ClientWs, TestTls};
 use super::heartbeat_test_support::{clients, ClockIo};
 use super::*;
-use crate::sc_frame::connect_test_support::zero_uuid_requests;
+use crate::sc_frame::connect_test_support::{
+    valid_connect, zero_limits_requests, zero_uuid_requests, InvalidConnect,
+};
 use std::sync::atomic::{AtomicU16, AtomicUsize};
 use std::time::Duration;
 
@@ -78,9 +80,18 @@ impl Drop for Peer {
 
 #[tokio::test]
 async fn zero_uuid_mtls_request_never_reaches_admission() {
+    check_invalid_requests_before_admission(zero_uuid_requests()).await;
+}
+
+#[tokio::test]
+async fn zero_limits_mtls_request_never_reaches_admission() {
+    check_invalid_requests_before_admission(zero_limits_requests()).await;
+}
+
+async fn check_invalid_requests_before_admission(cases: Vec<InvalidConnect>) {
     let tls = TestTls::new();
     let clients = clients();
-    for case in zero_uuid_requests() {
+    for case in cases {
         let mut peer = Peer::open(&tls, clients.clone()).await;
         peer.ws
             .send(Message::Binary(case.wire.into()))
@@ -96,6 +107,15 @@ async fn zero_uuid_mtls_request_never_reaches_admission() {
 
 #[tokio::test]
 async fn zero_uuid_mtls_collision_at_capacity_preserves_live_peers() {
+    check_invalid_collision_at_capacity(std::slice::from_ref(&(10..26))).await;
+}
+
+#[tokio::test]
+async fn zero_limits_mtls_collision_at_capacity_preserves_live_peers() {
+    check_invalid_collision_at_capacity(&[26..28, 28..30, 26..30]).await;
+}
+
+async fn check_invalid_collision_at_capacity(fields: &[std::ops::Range<usize>]) {
     let tls = TestTls::new();
     let clients = clients();
     let mut peers = Vec::new();
@@ -126,21 +146,28 @@ async fn zero_uuid_mtls_collision_at_capacity_preserves_live_peers() {
             .collect::<Vec<_>>()
     };
     for vmac in [owner, [0x10; 6], [0x42; 6]] {
-        let mut bad = Peer::open(&tls, clients.clone()).await;
-        bad.ws.send(request(vmac, [0; 16])).await.unwrap();
-        // Identity error beats both Duplicate-VMAC and capacity NAKs.
-        assert_eq!(bad.binary().await, [0, 0, 0x22, 0x33, 6, 1, 0, 0, 7, 0, 80]);
-        bad.rejected().await;
-        let map = clients.lock().await;
-        assert_eq!(map.len(), 256);
-        for (vmac, sink, uuid, heartbeat, activity) in &before {
-            let client = map.get(vmac).unwrap();
-            assert!(Arc::ptr_eq(&client.sink, sink));
-            assert_eq!(client.device_uuid, *uuid);
-            assert_eq!(client.heartbeat, *heartbeat);
-            assert_eq!(client.last_activity.load(Ordering::Acquire), *activity);
-            assert_eq!((client.max_bvlc, client.max_npdu), (8192, 4096));
-            assert!(!client.closed.load(Ordering::Acquire));
+        for field in fields {
+            let mut bad = Peer::open(&tls, clients.clone()).await;
+            let mut wire = valid_connect(6, vmac);
+            // Spoof the incumbent UUID, including from a different proposed VMAC.
+            wire[10..26].fill(0);
+            wire[25] = 1;
+            wire[field.clone()].fill(0);
+            bad.ws.send(Message::Binary(wire.into())).await.unwrap();
+            // Admission error beats replacement, Duplicate-VMAC and capacity NAKs.
+            assert_eq!(bad.binary().await, [0, 0, 0x22, 0x33, 6, 1, 0, 0, 7, 0, 80]);
+            bad.rejected().await;
+            let map = clients.lock().await;
+            assert_eq!(map.len(), 256);
+            for (vmac, sink, uuid, heartbeat, activity) in &before {
+                let client = map.get(vmac).unwrap();
+                assert!(Arc::ptr_eq(&client.sink, sink));
+                assert_eq!(client.device_uuid, *uuid);
+                assert_eq!(client.heartbeat, *heartbeat);
+                assert_eq!(client.last_activity.load(Ordering::Acquire), *activity);
+                assert_eq!((client.max_bvlc, client.max_npdu), (8192, 4096));
+                assert!(!client.closed.load(Ordering::Acquire));
+            }
         }
     }
     // A surviving connection still relays a real NPDU to another live peer.
@@ -164,6 +191,15 @@ async fn zero_uuid_mtls_collision_at_capacity_preserves_live_peers() {
 
 #[tokio::test]
 async fn zero_uuid_mtls_repeat_flood_preserves_activity_probe_and_registration() {
+    check_invalid_repeat_flood(zero_uuid_requests()).await;
+}
+
+#[tokio::test]
+async fn zero_limits_mtls_repeat_flood_preserves_activity_probe_and_registration() {
+    check_invalid_repeat_flood(zero_limits_requests()).await;
+}
+
+async fn check_invalid_repeat_flood(cases: Vec<InvalidConnect>) {
     let tls = TestTls::new();
     let clients = clients();
     let vmac = [0x22; 6];
@@ -196,13 +232,13 @@ async fn zero_uuid_mtls_repeat_flood_preserves_activity_probe_and_registration()
         )
     };
     for _ in 0..10 {
-        for case in zero_uuid_requests() {
+        for case in &cases {
             peer.ws
-                .send(Message::Binary(case.wire.into()))
+                .send(Message::Binary(case.wire.clone().into()))
                 .await
                 .unwrap();
-            if let Some(nak) = case.nak {
-                assert_eq!(peer.binary().await, nak);
+            if let Some(nak) = &case.nak {
+                assert_eq!(&peer.binary().await, nak);
             } else {
                 // Eligible nil request is a non-activity processing barrier.
                 peer.ws.send(request(vmac, [0; 16])).await.unwrap();
@@ -233,4 +269,36 @@ async fn zero_uuid_mtls_repeat_flood_preserves_activity_probe_and_registration()
     drop(sink);
     peer.close().await;
     assert!(clients.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn positive_limits_mtls_request_commits_exact_peer_capacities() {
+    let tls = TestTls::new();
+    let clients = clients();
+    for (bvlc, npdu) in [
+        (1u16, 1u16),
+        (1, 65535),
+        (65535, 1),
+        (65535, 65535),
+        (1200, 480),
+        (300, 1476),
+        (1476, 1476),
+    ] {
+        let mut peer = Peer::open(&tls, clients.clone()).await;
+        let mut wire = valid_connect(6, [0x22; 6]);
+        wire[26..28].copy_from_slice(&bvlc.to_be_bytes());
+        wire[28..30].copy_from_slice(&npdu.to_be_bytes());
+        peer.ws.send(Message::Binary(wire.into())).await.unwrap();
+        assert_eq!(peer.binary().await[0..4], [7, 0, 0x22, 0x33]);
+        assert!(peer.deadline.is_committed());
+        {
+            let map = clients.lock().await;
+            assert_eq!(map.len(), 1);
+            let client = map.get(&[0x22; 6]).unwrap();
+            assert_eq!((client.max_bvlc, client.max_npdu), (bvlc, npdu));
+            assert_eq!(client.device_uuid, [0x33; 16]);
+        }
+        peer.close().await;
+        assert!(clients.lock().await.is_empty());
+    }
 }

@@ -1955,6 +1955,8 @@
     "crates/bacnet-transport/src/sc/mod.rs",
     "crates/bacnet-transport/src/sc/connect_result.rs",
     "crates/bacnet-transport/src/sc_frame/connect.rs",
+    "crates/bacnet-transport/src/sc_frame/connect_test_support.rs",
+    "crates/bacnet-transport/src/sc_hub/peer_uuid_tests.rs",
     "crates/bacnet-transport/src/sc/connect_validation_tests.rs",
     "crates/bacnet-transport/src/sc/reconnect_validation_tests.rs",
     "crates/bacnet-transport/src/sc_tls/connect_accept_tests.rs",
@@ -1989,6 +1991,11 @@
    "positive_tests": [
     "crates/bacnet-types/src/enums/tests.rs::bacnet_sc_error_code_values",
     "crates/bacnet-transport/src/sc_frame/connect.rs::tests::nonzero_uuid_bits_remain_opaque",
+    "crates/bacnet-transport/src/sc_frame/connect.rs::tests::positive_limits_remain_independent_without_a_serviceability_floor",
+    "crates/bacnet-transport/src/sc/connect_validation_tests.rs::connect_accept_positive_limits_commit_without_normalization",
+    "crates/bacnet-transport/src/sc_hub/peer_uuid_tests.rs::positive_limits_mtls_request_commits_exact_peer_capacities",
+    "crates/bacnet-transport/src/sc_tls/connect_accept_tests.rs::zero_limits_accept_tls_is_silent_until_later_valid_accept",
+    "crates/rusty-bacnet/tests/test_sc_zero_limits.py::ZeroLimitsTests::test_native_nodes_zero_limits_wait_silently_then_recover",
     "crates/bacnet-transport/src/sc/connect_validation_tests.rs::connect_accept_invalid_matrix_waits_silently_for_valid_accept",
     "crates/bacnet-transport/src/sc_tls/connect_accept_tests.rs::nil_accept_tls_is_silent_until_later_valid_accept",
     "crates/rusty-bacnet/tests/test_sc_accept_uuid.py::AcceptUuidTests::test_native_nodes_wait_silently_then_accept_valid_uuid",
@@ -2020,6 +2027,19 @@
    "negative_tests": [
     "crates/bacnet-transport/src/sc/tests.rs::connect_accept_rejects_wrong_message_id",
     "crates/bacnet-transport/src/sc_frame/connect.rs::tests::zero_uuid_rejection_is_receive_admission_not_codec_policy",
+    "crates/bacnet-transport/src/sc_frame/connect.rs::tests::zero_limits_rejection_is_receive_admission_not_codec_policy",
+    "crates/bacnet-transport/src/sc/connect_validation_tests.rs::connect_accept_zero_limits_is_transactional_in_every_state",
+    "crates/bacnet-transport/src/sc/connect_validation_tests.rs::connect_accept_zero_limits_only_and_flood_keep_absolute_deadline",
+    "crates/bacnet-transport/src/sc/connect_validation_tests.rs::connect_accept_zero_limits_wrong_id_is_discarded_but_valid_wrong_id_is_terminal",
+    "crates/bacnet-transport/src/sc/reconnect_validation_tests.rs::zero_limits_accept_failover_and_failed_primary_probe_preserve_active_identity_and_limits",
+    "crates/bacnet-transport/src/sc/reconnect_validation_tests.rs::zero_limits_accept_reconnect_probe_times_out_then_redials_without_reseeding",
+    "crates/bacnet-transport/src/sc_tls/connect_accept_tests.rs::zero_limits_accept_tls_expires_without_peer_identity_or_limits",
+    "crates/bacnet-transport/src/sc_hub/peer_uuid_tests.rs::zero_limits_mtls_request_never_reaches_admission",
+    "crates/bacnet-transport/src/sc_hub/peer_uuid_tests.rs::zero_limits_mtls_collision_at_capacity_preserves_live_peers",
+    "crates/bacnet-transport/src/sc_hub/peer_uuid_tests.rs::zero_limits_mtls_repeat_flood_preserves_activity_probe_and_registration",
+    "crates/bacnet-transport/src/sc_hub/deadline_commit_tests.rs::zero_limits_flood_cannot_extend_blocked_nak_connect_deadline",
+    "crates/rusty-bacnet/tests/test_sc_zero_limits.py::ZeroLimitsTests::test_native_nodes_zero_limits_expire_without_connecting",
+    "crates/rusty-bacnet/tests/test_sc_zero_limits.py::ZeroLimitsTests::test_native_hub_zero_limits_preserve_known_uuid_owner_and_repeat",
     "crates/bacnet-transport/src/sc_frame/connect.rs::tests::zero_uuid_precedes_mu_for_local_connect_diagnostics",
     "crates/bacnet-transport/src/sc/connect_validation_tests.rs::connect_accept_zero_uuid_is_transactional_in_every_state",
     "crates/bacnet-transport/src/sc/connect_validation_tests.rs::connect_accept_nil_only_and_flood_keep_absolute_deadline",
@@ -2093,6 +2113,7 @@
     "crates/bacnet-transport/src/sc_hub/retirement_io_tests.rs::heartbeat_send_failure_interrupts_source_relay_and_releases_admission",
     "crates/bacnet-transport/src/sc_hub/retirement_io_tests.rs::target_retirement_cancels_inflight_send_before_io_completion"
    ],
+   "zero_limit_admission": "Refs #519, open/partial: zero-only local receive policy for Connect-Request and Connect-Accept, not a universal minimum-capacity conformance claim. Eligible Requests receive COMMUNICATION/PARAMETER_OUT_OF_RANGE (7/80); Accepts are silently discarded under AB.2 with pending state, identity, peer limits and the original connect deadline preserved. All positive values remain compatible, including tiny/inverted pairs. Positive floors and relationship checks are deferred; defaults, adapter caps, independent outgoing budgets and generic zero codec syntax are unchanged. See standard-135-2020-ledger.md#received-zero-capacity-admission. Closed #517 acceptance and historical tranche evidence remain valid.",
    "benchmarks": [
     "benchmarks/tests/sc_ws_memory.rs"
    ],

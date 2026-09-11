@@ -175,6 +175,16 @@ complete the same handshake; otherwise the original wait expires. This post-TLS
 local policy also applies to Python SC client/server startup, without API changes.
 See the [receive boundary and evidence](docs/conformance/standard-135-2020-ledger.md#received-peer-uuid-admission).
 
+**Current-dev zero-limit compatibility change (Refs #519):** received
+Connect-Request/Connect-Accept advertising zero Max-BVLC or Max-NPDU is rejected
+by a **zero-only local policy**. Eligible Requests get
+`COMMUNICATION/PARAMETER_OUT_OF_RANGE` (7/80); Accepts are silently discarded
+(AB.2), preserving state, peer limits and the original connect deadline. All
+positive values remain accepted by this check, even very small or inverted pairs;
+this is not a universal minimum-capacity conformance claim. Defaults and outgoing
+budgets are unchanged. See the [bounded evidence and exclusions](docs/conformance/standard-135-2020-ledger.md#received-zero-capacity-admission).
+#519 remains open/partial; the closed #517 identity acceptance is not reopened.
+
 ```python
 import asyncio
 import os

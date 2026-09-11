@@ -13,6 +13,55 @@
 - Addenda/errata status: No external addenda/errata check was performed. The local Standard 135-2020 source contract was reviewed for Clause 12.52 and Table 12-61, Clause 21 `BACnetNotifyType`, and Clause 15.7 RPM selector exclusions.
 - PR-0808 evidence row: `BACNET-12-ALERT-ENROLLMENT-TABLE-12-61` is `supported-with-clause-evidence` for the served object model only; it is not an Alert evaluator or notification-generation claim.
 
+## Received zero-capacity admission
+
+Current-dev scoped supplement to `BACNET-AB-SC-CONNECTION-STATE` (Refs #519).
+**Zero-only local policy:** received Connect-Request and Connect-Accept must
+advertise nonzero Max-BVLC and Max-NPDU. This is not a universal minimum-capacity
+conformance claim. #519 remains open/partial; the closed #513/#517 acceptance and
+the immutable PR #601 identity closeout below remain valid historical evidence.
+All 68 rows, 19 supported rows, statuses and global August 13/SHA provenance remain.
+
+- **Source:** licensed base 135-2020 AB.2.10–11 (printed 1389–1390/PDF 1391–1392)
+  defines each capacity and the fixed 26-byte payload; those field clauses do not
+  supply a universal positive peer floor. Zero's range classification is an
+  owner-approved local validation policy. AB.3.1.2/.4/.5 (printed 1393–1394/PDF
+  1395–1396) informs addressing, errors and MU handling; AB.2 (printed 1383/PDF
+  1385) prohibits replies to responses. AB.6.2 (printed 1401–1403/PDF 1403–1405)
+  supplies the connect wait/state context. No source edition/addendum expansion.
+- **Request:** eligible rejection is COMMUNICATION/PARAMETER_OUT_OF_RANGE (7/80),
+  marker zero, with existing envelope addressing and broadcast/reserved-source
+  suppression. Rejection precedes activity refresh, registry/capacity decisions,
+  UUID replacement and limit commit. New malformed peers close; registered repeats
+  preserve sink, identity, limits and liveness. Length/envelope/identity precedence
+  remains; zero capacities precede MU in local diagnostic selection.
+- **Accept:** silently discarded, with no NAK, state/identity/limit commit or
+  Connected publication. Pending request and local identity remain unchanged; the
+  original connect deadline is not extended. Later valid recovery is permitted;
+  zero-only/flood traffic expires the original wait. Invalid-plus-wrong-ID is
+  discarded while otherwise-valid wrong-ID remains terminal. Failed probes do not
+  retire a healthy failover peer or poison its effective APDU budget.
+- **Compatibility boundary:** all positive values remain accepted by this check,
+  including 1/1, 1/65535, 65535/1, 65535/65535, 1200/480, 300/1476 and 1476/1476.
+  Tiny positive values are not proof of serviceability or conformance. Stronger
+  positive floors and Max-NPDU/Max-BVLC relationship checks are deferred. AB.5.1's
+  hub forwarding/distribution capacity is not a blanket advertised-node floor;
+  PR #549's 5705-byte full BVLC budget, hub NPDU 1497 and node NPDU 1476 defaults,
+  adapter caps and independent outgoing budgets are unchanged. Generic codecs and
+  constructors still permit zero syntax; post-start public mutation is excluded.
+- **Evidence:** [independent wire vectors](../../crates/bacnet-transport/src/sc_frame/connect_test_support.rs)
+  cover either/both zero fields and error/suppression combinations; [direct and
+  async Accept tests](../../crates/bacnet-transport/src/sc/connect_validation_tests.rs)
+  cover transactional snapshots and paused-clock deadlines; [reconnect probes](../../crates/bacnet-transport/src/sc/reconnect_validation_tests.rs)
+  preserve active state and recover without reseeding. [Real TLS Accepts](../../crates/bacnet-transport/src/sc_tls/connect_accept_tests.rs),
+  [mTLS hub admission/capacity/repeats](../../crates/bacnet-transport/src/sc_hub/peer_uuid_tests.rs),
+  [held-NAK deadlines](../../crates/bacnet-transport/src/sc_hub/deadline_commit_tests.rs)
+  and [installed-native Python client/server/hub tests](../../crates/rusty-bacnet/tests/test_sc_zero_limits.py)
+  cover the runtime boundary. The JSON row adds only scoped anchors/supplement;
+  its historical tranche notes remain unchanged. Other #519 functions, diagnostic
+  rate/liveness gaps, positive floors, full Annex AB/PICS/BTL and performance claims
+  remain outside this slice.
+
 ## Received peer UUID admission
 
 Scoped supplement to `BACNET-AB-SC-CONNECTION-STATE` (Refs #517), superseding only

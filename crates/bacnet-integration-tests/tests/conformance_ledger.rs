@@ -13,6 +13,9 @@ const PICS_DRAFT: &str = include_str!("../../../docs/conformance/pics-draft.md")
 const BIBBS_DRAFT: &str = include_str!("../../../docs/conformance/bibbs-draft.md");
 const STANDARD_LEDGER: &str = include_str!("../../../docs/conformance/standard-135-2020-ledger.md");
 
+#[path = "conformance_ledger/sc_zero_limits.rs"]
+mod sc_zero_limits;
+
 const REQUIRED_IDS: &[&str] = &[
     "BACNET-J-BVLC-FUNCTION-CODES",
     "BACNET-J-ORIGINAL-UNICAST-NPDU",

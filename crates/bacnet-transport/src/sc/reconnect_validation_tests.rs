@@ -254,6 +254,18 @@ async fn wait_for_hub<W: WebSocketPort>(transport: &ScTransport<W>, vmac: Vmac) 
 
 #[tokio::test(start_paused = true)]
 async fn nil_accept_failover_and_failed_primary_probe_preserve_active_identity_and_limits() {
+    check_invalid_accept_failover_and_primary_probe(10..26).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn zero_limits_accept_failover_and_failed_primary_probe_preserve_active_identity_and_limits()
+{
+    for field in [26..28, 28..30, 26..30] {
+        check_invalid_accept_failover_and_primary_probe(field).await;
+    }
+}
+
+async fn check_invalid_accept_failover_and_primary_probe(field: std::ops::Range<usize>) {
     use crate::sc_frame::connect_test_support::valid_connect;
 
     let (primary, primary_hub) = LoopbackWebSocket::pair();
@@ -275,15 +287,15 @@ async fn nil_accept_failover_and_failed_primary_probe_preserve_active_identity_a
             hub_tx.send(hub).unwrap();
             async { Ok(client) }
         });
-    let state = transport.connection_state_changes();
+    let mut state = transport.connection_state_changes();
     let primary_reject = async {
         let request = primary_hub.recv().await.unwrap();
         let mut nil = valid_connect(7, [0x10; 6]);
         nil[2..4].copy_from_slice(&request[2..4]);
-        nil[10..26].fill(0);
+        nil[field.clone()].fill(0);
         primary_hub.send(&nil).await.unwrap();
         // The raw primary socket is retained for restoration by this API;
-        // receiving nil must not produce a response during its connect wait.
+        // an invalid Accept must not produce a response during its connect wait.
         assert!(
             tokio::time::timeout(Duration::from_millis(100), primary_hub.recv())
                 .await
@@ -296,7 +308,8 @@ async fn nil_accept_failover_and_failed_primary_probe_preserve_active_identity_a
         assert_eq!(&request[10..26], &uuid);
         let mut wire = valid_connect(7, [0x20; 6]);
         wire[2..4].copy_from_slice(&request[2..4]);
-        wire[10..26].fill(0);
+        let valid = wire.clone();
+        wire[field.clone()].fill(0);
         failover_hub.send(&wire).await.unwrap();
         assert!(
             tokio::time::timeout(Duration::from_millis(10), failover_hub.recv())
@@ -304,8 +317,7 @@ async fn nil_accept_failover_and_failed_primary_probe_preserve_active_identity_a
                 .is_err()
         );
         assert_eq!(*state.borrow(), ScConnectionState::Connecting);
-        wire[10..26].fill(0x33);
-        failover_hub.send(&wire).await.unwrap();
+        failover_hub.send(&valid).await.unwrap();
     };
     let (started, (), ()) = tokio::time::timeout(Duration::from_secs(2), async {
         tokio::join!(transport.start(), primary_reject, failover_accept)
@@ -317,6 +329,7 @@ async fn nil_accept_failover_and_failed_primary_probe_preserve_active_identity_a
     let conn = transport.connection().unwrap().clone();
     let before = conn.lock().await.clone();
     let effective_limit = transport.max_apdu_length();
+    assert_eq!(*state.borrow_and_update(), ScConnectionState::Connected);
 
     let probe_hub = tokio::time::timeout(Duration::from_secs(2), hub_rx.recv())
         .await
@@ -327,10 +340,10 @@ async fn nil_accept_failover_and_failed_primary_probe_preserve_active_identity_a
     assert_eq!(&request[10..26], &uuid);
     let mut nil = valid_connect(7, [0x10; 6]);
     nil[2..4].copy_from_slice(&request[2..4]);
-    nil[10..26].fill(0);
     nil[26..30].copy_from_slice(&[0, 16, 0, 1]); // poison limits if committed early
+    nil[field].fill(0);
     probe_hub.send(&nil).await.unwrap();
-    // A failed nil-only restoration must neither publish the primary nor
+    // A failed invalid-only restoration must neither publish the primary nor
     // disconnect the failover. It must keep the failover's larger limits.
     assert!(
         tokio::time::timeout(Duration::from_secs(1), probe_hub.recv())
@@ -355,6 +368,10 @@ async fn nil_accept_failover_and_failed_primary_probe_preserve_active_identity_a
         assert_eq!(after.connect_retry_allowed, before.connect_retry_allowed);
     }
     assert_eq!(transport.max_apdu_length(), effective_limit);
+    assert!(
+        !state.has_changed().unwrap(),
+        "failed primary probe published state"
+    );
     transport
         .send_unicast(&[1, 2, 3], &[0x44; 6])
         .await
@@ -362,7 +379,7 @@ async fn nil_accept_failover_and_failed_primary_probe_preserve_active_identity_a
     let data = failover_hub.recv().await.unwrap();
     assert_eq!(
         data[0], 1,
-        "nil probe must not disconnect the active failover"
+        "invalid probe must not disconnect the active failover"
     );
     assert_eq!(&data[data.len() - 3..], &[1, 2, 3]);
 
@@ -381,6 +398,17 @@ async fn nil_accept_failover_and_failed_primary_probe_preserve_active_identity_a
 
 #[tokio::test(start_paused = true)]
 async fn nil_accept_reconnect_probe_times_out_then_redials_without_reseeding() {
+    check_invalid_accept_reconnect_probe(10..26).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn zero_limits_accept_reconnect_probe_times_out_then_redials_without_reseeding() {
+    for field in [26..28, 28..30, 26..30] {
+        check_invalid_accept_reconnect_probe(field).await;
+    }
+}
+
+async fn check_invalid_accept_reconnect_probe(field: std::ops::Range<usize>) {
     use crate::sc_frame::connect_test_support::valid_connect;
 
     let (primary, primary_hub) = LoopbackWebSocket::pair();
@@ -414,8 +442,8 @@ async fn nil_accept_reconnect_probe_times_out_then_redials_without_reseeding() {
     assert_eq!(&request[10..26], &before.device_uuid);
     let mut nil = valid_connect(7, [0x44; 6]);
     nil[2..4].copy_from_slice(&request[2..4]);
-    nil[10..26].fill(0);
     nil[26..30].copy_from_slice(&[0, 16, 0, 1]);
+    nil[field].fill(0);
     nil_hub.send(&nil).await.unwrap();
     assert!(tokio::time::timeout(Duration::from_secs(1), nil_hub.recv())
         .await

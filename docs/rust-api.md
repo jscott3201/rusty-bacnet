@@ -1397,6 +1397,25 @@ restoration probes do not replace the active failover or reseed the local VMAC.
 No UUID version/variant, generation, storage or
 certificate-binding policy is added. See the [scoped evidence](conformance/standard-135-2020-ledger.md#received-peer-uuid-admission).
 
+**Current-dev zero-limit receive policy (Refs #519):** the shared Connect validator
+rejects zero Max-BVLC or Max-NPDU in either received Connect message, after the
+existing envelope/length/identity checks and before MU diagnostics. This is
+**zero-only local policy**, not a universal minimum-capacity conformance claim.
+Eligible Requests receive `COMMUNICATION/PARAMETER_OUT_OF_RANGE` (7/80) with the
+existing addressing/suppression rules, before activity, admission, capacity or
+UUID replacement. Accepts are silently discarded under AB.2: no NAK, pending or
+peer-limit commit, Connected publication, or original connect-deadline reset.
+Later valid Accepts recover; failed reconnect/restoration probes do not poison
+active limits or retire a good failover peer. Local UUID/VMAC are not reseeded.
+All positive values remain compatible, including 1/1, 65535/65535, 1200/480 and
+300/1476. These are policy boundaries, not proof that tiny capacities can carry
+useful services. No positive floor or Max-NPDU/Max-BVLC relationship is imposed.
+Local defaults, adapter caps and independent per-peer outgoing budgets remain
+unchanged; generic codecs/constructors and manual raw sending still permit zero
+syntax. Post-start public mutation is outside this receive guard. #519 remains
+open/partial; closed #517 identity acceptance and lifetime exclusions remain valid.
+See [zero-capacity evidence](conformance/standard-135-2020-ledger.md#received-zero-capacity-admission).
+
 ```rust
 use bacnet_client::client::BACnetClient;
 use bacnet_transport::sc_hub::{ScHub, ScHubHandshakeTimeouts, ScHubTlsConfig};

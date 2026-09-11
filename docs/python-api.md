@@ -1812,6 +1812,23 @@ Python signatures or exception mapping. This is local policy, not UUID-profile
 or lifetime-storage validation; post-handshake startup rollback is not expanded.
 See the [scoped evidence](conformance/standard-135-2020-ledger.md#received-peer-uuid-admission).
 
+**Current-dev zero-limit receive policy (Refs #519):** native `BACnetClient` async
+entry and `BACnetServer.start()` also silently discard Connect-Accept advertising
+zero Max-BVLC or Max-NPDU. AB.2 forbids a response: no NAK, startup completion,
+peer-limit commit or original connect-deadline reset. A later valid Accept can
+recover; zero-only traffic expires the original wait. The native hub rejects
+eligible zero-limit Requests with `COMMUNICATION/PARAMETER_OUT_OF_RANGE` (7/80)
+before registration/activity/replacement, preserving existing reply suppression
+and malformed-repeat behavior. Generated-certificate installed-native tests cover
+both public node APIs and a surviving hub peer's ReadProperty.
+This is **zero-only local policy**, not a universal minimum-capacity conformance
+claim. All positive values remain compatible, including very small/inverted
+pairs; positive floors and field relationship checks are deferred. Defaults,
+outgoing budgets and Python signatures/exception mapping remain unchanged.
+Generic Rust zero codec syntax and post-start public mutation exclusions remain.
+#519 stays open/partial and does not reopen the closed #517 identity acceptance.
+See [zero-capacity evidence](conformance/standard-135-2020-ledger.md#received-zero-capacity-admission).
+
 #### Required operational credentials
 
 **Compatibility change:** both `BACnetClient` and `BACnetServer` require all of

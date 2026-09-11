@@ -15,7 +15,7 @@ class AcceptUuidTests(mtls.MtlsFixture):
     send_frame = mtls.NodeIdentityMtlsTests.send_frame
     node = mtls.NodeIdentityMtlsTests.node
 
-    async def check_accept(self, api, recover):
+    async def check_accept(self, api, recover, limits=None):
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.minimum_version = context.maximum_version = ssl.TLSVersion.TLSv1_3
         context.load_cert_chain(self.path("hub.pem"), self.path("hub.key"))
@@ -50,6 +50,8 @@ class AcceptUuidTests(mtls.MtlsFixture):
                 self.assertEqual(request, b"\x06\0\0\1" + vmac + uuid + b"\x16\x49\x05\xc4")
                 # Independent base-2020 AB.2.11 bytes, not a product codec.
                 nil = b"\x07\0\0\1" + b"\x22" * 6 + bytes(16) + b"\x20\0\x10\0"
+                if limits is not None:
+                    nil = nil[:10] + b"\xff" * 16 + limits
                 for wire in (nil, nil[:2] + b"\x33\x44" + nil[4:],
                              b"\x07\x02\0\1\x5e" + nil[4:]):
                     await self.send_frame(writer, wire)
@@ -58,7 +60,7 @@ class AcceptUuidTests(mtls.MtlsFixture):
                 nil_checked.set()
                 if recover:
                     await asyncio.wait_for(release_valid.wait(), 3)
-                    await self.send_frame(writer, nil[:10] + b"\xff" * 16 + nil[26:])
+                    await self.send_frame(writer, nil[:10] + b"\xff" * 16 + b"\x20\0\x10\0")
                     # The public operation may emit I-Am after startup. Drain
                     # only after the valid Accept, until explicit owned stop.
                     async def drain():
@@ -82,7 +84,7 @@ class AcceptUuidTests(mtls.MtlsFixture):
         started = asyncio.ensure_future(node.start() if api is BACnetServer else node.__aenter__())
         try:
             await asyncio.wait_for(nil_checked.wait(), 3)
-            self.assertFalse(started.done(), "nil Accept completed native SC startup")
+            self.assertFalse(started.done(), "invalid Accept completed native SC startup")
             if recover:
                 release_valid.set()
                 await asyncio.wait_for(started, 5)
