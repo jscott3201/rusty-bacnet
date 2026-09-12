@@ -265,8 +265,8 @@ fn mixed_flat_and_framed_list_is_invalid_data_encoding() {
 #[test]
 fn empty_setpoint_frame_clears_only_on_the_setpoint_arm() {
     // 0x0E 0x0F: the BACnetSetpointReference frame with its OPTIONAL member
-    // absent — a syntactically valid encoding Clause 12.17 defines as "no
-    // reference" (fixed setpoint). On the Setpoint arm it clears (None);
+    // absent — a syntactically valid encoding selecting Clause 12.17's
+    // fixed-setpoint case. On the Setpoint arm it clears (None);
     // on the bare reference properties it is not a valid value.
     let empty_frame = PropertyValue::ApplicationData(vec![0x0E, 0x0F]);
     assert_eq!(

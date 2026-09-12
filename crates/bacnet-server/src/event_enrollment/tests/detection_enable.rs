@@ -68,8 +68,8 @@ fn detection_enabled_evaluates_normally() {
     assert_eq!(transitions[0].change.to, EventState::HIGH_LIMIT);
 }
 
-/// Clause 13.2.2.1: "If the Event_Detection_Enable property is FALSE, then this
-/// state machine is not evaluated. In this case, no transitions shall occur".
+/// Clause 13.2.2.1 suspends evaluation and prohibits transitions while
+/// Event_Detection_Enable is FALSE.
 #[test]
 fn detection_disabled_yields_no_transitions() {
     let (mut db, _ee_oid) = setup(false);
@@ -79,8 +79,8 @@ fn detection_disabled_yields_no_transitions() {
     );
 }
 
-/// Clause 12.12 states the disabled case as an invariant — "When this property
-/// is FALSE, Event_State shall be NORMAL" — so an evaluation pass over a
+/// Clause 12.12 requires Event_State to remain NORMAL throughout the disabled
+/// period, so an evaluation pass over a
 /// disabled enrollment must leave NORMAL in place, not merely decline to
 /// report a transition it already applied.
 #[test]
@@ -101,8 +101,8 @@ fn detection_disabled_holds_event_state_at_normal() {
 ///
 /// The standard is silent on the FALSE -> TRUE edge for this property — note
 /// the contrast with `Event_Algorithm_Inhibit`, which the standard gives an
-/// explicit re-arm rule ("any condition shall hold for its regular time delay
-/// after the change to FALSE"). Resuming from NORMAL is this implementation's
+/// explicit re-arm rule: after switching to FALSE, a condition must persist
+/// for its full applicable delay. Resuming from NORMAL is this implementation's
 /// choice, and follows from the reset having already run.
 #[test]
 fn re_enabling_detection_resumes_evaluation() {

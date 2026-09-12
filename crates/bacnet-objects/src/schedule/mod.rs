@@ -488,9 +488,9 @@ impl BACnetObject for ScheduleObject {
         // Clause 12.24 Table 12-28 carries no writable footnote on Reliability
         // (plain R), but the object text still anticipates client simulation:
         // the Reliability_Evaluation_Inhibit description states the property
-        // holds NO_FAULT_DETECTED while evaluation is disabled "unless
-        // Out_Of_Service is TRUE and an alternate value has been written to the
-        // Reliability property". In service the property reports the object's
+        // holds NO_FAULT_DETECTED while evaluation is disabled, except when a
+        // client has supplied a replacement Reliability value while Out_Of_Service
+        // is TRUE. In service the property reports the object's
         // own consistency evaluation (CONFIGURATION_ERROR et al.), so a network
         // write is refused; the internal route is `set_reliability_internal`
         // with the complementary guard.

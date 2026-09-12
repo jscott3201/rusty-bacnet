@@ -6,12 +6,12 @@
 //! than 0 or exceeds the file size is refused with SERVICES /
 //! INVALID_FILE_START_POSITION; a short read returns what remains, and End
 //! Of File is TRUE only when the window includes the last octet or record
-//! (Clause 14.1.3.1: "TRUE if this response includes the last octet of the
-//! file and FALSE otherwise"). Clause 14.2 Service Procedure: a start beyond
+//! (Clause 14.1.3.1 makes the flag FALSE for a response short of that end).
+//! Clause 14.2 Service Procedure: a start beyond
 //! the file extends it (intervening contents are a local matter — zero
 //! octets or empty records here), -1 appends, and the ACK carries the
 //! resolved position (Annex F shows 14, not -1). A write the object cannot
-//! hold is OBJECT / FILE_FULL (Clause 18: "filled to a designed limit").
+//! hold is OBJECT / FILE_FULL (Clause 18's configured-capacity limit).
 //!
 //! Every test here uses only the object surface that exists before the
 //! storage hook landed (`set_data`, `set_read_only`, `read_property`, the

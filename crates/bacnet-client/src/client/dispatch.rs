@@ -105,8 +105,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     )
                     .await;
                 } else {
-                    // "BACnet-ComplexACK-PDU with 'segmented-message' =
-                    // FALSE" is in the same Clause 5.4.4.4
+                    // An unsegmented BACnet-ComplexACK-PDU is in the same
+                    // Clause 5.4.4.4
                     // UnexpectedPDU_Received list: the transaction's answer
                     // is the segmented ComplexACK already under reassembly.
                     let key = (tsm_mac.clone(), ack.invoke_id);
@@ -206,8 +206,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 debug!(invoke_id = err.invoke_id, "Received Error PDU");
                 // Correlated by invoke ID alone. Unlike 20.1.4.2 and 20.1.5.6,
                 // Clause 20.1.7.2 imposes no correspondence to the requested
-                // service: error-choice is "the tag value of the BACnet-Error
-                // choice", and Clause 21 opens that production with
+                // service: error-choice identifies the selected BACnet-Error
+                // alternative by tag, and Clause 21 opens that production with
                 // `other [127] Error`. Nothing in the Standard forbids a peer
                 // from answering through that tag, so an exact-match gate here
                 // would reject conformant responses.
@@ -290,7 +290,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             }
             Apdu::Abort(abt) => {
                 // Clause 5.4.4.3 AbortPDU_Received fires only for an Abort
-                // "whose 'server' parameter is TRUE". An Abort this client
+                // with `server` = TRUE. An Abort this client
                 // itself sent — 5.4.4.4 emits them with 'server' = FALSE —
                 // must not, echoed back or spoofed, complete the very
                 // transaction it was trying to abort.
@@ -301,8 +301,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     );
                     return;
                 }
-                // Clause 5.4.4.4 AbortPDU_Received: "send ABORT.indication to
-                // the local application program; and enter the IDLE state" —
+                // Clause 5.4.4.4 AbortPDU_Received delivers ABORT.indication
+                // locally and returns to IDLE —
                 // ending the reassembly session is the IDLE half, and no
                 // reply PDU is prescribed (#367). This removal must stay
                 // below the server=FALSE guard above, or an echoed copy of
@@ -533,12 +533,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 let key = (tsm_mac.clone(), invoke_id);
 
                 // SEGMENTED_CONF (5.4.4.4) `UnexpectedPDU_Received` lists
-                // "BACnet-SegmentACK-PDU with 'server' = TRUE" among the PDUs
-                // that do not belong in this state, and requires all three of:
-                // "transmit a BACnet-Abort-PDU with 'server' = FALSE; send
-                // ABORT.indication with 'server' = FALSE and 'abort-reason' =
-                // INVALID_APDU_IN_THIS_STATE to the local application program;
-                // and enter the IDLE state."
+                // a server-side BACnet-SegmentACK-PDU among the inappropriate
+                // PDUs. The response has three parts: send a client-side
+                // BACnet-Abort-PDU (`server` = FALSE), deliver ABORT.indication
+                // locally with `server` = FALSE and `abort-reason` =
+                // INVALID_APDU_IN_THIS_STATE, and return to IDLE.
                 //
                 // Receive state is checked before the outgoing phase because
                 // SEGMENTED_CONF gives this PDU the opposite disposition.

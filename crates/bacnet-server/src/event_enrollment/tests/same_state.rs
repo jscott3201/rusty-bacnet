@@ -1,8 +1,8 @@
 //! Same-state transition actions (#166; ASHRAE 135-2020 Clause 13.2.2.1.4).
 //!
-//! "The actions are the same for all transitions and they shall be executed
-//! even if the transition does not change the event state (e.g., a transition
-//! from the OFFNORMAL event state to the OFFNORMAL event state)." The pre-#166
+//! Every indicated transition runs the same actions, including transitions
+//! with identical source and destination states such as OFFNORMAL→OFFNORMAL.
+//! The pre-#166
 //! evaluator dropped every evaluation whose result equaled the current state;
 //! these tests pin the indication-driven replacement:
 //!
@@ -13,8 +13,8 @@
 //!   the transition is emitted with its `Event_Enable`-scoped `distribute`;
 //! - a *persisting* condition that satisfies no algorithm condition
 //!   (OUT_OF_RANGE sitting in HIGH_LIMIT, COS sitting at the SAME alarm
-//!   value) still emits nothing (Clause 13.3's "no condition evaluates to
-//!   true → no transition").
+//!   value) still emits nothing (Clause 13.3 requires a satisfied algorithm
+//!   condition before indicating a transition).
 //!
 //! CHANGE_OF_VALUE's same-state coverage lives in `change_of_value.rs`.
 
@@ -106,10 +106,9 @@ fn acked_transitions(db: &ObjectDatabase, ee_oid: &ObjectIdentifier) -> u8 {
     }
 }
 
-/// Clause 13.3.2 condition (c) — "Optional: ... equal to one of the values
-/// contained in pAlarmValues that is DIFFERENT from the value that caused the
-/// last transition to OFFNORMAL ... indicate a transition to the OFFNORMAL
-/// event state" — implemented so the Clause 13.2.2.1.4 actions execute for
+/// Clause 13.3.2's optional condition (c) re-indicates OFFNORMAL for a match
+/// in pAlarmValues that differs from the value at the last OFFNORMAL
+/// indication. It is implemented so the Clause 13.2.2.1.4 actions execute for
 /// the OFFNORMAL→OFFNORMAL same-state transition: the transition is emitted
 /// and `Event_State` stores the specific state.
 #[test]
@@ -159,7 +158,7 @@ fn cos_moving_between_alarm_values_reindicates_offnormal() {
     );
 }
 
-/// Condition (c)'s "for pTimeDelay" is honored too: with a nonzero delay the
+/// Condition (c)'s pTimeDelay persistence requirement is honored too: with a nonzero delay the
 /// same-state re-indication counts down like any offnormal indication, and a
 /// flip back to the ORIGINAL alarm value mid-countdown re-seeds it (the
 /// condition identity is the matched value).
@@ -270,8 +269,8 @@ fn oor_across_band_stores_the_specific_state() {
 /// Clause 13.2.3 on a received transition: with the referenced Notification
 /// Class requiring acknowledgment of TO_OFFNORMAL, the corresponding
 /// `Acked_Transitions` bit is CLEARED (ack owed) when the transition fires —
-/// on the same-state re-indication too, because the actions "are the same for
-/// all transitions".
+/// on the same-state re-indication too, because all transitions run the
+/// same actions.
 #[test]
 fn acked_transitions_bit_clears_when_notification_class_requires_ack() {
     let (mut db, ee_oid, bi_oid) = setup_cos(1, &[1, 0], 0);
@@ -312,7 +311,7 @@ fn acked_transitions_bit_clears_when_notification_class_requires_ack() {
     assert_eq!(acked_transitions(&db, &ee_oid), 0b110);
 }
 
-/// The other half of 13.2.3's sentence: "otherwise it is set." With no
+/// Clause 13.2.3 sets the bit when acknowledgment is not required. With no
 /// Notification Class object resolvable, a fired transition leaves the bit at
 /// the acknowledged state; with a class that requires nothing, the same — a
 /// transition is never stranded unacknowledged for want of a class object.
@@ -359,8 +358,8 @@ fn acked_transitions_bit_sets_when_no_ack_required() {
 }
 
 /// A cleared `Event_Enable` bit suppresses only distribution — Clause 12.12
-/// scopes the property to "enabling and disabling the distribution of
-/// notifications" — never the same-state transition actions: the transition
+/// uses the property to control whether notifications are distributed,
+/// never the same-state transition actions: the transition
 /// is still emitted (with `distribute == false`) and `Event_State` stored.
 #[test]
 fn event_enable_suppresses_distribution_not_same_state_actions() {

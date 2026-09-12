@@ -435,8 +435,8 @@ fn storage_default_methods_are_file_access_denied() {
     );
 }
 
-/// Table 12-16 footnote 2: Record_Count "shall be present only if
-/// File_Access_Method is RECORD_ACCESS", and File_Size counts the octets of
+/// Table 12-16 footnote 2 limits Record_Count's presence to files whose
+/// File_Access_Method is RECORD_ACCESS, and File_Size counts the octets of
 /// the channel in use — whichever order the payload and the method are set.
 #[test]
 fn payload_setters_follow_the_access_method() {

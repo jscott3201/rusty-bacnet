@@ -177,16 +177,15 @@ fn event_state_change_uses_supplied_algorithm() {
     );
 }
 
-/// ASHRAE 135-2020 Clause 13.2.5.3: "For all transitions to, or from, the FAULT
-/// state, the corresponding event notification shall use the Event Type
-/// CHANGE_OF_RELIABILITY."
+/// ASHRAE 135-2020 Clause 13.2.5.3 requires CHANGE_OF_RELIABILITY as the
+/// notification's Event Type whenever a transition enters or leaves FAULT.
 ///
 /// Both directions are tested because the standard states them separately: the
 /// Event Type parameter of ConfirmedEventNotification (Clause 13.8) and
 /// UnconfirmedEventNotification (Clause 13.9) gives the to-FAULT rule and then
-/// adds "The Event Type CHANGE_OF_RELIABILITY shall be used for reporting a
-/// transition from FAULT." Table 13-3 states the combined predicate directly:
-/// "When 'To State' or 'From State' is FAULT, set to CHANGE_OF_RELIABILITY."
+/// separately requires CHANGE_OF_RELIABILITY on departure from FAULT.
+/// Table 13-3 combines both directions: FAULT at either endpoint selects
+/// CHANGE_OF_RELIABILITY.
 #[test]
 fn fault_transitions_are_change_of_reliability() {
     use bacnet_types::enums::EventType;

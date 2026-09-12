@@ -613,8 +613,8 @@ pub trait BACnetObject: Send + Sync {
     /// This is the read half of the internal channel the server's Event
     /// Enrollment evaluator uses to persist per-enrollment algorithm state
     /// across evaluation cycles: the pending (delayed) transition countdown,
-    /// the CHANGE_OF_VALUE detection baseline (Clause 13.3.3: "the value of
-    /// the monitored value when a transition to NORMAL is indicated"), and
+    /// the CHANGE_OF_VALUE detection baseline (the monitored sample at the
+    /// latest NORMAL indication, per Clause 13.3.3), and
     /// the value that caused the last transition to OFFNORMAL (Clause 13.3.2
     /// condition (c)). Like [`set_event_state_internal`](Self::set_event_state_internal)
     /// it deliberately bypasses the network property model: none of the three
@@ -635,7 +635,7 @@ pub trait BACnetObject: Send + Sync {
     /// The only caller is the trusted server evaluator, passing a state it
     /// derived from a prior snapshot plus the current cycle's evaluation.
     /// Implementations enforce the Clause 13.2.2.1 invariant by construction:
-    /// while `Event_Detection_Enable` is FALSE "no transitions shall occur",
+    /// transitions are prohibited while `Event_Detection_Enable` is FALSE,
     /// so a write arriving then is refused rather than queued (and the
     /// detection-disable reset has already cleared the fields).
     ///
@@ -677,11 +677,9 @@ pub trait BACnetObject: Send + Sync {
     /// transition.
     ///
     /// Implements the alarm-acknowledgment half of Clause 13.2.2.1.4's fourth
-    /// transition action ("indicate the transition to the Alarm-Acknowledgment
-    /// process"), per Clause 13.2.3: "When an event state transition is
-    /// received, the corresponding bit in Acked_Transitions is either set or
-    /// cleared. If the corresponding bit in Ack_Required is set, then the bit
-    /// in Acked_Transitions is cleared, otherwise it is set." The caller (the
+    /// transition action: pass the transition to alarm-acknowledgment handling.
+    /// Under Clause 13.2.3, receiving a transition updates its Acked_Transitions
+    /// bit to the inverse of the corresponding Ack_Required bit. The caller (the
     /// server evaluator) resolves `Ack_Required` from the referenced
     /// Notification Class object and passes the outcome as `acknowledged`;
     /// this method performs only the bit maintenance.
@@ -743,9 +741,8 @@ pub trait BACnetObject: Send + Sync {
     /// network [`write_property`](Self::write_property) route. Implementations
     /// enforce symmetric ownership: clients may write while `Out_Of_Service`
     /// is TRUE, and internal evaluation may write while it is FALSE. ASHRAE
-    /// 135-2020 Clause 3.2 defines reliability evaluation as "the process by
-    /// which an object determines its reliability and thus the value to set
-    /// into its Reliability property."
+    /// 135-2020 Clause 3.2 describes reliability evaluation as the object's
+    /// assessment of its reliability, producing its Reliability property value.
     ///
     /// The default rejects the operation, so object types without an internal
     /// reliability-evaluation process remain unaffected.
@@ -828,8 +825,8 @@ pub trait BACnetObject: Send + Sync {
     ///
     /// The **default** returns `None`, so object types without a file opt
     /// out; the server reports `None` on a File-typed object as SERVICES /
-    /// FILE_ACCESS_DENIED (Clause 18: "a file that is currently locked or
-    /// otherwise not accessible") rather than reading it as empty.
+    /// FILE_ACCESS_DENIED (Clause 18 covers locked or inaccessible files)
+    /// rather than reading it as empty.
     /// Applications backing a File object with their own storage — a disk
     /// file, a firmware partition — implement [`FileStorage`] and return
     /// `Some`.

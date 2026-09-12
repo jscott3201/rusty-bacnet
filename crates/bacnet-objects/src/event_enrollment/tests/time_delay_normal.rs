@@ -5,8 +5,8 @@
 use super::super::*;
 
 /// Absent a write, the property reads back the `Event_Parameters`
-/// `Time_Delay` — the Clause 13.3 fallback ("it takes on the value of the
-/// pTimeDelay parameter"), matching the intrinsic types' read arm.
+/// `Time_Delay` — the Clause 13.3 fallback to pTimeDelay,
+/// matching the intrinsic types' read arm.
 #[test]
 fn time_delay_normal_defaults_to_event_parameters_time_delay() {
     let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
@@ -239,8 +239,8 @@ fn configuration_setters_cancel_pending_countdowns() {
     );
 }
 
-/// Clause 13.2.2.1's disable reset covers the evaluation state: "this state
-/// machine is not evaluated" — a stale countdown or baseline must not
+/// Clause 13.2.2.1's disable reset covers the evaluation state: evaluation
+/// is suspended, so a stale countdown or baseline must not
 /// survive into the next enabled period.
 #[test]
 fn disabling_detection_clears_eval_state_and_refuses_writes() {

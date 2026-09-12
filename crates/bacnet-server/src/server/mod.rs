@@ -132,10 +132,9 @@ pub struct ServerTsm {
     /// from the dispatch loop, we send it directly — no polling needed.
     #[allow(dead_code)]
     pending: HashMap<TsmKey, oneshot::Sender<CovAckResult>>,
-    /// Router MACs learned per remote network, Clause 6.5.3 method 4: "using
-    /// the local broadcast MAC address in the initial transmission to a device
-    /// on a remote DNET and noting the SA associated with any subsequent
-    /// responses from the remote device" (#375). Consulted so later confirmed
+    /// Router MACs learned per remote network, Clause 6.5.3 method 4: first
+    /// send to a device on the remote DNET using a local link broadcast, then
+    /// learn the router from the link SA of a response (#375). Consulted so later confirmed
     /// sends to that DNET can unicast to the router instead of broadcasting.
     routers: HashMap<u16, MacAddr>,
 }
@@ -220,8 +219,8 @@ impl ServerTsm {
     ///    but which older callers may still expect.
     ///
     /// A hit that carries a routed identity also teaches the router cache:
-    /// the response's immediate MAC is "the SA associated with [a] subsequent
-    /// response from the remote device" (Clause 6.5.3 method 4).
+    /// the response's immediate MAC supplies the router's link SA
+    /// for that remote device (Clause 6.5.3 method 4).
     #[allow(dead_code)]
     fn record_result_correlated(
         &mut self,

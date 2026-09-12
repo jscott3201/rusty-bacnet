@@ -126,7 +126,7 @@ impl MultiStateOutputObject {
     ///
     /// Number_Of_States shrink interplay: if the state count ever shrinks
     /// below this value, the standard leaves adjustment of Priority_Array,
-    /// Relinquish_Default, Present_Value, and Feedback_Value "a local matter"
+    /// Relinquish_Default, Present_Value, and Feedback_Value to local policy
     /// (Clause 12.19 / Table 12-22 Number_Of_States text). This implementation does
     /// NOT auto-adjust: out-of-range stored values are a configuration
     /// decision for the application to resolve; the object-owned evaluator
@@ -312,10 +312,10 @@ impl BACnetObject for MultiStateOutputObject {
                 // Checked for representability but deliberately NOT range-checked against
                 // Number_Of_States, unlike Present_Value. Clause 12.19 treats a
                 // Feedback_Value outside the state set as a condition to be *reported* —
-                // "If any of those properties other than Present_Value are out of range,
-                // the value of the Reliability property shall remain CONFIGURATION_ERROR"
+                // Reliability must retain CONFIGURATION_ERROR while any of those
+                // properties except Present_Value remains outside the valid range
                 // — not as a value to refuse. Feedback_Value reflects a sensed quantity
-                // whose determination is "a local matter", so it can legitimately fall
+                // determined by local policy, so it can legitimately fall
                 // outside the configured range; refusing it would make CONFIGURATION_ERROR
                 // unreachable. The object-owned evaluator applies that reliability.
                 //
@@ -388,10 +388,9 @@ impl BACnetObject for MultiStateOutputObject {
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
-        // Clause 12.19, while Out_Of_Service is TRUE: "the Present_Value property and
-        // the Reliability property, if present and capable of taking on values other
-        // than NO_FAULT_DETECTED, shall be writable to allow simulating specific
-        // conditions or for testing purposes".
+        // Clause 12.19 requires simulation/test writes while Out_Of_Service is TRUE:
+        // Present_Value is writable, as is Reliability when that property exists
+        // and supports values beyond NO_FAULT_DETECTED.
         // `is_writable_property` stays statically true because it describes capability.
         if let Some(result) = self.reliability_inhibit.write_client_reliability(
             self.out_of_service,

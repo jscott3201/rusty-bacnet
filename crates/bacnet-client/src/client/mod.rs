@@ -366,8 +366,8 @@ pub struct DeviceWriteResult {
 
 /// The receive-side promises this client puts in every confirmed request.
 ///
-/// Clause 20.1.2.3 and Clause 20.1.2.4 exist "so that the responding device may
-/// determine how to convey its response", so the same values must bound what
+/// Clause 20.1.2.3 and Clause 20.1.2.4 let the responder choose a response
+/// form the requester can receive, so the same values must bound what
 /// the dispatch loop is willing to take back. Keeping the pair together stops
 /// the two halves from drifting as they are threaded through dispatch.
 #[derive(Debug, Clone, Copy)]

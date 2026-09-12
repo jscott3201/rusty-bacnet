@@ -109,7 +109,7 @@ fn fault_precedence_truth_table() {
 
 #[test]
 fn any_non_zero_reliability_faults_not_just_a_known_one() {
-    // Clause 13.2.2 keys on "a value other than NO_FAULT_DETECTED", not on
+    // Clause 13.2.2 tests inequality with NO_FAULT_DETECTED, not
     // membership in a list, so an unmodeled value must fault too.
     for reliability in [OVER_RANGE, SHORTED_LOOP, 9999] {
         let mut det = detector();
@@ -134,8 +134,8 @@ fn bad_reliability_drives_event_state_to_fault() {
 #[test]
 fn fault_takes_precedence_over_the_algorithm() {
     // Present value is above the high limit, so the algorithm alone would say
-    // HIGH_LIMIT. Clause 13.2.2: "Fault detection takes precedence over the
-    // detection of normal and offnormal states."
+    // HIGH_LIMIT. Clause 13.2.2 gives fault detection priority over
+    // normal/offnormal evaluation.
     let mut det = detector();
     assert_eq!(
         det.probe(99.0, OVER_RANGE).unwrap().change.to,
@@ -346,9 +346,9 @@ fn command_failure_reenters_fault_only_when_reliability_changes() {
 
 #[test]
 fn recovery_from_fault_enters_normal_not_the_algorithm_state() {
-    // THE keystone assertion. Clause 13.2.2.1 (Fault, ToNormal): "If
-    // reliability-evaluation indicates a value of NO_FAULT_DETECTED, then
-    // perform the corresponding transition actions and enter the Normal state."
+    // THE keystone assertion. Clause 13.2.2.1 (Fault, ToNormal) runs the
+    // transition actions and enters Normal when reliability evaluation
+    // returns NO_FAULT_DETECTED.
     //
     // Issue #167's own "Suggested direction" proposed re-deriving the state from
     // the event algorithm here. That would yield HIGH_LIMIT, because the present
@@ -797,8 +797,8 @@ fn ticking_an_object_uses_reliability_for_fault_and_recovery() {
 #[test]
 fn faulted_object_reports_both_fault_and_in_alarm_status_flags() {
     // Clause 12.2 derives IN_ALARM from Event_State and FAULT from Reliability,
-    // and notes "The relationship between individual flags is not defined by the
-    // protocol." They are reconciled upstream: while event-state-detection is
+    // without specifying how the individual flags relate to each other.
+    // They are reconciled upstream: while event-state-detection is
     // enabled, Clause 13.2.2 makes a bad Reliability determine Event_State =
     // FAULT, so both flags read TRUE together. Before #167 this object reported
     // FAULT TRUE with IN_ALARM FALSE, because Reliability never reached

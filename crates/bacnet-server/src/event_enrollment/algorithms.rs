@@ -9,8 +9,8 @@
 //! Every structured evaluator returns an [`ArmEvaluation`]: either the
 //! algorithm *indicated a transition* (possibly to the state the enrollment
 //! already holds — Clause 13.2.2.1.4's same-state case), or it did not
-//! ("If no condition evaluates to true, then no transition shall be
-//! indicated", Clause 13.3's common introduction). The pre-#166 code folded
+//! (Clause 13.3's common introduction permits an indication only when an
+//! algorithm condition is satisfied). The pre-#166 code folded
 //! both into one `EventState` return and dropped every same-state result,
 //! which made a genuine same-state indication (CHANGE_OF_VALUE's only
 //! transition kind, Figure 13-10) indistinguishable from "nothing changed".
@@ -64,20 +64,19 @@ impl ArmEvaluation {
 
 /// A transition the event algorithm indicated on this pass.
 ///
-/// The driver still owes the delay gate (Clause 13.3's "for pTimeDelay" /
-/// "for pTimeDelayNormal") before this becomes a fired transition; an
+/// The driver still owes the delay gate (Clause 13.3's persistence requirement
+/// over pTimeDelay / pTimeDelayNormal) before this becomes a fired transition; an
 /// indication only asserts that an algorithm condition is currently true.
 pub(crate) struct Indication {
     /// The specific BACnetEventState the algorithm returned. Stored verbatim
-    /// in `Event_State` when the transition fires (Clause 13.2.2.1.4: "it is
-    /// not acceptable to set Event_State to OFFNORMAL when the returned value
-    /// is HIGH_LIMIT").
+    /// in `Event_State` when the transition fires (Clause 13.2.2.1.4 requires
+    /// the specific result, so HIGH_LIMIT cannot be replaced with OFFNORMAL).
     pub target: EventState,
     /// Identity of the indicating condition, consumed by the driver's pending
     /// countdown — see `EventEnrollmentPending::condition` in bacnet-objects.
     /// CHANGE_OF_STATE discriminates by matched alarm value: condition (c)'s
-    /// text requires it ("remains equal to THAT value for pTimeDelay");
-    /// applying it to (a) — which says "ANY of the values" — is the stricter
+    /// text requires the same matched value to persist for pTimeDelay;
+    /// applying it to (a) — which accepts membership in the alarm set — is the stricter
     /// deliberate choice documented at
     /// [`eval_change_of_state_struct`]. CHANGE_OF_BITSTRING hashes the masked
     /// monitored bytes. Algorithms whose delay gates a threshold condition
@@ -88,10 +87,9 @@ pub(crate) struct Indication {
     /// (c) on later passes.
     pub offnormal_value: Option<u64>,
     /// CHANGE_OF_VALUE only: the sample installed as the new detection
-    /// baseline when the transition *fires* — Clause 13.3.3: "the value of
-    /// the monitored value when a transition to NORMAL is indicated shall be
-    /// used in evaluation of the conditions until the next transition to
-    /// NORMAL is indicated".
+    /// baseline when the transition *fires*. Clause 13.3.3 uses the sample
+    /// at each NORMAL indication as the comparison baseline until another
+    /// NORMAL indication replaces it.
     pub new_baseline: Option<PropertyValue>,
 }
 
@@ -360,8 +358,8 @@ fn eval_change_of_value(params: &[u8], value: f32, _current: EventState) -> Even
 /// Structured OUT_OF_RANGE evaluation with explicit limits and deadband.
 ///
 /// OUT_OF_RANGE defines no same-state condition (Clause 13.3.6 (a)–(h) are
-/// all state-changing, and persistence inside the band is the common
-/// introduction's "no condition evaluates to true"), so the hysteresis
+/// all state-changing, and persistence inside the band satisfies none of
+/// the conditions described in the common introduction), so the hysteresis
 /// result yields an indication only when it differs from the current state.
 pub(crate) fn eval_out_of_range_struct(
     low_limit: f32,
@@ -445,7 +443,7 @@ impl PropertyStateValue {
 /// (c) OFFNORMAL + value equals a *different* alarm value than the one that
 ///     caused the last OFFNORMAL transition → re-indicate OFFNORMAL.
 ///
-/// Condition (c) is marked "Optional:" in the standard. It is implemented
+/// Condition (c) is optional in the standard. It is implemented
 /// here because without it an enrollment whose monitored value moves between
 /// listed alarm values would sit silently OFFNORMAL — and Clause 13.2.2.1.4
 /// requires the transition actions even for an OFFNORMAL→OFFNORMAL result
@@ -455,9 +453,9 @@ impl PropertyStateValue {
 /// indicate rather than fabricating a re-entry every pass.
 ///
 /// Condition (a)'s pending identity is shared by every listed alarm value:
-/// the clause requires the monitored value to equal "any" pAlarmValues entry
+/// the clause requires the monitored value to stay within the pAlarmValues set
 /// for pTimeDelay. Condition (c) retains the matched-value identity because it
-/// requires the value to remain equal to "that" different value.
+/// requires persistence of the particular replacement alarm value.
 pub(crate) fn eval_change_of_state_struct(
     alarm_values: &[BACnetPropertyStates],
     value: PropertyStateValue,
@@ -514,9 +512,9 @@ fn masked_value_hash(mask: &[u8], value_bits: &[u8]) -> u64 {
 ///
 /// Clause 13.3.1 conditions: (a) NORMAL + masked value equals an alarm value
 /// → OFFNORMAL; (b) OFFNORMAL + masked value equals none → NORMAL.
-/// Condition (c) ("Optional:") is deliberately NOT implemented: it keys on a
-/// masked value "different from the value that caused the last transition to
-/// OFFNORMAL", no such baseline is retained for bitstrings, and guessing
+/// Optional condition (c) is deliberately NOT implemented: it requires the
+/// masked value to differ from the one at the last OFFNORMAL indication.
+/// No such baseline is retained for bitstrings, and guessing
 /// would re-indicate on every poll while a value sits unchanged in an alarm
 /// pattern — the failure mode issue #166 documented for an unguarded pass.
 ///
@@ -583,10 +581,10 @@ pub(crate) fn eval_change_of_bitstring_struct(
 /// detection baseline from Clause 13.3.3.
 ///
 /// The Figure 13-10 state machine inducts *only* transitions to NORMAL: for a
-/// REAL monitored value, "(a) If pCurrentState is NORMAL, and the absolute
-/// value of pMonitoredValue changes by an amount equal to or greater than
-/// pIncrement for pTimeDelayNormal, then indicate a transition to the NORMAL
-/// event state"; for a BIT STRING monitored value the significant (masked)
+/// REAL monitored value, condition (a) requires pCurrentState = NORMAL and
+/// a change in pMonitoredValue whose magnitude reaches pIncrement and
+/// persists for pTimeDelayNormal, producing a NORMAL indication;
+/// for a BIT STRING monitored value the significant (masked)
 /// bits change. This arm therefore never returns OFFNORMAL — the pre-#137
 /// implementation answered OFFNORMAL whenever `|value| >= increment`, a
 /// transition the algorithm cannot indicate, with no baseline at all.
@@ -599,7 +597,7 @@ pub(crate) fn eval_change_of_bitstring_struct(
 /// algorithm's only target, so a foreign recovery *is* an ordinary
 /// indication — target NORMAL, with the current sample installed as the
 /// detection baseline when the transition fires (exactly the 13.3.3 rule
-/// for "the value ... when a transition to NORMAL is indicated").
+/// for sampling a new baseline at each NORMAL indication).
 pub(crate) fn eval_change_of_value_struct(
     criteria: &ChangeOfValueCriteria,
     monitored_value: &PropertyValue,
@@ -663,7 +661,7 @@ pub(crate) fn eval_change_of_value_struct(
                     indication: None,
                     establish_baseline: Some(monitored_value.clone()),
                 },
-                // pIncrement "shall provide" a positive increment; a
+                // pIncrement must specify an increment above zero; a
                 // non-positive or non-finite configuration never indicates.
                 Some(_) if !increment.is_finite() || *increment <= 0.0 => {
                     ArmEvaluation::simple(None)

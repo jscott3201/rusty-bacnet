@@ -78,7 +78,7 @@ fn mso_msv_relinquish_default_write_recaptures_present_value() {
 
 /// Number_Of_States-shrink interplay, pinned: Clause 12.19 / Table 12-22 leave any
 /// adjustment of Priority_Array / Relinquish_Default / Present_Value /
-/// Feedback_Value "a local matter" when the state count shrinks below stored
+/// Feedback_Value to local policy when the state count shrinks below stored
 /// values, so the local count setter does not auto-adjust them — a stale
 /// Relinquish_Default keeps driving Present_Value until the application
 /// resolves the configuration, with CONFIGURATION_ERROR reported meanwhile.

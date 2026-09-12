@@ -11,8 +11,8 @@
 //! gates every indicated transition into an OFFNORMAL state; the EE object's
 //! optional `Time_Delay_Normal` property (pTimeDelayNormal, Table 12-14 O —
 //! falling back to pTimeDelay per Clause 13.3) gates transitions to NORMAL.
-//! Both delays are SECONDS in the standard (e.g. 13.3.1: "the time, in
-//! seconds, that the offnormal conditions must exist"), and this evaluator
+//! Both delays measure condition persistence in SECONDS (e.g. 13.3.1),
+//! and this evaluator
 //! keeps them in seconds: the pending countdown (owned by the EE object,
 //! in-memory only) is seeded with `ceil(delay_secs / interval_secs)` —
 //! never-fire-early ceiling semantics, so at the default 10s
@@ -153,9 +153,8 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
             continue;
         }
 
-        // Clause 13.2.2.1: "If the Event_Detection_Enable property is FALSE,
-        // then this state machine is not evaluated. In this case, no
-        // transitions shall occur". The accompanying reset is applied by the
+        // Clause 13.2.2.1 suspends evaluation and prohibits transitions while
+        // Event_Detection_Enable is FALSE. The accompanying reset is applied by the
         // object when the property is written (Clause 12.12 states the disabled
         // condition as an invariant), so skipping here cannot strand a stale
         // non-NORMAL state the way the pre-#136 Event_Enable gate did, nor a

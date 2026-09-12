@@ -562,11 +562,10 @@ fn trendlog_multiple_write_log_enable() {
 // ──────────────────────────────────────────────────────────────────────────
 
 /// Clause 12.25 Table 12-29 lists Reliability as plain O with no writability
-/// footnote, and the Trend Log Reliability_Evaluation_Inhibit paragraph ends at
-/// "shall have the value NO_FAULT_DETECTED." — unlike the Schedule (Clause
-/// 12.24) and intrinsic-reporting objects it does NOT carry the "...unless
-/// Out_Of_Service is TRUE and an alternate value has been written to the
-/// Reliability property" provision. The log owns the property as a logging
+/// footnote. The Trend Log Reliability_Evaluation_Inhibit paragraph requires
+/// NO_FAULT_DETECTED while evaluation is inhibited, without the Schedule
+/// (Clause 12.24) and intrinsic-reporting exception for a client-supplied
+/// Reliability value while Out_Of_Service is TRUE. The log owns the property as a logging
 /// status/fault indication, so no-write is the conformant posture; a client
 /// write is refused PROPERTY / WRITE_ACCESS_DENIED in and out of service.
 #[test]

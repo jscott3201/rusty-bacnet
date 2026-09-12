@@ -223,8 +223,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                             // = TRUE, reason a local matter)
                                             // is its one generic escape, and
                                             // Clause 18.10's BUFFER_OVERFLOW
-                                            // — "a buffer capacity has been
-                                            // exceeded" — is the fit (#364).
+                                            // fits a reassembly that exceeds
+                                            // available buffer capacity (#364).
                                             warn!(
                                                 invoke_id = req.invoke_id,
                                                 accepted = state.accepted_segments,
@@ -789,8 +789,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ///
     /// Every Abort this dispatch loop originates answers a client's request,
     /// so the flag is always TRUE — it names the sender's role, not the
-    /// error (Clause 20.1.9.1: "TRUE when the Abort PDU is sent by a
-    /// server").
+    /// error (Clause 20.1.9.1 assigns TRUE to a server-originated Abort).
     async fn send_server_abort(
         network: &Arc<NetworkLayer<T>>,
         source_mac: &MacAddr,

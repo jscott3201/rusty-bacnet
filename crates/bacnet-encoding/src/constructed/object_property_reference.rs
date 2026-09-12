@@ -92,9 +92,8 @@ pub fn decode_object_property_reference(
 ///
 /// The production's member is `OPTIONAL`: an empty frame (`0x0E 0x0F`) is a
 /// syntactically valid encoding of the ABSENT alternative (Clause 12.17,
-/// `Setpoint_Reference`: "The absence of a reference indicates that the
-/// setpoint for this control loop is fixed and is contained in the Setpoint
-/// property") and yields `None` — not an encoding error.
+/// `Setpoint_Reference`: without a reference, the loop uses the fixed value
+/// in its Setpoint property) and yields `None` — not an encoding error.
 pub fn decode_setpoint_reference(
     data: &[u8],
 ) -> Result<Option<BACnetObjectPropertyReference>, Error> {

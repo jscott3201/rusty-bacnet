@@ -163,8 +163,7 @@ fn time_delay_normal_gates_only_the_return_to_normal() {
 }
 
 /// Absent Time_Delay_Normal, NORMAL-direction transitions wait pTimeDelay
-/// (the normative fallback: "it takes on the value of the pTimeDelay
-/// parameter").
+/// (the required fallback uses the offnormal delay for the normal direction too).
 #[test]
 fn absent_time_delay_normal_falls_back_to_time_delay() {
     let (mut db, ee_oid, ai_oid) = setup_oor(85.0, 80.0, 20.0, 2.0, 2, None);

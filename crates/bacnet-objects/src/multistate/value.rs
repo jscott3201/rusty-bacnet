@@ -26,8 +26,8 @@ pub struct MultiStateValueObject {
     state_text: Vec<String>,
     /// CHANGE_OF_STATE event detector.
     event_detector: ChangeOfStateDetector,
-    /// Event_Detection_Enable (Clause 12.20). Clause 13.2.2.1: "If the
-    /// Event_Detection_Enable property is FALSE, then this state machine is not evaluated."
+    /// Event_Detection_Enable (Clause 12.20). A FALSE value suspends
+    /// event-state-machine evaluation under Clause 13.2.2.1.
     event_detection_enable: bool,
     pub(crate) event_history: EventHistory,
     /// Value source tracking (optional per spec — exposed via VALUE_SOURCE property).
@@ -382,10 +382,9 @@ impl BACnetObject for MultiStateValueObject {
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
-        // Clause 12.20, while Out_Of_Service is TRUE: "the Present_Value property and
-        // the Reliability property, if present and capable of taking on values other
-        // than NO_FAULT_DETECTED, shall be writable to allow simulating specific
-        // conditions or for testing purposes".
+        // Clause 12.20 requires simulation/test writes while Out_Of_Service is TRUE:
+        // Present_Value is writable, as is Reliability when that property exists
+        // and supports values beyond NO_FAULT_DETECTED.
         // `is_writable_property` stays statically true because it describes capability.
         if let Some(result) = self.reliability_inhibit.write_client_reliability(
             self.out_of_service,

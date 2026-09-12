@@ -9,9 +9,9 @@
 //! (record-access = 0, stream-access = 1); the mapping here is semantic.
 //!
 //! Non-File identifier classification (#398): the Clause 14.1.4.1 and
-//! 14.2.4.1 error tables pair "A non-File Object Identifier was provided"
-//! with SERVICES / INCONSISTENT_OBJECT_TYPE. The standard does not sequence
-//! that check against "The File object does not exist"; the handlers
+//! 14.2.4.1 error tables assign SERVICES / INCONSISTENT_OBJECT_TYPE to
+//! identifiers of non-File objects. The standard does not sequence
+//! that check against the missing-File-object check; the handlers
 //! classify the identifier by type before the object lookup, so an absent
 //! non-File identifier gets the type error and only a missing File object
 //! gets OBJECT / UNKNOWN_OBJECT.
@@ -471,8 +471,8 @@ fn unknown_access_method_raw_value_fails_closed() {
 // ──────────────────────────────────────────────────────────────────────────
 // Non-File identifier classification (#398) — Clauses 14.1.4.1 / 14.2.4.1
 // pair a non-File Object Identifier with SERVICES / INCONSISTENT_OBJECT_TYPE.
-// The standard does not sequence that against "The File object does not
-// exist", so these handlers classify by type first: a non-File identifier
+// The standard does not order the type and missing-object checks, so these
+// handlers classify by type first: a non-File identifier
 // gets the type error whether or not it names an object, and only a FILE
 // identifier that names no object gets OBJECT / UNKNOWN_OBJECT.
 // ──────────────────────────────────────────────────────────────────────────

@@ -200,11 +200,9 @@ struct PendingTransaction {
     /// newer segment activity acquired the TSM lock.
     segment_generation: u64,
     /// The service this request asked for. Clause 20.1.4.2 and 20.1.5.6 both
-    /// require an acknowledgment's service-ack-choice to "contain the value of
-    /// the BACnetConfirmedServiceChoice corresponding to the service contained
-    /// in the previous BACnet-Confirmed-Service-Request that has resulted in
-    /// this acknowledgment", so anything else is not this transaction's
-    /// response.
+    /// require service-ack-choice to match the BACnetConfirmedServiceChoice
+    /// of the request being acknowledged. A different choice therefore
+    /// cannot identify this transaction's response.
     expected_service_choice: ConfirmedServiceChoice,
     lease: PendingLease,
 }

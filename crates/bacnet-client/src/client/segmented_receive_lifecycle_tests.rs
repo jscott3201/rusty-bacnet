@@ -2,7 +2,7 @@
 //!
 //! Clause 5.4.4.4 SEGMENTED_CONF ends by AbortPDU_Received (peer Abort with
 //! 'server' = TRUE), by UnexpectedPDU_Received (Error and Reject PDUs are in
-//! its list), or locally — and every ending is "enter the IDLE state", where
+//! its list), or locally — and every ending returns to IDLE, where
 //! 5.4.4.1 answers further segments with Abort INVALID_APDU_IN_THIS_STATE.
 //! Before #367's fix, none of those endings removed the `seg_state` entry, so
 //! the client kept acking segments of a transaction that no longer existed.
@@ -646,7 +646,7 @@ async fn simple_ack_mid_reassembly_aborts_the_transfer() {
     client.stop().await.unwrap();
 }
 
-/// "BACnet-ComplexACK-PDU with 'segmented-message' = FALSE" is also in the
+/// An unsegmented BACnet-ComplexACK-PDU is also in the
 /// Clause 5.4.4.4 UnexpectedPDU_Received list — it must not complete the
 /// transaction with its own content while segments are outstanding.
 #[tokio::test]

@@ -54,9 +54,8 @@ pub struct EventEnrollmentObject {
     /// pTimeDelayNormal parameter for the object's event algorithm (Clause
     /// 12.12). `None` is the not-configured case and takes on the
     /// `Time_Delay` carried inside `event_parameters` (Table 12-15 maps
-    /// `Time_Delay` to pTimeDelay for every evaluated algorithm): "If no
-    /// value is available for this parameter, then it takes on the value of
-    /// the pTimeDelay parameter" (Clause 13.3).
+    /// `Time_Delay` to pTimeDelay for every evaluated algorithm), following
+    /// Clause 13.3's fallback from absent pTimeDelayNormal to pTimeDelay.
     time_delay_normal: Option<u32>,
     /// Delayed transition counting down, if any. In-memory only.
     pending: Option<EventEnrollmentPending>,
@@ -88,8 +87,8 @@ impl EventEnrollmentObject {
             object_property_reference: None,
             event_state: 0,
             event_enable: 0b111,
-            // Clause 12.12: "Each flag shall have the value TRUE if no event of
-            // that type has ever occurred for the object." That all-TRUE value
+            // Clause 12.12 requires a TRUE flag for an event type that has
+            // never occurred on the object. That all-TRUE initial value
             // is also the initial condition the detection-disabled reset
             // restores, so `RESET_ACKED_TRANSITIONS` names it once.
             acked_transitions: Self::RESET_ACKED_TRANSITIONS,
@@ -117,15 +116,14 @@ impl EventEnrollmentObject {
     const RESET_ACKED_TRANSITIONS: u8 = 0b111;
 
     /// Apply the reset ASHRAE 135-2020 Clause 13.2.2.1 requires while
-    /// `Event_Detection_Enable` is FALSE: "no transitions shall occur,
-    /// Event_State shall be set to NORMAL, and Event_Time_Stamps,
-    /// Event_Message_Texts and Acked_Transitions shall be set to their
-    /// respective initial conditions."
+    /// `Event_Detection_Enable` is FALSE: suppress transitions, restore NORMAL
+    /// in Event_State, and reset Event_Time_Stamps, Event_Message_Texts and
+    /// Acked_Transitions to their initial values.
     ///
     /// The monitored-source identity, pending countdown, and both baselines
     /// are cleared too: they are extensions of the same event-state-detection
-    /// state machine the clause freezes ("this state machine is not
-    /// evaluated"), so a stale countdown must not survive into the next
+    /// state machine whose evaluation the clause suspends, so a stale
+    /// countdown must not survive into the next
     /// enabled period and fire against a condition the object no longer
     /// observes. The intrinsic types make the same choice for their detectors
     /// (`analog/input.rs` clears `detector.pending` on the identical write).
@@ -337,8 +335,8 @@ impl BACnetObject for EventEnrollmentObject {
                 Ok(PropertyValue::ApplicationData(buf.to_vec()))
             }
             p if p == PropertyIdentifier::TIME_DELAY_NORMAL => {
-                // Clause 13.3: "If no value is available for this parameter,
-                // then it takes on the value of the pTimeDelay parameter" —
+                // Clause 13.3 supplies pTimeDelay as the fallback when
+                // pTimeDelayNormal is absent —
                 // the read-back of an unwritten Time_Delay_Normal is the
                 // Event_Parameters Time_Delay, matching the algorithm's
                 // behavior (mirrors the intrinsic types' read arm).
@@ -396,7 +394,7 @@ impl BACnetObject for EventEnrollmentObject {
             if let PropertyValue::Boolean(v) = value {
                 self.event_detection_enable = v;
                 // Clause 12.12 states the disabled condition as an invariant —
-                // "When this property is FALSE, Event_State shall be NORMAL" —
+                // disabled detection requires a persistent NORMAL Event_State —
                 // not as an action taken later. Resetting here rather than
                 // leaving it to the periodic evaluator closes the window in
                 // which a disabled object would still answer ReadProperty and
@@ -455,7 +453,7 @@ impl BACnetObject for EventEnrollmentObject {
     /// only caller is the trusted server evaluator.
     ///
     /// Refuses any non-NORMAL state while `Event_Detection_Enable` is FALSE.
-    /// Clause 13.2.2.1 requires that "no transitions shall occur" in that case,
+    /// Clause 13.2.2.1 prohibits transitions in that case,
     /// and the server evaluator already skips such objects — this guard makes
     /// the invariant hold by construction rather than by the caller
     /// remembering, so a future caller cannot reintroduce the violation.
@@ -479,7 +477,7 @@ impl BACnetObject for EventEnrollmentObject {
 
     /// Store the enrollment evaluation state. Refused while
     /// `Event_Detection_Enable` is FALSE: Clause 13.2.2.1 freezes the state
-    /// machine ("this state machine is not evaluated"), and the reset in the
+    /// machine by suspending evaluation, and the reset in the
     /// write arm has already returned these fields to their initial
     /// condition, so a write arriving while disabled can only be stale.
     fn set_enrollment_eval_state_internal(
@@ -514,8 +512,8 @@ impl BACnetObject for EventEnrollmentObject {
     /// Clause 13.9): Clause 13.2.3 sets the bit on the acknowledgment
     /// indication — unconditional and idempotent, so a repeated ack succeeds
     /// again. A detection-DISABLED enrollment instead refuses with
-    /// OBJECT/NO_ALARM_CONFIGURED, Table 13-10's "The object exists but does
-    /// not support or is not configured for event generation": it can
+    /// OBJECT/NO_ALARM_CONFIGURED, which Table 13-10 uses for an existing object
+    /// lacking event-generation support or configuration: it can
     /// generate nothing, and Clause 12.12 keeps its `Acked_Transitions` at
     /// the initial condition, which an accepted ack would break.
     /// Out_Of_Service does not gate the ack: no clause bars acknowledging a
@@ -571,8 +569,8 @@ impl BACnetObject for EventEnrollmentObject {
     /// the evaluator resolves `Ack_Required` from the referenced Notification
     /// Class object and this call applies the outcome — clear the bit when
     /// ack is required, set it otherwise. Refused while detection is
-    /// disabled, the same invariant as above: "Acked_Transitions shall be
-    /// equal to [its] initial condition" while FALSE.
+    /// disabled, preserving the same invariant as above: Acked_Transitions
+    /// must retain its initial value throughout the disabled period.
     fn set_acked_transitions_internal(
         &mut self,
         transition_bit: u8,
@@ -682,11 +680,10 @@ impl BACnetObject for EventEnrollmentObject {
     /// one as a real (O-coded) property, per Table 12-14.
     ///
     /// `Event_Detection_Enable` is writable even though Table 12-14 codes it R
-    /// rather than W: Clause 12.1.2 allows an R property to be writable "at the
-    /// implementor's option unless specifically prohibited in the text
-    /// describing that particular standard object's property", and Clause 12.12
-    /// prohibits nothing — it only says the value "is expected" to be set
-    /// during configuration, which is guidance, not a "shall". Annex K's
+    /// rather than W: Clause 12.1.2 lets implementors accept writes to an R
+    /// property unless that object's property description expressly forbids
+    /// them. Clause 12.12 has no such prohibition; it anticipates setting the
+    /// value during configuration without mandating that timing. Annex K's
     /// AE-AVM-A BIBB (Table K-17) positively requires a conforming workstation
     /// to be able to *write* this property, so refusing the write would be
     /// interoperably hostile.

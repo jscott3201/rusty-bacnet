@@ -9,8 +9,8 @@ use bacnet_encoding::apdu::advertised_max_segments;
 /// sequence number modulo 256, so a longer response is entirely representable —
 /// this client simply keys its segment store by that `u8` and cannot tell
 /// segment 257 from segment 1. Clause 5.4.4.4 names this exact situation
-/// (`NewSegmentReceived_NoSpace`, "the segment cannot be saved due to local
-/// conditions") and prescribes the Abort below.
+/// (`NewSegmentReceived_NoSpace`, a local inability to retain a segment)
+/// and prescribes the Abort below.
 ///
 /// Exactly 256 segments reassemble correctly and must keep working; 257 is the
 /// first that would corrupt the payload.
@@ -19,14 +19,12 @@ const SEQUENCE_NUMBER_SPACE: usize = 256;
 impl ResponseLimits {
     /// The receive-side limits `config` puts on the wire.
     pub(super) fn from_config(config: &ClientConfig) -> Self {
-        // Clause 20.1.2.4 defines max-segments-accepted as "the maximum number
-        // of segments that the device will accept"; Clause 5.2.1.3 makes it
-        // binding, requiring the segment count to be the smallest of the
-        // sender's own limit and "(b) the maximum number of segments accepted
-        // by the remote peer device" — which, for a ComplexACK, is "the 'Max
-        // Segments Accepted' parameter of the BACnet-Confirmed-Request-PDU for
-        // which this is a response". A peer that overruns it is therefore
-        // non-conformant, not merely unusual.
+        // Clause 20.1.2.4 uses max-segments-accepted to advertise receive
+        // capacity in segments. Clause 5.2.1.3 caps a transfer at the smaller
+        // of the sender's capacity and the receiver's advertised capacity.
+        // For a ComplexACK, the receiver's value comes from Max Segments
+        // Accepted in the corresponding BACnet-Confirmed-Request-PDU.
+        // Exceeding that limit is non-conformant, not merely unusual.
         //
         // Only the rungs B'001'..B'110' name a number; B'000' and B'111'
         // promise nothing, and `advertised_max_segments` reports those as
@@ -71,16 +69,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Abort a reassembly in progress, telling both the peer and the caller.
     ///
     /// Clause 5.4.4.4 gives this same shape to every way SEGMENTED_CONF can
-    /// end badly — `NewSegmentReceived_NoSpace` for a segment that "cannot be
-    /// saved due to local conditions" and `UnexpectedPDU_Received` for a PDU
-    /// that does not belong in the state. Both "transmit a BACnet-Abort-PDU
-    /// with 'server' = FALSE", "send ABORT.indication ... to the local
-    /// application program", and "enter the IDLE state"; only `abort-reason`
+    /// end badly — `NewSegmentReceived_NoSpace` when local storage cannot
+    /// retain a segment and `UnexpectedPDU_Received` for an inappropriate
+    /// PDU. Both send a client-side BACnet-Abort-PDU (`server` = FALSE),
+    /// deliver ABORT.indication locally, and return to IDLE; only `abort-reason`
     /// differs. The local ABORT.indication is the waiting caller, so the
     /// transaction is completed rather than left to time out.
     ///
     /// The caller is responsible for having removed the `seg_state` entry —
-    /// that is the "enter the IDLE state" half.
+    /// that removal implements the return to IDLE.
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn abort_reassembly(
         tsm: &Arc<Mutex<Tsm>>,
@@ -364,7 +361,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             return;
         }
         if let Err(e) = state.receiver.receive(seq, ack.service_ack) {
-            // Also "the segment cannot be saved due to local conditions", so
+            // This is another local failure to retain the segment, so
             // Clause 5.4.4.4 wants the same Abort rather than leaving the
             // caller to time out on a session that can no longer complete.
             warn!(error = %e, "Rejecting oversized segment");
@@ -657,10 +654,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 // segment count, e.g. a duplicated ack from
                                 // an earlier transfer aliased onto a reused
                                 // invoke ID — is 5.4.4.2
-                                // DuplicateACK_Received: "restart
-                                // SegmentTimer and enter the
-                                // SEGMENTED_REQUEST state to await an
-                                // acknowledgment" — discard and keep
+                                // DuplicateACK_Received: reset SegmentTimer
+                                // and resume waiting for an acknowledgment
+                                // in SEGMENTED_REQUEST — discard and keep
                                 // waiting, never a failure (#368). The
                                 // `continue` below re-enters the timeout
                                 // call, which is the SegmentTimer restart.

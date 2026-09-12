@@ -285,8 +285,8 @@ fn mso_event_properties_round_trip_and_match_pics() {
     assert_event_properties_round_trip(&mut mso, "MSO");
 }
 
-/// Clause 13.3: "If no value is available for this parameter, then it takes on
-/// the value of the pTimeDelay parameter." An object that was never written a
+/// Clause 13.3 supplies pTimeDelay when pTimeDelayNormal is absent.
+/// An object that was never written a
 /// Time_Delay_Normal reads back the effective (fallback) delay.
 #[test]
 fn multistate_time_delay_normal_defaults_to_time_delay_when_unwritten() {
@@ -633,8 +633,8 @@ fn recommissioning_alarm_values_while_offnormal_returns_to_normal() {
 
 /// BACnetNotifyType is a closed {alarm(0), event(1), ack-notification(2)}
 /// production (Clause 21). An out-of-production write is PROPERTY /
-/// VALUE_OUT_OF_RANGE (Clause 15.9.1.3: "The value provided is outside the
-/// range of values that the property can take on") and leaves the stored
+/// VALUE_OUT_OF_RANGE (Clause 15.9.1.3 rejects values outside the property's
+/// permitted range) and leaves the stored
 /// value untouched.
 #[test]
 fn mso_notify_type_rejects_out_of_production_values() {
@@ -676,8 +676,8 @@ fn mso_notify_type_rejects_out_of_production_values() {
 /// BACnetEventTransitionBits is a 3-bit production (Clause 21); its canonical
 /// encoding is one content octet with 5 unused bits, which is what the read
 /// path emits. A write declaring any other shape is PROPERTY /
-/// INVALID_DATA_ENCODING (Clause 15.9.1.3: "The encoding is not valid for the
-/// datatype of the property") — including an 8-bit string that would
+/// INVALID_DATA_ENCODING (Clause 15.9.1.3 covers encodings incompatible with
+/// the property's datatype) — including an 8-bit string that would
 /// previously have been silently masked to three bits.
 #[test]
 fn mso_event_enable_rejects_noncanonical_bit_strings() {

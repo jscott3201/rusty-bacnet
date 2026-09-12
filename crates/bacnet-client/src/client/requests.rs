@@ -31,17 +31,17 @@ impl core::fmt::Display for LengthBoundedBy {
 /// Reject a maximum transmittable length no conformant device could accept.
 ///
 /// Clause 5.2.1.2 derives this length as the smallest of the local capability,
-/// the internetwork limit, and "(c) the maximum APDU size accepted by the
-/// remote peer device, which must be at least 50 octets". Below that floor no
+/// the internetwork limit, and the peer's receive capacity, whose minimum
+/// is 50 octets. Below that floor no
 /// conformant APDU can be formed at all. Clause 20.1.2.5 gives the same number
-/// a name, spelling the lowest max-APDU-length-accepted code `B'0000'` as "Up
-/// to MinimumMessageSize (50 octets)".
+/// a name: MinimumMessageSize, the 50-octet capacity represented by the
+/// lowest max-APDU-length-accepted code `B'0000'`.
 ///
 /// The check is a floor, not membership of the six values Clause 20.1.2.5
 /// encodes. A discovered peer's length comes from I-Am's `Max APDU Length
 /// Accepted`, an Unsigned octet count rather than the four-bit code, and
-/// Clause 20.1.2.5 notes the true value "may be larger than indicated in this
-/// parameter" — so 600 and 1500 are legitimate and must not be rejected.
+/// Clause 20.1.2.5 allows actual capacity to exceed the encoded value,
+/// so 600 and 1500 are legitimate and must not be rejected.
 ///
 /// Failing rather than clamping up to 50 keeps the client from inventing a
 /// capability the peer never claimed: a device advertising less than 50 is

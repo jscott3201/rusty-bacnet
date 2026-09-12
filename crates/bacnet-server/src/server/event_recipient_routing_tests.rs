@@ -1,8 +1,8 @@
 //! How a `Recipient_List` entry becomes a network destination.
 //!
 //! Clause 21's `BACnetAddress` carries two independent fields — `network-number`
-//! ("A value of 0 indicates the local network") and `mac-address` ("A string of
-//! length 0 indicates a broadcast") — so a recipient names one of four
+//! (zero selects the local network) and `mac-address` (empty selects
+//! broadcast delivery) — so a recipient names one of four
 //! destinations, not one unicast with edge cases. These tests pin each one, plus
 //! the two that cannot be resolved at all.
 //!
@@ -336,7 +336,7 @@ pub(super) fn npdu_destination(frame: &Bytes) -> Option<(u16, Vec<u8>)> {
 }
 
 /// #185: Clause 12.21 requires a device whose `Recipient_List` is not writable
-/// to ship exactly one entry, "with the Recipient set to a local broadcast".
+/// to ship exactly one entry whose Recipient targets the local link broadcast.
 /// Clause 21 spells a local broadcast as network 0 with a zero-length MAC.
 ///
 /// This previously reached `send_apdu` with an empty MAC, which BACnet/IP
@@ -364,8 +364,8 @@ async fn zero_length_mac_on_local_network_broadcasts() {
 }
 
 /// #185/#186: a zero-length MAC on a *remote* network is a remote broadcast.
-/// Clause 6.3: "DNET shall specify the network number of the remote network and
-/// DLEN shall be set to zero."
+/// Clause 6.3 encodes that destination with the remote network number in
+/// DNET and a zero DLEN.
 #[tokio::test]
 async fn zero_length_mac_on_remote_network_broadcasts_with_dnet() {
     let (broadcasts, unicasts) =
@@ -381,8 +381,8 @@ async fn zero_length_mac_on_remote_network_broadcasts_with_dnet() {
 }
 
 /// Network 65535 with a zero-length MAC is a *global* broadcast, not a remote
-/// network that happens to be numbered 65535. Clause 6.3: "A global broadcast,
-/// indicated by a DNET of X'FFFF', is sent to all networks through all routers."
+/// network that happens to be numbered 65535. Clause 6.3 uses DNET X'FFFF'
+/// for distribution across every router to every network.
 ///
 /// It needs its own send: `NetworkLayer::broadcast_to_network` rejects 0xFFFF
 /// ("reserved for global broadcasts; use broadcast_global_apdu instead"), so
@@ -416,7 +416,7 @@ async fn global_broadcast_network_with_a_mac_is_skipped() {
 
 /// #186: a unicast MAC on a remote network goes out as a routed NPDU whose
 /// DNET/DADR name the recipient, sent with a broadcast link DA — Clause
-/// 6.5.3's form for when "the address of the router is initially unknown"
+/// 6.5.3's initial send form before learning the router's address
 /// (this non-routing device keeps no router table).
 ///
 /// The unicast assertion still matters most: the pre-#357 behavior discarded
@@ -493,8 +493,8 @@ async fn device_recipient_is_skipped_not_broadcast() {
     assert!(unicasts.is_empty());
 }
 
-/// Clause 6.3: "Of the BACnet APDUs, only the BACnet-Unconfirmed-Request-PDU
-/// may be transmitted using a multicast or broadcast network layer address."
+/// Clause 6.3 permits network-layer multicast/broadcast destinations only
+/// for BACnet-Unconfirmed-Request-PDU among the BACnet APDU types.
 ///
 /// A recipient asking for confirmed notifications at a broadcast address is
 /// unsatisfiable — it is skipped rather than broadcast as a ConfirmedRequest
@@ -545,8 +545,8 @@ async fn confirmed_notification_to_a_local_unicast_recipient_is_sent() {
 }
 
 /// #124: an empty `Recipient_List` names no notification-clients, and Clause
-/// 13.2.5 distributes "to the notification-clients specified by the
-/// Recipient_List input". Broadcasting instead invented a destination the
+/// 13.2.5 restricts distribution to the notification-clients in
+/// Recipient_List. Broadcasting instead invented a destination the
 /// configuration never named.
 #[tokio::test]
 async fn empty_recipient_list_distributes_nothing() {

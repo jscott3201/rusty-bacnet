@@ -2,12 +2,11 @@
 //!
 //! Clause 6.3 permits a confirmed PDU on a broadcast link DA when the
 //! DNET/DADR restricts the destination to one device, and Clause 6.5.3 names
-//! the broadcast DA as the send form while "the address of the router is
-//! initially unknown". What used to block this was correlation: the ack
+//! the broadcast DA as an initial send form before the router's MAC is
+//! known. What used to block this was correlation: the ack
 //! arrives from whichever router delivers it, so the transaction is keyed by
 //! routed identity with an empty local half, and the router's MAC is learned
-//! from the ack per Clause 6.5.3 method 4 ("noting the SA associated with any
-//! subsequent responses from the remote device").
+//! from the ack's link SA per Clause 6.5.3 method 4.
 //!
 //! The tests drive the real distribution path over a recording transport and
 //! feed acks through the same correlation entry point the dispatch loop uses.
