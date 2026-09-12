@@ -30,11 +30,13 @@ mod connector;
 mod control_admission;
 mod data_attributes;
 pub(crate) mod diagnostic_throttle;
+pub(crate) mod direct_discovery;
 mod empty_npdu;
 mod errors;
 mod failover;
 mod handshake;
 mod heartbeat;
+mod lifecycle;
 mod loopback;
 mod proprietary;
 mod random48;
@@ -108,6 +110,7 @@ pub struct ScTransport<W: WebSocketPort> {
     failover_connector: Option<WebSocketConnector<W>>,
     reconnect_config: Option<ScReconnectConfig>,
     restore_disconnect_task: Arc<StdMutex<Option<JoinHandle<()>>>>,
+    pub(super) direct: Option<Arc<direct_discovery::DirectShared<W>>>,
     #[cfg(test)]
     allow_test_heartbeat_timing: bool,
 }
@@ -136,6 +139,7 @@ impl<W: WebSocketPort> ScTransport<W> {
             failover_connector: None,
             reconnect_config: None,
             restore_disconnect_task: Arc::new(StdMutex::new(None)),
+            direct: None,
             #[cfg(test)]
             allow_test_heartbeat_timing: false,
         }
@@ -236,36 +240,6 @@ impl<W: WebSocketPort> ScTransport<W> {
     /// this as a current-state signal rather than a durable transition log.
     pub fn connection_state_changes(&self) -> watch::Receiver<ScConnectionState> {
         self.state_tx.subscribe()
-    }
-
-    fn abort_background_task_and_drop_sockets(
-        &mut self,
-    ) -> (Option<JoinHandle<()>>, Option<JoinHandle<()>>) {
-        let task = self.recv_task.take();
-        if let Some(task) = &task {
-            task.abort();
-        }
-        let restore_task = self
-            .restore_disconnect_task
-            .lock()
-            .ok()
-            .and_then(|mut task| task.take());
-        if let Some(task) = &restore_task {
-            task.abort();
-        }
-        if let Some(conn) = &self.connection {
-            if let Ok(mut c) = conn.try_lock() {
-                c.state = ScConnectionState::Disconnected;
-            }
-        }
-        self.effective_max_apdu_length
-            .store(DEFAULT_MAX_APDU_LENGTH, Ordering::Relaxed);
-        self.state_tx.send_replace(ScConnectionState::Disconnected);
-        self.ws_shared = None;
-        self.connection = None;
-        self.ws = None;
-        self.failover_ws = None;
-        (task, restore_task)
     }
 }
 
@@ -421,6 +395,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         let mut active_hub = active_hub;
         let effective_max_apdu_length = self.effective_max_apdu_length.clone();
         let advertised_payload = self.advertised_uris.join(" ").into_bytes();
+        let direct = self.direct.clone();
         let task = tokio::spawn(async move {
             let mut primary_restore_interval =
                 tokio::time::interval(Duration::from_millis(restore_interval_ms));
@@ -615,6 +590,9 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                         &msg, &conn, &*ws_clone, &advertised_payload,
                                     )
                                     .await;
+                                    if let Some(direct) = &direct {
+                                        direct.fulfill_from_hub_message(&msg).await;
+                                    }
 
                                     if let Some((npdu, source_vmac)) = npdu_result {
                                         if npdu_tx
@@ -836,12 +814,6 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
     }
 }
 
-impl<W: WebSocketPort> Drop for ScTransport<W> {
-    fn drop(&mut self) {
-        self.abort();
-    }
-}
-
 #[cfg(test)]
 mod data_attribute_tests;
 
@@ -880,6 +852,9 @@ mod unknown_function_tests;
 
 #[cfg(test)]
 mod address_resolution_tests;
+
+#[cfg(test)]
+mod direct_discovery_tests;
 
 #[cfg(test)]
 mod advertisement_tests;
