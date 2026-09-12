@@ -9,6 +9,14 @@ use tracing::{debug, warn};
 const QUEUE_CAPACITY: usize = 256;
 const APDU_SOURCE_CAPACITY: usize = 16;
 
+// NetworkLayer has one unnamed transport; router MACs are scoped to the
+// ingress port's network number, never the routed NPDU SNET/SADR.
+type AdmissionSource = (Option<u16>, MacAddr);
+
+fn apdu_source(apdu: &ReceivedApdu) -> AdmissionSource {
+    (apdu.ingress_network, apdu.source_mac.clone())
+}
+
 /// A consistent, count-only snapshot of one network-layer receive queue.
 ///
 /// Counters belong to one receiver, not to a source MAC. A router's local queue
@@ -22,10 +30,11 @@ pub struct QueueAdmissionSnapshot {
     pub high_water: usize,
     /// Arriving items dropped because the queue was full; saturates at `u64::MAX`.
     pub full_drops: u64,
-    /// Arriving APDUs dropped by NetworkLayer's per-source-MAC quota of 16;
+    /// Arriving APDUs dropped by the tracked queue's quota of 16 per source:
+    /// source MAC for NetworkLayer, (ingress network, source MAC) for routers;
     /// saturates at `u64::MAX`. Evaluated before global Full, even when the queue
     /// has room. Closed admission retains precedence. Always zero for control
-    /// and router-local queues, which have no per-source quota.
+    /// queues, which have no per-source quota.
     pub fairness_drops: u64,
     /// Arriving items dropped because the receiver was closed; saturates at `u64::MAX`.
     ///
@@ -47,16 +56,15 @@ pub struct QueueAdmissionCounters(Arc<Mutex<QueueAdmissionState>>);
 #[derive(Debug, Default)]
 struct QueueAdmissionState {
     snapshot: QueueAdmissionSnapshot,
-    // Used only by NetworkLayer's tracked APDU queue. Insert after successful
+    // Used only by tracked APDU queues. Insert after successful
     // admission, remove on the last dequeue: live entries <= depth <= 256.
-    // NetworkLayer owns one transport, so a separate port key is unnecessary.
-    queued_by_source: HashMap<MacAddr, usize>,
+    queued_by_source: HashMap<AdmissionSource, usize>,
 }
 
 impl QueueAdmissionState {
-    fn dequeued(&mut self, source: Option<&MacAddr>) {
+    fn dequeued(&mut self, source: Option<AdmissionSource>) {
         self.snapshot.current_depth -= 1;
-        if let Some(source) = source {
+        if let Some(ref source) = source {
             let count = self
                 .queued_by_source
                 .get_mut(source)
@@ -109,9 +117,9 @@ impl QueueAdmissionCounters {
 pub struct AdmissionReceiver<T> {
     rx: mpsc::Receiver<T>,
     counters: QueueAdmissionCounters,
-    // Only NetworkLayer's tracked APDU constructor installs source accounting.
-    // No public trait bound or change to router/control item types is needed.
-    source_mac: Option<fn(&T) -> &MacAddr>,
+    // Only tracked APDU constructors install source accounting. The same
+    // extractor is used on admission and every dequeue; no public trait bound.
+    source_key: Option<fn(&T) -> AdmissionSource>,
 }
 
 impl<T> AdmissionReceiver<T> {
@@ -133,7 +141,7 @@ impl<T> AdmissionReceiver<T> {
         Self {
             rx,
             counters,
-            source_mac: None,
+            source_key: None,
         }
     }
 
@@ -155,7 +163,7 @@ impl<T> AdmissionReceiver<T> {
                 .expect("queue admission counters poisoned");
             let result = self.rx.poll_recv(cx);
             if let Poll::Ready(Some(item)) = &result {
-                state.dequeued(self.source_mac.map(|source_mac| source_mac(item)));
+                state.dequeued(self.source_key.map(|source_key| source_key(item)));
             }
             result
         })
@@ -171,7 +179,7 @@ impl<T> AdmissionReceiver<T> {
             .expect("queue admission counters poisoned");
         let result = self.rx.try_recv();
         if let Ok(item) = &result {
-            state.dequeued(self.source_mac.map(|source_mac| source_mac(item)));
+            state.dequeued(self.source_key.map(|source_key| source_key(item)));
         }
         result
     }
@@ -188,6 +196,19 @@ impl<T> AdmissionReceiver<T> {
             .lock()
             .expect("queue admission counters poisoned");
         self.rx.close();
+    }
+}
+
+impl AdmissionReceiver<ReceivedApdu> {
+    pub(crate) fn from_apdu_parts(
+        rx: mpsc::Receiver<ReceivedApdu>,
+        counters: QueueAdmissionCounters,
+    ) -> Self {
+        Self {
+            rx,
+            counters,
+            source_key: Some(apdu_source),
+        }
     }
 }
 
@@ -244,7 +265,7 @@ impl<T> AdmissionSender<T> {
     fn try_send_from(
         &self,
         item: T,
-        source: Option<MacAddr>,
+        source: Option<AdmissionSource>,
     ) -> Result<(), mpsc::error::TrySendError<T>> {
         // Serialize the admission and dequeue accounting, not asynchronous
         // waiting. Each queue has its own short critical section, and no lock
@@ -284,6 +305,25 @@ impl<T> AdmissionSender<T> {
             }
         }
         result
+    }
+}
+
+impl AdmissionSender<ReceivedApdu> {
+    pub(crate) fn try_send_apdu(
+        &self,
+        apdu: ReceivedApdu,
+    ) -> Result<(), mpsc::error::TrySendError<()>> {
+        // Raw receivers cannot release source counts: legacy ingress neither
+        // clones keys nor enforces a quota.
+        let source = self.track_depth.then(|| apdu_source(&apdu));
+        // Both dispatchers drop arriving APDUs on failure. Release the owned
+        // item after the accounting lock is released; only Closed affects the
+        // NetworkLayer dispatch lifecycle, not the returned payload.
+        self.try_send_from(apdu, source)
+            .map_err(|error| match error {
+                mpsc::error::TrySendError::Full(_) => mpsc::error::TrySendError::Full(()),
+                mpsc::error::TrySendError::Closed(_) => mpsc::error::TrySendError::Closed(()),
+            })
     }
 }
 
@@ -368,7 +408,8 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// slot; processing or retaining the returned APDU does not hold that slot.
     /// Over-quota arrivals are dropped before checking global Full, releasing
     /// payload, metadata and reply sender without sending bytes or a wire reject.
-    /// Control and router-local queues do not enforce this quota.
+    /// Control queues do not enforce this quota. Router-local queues instead
+    /// scope each source MAC to its ingress port's network number.
     ///
     /// ```no_run
     /// # async fn example() -> Result<(), bacnet_types::error::Error> {
@@ -390,11 +431,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// ```
     pub async fn start_with_admission(&mut self) -> Result<AdmissionReceiver<ReceivedApdu>, Error> {
         let (rx, counters) = self.start_dispatch(true).await?;
-        Ok(AdmissionReceiver {
-            rx,
-            counters,
-            source_mac: Some(|apdu| &apdu.source_mac),
-        })
+        Ok(AdmissionReceiver::from_apdu_parts(rx, counters))
     }
 
     async fn start_dispatch(
@@ -456,6 +493,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
                         let apdu = ReceivedApdu {
                             apdu: npdu.payload,
                             source_mac: received.source_mac,
+                            ingress_network: None,
                             source_network,
                             link_layer_group: received.link_layer_group,
                             is_group,
@@ -463,10 +501,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
                             reply_tx: received.reply_tx,
                         };
 
-                        // Raw receivers cannot release source counts: legacy
-                        // ingress neither clones keys nor enforces a quota.
-                        let source = track_depth.then(|| apdu.source_mac.clone());
-                        match apdu_tx.try_send_from(apdu, source) {
+                        match apdu_tx.try_send_apdu(apdu) {
                             Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
                             Err(mpsc::error::TrySendError::Closed(_)) => break,
                         }

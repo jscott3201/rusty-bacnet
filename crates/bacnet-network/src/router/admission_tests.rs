@@ -131,7 +131,9 @@ fn incoming(destination: Option<NpduAddress>, id: u16) -> ReceivedNpdu {
     encode_npdu(&mut bytes, &npdu).unwrap();
     ReceivedNpdu {
         npdu: bytes.freeze(),
-        source_mac: MacAddr::from_slice(&[0xA0]),
+        // Capacity tests use at most 16 APDUs per key, so Full attribution
+        // remains independent of the tracked receiver's per-source quota.
+        source_mac: MacAddr::from_slice(&[0xA0 + (id / 16) as u8]),
         link_layer_group: true,
         data_attributes: vec![DataAttribute {
             option_type: 31,
@@ -250,9 +252,10 @@ fn assert_quiet(peers: &mut [Peer]) {
     }
 }
 
-fn assert_apdu(apdu: &ReceivedApdu, branch: LocalBranch, id: u16) {
+fn assert_apdu(apdu: &ReceivedApdu, branch: LocalBranch, port: usize, id: u16) {
     assert_eq!(apdu.apdu.as_ref(), id.to_be_bytes());
     assert_eq!(apdu.source_mac, incoming(None, id).source_mac);
+    assert_eq!(apdu.ingress_network, Some(network(port)));
     assert_eq!(apdu.source_network, Some(address(300, &[0x55])));
     assert!(apdu.link_layer_group);
     assert_eq!(apdu.is_group, !matches!(branch, LocalBranch::DadrMatch));
@@ -314,7 +317,7 @@ async fn full_shared_local_queue_drops_arrivals_in_all_four_branches_and_keeps_f
         );
         for id in 0..256 {
             let apdu = apdus.try_recv().unwrap();
-            assert_apdu(&apdu, LocalBranch::NoDnet, id);
+            assert_apdu(&apdu, LocalBranch::NoDnet, usize::from(id / 128), id);
             if id == 0 {
                 apdu.reply_tx
                     .unwrap()
@@ -333,7 +336,7 @@ async fn full_shared_local_queue_drops_arrivals_in_all_four_branches_and_keeps_f
             .await
             .unwrap()
             .unwrap();
-        assert_apdu(&apdu, LocalBranch::NoDnet, 257);
+        assert_apdu(&apdu, LocalBranch::NoDnet, 0, 257);
         assert_eq!(
             counters.snapshot(),
             QueueAdmissionSnapshot {
@@ -360,7 +363,8 @@ async fn admitted_local_branches_preserve_metadata_and_reply_ownership() {
         barrier(&mut peers[0]).await;
         assert_eq!(apdus.counters().snapshot().current_depth, 1);
         let apdu = apdus.recv().await.unwrap();
-        assert_apdu(&apdu, branch, 42);
+        assert_apdu(&apdu, branch, 0, 42);
+        assert_eq!(apdu.clone().ingress_network, apdu.ingress_network);
         if matches!(branch, LocalBranch::RemoteBroadcast) {
             assert!(apdu.reply_tx.is_none());
             assert!(reply_rx.await.is_err());
@@ -420,7 +424,7 @@ async fn closing_full_local_queue_counts_each_closed_arrival_and_preserves_drain
         } else {
             apdus.try_recv().unwrap()
         };
-        assert_apdu(&apdu, LocalBranch::NoDnet, id);
+        assert_apdu(&apdu, LocalBranch::NoDnet, usize::from(id / 128), id);
         assert_eq!(counters.snapshot().current_depth, 255 - usize::from(id));
     }
     assert!(accepted_reply.await.is_err());
@@ -482,7 +486,12 @@ async fn stop_with_full_local_queue_is_bounded_and_leaves_items_drainable() {
     assert_eq!(counters.snapshot().current_depth, 256);
     assert!(peers.iter().all(|peer| peer.tx.is_closed()));
     for id in 0..256 {
-        assert_apdu(&apdus.recv().await.unwrap(), LocalBranch::NoDnet, id);
+        assert_apdu(
+            &apdus.recv().await.unwrap(),
+            LocalBranch::NoDnet,
+            usize::from(id / 128),
+            id,
+        );
     }
     assert!(apdus.recv().await.is_none());
     assert!(accepted_reply.await.is_err());
@@ -507,7 +516,12 @@ async fn legacy_local_receiver_retains_type_and_nonblocking_full_closed_policy()
     }
     assert_eq!(apdus.len(), 256);
     for id in 0..256 {
-        assert_apdu(&apdus.try_recv().unwrap(), LocalBranch::NoDnet, id);
+        assert_apdu(
+            &apdus.try_recv().unwrap(),
+            LocalBranch::NoDnet,
+            usize::from(id / 128),
+            id,
+        );
     }
     assert!(accepted_reply.await.is_err());
     apdus.close();
@@ -673,3 +687,6 @@ fn cloned_senders_account_exactly_across_threads_and_concurrent_dequeues() {
         }
     );
 }
+
+#[path = "fairness_tests.rs"]
+mod fairness_tests;

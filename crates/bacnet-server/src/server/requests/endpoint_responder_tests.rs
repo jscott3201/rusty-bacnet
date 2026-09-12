@@ -51,6 +51,7 @@ async fn responder_moves_reply_sender_once_and_preserves_routed_destination() {
     let received = ReceivedApdu {
         apdu: read_property_request(0x31),
         source_mac: MacAddr::from_slice(&[0x02]),
+        ingress_network: None,
         source_network: Some(routed_source.clone()),
         link_layer_group: false,
         is_group: false,
@@ -84,6 +85,7 @@ async fn responder_moves_reply_sender_once_and_preserves_routed_destination() {
             .handle(ReceivedApdu {
                 apdu: read_property_request(0x32),
                 source_mac: MacAddr::from_slice(&[0x02]),
+                ingress_network: None,
                 source_network: None,
                 link_layer_group: false,
                 is_group: false,
@@ -118,6 +120,7 @@ async fn responder_routes_reply_to_original_source_via_immediate_router() {
         .handle(ReceivedApdu {
             apdu: read_property_request(0x41),
             source_mac: MacAddr::from_slice(&[0x02]),
+            ingress_network: None,
             source_network: Some(routed_source.clone()),
             link_layer_group: false,
             is_group: false,

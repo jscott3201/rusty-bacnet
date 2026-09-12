@@ -638,6 +638,7 @@ fn mock_received(
     bacnet_network::layer::ReceivedApdu {
         apdu: Bytes::new(),
         source_mac: MacAddr::from_slice(source_mac),
+        ingress_network: None,
         source_network: routed.map(|(net, mac)| NpduAddress {
             network: net,
             mac_address: MacAddr::from_slice(mac),

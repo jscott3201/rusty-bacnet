@@ -60,6 +60,7 @@ async fn dispatch(
         bacnet_network::layer::ReceivedApdu {
             apdu: Bytes::new(),
             source_mac: MacAddr::from_slice(&[1]),
+            ingress_network: None,
             source_network: source,
             link_layer_group: false,
             is_group: false,

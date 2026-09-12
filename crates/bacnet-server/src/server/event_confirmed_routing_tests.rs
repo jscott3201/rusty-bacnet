@@ -266,6 +266,7 @@ impl Harness {
             bacnet_network::layer::ReceivedApdu {
                 apdu: Bytes::new(),
                 source_mac: MacAddr::from_slice(source_mac),
+                ingress_network: None,
                 source_network,
                 link_layer_group: false,
                 is_group: false,
