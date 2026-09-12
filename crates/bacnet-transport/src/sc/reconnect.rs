@@ -12,9 +12,11 @@ use bacnet_types::error::Error;
 /// retries, not the separate failover attempt or primary-restoration timer.
 #[derive(Debug, Clone)]
 pub struct ScReconnectConfig {
-    /// Initial nominal backoff and minimum reconnect sleep (ms).
+    /// Initial nominal backoff and minimum reconnect sleep (ms), nonzero and
+    /// no greater than `max_delay_ms`.
     pub initial_delay_ms: u64,
-    /// Maximum delay between reconnect attempts (ms).
+    /// Maximum delay between reconnect attempts (ms), nonzero and at most
+    /// 86_400_000 (24 hours). This is a local defensive cap, not a conformance limit.
     pub max_delay_ms: u64,
     /// Maximum reconnect attempts on the active hub after a disconnect.
     /// Zero skips these retries, not the initial connection, eligible failover,
@@ -33,10 +35,11 @@ impl Default for ScReconnectConfig {
 }
 
 impl ScReconnectConfig {
-    /// Check that delays are nonzero and the initial delay does not exceed the maximum.
+    /// Check that delays are nonzero, the initial delay does not exceed the
+    /// maximum, and `max_delay_ms` is at most 86_400_000 (24 hours).
     ///
     /// This defensive guard applies even when `max_retries` is zero. It does not
-    /// impose a production minimum delay, timeout cap, or retry-count policy;
+    /// impose a production minimum delay or retry-count policy;
     /// acceptance does not establish deployment safety or Annex AB.6.1 conformance.
     /// Call this before dialing if supplying a socket to a raw SC transport.
     pub fn validate(&self) -> Result<(), Error> {
@@ -55,6 +58,13 @@ impl ScReconnectConfig {
                 "BACnet/SC reconnect initial_delay_ms must not exceed max_delay_ms, \
                  got initial_delay_ms={} max_delay_ms={}",
                 self.initial_delay_ms, self.max_delay_ms
+            )));
+        }
+        if self.max_delay_ms > 86_400_000 {
+            return Err(Error::OutOfRange(format!(
+                "BACnet/SC reconnect max_delay_ms must not exceed 86400000 (24 hours), \
+                 got max_delay_ms={}",
+                self.max_delay_ms
             )));
         }
         Ok(())
@@ -96,23 +106,48 @@ mod tests {
     }
 
     #[test]
-    fn reconnect_validation_accepts_positive_ordered_delays_without_timer_or_retry_caps() {
+    fn reconnect_validation_rejects_over_cap_delays_for_all_retry_counts() {
+        for max_retries in [0, 1, 10, u32::MAX] {
+            for max_delay_ms in [86_400_001, u64::MAX] {
+                for initial_delay_ms in [1, max_delay_ms] {
+                    let config = ScReconnectConfig {
+                        initial_delay_ms,
+                        max_delay_ms,
+                        max_retries,
+                    };
+                    match config.validate() {
+                        Err(Error::OutOfRange(message)) => assert_eq!(
+                            message,
+                            format!(
+                                "BACnet/SC reconnect max_delay_ms must not exceed 86400000 (24 hours), \
+                                 got max_delay_ms={max_delay_ms}"
+                            )
+                        ),
+                        result => panic!("expected delay-cap rejection for {config:?}, got {result:?}"),
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reconnect_validation_accepts_positive_ordered_delays_through_cap_without_retry_cap() {
         let default = ScReconnectConfig::default();
         assert_eq!(default.initial_delay_ms, 10_000);
         assert_eq!(default.max_delay_ms, 600_000);
         assert_eq!(default.max_retries, 10);
         default.validate().unwrap();
 
-        // Validate only: accepted extreme values are not safe timer/deployment promises.
+        // Validate only: accepted values are not safe timer/deployment promises.
         for max_retries in [0, 1, 10, u32::MAX] {
             for (initial_delay_ms, max_delay_ms) in [
                 (1, 1),
                 (1, 2),
                 (10_000, 600_000),
                 (600_001, 600_001),
-                (1, u64::MAX),
-                (u64::MAX - 1, u64::MAX),
-                (u64::MAX, u64::MAX),
+                (1, 86_400_000),
+                (86_399_999, 86_400_000),
+                (86_400_000, 86_400_000),
             ] {
                 ScReconnectConfig {
                     initial_delay_ms,

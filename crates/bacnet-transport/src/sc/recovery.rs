@@ -57,6 +57,8 @@ pub(super) async fn retire<W: WebSocketPort>(
 
 pub(super) struct Recovery<'a, W: WebSocketPort> {
     pub config: &'a ScReconnectConfig,
+    /// Transport-task owned: retries and reconnect episodes share one log window.
+    pub diagnostic_throttle: &'a mut diagnostic_throttle::DiagnosticThrottle,
     pub primary_connector: &'a Option<WebSocketConnector<W>>,
     pub failover_connector: &'a Option<WebSocketConnector<W>>,
     pub failover_ws: &'a mut Option<Arc<W>>,
@@ -81,7 +83,9 @@ impl<W: WebSocketPort> Recovery<'_, W> {
         for attempt in 1..=self.config.max_retries {
             tokio::time::sleep(jittered_backoff(backoff, initial_backoff, max_backoff)).await;
             if !self.conn.lock().await.connect_retry_allowed {
-                warn!(attempt, "SC reconnection skipped without retry eligibility");
+                if let Some(suppressed) = self.retry_diagnostic() {
+                    warn!(attempt, suppressed, "SC reconnection skipped without retry eligibility (suppressed {suppressed} reconnect diagnostics)");
+                }
                 break;
             }
             {
@@ -100,11 +104,15 @@ impl<W: WebSocketPort> Recovery<'_, W> {
                 Ok(Some(ws)) => ws,
                 Ok(None) if current_reusable => current_ws.clone(),
                 Ok(None) => {
-                    warn!("SC retired socket cannot be reused without a fresh connector");
+                    if let Some(suppressed) = self.retry_diagnostic() {
+                        warn!(suppressed, "SC retired socket cannot be reused without a fresh connector (suppressed {suppressed} reconnect diagnostics)");
+                    }
                     break;
                 }
                 Err(e) => {
-                    warn!(%e, attempt, "SC reconnection redial failed");
+                    if let Some(suppressed) = self.retry_diagnostic() {
+                        warn!(%e, attempt, suppressed, "SC reconnection redial failed (suppressed {suppressed} reconnect diagnostics)");
+                    }
                     backoff = (backoff * 2).min(max_backoff);
                     continue;
                 }
@@ -115,16 +123,21 @@ impl<W: WebSocketPort> Recovery<'_, W> {
             {
                 Ok(()) => {
                     self.publish(&reconnect_ws, &probe_conn).await;
-                    info!(attempt, "SC reconnected after backoff");
+                    let suppressed = self.diagnostic_throttle.take_suppressed();
+                    info!(attempt, suppressed, "SC reconnected after backoff (suppressed {suppressed} reconnect diagnostics)");
                     return Some((reconnect_ws, active_hub));
                 }
                 Err(e) => {
                     absorb_failed_connect_probe(self.conn, &probe_conn).await;
                     if !self.conn.lock().await.connect_retry_allowed {
-                        warn!(%e, attempt, "SC reconnection failed without retry eligibility");
+                        if let Some(suppressed) = self.retry_diagnostic() {
+                            warn!(%e, attempt, suppressed, "SC reconnection failed without retry eligibility (suppressed {suppressed} reconnect diagnostics)");
+                        }
                         break;
                     }
-                    warn!(%e, attempt, "SC reconnection failed, retrying in {:?}", backoff);
+                    if let Some(suppressed) = self.retry_diagnostic() {
+                        warn!(%e, attempt, suppressed, "SC reconnection failed, retrying in {:?} (suppressed {suppressed} reconnect diagnostics)", backoff);
+                    }
                     backoff = (backoff * 2).min(max_backoff);
                 }
             }
@@ -152,24 +165,38 @@ impl<W: WebSocketPort> Recovery<'_, W> {
                 {
                     Ok(()) => {
                         self.publish(&failover, &probe_conn).await;
-                        info!("SC connected to failover hub after primary reconnect exhaustion");
+                        let suppressed = self.diagnostic_throttle.take_suppressed();
+                        info!(suppressed, "SC connected to failover hub after primary reconnect exhaustion (suppressed {suppressed} reconnect diagnostics)");
                         return Some((failover, ActiveHub::Failover));
                     }
                     Err(e) => {
                         absorb_failed_connect_probe(self.conn, &probe_conn).await;
+                        // The terminal exhaustion notice below reports suppression.
                         warn!(%e, "SC failover connection failed");
                     }
                 }
             }
         }
+        let suppressed = self.diagnostic_throttle.take_suppressed();
         warn!(
             max_retries = self.config.max_retries,
-            "SC reconnection: max retries exhausted, giving up"
+            suppressed,
+            "SC reconnection: max retries exhausted, giving up (suppressed {suppressed} reconnect diagnostics)"
         );
         let mut c = self.conn.lock().await;
         c.state = ScConnectionState::Disconnected;
         self.state_tx.send_replace(c.state);
         None
+    }
+
+    /// Gate only per-attempt diagnostics, never recovery or wire decisions.
+    /// Lifecycle transitions/outcomes bypass the gate; taking their summary
+    /// does not reset the window, so a flap cannot replenish its allowance.
+    fn retry_diagnostic(&mut self) -> Option<u64> {
+        // Monotonic in production and follows the paused runtime clock in tests.
+        self.diagnostic_throttle
+            .should_emit(tokio::time::Instant::now().into_std())
+            .then(|| self.diagnostic_throttle.take_suppressed())
     }
 
     async fn publish(&self, ws: &Arc<W>, probe: &Arc<Mutex<ScConnection>>) {
@@ -184,6 +211,10 @@ impl<W: WebSocketPort> Recovery<'_, W> {
         .await;
     }
 }
+
+#[cfg(test)]
+#[path = "reconnect_diagnostic_tests.rs"]
+mod diagnostic_tests;
 
 #[cfg(test)]
 mod tests {
@@ -213,14 +244,14 @@ mod tests {
     }
 
     #[test]
-    fn reconnect_jitter_samples_respect_small_equal_and_extreme_config_bounds() {
+    fn reconnect_jitter_samples_respect_small_equal_and_delay_cap_config_bounds() {
         for (initial_delay_ms, max_delay_ms) in [
             (1, 1),
             (1, 2),
             (3, 7),
-            (1, u64::MAX),
-            (u64::MAX - 1, u64::MAX),
-            (u64::MAX, u64::MAX),
+            (1, 86_400_000),
+            (86_399_999, 86_400_000),
+            (86_400_000, 86_400_000),
         ] {
             let config = ScReconnectConfig {
                 initial_delay_ms,
@@ -233,7 +264,7 @@ mod tests {
             let mut backoff = initial;
             for _ in 0..config.max_retries {
                 for _ in 0..256 {
-                    // Duration calculations only: never sleep on extreme values.
+                    // Duration calculations only: never sleep on large values.
                     let sleep = jittered_backoff(backoff, initial, maximum);
                     assert!(sleep >= initial);
                     assert!(sleep <= maximum);

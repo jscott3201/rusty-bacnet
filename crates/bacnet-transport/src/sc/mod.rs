@@ -412,6 +412,9 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
             // a flood. Never changes accept/NAK/silence decisions: at most
             // one diagnostic per second, first occurrence always emits.
             let mut malformed_diag = diagnostic_throttle::DiagnosticThrottle::new();
+            // Separate reconnect log budget, retained across episodes. Only
+            // per-attempt notices are gated, never lifecycle outcomes or I/O.
+            let mut reconnect_diag = diagnostic_throttle::DiagnosticThrottle::new();
 
             'transport: loop {
                 let mut current_reusable = true;
@@ -714,6 +717,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
 
                 let mut recovery = recovery::Recovery {
                     config,
+                    diagnostic_throttle: &mut reconnect_diag,
                     primary_connector: &primary_connector,
                     failover_connector: &failover_connector,
                     failover_ws: &mut failover_ws,
