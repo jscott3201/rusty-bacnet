@@ -370,6 +370,20 @@ fn solicited_reply_payload() -> Vec<u8> {
     payload
 }
 
+#[tokio::test]
+async fn advertisement_default_accept_direct_stays_zero_on_raw_wire() {
+    let (mut transport, _rx, hub) = super::data_attribute_tests::start_transport().await;
+    hub.send(&[5, 0, 0x22, 0x34]).await.unwrap();
+    let reply = recv(&hub).await;
+    assert_eq!(reply.len(), 10);
+    assert_ne!(&reply[2..4], &[0x22, 0x34]);
+    assert_eq!(
+        reply,
+        [4, 0, reply[2], reply[3], 1, 0, 0x16, 0x49, 0x05, 0xC4]
+    );
+    transport.stop().await.unwrap();
+}
+
 async fn recv_reply(hub: &LoopbackWebSocket) -> crate::sc_frame::ScMessage {
     let data = timeout(Duration::from_secs(1), hub.recv())
         .await

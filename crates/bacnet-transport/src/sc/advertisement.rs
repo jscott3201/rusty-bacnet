@@ -9,11 +9,13 @@ use std::time::Duration;
 
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bytes::BytesMut;
+use tokio::sync::mpsc;
 use tracing::warn;
 
 use super::data_attributes::build_bvlc_result_nak;
 use super::rejection::{RejectionBudget, RejectionExpired};
-use super::WebSocketPort;
+use super::{ScConnection, WebSocketPort};
+use crate::port::ReceivedNpdu;
 use crate::sc_frame::{
     advertisement_message_error, encode_sc_message,
     first_must_understand_destination_option_marker, ScFunction, ScMessage, Vmac, BROADCAST_VMAC,
@@ -27,6 +29,116 @@ use crate::sc_frame::{
 /// positive transmission, not a rejection NAK; the send itself stays
 /// best-effort like Heartbeat-ACK.
 pub(super) const SOLICITED_ADVERTISEMENT_MIN_INTERVAL: Duration = Duration::from_secs(1);
+
+/// The listener's sole intake is merged by the existing transport receive task.
+/// A closed/absent receiver remains pending, never spinning or ending hub intake.
+#[derive(Default)]
+pub(super) struct DirectIntake {
+    npdus: Option<mpsc::Receiver<ReceivedNpdu>>,
+    #[cfg(feature = "sc-tls")]
+    listener: Option<ListenerStatus>,
+}
+
+#[cfg(feature = "sc-tls")]
+struct ListenerStatus {
+    shutdown: tokio::sync::watch::Receiver<bool>,
+    vmac: Vmac,
+    uuid: [u8; 16],
+}
+
+impl DirectIntake {
+    pub(super) async fn recv(&mut self) -> Option<ReceivedNpdu> {
+        match &mut self.npdus {
+            Some(rx) => {
+                let npdu = rx.recv().await;
+                if npdu.is_none() {
+                    self.npdus = None;
+                }
+                npdu
+            }
+            None => std::future::pending().await,
+        }
+    }
+
+    /// AB.2.8.1 capability sampled from real admission and an open intake.
+    /// Identity may change on a Connect retry; never advertise another VMAC's listener.
+    pub(super) fn accepts_direct(&self, _conn: &ScConnection) -> bool {
+        #[cfg(feature = "sc-tls")]
+        return self.npdus.as_ref().is_some_and(|rx| !rx.is_closed())
+            && self.listener.as_ref().is_some_and(|listener| {
+                !*listener.shutdown.borrow()
+                    && listener.vmac == _conn.local_vmac
+                    && listener.uuid == _conn.device_uuid
+            });
+        #[cfg(not(feature = "sc-tls"))]
+        false
+    }
+}
+
+#[cfg(feature = "sc-tls")]
+impl<W: WebSocketPort> super::ScTransport<W> {
+    /// Start and register an opt-in direct listener before transport start.
+    ///
+    /// Returns `(transport, listener)`: the application must retain the listener
+    /// and can stop/drop it independently. Its sole NPDU receiver is merged into
+    /// the receiver returned by [`crate::port::TransportPort::start`], with the
+    /// existing bounded, drop-on-full policy. No forwarding task is spawned.
+    /// Keep the listener only while using the transport; transport stop/drop
+    /// closes its intake but does not take ownership of this application handle.
+    ///
+    /// Solicited Advertisements report accept-direct 1 only while this listener
+    /// is live, identities match, and both intakes are open. Stop/drop restores 0
+    /// at the next send decision; already-built/sent frames cannot be recalled.
+    /// Registering never enables discovery/dial-out or infers public URIs: use
+    /// `with_advertised_uris` for known URIs (AB.3.3), or leave the list empty.
+    ///
+    /// Rejects an already-started transport, duplicate registration or mismatched
+    /// VMAC/UUID before binding. Configure the device UUID first. Other errors
+    /// are those of [`crate::sc_tls::DirectListener::start`].
+    ///
+    /// ```no_run
+    /// use bacnet_transport::{port::TransportPort, sc::{ScTransport, WebSocketPort},
+    ///     sc_tls::{DirectAcceptConfig, ScNodeTlsConfig}};
+    /// # async fn run(ws: impl WebSocketPort, tls: ScNodeTlsConfig,
+    /// #     vmac: [u8; 6], persisted_uuid: [u8; 16]) -> Result<(), bacnet_types::error::Error> {
+    /// let config = DirectAcceptConfig::new(
+    ///     "127.0.0.1:0".parse().unwrap(), vmac, persisted_uuid, tls);
+    /// let (mut transport, mut listener) = ScTransport::new(ws, vmac)
+    ///     .with_device_uuid(persisted_uuid).with_direct_listener(config).await?;
+    /// let mut incoming = transport.start().await?;
+    /// // Retain listener while consuming both hub and direct NPDUs here.
+    /// let received = incoming.recv().await;
+    /// listener.stop().await;
+    /// transport.stop().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn with_direct_listener(
+        mut self,
+        config: crate::sc_tls::DirectAcceptConfig,
+    ) -> Result<(Self, crate::sc_tls::DirectListener), bacnet_types::error::Error> {
+        if self.ws.is_none() || self.direct_intake.npdus.is_some() {
+            return Err(bacnet_types::error::Error::Encoding(
+                "SC direct listener requires an unstarted, unregistered transport".into(),
+            ));
+        }
+        if !config.matches_identity(self.local_vmac, self.device_uuid) {
+            return Err(bacnet_types::error::Error::Encoding(
+                "SC direct listener identity does not match transport".into(),
+            ));
+        }
+        let (listener, rx) = crate::sc_tls::DirectListener::start(config).await?;
+        self.direct_intake = DirectIntake {
+            npdus: Some(rx),
+            listener: Some(ListenerStatus {
+                shutdown: listener.shutdown_status(),
+                vmac: self.local_vmac,
+                uuid: self.device_uuid,
+            }),
+        };
+        Ok((self, listener))
+    }
+}
 
 /// Accepted-solicitation predicate for AB.3.2 solicited replies.
 ///
