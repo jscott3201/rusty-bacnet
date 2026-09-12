@@ -13,6 +13,17 @@ use crate::sc_frame::{
 
 use super::helpers::registered_client_matches_sink_in_map;
 use super::{Clients, WsSink};
+use crate::sc::diagnostic_throttle::DiagnosticThrottle;
+
+/// Emits one throttled hub-Result diagnostic. Returns without logging when
+/// the per-connection window budget is exhausted (suppressed is counted for
+/// the next summary). Never affects relay decisions.
+fn emit_result_diagnostic(diag: &mut DiagnosticThrottle, log: impl FnOnce(u64)) {
+    if diag.should_emit_now() {
+        let suppressed = diag.take_suppressed();
+        log(suppressed);
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum HubRelayTarget {
@@ -116,13 +127,20 @@ pub(super) async fn relay_result(
     clients: &Clients,
     source_sink: &Arc<Mutex<WsSink>>,
     close_requested: &Arc<AtomicBool>,
+    diag: &mut DiagnosticThrottle,
 ) -> ResultRelayDisposition {
     let result_for = match decode_sc_bvlc_result(msg) {
         Ok(ScBvlcResult::Ack { result_for }) | Ok(ScBvlcResult::Nak { result_for, .. }) => {
             result_for
         }
         Err(e) => {
-            debug!("Hub: malformed peer Result from {registered_vmac:02x?}, dropping: {e}");
+            emit_result_diagnostic(diag, |suppressed| {
+                if suppressed > 0 {
+                    debug!("Hub: malformed peer Result from {registered_vmac:02x?}, dropping: {e} (suppressed {suppressed} similar diagnostics)");
+                } else {
+                    debug!("Hub: malformed peer Result from {registered_vmac:02x?}, dropping: {e}");
+                }
+            });
             return ResultRelayDisposition::Continue;
         }
     };
@@ -149,25 +167,54 @@ pub(super) async fn relay_result(
             | ScFunction::ProprietaryMessage
             | ScFunction::Unknown(_)
     ) {
-        debug!(
-            "Hub: peer Result for {:?} from {registered_vmac:02x?}, dropping",
-            result_for
-        );
+        emit_result_diagnostic(diag, |suppressed| {
+            if suppressed > 0 {
+                debug!(
+                    "Hub: peer Result for {:?} from {registered_vmac:02x?}, dropping (suppressed {suppressed} similar diagnostics)",
+                    result_for
+                );
+            } else {
+                debug!(
+                    "Hub: peer Result for {:?} from {registered_vmac:02x?}, dropping",
+                    result_for
+                );
+            }
+        });
         return ResultRelayDisposition::Continue;
     }
 
     let destination = match hub_relay_target(msg) {
         Ok(HubRelayTarget::Unicast(destination)) => destination,
         Ok(HubRelayTarget::Broadcast) => {
-            debug!("Hub: broadcast Result from {registered_vmac:02x?}, dropping");
+            emit_result_diagnostic(diag, |suppressed| {
+                if suppressed > 0 {
+                    debug!("Hub: broadcast Result from {registered_vmac:02x?}, dropping (suppressed {suppressed} similar diagnostics)");
+                } else {
+                    debug!("Hub: broadcast Result from {registered_vmac:02x?}, dropping");
+                }
+            });
             return ResultRelayDisposition::Continue;
         }
         Err(HubRelayReject::OriginatingVmacPresent) => {
-            debug!("Hub: Result from {registered_vmac:02x?} had Originating VMAC, dropping");
+            emit_result_diagnostic(diag, |suppressed| {
+                if suppressed > 0 {
+                    debug!("Hub: Result from {registered_vmac:02x?} had Originating VMAC, dropping (suppressed {suppressed} similar diagnostics)");
+                } else {
+                    debug!(
+                        "Hub: Result from {registered_vmac:02x?} had Originating VMAC, dropping"
+                    );
+                }
+            });
             return ResultRelayDisposition::Continue;
         }
         Err(HubRelayReject::MissingDestinationVmac) => {
-            debug!("Hub: Result from {registered_vmac:02x?} had no relay destination, dropping");
+            emit_result_diagnostic(diag, |suppressed| {
+                if suppressed > 0 {
+                    debug!("Hub: Result from {registered_vmac:02x?} had no relay destination, dropping (suppressed {suppressed} similar diagnostics)");
+                } else {
+                    debug!("Hub: Result from {registered_vmac:02x?} had no relay destination, dropping");
+                }
+            });
             return ResultRelayDisposition::Continue;
         }
     };
@@ -195,7 +242,13 @@ pub(super) async fn relay_result(
         registered_vmac,
         HubRelayTarget::Unicast(destination),
     ) else {
-        warn!("Hub: failed to preserve peer Result frame from {registered_vmac:02x?}");
+        emit_result_diagnostic(diag, |suppressed| {
+            if suppressed > 0 {
+                warn!("Hub: failed to preserve peer Result frame from {registered_vmac:02x?} (suppressed {suppressed} similar diagnostics)");
+            } else {
+                warn!("Hub: failed to preserve peer Result frame from {registered_vmac:02x?}");
+            }
+        });
         return ResultRelayDisposition::Continue;
     };
     let relay_len = relay_buf.len();
@@ -214,13 +267,27 @@ pub(super) async fn relay_result(
     };
 
     let Some((target, max_bvlc)) = target else {
-        debug!("Hub: no client with vmac {destination:02x?} for Result relay");
+        emit_result_diagnostic(diag, |suppressed| {
+            if suppressed > 0 {
+                debug!("Hub: no client with vmac {destination:02x?} for Result relay (suppressed {suppressed} similar diagnostics)");
+            } else {
+                debug!("Hub: no client with vmac {destination:02x?} for Result relay");
+            }
+        });
         return ResultRelayDisposition::Continue;
     };
     if relay_len > max_bvlc as usize {
-        warn!(
-            "Hub: Result BVLC ({relay_len} bytes) exceeds target max_bvlc ({max_bvlc}) for {destination:02x?}, dropping"
-        );
+        emit_result_diagnostic(diag, |suppressed| {
+            if suppressed > 0 {
+                warn!(
+                    "Hub: Result BVLC ({relay_len} bytes) exceeds target max_bvlc ({max_bvlc}) for {destination:02x?}, dropping (suppressed {suppressed} similar diagnostics)"
+                );
+            } else {
+                warn!(
+                    "Hub: Result BVLC ({relay_len} bytes) exceeds target max_bvlc ({max_bvlc}) for {destination:02x?}, dropping"
+                );
+            }
+        });
         return ResultRelayDisposition::Continue;
     }
     if close_requested.load(Ordering::Acquire) {

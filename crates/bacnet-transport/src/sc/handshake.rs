@@ -12,7 +12,10 @@ use crate::sc_frame::{
     decode_sc_bvlc_result, decode_sc_message, encode_sc_message, ScBvlcResult, ScFunction,
 };
 
-use super::{heartbeat, ScConnectError, ScConnection, ScConnectionState, WebSocketPort};
+use super::{
+    diagnostic_throttle::DiagnosticThrottle, heartbeat, ScConnectError, ScConnection,
+    ScConnectionState, WebSocketPort,
+};
 
 fn notify_state(state_tx: Option<&watch::Sender<ScConnectionState>>, state: ScConnectionState) {
     if let Some(state_tx) = state_tx {
@@ -56,6 +59,10 @@ pub(super) async fn perform_handshake<W: WebSocketPort>(
     }
 
     let timeout_dur = Duration::from_millis(timeout_ms);
+    // Owner-local bound for handshake oversize diagnostics only. Fresh per
+    // handshake so one peer's flood cannot suppress another handshake's
+    // first diagnostic. Wire decisions (drop-and-wait) are unchanged.
+    let mut malformed_diag = DiagnosticThrottle::new();
     let accept_result = tokio::time::timeout(timeout_dur, async {
         loop {
             let data = match ws.recv().await {
@@ -68,7 +75,14 @@ pub(super) async fn perform_handshake<W: WebSocketPort>(
                 }
             };
             if data.len() > conn.lock().await.max_bvlc_length as usize {
-                warn!("BACnet/SC connect frame exceeds local Max-BVLC-Length, dropping");
+                if malformed_diag.should_emit_now() {
+                    let suppressed = malformed_diag.take_suppressed();
+                    if suppressed > 0 {
+                        warn!("BACnet/SC connect frame exceeds local Max-BVLC-Length, dropping (suppressed {suppressed} similar diagnostics)");
+                    } else {
+                        warn!("BACnet/SC connect frame exceeds local Max-BVLC-Length, dropping");
+                    }
+                }
                 continue;
             }
             let msg = match decode_sc_message(&data) {

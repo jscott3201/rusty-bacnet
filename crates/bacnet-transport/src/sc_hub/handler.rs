@@ -1,6 +1,7 @@
 //! Hub message dispatch; its registration lease is owned by the outer runner.
 
 use super::*;
+use crate::sc::diagnostic_throttle::DiagnosticThrottle;
 
 pub(super) async fn run(
     peer_addr: SocketAddr,
@@ -16,6 +17,10 @@ pub(super) async fn run(
     let close_requested = lease.closed.clone();
     let close_notify = lease.notify.clone();
     let client_activity: Arc<AtomicU64> = Arc::new(AtomicU64::new(now_secs()));
+    // Owner-local bound for malformed-frame diagnostics only. Fresh per
+    // connection so one peer's flood cannot suppress another connection's
+    // first diagnostic. NAK/relay/silence decisions are unchanged.
+    let mut malformed_diag = DiagnosticThrottle::new();
 
     loop {
         // A stream of immediately ready frames must not starve the timer.
@@ -64,18 +69,14 @@ pub(super) async fn run(
         };
 
         if data.len() > HUB_MAX_BVLC_LENGTH as usize {
-            warn!(
-                "Hub: frame from {peer_addr} is {} bytes, exceeds hub Max-BVLC-Length {}, dropping",
-                data.len(),
-                HUB_MAX_BVLC_LENGTH
-            );
+            super::malformed_diag::oversize(&mut malformed_diag, peer_addr, data.len());
             continue;
         }
 
         let sc_msg = match decode_sc_message(&data) {
             Ok(m) => m,
             Err(e) => {
-                warn!("Hub: decode error from {peer_addr}: {e}");
+                super::malformed_diag::decode_error(&mut malformed_diag, peer_addr, &e);
                 continue;
             }
         };
@@ -135,7 +136,7 @@ pub(super) async fn run(
         if sc_msg.function == ScFunction::EncapsulatedNpdu
             && sc_msg.payload.len() > HUB_MAX_NPDU_LENGTH as usize
         {
-            warn!("Hub: NPDU exceeds local Max-NPDU-Length, dropping");
+            super::malformed_diag::npdu_exceeds(&mut malformed_diag);
             continue;
         }
 
@@ -538,7 +539,7 @@ pub(super) async fn run(
 
             ScFunction::Result => {
                 let Some(registered_vmac) = lease.vmac else {
-                    debug!("Hub: Result before ConnectRequest from {peer_addr}, dropping");
+                    super::malformed_diag::result_before_connect(&mut malformed_diag, peer_addr);
                     continue;
                 };
                 if relay_result(
@@ -548,6 +549,7 @@ pub(super) async fn run(
                     &clients,
                     &write,
                     &close_requested,
+                    &mut malformed_diag,
                 )
                 .await
                     == ResultRelayDisposition::CloseSource
@@ -558,7 +560,7 @@ pub(super) async fn run(
 
             ScFunction::EncapsulatedNpdu => {
                 let Some(registered_vmac) = lease.vmac else {
-                    warn!("Hub: EncapsulatedNpdu before ConnectRequest from {peer_addr} — sending NAK");
+                    super::malformed_diag::npdu_before_connect(&mut malformed_diag, peer_addr);
                     let nak = build_bvlc_result_nak(
                         sc_msg.message_id,
                         ScFunction::EncapsulatedNpdu,
@@ -575,15 +577,11 @@ pub(super) async fn run(
                 let relay_target = match hub_relay_target(&sc_msg) {
                     Ok(target) => target,
                     Err(HubRelayReject::OriginatingVmacPresent) => {
-                        warn!(
-                            "Hub: EncapsulatedNpdu from {peer_addr} had Originating VMAC, dropping"
-                        );
+                        super::malformed_diag::originating_vmac(&mut malformed_diag, peer_addr);
                         continue;
                     }
                     Err(HubRelayReject::MissingDestinationVmac) => {
-                        warn!(
-                            "Hub: EncapsulatedNpdu from {peer_addr} missing Destination VMAC, dropping"
-                        );
+                        super::malformed_diag::missing_destination(&mut malformed_diag, peer_addr);
                         continue;
                     }
                 };
@@ -593,7 +591,7 @@ pub(super) async fn run(
                 let Some(relay_buf) =
                     encode_hub_relay_frame(&data, &sc_msg, registered_vmac, relay_target)
                 else {
-                    warn!("Hub: failed to preserve EncapsulatedNpdu frame from {peer_addr}");
+                    super::malformed_diag::preserve_failure(&mut malformed_diag, peer_addr);
                     continue;
                 };
                 let relay_bytes: Vec<u8> = relay_buf.to_vec();
@@ -619,23 +617,26 @@ pub(super) async fn run(
                             .filter_map(|vmac| {
                                 let c = map.get(&vmac)?;
                                 match relay_limit_decision(
-                                    npdu_len,
-                                    relay_len,
-                                    c.max_npdu,
-                                    c.max_bvlc,
+                                    npdu_len, relay_len, c.max_npdu, c.max_bvlc,
                                 ) {
-                                    RelayLimitDecision::Send => Some(HubRelaySink::capture(vmac, c)),
+                                    RelayLimitDecision::Send => {
+                                        Some(HubRelaySink::capture(vmac, c))
+                                    }
                                     RelayLimitDecision::DropMaxNpdu => {
-                                        warn!(
-                                            "Hub: broadcast NPDU ({npdu_len} bytes) exceeds target max_npdu ({}) for {vmac:02x?}, dropping for target",
-                                            c.max_npdu
+                                        super::malformed_diag::broadcast_npdu_drop(
+                                            &mut malformed_diag,
+                                            npdu_len,
+                                            c.max_npdu,
+                                            vmac,
                                         );
                                         None
                                     }
                                     RelayLimitDecision::DropMaxBvlc => {
-                                        warn!(
-                                            "Hub: broadcast BVLC ({relay_len} bytes) exceeds target max_bvlc ({}) for {vmac:02x?}, dropping for target",
-                                            c.max_bvlc
+                                        super::malformed_diag::broadcast_bvlc_drop(
+                                            &mut malformed_diag,
+                                            relay_len,
+                                            c.max_bvlc,
+                                            vmac,
                                         );
                                         None
                                     }
@@ -690,27 +691,41 @@ pub(super) async fn run(
                         match relay_limit_decision(npdu_len, relay_len, max_npdu, max_bvlc) {
                             RelayLimitDecision::Send => {
                                 if let Err(e) = super::relay_send::send(
-                                    &target, &clients, Message::Binary(relay_bytes.into()),
+                                    &target,
+                                    &clients,
+                                    Message::Binary(relay_bytes.into()),
                                     &super::relay_send::SocketIo,
-                                ).await {
+                                )
+                                .await
+                                {
                                     warn!("Hub: unicast relay error to {dest:02x?}: {e}");
                                 }
                             }
-                            RelayLimitDecision::DropMaxNpdu => warn!(
-                                "Hub: NPDU ({npdu_len} bytes) exceeds target max_npdu ({max_npdu}) for {dest:02x?}, dropping"
-                            ),
-                            RelayLimitDecision::DropMaxBvlc => warn!(
-                                "Hub: BVLC ({relay_len} bytes) exceeds target max_bvlc ({max_bvlc}) for {dest:02x?}, dropping"
-                            ),
+                            RelayLimitDecision::DropMaxNpdu => {
+                                super::malformed_diag::unicast_npdu_drop(
+                                    &mut malformed_diag,
+                                    npdu_len,
+                                    max_npdu,
+                                    dest,
+                                );
+                            }
+                            RelayLimitDecision::DropMaxBvlc => {
+                                super::malformed_diag::unicast_bvlc_drop(
+                                    &mut malformed_diag,
+                                    relay_len,
+                                    max_bvlc,
+                                    dest,
+                                );
+                            }
                         }
                     } else {
-                        debug!("Hub: no client with vmac {dest:02x?} for unicast relay");
+                        super::malformed_diag::no_unicast_target(&mut malformed_diag, dest);
                     }
                 }
             }
 
             other => {
-                debug!("Hub: unknown function {other:?} from {peer_addr}, sending NAK");
+                super::malformed_diag::unknown_function(&mut malformed_diag, peer_addr, &other);
                 let nak = build_bvlc_result_nak(
                     sc_msg.message_id,
                     other,
