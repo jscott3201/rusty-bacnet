@@ -28,11 +28,10 @@
 //! is a local matter. This module reuses the transport's existing connect
 //! timeout for that wait and introduces no new global deadline type.
 //!
-//! Asymmetry is intentional and documented: this transport dials out to
-//! direct peers only. Inbound direct connections stay refused — solicited
-//! Advertisements always report accept-direct 0 — so a peer's direct dial
-//! to this node is out of scope. Hub, failover, reconnect, and accept-side
-//! behavior are unchanged.
+//! Discovery enables dial-out only. Without a separately registered live
+//! direct listener, solicited Advertisements report accept-direct 0.
+//! Listener registration is independent of discovery; hub, failover,
+//! reconnect, and dial-out behavior are unchanged.
 //!
 //! Cache policy (owner-local): at most [`DIRECT_URI_CACHE_MAX_ENTRIES`]
 //! VMAC entries; each entry lives [`DIRECT_URI_CACHE_TTL`] from insertion.
@@ -402,7 +401,7 @@ impl<W: WebSocketPort> super::ScTransport<W> {
     /// delivery. Broadcasts always use the hub path.
     ///
     /// Dial-out only: this flag never enables inbound direct acceptance.
-    /// Solicited Advertisements keep accept-direct 0. Hub, failover, and
+    /// Without a separately registered listener, accept-direct stays 0. Hub, failover, and
     /// reconnect behavior are unchanged. The ACK wait reuses the configured
     /// connect timeout; no new global deadline type is introduced.
     pub fn with_direct_discovery(mut self, enabled: bool) -> Self {
