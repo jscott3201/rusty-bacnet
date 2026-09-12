@@ -1,11 +1,13 @@
 use super::*;
 use bacnet_encoding::npdu::decode_npdu;
+use std::collections::HashMap;
 use std::sync::Mutex;
 use std::task::Poll;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 const QUEUE_CAPACITY: usize = 256;
+const APDU_SOURCE_CAPACITY: usize = 16;
 
 /// A consistent, count-only snapshot of one network-layer receive queue.
 ///
@@ -20,6 +22,11 @@ pub struct QueueAdmissionSnapshot {
     pub high_water: usize,
     /// Arriving items dropped because the queue was full; saturates at `u64::MAX`.
     pub full_drops: u64,
+    /// Arriving APDUs dropped by NetworkLayer's per-source-MAC quota of 16;
+    /// saturates at `u64::MAX`. Evaluated before global Full, even when the queue
+    /// has room. Closed admission retains precedence. Always zero for control
+    /// and router-local queues, which have no per-source quota.
+    pub fairness_drops: u64,
     /// Arriving items dropped because the receiver was closed; saturates at `u64::MAX`.
     ///
     /// In NetworkLayer, the first such APDU ends dispatch; the first such control
@@ -31,16 +38,58 @@ pub struct QueueAdmissionSnapshot {
 
 /// Cloneable snapshot handle obtained from an [`AdmissionReceiver`].
 ///
-/// This handle keeps only counters alive, not the channel or dispatch task.
+/// This handle keeps only accounting alive, not payloads, the channel or dispatch task.
 /// It remains readable after the receiver, layer, or router is dropped. Dropping
 /// the receiver sets depth to zero; closing it preserves depth until drained.
 #[derive(Debug, Clone, Default)]
-pub struct QueueAdmissionCounters(Arc<Mutex<QueueAdmissionSnapshot>>);
+pub struct QueueAdmissionCounters(Arc<Mutex<QueueAdmissionState>>);
+
+#[derive(Debug, Default)]
+struct QueueAdmissionState {
+    snapshot: QueueAdmissionSnapshot,
+    // Used only by NetworkLayer's tracked APDU queue. Insert after successful
+    // admission, remove on the last dequeue: live entries <= depth <= 256.
+    // NetworkLayer owns one transport, so a separate port key is unnecessary.
+    queued_by_source: HashMap<MacAddr, usize>,
+}
+
+impl QueueAdmissionState {
+    fn dequeued(&mut self, source: Option<&MacAddr>) {
+        self.snapshot.current_depth -= 1;
+        if let Some(source) = source {
+            let count = self
+                .queued_by_source
+                .get_mut(source)
+                .expect("queued APDU source must be accounted");
+            *count -= 1;
+            if *count == 0 {
+                self.queued_by_source.remove(source);
+            }
+            self.assert_source_depth();
+        }
+    }
+
+    fn assert_source_depth(&self) {
+        debug_assert!(self.queued_by_source.len() <= self.snapshot.current_depth);
+        debug_assert!(self.snapshot.current_depth <= QUEUE_CAPACITY);
+        debug_assert_eq!(
+            self.queued_by_source.values().sum::<usize>(),
+            self.snapshot.current_depth
+        );
+        debug_assert!(self
+            .queued_by_source
+            .values()
+            .all(|count| (1..=APDU_SOURCE_CAPACITY).contains(count)));
+    }
+}
 
 impl QueueAdmissionCounters {
     /// Read this queue's depth, high-water mark, and admission-drop totals.
     pub fn snapshot(&self) -> QueueAdmissionSnapshot {
-        *self.0.lock().expect("queue admission counters poisoned")
+        self.0
+            .lock()
+            .expect("queue admission counters poisoned")
+            .snapshot
     }
 }
 
@@ -60,6 +109,9 @@ impl QueueAdmissionCounters {
 pub struct AdmissionReceiver<T> {
     rx: mpsc::Receiver<T>,
     counters: QueueAdmissionCounters,
+    // Only NetworkLayer's tracked APDU constructor installs source accounting.
+    // No public trait bound or change to router/control item types is needed.
+    source_mac: Option<fn(&T) -> &MacAddr>,
 }
 
 impl<T> AdmissionReceiver<T> {
@@ -78,7 +130,11 @@ impl<T> AdmissionReceiver<T> {
     }
 
     pub(crate) fn from_parts(rx: mpsc::Receiver<T>, counters: QueueAdmissionCounters) -> Self {
-        Self { rx, counters }
+        Self {
+            rx,
+            counters,
+            source_mac: None,
+        }
     }
 
     /// Obtain an independently owned snapshot handle for this queue.
@@ -92,14 +148,14 @@ impl<T> AdmissionReceiver<T> {
     /// or alter its depth. No counter lock is held while waiting.
     pub async fn recv(&mut self) -> Option<T> {
         std::future::poll_fn(|cx| {
-            let mut snapshot = self
+            let mut state = self
                 .counters
                 .0
                 .lock()
                 .expect("queue admission counters poisoned");
             let result = self.rx.poll_recv(cx);
-            if matches!(result, Poll::Ready(Some(_))) {
-                snapshot.current_depth -= 1;
+            if let Poll::Ready(Some(item)) = &result {
+                state.dequeued(self.source_mac.map(|source_mac| source_mac(item)));
             }
             result
         })
@@ -108,14 +164,14 @@ impl<T> AdmissionReceiver<T> {
 
     /// Receive immediately, distinguishing an empty queue from a closed one.
     pub fn try_recv(&mut self) -> Result<T, mpsc::error::TryRecvError> {
-        let mut snapshot = self
+        let mut state = self
             .counters
             .0
             .lock()
             .expect("queue admission counters poisoned");
         let result = self.rx.try_recv();
-        if result.is_ok() {
-            snapshot.current_depth -= 1;
+        if let Ok(item) = &result {
+            state.dequeued(self.source_mac.map(|source_mac| source_mac(item)));
         }
         result
     }
@@ -137,13 +193,14 @@ impl<T> AdmissionReceiver<T> {
 
 impl<T> Drop for AdmissionReceiver<T> {
     fn drop(&mut self) {
-        let mut snapshot = self
+        let mut state = self
             .counters
             .0
             .lock()
             .expect("queue admission counters poisoned");
         self.rx.close();
-        snapshot.current_depth = 0;
+        state.snapshot.current_depth = 0;
+        state.queued_by_source = HashMap::new();
         // The receiver's queued items (including reply senders) drop after
         // this guard is released. Closing first prevents concurrent admission.
     }
@@ -181,26 +238,49 @@ impl<T> AdmissionSender<T> {
     }
 
     pub(crate) fn try_send(&self, item: T) -> Result<(), mpsc::error::TrySendError<T>> {
+        self.try_send_from(item, None)
+    }
+
+    fn try_send_from(
+        &self,
+        item: T,
+        source: Option<MacAddr>,
+    ) -> Result<(), mpsc::error::TrySendError<T>> {
         // Serialize the admission and dequeue accounting, not asynchronous
-        // waiting. Each queue has its own short critical section; counters do
-        // not govern admission and no lock survives a poll/try operation.
-        let mut snapshot = self
+        // waiting. Each queue has its own short critical section, and no lock
+        // survives a poll/try operation. Closed keeps its lifecycle semantics;
+        // otherwise a source over quota takes precedence over global Full.
+        let mut state = self
             .counters
             .0
             .lock()
             .expect("queue admission counters poisoned");
+        if !self.tx.is_closed()
+            && source.as_ref().is_some_and(|source| {
+                state.queued_by_source.get(source).copied().unwrap_or(0) >= APDU_SOURCE_CAPACITY
+            })
+        {
+            state.snapshot.fairness_drops = state.snapshot.fairness_drops.saturating_add(1);
+            // Reuse the caller's drop-arriving path, but not its Full counter.
+            return Err(mpsc::error::TrySendError::Full(item));
+        }
         let result = self.tx.try_send(item);
         match &result {
             Ok(()) if self.track_depth => {
-                snapshot.current_depth += 1;
-                snapshot.high_water = snapshot.high_water.max(snapshot.current_depth);
+                state.snapshot.current_depth += 1;
+                state.snapshot.high_water =
+                    state.snapshot.high_water.max(state.snapshot.current_depth);
+                if let Some(source) = source {
+                    *state.queued_by_source.entry(source).or_default() += 1;
+                    state.assert_source_depth();
+                }
             }
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Full(_)) => {
-                snapshot.full_drops = snapshot.full_drops.saturating_add(1);
+                state.snapshot.full_drops = state.snapshot.full_drops.saturating_add(1);
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
-                snapshot.closed_drops = snapshot.closed_drops.saturating_add(1);
+                state.snapshot.closed_drops = state.snapshot.closed_drops.saturating_add(1);
             }
         }
         result
@@ -232,7 +312,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         &mut self,
     ) -> Result<AdmissionReceiver<ReceivedNetworkControl>, Error> {
         let (rx, counters) = self.enable_network_control(true)?;
-        Ok(AdmissionReceiver { rx, counters })
+        Ok(AdmissionReceiver::from_parts(rx, counters))
     }
 
     fn enable_network_control(
@@ -268,7 +348,8 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// full admission drops the arriving APDU and its owned reply channel and
     /// metadata without blocking control delivery. A closed APDU receiver ends
     /// dispatch on the next APDU admission attempt.
-    /// Use [`Self::start_with_admission`] to observe queue-admission snapshots.
+    /// This legacy raw receiver has no depth tracking or per-source quota.
+    /// Use [`Self::start_with_admission`] for snapshots and per-source fairness.
     pub async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedApdu>, Error> {
         self.start_dispatch(false).await.map(|(rx, _)| rx)
     }
@@ -279,6 +360,15 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// dispatch lifecycle. Stopping the layer closes admission but leaves
     /// queued items available to drain. Dropping the receiver discards those
     /// items and releases their reply channels without sending reply bytes.
+    ///
+    /// Unlike the legacy raw receiver, depth tracking caps each source MAC at
+    /// 16 queued, unconsumed APDUs. NetworkLayer owns a single transport, so no
+    /// separate ingress-port key is needed. Sixteen sources at their quota
+    /// exactly fill the unchanged 256-item queue. Dequeuing releases one source
+    /// slot; processing or retaining the returned APDU does not hold that slot.
+    /// Over-quota arrivals are dropped before checking global Full, releasing
+    /// payload, metadata and reply sender without sending bytes or a wire reject.
+    /// Control and router-local queues do not enforce this quota.
     ///
     /// ```no_run
     /// # async fn example() -> Result<(), bacnet_types::error::Error> {
@@ -300,7 +390,11 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// ```
     pub async fn start_with_admission(&mut self) -> Result<AdmissionReceiver<ReceivedApdu>, Error> {
         let (rx, counters) = self.start_dispatch(true).await?;
-        Ok(AdmissionReceiver { rx, counters })
+        Ok(AdmissionReceiver {
+            rx,
+            counters,
+            source_mac: Some(|apdu| &apdu.source_mac),
+        })
     }
 
     async fn start_dispatch(
@@ -369,7 +463,10 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
                             reply_tx: received.reply_tx,
                         };
 
-                        match apdu_tx.try_send(apdu) {
+                        // Raw receivers cannot release source counts: legacy
+                        // ingress neither clones keys nor enforces a quota.
+                        let source = track_depth.then(|| apdu.source_mac.clone());
+                        match apdu_tx.try_send_from(apdu, source) {
                             Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
                             Err(mpsc::error::TrySendError::Closed(_)) => break,
                         }
@@ -385,3 +482,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         Ok((apdu_rx, counters))
     }
 }
+
+#[cfg(test)]
+#[path = "layer_fairness_tests.rs"]
+mod fairness_tests;
