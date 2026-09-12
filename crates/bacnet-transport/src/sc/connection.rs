@@ -332,18 +332,21 @@ impl ScConnection {
     /// The destination mirrors the request origin (`None` for a hub-peer
     /// request so the reply stays peer-addressed, otherwise the requesting
     /// node) and the payload carries the configured space-joined URI list,
-    /// or zero octets when unconfigured. The message ID is always fresh: an
-    /// ACK answers the request but travels as its own message, matching the
-    /// solicited-Advertisement precedent. No Data Options. The caller
-    /// supplies already-validated payload bytes; only the ID counter moves.
+    /// or zero octets when unconfigured. The message ID copies the request
+    /// ID: Address-Resolution-ACK is a response message (AB.2 list) and
+    /// response messages carry the causing ID (AB.3.1.3); AB.2.7.1 repeats
+    /// the response-ID rule for this ACK. Only the solicited Advertisement
+    /// is excepted (AB.3.1.3), not this ACK. No Data Options. The caller
+    /// supplies already-validated payload bytes; no counter moves.
     pub fn build_address_resolution_ack(
-        &mut self,
+        &self,
+        request_message_id: u16,
         destination_vmac: Option<Vmac>,
         uri_payload: &[u8],
     ) -> ScMessage {
         ScMessage {
             function: ScFunction::AddressResolutionAck,
-            message_id: self.next_id(),
+            message_id: request_message_id,
             originating_vmac: None,
             destination_vmac,
             dest_options: Vec::new(),

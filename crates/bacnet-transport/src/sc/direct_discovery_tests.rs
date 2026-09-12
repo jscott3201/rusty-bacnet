@@ -101,6 +101,67 @@ fn ack_for(id: u16, payload: &'static [u8]) -> Vec<u8> {
     buf.to_vec()
 }
 
+const SENDER: Vmac = [0x01; 6];
+
+async fn start_responder(
+    uris: &[&str],
+) -> (
+    ScTransport<LoopbackWebSocket>,
+    mpsc::Receiver<ReceivedNpdu>,
+    LoopbackWebSocket,
+) {
+    let (client, hub) = LoopbackWebSocket::pair();
+    let mut transport = ScTransport::new(client, TARGET)
+        .with_device_uuid([2; 16])
+        .with_advertised_uris(uris.to_vec());
+    let hub_task = tokio::spawn(async move {
+        data_attribute_tests::hub_accept(&hub, [0x10; 6]).await;
+        hub
+    });
+    let rx = transport.start().await.unwrap();
+    let hub = hub_task.await.unwrap();
+    (transport, rx, hub)
+}
+
+async fn relay_one_ar_exchange(sender_hub: &LoopbackWebSocket, responder_hub: &LoopbackWebSocket) {
+    let ar_bytes = hub_recv(sender_hub).await;
+    let ar = decode_sc_message(&ar_bytes).unwrap();
+    assert_eq!(ar.function, ScFunction::AddressResolution);
+    assert_eq!(ar.destination_vmac, Some(TARGET));
+    assert_eq!(ar.originating_vmac, None);
+    assert!(ar.payload.is_empty());
+    let relayed = ScMessage {
+        function: ar.function,
+        message_id: ar.message_id,
+        originating_vmac: Some(SENDER),
+        destination_vmac: None,
+        dest_options: ar.dest_options.clone(),
+        data_options: ar.data_options.clone(),
+        payload: ar.payload.clone(),
+    };
+    let mut buf = BytesMut::new();
+    encode_sc_message(&mut buf, &relayed);
+    responder_hub.send(&buf).await.unwrap();
+    let ack_bytes = hub_recv(responder_hub).await;
+    let ack = decode_sc_message(&ack_bytes).unwrap();
+    assert_eq!(ack.function, ScFunction::AddressResolutionAck);
+    assert_eq!(ack.message_id, ar.message_id);
+    assert_eq!(ack.destination_vmac, Some(SENDER));
+    assert_eq!(ack.originating_vmac, None);
+    let back = ScMessage {
+        function: ack.function,
+        message_id: ack.message_id,
+        originating_vmac: Some(TARGET),
+        destination_vmac: None,
+        dest_options: ack.dest_options.clone(),
+        data_options: ack.data_options.clone(),
+        payload: ack.payload.clone(),
+    };
+    let mut back_buf = BytesMut::new();
+    encode_sc_message(&mut back_buf, &back);
+    sender_hub.send(&back_buf).await.unwrap();
+}
+
 #[test]
 fn uri_cache_count_bound_evicts_oldest_first() {
     let mut cache = DirectUriCache::new();
@@ -470,4 +531,84 @@ async fn broadcast_never_uses_direct_even_when_enabled() {
         .await
         .is_err());
     transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn interop_production_answer_drives_direct_without_timeout() {
+    let (mut sender, _rx, sender_hub, attempted, mut peers) = start_direct(2000).await;
+    let (mut responder, mut responder_rx, responder_hub) =
+        start_responder(&["wss://peer.example/sc"]).await;
+    let start = Instant::now();
+    let (send_res, ()) = tokio::join!(
+        sender.send_unicast(NPDU, &TARGET),
+        relay_one_ar_exchange(&sender_hub, &responder_hub)
+    );
+    send_res.unwrap();
+    let elapsed = start.elapsed();
+    assert!(elapsed < Duration::from_millis(1500));
+    assert_eq!(
+        attempted.lock().await.as_slice(),
+        &["wss://peer.example/sc".to_owned()]
+    );
+    let peer = timeout(Duration::from_secs(2), peers.recv())
+        .await
+        .unwrap()
+        .expect("direct peer missing");
+    let direct = decode_sc_message(
+        &timeout(Duration::from_secs(2), peer.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(direct.function, ScFunction::EncapsulatedNpdu);
+    assert_eq!(direct.originating_vmac, None);
+    assert_eq!(direct.destination_vmac, None);
+    assert_eq!(direct.payload.as_ref(), NPDU);
+    assert!(hub_try_recv(&sender_hub).await.is_none());
+    assert!(responder_rx.try_recv().is_err());
+    sender.stop().await.unwrap();
+    responder.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn interop_repeated_send_uses_cache_without_stall() {
+    let (mut sender, _rx, sender_hub, attempted, mut peers) = start_direct(2000).await;
+    let (mut responder, mut responder_rx, responder_hub) =
+        start_responder(&["wss://peer.example/sc"]).await;
+    let (first_res, ()) = tokio::join!(
+        sender.send_unicast(NPDU, &TARGET),
+        relay_one_ar_exchange(&sender_hub, &responder_hub)
+    );
+    first_res.unwrap();
+    let first_peer = timeout(Duration::from_secs(2), peers.recv())
+        .await
+        .unwrap()
+        .expect("first direct peer missing");
+    timeout(Duration::from_secs(2), first_peer.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let start = Instant::now();
+    sender.send_unicast(NPDU, &TARGET).await.unwrap();
+    let elapsed = start.elapsed();
+    assert!(elapsed < Duration::from_millis(1000));
+    assert!(hub_try_recv(&sender_hub).await.is_none());
+    let second_peer = timeout(Duration::from_secs(2), peers.recv())
+        .await
+        .unwrap()
+        .expect("cached direct peer missing");
+    let second = decode_sc_message(
+        &timeout(Duration::from_secs(2), second_peer.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(second.function, ScFunction::EncapsulatedNpdu);
+    assert_eq!(second.payload.as_ref(), NPDU);
+    assert_eq!(attempted.lock().await.len(), 2);
+    assert!(responder_rx.try_recv().is_err());
+    sender.stop().await.unwrap();
+    responder.stop().await.unwrap();
 }
