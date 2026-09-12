@@ -25,6 +25,8 @@ pub enum ScWebSocketErrorKind {
     WebSocketHandshake,
     /// The hub did not accept the BACnet/SC hub subprotocol.
     HubSubprotocol,
+    /// The direct peer did not accept the BACnet/SC direct subprotocol.
+    DirectSubprotocol,
     /// Sending a WebSocket frame failed.
     Send,
     /// Receiving a WebSocket frame failed.
@@ -44,9 +46,10 @@ impl ScWebSocketErrorKind {
                 io::ErrorKind::InvalidInput
             }
             Self::TcpDial => io::ErrorKind::ConnectionRefused,
-            Self::TlsHandshake | Self::WebSocketHandshake | Self::HubSubprotocol => {
-                io::ErrorKind::InvalidData
-            }
+            Self::TlsHandshake
+            | Self::WebSocketHandshake
+            | Self::HubSubprotocol
+            | Self::DirectSubprotocol => io::ErrorKind::InvalidData,
             Self::Send
             | Self::Receive
             | Self::Closed
@@ -66,6 +69,7 @@ impl fmt::Display for ScWebSocketErrorKind {
             Self::TlsHandshake => "tls-handshake",
             Self::WebSocketHandshake => "websocket-handshake",
             Self::HubSubprotocol => "hub-subprotocol",
+            Self::DirectSubprotocol => "direct-subprotocol",
             Self::Send => "send",
             Self::Receive => "receive",
             Self::Closed => "closed",
