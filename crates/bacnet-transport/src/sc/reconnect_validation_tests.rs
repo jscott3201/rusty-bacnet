@@ -160,6 +160,70 @@ async fn hub_accept(hub: &LoopbackWebSocket, vmac: Vmac) {
 }
 
 #[tokio::test(start_paused = true)]
+async fn failing_connectors_obey_reconnect_budget_plus_single_failover_allowance() {
+    for max_retries in [0, 1, 3, 10] {
+        for with_failover in [false, true] {
+            let config = ScReconnectConfig {
+                initial_delay_ms: 2,
+                max_delay_ms: 7,
+                max_retries,
+            };
+            config.validate().unwrap();
+            let (primary, primary_hub) = LoopbackWebSocket::pair();
+            let primary_dials = Arc::new(AtomicUsize::new(0));
+            let failover_dials = Arc::new(AtomicUsize::new(0));
+            let mut transport = ScTransport::new(primary, [0x22; 6])
+                .with_device_uuid([1; 16])
+                .with_reconnect(config)
+                .with_connector({
+                    let dials = primary_dials.clone();
+                    move || {
+                        dials.fetch_add(1, Ordering::SeqCst);
+                        async { Err(Error::Encoding("primary dial failed".into())) }
+                    }
+                });
+            if with_failover {
+                transport = transport.with_failover_connector({
+                    let dials = failover_dials.clone();
+                    move || {
+                        dials.fetch_add(1, Ordering::SeqCst);
+                        async { Err(Error::Encoding("failover dial failed".into())) }
+                    }
+                });
+            }
+
+            let (started, ()) =
+                tokio::join!(transport.start(), hub_accept(&primary_hub, [0x10; 6]));
+            let _rx = started.unwrap();
+            assert_eq!(primary_dials.load(Ordering::SeqCst), 0);
+            assert_eq!(failover_dials.load(Ordering::SeqCst), 0);
+            drop(primary_hub);
+
+            // Join the existing receive task: a transient Disconnected state is
+            // not proof that all retries (or the failover allowance) have ended.
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                transport.recv_task.as_mut().unwrap(),
+            )
+            .await
+            .expect("reconnect budget did not terminate")
+            .unwrap();
+            let _ = transport.recv_task.take();
+            let primary_count = primary_dials.load(Ordering::SeqCst);
+            let failover_count = failover_dials.load(Ordering::SeqCst);
+            assert_eq!(primary_count, max_retries as usize);
+            assert_eq!(failover_count, usize::from(with_failover));
+            assert!(primary_count + failover_count <= max_retries as usize + 1);
+            assert_eq!(
+                transport.connection().unwrap().lock().await.state,
+                ScConnectionState::Disconnected
+            );
+            transport.stop().await.unwrap();
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
 async fn zero_retries_skips_active_hub_retry_but_allows_initial_failover_and_restoration() {
     let (primary, primary_hub) = LoopbackWebSocket::pair();
     let (failover, failover_hub) = LoopbackWebSocket::pair();

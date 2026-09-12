@@ -3,6 +3,24 @@
 use super::connector::dial_reconnect_ws;
 use super::*;
 
+/// Jitter a nominal backoff from validated reconnect settings without changing
+/// its doubling progression. Both the configured initial floor and cap apply.
+fn jittered_backoff(backoff: Duration, initial: Duration, maximum: Duration) -> Duration {
+    let lower = initial.max(backoff / 2);
+    let upper = maximum.min(backoff + backoff / 2);
+    let mut random = [0; 16];
+    if getrandom::fill(&mut random).is_err() {
+        // Preserve recovery and its bounds if OS entropy is unavailable.
+        return backoff;
+    }
+    let nanos = u128::from_le_bytes(random) % ((upper - lower).as_nanos() + 1);
+    lower
+        + Duration::new(
+            (nanos / 1_000_000_000) as u64,
+            (nanos % 1_000_000_000) as u32,
+        )
+}
+
 pub(super) async fn retire<W: WebSocketPort>(
     current_ws: &Arc<W>,
     primary_ws: &mut Option<Arc<W>>,
@@ -57,10 +75,11 @@ impl<W: WebSocketPort> Recovery<'_, W> {
         current_reusable: bool,
     ) -> Option<(Arc<W>, ActiveHub)> {
         warn!("SC transport disconnected, attempting reconnection");
-        let mut backoff = Duration::from_millis(self.config.initial_delay_ms);
+        let initial_backoff = Duration::from_millis(self.config.initial_delay_ms);
+        let mut backoff = initial_backoff;
         let max_backoff = Duration::from_millis(self.config.max_delay_ms);
         for attempt in 1..=self.config.max_retries {
-            tokio::time::sleep(backoff).await;
+            tokio::time::sleep(jittered_backoff(backoff, initial_backoff, max_backoff)).await;
             if !self.conn.lock().await.connect_retry_allowed {
                 warn!(attempt, "SC reconnection skipped without retry eligibility");
                 break;
@@ -163,5 +182,64 @@ impl<W: WebSocketPort> Recovery<'_, W> {
             self.effective_max_apdu_length,
         )
         .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reconnect_jitter_default_samples_stay_in_each_capped_window() {
+        let config = ScReconnectConfig::default();
+        let initial = Duration::from_millis(config.initial_delay_ms);
+        let maximum = Duration::from_millis(config.max_delay_ms);
+        // Independent bounds for each nominal step, including the capped step.
+        for (backoff, lower, upper) in [
+            (10, 10, 15),
+            (20, 10, 30),
+            (40, 20, 60),
+            (80, 40, 120),
+            (160, 80, 240),
+            (320, 160, 480),
+            (600, 300, 600),
+        ] {
+            for _ in 0..256 {
+                let sleep = jittered_backoff(Duration::from_secs(backoff), initial, maximum);
+                assert!(sleep >= Duration::from_secs(lower));
+                assert!(sleep <= Duration::from_secs(upper));
+            }
+        }
+    }
+
+    #[test]
+    fn reconnect_jitter_samples_respect_small_equal_and_extreme_config_bounds() {
+        for (initial_delay_ms, max_delay_ms) in [
+            (1, 1),
+            (1, 2),
+            (3, 7),
+            (1, u64::MAX),
+            (u64::MAX - 1, u64::MAX),
+            (u64::MAX, u64::MAX),
+        ] {
+            let config = ScReconnectConfig {
+                initial_delay_ms,
+                max_delay_ms,
+                max_retries: 10,
+            };
+            config.validate().unwrap();
+            let initial = Duration::from_millis(initial_delay_ms);
+            let maximum = Duration::from_millis(max_delay_ms);
+            let mut backoff = initial;
+            for _ in 0..config.max_retries {
+                for _ in 0..256 {
+                    // Duration calculations only: never sleep on extreme values.
+                    let sleep = jittered_backoff(backoff, initial, maximum);
+                    assert!(sleep >= initial);
+                    assert!(sleep <= maximum);
+                }
+                backoff = (backoff * 2).min(maximum);
+            }
+        }
     }
 }
