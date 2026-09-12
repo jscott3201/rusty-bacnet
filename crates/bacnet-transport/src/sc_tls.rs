@@ -18,7 +18,7 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use bacnet_types::error::Error;
 
 use crate::sc::{ScConnectError, ScWebSocketErrorKind, WebSocketPort};
-use crate::sc_frame::BACNET_SC_HUB_SUBPROTOCOL;
+use crate::sc_frame::{BACNET_SC_DIRECT_SUBPROTOCOL, BACNET_SC_HUB_SUBPROTOCOL};
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -53,11 +53,35 @@ impl TlsWebSocket {
     /// }
     /// ```
     pub async fn connect(url: &str, tls_config: ScNodeTlsConfig) -> Result<Self, Error> {
+        Self::connect_with_subprotocol(url, tls_config, BACNET_SC_HUB_SUBPROTOCOL).await
+    }
+
+    /// Dial a direct-connection peer `wss` URI with node operational credentials.
+    ///
+    /// This is the dial-out half of an optional direct connection: the caller
+    /// supplies a peer URI (statically configured or previously discovered),
+    /// and this performs the TCP dial, mutual-TLS handshake, and WebSocket
+    /// upgrade offering only the direct subprotocol. Peer validation reuses
+    /// the [`ScNodeTlsConfig`] policy — explicit CA trust, operational
+    /// certificate checks during TLS, TLS 1.3 only, and URI-host server-name
+    /// binding — exactly as for hub dial. No BACnet identity (VMAC/UUID)
+    /// binding is performed here; that belongs to the later connection
+    /// exchange. Discovery triggering, routing over the connection, inbound
+    /// (accept-side) paths, and hub/failover interaction are out of scope.
+    pub async fn connect_direct(url: &str, tls_config: ScNodeTlsConfig) -> Result<Self, Error> {
+        Self::connect_with_subprotocol(url, tls_config, BACNET_SC_DIRECT_SUBPROTOCOL).await
+    }
+
+    async fn connect_with_subprotocol(
+        url: &str,
+        tls_config: ScNodeTlsConfig,
+        subprotocol: &'static str,
+    ) -> Result<Self, Error> {
         let uri = parse_wss_uri(url)?;
         let addr = tcp_addr_from_uri(&uri)?;
         let server_name = tls_server_name_from_uri(&uri)?;
         let request = tokio_tungstenite::tungstenite::ClientRequestBuilder::new(uri)
-            .with_sub_protocol(BACNET_SC_HUB_SUBPROTOCOL);
+            .with_sub_protocol(subprotocol);
 
         let socket = TcpStream::connect(&addr).await.map_err(|e| {
             ScConnectError::WebSocket {
@@ -89,7 +113,11 @@ impl TlsWebSocket {
         )
         .await
         .map_err(map_websocket_upgrade_error)?;
-        verify_hub_subprotocol(&response)?;
+        if subprotocol == BACNET_SC_DIRECT_SUBPROTOCOL {
+            verify_direct_subprotocol(&response)?;
+        } else {
+            verify_hub_subprotocol(&response)?;
+        }
 
         let (write, read) = ws_stream.split();
         Ok(Self {
@@ -210,19 +238,42 @@ fn map_websocket_handshake_error(error: TungsteniteError) -> Error {
 fn verify_hub_subprotocol(
     response: &tokio_tungstenite::tungstenite::handshake::client::Response,
 ) -> Result<(), Error> {
+    verify_selected_subprotocol(
+        response,
+        BACNET_SC_HUB_SUBPROTOCOL,
+        "hub",
+        ScWebSocketErrorKind::HubSubprotocol,
+    )
+}
+
+fn verify_direct_subprotocol(
+    response: &tokio_tungstenite::tungstenite::handshake::client::Response,
+) -> Result<(), Error> {
+    verify_selected_subprotocol(
+        response,
+        BACNET_SC_DIRECT_SUBPROTOCOL,
+        "direct",
+        ScWebSocketErrorKind::DirectSubprotocol,
+    )
+}
+
+fn verify_selected_subprotocol(
+    response: &tokio_tungstenite::tungstenite::handshake::client::Response,
+    expected: &str,
+    role: &str,
+    kind: ScWebSocketErrorKind,
+) -> Result<(), Error> {
     let selected = response
         .headers()
         .get("Sec-WebSocket-Protocol")
         .and_then(|value| value.to_str().ok());
 
-    if selected == Some(BACNET_SC_HUB_SUBPROTOCOL) {
+    if selected == Some(expected) {
         Ok(())
     } else {
         Err(ScConnectError::WebSocket {
-            kind: ScWebSocketErrorKind::HubSubprotocol,
-            message: format!(
-                "BACnet/SC hub WebSocket subprotocol {BACNET_SC_HUB_SUBPROTOCOL} was not accepted"
-            ),
+            kind,
+            message: format!("BACnet/SC {role} WebSocket subprotocol {expected} was not accepted"),
         }
         .into_bacnet_error())
     }
@@ -302,6 +353,10 @@ impl WebSocketPort for TlsWebSocket {
 #[cfg(test)]
 #[path = "sc_tls/node_tls_tests.rs"]
 mod node_tls_tests;
+
+#[cfg(test)]
+#[path = "sc_tls/direct_dial_tests.rs"]
+mod direct_dial_tests;
 
 #[cfg(test)]
 mod tests {
