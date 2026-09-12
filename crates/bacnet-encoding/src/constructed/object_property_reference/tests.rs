@@ -77,8 +77,8 @@ fn setpoint_reference_golden_vector_indexed() {
 #[test]
 fn setpoint_reference_empty_frame_is_the_absent_alternative() {
     // 0x0E 0x0F: opening/closing tag 0 with no members — the production's
-    // OPTIONAL member is absent, which Clause 12.17 defines as "no
-    // reference" (fixed setpoint), NOT an encoding error.
+    // OPTIONAL member is absent, selecting the fixed-setpoint case of
+    // Clause 12.17 rather than an encoding error.
     assert_eq!(decode_setpoint_reference(&[0x0E, 0x0F]).unwrap(), None);
 }
 

@@ -22,8 +22,8 @@ pub struct AnalogInputObject {
     /// Set to a positive value for delta-based filtering.
     cov_increment: f32,
     event_detector: OutOfRangeDetector,
-    /// Event_Detection_Enable (Clause 12.2). Clause 13.2.2.1: "If the
-    /// Event_Detection_Enable property is FALSE, then this state machine is not evaluated."
+    /// Event_Detection_Enable (Clause 12.2). A FALSE value suspends
+    /// event-state-machine evaluation under Clause 13.2.2.1.
     event_detection_enable: bool,
     /// Reliability: 0 = NO_FAULT_DETECTED.
     reliability: u32,

@@ -295,8 +295,8 @@ pub(crate) fn value_out_of_range_error() -> bacnet_types::error::Error {
 
 /// Return the invalid-data-encoding protocol error.
 ///
-/// Clause 15.9.1.3: "The encoding is not valid for the datatype of the
-/// property" — the value is of the right BACnet datatype but its declared
+/// Clause 15.9.1.3 covers an encoding incompatible with the property's
+/// datatype — the value is of the right BACnet datatype but its declared
 /// shape does not match the property's production.
 #[inline]
 pub(crate) fn invalid_data_encoding_error() -> bacnet_types::error::Error {
@@ -486,8 +486,8 @@ macro_rules! read_generic_event_properties {
                 )))
             }
             p if p == bacnet_types::enums::PropertyIdentifier::TIME_DELAY_NORMAL => {
-                // Clause 13.3: "If no value is available for this parameter,
-                // then it takes on the value of the pTimeDelay parameter" —
+                // Clause 13.3 supplies pTimeDelay as the fallback when
+                // pTimeDelayNormal is absent —
                 // so the read-back of an unwritten Time_Delay_Normal is
                 // Time_Delay's value, matching the algorithm's behavior.
                 Some(Ok(bacnet_types::primitives::PropertyValue::Unsigned(
@@ -710,8 +710,8 @@ macro_rules! write_generic_event_properties {
                 // acknowledged with a plain WriteProperty.
                 //
                 // It also carries the Clause 12.7 / 12.19 invariant that while
-                // Event_Detection_Enable is FALSE, Acked_Transitions "shall be equal to
-                // [its] initial condition" — an ungated write arm is the one route that
+                // Event_Detection_Enable is FALSE, Acked_Transitions must retain its
+                // initial value — an ungated write arm is the one route that
                 // could break that between detection-enable writes.
                 Some(Err($crate::common::write_access_denied_error()))
             }

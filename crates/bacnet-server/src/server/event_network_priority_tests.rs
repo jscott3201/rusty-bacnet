@@ -1,8 +1,8 @@
 //! Table 13-6's event-priority → NPDU-priority projection (issue #187).
 //!
-//! Clause 13.2.5.4: "the Network Priority as defined in Clause 6.2.2 shall be
-//! set as a function of the alarm and event priority as defined in Table
-//! 13-6." The assertion target is the encoded NPDU control octet, not the
+//! Clause 13.2.5.4 uses Table 13-6 to map alarm/event priority to the
+//! Clause 6.2.2 Network Priority. The assertion target is the encoded NPDU
+//! control octet, not the
 //! notification's APDU `priority` field — the APDU field was always right;
 //! the NPDU bits were always Normal.
 //!

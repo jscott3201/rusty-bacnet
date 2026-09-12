@@ -350,8 +350,8 @@ reliability_gate_test!(
     LoopObject::new(1, "LOOP-1", 62).unwrap()
 );
 // Clause 12.24: the Reliability_Evaluation_Inhibit text anticipates an
-// out-of-service client write ("...unless Out_Of_Service is TRUE and an
-// alternate value has been written to the Reliability property").
+// out-of-service client write by allowing a replacement Reliability value
+// supplied while Out_Of_Service is TRUE.
 reliability_gate_test!(
     schedule_reliability_requires_out_of_service,
     ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(0.0)).unwrap()

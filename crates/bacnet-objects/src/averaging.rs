@@ -167,9 +167,8 @@ impl BACnetObject for AveragingObject {
         }
         // Clause 12.5 Table 12-5 types Object_Property_Reference as
         // BACnetDeviceObjectPropertyReference, and the object text leaves
-        // referencing an object in a DIFFERENT device explicit ("Optionally,
-        // the object property to be sampled may exist in a different BACnet
-        // device") — this implementation samples local objects only, so the
+        // support for sampling a property on another BACnet device optional.
+        // This implementation samples local objects only, so the
         // shared arm helper decodes with the local-only
         // BACnetObjectPropertyReference framing: a device-qualified member
         // [3] refuses INVALID_DATA_ENCODING instead of silently dropping the

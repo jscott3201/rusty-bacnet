@@ -3,14 +3,13 @@
 //! Split out of `tests.rs` to keep every file under the 700-LOC cap.
 //!
 //! Clause 13.3.3 inducts only transitions to NORMAL, driven by a detection
-//! baseline: "the value of the monitored value when a transition to NORMAL
-//! is indicated shall be used in evaluation of the conditions until the next
-//! transition to NORMAL is indicated." The pre-#137 implementation had no
+//! baseline sampled at each NORMAL indication and retained for comparisons
+//! until the next NORMAL indication. The pre-#137 implementation had no
 //! baseline and answered OFFNORMAL whenever `|value| >= increment` — a
 //! transition the algorithm cannot indicate, dropped again by the pre-#166
 //! same-state skip. These tests pin the baseline semantics instead: the
-//! first sample initializes the baseline without indicating (the clause's
-//! "local matter"), and a change of `>= pIncrement` against that baseline
+//! first sample initializes the baseline without indicating (an
+//! implementation-defined choice), and a change of `>= pIncrement` against that baseline
 //! indicates a NORMAL→NORMAL same-state transition whose actions still run
 //! (Clause 13.2.2.1.4).
 
@@ -76,9 +75,9 @@ fn set_monitored(db: &mut ObjectDatabase, ai_oid: &ObjectIdentifier, value: f32)
 
 /// The FIRST observed sample initializes the detection baseline and never
 /// indicates a transition — even when its absolute value dwarfs the
-/// increment. Clause 13.3.3: "The initialization of the value used in
-/// evaluation before the first transition to NORMAL is indicated is a local
-/// matter." (This test replaces the pre-#137 `|value| >= increment →
+/// increment. Clause 13.3.3 leaves baseline initialization before the first
+/// NORMAL indication to the implementation.
+/// (This test replaces the pre-#137 `|value| >= increment →
 /// OFFNORMAL` assertion; that behavior is what the issue removed.)
 #[test]
 fn change_of_value_first_sample_establishes_baseline_without_transition() {
@@ -98,7 +97,7 @@ fn change_of_value_first_sample_establishes_baseline_without_transition() {
 }
 
 /// A change against the established baseline smaller than the increment
-/// indicates nothing (condition (a)'s "equal to or greater than pIncrement").
+/// indicates nothing (condition (a) requires reaching the pIncrement threshold).
 #[test]
 fn change_of_value_within_increment_indicates_nothing() {
     let (mut db, _ee_oid, ai_oid) = setup_cov(3.0, 5.0, 0);
@@ -111,8 +110,8 @@ fn change_of_value_within_increment_indicates_nothing() {
     );
 }
 
-/// A change of exactly pIncrement crosses the threshold ("equal to or
-/// greater than") and indicates the algorithm's only transition: NORMAL →
+/// A change of exactly pIncrement satisfies the inclusive threshold
+/// and indicates the algorithm's only transition: NORMAL →
 /// NORMAL (Figure 13-10). The transition actions run for the same-state
 /// result per Clause 13.2.2.1.4 — the transition is emitted and Event_State
 /// is (trivially) stored — and the baseline advances to the value at the
@@ -190,8 +189,8 @@ fn change_of_value_repeated_changes_each_indicate() {
     }
 }
 
-/// A non-positive increment never satisfies condition (a) ("a positive REAL
-/// increment"): no crash, no transition, whatever the values.
+/// A non-positive increment is outside condition (a)'s positive REAL domain:
+/// no crash, no transition, whatever the values.
 #[test]
 fn change_of_value_nonpositive_increment_never_indicates() {
     let (mut db, _ee_oid, ai_oid) = setup_cov(0.0, 0.0, 0);

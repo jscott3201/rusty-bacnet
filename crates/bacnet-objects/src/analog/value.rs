@@ -25,8 +25,8 @@ pub struct AnalogValueObject {
     /// Set to a positive value for delta-based filtering.
     cov_increment: f32,
     event_detector: OutOfRangeDetector,
-    /// Event_Detection_Enable (Clause 12.4). Clause 13.2.2.1: "If the
-    /// Event_Detection_Enable property is FALSE, then this state machine is not evaluated."
+    /// Event_Detection_Enable (Clause 12.4). A FALSE value suspends
+    /// event-state-machine evaluation under Clause 13.2.2.1.
     event_detection_enable: bool,
     /// Reliability: 0 = NO_FAULT_DETECTED.
     reliability: u32,
@@ -257,10 +257,9 @@ impl BACnetObject for AnalogValueObject {
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
-        // Clause 12.4, while Out_Of_Service is TRUE: "the Present_Value property and
-        // the Reliability property, if present and capable of taking on values other
-        // than NO_FAULT_DETECTED, shall be writable to allow simulating specific
-        // conditions or for testing purposes".
+        // Clause 12.4 requires simulation/test writes while Out_Of_Service is TRUE:
+        // Present_Value is writable, as is Reliability when that property exists
+        // and supports values beyond NO_FAULT_DETECTED.
         // `is_writable_property` stays statically true because it describes capability.
         if let Some(result) = self.reliability_inhibit.write_client_reliability(
             self.out_of_service,

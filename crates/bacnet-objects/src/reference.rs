@@ -153,9 +153,8 @@ fn decode_legacy_list(items: &[PropertyValue]) -> Result<BACnetObjectPropertyRef
 /// *opening* tag [0]), and the bare form is what a peer handling the
 /// reference generically — and this stack's own test tooling — may send. The
 /// [0] frame with NO inner members is the production's absent-alternative
-/// (the member is OPTIONAL; Clause 12.17 Setpoint_Reference: "The absence of
-/// a reference indicates that the setpoint for this control loop is fixed
-/// and is contained in the Setpoint property") and clears, exactly like a
+/// (the member is OPTIONAL; Clause 12.17 Setpoint_Reference uses the fixed
+/// value in Setpoint when no reference exists) and clears, exactly like a
 /// `Null` write.
 fn decode_framed(
     bytes: &[u8],

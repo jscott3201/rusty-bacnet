@@ -80,21 +80,20 @@ fn decode_max_segments(value: u8) -> Option<u8> {
 /// The segment count a configured `max-segments-accepted` actually promises a peer.
 ///
 /// Clause 20.1.2.4 carries this parameter in three bits, and only B'001'
-/// through B'110' name a number (2, 4, 8, 16, 32, 64). B'000' is "Unspecified
-/// number of segments accepted" and B'111' is "Greater than 64 segments
-/// accepted" — neither tells the peer a limit, so both yield `None`.
+/// through B'110' name a number (2, 4, 8, 16, 32, 64). B'000' leaves capacity
+/// unspecified; B'111' advertises capacity above 64 without an upper bound.
+/// Neither tells the peer a limit, so both yield `None`.
 ///
 /// This deliberately round-trips through the wire encoding rather than reading
 /// `configured` directly: a value such as `Some(100)` encodes as B'111', so the
-/// peer was told "Greater than 64 segments accepted", not "100". Answering
+/// peer was told only that capacity exceeds 64, not that it is 100. Answering
 /// from the configured number would claim a promise that was never sent.
 /// Invalid finite capacities below two yield `None`; APDU encoding and client
 /// startup reject those values through [`validate_max_segments`].
 pub fn advertised_max_segments(configured: Option<u8>) -> Option<u8> {
     let encoded = encode_max_segments(configured).ok()?;
     match decode_max_segments(encoded) {
-        // The B'111' sentinel — "Greater than 64 segments accepted", which is
-        // open-ended rather than a bound.
+        // B'111' advertises capacity above 64, not a specific upper bound.
         Some(255) => None,
         decoded => decoded,
     }
@@ -106,11 +105,10 @@ pub fn advertised_max_segments(configured: Option<u8>) -> Option<u8> {
 
 /// MinimumMessageSize: the smallest APDU any BACnet device accepts.
 ///
-/// Clause 20.1.2.5 spells the lowest max-APDU-length-accepted code, `B'0000'`,
-/// as "Up to MinimumMessageSize (50 octets)"; Clause 12.11.18 requires
-/// `Max_APDU_Length_Accepted` to be "greater than or equal to 50"; and Clause
-/// 5.2.1.2 requires the size accepted by a remote peer to be "at least 50
-/// octets".
+/// Clause 20.1.2.5 assigns the lowest max-APDU-length-accepted code, `B'0000'`,
+/// to the 50-octet MinimumMessageSize capacity. Clause 12.11.18 sets the same
+/// floor for `Max_APDU_Length_Accepted`, as does Clause 5.2.1.2 for a remote
+/// peer's receive capacity.
 pub const MINIMUM_MESSAGE_SIZE: u16 = 50;
 
 /// Decoded max-APDU-length values indexed by the 4-bit field.

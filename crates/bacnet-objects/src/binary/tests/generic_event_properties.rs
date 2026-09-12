@@ -237,8 +237,8 @@ fn bv_event_properties_round_trip_and_match_pics() {
     assert_event_properties_round_trip(&mut bv, "BV");
 }
 
-/// Clause 13.3: "If no value is available for this parameter, then it takes on
-/// the value of the pTimeDelay parameter." An object that was never written a
+/// Clause 13.3 supplies pTimeDelay when pTimeDelayNormal is absent.
+/// An object that was never written a
 /// Time_Delay_Normal reads back the effective (fallback) delay.
 #[test]
 fn binary_time_delay_normal_defaults_to_time_delay_when_unwritten() {

@@ -235,13 +235,11 @@ impl BACnetObject for LoopObject {
                     code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
                 })
             }
-            // Clause 12.17 Table 12-20 lists Reliability O7, whose footnote reads
-            // "These properties are required to be writable when Out_Of_Service
-            // is TRUE", and the Out_Of_Service property text then narrows the grant:
-            // while TRUE, "the Present_Value property and the Reliability property,
-            // if present and capable of taking on values other than
-            // NO_FAULT_DETECTED, shall be writable to allow simulating specific
-            // conditions or for testing purposes". In service the property is owned
+            // Clause 12.17 Table 12-20 lists Reliability O7; that footnote requires
+            // writes to be supported while Out_Of_Service is TRUE. The property's
+            // text specifies simulation/test writes to Present_Value and to
+            // Reliability when present and capable of values beyond
+            // NO_FAULT_DETECTED. In service the property is owned
             // by the algorithm, so a network write is refused here; the internal
             // evaluator route is `set_reliability_internal` with the complementary
             // guard, and Out_Of_Service saves/restores the evaluated value (handled
@@ -338,8 +336,8 @@ impl BACnetObject for LoopObject {
     fn set_reliability_internal(&mut self, reliability: u32) -> Result<(), Error> {
         // While Out_Of_Service is TRUE the client owns the simulated value;
         // an internal write would clobber the simulation (Clause 12.17
-        // Out_Of_Service paragraph: Reliability is "decoupled from the
-        // algorithm"), so it is refused until the object returns to service.
+        // Out_Of_Service paragraph separates Reliability from algorithm output),
+        // so it is refused until the object returns to service.
         if self.out_of_service {
             return Err(common::write_access_denied_error());
         }
@@ -727,7 +725,7 @@ mod tests {
         );
 
         // 0x0E 0x0F: BACnetSetpointReference with its OPTIONAL member absent —
-        // Clause 12.17 defines the absence as "fixed setpoint", so a
+        // Clause 12.17 uses the stored Setpoint when no reference exists, so a
         // conformant peer clearing the reference this way must be accepted,
         // exactly like a Null write (pinned over the wire in the server's
         // `reference_writes` tests).

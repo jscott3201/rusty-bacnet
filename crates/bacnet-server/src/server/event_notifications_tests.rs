@@ -326,8 +326,8 @@ async fn event_notification_projects_fault_priority_from_class() {
 }
 
 /// The from-FAULT direction, which Clauses 13.8 and 13.9 state separately from
-/// the to-FAULT case: "The Event Type CHANGE_OF_RELIABILITY shall be used for
-/// reporting a transition from FAULT."
+/// the to-FAULT case: departure from FAULT also requires
+/// CHANGE_OF_RELIABILITY as the Event Type.
 ///
 /// Worth its own test because the transition coordinate differs — this is a
 /// TO_NORMAL transition for Priority and Ack_Required purposes, while still
@@ -403,8 +403,8 @@ async fn event_notification_projects_normal_priority_from_class() {
 /// a deliberate choice for an undefined configuration, not a mandate.
 ///
 /// Silence is the defensible reading: a class that does not exist supplies no
-/// Recipient_List, and 13.2.5 distributes only "to the notification-clients
-/// specified by the Recipient_List input". The alternative was the previous
+/// Recipient_List, and 13.2.5 restricts distribution to that input's
+/// notification-clients. The alternative was the previous
 /// behavior, where a misconfigured `Notification_Class` broadcast the alarm to
 /// every device on the link.
 #[tokio::test]

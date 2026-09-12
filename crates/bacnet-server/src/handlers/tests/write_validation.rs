@@ -498,9 +498,8 @@ fn time_delay_normal_round_trips_over_write_property_and_read_property() {
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
 
-    // Never written, the read-back is Time_Delay's value: Clause 13.3 — "If
-    // no value is available for this parameter, then it takes on the value of
-    // the pTimeDelay parameter."
+    // Never written, the read-back is Time_Delay's value: Clause 13.3 uses
+    // pTimeDelay as the fallback for an absent pTimeDelayNormal.
     write_wire(
         &mut db,
         ai_oid,

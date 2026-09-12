@@ -88,7 +88,7 @@ fn gei_summary_acked(db: &ObjectDatabase, ee_oid: ObjectIdentifier) -> u8 {
 /// The full loop: ack-required transition fires -> GEI shows the
 /// TO_OFFNORMAL bit cleared (ack owed) -> AcknowledgeAlarm succeeds -> the
 /// bit is set -> GEI shows it set. A duplicate ack is idempotent per Clause
-/// 13.2.3's unconditional "is set".
+/// 13.2.3's unconditional assignment of the acknowledged value.
 #[test]
 fn ee_acknowledge_alarm_round_trip_over_services() {
     let (mut db, ee_oid) = make_db_with_ack_required_ee();
@@ -188,8 +188,8 @@ fn ee_acknowledge_to_normal_bit() {
     }
 }
 
-/// Table 13-10: an EE with `Event_Detection_Enable` FALSE "does not support
-/// or is not configured for event generation" — the ack fails
+/// Table 13-10: an EE with `Event_Detection_Enable` FALSE falls under the
+/// existing-object case lacking event-generation configuration — the ack fails
 /// OBJECT / NO_ALARM_CONFIGURED, and the initial-condition
 /// `Acked_Transitions` it must hold (Clause 12.12) is untouched.
 #[test]

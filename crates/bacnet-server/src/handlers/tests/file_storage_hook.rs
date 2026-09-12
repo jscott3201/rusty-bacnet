@@ -1,8 +1,7 @@
 //! A File-typed object without a storage hook (#397): the handlers report
-//! it as SERVICES / FILE_ACCESS_DENIED (Clause 18, "a file that is currently
-//! locked or otherwise not accessible") directly after the lookup — the
-//! Clause 14.1 / 14.2 Service Procedures decide "currently inaccessible for
-//! another reason" in their first step, ahead of the read-only and
+//! it as SERVICES / FILE_ACCESS_DENIED (Clause 18's locked/inaccessible-file
+//! case) directly after the lookup — the Clause 14.1 / 14.2 Service
+//! Procedures reject inaccessible files in their first step, ahead of the read-only and
 //! access-method gates — and never read it as empty. The same module pins
 //! the write handler's fail-closed Read_Only gate, the record cap's tie to
 //! the decoder ceiling, the read window one ACK can carry, and the

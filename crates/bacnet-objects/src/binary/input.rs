@@ -175,8 +175,8 @@ pub struct BinaryInputObject {
     inactive_text: String,
     /// CHANGE_OF_STATE event detector.
     event_detector: ChangeOfStateDetector,
-    /// Event_Detection_Enable (Clause 12.6). Clause 13.2.2.1: "If the
-    /// Event_Detection_Enable property is FALSE, then this state machine is not evaluated."
+    /// Event_Detection_Enable (Clause 12.6). A FALSE value suspends
+    /// event-state-machine evaluation under Clause 13.2.2.1.
     event_detection_enable: bool,
     pub(crate) event_history: EventHistory,
 }

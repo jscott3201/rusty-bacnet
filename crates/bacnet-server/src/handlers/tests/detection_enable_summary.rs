@@ -4,10 +4,9 @@
 //!
 //! Each of those three clauses states the exclusion independently, so each
 //! service is tested separately rather than trusting one shared code path. The
-//! wording differs and the difference matters: 13.10 and 13.11 say an object
-//! with the property FALSE "shall be ignored", while 13.12 inverts it into the
-//! search predicate — objects that "do not have an Event_Detection_Enable
-//! property with a value of FALSE" — which is what makes absence mean
+//! formulations differ: 13.10 and 13.11 exclude objects whose property is
+//! FALSE, whereas 13.12 searches objects unless Event_Detection_Enable
+//! exists and is FALSE. An absent property therefore leaves an object
 //! *included* rather than excluded.
 
 use super::*;
@@ -141,8 +140,8 @@ fn alarm_summary_entry_count(db: &ObjectDatabase) -> usize {
     GetAlarmSummaryAck::decode(&buf).unwrap().entries.len()
 }
 
-/// Clause 13.10, Service Procedure: "Any object that has an Event_Detection_Enable property
-/// with a value of FALSE shall be ignored."
+/// Clause 13.10's Service Procedure excludes an object when its
+/// Event_Detection_Enable property exists and is FALSE.
 #[test]
 fn get_alarm_summary_excludes_detection_disabled_object() {
     assert_eq!(
@@ -159,8 +158,8 @@ fn get_alarm_summary_excludes_detection_disabled_object() {
 
 /// The exclusion tests the property, not the absence of the property.
 ///
-/// Clause 13.12's Service Procedure phrases it as a double negative — objects that "do not have
-/// an Event_Detection_Enable property with a value of FALSE" are searched — so
+/// Clause 13.12's Service Procedure searches objects unless
+/// Event_Detection_Enable exists and is FALSE, so
 /// an object that does not model the property at all must still be reported.
 /// Getting this backwards would silently empty these responses for every object
 /// type that lacks the property, which is most of them.

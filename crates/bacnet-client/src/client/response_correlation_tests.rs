@@ -446,7 +446,7 @@ async fn segmented_ack_for_an_unknown_invoke_id_is_aborted_not_reassembled() {
 /// next request to an idle peer reuses invoke ID 0. A duplicated SegmentACK
 /// from a finished segmented transfer then lands on a live *unsegmented*
 /// request, which has no `seg_ack_senders` entry — and Clause 5.4.4.3
-/// `SegmentACK_Received` says to "discard the PDU as a duplicate", precisely
+/// `SegmentACK_Received` treats the PDU as a duplicate and drops it, precisely
 /// so that this client does not abort its own healthy request at the peer.
 #[tokio::test]
 async fn segment_ack_during_an_outstanding_request_is_discarded_not_aborted() {
@@ -521,8 +521,8 @@ async fn segment_ack_during_reassembly_aborts_the_transaction() {
         other => panic!("expected Abort, got {other:?}"),
     }
 
-    // "send ABORT.indication ... to the local application program": the
-    // caller must be told, not left waiting for a reassembly that is over.
+    // The local ABORT.indication informs the caller rather than leaving it
+    // waiting for a reassembly that is over.
     match link.finish().await {
         Err(Error::Abort { reason }) => {
             assert_eq!(reason, AbortReason::INVALID_APDU_IN_THIS_STATE.to_raw());
@@ -681,8 +681,8 @@ async fn non_rung_max_segments_rounds_down_in_header_and_bounds_reassembly() {
 
 #[tokio::test]
 async fn max_segments_above_the_encodable_rungs_advertises_no_bound() {
-    // Clause 20.1.2.4 has no rung for 100; it encodes as B'111', "Greater than
-    // 64 segments accepted", which promises the peer nothing. Capping
+    // Clause 20.1.2.4 has no rung for 100; B'111' advertises capacity above
+    // 64 segments without specifying an upper bound to the peer. Capping
     // reassembly at 100 would enforce a limit that was never advertised.
     assert_eq!(apdu::advertised_max_segments(Some(100)), None);
     assert_eq!(apdu::advertised_max_segments(None), None);

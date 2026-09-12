@@ -43,8 +43,8 @@ pub struct EventEnrollmentPending {
     /// seconds by the evaluator as `ceil(delay_secs / interval_secs)`.
     pub remaining: u32,
     /// Identity of the indicating condition, per algorithm. CHANGE_OF_STATE
-    /// uses one identity for condition (a)'s "any" alarm value and a
-    /// value-specific identity for condition (c)'s "that" value.
+    /// uses one identity for condition (a)'s set-membership check and a
+    /// value-specific identity for condition (c)'s sustained-value check.
     /// CHANGE_OF_BITSTRING uses the masked monitored bytes. Algorithms whose
     /// delay applies to the threshold condition itself (OUT_OF_RANGE,
     /// FLOATING_LIMIT, CHANGE_OF_VALUE) use `0`; the target identifies them.
@@ -71,13 +71,11 @@ pub struct EventEnrollmentPending {
 pub struct EventEnrollmentEvalState {
     /// Delayed transition in flight, if any.
     pub pending: Option<EventEnrollmentPending>,
-    /// CHANGE_OF_VALUE detection baseline (Clause 13.3.3: "the value of the
-    /// monitored value when a transition to NORMAL is indicated shall be used
-    /// in evaluation of the conditions until the next transition to NORMAL is
-    /// indicated"). `None` before the first sample; the first observed value
-    /// initializes it without indicating a transition ("the initialization of
-    /// the value used in evaluation before the first transition to NORMAL is
-    /// indicated is a local matter" — the policy chosen here).
+    /// CHANGE_OF_VALUE detection baseline. Clause 13.3.3 retains the sample
+    /// from a NORMAL indication for subsequent comparisons until the next
+    /// NORMAL indication replaces it. Initialization before that first
+    /// indication is implementation-defined: here it is `None` until the
+    /// first sample, which establishes a baseline without a transition.
     pub cov_baseline: Option<PropertyValue>,
     /// Domain-tagged identity of the monitored value that caused the last
     /// transition to OFFNORMAL. CHANGE_OF_STATE condition (c) requires a

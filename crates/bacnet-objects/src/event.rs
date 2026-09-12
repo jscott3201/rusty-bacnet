@@ -100,9 +100,8 @@ pub struct EnrollmentSummaryCapability {
 impl EventTransition {
     /// Classify a destination event state under ASHRAE 135-2020 Clause 13.2.
     ///
-    /// "All states that are not normal and not fault are offnormal states,"
-    /// while Clause 13.2.2.1.2 confirms that "the OffNormal state includes all
-    /// event states other than NORMAL and FAULT". Therefore the residual case
+    /// NORMAL and FAULT are the only states outside the offnormal category,
+    /// as also specified by Clause 13.2.2.1.2. Therefore the residual case
     /// is deliberately TO_OFFNORMAL, not TO_FAULT.
     pub fn for_target_state(state: EventState) -> Self {
         if state == EventState::NORMAL {
@@ -252,19 +251,17 @@ impl PendingTransition {
 /// Select the delay governing a transition toward `target`.
 ///
 /// ASHRAE 135-2020 Clause 13.3 gives the event algorithms two independent
-/// delays. pTimeDelay is "the time, in seconds, that the offnormal conditions
-/// must exist before an offnormal event state is indicated": it governs
+/// delays. pTimeDelay measures the required persistence of an offnormal
+/// condition in seconds before indicating that state: it governs
 /// every indication into an OFFNORMAL state, including offnormal→offnormal
 /// re-indication (CHANGE_OF_STATE (c) at 13.3.2, OUT_OF_RANGE (d)/(g) at
-/// 13.3.6, COMMAND_FAILURE (a) at 13.3.4). pTimeDelayNormal is "the time, in
-/// seconds, that the Normal conditions must exist before a NORMAL event
-/// state is indicated" and gates only the sustained-condition return to
+/// 13.3.6, COMMAND_FAILURE (a) at 13.3.4). pTimeDelayNormal measures the
+/// required persistence of a Normal condition in seconds and gates only the
+/// sustained-condition return to
 /// NORMAL (CHANGE_OF_STATE (b), COMMAND_FAILURE (b), OUT_OF_RANGE (e)/(h)).
 ///
-/// The fallback for the absent case is normative text: "If no value is
-/// available for this parameter, then it takes on the value of the
-/// pTimeDelay parameter" — so `None` behaves exactly as `time_delay`, never
-/// as an error or a zero.
+/// An absent pTimeDelayNormal uses pTimeDelay as its fallback, so `None`
+/// behaves exactly as `time_delay`, never as an error or a zero.
 ///
 /// FAULT never reaches this selector: Clause 13.2.2 fault precedence runs
 /// ahead of the event algorithm and carries no delay term.
@@ -278,19 +275,17 @@ fn delay_toward(time_delay: u32, time_delay_normal: Option<u32>, target: EventSt
 
 /// What Clause 13.2.2's fault-precedence rule dictates for a single evaluation.
 ///
-/// ASHRAE 135-2020 Clause 13.2.2: "The event algorithm determines the normal or
-/// offnormal states and the Reliability property determines whether or not the
-/// event state will indicate a fault. Fault detection takes precedence over the
-/// detection of normal and offnormal states. As such, when Reliability has a
-/// value other than NO_FAULT_DETECTED, the event-state-detection process will
-/// determine the object's event state to be FAULT."
+/// ASHRAE 135-2020 Clause 13.2.2 assigns normal/offnormal selection to the
+/// event algorithm and fault selection to Reliability. A Reliability value
+/// unequal to NO_FAULT_DETECTED overrides normal/offnormal detection,
+/// making the object's event state FAULT.
 ///
 /// **Whether FAULT holds is a standing condition; whether a transition fires is
-/// an edge.** Clause 13.2.2.1 states the first directly — "In the Fault state
-/// reliability-evaluation indicates a value other than NO_FAULT_DETECTED" — so
+/// an edge.** Clause 13.2.2.1 ties the Fault state to a reliability-evaluation
+/// result unequal to NO_FAULT_DETECTED, so
 /// the FAULT determination is re-derived from `reliability` on every evaluation
-/// and is never latched. But the same clause's ToFault transition fires on "a
-/// **different** Reliability value", which is an edge and cannot be derived from
+/// and is never latched. But the same clause's ToFault transition requires a
+/// **change** in Reliability, which is an edge and cannot be derived from
 /// the current value alone. That is what `fault_reliability` stores: the value in
 /// force at the last entry to FAULT, and nothing else.
 ///
@@ -303,11 +298,10 @@ pub(crate) enum FaultPrecedence {
     /// Reliability is bad and FAULT does not hold yet: transition immediately.
     ///
     /// Clause 13.2.2.1's ToFault transitions are unconditional and carry no
-    /// delay term — "If reliability-evaluation indicates a value other than
-    /// NO_FAULT_DETECTED, then perform the corresponding transition actions and
-    /// enter the Fault state." `Time_Delay` belongs to the event algorithm
-    /// (Clause 13.3.1 defines pTimeDelay as the time "that the offnormal
-    /// conditions must exist before an offnormal event state is indicated"), and
+    /// delay term: a reliability-evaluation result unequal to NO_FAULT_DETECTED
+    /// triggers the transition actions and entry to Fault. `Time_Delay` belongs
+    /// to the event algorithm (Clause 13.3.1 uses pTimeDelay to require sustained
+    /// offnormal conditions before an indication), and
     /// the algorithm is precisely what fault detection takes precedence over.
     EnterFault,
     /// Reliability is bad, **unchanged**, and FAULT already holds: the standing
@@ -318,10 +312,9 @@ pub(crate) enum FaultPrecedence {
     /// Reliability changed while FAULT already holds: execute the transition
     /// actions and re-enter FAULT.
     ///
-    /// Clause 13.2.2.1's Fault ToFault transition: "If reliability-evaluation
-    /// indicates a different Reliability value and the new Reliability value is
-    /// not NO_FAULT_DETECTED ... then perform the corresponding transition
-    /// actions and re-enter the Fault state."
+    /// Clause 13.2.2.1's Fault ToFault transition runs the transition actions
+    /// and re-enters Fault when Reliability changes to another value that
+    /// is still unequal to NO_FAULT_DETECTED.
     ///
     /// Also selected when FAULT holds with no recorded value — a state this
     /// crate never produces but a downstream implementor can construct, since
@@ -329,9 +322,9 @@ pub(crate) enum FaultPrecedence {
     ReenterFault,
     /// Reliability recovered while in FAULT.
     ///
-    /// Clause 13.2.2.1's Fault ToNormal transition: "If reliability-evaluation
-    /// indicates a value of NO_FAULT_DETECTED, then perform the corresponding
-    /// transition actions and enter the Normal state." **NORMAL specifically —
+    /// Clause 13.2.2.1's Fault ToNormal transition runs the transition actions
+    /// and enters Normal when reliability evaluation returns NO_FAULT_DETECTED.
+    /// **NORMAL specifically —
     /// not a state re-derived from the event algorithm.** Recovering straight
     /// into HIGH_LIMIT because the present value is still out of range would
     /// invent a transition the state machine does not define; the algorithm gets
@@ -404,8 +397,7 @@ pub struct OutOfRangeDetector {
     /// `Time_Delay_Normal` (property 356): the Clause 13.3.6 pTimeDelayNormal
     /// parameter — seconds that Normal conditions must persist before a
     /// NORMAL event state is indicated. `None` is the not-configured case
-    /// and takes on `time_delay`: "If no value is available for this
-    /// parameter, then it takes on the value of the pTimeDelay parameter."
+    /// and uses `time_delay` as the fallback required for absent pTimeDelayNormal.
     pub time_delay_normal: Option<u32>,
     pub event_state: EventState,
     /// Acknowledged-transitions bitfield (3 bits: TO_OFFNORMAL, TO_FAULT, TO_NORMAL).
@@ -667,8 +659,7 @@ pub struct ChangeOfStateDetector {
     /// `Time_Delay_Normal` (property 356): the Clause 13.3.2 pTimeDelayNormal
     /// parameter — seconds that Normal conditions must persist before a
     /// NORMAL event state is indicated. `None` is the not-configured case
-    /// and takes on `time_delay`: "If no value is available for this
-    /// parameter, then it takes on the value of the pTimeDelay parameter."
+    /// and uses `time_delay` as the fallback required for absent pTimeDelayNormal.
     pub time_delay_normal: Option<u32>,
     pub event_state: EventState,
     pub acked_transitions: u8,
@@ -847,8 +838,7 @@ pub struct CommandFailureDetector {
     /// `Time_Delay_Normal` (property 356): the Clause 13.3.4 pTimeDelayNormal
     /// parameter — seconds that Normal conditions must persist before a
     /// NORMAL event state is indicated. `None` is the not-configured case
-    /// and takes on `time_delay`: "If no value is available for this
-    /// parameter, then it takes on the value of the pTimeDelay parameter."
+    /// and uses `time_delay` as the fallback required for absent pTimeDelayNormal.
     pub time_delay_normal: Option<u32>,
     pub event_state: EventState,
     pub acked_transitions: u8,

@@ -11,8 +11,8 @@ fn conformant_lengths_pass() {
 }
 
 /// I-Am carries an Unsigned octet count, not the four-bit code, and Clause
-/// 20.1.2.5 says the true value "may be larger than indicated in this
-/// parameter" — so values outside the six encodings are legitimate.
+/// 20.1.2.5 allows actual capacity to exceed the encoded value, so values
+/// outside the six encodings are legitimate.
 #[test]
 fn lengths_outside_the_encoded_set_are_not_rejected() {
     for advertised in [51u16, 600, 1500, u16::MAX] {

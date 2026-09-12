@@ -26,9 +26,9 @@ mod resize;
 /// Clause 14.2 requires a write whose 'File Start Position' exceeds the
 /// file size to extend the file to that size, and the position is a signed
 /// 32-bit INTEGER, so an unbounded implementation would zero-fill up to
-/// 2 GiB from one small request. Clause 18 defines FILE_FULL for exactly
-/// this bound: "when a File Object becomes filled to a designed limit, as
-/// opposed to a No Space Available / Out of Memory situation".
+/// 2 GiB from one small request. Clause 18 uses FILE_FULL for reaching a
+/// File object's configured capacity, distinct from exhausting storage
+/// space or memory.
 pub const DEFAULT_MAX_FILE_SIZE: u64 = 1_048_576;
 
 /// Default growth cap, in records, for network writes to one record-access
@@ -103,7 +103,7 @@ pub struct FileRecordRead {
 /// Where an AtomicWriteFile write starts.
 ///
 /// Clauses 14.2.2.2 and 14.2.2.3 give 'File Start Position' and 'File
-/// Start Record' the special value -1 for "an append to file operation";
+/// Start Record' the special value -1 to append at the end of the file;
 /// every other value is an offset from the beginning of the file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileWriteStart {
@@ -126,8 +126,8 @@ pub enum FileWriteStart {
 /// [`BACnetObject::file_storage_internal`] and
 /// [`BACnetObject::file_storage_internal_mut`]. Every method has a default
 /// that refuses with SERVICES / FILE_ACCESS_DENIED — there is no
-/// implementation behind it, so the file is "otherwise not accessible" in
-/// Clause 18's words — and a stream-only implementation overrides only the
+/// implementation behind it, making the file inaccessible under
+/// Clause 18 — and a stream-only implementation overrides only the
 /// two stream methods.
 ///
 /// Error contract, using the Clause 14 pairs:
@@ -144,7 +144,7 @@ pub enum FileWriteStart {
 /// - SERVICES / FILE_ACCESS_DENIED from the defaults above.
 ///
 /// A write that returns `Err` must leave the storage unchanged: the service
-/// fails "in its entirety" (Clause 14.2.4), and the server encodes no ACK on
+/// fails as a whole (Clause 14.2.4), and the server encodes no ACK on
 /// the error path. Resolved write positions must fit the ACK's INTEGER, so
 /// implementations keep their limit at or below `i32::MAX`.
 pub trait FileStorage: Send + Sync {

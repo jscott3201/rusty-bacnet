@@ -608,8 +608,8 @@ fn analog_time_delay_normal_round_trips_and_matches_pics() {
     }
 }
 
-/// Clause 13.3: "If no value is available for this parameter, then it takes on
-/// the value of the pTimeDelay parameter" — an object with no Time_Delay_Normal
+/// Clause 13.3 supplies pTimeDelay when pTimeDelayNormal is absent —
+/// an object with no Time_Delay_Normal
 /// ever written reads back the effective (fallback) delay.
 #[test]
 fn analog_time_delay_normal_defaults_to_time_delay_when_unwritten() {

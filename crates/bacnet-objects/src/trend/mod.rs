@@ -237,10 +237,10 @@ impl BACnetObject for TrendLogObject {
         }
         // Clause 12.25 Table 12-29 lists Reliability as plain O with no
         // writability footnote, and unlike the intrinsic-reporting objects the
-        // Trend Log Reliability_Evaluation_Inhibit paragraph ends at "shall
-        // have the value NO_FAULT_DETECTED." — it does NOT carry the "...unless
-        // Out_Of_Service is TRUE and an alternate value has been written to the
-        // Reliability property" provision. Nothing in Clause 12.25 grants a
+        // Trend Log Reliability_Evaluation_Inhibit paragraph requires
+        // NO_FAULT_DETECTED while evaluation is inhibited, without an exception
+        // for a client-supplied Reliability value while Out_Of_Service is TRUE.
+        // Nothing in Clause 12.25 grants a
         // network client this property: the log owns it (logging status and
         // fault indication), so every write is refused.
         if property == PropertyIdentifier::RELIABILITY {

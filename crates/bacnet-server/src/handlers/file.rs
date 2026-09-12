@@ -8,9 +8,9 @@ use bacnet_types::enums::FileAccessMethod as ObjectFileAccessMethod;
 /// back as the Clause 21 `BACnetFileAccessMethod` production.
 ///
 /// Clauses 14.1 and 14.2 require SERVICES / INVALID_FILE_ACCESS_METHOD for
-/// an "Incorrect File access method"; Clause 18 defines the code as the
-/// error generated when AtomicReadFile or AtomicWriteFile specifies a File
-/// Access Method that is not valid for the specified file. Reading fails
+/// an access-method mismatch. Clause 18 applies this code when an
+/// AtomicReadFile or AtomicWriteFile request uses a method the target file
+/// cannot support. Reading fails
 /// closed: a missing, undecodable, or out-of-production property value is
 /// treated as a mismatch rather than defaulting to stream or record access.
 fn invalid_file_access_method() -> Error {
@@ -22,12 +22,12 @@ fn invalid_file_access_method() -> Error {
 
 /// Refuse a request whose 'File Identifier' names a non-File object type.
 ///
-/// The Clause 14.1.4.1 and 14.2.4.1 error tables pair "A non-File Object
-/// Identifier was provided" with SERVICES / INCONSISTENT_OBJECT_TYPE, and
+/// The Clause 14.1.4.1 and 14.2.4.1 error tables assign SERVICES /
+/// INCONSISTENT_OBJECT_TYPE to identifiers of non-File objects, and
 /// Clause 18 gives an AtomicReadFile request for a non-File object as the
 /// code's example. The type is a property of the parameter alone, so it is
 /// classified before the object lookup; the standard does not sequence this
-/// check against "The File object does not exist", so an absent non-File
+/// check against the missing-File-object check, so an absent non-File
 /// identifier gets this error rather than OBJECT / UNKNOWN_OBJECT.
 fn inconsistent_object_type() -> Error {
     Error::Protocol {
@@ -54,8 +54,8 @@ fn validate_file_access_method(
 /// file.
 ///
 /// The Clause 14.1 Service Procedure returns an error when 'File Start
-/// Position' or 'File Start Record' "is either less than 0 or exceeds the
-/// actual file size"; Clause 18 pairs both parameters with
+/// Position' or 'File Start Record' is negative or beyond the file's end;
+/// Clause 18 pairs both parameters with
 /// INVALID_FILE_START_POSITION. Clause 14.2 defines only -1 as a negative
 /// write start (append), so any other negative value gets the same error.
 fn invalid_file_start_position() -> Error {
@@ -67,9 +67,9 @@ fn invalid_file_start_position() -> Error {
 
 /// Refuse access to a File object the handler cannot safely use.
 ///
-/// Clause 18 scopes FILE_ACCESS_DENIED to a file "that is currently locked
-/// or otherwise not accessible", and Clause 14.2.4.1 pairs it with "Write
-/// to a read-only File". Both handlers report a File-typed object whose
+/// Clause 18 uses FILE_ACCESS_DENIED for locked or inaccessible files,
+/// and Clause 14.2.4.1 also uses it for attempted writes to read-only files.
+/// Both handlers report a File-typed object whose
 /// `file_storage_internal` hook returns `None` this way rather than reading
 /// it as empty, and the write handler also reports a `Read_Only` that is
 /// TRUE, unreadable, or not a BOOLEAN: like the access-method gate, it
@@ -160,8 +160,8 @@ fn read_file(
         .get(&request.file_identifier)
         .ok_or_else(unknown_object)?;
 
-    // Clause 14.1 Service Procedure, first step: a File object "currently
-    // inaccessible for another reason" is refused before its properties are
+    // Clause 14.1 Service Procedure, first step: reject an inaccessible
+    // File object before its properties are
     // consulted; an object without storage is that case.
     if object.file_storage_internal().is_none() {
         return Err(file_access_denied().into());
@@ -337,14 +337,14 @@ fn write_file(
         .get_mut(&request.file_identifier)
         .ok_or_else(unknown_object)?;
 
-    // Clause 14.2 Service Procedure, first step: a File object "currently
-    // inaccessible for another reason" is refused before its properties are
+    // Clause 14.2 Service Procedure, first step: reject an inaccessible
+    // File object before its properties are
     // consulted; an object without storage is that case.
     if object.file_storage_internal().is_none() {
         return Err(file_access_denied().into());
     }
 
-    // Clause 14.2.4.1 "Write to a read-only File". Reading the property
+    // Clause 14.2.4.1 rejects writes to read-only files. Reading the property
     // fails closed, as the access-method gate below does: a missing,
     // undecodable, or non-BOOLEAN Read_Only is treated as read-only rather
     // than as permission to write.

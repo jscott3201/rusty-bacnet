@@ -99,7 +99,7 @@ fn bo_fresh_object_reports_nothing_when_detection_is_enabled() {
     );
 }
 
-/// Clause 13.2.2.1 requires that while detection is disabled "no transitions shall occur".
+/// Clause 13.2.2.1 prohibits transitions throughout the detection-disabled period.
 /// Discarding an in-flight `Time_Delay` countdown is part of that: without it, a
 /// disable-then-enable cycle would leave a stale `PendingTransition` so the next tick fires
 /// immediately instead of restarting the full delay. Deleting `pending = None` from the write

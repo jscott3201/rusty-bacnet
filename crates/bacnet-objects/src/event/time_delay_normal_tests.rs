@@ -4,8 +4,8 @@
 //! an offnormal state (including offnormal→offnormal re-indication — OOR
 //! (d)/(g), CHANGE_OF_STATE (c)), while pTimeDelayNormal gates only the
 //! sustained-condition return to NORMAL (OOR (e)/(h), CHANGE_OF_STATE (b),
-//! COMMAND_FAILURE (b)). Absent, pTimeDelayNormal "takes on the value of the
-//! pTimeDelay parameter", so the fallback must be visible as such: `None`.
+//! COMMAND_FAILURE (b)). An absent pTimeDelayNormal uses pTimeDelay instead,
+//! so the fallback must be visible as such: `None`.
 
 use super::*;
 

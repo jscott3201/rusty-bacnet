@@ -10,8 +10,8 @@ use super::super::*;
 ///
 /// The *value* TRUE is a project choice, not a spec requirement: 135-2020
 /// specifies no default for this property anywhere, and Clause 15.3's CreateObject Service Procedure makes
-/// the initial values of properties not named in a CreateObject request "a
-/// local matter". TRUE is chosen because it preserves the always-detecting
+/// initialization of properties omitted from a CreateObject request an
+/// implementation choice. TRUE is chosen because it preserves the always-detecting
 /// behavior this object had before the property existed, and matches
 /// `AlertEnrollmentObject`.
 #[test]
@@ -72,12 +72,11 @@ fn event_detection_enable_rejects_wrong_type() {
     );
 }
 
-/// The core Clause 13.2.2.1 requirement: "If the Event_Detection_Enable
-/// property is FALSE, then this state machine is not evaluated. In this case,
-/// no transitions shall occur, Event_State shall be set to NORMAL".
+/// Clause 13.2.2.1 suspends evaluation when Event_Detection_Enable is FALSE,
+/// prohibiting transitions and restoring NORMAL in Event_State.
 ///
 /// Clause 12.12 states the same as an invariant rather than an action —
-/// "When this property is FALSE, Event_State shall be NORMAL" — which is why
+/// Event_State must remain NORMAL throughout the disabled period — which is why
 /// the reset happens on the write and not on some later evaluation pass.
 #[test]
 fn disabling_detection_resets_event_state_to_normal() {
@@ -107,7 +106,7 @@ fn disabling_detection_resets_event_state_to_normal() {
 }
 
 /// `Acked_Transitions` must read its initial condition — every flag TRUE,
-/// "if no event of that type has ever occurred" (Clause 12.12) — while
+/// the value before any occurrence of its event type (Clause 12.12) — while
 /// detection is disabled.
 ///
 /// Weaker than it looks, and deliberately so: nothing on this object ever
@@ -137,7 +136,7 @@ fn disabled_detection_reports_initial_acked_transitions() {
     );
 }
 
-/// Clause 13.2.2.1's "no transitions shall occur" is enforced at the one place
+/// Clause 13.2.2.1's prohibition on transitions is enforced at the one place
 /// that can change `Event_State`, so a caller that forgets to check the flag
 /// cannot violate the invariant.
 #[test]
