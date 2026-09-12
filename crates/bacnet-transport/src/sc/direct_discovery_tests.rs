@@ -50,7 +50,40 @@ fn fake_dialer(
         Box::pin(async move {
             attempted.lock().await.push(uri);
             let (client, peer) = LoopbackWebSocket::pair();
-            let _ = peers.send(peer);
+            // Answer the direct Connect handshake on the peer side with a
+            // valid Accept, then hand the peer to the test for the NPDU
+            // check. This keeps discovery-focused tests green while the
+            // production path requires the handshake before any NPDU.
+            let peers_for_handshake = peers.clone();
+            tokio::spawn(async move {
+                let Ok(req_bytes) = peer.recv().await else {
+                    return;
+                };
+                let Ok(req) = decode_sc_message(&req_bytes) else {
+                    let _ = peers_for_handshake.send(peer);
+                    return;
+                };
+                if req.function == ScFunction::ConnectRequest {
+                    let mut payload = Vec::with_capacity(26);
+                    payload.extend_from_slice(&[0x33; 6]);
+                    payload.extend_from_slice(&[0x44; 16]);
+                    payload.extend_from_slice(&1476u16.to_be_bytes());
+                    payload.extend_from_slice(&1476u16.to_be_bytes());
+                    let accept = ScMessage {
+                        function: ScFunction::ConnectAccept,
+                        message_id: req.message_id,
+                        originating_vmac: None,
+                        destination_vmac: None,
+                        dest_options: Vec::new(),
+                        data_options: Vec::new(),
+                        payload: bytes::Bytes::from(payload),
+                    };
+                    let mut buf = BytesMut::new();
+                    encode_sc_message(&mut buf, &accept);
+                    let _ = peer.send(&buf).await;
+                }
+                let _ = peers_for_handshake.send(peer);
+            });
             Ok(client)
         })
             as std::pin::Pin<

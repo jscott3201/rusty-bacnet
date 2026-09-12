@@ -3,9 +3,11 @@
 //! When enabled, unicast sends consult a bounded URI cache keyed by
 //! destination VMAC. On a miss the transport issues one Address-Resolution
 //! request through the hub, waits for the matching Address-Resolution-ACK
-//! by message ID, caches the returned URIs, dials a direct peer, and sends
-//! the NPDU over the direct WebSocket with both address parameters omitted.
-//! Any failure at any stage falls back to the existing hub send path.
+//! by message ID, caches the returned URIs, dials a direct peer, runs the
+//! Connect-Request into Connect-Accept handshake with the existing hub
+//! validation, and sends the NPDU over the direct WebSocket with both
+//! address parameters omitted. Any failure at any stage falls back to the
+//! existing hub send path.
 //! Disabled (the default) leaves the hub send path byte-identical.
 //!
 //! Source grounding paraphrases the local Standard 135-2020 Annex AB: a
@@ -17,7 +19,9 @@
 //! configured they may be requested through the hub. Only unicast addressed
 //! to the direct peer travels over a direct connection; all other traffic
 //! uses the hub. Direct sends omit both address parameters while hub sends
-//! carry both. When a node initiates direct connections, the timing of
+//! carry both. A direct WebSocket carries NPDUs only after its Connect
+//! handshake completes; strict peers that require the handshake otherwise
+//! fall back to hub delivery. When a node initiates direct connections, the timing of
 //! initiation and re-initiation is a local matter, and a failed URI attempt
 //! still leaves hub delivery available. Response messages copy the causing
 //! message ID so an ACK can be matched to its request, and the wait budget
@@ -362,14 +366,16 @@ impl<W: WebSocketPort> DirectShared<W> {
         Some(uris)
     }
 
-    /// Dial each candidate URI in order and send the NPDU over the first
-    /// direct connection that accepts it, omitting both address parameters.
+    /// Dial each candidate URI in order, run the Connect handshake, and send
+    /// the NPDU over the first direct connection that completes it, omitting
+    /// both address parameters.
     ///
     /// Returns `Ok(())` on the first successful direct send. Returns `Err`
-    /// when no dialer is configured, every URI fails, or the hub connection
-    /// is no longer usable for ID allocation; the caller must fall back to
-    /// hub delivery. Never mutates hub connection state besides consuming
-    /// fresh message IDs, and never touches hub failover or reconnect state.
+    /// when no dialer is configured, every URI fails, the handshake is
+    /// rejected or times out, or the hub connection is no longer usable for
+    /// ID allocation; the caller must fall back to hub delivery. Never
+    /// mutates hub connection state besides consuming fresh message IDs,
+    /// and never touches hub failover or reconnect state.
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn try_direct_uris(
         &self,
@@ -378,7 +384,6 @@ impl<W: WebSocketPort> DirectShared<W> {
         npdu: &[u8],
         data_attributes: &[DataAttribute],
         conn: &Arc<Mutex<ScConnection>>,
-        hub_max_bvlc_length: u16,
         hub_max_apdu_length: u16,
         connect_timeout_ms: u64,
     ) -> Result<(), ()> {
@@ -391,13 +396,37 @@ impl<W: WebSocketPort> DirectShared<W> {
         }
         // Materialize one direct frame per attempt under the hub ID counter
         // so direct and hub messages share unique IDs. The hub state itself
-        // is only read, never transitioned, here.
+        // is only read, never transitioned, here. Each attempt first runs
+        // the shared Connect-Request into Connect-Accept handshake on an
+        // ephemeral probe carrying the hub connection's node identity; any
+        // handshake failure drops the dialed socket and tries the next URI.
         for uri in uris {
             let dial_wait = Duration::from_millis(connect_timeout_ms.max(1));
             let direct_ws = match tokio::time::timeout(dial_wait, dialer(uri.clone())).await {
                 Ok(Ok(ws)) => ws,
                 _ => continue,
             };
+            let probe = {
+                let c = conn.lock().await;
+                if c.state != ScConnectionState::Connected {
+                    return Err(());
+                }
+                Arc::new(Mutex::new(c.connect_probe()))
+            };
+            let handshake_wait = connect_timeout_ms.max(1);
+            if super::handshake::perform_handshake(&direct_ws, &probe, None, handshake_wait)
+                .await
+                .is_err()
+            {
+                continue;
+            }
+            let (peer_max_bvlc_length, peer_max_apdu_length) = {
+                let p = probe.lock().await;
+                (p.hub_max_bvlc_length, p.hub_max_apdu_length)
+            };
+            if npdu.len() > peer_max_apdu_length as usize {
+                continue;
+            }
             let direct_msg = {
                 let mut c = conn.lock().await;
                 if c.state != ScConnectionState::Connected {
@@ -410,8 +439,8 @@ impl<W: WebSocketPort> DirectShared<W> {
             };
             let mut buf = BytesMut::new();
             encode_sc_message(&mut buf, &direct_msg);
-            if buf.len() > hub_max_bvlc_length as usize {
-                return Err(());
+            if buf.len() > peer_max_bvlc_length as usize {
+                continue;
             }
             let send_wait = Duration::from_millis(connect_timeout_ms.max(1));
             match tokio::time::timeout(send_wait, direct_ws.send(&buf)).await {
