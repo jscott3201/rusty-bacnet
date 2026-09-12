@@ -184,7 +184,13 @@ The `BACnetServer` spawns several background tasks:
 | Trend log | Records data samples for trend log objects | Per-object interval |
 | Schedule tick | Evaluates weekly schedules and exception dates | 60s |
 
-The server handles 20+ services including ReadProperty, WriteProperty, ReadPropertyMultiple, WritePropertyMultiple, SubscribeCOV, CreateObject, DeleteObject, DeviceCommunicationControl, ReinitializeDevice, GetEventInformation, GetAlarmSummary, LifeSafetyOperation, AtomicReadFile, AtomicWriteFile, TimeSynchronization, and more.
+The server handles 20+ services including ReadProperty, WriteProperty, ReadPropertyMultiple, WritePropertyMultiple, SubscribeCOV, CreateObject, DeleteObject, DeviceCommunicationControl, GetEventInformation, GetAlarmSummary, LifeSafetyOperation, AtomicReadFile, AtomicWriteFile, TimeSynchronization, and more.
+
+ReinitializeDevice is decoded and password-validated, then refused with
+`SERVICES / SERVICE_REQUEST_DENIED` for every requested state until an action
+surface exists. The server performs no reinitialization and never sends a
+SimpleACK for this service. Password failures and malformed-request errors retain
+their existing responses before refusal.
 
 ## Companion projects
 

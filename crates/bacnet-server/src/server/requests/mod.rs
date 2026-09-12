@@ -303,13 +303,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .await
             }
             s if s == ConfirmedServiceChoice::REINITIALIZE_DEVICE => {
-                match handlers::handle_reinitialize_device(
-                    &req.service_request,
-                    &config.reinit_password,
-                ) {
-                    Ok(()) => simple_ack(),
-                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
-                }
+                let password = &config.reinit_password;
+                let error = handlers::handle_reinitialize_device(&req.service_request, password)
+                    .err()
+                    .unwrap_or(Error::Protocol {
+                        class: ErrorClass::SERVICES.to_raw() as u32,
+                        code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
+                    });
+                Self::error_apdu_from_error(invoke_id, service_choice, &error)
             }
             s if s == ConfirmedServiceChoice::GET_EVENT_INFORMATION => {
                 event_information::response(
