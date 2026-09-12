@@ -306,6 +306,12 @@ impl ScConnection {
                 // frame is consumed without NPDU delivery or state change.
                 None
             }
+            ScFunction::ProprietaryMessage => {
+                // Validated before activity by the rejection gate. Vendor
+                // dispatch is a local matter; the frame is consumed without
+                // NPDU delivery or state change.
+                None
+            }
             _ => None,
         }
     }

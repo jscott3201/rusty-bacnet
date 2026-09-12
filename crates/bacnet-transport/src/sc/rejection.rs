@@ -98,6 +98,12 @@ pub(super) async fn reject<W: WebSocketPort>(
     if super::advertisement::reject(msg, wire, ws, budget).await? {
         return Ok(true);
     }
+    // Proprietary 0x0C is a known unicast-or-broadcast family with its own
+    // AB.2.16 envelope rules. It precedes Unknown so the known function keeps
+    // its shape diagnostics; Unknown identity still wins for 0x0D..0xFF.
+    if super::proprietary::reject(msg, wire, ws, budget).await? {
+        return Ok(true);
+    }
     // All preceding gates exclude Unknown. Its identity wins over option or
     // payload diagnostics without changing any known-function admission.
     super::unknown_function::reject(msg, ws, budget).await

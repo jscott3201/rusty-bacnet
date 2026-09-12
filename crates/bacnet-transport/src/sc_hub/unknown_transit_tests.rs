@@ -285,17 +285,17 @@ async fn unknown_transit_local_preregistered_and_invalid_envelopes_no_state_effe
     }
     assert_eq!(cases, [288, 240]);
     // Known-but-unhandled remains the old connection-local 7/150 fallback.
-    // Advertisement (0x04) and Solicitation (0x05) graduated to their own
-    // transit family; Proprietary (0x0C) stays deferred.
+    // Advertisement (0x04)/Solicitation (0x05) and Proprietary (0x0C)
+    // graduated to their own transit families; no known function stays deferred.
     let (mut hub, mut a, mut b) = matrix_pair(&tls, true, 0x42, 0x43).await;
-    for function in [12] {
-        send(&mut a, raw(function, 7, None, Some([0x43; 6]), 0, &[])).await;
-        assert_eq!(
-            recv(&mut a).await,
-            raw(0, 7, None, None, 0, &[function, 1, 0, 0, 7, 0, 150])
-        );
-        barrier(&mut b).await;
-    }
+    // Proprietary transit stays opaque: even the empty shape relays when the
+    // envelope is an eligible registered unicast.
+    send(&mut a, raw(12, 7, None, Some([0x43; 6]), 0, &[])).await;
+    assert_eq!(
+        recv(&mut b).await,
+        raw(12, 7, Some([0x42; 6]), None, 0, &[])
+    );
+    barrier(&mut a).await;
     stopped(&mut hub).await;
 }
 
@@ -442,9 +442,10 @@ async fn unknown_transit_result_ack_nak_routing_and_invalid_result_silence() {
         raw(0, 0, None, Some([0x42; 6]), 1, &[0x1E, 0x42, 0]),
     )
     .await;
-    for function in [0, 3, 6, 7, 8, 9, 10, 11, 12] {
+    for function in [0, 3, 6, 7, 8, 9, 10, 11] {
         send(&mut b, raw(0, 0, None, Some([0x42; 6]), 0, &[function, 0])).await;
     }
+    // Proprietary (0x0C) graduated to its own transit family and relays.
     barrier(&mut b).await;
     barrier(&mut a).await;
     // Existing EncapsulatedNpdu Result relay is still accepted.

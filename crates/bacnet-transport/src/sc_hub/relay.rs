@@ -132,6 +132,7 @@ pub(super) async fn relay_result(
             | ScFunction::AddressResolution
             | ScFunction::Advertisement
             | ScFunction::AdvertisementSolicitation
+            | ScFunction::ProprietaryMessage
             | ScFunction::Unknown(_)
     ) {
         debug!(
@@ -164,6 +165,7 @@ pub(super) async fn relay_result(
         ScFunction::AddressResolution
             | ScFunction::Advertisement
             | ScFunction::AdvertisementSolicitation
+            | ScFunction::ProprietaryMessage
             | ScFunction::Unknown(_)
     ) && destination == registered_vmac
     {

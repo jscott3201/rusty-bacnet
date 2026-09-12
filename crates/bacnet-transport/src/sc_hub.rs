@@ -4,7 +4,8 @@
 //! The hub performs three duties:
 //! 1. **Connection handshake** — responds to `ConnectRequest` with `ConnectAccept`.
 //! 2. **Message relay** — forwards `EncapsulatedNpdu`, addressed Unknown functions,
-//!    unicast Address-Resolution/ACK, unicast Advertisement/Solicitation, and permitted routed `Result` messages.
+//!    unicast Address-Resolution/ACK, unicast Advertisement/Solicitation,
+//!    unicast/broadcast Proprietary-Message, and permitted routed `Result` messages.
 //!    No node URI parsing, discovery, or direct-connection support is implied.
 //! 3. **Heartbeat** — responds to `HeartbeatRequest` with `HeartbeatAck`.
 
@@ -34,6 +35,7 @@ mod handler;
 mod heartbeat;
 mod helpers;
 mod opaque_relay;
+mod proprietary_transit;
 mod relay;
 mod relay_send;
 mod resolution_transit;
@@ -423,6 +425,8 @@ mod unknown_transit_tests;
 
 #[cfg(test)]
 mod advertisement_transit_tests;
+#[cfg(test)]
+mod proprietary_transit_tests;
 #[cfg(test)]
 mod resolution_transit_lifecycle_tests;
 #[cfg(test)]

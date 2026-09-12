@@ -283,6 +283,48 @@ pub(super) async fn run(
             continue;
         }
 
+        if sc_msg.function == ScFunction::ProprietaryMessage {
+            if let Some(registered_vmac) = lease.vmac.filter(|_| sc_msg.destination_vmac.is_some())
+            {
+                // Proprietary is unicast-or-broadcast per AB.2.16. Unicast
+                // strips the destination and stamps the origin with no echo;
+                // broadcast fans out except the source with origin-stamp and
+                // preserved broadcast destination. Explicit origins and self
+                // unicast stay silent before activity; never reflect a NAK.
+                // Transit stays opaque with BVLC-only caps and no NPDU caps.
+                let Ok(target) = hub_relay_target(&sc_msg) else {
+                    continue;
+                };
+                if target == HubRelayTarget::Unicast(registered_vmac) {
+                    // Proprietary no-echo rule: self drops do not count as activity.
+                    continue;
+                }
+                // Accepted transit follows the existing NPDU activity policy,
+                // including absent/oversized recipient drops. No probe mutation.
+                client_activity.store(now_secs(), Ordering::Release);
+                if super::opaque_relay::relay(
+                    &data,
+                    &sc_msg,
+                    registered_vmac,
+                    target,
+                    &clients,
+                    &write,
+                )
+                .await
+                    == ResultRelayDisposition::CloseSource
+                {
+                    break;
+                }
+            } else if let Some(nak) = super::proprietary_transit::local_nak(&sc_msg, &data) {
+                let mut buf = BytesMut::new();
+                encode_sc_message(&mut buf, &nak);
+                // Same socket only. Keep ignored immediate write failures and
+                // the existing retirement/absolute Connect deadline owners.
+                let _ = write.lock().await.send(Message::Binary(buf.freeze())).await;
+            }
+            continue;
+        }
+
         // Decoded remaining BVLC messages that pass response/Connect/control admission,
         // registered NPDU payload presence and local capacity checks count as activity.
         // WebSocket control, oversized, and undecodable frames do not.

@@ -16,9 +16,11 @@ mod advertisement;
 mod connect;
 mod control;
 mod npdu;
+mod proprietary;
 mod result;
 
 pub(crate) use advertisement::advertisement_message_error;
+pub(crate) use proprietary::proprietary_message_error;
 
 pub(crate) use connect::connect_message_error;
 #[cfg(feature = "sc-tls")]
