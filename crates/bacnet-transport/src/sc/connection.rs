@@ -258,22 +258,13 @@ impl ScConnection {
     /// origin) and the hub-connection status derived from live transport
     /// state (1 = primary hub, 2 = failover hub). The message ID is always
     /// fresh: a solicited Advertisement is not a "response message" and must
-    /// not copy the solicitation ID (AB.3.1.3). This standalone builder keeps
-    /// accept-direct 0; the transport uses its registered listener's live
-    /// intake state. The two maxima echo local receive configuration. No Data Options.
+    /// not copy the solicitation ID (AB.3.1.3). Accept-direct is always 0 —
+    /// this transport has no direct-connection accept path — and the two
+    /// maxima echo the local receive configuration. No Data Options.
     pub fn build_solicited_advertisement(
         &mut self,
         destination_vmac: Option<Vmac>,
         hub_status: u8,
-    ) -> ScMessage {
-        self.build_solicited_advertisement_with_direct(destination_vmac, hub_status, false)
-    }
-
-    pub(super) fn build_solicited_advertisement_with_direct(
-        &mut self,
-        destination_vmac: Option<Vmac>,
-        hub_status: u8,
-        accept_direct: bool,
     ) -> ScMessage {
         debug_assert!(
             hub_status == 1 || hub_status == 2,
@@ -281,7 +272,7 @@ impl ScConnection {
         );
         let mut payload = Vec::with_capacity(6);
         payload.push(hub_status);
-        payload.push(u8::from(accept_direct));
+        payload.push(0);
         payload.extend_from_slice(&self.max_bvlc_length.to_be_bytes());
         payload.extend_from_slice(&self.max_apdu_length.to_be_bytes());
         ScMessage {

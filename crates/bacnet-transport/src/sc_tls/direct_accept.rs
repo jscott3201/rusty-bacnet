@@ -94,10 +94,6 @@ pub struct DirectAcceptConfig {
 }
 
 impl DirectAcceptConfig {
-    pub(crate) fn matches_identity(&self, vmac: Vmac, uuid: [u8; 16]) -> bool {
-        self.local_vmac == vmac && self.device_uuid == uuid
-    }
-
     /// Configure an opt-in direct listener.
     ///
     /// `bind_addr` is the local TCP address to bind (e.g.
@@ -162,21 +158,7 @@ pub struct DirectListener {
     active: Arc<AtomicUsize>,
 }
 
-/// Invalidate registrations even if the accept task is cancelled before its
-/// first poll, exits unexpectedly, or unwinds. No separate monitor task.
-struct ListenerStopped(watch::Sender<bool>);
-
-impl Drop for ListenerStopped {
-    fn drop(&mut self) {
-        self.0.send_replace(true);
-    }
-}
-
 impl DirectListener {
-    pub(crate) fn shutdown_status(&self) -> watch::Receiver<bool> {
-        self.shutdown.subscribe()
-    }
-
     /// Start an opt-in direct listener.
     ///
     /// Binds `config.bind_addr`, begins accepting direct peers on a
@@ -212,7 +194,6 @@ impl DirectListener {
             npdu_tx,
             shutdown_rx,
             Arc::clone(&active),
-            ListenerStopped(shutdown.clone()),
         ));
         debug!("BACnet/SC direct listener on {local_addr}");
         Ok((
@@ -242,7 +223,7 @@ impl DirectListener {
     /// frame or shutdown poll. This is forceful local shutdown, not the
     /// BACnet Disconnect sequence.
     pub async fn stop(&mut self) {
-        self.shutdown.send_replace(true);
+        let _ = self.shutdown.send(true);
         if let Some(task) = self.accept_task.take() {
             task.abort();
             let _ = task.await;
@@ -252,7 +233,7 @@ impl DirectListener {
 
 impl Drop for DirectListener {
     fn drop(&mut self) {
-        self.shutdown.send_replace(true);
+        let _ = self.shutdown.send(true);
         if let Some(task) = self.accept_task.take() {
             task.abort();
         }
@@ -333,7 +314,6 @@ async fn accept_loop(
     npdu_tx: mpsc::Sender<ReceivedNpdu>,
     mut shutdown: watch::Receiver<bool>,
     active: Arc<AtomicUsize>,
-    _stopped: ListenerStopped,
 ) {
     loop {
         let accepted = tokio::select! {
