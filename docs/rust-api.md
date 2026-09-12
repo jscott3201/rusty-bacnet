@@ -1259,7 +1259,11 @@ The server automatically dispatches:
 - ReadPropertyMultiple, WritePropertyMultiple
 - SubscribeCOV, SubscribeCOVProperty, SubscribeCOVPropertyMultiple
 - CreateObject, DeleteObject
-- DeviceCommunicationControl, ReinitializeDevice
+- DeviceCommunicationControl
+- ReinitializeDevice (decoded and password-validated, then refused with
+  `SERVICES / SERVICE_REQUEST_DENIED` for every requested state until an action
+  surface exists; no reinitialization or SimpleACK, with password and decode
+  errors retaining their existing precedence)
 - GetEventInformation, AcknowledgeAlarm
 - GetAlarmSummary, GetEnrollmentSummary
 - ConfirmedTextMessage

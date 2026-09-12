@@ -132,7 +132,9 @@ pub(crate) fn validate_dcc(
 
 /// Handle a ReinitializeDevice request.
 ///
-/// Returns the requested state. The caller decides what action to take.
+/// Intentionally validates decoding and the password only; no action is performed.
+/// Until an action surface exists, the server caller refuses the request after
+/// successful validation with SERVICES / SERVICE_REQUEST_DENIED.
 pub fn handle_reinitialize_device(
     service_data: &[u8],
     reinit_password: &Option<String>,

@@ -6,6 +6,10 @@ use super::*;
 mod dcc_tests;
 
 #[cfg(test)]
+#[path = "reinitialize_device_tests.rs"]
+mod reinitialize_device_tests;
+
+#[cfg(test)]
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Atomically admit a confirmed request before DCC, service decoding,
     /// authorization, mutation, side effects, or response construction.
