@@ -442,10 +442,11 @@ async fn unknown_transit_result_ack_nak_routing_and_invalid_result_silence() {
         raw(0, 0, None, Some([0x42; 6]), 1, &[0x1E, 0x42, 0]),
     )
     .await;
-    for function in [0, 3, 6, 7, 8, 9, 10, 11] {
+    for function in [0, 6, 7, 8, 9, 10, 11] {
         send(&mut b, raw(0, 0, None, Some([0x42; 6]), 0, &[function, 0])).await;
     }
-    // Proprietary (0x0C) graduated to its own transit family and relays.
+    // Proprietary (0x0C) graduated to its own transit family and relays;
+    // Address-Resolution-ACK (0x03) relays via the resolution family.
     barrier(&mut b).await;
     barrier(&mut a).await;
     // Existing EncapsulatedNpdu Result relay is still accepted.

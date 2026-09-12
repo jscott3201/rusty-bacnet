@@ -157,7 +157,7 @@ async fn resolution_transit_local_preregistered_invalid_silence_and_state_matrix
 }
 
 #[tokio::test]
-async fn resolution_transit_result_for_request_only_ack_nak_and_address_matrix() {
+async fn resolution_transit_result_for_2_and_3_relay_ack_nak_and_address_matrix() {
     let tls = TestTls::new();
     let mut cases = [0; 2];
     for registered in [false, true] {
@@ -183,7 +183,7 @@ async fn resolution_transit_result_for_request_only_ack_nak_and_address_matrix()
                             body.extend_from_slice(&result);
                             let case = format!("ResultFor={result_for} registered={registered} id={id} origin={origin:02x?} dest={dest:02x?} result={result:02x?}");
                             send(&mut b, raw(0, id, origin, dest, 2, &body)).await;
-                            if result_for == 2
+                            if matches!(result_for, 2 | 3)
                                 && registered
                                 && origin.is_none()
                                 && dest == Some([0x42; 6])
@@ -269,20 +269,22 @@ async fn resolution_transit_encoded_caps_not_npdu_and_ingress_boundary() {
             send(&mut a, wire).await;
         }
     }
-    // ResultFor2 retains the exact final BVLC cap and existing Result syntax.
-    for extra in [0, 1] {
-        let mut body = vec![2, 1, 0, 0, 7, 0, 150];
-        body.resize(1590 + extra, b'x');
-        send(&mut a, raw(0, u16::MAX, None, Some([0x43; 6]), 0, &body)).await;
-        if extra == 0 {
-            assert_eq!(
-                recv(&mut b).await,
-                raw(0, u16::MAX, Some([0x42; 6]), None, 0, &body)
-            );
+    // ResultFor2/3 retain the exact final BVLC cap and existing Result syntax.
+    for result_for in [2, 3] {
+        for extra in [0, 1] {
+            let mut body = vec![result_for, 1, 0, 0, 7, 0, 150];
+            body.resize(1590 + extra, b'x');
+            send(&mut a, raw(0, u16::MAX, None, Some([0x43; 6]), 0, &body)).await;
+            if extra == 0 {
+                assert_eq!(
+                    recv(&mut b).await,
+                    raw(0, u16::MAX, Some([0x42; 6]), None, 0, &body)
+                );
+            }
+            barrier(&mut a).await;
+            barrier(&mut b).await;
+            barrier(&mut c).await;
         }
-        barrier(&mut a).await;
-        barrier(&mut b).await;
-        barrier(&mut c).await;
     }
     stopped(&mut hub).await;
 }
