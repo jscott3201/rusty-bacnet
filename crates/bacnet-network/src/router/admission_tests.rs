@@ -303,6 +303,7 @@ async fn full_shared_local_queue_drops_arrivals_in_all_four_branches_and_keeps_f
                     current_depth: 256,
                     high_water: 256,
                     full_drops: port as u64 + 1,
+                    fairness_drops: 0,
                     closed_drops: 0,
                 }
             );
@@ -405,6 +406,7 @@ async fn closing_full_local_queue_counts_each_closed_arrival_and_preserves_drain
             current_depth: 256,
             high_water: 256,
             full_drops: 0,
+            fairness_drops: 0,
             closed_drops: 8,
         }
     );
@@ -553,6 +555,7 @@ async fn concurrent_ports_share_one_capacity_and_exact_depth_during_receive() {
             current_depth: 256,
             high_water: 256,
             full_drops: 768,
+            fairness_drops: 0,
             closed_drops: 0,
         }
     );
@@ -626,6 +629,7 @@ fn cloned_senders_account_exactly_across_threads_and_concurrent_dequeues() {
             current_depth: 256,
             high_water: 256,
             full_drops: 768,
+            fairness_drops: 0,
             closed_drops: 0,
         }
     );

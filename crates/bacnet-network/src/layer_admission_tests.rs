@@ -88,9 +88,13 @@ fn incoming(control: bool, id: u16) -> ReceivedNpdu {
 }
 
 fn assert_apdu(apdu: &ReceivedApdu, id: u16) {
+    assert_apdu_from(apdu, id, &[2]);
+}
+
+fn assert_apdu_from(apdu: &ReceivedApdu, id: u16, source: &[u8]) {
     let expected = incoming(false, id);
     assert_eq!(apdu.apdu.as_ref(), id.to_be_bytes());
-    assert_eq!(apdu.source_mac, expected.source_mac);
+    assert_eq!(apdu.source_mac.as_slice(), source);
     assert_eq!(
         apdu.source_network,
         Some(NpduAddress {
@@ -101,6 +105,17 @@ fn assert_apdu(apdu: &ReceivedApdu, id: u16) {
     assert!(apdu.link_layer_group);
     assert!(apdu.is_group);
     assert_eq!(apdu.data_attributes, expected.data_attributes);
+}
+
+// Sixteen sources with sixteen queued APDUs each still fill the shared queue.
+fn balanced_incoming(id: u16) -> ReceivedNpdu {
+    let mut arrival = incoming(false, id);
+    arrival.source_mac = MacAddr::from_slice(&[2 + (id / 16) as u8]);
+    arrival
+}
+
+fn assert_balanced_apdu(apdu: &ReceivedApdu, id: u16) {
+    assert_apdu_from(apdu, id, &[2 + (id / 16) as u8]);
 }
 
 fn assert_control(control: &ReceivedNetworkControl, id: u16, sequence: u64) {
@@ -130,14 +145,14 @@ async fn full_apdu_queue_drops_arrival_releases_reply_and_allows_control_progres
     let mut apdus = network.start_with_admission().await.unwrap();
     let counters = apdus.counters();
     let (reply_tx, mut accepted_reply) = oneshot::channel();
-    let mut first = incoming(false, 0);
+    let mut first = balanced_incoming(0);
     first.reply_tx = Some(reply_tx);
     tx.send(first).await.unwrap();
     for id in 1..256 {
-        tx.send(incoming(false, id)).await.unwrap();
+        tx.send(balanced_incoming(id)).await.unwrap();
     }
     let (reply_tx, rejected_reply) = oneshot::channel();
-    let mut overflow = incoming(false, 256);
+    let mut overflow = balanced_incoming(256);
     overflow.reply_tx = Some(reply_tx);
     tx.send(overflow).await.unwrap();
     tx.send(incoming(true, 42)).await.unwrap();
@@ -151,6 +166,7 @@ async fn full_apdu_queue_drops_arrival_releases_reply_and_allows_control_progres
             current_depth: 256,
             high_water: 256,
             full_drops: 1,
+            fairness_drops: 0,
             closed_drops: 0,
         }
     );
@@ -172,7 +188,7 @@ async fn full_apdu_queue_drops_arrival_releases_reply_and_allows_control_progres
         .unwrap();
     assert_eq!(accepted_reply.await.unwrap(), Bytes::from_static(b"reply"));
     for id in 1..256 {
-        assert_apdu(&apdus.try_recv().unwrap(), id);
+        assert_balanced_apdu(&apdus.try_recv().unwrap(), id);
     }
     assert!(matches!(
         apdus.try_recv(),
@@ -212,6 +228,7 @@ async fn full_control_queue_drops_arrival_and_allows_apdu_progress() {
             current_depth: 256,
             high_water: 256,
             full_drops: 1,
+            fairness_drops: 0,
             closed_drops: 0,
         }
     );
@@ -356,11 +373,11 @@ async fn stop_with_both_queues_full_is_bounded_and_preserves_drain_and_drop_acco
     let apdu_counters = apdus.counters();
     let control_counters = controls.counters();
     let (reply_tx, mut queued_reply) = oneshot::channel();
-    let mut first = incoming(false, 0);
+    let mut first = balanced_incoming(0);
     first.reply_tx = Some(reply_tx);
     tx.send(first).await.unwrap();
     for id in 1..256 {
-        tx.send(incoming(false, id)).await.unwrap();
+        tx.send(balanced_incoming(id)).await.unwrap();
     }
     for id in 0..256 {
         tx.send(incoming(true, id)).await.unwrap();
@@ -523,11 +540,11 @@ async fn closing_full_receivers_preserves_depth_until_drained_and_counts_closed_
     assert_eq!(network.network_control_ingress_sequence(), 257);
 
     let (reply_tx, queued_reply) = oneshot::channel();
-    let mut first = incoming(false, 0);
+    let mut first = balanced_incoming(0);
     first.reply_tx = Some(reply_tx);
     tx.send(first).await.unwrap();
     for id in 1..256 {
-        tx.send(incoming(false, id)).await.unwrap();
+        tx.send(balanced_incoming(id)).await.unwrap();
     }
     // Controls now use the discard path; closure of this reply is a barrier.
     let (reply_tx, barrier) = oneshot::channel();
