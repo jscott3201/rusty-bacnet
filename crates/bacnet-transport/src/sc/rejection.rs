@@ -95,6 +95,9 @@ pub(super) async fn reject<W: WebSocketPort>(
     if super::empty_npdu::reject(msg, ws, budget).await? {
         return Ok(true);
     }
+    if super::advertisement::reject(msg, wire, ws, budget).await? {
+        return Ok(true);
+    }
     // All preceding gates exclude Unknown. Its identity wins over option or
     // payload diagnostics without changing any known-function admission.
     super::unknown_function::reject(msg, ws, budget).await

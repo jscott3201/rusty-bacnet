@@ -22,6 +22,7 @@ use crate::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, Vmac, BR
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 
+mod advertisement;
 mod connect_result;
 mod connection;
 mod connector;
@@ -771,6 +772,9 @@ mod empty_npdu_tests;
 
 #[cfg(test)]
 mod unknown_function_tests;
+
+#[cfg(test)]
+mod advertisement_tests;
 
 #[cfg(test)]
 mod primary_restore_tests;

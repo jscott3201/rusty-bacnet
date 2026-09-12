@@ -12,10 +12,13 @@
 use bacnet_types::error::Error;
 use bytes::{BufMut, Bytes, BytesMut};
 
+mod advertisement;
 mod connect;
 mod control;
 mod npdu;
 mod result;
+
+pub(crate) use advertisement::advertisement_message_error;
 
 pub(crate) use connect::connect_message_error;
 #[cfg(feature = "sc-tls")]
