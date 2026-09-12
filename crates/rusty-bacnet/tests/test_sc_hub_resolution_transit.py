@@ -94,8 +94,14 @@ class HubResolutionTransitTests(mtls.MtlsFixture):
                 self.assertEqual(await self.binary(b[0]), b"\0\x08\xff\xff" + av + body)
             for endpoint in endpoints:
                 await self.barrier(endpoint)
-        # ResultForACK remains silent, as do malformed and DataOptions Results.
-        for result in (b"\3\0", b"\3\1\0\0\7\0\x96", b"\2\0\0", b"\2\1\0\0\7\0\x96\xff"):
+        # General-known Result forwarding (AB.5.1/AB.5.3.2): valid-shaped
+        # Result-for-0x03 relays like Result-for-0x02, with msg-id echo,
+        # stamped origin and destination removal; malformed and DataOptions
+        # Results stay silent.
+        for result in (b"\3\0", b"\3\1\0\0\7\0\x96"):
+            await self.send(b[1], b"\0\4\0\0" + av + result)
+            self.assertEqual(await self.binary(a[0]), b"\0\x08\0\0" + bv + result)
+        for result in (b"\2\0\0", b"\2\1\0\0\7\0\x96\xff"):
             await self.send(b[1], b"\0\4\0\0" + av + result)
         await self.send(b[1], b"\0\5\0\0" + av + b"\x1e\2\0")
         for endpoint in reversed(endpoints):
