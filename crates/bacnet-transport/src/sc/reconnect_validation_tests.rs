@@ -78,7 +78,14 @@ async fn check_invalid_start_and_repair(heartbeat_mode: &str) {
     let state = transport.connection_state_changes();
 
     for max_retries in [0, 10, u32::MAX] {
-        for (initial_delay_ms, max_delay_ms) in [(0, 1), (1, 0), (0, 0), (2, 1)] {
+        for (initial_delay_ms, max_delay_ms) in [
+            (0, 1),
+            (1, 0),
+            (0, 0),
+            (2, 1),
+            (1, 86_400_001),
+            (1, u64::MAX),
+        ] {
             transport = transport.with_reconnect(ScReconnectConfig {
                 initial_delay_ms,
                 max_delay_ms,
