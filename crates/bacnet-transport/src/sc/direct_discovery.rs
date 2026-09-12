@@ -41,6 +41,25 @@
 //! URIs, or an unsupported-function NAK) are cached as empty so later sends
 //! within TTL go straight to the hub without another request. Timeouts and
 //! transport failures are not cached.
+//!
+//! Redial backoff (owner-local): each dial/handshake/send failure on a URI
+//! records exponential backoff (`200ms, 400ms, 800ms, ...` capped at 5s via
+//! [`redial_backoff_delay`]). Sends skip URIs still inside their backoff
+//! window and fall back to hub delivery. Success clears the URI entry. At
+//! most [`DIRECT_REDIAL_MAX_ENTRIES`] URIs are tracked (FIFO eviction).
+//! Annex AB leaves initiation/re-initiation timing to the local node, so
+//! these bounds are local policy, not wire conformance.
+//!
+//! Connection reuse (owner-local): at most [`DIRECT_POOL_MAX_ENTRIES`]
+//! handshaked direct connections are pooled, one per destination VMAC
+//! (FIFO eviction while over cap). Each pooled entry lives
+//! [`DIRECT_POOL_IDLE_TTL`] from last successful use; reads lazily expire.
+//! A single reusable connection per VMAC covers the need — discovery already
+//! yields one URI list per VMAC and sends are per-VMAC — so no general pool
+//! is introduced. Pool teardown is dropping `DirectShared` with the
+//! transport (lifecycle precedent); no background task or new timer type is
+//! added. All waits reuse `connect_timeout_ms`; expiry uses `Instant` checks
+//! like the URI cache.
 
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
@@ -66,6 +85,200 @@ pub(crate) const DIRECT_URI_CACHE_MAX_ENTRIES: usize = 32;
 
 /// Time-to-live for cached URI entries (owner-local policy).
 pub(crate) const DIRECT_URI_CACHE_TTL: Duration = Duration::from_secs(300);
+
+/// Initial redial backoff after the first consecutive direct failure
+/// (owner-local policy; Annex AB leaves re-initiation timing local).
+pub(crate) const DIRECT_REDIAL_INITIAL_BACKOFF: Duration = Duration::from_millis(200);
+
+/// Maximum backoff between redials to the same URI (owner-local cap).
+pub(crate) const DIRECT_REDIAL_MAX_BACKOFF: Duration = Duration::from_secs(5);
+
+/// Maximum URIs tracked in the redial backoff table (owner-local bound).
+pub(crate) const DIRECT_REDIAL_MAX_ENTRIES: usize = 32;
+
+/// Maximum pooled handshaked direct connections (owner-local bound).
+///
+/// One entry per destination VMAC; FIFO eviction while over cap.
+pub(crate) const DIRECT_POOL_MAX_ENTRIES: usize = 16;
+
+/// Idle TTL for pooled direct connections (owner-local policy).
+pub(crate) const DIRECT_POOL_IDLE_TTL: Duration = Duration::from_secs(60);
+
+/// Backoff delay for `consecutive_failures` (1-indexed) direct failures.
+///
+/// Exponential `200ms, 400ms, 800ms, ...` capped at 5s. Pure and
+/// time-virtualized: tests assert progression without sleeping.
+pub(crate) fn redial_backoff_delay(consecutive_failures: u32) -> Duration {
+    let shift = consecutive_failures.saturating_sub(1).min(5);
+    DIRECT_REDIAL_INITIAL_BACKOFF
+        .saturating_mul(1u32 << shift)
+        .min(DIRECT_REDIAL_MAX_BACKOFF)
+}
+
+#[derive(Debug, Clone)]
+struct BackoffEntry {
+    consecutive_failures: u32,
+    not_before: Instant,
+}
+
+/// Bounded per-URI redial backoff table with FIFO eviction.
+///
+/// `is_backed_off` is a pure `Instant` comparison (no timers); failures
+/// advance the exponential delay, successes remove the entry.
+pub(crate) struct RedialBackoff {
+    entries: HashMap<String, BackoffEntry>,
+    order: VecDeque<String>,
+}
+
+impl RedialBackoff {
+    pub(crate) fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub(crate) fn is_backed_off(&self, uri: &str, now: Instant) -> bool {
+        self.entries
+            .get(uri)
+            .is_some_and(|entry| now < entry.not_before)
+    }
+
+    pub(crate) fn record_failure(&mut self, uri: String, now: Instant) {
+        let failures = self
+            .entries
+            .get(&uri)
+            .map(|entry| entry.consecutive_failures.saturating_add(1))
+            .unwrap_or(1);
+        if !self.entries.contains_key(&uri) {
+            self.order.push_back(uri.clone());
+        }
+        let delay = redial_backoff_delay(failures);
+        self.entries.insert(
+            uri,
+            BackoffEntry {
+                consecutive_failures: failures,
+                not_before: now + delay,
+            },
+        );
+        while self.entries.len() > DIRECT_REDIAL_MAX_ENTRIES {
+            match self.order.pop_front() {
+                Some(oldest) => {
+                    self.entries.remove(&oldest);
+                }
+                None => break,
+            }
+        }
+    }
+
+    pub(crate) fn record_success(&mut self, uri: &str) {
+        if self.entries.remove(uri).is_some() {
+            self.order.retain(|existing| existing != uri);
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct PooledDirect<W> {
+    ws: Arc<W>,
+    uri: String,
+    peer_max_bvlc_length: u16,
+    peer_max_apdu_length: u16,
+    idle_deadline: Instant,
+}
+
+impl<W> Clone for PooledDirect<W> {
+    fn clone(&self) -> Self {
+        Self {
+            ws: Arc::clone(&self.ws),
+            uri: self.uri.clone(),
+            peer_max_bvlc_length: self.peer_max_bvlc_length,
+            peer_max_apdu_length: self.peer_max_apdu_length,
+            idle_deadline: self.idle_deadline,
+        }
+    }
+}
+
+/// Bounded per-VMAC pool of handshaked direct connections.
+///
+/// Single reusable connection per destination VMAC with lazy idle expiry;
+/// inserts evict the oldest VMAC first (FIFO) while over cap.
+pub(crate) struct DirectPool<W> {
+    entries: HashMap<Vmac, PooledDirect<W>>,
+    order: VecDeque<Vmac>,
+}
+
+impl<W> DirectPool<W> {
+    pub(crate) fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub(crate) fn get(&mut self, vmac: &Vmac, now: Instant) -> Option<PooledDirect<W>> {
+        let expired = match self.entries.get(vmac) {
+            Some(entry) if now < entry.idle_deadline => return Some(entry.clone()),
+            Some(_) => true,
+            None => return None,
+        };
+        if expired {
+            self.entries.remove(vmac);
+            self.order.retain(|existing| existing != vmac);
+        }
+        None
+    }
+
+    pub(crate) fn insert(&mut self, vmac: Vmac, pooled: PooledDirect<W>) {
+        if self.entries.contains_key(&vmac) {
+            self.order.retain(|existing| existing != &vmac);
+        }
+        self.order.push_back(vmac);
+        self.entries.insert(vmac, pooled);
+        while self.entries.len() > DIRECT_POOL_MAX_ENTRIES {
+            match self.order.pop_front() {
+                Some(oldest) => {
+                    self.entries.remove(&oldest);
+                }
+                None => break,
+            }
+        }
+    }
+
+    pub(crate) fn remove(&mut self, vmac: &Vmac) {
+        if self.entries.remove(vmac).is_some() {
+            self.order.retain(|existing| existing != vmac);
+        }
+    }
+
+    pub(crate) fn refresh(&mut self, vmac: &Vmac, now: Instant) {
+        if let Some(entry) = self.entries.get_mut(vmac) {
+            entry.idle_deadline = now + DIRECT_POOL_IDLE_TTL;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn insert_test_entry(&mut self, vmac: Vmac, ws: Arc<W>, uri: String, now: Instant) {
+        let pooled = PooledDirect {
+            ws,
+            uri,
+            peer_max_bvlc_length: 1476,
+            peer_max_apdu_length: 1476,
+            idle_deadline: now + DIRECT_POOL_IDLE_TTL,
+        };
+        self.insert(vmac, pooled);
+    }
+}
 
 #[derive(Debug, Clone)]
 struct CacheEntry {
@@ -161,6 +374,8 @@ pub(crate) struct DirectShared<W: WebSocketPort> {
     cache: Mutex<DirectUriCache>,
     pending: Mutex<HashMap<u16, oneshot::Sender<Vec<String>>>>,
     dialer: Mutex<Option<DirectDialer<W>>>,
+    backoff: Mutex<RedialBackoff>,
+    pool: Mutex<DirectPool<W>>,
 }
 
 impl<W: WebSocketPort> DirectShared<W> {
@@ -169,6 +384,8 @@ impl<W: WebSocketPort> DirectShared<W> {
             cache: Mutex::new(DirectUriCache::new()),
             pending: Mutex::new(HashMap::new()),
             dialer: Mutex::new(None),
+            backoff: Mutex::new(RedialBackoff::new()),
+            pool: Mutex::new(DirectPool::new()),
         }
     }
 }
@@ -229,6 +446,22 @@ impl<W: WebSocketPort> super::ScTransport<W> {
     pub(super) fn direct_shared(&self) -> Option<Arc<DirectShared<W>>> {
         self.direct.clone()
     }
+
+    #[cfg(test)]
+    pub(crate) async fn direct_shared_test_pool_len(&self) -> Option<usize> {
+        match self.direct.clone() {
+            Some(shared) => Some(shared.test_pool_len().await),
+            None => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn direct_shared_test_is_backed_off(&self, uri: &str) -> bool {
+        match self.direct.clone() {
+            Some(shared) => shared.test_is_backed_off(uri).await,
+            None => false,
+        }
+    }
 }
 
 /// Split an Address-Resolution-ACK payload into validated URI strings.
@@ -262,6 +495,75 @@ impl<W: WebSocketPort> DirectShared<W> {
     async fn cache_insert(&self, vmac: Vmac, uris: Vec<String>) {
         let now = Instant::now();
         self.cache.lock().await.insert(vmac, uris, now);
+    }
+
+    async fn pooled_get(&self, vmac: &Vmac, now: Instant) -> Option<PooledDirect<W>> {
+        self.pool.lock().await.get(vmac, now)
+    }
+
+    async fn pooled_insert(
+        &self,
+        vmac: Vmac,
+        ws: Arc<W>,
+        uri: String,
+        peer_max_bvlc_length: u16,
+        peer_max_apdu_length: u16,
+        now: Instant,
+    ) {
+        let pooled = PooledDirect {
+            ws,
+            uri,
+            peer_max_bvlc_length,
+            peer_max_apdu_length,
+            idle_deadline: now + DIRECT_POOL_IDLE_TTL,
+        };
+        self.pool.lock().await.insert(vmac, pooled);
+    }
+
+    async fn pooled_remove(&self, vmac: &Vmac) {
+        self.pool.lock().await.remove(vmac);
+    }
+
+    async fn pooled_refresh(&self, vmac: &Vmac, now: Instant) {
+        self.pool.lock().await.refresh(vmac, now);
+    }
+
+    /// URIs still eligible for dial (ACK order preserved).
+    async fn eligible_uris(&self, uris: &[String], now: Instant) -> Vec<String> {
+        let guard = self.backoff.lock().await;
+        uris.iter()
+            .filter(|uri| !guard.is_backed_off(uri, now))
+            .cloned()
+            .collect()
+    }
+
+    async fn note_direct_failure(&self, uri: &str) {
+        let now = Instant::now();
+        self.backoff
+            .lock()
+            .await
+            .record_failure(uri.to_owned(), now);
+    }
+
+    async fn note_direct_success(&self, uri: &str) {
+        self.backoff.lock().await.record_success(uri);
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) async fn test_backoff_len(&self) -> usize {
+        self.backoff.lock().await.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn test_is_backed_off(&self, uri: &str) -> bool {
+        let guard = self.backoff.lock().await;
+        guard.is_backed_off(uri, Instant::now())
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn test_pool_len(&self) -> usize {
+        self.pool.lock().await.len()
     }
 
     /// Wake the pending discovery matching an inbound hub message, if any.
@@ -366,16 +668,26 @@ impl<W: WebSocketPort> DirectShared<W> {
         Some(uris)
     }
 
-    /// Dial each candidate URI in order, run the Connect handshake, and send
-    /// the NPDU over the first direct connection that completes it, omitting
-    /// both address parameters.
+    /// Send over a pooled handshaked connection or dial each eligible URI in
+    /// order, run the Connect handshake, pool the success, and send the NPDU
+    /// over direct with both address parameters omitted.
     ///
-    /// Returns `Ok(())` on the first successful direct send. Returns `Err`
-    /// when no dialer is configured, every URI fails, the handshake is
-    /// rejected or times out, or the hub connection is no longer usable for
-    /// ID allocation; the caller must fall back to hub delivery. Never
-    /// mutates hub connection state besides consuming fresh message IDs,
-    /// and never touches hub failover or reconnect state.
+    /// Pooled reuse is attempted first: a fresh idle entry for `dest` sends
+    /// one direct frame bounded by the stored peer limits. Pool hit refreshes
+    /// the idle deadline; pool send failure evicts without recording redial
+    /// backoff (a broken reuse is not URI health) and falls through to
+    /// redial. URIs inside their backoff window are skipped; every skipped
+    /// or failed attempt must fall back to hub delivery.
+    ///
+    /// Returns `Ok(())` on the first successful direct send (pooled or fresh
+    /// dial). Returns `Err` when no dialer is configured, the pool misses and
+    /// every eligible URI fails or is backed off, the handshake is rejected
+    /// or times out, or the hub connection is no longer usable for ID
+    /// allocation; the caller must fall back to hub delivery. Never mutates
+    /// hub connection state besides consuming fresh message IDs, and never
+    /// touches hub failover or reconnect state. Locks are never held across
+    /// dial/handshake/send awaits; concurrent sends may duplicate a dial in
+    /// the race window (last-writer-wins pool insert) but never deadlock.
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn try_direct_uris(
         &self,
@@ -394,17 +706,61 @@ impl<W: WebSocketPort> DirectShared<W> {
         if npdu.len() > hub_max_apdu_length as usize {
             return Err(());
         }
+        // Pooled reuse: one handshaked connection per destination VMAC.
+        // Snapshot under the pool lock, then release before any await.
+        let now = Instant::now();
+        if let Some(pooled) = self.pooled_get(&dest, now).await {
+            if npdu.len() <= pooled.peer_max_apdu_length as usize {
+                let direct_msg = {
+                    let mut c = conn.lock().await;
+                    if c.state != ScConnectionState::Connected {
+                        return Err(());
+                    }
+                    c.build_direct_encapsulated_npdu(npdu, data_attributes).ok()
+                };
+                if let Some(direct_msg) = direct_msg {
+                    let mut buf = BytesMut::new();
+                    encode_sc_message(&mut buf, &direct_msg);
+                    if buf.len() <= pooled.peer_max_bvlc_length as usize {
+                        let send_wait = Duration::from_millis(connect_timeout_ms.max(1));
+                        match tokio::time::timeout(send_wait, pooled.ws.send(&buf)).await {
+                            Ok(Ok(())) => {
+                                let refresh_now = Instant::now();
+                                self.pooled_refresh(&dest, refresh_now).await;
+                                self.note_direct_success(&pooled.uri).await;
+                                return Ok(());
+                            }
+                            _ => {
+                                self.pooled_remove(&dest).await;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Redial with per-URI backoff: skip URIs still inside their window,
+        // preserving ACK order. All-backed-off means immediate hub fallback.
+        let candidates = self.eligible_uris(uris, Instant::now()).await;
+        if candidates.is_empty() {
+            return Err(());
+        }
         // Materialize one direct frame per attempt under the hub ID counter
         // so direct and hub messages share unique IDs. The hub state itself
         // is only read, never transitioned, here. Each attempt first runs
         // the shared Connect-Request into Connect-Accept handshake on an
         // ephemeral probe carrying the hub connection's node identity; any
-        // handshake failure drops the dialed socket and tries the next URI.
-        for uri in uris {
+        // handshake failure records backoff, drops the dialed socket, and
+        // tries the next eligible URI. Size mismatches against freshly
+        // learned peer limits are per-NPDU, not URI health, so they skip
+        // without recording backoff.
+        for uri in &candidates {
             let dial_wait = Duration::from_millis(connect_timeout_ms.max(1));
             let direct_ws = match tokio::time::timeout(dial_wait, dialer(uri.clone())).await {
                 Ok(Ok(ws)) => ws,
-                _ => continue,
+                _ => {
+                    self.note_direct_failure(uri).await;
+                    continue;
+                }
             };
             let probe = {
                 let c = conn.lock().await;
@@ -418,6 +774,7 @@ impl<W: WebSocketPort> DirectShared<W> {
                 .await
                 .is_err()
             {
+                self.note_direct_failure(uri).await;
                 continue;
             }
             let (peer_max_bvlc_length, peer_max_apdu_length) = {
@@ -444,8 +801,23 @@ impl<W: WebSocketPort> DirectShared<W> {
             }
             let send_wait = Duration::from_millis(connect_timeout_ms.max(1));
             match tokio::time::timeout(send_wait, direct_ws.send(&buf)).await {
-                Ok(Ok(())) => return Ok(()),
-                _ => continue,
+                Ok(Ok(())) => {
+                    self.note_direct_success(uri).await;
+                    self.pooled_insert(
+                        dest,
+                        Arc::new(direct_ws),
+                        uri.clone(),
+                        peer_max_bvlc_length,
+                        peer_max_apdu_length,
+                        Instant::now(),
+                    )
+                    .await;
+                    return Ok(());
+                }
+                _ => {
+                    self.note_direct_failure(uri).await;
+                    continue;
+                }
             }
         }
         Err(())

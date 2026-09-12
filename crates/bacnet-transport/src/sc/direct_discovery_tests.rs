@@ -627,12 +627,13 @@ async fn interop_repeated_send_uses_cache_without_stall() {
     let elapsed = start.elapsed();
     assert!(elapsed < Duration::from_millis(1000));
     assert!(hub_try_recv(&sender_hub).await.is_none());
-    let second_peer = timeout(Duration::from_secs(2), peers.recv())
+    // Pooled reuse: the second send reuses the handshaked connection, so no
+    // new dial occurs and the first peer receives the second NPDU.
+    assert!(timeout(Duration::from_millis(100), peers.recv())
         .await
-        .unwrap()
-        .expect("cached direct peer missing");
+        .is_err());
     let second = decode_sc_message(
-        &timeout(Duration::from_secs(2), second_peer.recv())
+        &timeout(Duration::from_secs(2), first_peer.recv())
             .await
             .unwrap()
             .unwrap(),
@@ -640,7 +641,7 @@ async fn interop_repeated_send_uses_cache_without_stall() {
     .unwrap();
     assert_eq!(second.function, ScFunction::EncapsulatedNpdu);
     assert_eq!(second.payload.as_ref(), NPDU);
-    assert_eq!(attempted.lock().await.len(), 2);
+    assert_eq!(attempted.lock().await.len(), 1);
     assert!(responder_rx.try_recv().is_err());
     sender.stop().await.unwrap();
     responder.stop().await.unwrap();

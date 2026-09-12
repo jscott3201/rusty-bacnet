@@ -860,6 +860,9 @@ mod direct_discovery_tests;
 mod direct_handshake_tests;
 
 #[cfg(test)]
+mod direct_pool_tests;
+
+#[cfg(test)]
 mod advertisement_tests;
 
 #[cfg(test)]
