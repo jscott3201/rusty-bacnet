@@ -40,10 +40,10 @@ Their NODE and other known-family exclusions remain, including Advertisement
 - **Installed native DEV:** [public native hub + raw mTLS A/B](../../crates/rusty-bacnet/tests/test_sc_hub_resolution_transit.py)
   checks Request→ACK (including empty URI list), ResultFor2 ACK/NAK, exact origin
   bytes, silence/caps and real native third-peer ReadProperty before/after. Raw B
-  owns AR endpoint semantics; the native NODE does not implement AR responses.
+  owns AR endpoint semantics; the native NODE answers valid AR-Requests with its configured-or-empty ACK (Refs #615 PR2).
 - **Excluded:** AB.3.3 node URI response/unsupported-optionality semantics and
   AB.4.1 direct connections (PDF1396–1397 / printed1394–1395), URI discovery,
-  validation, dialing, new ACK generation/correlation state, general known-function
+  validation, dialing, general known-function
   forwarding, support promotion and full Annex AB claims. Authenticated peers only;
   cancellation is not rollback, logical retirement is not OS closure, held-sink
   evidence is not OS backpressure. Cooperative runtime/state-lock assumptions,

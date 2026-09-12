@@ -20,7 +20,7 @@ mod npdu;
 mod proprietary;
 mod result;
 
-pub(crate) use address_resolution::address_resolution_message_error;
+pub(crate) use address_resolution::{address_resolution_message_error, is_valid_wss_uri};
 pub(crate) use advertisement::advertisement_message_error;
 pub(crate) use proprietary::proprietary_message_error;
 

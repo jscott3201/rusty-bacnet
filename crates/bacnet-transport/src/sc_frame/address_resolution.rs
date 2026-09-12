@@ -94,7 +94,7 @@ fn uri_list_structure_error(text: &str) -> Option<ErrorCode> {
 /// list; hub forwarding stays opaque and discovery/dial selection remains
 /// later work. No length floor or ceiling beyond the BVLC envelope is
 /// imposed here.
-fn is_valid_wss_uri(token: &str) -> bool {
+pub(crate) fn is_valid_wss_uri(token: &str) -> bool {
     if token.is_empty() {
         return false;
     }

@@ -286,6 +286,31 @@ impl ScConnection {
         }
     }
 
+    /// Build an Address-Resolution-ACK reply for one accepted request.
+    ///
+    /// The destination mirrors the request origin (`None` for a hub-peer
+    /// request so the reply stays peer-addressed, otherwise the requesting
+    /// node) and the payload carries the configured space-joined URI list,
+    /// or zero octets when unconfigured. The message ID is always fresh: an
+    /// ACK answers the request but travels as its own message, matching the
+    /// solicited-Advertisement precedent. No Data Options. The caller
+    /// supplies already-validated payload bytes; only the ID counter moves.
+    pub fn build_address_resolution_ack(
+        &mut self,
+        destination_vmac: Option<Vmac>,
+        uri_payload: &[u8],
+    ) -> ScMessage {
+        ScMessage {
+            function: ScFunction::AddressResolutionAck,
+            message_id: self.next_id(),
+            originating_vmac: None,
+            destination_vmac,
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::copy_from_slice(uri_payload),
+        }
+    }
+
     /// Handle a received message. Returns NPDU data if it's an Encapsulated-NPDU for us.
     /// Hub-relayed NPDUs must include a non-reserved Originating VMAC.
     pub fn handle_received(&mut self, msg: &ScMessage) -> Option<(Bytes, Vmac)> {
@@ -418,10 +443,12 @@ impl ScConnection {
                 None
             }
             ScFunction::AddressResolution | ScFunction::AddressResolutionAck => {
-                // Validated before activity by the rejection gate. Answering,
-                // discovery, and dialing remain later work; well-formed bodies
-                // stay consumed without NPDU delivery or state change so this
-                // handler stays pure.
+                // Validated before activity by the rejection gate. Replies to
+                // accepted requests are originated by the transport loop
+                // (which owns the socket and the advertised URIs), so this
+                // handler stays pure; discovery and dialing remain later
+                // work. Well-formed bodies stay consumed without NPDU
+                // delivery or state change.
                 None
             }
             _ => None,
