@@ -1,4 +1,4 @@
-//! Owner-local budget for node control/source/MU/missing-payload/unknown NAKs only.
+//! Owner-local budget for node control/source/MU/missing-payload/address-resolution/unknown NAKs only.
 //! Cancellation drops the send future, not bytes already buffered by the driver.
 
 use std::future::{poll_fn, Future};
@@ -102,6 +102,14 @@ pub(super) async fn reject<W: WebSocketPort>(
     // AB.2.16 envelope rules. It precedes Unknown so the known function keeps
     // its shape diagnostics; Unknown identity still wins for 0x0D..0xFF.
     if super::proprietary::reject(msg, wire, ws, budget).await? {
+        return Ok(true);
+    }
+    // Address-Resolution 0x02/0x03 validates URI bodies before dispatch.
+    // Well-formed bodies stay silently consumed (no answering yet); malformed
+    // requests NAK locally while malformed responses stay silent per the
+    // response rule. Precedes Unknown so the known family keeps its shape
+    // diagnostics.
+    if super::address_resolution::reject(msg, wire, ws, budget).await? {
         return Ok(true);
     }
     // All preceding gates exclude Unknown. Its identity wins over option or
