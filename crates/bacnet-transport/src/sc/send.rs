@@ -106,11 +106,12 @@ impl<W: WebSocketPort> ScTransport<W> {
         conn: &Arc<Mutex<ScConnection>>,
         connect_timeout_ms: u64,
     ) -> Result<(), ()> {
-        // Hub limits bound the direct frame until a direct handshake learns
-        // peer limits; read them without holding the lock across dial/send.
-        let (hub_max_bvlc_length, hub_max_apdu_length) = {
+        // Hub APDU bound is an early hub-fallback check; the direct frame
+        // itself is bounded by the peer limits learned in the per-attempt
+        // Connect handshake. Read without holding the lock across dial/send.
+        let hub_max_apdu_length = {
             let c = conn.lock().await;
-            (c.hub_max_bvlc_length, c.hub_max_apdu_length)
+            c.hub_max_apdu_length
         };
         direct
             .try_direct_uris(
@@ -119,7 +120,6 @@ impl<W: WebSocketPort> ScTransport<W> {
                 npdu,
                 data_attributes,
                 conn,
-                hub_max_bvlc_length,
                 hub_max_apdu_length,
                 connect_timeout_ms,
             )
