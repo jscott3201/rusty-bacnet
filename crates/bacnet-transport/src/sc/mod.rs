@@ -98,6 +98,7 @@ pub struct ScTransport<W: WebSocketPort> {
     device_uuid: [u8; 16],
     /// Advertised direct-connection URIs answered in Address-Resolution-ACKs.
     advertised_uris: Vec<String>,
+    direct_intake: advertisement::DirectIntake,
     connection: Option<Arc<Mutex<ScConnection>>>,
     effective_max_apdu_length: Arc<AtomicU16>,
     state_tx: watch::Sender<ScConnectionState>,
@@ -127,6 +128,7 @@ impl<W: WebSocketPort> ScTransport<W> {
             local_vmac,
             device_uuid: [0u8; 16],
             advertised_uris: Vec::new(),
+            direct_intake: advertisement::DirectIntake::default(),
             connection: None,
             effective_max_apdu_length: Arc::new(AtomicU16::new(DEFAULT_MAX_APDU_LENGTH)),
             state_tx,
@@ -396,6 +398,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         let effective_max_apdu_length = self.effective_max_apdu_length.clone();
         let advertised_payload = self.advertised_uris.join(" ").into_bytes();
         let direct = self.direct.clone();
+        let mut direct_intake = std::mem::take(&mut self.direct_intake);
         let task = tokio::spawn(async move {
             let mut primary_restore_interval =
                 tokio::time::interval(Duration::from_millis(restore_interval_ms));
@@ -421,6 +424,11 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                 loop {
                     let recv_ws = ws_clone.clone();
                     tokio::select! {
+                        Some(npdu) = direct_intake.recv() => {
+                            if npdu_tx.try_send(npdu).is_err() {
+                                warn!("SC transport: NPDU channel full, dropping direct message");
+                            }
+                        }
                         data = recv_ws.recv() => {
                             match data {
                                 Ok(data) => {
@@ -546,9 +554,12 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                                     ActiveHub::Primary => 1,
                                                     ActiveHub::Failover => 2,
                                                 };
-                                                c.build_solicited_advertisement(
+                                                let accept_direct = !npdu_tx.is_closed()
+                                                    && direct_intake.accepts_direct(&c);
+                                                c.build_solicited_advertisement_with_direct(
                                                     destination,
                                                     hub_status,
+                                                    accept_direct,
                                                 )
                                             })
                                         } else {
@@ -730,6 +741,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
     }
 
     async fn stop(&mut self) -> Result<(), Error> {
+        self.direct_intake = advertisement::DirectIntake::default();
         // Attempt clean disconnect: send DisconnectRequest via the WebSocket
         if let (Some(ws), Some(conn)) = (&self.ws_shared, &self.connection) {
             let (ws, disconnect_msg) = {
@@ -768,6 +780,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
     }
 
     fn abort(&mut self) {
+        self.direct_intake = advertisement::DirectIntake::default();
         let _ = self.abort_background_task_and_drop_sockets();
     }
 
