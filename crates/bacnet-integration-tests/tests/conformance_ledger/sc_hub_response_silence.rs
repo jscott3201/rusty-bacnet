@@ -257,7 +257,7 @@ fn hub_resolution_transit_is_unicast_hub_only_with_executable_evidence() {
         "relays ResultFor2 and ResultFor3",
         "192 preregistered and 168 registered",
         "192 preregistered and 192 registered",
-        "native NODE does not implement AR responses",
+        "native NODE answers valid AR-Requests with its configured-or-empty ACK",
         "#519 remains open/partial",
     ] {
         assert!(section.contains(phrase), "{phrase}");

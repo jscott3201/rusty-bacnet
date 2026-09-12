@@ -94,6 +94,8 @@ pub struct ScTransport<W: WebSocketPort> {
     local_vmac: Vmac,
     /// Device UUID (16 bytes, RFC 4122).
     device_uuid: [u8; 16],
+    /// Advertised direct-connection URIs answered in Address-Resolution-ACKs.
+    advertised_uris: Vec<String>,
     connection: Option<Arc<Mutex<ScConnection>>>,
     effective_max_apdu_length: Arc<AtomicU16>,
     state_tx: watch::Sender<ScConnectionState>,
@@ -121,6 +123,7 @@ impl<W: WebSocketPort> ScTransport<W> {
             ws_shared: None,
             local_vmac,
             device_uuid: [0u8; 16],
+            advertised_uris: Vec::new(),
             connection: None,
             effective_max_apdu_length: Arc::new(AtomicU16::new(DEFAULT_MAX_APDU_LENGTH)),
             state_tx,
@@ -417,6 +420,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         let mut ws_clone = ws.clone();
         let mut active_hub = active_hub;
         let effective_max_apdu_length = self.effective_max_apdu_length.clone();
+        let advertised_payload = self.advertised_uris.join(" ").into_bytes();
         let task = tokio::spawn(async move {
             let mut primary_restore_interval =
                 tokio::time::interval(Duration::from_millis(restore_interval_ms));
@@ -604,6 +608,13 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                             );
                                         }
                                     }
+
+                                    // Best-effort answer to one accepted
+                                    // Address-Resolution request, if any.
+                                    address_resolution::maybe_answer(
+                                        &msg, &conn, &*ws_clone, &advertised_payload,
+                                    )
+                                    .await;
 
                                     if let Some((npdu, source_vmac)) = npdu_result {
                                         if npdu_tx

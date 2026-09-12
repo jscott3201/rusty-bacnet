@@ -1,9 +1,10 @@
 //! Independent raw-wire node admission vectors for Address-Resolution
 //! (0x02) and Address-Resolution-ACK (0x03); no hub fallback involved.
 //!
-//! Well-formed bodies stay silently consumed (no answering yet); malformed
-//! requests NAK locally while malformed responses stay silent per the
-//! response rule. Hub opaque transit for valid bodies is preserved by
+//! Well-formed requests earn an ACK (empty here: the fixture transport is
+//! unconfigured); well-formed responses stay silently consumed per the
+//! response rule. Malformed requests NAK locally while malformed responses
+//! stay silent. Hub opaque transit for valid bodies is preserved by
 //! existing hub tests; these vectors prove the node gate only.
 use super::*;
 use tokio::time::timeout;
@@ -58,6 +59,304 @@ async fn recv(hub: &LoopbackWebSocket) -> Vec<u8> {
         .unwrap()
 }
 
+async fn recv_ack(hub: &LoopbackWebSocket) -> ScMessage {
+    decode_sc_message(&recv(hub).await).unwrap()
+}
+
+async fn start_with_uris(
+    uris: &[&str],
+) -> (
+    ScTransport<LoopbackWebSocket>,
+    mpsc::Receiver<ReceivedNpdu>,
+    LoopbackWebSocket,
+) {
+    let (ws_client, ws_hub) = LoopbackWebSocket::pair();
+    let mut transport = ScTransport::new(ws_client, [0x01; 6])
+        .with_device_uuid([1; 16])
+        .with_advertised_uris(uris.to_vec());
+    let hub_task = tokio::spawn(async move {
+        data_attribute_tests::hub_accept(&ws_hub, [0x10; 6]).await;
+        ws_hub
+    });
+    let rx = transport.start().await.unwrap();
+    let ws_hub = hub_task.await.unwrap();
+    (transport, rx, ws_hub)
+}
+
+#[test]
+fn advertised_uris_accept_valid_forms() {
+    let (client_a, _) = LoopbackWebSocket::pair();
+    let _ = ScTransport::new(client_a, [1; 6])
+        .with_device_uuid([1; 16])
+        .with_advertised_uris(vec![
+            "wss://one.example/sc".to_string(),
+            "wss://two.example:8443/sc".to_string(),
+        ]);
+    let (client_b, _) = LoopbackWebSocket::pair();
+    let _ = ScTransport::new(client_b, [1; 6])
+        .with_device_uuid([1; 16])
+        .with_advertised_uris(["wss://one.example/sc", "WSS://UPPER.example/SC"]);
+    let (client_c, _) = LoopbackWebSocket::pair();
+    let long = format!("wss://peer.example/{}", "x".repeat(1380));
+    let _ = ScTransport::new(client_c, [1; 6])
+        .with_device_uuid([1; 16])
+        .with_advertised_uris([long.as_str()]);
+}
+
+#[test]
+#[should_panic(expected = "advertised URI")]
+fn advertised_uris_reject_bad_scheme_at_set() {
+    let (client, _) = LoopbackWebSocket::pair();
+    let _ = ScTransport::new(client, [1; 6])
+        .with_device_uuid([1; 16])
+        .with_advertised_uris(["ws://one.example/sc"]);
+}
+
+#[test]
+#[should_panic(expected = "advertised URI")]
+fn advertised_uris_reject_missing_host_at_set() {
+    let (client, _) = LoopbackWebSocket::pair();
+    let _ = ScTransport::new(client, [1; 6])
+        .with_device_uuid([1; 16])
+        .with_advertised_uris(["wss://one.example/sc", "wss:///sc"]);
+}
+
+#[test]
+#[should_panic(expected = "advertised URI")]
+fn advertised_uris_reject_over_budget_list_at_set() {
+    let (client, _) = LoopbackWebSocket::pair();
+    let uris: Vec<String> = (0..8)
+        .map(|i| format!("wss://peer{i}.example/{}", "x".repeat(1380)))
+        .collect();
+    let _ = ScTransport::new(client, [1; 6])
+        .with_device_uuid([1; 16])
+        .with_advertised_uris(uris);
+}
+
+#[test]
+fn ack_builder_shape_fresh_ids_dest_mirror() {
+    let mut conn = ScConnection::new([1; 6], [1; 16]);
+    conn.state = ScConnectionState::Connected;
+    let before = conn.clone();
+    let payload = b"wss://one.example/sc wss://two.example:8443/sc";
+    let first = conn.build_address_resolution_ack(None, payload);
+    assert_eq!(first.function, ScFunction::AddressResolutionAck);
+    assert_eq!(first.originating_vmac, None);
+    assert_eq!(first.destination_vmac, None);
+    assert!(first.dest_options.is_empty());
+    assert!(first.data_options.is_empty());
+    assert_eq!(first.payload.as_ref(), payload);
+    let second = conn.build_address_resolution_ack(Some([0x22; 6]), &[]);
+    assert_eq!(
+        second.message_id,
+        first.message_id.wrapping_add(1),
+        "answers must consume fresh message IDs"
+    );
+    assert_eq!(second.destination_vmac, Some([0x22; 6]));
+    assert!(second.payload.is_empty(), "unconfigured answers stay empty");
+    // Builder touches only the message-ID counter: no state-machine effect.
+    assert_eq!(conn.state, before.state);
+    assert_eq!(conn.local_vmac, before.local_vmac);
+    assert_eq!(conn.disconnect_ack_to_send, before.disconnect_ack_to_send);
+}
+
+#[test]
+fn answer_predicate_accepts_only_answerable_requests() {
+    fn request(
+        function: ScFunction,
+        origin: Option<Vmac>,
+        dest: Option<Vmac>,
+        payload: &[u8],
+    ) -> ScMessage {
+        ScMessage {
+            function,
+            message_id: 0x2233,
+            originating_vmac: origin,
+            destination_vmac: dest,
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::copy_from_slice(payload),
+        }
+    }
+    assert_eq!(
+        address_resolution::answer_destination(&request(
+            ScFunction::AddressResolution,
+            None,
+            None,
+            &[]
+        )),
+        Some(None)
+    );
+    assert_eq!(
+        address_resolution::answer_destination(&request(
+            ScFunction::AddressResolution,
+            Some([0x22; 6]),
+            None,
+            &[]
+        )),
+        Some(Some([0x22; 6]))
+    );
+    // Responses are never answered, even when well-formed.
+    assert_eq!(
+        address_resolution::answer_destination(&request(
+            ScFunction::AddressResolutionAck,
+            Some([0x22; 6]),
+            None,
+            b"wss://one.example/sc"
+        )),
+        None
+    );
+    // Malformed shapes keep the existing NAK path (no answer destination).
+    assert_eq!(
+        address_resolution::answer_destination(&request(
+            ScFunction::AddressResolution,
+            Some([0x22; 6]),
+            None,
+            &[0x00]
+        )),
+        None
+    );
+    // Explicit destinations are not for the local node.
+    assert_eq!(
+        address_resolution::answer_destination(&request(
+            ScFunction::AddressResolution,
+            Some([0x22; 6]),
+            Some([0x44; 6]),
+            &[]
+        )),
+        None
+    );
+    // Reserved origins stay silent.
+    for origin in [Some([0; 6]), Some(BROADCAST_VMAC)] {
+        assert_eq!(
+            address_resolution::answer_destination(&request(
+                ScFunction::AddressResolution,
+                origin,
+                None,
+                &[]
+            )),
+            None
+        );
+    }
+}
+
+#[tokio::test]
+async fn answer_configured_uris_echoed_with_fresh_advancing_ids() {
+    let (mut transport, mut rx, hub) =
+        start_with_uris(&["wss://one.example/sc", "wss://two.example:8443/sc"]).await;
+    hub.send(&wire(2, 0x2234, None, None, 0, &[]))
+        .await
+        .unwrap();
+    let first = recv_ack(&hub).await;
+    assert_eq!(first.function, ScFunction::AddressResolutionAck);
+    assert_ne!(
+        first.message_id, 0x2234,
+        "answers must use a fresh message ID, not the request ID"
+    );
+    assert_eq!(first.originating_vmac, None);
+    assert_eq!(first.destination_vmac, None);
+    assert!(first.dest_options.is_empty());
+    assert!(first.data_options.is_empty());
+    assert_eq!(
+        first.payload.as_ref(),
+        b"wss://one.example/sc wss://two.example:8443/sc"
+    );
+    hub.send(&wire(2, 0x2235, Some([0x22; 6]), None, 0, &[]))
+        .await
+        .unwrap();
+    let second = recv_ack(&hub).await;
+    assert_eq!(second.function, ScFunction::AddressResolutionAck);
+    assert_eq!(
+        second.destination_vmac,
+        Some([0x22; 6]),
+        "answer must be routable back to the requesting node"
+    );
+    assert_eq!(
+        second.message_id,
+        first.message_id.wrapping_add(1),
+        "each answer must consume a fresh message ID"
+    );
+    assert_eq!(
+        second.payload.as_ref(),
+        b"wss://one.example/sc wss://two.example:8443/sc"
+    );
+    barrier(&hub).await;
+    assert!(rx.try_recv().is_err());
+    transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn no_answer_once_disconnected() {
+    let (mut transport, mut rx, hub) = start_with_uris(&["wss://one.example/sc"]).await;
+    // A valid request is answered while connected.
+    hub.send(&wire(2, 0x2234, None, None, 0, &[]))
+        .await
+        .unwrap();
+    let reply = recv_ack(&hub).await;
+    assert_eq!(reply.function, ScFunction::AddressResolutionAck);
+    // Peer-initiated disconnect retires the connection; the transport
+    // acknowledges the disconnect itself.
+    hub.send(&wire(8, 0x2236, None, None, 0, &[]))
+        .await
+        .unwrap();
+    let ack = recv_ack(&hub).await;
+    assert_eq!(ack.function, ScFunction::DisconnectAck);
+    assert_eq!(
+        transport.connection().unwrap().lock().await.state,
+        ScConnectionState::Disconnected
+    );
+    // The same valid request is now silent: no answers when not connected.
+    hub.send(&wire(2, 0x2237, None, None, 0, &[]))
+        .await
+        .unwrap();
+    barrier(&hub).await;
+    assert!(rx.try_recv().is_err());
+    transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn answer_keeps_heartbeat_and_npdu_interop() {
+    let (client, hub) = LoopbackWebSocket::pair();
+    let mut transport = ScTransport::new(client, [1; 6])
+        .with_device_uuid([1; 16])
+        .with_advertised_uris(["wss://one.example/sc"])
+        .with_test_heartbeat_timing_ms(80, 700);
+    let (rx, ()) = tokio::join!(
+        transport.start(),
+        super::data_attribute_tests::hub_accept(&hub, [0x10; 6])
+    );
+    let mut rx = rx.unwrap();
+    let probe = recv(&hub).await;
+    assert_eq!(probe[0], 0x0A);
+    // A request earns exactly one answer; accepted traffic keeps the
+    // heartbeat budget alive like NPDUs.
+    hub.send(&wire(2, 0x2234, Some([0x22; 6]), None, 0, &[]))
+        .await
+        .unwrap();
+    let reply = recv_ack(&hub).await;
+    assert_eq!(reply.function, ScFunction::AddressResolutionAck);
+    assert_eq!(reply.destination_vmac, Some([0x22; 6]));
+    assert_eq!(reply.payload.as_ref(), b"wss://one.example/sc");
+    let next = timeout(Duration::from_secs(1), hub.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(next[0], 0x0A);
+    assert_ne!(&next[2..4], &probe[2..4]);
+    assert!(rx.try_recv().is_err());
+    // Positive controls only AFTER the resolution window.
+    hub.send(&[0x0B, 0, next[2], next[3]]).await.unwrap();
+    hub.send(&wire(1, 0, Some([0x22; 6]), None, 0, &[1, 0, 0x30]))
+        .await
+        .unwrap();
+    let npdu = timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    transport.stop().await.unwrap();
+    assert_eq!(npdu.npdu.as_ref(), &[1, 0, 0x30]);
+}
+
 async fn barrier(hub: &LoopbackWebSocket) {
     // An invalid known control is an ordered, non-activity barrier, not a valid
     // sentinel that could conceal unintended activity from resolution traffic.
@@ -66,13 +365,20 @@ async fn barrier(hub: &LoopbackWebSocket) {
 }
 
 #[tokio::test]
-async fn address_resolution_valid_shapes_are_consumed_silently_without_npdu() {
+async fn address_resolution_valid_shapes_answered_or_silent_without_npdu() {
     let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
-    // Empty request is the only valid request shape.
+    // Empty request is the only valid request shape. The fixture transport
+    // is unconfigured, so each answer carries a valid empty URI list with a
+    // fresh ID mirrored to the request origin.
     for source in [None, Some([0x22; 6])] {
         hub.send(&wire(2, 0x2233, source, None, 0, &[]))
             .await
             .unwrap();
+        let reply = recv_ack(&hub).await;
+        assert_eq!(reply.function, ScFunction::AddressResolutionAck);
+        assert_ne!(reply.message_id, 0x2233);
+        assert_eq!(reply.destination_vmac, source);
+        assert!(reply.payload.is_empty());
         barrier(&hub).await;
         assert!(rx.try_recv().is_err());
     }
@@ -86,13 +392,19 @@ async fn address_resolution_valid_shapes_are_consumed_silently_without_npdu() {
             assert!(rx.try_recv().is_err());
         }
     }
-    // Non-MU destination options on valid shapes stay silent here.
+    // Non-MU destination options stay silent on responses; a valid request
+    // carrying them is still answerable.
     for (function, payload) in [(2, vec![]), (3, b"wss://one.example/sc".to_vec())] {
         let mut optioned = vec![0x1F];
         optioned.extend_from_slice(&payload);
         hub.send(&wire(function, 0x2235, None, None, 2, &optioned))
             .await
             .unwrap();
+        if function == 2 {
+            let reply = recv_ack(&hub).await;
+            assert_eq!(reply.function, ScFunction::AddressResolutionAck);
+            assert!(reply.payload.is_empty());
+        }
         barrier(&hub).await;
         assert!(rx.try_recv().is_err());
     }
@@ -419,9 +731,11 @@ async fn address_resolution_valid_traffic_keeps_heartbeat_and_npdu_interop() {
     let mut rx = rx.unwrap();
     let probe = recv(&hub).await;
     assert_eq!(probe[0], 0x0A);
-    // Valid resolution frames are consumed without replies.
+    // Valid requests earn one empty ACK each (fixture is unconfigured);
+    // valid responses stay silent.
     for _ in 0..4 {
         hub.send(&wire(2, 0, None, None, 0, &[])).await.unwrap();
+        assert!(recv_ack(&hub).await.payload.is_empty());
         hub.send(&wire(
             3,
             1,
