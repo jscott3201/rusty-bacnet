@@ -176,7 +176,7 @@ pub(super) async fn run(
                 // Accepted transit follows the existing NPDU activity policy,
                 // including absent/oversized recipient drops. No probe mutation.
                 client_activity.store(now_secs(), Ordering::Release);
-                if super::unknown_transit::relay(
+                if super::opaque_relay::relay(
                     &data,
                     &sc_msg,
                     registered_vmac,
@@ -200,7 +200,48 @@ pub(super) async fn run(
             continue;
         }
 
-        // Decoded known BVLC messages that pass response/Connect/control admission,
+        if matches!(
+            sc_msg.function,
+            ScFunction::AddressResolution | ScFunction::AddressResolutionAck
+        ) {
+            if let Some(registered_vmac) = lease.vmac.filter(|_| sc_msg.destination_vmac.is_some())
+            {
+                // Both functions are unicast-only. Reject broadcast, explicit
+                // origin and self before activity; never reflect a transit NAK.
+                let Ok(target @ HubRelayTarget::Unicast(dest)) = hub_relay_target(&sc_msg) else {
+                    continue;
+                };
+                if dest == registered_vmac {
+                    continue;
+                }
+                // Opaque options/body (including zero-byte ACK URI lists) are
+                // not NPDUs or endpoint fields to validate here. Accepted transit
+                // follows NPDU/Unknown activity even for missing/capped targets.
+                client_activity.store(now_secs(), Ordering::Release);
+                if super::opaque_relay::relay(
+                    &data,
+                    &sc_msg,
+                    registered_vmac,
+                    target,
+                    &clients,
+                    &write,
+                )
+                .await
+                    == ResultRelayDisposition::CloseSource
+                {
+                    break;
+                }
+            } else if let Some(nak) = super::resolution_transit::local_nak(&sc_msg) {
+                let mut buf = BytesMut::new();
+                encode_sc_message(&mut buf, &nak);
+                // Same socket only. Keep ignored immediate write failures and
+                // the existing retirement/absolute Connect deadline owners.
+                let _ = write.lock().await.send(Message::Binary(buf.freeze())).await;
+            }
+            continue;
+        }
+
+        // Decoded remaining BVLC messages that pass response/Connect/control admission,
         // registered NPDU payload presence and local capacity checks count as activity.
         // WebSocket control, oversized, and undecodable frames do not.
         client_activity.store(now_secs(), std::sync::atomic::Ordering::Release);

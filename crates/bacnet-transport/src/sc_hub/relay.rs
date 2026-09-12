@@ -128,7 +128,7 @@ pub(super) async fn relay_result(
     };
     if !matches!(
         result_for,
-        ScFunction::EncapsulatedNpdu | ScFunction::Unknown(_)
+        ScFunction::EncapsulatedNpdu | ScFunction::AddressResolution | ScFunction::Unknown(_)
     ) {
         debug!(
             "Hub: peer Result for {:?} from {registered_vmac:02x?}, dropping",
@@ -153,8 +153,13 @@ pub(super) async fn relay_result(
         }
     };
 
-    // Only the newly admitted family changes self-target behavior.
-    if matches!(result_for, ScFunction::Unknown(_)) && destination == registered_vmac {
+    // Preserve EncapsulatedNpdu self-target behavior; only these selected
+    // families have the explicit no-echo rule.
+    if matches!(
+        result_for,
+        ScFunction::AddressResolution | ScFunction::Unknown(_)
+    ) && destination == registered_vmac
+    {
         return ResultRelayDisposition::Continue;
     }
 

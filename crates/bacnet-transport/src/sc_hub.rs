@@ -4,7 +4,8 @@
 //! The hub performs three duties:
 //! 1. **Connection handshake** — responds to `ConnectRequest` with `ConnectAccept`.
 //! 2. **Message relay** — forwards `EncapsulatedNpdu`, addressed Unknown functions,
-//!    and their routed `Result` messages to the destination VMAC.
+//!    unicast Address-Resolution/ACK, and permitted routed `Result` messages.
+//!    No node URI parsing, discovery, or direct-connection support is implied.
 //! 3. **Heartbeat** — responds to `HeartbeatRequest` with `HeartbeatAck`.
 
 use std::collections::HashMap;
@@ -31,8 +32,10 @@ mod deadlines;
 mod handler;
 mod heartbeat;
 mod helpers;
+mod opaque_relay;
 mod relay;
 mod relay_send;
+mod resolution_transit;
 mod retirement;
 mod tasks;
 mod timeouts;
@@ -416,3 +419,8 @@ mod retirement_capacity_tests;
 mod unknown_transit_lifecycle_tests;
 #[cfg(test)]
 mod unknown_transit_tests;
+
+#[cfg(test)]
+mod resolution_transit_lifecycle_tests;
+#[cfg(test)]
+mod resolution_transit_tests;
