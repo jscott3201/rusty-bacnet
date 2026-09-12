@@ -300,6 +300,12 @@ impl ScConnection {
                 }
                 None
             }
+            ScFunction::Advertisement | ScFunction::AdvertisementSolicitation => {
+                // Validated before activity by the rejection gate. AB.3.2
+                // status tracking and solicited responses are deferred; the
+                // frame is consumed without NPDU delivery or state change.
+                None
+            }
             _ => None,
         }
     }

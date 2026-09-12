@@ -128,7 +128,11 @@ pub(super) async fn relay_result(
     };
     if !matches!(
         result_for,
-        ScFunction::EncapsulatedNpdu | ScFunction::AddressResolution | ScFunction::Unknown(_)
+        ScFunction::EncapsulatedNpdu
+            | ScFunction::AddressResolution
+            | ScFunction::Advertisement
+            | ScFunction::AdvertisementSolicitation
+            | ScFunction::Unknown(_)
     ) {
         debug!(
             "Hub: peer Result for {:?} from {registered_vmac:02x?}, dropping",
@@ -157,7 +161,10 @@ pub(super) async fn relay_result(
     // families have the explicit no-echo rule.
     if matches!(
         result_for,
-        ScFunction::AddressResolution | ScFunction::Unknown(_)
+        ScFunction::AddressResolution
+            | ScFunction::Advertisement
+            | ScFunction::AdvertisementSolicitation
+            | ScFunction::Unknown(_)
     ) && destination == registered_vmac
     {
         return ResultRelayDisposition::Continue;

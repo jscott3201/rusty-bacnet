@@ -285,8 +285,10 @@ async fn unknown_transit_local_preregistered_and_invalid_envelopes_no_state_effe
     }
     assert_eq!(cases, [288, 240]);
     // Known-but-unhandled remains the old connection-local 7/150 fallback.
+    // Advertisement (0x04) and Solicitation (0x05) graduated to their own
+    // transit family; Proprietary (0x0C) stays deferred.
     let (mut hub, mut a, mut b) = matrix_pair(&tls, true, 0x42, 0x43).await;
-    for function in [4, 5, 12] {
+    for function in [12] {
         send(&mut a, raw(function, 7, None, Some([0x43; 6]), 0, &[])).await;
         assert_eq!(
             recv(&mut a).await,
@@ -440,7 +442,7 @@ async fn unknown_transit_result_ack_nak_routing_and_invalid_result_silence() {
         raw(0, 0, None, Some([0x42; 6]), 1, &[0x1E, 0x42, 0]),
     )
     .await;
-    for function in [0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] {
+    for function in [0, 3, 6, 7, 8, 9, 10, 11, 12] {
         send(&mut b, raw(0, 0, None, Some([0x42; 6]), 0, &[function, 0])).await;
     }
     barrier(&mut b).await;

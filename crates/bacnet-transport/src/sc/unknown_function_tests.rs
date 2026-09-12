@@ -156,7 +156,14 @@ async fn unknown_function_silence_and_known_codes_never_consult_expired_budget()
             super::unknown_function::reject(&msg, &NoIo, expired).await,
             Ok(false)
         );
-        assert_eq!(reject(&msg, &bytes, &NoIo, expired).await, Ok(false));
+        // Advertisement (0x04) and Solicitation (0x05) own a later gate that
+        // consults the budget for forbidden local shapes; an empty
+        // Advertisement is such a shape while an empty Solicitation is valid.
+        let expected = match raw {
+            4 => Err(RejectionExpired),
+            _ => Ok(false),
+        };
+        assert_eq!(reject(&msg, &bytes, &NoIo, expired).await, expected);
     }
 }
 

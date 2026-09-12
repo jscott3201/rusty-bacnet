@@ -241,6 +241,48 @@ pub(super) async fn run(
             continue;
         }
 
+        if matches!(
+            sc_msg.function,
+            ScFunction::Advertisement | ScFunction::AdvertisementSolicitation
+        ) {
+            if let Some(registered_vmac) = lease.vmac.filter(|_| sc_msg.destination_vmac.is_some())
+            {
+                // Both functions are unicast-only. Reject broadcast, explicit
+                // origin and self before activity; never reflect a transit NAK.
+                // Transit stays opaque: the shape validator owns hub-local
+                // and node destinations, while AB.5.3.2 forwarding preserves
+                // the wire frame bytes for the destination to judge.
+                let Ok(target @ HubRelayTarget::Unicast(dest)) = hub_relay_target(&sc_msg) else {
+                    continue;
+                };
+                if dest == registered_vmac {
+                    continue;
+                }
+                // Accepted transit follows NPDU/Unknown activity even for missing/capped targets.
+                client_activity.store(now_secs(), Ordering::Release);
+                if super::opaque_relay::relay(
+                    &data,
+                    &sc_msg,
+                    registered_vmac,
+                    target,
+                    &clients,
+                    &write,
+                )
+                .await
+                    == ResultRelayDisposition::CloseSource
+                {
+                    break;
+                }
+            } else if let Some(nak) = super::advertisement_transit::local_nak(&sc_msg, &data) {
+                let mut buf = BytesMut::new();
+                encode_sc_message(&mut buf, &nak);
+                // Same socket only. Keep ignored immediate write failures and
+                // the existing retirement/absolute Connect deadline owners.
+                let _ = write.lock().await.send(Message::Binary(buf.freeze())).await;
+            }
+            continue;
+        }
+
         // Decoded remaining BVLC messages that pass response/Connect/control admission,
         // registered NPDU payload presence and local capacity checks count as activity.
         // WebSocket control, oversized, and undecodable frames do not.
