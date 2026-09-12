@@ -34,6 +34,7 @@ mod failover;
 mod handshake;
 mod heartbeat;
 mod loopback;
+mod proprietary;
 mod random48;
 mod reconnect;
 mod recovery;
@@ -769,6 +770,9 @@ mod source_admission_tests;
 
 #[cfg(test)]
 mod empty_npdu_tests;
+
+#[cfg(test)]
+mod proprietary_tests;
 
 #[cfg(test)]
 mod unknown_function_tests;
