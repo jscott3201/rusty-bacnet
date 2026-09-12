@@ -31,6 +31,7 @@ pub struct RouteEntry {
     pub next_hop_mac: MacAddr,
     /// When this learned route was last confirmed. `None` for direct routes.
     pub last_seen: Option<Instant>,
+    /// Recorded reachability state of this route.
     pub reachability: ReachabilityStatus,
     /// Deadline after which a `Busy` status auto-clears (spec 6.6.3.6).
     pub busy_until: Option<Instant>,

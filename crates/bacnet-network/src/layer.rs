@@ -4,6 +4,82 @@
 //! by handling NPDU encoding/decoding. This is a non-router implementation:
 //! it does not forward messages between networks, but it can address remote
 //! devices through local routers via NPDU destination fields (DNET/DADR).
+//!
+//! # Receive-queue admission
+//!
+//! [`NetworkLayer`] and [`BACnetRouter`](crate::router::BACnetRouter) use the
+//! same drop-arriving policy for application delivery. Each receive queue holds
+//! **256 items**. Admission never waits for a consumer and never evicts an older
+//! queued item. NetworkLayer APDU and opted-in control queues have independent
+//! capacities, so saturation of either does not stall admission to the other.
+//! All router ports share one local APDU queue; its saturation does not stop
+//! forwarding or inline network-message handling.
+//!
+//! ## Raw and tracked receivers
+//!
+//! | Receiver kind | Entry points | Capacity | Per-source quota | Accounting |
+//! | --- | --- | --- | --- | --- |
+//! | Raw APDU | [`NetworkLayer::start`], [`BACnetRouter::start`](crate::router::BACnetRouter::start) | 256 | None | Full/Closed counted internally; no admission snapshot or depth/high-water tracking |
+//! | Tracked APDU | [`NetworkLayer::start_with_admission`], [`BACnetRouter::start_with_admission`](crate::router::BACnetRouter::start_with_admission) | 256 | 16 queued APDUs per key, defined below | Exact depth/high-water and Full/fairness/Closed totals via [`AdmissionReceiver::counters`] |
+//! | Raw control | [`NetworkLayer::enable_network_control_receiver`] | 256, separate from APDUs | None | Full/Closed counted internally; no admission snapshot or depth/high-water tracking |
+//! | Tracked control | [`NetworkLayer::enable_network_control_receiver_with_admission`] | 256, separate from APDUs | None | Exact depth/high-water and Full/Closed totals; fairness always zero |
+//!
+//! Raw receivers remain `tokio::sync::mpsc::Receiver`; tracked receivers are the
+//! additive [`AdmissionReceiver`] alternatives. APDU and control opt-ins are
+//! independent. Routers process network messages inline, not through a control
+//! receiver. [`priority_channel`](crate::priority_channel) is not used by these ingress paths.
+//!
+//! ## Source keys and drop precedence
+//!
+//! Tracked APDU queues cap each key at **16 queued, unconsumed APDUs**:
+//! - NetworkLayer: the complete transport-native [`ReceivedApdu::source_mac`]
+//!   byte value. Its single transport needs no separate port key.
+//! - Router local delivery: ([ingress port network number](ReceivedApdu::ingress_network),
+//!   [`source_mac`](ReceivedApdu::source_mac)). Identical MAC bytes on different
+//!   ports have separate quotas. Neither key uses routed NPDU SNET/SADR
+//!   ([`source_network`](ReceivedApdu::source_network)) or authenticates a peer.
+//!
+//! Each successful [`recv`](AdmissionReceiver::recv) or
+//! [`try_recv`](AdmissionReceiver::try_recv) releases a queue slot and, for
+//! tracked APDUs, that key's quota slot before returning the item. Retaining or
+//! processing the returned item does not occupy either slot. Sixteen keys at
+//! their quota fill the 256-item queue; a key below quota can still encounter
+//! global Full. This is a queued-item cap, not a byte/rate limit or a delivery
+//! guarantee. Raw receivers and control queues have no per-source quota.
+//!
+//! Drop attribution is **Closed > fairness > Full**: closed admission wins;
+//! otherwise a tracked APDU whose key already holds 16 items is a fairness drop,
+//! even if the queue also holds 256 items; otherwise global saturation is Full.
+//! Only the winning reason is counted. Every admission drop releases the
+//! arriving item's owned payload, metadata and any reply sender without sending
+//! reply bytes or generating a wire rejection. This does not suppress ordinary
+//! router forwarding/reject behavior or change transport no-reply handling.
+//!
+//! ## Close, drop, stop, and observation
+//!
+//! Closing either receiver kind prevents further admission but retains queued
+//! items for draining. Dropping a receiver discards them and releases their
+//! payloads, metadata and reply senders without sending reply bytes. For tracked
+//! receivers, close preserves depth until dequeued; drop sets depth to zero.
+//! Neither operation resets high-water/drop totals, and discarding queued items
+//! is not an admission drop.
+//!
+//! NetworkLayer ends its dispatcher on the first APDU admission attempt after
+//! that receiver closes/drops, also ending control delivery. A closed/dropped
+//! control receiver instead disables only that stream on the first subsequent
+//! control admission attempt. Later discarded controls (like controls received
+//! without either opt-in) are not admission attempts. Router forwarding and
+//! inline control handling continue after local delivery closes/drops; each
+//! subsequent local admission attempt is counted as Closed.
+//!
+//! [`NetworkLayer::stop`] after start and [`BACnetRouter::stop`](crate::router::BACnetRouter::stop)
+//! end dispatch without waiting for application queues to drain; queued items
+//! remain drainable. Stopping is not an admission drop. An independently owned
+//! [`QueueAdmissionCounters`] handle remains readable after the receiver, layer,
+//! or router is dropped; it keeps accounting alive, not the channel or tasks.
+//! [`snapshot`](QueueAdmissionCounters::snapshot) is consistent for one queue,
+//! not atomic across queues, and exposes counts only, not payloads, per-source
+//! identities or per-source totals. Its three drop totals saturate at `u64::MAX`.
 
 use bacnet_encoding::npdu::{encode_npdu, Npdu, NpduAddress};
 use bacnet_transport::port::{DataAttribute, TransportPort};
@@ -32,6 +108,11 @@ pub struct ReceivedApdu {
     /// Router deliveries set this to `Some`, independently of the routed source
     /// address. Non-router [`NetworkLayer`] deliveries use `None` because the
     /// layer owns one transport without an assigned ingress network number.
+    /// Both raw and tracked deliveries carry this metadata. For
+    /// [`BACnetRouter::start_with_admission`](crate::router::BACnetRouter::start_with_admission),
+    /// it scopes [`source_mac`](Self::source_mac) to the ingress port for the
+    /// 16-queued-APDU quota; [`source_network`](Self::source_network) is not part
+    /// of that key. See the [receive-queue contract](self#receive-queue-admission).
     pub ingress_network: Option<u16>,
     /// Source network address if the APDU was routed (NPDU had source field).
     pub source_network: Option<NpduAddress>,
@@ -120,6 +201,8 @@ pub(crate) fn is_group_delivery(link_layer_group: bool, destination: Option<&Npd
 /// NPDU framing. This layer does not act as a router (it does not forward
 /// messages between networks), but it can send to remote devices through
 /// local routers using NPDU destination addressing.
+/// See the [receive-queue contract](self#receive-queue-admission) for raw/tracked
+/// receiver choices, admission limits, drop attribution and lifecycle.
 pub struct NetworkLayer<T: TransportPort> {
     transport: T,
     dispatch_task: Option<JoinHandle<()>>,
@@ -416,11 +499,13 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         self.transport.local_mac()
     }
 
-    /// Sequence assigned to the most recently decoded network-control ingress.
+    /// Sequence assigned to the most recent opted-in control admission attempt.
     ///
-    /// The value is updated before the control is queued for its opt-in
-    /// consumer. At counter exhaustion it remains at `u64::MAX`, which makes
-    /// sequence-based consumers fail closed rather than accepting an alias.
+    /// The value advances before admission, including Full and Closed drops,
+    /// but not for controls discarded without an enabled stream or after its
+    /// first Closed drop. See the [receive-queue contract](self#receive-queue-admission).
+    /// At counter exhaustion it remains at `u64::MAX`, which makes sequence-based
+    /// consumers fail closed rather than accepting an alias.
     pub fn network_control_ingress_sequence(&self) -> u64 {
         self.network_control_ingress_sequence.load(Ordering::SeqCst)
     }
@@ -453,6 +538,13 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     }
 
     /// Stop the network layer and underlying transport.
+    ///
+    /// After start, aborts and awaits dispatch before stopping the transport;
+    /// it does not wait for consumers, even with full APDU/control queues.
+    /// Queued items remain drainable, retaining their reply senders until
+    /// consumed or the receiver is dropped. Stop does not count as an admission
+    /// drop or clear depth/high-water/drop totals. See the
+    /// [receive-queue contract](self#receive-queue-admission).
     pub async fn stop(&mut self) -> Result<(), Error> {
         if let Some(task) = self.abort_dispatch_task() {
             let _ = task.await;

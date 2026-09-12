@@ -14,7 +14,9 @@ use bacnet_types::enums::NetworkPriority;
 /// An item tagged with a BACnet network priority.
 #[derive(Debug, Clone)]
 pub struct PrioritizedItem<T> {
+    /// BACnet network priority used to select this item's queue.
     pub priority: NetworkPriority,
+    /// Payload carried by this item.
     pub data: T,
 }
 

@@ -9,6 +9,10 @@
 //! - Who-Is-Router-To-Network / I-Am-Router-To-Network messages
 //! - Reject-Message-To-Network for unknown routes
 //! - Learned routes from I-Am-Router-To-Network announcements
+//!
+//! Local application delivery follows the shared
+//! [receive-queue contract](crate::layer#receive-queue-admission), independently
+//! of forwarding and inline network-message handling.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -76,6 +80,8 @@ pub struct RouterPort<T: TransportPort> {
 /// The router holds multiple ports, each bound to a different BACnet network.
 /// When an NPDU arrives on one port with a destination network that maps to
 /// another port, the router forwards the message.
+/// See the [receive-queue contract](crate::layer#receive-queue-admission) for
+/// raw/tracked local receivers, admission limits, counters and lifecycle.
 pub struct BACnetRouter {
     /// Shared routing table.
     table: Arc<Mutex<RouterTable>>,
@@ -93,11 +99,20 @@ impl BACnetRouter {
     /// Returns the router and a receiver for APDUs destined to local
     /// applications (messages without remote destination or where this
     /// router is the final hop).
-    /// The shared local queue holds 256 items and drops the arriving APDU when
-    /// full, releasing its reply channel without sending reply bytes. Full or
-    /// closed local delivery never waits for the consumer or stops forwarding.
-    /// This legacy raw receiver has no per-source quota or depth tracking.
-    /// Use [`Self::start_with_admission`] for snapshots and per-source fairness.
+    /// All ports share one 256-item local queue. Full/Closed admission drops the
+    /// arriving APDU with its payload, metadata and reply sender without sending
+    /// reply bytes or a wire rejection, never evicting an older item. Admission
+    /// never waits for the consumer or stops forwarding/inline control handling.
+    /// This raw receiver has no per-source quota, admission snapshot or
+    /// depth/high-water tracking. Full/Closed drops are counted internally, with
+    /// Closed > Full precedence.
+    ///
+    /// Closing retains queued items; dropping discards them. Both leave routing
+    /// active, and each later local admission attempt counts as Closed.
+    /// [`Self::stop`] also leaves queued items drainable. Use
+    /// [`Self::start_with_admission`] for snapshots and per-source fairness; see
+    /// the [receive-queue contract](crate::layer#receive-queue-admission) for the
+    /// raw/tracked matrix and ownership/lifecycle details.
     pub async fn start<T: TransportPort + 'static>(
         ports: Vec<RouterPort<T>>,
     ) -> Result<(Self, mpsc::Receiver<ReceivedApdu>), Error> {
@@ -109,23 +124,29 @@ impl BACnetRouter {
     /// Start with a local APDU receiver exposing queue-admission snapshots.
     ///
     /// This is an alternative to [`Self::start`], with the same port and router
-    /// lifecycle. All ports share one 256-item queue and one counters handle,
-    /// obtained through [`AdmissionReceiver::counters`]. Full admission drops
-    /// the arriving APDU, never an older one; drops do not send wire rejections.
+    /// lifecycle. All ports share one 256-item queue and one accounting state;
+    /// [`AdmissionReceiver::counters`] returns cloneable count-only handles for
+    /// depth/high-water and admission-drop totals, readable after receiver or
+    /// router drop. Failed admission drops the arriving APDU, never an older one, and
+    /// releases its payload, metadata and reply sender without reply bytes or
+    /// wire rejections. Forwarding and inline control handling remain independent.
     /// Closing the receiver retains queued items for draining and counts each
     /// subsequent local arrival as a closed drop while forwarding continues.
-    /// Stopping the router also leaves queued items drainable. Dropping the
+    /// [`Self::stop`] also leaves queued items drainable. Dropping the
     /// receiver discards queued items and releases their reply channels without
     /// sending reply bytes; discarding queued items is not an admission drop.
     ///
-    /// Each (ingress port network number, source MAC) may hold at most 16 queued
-    /// local APDUs. Identical MAC bytes on different ports have separate quotas.
+    /// Each ([ingress port network number](ReceivedApdu::ingress_network),
+    /// complete [`source_mac`](ReceivedApdu::source_mac) byte value) may hold at
+    /// most 16 queued local APDUs, never keyed by routed NPDU SNET/SADR.
+    /// Identical MAC bytes on different ports have separate quotas.
     /// Dequeuing releases one slot, even if the consumer retains the APDU.
-    /// Over-quota arrivals release payload, metadata and reply sender without
-    /// sending bytes, and increment `fairness_drops` before checking global Full.
-    /// Closed admission retains precedence. Inline network-message handling and
-    /// forwarding are independent of this quota; the legacy [`Self::start`]
-    /// receiver does not enforce it.
+    /// **Closed > fairness > Full** selects one drop reason; over-quota arrivals
+    /// increment [`fairness_drops`](crate::layer::QueueAdmissionSnapshot::fairness_drops)
+    /// even if the queue is also globally full, unless admission is closed.
+    /// The raw [`Self::start`] receiver does not enforce a quota. See the
+    /// [receive-queue contract](crate::layer#receive-queue-admission) for exact
+    /// keys, the raw/tracked matrix and complete ownership/lifecycle rules.
     pub async fn start_with_admission<T: TransportPort + 'static>(
         ports: Vec<RouterPort<T>>,
     ) -> Result<(Self, AdmissionReceiver<ReceivedApdu>), Error> {
@@ -478,6 +499,13 @@ impl BACnetRouter {
     }
 
     /// Stop the router.
+    ///
+    /// Aborts and awaits dispatch, sender and aging tasks without waiting for
+    /// the local application consumer, even with a full queue. Queued local
+    /// APDUs remain drainable, retaining their reply senders until consumed or
+    /// the receiver is dropped. Stop is not an admission drop and does not clear
+    /// depth/high-water/drop totals. See the
+    /// [receive-queue contract](crate::layer#receive-queue-admission).
     pub async fn stop(&mut self) {
         for task in self.dispatch_tasks.drain(..) {
             task.abort();
