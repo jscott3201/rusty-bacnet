@@ -8,9 +8,10 @@ use crate::port::TransportPort;
 use crate::sc::{ScConnection, ScTransport, WebSocketPort};
 use crate::sc_frame::{
     decode_sc_bvlc_result, decode_sc_message, encode_sc_message, ScBvlcResult, ScFunction,
-    ScMessage,
+    ScMessage, ScOption,
 };
 use crate::sc_tls::ScNodeTlsConfig;
+use bacnet_types::enums::{ErrorClass, ErrorCode};
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -374,4 +375,132 @@ async fn accept_hub_transport_path_is_untouched() {
     assert_eq!(msg.function, ScFunction::EncapsulatedNpdu);
     assert_eq!(msg.destination_vmac, Some([0x22; 6]));
     transport.stop().await.unwrap();
+}
+
+fn direct_npdu_wire(
+    message_id: u16,
+    destination_vmac: Option<[u8; 6]>,
+    dest_options: Vec<ScOption>,
+) -> Vec<u8> {
+    let msg = ScMessage {
+        function: ScFunction::EncapsulatedNpdu,
+        message_id,
+        originating_vmac: None,
+        destination_vmac,
+        dest_options,
+        data_options: Vec::new(),
+        payload: Bytes::from(NPDU.to_vec()),
+    };
+    let mut buf = BytesMut::new();
+    encode_sc_message(&mut buf, &msg);
+    buf.to_vec()
+}
+
+#[tokio::test]
+async fn accept_mu_destination_option_naks_without_delivery() {
+    let ca = TestCa::generate();
+    let (mut listener, mut rx) = start_listener(&ca, |c| c).await;
+    let url = direct_url(&listener.local_addr());
+    let (ws, _conn) = dial_and_handshake(&url, ca.node_config(vec!["node".into()])).await;
+    // MU option with Header Data so the NAK must echo the wire marker verbatim.
+    let wire = direct_npdu_wire(
+        0x5151,
+        None,
+        vec![ScOption {
+            option_type: 2,
+            must_understand: true,
+            data: vec![0xAA],
+        }],
+    );
+    ws.send(&wire).await.unwrap();
+    let nak_bytes = tokio::time::timeout(Duration::from_secs(5), ws.recv())
+        .await
+        .expect("MU NAK timed out")
+        .unwrap();
+    let nak = decode_sc_message(&nak_bytes).unwrap();
+    assert_eq!(nak.function, ScFunction::Result);
+    assert_eq!(nak.message_id, 0x5151);
+    assert_eq!(nak.originating_vmac, None);
+    assert_eq!(nak.destination_vmac, None);
+    assert_eq!(
+        decode_sc_bvlc_result(&nak).unwrap(),
+        ScBvlcResult::Nak {
+            result_for: ScFunction::EncapsulatedNpdu,
+            error_header_marker: 0x62,
+            error_class: ErrorClass::COMMUNICATION.to_raw(),
+            error_code: ErrorCode::HEADER_NOT_UNDERSTOOD.to_raw(),
+            error_details: String::new(),
+        }
+    );
+    assert!(rx.try_recv().is_err());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), rx.recv())
+            .await
+            .is_err(),
+        "MU destination option must never deliver"
+    );
+    assert_eq!(listener.active_connections(), 1);
+    listener.stop().await;
+}
+
+#[tokio::test]
+async fn accept_non_mu_destination_option_still_delivers() {
+    let ca = TestCa::generate();
+    let (mut listener, mut rx) = start_listener(&ca, |c| c).await;
+    let url = direct_url(&listener.local_addr());
+    let (ws, _conn) = dial_and_handshake(&url, ca.node_config(vec!["node".into()])).await;
+    let wire = direct_npdu_wire(
+        0x5252,
+        None,
+        vec![ScOption {
+            option_type: 31,
+            must_understand: false,
+            data: vec![0x12, 0x34],
+        }],
+    );
+    ws.send(&wire).await.unwrap();
+    let received = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("non-MU NPDU timed out")
+        .expect("listener closed");
+    assert_eq!(received.npdu.as_ref(), NPDU);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), ws.recv())
+            .await
+            .is_err(),
+        "non-MU destination option must not NAK"
+    );
+    listener.stop().await;
+}
+
+#[tokio::test]
+async fn accept_broadcast_mu_destination_option_drops_without_nak() {
+    let ca = TestCa::generate();
+    let (mut listener, mut rx) = start_listener(&ca, |c| c).await;
+    let url = direct_url(&listener.local_addr());
+    let (ws, _conn) = dial_and_handshake(&url, ca.node_config(vec!["node".into()])).await;
+    let wire = direct_npdu_wire(
+        0x5353,
+        Some([0xFF; 6]),
+        vec![ScOption {
+            option_type: 31,
+            must_understand: true,
+            data: vec![0x12, 0x34, 0x56],
+        }],
+    );
+    ws.send(&wire).await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), rx.recv())
+            .await
+            .is_err(),
+        "broadcast MU destination option must never deliver"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), ws.recv())
+            .await
+            .is_err(),
+        "broadcast MU destination option must not NAK"
+    );
+    assert_eq!(listener.active_connections(), 1);
+    listener.stop().await;
 }
