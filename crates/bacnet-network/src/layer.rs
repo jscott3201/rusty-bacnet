@@ -27,6 +27,12 @@ pub struct ReceivedApdu {
     pub apdu: Bytes,
     /// Source MAC address in transport-native format.
     pub source_mac: MacAddr,
+    /// BACnet network number of the router ingress port at admission time.
+    ///
+    /// Router deliveries set this to `Some`, independently of the routed source
+    /// address. Non-router [`NetworkLayer`] deliveries use `None` because the
+    /// layer owns one transport without an assigned ingress network number.
+    pub ingress_network: Option<u16>,
     /// Source network address if the APDU was routed (NPDU had source field).
     pub source_network: Option<NpduAddress>,
     /// Whether the NPDU arrived through a data-link multicast or broadcast.
@@ -76,6 +82,7 @@ impl Clone for ReceivedApdu {
         Self {
             apdu: self.apdu.clone(),
             source_mac: self.source_mac.clone(),
+            ingress_network: self.ingress_network,
             source_network: self.source_network.clone(),
             link_layer_group: self.link_layer_group,
             is_group: self.is_group,
@@ -90,6 +97,7 @@ impl std::fmt::Debug for ReceivedApdu {
         f.debug_struct("ReceivedApdu")
             .field("apdu", &self.apdu)
             .field("source_mac", &self.source_mac)
+            .field("ingress_network", &self.ingress_network)
             .field("source_network", &self.source_network)
             .field("link_layer_group", &self.link_layer_group)
             .field("is_group", &self.is_group)

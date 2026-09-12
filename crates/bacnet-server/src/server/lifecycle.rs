@@ -454,6 +454,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                                         bacnet_network::layer::ReceivedApdu {
                                                             apdu: bytes::Bytes::new(),
                                                             source_mac: bacnet_types::MacAddr::new(),
+                                                            ingress_network: None,
                                                             source_network: None,
                                                             link_layer_group: false,
                                                             is_group: false,
@@ -508,6 +509,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     bacnet_network::layer::ReceivedApdu {
                                         apdu: bytes::Bytes::new(),
                                         source_mac: bacnet_types::MacAddr::new(),
+                                        ingress_network: None,
                                         source_network: None,
                                         link_layer_group: false,
                                         is_group: false,

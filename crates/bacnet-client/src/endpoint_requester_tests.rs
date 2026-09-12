@@ -67,6 +67,7 @@ fn received(apdu: Bytes, source: &[u8]) -> ReceivedApdu {
     ReceivedApdu {
         apdu,
         source_mac: MacAddr::from_slice(source),
+        ingress_network: None,
         source_network: None,
         link_layer_group: false,
         is_group: false,

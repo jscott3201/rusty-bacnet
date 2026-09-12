@@ -96,7 +96,8 @@ impl BACnetRouter {
     /// The shared local queue holds 256 items and drops the arriving APDU when
     /// full, releasing its reply channel without sending reply bytes. Full or
     /// closed local delivery never waits for the consumer or stops forwarding.
-    /// Use [`Self::start_with_admission`] to observe queue-admission snapshots.
+    /// This legacy raw receiver has no per-source quota or depth tracking.
+    /// Use [`Self::start_with_admission`] for snapshots and per-source fairness.
     pub async fn start<T: TransportPort + 'static>(
         ports: Vec<RouterPort<T>>,
     ) -> Result<(Self, mpsc::Receiver<ReceivedApdu>), Error> {
@@ -116,11 +117,20 @@ impl BACnetRouter {
     /// Stopping the router also leaves queued items drainable. Dropping the
     /// receiver discards queued items and releases their reply channels without
     /// sending reply bytes; discarding queued items is not an admission drop.
+    ///
+    /// Each (ingress port network number, source MAC) may hold at most 16 queued
+    /// local APDUs. Identical MAC bytes on different ports have separate quotas.
+    /// Dequeuing releases one slot, even if the consumer retains the APDU.
+    /// Over-quota arrivals release payload, metadata and reply sender without
+    /// sending bytes, and increment `fairness_drops` before checking global Full.
+    /// Closed admission retains precedence. Inline network-message handling and
+    /// forwarding are independent of this quota; the legacy [`Self::start`]
+    /// receiver does not enforce it.
     pub async fn start_with_admission<T: TransportPort + 'static>(
         ports: Vec<RouterPort<T>>,
     ) -> Result<(Self, AdmissionReceiver<ReceivedApdu>), Error> {
         let (router, rx, counters) = Self::start_dispatch(ports, true).await?;
-        Ok((router, AdmissionReceiver::from_parts(rx, counters)))
+        Ok((router, AdmissionReceiver::from_apdu_parts(rx, counters)))
     }
 
     async fn start_dispatch<T: TransportPort + 'static>(
@@ -297,13 +307,14 @@ impl BACnetRouter {
                                     let apdu = ReceivedApdu {
                                         apdu: npdu.payload,
                                         source_mac: received.source_mac,
+                                        ingress_network: Some(port_network),
                                         source_network: npdu.source,
                                         link_layer_group: received.link_layer_group,
                                         is_group: true,
                                         data_attributes: received.data_attributes,
                                         reply_tx: received.reply_tx,
                                     };
-                                    let _ = local_tx.try_send(apdu);
+                                    let _ = local_tx.try_send_apdu(apdu);
                                     continue;
                                 }
 
@@ -352,13 +363,14 @@ impl BACnetRouter {
                                             let apdu = ReceivedApdu {
                                                 apdu: npdu.payload,
                                                 source_mac: received.source_mac,
+                                                ingress_network: Some(port_network),
                                                 source_network: npdu.source,
                                                 link_layer_group: received.link_layer_group,
                                                 is_group: false,
                                                 data_attributes: received.data_attributes,
                                                 reply_tx: received.reply_tx,
                                             };
-                                            let _ = local_tx.try_send(apdu);
+                                            let _ = local_tx.try_send_apdu(apdu);
                                         } else {
                                             // Remote broadcast to our network (DLEN=0):
                                             // deliver locally AND forward
@@ -366,6 +378,7 @@ impl BACnetRouter {
                                                 let apdu = ReceivedApdu {
                                                     apdu: npdu.payload.clone(),
                                                     source_mac: received.source_mac.clone(),
+                                                    ingress_network: Some(port_network),
                                                     source_network: npdu.source.clone(),
                                                     link_layer_group: received.link_layer_group,
                                                     is_group: true,
@@ -374,7 +387,7 @@ impl BACnetRouter {
                                                         .clone(),
                                                     reply_tx: None,
                                                 };
-                                                let _ = local_tx.try_send(apdu);
+                                                let _ = local_tx.try_send_apdu(apdu);
                                             }
                                             forward_unicast(
                                                 &send_txs,
@@ -410,13 +423,14 @@ impl BACnetRouter {
                                 let apdu = ReceivedApdu {
                                     apdu: npdu.payload,
                                     source_mac: received.source_mac,
+                                    ingress_network: Some(port_network),
                                     source_network: npdu.source,
                                     link_layer_group: received.link_layer_group,
                                     is_group: is_group_delivery(received.link_layer_group, None),
                                     data_attributes: received.data_attributes,
                                     reply_tx: received.reply_tx,
                                 };
-                                let _ = local_tx.try_send(apdu);
+                                let _ = local_tx.try_send_apdu(apdu);
                             }
                         }
                         Err(e) => {

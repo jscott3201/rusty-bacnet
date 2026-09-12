@@ -83,6 +83,7 @@ async fn barrier(tx: &mpsc::Sender<ReceivedNpdu>) {
 fn assert_apdu(apdu: &ReceivedApdu, source: &[u8], id: u16) {
     assert_eq!(apdu.apdu.as_ref(), id.to_be_bytes());
     assert_eq!(apdu.source_mac.as_slice(), source);
+    assert_eq!(apdu.ingress_network, None);
     assert_eq!(
         apdu.source_network,
         Some(NpduAddress {
@@ -469,4 +470,108 @@ async fn concurrent_dispatch_and_dequeues_keep_source_and_depth_accounting_in_st
     assert_eq!(counters.snapshot().full_drops, 0);
     assert_eq!(counters.snapshot().closed_drops, 0);
     network.stop().await.unwrap();
+}
+
+fn router_apdu(ingress_network: u16, source: &[u8], id: u16) -> ReceivedApdu {
+    ReceivedApdu {
+        apdu: Bytes::copy_from_slice(&id.to_be_bytes()),
+        source_mac: MacAddr::from_slice(source),
+        ingress_network: Some(ingress_network),
+        source_network: None,
+        link_layer_group: false,
+        is_group: false,
+        data_attributes: Vec::new(),
+        reply_tx: None,
+    }
+}
+
+#[test]
+fn router_key_churn_keeps_entries_bounded_by_depth_and_drop_clears_them() {
+    let (tx, rx, counters) = AdmissionReceiver::channel(true);
+    let mut apdus = AdmissionReceiver::from_apdu_parts(rx, counters.clone());
+    for round in 0..3 {
+        for id in 0..512 {
+            // Same MAC on 256 distinct ports, then fresh keys while full.
+            let _ = tx.try_send_apdu(router_apdu(id % 256, &[round, (id / 256) as u8], id));
+        }
+        assert_sources(&counters, 256, 256);
+        assert_eq!(counters.snapshot().full_drops, u64::from(round + 1) * 256);
+        assert_eq!(counters.snapshot().fairness_drops, 0);
+        for port in 0..256 {
+            let mut apdu = apdus.try_recv().unwrap();
+            assert_eq!(apdu.ingress_network, Some(port));
+            assert!(!counters
+                .0
+                .lock()
+                .unwrap()
+                .queued_by_source
+                .contains_key(&apdu_source(&apdu)));
+            apdu.ingress_network = None;
+            apdu.source_mac.clear();
+            assert_sources(&counters, usize::from(255 - port), usize::from(255 - port));
+        }
+    }
+    for port in 0..256 {
+        tx.try_send_apdu(router_apdu(port, &[2], 0)).unwrap();
+    }
+    apdus.close();
+    assert_sources(&counters, 256, 256);
+    drop(apdus);
+    assert_sources(&counters, 0, 0);
+}
+
+#[test]
+fn cloned_router_senders_enforce_composite_quotas_across_threads_and_dequeues() {
+    let (tx, rx, counters) = AdmissionReceiver::channel(true);
+    let mut apdus = AdmissionReceiver::from_apdu_parts(rx, counters.clone());
+    let start = std::sync::Barrier::new(4);
+    std::thread::scope(|scope| {
+        for port in 100..104 {
+            let tx = tx.clone();
+            let start = &start;
+            scope.spawn(move || {
+                start.wait();
+                for id in 0..256 {
+                    let _ = tx.try_send_apdu(router_apdu(port, &[2], id));
+                }
+            });
+        }
+    });
+    assert_sources(&counters, 4, 64);
+    assert_eq!(counters.snapshot().fairness_drops, 960);
+    for _ in 0..64 {
+        apdus.try_recv().unwrap();
+    }
+    assert_sources(&counters, 0, 0);
+    let start = std::sync::Barrier::new(5);
+    std::thread::scope(|scope| {
+        for port in 100..104 {
+            let tx = tx.clone();
+            let start = &start;
+            scope.spawn(move || {
+                start.wait();
+                for id in 0..16 {
+                    tx.try_send_apdu(router_apdu(port, &[2], id)).unwrap();
+                }
+            });
+        }
+        start.wait();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut seen = std::collections::HashSet::new();
+        while seen.len() < 64 {
+            match apdus.try_recv() {
+                Ok(apdu) => assert!(seen.insert((apdu.ingress_network, apdu.apdu))),
+                Err(mpsc::error::TryRecvError::Empty) => {
+                    assert!(std::time::Instant::now() < deadline, "sender stalled");
+                    std::thread::yield_now();
+                }
+                Err(e) => panic!("unexpected receive error: {e}"),
+            }
+            counters.0.lock().unwrap().assert_source_depth();
+        }
+    });
+    assert_sources(&counters, 0, 0);
+    assert_eq!(counters.snapshot().fairness_drops, 960);
+    assert_eq!(counters.snapshot().full_drops, 0);
+    assert_eq!(counters.snapshot().closed_drops, 0);
 }
