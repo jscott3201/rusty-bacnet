@@ -7,9 +7,10 @@ use tracing::{debug, warn};
 
 const QUEUE_CAPACITY: usize = 256;
 
-/// A consistent, count-only snapshot of one NetworkLayer receive queue.
+/// A consistent, count-only snapshot of one network-layer receive queue.
 ///
-/// Counters belong to one receiver, not to a source MAC or to the entire layer.
+/// Counters belong to one receiver, not to a source MAC. A router's local queue
+/// is shared by all its ports.
 /// Separate APDU/control snapshots are not an atomic snapshot of both queues.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct QueueAdmissionSnapshot {
@@ -21,8 +22,9 @@ pub struct QueueAdmissionSnapshot {
     pub full_drops: u64,
     /// Arriving items dropped because the receiver was closed; saturates at `u64::MAX`.
     ///
-    /// The first such APDU ends dispatch; the first such control disables that
-    /// stream. Later discarded controls are not queue-admission attempts.
+    /// In NetworkLayer, the first such APDU ends dispatch; the first such control
+    /// disables that stream. Later discarded controls are not admission attempts.
+    /// Routers keep forwarding and count each closed local-admission attempt.
     /// Dropping already queued items with the receiver is not an admission drop.
     pub closed_drops: u64,
 }
@@ -30,7 +32,7 @@ pub struct QueueAdmissionSnapshot {
 /// Cloneable snapshot handle obtained from an [`AdmissionReceiver`].
 ///
 /// This handle keeps only counters alive, not the channel or dispatch task.
-/// It remains readable after the receiver or NetworkLayer is dropped. Dropping
+/// It remains readable after the receiver, layer, or router is dropped. Dropping
 /// the receiver sets depth to zero; closing it preserves depth until drained.
 #[derive(Debug, Clone, Default)]
 pub struct QueueAdmissionCounters(Arc<Mutex<QueueAdmissionSnapshot>>);
@@ -45,13 +47,14 @@ impl QueueAdmissionCounters {
 /// Opt-in, one-consumer receiver with exact queue-depth accounting.
 ///
 /// Created by [`NetworkLayer::start_with_admission`] or
-/// [`NetworkLayer::enable_network_control_receiver_with_admission`]. The queue
+/// [`NetworkLayer::enable_network_control_receiver_with_admission`], or by
+/// [`BACnetRouter::start_with_admission`](crate::router::BACnetRouter::start_with_admission). The queue
 /// holds 256 items; full admission drops the arriving item, never an older one.
 /// APDU and control queues have independent capacities and counters. Neither
 /// full queue waits for its consumer or blocks dispatch to the other queue.
 ///
 /// This wrapper deliberately does not expose the underlying receiver: all
-/// dequeues must update the snapshot. Use the existing NetworkLayer methods
+/// dequeues must update the snapshot. Use the existing layer/router `start` methods
 /// when a plain `mpsc::Receiver` is required instead.
 #[derive(Debug)]
 pub struct AdmissionReceiver<T> {
@@ -60,6 +63,24 @@ pub struct AdmissionReceiver<T> {
 }
 
 impl<T> AdmissionReceiver<T> {
+    // Crate-internal construction keeps the generic sender and accounting in
+    // this module while allowing the router to retain its legacy receiver API.
+    pub(crate) fn channel(
+        track_depth: bool,
+    ) -> (
+        AdmissionSender<T>,
+        mpsc::Receiver<T>,
+        QueueAdmissionCounters,
+    ) {
+        let (tx, rx) = AdmissionSender::channel(track_depth);
+        let counters = tx.counters.clone();
+        (tx, rx, counters)
+    }
+
+    pub(crate) fn from_parts(rx: mpsc::Receiver<T>, counters: QueueAdmissionCounters) -> Self {
+        Self { rx, counters }
+    }
+
     /// Obtain an independently owned snapshot handle for this queue.
     pub fn counters(&self) -> QueueAdmissionCounters {
         self.counters.clone()
@@ -101,8 +122,9 @@ impl<T> AdmissionReceiver<T> {
 
     /// Stop admission while retaining already queued items for draining.
     ///
-    /// The next arriving APDU ends dispatch, or the next control disables its
-    /// stream, exactly as closing the corresponding legacy receiver does.
+    /// In NetworkLayer, the next arriving APDU ends dispatch, or the next control
+    /// disables its stream. Routers keep forwarding after local delivery closes.
+    /// Both match closing the corresponding legacy receiver.
     pub fn close(&mut self) {
         let _snapshot = self
             .counters
@@ -127,12 +149,22 @@ impl<T> Drop for AdmissionReceiver<T> {
     }
 }
 
-pub(super) struct AdmissionSender<T> {
+pub(crate) struct AdmissionSender<T> {
     tx: mpsc::Sender<T>,
     counters: QueueAdmissionCounters,
     // Legacy receivers dequeue outside this module, so only opt-in receivers
     // expose depth/high-water accounting. Admission drops are counted in both.
     track_depth: bool,
+}
+
+impl<T> Clone for AdmissionSender<T> {
+    fn clone(&self) -> Self {
+        Self {
+            tx: self.tx.clone(),
+            counters: self.counters.clone(),
+            track_depth: self.track_depth,
+        }
+    }
 }
 
 impl<T> AdmissionSender<T> {
@@ -148,7 +180,7 @@ impl<T> AdmissionSender<T> {
         )
     }
 
-    fn try_send(&self, item: T) -> Result<(), mpsc::error::TrySendError<T>> {
+    pub(crate) fn try_send(&self, item: T) -> Result<(), mpsc::error::TrySendError<T>> {
         // Serialize the admission and dequeue accounting, not asynchronous
         // waiting. Each queue has its own short critical section; counters do
         // not govern admission and no lock survives a poll/try operation.
