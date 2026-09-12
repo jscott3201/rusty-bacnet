@@ -110,13 +110,15 @@ pub(super) fn answer_destination(msg: &ScMessage) -> Option<Option<Vmac>> {
 /// Answer one accepted Address-Resolution request with an ACK carrying the
 /// configured URI payload (empty when unconfigured).
 ///
-/// Best-effort like Heartbeat-ACK and the solicited Advertisement: no
-/// rejection budget is spent on this positive answer, and no separate rate
-/// gate is added — each valid unicast request earns one answer, while the
-/// broadcast/response/addressed envelopes that could amplify a storm stay
-/// silent and malformed shapes keep the budgeted NAK path. The Connected
-/// check and the fresh message-ID allocation share one lock hold so an
-/// answer cannot race a reconnect half-way.
+/// Best-effort like Heartbeat-ACK: no rejection budget is spent on this
+/// positive answer, and no separate rate gate is added — each valid unicast
+/// request earns one answer, while the broadcast/response/addressed
+/// envelopes that could amplify a storm stay silent and malformed shapes
+/// keep the budgeted NAK path. The ACK copies the request message ID per
+/// the response-ID rule (AB.2 response list, AB.2.7.1, AB.3.1.3); unlike a
+/// solicited Advertisement it is a response message, so no fresh ID is
+/// allocated. The Connected check shares one lock hold so an answer cannot
+/// race a reconnect half-way.
 pub(super) async fn maybe_answer<W: WebSocketPort>(
     msg: &ScMessage,
     conn: &Mutex<ScConnection>,
@@ -128,11 +130,11 @@ pub(super) async fn maybe_answer<W: WebSocketPort>(
         None => return,
     };
     let reply = {
-        let mut c = conn.lock().await;
+        let c = conn.lock().await;
         if c.state != ScConnectionState::Connected {
             return;
         }
-        c.build_address_resolution_ack(destination, advertised_payload)
+        c.build_address_resolution_ack(msg.message_id, destination, advertised_payload)
     };
     let mut bytes = BytesMut::new();
     encode_sc_message(&mut bytes, &reply);

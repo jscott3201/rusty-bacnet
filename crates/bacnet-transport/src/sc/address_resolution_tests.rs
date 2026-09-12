@@ -134,29 +134,26 @@ fn advertised_uris_reject_over_budget_list_at_set() {
 }
 
 #[test]
-fn ack_builder_shape_fresh_ids_dest_mirror() {
-    let mut conn = ScConnection::new([1; 6], [1; 16]);
-    conn.state = ScConnectionState::Connected;
+fn ack_builder_shape_copies_request_id_dest_mirror() {
+    let conn = ScConnection::new([1; 6], [1; 16]);
     let before = conn.clone();
     let payload = b"wss://one.example/sc wss://two.example:8443/sc";
-    let first = conn.build_address_resolution_ack(None, payload);
+    let first = conn.build_address_resolution_ack(0x2234, None, payload);
     assert_eq!(first.function, ScFunction::AddressResolutionAck);
+    assert_eq!(first.message_id, 0x2234);
     assert_eq!(first.originating_vmac, None);
     assert_eq!(first.destination_vmac, None);
     assert!(first.dest_options.is_empty());
     assert!(first.data_options.is_empty());
     assert_eq!(first.payload.as_ref(), payload);
-    let second = conn.build_address_resolution_ack(Some([0x22; 6]), &[]);
-    assert_eq!(
-        second.message_id,
-        first.message_id.wrapping_add(1),
-        "answers must consume fresh message IDs"
-    );
+    let second = conn.build_address_resolution_ack(0x2235, Some([0x22; 6]), &[]);
+    assert_eq!(second.message_id, 0x2235);
     assert_eq!(second.destination_vmac, Some([0x22; 6]));
     assert!(second.payload.is_empty(), "unconfigured answers stay empty");
-    // Builder touches only the message-ID counter: no state-machine effect.
+    // Builder is pure: no state-machine or counter effect.
     assert_eq!(conn.state, before.state);
     assert_eq!(conn.local_vmac, before.local_vmac);
+    assert_eq!(conn.next_message_id, before.next_message_id);
     assert_eq!(conn.disconnect_ack_to_send, before.disconnect_ack_to_send);
 }
 
@@ -241,7 +238,7 @@ fn answer_predicate_accepts_only_answerable_requests() {
 }
 
 #[tokio::test]
-async fn answer_configured_uris_echoed_with_fresh_advancing_ids() {
+async fn answer_configured_uris_echoed_with_copied_ids() {
     let (mut transport, mut rx, hub) =
         start_with_uris(&["wss://one.example/sc", "wss://two.example:8443/sc"]).await;
     hub.send(&wire(2, 0x2234, None, None, 0, &[]))
@@ -249,10 +246,7 @@ async fn answer_configured_uris_echoed_with_fresh_advancing_ids() {
         .unwrap();
     let first = recv_ack(&hub).await;
     assert_eq!(first.function, ScFunction::AddressResolutionAck);
-    assert_ne!(
-        first.message_id, 0x2234,
-        "answers must use a fresh message ID, not the request ID"
-    );
+    assert_eq!(first.message_id, 0x2234);
     assert_eq!(first.originating_vmac, None);
     assert_eq!(first.destination_vmac, None);
     assert!(first.dest_options.is_empty());
@@ -271,11 +265,7 @@ async fn answer_configured_uris_echoed_with_fresh_advancing_ids() {
         Some([0x22; 6]),
         "answer must be routable back to the requesting node"
     );
-    assert_eq!(
-        second.message_id,
-        first.message_id.wrapping_add(1),
-        "each answer must consume a fresh message ID"
-    );
+    assert_eq!(second.message_id, 0x2235);
     assert_eq!(
         second.payload.as_ref(),
         b"wss://one.example/sc wss://two.example:8443/sc"
@@ -368,15 +358,15 @@ async fn barrier(hub: &LoopbackWebSocket) {
 async fn address_resolution_valid_shapes_answered_or_silent_without_npdu() {
     let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
     // Empty request is the only valid request shape. The fixture transport
-    // is unconfigured, so each answer carries a valid empty URI list with a
-    // fresh ID mirrored to the request origin.
+    // is unconfigured, so each answer carries a valid empty URI list with
+    // the request ID copied and the destination mirrored to the origin.
     for source in [None, Some([0x22; 6])] {
         hub.send(&wire(2, 0x2233, source, None, 0, &[]))
             .await
             .unwrap();
         let reply = recv_ack(&hub).await;
         assert_eq!(reply.function, ScFunction::AddressResolutionAck);
-        assert_ne!(reply.message_id, 0x2233);
+        assert_eq!(reply.message_id, 0x2233);
         assert_eq!(reply.destination_vmac, source);
         assert!(reply.payload.is_empty());
         barrier(&hub).await;
@@ -403,6 +393,7 @@ async fn address_resolution_valid_shapes_answered_or_silent_without_npdu() {
         if function == 2 {
             let reply = recv_ack(&hub).await;
             assert_eq!(reply.function, ScFunction::AddressResolutionAck);
+            assert_eq!(reply.message_id, 0x2235);
             assert!(reply.payload.is_empty());
         }
         barrier(&hub).await;

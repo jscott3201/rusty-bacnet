@@ -286,23 +286,67 @@ impl ScConnection {
         }
     }
 
+    /// Build an Address-Resolution request for on-demand direct discovery.
+    ///
+    /// The destination names the target node; the origin is omitted because
+    /// the sender is the originator. The payload is empty and no Data
+    /// Options are present. The message ID is fresh from the shared counter
+    /// so the later ACK can be correlated by ID. Only the ID counter moves.
+    pub fn build_address_resolution_request(&mut self, destination_vmac: Vmac) -> ScMessage {
+        ScMessage {
+            function: ScFunction::AddressResolution,
+            message_id: self.next_id(),
+            originating_vmac: None,
+            destination_vmac: Some(destination_vmac),
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::new(),
+        }
+    }
+
+    /// Build a direct-connection Encapsulated-NPDU (peer-addressed, no VMACs).
+    ///
+    /// Used only for unicast over an established direct WebSocket to the
+    /// connection peer: both address parameters are omitted. Hub sends keep
+    /// the destination address. Only the ID counter moves besides the
+    /// returned message.
+    pub fn build_direct_encapsulated_npdu(
+        &mut self,
+        npdu: &[u8],
+        data_attributes: &[DataAttribute],
+    ) -> Result<ScMessage, Error> {
+        let data_options = data_attributes::to_data_options(data_attributes)?;
+        Ok(ScMessage {
+            function: ScFunction::EncapsulatedNpdu,
+            message_id: self.next_id(),
+            originating_vmac: None,
+            destination_vmac: None,
+            dest_options: Vec::new(),
+            data_options,
+            payload: Bytes::copy_from_slice(npdu),
+        })
+    }
+
     /// Build an Address-Resolution-ACK reply for one accepted request.
     ///
     /// The destination mirrors the request origin (`None` for a hub-peer
     /// request so the reply stays peer-addressed, otherwise the requesting
     /// node) and the payload carries the configured space-joined URI list,
-    /// or zero octets when unconfigured. The message ID is always fresh: an
-    /// ACK answers the request but travels as its own message, matching the
-    /// solicited-Advertisement precedent. No Data Options. The caller
-    /// supplies already-validated payload bytes; only the ID counter moves.
+    /// or zero octets when unconfigured. The message ID copies the request
+    /// ID: Address-Resolution-ACK is a response message (AB.2 list) and
+    /// response messages carry the causing ID (AB.3.1.3); AB.2.7.1 repeats
+    /// the response-ID rule for this ACK. Only the solicited Advertisement
+    /// is excepted (AB.3.1.3), not this ACK. No Data Options. The caller
+    /// supplies already-validated payload bytes; no counter moves.
     pub fn build_address_resolution_ack(
-        &mut self,
+        &self,
+        request_message_id: u16,
         destination_vmac: Option<Vmac>,
         uri_payload: &[u8],
     ) -> ScMessage {
         ScMessage {
             function: ScFunction::AddressResolutionAck,
-            message_id: self.next_id(),
+            message_id: request_message_id,
             originating_vmac: None,
             destination_vmac,
             dest_options: Vec::new(),
@@ -410,7 +454,19 @@ impl ScConnection {
                             }
                         }
                         if result_for != ScFunction::EncapsulatedNpdu {
-                            self.state = ScConnectionState::Disconnected;
+                            // Discovery negatives relayed from a target node
+                            // (origin present) are normal: the peer does not
+                            // support direct connections or knows no URIs.
+                            // Stay connected so the sender can fall back to
+                            // hub delivery. Hub-peer NAKs (origin absent)
+                            // keep the existing fatal policy.
+                            let discovery_negative = matches!(
+                                result_for,
+                                ScFunction::AddressResolution | ScFunction::AddressResolutionAck
+                            ) && msg.originating_vmac.is_some();
+                            if !discovery_negative {
+                                self.state = ScConnectionState::Disconnected;
+                            }
                         }
                     }
                     Err(e) => {
