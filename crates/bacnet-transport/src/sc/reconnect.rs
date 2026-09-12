@@ -1,9 +1,18 @@
 use bacnet_types::error::Error;
 
-/// Configuration for SC transport reconnection with exponential backoff.
+/// Configuration for SC transport reconnection with jittered exponential backoff.
+///
+/// The nominal backoff starts at `initial_delay_ms` and doubles after each failed
+/// active-hub retry, capped at `max_delay_ms`. Each reconnect sleep uses fresh OS
+/// randomness between `max(initial_delay_ms, backoff / 2)` and
+/// `min(max_delay_ms, backoff + backoff / 2)`, inclusive. Thus the initial delay
+/// remains a floor and the maximum remains a cap, including at the capped step.
+/// Equal initial and maximum delays leave no room for jitter. If OS randomness
+/// is unavailable, the nominal backoff is used. Jitter applies only to active-hub
+/// retries, not the separate failover attempt or primary-restoration timer.
 #[derive(Debug, Clone)]
 pub struct ScReconnectConfig {
-    /// Initial delay before first reconnect attempt (ms).
+    /// Initial nominal backoff and minimum reconnect sleep (ms).
     pub initial_delay_ms: u64,
     /// Maximum delay between reconnect attempts (ms).
     pub max_delay_ms: u64,
