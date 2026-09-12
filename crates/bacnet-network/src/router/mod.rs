@@ -23,7 +23,7 @@ use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
-use crate::layer::{is_group_delivery, ReceivedApdu};
+use crate::layer::{is_group_delivery, AdmissionReceiver, QueueAdmissionCounters, ReceivedApdu};
 use crate::router_table::{ReachabilityStatus, RouterTable};
 
 mod control_messages;
@@ -93,9 +93,40 @@ impl BACnetRouter {
     /// Returns the router and a receiver for APDUs destined to local
     /// applications (messages without remote destination or where this
     /// router is the final hop).
+    /// The shared local queue holds 256 items and drops the arriving APDU when
+    /// full, releasing its reply channel without sending reply bytes. Full or
+    /// closed local delivery never waits for the consumer or stops forwarding.
+    /// Use [`Self::start_with_admission`] to observe queue-admission snapshots.
     pub async fn start<T: TransportPort + 'static>(
-        mut ports: Vec<RouterPort<T>>,
+        ports: Vec<RouterPort<T>>,
     ) -> Result<(Self, mpsc::Receiver<ReceivedApdu>), Error> {
+        Self::start_dispatch(ports, false)
+            .await
+            .map(|(router, rx, _)| (router, rx))
+    }
+
+    /// Start with a local APDU receiver exposing queue-admission snapshots.
+    ///
+    /// This is an alternative to [`Self::start`], with the same port and router
+    /// lifecycle. All ports share one 256-item queue and one counters handle,
+    /// obtained through [`AdmissionReceiver::counters`]. Full admission drops
+    /// the arriving APDU, never an older one; drops do not send wire rejections.
+    /// Closing the receiver retains queued items for draining and counts each
+    /// subsequent local arrival as a closed drop while forwarding continues.
+    /// Stopping the router also leaves queued items drainable. Dropping the
+    /// receiver discards queued items and releases their reply channels without
+    /// sending reply bytes; discarding queued items is not an admission drop.
+    pub async fn start_with_admission<T: TransportPort + 'static>(
+        ports: Vec<RouterPort<T>>,
+    ) -> Result<(Self, AdmissionReceiver<ReceivedApdu>), Error> {
+        let (router, rx, counters) = Self::start_dispatch(ports, true).await?;
+        Ok((router, AdmissionReceiver::from_parts(rx, counters)))
+    }
+
+    async fn start_dispatch<T: TransportPort + 'static>(
+        mut ports: Vec<RouterPort<T>>,
+        track_depth: bool,
+    ) -> Result<(Self, mpsc::Receiver<ReceivedApdu>, QueueAdmissionCounters), Error> {
         let mut table = RouterTable::new();
 
         // Reject duplicate network numbers
@@ -117,7 +148,7 @@ impl BACnetRouter {
         }
 
         let table = Arc::new(Mutex::new(table));
-        let (local_tx, local_rx) = mpsc::channel(256);
+        let (local_tx, local_rx, counters) = AdmissionReceiver::channel(track_depth);
 
         // Start each transport, set up send channels
         let mut port_receivers = Vec::new();
@@ -272,7 +303,7 @@ impl BACnetRouter {
                                         data_attributes: received.data_attributes,
                                         reply_tx: received.reply_tx,
                                     };
-                                    let _ = local_tx.send(apdu).await;
+                                    let _ = local_tx.try_send(apdu);
                                     continue;
                                 }
 
@@ -327,7 +358,7 @@ impl BACnetRouter {
                                                 data_attributes: received.data_attributes,
                                                 reply_tx: received.reply_tx,
                                             };
-                                            let _ = local_tx.send(apdu).await;
+                                            let _ = local_tx.try_send(apdu);
                                         } else {
                                             // Remote broadcast to our network (DLEN=0):
                                             // deliver locally AND forward
@@ -343,7 +374,7 @@ impl BACnetRouter {
                                                         .clone(),
                                                     reply_tx: None,
                                                 };
-                                                let _ = local_tx.send(apdu).await;
+                                                let _ = local_tx.try_send(apdu);
                                             }
                                             forward_unicast(
                                                 &send_txs,
@@ -385,7 +416,7 @@ impl BACnetRouter {
                                     data_attributes: received.data_attributes,
                                     reply_tx: received.reply_tx,
                                 };
-                                let _ = local_tx.send(apdu).await;
+                                let _ = local_tx.try_send(apdu);
                             }
                         }
                         Err(e) => {
@@ -423,6 +454,7 @@ impl BACnetRouter {
                 aging_task: Some(aging_task),
             },
             local_rx,
+            counters,
         ))
     }
 
@@ -448,5 +480,7 @@ impl BACnetRouter {
     }
 }
 
+#[cfg(test)]
+mod admission_tests;
 #[cfg(test)]
 mod tests;
