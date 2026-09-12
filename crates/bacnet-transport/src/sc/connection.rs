@@ -9,6 +9,7 @@ use crate::sc_frame::{
     decode_sc_bvlc_result, is_broadcast_vmac, ScBvlcResult, ScFunction, ScMessage, Vmac,
 };
 
+use super::diagnostic_throttle::DiagnosticThrottle;
 use super::{data_attributes, source_admission};
 
 /// BACnet/SC connection state.
@@ -49,6 +50,13 @@ pub struct ScConnection {
     pub hub_device_uuid: Option<[u8; 16]>,
     /// Whether the last connect failure permits another connection attempt.
     pub(super) connect_retry_allowed: bool,
+    /// Owner-local throttle for connection-path malformed diagnostics only.
+    ///
+    /// Logging-only: never affects state transitions, NPDU delivery, or NAK
+    /// decisions. At most one diagnostic per second per connection; bursts
+    /// count as suppressed for the next summary. Ignored by transactional
+    /// field comparisons (logging state, not protocol state).
+    malformed_diag: DiagnosticThrottle,
 }
 
 impl ScConnection {
@@ -67,6 +75,7 @@ impl ScConnection {
             pending_connect_message_id: None,
             hub_device_uuid: None,
             connect_retry_allowed: true,
+            malformed_diag: DiagnosticThrottle::new(),
         }
     }
 
@@ -82,6 +91,16 @@ impl ScConnection {
         if !probe.connect_retry_allowed {
             self.connect_retry_allowed = false;
         }
+    }
+
+    /// Test-only suppressed diagnostic count for the connection throttle.
+    ///
+    /// Exposes the logging throttle without affecting wire decisions, so
+    /// burst tests can assert O(1) diagnostics alongside bit-for-bit
+    /// accept/NAK/silence behavior.
+    #[cfg(test)]
+    pub(super) fn malformed_diag_suppressed(&self) -> u64 {
+        self.malformed_diag.suppressed()
     }
 
     /// Generate the next message ID.
@@ -122,10 +141,20 @@ impl ScConnection {
         }
         if let Some(expected_id) = self.pending_connect_message_id {
             if msg.message_id != expected_id {
-                warn!(
-                    "ConnectAccept message_id {:#x} does not match request {:#x}",
-                    msg.message_id, expected_id
-                );
+                if self.malformed_diag.should_emit_now() {
+                    let suppressed = self.malformed_diag.take_suppressed();
+                    if suppressed > 0 {
+                        warn!(
+                            "ConnectAccept message_id {:#x} does not match request {:#x} (suppressed {suppressed} similar diagnostics)",
+                            msg.message_id, expected_id
+                        );
+                    } else {
+                        warn!(
+                            "ConnectAccept message_id {:#x} does not match request {:#x}",
+                            msg.message_id, expected_id
+                        );
+                    }
+                }
                 return false;
             }
         }
@@ -266,7 +295,14 @@ impl ScConnection {
         match msg.function {
             ScFunction::EncapsulatedNpdu => {
                 if self.state != ScConnectionState::Connected {
-                    debug!("Ignoring EncapsulatedNpdu in {:?} state", self.state);
+                    if self.malformed_diag.should_emit_now() {
+                        let suppressed = self.malformed_diag.take_suppressed();
+                        if suppressed > 0 {
+                            debug!("Ignoring EncapsulatedNpdu in {:?} state (suppressed {suppressed} similar diagnostics)", self.state);
+                        } else {
+                            debug!("Ignoring EncapsulatedNpdu in {:?} state", self.state);
+                        }
+                    }
                     return None;
                 }
                 if let Some(dest) = msg.destination_vmac {
@@ -275,11 +311,22 @@ impl ScConnection {
                     }
                 }
                 if msg.payload.len() > self.max_apdu_length as usize {
-                    warn!(
-                        "BACnet/SC NPDU ({} bytes) exceeds local Max-NPDU-Length ({}), dropping",
-                        msg.payload.len(),
-                        self.max_apdu_length
-                    );
+                    if self.malformed_diag.should_emit_now() {
+                        let suppressed = self.malformed_diag.take_suppressed();
+                        if suppressed > 0 {
+                            warn!(
+                                "BACnet/SC NPDU ({} bytes) exceeds local Max-NPDU-Length ({}), dropping (suppressed {suppressed} similar diagnostics)",
+                                msg.payload.len(),
+                                self.max_apdu_length
+                            );
+                        } else {
+                            warn!(
+                                "BACnet/SC NPDU ({} bytes) exceeds local Max-NPDU-Length ({}), dropping",
+                                msg.payload.len(),
+                                self.max_apdu_length
+                            );
+                        }
+                    }
                     return None;
                 }
                 let source = source_admission::hub_source(msg)?;
@@ -317,19 +364,39 @@ impl ScConnection {
                         error_code,
                         ..
                     }) => {
-                        warn!(
-                            "BACnet/SC BVLC-Result NAK: function={:#x} \
-                             error_class={} error_code={}",
-                            result_for.to_raw(),
-                            error_class,
-                            error_code
-                        );
+                        if self.malformed_diag.should_emit_now() {
+                            let suppressed = self.malformed_diag.take_suppressed();
+                            if suppressed > 0 {
+                                warn!(
+                                    "BACnet/SC BVLC-Result NAK: function={:#x} \
+                                     error_class={} error_code={} (suppressed {suppressed} similar diagnostics)",
+                                    result_for.to_raw(),
+                                    error_class,
+                                    error_code
+                                );
+                            } else {
+                                warn!(
+                                    "BACnet/SC BVLC-Result NAK: function={:#x} \
+                                     error_class={} error_code={}",
+                                    result_for.to_raw(),
+                                    error_class,
+                                    error_code
+                                );
+                            }
+                        }
                         if result_for != ScFunction::EncapsulatedNpdu {
                             self.state = ScConnectionState::Disconnected;
                         }
                     }
                     Err(e) => {
-                        warn!("Malformed BACnet/SC BVLC-Result: {e}");
+                        if self.malformed_diag.should_emit_now() {
+                            let suppressed = self.malformed_diag.take_suppressed();
+                            if suppressed > 0 {
+                                warn!("Malformed BACnet/SC BVLC-Result: {e} (suppressed {suppressed} similar diagnostics)");
+                            } else {
+                                warn!("Malformed BACnet/SC BVLC-Result: {e}");
+                            }
+                        }
                         self.state = ScConnectionState::Disconnected;
                     }
                 }

@@ -37,6 +37,7 @@ mod deadlines;
 mod handler;
 mod heartbeat;
 mod helpers;
+mod malformed_diag;
 mod opaque_relay;
 mod proprietary_transit;
 mod relay;

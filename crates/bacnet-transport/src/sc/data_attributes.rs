@@ -5,11 +5,39 @@ use bacnet_types::error::Error;
 use bytes::{Bytes, BytesMut};
 use tracing::warn;
 
+use std::sync::{Mutex, OnceLock};
+
+use super::diagnostic_throttle::DiagnosticThrottle;
 use super::rejection::{RejectionBudget, RejectionExpired};
 use super::WebSocketPort;
 
 const MAX_SC_DATA_ATTRIBUTES: usize = 64;
 const SECURE_PATH_OPTION_TYPE: u8 = 1;
+
+/// Owner-local throttle for Must-Understand diagnostics only.
+///
+/// Process-shared because the rejection gates are `pub(super)` pure-logging
+/// call sites without per-transport state; NAK/silence decisions are
+/// unchanged. At most one diagnostic per second process-wide for this
+/// category; bursts count as suppressed for the next summary.
+fn mu_diag() -> &'static Mutex<DiagnosticThrottle> {
+    static MU_DIAG: OnceLock<Mutex<DiagnosticThrottle>> = OnceLock::new();
+    MU_DIAG.get_or_init(|| Mutex::new(DiagnosticThrottle::new()))
+}
+
+/// Emits one throttled diagnostic via `log(suppressed)`, counting the event
+/// as suppressed when the window budget is exhausted. Lock failure fails
+/// open (still logs) so diagnostics never go fully silent.
+fn emit_mu_diagnostic(log: impl FnOnce(u64)) {
+    let mut guard = mu_diag()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if guard.should_emit_now() {
+        let suppressed = guard.take_suppressed();
+        drop(guard);
+        log(suppressed);
+    }
+}
 
 pub(super) fn from_data_options(msg: &ScMessage) -> Vec<DataAttribute> {
     msg.data_options
@@ -43,16 +71,39 @@ pub(super) async fn reject_unsupported_must_understand_destination_option<W: Web
     };
 
     let Some(marker) = error_header_marker else {
-        warn!(
-            option_type = option.option_type,
-            "BACnet/SC failed to recover unsupported Destination Option marker"
-        );
+        let option_type = option.option_type;
+        emit_mu_diagnostic(|suppressed| {
+            if suppressed > 0 {
+                warn!(
+                    option_type,
+                    "BACnet/SC failed to recover unsupported Destination Option marker (suppressed {suppressed} similar diagnostics)"
+                );
+            } else {
+                warn!(
+                    option_type,
+                    "BACnet/SC failed to recover unsupported Destination Option marker"
+                );
+            }
+        });
         return Ok(true);
     };
-    warn!(
-        option_type = option.option_type,
-        marker, "BACnet/SC unsupported Must Understand Destination Option"
-    );
+    {
+        let option_type = option.option_type;
+        emit_mu_diagnostic(|suppressed| {
+            if suppressed > 0 {
+                warn!(
+                    option_type,
+                    marker,
+                    "BACnet/SC unsupported Must Understand Destination Option (suppressed {suppressed} similar diagnostics)"
+                );
+            } else {
+                warn!(
+                    option_type,
+                    marker, "BACnet/SC unsupported Must Understand Destination Option"
+                );
+            }
+        });
+    }
 
     if msg.destination_vmac != Some(BROADCAST_VMAC) {
         let nak = build_bvlc_result_nak(

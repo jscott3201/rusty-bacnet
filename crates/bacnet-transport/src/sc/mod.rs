@@ -28,6 +28,7 @@ mod connection;
 mod connector;
 mod control_admission;
 mod data_attributes;
+pub(crate) mod diagnostic_throttle;
 mod empty_npdu;
 mod errors;
 mod failover;
@@ -423,6 +424,11 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
             // rate policy. Kept across reconnects so a flap cannot reset
             // the budget into a storm.
             let mut last_solicited_advertisement: Option<Instant> = None;
+            // Owner-local bound for malformed-frame diagnostics only. Kept
+            // across reconnects so a flap cannot reset log suppression into
+            // a flood. Never changes accept/NAK/silence decisions: at most
+            // one diagnostic per second, first occurrence always emits.
+            let mut malformed_diag = diagnostic_throttle::DiagnosticThrottle::new();
 
             'transport: loop {
                 let mut current_reusable = true;
@@ -439,20 +445,41 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                             match data {
                                 Ok(data) => {
                                     if data.len() > conn.lock().await.max_bvlc_length as usize {
-                                        warn!("BACnet/SC frame exceeds local Max-BVLC-Length, dropping");
+                                        if malformed_diag.should_emit_now() {
+                                            let suppressed = malformed_diag.take_suppressed();
+                                            if suppressed > 0 {
+                                                warn!("BACnet/SC frame exceeds local Max-BVLC-Length, dropping (suppressed {suppressed} similar diagnostics)");
+                                            } else {
+                                                warn!("BACnet/SC frame exceeds local Max-BVLC-Length, dropping");
+                                            }
+                                        }
                                         continue;
                                     }
                                     let msg = match decode_sc_message(&data) {
                                         Ok(m) => m,
                                         Err(e) if heartbeat::is_bvlc_result_wire(&data) => {
-                                            warn!("Malformed wire-level BACnet/SC BVLC-Result: {e}");
+                                            if malformed_diag.should_emit_now() {
+                                                let suppressed = malformed_diag.take_suppressed();
+                                                if suppressed > 0 {
+                                                    warn!("Malformed wire-level BACnet/SC BVLC-Result: {e} (suppressed {suppressed} similar diagnostics)");
+                                                } else {
+                                                    warn!("Malformed wire-level BACnet/SC BVLC-Result: {e}");
+                                                }
+                                            }
                                             let mut c = conn.lock().await;
                                             c.state = ScConnectionState::Disconnected;
                                             state_tx.send_replace(c.state);
                                             break;
                                         }
                                         Err(e) => {
-                                            warn!("BACnet/SC decode error: {}", e);
+                                            if malformed_diag.should_emit_now() {
+                                                let suppressed = malformed_diag.take_suppressed();
+                                                if suppressed > 0 {
+                                                    warn!("BACnet/SC decode error: {} (suppressed {suppressed} similar diagnostics)", e);
+                                                } else {
+                                                    warn!("BACnet/SC decode error: {}", e);
+                                                }
+                                            }
                                             continue;
                                         }
                                     };
@@ -475,8 +502,13 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                         if heartbeat::ack_matches_outstanding(&msg, pending_heartbeat_id) {
                                             last_bvlc_received = Instant::now();
                                             pending_heartbeat_id = None;
-                                        } else {
-                                            warn!("BACnet/SC ignored unexpected Heartbeat-ACK");
+                                        } else if malformed_diag.should_emit_now() {
+                                            let suppressed = malformed_diag.take_suppressed();
+                                            if suppressed > 0 {
+                                                warn!("BACnet/SC ignored unexpected Heartbeat-ACK (suppressed {suppressed} similar diagnostics)");
+                                            } else {
+                                                warn!("BACnet/SC ignored unexpected Heartbeat-ACK");
+                                            }
                                         }
                                         continue;
                                     }
