@@ -222,6 +222,41 @@ impl ScConnection {
         })
     }
 
+    /// Build a solicited Advertisement reply (AB.2.8.1 content, AB.3.2 trigger).
+    ///
+    /// The caller supplies the destination selected by the request-addressing
+    /// rule (`None` for a hub-peer solicitation, otherwise the solicitation
+    /// origin) and the hub-connection status derived from live transport
+    /// state (1 = primary hub, 2 = failover hub). The message ID is always
+    /// fresh: a solicited Advertisement is not a "response message" and must
+    /// not copy the solicitation ID (AB.3.1.3). Accept-direct is always 0 —
+    /// this transport has no direct-connection accept path — and the two
+    /// maxima echo the local receive configuration. No Data Options.
+    pub fn build_solicited_advertisement(
+        &mut self,
+        destination_vmac: Option<Vmac>,
+        hub_status: u8,
+    ) -> ScMessage {
+        debug_assert!(
+            hub_status == 1 || hub_status == 2,
+            "solicited Advertisement status must be 1 (primary) or 2 (failover)"
+        );
+        let mut payload = Vec::with_capacity(6);
+        payload.push(hub_status);
+        payload.push(0);
+        payload.extend_from_slice(&self.max_bvlc_length.to_be_bytes());
+        payload.extend_from_slice(&self.max_apdu_length.to_be_bytes());
+        ScMessage {
+            function: ScFunction::Advertisement,
+            message_id: self.next_id(),
+            originating_vmac: None,
+            destination_vmac,
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::from(payload),
+        }
+    }
+
     /// Handle a received message. Returns NPDU data if it's an Encapsulated-NPDU for us.
     /// Hub-relayed NPDUs must include a non-reserved Originating VMAC.
     pub fn handle_received(&mut self, msg: &ScMessage) -> Option<(Bytes, Vmac)> {
@@ -301,9 +336,12 @@ impl ScConnection {
                 None
             }
             ScFunction::Advertisement | ScFunction::AdvertisementSolicitation => {
-                // Validated before activity by the rejection gate. AB.3.2
-                // status tracking and solicited responses are deferred; the
-                // frame is consumed without NPDU delivery or state change.
+                // Validated before activity by the rejection gate. Received
+                // Advertisements need no local peer store and stay consumed
+                // without NPDU delivery or state change. Solicited replies to
+                // accepted solicitations are originated by the transport loop
+                // (which owns the hub role, rate clock, and socket), so this
+                // handler stays pure.
                 None
             }
             ScFunction::ProprietaryMessage => {

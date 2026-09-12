@@ -66,13 +66,9 @@ async fn advertisement_valid_shapes_are_consumed_silently_without_npdu() {
             }
         }
     }
-    for source in [None, Some([0x22; 6])] {
-        hub.send(&wire(5, 0x2234, source, None, 0, &[]))
-            .await
-            .unwrap();
-        barrier(&hub).await;
-        assert!(rx.try_recv().is_err());
-    }
+    // Valid Advertisement-Solicitation shapes are answered, not silent: see
+    // the solicited-reply tests below. Solicitations stay out of this
+    // silence matrix so the rate gate cannot collapse them here.
     // Non-MU destination options on valid shapes stay silent here.
     let mut optioned = vec![0x1F];
     optioned.extend_from_slice(&valid_advertisement());
@@ -367,6 +363,164 @@ async fn advertisement_result_for_keeps_existing_parse_and_fatal_policy() {
     }
 }
 
+fn solicited_reply_payload() -> Vec<u8> {
+    let mut payload = vec![1, 0];
+    payload.extend_from_slice(&crate::sc_limits::DEFAULT_MAX_BVLC_LENGTH.to_be_bytes());
+    payload.extend_from_slice(&1476u16.to_be_bytes());
+    payload
+}
+
+async fn recv_reply(hub: &LoopbackWebSocket) -> crate::sc_frame::ScMessage {
+    let data = timeout(Duration::from_secs(1), hub.recv())
+        .await
+        .expect("timed out waiting for solicited Advertisement")
+        .unwrap();
+    decode_sc_message(&data).unwrap()
+}
+
+#[tokio::test]
+async fn advertisement_solicited_reply_shape_hub_peer_origin() {
+    let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
+    hub.send(&wire(5, 0x2234, None, None, 0, &[]))
+        .await
+        .unwrap();
+    let reply = recv_reply(&hub).await;
+    assert_eq!(reply.function, ScFunction::Advertisement);
+    assert_ne!(
+        reply.message_id, 0x2234,
+        "solicited Advertisement must use a fresh message ID, not the solicitation ID"
+    );
+    assert_eq!(reply.originating_vmac, None);
+    assert_eq!(reply.destination_vmac, None);
+    assert!(reply.dest_options.is_empty());
+    assert!(reply.data_options.is_empty());
+    assert_eq!(reply.payload.as_ref(), solicited_reply_payload());
+    barrier(&hub).await;
+    assert!(rx.try_recv().is_err());
+    assert_eq!(
+        transport.connection().unwrap().lock().await.state,
+        ScConnectionState::Connected
+    );
+    transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn advertisement_solicited_reply_targets_relayed_origin() {
+    let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
+    hub.send(&wire(5, 0x2235, Some([0x22; 6]), None, 0, &[]))
+        .await
+        .unwrap();
+    let reply = recv_reply(&hub).await;
+    assert_eq!(reply.function, ScFunction::Advertisement);
+    assert_ne!(reply.message_id, 0x2235);
+    assert_eq!(reply.originating_vmac, None);
+    assert_eq!(
+        reply.destination_vmac,
+        Some([0x22; 6]),
+        "solicited Advertisement must be routable back to the soliciting node"
+    );
+    assert_eq!(reply.payload.as_ref(), solicited_reply_payload());
+    barrier(&hub).await;
+    assert!(rx.try_recv().is_err());
+    transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn advertisement_solicited_reply_is_rate_gated() {
+    let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
+    hub.send(&wire(5, 0x2234, None, None, 0, &[]))
+        .await
+        .unwrap();
+    let first = recv_reply(&hub).await;
+    assert_eq!(first.function, ScFunction::Advertisement);
+    // Immediate floods — same peer with a new ID and a different relayed
+    // peer — must not become advertisement storms.
+    hub.send(&wire(5, 0x2235, None, None, 0, &[]))
+        .await
+        .unwrap();
+    hub.send(&wire(5, 0x2236, Some([0x22; 6]), None, 0, &[]))
+        .await
+        .unwrap();
+    // The barrier NAK arrives next only if no gated reply was queued.
+    barrier(&hub).await;
+    assert!(rx.try_recv().is_err());
+    assert_eq!(
+        transport.connection().unwrap().lock().await.state,
+        ScConnectionState::Connected
+    );
+    transport.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn advertisement_solicited_reply_recurs_after_interval() {
+    let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
+    hub.send(&wire(5, 0x2234, None, None, 0, &[]))
+        .await
+        .unwrap();
+    let first = recv_reply(&hub).await;
+    assert_eq!(first.function, ScFunction::Advertisement);
+    tokio::time::sleep(super::advertisement::SOLICITED_ADVERTISEMENT_MIN_INTERVAL).await;
+    hub.send(&wire(5, 0x2235, None, None, 0, &[]))
+        .await
+        .unwrap();
+    let second = recv_reply(&hub).await;
+    assert_eq!(second.function, ScFunction::Advertisement);
+    assert_eq!(
+        second.message_id,
+        first.message_id.wrapping_add(1),
+        "each solicited Advertisement must consume a fresh message ID"
+    );
+    barrier(&hub).await;
+    assert!(rx.try_recv().is_err());
+    transport.stop().await.unwrap();
+}
+
+#[test]
+fn solicited_builder_encodes_local_status_and_fresh_ids() {
+    let mut conn = ScConnection::new([1; 6], [1; 16]);
+    conn.state = ScConnectionState::Connected;
+    let before = conn.clone();
+    let first = conn.build_solicited_advertisement(None, 1);
+    assert_eq!(first.function, ScFunction::Advertisement);
+    assert_eq!(first.originating_vmac, None);
+    assert_eq!(first.destination_vmac, None);
+    assert!(first.dest_options.is_empty());
+    assert!(first.data_options.is_empty());
+    let mut expected = vec![1, 0];
+    expected.extend_from_slice(&before.max_bvlc_length.to_be_bytes());
+    expected.extend_from_slice(&before.max_apdu_length.to_be_bytes());
+    assert_eq!(first.payload.as_ref(), expected);
+    let second = conn.build_solicited_advertisement(Some([0x22; 6]), 2);
+    assert_eq!(
+        second.message_id,
+        first.message_id.wrapping_add(1),
+        "solicited replies must consume fresh message IDs"
+    );
+    assert_eq!(second.destination_vmac, Some([0x22; 6]));
+    assert_eq!(second.payload[0], 2);
+    assert_eq!(second.payload[1], 0);
+    // Builder touches only the message-ID counter: no state-machine effect.
+    assert_eq!(conn.state, before.state);
+    assert_eq!(conn.local_vmac, before.local_vmac);
+    assert_eq!(conn.max_bvlc_length, before.max_bvlc_length);
+    assert_eq!(conn.max_apdu_length, before.max_apdu_length);
+    assert_eq!(conn.hub_vmac, before.hub_vmac);
+    assert_eq!(conn.disconnect_ack_to_send, before.disconnect_ack_to_send);
+}
+
+#[test]
+fn solicited_builder_echoes_configured_maxima() {
+    let mut conn = ScConnection::new([1; 6], [1; 16]);
+    conn.max_bvlc_length = 300;
+    conn.max_apdu_length = 480;
+    let reply = conn.build_solicited_advertisement(None, 1);
+    assert_eq!(
+        reply.payload.as_ref(),
+        &[1, 0, 0x01, 0x2C, 0x01, 0xE0],
+        "maxima must echo local receive configuration, not wire defaults"
+    );
+}
+
 #[tokio::test]
 async fn advertisement_valid_traffic_keeps_heartbeat_and_npdu_interop() {
     let (client, hub) = LoopbackWebSocket::pair();
@@ -380,17 +534,31 @@ async fn advertisement_valid_traffic_keeps_heartbeat_and_npdu_interop() {
     let mut rx = rx.unwrap();
     let probe = recv(&hub).await;
     assert_eq!(probe[0], 0x0A);
-    // Valid advertisements and solicitations are consumed without replies.
+    // Valid advertisements stay silent; one accepted solicitation earns one
+    // solicited Advertisement reply with fresh ID and local status content.
     for _ in 0..4 {
         hub.send(&wire(4, 0, None, None, 0, &valid_advertisement()))
             .await
             .unwrap();
-        hub.send(&wire(5, 1, Some([0x22; 6]), None, 0, &[]))
-            .await
-            .unwrap();
     }
-    // No rejection reply may precede the next liveness probe; accepted
-    // advertisement traffic keeps the heartbeat budget alive like NPDUs.
+    hub.send(&wire(5, 1, Some([0x22; 6]), None, 0, &[]))
+        .await
+        .unwrap();
+    let reply_data = timeout(Duration::from_secs(1), hub.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let reply = decode_sc_message(&reply_data).unwrap();
+    assert_eq!(reply.function, ScFunction::Advertisement);
+    assert_ne!(reply.message_id, 1);
+    assert_eq!(reply.destination_vmac, Some([0x22; 6]));
+    assert_eq!(reply.payload.as_ref(), solicited_reply_payload());
+    // A rapid second solicitation is rate-gated: no reply may precede the
+    // next liveness probe; accepted advertisement traffic keeps the
+    // heartbeat budget alive like NPDUs.
+    hub.send(&wire(5, 2, Some([0x22; 6]), None, 0, &[]))
+        .await
+        .unwrap();
     let next = timeout(Duration::from_secs(1), hub.recv())
         .await
         .unwrap()

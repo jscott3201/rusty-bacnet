@@ -419,6 +419,10 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
             let mut primary_restore_interval =
                 tokio::time::interval(Duration::from_millis(restore_interval_ms));
             primary_restore_interval.tick().await;
+            // Last solicited-Advertisement send for the AB.3.2 anti-storm
+            // rate policy. Kept across reconnects so a flap cannot reset
+            // the budget into a storm.
+            let mut last_solicited_advertisement: Option<Instant> = None;
 
             'transport: loop {
                 let mut current_reusable = true;
@@ -497,22 +501,75 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                     }
 
                                     // Handle NPDU — lock, extract results, drop before awaiting
-                                    let (npdu_result, disconnect_ack, fatal_result, state_change) = {
+                                    // An accepted Advertisement-Solicitation also queues one
+                                    // solicited Advertisement here (AB.3.2): fresh message
+                                    // ID, request-addressed, rate-gated. The build stays
+                                    // under the connection lock with the state check so
+                                    // the status byte and the ID cannot race a reconnect.
+                                    let solicited_destination =
+                                        advertisement::solicited_advertisement_destination(&msg);
+                                    let solicitation_now = Instant::now();
+                                    let solicited_due = solicited_destination.is_some()
+                                        && last_solicited_advertisement.is_none_or(|sent| {
+                                            solicitation_now.duration_since(sent)
+                                                >= advertisement::SOLICITED_ADVERTISEMENT_MIN_INTERVAL
+                                        });
+                                    let (
+                                        npdu_result,
+                                        disconnect_ack,
+                                        fatal_result,
+                                        state_change,
+                                        solicited_advertisement,
+                                    ) = {
                                         let mut c = conn.lock().await;
                                         let before_state = c.state;
                                         let npdu = c.handle_received(&msg);
                                         let ack = c.disconnect_ack_to_send.take();
                                         let after_state = c.state;
+                                        let solicited = if solicited_due
+                                            && after_state == ScConnectionState::Connected
+                                        {
+                                            solicited_destination.map(|destination| {
+                                                let hub_status = match active_hub {
+                                                    ActiveHub::Primary => 1,
+                                                    ActiveHub::Failover => 2,
+                                                };
+                                                c.build_solicited_advertisement(
+                                                    destination,
+                                                    hub_status,
+                                                )
+                                            })
+                                        } else {
+                                            None
+                                        };
                                         (
                                             npdu,
                                             ack,
                                             msg.function == ScFunction::Result
                                                 && after_state == ScConnectionState::Disconnected,
                                             (after_state != before_state).then_some(after_state),
+                                            solicited,
                                         )
                                     };
                                     if let Some(state) = state_change {
                                         state_tx.send_replace(state);
+                                    }
+
+                                    // Best-effort solicited reply (Heartbeat-ACK precedent:
+                                    // no rejection budget — the rate gate above is the
+                                    // storm protection). The timestamp is claimed at the
+                                    // send decision so a slow socket cannot re-arm the
+                                    // gate into a burst.
+                                    if let Some(reply) = solicited_advertisement {
+                                        last_solicited_advertisement = Some(solicitation_now);
+                                        let mut reply_buf = BytesMut::new();
+                                        encode_sc_message(&mut reply_buf, &reply);
+                                        if let Err(e) = ws_clone.send(&reply_buf).await {
+                                            warn!(
+                                                "BACnet/SC solicited advertisement send error: {}",
+                                                e
+                                            );
+                                        }
                                     }
 
                                     if let Some((npdu, source_vmac)) = npdu_result {
