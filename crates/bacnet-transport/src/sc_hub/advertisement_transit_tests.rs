@@ -230,9 +230,10 @@ async fn advertisement_transit_result_for_4_and_5_relay_and_others_drop() {
     }
     assert_eq!(cases, [192, 192]);
     // Results for responses and other known functions stay dropped.
-    // Proprietary (0x0C) graduated to its own transit family and relays.
+    // Proprietary (0x0C) graduated to its own transit family and relays;
+    // Address-Resolution-ACK (0x03) relays via the resolution family.
     let (mut hub, mut b, mut a) = matrix_pair(&tls, true, 0x43, 0x42).await;
-    for result_for in [0, 3, 6, 7, 8, 9, 10, 11] {
+    for result_for in [0, 6, 7, 8, 9, 10, 11] {
         send(
             &mut b,
             raw(0, 0, None, Some([0x42; 6]), 0, &[result_for, 0]),

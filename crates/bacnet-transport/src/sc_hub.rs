@@ -5,7 +5,10 @@
 //! 1. **Connection handshake** — responds to `ConnectRequest` with `ConnectAccept`.
 //! 2. **Message relay** — forwards `EncapsulatedNpdu`, addressed Unknown functions,
 //!    unicast Address-Resolution/ACK, unicast Advertisement/Solicitation,
-//!    unicast/broadcast Proprietary-Message, and permitted routed `Result` messages.
+//!    unicast/broadcast Proprietary-Message, and permitted routed `Result` messages
+//!    (for 0x01/0x02/0x03/0x04/0x05/0x0C/Unknown; Results for 0x00/0x06–0x0B stay
+//!    dropped). Relayed Results stay opaque with destination-match, no-echo, and
+//!    recipient-cap guards.
 //!    No node URI parsing, discovery, or direct-connection support is implied.
 //! 3. **Heartbeat** — responds to `HeartbeatRequest` with `HeartbeatAck`.
 

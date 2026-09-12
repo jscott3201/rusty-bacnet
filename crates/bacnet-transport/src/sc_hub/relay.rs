@@ -126,10 +126,24 @@ pub(super) async fn relay_result(
             return ResultRelayDisposition::Continue;
         }
     };
+    // General-known Result forwarding rule (AB.5.1/AB.5.3.2): the hub
+    // forwards unicast BVLC messages by destination-VMAC match with no
+    // per-function carve-out. A BVLC-Result is itself a unicast response
+    // (AB.2/AB.2.4); the result_for octet stays opaque payload, and an
+    // unmatched Result is a local matter for the destination node
+    // (AB.3.1.1). Relay set: 0x01 Encapsulated-NPDU, 0x02
+    // Address-Resolution, 0x03 Address-Resolution-ACK (a unicast response
+    // directed at the AR initiator per AB.2.7, returned through the hub
+    // per AB.4.1), 0x04 Advertisement, 0x05 Advertisement-Solicitation,
+    // 0x0C Proprietary-Message, and Unknown. Drop set: 0x00
+    // Result-for-Result (a received Result must not draw a Result per
+    // AB.3.1.1) and 0x06-0x0B connection/heartbeat traffic, which is
+    // connection-peer scoped (AB.5.3.1/AB.6.2), never hub-forwarded.
     if !matches!(
         result_for,
         ScFunction::EncapsulatedNpdu
             | ScFunction::AddressResolution
+            | ScFunction::AddressResolutionAck
             | ScFunction::Advertisement
             | ScFunction::AdvertisementSolicitation
             | ScFunction::ProprietaryMessage
@@ -159,10 +173,13 @@ pub(super) async fn relay_result(
     };
 
     // Preserve EncapsulatedNpdu self-target behavior; only these selected
-    // families have the explicit no-echo rule.
+    // families have the explicit no-echo rule. Address-Resolution-ACK is
+    // unicast-only like the rest of this set (AB.2.7), so self-addressed
+    // Results stay dropped here as well.
     if matches!(
         result_for,
         ScFunction::AddressResolution
+            | ScFunction::AddressResolutionAck
             | ScFunction::Advertisement
             | ScFunction::AdvertisementSolicitation
             | ScFunction::ProprietaryMessage
