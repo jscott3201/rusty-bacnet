@@ -57,7 +57,7 @@ pub(super) async fn stopped(hub: &mut CountedHub) {
 // Semantic matrices must not consume an entire real Connect deadline across
 // hundreds of cases. Each fresh fixture handles only two body/result variants.
 // The observer is registered before the source's five-second deadline starts.
-async fn matrix_pair(
+pub(super) async fn matrix_pair(
     tls: &TestTls,
     registered: bool,
     source_id: u8,
@@ -73,7 +73,7 @@ async fn matrix_pair(
     (hub, source, observer)
 }
 
-async fn matrix_receive(peer: &mut ControlledPeer, expected: &[u8], case: &str) {
+pub(super) async fn matrix_receive(peer: &mut ControlledPeer, expected: &[u8], case: &str) {
     let received = poll_io(peer.ws.next()).await;
     assert!(
         matches!(&received, Some(Ok(Message::Binary(data))) if data.as_ref() == expected),
@@ -87,7 +87,7 @@ async fn matrix_receive(peer: &mut ControlledPeer, expected: &[u8], case: &str) 
     );
 }
 
-async fn matrix_barrier(peer: &mut ControlledPeer, case: &str) {
+pub(super) async fn matrix_barrier(peer: &mut ControlledPeer, case: &str) {
     send(peer, vec![8, 0, 0x55, 0x66, 0x42]).await;
     matrix_receive(peer, &[0, 0, 0x55, 0x66, 8, 1, 0, 0, 7, 0, 7], case).await;
 }
@@ -286,7 +286,7 @@ async fn unknown_transit_local_preregistered_and_invalid_envelopes_no_state_effe
     assert_eq!(cases, [288, 240]);
     // Known-but-unhandled remains the old connection-local 7/150 fallback.
     let (mut hub, mut a, mut b) = matrix_pair(&tls, true, 0x42, 0x43).await;
-    for function in [2, 3, 4, 5, 12] {
+    for function in [4, 5, 12] {
         send(&mut a, raw(function, 7, None, Some([0x43; 6]), 0, &[])).await;
         assert_eq!(
             recv(&mut a).await,
@@ -440,7 +440,7 @@ async fn unknown_transit_result_ack_nak_routing_and_invalid_result_silence() {
         raw(0, 0, None, Some([0x42; 6]), 1, &[0x1E, 0x42, 0]),
     )
     .await;
-    for function in [0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] {
+    for function in [0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] {
         send(&mut b, raw(0, 0, None, Some([0x42; 6]), 0, &[function, 0])).await;
     }
     barrier(&mut b).await;

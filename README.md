@@ -330,6 +330,11 @@ Annex AB security profile or qualification of your credential provisioning.
   a guarded Result return path. Pre-registration frames are not forwarded.
   This does not add general forwarding for other known BVLC functions; see the
   [bounded forwarding and rejection scope](docs/conformance/standard-135-2020-ledger.md#hub-unknown-transit-and-result-return).
+- The hub also supports [unicast Address-Resolution/ACK transit](docs/conformance/standard-135-2020-ledger.md#hub-address-resolution-transit)
+  with opaque URI bytes (including empty ACK lists) and guarded Result-for-Request
+  return. Broadcasts and nonforwardable ACKs are silent. This is **hub transit
+  only**, not node Address-Resolution support, URI parsing/discovery, or direct
+  connections; other known-function forwarding remains outside this scope.
 
 ## Development and contributing
 

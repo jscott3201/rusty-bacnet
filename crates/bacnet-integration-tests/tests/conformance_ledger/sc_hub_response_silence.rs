@@ -159,3 +159,111 @@ fn hub_unknown_transit_evidence_keeps_family_scope_and_existing_lifecycle() {
     assert!(read_repo_file("CHANGELOG.md").contains("#hub-unknown-transit-and-result-return"));
     assert_eq!(sc_identity_closeout().matches("\n| A").count(), 6);
 }
+
+#[test]
+fn hub_resolution_transit_is_unicast_hub_only_with_executable_evidence() {
+    let data = ledger();
+    let rows = rows_by_id(&data);
+    let row = rows["BACNET-AB-SC-CONNECTION-STATE"];
+    assert_eq!(rows.len(), 68);
+    assert_eq!(
+        rows.values()
+            .filter(|r| r["status"] == "supported-with-clause-evidence")
+            .count(),
+        19
+    );
+    assert_eq!(
+        row["status"],
+        "implementation-present-needs-state-machine-audit"
+    );
+    assert_eq!(data["reviewed_at"], "2026-08-13");
+    assert_eq!(data["repo_sha"], "f485021f5cd7058ac406d57d3d317936cbe7b361");
+    let policy = row["hub_resolution_transit"].as_str().unwrap();
+    for phrase in [
+        "HUB-only",
+        "Request0x02/ACK0x03",
+        "AB.2.6/.1",
+        "AB.2.7/.1",
+        "zero-byte ACK URI lists",
+        "AB.5.1/AB.5.3.2",
+        "no self echo",
+        "encoded BVLC limits only",
+        "not Max-NPDU",
+        "Every nonforwardable ACK is silent",
+        "7/150 UNEXPECTED_DATA",
+        "marker zero",
+        "same socket only",
+        "not AB.3.3 node behavior",
+        "ResultFor3 stays dropped",
+        "no Result-on-Result",
+        "Pending ACK timeout was already independent",
+        "no new timers or write budgets",
+        "NODE production/fatal ResultFor2 policy unchanged",
+        "raw B owns AR semantics",
+        "No node URI discovery, URI parser, dialing, direct connections",
+        "not rollback",
+        "open/partial",
+        "68/19/statuses/global/historical/#517 A1-A6 preserved",
+    ] {
+        assert!(policy.contains(phrase), "{phrase}");
+    }
+    for file in [
+        "crates/bacnet-transport/src/sc_hub/opaque_relay.rs",
+        "crates/bacnet-transport/src/sc_hub/resolution_transit.rs",
+        "crates/bacnet-transport/src/sc_hub/resolution_transit_tests.rs",
+        "crates/bacnet-transport/src/sc_hub/resolution_transit_lifecycle_tests.rs",
+    ] {
+        assert!(row["code_anchors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == file));
+        assert!(!read_repo_file(file).is_empty());
+    }
+    let mut count = 0;
+    for field in ["positive_tests", "negative_tests"] {
+        for anchor in row[field].as_array().unwrap() {
+            let anchor = anchor.as_str().unwrap();
+            if !anchor.contains("resolution_transit") {
+                continue;
+            }
+            let parts: Vec<_> = anchor.split("::").collect();
+            let source = read_repo_file(parts[0]);
+            let name = parts.last().unwrap();
+            assert!(
+                source.contains(&format!("fn {name}(")) || source.contains(&format!("def {name}(")),
+                "{anchor}"
+            );
+            count += 1;
+        }
+    }
+    assert_eq!(count, 12);
+    let section = STANDARD_LEDGER
+        .split_once("## Hub Address-Resolution transit\n")
+        .unwrap()
+        .1
+        .split("\n## ")
+        .next()
+        .unwrap()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    for phrase in [
+        "Base Standard 135-2020",
+        "zero bytes",
+        "not endpoint format conformance",
+        "not AB.3.3 node behavior",
+        "same socket only",
+        "ResultFor3 remains dropped",
+        "192 preregistered and 168 registered",
+        "192 preregistered and 192 registered",
+        "native NODE does not implement AR responses",
+        "#519 remains open/partial",
+    ] {
+        assert!(section.contains(phrase), "{phrase}");
+    }
+    for file in ["README.md", "CHANGELOG.md"] {
+        assert!(read_repo_file(file).contains("#hub-address-resolution-transit"));
+    }
+    assert_eq!(sc_identity_closeout().matches("\n| A").count(), 6);
+}
