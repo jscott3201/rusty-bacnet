@@ -12,6 +12,7 @@
 use bacnet_types::error::Error;
 use bytes::{BufMut, Bytes, BytesMut};
 
+mod address_resolution;
 mod advertisement;
 mod connect;
 mod control;
@@ -19,6 +20,7 @@ mod npdu;
 mod proprietary;
 mod result;
 
+pub(crate) use address_resolution::address_resolution_message_error;
 pub(crate) use advertisement::advertisement_message_error;
 pub(crate) use proprietary::proprietary_message_error;
 

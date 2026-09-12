@@ -417,6 +417,13 @@ impl ScConnection {
                 // NPDU delivery or state change.
                 None
             }
+            ScFunction::AddressResolution | ScFunction::AddressResolutionAck => {
+                // Validated before activity by the rejection gate. Answering,
+                // discovery, and dialing remain later work; well-formed bodies
+                // stay consumed without NPDU delivery or state change so this
+                // handler stays pure.
+                None
+            }
             _ => None,
         }
     }

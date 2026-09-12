@@ -22,6 +22,7 @@ use crate::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, Vmac, BR
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 
+mod address_resolution;
 mod advertisement;
 mod connect_result;
 mod connection;
@@ -79,7 +80,7 @@ pub trait WebSocketPort: Send + Sync + 'static {
 
 /// BACnet/SC transport implementing [`TransportPort`].
 ///
-/// Node control/source/Must-Understand/missing-NPDU-payload/unknown-function NAKs use the
+/// Node control/source/Must-Understand/missing-NPDU-payload/address-resolution/unknown-function NAKs use the
 /// remaining accepted-activity heartbeat budget. On expiry the send future is dropped and the socket
 /// is retired from transport-initiated I/O, including reconnect/primary restore.
 /// This local policy is not a deadline for other writes or a hard real-time bound:
@@ -865,6 +866,9 @@ mod proprietary_tests;
 
 #[cfg(test)]
 mod unknown_function_tests;
+
+#[cfg(test)]
+mod address_resolution_tests;
 
 #[cfg(test)]
 mod advertisement_tests;
