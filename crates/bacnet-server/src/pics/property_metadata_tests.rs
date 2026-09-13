@@ -1,5 +1,5 @@
 use bacnet_objects::{
-    analog::AnalogInputObject,
+    analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject},
     audit::AuditReporterObject,
     binary::BinaryInputObject,
     event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject},
@@ -297,7 +297,7 @@ fn pics_audit_reporter_metadata_is_complete_and_exact() {
 }
 
 #[test]
-fn pics_analog_input_property_metadata_is_exact_for_each_configuration() {
+fn pics_analog_property_metadata_is_exact_for_each_configuration() {
     use bacnet_objects::traits::BACnetObject;
     use PropertyIdentifier as P;
 
@@ -331,43 +331,77 @@ fn pics_analog_input_property_metadata_is_exact_for_each_configuration() {
         (P::PROPERTY_LIST, false, false),
     ];
     for configuration in 0..8 {
-        let mut object = AnalogInputObject::new(1, "AI-1", 62).unwrap();
-        let mut expected = base.to_vec();
+        let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+        let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+        let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
         if configuration & 1 != 0 {
-            object.configure_fault_out_of_range(-10.0, 100.0).unwrap();
-            expected.extend([
-                (P::FAULT_HIGH_LIMIT, true, false),
-                (P::FAULT_LOW_LIMIT, true, false),
-            ]);
+            ai.configure_fault_out_of_range(-10.0, 100.0).unwrap();
+            av.configure_fault_out_of_range(-10.0, 100.0).unwrap();
         }
-        if configuration & 2 != 0 {
-            object.set_min_pres_value(-20.0);
-            expected.push((P::MIN_PRES_VALUE, true, false));
+        macro_rules! bounds {
+            ($object:ident) => {
+                if configuration & 2 != 0 {
+                    $object.set_min_pres_value(-20.0);
+                }
+                if configuration & 4 != 0 {
+                    $object.set_max_pres_value(120.0);
+                }
+            };
         }
-        if configuration & 4 != 0 {
-            object.set_max_pres_value(120.0);
-            expected.push((P::MAX_PRES_VALUE, true, false));
+        bounds!(ai);
+        bounds!(av);
+        bounds!(ao);
+        let objects: [Box<dyn BACnetObject>; 3] = [Box::new(ai), Box::new(av), Box::new(ao)];
+        for object in objects {
+            let kind = object.object_identifier().object_type();
+            let mut expected = base.to_vec();
+            if kind != ObjectType::ANALOG_INPUT {
+                let optional = kind == ObjectType::ANALOG_VALUE;
+                expected.splice(
+                    10..10,
+                    [
+                        (P::PRIORITY_ARRAY, optional, true),
+                        (P::RELINQUISH_DEFAULT, optional, true),
+                        (P::CURRENT_COMMAND_PRIORITY, optional, false),
+                    ],
+                );
+            }
+            if configuration & 1 != 0 && kind != ObjectType::ANALOG_OUTPUT {
+                expected.extend([
+                    (P::FAULT_HIGH_LIMIT, true, false),
+                    (P::FAULT_LOW_LIMIT, true, false),
+                ]);
+            }
+            if configuration & 2 != 0 {
+                expected.push((P::MIN_PRES_VALUE, true, false));
+            }
+            if configuration & 4 != 0 {
+                expected.push((P::MAX_PRES_VALUE, true, false));
+            }
+            let required = object.required_properties();
+            let mut db = ObjectDatabase::new();
+            db.add(object).unwrap();
+            let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+            let support = &pics.supported_object_types[0];
+            assert_eq!(support.object_type, kind);
+            if kind != ObjectType::ANALOG_INPUT {
+                assert_eq!(support.createable, kind == ObjectType::ANALOG_OUTPUT);
+            }
+            let rows: Vec<_> = support
+                .supported_properties
+                .iter()
+                .map(|row| {
+                    assert!(row.access.readable);
+                    (row.property_id, row.access.optional, row.access.writable)
+                })
+                .collect();
+            assert_eq!(rows, expected, "configuration {configuration}");
+            assert_eq!(
+                rows.iter()
+                    .filter_map(|&(p, optional, _)| (!optional).then_some(p))
+                    .collect::<Vec<_>>(),
+                required.as_ref()
+            );
         }
-        let required = object.required_properties();
-        let mut db = ObjectDatabase::new();
-        db.add(Box::new(object)).unwrap();
-        let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
-        let support = &pics.supported_object_types[0];
-        assert_eq!(support.object_type, ObjectType::ANALOG_INPUT);
-        let rows: Vec<_> = support
-            .supported_properties
-            .iter()
-            .map(|row| {
-                assert!(row.access.readable);
-                (row.property_id, row.access.optional, row.access.writable)
-            })
-            .collect();
-        assert_eq!(rows, expected, "configuration {configuration}");
-        assert_eq!(
-            rows.iter()
-                .filter_map(|&(p, optional, _)| (!optional).then_some(p))
-                .collect::<Vec<_>>(),
-            required.as_ref()
-        );
     }
 }

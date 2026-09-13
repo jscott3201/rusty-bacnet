@@ -496,13 +496,13 @@ fn rpm_explicit_index_returns_one_multistate_event_message() {
 fn rpm_handler_required_vs_optional() {
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
-        bacnet_objects::analog::AnalogValueObject::new(1, "AV-1", 62).unwrap(),
+        bacnet_objects::value_types::DateValueObject::new(1, "DV-1").unwrap(),
     ))
     .unwrap();
-    let oid = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap();
+    let oid = ObjectIdentifier::new(ObjectType::DATE_VALUE, 1).unwrap();
     assert!(
         db.get(&oid).unwrap().property_metadata().is_empty(),
-        "Analog Value intentionally exercises the legacy RPM fallback"
+        "Date Value intentionally exercises the legacy RPM fallback"
     );
 
     use bacnet_services::common::PropertyReference;
