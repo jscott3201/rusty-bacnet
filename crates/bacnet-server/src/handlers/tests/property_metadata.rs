@@ -326,8 +326,8 @@ fn rpm_metadata_selectors_are_exact_for_audit_reporter() {
 }
 
 #[test]
-fn rpm_metadata_analog_input_required_optional_and_budgeted_bytes_agree() {
-    use bacnet_objects::analog::AnalogInputObject;
+fn rpm_metadata_analog_required_optional_and_budgeted_bytes_agree() {
+    use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
     use bacnet_objects::traits::BACnetObject;
     use PropertyIdentifier as P;
 
@@ -361,89 +361,151 @@ fn rpm_metadata_analog_input_required_optional_and_budgeted_bytes_agree() {
         P::EVENT_MESSAGE_TEXTS,
     ];
     for configuration in 0..8 {
-        let mut object = AnalogInputObject::new(1, "AI-1", 62).unwrap();
-        let mut expected_optional = optional.clone();
+        let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+        let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+        let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
         if configuration & 1 != 0 {
-            object.configure_fault_out_of_range(-10.0, 100.0).unwrap();
-            expected_optional.extend([P::FAULT_HIGH_LIMIT, P::FAULT_LOW_LIMIT]);
+            ai.configure_fault_out_of_range(-10.0, 100.0).unwrap();
+            av.configure_fault_out_of_range(-10.0, 100.0).unwrap();
         }
-        if configuration & 2 != 0 {
-            object.set_min_pres_value(-20.0);
-            expected_optional.push(P::MIN_PRES_VALUE);
+        macro_rules! bounds {
+            ($object:ident) => {
+                if configuration & 2 != 0 {
+                    $object.set_min_pres_value(-20.0);
+                }
+                if configuration & 4 != 0 {
+                    $object.set_max_pres_value(120.0);
+                }
+            };
         }
-        if configuration & 4 != 0 {
-            object.set_max_pres_value(120.0);
-            expected_optional.push(P::MAX_PRES_VALUE);
-        }
-        let oid = object.object_identifier();
-        let all = object.property_list().into_owned();
-        let metadata = object.property_metadata().into_owned();
-        let mut db = ObjectDatabase::new();
-        db.add(Box::new(object)).unwrap();
+        bounds!(ai);
+        bounds!(av);
+        bounds!(ao);
+        let objects: [Box<dyn BACnetObject>; 3] = [Box::new(ai), Box::new(av), Box::new(ao)];
+        for object in objects {
+            let oid = object.object_identifier();
+            let kind = oid.object_type();
+            let mut expected_required = required.clone();
+            let mut expected_optional = optional.clone();
+            let commandable = [
+                P::PRIORITY_ARRAY,
+                P::RELINQUISH_DEFAULT,
+                P::CURRENT_COMMAND_PRIORITY,
+            ];
+            if kind == ObjectType::ANALOG_OUTPUT {
+                expected_required.extend(commandable);
+            } else if kind == ObjectType::ANALOG_VALUE {
+                expected_optional.splice(2..2, commandable);
+            }
+            if configuration & 1 != 0 && kind != ObjectType::ANALOG_OUTPUT {
+                expected_optional.extend([P::FAULT_HIGH_LIMIT, P::FAULT_LOW_LIMIT]);
+            }
+            if configuration & 2 != 0 {
+                expected_optional.push(P::MIN_PRES_VALUE);
+            }
+            if configuration & 4 != 0 {
+                expected_optional.push(P::MAX_PRES_VALUE);
+            }
+            let all = object.property_list().into_owned();
+            let metadata = object.property_metadata().into_owned();
+            let mut db = ObjectDatabase::new();
+            db.add(object).unwrap();
 
-        for (selector, expected) in [
-            (P::REQUIRED, &required),
-            (P::OPTIONAL, &expected_optional),
-            (P::ALL, &all),
-        ] {
-            assert_eq!(rpm_property_ids(&db, oid, selector), *expected);
-            let projected: Vec<_> = metadata
-                .iter()
-                .filter_map(|row| {
-                    let selected = row.property_identifier != P::PROPERTY_LIST
-                        && match selector {
-                            P::REQUIRED => row.conformance.is_required(),
-                            P::OPTIONAL => !row.conformance.is_required(),
-                            _ => true,
-                        };
-                    selected.then_some(row.property_identifier)
-                })
-                .collect();
-            assert_eq!(projected, *expected);
+            for (selector, expected) in [
+                (P::REQUIRED, &expected_required),
+                (P::OPTIONAL, &expected_optional),
+                (P::ALL, &all),
+            ] {
+                assert_eq!(rpm_property_ids(&db, oid, selector), *expected);
+                let projected: Vec<_> = metadata
+                    .iter()
+                    .filter_map(|row| {
+                        let selected = row.property_identifier != P::PROPERTY_LIST
+                            && match selector {
+                                P::REQUIRED => row.conformance.is_required(),
+                                P::OPTIONAL => !row.conformance.is_required(),
+                                _ => true,
+                            };
+                        selected.then_some(row.property_identifier)
+                    })
+                    .collect();
+                assert_eq!(projected, *expected);
 
-            let request = ReadPropertyMultipleRequest {
-                list_of_read_access_specs: vec![ReadAccessSpecification {
-                    object_identifier: oid,
-                    list_of_property_references: vec![PropertyReference {
-                        property_identifier: selector,
-                        property_array_index: None,
+                let request = ReadPropertyMultipleRequest {
+                    list_of_read_access_specs: vec![ReadAccessSpecification {
+                        object_identifier: oid,
+                        list_of_property_references: vec![PropertyReference {
+                            property_identifier: selector,
+                            property_array_index: None,
+                        }],
                     }],
-                }],
-            };
-            let mut request_bytes = BytesMut::new();
-            request.encode(&mut request_bytes);
-            let mut legacy = BytesMut::new();
-            handle_read_property_multiple(&db, &request_bytes, &mut legacy).unwrap();
-            let mut bounded = BytesMut::new();
-            let budget = crate::server::ReadPropertyMultipleBudget {
-                max_result_elements: expected.len(),
-                max_service_ack_bytes: legacy.len(),
-            };
-            super::super::rpm_budget::handle_rpm_budgeted(
-                &db,
-                &request_bytes,
-                &mut bounded,
-                budget,
-            )
-            .unwrap();
-            assert_eq!(
-                bounded, legacy,
-                "{selector:?}, configuration {configuration}"
-            );
-            let mut prefix = BytesMut::from(&b"prefix"[..]);
-            assert!(matches!(
+                };
+                let mut request_bytes = BytesMut::new();
+                request.encode(&mut request_bytes);
+                let mut legacy = BytesMut::new();
+                handle_read_property_multiple(&db, &request_bytes, &mut legacy).unwrap();
+                // Explicit property reads are an independent selector-expansion oracle.
+                let explicit = ReadPropertyMultipleRequest {
+                    list_of_read_access_specs: vec![ReadAccessSpecification {
+                        object_identifier: oid,
+                        list_of_property_references: expected
+                            .iter()
+                            .map(|&property_identifier| PropertyReference {
+                                property_identifier,
+                                property_array_index: None,
+                            })
+                            .collect(),
+                    }],
+                };
+                let mut explicit_request = BytesMut::new();
+                explicit.encode(&mut explicit_request);
+                let mut explicit_ack = BytesMut::new();
+                handle_read_property_multiple(&db, &explicit_request, &mut explicit_ack).unwrap();
+                assert_eq!(legacy, explicit_ack);
+                let mut bounded = BytesMut::new();
+                let budget = crate::server::ReadPropertyMultipleBudget {
+                    max_result_elements: expected.len(),
+                    max_service_ack_bytes: legacy.len(),
+                };
                 super::super::rpm_budget::handle_rpm_budgeted(
                     &db,
                     &request_bytes,
-                    &mut prefix,
-                    crate::server::ReadPropertyMultipleBudget {
-                        max_result_elements: expected.len() - 1,
-                        ..budget
-                    }
-                ),
-                Err(super::super::rpm_budget::RpmFailure::Work)
-            ));
-            assert_eq!(&prefix[..], b"prefix");
+                    &mut bounded,
+                    budget,
+                )
+                .unwrap();
+                assert_eq!(
+                    bounded, legacy,
+                    "{selector:?}, configuration {configuration}"
+                );
+                let mut prefix = BytesMut::from(&b"prefix"[..]);
+                assert!(matches!(
+                    super::super::rpm_budget::handle_rpm_budgeted(
+                        &db,
+                        &request_bytes,
+                        &mut prefix,
+                        crate::server::ReadPropertyMultipleBudget {
+                            max_result_elements: expected.len() - 1,
+                            ..budget
+                        }
+                    ),
+                    Err(super::super::rpm_budget::RpmFailure::Work)
+                ));
+                assert_eq!(&prefix[..], b"prefix");
+                assert!(matches!(
+                    super::super::rpm_budget::handle_rpm_budgeted(
+                        &db,
+                        &request_bytes,
+                        &mut prefix,
+                        crate::server::ReadPropertyMultipleBudget {
+                            max_service_ack_bytes: legacy.len() - 1,
+                            ..budget
+                        }
+                    ),
+                    Err(super::super::rpm_budget::RpmFailure::Bytes)
+                ));
+                assert_eq!(&prefix[..], b"prefix");
+            }
         }
     }
 }
