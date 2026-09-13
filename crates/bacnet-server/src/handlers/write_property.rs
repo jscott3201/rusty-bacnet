@@ -50,6 +50,19 @@ pub(crate) fn handle_write_property_multiple_detailed(
     service_data: &[u8],
     snapshots: &mut crate::life_safety_cov::LifeSafetyCovSnapshots,
 ) -> WritePropertyMultipleOutcome {
+    handle_write_property_multiple_authorized(db, service_data, snapshots, None)
+}
+
+type WritePropertyMultipleGate<'a> =
+    &'a dyn Fn(&bacnet_services::wpm::WritePropertyAttempt) -> Result<(), Error>;
+
+/// Optional per-element gate; `None` preserves the existing incremental path.
+pub(crate) fn handle_write_property_multiple_authorized(
+    db: &mut ObjectDatabase,
+    service_data: &[u8],
+    snapshots: &mut crate::life_safety_cov::LifeSafetyCovSnapshots,
+    authorize: Option<WritePropertyMultipleGate<'_>>,
+) -> WritePropertyMultipleOutcome {
     let mut cursor = WritePropertyMultipleCursor::new(service_data);
     let mut committed_oids = Vec::new();
 
@@ -77,7 +90,7 @@ pub(crate) fn handle_write_property_multiple_detailed(
         let WritePropertyMultipleEvent::WriteAttempt(attempt) = event else {
             continue;
         };
-        let reference = attempt.reference;
+        let reference = attempt.reference.clone();
         let oid = reference.object_identifier;
         let property = PropertyIdentifier::from_raw(reference.property_identifier);
 
@@ -109,6 +122,11 @@ pub(crate) fn handle_write_property_multiple_detailed(
             }
         }
 
+        if let Some(authorize) = authorize {
+            if let Err(error) = authorize(&attempt) {
+                return semantic_failure(error, reference, committed_oids);
+            }
+        }
         snapshots.capture_before_write(db, oid);
         let write = db
             .get_mut(&oid)

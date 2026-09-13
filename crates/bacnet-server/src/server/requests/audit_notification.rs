@@ -135,11 +135,11 @@ fn current_unix_millis() -> Result<u64, Error> {
         .map_err(|_| Error::OutOfRange("system time exceeds Unix millisecond range".into()))
 }
 
-fn fail_closed_authorize(authorize: impl FnOnce() -> bool) -> bool {
+pub(super) fn fail_closed_authorize(authorize: impl FnOnce() -> bool) -> bool {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(authorize)).unwrap_or(false)
 }
 
-fn request_denied() -> Error {
+pub(super) fn request_denied() -> Error {
     Error::Protocol {
         class: ErrorClass::SERVICES.to_raw() as u32,
         code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,

@@ -7,6 +7,7 @@ pub mod fault_detection;
 pub mod handlers;
 pub mod life_safety;
 mod life_safety_cov;
+pub mod mutation;
 pub mod pics;
 pub mod schedule;
 pub mod server;

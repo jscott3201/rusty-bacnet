@@ -1217,6 +1217,19 @@ server.stop().await?;
 
 `BACnetServer::builder()` is an alias for `bip_builder()`.
 
+All three Rust builders accept `.mutation_authorizer(|context| ...)`, also
+available as `ServerConfig::mutation_authorizer`. It covers only confirmed
+WriteProperty, WritePropertyMultiple, CreateObject, DeleteObject, AddListElement,
+RemoveListElement, AtomicWriteFile, SubscribeCOV, SubscribeCOVProperty, and
+SubscribeCOVPropertyMultiple. **Omitting it allows existing behavior**, unlike
+Audit/LifeSafety's fail-closed absence. False or panic returns
+`SERVICES / SERVICE_REQUEST_DENIED` without the denied mutation. WPM authorizes
+each element in order and retains an authorized prefix on later denial or
+malformed input; other covered services authorize once after service decoding.
+Callbacks must be fast, nonblocking, and side-effect-free. Context addresses and
+process IDs are claimed, not authenticated identities. DCC/Reinit, Audit/LifeSafety,
+reads, discovery, unconfirmed services, and trusted local writes are unchanged.
+
 Inbound LifeSafetyOperation is fail-closed unless an authorizer is configured.
 The built-in Life Safety Point and Zone objects execute the six silence and
 unsilence operations. `RESET`, `RESET_ALARM`, and `RESET_FAULT` execute only
