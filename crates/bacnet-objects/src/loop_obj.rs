@@ -12,6 +12,8 @@ use std::borrow::Cow;
 use crate::common::{self, read_property_list_property};
 use crate::traits::BACnetObject;
 
+mod metadata;
+
 /// BACnet Loop object — PID control loop configuration and state.
 pub struct LoopObject {
     oid: ObjectIdentifier,
@@ -305,28 +307,12 @@ impl BACnetObject for LoopObject {
         }
     }
 
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_object(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::SETPOINT,
-            PropertyIdentifier::PROPORTIONAL_CONSTANT,
-            PropertyIdentifier::INTEGRAL_CONSTANT,
-            PropertyIdentifier::DERIVATIVE_CONSTANT,
-            PropertyIdentifier::OUTPUT_UNITS,
-            PropertyIdentifier::UPDATE_INTERVAL,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::RELIABILITY,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE,
-            PropertyIdentifier::MANIPULATED_VARIABLE_REFERENCE,
-            PropertyIdentifier::SETPOINT_REFERENCE,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     fn supports_cov(&self) -> bool {
@@ -346,25 +332,6 @@ impl BACnetObject for LoopObject {
         }
         self.reliability = reliability;
         Ok(())
-    }
-
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        // Mirrors the LoopObject `write_property` arms so the PICS and
-        // runtime dispatch share one truth source.
-        matches!(
-            property,
-            PropertyIdentifier::SETPOINT
-                | PropertyIdentifier::PROPORTIONAL_CONSTANT
-                | PropertyIdentifier::INTEGRAL_CONSTANT
-                | PropertyIdentifier::DERIVATIVE_CONSTANT
-                | PropertyIdentifier::UPDATE_INTERVAL
-                | PropertyIdentifier::RELIABILITY
-                | PropertyIdentifier::OUT_OF_SERVICE
-                | PropertyIdentifier::DESCRIPTION
-                | PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE
-                | PropertyIdentifier::MANIPULATED_VARIABLE_REFERENCE
-                | PropertyIdentifier::SETPOINT_REFERENCE
-        )
     }
 }
 

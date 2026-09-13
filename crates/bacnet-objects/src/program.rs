@@ -11,6 +11,8 @@ use std::borrow::Cow;
 use crate::common::{self, read_common_properties};
 use crate::traits::BACnetObject;
 
+mod metadata;
+
 /// Maximum valid program state value (unloaded = 5).
 const PROGRAM_STATE_MAX: u32 = 5;
 
@@ -128,20 +130,12 @@ impl BACnetObject for ProgramObject {
         }
     }
 
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_object(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PROGRAM_STATE,
-            PropertyIdentifier::PROGRAM_CHANGE,
-            PropertyIdentifier::REASON_FOR_HALT,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 }
 
