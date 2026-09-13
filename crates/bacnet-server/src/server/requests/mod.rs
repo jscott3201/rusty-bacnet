@@ -14,8 +14,16 @@ mod endpoint_responder;
 mod endpoint_shared_runtime_tests;
 mod enrollment_summary;
 mod event_information;
+mod mutations;
+use mutations::InitialCovNotification;
 #[cfg(test)]
 mod executed;
+#[cfg(test)]
+mod mutation_boundary_tests;
+#[cfg(test)]
+mod mutation_tests;
+#[cfg(test)]
+mod mutation_wpm_tests;
 mod read_range;
 mod unconfirmed;
 #[cfg(test)]
@@ -46,11 +54,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         req: bacnet_encoding::apdu::ConfirmedRequest,
         reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
     ) {
-        enum InitialCovNotification {
-            Single(CovSubscription),
-            Multiple(Vec<CovSubscription>),
-        }
-
         let invoke_id = req.invoke_id;
         let service_choice = req.service_choice;
         let client_max_apdu = req.max_apdu_length;
@@ -97,42 +100,26 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         };
 
         let mut ack_buf = BytesMut::with_capacity(512);
+        let mutation = mutations::Request {
+            config,
+            source_mac,
+            source_network: source_network.as_ref(),
+            req: &req,
+        };
         let response = match service_choice {
             s if s == ConfirmedServiceChoice::READ_PROPERTY => {
                 confirmed_response::read_property_response(db, &req).await
             }
             s if s == ConfirmedServiceChoice::WRITE_PROPERTY => {
-                let (result, exact_changes, plans) = {
-                    let mut db = db.write().await;
-                    let snapshots =
-                        crate::life_safety_cov::LifeSafetyCovSnapshots::capture_write_property(
-                            &db,
-                            &req.service_request,
-                        );
-                    let result = handlers::handle_write_property(&mut db, &req.service_request);
-                    let changes = result
-                        .as_ref()
-                        .map(|oid| snapshots.changes(&db, std::slice::from_ref(oid)))
-                        .unwrap_or_default();
-                    let plans = result.as_ref().map_or_else(
-                        |_| Vec::new(),
-                        |oid| Self::take_staging_plans(&mut db, std::slice::from_ref(oid)),
-                    );
-                    (result, changes, plans)
-                };
-                staging_plans.extend(plans);
-                match result {
-                    Ok(oid) => {
-                        written_oids.push(oid);
-                        if crate::life_safety_cov::is_life_safety_object(oid) {
-                            life_safety_cov_changes = exact_changes;
-                        } else {
-                            coarse_cov_oids.push(oid);
-                        }
-                        simple_ack()
-                    }
-                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
-                }
+                mutation
+                    .write_property::<T>(
+                        db,
+                        &mut written_oids,
+                        &mut coarse_cov_oids,
+                        &mut life_safety_cov_changes,
+                        &mut staging_plans,
+                    )
+                    .await
             }
             s if s == ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE => {
                 let db = db.read().await;
@@ -158,136 +145,31 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
             s if s == ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE => {
-                let (outcome, exact_changes, plans) = {
-                    let mut db = db.write().await;
-                    let mut snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::default();
-                    let outcome = handlers::handle_write_property_multiple_detailed(
-                        &mut db,
-                        &req.service_request,
-                        &mut snapshots,
-                    );
-                    let committed_oids = match &outcome {
-                        handlers::WritePropertyMultipleOutcome::Success { committed_oids }
-                        | handlers::WritePropertyMultipleOutcome::Error {
-                            committed_oids, ..
-                        } => committed_oids.as_slice(),
-                        handlers::WritePropertyMultipleOutcome::Reject { .. } => &[],
-                    };
-                    let changes = snapshots.changes(&db, committed_oids);
-                    let plans = Self::take_staging_plans(&mut db, committed_oids);
-                    (outcome, changes, plans)
-                };
-                staging_plans.extend(plans);
-                let response = match outcome {
-                    handlers::WritePropertyMultipleOutcome::Success { committed_oids } => {
-                        written_oids = committed_oids;
-                        simple_ack()
-                    }
-                    handlers::WritePropertyMultipleOutcome::Error {
-                        error,
-                        first_failed_write_attempt,
-                        committed_oids,
-                    } => {
-                        written_oids = committed_oids;
-                        let (error_class, error_code) = confirmed_response::error_fields(&error);
-                        Apdu::Error(
-                            bacnet_services::wpm::WritePropertyMultipleError {
-                                error_class,
-                                error_code,
-                                first_failed_write_attempt,
-                            }
-                            .to_error_pdu(invoke_id),
-                        )
-                    }
-                    handlers::WritePropertyMultipleOutcome::Reject { reason } => {
-                        Apdu::Reject(RejectPdu {
-                            invoke_id,
-                            reject_reason: reason,
-                        })
-                    }
-                };
-                coarse_cov_oids.extend(
-                    written_oids
-                        .iter()
-                        .copied()
-                        .filter(|oid| !crate::life_safety_cov::is_life_safety_object(*oid)),
-                );
-                life_safety_cov_changes = exact_changes;
-                response
+                mutation
+                    .write_property_multiple::<T>(
+                        db,
+                        &mut written_oids,
+                        &mut coarse_cov_oids,
+                        &mut life_safety_cov_changes,
+                        &mut staging_plans,
+                    )
+                    .await
             }
             s if s == ConfirmedServiceChoice::SUBSCRIBE_COV => {
-                let db = db.read().await;
-                let mut table = cov_table.write().await;
-                match handlers::handle_subscribe_cov_with_initial_endpoint(
-                    &mut table,
-                    &db,
-                    source_mac,
-                    source_network.as_ref(),
-                    &req.service_request,
-                ) {
-                    Ok(subscriptions) => {
-                        initial_cov_notifications.extend(
-                            subscriptions
-                                .into_iter()
-                                .map(InitialCovNotification::Single),
-                        );
-                        simple_ack()
-                    }
-                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
-                }
+                mutation
+                    .subscribe_cov::<T>(db, cov_table, &mut initial_cov_notifications)
+                    .await
             }
             s if s == ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY => {
-                let db = db.read().await;
-                let mut table = cov_table.write().await;
-                match handlers::handle_subscribe_cov_property_with_initial_endpoint(
-                    &mut table,
-                    &db,
-                    source_mac,
-                    source_network.as_ref(),
-                    &req.service_request,
-                ) {
-                    Ok(subscriptions) => {
-                        initial_cov_notifications.extend(
-                            subscriptions
-                                .into_iter()
-                                .map(InitialCovNotification::Single),
-                        );
-                        simple_ack()
-                    }
-                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
-                }
+                mutation
+                    .subscribe_cov_property::<T>(db, cov_table, &mut initial_cov_notifications)
+                    .await
             }
             s if s == ConfirmedServiceChoice::CREATE_OBJECT => {
-                let result = {
-                    let mut db = db.write().await;
-                    handlers::handle_create_object(&mut db, &req.service_request, &mut ack_buf)
-                };
-                match result {
-                    Ok(()) => complex_ack(ack_buf),
-                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
-                }
+                mutation.create_object::<T>(db, ack_buf).await
             }
             s if s == ConfirmedServiceChoice::DELETE_OBJECT => {
-                let deleted_oid =
-                    bacnet_services::object_mgmt::DeleteObjectRequest::decode(&req.service_request)
-                        .ok()
-                        .map(|r| r.object_identifier);
-
-                let result = {
-                    let mut db = db.write().await;
-                    handlers::handle_delete_object(&mut db, &req.service_request)
-                };
-                match result {
-                    Ok(()) => {
-                        // Clean up COV subscriptions for the deleted object
-                        if let Some(oid) = deleted_oid {
-                            let mut table = cov_table.write().await;
-                            table.remove_for_object(oid);
-                        }
-                        simple_ack()
-                    }
-                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
-                }
+                mutation.delete_object::<T>(db, cov_table).await
             }
             s if s == ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL => {
                 dcc::response::<T>(
@@ -345,27 +227,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 )
             }
             s if s == ConfirmedServiceChoice::ATOMIC_WRITE_FILE => {
-                let mut db = db.write().await;
-                Self::atomic_write_file_response(
-                    &mut db,
-                    invoke_id,
-                    &req.service_request,
-                    config.atomic_write_file_budget,
-                )
+                mutation.atomic_write_file::<T>(db).await
             }
             s if s == ConfirmedServiceChoice::ADD_LIST_ELEMENT => {
-                let mut db = db.write().await;
-                match handlers::handle_add_list_element(&mut db, &req.service_request) {
-                    Ok(()) => simple_ack(),
-                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
-                }
+                mutation.add_list_element::<T>(db).await
             }
             s if s == ConfirmedServiceChoice::REMOVE_LIST_ELEMENT => {
-                let mut db = db.write().await;
-                match handlers::handle_remove_list_element(&mut db, &req.service_request) {
-                    Ok(()) => simple_ack(),
-                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
-                }
+                mutation.remove_list_element::<T>(db).await
             }
             s if s == ConfirmedServiceChoice::GET_ALARM_SUMMARY => {
                 let db = db.read().await;
@@ -485,33 +353,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
             s if s == ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE => {
-                let decoded =
-                    bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleRequest::decode(
-                        &req.service_request,
-                    );
-                match decoded {
-                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
-                    Ok(request) => {
-                        let db = db.read().await;
-                        let mut table = cov_table.write().await;
-                        match handlers::handle_subscribe_cov_property_multiple_request_endpoint(
-                            &mut table,
-                            &db,
-                            source_mac,
-                            source_network.as_ref(),
-                            request,
-                        ) {
-                            Ok(subscriptions) => {
-                                if !subscriptions.is_empty() {
-                                    initial_cov_notifications
-                                        .push(InitialCovNotification::Multiple(subscriptions));
-                                }
-                                simple_ack()
-                            }
-                            Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
-                        }
-                    }
-                }
+                mutation
+                    .subscribe_cov_property_multiple::<T>(
+                        db,
+                        cov_table,
+                        &mut initial_cov_notifications,
+                    )
+                    .await
             }
             _ => {
                 debug!(
