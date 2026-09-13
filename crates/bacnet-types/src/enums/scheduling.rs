@@ -1,9 +1,9 @@
 // ===========================================================================
-// Timer enums (Clause 12.31)
+// Timer enums
 // ===========================================================================
 
 bacnet_enum! {
-    /// BACnet timer state (Clause 12.31, new in 135-2020).
+    /// BACnet timer state: idle, running, or expired.
     pub struct TimerState(u32);
 
     const IDLE = 0;
@@ -12,7 +12,7 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
-    /// BACnet timer state transition (Clause 12.31, new in 135-2020).
+    /// BACnet timer state transition.
     pub struct TimerTransition(u32);
 
     const NONE = 0;
