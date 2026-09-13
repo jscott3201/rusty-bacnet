@@ -104,12 +104,14 @@ pub(super) async fn handle_network_message(
             offset += 2;
 
             if table.len() >= MAX_LEARNED_ROUTES && table.lookup(net).is_none() {
+                table.record_learning_cap();
                 warn!("Router table learned routes cap ({MAX_LEARNED_ROUTES}) reached, ignoring further networks");
                 break;
             }
 
             if table.add_learned_with_flap_detection(net, port_idx, MacAddr::from_slice(source_mac))
             {
+                table.record_learned();
                 debug!(
                     network = net,
                     port = port_idx,
@@ -148,18 +150,7 @@ pub(super) async fn handle_network_message(
             );
             {
                 let mut tbl = table.lock().await;
-                if let Some(entry) = tbl.lookup(rejected_net) {
-                    if !entry.directly_connected {
-                        match reason {
-                            1 => tbl.mark_unreachable(rejected_net),
-                            2 => tbl
-                                .mark_busy(rejected_net, Instant::now() + Duration::from_secs(30)),
-                            _ => {
-                                tbl.remove(rejected_net);
-                            }
-                        }
-                    }
-                }
+                tbl.apply_reject(rejected_net, port_idx, reason, Instant::now());
             }
 
             // Relay the reject to the originating node if SNET/SADR is present.
@@ -284,10 +275,12 @@ pub(super) async fn handle_network_message(
                     continue; // don't overwrite existing routes
                 }
                 if tbl.len() >= MAX_LEARNED_ROUTES {
+                    tbl.record_learning_cap();
                     warn!("Init-Routing-Table: route cap reached, ignoring further entries");
                     break;
                 }
                 tbl.add_learned(net, port_idx, MacAddr::from_slice(source_mac));
+                tbl.record_learned();
                 debug!(
                     network = net,
                     port = port_idx,
@@ -449,9 +442,13 @@ pub(super) async fn handle_network_message(
                 continue;
             }
             if table.len() >= MAX_LEARNED_ROUTES {
+                table.record_learning_cap();
                 break;
             }
-            table.add_learned_with_flap_detection(net, port_idx, MacAddr::from_slice(source_mac));
+            if table.add_learned_with_flap_detection(net, port_idx, MacAddr::from_slice(source_mac))
+            {
+                table.record_learned();
+            }
             debug!(
                 network = net,
                 port = port_idx,

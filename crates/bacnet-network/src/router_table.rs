@@ -9,6 +9,37 @@ use std::time::{Duration, Instant};
 
 use bacnet_types::MacAddr;
 
+// Align with the existing 30s reject-busy deadline: at most one accepted
+// reject-driven change per (ingress port, network) per window without fresh
+// learning. A legitimate unreachable-after-busy signal may wait up to 30s.
+const HOLD_DOWN: Duration = Duration::from_secs(30);
+
+/// Count-only outcomes for routing claims handled by one router table.
+///
+/// All totals saturate at `u64::MAX`, never affect routing decisions, and expose
+/// no peer identities. Learning totals cover inspected I-Am-Router and
+/// Initialize-Routing-Table/ACK entries, not manual table edits or other message
+/// types. Existing cap-triggered early stops remain: their unexamined suffixes
+/// are not classified or counted. Flap warnings are counted at their emission.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RoutingClaimSnapshot {
+    /// Rejects that changed a learned route's effective state or removed it.
+    pub reject_applied: u64,
+    /// Rejects ignored as no-ops or during hold-down (counted once each).
+    pub reject_dampened: u64,
+    /// No-op rejects, including missing routes and directly-connected immunity.
+    /// Busy duplicates do not extend the existing busy deadline.
+    pub reject_dampened_same_state: u64,
+    /// State-changing rejects ignored within 30s of this key's last applied one.
+    pub reject_dampened_hold_down: u64,
+    /// Inspected learning claims that inserted or refreshed a learned route.
+    pub learned_ok: u64,
+    /// Inspected entries that triggered the existing route-cap early stop.
+    pub learned_cap_ignored: u64,
+    /// Flap warnings emitted at the existing port-change threshold.
+    pub flap_warned: u64,
+}
+
 /// Reachability status of a route entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReachabilityStatus {
@@ -48,6 +79,12 @@ pub struct RouteEntry {
 pub struct RouterTable {
     /// Network number → route entry.
     routes: HashMap<u16, RouteEntry>,
+    // Network → (ingress port → last APPLIED reject). Grouping by network makes
+    // re-arming on learning/removal local. Only live learned routes retain
+    // records, at most one per router ingress port; absent/direct spam allocates
+    // nothing. Neither peer MACs nor advertised source addresses are keys.
+    reject_transitions: HashMap<u16, HashMap<usize, Instant>>,
+    claim_counters: RoutingClaimSnapshot,
 }
 
 impl RouterTable {
@@ -55,7 +92,86 @@ impl RouterTable {
     pub fn new() -> Self {
         Self {
             routes: HashMap::new(),
+            reject_transitions: HashMap::new(),
+            claim_counters: RoutingClaimSnapshot::default(),
         }
+    }
+
+    /// Read a consistent, non-resetting copy of this table's routing-claim totals.
+    ///
+    /// For a live router, call `router.table().lock().await.claim_snapshot()`.
+    /// The snapshot owns only counts and remains readable after table drop;
+    /// cloning the table copies, rather than shares, its counters and records.
+    pub fn claim_snapshot(&self) -> RoutingClaimSnapshot {
+        self.claim_counters
+    }
+
+    pub(crate) fn record_learned(&mut self) {
+        self.claim_counters.learned_ok = self.claim_counters.learned_ok.saturating_add(1);
+    }
+
+    pub(crate) fn record_learning_cap(&mut self) {
+        self.claim_counters.learned_cap_ignored =
+            self.claim_counters.learned_cap_ignored.saturating_add(1);
+    }
+
+    /// Apply only the reject-driven table transition, never its relay.
+    /// The caller holds the table lock across this synchronous gate and update.
+    /// `now` is supplied so deadline boundaries can be tested without sleeping.
+    pub(crate) fn apply_reject(
+        &mut self,
+        network: u16,
+        ingress_port: usize,
+        reason: u8,
+        now: Instant,
+    ) {
+        let changes_state = self.routes.get(&network).is_some_and(|entry| {
+            if entry.directly_connected {
+                return false;
+            }
+            // Compare effective state, not the stored Busy marker: a busy
+            // deadline may have elapsed before the next aging sweep.
+            match reason {
+                1 => entry.reachability != ReachabilityStatus::Unreachable,
+                2 => {
+                    entry.reachability != ReachabilityStatus::Busy
+                        || entry.busy_until.is_some_and(|deadline| now >= deadline)
+                }
+                _ => true,
+            }
+        });
+        let held_down = self
+            .reject_transitions
+            .get(&network)
+            .and_then(|ports| ports.get(&ingress_port))
+            .is_some_and(|last| now.duration_since(*last) < HOLD_DOWN);
+        if !changes_state || held_down {
+            let counters = &mut self.claim_counters;
+            counters.reject_dampened = counters.reject_dampened.saturating_add(1);
+            if !changes_state {
+                counters.reject_dampened_same_state =
+                    counters.reject_dampened_same_state.saturating_add(1);
+            } else {
+                counters.reject_dampened_hold_down =
+                    counters.reject_dampened_hold_down.saturating_add(1);
+            }
+            return; // Ignored claims never slide the window or busy deadline.
+        }
+
+        match reason {
+            1 => self.mark_unreachable(network),
+            2 => self.mark_busy(network, now + Duration::from_secs(30)),
+            _ => {
+                self.remove(network); // Removal also discards every port's record.
+            }
+        }
+        if self.routes.contains_key(&network) {
+            self.reject_transitions
+                .entry(network)
+                .or_default()
+                .insert(ingress_port, now);
+        }
+        self.claim_counters.reject_applied = self.claim_counters.reject_applied.saturating_add(1);
     }
 
     /// Add a directly-connected network on the given port.
@@ -64,6 +180,7 @@ impl RouterTable {
         if network == 0 || network == 0xFFFF {
             return;
         }
+        self.reject_transitions.remove(&network);
         self.routes.insert(
             network,
             RouteEntry {
@@ -91,6 +208,7 @@ impl RouterTable {
                 return; // never overwrite direct routes
             }
         }
+        self.reject_transitions.remove(&network);
         self.routes.insert(
             network,
             RouteEntry {
@@ -132,6 +250,8 @@ impl RouterTable {
                     _ => 1,
                 };
                 if flap_count >= 3 {
+                    self.claim_counters.flap_warned =
+                        self.claim_counters.flap_warned.saturating_add(1);
                     tracing::warn!(
                         network,
                         old_port = existing.port_index,
@@ -141,6 +261,7 @@ impl RouterTable {
                         flap_count
                     );
                 }
+                self.reject_transitions.remove(&network);
                 self.routes.insert(
                     network,
                     RouteEntry {
@@ -228,6 +349,7 @@ impl RouterTable {
 
     /// Remove a route.
     pub fn remove(&mut self, network: u16) -> Option<RouteEntry> {
+        self.reject_transitions.remove(&network);
         self.routes.remove(&network)
     }
 
@@ -293,7 +415,7 @@ impl RouterTable {
             .map(|(net, _)| *net)
             .collect();
         for net in &stale {
-            self.routes.remove(net);
+            self.remove(*net);
         }
         stale
     }
@@ -304,6 +426,10 @@ impl Default for RouterTable {
         Self::new()
     }
 }
+
+#[cfg(test)]
+#[path = "router_table_reject_tests.rs"]
+mod reject_tests;
 
 #[cfg(test)]
 mod tests {
