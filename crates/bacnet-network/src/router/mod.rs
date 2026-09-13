@@ -18,11 +18,27 @@
 //!
 //! Classic BACnet routing claims are unauthenticated: an ingress port, next-hop
 //! MAC or advertised network is not proof that a peer is authorized to control
-//! that route. Learning remains last-wins; these local mitigations do not
+//! that route. These local mitigations do not
 //! prevent route poisoning or authenticate a claim (Clauses 6.4 and 6.6.3):
 //! - Direct routes cannot be overwritten by learning or changed by rejects.
+//! - I-Am-Router and Initialize-Routing-Table-ACK claims moving a learned route
+//!   to a different port need two claims for the same (network, new port), no
+//!   more than 60s apart (inclusive, aligned with the flap window). Repeats in
+//!   separate messages from one router suffice; distinct sources are not required.
+//!   Duplicate entries in one message cannot supply both votes. The old route keeps
+//!   forwarding while pending. Absent-route learning and same-port refreshes
+//!   remain immediate; Initialize-Routing-Table and I-Could-Be-Router remain
+//!   absent-only and cannot corroborate replacements.
+//! - One pending challenger is retained per learned network: a different new
+//!   port replaces the slot and starts fresh. A slot older than 60s expires on
+//!   the next learning claim. Applying, current-port refresh, removal, aging,
+//!   direct-route installation and manual table edits clear the slot. Pending
+//!   entries are bounded by the number of live learned routes.
 //! - I-Am-Router and Initialize-Routing-Table/ACK retain their existing route-cap
 //!   checks; stale learned routes age out, and rapid port changes warn.
+//! - Disconnect-Connection-To-Network never removes routes: PTP connections are
+//!   unimplemented, matching Establish-Connection-To-Network's no-op handling.
+//!   Each well-formed ignored removal request is debug-logged and counted.
 //! - Reject-driven table transitions are dampened per (ingress port, network),
 //!   not by spoofable source MAC or routed source address. No-op rejects are
 //!   ignored, without renewing busy deadlines. A first state-changing reject
@@ -37,9 +53,24 @@
 //! 30s without fresh learning; legitimate re-signals after the window can apply.
 //! **Trade-off:** a legitimate unreachable-after-busy signal can be delayed up
 //! to 30s. This is local hardening, not a protocol authentication mechanism.
-//! Learning can re-arm dampening even when the refresh is malicious. Other
-//! control-message handling, forwarding, reject relay and warning behavior are
-//! unchanged; operators still need a trusted, appropriately isolated network.
+//!
+//! **Convergence requirement:** while the old learned route remains installed,
+//! a cross-port move requires two announcements for the same (network, new port)
+//! within 60s inclusive. Single-shot advertisers (including this router's startup
+//! announcements) or advertisers repeating more than 60s apart never converge to
+//! the new path through this gate. Under sustained forwarded traffic, every route
+//! lookup refreshes the stale entry's age, so the 300s aging rescue does not fire,
+//! even if the old path is dead. That path keeps being tried until traffic for the
+//! network idles for roughly 300s or longer (with no other refreshes, and subject
+//! to periodic aging), the table is edited manually, or two fresh claims arrive
+//! within 60s. Who-Is-Router-To-Network solicitations can prompt peers to
+//! re-advertise those claims; this gate does not initiate solicitation.
+//! Active cross-port alternation can delay legitimate convergence by continually
+//! replacing the pending challenger. The old route keeps forwarding; if that
+//! path is truly dead, traffic waits for attack pause/expiry and fresh learning.
+//! Learning can still re-arm reject dampening even when the refresh is malicious.
+//! Forwarding, reject relay and flap-warning thresholds are unchanged; operators
+//! still need a trusted, appropriately isolated network.
 
 use std::sync::Arc;
 use std::time::Duration;

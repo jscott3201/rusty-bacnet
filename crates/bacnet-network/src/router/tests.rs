@@ -781,7 +781,7 @@ async fn establish_connection_does_not_crash() {
 }
 
 #[tokio::test]
-async fn disconnect_removes_learned_route() {
+async fn disconnect_retains_learned_route() {
     let mut table = RouterTable::new();
     table.add_learned(7000, 0, MacAddr::from_slice(&[10, 0, 1, 1]));
     let table = Arc::new(Mutex::new(table));
@@ -802,7 +802,8 @@ async fn disconnect_removes_learned_route() {
     handle_network_message(&table, &send_txs, 0, 1000, &[0x0A], &npdu).await;
 
     let tbl = table.lock().await;
-    assert!(tbl.lookup(7000).is_none());
+    assert!(tbl.lookup(7000).is_some());
+    assert_eq!(tbl.claim_snapshot().disconnect_removal_ignored, 1);
 }
 
 #[tokio::test]
