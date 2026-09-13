@@ -89,6 +89,7 @@ use tokio_rustls::TlsAcceptor;
 #[derive(Clone)]
 pub struct ScHubTlsConfig {
     inner: Arc<rustls::ServerConfig>,
+    broadcast_rate: super::ScHubBroadcastRatePolicy,
 }
 
 impl ScHubTlsConfig {
@@ -136,7 +137,24 @@ impl ScHubTlsConfig {
             .map_err(|e| Error::Encoding(format!("TLS server config error: {e}")))?;
         Ok(Self {
             inner: Arc::new(config),
+            broadcast_rate: super::ScHubBroadcastRatePolicy::default(),
         })
+    }
+
+    /// Tune the always-on hub broadcast relay budgets without changing TLS policy.
+    ///
+    /// Every startup validates these bounds before binding. Zero or overflowing
+    /// bounds are configuration errors, not a way to disable limiting. Each hub
+    /// started from a clone gets independent buckets and drop counters. See
+    /// [`super::ScHubBroadcastRatePolicy`] for defaults, units and tuning guidance.
+    pub fn with_broadcast_rate_policy(mut self, policy: super::ScHubBroadcastRatePolicy) -> Self {
+        self.broadcast_rate = policy;
+        self
+    }
+
+    /// The broadcast policy that will be validated at startup.
+    pub fn broadcast_rate_policy(&self) -> super::ScHubBroadcastRatePolicy {
+        self.broadcast_rate
     }
 
     pub(super) fn into_acceptor(self) -> TlsAcceptor {

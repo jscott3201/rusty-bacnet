@@ -21,6 +21,7 @@ pub(super) async fn run(
     // connection so one peer's flood cannot suppress another connection's
     // first diagnostic. NAK/relay/silence decisions are unchanged.
     let mut malformed_diag = DiagnosticThrottle::new();
+    let mut broadcast_rate = super::broadcast_rate::SenderBudget::for_connection();
 
     loop {
         // A stream of immediately ready frames must not starve the timer.
@@ -177,6 +178,9 @@ pub(super) async fn run(
                 // Accepted transit follows the existing NPDU activity policy,
                 // including absent/oversized recipient drops. No probe mutation.
                 client_activity.store(now_secs(), Ordering::Release);
+                if !broadcast_rate.admit(target, registered_vmac) {
+                    continue;
+                }
                 if super::opaque_relay::relay(
                     &data,
                     &sc_msg,
@@ -303,6 +307,9 @@ pub(super) async fn run(
                 // Accepted transit follows the existing NPDU activity policy,
                 // including absent/oversized recipient drops. No probe mutation.
                 client_activity.store(now_secs(), Ordering::Release);
+                if !broadcast_rate.admit(target, registered_vmac) {
+                    continue;
+                }
                 if super::opaque_relay::relay(
                     &data,
                     &sc_msg,
@@ -587,6 +594,10 @@ pub(super) async fn run(
                 };
 
                 let npdu_len = sc_msg.payload.len();
+
+                if !broadcast_rate.admit(relay_target, registered_vmac) {
+                    continue;
+                }
 
                 let Some(relay_buf) =
                     encode_hub_relay_frame(&data, &sc_msg, registered_vmac, relay_target)

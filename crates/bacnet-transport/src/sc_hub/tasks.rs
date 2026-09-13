@@ -11,6 +11,7 @@ use tokio::task::JoinSet;
 pub(super) struct Tasks {
     state: Arc<Mutex<State>>,
     shutdown: watch::Sender<bool>,
+    pub(super) broadcast: Arc<super::broadcast_rate::HubBudget>,
 }
 
 struct State {
@@ -31,7 +32,13 @@ impl Tasks {
                 empty_waiter: None,
             })),
             shutdown: watch::channel(false).0,
+            broadcast: Arc::new(super::broadcast_rate::HubBudget::default()),
         }
+    }
+
+    pub fn with_broadcast_budget(mut self, budget: Arc<super::broadcast_rate::HubBudget>) -> Self {
+        self.broadcast = budget;
+        self
     }
 
     pub fn abort_on_exit(&self) -> AbortOnExit {

@@ -31,6 +31,7 @@ use tokio_tungstenite::WebSocketStream;
 use tracing::{debug, warn};
 
 mod advertisement_transit;
+mod broadcast_rate;
 mod client;
 mod connection;
 mod deadlines;
@@ -49,6 +50,7 @@ mod timeouts;
 mod tls_config;
 mod unknown_transit;
 
+pub use broadcast_rate::{ScHubBroadcastDropCounts, ScHubBroadcastRatePolicy};
 pub use timeouts::ScHubHandshakeTimeouts;
 pub use tls_config::ScHubTlsConfig;
 
@@ -245,6 +247,9 @@ impl ScHub {
                 "hub VMAC must not be UNKNOWN or BROADCAST".into(),
             ));
         }
+        let broadcast = Arc::new(broadcast_rate::HubBudget::new(
+            tls_config.broadcast_rate_policy(),
+        )?);
         let tls_acceptor = tls_config.into_acceptor();
         let listener = TcpListener::bind(bind_addr)
             .await
@@ -259,6 +264,7 @@ impl ScHub {
         let clients: Clients = Arc::new(Mutex::new(HashMap::new()));
 
         let tasks = tasks::Tasks::new();
+        let tasks = tasks.with_broadcast_budget(broadcast);
         let task = tokio::spawn(connection::accept_loop_with_counter(
             listener,
             tls_acceptor,
