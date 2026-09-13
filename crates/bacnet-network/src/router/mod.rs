@@ -53,6 +53,18 @@
 //! 30s without fresh learning; legitimate re-signals after the window can apply.
 //! **Trade-off:** a legitimate unreachable-after-busy signal can be delayed up
 //! to 30s. This is local hardening, not a protocol authentication mechanism.
+//!
+//! **Convergence requirement:** while the old learned route remains installed,
+//! a cross-port move requires two announcements for the same (network, new port)
+//! within 60s inclusive. Single-shot advertisers (including this router's startup
+//! announcements) or advertisers repeating more than 60s apart never converge to
+//! the new path through this gate. Under sustained forwarded traffic, every route
+//! lookup refreshes the stale entry's age, so the 300s aging rescue does not fire,
+//! even if the old path is dead. That path keeps being tried until traffic for the
+//! network idles for roughly 300s or longer (with no other refreshes, and subject
+//! to periodic aging), the table is edited manually, or two fresh claims arrive
+//! within 60s. Who-Is-Router-To-Network solicitations can prompt peers to
+//! re-advertise those claims; this gate does not initiate solicitation.
 //! Active cross-port alternation can delay legitimate convergence by continually
 //! replacing the pending challenger. The old route keeps forwarding; if that
 //! path is truly dead, traffic waits for attack pause/expiry and fresh learning.
