@@ -1,8 +1,8 @@
-//! NotificationClass object per ASHRAE 135-2020 Clause 12.31.
+//! NotificationClass object: priorities, acknowledgment requirements, and recipients.
 //!
 //! # Recipient-list day/time convention
 //!
-//! `RECIPIENT_LIST` entries are `BACnetDestination` (Clause 12.15.5). The
+//! `RECIPIENT_LIST` entries are `BACnetDestination` notification destinations. The
 //! `valid_days` field is a `BACnetDaysOfWeek` bit string defined as
 //! `BIT STRING { monday(0), tuesday(1), ..., sunday(6) }` (Clause 21): **bit 0
 //! is Monday and bit 6 is Sunday** in the in-memory `u8`. Callers must build

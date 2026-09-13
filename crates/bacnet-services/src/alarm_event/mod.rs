@@ -1,8 +1,8 @@
-//! Alarm and event services per ASHRAE 135-2020 Clauses 13.5, 13.8-13.9, and 13.12.
+//! Alarm acknowledgment, event notification, and event information services.
 //!
-//! - AcknowledgeAlarm (Clause 13.5)
-//! - ConfirmedEventNotification / UnconfirmedEventNotification (Clauses 13.8-13.9)
-//! - GetEventInformation (Clause 13.12)
+//! - AcknowledgeAlarm acknowledges an event transition.
+//! - ConfirmedEventNotification / UnconfirmedEventNotification report events.
+//! - GetEventInformation retrieves event summaries.
 
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::constructed::{

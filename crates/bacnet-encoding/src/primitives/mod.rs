@@ -77,6 +77,30 @@ pub fn decode_unsigned(data: &[u8]) -> Result<u64, Error> {
     Ok(value)
 }
 
+/// Decode an unsigned integer that fits in a `u8` from 1-8 big-endian bytes.
+/// Leading zero bytes are accepted; values above `u8::MAX` are rejected.
+pub fn decode_unsigned_u8(data: &[u8]) -> Result<u8, Error> {
+    let value = decode_unsigned(data)?;
+    u8::try_from(value)
+        .map_err(|_| Error::decoding(0, format!("unsigned value {value} exceeds u8")))
+}
+
+/// Decode an unsigned integer that fits in a `u16` from 1-8 big-endian bytes.
+/// Leading zero bytes are accepted; values above `u16::MAX` are rejected.
+pub fn decode_unsigned_u16(data: &[u8]) -> Result<u16, Error> {
+    let value = decode_unsigned(data)?;
+    u16::try_from(value)
+        .map_err(|_| Error::decoding(0, format!("unsigned value {value} exceeds u16")))
+}
+
+/// Decode an unsigned integer that fits in a `u32` from 1-8 big-endian bytes.
+/// Leading zero bytes are accepted; values above `u32::MAX` are rejected.
+pub fn decode_unsigned_u32(data: &[u8]) -> Result<u32, Error> {
+    let value = decode_unsigned(data)?;
+    u32::try_from(value)
+        .map_err(|_| Error::decoding(0, format!("unsigned value {value} exceeds u32")))
+}
+
 // --- Signed Integer ---
 
 /// Encode a signed integer using minimum octets, two's complement, big-endian.

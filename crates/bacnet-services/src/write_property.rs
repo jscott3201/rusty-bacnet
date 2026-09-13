@@ -140,7 +140,13 @@ impl WritePropertyRequest {
             if end > data.len() {
                 return Err(Error::decoding(pos, "WriteProperty truncated at priority"));
             }
-            let prio = primitives::decode_unsigned(&data[pos..end])?;
+            let prio =
+                primitives::decode_unsigned_u8(&data[pos..end]).map_err(|error| match error {
+                    Error::Decoding { message, .. } => {
+                        Error::decoding(pos, format!("WriteProperty priority: {message}"))
+                    }
+                    other => other,
+                })?;
             if !(1..=16).contains(&prio) {
                 return Err(Error::decoding(
                     pos,
@@ -150,10 +156,7 @@ impl WritePropertyRequest {
             if end != data.len() {
                 return Err(Error::decoding(end, "WriteProperty has trailing data"));
             }
-            priority =
-                Some(u8::try_from(prio).map_err(|_| {
-                    Error::decoding(pos, "WriteProperty priority conversion failed")
-                })?);
+            priority = Some(prio);
         }
 
         Ok(Self {
@@ -333,6 +336,57 @@ mod tests {
             WritePropertyRequest::decode(&buf).unwrap().priority,
             Some(1)
         );
+    }
+
+    #[test]
+    fn write_property_accepts_all_priorities_with_leading_zeros() {
+        for priority in 1u8..=16 {
+            for length in 1..=8 {
+                let mut buf = encode_fields(0, 1, 85, None, None, false);
+                tags::encode_tag(
+                    &mut buf,
+                    4,
+                    TagClass::Context,
+                    u32::try_from(length).unwrap(),
+                );
+                buf.extend_from_slice(&u64::from(priority).to_be_bytes()[8 - length..]);
+                let request = WritePropertyRequest::decode(&buf).unwrap();
+                assert_eq!(request.object_identifier, object_id());
+                assert_eq!(
+                    request.property_identifier,
+                    PropertyIdentifier::PRESENT_VALUE
+                );
+                assert_eq!(request.property_array_index, None);
+                assert_eq!(request.property_value, [0x00]);
+                assert_eq!(request.priority, Some(priority));
+            }
+        }
+    }
+
+    #[test]
+    fn write_property_rejects_overflow_before_priority_range_validation() {
+        let mut values = vec![256, 65_536, 4_294_967_296, u64::MAX];
+        for low_byte in 1..=16 {
+            for high_bits in [0x100, 0x1_0000, 0x1_0000_0000, 0x8000_0000_0000_0000] {
+                values.push(high_bits | low_byte);
+            }
+        }
+        for value in values {
+            let buf = encode_fields(0, 1, 85, None, Some((4, value)), false);
+            let error = WritePropertyRequest::decode(&buf).unwrap_err();
+            assert!(
+                matches!(error, Error::Decoding { ref message, .. } if message.contains("exceeds u8")),
+                "priority {value} must fail typed decoding, got {error:?}"
+            );
+        }
+        for value in [0, 17, 255] {
+            let buf = encode_fields(0, 1, 85, None, Some((4, value)), false);
+            let error = WritePropertyRequest::decode(&buf).unwrap_err();
+            assert!(
+                matches!(error, Error::Decoding { ref message, .. } if message.contains("out of range")),
+                "priority {value} must fail range validation, got {error:?}"
+            );
+        }
     }
 
     // -----------------------------------------------------------------------
