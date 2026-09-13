@@ -1,5 +1,8 @@
 use super::*;
 use crate::event::CommandFailureDetector;
+use crate::property_metadata::PropertyMetadata;
+
+mod metadata;
 
 // ---------------------------------------------------------------------------
 // MultiStateOutput (type 14)
@@ -410,35 +413,12 @@ impl BACnetObject for MultiStateOutputObject {
         Err(common::write_access_denied_error())
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        metadata::for_object(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::FEEDBACK_VALUE,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::EVENT_DETECTION_ENABLE,
-            PropertyIdentifier::EVENT_ENABLE,
-            PropertyIdentifier::TIME_DELAY,
-            PropertyIdentifier::TIME_DELAY_NORMAL,
-            PropertyIdentifier::NOTIFY_TYPE,
-            PropertyIdentifier::NOTIFICATION_CLASS,
-            PropertyIdentifier::ACKED_TRANSITIONS,
-            PropertyIdentifier::EVENT_TIME_STAMPS,
-            PropertyIdentifier::EVENT_MESSAGE_TEXTS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::NUMBER_OF_STATES,
-            PropertyIdentifier::PRIORITY_ARRAY,
-            PropertyIdentifier::RELINQUISH_DEFAULT,
-            PropertyIdentifier::CURRENT_COMMAND_PRIORITY,
-            PropertyIdentifier::RELIABILITY,
-            PropertyIdentifier::RELIABILITY_EVALUATION_INHIBIT,
-            PropertyIdentifier::STATE_TEXT,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     fn is_createable(&self) -> bool {
@@ -462,16 +442,6 @@ impl BACnetObject for MultiStateOutputObject {
 
     fn reliability_evaluation_inhibited_internal(&self) -> bool {
         self.reliability_inhibit.enabled()
-    }
-
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        // Mirrors the MultiStateOutput `write_property` arms.
-        common::is_multistate_commandable_writable(property)
-            || property == PropertyIdentifier::RELIABILITY
-            || property == PropertyIdentifier::RELIABILITY_EVALUATION_INHIBIT
-            || common::is_generic_event_property_writable(property)
-            || property == PropertyIdentifier::FEEDBACK_VALUE
-            || property == PropertyIdentifier::EVENT_DETECTION_ENABLE
     }
 }
 
