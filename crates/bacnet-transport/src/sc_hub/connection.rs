@@ -82,15 +82,22 @@ pub(super) async fn accept_loop_with_counter(
         let acceptor = tls_acceptor.clone();
         let clients = clients.clone();
 
-        tasks.spawner().spawn(serve_connection(
-            tcp_stream,
-            peer_addr,
-            acceptor,
-            (hub_vmac, hub_uuid),
-            clients,
-            timeouts,
-            admission,
-        ));
+        // Task locals are not inherited by spawn. Explicitly scope every
+        // connection to this hub's one aggregate budget; no new worker/lifetime.
+        tasks
+            .spawner()
+            .spawn(super::broadcast_rate::HUB_BUDGET.scope(
+                tasks.broadcast.clone(),
+                serve_connection(
+                    tcp_stream,
+                    peer_addr,
+                    acceptor,
+                    (hub_vmac, hub_uuid),
+                    clients,
+                    timeouts,
+                    admission,
+                ),
+            ));
     }
     drop(listener);
     tasks.drain().await;
