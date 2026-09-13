@@ -40,7 +40,11 @@ pub struct ServerConfig {
     pub vendor_id: u16,
     /// Timeout in ms before retrying a failed confirmed COV notification send (default 3000ms).
     pub cov_retry_timeout_ms: u64,
-    /// Optional observer invoked after a time-synchronization request is accepted.
+    /// Opt-in inbound time-sync restrictions; default allows all, with no step cap.
+    pub time_sync_policy: TimeSyncPolicy,
+    /// Optional fast, nonblocking observer invoked after the clock changes.
+    /// A panic is caught (with unwind builds); the change stands and ingress
+    /// continues. This callback cannot authorize or roll back synchronization.
     pub on_time_sync: Option<Arc<dyn Fn(TimeSyncData) + Send + Sync>>,
     /// Opt-in mutation policy; `None` allows. See [`MutationAuthorizer`].
     pub mutation_authorizer: Option<MutationAuthorizer>,
@@ -151,6 +155,7 @@ impl std::fmt::Debug for ServerConfig {
             .field("segmentation_supported", &self.segmentation_supported)
             .field("vendor_id", &self.vendor_id)
             .field("cov_retry_timeout_ms", &self.cov_retry_timeout_ms)
+            .field("time_sync_policy", &self.time_sync_policy)
             .field(
                 "on_time_sync",
                 &self.on_time_sync.as_ref().map(|_| "<callback>"),
@@ -219,6 +224,7 @@ impl Default for ServerConfig {
             segmentation_supported: Segmentation::NONE,
             vendor_id: 0,
             cov_retry_timeout_ms: 3000,
+            time_sync_policy: TimeSyncPolicy::default(),
             on_time_sync: None,
             mutation_authorizer: None,
             life_safety_operation_authorizer: None,

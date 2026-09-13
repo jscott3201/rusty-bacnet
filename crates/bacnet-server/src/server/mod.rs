@@ -266,6 +266,11 @@ pub struct TimeSyncData {
     pub raw_service_data: Bytes,
     /// Whether this was a UTC time sync (vs. local).
     pub is_utc: bool,
+    /// Transport-native source MAC; on SC this is the source VMAC, not a
+    /// certificate principal. This metadata is a claimed identity only.
+    pub source_mac: MacAddr,
+    /// Claimed routed NPDU source, if present; takes precedence for policy matching.
+    pub source_network: Option<NpduAddress>,
 }
 
 mod config;
@@ -560,6 +565,8 @@ impl BipServerBuilder {
 pub struct BACnetServer<T: TransportPort> {
     config: ServerConfig,
     discovery_limiter: Arc<DiscoveryLimiter>,
+    #[allow(dead_code)] // Retained with the server, including direct dispatch tests.
+    time_sync_limiter: Arc<TimeSyncLimiter>,
     /// Server-owned clock controller; absent in explicit clockless mode.
     _clock: Option<Arc<ServerClock>>,
     /// Shared network layer (also held by dispatch task; read by
@@ -644,10 +651,15 @@ impl BACnetServer<BipTransport> {
 }
 
 mod clock;
+mod time_sync_policy;
 #[cfg(test)]
 pub(crate) use clock::clocked_test_database;
 pub use clock::ClockConfig;
 use clock::ServerClock;
+use time_sync_policy::{request_limiters, TimeSyncLimiter};
+pub use time_sync_policy::{
+    TimeSyncPolicy, TimeSyncRateLimit, TimeSyncSource, TimeSyncSourceRestriction,
+};
 mod binary_lighting_lifecycle;
 mod confirmed_request_tracker;
 mod cov_clock;

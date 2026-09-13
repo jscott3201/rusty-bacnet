@@ -181,7 +181,7 @@ fn system_utc_hundredths() -> i128 {
     i128::from(elapsed.as_secs()) * HUNDREDTHS_PER_SECOND + i128::from(elapsed.subsec_millis() / 10)
 }
 
-fn date_time_to_hundredths(date: Date, time: Time) -> Result<i128, Error> {
+pub(super) fn date_time_to_hundredths(date: Date, time: Time) -> Result<i128, Error> {
     let year = date
         .actual_year()
         .ok_or_else(|| invalid_datetime("date contains an unspecified year"))?;
