@@ -85,6 +85,13 @@ fn finish_data_request_at_transport_boundary(
     }
 }
 
+/// Wait only for the unelapsed part of receive-to-transmit turnaround silence.
+async fn wait_for_turnaround(earliest_tx: tokio::time::Instant) {
+    if earliest_tx > tokio::time::Instant::now() {
+        tokio::time::sleep_until(earliest_tx).await;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // MS/TP Transport
 // ---------------------------------------------------------------------------
@@ -153,12 +160,15 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
             let mut recv_buf = vec![0u8; 2048];
             let mut frame_buf = Vec::with_capacity(MSTP_MAX_FRAME_BUF);
             let mut last_byte_time = tokio::time::Instant::now();
+            let mut earliest_tx = last_byte_time;
 
             // Start with T_NO_TOKEN timeout — if we don't see anything, claim the token
             let sleep = tokio::time::sleep(tokio::time::Duration::from_millis(T_NO_TOKEN_MS));
             tokio::pin!(sleep);
 
             let mut encode_buf = BytesMut::with_capacity(1024);
+            // Reuse both storage and frame boundaries; no per-frame byte Vecs.
+            let mut pending_write_ends = Vec::new();
             let mut pending_reply_rx: Option<oneshot::Receiver<Bytes>> = None;
             let mut pending_reply_deadline: Option<tokio::time::Instant> = None;
 
@@ -186,10 +196,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                         if let Some(response) = response {
                             encode_buf.clear();
                             if encode_frame(&mut encode_buf, &response).is_ok() {
-                                tokio::time::sleep(tokio::time::Duration::from_micros(
-                                    t_turnaround_us,
-                                ))
-                                .await;
+                                wait_for_turnaround(earliest_tx).await;
                                 if let Err(e) = serial_clone.write(&encode_buf).await {
                                     warn!("MS/TP write error: {}", e);
                                 }
@@ -207,7 +214,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                             Ok(n) => {
                                 // Host stale-partial timeout: drop abandoned assembly if no
                                 // bytes arrive for a long host-side gap (USB scheduling, not
-                                // Clause 9 wire T_frame_abort).
+                                // wire inter-byte silence).
                                 let now = tokio::time::Instant::now();
                                 if !frame_buf.is_empty() {
                                     let gap = now.duration_since(last_byte_time);
@@ -223,6 +230,11 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                     }
                                 }
                                 last_byte_time = now;
+                                // Host arrival is no earlier than wire reception.
+                                // Anchor to the latest chunk, including a late tail,
+                                // without estimating backwards through USB batching.
+                                earliest_tx = now
+                                    + tokio::time::Duration::from_micros(t_turnaround_us);
                                 assemble_host_chunk(&mut frame_buf, &recv_buf[..n])
                             }
                             Err(e) => {
@@ -252,15 +264,15 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                                 ),
                                         );
                                     }
-                                    let mut pending_writes: Vec<Vec<u8>> = Vec::new();
+                                    encode_buf.clear();
+                                    pending_write_ends.clear();
                                     if let Some(response) = response {
-                                        encode_buf.clear();
                                         if let Err(e) = encode_frame(&mut encode_buf, &response) {
                                             warn!("MS/TP encode error: {}", e);
                                             drop(node_guard);
                                             continue;
                                         }
-                                        pending_writes.push(encode_buf.to_vec());
+                                        pending_write_ends.push(encode_buf.len());
                                     }
 
                                     // If we got the token, use it
@@ -273,13 +285,12 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                             } else {
                                                 node_guard.use_token()
                                             };
-                                        encode_buf.clear();
                                         if let Err(e) = encode_frame(&mut encode_buf, &frame_to_send)
                                         {
                                             warn!("MS/TP encode error: {}", e);
                                             break;
                                         }
-                                        pending_writes.push(encode_buf.to_vec());
+                                        pending_write_ends.push(encode_buf.len());
                                         // After sending DataExpectingReply, enter WaitForReply
                                         if frame_to_send.frame_type
                                             == FrameType::BACnetDataExpectingReply
@@ -318,18 +329,16 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                     };
                                     drop(node_guard);
 
-                                    // T_turnaround before transmitting
-                                    if !pending_writes.is_empty() {
-                                        tokio::time::sleep(tokio::time::Duration::from_micros(
-                                            t_turnaround_us,
-                                        ))
-                                        .await;
+                                    if !pending_write_ends.is_empty() {
+                                        wait_for_turnaround(earliest_tx).await;
                                     }
-                                    for frame_data in &pending_writes {
-                                        if let Err(e) = serial_clone.write(frame_data).await {
+                                    let mut start = 0;
+                                    for &end in &pending_write_ends {
+                                        if let Err(e) = serial_clone.write(&encode_buf[start..end]).await {
                                             warn!("MS/TP write error: {}", e);
                                             break;
                                         }
+                                        start = end;
                                     }
 
                                     sleep.as_mut().reset(
@@ -343,7 +352,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                     // Branch 2: timeout
                     () = &mut sleep => {
                         let mut node_guard = node.lock().await;
-                        let mut pending_writes: Vec<Vec<u8>> = Vec::new();
+                        encode_buf.clear();
                         let was_answering_data_request =
                             node_guard.pending_reply_source.is_some();
                         let timeout_ms = match node_guard.state {
@@ -362,10 +371,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                     source: ts,
                                     data: Bytes::new(),
                                 };
-                                encode_buf.clear();
-                                if let Ok(()) = encode_frame(&mut encode_buf, &pfm) {
-                                    pending_writes.push(encode_buf.to_vec());
-                                }
+                                let _ = encode_frame(&mut encode_buf, &pfm);
                                 node_guard.poll_station =
                                     next_addr(ts, node_guard.config.max_master);
                                 node_guard.state = MasterState::PollForMaster;
@@ -375,10 +381,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                             MasterState::PollForMaster => {
                                 // No reply to PFM — try next
                                 let frame_to_send = node_guard.poll_timeout();
-                                encode_buf.clear();
-                                if let Ok(()) = encode_frame(&mut encode_buf, &frame_to_send) {
-                                    pending_writes.push(encode_buf.to_vec());
-                                }
+                                let _ = encode_frame(&mut encode_buf, &frame_to_send);
                                 if node_guard.state == MasterState::PollForMaster {
                                     node_guard.t_slot_ms
                                 } else {
@@ -391,10 +394,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                 node_guard.frame_count = node_guard.config.max_info_frames;
                                 node_guard.state = MasterState::DoneWithToken;
                                 let frame_to_send = node_guard.done_with_token();
-                                encode_buf.clear();
-                                if let Ok(()) = encode_frame(&mut encode_buf, &frame_to_send) {
-                                    pending_writes.push(encode_buf.to_vec());
-                                }
+                                let _ = encode_frame(&mut encode_buf, &frame_to_send);
                                 match node_guard.state {
                                     MasterState::PassToken => T_USAGE_TIMEOUT_MS,
                                     MasterState::PollForMaster => node_guard.t_slot_ms,
@@ -414,19 +414,13 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                     &mut node_guard,
                                     reply_data,
                                 ) {
-                                    encode_buf.clear();
-                                    if encode_frame(&mut encode_buf, &reply_frame).is_ok() {
-                                        pending_writes.push(encode_buf.to_vec());
-                                    }
+                                    let _ = encode_frame(&mut encode_buf, &reply_frame);
                                 }
                                 T_USAGE_TIMEOUT_MS
                             }
                             MasterState::PassToken => {
                                 if let Some(frame) = node_guard.pass_token_timeout() {
-                                    encode_buf.clear();
-                                    if let Ok(()) = encode_frame(&mut encode_buf, &frame) {
-                                        pending_writes.push(encode_buf.to_vec());
-                                    }
+                                    let _ = encode_frame(&mut encode_buf, &frame);
                                 }
                                 match node_guard.state {
                                     MasterState::PassToken => T_USAGE_TIMEOUT_MS,
@@ -445,10 +439,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                 // transitions (never unconditional pass_token).
                                 node_guard.state = MasterState::DoneWithToken;
                                 let frame_to_send = node_guard.done_with_token();
-                                encode_buf.clear();
-                                if let Ok(()) = encode_frame(&mut encode_buf, &frame_to_send) {
-                                    pending_writes.push(encode_buf.to_vec());
-                                }
+                                let _ = encode_frame(&mut encode_buf, &frame_to_send);
                                 match node_guard.state {
                                     MasterState::PassToken => T_USAGE_TIMEOUT_MS,
                                     MasterState::PollForMaster => node_guard.t_slot_ms,
@@ -462,17 +453,10 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                         }
                         drop(node_guard);
 
-                        // T_turnaround before transmitting
-                        if !pending_writes.is_empty() {
-                            tokio::time::sleep(tokio::time::Duration::from_micros(
-                                t_turnaround_us,
-                            ))
-                            .await;
-                        }
-                        for frame_data in &pending_writes {
-                            if let Err(e) = serial_clone.write(frame_data).await {
+                        if !encode_buf.is_empty() {
+                            wait_for_turnaround(earliest_tx).await;
+                            if let Err(e) = serial_clone.write(&encode_buf).await {
                                 warn!("MS/TP write error: {}", e);
-                                break;
                             }
                         }
 
@@ -598,6 +582,11 @@ impl SerialPort for LoopbackSerial {
             .send(data.to_vec())
             .await
             .map_err(|_| Error::Encoding("loopback write failed".into()))
+    }
+
+    async fn drain(&self) -> Result<(), Error> {
+        // In-memory writes are delivered before returning; there is no UART.
+        Ok(())
     }
 
     async fn read(&self, buf: &mut [u8]) -> Result<usize, Error> {

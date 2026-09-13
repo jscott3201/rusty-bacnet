@@ -505,7 +505,7 @@ settings. See the [Linux RS-485 userspace ABI](https://cdn.kernel.org/doc/html/l
 
 #### GPIO Direction Control (RS-485 Hats)
 
-For RS-485 hats where DE/RE is wired to a GPIO pin (e.g., Seeed Studio RS-485 Shield on Raspberry Pi with GPIO18), use `GpioDirectionPort` to wrap any `SerialPort`. Requires the `serial-gpio` feature.
+For RS-485 hats where DE/RE is wired to a GPIO pin (e.g., Seeed Studio RS-485 Shield on Raspberry Pi with GPIO18), use `GpioDirectionPort` to wrap a `SerialPort` that implements transmit-complete `drain()`. Requires the `serial-gpio` feature.
 
 ```rust
 use bacnet_transport::mstp_serial::{GpioDirectionPort, TokioSerialPort, SerialConfig};
@@ -518,7 +518,7 @@ let serial = TokioSerialPort::open(&SerialConfig {
 // Wrap with GPIO direction control: gpiochip0, line 18, active-high
 let port = GpioDirectionPort::new(serial, "/dev/gpiochip0", 18, true)?;
 
-// Or with explicit post-TX delay (microseconds before switching to RX):
+// Or with an additional guard interval after drain (microseconds):
 let port = GpioDirectionPort::with_post_tx_delay(
     serial, "/dev/gpiochip0", 18, true, 200,
 )?;
@@ -527,9 +527,18 @@ let port = GpioDirectionPort::with_post_tx_delay(
 The `GpioDirectionPort` wrapper:
 - Sets GPIO to receive mode (DE deasserted) on creation
 - Switches to TX mode before each `write()`
-- Waits for optional post-TX delay after write completes
-- Switches back to RX mode after each `write()`
+- Waits for transmit-complete drain, including after a partial write error
+- Starts the optional transceiver guard interval only after drain succeeds; the delay is not a substitute for drain and must fit the link's driver-release timing budget
+- Switches back to RX only after completion and the guard interval
+- Serializes I/O with direction changes; after a failed drain or cancelled write, the next read/write must finish draining before restoring RX
 - Uses the Linux GPIO character device (`/dev/gpiochipN`) via `gpiocdev` — not deprecated sysfs
+
+A drain error leaves transmit completion unknown and DE asserted. If recovery is
+not possible, the caller must handle the failed port; dropping the wrapper is not
+an asynchronous drain. Unix `TokioSerialPort` uses the native serial backend's
+`tcdrain`-backed synchronous flush on a blocking worker, keeping the stream alive
+and exclusive until the syscall returns. This does not qualify adapter or driver
+on-wire timing. Auto-direction and kernel RS-485 writes remain unchanged.
 
 #### SerialPort Trait
 
@@ -538,9 +547,17 @@ The MS/TP state machine is hardware-agnostic. Custom serial implementations (e.g
 ```rust
 pub trait SerialPort: Send + Sync + 'static {
     fn write(&self, data: &[u8]) -> impl Future<Output = Result<(), Error>> + Send;
+    fn drain(&self) -> impl Future<Output = Result<(), Error>> + Send;
     fn read(&self, buf: &mut [u8]) -> impl Future<Output = Result<usize, Error>> + Send;
 }
 ```
+
+`write()` may report driver acceptance before transmission finishes. `drain()`
+reports completion of all accepted output, including the UART shift register.
+Its default implementation returns an unsupported-operation error, preserving
+existing custom backends without falsely claiming completion. Custom backends
+used for software direction control must implement this operation. The loopback
+backend completes writes in memory and drains immediately.
 
 ### Loopback Transport
 

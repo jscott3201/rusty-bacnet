@@ -16,6 +16,8 @@
 //!   Use this for RS-485 hats (like the Seeed Studio RS-485 Shield) where
 //!   DE/RE is wired to a GPIO pin rather than the UART's RTS.
 
+use std::sync::Arc;
+
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 use tokio_serial::SerialStream;
@@ -51,7 +53,7 @@ impl Default for SerialConfig {
 /// RS-485 adapters). On Linux, call [`enable_kernel_rs485`](Self::enable_kernel_rs485)
 /// to use kernel-managed RTS direction control.
 pub struct TokioSerialPort {
-    inner: Mutex<SerialStream>,
+    inner: Arc<Mutex<SerialStream>>,
 }
 
 impl TokioSerialPort {
@@ -61,7 +63,7 @@ impl TokioSerialPort {
         let stream = SerialStream::open(&builder)
             .map_err(|e| Error::Encoding(format!("Serial open failed: {e}")))?;
         Ok(Self {
-            inner: Mutex::new(stream),
+            inner: Arc::new(Mutex::new(stream)),
         })
     }
 
@@ -144,6 +146,19 @@ impl SerialPort for TokioSerialPort {
             .map_err(|e| Error::Encoding(format!("Serial write failed: {e}")))
     }
 
+    #[cfg(unix)]
+    async fn drain(&self) -> Result<(), Error> {
+        // The synchronous Write implementation reaches tcdrain on Unix and
+        // propagates its result. Do not run this blocking wait on a Tokio worker.
+        // The owned guard keeps the stream alive and exclusive even if the
+        // awaiting future is cancelled while the blocking task is running.
+        let mut stream = self.inner.clone().lock_owned().await;
+        tokio::task::spawn_blocking(move || std::io::Write::flush(&mut *stream))
+            .await
+            .map_err(|e| Error::Encoding(format!("Serial drain task failed: {e}")))?
+            .map_err(|e| Error::Encoding(format!("Serial drain failed: {e}")))
+    }
+
     async fn read(&self, buf: &mut [u8]) -> Result<usize, Error> {
         let mut stream = self.inner.lock().await;
         stream
@@ -156,6 +171,83 @@ impl SerialPort for TokioSerialPort {
 // ---------------------------------------------------------------------------
 // GPIO direction control wrapper
 // ---------------------------------------------------------------------------
+
+#[cfg(any(feature = "serial-gpio", test))]
+trait DirectionControl: Send + Sync {
+    fn set_tx_mode(&self) -> Result<(), Error>;
+    fn set_rx_mode(&self) -> Result<(), Error>;
+}
+
+/// Serializes direction changes with I/O and remembers unfinished transmission
+/// across errors or cancellation. No RX transition is safe until drain succeeds.
+#[cfg(any(feature = "serial-gpio", test))]
+struct SoftwareDirection {
+    tx_pending: Mutex<bool>,
+    post_tx_delay_us: u64,
+}
+
+#[cfg(any(feature = "serial-gpio", test))]
+impl SoftwareDirection {
+    fn new(post_tx_delay_us: u64) -> Self {
+        Self {
+            tx_pending: Mutex::new(false),
+            post_tx_delay_us,
+        }
+    }
+
+    async fn finish_transmit(
+        &self,
+        inner: &impl SerialPort,
+        direction: &impl DirectionControl,
+        tx_pending: &mut bool,
+    ) -> Result<(), Error> {
+        if *tx_pending {
+            inner.drain().await?;
+            // This is a transceiver guard interval AFTER confirmed completion,
+            // never an estimate of how long queued bytes take to reach the wire.
+            if self.post_tx_delay_us > 0 {
+                tokio::time::sleep(tokio::time::Duration::from_micros(self.post_tx_delay_us)).await;
+            }
+            direction.set_rx_mode()?;
+            *tx_pending = false;
+        }
+        Ok(())
+    }
+
+    async fn write(
+        &self,
+        inner: &impl SerialPort,
+        direction: &impl DirectionControl,
+        data: &[u8],
+    ) -> Result<(), Error> {
+        let mut tx_pending = self.tx_pending.lock().await;
+        self.finish_transmit(inner, direction, &mut tx_pending)
+            .await?;
+        if let Err(error) = direction.set_tx_mode() {
+            // No write was attempted, so restoring RX cannot truncate output.
+            direction.set_rx_mode()?;
+            return Err(error);
+        }
+        *tx_pending = true;
+        let result = inner.write(data).await;
+        // A failed write can still have queued bytes. Drain those before RX too.
+        self.finish_transmit(inner, direction, &mut tx_pending)
+            .await?;
+        result
+    }
+
+    async fn read(
+        &self,
+        inner: &impl SerialPort,
+        direction: &impl DirectionControl,
+        buf: &mut [u8],
+    ) -> Result<usize, Error> {
+        let mut tx_pending = self.tx_pending.lock().await;
+        self.finish_transmit(inner, direction, &mut tx_pending)
+            .await?;
+        inner.read(buf).await
+    }
+}
 
 /// RS-485 direction control via a GPIO pin on the Linux GPIO character device.
 ///
@@ -177,16 +269,17 @@ impl SerialPort for TokioSerialPort {
 /// ```
 ///
 /// The pin is set to receive mode (DE deasserted) on creation and after
-/// each write. This ensures the bus defaults to listening.
+/// each drained write. The inner port must implement [`SerialPort::drain`].
+/// If drain fails or a write is cancelled, DE remains asserted until a later
+/// read/write can confirm completion and restore RX. Dropping the wrapper is not
+/// an asynchronous drain; finish pending I/O before releasing the GPIO resource.
 #[cfg(feature = "serial-gpio")]
 pub struct GpioDirectionPort<S: SerialPort> {
     inner: S,
     gpio: std::sync::Mutex<gpiocdev::Request>,
     line: u32,
     active_high: bool,
-    /// Baud-rate-dependent delay after flush to ensure the last byte
-    /// has left the UART shift register before switching to RX mode.
-    post_tx_delay_us: u64,
+    direction: SoftwareDirection,
 }
 
 #[cfg(feature = "serial-gpio")]
@@ -205,13 +298,10 @@ impl<S: SerialPort> GpioDirectionPort<S> {
 
     /// Create with an explicit post-TX delay in microseconds.
     ///
-    /// After flushing the serial port, the wrapper waits this long before
-    /// switching back to receive mode. This covers the time for the last
-    /// byte to leave the UART's shift register. At 76800 baud, one byte
-    /// takes ~130us. A delay of 200-500us is typically safe.
-    ///
-    /// If set to 0, no additional delay is added (suitable when the UART
-    /// driver's flush fully drains the hardware FIFO).
+    /// After the inner port confirms transmit completion, the wrapper waits
+    /// this additional transceiver guard interval before switching to RX.
+    /// Zero adds no guard interval. This delay is not a substitute for drain
+    /// and must fit the link's driver-release timing budget.
     pub fn with_post_tx_delay(
         inner: S,
         gpio_chip: &str,
@@ -249,10 +339,13 @@ impl<S: SerialPort> GpioDirectionPort<S> {
             gpio: std::sync::Mutex::new(request),
             line,
             active_high,
-            post_tx_delay_us,
+            direction: SoftwareDirection::new(post_tx_delay_us),
         })
     }
+}
 
+#[cfg(feature = "serial-gpio")]
+impl<S: SerialPort> DirectionControl for GpioDirectionPort<S> {
     /// Set the transceiver to transmit mode (DE asserted).
     fn set_tx_mode(&self) -> Result<(), Error> {
         use gpiocdev::line::Value;
@@ -287,24 +380,20 @@ impl<S: SerialPort> GpioDirectionPort<S> {
 #[cfg(feature = "serial-gpio")]
 impl<S: SerialPort> SerialPort for GpioDirectionPort<S> {
     async fn write(&self, data: &[u8]) -> Result<(), Error> {
-        // Switch to TX mode before writing.
-        self.set_tx_mode()?;
+        self.direction.write(&self.inner, self, data).await
+    }
 
-        let result = self.inner.write(data).await;
-
-        // Post-TX delay to let the last byte leave the shift register.
-        if self.post_tx_delay_us > 0 {
-            tokio::time::sleep(tokio::time::Duration::from_micros(self.post_tx_delay_us)).await;
-        }
-
-        // Always switch back to RX mode, even on write error.
-        self.set_rx_mode()?;
-
-        result
+    async fn drain(&self) -> Result<(), Error> {
+        let mut tx_pending = self.direction.tx_pending.lock().await;
+        self.direction
+            .finish_transmit(&self.inner, self, &mut tx_pending)
+            .await
     }
 
     async fn read(&self, buf: &mut [u8]) -> Result<usize, Error> {
-        // Already in RX mode — just delegate.
-        self.inner.read(buf).await
+        self.direction.read(&self.inner, self, buf).await
     }
 }
+
+#[cfg(test)]
+mod tests;

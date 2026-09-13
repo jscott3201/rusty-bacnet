@@ -27,8 +27,23 @@ use crate::port::ReceivedNpdu;
 /// Implementations wrap the platform serial driver (e.g. `tokio-serial`).
 /// A loopback implementation is provided for testing.
 pub trait SerialPort: Send + Sync + 'static {
-    /// Write bytes to the serial port.
+    /// Write bytes to the serial port. Success may mean only driver acceptance,
+    /// not that the final stop bit has left the UART; use [`Self::drain`] for that.
     fn write(&self, data: &[u8]) -> impl std::future::Future<Output = Result<(), Error>> + Send;
+    /// Wait until all accepted output has finished transmission, including the
+    /// UART shift register. Required for software-controlled RS-485 direction.
+    ///
+    /// Call even after a write error, which may have accepted a partial frame.
+    /// An error leaves transmit completion unknown. The default is unsupported,
+    /// rather than falsely reporting completion for existing custom backends.
+    fn drain(&self) -> impl std::future::Future<Output = Result<(), Error>> + Send {
+        async {
+            Err(Error::Transport(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "Serial transmit-complete drain is not supported by this backend",
+            )))
+        }
+    }
     /// Read available bytes into `buf`. Returns the number of bytes read.
     /// Should block until at least 1 byte is available or timeout.
     fn read(

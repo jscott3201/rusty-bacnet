@@ -133,7 +133,9 @@ UART + GPIO → DE/RE ─────────>│  GpioDirectionPort<S>    �
                               └──────────────────────────┘
 ```
 
-`GpioDirectionPort` is a composable wrapper — it wraps any `SerialPort` and toggles a GPIO pin via the Linux character device API (`/dev/gpiochipN`) before and after each write. This keeps `TokioSerialPort` simple and platform-independent.
+`GpioDirectionPort` wraps a `SerialPort` with transmit-complete `drain()` support and controls a GPIO pin through the Linux character device API (`/dev/gpiochipN`). It asserts DE before writing, waits for drain, then applies any configured transceiver guard interval before returning to RX. Unix `TokioSerialPort` drains through the native serial backend on a blocking worker while retaining exclusive ownership of the stream. Ordinary hardware auto-direction and kernel RS-485 writes do not add userspace direction changes or drain waits.
+
+MS/TP turnaround uses an absolute earliest-transmit deadline derived from the latest nonempty host read. Processing time counts toward that silence interval; a later chunk moves the deadline forward. Transmit encoding reuses a buffer and frame boundaries without copying each encoded frame into its own byte vector. These host-side guarantees are not physical UART timing qualification.
 
 ## Object Model
 
