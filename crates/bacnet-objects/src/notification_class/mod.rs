@@ -34,6 +34,7 @@ use crate::event::EventTransition;
 use crate::traits::BACnetObject;
 
 mod enrollment_summary;
+mod metadata;
 #[doc(hidden)]
 pub use enrollment_summary::{
     resolve_enrollment_summary_class_internal, EnrollmentSummaryClassProjection,
@@ -229,22 +230,12 @@ impl BACnetObject for NotificationClass {
         Err(common::write_access_denied_error())
     }
 
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_object(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-            PropertyIdentifier::NOTIFICATION_CLASS,
-            PropertyIdentifier::PRIORITY,
-            PropertyIdentifier::ACK_REQUIRED,
-            PropertyIdentifier::RECIPIENT_LIST,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 }
 

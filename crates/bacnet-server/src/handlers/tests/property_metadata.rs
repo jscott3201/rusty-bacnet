@@ -1,5 +1,7 @@
 use super::*;
 
+mod notification_class;
+
 use bacnet_objects::audit::AuditReporterObject;
 use bacnet_objects::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use bacnet_objects::event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject};
