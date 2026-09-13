@@ -74,6 +74,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let dcc_timer: Arc<Mutex<Option<JoinHandle<()>>>> = Arc::new(Mutex::new(None));
         let dcc_outcomes = Arc::new(dcc_outcomes::DccOutcomes::default());
         let dcc_outcomes_dispatch = Arc::clone(&dcc_outcomes);
+        let mutation_decisions = Arc::new(crate::mutation::MutationDecisions::default());
+        let mutation_decisions_dispatch = Arc::clone(&mutation_decisions);
 
         let network_dispatch = Arc::clone(&network);
         let db_dispatch = Arc::clone(&db);
@@ -440,6 +442,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                                     &comm_state_dispatch,
                                                     &dcc_timer_dispatch,
                                                     &dcc_outcomes_dispatch,
+                                                    &mutation_decisions_dispatch,
                                                     &config_dispatch,
                                                     &clock_dispatch,
                                                     &limiters_dispatch.0,
@@ -496,6 +499,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 &comm_state_dispatch,
                                 &dcc_timer_dispatch,
                                 &dcc_outcomes_dispatch,
+                                &mutation_decisions_dispatch,
                                 &config_dispatch,
                                 &clock_dispatch,
                                 &limiters_dispatch.0,
@@ -750,6 +754,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             comm_state,
             dcc_timer,
             dcc_outcomes,
+            mutation_decisions,
             dispatch_task: Some(dispatch_task),
             request_tasks,
             cov_purge_task: Some(cov_purge_task),
@@ -810,40 +815,5 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         {
             warn!(error = %e, reason = abort_reason.to_raw(), "Failed to send Abort");
         }
-    }
-
-    /// Get the server's local MAC address.
-    pub fn local_mac(&self) -> &[u8] {
-        &self.local_mac
-    }
-
-    /// Get a reference to the shared object database.
-    pub fn database(&self) -> &Arc<RwLock<ObjectDatabase>> {
-        &self.db
-    }
-
-    /// Create a cloneable handle for unsolicited I-Am announcements.
-    pub fn i_am_broadcaster(&self) -> IAmBroadcaster<T> {
-        IAmBroadcaster {
-            config: self.config.clone(),
-            network: Arc::clone(&self.network),
-            db: Arc::clone(&self.db),
-        }
-    }
-
-    /// Get the communication state per DeviceCommunicationControl.
-    ///
-    /// Returns 0 (Enable), 1 (Disable), or 2 (DisableInitiation).
-    pub fn comm_state(&self) -> u8 {
-        self.comm_state.load(Ordering::Acquire)
-    }
-
-    /// Generate a PICS document from the current object database and server configuration.
-    ///
-    /// The caller must supply a [`PicsConfig`] for fields not available from the server
-    /// (vendor name, model, firmware revision, etc.).
-    pub async fn generate_pics(&self, pics_config: &crate::pics::PicsConfig) -> crate::pics::Pics {
-        let db = self.db.read().await;
-        crate::pics::PicsGenerator::new(&db, &self.config, pics_config).generate()
     }
 }

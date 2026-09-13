@@ -51,6 +51,7 @@ async fn dispatch(
         &server.comm_state,
         &server.dcc_timer,
         &server.dcc_outcomes,
+        &server.mutation_decisions,
         &Arc::new(server.config.clone()),
         &server._clock,
         &server.discovery_limiter,

@@ -47,6 +47,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         comm_state: &Arc<AtomicU8>,
         dcc_timer: &Arc<Mutex<Option<JoinHandle<()>>>>,
         dcc_outcomes: &Arc<dcc_outcomes::DccOutcomes>,
+        mutation_decisions: &Arc<crate::mutation::MutationDecisions>,
         config: &ServerConfig,
         request_tasks: &super::request_tasks::RequestTaskSpawner,
         source_mac: &[u8],
@@ -102,6 +103,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let mut ack_buf = BytesMut::with_capacity(512);
         let mutation = mutations::Request {
             config,
+            decisions: mutation_decisions,
             source_mac,
             source_network: source_network.as_ref(),
             req: &req,

@@ -292,6 +292,7 @@ async fn dispatch_test_apdu_from_network<T: TransportPort + 'static>(
         &comm_state,
         &dcc_timer,
         &Arc::new(dcc_outcomes::DccOutcomes::default()),
+        &Arc::new(crate::mutation::MutationDecisions::default()),
         &config,
         &None,
         &Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), None)),
