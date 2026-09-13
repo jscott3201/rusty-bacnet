@@ -3,6 +3,7 @@ use bacnet_objects::{
     audit::AuditReporterObject,
     binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject},
     event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject},
+    multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject},
     staging::{StagingConfig, StagingObject},
     value_types::TimeValueObject,
 };
@@ -467,6 +468,107 @@ fn pics_binary_commandable_property_metadata_is_exact() {
                 } else {
                     expected.insert(20, (P::POLARITY, false, false));
                     expected.insert(5, (P::FEEDBACK_VALUE, true, true));
+                }
+                expected.push((P::PROPERTY_LIST, false, false));
+                let required = object.required_properties();
+                let mut db = ObjectDatabase::new();
+                db.add(object).unwrap();
+                let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+                assert_eq!(pics.supported_object_types.len(), 1);
+                let support = &pics.supported_object_types[0];
+                assert_eq!(support.object_type, kind);
+                assert!(support.createable);
+                let rows: Vec<_> = support
+                    .supported_properties
+                    .iter()
+                    .map(|row| {
+                        assert!(row.access.readable);
+                        (row.property_id, row.access.optional, row.access.writable)
+                    })
+                    .collect();
+                assert_eq!(
+                    rows, expected,
+                    "{kind:?}, OOS={out_of_service}, detection={detection_enabled}"
+                );
+                assert_eq!(
+                    rows.iter()
+                        .filter_map(|&(p, optional, _)| (!optional).then_some(p))
+                        .collect::<Vec<_>>(),
+                    required.as_ref()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn pics_multistate_property_metadata_is_exact() {
+    use bacnet_objects::traits::BACnetObject;
+    use bacnet_types::primitives::PropertyValue;
+    use PropertyIdentifier as P;
+
+    let base = [
+        (P::OBJECT_IDENTIFIER, false, false),
+        (P::OBJECT_NAME, false, true),
+        (P::DESCRIPTION, true, true),
+        (P::OBJECT_TYPE, false, false),
+        (P::PRESENT_VALUE, false, true),
+        (P::STATUS_FLAGS, false, false),
+        (P::EVENT_STATE, false, false),
+        (P::EVENT_DETECTION_ENABLE, true, true),
+        (P::EVENT_ENABLE, true, true),
+        (P::TIME_DELAY, true, true),
+        (P::TIME_DELAY_NORMAL, true, true),
+        (P::NOTIFY_TYPE, true, true),
+        (P::NOTIFICATION_CLASS, true, true),
+        (P::ACKED_TRANSITIONS, true, false),
+        (P::EVENT_TIME_STAMPS, true, false),
+        (P::EVENT_MESSAGE_TEXTS, true, false),
+        (P::OUT_OF_SERVICE, false, true),
+        (P::NUMBER_OF_STATES, false, false),
+        (P::RELIABILITY, true, true),
+        (P::RELIABILITY_EVALUATION_INHIBIT, true, true),
+        (P::STATE_TEXT, true, true),
+    ];
+    for out_of_service in [false, true] {
+        for detection_enabled in [false, true] {
+            let objects: [Box<dyn BACnetObject>; 3] = [
+                Box::new(MultiStateInputObject::new(1, "MSI-1", 3).unwrap()),
+                Box::new(MultiStateValueObject::new(1, "MSV-1", 3).unwrap()),
+                Box::new(MultiStateOutputObject::new(1, "MSO-1", 3).unwrap()),
+            ];
+            for mut object in objects {
+                let kind = object.object_identifier().object_type();
+                for (p, enabled) in [
+                    (P::OUT_OF_SERVICE, out_of_service),
+                    (P::EVENT_DETECTION_ENABLE, detection_enabled),
+                ] {
+                    object
+                        .write_property(p, None, PropertyValue::Boolean(enabled), None)
+                        .unwrap();
+                }
+                let mut expected = base.to_vec();
+                if kind != ObjectType::MULTI_STATE_INPUT {
+                    let optional = kind == ObjectType::MULTI_STATE_VALUE;
+                    expected.splice(
+                        18..18,
+                        [
+                            (P::PRIORITY_ARRAY, optional, true),
+                            (P::RELINQUISH_DEFAULT, optional, true),
+                            (P::CURRENT_COMMAND_PRIORITY, optional, false),
+                        ],
+                    );
+                }
+                if kind == ObjectType::MULTI_STATE_OUTPUT {
+                    expected.insert(5, (P::FEEDBACK_VALUE, true, true));
+                } else {
+                    expected.push((P::ALARM_VALUES, true, true));
+                }
+                if kind != ObjectType::MULTI_STATE_INPUT {
+                    expected.extend([
+                        (P::VALUE_SOURCE, true, false),
+                        (P::LAST_COMMAND_TIME, true, false),
+                    ]);
                 }
                 expected.push((P::PROPERTY_LIST, false, false));
                 let required = object.required_properties();

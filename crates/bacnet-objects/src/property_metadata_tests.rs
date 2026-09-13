@@ -7,6 +7,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
+use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
 use crate::property_metadata::{
     PropertyConformance, PropertyMetadata, PropertyPresenceCondition, PropertyWriteCapability,
 };
@@ -220,14 +221,18 @@ fn property_metadata_contract_binary_input() {
 
 #[test]
 fn property_metadata_contract_all_migrated_rows_are_readable() {
-    let objects: [Box<dyn BACnetObject>; 4] = [
+    let objects: [Box<dyn BACnetObject>; 7] = [
         Box::new(TimeValueObject::new(1, "TV-1").unwrap()),
         Box::new(BinaryInputObject::new(1, "BI-1").unwrap()),
         Box::new(BinaryValueObject::new(1, "BV-1").unwrap()),
         Box::new(BinaryOutputObject::new(1, "BO-1").unwrap()),
+        Box::new(MultiStateInputObject::new(1, "MSI-1", 3).unwrap()),
+        Box::new(MultiStateValueObject::new(1, "MSV-1", 3).unwrap()),
+        Box::new(MultiStateOutputObject::new(1, "MSO-1", 3).unwrap()),
     ];
 
     for object in objects {
+        assert_unique_and_canonical(object.as_ref());
         let metadata = object.property_metadata();
         for row in metadata.iter() {
             assert!(

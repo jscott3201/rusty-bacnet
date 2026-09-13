@@ -647,3 +647,103 @@ fn read_property_serves_derived_services_supported() {
     assert!(ss.contains(bacnet_types::enums::ServiceSupported::AUDIT_LOG_QUERY));
     assert!(!ss.contains(bacnet_types::enums::ServiceSupported::I_AM));
 }
+
+#[test]
+fn rpm_multistate_indexed_state_text_and_list_gating_preserve_bytes() {
+    use bacnet_services::common::PropertyReference;
+    use bacnet_services::rpm::{ReadAccessSpecification, ReadPropertyMultipleACK};
+    use bacnet_types::primitives::PropertyValue;
+    use PropertyIdentifier as P;
+
+    for mut object in super::property_metadata::multistate_objects() {
+        let oid = object.object_identifier();
+        let label = "indexed label".repeat(100);
+        object
+            .write_property(
+                P::STATE_TEXT,
+                Some(2),
+                PropertyValue::CharacterString(label.clone()),
+                None,
+            )
+            .unwrap();
+        let mut db = ObjectDatabase::new();
+        db.add(object).unwrap();
+        // The object read arms retain their legacy behavior; the service gates
+        // an index on scalar/list properties before dispatch in both paths.
+        let references = [
+            (P::STATE_TEXT, 0),
+            (P::STATE_TEXT, 1),
+            (P::STATE_TEXT, 2),
+            (P::STATE_TEXT, 3),
+            (P::STATE_TEXT, 4),
+            (P::ALARM_VALUES, 0),
+            (P::NUMBER_OF_STATES, 1),
+            (P::FEEDBACK_VALUE, 1),
+        ];
+        let request = ReadPropertyMultipleRequest {
+            list_of_read_access_specs: vec![ReadAccessSpecification {
+                object_identifier: oid,
+                list_of_property_references: references
+                    .iter()
+                    .map(|&(p, i)| PropertyReference {
+                        property_identifier: p,
+                        property_array_index: Some(i),
+                    })
+                    .collect(),
+            }],
+        };
+        let mut bytes = BytesMut::new();
+        request.encode(&mut bytes);
+        let mut legacy = BytesMut::new();
+        handle_read_property_multiple(&db, &bytes, &mut legacy).unwrap();
+        let ack = ReadPropertyMultipleACK::decode(&legacy).unwrap();
+        let results = &ack.list_of_read_access_results[0].list_of_results;
+        assert_eq!(results.len(), references.len());
+        for (result, (p, i)) in results.iter().zip(references) {
+            assert_eq!(result.property_identifier, p);
+            assert_eq!(result.property_array_index, Some(i));
+            if p == P::STATE_TEXT && i <= 3 {
+                assert!(result.error.is_none());
+                let value_bytes = result.property_value.as_ref().unwrap();
+                let (value, end) =
+                    bacnet_encoding::primitives::decode_application_value(value_bytes, 0).unwrap();
+                let expected = match i {
+                    0 => PropertyValue::Unsigned(3),
+                    2 => PropertyValue::CharacterString(label.clone()),
+                    _ => PropertyValue::CharacterString(format!("State {i}")),
+                };
+                assert_eq!(value, expected);
+                assert_eq!(end, value_bytes.len());
+            } else {
+                let expected = if p == P::STATE_TEXT {
+                    ErrorCode::INVALID_ARRAY_INDEX
+                } else {
+                    ErrorCode::PROPERTY_IS_NOT_AN_ARRAY
+                };
+                assert_eq!(result.error, Some((ErrorClass::PROPERTY, expected)));
+                assert!(result.property_value.is_none());
+            }
+        }
+        let budget = crate::server::ReadPropertyMultipleBudget {
+            max_result_elements: references.len(),
+            max_service_ack_bytes: legacy.len(),
+        };
+        let mut bounded = BytesMut::new();
+        super::super::rpm_budget::handle_rpm_budgeted(&db, &bytes, &mut bounded, budget).unwrap();
+        assert_eq!(bounded, legacy);
+        let mut prefix = BytesMut::from(&b"prefix"[..]);
+        assert!(matches!(
+            super::super::rpm_budget::handle_rpm_budgeted(
+                &db,
+                &bytes,
+                &mut prefix,
+                crate::server::ReadPropertyMultipleBudget {
+                    max_service_ack_bytes: legacy.len() - 1,
+                    ..budget
+                }
+            ),
+            Err(super::super::rpm_budget::RpmFailure::Bytes)
+        ));
+        assert_eq!(&prefix[..], b"prefix");
+    }
+}

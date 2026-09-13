@@ -602,3 +602,116 @@ fn rpm_metadata_binary_required_optional_and_budgeted_bytes_agree() {
         }
     }
 }
+
+pub(super) fn multistate_objects() -> [Box<dyn bacnet_objects::traits::BACnetObject>; 3] {
+    use bacnet_objects::multistate::{
+        MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject,
+    };
+    [
+        Box::new(MultiStateInputObject::new(1, "MSI-1", 3).unwrap()),
+        Box::new(MultiStateValueObject::new(1, "MSV-1", 3).unwrap()),
+        Box::new(MultiStateOutputObject::new(1, "MSO-1", 3).unwrap()),
+    ]
+}
+
+#[test]
+fn rpm_metadata_multistate_required_optional_and_budgeted_bytes_agree() {
+    use bacnet_types::primitives::PropertyValue;
+    use PropertyIdentifier as P;
+    let base = [
+        P::OBJECT_IDENTIFIER,
+        P::OBJECT_NAME,
+        P::DESCRIPTION,
+        P::OBJECT_TYPE,
+        P::PRESENT_VALUE,
+        P::STATUS_FLAGS,
+        P::EVENT_STATE,
+        P::EVENT_DETECTION_ENABLE,
+        P::EVENT_ENABLE,
+        P::TIME_DELAY,
+        P::TIME_DELAY_NORMAL,
+        P::NOTIFY_TYPE,
+        P::NOTIFICATION_CLASS,
+        P::ACKED_TRANSITIONS,
+        P::EVENT_TIME_STAMPS,
+        P::EVENT_MESSAGE_TEXTS,
+        P::OUT_OF_SERVICE,
+        P::NUMBER_OF_STATES,
+        P::RELIABILITY,
+        P::RELIABILITY_EVALUATION_INHIBIT,
+        P::STATE_TEXT,
+    ];
+    for enabled in [false, true] {
+        for mut object in multistate_objects() {
+            let oid = object.object_identifier();
+            let kind = oid.object_type();
+            let mut all = base.to_vec();
+            let mut required = vec![
+                P::OBJECT_IDENTIFIER,
+                P::OBJECT_NAME,
+                P::OBJECT_TYPE,
+                P::PRESENT_VALUE,
+                P::STATUS_FLAGS,
+                P::EVENT_STATE,
+                P::OUT_OF_SERVICE,
+                P::NUMBER_OF_STATES,
+            ];
+            let commands = [
+                P::PRIORITY_ARRAY,
+                P::RELINQUISH_DEFAULT,
+                P::CURRENT_COMMAND_PRIORITY,
+            ];
+            if kind != ObjectType::MULTI_STATE_INPUT {
+                all.splice(18..18, commands);
+            }
+            if kind == ObjectType::MULTI_STATE_OUTPUT {
+                all.insert(5, P::FEEDBACK_VALUE);
+                required.extend(commands);
+            } else {
+                all.push(P::ALARM_VALUES);
+                object
+                    .write_property(
+                        P::ALARM_VALUES,
+                        None,
+                        PropertyValue::List(vec![PropertyValue::Unsigned(2); 1024]),
+                        None,
+                    )
+                    .unwrap();
+            }
+            if kind != ObjectType::MULTI_STATE_INPUT {
+                all.extend([P::VALUE_SOURCE, P::LAST_COMMAND_TIME]);
+            }
+            let optional: Vec<_> = all
+                .iter()
+                .copied()
+                .filter(|p| !required.contains(p))
+                .collect();
+            object
+                .write_property(
+                    P::EVENT_DETECTION_ENABLE,
+                    None,
+                    PropertyValue::Boolean(enabled),
+                    None,
+                )
+                .unwrap();
+            object
+                .write_property(
+                    P::STATE_TEXT,
+                    Some(2),
+                    PropertyValue::CharacterString("long label".repeat(100)),
+                    None,
+                )
+                .unwrap();
+            let mut db = ObjectDatabase::new();
+            db.add(object).unwrap();
+            for (selector, expected) in [
+                (P::ALL, all.as_slice()),
+                (P::REQUIRED, required.as_slice()),
+                (P::OPTIONAL, optional.as_slice()),
+                (P::PROPERTY_LIST, &[P::PROPERTY_LIST]),
+            ] {
+                assert_rpm_selector_bytes(&db, oid, selector, expected);
+            }
+        }
+    }
+}
