@@ -205,6 +205,16 @@ pub trait BACnetObject: Send + Sync {
     /// Universal read-only properties (`OBJECT_IDENTIFIER`, `OBJECT_TYPE`,
     /// `PROPERTY_LIST`, `STATUS_FLAGS`) are always non-writable and are
     /// excluded by the default; overrides should preserve that invariant.
+    ///
+    /// Built-in analog, binary, multi-state, Event Enrollment, and Alert
+    /// Enrollment objects also deny network writes to `ACKED_TRANSITIONS`.
+    /// The property descriptions accompanying ASHRAE 135-2020 Tables 12-2/3/4,
+    /// 12-6/8/10, 12-21/22/23, 12-14, and 12-61 explicitly make it read-only;
+    /// the table's `R`/`O` classification alone is not a write prohibition.
+    /// Clause 13.2.3 assigns acknowledgment-bit maintenance to internal
+    /// transition and acknowledgment processing. Those lifecycle hooks and
+    /// supported AcknowledgeAlarm paths do not use `write_property`, so this
+    /// network restriction does not prevent their internal updates.
     fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
         let metadata = self.property_metadata();
         if metadata.is_empty() {
