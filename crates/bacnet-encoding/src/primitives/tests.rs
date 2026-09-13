@@ -57,6 +57,69 @@ fn unsigned_max_u64() {
     assert_eq!(decode_unsigned(&buf).unwrap(), u64::MAX);
 }
 
+#[test]
+fn typed_unsigned_accepts_fitting_values_and_leading_zeros() {
+    for length in 1..=8 {
+        for value in [0u8, 1, u8::MAX] {
+            let bytes = u64::from(value).to_be_bytes();
+            let data = &bytes[8 - length..];
+            assert_eq!(decode_unsigned_u8(data).unwrap(), value);
+            assert_eq!(decode_unsigned_u16(data).unwrap(), u16::from(value));
+            assert_eq!(decode_unsigned_u32(data).unwrap(), u32::from(value));
+        }
+    }
+    for length in 2..=8 {
+        let bytes = u64::from(u16::MAX).to_be_bytes();
+        assert_eq!(decode_unsigned_u16(&bytes[8 - length..]).unwrap(), u16::MAX);
+    }
+    for length in 4..=8 {
+        let bytes = u64::from(u32::MAX).to_be_bytes();
+        assert_eq!(decode_unsigned_u32(&bytes[8 - length..]).unwrap(), u32::MAX);
+    }
+}
+
+#[test]
+fn typed_unsigned_rejects_numeric_overflow() {
+    for (maximum, width) in [
+        (u64::from(u8::MAX), 1),
+        (u64::from(u16::MAX), 2),
+        (u64::from(u32::MAX), 4),
+    ] {
+        for value in [maximum + 1, maximum + 2, 0x8000_0000_0000_0001, u64::MAX] {
+            let bytes = value.to_be_bytes();
+            for length in width + 1..=8 {
+                let data = &bytes[8 - length..];
+                // Only test complete representations, not truncated test vectors.
+                if bytes[..8 - length].iter().any(|&byte| byte != 0) {
+                    continue;
+                }
+                let error = match width {
+                    1 => decode_unsigned_u8(data).unwrap_err(),
+                    2 => decode_unsigned_u16(data).unwrap_err(),
+                    4 => decode_unsigned_u32(data).unwrap_err(),
+                    _ => unreachable!(),
+                };
+                assert!(matches!(error, Error::Decoding { .. }), "{error:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn typed_unsigned_preserves_raw_length_errors() {
+    for data in [&[][..], &[0; 9][..]] {
+        let expected = decode_unsigned(data).unwrap_err();
+        for error in [
+            decode_unsigned_u8(data).unwrap_err(),
+            decode_unsigned_u16(data).unwrap_err(),
+            decode_unsigned_u32(data).unwrap_err(),
+        ] {
+            assert!(matches!(error, Error::Decoding { .. }));
+            assert_eq!(error.to_string(), expected.to_string());
+        }
+    }
+}
+
 // --- Raw signed ---
 
 #[test]

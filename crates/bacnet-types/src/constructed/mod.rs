@@ -314,7 +314,7 @@ pub enum BACnetRecipient {
 }
 
 // ---------------------------------------------------------------------------
-// BACnetDestination (Clause 12.15.5 -- recipient_list of NotificationClass)
+// BACnetDestination -- notification recipient, schedule, and delivery options
 // ---------------------------------------------------------------------------
 
 /// A single entry in a NotificationClass recipient list.
@@ -626,7 +626,7 @@ pub enum BACnetValueSource {
 }
 
 // ---------------------------------------------------------------------------
-// BACnetEventParameter (Clause 13.5 -- Event_Parameters CHOICE alternatives)
+// BACnetEventParameter -- Event_Parameters algorithm alternatives
 // ---------------------------------------------------------------------------
 
 mod event_parameter;

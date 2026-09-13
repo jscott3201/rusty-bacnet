@@ -126,7 +126,7 @@ impl EventTransition {
 
     /// Positional index into the NotificationClass `PRIORITY` and
     /// `ACK_REQUIRED` arrays, both ordered `[TO_OFFNORMAL, TO_FAULT,
-    /// TO_NORMAL]` per ASHRAE 135-2020 Clause 12.31.5 / 12.31.6.
+    /// TO_NORMAL]` to select the priority and acknowledgment requirement.
     pub fn index(self) -> usize {
         match self {
             EventTransition::ToOffnormal => 0,

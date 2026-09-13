@@ -1,5 +1,4 @@
-//! `BACnetEventParameter` — structured `Event_Parameters` CHOICE
-//! (ASHRAE 135-2020 Clause 13.5).
+//! `BACnetEventParameter` — structured `Event_Parameters` algorithm choice.
 //!
 //! See the [`BACnetEventParameter`] type for details.
 
@@ -19,8 +18,7 @@ use crate::primitives::PropertyValue;
 
 /// Algorithm tag constants for the [`BACnetEventParameter`] CHOICE.
 ///
-/// These mirror the context-tag numbers in the ASHRAE 135-2020
-/// `BACnetEventParameter ::= CHOICE` definition (Clause 13.5) and are used as
+/// These identify the `BACnetEventParameter` alternatives and are used as
 /// the leading element of the flat [`PropertyValue::List`] encoding so that an
 /// enrollment's parameters survive a complete property round trip without
 /// requiring ASN.1 context-tagged framing.
@@ -43,7 +41,7 @@ pub mod event_parameter_tag {
 
 /// The `cov-criteria [1] CHOICE` nested inside `change-of-value`.
 ///
-/// Per Clause 13.5 the change-of-value algorithm monitors either a bitmask or
+/// The change-of-value algorithm monitors either a bitmask or
 /// a referenced-property increment; this preserves which alternative is in
 /// use along with its payload.
 #[derive(Debug, Clone, PartialEq)]
@@ -62,7 +60,7 @@ pub enum ChangeOfValueCriteria {
 /// Structured `Event_Parameters` for an EventEnrollment object.
 ///
 /// Models the evaluated algorithm alternatives of the `BACnetEventParameter`
-/// `CHOICE` (ASHRAE 135-2020 Clause 13.5) that this library can evaluate.
+/// `CHOICE` that this library can evaluate.
 /// Unknown or vendor-defined alternatives are preserved verbatim via
 /// [`BACnetEventParameter::Opaque`] so that values written by a remote client
 /// are never silently discarded.
