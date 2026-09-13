@@ -13,6 +13,33 @@
 //! Local application delivery follows the shared
 //! [receive-queue contract](crate::layer#receive-queue-admission), independently
 //! of forwarding and inline network-message handling.
+//!
+//! # Routing-claim trust model
+//!
+//! Classic BACnet routing claims are unauthenticated: an ingress port, next-hop
+//! MAC or advertised network is not proof that a peer is authorized to control
+//! that route. Learning remains last-wins; these local mitigations do not
+//! prevent route poisoning or authenticate a claim (Clauses 6.4 and 6.6.3):
+//! - Direct routes cannot be overwritten by learning or changed by rejects.
+//! - I-Am-Router and Initialize-Routing-Table/ACK retain their existing route-cap
+//!   checks; stale learned routes age out, and rapid port changes warn.
+//! - Reject-driven table transitions are dampened per (ingress port, network),
+//!   not by spoofable source MAC or routed source address. No-op rejects are
+//!   ignored, without renewing busy deadlines. A first state-changing reject
+//!   applies; further changes within 30s of the last applied reject are ignored.
+//!   Ignored claims do not extend that window. Learning refresh/replacement,
+//!   removal and aging re-arm all ingress keys for that network.
+//! - [`RouterTable::claim_snapshot`] exposes saturating count-only outcomes;
+//!   counters never influence learning or forwarding.
+//!
+//! The private 30s hold-down aligns with the existing reject-busy deadline: one
+//! busy marking buys at most one accepted reject-driven churn event per key per
+//! 30s without fresh learning; legitimate re-signals after the window can apply.
+//! **Trade-off:** a legitimate unreachable-after-busy signal can be delayed up
+//! to 30s. This is local hardening, not a protocol authentication mechanism.
+//! Learning can re-arm dampening even when the refresh is malicious. Other
+//! control-message handling, forwarding, reject relay and warning behavior are
+//! unchanged; operators still need a trusted, appropriately isolated network.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -524,5 +551,7 @@ impl BACnetRouter {
 
 #[cfg(test)]
 mod admission_tests;
+#[cfg(test)]
+mod claim_tests;
 #[cfg(test)]
 mod tests;
