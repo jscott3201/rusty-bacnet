@@ -54,6 +54,7 @@ async fn dispatch(
         &Arc::new(server.config.clone()),
         &server._clock,
         &server.discovery_limiter,
+        &server.time_sync_limiter,
         &server.request_tasks,
         &[1],
         apdu,

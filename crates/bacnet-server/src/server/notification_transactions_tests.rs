@@ -406,6 +406,7 @@ async fn dispatch_keeps_segment_and_complex_acks_out_of_notification_completion(
             &config,
             &None,
             &Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), None)),
+            &Arc::new(TimeSyncLimiter::new(TimeSyncPolicy::default())),
             &Arc::new(super::request_tasks::RequestTasks::default()),
             source_mac.as_slice(),
             apdu,

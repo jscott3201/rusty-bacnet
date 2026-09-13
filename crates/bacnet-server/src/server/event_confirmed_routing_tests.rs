@@ -259,6 +259,7 @@ impl Harness {
             &Arc::new(ServerConfig::default()),
             &None,
             &Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), None)),
+            &Arc::new(TimeSyncLimiter::new(TimeSyncPolicy::default())),
             &Arc::new(super::request_tasks::RequestTasks::default()),
             source_mac,
             apdu,

@@ -1,4 +1,4 @@
-use super::super::{ClockConfig, ServerClock, ServerConfig};
+use super::super::{ClockConfig, ServerClock, ServerConfig, TimeSyncLimiter, TimeSyncPolicy};
 use super::unconfirmed::apply_time_sync_request;
 use crate::server::TimeSyncData;
 use bacnet_objects::clock::ClockReader;
@@ -41,6 +41,19 @@ fn config_with_counter(counter: Arc<AtomicUsize>) -> ServerConfig {
     }
 }
 
+fn received() -> bacnet_network::layer::ReceivedApdu {
+    bacnet_network::layer::ReceivedApdu {
+        apdu: Bytes::new(),
+        source_mac: bacnet_types::MacAddr::from_slice(&[1]),
+        ingress_network: None,
+        source_network: None,
+        link_layer_group: false,
+        is_group: false,
+        data_attributes: Vec::new(),
+        reply_tx: None,
+    }
+}
+
 #[test]
 fn accepted_local_and_utc_requests_update_then_notify() {
     let clock = ServerClock::new(ClockConfig::new(300, true).unwrap());
@@ -50,8 +63,10 @@ fn accepted_local_and_utc_requests_update_then_notify() {
     apply_time_sync_request(
         Some(&clock),
         &config,
+        &TimeSyncLimiter::new(TimeSyncPolicy::default()),
         encoded(date(2024, 7, 4, 4), time(9, 15)),
         false,
+        &received(),
     )
     .unwrap();
     let frame = clock.read_clock().unwrap();
@@ -61,8 +76,10 @@ fn accepted_local_and_utc_requests_update_then_notify() {
     apply_time_sync_request(
         Some(&clock),
         &config,
+        &TimeSyncLimiter::new(TimeSyncPolicy::default()),
         encoded(date(2024, 7, 4, 4), time(13, 15)),
         true,
+        &received(),
     )
     .unwrap();
     let frame = clock.read_clock().unwrap();
@@ -76,13 +93,19 @@ fn invalid_and_clockless_requests_do_not_notify() {
     let callbacks = Arc::new(AtomicUsize::new(0));
     let config = config_with_counter(Arc::clone(&callbacks));
 
-    assert!(
-        apply_time_sync_request(Some(&clock), &config, Bytes::from_static(&[0xff]), false,)
-            .is_err()
-    );
     assert!(apply_time_sync_request(
         Some(&clock),
         &config,
+        &TimeSyncLimiter::new(TimeSyncPolicy::default()),
+        Bytes::from_static(&[0xff]),
+        false,
+        &received()
+    )
+    .is_err());
+    assert!(apply_time_sync_request(
+        Some(&clock),
+        &config,
+        &TimeSyncLimiter::new(TimeSyncPolicy::default()),
         encoded(
             Date {
                 year: Date::UNSPECIFIED,
@@ -93,13 +116,16 @@ fn invalid_and_clockless_requests_do_not_notify() {
             time(0, 0),
         ),
         false,
+        &received(),
     )
     .is_err());
     assert!(apply_time_sync_request(
         None,
         &config,
+        &TimeSyncLimiter::new(TimeSyncPolicy::default()),
         encoded(date(2024, 7, 4, 4), time(9, 15)),
         false,
+        &received(),
     )
     .is_err());
     assert_eq!(callbacks.load(Ordering::SeqCst), 0);

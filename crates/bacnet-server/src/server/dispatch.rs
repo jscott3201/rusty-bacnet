@@ -97,6 +97,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         config: &Arc<ServerConfig>,
         clock: &Option<Arc<ServerClock>>,
         discovery_limiter: &Arc<DiscoveryLimiter>,
+        time_sync_limiter: &Arc<TimeSyncLimiter>,
         request_tasks: &Arc<super::request_tasks::RequestTasks>,
         source_mac: &[u8],
         apdu: Apdu,
@@ -266,6 +267,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let comm_state = Arc::clone(comm_state);
                 let device_bindings = Arc::clone(device_bindings);
                 let discovery_limiter = Arc::clone(discovery_limiter);
+                let time_sync_limiter = Arc::clone(time_sync_limiter);
                 let peer = super::request_peer::canonical_requester(
                     source_mac,
                     received.source_network.as_ref(),
@@ -279,6 +281,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         &comm_state,
                         &device_bindings,
                         &discovery_limiter,
+                        &time_sync_limiter,
                         req,
                         &received,
                     )

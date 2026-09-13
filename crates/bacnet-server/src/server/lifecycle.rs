@@ -55,10 +55,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .into_iter()
             .find(|oid| oid.object_type() == ObjectType::DEVICE)
             .map(|oid| oid.instance_number());
-        let discovery_limiter = Arc::new(DiscoveryLimiter::new(
-            config.discovery_policy.sanitized(),
-            device_instance,
-        ));
+        let (discovery_limiter, time_sync_limiter) = request_limiters(&config, device_instance);
         let db = Arc::new(RwLock::new(db));
         let cov_counters = Arc::new(crate::cov::AtomicCovCounters::default());
         let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::with_policy(
@@ -92,7 +89,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let dcc_timer_dispatch = Arc::clone(&dcc_timer);
         let config_dispatch = Arc::new(config.clone());
         let clock_dispatch = clock.clone();
-        let discovery_limiter_dispatch = Arc::clone(&discovery_limiter);
+        let limiters_dispatch = (discovery_limiter.clone(), time_sync_limiter.clone());
 
         let requests = Arc::clone(&request_tasks);
         let dispatch_task = tokio::spawn(async move {
@@ -445,7 +442,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                                     &dcc_outcomes_dispatch,
                                                     &config_dispatch,
                                                     &clock_dispatch,
-                                                    &discovery_limiter_dispatch,
+                                                    &limiters_dispatch.0,
+                                                    &limiters_dispatch.1,
                                                     &requests,
                                                     &source_mac,
                                                     Apdu::ConfirmedRequest(reassembled),
@@ -500,7 +498,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 &dcc_outcomes_dispatch,
                                 &config_dispatch,
                                 &clock_dispatch,
-                                &discovery_limiter_dispatch,
+                                &limiters_dispatch.0,
+                                &limiters_dispatch.1,
                                 &requests,
                                 &source_mac,
                                 decoded,
@@ -735,6 +734,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let server = Self {
             config,
             discovery_limiter,
+            time_sync_limiter,
             _clock: clock,
             network,
             db,
