@@ -494,6 +494,9 @@ fn rpm_explicit_index_returns_one_multistate_event_message() {
 
 #[test]
 fn rpm_handler_required_vs_optional() {
+    use super::property_metadata::assert_rpm_selector_bytes;
+    use PropertyIdentifier as P;
+
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
         bacnet_objects::value_types::DateValueObject::new(1, "DV-1").unwrap(),
@@ -505,102 +508,139 @@ fn rpm_handler_required_vs_optional() {
         "Date Value intentionally exercises the legacy RPM fallback"
     );
 
-    use bacnet_services::common::PropertyReference;
-    use bacnet_services::rpm::ReadAccessSpecification;
-
-    // REQUIRED wildcard
-    let req_required = bacnet_services::rpm::ReadPropertyMultipleRequest {
-        list_of_read_access_specs: vec![ReadAccessSpecification {
-            object_identifier: oid,
-            list_of_property_references: vec![PropertyReference {
-                property_identifier: PropertyIdentifier::REQUIRED,
-                property_array_index: None,
-            }],
-        }],
-    };
-    let mut buf = BytesMut::new();
-    req_required.encode(&mut buf);
-    let mut ack_buf = BytesMut::new();
-    handle_read_property_multiple(&db, &buf, &mut ack_buf).unwrap();
-    let ack_bytes = ack_buf.to_vec();
-    let ack = bacnet_services::rpm::ReadPropertyMultipleACK::decode(&ack_bytes).unwrap();
-    let required_results = &ack.list_of_read_access_results[0].list_of_results;
-
-    // OPTIONAL wildcard
-    let req_optional = bacnet_services::rpm::ReadPropertyMultipleRequest {
-        list_of_read_access_specs: vec![ReadAccessSpecification {
-            object_identifier: oid,
-            list_of_property_references: vec![PropertyReference {
-                property_identifier: PropertyIdentifier::OPTIONAL,
-                property_array_index: None,
-            }],
-        }],
-    };
-    let mut buf = BytesMut::new();
-    req_optional.encode(&mut buf);
-    let mut ack_buf = BytesMut::new();
-    handle_read_property_multiple(&db, &buf, &mut ack_buf).unwrap();
-    let ack_bytes = ack_buf.to_vec();
-    let ack = bacnet_services::rpm::ReadPropertyMultipleACK::decode(&ack_bytes).unwrap();
-    let optional_results = &ack.list_of_read_access_results[0].list_of_results;
-
-    // REQUIRED must include the 4 universal properties
-    let req_pids: Vec<_> = required_results
-        .iter()
-        .map(|r| r.property_identifier)
-        .collect();
-    assert_eq!(
-        req_pids,
-        [
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PROPERTY_LIST,
-        ]
-    );
-
-    // OPTIONAL must NOT include any required properties
-    let opt_pids: Vec<_> = optional_results
-        .iter()
-        .map(|r| r.property_identifier)
-        .collect();
-    assert_eq!(
-        opt_pids,
-        [
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-            PropertyIdentifier::PRIORITY_ARRAY,
-            PropertyIdentifier::RELINQUISH_DEFAULT,
-        ]
-    );
+    // Exact fallback fixtures remain independent of the object's metadata.
+    let req_pids = [
+        P::OBJECT_IDENTIFIER,
+        P::OBJECT_NAME,
+        P::OBJECT_TYPE,
+        P::PROPERTY_LIST,
+    ];
+    let opt_pids = [
+        P::DESCRIPTION,
+        P::PRESENT_VALUE,
+        P::STATUS_FLAGS,
+        P::OUT_OF_SERVICE,
+        P::RELIABILITY,
+        P::PRIORITY_ARRAY,
+        P::RELINQUISH_DEFAULT,
+    ];
+    // The legacy required set includes Property_List although ALL omits it.
+    let mut all = req_pids[..3].to_vec();
+    all.insert(2, P::DESCRIPTION);
+    all.extend_from_slice(&opt_pids[1..]);
     for (selector, expected) in [
-        (PropertyIdentifier::REQUIRED, &req_pids),
-        (PropertyIdentifier::OPTIONAL, &opt_pids),
+        (P::REQUIRED, req_pids.as_slice()),
+        (P::OPTIONAL, opt_pids.as_slice()),
+        (P::ALL, all.as_slice()),
     ] {
-        super::property_metadata::assert_rpm_selector_bytes(&db, oid, selector, expected);
+        assert_rpm_selector_bytes(&db, oid, selector, expected);
     }
-    for req_pid in &req_pids {
-        assert!(
-            !opt_pids.contains(req_pid),
-            "OPTIONAL should not contain {req_pid:?}"
-        );
-    }
+}
 
-    // REQUIRED + OPTIONAL should cover ALL.
-    // Note: REQUIRED may include PROPERTY_LIST (per Clause 12.11.12,
-    // property_list() excludes itself, so REQUIRED can have 1 extra).
-    let obj = db.get(&oid).unwrap();
-    let all_pids = obj.property_list();
-    let required_set: std::collections::HashSet<_> = req_pids.iter().collect();
-    let optional_set: std::collections::HashSet<_> = opt_pids.iter().collect();
-    for pid in all_pids.iter() {
-        assert!(
-            required_set.contains(pid) || optional_set.contains(pid),
-            "ALL property {pid:?} missing from REQUIRED and OPTIONAL"
-        );
+#[test]
+fn rpm_loop_program_metadata_selectors_preserve_bytes_and_budgets() {
+    use super::property_metadata::assert_rpm_selector_bytes;
+    use bacnet_objects::{loop_obj::LoopObject, program::ProgramObject, traits::BACnetObject};
+    use bacnet_types::primitives::PropertyValue;
+    use PropertyIdentifier as P;
+
+    // Independent legacy-order fixtures: classification must not be inferred
+    // from the metadata being exercised. Property_List is read explicitly.
+    let loop_all = [
+        P::OBJECT_IDENTIFIER,
+        P::OBJECT_NAME,
+        P::DESCRIPTION,
+        P::OBJECT_TYPE,
+        P::PRESENT_VALUE,
+        P::SETPOINT,
+        P::PROPORTIONAL_CONSTANT,
+        P::INTEGRAL_CONSTANT,
+        P::DERIVATIVE_CONSTANT,
+        P::OUTPUT_UNITS,
+        P::UPDATE_INTERVAL,
+        P::STATUS_FLAGS,
+        P::EVENT_STATE,
+        P::RELIABILITY,
+        P::OUT_OF_SERVICE,
+        P::CONTROLLED_VARIABLE_REFERENCE,
+        P::MANIPULATED_VARIABLE_REFERENCE,
+        P::SETPOINT_REFERENCE,
+    ];
+    let loop_optional = [
+        P::DESCRIPTION,
+        P::PROPORTIONAL_CONSTANT,
+        P::INTEGRAL_CONSTANT,
+        P::DERIVATIVE_CONSTANT,
+        P::UPDATE_INTERVAL,
+        P::RELIABILITY,
+    ];
+    let program_all = [
+        P::OBJECT_IDENTIFIER,
+        P::OBJECT_NAME,
+        P::DESCRIPTION,
+        P::OBJECT_TYPE,
+        P::PROGRAM_STATE,
+        P::PROGRAM_CHANGE,
+        P::REASON_FOR_HALT,
+        P::STATUS_FLAGS,
+        P::OUT_OF_SERVICE,
+        P::RELIABILITY,
+    ];
+    let program_optional = [P::DESCRIPTION, P::REASON_FOR_HALT, P::RELIABILITY];
+    for configured in [false, true] {
+        let mut lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+        let mut program = ProgramObject::new(1, "PRG-1").unwrap();
+        if configured {
+            let reference = bacnet_types::constructed::BACnetObjectPropertyReference::new_indexed(
+                ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 7).unwrap(),
+                P::PRESENT_VALUE.to_raw(),
+                3,
+            );
+            lo.set_controlled_variable_reference(reference.clone());
+            lo.set_manipulated_variable_reference(reference.clone());
+            lo.set_setpoint_reference(reference);
+            lo.set_present_value(42.0);
+            program.set_program_state(5);
+            program.set_reason_for_halt(3);
+        }
+        let objects: [Box<dyn BACnetObject>; 2] = [Box::new(lo), Box::new(program)];
+        for mut object in objects {
+            let oid = object.object_identifier();
+            let oos = PropertyValue::Boolean(configured);
+            object
+                .write_property(P::OUT_OF_SERVICE, None, oos, None)
+                .unwrap();
+            if configured {
+                object
+                    .write_property(
+                        P::DESCRIPTION,
+                        None,
+                        PropertyValue::CharacterString("long label".repeat(100)),
+                        None,
+                    )
+                    .unwrap();
+            }
+            let (all, optional) = if oid.object_type() == ObjectType::LOOP {
+                (loop_all.as_slice(), loop_optional.as_slice())
+            } else {
+                (program_all.as_slice(), program_optional.as_slice())
+            };
+            let required: Vec<_> = all
+                .iter()
+                .copied()
+                .filter(|p| !optional.contains(p))
+                .collect();
+            let mut db = ObjectDatabase::new();
+            db.add(object).unwrap();
+            for (selector, expected) in [
+                (P::ALL, all),
+                (P::REQUIRED, required.as_slice()),
+                (P::OPTIONAL, optional),
+                (P::PROPERTY_LIST, &[P::PROPERTY_LIST]),
+            ] {
+                assert_rpm_selector_bytes(&db, oid, selector, expected);
+            }
+        }
     }
 }
 
