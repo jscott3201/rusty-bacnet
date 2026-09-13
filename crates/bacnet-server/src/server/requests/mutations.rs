@@ -1,6 +1,9 @@
 use super::*;
 use crate::life_safety_cov::LifeSafetyCovChange;
-use crate::mutation::{MutationAuthorizationContext, MutationTarget};
+use crate::mutation::{
+    MutationAuthorizationContext, MutationDecision, MutationDecisions, MutationPolicy,
+    MutationTarget,
+};
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_services::cov::{SubscribeCOVPropertyRequest, SubscribeCOVRequest};
 use bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleRequest;
@@ -17,6 +20,7 @@ pub(super) enum InitialCovNotification {
 /// Borrowed dispatch inputs; constructed only after the DCC precheck.
 pub(super) struct Request<'a> {
     pub config: &'a ServerConfig,
+    pub decisions: &'a MutationDecisions,
     pub source_mac: &'a [u8],
     pub source_network: Option<&'a NpduAddress>,
     pub req: &'a ConfirmedRequestPdu,
@@ -27,19 +31,36 @@ impl Request<'_> {
         &self,
         decode: impl FnOnce() -> Result<MutationTarget, Error>,
     ) -> Result<(), Error> {
-        let Some(authorizer) = &self.config.mutation_authorizer else {
+        if self.config.mutation_policy == MutationPolicy::Permissive
+            && self.config.mutation_authorizer.is_none()
+        {
+            self.decisions
+                .record(self.req.service_choice, MutationDecision::Allow);
             return Ok(());
+        }
+        let target = decode()?;
+        if self.config.mutation_policy == MutationPolicy::DenyAll {
+            self.decisions
+                .record(self.req.service_choice, MutationDecision::PolicyDeny);
+            return Err(audit_notification::request_denied());
+        }
+        let Some(authorizer) = &self.config.mutation_authorizer else {
+            unreachable!("permissive absence handled above")
         };
         let context = MutationAuthorizationContext {
             source_mac: MacAddr::from_slice(self.source_mac),
             source_network: self.source_network.cloned(),
             invoke_id: self.req.invoke_id,
             service_choice: self.req.service_choice,
-            target: decode()?,
+            target,
         };
         if audit_notification::fail_closed_authorize(|| authorizer(&context)) {
+            self.decisions
+                .record(self.req.service_choice, MutationDecision::Allow);
             Ok(())
         } else {
+            self.decisions
+                .record(self.req.service_choice, MutationDecision::Deny);
             Err(audit_notification::request_denied())
         }
     }
@@ -131,10 +152,7 @@ impl Request<'_> {
                 &mut db,
                 &self.req.service_request,
                 &mut snapshots,
-                self.config
-                    .mutation_authorizer
-                    .as_ref()
-                    .map(|_| &authorize as _),
+                Some(&authorize),
             );
             let committed_oids = match &outcome {
                 handlers::WritePropertyMultipleOutcome::Success { committed_oids }
@@ -391,3 +409,7 @@ impl Request<'_> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "mutation_policy_tests.rs"]
+mod policy_tests;

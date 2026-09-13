@@ -1,5 +1,5 @@
 use super::*;
-use crate::mutation::{MutationAuthorizationContext, MutationAuthorizer};
+use crate::mutation::{MutationAuthorizationContext, MutationAuthorizer, MutationPolicy};
 
 /// Server configuration.
 #[derive(Clone)]
@@ -46,7 +46,12 @@ pub struct ServerConfig {
     /// A panic is caught (with unwind builds); the change stands and ingress
     /// continues. This callback cannot authorize or roll back synchronization.
     pub on_time_sync: Option<Arc<dyn Fn(TimeSyncData) + Send + Sync>>,
-    /// Opt-in mutation policy; `None` allows. See [`MutationAuthorizer`].
+    /// Local mutation authorization mode (default: permissive). SC mTLS channel/peer
+    /// authentication is not service authorization; addresses here are claimed,
+    /// never certificate principals. See [`MutationPolicy`].
+    pub mutation_policy: MutationPolicy,
+    /// Opt-in mutation authorizer; `None` allows only in permissive mode.
+    /// See [`MutationAuthorizer`].
     pub mutation_authorizer: Option<MutationAuthorizer>,
     /// Optional LifeSafetyOperation authorization policy.
     ///
@@ -156,6 +161,7 @@ impl std::fmt::Debug for ServerConfig {
             .field("vendor_id", &self.vendor_id)
             .field("cov_retry_timeout_ms", &self.cov_retry_timeout_ms)
             .field("time_sync_policy", &self.time_sync_policy)
+            .field("mutation_policy", &self.mutation_policy)
             .field(
                 "on_time_sync",
                 &self.on_time_sync.as_ref().map(|_| "<callback>"),
@@ -226,6 +232,7 @@ impl Default for ServerConfig {
             cov_retry_timeout_ms: 3000,
             time_sync_policy: TimeSyncPolicy::default(),
             on_time_sync: None,
+            mutation_policy: MutationPolicy::default(),
             mutation_authorizer: None,
             life_safety_operation_authorizer: None,
             audit_notification_sink: None,
@@ -247,6 +254,14 @@ impl Default for ServerConfig {
 }
 
 impl<T: TransportPort + 'static> ServerBuilder<T> {
+    /// Select local mutation authorization (default: [`MutationPolicy::Permissive`]).
+    /// SC mTLS channel/peer authentication is not service authorization; identities
+    /// here are claimed link/routed addresses, never certificate principals.
+    pub fn mutation_policy(mut self, policy: MutationPolicy) -> Self {
+        self.config.mutation_policy = policy;
+        self
+    }
+
     /// Set opt-in mutation policy. See [`MutationAuthorizer`] for callback rules.
     pub fn mutation_authorizer<F>(mut self, authorizer: F) -> Self
     where
@@ -258,6 +273,19 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
 }
 
 impl BipServerBuilder {
+    /// Select local mutation authorization (default: [`MutationPolicy::Permissive`]).
+    /// SC mTLS channel/peer authentication is not service authorization; identities
+    /// here are claimed link/routed addresses, never certificate principals.
+    ///
+    /// ```
+    /// use bacnet_server::{mutation::MutationPolicy, server::BACnetServer};
+    /// let builder = BACnetServer::bip_builder().mutation_policy(MutationPolicy::DenyAll);
+    /// ```
+    pub fn mutation_policy(mut self, policy: MutationPolicy) -> Self {
+        self.config.mutation_policy = policy;
+        self
+    }
+
     /// Set opt-in mutation policy. See [`MutationAuthorizer`] for callback rules.
     ///
     /// ```
@@ -275,6 +303,14 @@ impl BipServerBuilder {
 
 #[cfg(feature = "sc-tls")]
 impl ScServerBuilder {
+    /// Select local mutation authorization (default: [`MutationPolicy::Permissive`]).
+    /// SC mTLS channel/peer authentication is not service authorization; identities
+    /// here are claimed link/routed addresses, never certificate principals.
+    pub fn mutation_policy(mut self, policy: MutationPolicy) -> Self {
+        self.config.mutation_policy = policy;
+        self
+    }
+
     /// Set opt-in mutation policy. See [`MutationAuthorizer`] for callback rules.
     pub fn mutation_authorizer<F>(mut self, authorizer: F) -> Self
     where

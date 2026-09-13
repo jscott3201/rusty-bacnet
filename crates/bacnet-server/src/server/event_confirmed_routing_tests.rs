@@ -256,6 +256,7 @@ impl Harness {
             &self.comm_state,
             &Arc::new(Mutex::new(None::<JoinHandle<()>>)),
             &Arc::new(dcc_outcomes::DccOutcomes::default()),
+            &Arc::new(crate::mutation::MutationDecisions::default()),
             &Arc::new(ServerConfig::default()),
             &None,
             &Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), None)),

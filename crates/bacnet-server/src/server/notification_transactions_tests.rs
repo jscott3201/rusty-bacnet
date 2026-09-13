@@ -403,6 +403,7 @@ async fn dispatch_keeps_segment_and_complex_acks_out_of_notification_completion(
             &comm_state,
             &dcc_timer,
             &Arc::new(dcc_outcomes::DccOutcomes::default()),
+            &Arc::new(crate::mutation::MutationDecisions::default()),
             &config,
             &None,
             &Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), None)),

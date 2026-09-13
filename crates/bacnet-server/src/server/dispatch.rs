@@ -94,6 +94,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         comm_state: &Arc<AtomicU8>,
         dcc_timer: &Arc<Mutex<Option<JoinHandle<()>>>>,
         dcc_outcomes: &Arc<dcc_outcomes::DccOutcomes>,
+        mutation_decisions: &Arc<crate::mutation::MutationDecisions>,
         config: &Arc<ServerConfig>,
         clock: &Option<Arc<ServerClock>>,
         discovery_limiter: &Arc<DiscoveryLimiter>,
@@ -140,6 +141,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let comm_state = Arc::clone(comm_state);
                 let dcc_timer = Arc::clone(dcc_timer);
                 let dcc_outcomes = Arc::clone(dcc_outcomes);
+                let mutation_decisions = Arc::clone(mutation_decisions);
                 let config = Arc::clone(config);
                 let source_mac = MacAddr::from_slice(source_mac);
                 let source_network = received.source_network.clone();
@@ -166,6 +168,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             &comm_state,
                             &dcc_timer,
                             &dcc_outcomes,
+                            &mutation_decisions,
                             &config,
                             &descendants,
                             &source_mac,

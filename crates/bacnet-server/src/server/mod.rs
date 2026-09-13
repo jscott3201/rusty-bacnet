@@ -603,6 +603,7 @@ pub struct BACnetServer<T: TransportPort> {
     /// Valid replacement and explicit stop abort and join before clearing it.
     dcc_timer: Arc<Mutex<Option<JoinHandle<()>>>>,
     dcc_outcomes: Arc<dcc_outcomes::DccOutcomes>,
+    mutation_decisions: Arc<crate::mutation::MutationDecisions>,
     dispatch_task: Option<JoinHandle<()>>,
     request_tasks: Arc<request_tasks::RequestTasks>,
     cov_purge_task: Option<JoinHandle<()>>,
@@ -684,6 +685,7 @@ pub(crate) mod event_notification_payload;
 mod event_notifications;
 mod event_recipient_route;
 pub(crate) mod event_timestamp;
+mod handles;
 mod lifecycle;
 mod local_writes;
 mod notification_transactions;
@@ -790,6 +792,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Get a snapshot of COV operational and telemetry counters.
     pub fn cov_counters(&self) -> CovCounters {
         self.cov_counters.snapshot()
+    }
+
+    /// Sample lifetime mutation authorization decisions, including after `stop()`.
+    /// Counts decisions, not completed handlers or response delivery; see
+    /// [`MutationDecisionCounters`](crate::mutation::MutationDecisionCounters).
+    pub fn mutation_decision_counters(&self) -> crate::mutation::MutationDecisionCounters {
+        self.mutation_decisions.snapshot()
     }
 
     /// Purge all active COV subscriptions for a peer, deterministically releasing its quota.
