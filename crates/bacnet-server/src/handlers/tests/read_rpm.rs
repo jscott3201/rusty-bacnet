@@ -1,5 +1,7 @@
 use super::*;
 
+mod notification_class;
+
 #[test]
 fn read_property_handler_success() {
     let db = make_db_with_ai();
