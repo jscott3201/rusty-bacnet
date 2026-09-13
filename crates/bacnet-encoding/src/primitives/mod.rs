@@ -703,7 +703,7 @@ pub const MAX_TIMESTAMP_SEQUENCE_NUMBER: u64 = 65535;
 ///
 /// Used where a production lists `BACnetTimeStamp` as a bare CHOICE item —
 /// e.g. the `eventTimeStamps [3] SEQUENCE OF BACnetTimeStamp` inside
-/// GetEventInformation-ACK (Clause 13.9). [`encode_timestamp`] wraps this in
+/// GetEventInformation-ACK. [`encode_timestamp`] wraps this in
 /// the enclosing field's context tag pair instead.
 ///
 /// Tag forms per Clause 20.2.1.5: `time [0]` is the CHOICE's only alternative
