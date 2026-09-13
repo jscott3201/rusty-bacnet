@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -99,6 +100,7 @@ pub(super) async fn handle_network_message(
         let mut offset = 0;
         let mut table = table.lock().await;
 
+        let mut replacement_networks = HashSet::new();
         while offset + 2 <= data.len() {
             let net = u16::from_be_bytes([data[offset], data[offset + 1]]);
             offset += 2;
@@ -109,8 +111,21 @@ pub(super) async fn handle_network_message(
                 break;
             }
 
-            if table.add_learned_with_flap_detection(net, port_idx, MacAddr::from_slice(source_mac))
+            // Repeated entries in one packet are not independent arrivals.
+            // Leave absent learning and same-port refresh entries unchanged.
+            if table
+                .lookup(net)
+                .is_some_and(|entry| !entry.directly_connected && entry.port_index != port_idx)
+                && !replacement_networks.insert(net)
             {
+                continue;
+            }
+            if table.apply_learning_claim(
+                net,
+                port_idx,
+                MacAddr::from_slice(source_mac),
+                Instant::now(),
+            ) {
                 table.record_learned();
                 debug!(
                     network = net,
@@ -360,17 +375,12 @@ pub(super) async fn handle_network_message(
     } else if msg_type == NetworkMessageType::DISCONNECT_CONNECTION_TO_NETWORK.to_raw() {
         if npdu.payload.len() >= 2 {
             let net = u16::from_be_bytes([npdu.payload[0], npdu.payload[1]]);
-            debug!(network = net, "Received Disconnect-Connection-To-Network");
+            debug!(
+                network = net,
+                "Received Disconnect-Connection-To-Network (PTP not implemented; route removal ignored)"
+            );
             let mut tbl = table.lock().await;
-            if let Some(entry) = tbl.lookup(net) {
-                if !entry.directly_connected {
-                    tbl.remove(net);
-                    debug!(
-                        network = net,
-                        "Removed dynamically established route on disconnect"
-                    );
-                }
-            }
+            tbl.record_disconnect_removal_ignored();
         }
     } else if msg_type == NetworkMessageType::WHAT_IS_NETWORK_NUMBER.to_raw() {
         // Ignore if SNET/SADR or DNET/DADR is present.
@@ -428,6 +438,7 @@ pub(super) async fn handle_network_message(
         let count = data[0] as usize;
         let mut offset = 1usize;
         let mut table = table.lock().await;
+        let mut replacement_networks = HashSet::new();
         for _ in 0..count {
             if offset + 4 > data.len() {
                 break;
@@ -445,15 +456,26 @@ pub(super) async fn handle_network_message(
                 table.record_learning_cap();
                 break;
             }
-            if table.add_learned_with_flap_detection(net, port_idx, MacAddr::from_slice(source_mac))
+            if table
+                .lookup(net)
+                .is_some_and(|entry| !entry.directly_connected && entry.port_index != port_idx)
+                && !replacement_networks.insert(net)
             {
-                table.record_learned();
+                continue;
             }
-            debug!(
-                network = net,
-                port = port_idx,
-                "Learned route from Init-Routing-Table-Ack"
-            );
+            if table.apply_learning_claim(
+                net,
+                port_idx,
+                MacAddr::from_slice(source_mac),
+                Instant::now(),
+            ) {
+                table.record_learned();
+                debug!(
+                    network = net,
+                    port = port_idx,
+                    "Learned route from Init-Routing-Table-Ack"
+                );
+            }
         }
     } else if (0x0A..=0x11).contains(&msg_type) {
         // Security messages — acknowledge but do not reject.
@@ -475,3 +497,7 @@ pub(super) async fn handle_network_message(
         );
     }
 }
+
+#[cfg(test)]
+#[path = "corroboration_tests.rs"]
+mod corroboration_tests;

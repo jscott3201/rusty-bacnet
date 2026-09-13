@@ -276,6 +276,7 @@ fn counters_saturate_without_affecting_decisions_and_snapshots_are_owned() {
         learned_ok: u64::MAX - 1,
         learned_cap_ignored: u64::MAX - 1,
         flap_warned: u64::MAX - 1,
+        ..Default::default()
     };
     let before = table.claim_snapshot();
     let now = Instant::now();
@@ -306,6 +307,7 @@ fn counters_saturate_without_affecting_decisions_and_snapshots_are_owned() {
             learned_ok: u64::MAX,
             learned_cap_ignored: u64::MAX,
             flap_warned: u64::MAX,
+            ..Default::default()
         }
     );
     let cloned = table.clone();

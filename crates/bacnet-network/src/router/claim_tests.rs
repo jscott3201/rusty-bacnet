@@ -105,9 +105,19 @@ async fn spoofing_mac_does_not_bypass_hold_down_but_another_ingress_is_independe
 }
 
 #[tokio::test]
-async fn i_am_refresh_rearms_rejects_and_last_wins_learning_still_warns() {
+async fn i_am_refresh_rearms_rejects_and_corroborated_learning_still_warns() {
     let table = Arc::new(Mutex::new(RouterTable::new()));
     for (index, port) in [0, 0, 1, 0, 1, 0].into_iter().enumerate() {
+        if index >= 2 {
+            deliver(
+                &table,
+                port,
+                &[index as u8],
+                NetworkMessageType::I_AM_ROUTER_TO_NETWORK,
+                &[0x0b, 0xb8],
+            )
+            .await;
+        }
         let output = deliver(
             &table,
             port,
@@ -139,6 +149,8 @@ async fn i_am_refresh_rearms_rejects_and_last_wins_learning_still_warns() {
             learned_ok: 6,
             reject_applied: 6,
             flap_warned: 2,
+            pending_started: 4,
+            corroborated_applied: 4,
             ..Default::default()
         }
     );
@@ -171,7 +183,7 @@ async fn learning_outcomes_exclude_direct_reserved_and_truncated_entries() {
     .await;
     assert_eq!(output[1].len(), 1); // ACK still generated.
     assert_eq!(table.lock().await.lookup(3000).unwrap().port_index, 0);
-    // ACK refreshes existing learned routes, but still cannot overwrite direct.
+    // ACK refreshes same-port routes, holds cross-port claims, and cannot overwrite direct.
     deliver(
         &table,
         1,
@@ -183,11 +195,12 @@ async fn learning_outcomes_exclude_direct_reserved_and_truncated_entries() {
     let table = table.lock().await;
     assert_eq!(table.len(), 3);
     assert!(table.lookup(1000).unwrap().directly_connected);
-    assert_eq!(table.lookup(3000).unwrap().port_index, 1);
+    assert_eq!(table.lookup(3000).unwrap().port_index, 0);
     assert_eq!(
         table.claim_snapshot(),
         RoutingClaimSnapshot {
-            learned_ok: 4,
+            learned_ok: 3,
+            pending_started: 1,
             ..Default::default()
         }
     );
@@ -233,6 +246,10 @@ async fn each_learning_cap_counts_its_inspected_stop_without_changing_tail_handl
             &[1, 0, 1, 0, 0]
         };
         deliver(&table, 1, &[2], message_type, existing).await;
+        if message_type == NetworkMessageType::I_AM_ROUTER_TO_NETWORK {
+            assert_eq!(table.lock().await.lookup(1).unwrap().port_index, 0);
+            deliver(&table, 1, &[2], message_type, existing).await;
+        }
         let table = table.lock().await;
         let refreshed = message_type == NetworkMessageType::I_AM_ROUTER_TO_NETWORK;
         assert_eq!(table.lookup(1).unwrap().port_index, usize::from(refreshed));
@@ -306,7 +323,7 @@ async fn init_ack_refresh_rearms_but_init_existing_entry_does_not() {
     );
     deliver(
         &table,
-        1,
+        0,
         &[2],
         NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK,
         &payload,
@@ -318,7 +335,7 @@ async fn init_ack_refresh_rearms_but_init_existing_entry_does_not() {
         table.effective_reachability(3000),
         Some(ReachabilityStatus::Unreachable)
     );
-    assert_eq!(table.lookup(3000).unwrap().port_index, 1);
+    assert_eq!(table.lookup(3000).unwrap().port_index, 0);
     assert_eq!(
         table.claim_snapshot(),
         RoutingClaimSnapshot {

@@ -14,6 +14,9 @@ use bacnet_types::MacAddr;
 // learning. A legitimate unreachable-after-busy signal may wait up to 30s.
 const HOLD_DOWN: Duration = Duration::from_secs(30);
 
+// Repeat-based local hardening, aligned with the existing flap window.
+const CORROBORATION_WINDOW: Duration = Duration::from_secs(60);
+
 /// Count-only outcomes for routing claims handled by one router table.
 ///
 /// All totals saturate at `u64::MAX`, never affect routing decisions, and expose
@@ -21,6 +24,10 @@ const HOLD_DOWN: Duration = Duration::from_secs(30);
 /// Initialize-Routing-Table/ACK entries, not manual table edits or other message
 /// types. Existing cap-triggered early stops remain: their unexamined suffixes
 /// are not classified or counted. Flap warnings are counted at their emission.
+/// Pending replacements are not successful learning until corroborated. Disconnect
+/// totals count each well-formed ignored removal request, even for absent/direct
+/// routes; malformed messages are not counted.
+/// Duplicate cross-port entries within one message supply no extra vote or count.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct RoutingClaimSnapshot {
     /// Rejects that changed a learned route's effective state or removed it.
@@ -38,6 +45,21 @@ pub struct RoutingClaimSnapshot {
     pub learned_cap_ignored: u64,
     /// Flap warnings emitted at the existing port-change threshold.
     pub flap_warned: u64,
+    /// Cross-port claims held pending, including new challengers and expiry restarts.
+    pub pending_started: u64,
+    /// Replacements applied on a second same-network/port claim within 60s inclusive.
+    pub corroborated_applied: u64,
+    /// Pending slots found older than 60s and discarded on the next learning claim.
+    /// Non-expiry cleanup (removal, aging, manual edits or refresh) does not count.
+    pub pending_expired: u64,
+    /// Disconnect-Connection-To-Network removal requests ignored (PTP unsupported).
+    pub disconnect_removal_ignored: u64,
+}
+
+#[derive(Debug, Clone)]
+struct PendingReplacement {
+    port_index: usize,
+    first_seen: Instant,
 }
 
 /// Reachability status of a route entry.
@@ -84,6 +106,10 @@ pub struct RouterTable {
     // records, at most one per router ingress port; absent/direct spam allocates
     // nothing. Neither peer MACs nor advertised source addresses are keys.
     reject_transitions: HashMap<u16, HashMap<usize, Instant>>,
+    // One challenger per live learned network, never keyed by peer identity.
+    // Thus pending entries <= live learned routes. Every route replacement,
+    // removal and mutable-entry handoff clears its slot; expiry is checked lazily.
+    pending_replacements: HashMap<u16, PendingReplacement>,
     claim_counters: RoutingClaimSnapshot,
 }
 
@@ -93,6 +119,7 @@ impl RouterTable {
         Self {
             routes: HashMap::new(),
             reject_transitions: HashMap::new(),
+            pending_replacements: HashMap::new(),
             claim_counters: RoutingClaimSnapshot::default(),
         }
     }
@@ -113,6 +140,66 @@ impl RouterTable {
     pub(crate) fn record_learning_cap(&mut self) {
         self.claim_counters.learned_cap_ignored =
             self.claim_counters.learned_cap_ignored.saturating_add(1);
+    }
+
+    pub(crate) fn record_disconnect_removal_ignored(&mut self) {
+        self.claim_counters.disconnect_removal_ignored = self
+            .claim_counters
+            .disconnect_removal_ignored
+            .saturating_add(1);
+    }
+
+    /// Gate I-Am-Router and Init-Routing-Table-ACK cross-port replacements only.
+    /// The caller holds the table lock across this synchronous gate and update.
+    /// Absent learning and current-port refreshes use the existing immediate path.
+    /// `now` makes the inclusive 60s boundary testable without sleeping.
+    pub(crate) fn apply_learning_claim(
+        &mut self,
+        network: u16,
+        port_index: usize,
+        next_hop_mac: MacAddr,
+        now: Instant,
+    ) -> bool {
+        let pending = self
+            .pending_replacements
+            .remove(&network)
+            .filter(|pending| {
+                if now.duration_since(pending.first_seen) > CORROBORATION_WINDOW {
+                    self.claim_counters.pending_expired =
+                        self.claim_counters.pending_expired.saturating_add(1);
+                    false
+                } else {
+                    true
+                }
+            });
+        if self
+            .routes
+            .get(&network)
+            .is_some_and(|entry| !entry.directly_connected && entry.port_index != port_index)
+        {
+            if pending.is_some_and(|pending| pending.port_index == port_index) {
+                // K=2: the second claim supplies the next hop, even if its MAC
+                // differs. Neither source identity nor message type is a key.
+                self.claim_counters.corroborated_applied =
+                    self.claim_counters.corroborated_applied.saturating_add(1);
+            } else {
+                self.pending_replacements.insert(
+                    network,
+                    PendingReplacement {
+                        port_index,
+                        first_seen: now,
+                    },
+                );
+                self.claim_counters.pending_started =
+                    self.claim_counters.pending_started.saturating_add(1);
+                debug_assert!(self.pending_replacements.keys().all(|net| self
+                    .routes
+                    .get(net)
+                    .is_some_and(|entry| !entry.directly_connected)));
+                return false; // Keep all old route state, including forwarding and age.
+            }
+        }
+        self.add_learned_with_flap_detection(network, port_index, next_hop_mac)
     }
 
     /// Apply only the reject-driven table transition, never its relay.
@@ -181,6 +268,7 @@ impl RouterTable {
             return;
         }
         self.reject_transitions.remove(&network);
+        self.pending_replacements.remove(&network);
         self.routes.insert(
             network,
             RouteEntry {
@@ -209,6 +297,7 @@ impl RouterTable {
             }
         }
         self.reject_transitions.remove(&network);
+        self.pending_replacements.remove(&network);
         self.routes.insert(
             network,
             RouteEntry {
@@ -224,7 +313,7 @@ impl RouterTable {
         );
     }
 
-    /// Add a learned route, always accepting (spec 6.6.3.2: last I-Am-Router wins).
+    /// Add a learned route immediately (manual table update, without corroboration).
     /// Detects rapid port changes for operator visibility but never suppresses updates.
     ///
     /// Returns `true` if the route was inserted/updated.
@@ -262,6 +351,7 @@ impl RouterTable {
                     );
                 }
                 self.reject_transitions.remove(&network);
+                self.pending_replacements.remove(&network);
                 self.routes.insert(
                     network,
                     RouteEntry {
@@ -343,13 +433,16 @@ impl RouterTable {
     }
 
     /// Lookup a mutable route entry by network number.
+    /// Clears any pending challenger since the caller can replace the route state.
     pub fn lookup_mut(&mut self, network: u16) -> Option<&mut RouteEntry> {
+        self.pending_replacements.remove(&network);
         self.routes.get_mut(&network)
     }
 
     /// Remove a route.
     pub fn remove(&mut self, network: u16) -> Option<RouteEntry> {
         self.reject_transitions.remove(&network);
+        self.pending_replacements.remove(&network);
         self.routes.remove(&network)
     }
 
@@ -430,6 +523,10 @@ impl Default for RouterTable {
 #[cfg(test)]
 #[path = "router_table_reject_tests.rs"]
 mod reject_tests;
+
+#[cfg(test)]
+#[path = "router_table_corroboration_tests.rs"]
+mod corroboration_tests;
 
 #[cfg(test)]
 mod tests {
