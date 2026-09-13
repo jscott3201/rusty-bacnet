@@ -1,7 +1,7 @@
 use bacnet_objects::{
     analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject},
     audit::AuditReporterObject,
-    binary::BinaryInputObject,
+    binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject},
     event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject},
     staging::{StagingConfig, StagingObject},
     value_types::TimeValueObject,
@@ -402,6 +402,100 @@ fn pics_analog_property_metadata_is_exact_for_each_configuration() {
                     .collect::<Vec<_>>(),
                 required.as_ref()
             );
+        }
+    }
+}
+
+#[test]
+fn pics_binary_commandable_property_metadata_is_exact() {
+    use bacnet_objects::traits::BACnetObject;
+    use bacnet_types::primitives::PropertyValue;
+    use PropertyIdentifier as P;
+
+    // Independent (identifier, optional, writable) fixture in legacy order.
+    let base = [
+        (P::OBJECT_IDENTIFIER, false, false),
+        (P::OBJECT_NAME, false, true),
+        (P::DESCRIPTION, true, true),
+        (P::OBJECT_TYPE, false, false),
+        (P::PRESENT_VALUE, false, true),
+        (P::STATUS_FLAGS, false, false),
+        (P::EVENT_STATE, false, false),
+        (P::EVENT_DETECTION_ENABLE, true, true),
+        (P::EVENT_ENABLE, true, true),
+        (P::TIME_DELAY, true, true),
+        (P::TIME_DELAY_NORMAL, true, true),
+        (P::NOTIFY_TYPE, true, true),
+        (P::NOTIFICATION_CLASS, true, true),
+        (P::ACKED_TRANSITIONS, true, false),
+        (P::EVENT_TIME_STAMPS, true, false),
+        (P::EVENT_MESSAGE_TEXTS, true, false),
+        (P::OUT_OF_SERVICE, false, true),
+        (P::RELIABILITY, true, true),
+        (P::RELIABILITY_EVALUATION_INHIBIT, true, true),
+        (P::ACTIVE_TEXT, true, true),
+        (P::INACTIVE_TEXT, true, true),
+    ];
+    for out_of_service in [false, true] {
+        for detection_enabled in [false, true] {
+            let objects: [Box<dyn BACnetObject>; 2] = [
+                Box::new(BinaryValueObject::new(1, "BV-1").unwrap()),
+                Box::new(BinaryOutputObject::new(1, "BO-1").unwrap()),
+            ];
+            for mut object in objects {
+                let kind = object.object_identifier().object_type();
+                for (p, enabled) in [
+                    (P::OUT_OF_SERVICE, out_of_service),
+                    (P::EVENT_DETECTION_ENABLE, detection_enabled),
+                ] {
+                    object
+                        .write_property(p, None, PropertyValue::Boolean(enabled), None)
+                        .unwrap();
+                }
+                let optional = kind == ObjectType::BINARY_VALUE;
+                let mut expected = base.to_vec();
+                expected.splice(
+                    17..17,
+                    [
+                        (P::PRIORITY_ARRAY, optional, true),
+                        (P::RELINQUISH_DEFAULT, optional, true),
+                        (P::CURRENT_COMMAND_PRIORITY, optional, false),
+                    ],
+                );
+                if optional {
+                    expected.push((P::ALARM_VALUE, true, true));
+                } else {
+                    expected.insert(20, (P::POLARITY, false, false));
+                    expected.insert(5, (P::FEEDBACK_VALUE, true, true));
+                }
+                expected.push((P::PROPERTY_LIST, false, false));
+                let required = object.required_properties();
+                let mut db = ObjectDatabase::new();
+                db.add(object).unwrap();
+                let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+                assert_eq!(pics.supported_object_types.len(), 1);
+                let support = &pics.supported_object_types[0];
+                assert_eq!(support.object_type, kind);
+                assert!(support.createable);
+                let rows: Vec<_> = support
+                    .supported_properties
+                    .iter()
+                    .map(|row| {
+                        assert!(row.access.readable);
+                        (row.property_id, row.access.optional, row.access.writable)
+                    })
+                    .collect();
+                assert_eq!(
+                    rows, expected,
+                    "{kind:?}, OOS={out_of_service}, detection={detection_enabled}"
+                );
+                assert_eq!(
+                    rows.iter()
+                        .filter_map(|&(p, optional, _)| (!optional).then_some(p))
+                        .collect::<Vec<_>>(),
+                    required.as_ref()
+                );
+            }
         }
     }
 }

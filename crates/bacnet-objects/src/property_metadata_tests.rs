@@ -6,7 +6,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
-use crate::binary::BinaryInputObject;
+use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use crate::property_metadata::{
     PropertyConformance, PropertyMetadata, PropertyPresenceCondition, PropertyWriteCapability,
 };
@@ -220,9 +220,11 @@ fn property_metadata_contract_binary_input() {
 
 #[test]
 fn property_metadata_contract_all_migrated_rows_are_readable() {
-    let objects: [Box<dyn BACnetObject>; 2] = [
+    let objects: [Box<dyn BACnetObject>; 4] = [
         Box::new(TimeValueObject::new(1, "TV-1").unwrap()),
         Box::new(BinaryInputObject::new(1, "BI-1").unwrap()),
+        Box::new(BinaryValueObject::new(1, "BV-1").unwrap()),
+        Box::new(BinaryOutputObject::new(1, "BO-1").unwrap()),
     ];
 
     for object in objects {
@@ -686,4 +688,38 @@ fn property_metadata_unmigrated_date_value_keeps_universal_required_fallback() {
             P::PROPERTY_LIST
         ]
     );
+}
+
+#[test]
+fn property_metadata_binary_commandable_exact_required_sets() {
+    use PropertyIdentifier as P;
+
+    let objects: [Box<dyn BACnetObject>; 2] = [
+        Box::new(BinaryValueObject::new(1, "BV-1").unwrap()),
+        Box::new(BinaryOutputObject::new(1, "BO-1").unwrap()),
+    ];
+    for object in objects {
+        let mut required = vec![
+            P::OBJECT_IDENTIFIER,
+            P::OBJECT_NAME,
+            P::OBJECT_TYPE,
+            P::PRESENT_VALUE,
+            P::STATUS_FLAGS,
+            P::EVENT_STATE,
+            P::OUT_OF_SERVICE,
+        ];
+        if object.object_identifier().object_type() == ObjectType::BINARY_OUTPUT {
+            required.extend([
+                P::PRIORITY_ARRAY,
+                P::RELINQUISH_DEFAULT,
+                P::CURRENT_COMMAND_PRIORITY,
+                P::POLARITY,
+            ]);
+        }
+        required.push(P::PROPERTY_LIST);
+        assert_unique_and_canonical(object.as_ref());
+        assert!(matches!(object.property_metadata(), Cow::Borrowed(_)));
+        assert_eq!(object.required_properties().as_ref(), required);
+        assert!(object.is_createable());
+    }
 }

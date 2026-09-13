@@ -564,6 +564,24 @@ fn rpm_handler_required_vs_optional() {
         .iter()
         .map(|r| r.property_identifier)
         .collect();
+    assert_eq!(
+        opt_pids,
+        [
+            PropertyIdentifier::DESCRIPTION,
+            PropertyIdentifier::PRESENT_VALUE,
+            PropertyIdentifier::STATUS_FLAGS,
+            PropertyIdentifier::OUT_OF_SERVICE,
+            PropertyIdentifier::RELIABILITY,
+            PropertyIdentifier::PRIORITY_ARRAY,
+            PropertyIdentifier::RELINQUISH_DEFAULT,
+        ]
+    );
+    for (selector, expected) in [
+        (PropertyIdentifier::REQUIRED, &req_pids),
+        (PropertyIdentifier::OPTIONAL, &opt_pids),
+    ] {
+        super::property_metadata::assert_rpm_selector_bytes(&db, oid, selector, expected);
+    }
     for req_pid in &req_pids {
         assert!(
             !opt_pids.contains(req_pid),

@@ -1,4 +1,8 @@
 use super::*;
+use crate::property_metadata::PropertyMetadata;
+
+#[path = "value/metadata.rs"]
+mod metadata;
 
 // ---------------------------------------------------------------------------
 // BinaryValue (type 5)
@@ -325,35 +329,12 @@ impl BACnetObject for BinaryValueObject {
         Err(common::write_access_denied_error())
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        metadata::for_object(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::EVENT_DETECTION_ENABLE,
-            PropertyIdentifier::EVENT_ENABLE,
-            PropertyIdentifier::TIME_DELAY,
-            PropertyIdentifier::TIME_DELAY_NORMAL,
-            PropertyIdentifier::NOTIFY_TYPE,
-            PropertyIdentifier::NOTIFICATION_CLASS,
-            PropertyIdentifier::ACKED_TRANSITIONS,
-            PropertyIdentifier::EVENT_TIME_STAMPS,
-            PropertyIdentifier::EVENT_MESSAGE_TEXTS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::PRIORITY_ARRAY,
-            PropertyIdentifier::RELINQUISH_DEFAULT,
-            PropertyIdentifier::CURRENT_COMMAND_PRIORITY,
-            PropertyIdentifier::RELIABILITY,
-            PropertyIdentifier::RELIABILITY_EVALUATION_INHIBIT,
-            PropertyIdentifier::ACTIVE_TEXT,
-            PropertyIdentifier::INACTIVE_TEXT,
-            PropertyIdentifier::ALARM_VALUE,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     fn is_createable(&self) -> bool {
@@ -373,24 +354,6 @@ impl BACnetObject for BinaryValueObject {
 
     fn reliability_evaluation_inhibited_internal(&self) -> bool {
         self.reliability_inhibit.enabled()
-    }
-
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        // Mirrors the BinaryValue `write_property` arms. Same set as
-        // BinaryOutput (commandable + common + text + generic event
-        // properties). The event set became writable with #229: Clause 12.8
-        // requires the supported Event_Enable value set to include (T, T, T),
-        // and these detectors default to (F, F, F) with, previously, no
-        // commissioning path at all.
-        common::is_commandable_property_writable(property)
-            || common::is_common_writable(property)
-            || common::is_generic_event_property_writable(property)
-            || property == PropertyIdentifier::ACTIVE_TEXT
-            || property == PropertyIdentifier::INACTIVE_TEXT
-            || property == PropertyIdentifier::ALARM_VALUE
-            || property == PropertyIdentifier::RELIABILITY
-            || property == PropertyIdentifier::RELIABILITY_EVALUATION_INHIBIT
-            || property == PropertyIdentifier::EVENT_DETECTION_ENABLE
     }
 }
 
