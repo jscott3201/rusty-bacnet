@@ -137,6 +137,29 @@ UART + GPIO → DE/RE ─────────>│  GpioDirectionPort<S>    �
 
 MS/TP turnaround uses an absolute earliest-transmit deadline derived from the latest nonempty host read. Processing time counts toward that silence interval; a later chunk moves the deadline forward. Transmit encoding reuses a buffer and frame boundaries without copying each encoded frame into its own byte vector. These host-side guarantees are not physical UART timing qualification.
 
+`MstpTransport::with_execution_mode(MstpExecutionMode::DedicatedThread)` opts into
+an OS thread with a current-thread Tokio runtime for the MAC loop. The default
+`Tokio` mode retains the application-runtime spawn path. Both modes run the same
+master state machine, frame encoding and ordering, turnaround/deadline logic, and
+64-entry NPDU receive channel. Serial wrappers retain their existing drain
+boundary; native blocking drain jobs use the isolated runtime's blocking pool
+when called from the dedicated loop. No per-frame bridge or second MAC machine
+is introduced. Already-open async serial resources still depend on their original
+reactor, which must remain running.
+
+`stop()` cancels the MAC task, waits for isolated runtime teardown and outstanding
+blocking work, then clears the transmit queue and returns the node to Idle.
+`abort()` and drop request teardown without waiting. Cancellation cannot interrupt
+a blocking syscall or undo bytes already accepted by a driver; a stuck backend
+can delay shutdown. Fast or efficient execution is not guaranteed or measured
+deterministic timing. Neither execution mode qualifies real hardware timing.
+
+Deferred from this thread-isolation subset: RT scheduling policy/priority
+(`SCHED_FIFO`), CPU affinity/pinning and observable RT setup results; PREEMPT_RT,
+IRQ, mlock and buffer-tuning deployment guidance beyond this note; and on-wire
+hardware qualification (#502). These RT APIs are not implemented here, and #501
+remains open for its residual RT-policy/affinity and full documentation work.
+
 ## Object Model
 
 Every BACnet object implements the `BACnetObject` trait:

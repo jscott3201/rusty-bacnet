@@ -457,6 +457,48 @@ configuration gap is closed, not the full Annex AB profile or issue #513.
 
 MS/TP is a token-passing protocol over RS-485 serial, commonly used for field-level BACnet devices. The serial I/O is abstracted behind the `SerialPort` trait, with three RS-485 direction control modes.
 
+#### Optional Dedicated Execution
+
+Execution placement is configured separately from `MstpConfig`, preserving
+existing master-node configuration literals and `SerialPort` implementations:
+
+```rust
+use bacnet_transport::mstp::{MstpConfig, MstpExecutionMode, MstpTransport};
+
+let transport = MstpTransport::new(serial, MstpConfig {
+    this_station: 1,
+    baud_rate: 76800,
+    ..MstpConfig::default()
+})
+.with_execution_mode(MstpExecutionMode::DedicatedThread);
+```
+
+Call the builder before `start()`. Omitting it (or selecting `Tokio`) keeps the
+existing Tokio-spawn path; changing the builder setting does not migrate an
+already-running loop. Dedicated mode runs the same MAC loop on an OS thread with
+its own current-thread runtime. Read/write polling and blocking backend work are
+isolated from application workers; native drain offloads use the isolated
+runtime's blocking pool. This applies equally to UART and USB serial backends,
+without changing frame order, drain boundaries, turnaround deadlines or the
+64-entry NPDU receive channel. Async serial resources opened on another reactor
+still require that original reactor to remain running.
+
+`start()` reports thread/runtime creation failures without falling back to the
+application pool. `stop()` waits for task and isolated-runtime teardown, clears
+the transmit queue and sets the node to Idle. `abort()` and drop request
+cancellation and release transport-owned state without waiting. Blocking calls
+must return before their resources can be released; cancellation is not a drain
+or rollback of driver-accepted bytes. As before, stopping does not make a
+consumed serial transport restartable: construct a new transport to restart.
+
+Isolation is an execution option, not a real-time guarantee or measured timing
+claim: fast/efficient does not mean deterministic. RT policy/priority
+(`SCHED_FIFO`), CPU affinity/pinning and reporting RT setup success/failure are
+**deferred, not implemented**. PREEMPT_RT, IRQ, mlock and buffer-tuning deployment
+guidance beyond this note, plus on-wire hardware qualification (#502), remain
+out of scope. This is only the thread-isolation subset of #501; that issue remains
+open for the residual RT work and full documentation.
+
 #### Auto-Direction (USB RS-485 Adapters)
 
 Most USB RS-485 adapters (FTDI, CH340, CP2102) handle direction switching in hardware — no configuration needed.

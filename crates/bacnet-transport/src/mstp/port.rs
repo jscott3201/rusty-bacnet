@@ -12,9 +12,10 @@ use crate::mstp_frame::{
 use crate::port::{ReceivedNpdu, TransportPort};
 
 use super::{
-    calculate_host_stale_partial_timeout_us, calculate_t_turnaround_us, next_addr, MasterNode,
-    MasterState, MstpConfig, SerialPort, MSTP_MAX_FRAME_BUF, T_NO_TOKEN_MS, T_REPLY_DELAY_MS,
-    T_REPLY_TIMEOUT_MS, T_REPLY_TRANSMIT_MARGIN_MS, T_USAGE_TIMEOUT_MS,
+    calculate_host_stale_partial_timeout_us, calculate_t_turnaround_us, next_addr,
+    DedicatedRuntime, MasterNode, MasterState, MstpConfig, MstpExecutionMode, SerialPort,
+    MSTP_MAX_FRAME_BUF, T_NO_TOKEN_MS, T_REPLY_DELAY_MS, T_REPLY_TIMEOUT_MS,
+    T_REPLY_TRANSMIT_MARGIN_MS, T_USAGE_TIMEOUT_MS,
 };
 
 /// Add one host read to the persistent receive buffer and drain all complete frames.
@@ -103,6 +104,8 @@ pub struct MstpTransport<S: SerialPort> {
     local_mac: [u8; 1],
     node: Option<Arc<Mutex<MasterNode>>>,
     recv_task: Option<tokio::task::JoinHandle<()>>,
+    execution_mode: MstpExecutionMode,
+    dedicated_runtime: Option<DedicatedRuntime>,
 }
 
 impl<S: SerialPort> MstpTransport<S> {
@@ -114,7 +117,23 @@ impl<S: SerialPort> MstpTransport<S> {
             local_mac: [mac],
             node: None,
             recv_task: None,
+            execution_mode: MstpExecutionMode::default(),
+            dedicated_runtime: None,
         }
+    }
+
+    /// Configure execution placement for the next `start`; call before starting.
+    /// The default is [`MstpExecutionMode::Tokio`]. No serial or master-node
+    /// settings change, and an already-running loop is not migrated.
+    ///
+    /// Dedicated execution isolates MAC polling and backend blocking work from
+    /// the application pool, not from OS scheduling delays. Async serial resources
+    /// opened on another reactor still require that reactor to remain running.
+    /// `stop` waits for teardown; `abort`/drop request cancellation without waiting.
+    /// Neither can interrupt an in-progress blocking syscall or undo queued bytes.
+    pub fn with_execution_mode(mut self, mode: MstpExecutionMode) -> Self {
+        self.execution_mode = mode;
+        self
     }
 
     /// Get the master node state (for testing/inspection).
@@ -126,6 +145,7 @@ impl<S: SerialPort> MstpTransport<S> {
         if let Some(task) = self.recv_task.take() {
             task.abort();
         }
+        self.dedicated_runtime.take();
         self.serial.take();
         self.node.take();
     }
@@ -146,6 +166,11 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
             .take()
             .ok_or_else(|| Error::Encoding("MS/TP transport already started".into()))?;
 
+        let dedicated_runtime = match self.execution_mode {
+            MstpExecutionMode::Tokio => None,
+            MstpExecutionMode::DedicatedThread => Some(DedicatedRuntime::new().await?),
+        };
+
         let serial = Arc::new(serial);
         let serial_clone = serial.clone();
         let t_turnaround_us = calculate_t_turnaround_us(self.config.baud_rate);
@@ -156,7 +181,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
             .saturating_sub(t_turnaround_us.div_ceil(1_000) + T_REPLY_TRANSMIT_MARGIN_MS);
 
         // Receive loop using tokio::select! with timer
-        let task = tokio::spawn(async move {
+        let mac_loop = async move {
             let mut recv_buf = vec![0u8; 2048];
             let mut frame_buf = Vec::with_capacity(MSTP_MAX_FRAME_BUF);
             let mut last_byte_time = tokio::time::Instant::now();
@@ -467,8 +492,13 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                     }
                 }
             }
-        });
+        };
 
+        let task = match &dedicated_runtime {
+            Some(runtime) => runtime.handle.spawn(mac_loop),
+            None => tokio::spawn(mac_loop),
+        };
+        self.dedicated_runtime = dedicated_runtime;
         self.recv_task = Some(task);
         Ok(npdu_rx)
     }
@@ -477,6 +507,9 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
         if let Some(task) = self.recv_task.take() {
             task.abort();
             let _ = task.await;
+        }
+        if let Some(runtime) = self.dedicated_runtime.take() {
+            runtime.stop().await;
         }
         // Clear the node's queue to prevent stale sends after stop
         if let Some(ref node) = self.node {
