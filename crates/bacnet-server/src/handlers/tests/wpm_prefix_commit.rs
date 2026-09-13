@@ -1,10 +1,18 @@
 use super::*;
 
-use bacnet_objects::binary::BinaryValueObject;
-use bacnet_objects::event_enrollment::EventEnrollmentObject;
+use bacnet_objects::analog::{AnalogOutputObject, AnalogValueObject};
+use bacnet_objects::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
+use bacnet_objects::event::{EventStateChange, EventTransition, EventTransitionCommit};
+use bacnet_objects::event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject};
+use bacnet_objects::multistate::{
+    MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject,
+};
 use bacnet_services::common::BACnetPropertyValue;
-use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
+use bacnet_services::wpm::{
+    WriteAccessSpecification, WritePropertyAttempt, WritePropertyMultipleRequest,
+};
 use bacnet_types::constructed::BACnetObjectPropertyReference;
+use bacnet_types::primitives::BACnetTimeStamp;
 
 fn encode_value(value: &PropertyValue) -> Vec<u8> {
     let mut bytes = BytesMut::new();
@@ -102,6 +110,210 @@ fn event_enrollment_prefix_commits_before_read_only_first_failure() {
             .unwrap(),
         PropertyValue::CharacterString("committed".into())
     );
+}
+
+fn acked_transitions_objects() -> Vec<Box<dyn BACnetObject>> {
+    let source = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    vec![
+        Box::new(AnalogInputObject::new(1, "AI", 62).unwrap()),
+        Box::new(AnalogOutputObject::new(1, "AO", 62).unwrap()),
+        Box::new(AnalogValueObject::new(1, "AV", 62).unwrap()),
+        Box::new(BinaryInputObject::new(1, "BI").unwrap()),
+        Box::new(BinaryOutputObject::new(1, "BO").unwrap()),
+        Box::new(BinaryValueObject::new(1, "BV").unwrap()),
+        Box::new(MultiStateInputObject::new(1, "MSI", 3).unwrap()),
+        Box::new(MultiStateOutputObject::new(1, "MSO", 3).unwrap()),
+        Box::new(MultiStateValueObject::new(1, "MSV", 3).unwrap()),
+        Box::new(EventEnrollmentObject::new(1, "EE", 5).unwrap()),
+        Box::new(AlertEnrollmentObject::new(1, "Alert", source).unwrap()),
+    ]
+}
+
+fn event_snapshot(object: &dyn BACnetObject) -> [PropertyValue; 4] {
+    [
+        PropertyIdentifier::EVENT_STATE,
+        PropertyIdentifier::ACKED_TRANSITIONS,
+        PropertyIdentifier::EVENT_TIME_STAMPS,
+        PropertyIdentifier::EVENT_DETECTION_ENABLE,
+    ]
+    .map(|property| object.read_property(property, None).unwrap())
+}
+
+fn seed_unacknowledged(object: &mut dyn BACnetObject) {
+    object
+        .write_property(
+            PropertyIdentifier::EVENT_DETECTION_ENABLE,
+            None,
+            PropertyValue::Boolean(true),
+            None,
+        )
+        .unwrap();
+    if object.object_identifier().object_type() == ObjectType::ALERT_ENROLLMENT {
+        object
+            .set_event_state_internal(EventState::OFFNORMAL)
+            .unwrap();
+        object.set_acked_transitions_internal(1, false).unwrap();
+    } else {
+        object
+            .commit_event_transition_internal(EventTransitionCommit {
+                change: EventStateChange {
+                    from: EventState::NORMAL,
+                    to: EventState::OFFNORMAL,
+                },
+                coordinate: EventTransition::ToOffnormal,
+                ack_required: true,
+                timestamp: BACnetTimeStamp::SequenceNumber(42),
+                message_text: None,
+            })
+            .unwrap();
+    }
+    assert_eq!(
+        event_snapshot(object)[1],
+        PropertyValue::BitString {
+            unused_bits: 5,
+            data: vec![0x60]
+        }
+    );
+}
+
+#[test]
+fn acked_transitions_write_property_denies_every_family_without_mutation() {
+    for mut object in acked_transitions_objects() {
+        seed_unacknowledged(&mut *object);
+        let oid = object.object_identifier();
+        let mut db = ObjectDatabase::new();
+        db.add(object).unwrap();
+        let before = event_snapshot(db.get(&oid).unwrap());
+        for octet in [0xe0, 0x00, 0xa0] {
+            let request = WritePropertyRequest {
+                object_identifier: oid,
+                property_identifier: PropertyIdentifier::ACKED_TRANSITIONS,
+                property_array_index: None,
+                property_value: encode_value(&PropertyValue::BitString {
+                    unused_bits: 5,
+                    data: vec![octet],
+                }),
+                priority: Some(8),
+            };
+            let mut bytes = BytesMut::new();
+            request.encode(&mut bytes);
+            assert_protocol(
+                handle_write_property(&mut db, &bytes).unwrap_err(),
+                ErrorClass::PROPERTY,
+                ErrorCode::WRITE_ACCESS_DENIED,
+            );
+            assert_eq!(event_snapshot(db.get(&oid).unwrap()), before, "{oid:?}");
+        }
+    }
+}
+
+#[test]
+fn acked_transitions_wpm_authorizer_allow_retains_prefix_and_stops_at_denial() {
+    // No prefix, an ordinary prefix, and a destructive detection-reset prefix.
+    // None may apply the denied write or suffix; successful prefixes must NOT
+    // be rolled back, even though objects retain local snapshot/restore hooks.
+    for prefix_len in 0..=2 {
+        for mut object in acked_transitions_objects() {
+            let mut reset = event_snapshot(&*object);
+            reset[3] = PropertyValue::Boolean(false);
+            seed_unacknowledged(&mut *object);
+            let before = event_snapshot(&*object);
+            let oid = object.object_identifier();
+            let mut db = ObjectDatabase::new();
+            db.add(object).unwrap();
+            let property = |property_identifier, value| BACnetPropertyValue {
+                property_identifier,
+                property_array_index: None,
+                value: encode_value(&value),
+                priority: None,
+            };
+            let mut properties = vec![
+                property(
+                    PropertyIdentifier::DESCRIPTION,
+                    PropertyValue::CharacterString("committed".into()),
+                ),
+                property(
+                    PropertyIdentifier::EVENT_DETECTION_ENABLE,
+                    PropertyValue::Boolean(false),
+                ),
+            ];
+            properties.truncate(prefix_len);
+            let denied = BACnetPropertyValue {
+                property_identifier: PropertyIdentifier::ACKED_TRANSITIONS,
+                property_array_index: None,
+                value: encode_value(&PropertyValue::BitString {
+                    unused_bits: 5,
+                    data: vec![0x00],
+                }),
+                priority: Some(8),
+            };
+            properties.push(denied.clone());
+            properties.push(property(
+                PropertyIdentifier::DESCRIPTION,
+                PropertyValue::CharacterString("suffix".into()),
+            ));
+            properties.push(property(
+                PropertyIdentifier::EVENT_DETECTION_ENABLE,
+                PropertyValue::Boolean(true),
+            ));
+            let request = encode_request(oid, properties);
+            let allowed = std::cell::RefCell::new(Vec::new());
+            let authorize = |attempt: &WritePropertyAttempt| {
+                allowed.borrow_mut().push(attempt.clone());
+                Ok(())
+            };
+            let mut snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::default();
+            let WritePropertyMultipleOutcome::Error {
+                error,
+                first_failed_write_attempt,
+                committed_oids,
+            } = handle_write_property_multiple_authorized(
+                &mut db,
+                &request,
+                &mut snapshots,
+                Some(&authorize),
+            )
+            else {
+                panic!("expected Acked_Transitions WPM denial for {oid:?}");
+            };
+            assert_protocol(error, ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED);
+            assert_reference(
+                &first_failed_write_attempt,
+                oid,
+                PropertyIdentifier::ACKED_TRANSITIONS,
+                None,
+            );
+            assert_eq!(
+                committed_oids,
+                if prefix_len == 0 { vec![] } else { vec![oid] }
+            );
+            let allowed = allowed.into_inner();
+            assert_eq!(
+                allowed.len(),
+                prefix_len + 1,
+                "suffix reached authorizer for {oid:?}"
+            );
+            let attempt = allowed.last().unwrap();
+            assert_eq!(attempt.reference, first_failed_write_attempt);
+            assert_eq!(attempt.value, denied.value);
+            assert_eq!(attempt.priority, denied.priority);
+            let object = db.get(&oid).unwrap();
+            assert_eq!(
+                event_snapshot(object),
+                if prefix_len == 2 { reset } else { before },
+                "{oid:?}"
+            );
+            assert_eq!(
+                object
+                    .read_property(PropertyIdentifier::DESCRIPTION, None)
+                    .unwrap(),
+                PropertyValue::CharacterString(
+                    if prefix_len == 0 { "" } else { "committed" }.into()
+                ),
+                "{oid:?}"
+            );
+        }
+    }
 }
 
 #[test]
