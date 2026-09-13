@@ -1,4 +1,5 @@
 use bacnet_objects::{
+    analog::AnalogInputObject,
     audit::AuditReporterObject,
     binary::BinaryInputObject,
     event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject},
@@ -293,4 +294,80 @@ fn pics_audit_reporter_metadata_is_complete_and_exact() {
             (PropertyIdentifier::PROPERTY_LIST, true, false, false),
         ]
     );
+}
+
+#[test]
+fn pics_analog_input_property_metadata_is_exact_for_each_configuration() {
+    use bacnet_objects::traits::BACnetObject;
+    use PropertyIdentifier as P;
+
+    // Expected (identifier, optional, writable) rows, not generated from metadata.
+    let base = [
+        (P::OBJECT_IDENTIFIER, false, false),
+        (P::OBJECT_NAME, false, true),
+        (P::DESCRIPTION, true, true),
+        (P::OBJECT_TYPE, false, false),
+        (P::PRESENT_VALUE, false, true),
+        (P::STATUS_FLAGS, false, false),
+        (P::EVENT_STATE, false, false),
+        (P::EVENT_DETECTION_ENABLE, true, true),
+        (P::OUT_OF_SERVICE, false, true),
+        (P::UNITS, false, false),
+        (P::COV_INCREMENT, true, true),
+        (P::HIGH_LIMIT, true, true),
+        (P::LOW_LIMIT, true, true),
+        (P::DEADBAND, true, true),
+        (P::LIMIT_ENABLE, true, true),
+        (P::EVENT_ENABLE, true, true),
+        (P::NOTIFY_TYPE, true, true),
+        (P::NOTIFICATION_CLASS, true, true),
+        (P::TIME_DELAY, true, true),
+        (P::TIME_DELAY_NORMAL, true, true),
+        (P::RELIABILITY, true, true),
+        (P::RELIABILITY_EVALUATION_INHIBIT, true, true),
+        (P::ACKED_TRANSITIONS, true, false),
+        (P::EVENT_TIME_STAMPS, true, false),
+        (P::EVENT_MESSAGE_TEXTS, true, false),
+        (P::PROPERTY_LIST, false, false),
+    ];
+    for configuration in 0..8 {
+        let mut object = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+        let mut expected = base.to_vec();
+        if configuration & 1 != 0 {
+            object.configure_fault_out_of_range(-10.0, 100.0).unwrap();
+            expected.extend([
+                (P::FAULT_HIGH_LIMIT, true, false),
+                (P::FAULT_LOW_LIMIT, true, false),
+            ]);
+        }
+        if configuration & 2 != 0 {
+            object.set_min_pres_value(-20.0);
+            expected.push((P::MIN_PRES_VALUE, true, false));
+        }
+        if configuration & 4 != 0 {
+            object.set_max_pres_value(120.0);
+            expected.push((P::MAX_PRES_VALUE, true, false));
+        }
+        let required = object.required_properties();
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(object)).unwrap();
+        let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+        let support = &pics.supported_object_types[0];
+        assert_eq!(support.object_type, ObjectType::ANALOG_INPUT);
+        let rows: Vec<_> = support
+            .supported_properties
+            .iter()
+            .map(|row| {
+                assert!(row.access.readable);
+                (row.property_id, row.access.optional, row.access.writable)
+            })
+            .collect();
+        assert_eq!(rows, expected, "configuration {configuration}");
+        assert_eq!(
+            rows.iter()
+                .filter_map(|&(p, optional, _)| (!optional).then_some(p))
+                .collect::<Vec<_>>(),
+            required.as_ref()
+        );
+    }
 }

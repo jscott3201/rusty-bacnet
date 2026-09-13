@@ -324,3 +324,126 @@ fn rpm_metadata_selectors_are_exact_for_audit_reporter() {
         vec![PropertyIdentifier::DESCRIPTION]
     );
 }
+
+#[test]
+fn rpm_metadata_analog_input_required_optional_and_budgeted_bytes_agree() {
+    use bacnet_objects::analog::AnalogInputObject;
+    use bacnet_objects::traits::BACnetObject;
+    use PropertyIdentifier as P;
+
+    let required = vec![
+        P::OBJECT_IDENTIFIER,
+        P::OBJECT_NAME,
+        P::OBJECT_TYPE,
+        P::PRESENT_VALUE,
+        P::STATUS_FLAGS,
+        P::EVENT_STATE,
+        P::OUT_OF_SERVICE,
+        P::UNITS,
+    ];
+    let optional = vec![
+        P::DESCRIPTION,
+        P::EVENT_DETECTION_ENABLE,
+        P::COV_INCREMENT,
+        P::HIGH_LIMIT,
+        P::LOW_LIMIT,
+        P::DEADBAND,
+        P::LIMIT_ENABLE,
+        P::EVENT_ENABLE,
+        P::NOTIFY_TYPE,
+        P::NOTIFICATION_CLASS,
+        P::TIME_DELAY,
+        P::TIME_DELAY_NORMAL,
+        P::RELIABILITY,
+        P::RELIABILITY_EVALUATION_INHIBIT,
+        P::ACKED_TRANSITIONS,
+        P::EVENT_TIME_STAMPS,
+        P::EVENT_MESSAGE_TEXTS,
+    ];
+    for configuration in 0..8 {
+        let mut object = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+        let mut expected_optional = optional.clone();
+        if configuration & 1 != 0 {
+            object.configure_fault_out_of_range(-10.0, 100.0).unwrap();
+            expected_optional.extend([P::FAULT_HIGH_LIMIT, P::FAULT_LOW_LIMIT]);
+        }
+        if configuration & 2 != 0 {
+            object.set_min_pres_value(-20.0);
+            expected_optional.push(P::MIN_PRES_VALUE);
+        }
+        if configuration & 4 != 0 {
+            object.set_max_pres_value(120.0);
+            expected_optional.push(P::MAX_PRES_VALUE);
+        }
+        let oid = object.object_identifier();
+        let all = object.property_list().into_owned();
+        let metadata = object.property_metadata().into_owned();
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(object)).unwrap();
+
+        for (selector, expected) in [
+            (P::REQUIRED, &required),
+            (P::OPTIONAL, &expected_optional),
+            (P::ALL, &all),
+        ] {
+            assert_eq!(rpm_property_ids(&db, oid, selector), *expected);
+            let projected: Vec<_> = metadata
+                .iter()
+                .filter_map(|row| {
+                    let selected = row.property_identifier != P::PROPERTY_LIST
+                        && match selector {
+                            P::REQUIRED => row.conformance.is_required(),
+                            P::OPTIONAL => !row.conformance.is_required(),
+                            _ => true,
+                        };
+                    selected.then_some(row.property_identifier)
+                })
+                .collect();
+            assert_eq!(projected, *expected);
+
+            let request = ReadPropertyMultipleRequest {
+                list_of_read_access_specs: vec![ReadAccessSpecification {
+                    object_identifier: oid,
+                    list_of_property_references: vec![PropertyReference {
+                        property_identifier: selector,
+                        property_array_index: None,
+                    }],
+                }],
+            };
+            let mut request_bytes = BytesMut::new();
+            request.encode(&mut request_bytes);
+            let mut legacy = BytesMut::new();
+            handle_read_property_multiple(&db, &request_bytes, &mut legacy).unwrap();
+            let mut bounded = BytesMut::new();
+            let budget = crate::server::ReadPropertyMultipleBudget {
+                max_result_elements: expected.len(),
+                max_service_ack_bytes: legacy.len(),
+            };
+            super::super::rpm_budget::handle_rpm_budgeted(
+                &db,
+                &request_bytes,
+                &mut bounded,
+                budget,
+            )
+            .unwrap();
+            assert_eq!(
+                bounded, legacy,
+                "{selector:?}, configuration {configuration}"
+            );
+            let mut prefix = BytesMut::from(&b"prefix"[..]);
+            assert!(matches!(
+                super::super::rpm_budget::handle_rpm_budgeted(
+                    &db,
+                    &request_bytes,
+                    &mut prefix,
+                    crate::server::ReadPropertyMultipleBudget {
+                        max_result_elements: expected.len() - 1,
+                        ..budget
+                    }
+                ),
+                Err(super::super::rpm_budget::RpmFailure::Work)
+            ));
+            assert_eq!(&prefix[..], b"prefix");
+        }
+    }
+}
