@@ -494,11 +494,15 @@ fn rpm_explicit_index_returns_one_multistate_event_message() {
 
 #[test]
 fn rpm_handler_required_vs_optional() {
-    let db = make_db_with_ai();
-    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(
+        bacnet_objects::analog::AnalogValueObject::new(1, "AV-1", 62).unwrap(),
+    ))
+    .unwrap();
+    let oid = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap();
     assert!(
         db.get(&oid).unwrap().property_metadata().is_empty(),
-        "Analog Input intentionally exercises the legacy RPM fallback"
+        "Analog Value intentionally exercises the legacy RPM fallback"
     );
 
     use bacnet_services::common::PropertyReference;
@@ -545,10 +549,15 @@ fn rpm_handler_required_vs_optional() {
         .iter()
         .map(|r| r.property_identifier)
         .collect();
-    assert!(req_pids.contains(&PropertyIdentifier::OBJECT_IDENTIFIER));
-    assert!(req_pids.contains(&PropertyIdentifier::OBJECT_NAME));
-    assert!(req_pids.contains(&PropertyIdentifier::OBJECT_TYPE));
-    assert!(req_pids.contains(&PropertyIdentifier::PROPERTY_LIST));
+    assert_eq!(
+        req_pids,
+        [
+            PropertyIdentifier::OBJECT_IDENTIFIER,
+            PropertyIdentifier::OBJECT_NAME,
+            PropertyIdentifier::OBJECT_TYPE,
+            PropertyIdentifier::PROPERTY_LIST,
+        ]
+    );
 
     // OPTIONAL must NOT include any required properties
     let opt_pids: Vec<_> = optional_results

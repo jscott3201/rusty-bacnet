@@ -3,6 +3,9 @@ use crate::common::{
     read_analog_event_properties, read_generic_event_properties, write_analog_event_properties,
     write_generic_event_properties,
 };
+use crate::property_metadata::PropertyMetadata;
+
+mod metadata;
 
 // ---------------------------------------------------------------------------
 // AnalogInput (type 0)
@@ -254,35 +257,12 @@ impl BACnetObject for AnalogInputObject {
         Err(common::write_access_denied_error())
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        metadata::for_object(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::EVENT_DETECTION_ENABLE,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::UNITS,
-            PropertyIdentifier::COV_INCREMENT,
-            PropertyIdentifier::HIGH_LIMIT,
-            PropertyIdentifier::LOW_LIMIT,
-            PropertyIdentifier::DEADBAND,
-            PropertyIdentifier::LIMIT_ENABLE,
-            PropertyIdentifier::EVENT_ENABLE,
-            PropertyIdentifier::NOTIFY_TYPE,
-            PropertyIdentifier::NOTIFICATION_CLASS,
-            PropertyIdentifier::TIME_DELAY,
-            PropertyIdentifier::TIME_DELAY_NORMAL,
-            PropertyIdentifier::RELIABILITY,
-            PropertyIdentifier::RELIABILITY_EVALUATION_INHIBIT,
-            PropertyIdentifier::ACKED_TRANSITIONS,
-            PropertyIdentifier::EVENT_TIME_STAMPS,
-            PropertyIdentifier::EVENT_MESSAGE_TEXTS,
-        ];
-        self.fault_out_of_range.property_list(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     fn supports_cov(&self) -> bool {
@@ -369,17 +349,6 @@ impl BACnetObject for AnalogInputObject {
 
     fn is_createable(&self) -> bool {
         true
-    }
-
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        // Mirrors the AnalogInput `write_property` arms.
-        common::is_common_writable(property)
-            || property == PropertyIdentifier::PRESENT_VALUE
-            || property == PropertyIdentifier::RELIABILITY
-            || property == PropertyIdentifier::RELIABILITY_EVALUATION_INHIBIT
-            || property == PropertyIdentifier::COV_INCREMENT
-            || common::is_event_property_writable(property)
-            || property == PropertyIdentifier::EVENT_DETECTION_ENABLE
     }
 }
 
