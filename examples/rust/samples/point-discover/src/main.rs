@@ -3,13 +3,14 @@
 //! points, print, exit.
 
 use std::net::Ipv4Addr;
+use std::ops::RangeInclusive;
 use std::process;
 use std::time::Duration;
 
 use bacnet_client::client::BACnetClient;
 use bacnet_encoding::primitives::decode_application_value;
 use bacnet_services::common::PropertyReference;
-use bacnet_services::rpm::ReadAccessSpecification;
+use bacnet_services::rpm::{ReadAccessSpecification, ReadResultElement};
 use bacnet_services::who_is::WhoIsRequest;
 use bacnet_transport::bip::DEFAULT_BACNET_PORT;
 use bacnet_transport::bvll::encode_bip_mac;
@@ -21,6 +22,9 @@ use clap::Parser;
 mod net_defaults;
 
 use net_defaults::default_broadcast;
+
+// Example-local limit on indexed object-list allocation and reads, not a wire limit.
+const MAX_OBJECT_LIST_ENTRIES: usize = 10_000;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -150,24 +154,21 @@ fn decode_object_identifier_list(bytes: &[u8]) -> Vec<ObjectIdentifier> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use bacnet_encoding::primitives::encode_property_value;
-    use bytes::BytesMut;
+mod tests;
 
-    #[test]
-    fn decode_full_object_list_sequence() {
-        let device = ObjectIdentifier::new(ObjectType::DEVICE, 5007).unwrap();
-        let ai = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1173).unwrap();
-        let mut buf = BytesMut::new();
-        encode_property_value(&mut buf, &PropertyValue::ObjectIdentifier(device)).unwrap();
-        encode_property_value(&mut buf, &PropertyValue::ObjectIdentifier(ai)).unwrap();
-
-        let oids = decode_object_identifier_list(&buf);
-        assert_eq!(oids.len(), 2);
-        assert_eq!(oids[0], device);
-        assert_eq!(oids[1], ai);
-    }
+fn object_list_bounds(count: u64) -> Result<(u32, usize), bacnet_types::error::Error> {
+    let count = u32::try_from(count).map_err(|_| {
+        bacnet_types::error::Error::Encoding("object-list count exceeds u32".into())
+    })?;
+    let capacity = usize::try_from(count)
+        .ok()
+        .filter(|&n| n <= MAX_OBJECT_LIST_ENTRIES)
+        .ok_or_else(|| {
+            bacnet_types::error::Error::Encoding(format!(
+                "object-list count exceeds example limit of {MAX_OBJECT_LIST_ENTRIES}"
+            ))
+        })?;
+    Ok((count, capacity))
 }
 
 async fn read_object_list(
@@ -194,8 +195,8 @@ async fn read_object_list(
     // Many field devices only expose object-list via array index (not as a whole list).
     if let Ok(ack0) = read_prop(client, device_instance, device_oid, Some(0)).await {
         if let Some(PropertyValue::Unsigned(count)) = decode_prop(&ack0.property_value) {
-            let count = count as u32;
-            let mut oids = Vec::with_capacity(count as usize);
+            let (count, capacity) = object_list_bounds(count)?;
+            let mut oids = Vec::with_capacity(capacity);
             for idx in 1..=count {
                 let ack = read_prop(client, device_instance, device_oid, Some(idx)).await?;
                 match decode_prop(&ack.property_value) {
@@ -266,9 +267,12 @@ async fn read_current_command_priority(
         )
         .await
         .ok()?;
-    match decode_prop(&ack.property_value)? {
-        PropertyValue::Unsigned(v) if (1..=16).contains(&(v as u8)) => Some(v as u8),
-        PropertyValue::Null => None,
+    decode_current_command_priority(&ack.property_value)
+}
+
+fn decode_current_command_priority(bytes: &[u8]) -> Option<u8> {
+    match decode_prop(bytes)? {
+        PropertyValue::Unsigned(v) => u8::try_from(v).ok().filter(|p| (1..=16).contains(p)),
         _ => None,
     }
 }
@@ -313,30 +317,19 @@ async fn read_priority_array_slots(
         .await
     {
         if let Some(PropertyValue::List(items)) = decode_prop(&ack.property_value) {
-            return items
-                .into_iter()
-                .enumerate()
-                .filter_map(|(idx, value)| {
-                    let priority = (idx + 1) as u8;
-                    if priority > 16 || matches!(value, PropertyValue::Null) {
-                        None
-                    } else {
-                        Some((priority, value))
-                    }
-                })
-                .collect();
+            return active_priority_array_slots(items);
         }
     }
 
     let mut active = Vec::new();
-    for chunk_start in (1u32..=16).step_by(8) {
+    for chunk_start in (1u8..=16).step_by(8) {
         let chunk_end = (chunk_start + 7).min(16);
         let specs = vec![ReadAccessSpecification {
             object_identifier: oid,
             list_of_property_references: (chunk_start..=chunk_end)
                 .map(|idx| PropertyReference {
                     property_identifier: PropertyIdentifier::PRIORITY_ARRAY,
-                    property_array_index: Some(idx),
+                    property_array_index: Some(u32::from(idx)),
                 })
                 .collect(),
         }];
@@ -349,20 +342,10 @@ async fn read_priority_array_slots(
             Err(_) => continue,
         };
 
-        for (offset, result) in rpm.list_of_read_access_results[0]
-            .list_of_results
-            .iter()
-            .enumerate()
-        {
-            let priority = (chunk_start + offset as u32) as u8;
-            if let Some(ref bytes) = result.property_value {
-                if let Some(val) = decode_prop(bytes) {
-                    if !matches!(val, PropertyValue::Null) {
-                        active.push((priority, val));
-                    }
-                }
-            }
-        }
+        active.extend(active_priority_chunk(
+            chunk_start..=chunk_end,
+            &rpm.list_of_read_access_results[0].list_of_results,
+        ));
     }
 
     if active.is_empty() {
@@ -386,6 +369,26 @@ async fn read_priority_array_slots(
     }
 
     active
+}
+
+fn active_priority_array_slots(items: Vec<PropertyValue>) -> Vec<(u8, PropertyValue)> {
+    (1u8..=16)
+        .zip(items)
+        .filter(|(_, value)| !matches!(value, PropertyValue::Null))
+        .collect()
+}
+
+fn active_priority_chunk(
+    priorities: RangeInclusive<u8>,
+    results: &[ReadResultElement],
+) -> Vec<(u8, PropertyValue)> {
+    priorities
+        .zip(results)
+        .filter_map(|(priority, result)| {
+            let value = decode_prop(result.property_value.as_deref()?)?;
+            (!matches!(value, PropertyValue::Null)).then_some((priority, value))
+        })
+        .collect()
 }
 
 struct CommandablePoint {
