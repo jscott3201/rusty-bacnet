@@ -52,6 +52,70 @@ pub trait SerialPort: Send + Sync + 'static {
     ) -> impl std::future::Future<Output = Result<usize, Error>> + Send;
 }
 
+/// Execution placement for an MS/TP transport, independent of master-node settings.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MstpExecutionMode {
+    /// Spawn the MAC loop on the caller's Tokio runtime (the existing default).
+    #[default]
+    Tokio,
+    /// Poll the same MAC loop on a dedicated OS thread with its own Tokio runtime.
+    /// Blocking drain work uses that runtime's blocking pool, not the application's.
+    /// This does not configure real-time scheduling or guarantee wire timing.
+    DedicatedThread,
+}
+
+/// Owns the isolated reactor. Dropping the shutdown sender also handles cancelled
+/// startup and abort; only `stop` waits for runtime and blocking-I/O completion.
+struct DedicatedRuntime {
+    handle: tokio::runtime::Handle,
+    shutdown: oneshot::Sender<()>,
+    finished: oneshot::Receiver<()>,
+}
+
+impl DedicatedRuntime {
+    async fn new() -> Result<Self, Error> {
+        let (started_tx, started_rx) = oneshot::channel();
+        let (shutdown, shutdown_rx) = oneshot::channel();
+        let (finished_tx, finished) = oneshot::channel();
+        std::thread::Builder::new()
+            .name("bacnet-mstp".into())
+            .spawn(move || {
+                match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(runtime) => {
+                        if started_tx.send(Ok(runtime.handle().clone())).is_ok() {
+                            let _ = runtime.block_on(shutdown_rx);
+                        }
+                        // Drop on the OS thread, never in the caller's async context.
+                        // This waits for any already-started blocking drain calls.
+                        drop(runtime);
+                    }
+                    Err(error) => {
+                        let _ = started_tx.send(Err(error));
+                    }
+                }
+                let _ = finished_tx.send(());
+            })
+            .map_err(Error::Transport)?;
+        let handle = started_rx
+            .await
+            .map_err(|_| Error::Encoding("MS/TP execution thread failed to start".into()))?
+            .map_err(Error::Transport)?;
+        Ok(Self {
+            handle,
+            shutdown,
+            finished,
+        })
+    }
+
+    async fn stop(self) {
+        drop(self.shutdown);
+        let _ = self.finished.await;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // MS/TP timing constants
 // ---------------------------------------------------------------------------
@@ -670,7 +734,7 @@ pub use port::{LoopbackSerial, MstpTransport, NoSerial};
 #[cfg(test)]
 mod clause956_tests;
 #[cfg(test)]
-mod port_timing_tests;
+pub(crate) mod port_timing_tests;
 #[cfg(test)]
 mod reply_tests;
 #[cfg(test)]
