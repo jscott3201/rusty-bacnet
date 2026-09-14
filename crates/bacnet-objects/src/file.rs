@@ -15,6 +15,7 @@ use crate::clock::ClockReader;
 use crate::common::{self, read_common_properties};
 use crate::traits::{BACnetObject, WritePropertyRollback};
 
+mod metadata;
 mod resize;
 
 // ---------------------------------------------------------------------------
@@ -676,30 +677,12 @@ impl BACnetObject for FileObject {
         }
     }
 
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        let mut props = vec![
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::FILE_TYPE,
-            PropertyIdentifier::FILE_SIZE,
-            PropertyIdentifier::MODIFICATION_DATE,
-            PropertyIdentifier::ARCHIVE,
-            PropertyIdentifier::READ_ONLY,
-            PropertyIdentifier::FILE_ACCESS_METHOD,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ];
-        if self.record_count.is_some() {
-            props.push(PropertyIdentifier::RECORD_COUNT);
-        }
-        Cow::Owned(props)
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_object(self)
     }
 
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        resize::is_writable(self, property)
+    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     fn capture_write_property_rollback(
