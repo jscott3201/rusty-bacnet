@@ -221,7 +221,7 @@ fn property_metadata_contract_binary_input() {
 
 #[test]
 fn property_metadata_contract_all_migrated_rows_are_readable() {
-    let objects: [Box<dyn BACnetObject>; 9] = [
+    let objects: [Box<dyn BACnetObject>; 10] = [
         Box::new(TimeValueObject::new(1, "TV-1").unwrap()),
         Box::new(BinaryInputObject::new(1, "BI-1").unwrap()),
         Box::new(BinaryValueObject::new(1, "BV-1").unwrap()),
@@ -231,6 +231,7 @@ fn property_metadata_contract_all_migrated_rows_are_readable() {
         Box::new(MultiStateOutputObject::new(1, "MSO-1", 3).unwrap()),
         Box::new(crate::loop_obj::LoopObject::new(1, "LOOP-1", 62).unwrap()),
         Box::new(crate::program::ProgramObject::new(1, "PRG-1").unwrap()),
+        Box::new(crate::file::FileObject::new(1, "FILE-1", "raw").unwrap()),
     ];
 
     for object in objects {

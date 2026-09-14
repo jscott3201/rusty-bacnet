@@ -1,5 +1,6 @@
 use super::*;
 
+mod file;
 mod notification_class;
 
 #[test]
