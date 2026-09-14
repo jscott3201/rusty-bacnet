@@ -19,6 +19,8 @@ use crate::clock::{ClockFrame, ClockReader};
 use crate::common::read_property_list_property;
 use crate::traits::BACnetObject;
 
+mod metadata;
+
 /// Every service the bundled `bacnet-server` dispatch executes, as
 /// `BACnetServicesSupported` bit positions (Clause 21).
 ///
@@ -544,23 +546,19 @@ impl BACnetObject for DeviceObject {
         })
     }
 
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_object(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        let mut props: Vec<PropertyIdentifier> = self.properties.keys().copied().collect();
-        props.push(PropertyIdentifier::OBJECT_LIST);
-        props.push(PropertyIdentifier::PROPERTY_LIST);
-        props.push(PropertyIdentifier::PROTOCOL_OBJECT_TYPES_SUPPORTED);
-        props.push(PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED);
-        props.push(PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS);
-        if self.clock_frame().is_some() {
-            props.extend([
-                PropertyIdentifier::LOCAL_DATE,
-                PropertyIdentifier::LOCAL_TIME,
-                PropertyIdentifier::UTC_OFFSET,
-                PropertyIdentifier::DAYLIGHT_SAVINGS_STATUS,
-            ]);
-        }
-        props.sort_by_key(|p| p.to_raw());
-        Cow::Owned(props)
+        // Preserve Device's legacy inclusion of PROPERTY_LIST. The wire reader
+        // still removes it and the identity rows as before.
+        Cow::Owned(
+            self.property_metadata()
+                .iter()
+                .map(|row| row.property_identifier)
+                .collect(),
+        )
     }
 
     /// Device is not createable or deleteable at runtime.

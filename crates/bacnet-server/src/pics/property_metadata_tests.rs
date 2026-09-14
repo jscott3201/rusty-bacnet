@@ -2,6 +2,7 @@ use bacnet_objects::{
     analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject},
     audit::AuditReporterObject,
     binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject},
+    device::DeviceObject,
     event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject},
     multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject},
     staging::{StagingConfig, StagingObject},
@@ -33,6 +34,8 @@ fn property_support(
 #[test]
 fn pics_projects_migrated_property_metadata() {
     let mut db = ObjectDatabase::new();
+    db.add(Box::new(DeviceObject::new(Default::default()).unwrap()))
+        .unwrap();
     db.add(Box::new(TimeValueObject::new(1, "tv-1").unwrap()))
         .unwrap();
     db.add(Box::new(BinaryInputObject::new(1, "bi-1").unwrap()))
@@ -191,6 +194,7 @@ fn pics_projects_migrated_property_metadata() {
     }
 
     for object_type in [
+        ObjectType::DEVICE,
         ObjectType::TIME_VALUE,
         ObjectType::BINARY_INPUT,
         ObjectType::EVENT_ENROLLMENT,

@@ -1,5 +1,6 @@
 use super::*;
 
+mod device;
 mod file;
 mod log;
 mod notification_class;

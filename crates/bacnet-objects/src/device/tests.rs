@@ -653,3 +653,113 @@ fn device_protocol_object_types_has_new_bits() {
     assert_ne!(bits[3] & 0x80, 0, "Accumulator (24)");
     assert_ne!(bits[7] & 0x80, 0, "NetworkPort (56)");
 }
+
+#[test]
+fn device_property_metadata_preserves_dynamic_list_and_write_dispatch() {
+    use crate::property_metadata::PropertyWriteCapability;
+    use PropertyIdentifier as P;
+
+    for segmentation_supported in [
+        Segmentation::NONE,
+        Segmentation::TRANSMIT,
+        Segmentation::RECEIVE,
+        Segmentation::BOTH,
+        Segmentation::from_raw(64),
+    ] {
+        let mut device = DeviceObject::new(DeviceConfig {
+            segmentation_supported,
+            ..DeviceConfig::default()
+        })
+        .unwrap();
+        let clock = FakeClock::new(clock_frame(12, 0));
+        // Bind, lose a sample, recover, and unbind on the same instance.
+        for state in [0, 1, 2, 1, 0] {
+            *clock.0.lock().unwrap() = (state == 1).then(|| clock_frame(12, 0));
+            device.bind_clock_internal(
+                (state != 0).then(|| Arc::new(clock.clone()) as Arc<dyn ClockReader>),
+            );
+            let mut expected: Vec<_> = device.properties.keys().copied().collect();
+            expected.extend([
+                P::OBJECT_LIST,
+                P::PROPERTY_LIST,
+                P::PROTOCOL_OBJECT_TYPES_SUPPORTED,
+                P::PROTOCOL_SERVICES_SUPPORTED,
+                P::ACTIVE_COV_SUBSCRIPTIONS,
+            ]);
+            if state == 1 {
+                expected.extend([
+                    P::LOCAL_DATE,
+                    P::LOCAL_TIME,
+                    P::UTC_OFFSET,
+                    P::DAYLIGHT_SAVINGS_STATUS,
+                ]);
+            }
+            expected.sort_by_key(|p| p.to_raw());
+            let metadata = device.property_metadata();
+            assert!(matches!(metadata, Cow::Borrowed(_)));
+            assert_eq!(
+                metadata
+                    .iter()
+                    .map(|row| row.property_identifier)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(device.property_list().as_ref(), expected);
+            let wire: Vec<_> = expected
+                .iter()
+                .copied()
+                .filter(|p| {
+                    !matches!(
+                        *p,
+                        P::OBJECT_IDENTIFIER | P::OBJECT_NAME | P::OBJECT_TYPE | P::PROPERTY_LIST
+                    )
+                })
+                .map(|p| PropertyValue::Enumerated(p.to_raw()))
+                .collect();
+            assert_eq!(
+                device.read_property(P::PROPERTY_LIST, None).unwrap(),
+                PropertyValue::List(wire.clone())
+            );
+            assert_eq!(
+                device.read_property(P::PROPERTY_LIST, Some(0)).unwrap(),
+                PropertyValue::Unsigned(wire.len() as u64)
+            );
+            for (i, value) in wire.iter().enumerate() {
+                assert_eq!(
+                    device
+                        .read_property(P::PROPERTY_LIST, Some(i as u32 + 1))
+                        .unwrap(),
+                    *value
+                );
+            }
+            assert!(
+                matches!(device.read_property(P::PROPERTY_LIST, Some(wire.len() as u32 + 1)),
+                Err(Error::Protocol { class, code }) if class == ErrorClass::PROPERTY.to_raw() as u32
+                    && code == ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32)
+            );
+            let metadata = metadata.into_owned();
+            for row in metadata {
+                let p = row.property_identifier;
+                let before = device.read_property(p, None).unwrap();
+                assert_eq!(
+                    row.write_capability,
+                    if p == P::DESCRIPTION {
+                        PropertyWriteCapability::Always
+                    } else {
+                        PropertyWriteCapability::ReadOnly
+                    }
+                );
+                assert_eq!(device.is_writable_property(p), p == P::DESCRIPTION);
+                let result = device.write_property(p, None, before.clone(), None);
+                if p == P::DESCRIPTION {
+                    result.unwrap();
+                } else {
+                    assert!(matches!(result, Err(Error::Protocol { class, code })
+                        if class == ErrorClass::PROPERTY.to_raw() as u32
+                            && code == ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32));
+                }
+                assert_eq!(device.read_property(p, None).unwrap(), before);
+            }
+        }
+    }
+}
