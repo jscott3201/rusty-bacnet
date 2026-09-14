@@ -54,9 +54,10 @@ dependencies = [
 
 [[package]]
 name = "bacnet-client"
-version = "0.9.0"
+version = "0.11.0"
 dependencies = [
  "bacnet-encoding",
+ "bacnet-endpoint-core",
  "bacnet-network",
  "bacnet-services",
  "bacnet-transport",
@@ -69,7 +70,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-encoding"
-version = "0.9.0"
+version = "0.11.0"
 dependencies = [
  "bacnet-types",
  "bytes",
@@ -77,8 +78,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "bacnet-endpoint-core"
+version = "0.11.0"
+dependencies = [
+ "bacnet-encoding",
+ "bacnet-network",
+ "bacnet-transport",
+ "bacnet-types",
+ "tokio",
+]
+
+[[package]]
 name = "bacnet-network"
-version = "0.9.0"
+version = "0.11.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-transport",
@@ -90,7 +102,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-services"
-version = "0.9.0"
+version = "0.11.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-types",
@@ -100,20 +112,22 @@ dependencies = [
 
 [[package]]
 name = "bacnet-transport"
-version = "0.9.0"
+version = "0.11.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-types",
  "bytes",
+ "getrandom",
  "libc",
  "socket2",
  "tokio",
  "tracing",
+ "windows-sys",
 ]
 
 [[package]]
 name = "bacnet-types"
-version = "0.9.0"
+version = "0.11.0"
 dependencies = [
  "bitflags",
  "smallvec",
@@ -131,6 +145,12 @@ name = "bytes"
 version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ae3f5d315924270530207e2a68396c3cc547f6dca3fbdca317cfb1a51edb593"
+
+[[package]]
+name = "cfg-if"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "clap"
@@ -215,6 +235,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "getrandom"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "r-efi",
+ "wasip2",
+]
+
+[[package]]
 name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -278,6 +310,12 @@ checksum = "dfbc457d0c7a0759a614551b11a6409e5951f6c7537be1f1b7682b9ae9230368"
 dependencies = [
  "proc-macro2",
 ]
+
+[[package]]
+name = "r-efi"
+version = "5.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
 name = "slab"
@@ -413,6 +451,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
 
 [[package]]
+name = "wasip2"
+version = "1.0.4+wasi-0.2.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b67efb37e106e55ce722a510d6b5f9c17f083e5fc79afc2badeb12cc313d9487"
+dependencies = [
+ "wit-bindgen",
+]
+
+[[package]]
 name = "whois-scan"
 version = "0.1.0"
 dependencies = [
@@ -439,3 +486,9 @@ checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
 dependencies = [
  "windows-link",
 ]
+
+[[package]]
+name = "wit-bindgen"
+version = "0.57.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
