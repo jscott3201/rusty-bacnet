@@ -1,6 +1,12 @@
 use super::*;
 
 impl<T: TransportPort + 'static> ClientBuilder<T> {
+    /// Set the independent event notification broadcast channel capacity.
+    pub fn event_channel_capacity(mut self, capacity: usize) -> Self {
+        self.options.event_channel_capacity = capacity;
+        self
+    }
+
     /// Set the number of APDU retries before a confirmed request times out.
     pub fn apdu_retries(mut self, retries: u8) -> Self {
         self.config.apdu_retries = retries;
@@ -41,6 +47,12 @@ impl<T: TransportPort + 'static> ClientBuilder<T> {
 }
 
 impl BipClientBuilder {
+    /// Set the independent event notification broadcast channel capacity.
+    pub fn event_channel_capacity(mut self, capacity: usize) -> Self {
+        self.options.event_channel_capacity = capacity;
+        self
+    }
+
     /// Set the number of APDU retries before a confirmed request times out.
     pub fn apdu_retries(mut self, retries: u8) -> Self {
         self.config.apdu_retries = retries;
@@ -82,6 +94,12 @@ impl BipClientBuilder {
 
 #[cfg(feature = "ipv6")]
 impl Bip6ClientBuilder {
+    /// Set the independent event notification broadcast channel capacity.
+    pub fn event_channel_capacity(mut self, capacity: usize) -> Self {
+        self.options.event_channel_capacity = capacity;
+        self
+    }
+
     /// Set the number of APDU retries before a confirmed request times out.
     pub fn apdu_retries(mut self, retries: u8) -> Self {
         self.config.apdu_retries = retries;
@@ -123,6 +141,12 @@ impl Bip6ClientBuilder {
 
 #[cfg(feature = "sc-tls")]
 impl ScClientBuilder {
+    /// Set the independent event notification broadcast channel capacity.
+    pub fn event_channel_capacity(mut self, capacity: usize) -> Self {
+        self.options.event_channel_capacity = capacity;
+        self
+    }
+
     /// Set the number of APDU retries before a confirmed request times out.
     pub fn apdu_retries(mut self, retries: u8) -> Self {
         self.config.apdu_retries = retries;

@@ -124,6 +124,9 @@ pub struct ClientOptions {
     /// they call `recv()`. The default preserves the historical fixed capacity
     /// of 64.
     pub cov_channel_capacity: usize,
+    /// Capacity of the independent event notification broadcast channel (default 64).
+    /// Slow receivers observe lag; valid confirmed notifications are still acknowledged.
+    pub event_channel_capacity: usize,
     confirmed_cov_notification_ack_policy: ConfirmedCOVNotificationAckPolicy,
 }
 
@@ -147,6 +150,7 @@ impl Default for ClientOptions {
     fn default() -> Self {
         Self {
             cov_channel_capacity: DEFAULT_COV_CHANNEL_CAPACITY,
+            event_channel_capacity: DEFAULT_EVENT_CHANNEL_CAPACITY,
             confirmed_cov_notification_ack_policy:
                 cov_notifications::default_confirmed_cov_notification_ack_policy(),
         }
@@ -190,6 +194,12 @@ impl ClientOptions {
             return Err(Error::Encoding(format!(
                 "invalid cov-channel-capacity {}; expected 1..={}",
                 self.cov_channel_capacity, MAX_COV_CHANNEL_CAPACITY
+            )));
+        }
+        if !(1..=MAX_EVENT_CHANNEL_CAPACITY).contains(&self.event_channel_capacity) {
+            return Err(Error::Encoding(format!(
+                "invalid event-channel-capacity {}; expected 1..={}",
+                self.event_channel_capacity, MAX_EVENT_CHANNEL_CAPACITY
             )));
         }
         Ok(())
@@ -424,6 +434,7 @@ pub struct BACnetClient<T: TransportPort> {
     tsm: Arc<Mutex<Tsm>>,
     device_table: Arc<Mutex<DeviceTable>>,
     cov_tx: broadcast::Sender<ReceivedCOVNotification>,
+    event_tx: broadcast::Sender<ReceivedEventNotification>,
     device_tx: broadcast::Sender<DeviceEvent>,
     device_collision_tx: broadcast::Sender<DeviceCollisionEvent>,
     dispatch_task: Option<JoinHandle<()>>,
@@ -819,6 +830,7 @@ mod device_events;
 mod device_mgmt;
 mod discovery;
 mod dispatch;
+mod event_notifications;
 mod file_list;
 mod lifecycle;
 mod object_mgmt;
@@ -840,6 +852,10 @@ pub use cov_notifications::{
 pub use cov_renewal::{
     ManagedCOVSubscription, ManagedCOVSubscriptionEvent, ManagedCOVSubscriptionOptions,
 };
+pub use event_notifications::{
+    EventNotificationDelivery, ReceivedEventNotification, DEFAULT_EVENT_CHANNEL_CAPACITY,
+    MAX_EVENT_CHANNEL_CAPACITY,
+};
 
 #[cfg(test)]
 mod acknowledge_alarm_tests;
@@ -859,6 +875,8 @@ mod cov_renewal_tests;
 mod cov_tests;
 #[cfg(test)]
 mod device_events_tests;
+#[cfg(test)]
+mod event_notification_tests;
 #[cfg(test)]
 mod peer_max_apdu_tests;
 #[cfg(test)]

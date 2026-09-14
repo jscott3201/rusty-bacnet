@@ -13,6 +13,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         device_table: &Arc<Mutex<DeviceTable>>,
         network: &Arc<NetworkLayer<T>>,
         cov_tx: &broadcast::Sender<ReceivedCOVNotification>,
+        event_tx: &broadcast::Sender<ReceivedEventNotification>,
         confirmed_cov_ack_policy: &ConfirmedCOVNotificationAckPolicy,
         device_tx: &broadcast::Sender<DeviceEvent>,
         device_collision_tx: &broadcast::Sender<DeviceCollisionEvent>,
@@ -409,6 +410,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                             .await;
                         }
                     }
+                } else if req.service_choice == ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION
+                {
+                    Self::receive_confirmed_event_notification(
+                        network,
+                        event_tx,
+                        source_mac,
+                        source_network,
+                        reply_tx,
+                        req,
+                    )
+                    .await;
                 } else {
                     debug!(
                         service = req.service_choice.to_raw(),
@@ -502,6 +514,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                             warn!(error = %e, "Failed to decode UnconfirmedCOVNotification");
                         }
                     }
+                } else if req.service_choice
+                    == UnconfirmedServiceChoice::UNCONFIRMED_EVENT_NOTIFICATION
+                {
+                    event_notifications::receive_unconfirmed_event_notification(
+                        event_tx,
+                        source_mac,
+                        source_network,
+                        &req.service_request,
+                    );
                 } else {
                     debug!(
                         service = req.service_choice.to_raw(),
@@ -613,7 +634,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
     }
 
-    async fn send_confirmed_request_reject(
+    pub(super) async fn send_confirmed_request_reject(
         network: &Arc<NetworkLayer<T>>,
         source_mac: &[u8],
         source_network: &Option<NpduAddress>,
@@ -698,7 +719,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
     }
 
-    async fn send_received_reply_apdu(
+    pub(super) async fn send_received_reply_apdu(
         network: &Arc<NetworkLayer<T>>,
         buf: &[u8],
         reply_mac: &[u8],
