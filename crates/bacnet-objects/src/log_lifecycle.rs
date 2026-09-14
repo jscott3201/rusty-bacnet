@@ -3,13 +3,27 @@
 use std::sync::Arc;
 
 use bacnet_types::constructed::{BACnetLogRecord, LogDatum};
-use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, Time};
 
 use crate::clock::ClockReader;
 use crate::common::protocol_error;
 use crate::log_buffer::{LogRecordBuffer, OrdinaryAdmission};
+use crate::property_metadata::{
+    PropertyConformance::{RequiredRead, RequiredWrite},
+    PropertyMetadata,
+    PropertyWriteCapability::Always,
+};
+
+// Capability describes the implemented write route, not whether a particular
+// value, clock, or buffer state passes that route's existing validation.
+pub(crate) const LOG_ENABLE_METADATA: PropertyMetadata =
+    PropertyMetadata::new(P::LOG_ENABLE, RequiredWrite, None, Always);
+pub(crate) const STOP_WHEN_FULL_METADATA: PropertyMetadata =
+    PropertyMetadata::new(P::STOP_WHEN_FULL, RequiredRead, None, Always);
+pub(crate) const RECORD_COUNT_METADATA: PropertyMetadata =
+    PropertyMetadata::new(P::RECORD_COUNT, RequiredWrite, None, Always);
 
 pub(crate) const LOG_DISABLED: u8 = 0b001;
 pub(crate) const BUFFER_PURGED: u8 = 0b010;

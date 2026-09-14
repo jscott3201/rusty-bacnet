@@ -1,6 +1,7 @@
 use super::*;
 
 mod file;
+mod log;
 mod notification_class;
 
 use bacnet_objects::audit::AuditReporterObject;
