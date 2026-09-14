@@ -61,6 +61,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let (cov_tx, _) =
             broadcast::channel::<ReceivedCOVNotification>(options.cov_channel_capacity);
         let cov_tx_dispatch = cov_tx.clone();
+        let (event_tx, _) =
+            broadcast::channel::<ReceivedEventNotification>(options.event_channel_capacity);
+        let event_tx_dispatch = event_tx.clone();
         let confirmed_cov_ack_policy = options.confirmed_cov_notification_ack_policy.clone();
         let (device_tx, _) = broadcast::channel::<DeviceEvent>(DEVICE_EVENT_CHANNEL_CAPACITY);
         let device_tx_dispatch = device_tx.clone();
@@ -157,6 +160,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                     &device_table_dispatch,
                                     &network_dispatch,
                                     &cov_tx_dispatch,
+                                    &event_tx_dispatch,
                                     &confirmed_cov_ack_policy,
                                     &device_tx_dispatch,
                                     &device_collision_tx_dispatch,
@@ -186,6 +190,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             tsm,
             device_table,
             cov_tx,
+            event_tx,
             device_tx,
             device_collision_tx,
             dispatch_task: Some(dispatch_task),
