@@ -15,6 +15,9 @@ use crate::log_buffer::{LogRecordBuffer, LogRecordIdentity, LogRecordProfile};
 use crate::log_lifecycle::{LogLifecycle, LogLifecycleSnapshot};
 use crate::traits::{BACnetObject, WritePropertyRollback};
 
+mod metadata;
+mod multiple_metadata;
+
 /// BACnet TrendLog object.
 ///
 /// Ring buffer of timestamped property values. The application calls
@@ -275,43 +278,16 @@ impl BACnetObject for TrendLogObject {
         })
     }
 
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_object(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::LOG_ENABLE,
-            PropertyIdentifier::LOG_INTERVAL,
-            PropertyIdentifier::STOP_WHEN_FULL,
-            PropertyIdentifier::BUFFER_SIZE,
-            PropertyIdentifier::LOG_BUFFER,
-            PropertyIdentifier::RECORD_COUNT,
-            PropertyIdentifier::TOTAL_RECORD_COUNT,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::RELIABILITY,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::LOGGING_TYPE,
-            PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
         self.clock = clock;
-    }
-
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        matches!(
-            property,
-            PropertyIdentifier::LOG_ENABLE
-                | PropertyIdentifier::LOG_INTERVAL
-                | PropertyIdentifier::STOP_WHEN_FULL
-                | PropertyIdentifier::RECORD_COUNT
-                | PropertyIdentifier::OUT_OF_SERVICE
-                | PropertyIdentifier::DESCRIPTION
-        )
     }
 
     fn capture_write_property_rollback(
@@ -601,42 +577,16 @@ impl BACnetObject for TrendLogMultipleObject {
         })
     }
 
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        multiple_metadata::for_object(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::LOG_ENABLE,
-            PropertyIdentifier::LOG_INTERVAL,
-            PropertyIdentifier::STOP_WHEN_FULL,
-            PropertyIdentifier::BUFFER_SIZE,
-            PropertyIdentifier::LOG_BUFFER,
-            PropertyIdentifier::RECORD_COUNT,
-            PropertyIdentifier::TOTAL_RECORD_COUNT,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-            PropertyIdentifier::LOGGING_TYPE,
-            PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
         self.clock = clock;
-    }
-
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        matches!(
-            property,
-            PropertyIdentifier::LOG_ENABLE
-                | PropertyIdentifier::LOG_INTERVAL
-                | PropertyIdentifier::STOP_WHEN_FULL
-                | PropertyIdentifier::RECORD_COUNT
-                | PropertyIdentifier::DESCRIPTION
-        )
     }
 
     fn capture_write_property_rollback(

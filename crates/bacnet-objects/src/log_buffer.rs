@@ -3,7 +3,21 @@
 use std::collections::VecDeque;
 
 use bacnet_types::constructed::{BACnetLogRecord, LogDatum};
+use bacnet_types::enums::PropertyIdentifier as P;
 use bacnet_types::primitives::{Date, PropertyValue, Time};
+
+use crate::property_metadata::{
+    PropertyConformance::RequiredRead, PropertyMetadata, PropertyWriteCapability::ReadOnly,
+};
+
+// Shared conformance rows only: LOG_BUFFER remains the existing LIST projection,
+// not an array or a serialization of the resident sequence identities.
+pub(crate) const BUFFER_SIZE_METADATA: PropertyMetadata =
+    PropertyMetadata::new(P::BUFFER_SIZE, RequiredRead, None, ReadOnly);
+pub(crate) const LOG_BUFFER_METADATA: PropertyMetadata =
+    PropertyMetadata::new(P::LOG_BUFFER, RequiredRead, None, ReadOnly);
+pub(crate) const TOTAL_RECORD_COUNT_METADATA: PropertyMetadata =
+    PropertyMetadata::new(P::TOTAL_RECORD_COUNT, RequiredRead, None, ReadOnly);
 
 /// Stable object-owned identity for one resident log record.
 ///
