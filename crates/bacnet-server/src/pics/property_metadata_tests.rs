@@ -14,6 +14,8 @@ use bacnet_types::primitives::ObjectIdentifier;
 
 use super::*;
 
+mod schedule;
+
 fn property_support(
     pics: &Pics,
     object_type: ObjectType,
