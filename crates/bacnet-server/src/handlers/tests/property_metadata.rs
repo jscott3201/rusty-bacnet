@@ -1,5 +1,6 @@
 use super::*;
 
+mod calendar;
 mod device;
 mod file;
 mod log;

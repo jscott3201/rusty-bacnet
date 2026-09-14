@@ -133,6 +133,81 @@ fn calendar_property_list_contains_date_list() {
     assert!(props.contains(&PropertyIdentifier::DATE_LIST));
 }
 
+#[test]
+fn calendar_property_metadata_date_list_projection_and_manual_value_stay_unchanged() {
+    let mut cal = CalendarObject::new(1, "CAL-1").unwrap();
+    let metadata = cal.property_metadata().into_owned();
+    let date = Date {
+        year: 126,
+        month: 9,
+        day: 14,
+        day_of_week: 1,
+    };
+    let entries = [
+        BACnetCalendarEntry::Date(date),
+        BACnetCalendarEntry::DateRange(BACnetDateRange {
+            start_date: date,
+            end_date: date,
+        }),
+        BACnetCalendarEntry::WeekNDay(BACnetWeekNDay {
+            month: 255,
+            week_of_month: 255,
+            day_of_week: 1,
+        }),
+    ];
+    let projected = PropertyValue::List(vec![
+        PropertyValue::Date(date),
+        PropertyValue::OctetString(vec![126, 9, 14, 1, 126, 9, 14, 1]),
+        PropertyValue::OctetString(vec![255, 255, 1]),
+    ]);
+    assert!(!cal.is_array_property(PropertyIdentifier::DATE_LIST));
+    for configured in [false, true] {
+        if configured {
+            for entry in entries.clone() {
+                cal.add_date_entry(entry);
+            }
+        }
+        let expected = if configured {
+            projected.clone()
+        } else {
+            PropertyValue::List(vec![])
+        };
+        // Direct reads still ignore the index; service handlers reject list indexing.
+        for index in [None, Some(0), Some(1), Some(u32::MAX)] {
+            assert_eq!(
+                cal.read_property(PropertyIdentifier::DATE_LIST, index)
+                    .unwrap(),
+                expected
+            );
+        }
+        assert_eq!(
+            cal.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+                .unwrap(),
+            PropertyValue::Boolean(false)
+        );
+        assert_eq!(cal.property_metadata().as_ref(), metadata);
+    }
+    cal.set_present_value(true);
+    cal.clear_date_list();
+    assert_eq!(
+        cal.read_property(PropertyIdentifier::DATE_LIST, None)
+            .unwrap(),
+        PropertyValue::List(vec![])
+    );
+    assert_eq!(
+        cal.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Boolean(true)
+    );
+    cal.set_present_value(false);
+    assert_eq!(
+        cal.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        PropertyValue::Boolean(false)
+    );
+    assert_eq!(cal.property_metadata().as_ref(), metadata);
+}
+
 // --- Schedule ---
 
 #[test]
