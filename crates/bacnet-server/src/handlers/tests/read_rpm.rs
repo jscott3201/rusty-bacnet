@@ -1,5 +1,6 @@
 use super::*;
 
+mod calendar;
 mod file;
 mod notification_class;
 mod schedule;
