@@ -2,6 +2,7 @@ use super::*;
 
 mod file;
 mod notification_class;
+mod schedule;
 
 #[test]
 fn read_property_handler_success() {

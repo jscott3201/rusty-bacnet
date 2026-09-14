@@ -12,6 +12,8 @@ use std::borrow::Cow;
 use crate::common::{self, read_property_list_property};
 use crate::traits::BACnetObject;
 
+mod metadata;
+
 // ---------------------------------------------------------------------------
 // Calendar (type 6)
 // ---------------------------------------------------------------------------
@@ -535,24 +537,12 @@ impl BACnetObject for ScheduleObject {
         })
     }
 
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_object(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::SCHEDULE_DEFAULT,
-            PropertyIdentifier::WEEKLY_SCHEDULE,
-            PropertyIdentifier::EXCEPTION_SCHEDULE,
-            PropertyIdentifier::EFFECTIVE_PERIOD,
-            PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::RELIABILITY,
-            PropertyIdentifier::OUT_OF_SERVICE,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     fn set_reliability_internal(&mut self, reliability: u32) -> Result<(), Error> {
@@ -567,18 +557,6 @@ impl BACnetObject for ScheduleObject {
         }
         self.reliability = reliability;
         Ok(())
-    }
-
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        // Mirrors the ScheduleObject `write_property` arms so the PICS and
-        // runtime dispatch share one truth source.
-        matches!(
-            property,
-            PropertyIdentifier::SCHEDULE_DEFAULT
-                | PropertyIdentifier::RELIABILITY
-                | PropertyIdentifier::OUT_OF_SERVICE
-                | PropertyIdentifier::DESCRIPTION
-        )
     }
 
     fn tick_schedule(
