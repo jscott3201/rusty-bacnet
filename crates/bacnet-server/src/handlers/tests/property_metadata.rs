@@ -10,6 +10,7 @@ mod file;
 mod life_safety;
 mod load_control;
 mod log;
+mod network_port;
 mod notification_class;
 mod schedule;
 mod timer;

@@ -20,6 +20,7 @@ mod command;
 mod life_safety;
 mod load_control;
 mod loop_program;
+mod network_port;
 mod schedule;
 mod timer;
 

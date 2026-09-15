@@ -8,6 +8,7 @@ mod file;
 mod life_safety;
 mod load_control;
 mod loop_program;
+mod network_port;
 mod notification_class;
 mod schedule;
 mod timer;
