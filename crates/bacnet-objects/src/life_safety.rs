@@ -11,6 +11,7 @@ use std::borrow::Cow;
 use crate::common::{self, read_common_properties};
 use crate::traits::{BACnetObject, LifeSafetyOperationEffect, LifeSafetyOperationOutcome};
 
+mod metadata;
 mod reset;
 
 pub use reset::{
@@ -321,26 +322,12 @@ impl BACnetObject for LifeSafetyPointObject {
         Err(common::write_access_denied_error())
     }
 
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_point(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::MODE,
-            PropertyIdentifier::SILENCED,
-            PropertyIdentifier::OPERATION_EXPECTED,
-            PropertyIdentifier::TRACKING_VALUE,
-            PropertyIdentifier::MEMBER_OF,
-            PropertyIdentifier::DIRECT_READING,
-            PropertyIdentifier::MAINTENANCE_REQUIRED,
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     fn supports_cov(&self) -> bool {
@@ -349,17 +336,6 @@ impl BACnetObject for LifeSafetyPointObject {
 
     fn supports_cov_property(&self, property: PropertyIdentifier) -> bool {
         POINT_COV_PROPERTIES.contains(&property)
-    }
-
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        matches!(
-            property,
-            PropertyIdentifier::MODE
-                | PropertyIdentifier::DIRECT_READING
-                | PropertyIdentifier::MAINTENANCE_REQUIRED
-                | PropertyIdentifier::DESCRIPTION
-                | PropertyIdentifier::OUT_OF_SERVICE
-        )
     }
 
     fn apply_life_safety_operation(
@@ -576,23 +552,12 @@ impl BACnetObject for LifeSafetyZoneObject {
         Err(common::write_access_denied_error())
     }
 
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_zone(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::MODE,
-            PropertyIdentifier::SILENCED,
-            PropertyIdentifier::OPERATION_EXPECTED,
-            PropertyIdentifier::ZONE_MEMBERS,
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     fn supports_cov(&self) -> bool {
@@ -601,15 +566,6 @@ impl BACnetObject for LifeSafetyZoneObject {
 
     fn supports_cov_property(&self, property: PropertyIdentifier) -> bool {
         ZONE_COV_PROPERTIES.contains(&property)
-    }
-
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        matches!(
-            property,
-            PropertyIdentifier::MODE
-                | PropertyIdentifier::DESCRIPTION
-                | PropertyIdentifier::OUT_OF_SERVICE
-        )
     }
 
     fn apply_life_safety_operation(

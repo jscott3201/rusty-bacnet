@@ -14,6 +14,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 
 use super::*;
 
+mod life_safety;
 mod schedule;
 
 fn property_support(

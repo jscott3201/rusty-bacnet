@@ -3,6 +3,7 @@ use super::*;
 mod calendar;
 mod device;
 mod file;
+mod life_safety;
 mod log;
 mod notification_class;
 mod schedule;

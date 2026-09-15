@@ -221,7 +221,7 @@ fn property_metadata_contract_binary_input() {
 
 #[test]
 fn property_metadata_contract_all_migrated_rows_are_readable() {
-    let objects: [Box<dyn BACnetObject>; 16] = [
+    let objects: [Box<dyn BACnetObject>; 18] = [
         Box::new(crate::device::DeviceObject::new(Default::default()).unwrap()),
         Box::new(TimeValueObject::new(1, "TV-1").unwrap()),
         Box::new(BinaryInputObject::new(1, "BI-1").unwrap()),
@@ -238,6 +238,8 @@ fn property_metadata_contract_all_migrated_rows_are_readable() {
         Box::new(crate::event_log::EventLogObject::new(1, "EL-1", 3).unwrap()),
         Box::new(crate::schedule::ScheduleObject::new(1, "SCH-1", PropertyValue::Null).unwrap()),
         Box::new(crate::schedule::CalendarObject::new(1, "CAL-1").unwrap()),
+        Box::new(crate::life_safety::LifeSafetyPointObject::new(1, "LSP-1").unwrap()),
+        Box::new(crate::life_safety::LifeSafetyZoneObject::new(1, "LSZ-1").unwrap()),
     ];
 
     for object in objects {
