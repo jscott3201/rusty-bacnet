@@ -13,6 +13,8 @@ use std::borrow::Cow;
 use crate::common::{self, read_common_properties};
 use crate::traits::{BACnetObject, WritePropertyRollback};
 
+mod metadata;
+
 /// BACnet Network Port object.
 ///
 /// Models a network interface on the device. Key properties include
@@ -249,28 +251,12 @@ impl BACnetObject for NetworkPortObject {
         Err(common::write_access_denied_error())
     }
 
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_object(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-            PropertyIdentifier::NETWORK_TYPE,
-            PropertyIdentifier::NETWORK_NUMBER,
-            PropertyIdentifier::MAC_ADDRESS,
-            PropertyIdentifier::MAX_APDU_LENGTH_ACCEPTED,
-            PropertyIdentifier::LINK_SPEED,
-            PropertyIdentifier::CHANGES_PENDING,
-            PropertyIdentifier::COMMAND_NP,
-            PropertyIdentifier::IP_ADDRESS,
-            PropertyIdentifier::IP_DEFAULT_GATEWAY,
-            PropertyIdentifier::IP_SUBNET_MASK,
-            PropertyIdentifier::BACNET_IP_UDP_PORT,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     fn capture_write_property_rollback(
