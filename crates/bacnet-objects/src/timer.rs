@@ -11,6 +11,8 @@ use std::borrow::Cow;
 use crate::common::{self, read_common_properties};
 use crate::traits::BACnetObject;
 
+mod metadata;
+
 /// Timer state enumeration values.
 const TIMER_STATE_IDLE: u32 = 0;
 const TIMER_STATE_RUNNING: u32 = 1;
@@ -195,23 +197,12 @@ impl BACnetObject for TimerObject {
         }
     }
 
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_object(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::TIMER_STATE,
-            PropertyIdentifier::TIMER_RUNNING,
-            PropertyIdentifier::INITIAL_TIMEOUT,
-            PropertyIdentifier::UPDATE_TIME,
-            PropertyIdentifier::EXPIRATION_TIME,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 }
 
