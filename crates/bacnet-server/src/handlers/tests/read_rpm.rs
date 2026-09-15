@@ -2,6 +2,7 @@ use super::*;
 
 mod calendar;
 mod file;
+mod life_safety;
 mod notification_class;
 mod schedule;
 
