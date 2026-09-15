@@ -9,6 +9,7 @@ mod life_safety;
 mod log;
 mod notification_class;
 mod schedule;
+mod timer;
 
 use bacnet_objects::audit::AuditReporterObject;
 use bacnet_objects::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};

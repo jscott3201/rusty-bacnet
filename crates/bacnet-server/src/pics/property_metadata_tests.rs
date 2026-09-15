@@ -17,6 +17,7 @@ use super::*;
 mod audit_log;
 mod life_safety;
 mod schedule;
+mod timer;
 
 fn property_support(
     pics: &Pics,

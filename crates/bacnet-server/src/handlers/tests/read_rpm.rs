@@ -7,6 +7,7 @@ mod life_safety;
 mod loop_program;
 mod notification_class;
 mod schedule;
+mod timer;
 
 #[test]
 fn read_property_handler_success() {
