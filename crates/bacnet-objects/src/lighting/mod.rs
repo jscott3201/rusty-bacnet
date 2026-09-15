@@ -247,51 +247,20 @@ impl BACnetObject for LightingOutputObject {
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::TRACKING_VALUE,
-            PropertyIdentifier::LIGHTING_COMMAND,
-            PropertyIdentifier::LIGHTING_COMMAND_DEFAULT_PRIORITY,
-            PropertyIdentifier::IN_PROGRESS,
-            PropertyIdentifier::BLINK_WARN_ENABLE,
-            PropertyIdentifier::EGRESS_TIME,
-            PropertyIdentifier::EGRESS_ACTIVE,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-            PropertyIdentifier::PRIORITY_ARRAY,
-            PropertyIdentifier::RELINQUISH_DEFAULT,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
+    }
+
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_lighting_output_object(self)
     }
 
     fn supports_cov(&self) -> bool {
         true
     }
-
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        // Mirrors the LightingOutputObject `write_property` arms so the PICS
-        // and runtime dispatch share one truth source.
-        matches!(
-            property,
-            PropertyIdentifier::PRIORITY_ARRAY
-                | PropertyIdentifier::PRESENT_VALUE
-                | PropertyIdentifier::RELINQUISH_DEFAULT
-                | PropertyIdentifier::LIGHTING_COMMAND
-                | PropertyIdentifier::LIGHTING_COMMAND_DEFAULT_PRIORITY
-                | PropertyIdentifier::BLINK_WARN_ENABLE
-                | PropertyIdentifier::EGRESS_TIME
-                | PropertyIdentifier::OUT_OF_SERVICE
-                | PropertyIdentifier::DESCRIPTION
-        )
-    }
 }
 
 mod binary;
+mod metadata;
 pub use binary::BinaryLightingOutputObject;
 
 // ---------------------------------------------------------------------------
