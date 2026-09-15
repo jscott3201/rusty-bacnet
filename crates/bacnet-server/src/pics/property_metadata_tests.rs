@@ -14,6 +14,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 
 use super::*;
 
+mod audit_log;
 mod life_safety;
 mod schedule;
 

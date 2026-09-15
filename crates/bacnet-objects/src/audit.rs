@@ -20,6 +20,7 @@ use crate::common::read_property_list_property;
 use crate::property_metadata::PropertyMetadata;
 use crate::traits::{BACnetObject, WritePropertyRollback};
 
+mod log_metadata;
 mod notification;
 mod persistence;
 mod receipt;
@@ -508,20 +509,14 @@ impl BACnetObject for AuditLogObject {
         })
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        log_metadata::for_object(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::LOG_ENABLE,
-            PropertyIdentifier::BUFFER_SIZE,
-            PropertyIdentifier::RECORD_COUNT,
-            PropertyIdentifier::TOTAL_RECORD_COUNT,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::EVENT_STATE,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(
+            log_metadata::for_object(self).as_ref(),
+        )
     }
 
     fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
