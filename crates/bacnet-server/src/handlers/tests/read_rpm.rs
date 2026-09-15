@@ -1,6 +1,7 @@
 use super::*;
 
 mod audit_log;
+mod averaging;
 mod calendar;
 mod file;
 mod life_safety;

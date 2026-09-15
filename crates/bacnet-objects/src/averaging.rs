@@ -1,4 +1,4 @@
-//! Averaging (type 18) object per ASHRAE 135-2020 Clause 12.4.
+//! Averaging (type 18) object per ASHRAE 135-2020 Clause 12.5.
 //!
 //! Computes running statistics (min, max, average) over sampled values from
 //! a referenced object property.
@@ -11,6 +11,8 @@ use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
 use crate::traits::BACnetObject;
+
+mod metadata;
 
 /// BACnet Averaging object (type 18).
 ///
@@ -185,39 +187,12 @@ impl BACnetObject for AveragingObject {
         Err(common::write_access_denied_error())
     }
 
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::MINIMUM_VALUE,
-            PropertyIdentifier::MAXIMUM_VALUE,
-            PropertyIdentifier::AVERAGE_VALUE,
-            PropertyIdentifier::ATTEMPTED_SAMPLES,
-            PropertyIdentifier::VALID_SAMPLES,
-            PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-            PropertyIdentifier::EVENT_STATE,
-        ];
-        Cow::Borrowed(PROPS)
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_object(self)
     }
 
-    /// Mirror the `write_property` arms exactly (PICS truth invariant):
-    /// Averaging accepts OBJECT_PROPERTY_REFERENCE plus the shared
-    /// DESCRIPTION / OUT_OF_SERVICE routes. OBJECT_NAME is NOT advertised:
-    /// unlike the historical default's blanket claim, no arm routes it (a
-    /// network write falls through to WRITE_ACCESS_DENIED).
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        matches!(
-            property,
-            PropertyIdentifier::OBJECT_PROPERTY_REFERENCE
-                | PropertyIdentifier::DESCRIPTION
-                | PropertyIdentifier::OUT_OF_SERVICE
-        )
+    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 }
 
