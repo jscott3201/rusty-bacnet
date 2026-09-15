@@ -5,6 +5,7 @@ mod averaging;
 mod calendar;
 mod command;
 mod file;
+mod group;
 mod life_safety;
 mod load_control;
 mod loop_program;

@@ -7,6 +7,7 @@ mod command;
 mod device;
 mod event_enrollment;
 mod file;
+mod group;
 mod life_safety;
 mod load_control;
 mod log;
