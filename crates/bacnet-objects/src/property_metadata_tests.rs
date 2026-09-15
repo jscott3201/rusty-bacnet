@@ -238,7 +238,7 @@ fn property_metadata_contract_binary_input() {
 
 #[test]
 fn property_metadata_contract_all_migrated_rows_are_readable() {
-    let objects: [Box<dyn BACnetObject>; 22] = [
+    let objects: [Box<dyn BACnetObject>; 23] = [
         Box::new(crate::device::DeviceObject::new(Default::default()).unwrap()),
         Box::new(TimeValueObject::new(1, "TV-1").unwrap()),
         Box::new(BinaryInputObject::new(1, "BI-1").unwrap()),
@@ -264,6 +264,7 @@ fn property_metadata_contract_all_migrated_rows_are_readable() {
         Box::new(crate::timer::TimerObject::new(1, "TMR-1").unwrap()),
         Box::new(crate::averaging::AveragingObject::new(1, "AVG-1").unwrap()),
         Box::new(crate::command::CommandObject::new(1, "CMD-1").unwrap()),
+        Box::new(crate::load_control::LoadControlObject::new(1, "LC-1").unwrap()),
     ];
 
     for object in objects {

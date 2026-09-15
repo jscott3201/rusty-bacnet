@@ -6,6 +6,7 @@ mod calendar;
 mod command;
 mod file;
 mod life_safety;
+mod load_control;
 mod loop_program;
 mod notification_class;
 mod schedule;

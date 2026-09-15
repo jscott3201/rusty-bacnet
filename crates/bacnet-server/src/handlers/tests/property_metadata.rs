@@ -8,6 +8,7 @@ mod device;
 mod event_enrollment;
 mod file;
 mod life_safety;
+mod load_control;
 mod log;
 mod notification_class;
 mod schedule;

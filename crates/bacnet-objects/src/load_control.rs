@@ -12,6 +12,8 @@ use std::borrow::Cow;
 use crate::common::{self, read_common_properties};
 use crate::traits::BACnetObject;
 
+mod metadata;
+
 /// BACnet Load Control object — demand-response load shedding.
 pub struct LoadControlObject {
     oid: ObjectIdentifier,
@@ -189,23 +191,12 @@ impl BACnetObject for LoadControlObject {
         }
     }
 
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_object(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::REQUESTED_SHED_LEVEL,
-            PropertyIdentifier::EXPECTED_SHED_LEVEL,
-            PropertyIdentifier::ACTUAL_SHED_LEVEL,
-            PropertyIdentifier::SHED_DURATION,
-            PropertyIdentifier::START_TIME,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 }
 
