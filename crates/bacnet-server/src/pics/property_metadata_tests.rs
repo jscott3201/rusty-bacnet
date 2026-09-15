@@ -20,6 +20,7 @@ mod command;
 mod elevator;
 mod group;
 mod life_safety;
+mod lighting;
 mod load_control;
 mod loop_program;
 mod network_port;

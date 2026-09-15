@@ -385,39 +385,15 @@ impl BACnetObject for BinaryLightingOutputObject {
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::BLINK_WARN_ENABLE,
-            PropertyIdentifier::EGRESS_TIME,
-            PropertyIdentifier::EGRESS_ACTIVE,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-            PropertyIdentifier::PRIORITY_ARRAY,
-            PropertyIdentifier::RELINQUISH_DEFAULT,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
+    }
+
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        super::metadata::for_binary_lighting_output_object(self)
     }
 
     fn supports_cov(&self) -> bool {
         true
-    }
-
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        matches!(
-            property,
-            PropertyIdentifier::PRIORITY_ARRAY
-                | PropertyIdentifier::PRESENT_VALUE
-                | PropertyIdentifier::RELINQUISH_DEFAULT
-                | PropertyIdentifier::BLINK_WARN_ENABLE
-                | PropertyIdentifier::EGRESS_TIME
-                | PropertyIdentifier::OUT_OF_SERVICE
-                | PropertyIdentifier::DESCRIPTION
-        )
     }
 
     fn capture_write_property_rollback(

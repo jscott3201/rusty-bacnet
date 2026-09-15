@@ -10,6 +10,7 @@ mod event_enrollment;
 mod file;
 mod group;
 mod life_safety;
+mod lighting;
 mod load_control;
 mod log;
 mod network_port;
