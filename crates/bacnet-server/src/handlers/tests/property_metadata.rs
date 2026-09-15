@@ -5,6 +5,7 @@ mod averaging;
 mod calendar;
 mod command;
 mod device;
+mod elevator;
 mod event_enrollment;
 mod file;
 mod group;

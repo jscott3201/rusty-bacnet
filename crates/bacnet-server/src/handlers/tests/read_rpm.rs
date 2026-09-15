@@ -4,6 +4,7 @@ mod audit_log;
 mod averaging;
 mod calendar;
 mod command;
+mod elevator;
 mod file;
 mod group;
 mod life_safety;

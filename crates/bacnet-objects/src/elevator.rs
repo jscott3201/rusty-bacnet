@@ -1,8 +1,8 @@
-//! Elevator, Escalator, and Lift objects per ASHRAE 135-2020 Clause 12.
+//! Elevator Group, Escalator, and Lift objects per ASHRAE 135-2020.
 //!
-//! - ElevatorGroupObject (type 57): manages a group of lifts
-//! - EscalatorObject (type 58): represents an escalator
-//! - LiftObject (type 59): represents a single lift/elevator car
+//! - ElevatorGroupObject (type 57) — Clause 12.58
+//! - EscalatorObject (type 58) — Clause 12.60
+//! - LiftObject (type 59) — Clause 12.59
 
 use bacnet_types::enums::{
     EscalatorFault, EscalatorMode, EscalatorOperationDirection, ObjectType, PropertyIdentifier,
@@ -13,6 +13,8 @@ use std::{borrow::Cow, collections::HashSet};
 
 use crate::common::{self, read_common_properties};
 use crate::traits::BACnetObject;
+
+mod metadata;
 
 // ===========================================================================
 // ElevatorGroupObject (type 57)
@@ -150,22 +152,12 @@ impl BACnetObject for ElevatorGroupObject {
         }
     }
 
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_elevator_group_object(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::GROUP_ID,
-            PropertyIdentifier::GROUP_MEMBERS,
-            PropertyIdentifier::GROUP_MODE,
-            PropertyIdentifier::LANDING_CALLS,
-            PropertyIdentifier::LANDING_CALL_CONTROL,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 }
 
@@ -378,38 +370,12 @@ impl BACnetObject for EscalatorObject {
         }
     }
 
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::ESCALATOR_MODE,
-            PropertyIdentifier::FAULT_SIGNALS,
-            PropertyIdentifier::ENERGY_METER,
-            PropertyIdentifier::ENERGY_METER_REF,
-            PropertyIdentifier::POWER_MODE,
-            PropertyIdentifier::OPERATION_DIRECTION,
-            PropertyIdentifier::PASSENGER_ALARM,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ];
-        Cow::Borrowed(PROPS)
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_escalator_object(self)
     }
 
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        matches!(
-            property,
-            PropertyIdentifier::DESCRIPTION
-                | PropertyIdentifier::OUT_OF_SERVICE
-                | PropertyIdentifier::POWER_MODE
-                | PropertyIdentifier::OPERATION_DIRECTION
-                | PropertyIdentifier::ESCALATOR_MODE
-                | PropertyIdentifier::ENERGY_METER
-                | PropertyIdentifier::FAULT_SIGNALS
-                | PropertyIdentifier::PASSENGER_ALARM
-        )
+    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 }
 
@@ -587,25 +553,12 @@ impl BACnetObject for LiftObject {
         }
     }
 
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_lift_object(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::TRACKING_VALUE,
-            PropertyIdentifier::CAR_POSITION,
-            PropertyIdentifier::CAR_MOVING_DIRECTION,
-            PropertyIdentifier::CAR_DOOR_STATUS,
-            PropertyIdentifier::CAR_LOAD,
-            PropertyIdentifier::LANDING_DOOR_STATUS,
-            PropertyIdentifier::FLOOR_TEXT,
-            PropertyIdentifier::ENERGY_METER,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 }
 
