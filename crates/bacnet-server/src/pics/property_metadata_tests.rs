@@ -16,6 +16,7 @@ use super::*;
 
 mod audit_log;
 mod averaging;
+mod command;
 mod life_safety;
 mod loop_program;
 mod schedule;

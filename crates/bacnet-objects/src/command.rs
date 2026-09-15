@@ -11,6 +11,8 @@ use std::borrow::Cow;
 use crate::common::{self, read_common_properties};
 use crate::traits::BACnetObject;
 
+mod metadata;
+
 /// BACnet Command object — triggers a set of actions on PV write.
 pub struct CommandObject {
     oid: ObjectIdentifier,
@@ -122,21 +124,12 @@ impl BACnetObject for CommandObject {
         }
     }
 
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_object(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::IN_PROCESS,
-            PropertyIdentifier::ALL_WRITES_SUCCESSFUL,
-            PropertyIdentifier::ACTION,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 }
 
