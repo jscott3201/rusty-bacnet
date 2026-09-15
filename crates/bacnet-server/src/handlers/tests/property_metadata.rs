@@ -3,6 +3,7 @@ use super::*;
 mod audit_log;
 mod averaging;
 mod calendar;
+mod command;
 mod device;
 mod event_enrollment;
 mod file;

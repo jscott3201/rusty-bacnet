@@ -3,6 +3,7 @@ use super::*;
 mod audit_log;
 mod averaging;
 mod calendar;
+mod command;
 mod file;
 mod life_safety;
 mod loop_program;
