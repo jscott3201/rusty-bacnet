@@ -1320,9 +1320,13 @@ only when either changes. Property reports are the subscribed property plus one
 `Tracking_Value`, which is rejected with `PROPERTY / NOT_COV_PROPERTY`.
 Low-level object setters still bypass server notification ownership.
 
-This is a bounded operational-state slice, not complete Life Safety Point/Zone
-table, metadata, PICS/BIBB, profile, accepted-mode, reliability/tracking, or
-intrinsic `CHANGE_OF_LIFE_SAFETY` event-algorithm conformance.
+This is a bounded operational-state slice with pinned partial metadata (Point
+`POINT_BASE` 17 rows, Zone `ZONE_BASE` 14 rows; exact PICS projection tests) and
+network read-only `Silenced`/`Operation_Expected`; not complete Life Safety
+Point/Zone tables, formal PICS/BIBB/profile/device-advertisement,
+`Accepted_Modes`/mode validation, out-of-service tracking/`Reliability`
+writability, or intrinsic `CHANGE_OF_LIFE_SAFETY` event-algorithm conformance
+(`Event_State` intrinsic-only, `IN_ALARM` latent with no setter).
 
 ### Handled Services
 
