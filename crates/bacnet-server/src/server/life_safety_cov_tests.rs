@@ -604,7 +604,7 @@ async fn network_write_property_and_multiple_use_exact_status_deltas() {
 }
 
 #[tokio::test]
-async fn operation_ack_precedes_exact_cov_and_duplicate_is_silent() {
+async fn operation_ack_precedes_exact_cov_and_duplicate_replays_ack_without_second_cov() {
     let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
     point.set_present_value(bacnet_types::enums::LifeSafetyState::ALARM.to_raw());
     point.set_operation_expected(LifeSafetyOperation::RESET);
@@ -635,6 +635,13 @@ async fn operation_ack_precedes_exact_cov_and_duplicate_is_silent() {
             encoded.clone(),
         )
         .await;
+    let first_raw: Vec<Bytes> = fixture
+        .sent
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(frame, _)| frame.clone())
+        .collect();
     let apdus = fixture.take_apdus();
     assert_eq!(apdus.len(), 2);
     assert!(matches!(apdus[0], Apdu::SimpleAck(_)));
@@ -646,10 +653,31 @@ async fn operation_ack_precedes_exact_cov_and_duplicate_is_silent() {
         ]
     );
 
+    // PR-0801: retransmitted already-executed LSO replays the byte-identical
+    // SimpleACK with zero side effects — no second COV. This is a local
+    // service-specific extension, not a Standard mandate.
     fixture
         .dispatch(0x51, ConfirmedServiceChoice::LIFE_SAFETY_OPERATION, encoded)
         .await;
-    assert!(fixture.take_apdus().is_empty(), "exact duplicate is silent");
+    let second_raw: Vec<Bytes> = fixture
+        .sent
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(frame, _)| frame.clone())
+        .collect();
+    assert_eq!(
+        second_raw.len(),
+        1,
+        "executed LSO duplicate replays exactly one ACK with no second COV"
+    );
+    assert_eq!(
+        second_raw[0], first_raw[0],
+        "replayed LSO ACK must be byte-identical"
+    );
+    let apdus = fixture.take_apdus();
+    assert_eq!(apdus.len(), 1);
+    assert!(matches!(apdus[0], Apdu::SimpleAck(_)));
 
     {
         let mut db = fixture.db.write().await;

@@ -33,6 +33,10 @@ pub(crate) use self::{executed::EXECUTED_CONFIRMED, unconfirmed::EXECUTED_UNCONF
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Handle one admitted confirmed request.
+    ///
+    /// Backward-compatible entry for callers without LSO replay state
+    /// (e.g. DCC-focused tests): LSO requests execute without storing a
+    /// replay, which is always safe (never suppresses first execution).
     #[allow(clippy::too_many_arguments)]
     pub(in crate::server) async fn handle_admitted_confirmed_request(
         db: &Arc<RwLock<ObjectDatabase>>,
@@ -54,6 +58,61 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         source_network: Option<NpduAddress>,
         req: bacnet_encoding::apdu::ConfirmedRequest,
         reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
+    ) {
+        Self::handle_admitted_confirmed_request_with_lso(
+            db,
+            network,
+            cov_table,
+            seg_ack_senders,
+            seg_send_permits,
+            cov_in_flight,
+            server_tsm,
+            notification_transactions,
+            device_bindings,
+            comm_state,
+            dcc_timer,
+            dcc_outcomes,
+            mutation_decisions,
+            config,
+            request_tasks,
+            source_mac,
+            source_network,
+            req,
+            reply_tx,
+            None,
+        )
+        .await;
+    }
+
+    /// Handle one admitted confirmed request with LSO replay ownership.
+    ///
+    /// `lso_pending` is `Some` for LSO requests admitted through the LSO
+    /// replay cache (tracked or untracked fallback) and `None` otherwise.
+    /// The LSO arm stores the exact encoded response bytes before sending so
+    /// a retransmitted already-executed request replays byte-identically with
+    /// zero side effects. Untracked/`None` completions are no-ops.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::server) async fn handle_admitted_confirmed_request_with_lso(
+        db: &Arc<RwLock<ObjectDatabase>>,
+        network: &Arc<NetworkLayer<T>>,
+        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
+        seg_ack_senders: &Arc<segmented_send::SegmentedSendRegistry>,
+        seg_send_permits: &Arc<Semaphore>,
+        cov_in_flight: &Arc<Semaphore>,
+        server_tsm: &Arc<Mutex<ServerTsm>>,
+        notification_transactions: &Arc<NotificationTransactions>,
+        device_bindings: &Arc<RwLock<DeviceBindingTable>>,
+        comm_state: &Arc<AtomicU8>,
+        dcc_timer: &Arc<Mutex<Option<JoinHandle<()>>>>,
+        dcc_outcomes: &Arc<dcc_outcomes::DccOutcomes>,
+        mutation_decisions: &Arc<crate::mutation::MutationDecisions>,
+        config: &ServerConfig,
+        request_tasks: &super::request_tasks::RequestTaskSpawner,
+        source_mac: &[u8],
+        source_network: Option<NpduAddress>,
+        req: bacnet_encoding::apdu::ConfirmedRequest,
+        reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
+        lso_pending: Option<PendingLsoReplay>,
     ) {
         let invoke_id = req.invoke_id;
         let service_choice = req.service_choice;
@@ -374,6 +433,24 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 })
             }
         };
+
+        // LSO-only replay store (server level, never handler/object level).
+        // Uniform rule: anything that reaches this admission point and produces
+        // an LSO response — success SimpleACK, execution errors, denial, and
+        // the pre-authorization deterministic rejects (decode fail,
+        // UNKNOWN_OBJECT precheck, VALUE_OUT_OF_RANGE) — is stored once
+        // admitted. The replay is a local idempotency extension, not a
+        // Standard mandate, and makes no physical-idempotency claim.
+        // Lock → clone → unlock → send; never held across `.await`.
+        if service_choice == ConfirmedServiceChoice::LIFE_SAFETY_OPERATION {
+            if let Some(pending) = lso_pending {
+                let mut encoded = BytesMut::new();
+                encode_apdu(&mut encoded, &response).expect("valid APDU encoding");
+                pending.complete_with_response(encoded.freeze());
+            }
+        }
+        // Non-LSO callers pass `None` (or an untracked guard whose completion
+        // is a no-op); dropping here is intentional.
 
         Self::execute_staging_plans(
             db,
