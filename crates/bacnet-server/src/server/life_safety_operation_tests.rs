@@ -113,6 +113,96 @@ async fn dispatch_life_safety_operation_with_tracker(
     })
 }
 
+async fn dispatch_raw_with_tracker(
+    db: Arc<RwLock<ObjectDatabase>>,
+    config: ServerConfig,
+    confirmed_request_tracker: &Arc<ConfirmedRequestTracker>,
+    source_mac: MacAddr,
+    source_network: Option<NpduAddress>,
+    invoke_id: u8,
+    request: LifeSafetyOperationRequest,
+) -> Result<Bytes, tokio::sync::oneshot::error::RecvError> {
+    let mut service_request = BytesMut::new();
+    request.encode(&mut service_request).unwrap();
+    dispatch_confirmed_raw_with_tracker(
+        db,
+        config,
+        confirmed_request_tracker,
+        source_mac,
+        source_network,
+        ConfirmedRequestPdu {
+            segmented: false,
+            more_follows: false,
+            segmented_response_accepted: false,
+            max_segments: None,
+            max_apdu_length: 480,
+            invoke_id,
+            sequence_number: None,
+            proposed_window_size: None,
+            service_choice: ConfirmedServiceChoice::LIFE_SAFETY_OPERATION,
+            service_request: service_request.freeze(),
+        },
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_confirmed_raw_with_tracker(
+    db: Arc<RwLock<ObjectDatabase>>,
+    config: ServerConfig,
+    confirmed_request_tracker: &Arc<ConfirmedRequestTracker>,
+    source_mac: MacAddr,
+    source_network: Option<NpduAddress>,
+    confirmed: ConfirmedRequestPdu,
+    // Note: takes the full PDU so oversize/changed-byte cases can craft raw
+    // service requests without going through the typed encoder.
+) -> Result<Bytes, tokio::sync::oneshot::error::RecvError> {
+    let network = Arc::new(NetworkLayer::new(BipTransport::new(
+        Ipv4Addr::LOCALHOST,
+        0,
+        Ipv4Addr::BROADCAST,
+    )));
+    let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
+    let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
+    let cov_in_flight = Arc::new(Semaphore::new(1));
+    let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+    let notification_transactions = NotificationTransactions::new();
+    let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
+    let comm_state = Arc::new(AtomicU8::new(0));
+    let dcc_timer = Arc::new(Mutex::new(None::<JoinHandle<()>>));
+    let (tx, rx) = oneshot::channel();
+
+    BACnetServer::<BipTransport>::handle_confirmed_request(
+        &db,
+        &network,
+        &cov_table,
+        &seg_ack_senders,
+        &seg_send_permits,
+        &cov_in_flight,
+        &server_tsm,
+        &notification_transactions,
+        confirmed_request_tracker,
+        &device_bindings,
+        &comm_state,
+        &dcc_timer,
+        &config,
+        &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
+        &source_mac,
+        source_network,
+        confirmed,
+        Some(tx),
+    )
+    .await;
+
+    rx.await
+}
+
+fn decode_raw(bytes: &Bytes) -> Apdu {
+    let npdu = decode_npdu(bytes.clone()).unwrap();
+    decode_apdu(npdu.payload).unwrap()
+}
+
 fn assert_error(apdu: Apdu, class: ErrorClass, code: ErrorCode) {
     match apdu {
         Apdu::Error(error) => {
@@ -467,7 +557,7 @@ async fn life_safety_operation_panicking_authorizer_fails_closed() {
 }
 
 #[tokio::test]
-async fn exact_success_duplicate_is_silent_and_changed_reuse_executes_normally() {
+async fn exact_success_duplicate_replays_identical_simple_ack_single_execution() {
     let oid = point_oid(1);
     let executions = Arc::new(AtomicUsize::new(0));
     let observed_executions = Arc::clone(&executions);
@@ -502,7 +592,9 @@ async fn exact_success_duplicate_is_silent_and_changed_reuse_executes_normally()
     let source = MacAddr::from_slice(&[1, 2, 3]);
     let reset = request(LifeSafetyOperation::RESET, Some(oid));
 
-    let first = dispatch_life_safety_operation_with_tracker(
+    // Byte-identical replay: compare the raw NPDU bytes, not just the decoded
+    // APDU, so any future encoding divergence fails the test.
+    let first_raw = dispatch_raw_with_tracker(
         Arc::clone(&db),
         config.clone(),
         &tracker,
@@ -513,8 +605,8 @@ async fn exact_success_duplicate_is_silent_and_changed_reuse_executes_normally()
     )
     .await
     .unwrap();
-    assert_simple_ack(first);
-    assert!(dispatch_life_safety_operation_with_tracker(
+    assert_simple_ack(decode_raw(&first_raw));
+    let second_raw = dispatch_raw_with_tracker(
         Arc::clone(&db),
         config.clone(),
         &tracker,
@@ -524,7 +616,15 @@ async fn exact_success_duplicate_is_silent_and_changed_reuse_executes_normally()
         reset,
     )
     .await
-    .is_err());
+    .unwrap();
+    assert_simple_ack(decode_raw(&second_raw));
+    assert_eq!(
+        first_raw, second_raw,
+        "retransmitted executed LSO must replay byte-identical bytes"
+    );
+    // Single execution: no second authorizer invocation, no second mutation,
+    // and therefore no second COV/event/reset re-fire (replay is byte resend
+    // only).
     assert_eq!(authorizations.load(Ordering::Acquire), 1);
     assert_eq!(executions.load(Ordering::Acquire), 1);
     assert_eq!(
@@ -537,6 +637,7 @@ async fn exact_success_duplicate_is_silent_and_changed_reuse_executes_normally()
         PropertyValue::Enumerated(LifeSafetyState::QUIET.to_raw())
     );
 
+    // Changed bytes (different operation) execute normally with a new response.
     db.write()
         .await
         .get_mut(&oid)
@@ -569,7 +670,7 @@ async fn exact_success_duplicate_is_silent_and_changed_reuse_executes_normally()
 }
 
 #[tokio::test]
-async fn exact_denied_duplicate_is_silent_without_second_authorization() {
+async fn exact_denied_duplicate_replays_identical_error_single_authorization() {
     let oid = point_oid(1);
     let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
     point.set_operation_expected(LifeSafetyOperation::SILENCE);
@@ -589,7 +690,7 @@ async fn exact_denied_duplicate_is_silent_without_second_authorization() {
     let source = MacAddr::from_slice(&[4, 5, 6]);
     let denied = request(LifeSafetyOperation::SILENCE, Some(oid));
 
-    let first = dispatch_life_safety_operation_with_tracker(
+    let first_raw = dispatch_raw_with_tracker(
         Arc::clone(&db),
         config.clone(),
         &tracker,
@@ -601,11 +702,11 @@ async fn exact_denied_duplicate_is_silent_without_second_authorization() {
     .await
     .unwrap();
     assert_error(
-        first,
+        decode_raw(&first_raw),
         ErrorClass::SERVICES,
         ErrorCode::SERVICE_REQUEST_DENIED,
     );
-    assert!(dispatch_life_safety_operation_with_tracker(
+    let second_raw = dispatch_raw_with_tracker(
         Arc::clone(&db),
         config,
         &tracker,
@@ -615,7 +716,16 @@ async fn exact_denied_duplicate_is_silent_without_second_authorization() {
         denied,
     )
     .await
-    .is_err());
+    .unwrap();
+    assert_error(
+        decode_raw(&second_raw),
+        ErrorClass::SERVICES,
+        ErrorCode::SERVICE_REQUEST_DENIED,
+    );
+    assert_eq!(
+        first_raw, second_raw,
+        "denied LSO must replay byte-identical Error bytes"
+    );
     assert_eq!(authorizations.load(Ordering::Acquire), 1);
     assert_eq!(
         db.read()

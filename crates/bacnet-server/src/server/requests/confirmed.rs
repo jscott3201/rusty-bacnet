@@ -34,6 +34,59 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         req: bacnet_encoding::apdu::ConfirmedRequest,
         reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
     ) {
+        // LSO-only replay path mirrors dispatch admission (server level,
+        // separate budget). Retransmitted already-executed LSO replays
+        // byte-identically; pending in-flight duplicates discard.
+        if req.service_choice == ConfirmedServiceChoice::LIFE_SAFETY_OPERATION {
+            if comm_state.load(Ordering::Acquire) == 1 {
+                return;
+            }
+            let lso_pending = match confirmed_request_tracker.lso.begin(
+                source_mac,
+                source_network.as_ref(),
+                req.clone(),
+            ) {
+                LsoAdmission::Replay(bytes) => {
+                    confirmed_response::send_replay_bytes(
+                        network,
+                        &bytes,
+                        source_mac,
+                        source_network.as_ref(),
+                        reply_tx,
+                    )
+                    .await;
+                    return;
+                }
+                LsoAdmission::DuplicatePending => return,
+                LsoAdmission::New(pending) => pending,
+            };
+
+            Self::handle_admitted_confirmed_request_with_lso(
+                db,
+                network,
+                cov_table,
+                seg_ack_senders,
+                seg_send_permits,
+                cov_in_flight,
+                server_tsm,
+                notification_transactions,
+                device_bindings,
+                comm_state,
+                dcc_timer,
+                &Arc::new(dcc_outcomes::DccOutcomes::default()),
+                &Arc::new(crate::mutation::MutationDecisions::default()),
+                config,
+                request_tasks,
+                source_mac,
+                source_network,
+                req,
+                reply_tx,
+                Some(lso_pending),
+            )
+            .await;
+            return;
+        }
+
         let pending =
             match confirmed_request_tracker.begin(source_mac, source_network.as_ref(), req.clone())
             {

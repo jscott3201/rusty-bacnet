@@ -91,6 +91,71 @@ pub(in crate::server) async fn send_overload_response<T: TransportPort + 'static
     .await;
 }
 
+/// Resend already-encoded LSO response bytes without re-execution.
+///
+/// Replay path only: no mutation, no authorizer re-invocation, no COV/event
+/// re-fire. Bytes are the exact APDU encoding stored at first-execution
+/// response time (same invoke echo); the NPDU wrap / transport send mirrors
+/// [`send_unsegmented_response`] so the wire image is byte-identical.
+pub(in crate::server) async fn send_replay_bytes<T: TransportPort + 'static>(
+    network: &NetworkLayer<T>,
+    apdu_bytes: &Bytes,
+    source_mac: &[u8],
+    source_network: Option<&NpduAddress>,
+    reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
+) {
+    send_raw_response(network, apdu_bytes, source_mac, source_network, reply_tx).await;
+}
+
+async fn send_raw_response<T: TransportPort + 'static>(
+    network: &NetworkLayer<T>,
+    apdu_bytes: &Bytes,
+    source_mac: &[u8],
+    source_network: Option<&NpduAddress>,
+    reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
+) {
+    if let Some(tx) = reply_tx {
+        use bacnet_encoding::npdu::{encode_npdu, Npdu};
+        let npdu = Npdu {
+            is_network_message: false,
+            expecting_reply: false,
+            priority: NetworkPriority::NORMAL,
+            destination: source_network.cloned(),
+            source: None,
+            payload: apdu_bytes.clone(),
+            ..Npdu::default()
+        };
+        let mut npdu_buf = BytesMut::with_capacity(2 + apdu_bytes.len());
+        match encode_npdu(&mut npdu_buf, &npdu) {
+            Ok(()) => {
+                let _ = tx.send(npdu_buf.freeze());
+            }
+            Err(error) => {
+                warn!(%error, "Failed to encode NPDU for MS/TP replay");
+                if let Err(error) = BACnetServer::<T>::send_confirmed_response_apdu(
+                    network,
+                    apdu_bytes,
+                    source_mac,
+                    source_network,
+                )
+                .await
+                {
+                    warn!(%error, "Failed to send replay");
+                }
+            }
+        }
+    } else if let Err(error) = BACnetServer::<T>::send_confirmed_response_apdu(
+        network,
+        apdu_bytes,
+        source_mac,
+        source_network,
+    )
+    .await
+    {
+        warn!(%error, "Failed to send replay");
+    }
+}
+
 async fn send_response<T: TransportPort + 'static>(
     network: &NetworkLayer<T>,
     response: &Apdu,

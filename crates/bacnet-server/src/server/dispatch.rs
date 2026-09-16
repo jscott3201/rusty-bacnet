@@ -106,6 +106,124 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ) {
         match apdu {
             Apdu::ConfirmedRequest(req) => {
+                // LSO-only replay path (server level, separate budget).
+                // Retransmitted already-executed confirmed LSO within the
+                // window resends byte-identical bytes with a single execution.
+                // Pending in-flight duplicates preserve DISCARD. This is a
+                // local service-specific extension, not a Standard mandate.
+                if req.service_choice == ConfirmedServiceChoice::LIFE_SAFETY_OPERATION {
+                    if comm_state.load(Ordering::Acquire) == 1 {
+                        // DCC DISABLE drops without touching the replay store
+                        // so a later retry executes normally (invariant 1).
+                        return;
+                    }
+                    let lso_pending = match confirmed_request_tracker.lso.begin(
+                        source_mac,
+                        received.source_network.as_ref(),
+                        req.clone(),
+                    ) {
+                        LsoAdmission::Replay(bytes) => {
+                            let reply_tx = received.reply_tx.take();
+                            let replay_mac = MacAddr::from_slice(source_mac);
+                            let replay_network = received.source_network.clone();
+                            requests::confirmed_response::send_replay_bytes(
+                                network,
+                                &bytes,
+                                &replay_mac,
+                                replay_network.as_ref(),
+                                reply_tx,
+                            )
+                            .await;
+                            return;
+                        }
+                        LsoAdmission::DuplicatePending => return,
+                        LsoAdmission::New(pending) => pending,
+                    };
+                    let invoke_id = req.invoke_id;
+                    let service_choice = req.service_choice;
+                    let abort_comm_state = Arc::clone(comm_state);
+                    let abort_network = Arc::clone(network);
+                    let abort_mac = MacAddr::from_slice(source_mac);
+                    let abort_source = received.source_network.clone();
+                    let mut reply_tx = received.reply_tx.take();
+                    let db = Arc::clone(db);
+                    let network = Arc::clone(network);
+                    let cov_table = Arc::clone(cov_table);
+                    let seg_ack_senders = Arc::clone(seg_ack_senders);
+                    let seg_send_permits = Arc::clone(seg_send_permits);
+                    let cov_in_flight = Arc::clone(cov_in_flight);
+                    let server_tsm = Arc::clone(server_tsm);
+                    let notification_transactions = Arc::clone(notification_transactions);
+                    let device_bindings = Arc::clone(device_bindings);
+                    let comm_state = Arc::clone(comm_state);
+                    let dcc_timer = Arc::clone(dcc_timer);
+                    let dcc_outcomes = Arc::clone(dcc_outcomes);
+                    let mutation_decisions = Arc::clone(mutation_decisions);
+                    let config = Arc::clone(config);
+                    let source_mac = MacAddr::from_slice(source_mac);
+                    let source_network = received.source_network.clone();
+                    let descendants = request_tasks.spawner();
+                    let peer = super::request_peer::canonical_requester(
+                        &source_mac,
+                        source_network.as_ref(),
+                    );
+                    let class = super::request_admission::confirmed_class(
+                        req.service_choice,
+                        &req.service_request,
+                    );
+                    let result = request_tasks.try_spawn(class, peer.clone(), || {
+                        let reply_tx = reply_tx.take();
+                        async move {
+                            Self::handle_admitted_confirmed_request_with_lso(
+                                &db,
+                                &network,
+                                &cov_table,
+                                &seg_ack_senders,
+                                &seg_send_permits,
+                                &cov_in_flight,
+                                &server_tsm,
+                                &notification_transactions,
+                                &device_bindings,
+                                &comm_state,
+                                &dcc_timer,
+                                &dcc_outcomes,
+                                &mutation_decisions,
+                                &config,
+                                &descendants,
+                                &source_mac,
+                                source_network,
+                                req,
+                                reply_tx,
+                                Some(lso_pending),
+                            )
+                            .await;
+                        }
+                    });
+                    if result == Err(Rejection::Overloaded) {
+                        let _ = request_tasks.try_spawn(Class::Abort, peer, || async move {
+                            if abort_comm_state.load(Ordering::Acquire) == 1
+                                && service_choice
+                                    != ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL
+                                && service_choice != ConfirmedServiceChoice::REINITIALIZE_DEVICE
+                            {
+                                return;
+                            }
+                            requests::confirmed_response::send_overload_response(
+                                &abort_network,
+                                &Apdu::Abort(AbortPdu {
+                                    sent_by_server: true,
+                                    invoke_id,
+                                    abort_reason: AbortReason::OUT_OF_RESOURCES,
+                                }),
+                                &abort_mac,
+                                abort_source.as_ref(),
+                                reply_tx,
+                            )
+                            .await;
+                        });
+                    }
+                    return;
+                }
                 let pending = match confirmed_request_tracker.begin(
                     source_mac,
                     received.source_network.as_ref(),

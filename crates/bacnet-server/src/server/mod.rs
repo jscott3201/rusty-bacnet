@@ -63,6 +63,7 @@ use crate::life_safety::{LifeSafetyOperationAuthorizationContext, LifeSafetyOper
 use confirmed_request_tracker::{ConfirmedRequestAdmission, ConfirmedRequestTracker};
 pub use device_bindings::DeviceBinding;
 use device_bindings::{register_configured_binding, DeviceBindingTable};
+use lso_replay::{LsoAdmission, PendingLsoReplay};
 use notification_transactions::{
     canonical_direct_peer, canonical_routed_peer, run_notification_worker,
     NotificationTransactions, NotificationWorkerResult,
@@ -670,6 +671,7 @@ mod cov_snapshot;
 mod dcc_disable_rate;
 pub(crate) mod dcc_outcomes;
 mod dcc_policy;
+mod lso_replay;
 pub use dcc_disable_rate::DccDisableRateLimit;
 mod dcc_timer;
 pub use dcc_outcomes::DccOutcomeCounters;
@@ -765,6 +767,8 @@ mod event_notifications_tests;
 mod event_recipient_routing_tests;
 #[cfg(test)]
 mod life_safety_cov_tests;
+#[cfg(test)]
+mod life_safety_operation_replay_tests;
 #[cfg(test)]
 mod life_safety_operation_tests;
 #[cfg(test)]

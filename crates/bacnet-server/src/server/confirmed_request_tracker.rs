@@ -33,9 +33,15 @@ struct TrackerState {
 }
 
 /// Server-lifetime, bounded, exact confirmed-request duplicate tracker.
+///
+/// The generic policy is detection WITHOUT replay (silent discard). The
+/// LSO-only replay store below is a separate budget with its own limits and
+/// TTL, held on the same server-owned [`Arc`] so dispatch admission can reach
+/// it without changing the dispatch signature shared with non-LSO callers.
 #[derive(Default)]
 pub(super) struct ConfirmedRequestTracker {
     state: Mutex<TrackerState>,
+    pub(super) lso: Arc<super::lso_replay::LsoReplayCache>,
 }
 
 pub(super) enum ConfirmedRequestAdmission {
