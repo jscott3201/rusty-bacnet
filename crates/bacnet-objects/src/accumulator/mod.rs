@@ -1,6 +1,6 @@
 //! Accumulator (type 23) and Pulse Converter (type 24) objects.
 //!
-//! Per ASHRAE 135-2020 Clauses 12.1 (Accumulator) and 12.2 (PulseConverter).
+//! Per ASHRAE 135-2020 §12.61 Table 12-79 (Accumulator) and §12.23 Table 12-27 (PulseConverter).
 
 use bacnet_types::constructed::{BACnetObjectPropertyReference, BACnetPrescale, BACnetScale};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};

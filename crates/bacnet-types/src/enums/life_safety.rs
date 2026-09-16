@@ -44,7 +44,7 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
-    /// Life safety operating mode (Clause 12.15.12).
+    /// Life safety operating mode (Clause 12.15 (Mode)).
     pub struct LifeSafetyMode(u32);
 
     const OFF = 0;
@@ -70,7 +70,7 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
-    /// Life safety commanded operation (Clause 12.15.13, Table 12-54).
+    /// Life safety commanded operation (Clauses 13.13, 12.15).
     pub struct LifeSafetyOperation(u32);
 
     const NONE = 0;
@@ -86,7 +86,7 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
-    /// Silenced state for a life safety point/zone (Clause 12.15.14).
+    /// Silenced state for a life safety point/zone (Clause 12.15 (Silenced)).
     pub struct SilencedState(u32);
 
     const UNSILENCED = 0;

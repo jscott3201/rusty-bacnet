@@ -1,4 +1,4 @@
-//! Loop (type 12) object per ASHRAE 135-2020 Clause 12.19.
+//! Loop (type 12) object per ASHRAE 135-2020 Clause 12.17.
 //!
 //! PID control loop. The application is responsible for running the PID
 //! algorithm; this object stores configuration and current output.

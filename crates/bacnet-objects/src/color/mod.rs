@@ -1,6 +1,6 @@
 //! Color (type 63) and Color Temperature (type 64) objects.
 //!
-//! Per ASHRAE 135-2020 Addendum bj, Clauses 12.55-12.56.
+//! Per ASHRAE 135-2020 Addendum bj (Color and Color Temperature objects).
 //!
 //! Color objects represent CIE 1931 xy color coordinates.
 //! Color Temperature objects represent correlated color temperature in Kelvin.

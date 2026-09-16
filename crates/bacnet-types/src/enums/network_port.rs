@@ -3,7 +3,7 @@
 // ===========================================================================
 
 bacnet_enum! {
-    /// BACnet data link/network type (Clause 12.56.44).
+    /// BACnet data link/network type (Clause 12.56 (Network_Type)).
     pub struct NetworkType(u32);
 
     const ETHERNET = 0;
@@ -30,7 +30,7 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
-    /// Commands for a NetworkPort object (Clause 12.56.40).
+    /// Commands for a NetworkPort object (Clause 12.56 (Command)).
     pub struct NetworkPortCommand(u32);
 
     const IDLE = 0;
@@ -44,7 +44,7 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
-    /// Quality of a NetworkPort's network number (Clause 12.56.42).
+    /// Quality of a NetworkPort's network number (Clause 12.56 (Network_Number_Quality)).
     pub struct NetworkNumberQuality(u32);
 
     const UNKNOWN = 0;

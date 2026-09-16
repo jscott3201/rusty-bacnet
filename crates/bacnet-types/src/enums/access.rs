@@ -165,7 +165,7 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
-    /// BACnet access user type (Clause 12.35).
+    /// BACnet access user type (Clause 12.33; Clause 21.6 production).
     pub struct AccessUserType(u32);
 
     const ASSET = 0;

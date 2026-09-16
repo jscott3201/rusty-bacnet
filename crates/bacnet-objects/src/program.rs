@@ -1,4 +1,4 @@
-//! Program object (type 16) per ASHRAE 135-2020 Clause 12.
+//! Program object (type 16) per ASHRAE 135-2020 Clause 12.22.
 //!
 //! The Program object represents an application program running within
 //! a BACnet device. It exposes the program's lifecycle state.
