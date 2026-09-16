@@ -1,5 +1,47 @@
 //! Life Safety Point (type 21) and Life Safety Zone (type 22) objects
 //! per ASHRAE 135-2020 Clauses 12.15 and 12.16.
+//!
+//! R1 matrix (PR-0803 sub-slice 1) — Event_State / Status_Flags post-state for
+//! each LifeSafetyOperation on Point and Zone. Verdict: outcome (b), pins only
+//! with zero state change. The Standard keeps Event_State purely intrinsic —
+//! driven by the object's event algorithm off the monitored LifeSafetyState,
+//! mode changes, delays, and re-alert — and no service clause mandates an
+//! LSO-driven Event_State or Status_Flags transition:
+//!
+//! | Operation         | Point Event_State | Point IN_ALARM | Zone Event_State | Zone IN_ALARM |
+//! |-------------------|-------------------|----------------|------------------|---------------|
+//! | SILENCE           | NORMAL (0)        | FALSE          | NORMAL (0)       | FALSE         |
+//! | SILENCE_AUDIBLE   | NORMAL (0)        | FALSE          | NORMAL (0)       | FALSE         |
+//! | SILENCE_VISUAL    | NORMAL (0)        | FALSE          | NORMAL (0)       | FALSE         |
+//! | UNSILENCE         | NORMAL (0)        | FALSE          | NORMAL (0)       | FALSE         |
+//! | UNSILENCE_AUDIBLE | NORMAL (0)        | FALSE          | NORMAL (0)       | FALSE         |
+//! | UNSILENCE_VISUAL  | NORMAL (0)        | FALSE          | NORMAL (0)       | FALSE         |
+//! | RESET             | NORMAL (0)        | FALSE          | NORMAL (0)       | FALSE         |
+//! | RESET_ALARM       | NORMAL (0)        | FALSE          | NORMAL (0)       | FALSE         |
+//! | RESET_FAULT       | NORMAL (0)        | FALSE          | NORMAL (0)       | FALSE         |
+//!
+//! Rationale (paraphrased; see cited pages, never normative text): the object
+//! clauses describe Event_State as read-only, mirroring the event algorithm
+//! only when intrinsic reporting is supported and otherwise staying NORMAL —
+//! and this crate implements no intrinsic reporting, so NORMAL is the
+//! spec-correct value. The IN_ALARM flag mirrors a non-NORMAL Event_State.
+//! Present_Value latching until reset and Tracking_Value continuous tracking
+//! are local matters; Silenced records whether the latest audible/visual
+//! transition was silenced via service request or local means, and
+//! Operation_Expected names the next operation the local situation calls for.
+//! The LifeSafetyOperation service clause only silences/resets/unsilences the
+//! addressed (or all applicable) objects and answers Result(+/-), rejecting a
+//! reset the object is not ready for; it carries no Event_State/Status_Flags
+//! rows. The CHANGE_OF_LIFE_SAFETY algorithm keys transitions off the
+//! monitored state versus the alarm lists (plus mode/delay/re-alert) while
+//! Operation_Expected and Status_Flags travel as notification inputs only.
+//! Page cites in the local licensed PDF (`_spec/2020_ASHRAE_...pdf`):
+//! object clauses printed pp. 245-256 (PDF pp. 247-258), LifeSafetyOperation
+//! service printed pp. 701-702 (PDF pp. 703-704), CHANGE_OF_LIFE_SAFETY
+//! printed pp. 657-658 (PDF pp. 659-660). Refs #177 (no claim change here).
+//!
+//! The built-in Zone object intentionally carries no Tracking_Value, and no
+//! reset or COV path fabricates one.
 
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, LifeSafetyOperation, ObjectType, PropertyIdentifier, SilencedState,
@@ -613,3 +655,6 @@ mod tests;
 
 #[cfg(test)]
 mod reset_tests;
+
+#[cfg(test)]
+mod event_state_tests;
