@@ -1294,9 +1294,11 @@ The built-in Life Safety Point and Zone objects execute the six silence and
 unsilence operations. `RESET`, `RESET_ALARM`, and `RESET_FAULT` execute only
 through a configured application-owned Point/Zone reset executor after exact
 `Operation_Expected` arming; omitted commit fields remain unchanged and no
-physical state is inferred. Exact confirmed duplicates are discarded silently
-by the bounded process-local request tracker, so irreversible actuation still
-requires application-owned idempotency across tracker expiry or restart.
+physical state is inferred. Exact confirmed duplicates receive the byte-identical
+recorded response from the bounded process-local request tracker (60-second /
+256-entry retention; requests over 64 KiB execute untracked), so irreversible
+actuation still requires application-owned idempotency across tracker expiry
+or restart.
 
 Trusted runtime logic can arm or rearm a Life Safety object through
 `BACnetServer::set_life_safety_operation_expected_local`. The lower-level
