@@ -476,13 +476,14 @@
    "id": "BACNET-12-PROPERTY-METADATA-CORE",
    "standard_anchor": "Clause 12.6, Table 12-6 (pp. 189-190); Clause 12.42, Table 12-49 (pp. 444-445); Clause 15.7.3.1 (p. 743); Annex A (pp. 964-965)",
    "priority": "P1",
-   "requirement_summary": "Executable metadata classifies each effective standard property by base R, W, or O conformance, presence condition, and implemented write capability. Time Value and Binary Input use the metadata for property-list compatibility, ReadPropertyMultiple special selectors, and existing PICS flags; unmigrated object types retain the legacy fallback.",
+    "requirement_summary": "Executable metadata classifies each effective standard property by base R, W, or O conformance, presence condition, and implemented write capability. Time Value, Binary Input, Life Safety Point (POINT_BASE 17 rows), and Life Safety Zone (ZONE_BASE 14 rows) use the metadata for property-list compatibility, ReadPropertyMultiple special selectors, and existing PICS flags; unmigrated object types retain the legacy fallback.",
    "status": "in-progress",
    "code_anchors": [
     "crates/bacnet-objects/src/property_metadata.rs::PropertyMetadata",
     "crates/bacnet-objects/src/traits.rs::BACnetObject::property_metadata",
     "crates/bacnet-objects/src/value_types/mod.rs::TIME_VALUE_PROPERTY_METADATA",
     "crates/bacnet-objects/src/binary/input.rs::BINARY_INPUT_PROPERTY_METADATA",
+     "crates/bacnet-objects/src/life_safety/metadata.rs",
     "crates/bacnet-server/src/handlers/read_property.rs::expand_property_reference",
     "crates/bacnet-server/src/pics/mod.rs::PicsGenerator::build_object_types"
    ],
@@ -492,11 +493,15 @@
      "crates/bacnet-objects/src/property_metadata_tests.rs::property_metadata_contract_property_list_projection_excludes_property_list",
      "crates/bacnet-objects/src/property_metadata_tests.rs::property_metadata_contract_all_migrated_rows_are_readable",
     "crates/bacnet-server/src/handlers/tests/property_metadata.rs::rpm_metadata_selectors_are_exact_for_time_value",
-    "crates/bacnet-server/src/handlers/tests/property_metadata.rs::rpm_metadata_selectors_are_exact_for_binary_input",
-    "crates/bacnet-server/src/pics/property_metadata_tests.rs::pics_projects_migrated_property_metadata"
-   ],
-   "negative_tests": [
-    "crates/bacnet-objects/src/property_metadata_tests.rs::property_metadata_contract_macro_opt_in_and_legacy_default",
+     "crates/bacnet-server/src/handlers/tests/property_metadata.rs::rpm_metadata_selectors_are_exact_for_binary_input",
+     "crates/bacnet-server/src/pics/property_metadata_tests.rs::pics_projects_migrated_property_metadata",
+     "crates/bacnet-objects/src/life_safety/metadata.rs::tests::property_metadata_point_exact_sets_and_indexed_list",
+     "crates/bacnet-objects/src/life_safety/metadata.rs::tests::property_metadata_zone_exact_sets_and_indexed_list",
+     "crates/bacnet-server/src/pics/property_metadata_tests/life_safety.rs::pics_life_safety_point_property_metadata_is_exact",
+     "crates/bacnet-server/src/pics/property_metadata_tests/life_safety.rs::pics_life_safety_zone_property_metadata_is_exact"
+    ],
+    "negative_tests": [
+     "crates/bacnet-objects/src/property_metadata_tests.rs::property_metadata_contract_macro_opt_in_and_legacy_default",
     "crates/bacnet-objects/src/property_metadata_tests.rs::property_metadata_contract_write_capabilities_match_dispatch",
     "crates/bacnet-server/src/handlers/tests/read_rpm.rs::rpm_handler_required_vs_optional",
     "crates/bacnet-server/src/pics/tests.rs::object_type_properties_populated"
@@ -505,7 +510,7 @@
    "public_claims": [
     "CHANGELOG Unreleased property-metadata core"
    ],
-   "notes": "This is a qualifying slice of #261, not an all-object conformance claim. Canonical metadata includes Property_List; the legacy property_list projection and RPM ALL/REQUIRED omit it, while wire Property_List also omits Object_Identifier, Object_Name, and Object_Type. Conditional rows record why a present property exists, and conditional write capability contributes to the existing PICS writable flag. Date Value and every object type other than Time Value and Binary Input remain on the explicit legacy fallback."
+   "notes": "This is a qualifying slice of #261, not an all-object conformance claim. Canonical metadata includes Property_List; the legacy property_list projection and RPM ALL/REQUIRED omit it, while wire Property_List also omits Object_Identifier, Object_Name, and Object_Type. Conditional rows record why a present property exists, and conditional write capability contributes to the existing PICS writable flag. Date Value and every object type other than Time Value, Binary Input, Life Safety Point, and Life Safety Zone remain on the explicit legacy fallback. Life Safety POINT_BASE/ZONE_BASE rows mirror dispatch exactly: Mode carries table W with no mode validation, Silenced and Operation_Expected are network read-only, Tracking_Value and Reliability mirror dispatch as read-only against the R1 OOS-writable footnote, and Accepted_Modes stays absent."
   },
   {
    "id": "BACNET-12-ESCALATOR-STATUS-WRITABILITY",
@@ -2588,6 +2593,8 @@
    "code_anchors": [
      "crates/bacnet-services/src/life_safety.rs",
      "crates/bacnet-objects/src/life_safety.rs",
+     "crates/bacnet-objects/src/life_safety/metadata.rs",
+     "crates/bacnet-objects/src/life_safety/event_state_tests.rs",
      "crates/bacnet-objects/src/life_safety/reset.rs",
      "crates/bacnet-objects/src/traits.rs",
       "crates/bacnet-server/src/life_safety.rs",
@@ -2598,9 +2605,11 @@
      "crates/bacnet-server/src/life_safety_cov.rs",
      "crates/bacnet-server/src/handlers/alarm_event/life_safety_operation.rs",
      "crates/bacnet-server/src/handlers/cov.rs",
-      "crates/bacnet-server/src/server/cov_notifications.rs",
-      "crates/bacnet-server/src/server/cov_notifications/life_safety.rs",
-      "crates/bacnet-server/src/server/local_writes.rs",
+     "crates/bacnet-server/src/server/cov_notifications.rs",
+     "crates/bacnet-server/src/server/cov_notifications/life_safety.rs",
+     "crates/bacnet-server/src/pics/property_metadata_tests/life_safety.rs",
+     "crates/bacnet-server/src/handlers/tests/read_rpm/life_safety.rs",
+     "crates/bacnet-server/src/server/local_writes.rs",
       "crates/bacnet-server/src/schedule.rs",
       "crates/bacnet-server/src/server/lifecycle.rs",
       "crates/bacnet-server/src/server/requests/mod.rs"
@@ -2622,8 +2631,13 @@
      "crates/bacnet-server/src/server/life_safety_operation_tests.rs::{exact_success_duplicate_replays_identical_simple_ack_single_execution,exact_denied_duplicate_replays_identical_error_single_authorization}",
      "crates/bacnet-server/src/server/life_safety_operation_replay_tests.rs::{pending_in_flight_duplicate_discards_without_replay,routed_same_origin_replays_while_other_origins_execute_independently,invoke_reuse_with_changed_bytes_and_new_invoke_execute,oversize_lso_request_executes_untracked_without_suppression,targetless_reset_duplicate_replays_identical_simple_ack_without_second_actuation}",
      "crates/bacnet-server/src/server/lso_replay.rs::tests::{completed_response_replays_until_window_boundary_then_reexecutes,error_bytes_replay_identically,full_key_match_required_for_replay,canonical_routed_origin_replays_while_peers_stay_independent,completed_capacity_evicts_oldest_completion,all_pending_capacity_and_oversize_serve_untracked_without_suppression}",
-     "crates/bacnet-server/src/server/confirmed_request_tracker.rs::tests::{exact_request_moves_from_pending_to_completed_until_window_boundary,complete_request_discrimination_allows_changed_invoke_reuse,canonical_routed_origin_ignores_router_and_peers_remain_independent,completed_capacity_evicts_oldest_completion,all_pending_capacity_and_oversize_requests_fall_back_untracked}"
-   ],
+     "crates/bacnet-server/src/server/confirmed_request_tracker.rs::tests::{exact_request_moves_from_pending_to_completed_until_window_boundary,complete_request_discrimination_allows_changed_invoke_reuse,canonical_routed_origin_ignores_router_and_peers_remain_independent,completed_capacity_evicts_oldest_completion,all_pending_capacity_and_oversize_requests_fall_back_untracked}",
+     "crates/bacnet-objects/src/life_safety/event_state_tests.rs::{point_silence_unsilence_leaves_event_state_and_in_alarm_untouched,zone_silence_unsilence_leaves_event_state_and_in_alarm_untouched,point_resets_leave_event_state_and_in_alarm_untouched,zone_resets_leave_event_state_and_in_alarm_untouched}",
+     "crates/bacnet-objects/src/life_safety/metadata.rs::tests::{property_metadata_point_exact_sets_and_indexed_list,property_metadata_zone_exact_sets_and_indexed_list,property_metadata_point_write_capabilities_match_dispatch,property_metadata_zone_write_capabilities_match_dispatch}",
+     "crates/bacnet-objects/src/life_safety/tests.rs::life_safety_property_metadata_drives_required_sets",
+     "crates/bacnet-server/src/pics/property_metadata_tests/life_safety.rs::{pics_life_safety_point_property_metadata_is_exact,pics_life_safety_zone_property_metadata_is_exact}",
+     "crates/bacnet-server/src/handlers/tests/read_rpm/life_safety.rs::{rpm_life_safety_point_indexed_reads_and_list_bytes_are_unchanged,rpm_life_safety_zone_indexed_reads_and_list_bytes_are_unchanged}"
+    ],
    "negative_tests": [
     "crates/bacnet-services/src/life_safety.rs::tests::malformed_supported_requesting_source_still_errors",
     "crates/bacnet-objects/src/life_safety/tests.rs::point_replayed_silence_without_response_cache_is_invalid_state",
@@ -2641,7 +2655,7 @@
    "public_claims": [
      "README supported services (qualified authorized Life Safety operations and modeled exact COV)"
    ],
-    "notes": "Partial operational-state evidence only (Refs #177; remains open). Authorization is fail-closed and sees immediate plus routed requester identity; Requesting Source remains untrusted text. Built-in Point/Zone execute the six silence/unsilence operations with exact Operation_Expected arming. Reset variants execute only through configured application-owned synchronous executors and commit only supplied modeled values before clearing Operation_Expected; no physical state is inferred. The bounded process-local confirmed-request tracker resends the byte-identical recorded response for exact duplicates within 60 seconds / 256 entries before authorization/execution; requests over 64 KiB execute untracked; replay is retained by design and is not durable actuation idempotency. Detailed object outcomes and WP/WPM/write_local/live-Schedule readback snapshots retain ordered actual deltas. Whole-object Life Safety COV triggers only for Present_Value/Status_Flags and reports exactly both; property COV reports the supported subscribed property plus one Status_Flags and fans out on an actual Status_Flags change. Point supports Present_Value, Status_Flags, Tracking_Value, Silenced, and Operation_Expected; Zone supports those without Tracking_Value, which is absent and rejected as NOT_COV_PROPERTY. The built-in Point/Zone Status_Flags IN_ALARM projection from event_state is latent: no event_state setter exists, so IN_ALARM transitions are unreachable. Initial and re-subscription notifications follow the same payload sets after ACK; cancellation is quiet. Gaps retained: no complete Point/Zone table, metadata, PICS, BIBB, profile, or device-advertisement claim; Accepted_Modes/mode validation, out-of-service tracking/reliability behavior, datatype/reference fixes, persistence/durable replay, and a broad intrinsic CHANGE_OF_LIFE_SAFETY event algorithm remain deferred."
+    "notes": "Partial operational-state evidence only (Refs #177; remains open). Authorization is fail-closed and sees immediate plus routed requester identity; Requesting Source remains untrusted text. Built-in Point/Zone execute the six silence/unsilence operations with exact Operation_Expected arming. Reset variants execute only through configured application-owned synchronous executors and commit only supplied modeled values before clearing Operation_Expected; no physical state is inferred. The bounded process-local confirmed-request tracker resends the byte-identical recorded response for exact duplicates within 60 seconds / 256 entries before authorization/execution; requests over 64 KiB execute untracked; replay is retained by design and is not durable actuation idempotency. Detailed object outcomes and WP/WPM/write_local/live-Schedule readback snapshots retain ordered actual deltas. Whole-object Life Safety COV triggers only for Present_Value/Status_Flags and reports exactly both; property COV reports the supported subscribed property plus one Status_Flags and fans out on an actual Status_Flags change. Point supports Present_Value, Status_Flags, Tracking_Value, Silenced, and Operation_Expected; Zone supports those without Tracking_Value, which is absent and rejected as NOT_COV_PROPERTY. The built-in Point/Zone Status_Flags IN_ALARM projection from event_state is latent: no event_state setter exists, so IN_ALARM transitions are unreachable; Event_State is purely intrinsic per R1 outcome (b) with no LSO-driven change. Initial and re-subscription notifications follow the same payload sets after ACK; cancellation is quiet. Served property model is pinned by executable metadata: Point POINT_BASE 17 rows and Zone ZONE_BASE 14 rows drive Property_List, required sets, and writability with exact PICS projection tests; Silenced and Operation_Expected are network read-only. Gaps retained: no BIBB, profile, or device-advertisement claim; Accepted_Modes absent with Mode carrying W and no mode validation; out-of-service tracking and Reliability writability deferred (Tracking_Value and Reliability mirror dispatch as read-only against the R1 OOS-writable footnote); broad intrinsic CHANGE_OF_LIFE_SAFETY event algorithm deferred."
   },
   {
    "id": "BACNET-14-FILE-ACCESS-METHOD",
