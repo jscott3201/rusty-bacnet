@@ -43,6 +43,9 @@ pub mod value_types;
 mod log_status_tests;
 
 #[cfg(test)]
+mod property_metadata_audit;
+
+#[cfg(test)]
 mod property_metadata_tests;
 
 #[cfg(test)]
