@@ -10,30 +10,8 @@ import rusty_bacnet
 from rusty_bacnet import PropertyIdentifier
 
 
-# Existing drift outside the PropertyIdentifier repair in #262. Keep this exact:
-# new omissions must fail, and repaired declarations must leave this baseline.
-KNOWN_MISSING_STUB_CONSTANTS = {
-    "ErrorCode": {
-        "BVLC_FUNCTION_UNKNOWN",
-        "BVLC_PROPRIETARY_FUNCTION_UNKNOWN",
-        "HEADER_ENCODING_ERROR",
-        "HEADER_NOT_UNDERSTOOD",
-        "INVALID_DATA_ENCODING",
-        "INVALID_OPERATION_IN_THIS_STATE",
-        "INVALID_OPERATOR_NAME",
-        "INVALID_PARAMETER_DATA_TYPE",
-        "INVALID_TIME_STAMP",
-        "KEY_GENERATION_ERROR",
-        "LIST_ITEM_NOT_NUMBERED",
-        "LIST_ITEM_NOT_TIMESTAMPED",
-        "MESSAGE_INCOMPLETE",
-        "NODE_DUPLICATE_VMAC",
-        "NOT_A_BACNET_SC_HUB",
-        "PAYLOAD_EXPECTED",
-        "SECURITY_NOT_SUPPORTED",
-        "UNEXPECTED_DATA",
-    },
-}
+# All discovered enum classes must match the stub exactly: new omissions
+# and repaired declarations alike fail here.
 
 
 def stub_classes() -> dict[str, ast.ClassDef]:
@@ -60,7 +38,6 @@ class EnumStubParityTests(unittest.TestCase):
             and callable(getattr(cls, "to_raw", None))
         }
         self.assertIn("PropertyIdentifier", enum_classes)
-        self.assertLessEqual(KNOWN_MISSING_STUB_CONSTANTS.keys(), enum_classes.keys())
         for name, cls in enum_classes.items():
             with self.subTest(enum=name):
                 self.assertIn(name, classes)
@@ -77,9 +54,7 @@ class EnumStubParityTests(unittest.TestCase):
                 }
                 declared = set(declarations)
                 self.assertSetEqual(declared - registered, set())
-                self.assertSetEqual(
-                    registered - declared, KNOWN_MISSING_STUB_CONSTANTS.get(name, set())
-                )
+                self.assertSetEqual(registered - declared, set())
                 self.assertEqual(
                     declarations, {constant: name for constant in declared}
                 )

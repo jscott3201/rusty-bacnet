@@ -614,7 +614,8 @@ class ErrorClass:
 class ErrorCode:
     """BACnet error code enumeration (Clause 18).
 
-    All 139 standard codes are available as class attributes.
+    All 151 registered standard codes are available as class attributes
+    (value 33 removed).
     Use ``ErrorCode.from_raw(n)`` for vendor-proprietary codes.
     """
 
@@ -630,6 +631,10 @@ class ErrorCode:
     INVALID_DATA_TYPE: ErrorCode
     INVALID_FILE_ACCESS_METHOD: ErrorCode
     INVALID_FILE_START_POSITION: ErrorCode
+    INVALID_OPERATOR_NAME: ErrorCode
+    INVALID_PARAMETER_DATA_TYPE: ErrorCode
+    INVALID_TIME_STAMP: ErrorCode
+    KEY_GENERATION_ERROR: ErrorCode
     MISSING_REQUIRED_PARAMETER: ErrorCode
     NO_OBJECTS_OF_SPECIFIED_TYPE: ErrorCode
     NO_SPACE_FOR_OBJECT: ErrorCode
@@ -642,6 +647,7 @@ class ErrorCode:
     OPERATIONAL_PROBLEM: ErrorCode
     PASSWORD_FAILURE: ErrorCode
     READ_ACCESS_DENIED: ErrorCode
+    SECURITY_NOT_SUPPORTED: ErrorCode
     SERVICE_REQUEST_DENIED: ErrorCode
     TIMEOUT: ErrorCode
     UNKNOWN_OBJECT: ErrorCode
@@ -751,6 +757,19 @@ class ErrorCode:
     ABORT_SECURITY_ERROR: ErrorCode
     DUPLICATE_ENTRY: ErrorCode
     INVALID_VALUE_IN_THIS_STATE: ErrorCode
+    INVALID_OPERATION_IN_THIS_STATE: ErrorCode
+    LIST_ITEM_NOT_NUMBERED: ErrorCode
+    LIST_ITEM_NOT_TIMESTAMPED: ErrorCode
+    INVALID_DATA_ENCODING: ErrorCode
+    BVLC_FUNCTION_UNKNOWN: ErrorCode
+    BVLC_PROPRIETARY_FUNCTION_UNKNOWN: ErrorCode
+    HEADER_ENCODING_ERROR: ErrorCode
+    HEADER_NOT_UNDERSTOOD: ErrorCode
+    MESSAGE_INCOMPLETE: ErrorCode
+    NOT_A_BACNET_SC_HUB: ErrorCode
+    PAYLOAD_EXPECTED: ErrorCode
+    UNEXPECTED_DATA: ErrorCode
+    NODE_DUPLICATE_VMAC: ErrorCode
 
     @staticmethod
     def from_raw(value: int) -> ErrorCode: ...
