@@ -17,6 +17,7 @@ use super::*;
 mod accumulator;
 mod audit_log;
 mod averaging;
+mod color;
 mod command;
 mod elevator;
 mod group;

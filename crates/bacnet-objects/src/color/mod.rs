@@ -14,6 +14,8 @@ use std::borrow::Cow;
 use crate::common::{self, read_common_properties, read_property_list_property};
 use crate::traits::BACnetObject;
 
+mod metadata;
+
 // ---------------------------------------------------------------------------
 // ColorObject (type 63) — CIE 1931 xy color
 // ---------------------------------------------------------------------------
@@ -180,25 +182,12 @@ impl BACnetObject for ColorObject {
         }
     }
 
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_color_object(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::TRACKING_VALUE,
-            PropertyIdentifier::COLOR_COMMAND,
-            PropertyIdentifier::IN_PROGRESS,
-            PropertyIdentifier::DEFAULT_COLOR,
-            PropertyIdentifier::DEFAULT_FADE_TIME,
-            PropertyIdentifier::TRANSITION,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     fn supports_cov(&self) -> bool {
@@ -397,29 +386,12 @@ impl BACnetObject for ColorTemperatureObject {
         }
     }
 
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_color_temperature_object(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::TRACKING_VALUE,
-            PropertyIdentifier::COLOR_COMMAND,
-            PropertyIdentifier::IN_PROGRESS,
-            PropertyIdentifier::DEFAULT_COLOR_TEMPERATURE,
-            PropertyIdentifier::DEFAULT_FADE_TIME,
-            PropertyIdentifier::DEFAULT_RAMP_RATE,
-            PropertyIdentifier::DEFAULT_STEP_INCREMENT,
-            PropertyIdentifier::TRANSITION,
-            PropertyIdentifier::MIN_PRES_VALUE,
-            PropertyIdentifier::MAX_PRES_VALUE,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     fn supports_cov(&self) -> bool {
