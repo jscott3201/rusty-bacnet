@@ -524,19 +524,33 @@ fn rpm_handler_required_vs_optional() {
     .unwrap();
     let oid = ObjectIdentifier::new(ObjectType::DATE_VALUE, 1).unwrap();
     assert!(
-        db.get(&oid).unwrap().property_metadata().is_empty(),
-        "Date Value intentionally exercises the legacy RPM fallback"
+        !db.get(&oid).unwrap().property_metadata().is_empty(),
+        "Date Value routes RPM selectors through canonical metadata"
     );
 
-    // Exact fallback fixtures remain independent of the object's metadata.
+    // Metadata routing fixtures mirror the Time Value precedent: REQUIRED
+    // carries the RequiredRead rows (Property_List excluded from the wire
+    // expansion), OPTIONAL the Optional rows, and ALL the 10-row projection.
     let req_pids = [
         P::OBJECT_IDENTIFIER,
         P::OBJECT_NAME,
         P::OBJECT_TYPE,
-        P::PROPERTY_LIST,
+        P::PRESENT_VALUE,
+        P::STATUS_FLAGS,
     ];
     let opt_pids = [
         P::DESCRIPTION,
+        P::OUT_OF_SERVICE,
+        P::RELIABILITY,
+        P::PRIORITY_ARRAY,
+        P::RELINQUISH_DEFAULT,
+    ];
+    // ALL omits Property_List although required_properties keeps it.
+    let all = [
+        P::OBJECT_IDENTIFIER,
+        P::OBJECT_NAME,
+        P::DESCRIPTION,
+        P::OBJECT_TYPE,
         P::PRESENT_VALUE,
         P::STATUS_FLAGS,
         P::OUT_OF_SERVICE,
@@ -544,10 +558,6 @@ fn rpm_handler_required_vs_optional() {
         P::PRIORITY_ARRAY,
         P::RELINQUISH_DEFAULT,
     ];
-    // The legacy required set includes Property_List although ALL omits it.
-    let mut all = req_pids[..3].to_vec();
-    all.insert(2, P::DESCRIPTION);
-    all.extend_from_slice(&opt_pids[1..]);
     for (selector, expected) in [
         (P::REQUIRED, req_pids.as_slice()),
         (P::OPTIONAL, opt_pids.as_slice()),

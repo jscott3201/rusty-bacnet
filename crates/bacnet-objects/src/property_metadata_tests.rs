@@ -17,7 +17,12 @@ use crate::property_metadata::{
     PropertyConformance, PropertyMetadata, PropertyPresenceCondition, PropertyWriteCapability,
 };
 use crate::traits::BACnetObject;
-use crate::value_types::{DateValueObject, TimeValueObject};
+use crate::value_types::{
+    BitStringValueObject, CharacterStringValueObject, DatePatternValueObject,
+    DateTimePatternValueObject, DateTimeValueObject, DateValueObject, IntegerValueObject,
+    LargeAnalogValueObject, OctetStringValueObject, PositiveIntegerValueObject,
+    TimePatternValueObject, TimeValueObject,
+};
 
 mod analog;
 
@@ -242,9 +247,20 @@ fn property_metadata_contract_binary_input() {
 
 #[test]
 fn property_metadata_contract_all_migrated_rows_are_readable() {
-    let objects: [Box<dyn BACnetObject>; 43] = [
+    let objects: [Box<dyn BACnetObject>; 54] = [
         Box::new(crate::device::DeviceObject::new(Default::default()).unwrap()),
         Box::new(TimeValueObject::new(1, "TV-1").unwrap()),
+        Box::new(IntegerValueObject::new(1, "IV-1").unwrap()),
+        Box::new(PositiveIntegerValueObject::new(1, "PIV-1").unwrap()),
+        Box::new(LargeAnalogValueObject::new(1, "LAV-1").unwrap()),
+        Box::new(CharacterStringValueObject::new(1, "CSV-1").unwrap()),
+        Box::new(OctetStringValueObject::new(1, "OSV-1").unwrap()),
+        Box::new(BitStringValueObject::new(1, "BSV-1").unwrap()),
+        Box::new(DateValueObject::new(1, "DV-1").unwrap()),
+        Box::new(DateTimeValueObject::new(1, "DTV-1").unwrap()),
+        Box::new(DatePatternValueObject::new(1, "DPV-1").unwrap()),
+        Box::new(TimePatternValueObject::new(1, "TPV-1").unwrap()),
+        Box::new(DateTimePatternValueObject::new(1, "DTPV-1").unwrap()),
         Box::new(BinaryInputObject::new(1, "BI-1").unwrap()),
         Box::new(BinaryValueObject::new(1, "BV-1").unwrap()),
         Box::new(BinaryOutputObject::new(1, "BO-1").unwrap()),
@@ -391,12 +407,14 @@ fn property_metadata_contract_property_list_projection_excludes_property_list() 
 }
 
 #[test]
-fn property_metadata_contract_macro_opt_in_and_legacy_default() {
+fn property_metadata_contract_all_value_types_opt_in_to_metadata() {
+    // Every value type now passes `property_metadata:` to the macro, so no
+    // value type exercises the legacy empty-metadata default.
     let time_value = TimeValueObject::new(1, "TV-1").unwrap();
     let date_value = DateValueObject::new(1, "DV-1").unwrap();
 
     assert!(!time_value.property_metadata().is_empty());
-    assert!(date_value.property_metadata().is_empty());
+    assert!(!date_value.property_metadata().is_empty());
 }
 
 #[test]
@@ -511,19 +529,22 @@ fn property_metadata_contract_dyn_object_can_return_owned_instance_rows() {
 }
 
 #[test]
-fn property_metadata_unmigrated_date_value_keeps_universal_required_fallback() {
+fn property_metadata_migrated_date_value_exact_required_set() {
     use PropertyIdentifier as P;
 
     let object = DateValueObject::new(1, "DV-1").unwrap();
-    assert!(object.property_metadata().is_empty());
+    let metadata = object.property_metadata();
+    assert!(matches!(metadata, Cow::Borrowed(_)));
+    assert_eq!(metadata.len(), 11);
     let required = object.required_properties();
-    assert!(matches!(required, Cow::Borrowed(_)));
     assert_eq!(
         required.as_ref(),
         [
             P::OBJECT_IDENTIFIER,
             P::OBJECT_NAME,
             P::OBJECT_TYPE,
+            P::PRESENT_VALUE,
+            P::STATUS_FLAGS,
             P::PROPERTY_LIST
         ]
     );

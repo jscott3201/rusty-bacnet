@@ -16,6 +16,8 @@ use crate::property_metadata::{
 };
 use crate::traits::BACnetObject;
 
+mod metadata;
+
 // ---------------------------------------------------------------------------
 // Macro: define_value_object! (commandable variant)
 // ---------------------------------------------------------------------------
@@ -330,128 +332,6 @@ macro_rules! define_value_object_commandable {
 }
 
 // ---------------------------------------------------------------------------
-// Macro: define_value_object! (non-commandable variant)
-// ---------------------------------------------------------------------------
-
-/// Generate a non-commandable value object type (simple read/write PV).
-/// Currently unused — all value types are commandable.
-#[allow(unused_macros)]
-macro_rules! define_value_object_simple {
-    (
-        name: $struct_name:ident,
-        doc: $doc:expr,
-        object_type: $obj_type:expr,
-        value_type: $val_type:ty,
-        default_value: $default:expr,
-        pv_to_property: $pv_to_prop:expr,
-        property_to_pv: $prop_to_pv:expr
-        $(,)?
-    ) => {
-        #[doc = $doc]
-        pub struct $struct_name {
-            oid: ObjectIdentifier,
-            name: String,
-            description: String,
-            present_value: $val_type,
-            out_of_service: bool,
-            status_flags: StatusFlags,
-            reliability: u32,
-        }
-
-        impl $struct_name {
-            /// Create a new instance of this value object.
-            pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
-                let oid = ObjectIdentifier::new($obj_type, instance)?;
-                Ok(Self {
-                    oid,
-                    name: name.into(),
-                    description: String::new(),
-                    present_value: $default,
-                    out_of_service: false,
-                    status_flags: StatusFlags::empty(),
-                    reliability: 0,
-                })
-            }
-        }
-
-        impl BACnetObject for $struct_name {
-            fn object_identifier(&self) -> ObjectIdentifier {
-                self.oid
-            }
-
-            fn object_name(&self) -> &str {
-                &self.name
-            }
-
-            fn read_property(
-                &self,
-                property: PropertyIdentifier,
-                array_index: Option<u32>,
-            ) -> Result<PropertyValue, Error> {
-                if let Some(result) = read_common_properties!(self, property, array_index) {
-                    return result;
-                }
-                match property {
-                    p if p == PropertyIdentifier::OBJECT_TYPE => {
-                        Ok(PropertyValue::Enumerated($obj_type.to_raw()))
-                    }
-                    p if p == PropertyIdentifier::PRESENT_VALUE => {
-                        Ok(($pv_to_prop)(&self.present_value))
-                    }
-                    _ => Err(common::unknown_property_error()),
-                }
-            }
-
-            fn write_property(
-                &mut self,
-                property: PropertyIdentifier,
-                _array_index: Option<u32>,
-                value: PropertyValue,
-                _priority: Option<u8>,
-            ) -> Result<(), Error> {
-                if property == PropertyIdentifier::PRESENT_VALUE {
-                    let extracted = ($prop_to_pv)(value)?;
-                    self.present_value = extracted;
-                    return Ok(());
-                }
-                if let Some(result) =
-                    common::write_out_of_service(&mut self.out_of_service, property, &value)
-                {
-                    return result;
-                }
-                if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
-                    return result;
-                }
-                if let Some(result) =
-                    common::write_description(&mut self.description, property, &value)
-                {
-                    return result;
-                }
-                Err(common::write_access_denied_error())
-            }
-
-            fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-                static PROPS: &[PropertyIdentifier] = &[
-                    PropertyIdentifier::OBJECT_IDENTIFIER,
-                    PropertyIdentifier::OBJECT_NAME,
-                    PropertyIdentifier::DESCRIPTION,
-                    PropertyIdentifier::OBJECT_TYPE,
-                    PropertyIdentifier::PRESENT_VALUE,
-                    PropertyIdentifier::STATUS_FLAGS,
-                    PropertyIdentifier::OUT_OF_SERVICE,
-                    PropertyIdentifier::RELIABILITY,
-                ];
-                Cow::Borrowed(PROPS)
-            }
-
-            fn supports_cov(&self) -> bool {
-                true
-            }
-        }
-    };
-}
-
-// ---------------------------------------------------------------------------
 // Helper functions for value conversions
 // ---------------------------------------------------------------------------
 
@@ -536,6 +416,7 @@ define_value_object_commandable! {
     rd_validate: (|_: &i32| -> Result<(), Error> { Ok(()) }),
     rd_access: writable,
     copy_type: copy,
+    property_metadata: metadata::INTEGER_VALUE_BASE,
 }
 
 define_value_object_commandable! {
@@ -554,6 +435,7 @@ define_value_object_commandable! {
     rd_validate: (|_: &u64| -> Result<(), Error> { Ok(()) }),
     rd_access: writable,
     copy_type: copy,
+    property_metadata: metadata::POSITIVE_INTEGER_VALUE_BASE,
 }
 
 define_value_object_commandable! {
@@ -578,6 +460,7 @@ define_value_object_commandable! {
     }),
     rd_access: writable,
     copy_type: copy,
+    property_metadata: metadata::LARGE_ANALOG_VALUE_BASE,
 }
 
 define_value_object_commandable! {
@@ -596,6 +479,7 @@ define_value_object_commandable! {
     rd_validate: (|_: &String| -> Result<(), Error> { Ok(()) }),
     rd_access: writable,
     copy_type: clone,
+    property_metadata: metadata::CHARACTERSTRING_VALUE_BASE,
 }
 
 define_value_object_commandable! {
@@ -614,6 +498,7 @@ define_value_object_commandable! {
     rd_validate: (|_: &Vec<u8>| -> Result<(), Error> { Ok(()) }),
     rd_access: writable,
     copy_type: clone,
+    property_metadata: metadata::OCTETSTRING_VALUE_BASE,
 }
 
 define_value_object_commandable! {
@@ -638,6 +523,7 @@ define_value_object_commandable! {
     rd_validate: (|_: &(u8, Vec<u8>)| -> Result<(), Error> { Ok(()) }),
     rd_access: writable,
     copy_type: clone,
+    property_metadata: metadata::BITSTRING_VALUE_BASE,
 }
 
 define_value_object_commandable! {
@@ -653,6 +539,7 @@ define_value_object_commandable! {
     rd_validate: (|_: &Date| -> Result<(), Error> { Ok(()) }),
     rd_access: writable,
     copy_type: copy,
+    property_metadata: metadata::DATE_VALUE_BASE,
 }
 
 const TIME_VALUE_PROPERTY_METADATA: &[PropertyMetadata] = &[
@@ -756,6 +643,7 @@ define_value_object_commandable! {
     rd_validate: (|_: &(Date, Time)| -> Result<(), Error> { Ok(()) }),
     rd_access: writable,
     copy_type: copy,
+    property_metadata: metadata::DATETIME_VALUE_BASE,
 }
 
 // ---------------------------------------------------------------------------
@@ -775,6 +663,7 @@ define_value_object_commandable! {
     rd_validate: (|_: &Date| -> Result<(), Error> { Ok(()) }),
     rd_access: writable,
     copy_type: copy,
+    property_metadata: metadata::DATEPATTERN_VALUE_BASE,
 }
 
 define_value_object_commandable! {
@@ -790,6 +679,7 @@ define_value_object_commandable! {
     rd_validate: (|_: &Time| -> Result<(), Error> { Ok(()) }),
     rd_access: writable,
     copy_type: copy,
+    property_metadata: metadata::TIMEPATTERN_VALUE_BASE,
 }
 
 define_value_object_commandable! {
@@ -808,6 +698,7 @@ define_value_object_commandable! {
     rd_validate: (|_: &(Date, Time)| -> Result<(), Error> { Ok(()) }),
     rd_access: writable,
     copy_type: copy,
+    property_metadata: metadata::DATETIMEPATTERN_VALUE_BASE,
 }
 
 // ---------------------------------------------------------------------------
