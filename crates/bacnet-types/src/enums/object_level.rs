@@ -63,7 +63,7 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
-    /// BACnet device status (Clause 12.11.9).
+    /// BACnet device status (Clause 12.11 (System_Status)).
     pub struct DeviceStatus(u32);
 
     const OPERATIONAL = 0;
@@ -167,7 +167,7 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
-    /// BACnet event type (Clause 12.12.6).
+    /// BACnet event type (Clause 12.12 (Event_Type)).
     pub struct EventType(u32);
 
     const CHANGE_OF_BITSTRING = 0;
@@ -234,7 +234,7 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
-    /// BACnet logging type (Clause 12.25.14).
+    /// BACnet logging type (Clause 12.25 (Logging_Type)).
     pub struct LoggingType(u32);
 
     const POLLED = 0;

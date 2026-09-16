@@ -116,7 +116,7 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
-    /// Event transition bit positions (Clause 12.11).
+    /// Event transition bit positions (Clause 21.6 production).
     pub struct EventTransitionBits(u8);
 
     const TO_OFFNORMAL = 0;

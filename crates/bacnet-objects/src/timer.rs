@@ -1,4 +1,4 @@
-//! Timer object (type 31) per ASHRAE 135-2020 Clause 12.
+//! Timer object (type 31) per ASHRAE 135-2020 Clause 12.57.
 //!
 //! The Timer object represents a countdown or count-up timer. Its present value
 //! is an Enumerated representing the timer state: 0=idle, 1=running, 2=expired.

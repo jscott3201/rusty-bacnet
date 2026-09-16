@@ -1,4 +1,4 @@
-//! Schedule-property codecs per ASHRAE 135-2020 Clauses 12.17, 21.
+//! Schedule-property codecs per ASHRAE 135-2020 Clauses 12.24, 21.
 //!
 //! These cover the wire-format encode/decode for the constructed types that
 //! the Schedule object's `weekly-schedule` and `exception-schedule` carry:

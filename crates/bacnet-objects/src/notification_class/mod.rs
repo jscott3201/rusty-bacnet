@@ -349,7 +349,7 @@ fn find_notification_class(
 /// Resolve the per-transition `Priority` and `Ack_Required` for an event
 /// notification from the referenced NotificationClass.
 ///
-/// Per ASHRAE 135-2020 Clause 13.2.1, the `Priority` and `Ack_Required`
+/// Per ASHRAE 135-2020 Clause 12.21, the `Priority` and `Ack_Required`
 /// projected into an `EventNotification` come from the NotificationClass
 /// referenced by the event-generating object's `Notification_Class` property,
 /// selected by the transition coordinate (TO_OFFNORMAL, TO_FAULT, or

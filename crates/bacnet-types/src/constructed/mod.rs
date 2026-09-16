@@ -101,7 +101,7 @@ impl BACnetWeekNDay {
 }
 
 // ---------------------------------------------------------------------------
-// BACnetCalendarEntry (Clause 12.6.3 -- property list of Calendar object)
+// BACnetCalendarEntry (Clause 21.6 -- Calendar Date_List; Calendar object Clause 12.9)
 // ---------------------------------------------------------------------------
 
 /// BACnet calendar entry: a CHOICE between a specific date, a date range,
@@ -122,7 +122,7 @@ pub enum BACnetCalendarEntry {
 }
 
 // ---------------------------------------------------------------------------
-// BACnetTimeValue (Clause 12.17.4 -- used by Schedule weekly_schedule)
+// BACnetTimeValue (Clause 12.24 -- Schedule Weekly_Schedule; Clause 21.6)
 // ---------------------------------------------------------------------------
 
 /// BACnet time-value pair: a Time followed by an application-tagged value.
@@ -139,7 +139,7 @@ pub struct BACnetTimeValue {
 }
 
 // ---------------------------------------------------------------------------
-// SpecialEventPeriod (Clause 12.17.5 -- used by BACnetSpecialEvent)
+// SpecialEventPeriod (Clause 12.24 -- Schedule Exception_Schedule; Clause 21.6)
 // ---------------------------------------------------------------------------
 
 /// The period portion of a BACnetSpecialEvent: either an inline
@@ -157,7 +157,7 @@ pub enum SpecialEventPeriod {
 }
 
 // ---------------------------------------------------------------------------
-// BACnetSpecialEvent (Clause 12.17.5 -- exception_schedule of Schedule)
+// BACnetSpecialEvent (Clause 12.24 -- Schedule Exception_Schedule; Clause 21.6)
 // ---------------------------------------------------------------------------
 
 /// BACnet special event: an exception schedule entry combining a period
@@ -341,7 +341,7 @@ pub struct BACnetDestination {
 }
 
 // ---------------------------------------------------------------------------
-// LogDatum (Clause 12.20.5 -- log_buffer element datum of TrendLog)
+// LogDatum (Clause 12.25 -- TrendLog Log_Buffer; Clause 21.6)
 // ---------------------------------------------------------------------------
 
 /// The datum field of a BACnetLogRecord: a CHOICE covering all possible
@@ -398,7 +398,7 @@ pub enum LogDatum {
 }
 
 // ---------------------------------------------------------------------------
-// BACnetLogRecord (Clause 12.20.5 -- log_buffer of TrendLog)
+// BACnetLogRecord (Clause 12.25 -- TrendLog Log_Buffer; Clause 21.6)
 // ---------------------------------------------------------------------------
 
 /// A single record stored in a TrendLog object's log buffer.
@@ -548,7 +548,7 @@ pub struct BACnetAssignedLandingCalls {
 }
 
 // ---------------------------------------------------------------------------
-// FaultParameters (Clause 12.12.50)
+// FaultParameters (Clause 12.12 -- Fault_Parameters of Event Enrollment)
 // ---------------------------------------------------------------------------
 
 /// Fault parameter variants for configuring fault detection algorithms.

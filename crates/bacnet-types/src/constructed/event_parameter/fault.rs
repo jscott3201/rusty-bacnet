@@ -6,7 +6,7 @@ use super::*;
 use crate::enums::FaultType;
 
 // ---------------------------------------------------------------------------
-// FaultParameters structured round trip (Clause 12.12.50 -- Fault_Parameters)
+// FaultParameters structured round trip (Clause 12.12 -- Fault_Parameters)
 // ---------------------------------------------------------------------------
 
 /// Variant tag carried as the leading element of the flat-`List` encoding.

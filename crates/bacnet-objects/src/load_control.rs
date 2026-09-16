@@ -1,4 +1,4 @@
-//! Load Control object (type 28) per ASHRAE 135-2020 Clause 12.
+//! Load Control object (type 28) per ASHRAE 135-2020 Clause 12.28.
 //!
 //! The Load Control object provides a standard interface for demand-response
 //! load shedding. It tracks requested, expected, and actual shed levels.

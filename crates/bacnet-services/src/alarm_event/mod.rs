@@ -1,8 +1,8 @@
 //! Alarm acknowledgment, event notification, and event information services.
 //!
-//! - AcknowledgeAlarm acknowledges an event transition.
-//! - ConfirmedEventNotification / UnconfirmedEventNotification report events.
-//! - GetEventInformation retrieves event summaries.
+//! - AcknowledgeAlarm acknowledges an event transition (Clause 13.5).
+//! - ConfirmedEventNotification / UnconfirmedEventNotification report events (Clauses 13.8, 13.9).
+//! - GetEventInformation retrieves event summaries (Clause 13.12).
 
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::constructed::{
