@@ -6,6 +6,7 @@ use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
+use crate::access_control::{AccessDoorObject, AccessPointObject, AccessZoneObject};
 use crate::audit::{AuditLogObject, AuditLogPersistence, AuditLogSnapshot};
 use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
@@ -238,7 +239,7 @@ fn property_metadata_contract_binary_input() {
 
 #[test]
 fn property_metadata_contract_all_migrated_rows_are_readable() {
-    let objects: [Box<dyn BACnetObject>; 36] = [
+    let objects: [Box<dyn BACnetObject>; 39] = [
         Box::new(crate::device::DeviceObject::new(Default::default()).unwrap()),
         Box::new(TimeValueObject::new(1, "TV-1").unwrap()),
         Box::new(BinaryInputObject::new(1, "BI-1").unwrap()),
@@ -278,6 +279,9 @@ fn property_metadata_contract_all_migrated_rows_are_readable() {
         Box::new(crate::accumulator::PulseConverterObject::new(1, "PC-1", 62).unwrap()),
         Box::new(crate::color::ColorObject::new(1, "CLR-1").unwrap()),
         Box::new(crate::color::ColorTemperatureObject::new(1, "CT-1").unwrap()),
+        Box::new(AccessDoorObject::new(1, "DOOR-1").unwrap()),
+        Box::new(AccessPointObject::new(1, "AP-1").unwrap()),
+        Box::new(AccessZoneObject::new(1, "ZONE-1").unwrap()),
     ];
 
     for object in objects {

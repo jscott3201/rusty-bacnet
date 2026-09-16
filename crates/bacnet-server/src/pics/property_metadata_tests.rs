@@ -14,6 +14,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 
 use super::*;
 
+mod access_topology;
 mod accumulator;
 mod audit_log;
 mod averaging;

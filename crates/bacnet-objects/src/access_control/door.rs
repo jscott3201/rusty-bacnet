@@ -190,23 +190,12 @@ impl BACnetObject for AccessDoorObject {
         }
     }
 
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        super::metadata_topology::for_access_door_object(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::DOOR_STATUS,
-            PropertyIdentifier::LOCK_STATUS,
-            PropertyIdentifier::SECURED_STATUS,
-            PropertyIdentifier::DOOR_ALARM_STATE,
-            PropertyIdentifier::DOOR_MEMBERS,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     fn capture_write_property_rollback(
@@ -234,18 +223,6 @@ impl BACnetObject for AccessDoorObject {
 
     fn supports_cov(&self) -> bool {
         true
-    }
-
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        // Mirrors the AccessDoorObject `write_property` arms so the PICS and
-        // runtime dispatch share one truth source.
-        matches!(
-            property,
-            PropertyIdentifier::OUT_OF_SERVICE
-                | PropertyIdentifier::DESCRIPTION
-                | PropertyIdentifier::PRESENT_VALUE
-                | PropertyIdentifier::RELINQUISH_DEFAULT
-        )
     }
 }
 

@@ -22,6 +22,7 @@ use crate::traits::BACnetObject;
 mod credential;
 mod credential_data_input;
 mod door;
+mod metadata_topology;
 mod point;
 mod rights;
 mod user;
