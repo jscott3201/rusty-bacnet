@@ -11,6 +11,8 @@ use std::borrow::Cow;
 use crate::common::{self, read_common_properties};
 use crate::traits::BACnetObject;
 
+mod metadata;
+
 // ---------------------------------------------------------------------------
 // AccumulatorObject (type 23)
 // ---------------------------------------------------------------------------
@@ -187,27 +189,12 @@ impl BACnetObject for AccumulatorObject {
         }
     }
 
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_accumulator_object(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::MAX_PRES_VALUE,
-            PropertyIdentifier::SCALE,
-            PropertyIdentifier::PRESCALE,
-            PropertyIdentifier::PULSE_RATE,
-            PropertyIdentifier::UNITS,
-            PropertyIdentifier::LIMIT_MONITORING_INTERVAL,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-            PropertyIdentifier::VALUE_BEFORE_CHANGE,
-            PropertyIdentifier::VALUE_SET,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     fn supports_cov(&self) -> bool {
@@ -375,24 +362,12 @@ impl BACnetObject for PulseConverterObject {
         }
     }
 
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_pulse_converter_object(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::UNITS,
-            PropertyIdentifier::SCALE_FACTOR,
-            PropertyIdentifier::ADJUST_VALUE,
-            PropertyIdentifier::COV_INCREMENT,
-            PropertyIdentifier::INPUT_REFERENCE,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     fn supports_cov(&self) -> bool {
@@ -402,23 +377,6 @@ impl BACnetObject for PulseConverterObject {
     fn cov_increment(&self) -> Option<f32> {
         Some(self.cov_increment)
     }
-
-    /// Mirror the static `write_property` routes (PICS truth invariant):
-    /// PRESENT_VALUE is advertised because its route is available while OOS;
-    /// this method does not report current-state authorization. OBJECT_NAME is
-    /// not advertised because no arm routes it.
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        matches!(
-            property,
-            PropertyIdentifier::PRESENT_VALUE
-                | PropertyIdentifier::SCALE_FACTOR
-                | PropertyIdentifier::ADJUST_VALUE
-                | PropertyIdentifier::INPUT_REFERENCE
-                | PropertyIdentifier::DESCRIPTION
-                | PropertyIdentifier::OUT_OF_SERVICE
-                | PropertyIdentifier::COV_INCREMENT
-        )
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -426,7 +384,7 @@ impl BACnetObject for PulseConverterObject {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-#[path = "pulse_converter_policy_tests.rs"]
+#[path = "../pulse_converter_policy_tests.rs"]
 mod pulse_converter_policy_tests;
 
 #[cfg(test)]
