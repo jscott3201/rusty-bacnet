@@ -44,6 +44,7 @@ impl Peer {
             || {},
             runtime,
             verified,
+            super::tasks::Tasks::new().graceful_ctx(),
         );
         let task = tokio::spawn(async move {
             let _permit = permit;

@@ -16,6 +16,7 @@ pub(super) async fn run(
     on_heartbeat_ack: impl Fn() + Send,
     admission: Arc<super::admission::AdmissionRuntime>,
     tls_client_verified: bool,
+    graceful: super::graceful::GracefulCtx,
 ) {
     let (hub_vmac, hub_uuid) = hub;
     let (clients, lease) = clients;
@@ -27,6 +28,7 @@ pub(super) async fn run(
     // first diagnostic. NAK/relay/silence decisions are unchanged.
     let mut malformed_diag = DiagnosticThrottle::new();
     let mut broadcast_rate = super::broadcast_rate::SenderBudget::for_connection();
+    let mut graceful_signal = graceful.signal();
 
     loop {
         // A stream of immediately ready frames must not starve the timer.
@@ -38,7 +40,28 @@ pub(super) async fn run(
         if close_requested.load(Ordering::Acquire) {
             break;
         }
-        let msg_result = read.next().await;
+        let msg_result = {
+            let Some(next) =
+                super::graceful::next_or_graceful(&mut read, &mut graceful_signal).await
+            else {
+                // Hub graceful shutdown: Disconnect exchange (established) or
+                // silent Close (half-handshake) owns this task from here;
+                // the existing lease cleanup still retires the registration.
+                super::graceful::exchange(
+                    peer_addr,
+                    &mut read,
+                    &write,
+                    &clients,
+                    lease.vmac,
+                    &close_requested,
+                    &close_notify,
+                    &graceful,
+                )
+                .await;
+                break;
+            };
+            next
+        };
         let Some(msg_result) = msg_result else {
             break;
         };
