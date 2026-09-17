@@ -39,14 +39,18 @@ pub struct DataAttribute {
 ///   SC-TLS post-handshake peer only. Scope: the TLS handshake verified the
 ///   peer's operational certificate and the Connect-Request/Accept exchange
 ///   completed on *this* connection, and `source_mac` is that peer's VMAC.
+///   The VMAC itself is payload-claimed in the Connect-Request inside the
+///   TLS channel and is not bound to the operational certificate.
 ///   It asserts nothing about a routed origin behind the peer (there is none
 ///   on a direct connection). Expires with the connection (idle timeout,
 ///   close, or disconnect); snapshots compare by value.
 /// - Verified relayed origin — Independently validated relayed origin, SC hub
 ///   path post `source_admission` only. Scope: the hub TLS connection is
 ///   authenticated *and* the originating VMAC passed hub source admission
-///   (present, non-reserved). It asserts the relay validated the origin
-///   field. An SC node's authenticated hub peer is NOT the origin leaf:
+///   (present, non-reserved). The originating VMAC is a hub-relayed claim
+///   checked only for presence/non-reserved, not certificate-bound. It asserts
+///   the relay validated the origin field. An SC node's authenticated hub peer
+///   is NOT the origin leaf:
 ///   the hub VMAC is never substituted for the leaf origin.
 ///
 /// Only trusted transport/relay validation code may construct a verified

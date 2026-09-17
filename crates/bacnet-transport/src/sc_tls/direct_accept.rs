@@ -773,3 +773,7 @@ impl DirectWsRead for futures_util::stream::SplitStream<TlsWsStream> {
 #[cfg(test)]
 #[path = "direct_accept_tests.rs"]
 mod direct_accept_tests;
+
+#[cfg(test)]
+#[path = "rb08_direct_accept_provenance_tests.rs"]
+mod rb08_direct_accept_provenance_tests;
