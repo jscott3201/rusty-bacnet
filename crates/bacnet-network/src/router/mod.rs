@@ -20,22 +20,35 @@
 //! MAC or advertised network is not proof that a peer is authorized to control
 //! that route. These local mitigations do not
 //! prevent route poisoning or authenticate a claim (Clauses 6.4 and 6.6.3):
-//! - Direct routes cannot be overwritten by learning or changed by rejects.
-//! - I-Am-Router and Initialize-Routing-Table-ACK claims moving a learned route
+//! - Direct routes cannot be overwritten by learning, changed by rejects, or
+//!   changed by Initialize-Routing-Table management updates.
+//! - I-Am-Router and Initialize-Routing-Table-Ack claims moving a learned route
 //!   to a different port need two claims for the same (network, new port), no
 //!   more than 60s apart (inclusive, aligned with the flap window). Repeats in
 //!   separate messages from one router suffice; distinct sources are not required.
 //!   Duplicate entries in one message cannot supply both votes. The old route keeps
 //!   forwarding while pending. Absent-route learning and same-port refreshes
-//!   remain immediate; Initialize-Routing-Table and I-Could-Be-Router remain
-//!   absent-only and cannot corroborate replacements.
+//!   remain immediate; I-Could-Be-Router remains absent-only and cannot
+//!   corroborate replacements.
+//! - Initialize-Routing-Table updates are management writes, not learning
+//!   claims (Clauses 6.4.7/6.6.3.8): a nonzero Port ID replaces the learned
+//!   entry for the DNET or appends one, Port ID 0 purges the learned entry,
+//!   applied immediately in wire order with no corroboration gate. They never
+//!   create or alter direct routes. No authorization policy is enforced yet
+//!   (RB-09); the direct-route immunity here is safety scoping, not an auth
+//!   decision.
+//! - A query (Number of Ports 0) never mutates the table and answers with the
+//!   complete table in ascending-DNET portions across as many bounded
+//!   acknowledgments as needed (Clause 6.6.3.9); wire Port IDs are the stable
+//!   nonzero `port_index + 1` mapping (Port ID 0 stays the purge trigger).
 //! - One pending challenger is retained per learned network: a different new
 //!   port replaces the slot and starts fresh. A slot older than 60s expires on
 //!   the next learning claim. Applying, current-port refresh, removal, aging,
 //!   direct-route installation and manual table edits clear the slot. Pending
 //!   entries are bounded by the number of live learned routes.
-//! - I-Am-Router and Initialize-Routing-Table/ACK retain their existing route-cap
-//!   checks; stale learned routes age out, and rapid port changes warn.
+//! - I-Am-Router and Initialize-Routing-Table-Ack retain their existing route-cap
+//!   checks, as does a management update naming a genuinely new network;
+//!   stale learned routes age out, and rapid port changes warn.
 //! - Disconnect-Connection-To-Network never removes routes: PTP connections are
 //!   unimplemented, matching Establish-Connection-To-Network's no-op handling.
 //!   Each well-formed ignored removal request is debug-logged and counted.
@@ -766,5 +779,7 @@ mod envelope_control_tests;
 mod envelope_discovery_tests;
 #[cfg(test)]
 mod envelope_harness;
+#[cfg(test)]
+mod init_routing_table_tests;
 #[cfg(test)]
 mod tests;

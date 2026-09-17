@@ -180,7 +180,7 @@ async fn truncated_tails_change_nothing_and_send_no_ack() {
     assert!(output.iter().all(Vec::is_empty));
     assert_eq!(table.lock().await.len(), 1);
 
-    // Init preserves existing routes; only 4000 is new, the trailing entry is truncated.
+    // Init with a truncated tail is rejected whole: nothing applied, no ACK.
     let init = [
         6, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 0x03, 0xe8, 0, 0, 0x0b, 0xb8, 0, 0, 0x0f, 0xa0, 0, 0, 0x13,
     ];
@@ -216,7 +216,6 @@ async fn truncated_tails_change_nothing_and_send_no_ack() {
 async fn each_learning_cap_counts_its_inspected_stop_without_changing_tail_handling() {
     for message_type in [
         NetworkMessageType::I_AM_ROUTER_TO_NETWORK,
-        NetworkMessageType::INITIALIZE_ROUTING_TABLE,
         NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK,
     ] {
         let mut table = RouterTable::new();
@@ -245,7 +244,7 @@ async fn each_learning_cap_counts_its_inspected_stop_without_changing_tail_handl
             );
         }
         // Existing per-message cap behavior is preserved, including ACK's cap
-        // before refresh and Init's refusal to overwrite an existing route.
+        // before refresh.
         let existing: &[u8] = if message_type == NetworkMessageType::I_AM_ROUTER_TO_NETWORK {
             &[0, 1]
         } else {
@@ -269,6 +268,61 @@ async fn each_learning_cap_counts_its_inspected_stop_without_changing_tail_handl
             }
         );
     }
+}
+
+#[tokio::test]
+async fn init_management_keeps_cap_for_new_entries_and_replaces_existing() {
+    let mut table = RouterTable::new();
+    for net in 1..=256 {
+        table.add_learned(net, 0, MacAddr::from_slice(&[1]));
+    }
+    let table = Arc::new(Mutex::new(table));
+    // Two unknown networks via Port ID 2 (local port 1): the first trips the
+    // cap and stops the message; the second stays unexamined.
+    deliver(
+        &table,
+        1,
+        &[2],
+        NetworkMessageType::INITIALIZE_ROUTING_TABLE,
+        &[2, 0x0b, 0xb8, 2, 0, 0x0b, 0xb9, 2, 0],
+    )
+    .await;
+    {
+        let table = table.lock().await;
+        assert_eq!(table.len(), 256);
+        assert!(table.lookup(3000).is_none());
+        assert!(table.lookup(3001).is_none());
+        assert_eq!(
+            table.claim_snapshot(),
+            RoutingClaimSnapshot {
+                learned_cap_ignored: 1,
+                ..Default::default()
+            }
+        );
+    }
+    // Replacement of an existing learned entry bypasses the cap and rewrites
+    // the port mapping immediately (no corroboration gate, no learned_ok:
+    // management writes are not learning claims).
+    deliver(
+        &table,
+        1,
+        &[2],
+        NetworkMessageType::INITIALIZE_ROUTING_TABLE,
+        &[1, 0, 1, 2, 0],
+    )
+    .await;
+    let table = table.lock().await;
+    let route = table.lookup(1).unwrap();
+    assert_eq!(route.port_index, 1);
+    assert!(!route.directly_connected);
+    assert_eq!(route.next_hop_mac.as_slice(), &[2]);
+    assert_eq!(
+        table.claim_snapshot(),
+        RoutingClaimSnapshot {
+            learned_cap_ignored: 1,
+            ..Default::default()
+        }
+    );
 }
 
 #[tokio::test]
@@ -308,47 +362,50 @@ async fn direct_route_immunity_and_malformed_rejects_under_spam() {
 }
 
 #[tokio::test]
-async fn init_ack_refresh_rearms_but_init_existing_entry_does_not() {
+async fn init_replace_and_ack_refresh_both_rearm_reject_hold_down() {
+    // RB-05: a management replace installs a fresh learned entry (clearing
+    // reject records like fresh learning), so a later reject applies again;
+    // the ACK same-port refresh re-arms the same way.
     let mut table = RouterTable::new();
     table.add_learned(3000, 0, MacAddr::from_slice(&[1]));
     let table = Arc::new(Mutex::new(table));
-    let payload = [1, 0x0b, 0xb8, 0, 0];
     reject(&table, 0, &[1], 2).await;
+    // Port ID 1 names local port 0: replaces 3000 in place, re-arming.
     deliver(
         &table,
         1,
         &[2],
         NetworkMessageType::INITIALIZE_ROUTING_TABLE,
-        &payload,
+        &[1, 0x0b, 0xb8, 1, 0],
     )
     .await;
     reject(&table, 0, &[1], 1).await;
     assert_eq!(
         table.lock().await.effective_reachability(3000),
-        Some(ReachabilityStatus::Busy)
+        Some(ReachabilityStatus::Unreachable)
     );
     deliver(
         &table,
         0,
         &[2],
         NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK,
-        &payload,
+        &[1, 0x0b, 0xb8, 0, 0],
     )
     .await;
-    reject(&table, 0, &[1], 1).await;
+    reject(&table, 0, &[1], 2).await;
     let table = table.lock().await;
     assert_eq!(
         table.effective_reachability(3000),
-        Some(ReachabilityStatus::Unreachable)
+        Some(ReachabilityStatus::Busy)
     );
-    assert_eq!(table.lookup(3000).unwrap().port_index, 0);
+    let route = table.lookup(3000).unwrap();
+    assert_eq!(route.port_index, 0);
+    assert_eq!(route.next_hop_mac.as_slice(), &[2]);
     assert_eq!(
         table.claim_snapshot(),
         RoutingClaimSnapshot {
             learned_ok: 1,
-            reject_applied: 2,
-            reject_dampened: 1,
-            reject_dampened_hold_down: 1,
+            reject_applied: 3,
             ..Default::default()
         }
     );

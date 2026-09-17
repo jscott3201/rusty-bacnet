@@ -82,7 +82,7 @@ impl Fixture {
                 assert_eq!(dest.as_slice(), mac);
                 let ack = decode_npdu(data).unwrap();
                 assert_eq!(ack.message_type, Some(ACK.to_raw()));
-                assert_eq!(ack.payload.as_ref(), &[0]);
+                assert!(ack.payload.is_empty());
             }
             assert!(rx.try_recv().is_err());
         }
@@ -235,7 +235,11 @@ async fn alternating_ports_in_both_handlers_never_replace_forwarding_route() {
 }
 
 #[tokio::test]
-async fn absent_only_messages_neither_replace_nor_corroborate_pending() {
+async fn unrelated_management_and_absent_only_messages_preserve_pending() {
+    // RB-05: Initialize-Routing-Table is management, not absent-only — it can
+    // replace or purge learned entries. Writes to unrelated networks (and
+    // absent-only I-Could-Be-Router) still leave another network's pending
+    // challenger alone, and the pending claim still corroborates after.
     for kind in [I_AM, ACK] {
         for other in [
             NetworkMessageType::INITIALIZE_ROUTING_TABLE,
@@ -244,26 +248,27 @@ async fn absent_only_messages_neither_replace_nor_corroborate_pending() {
             let mut fixture = Fixture::learned();
             fixture.claim(1, &[2], kind).await;
             let payload: &[u8] = if other == NetworkMessageType::INITIALIZE_ROUTING_TABLE {
-                &[2, 0x0b, 0xb8, 0, 0, 0x0f, 0xa0, 0, 0]
+                // Adds unrelated 4000 via Port ID 2 (local port 1) and purges
+                // absent 5000: touches neither 3000 nor its challenger.
+                &[2, 0x0f, 0xa0, 2, 0, 0x13, 0x88, 0, 0]
             } else {
                 &[0x0b, 0xb8, 0]
             };
-            // A claim on the current port also must not clear pending when the
-            // message's policy is absent-only (it is not a refresh).
             for port in [1, 0] {
                 fixture.deliver(port, &[3], other, payload).await;
                 fixture.assert_forwarded(0, &[1]).await;
+            }
+            if other == NetworkMessageType::INITIALIZE_ROUTING_TABLE {
+                assert!(fixture.table.lock().await.lookup(4000).is_some());
+            } else {
+                assert!(fixture.table.lock().await.lookup(4000).is_none());
             }
             fixture.claim(1, &[2], kind).await;
             fixture.assert_forwarded(1, &[2]).await;
             assert_eq!(
                 fixture.table.lock().await.claim_snapshot(),
                 RoutingClaimSnapshot {
-                    learned_ok: if other == NetworkMessageType::INITIALIZE_ROUTING_TABLE {
-                        2
-                    } else {
-                        1
-                    },
+                    learned_ok: 1,
                     pending_started: 1,
                     corroborated_applied: 1,
                     ..Default::default()
@@ -286,6 +291,10 @@ async fn all_absent_learning_paths_apply_on_first_message() {
             &[0x0b, 0xb8]
         } else if kind == NetworkMessageType::I_COULD_BE_ROUTER_TO_NETWORK {
             &[0x0b, 0xb8, 0]
+        } else if kind == NetworkMessageType::INITIALIZE_ROUTING_TABLE {
+            // Management update via Port ID 2 (local port 1): a purge-style
+            // Port ID 0 would remove rather than install.
+            &[1, 0x0b, 0xb8, 2, 0]
         } else {
             &[1, 0x0b, 0xb8, 0, 0]
         };
@@ -294,7 +303,7 @@ async fn all_absent_learning_paths_apply_on_first_message() {
         assert_eq!(
             fixture.table.lock().await.claim_snapshot(),
             RoutingClaimSnapshot {
-                learned_ok: u64::from(kind != NetworkMessageType::I_COULD_BE_ROUTER_TO_NETWORK),
+                learned_ok: u64::from(kind == I_AM || kind == ACK),
                 ..Default::default()
             }
         );

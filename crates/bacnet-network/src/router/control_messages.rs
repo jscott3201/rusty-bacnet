@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use bacnet_encoding::npdu::{encode_npdu, Npdu, NpduAddress};
 use bacnet_types::enums::{NetworkMessageType, RejectMessageReason};
 use bacnet_types::MacAddr;
-use bytes::{BufMut, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, warn};
 
@@ -14,35 +14,76 @@ use crate::router_table::RouterTable;
 use super::forwarding::send_reject;
 use super::{IngressContext, SendRequest};
 
+/// One validated Initialize-Routing-Table / Initialize-Routing-Table-Ack
+/// entry: DNET(2) + Port ID(1) + Port Info Length(1) + Port Info(N).
+/// Port Info octets are envelope-checked but not retained: this router holds
+/// no PTP/modem dial information (135-2020 6.4.7: "The Port Info field, if
+/// present, shall contain an octet string. A typical use would be to convey
+/// modem control and dial information for accessing a remote network via a
+/// dial-up PTP connection").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RoutingTableEntry {
+    network: u16,
+    port_id: u8,
+}
+
 /// Validate an Initialize-Routing-Table / Initialize-Routing-Table-Ack data
 /// portion without touching the table (RB-03).
 ///
-/// Returns the advertised network numbers in order when the payload is
-/// exactly `Number of Ports` entries — each `DNET(2) + Port ID(1) + Port Info
-/// Length(1) + Port Info(N)` — with no truncation and no trailing bytes.
-/// Returns `None` for any incomplete tail, including a missing `Number of
-/// Ports` octet. Per-entry policy (reserved networks, existing routes, route
-/// cap) stays in the apply phase; this only proves the envelope is complete.
-fn parse_routing_table_entries(data: &[u8]) -> Option<Vec<u16>> {
+/// Returns the entries in order when the payload is exactly `Number of Ports`
+/// entries — each `DNET(2) + Port ID(1) + Port Info Length(1) + Port Info(N)`
+/// — with no truncation and no trailing bytes. Returns `None` for any
+/// incomplete tail, including a missing `Number of Ports` octet. Per-entry
+/// policy (reserved networks, existing routes, route cap) stays in the apply
+/// phase; this only proves the envelope is complete.
+fn parse_routing_table_entries(data: &[u8]) -> Option<Vec<RoutingTableEntry>> {
     let count = usize::from(*data.first()?);
     let mut offset = 1usize;
-    let mut networks = Vec::with_capacity(count);
+    let mut entries = Vec::with_capacity(count);
     for _ in 0..count {
         if offset + 4 > data.len() {
             return None;
         }
-        networks.push(u16::from_be_bytes([data[offset], data[offset + 1]]));
+        let network = u16::from_be_bytes([data[offset], data[offset + 1]]);
+        let port_id = data[offset + 2];
         let info_len = usize::from(data[offset + 3]);
         if offset + 4 + info_len > data.len() {
             return None;
         }
+        entries.push(RoutingTableEntry { network, port_id });
         offset += 4 + info_len;
     }
     if offset != data.len() {
         return None;
     }
-    Some(networks)
+    Some(entries)
 }
+
+/// Bound for an encoded Initialize-Routing-Table-Ack reply NPDU (RB-05).
+///
+/// Query replies must fit the smallest standard link so the answer is
+/// receivable anywhere: "For non-encoded frames, the Length field specifies
+/// the length in octets of the Data field and shall be between 0 and 501
+/// octets" (135-2020 9.3), and the NPDU envelope rides in that Data field. This octet bound and the 1-octet entry-count field (6.4.7,
+/// Fig. 6-11) apply independently when chunking a complete table.
+const MAX_ROUTER_CONTROL_REPLY_NPDU: usize = 501;
+/// Encoded NPDU overhead of a link-local Init-Ack: version + control +
+/// message type (no DNET/SNET, hence no hop count; type < 0x80, no vendor ID).
+const INIT_ACK_NPDU_OVERHEAD: usize = 3;
+/// Encoded octets per query entry: DNET(2) + Port ID(1) + Port Info Length(1)
+/// with empty Port Info (no PTP/modem info held — see [`RoutingTableEntry`]).
+const INIT_ACK_ENTRY_OCTETS: usize = 4;
+/// Entries per query acknowledgment, from the octet bound above (124); the
+/// `assert` pins both independent limits — never more than the 255 the count
+/// field can name, never an encoded reply over the egress bound.
+const MAX_INIT_ACK_ENTRIES: usize =
+    (MAX_ROUTER_CONTROL_REPLY_NPDU - INIT_ACK_NPDU_OVERHEAD - 1) / INIT_ACK_ENTRY_OCTETS;
+const _: () = assert!(
+    MAX_INIT_ACK_ENTRIES >= 1
+        && MAX_INIT_ACK_ENTRIES <= 255
+        && INIT_ACK_NPDU_OVERHEAD + 1 + MAX_INIT_ACK_ENTRIES * INIT_ACK_ENTRY_OCTETS
+            <= MAX_ROUTER_CONTROL_REPLY_NPDU
+);
 
 /// Handle a network-layer message.
 ///
@@ -414,67 +455,158 @@ pub(super) async fn handle_network_message(
     } else if msg_type == NetworkMessageType::INITIALIZE_ROUTING_TABLE.to_raw() {
         // Clauses 6.4.7/6.6.3.8: Number of Ports plus exactly that many
         // entries, fully validated before the table lock. A truncated entry
-        // or trailing bytes rejects the whole message: no table change and,
-        // unlike the previous ACK-on-partial behavior, no ACK. A zero count
-        // with no trailing bytes is a table query.
+        // or trailing bytes rejects the whole message: no table change and
+        // no ACK. A zero count with no trailing bytes is a table query.
         let data = &npdu.payload;
-        let Some(networks) = parse_routing_table_entries(data) else {
+        let Some(entries) = parse_routing_table_entries(data) else {
             return;
         };
 
-        let is_query = data[0] == 0;
+        if data[0] == 0 {
+            // Query: "the responding device shall return its complete routing
+            // table in an Initialize-Routing-Table-Ack message without
+            // updating its routing table" (6.4.7). "If a complete copy of
+            // the table cannot be returned in a single acknowledgment, the
+            // router shall send multiple acknowledgments, each containing a
+            // portion of the routing table until the entire table has been
+            // sent" (6.6.3.9). Entries ascend by DNET for determinism; every
+            // ACK is bounded by the egress-octet limit and the count field
+            // independently. A full queue drops the remaining ACKs (bounded,
+            // no retry); the table itself is never mutated here. This arm
+            // never consults the RB-04 via-peer selector.
+            let snapshot: Vec<(u16, u8)> = {
+                let tbl = table.lock().await;
+                let mut snapshot = Vec::with_capacity(tbl.len());
+                for net in tbl.sorted_networks() {
+                    let port_id = tbl
+                        .lookup(net)
+                        .and_then(|entry| RouterTable::wire_port_id(entry.port_index));
+                    match port_id {
+                        Some(port_id) => snapshot.push((net, port_id)),
+                        None => warn!(
+                            network = net,
+                            "Init-Routing-Table query: route has no wire Port ID, skipped"
+                        ),
+                    }
+                }
+                snapshot
+            };
+            // An empty table is still complete in one count-zero ACK; a
+            // count-zero ACK is not the same wire value as an update ACK
+            // (which carries no data at all — see below and 6.4.8).
+            let chunk_len = MAX_INIT_ACK_ENTRIES.min(255).max(1);
+            let mut chunks: Vec<&[(u16, u8)]> = snapshot.chunks(chunk_len).collect();
+            if chunks.is_empty() {
+                chunks.push(&[]);
+            }
+            for chunk in chunks {
+                let mut payload = BytesMut::with_capacity(1 + chunk.len() * INIT_ACK_ENTRY_OCTETS);
+                payload.put_u8(chunk.len() as u8);
+                for (net, port_id) in chunk {
+                    payload.put_u16(*net);
+                    payload.put_u8(*port_id);
+                    payload.put_u8(0); // Port Info Length: none held.
+                }
+                let response = Npdu {
+                    is_network_message: true,
+                    message_type: Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK.to_raw()),
+                    payload: payload.freeze(),
+                    ..Npdu::default()
+                };
+                let mut buf = BytesMut::with_capacity(
+                    INIT_ACK_NPDU_OVERHEAD + 1 + chunk.len() * INIT_ACK_ENTRY_OCTETS,
+                );
+                if let Err(e) = encode_npdu(&mut buf, &response) {
+                    warn!("Failed to encode Init-Routing-Table-ACK NPDU: {e}");
+                    return;
+                }
+                debug_assert!(buf.len() <= MAX_ROUTER_CONTROL_REPLY_NPDU);
+                if let Err(e) = send_txs[port_idx].try_send(SendRequest::unicast_with_attributes(
+                    buf.freeze(),
+                    MacAddr::from_slice(source_mac),
+                    ingress_attributes,
+                )) {
+                    warn!(%e, "Router dropped Init-Routing-Table-ACK: output channel full");
+                    return;
+                }
+            }
+            return;
+        }
 
-        if !is_query {
+        // Update: "it shall update its current port-to-network-number mappings
+        // for each network specified in the NPDU with the information contained
+        // in the NPDU and return an Initialize-Routing-Table-Ack message
+        // without any routing table data to the source" (6.6.3.8). Entries
+        // apply in wire order (last wins); an unknown wire Port ID names no
+        // local port, so that entry is skipped while the rest still apply.
+        // No authorization policy yet (RB-09): the direct-route immunity in
+        // the apply helpers is safety scoping, not an auth decision. This arm
+        // never consults the RB-04 via-peer selector.
+        let port_count = send_txs.len();
+        {
             let mut tbl = table.lock().await;
-            for net in &networks {
-                if *net == 0 || *net == 0xFFFF {
+            for entry in &entries {
+                // Reserved DNETs name no routable network: skip before the
+                // route-cap check so they consume neither cap nor suffix.
+                if entry.network == 0 || entry.network == 0xFFFF {
                     continue;
                 }
-                if tbl.lookup(*net).is_some() {
-                    continue; // don't overwrite existing routes
+                // Port ID 0 purges: "all table entries for the specified DNET
+                // shall be purged from the table" (6.4.7), scoped to learned
+                // entries by direct-route safety (see the apply helper).
+                if entry.port_id == 0 {
+                    if tbl.apply_management_removal(entry.network) {
+                        debug!(
+                            network = entry.network,
+                            "Init-Routing-Table purged learned route"
+                        );
+                    }
+                    continue;
                 }
-                if tbl.len() >= MAX_LEARNED_ROUTES {
+                let Some(mapped) = RouterTable::port_index_for_wire_id(entry.port_id, port_count)
+                else {
+                    warn!(
+                        network = entry.network,
+                        port_id = entry.port_id,
+                        "Init-Routing-Table: unknown Port ID, entry skipped"
+                    );
+                    continue;
+                };
+                if tbl.len() >= MAX_LEARNED_ROUTES && tbl.lookup(entry.network).is_none() {
                     tbl.record_learning_cap();
                     warn!("Init-Routing-Table: route cap reached, ignoring further entries");
                     break;
                 }
-                tbl.add_learned(*net, port_idx, MacAddr::from_slice(source_mac));
-                tbl.record_learned();
-                debug!(
-                    network = net,
-                    port = port_idx,
-                    "Learned route from Init-Routing-Table"
-                );
-            }
-            drop(tbl);
-        }
-
-        let mut payload = BytesMut::new();
-        if is_query {
-            let tbl = table.lock().await;
-            let networks = tbl.networks();
-            let count = networks.len().min(255);
-            payload.put_u8(count as u8);
-            for net in networks.iter().take(count) {
-                if let Some(route) = tbl.lookup(*net) {
-                    payload.put_u16(*net);
-                    payload.put_u8(route.port_index as u8); // Port ID
-                    payload.put_u8(0); // Port info length
+                // Non-zero Port ID replaces or appends: "the routing
+                // information for this DNET shall either replace any previous
+                // entry for this DNET in the routing table or, if no such
+                // entry exists, be appended to the routing table" (6.4.7).
+                if tbl.apply_management_update(
+                    entry.network,
+                    mapped,
+                    MacAddr::from_slice(source_mac),
+                ) {
+                    debug!(
+                        network = entry.network,
+                        port = mapped,
+                        "Applied route from Init-Routing-Table management update"
+                    );
                 }
             }
-        } else {
-            payload.put_u8(0);
         }
 
-        let payload_len = payload.len();
+        // Update ACK carries no data at all (6.6.3.9: "it shall return an
+        // Initialize-Routing-Table-Ack without data"; 6.4.8: the data portion
+        // is "returned only in response to a routing table query"). An empty
+        // payload is not interchangeable with a zero count octet.
         let response = Npdu {
             is_network_message: true,
             message_type: Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK.to_raw()),
-            payload: payload.freeze(),
+            payload: Bytes::new(),
             ..Npdu::default()
         };
 
-        let mut buf = BytesMut::with_capacity(8 + payload_len);
+        let mut buf = BytesMut::with_capacity(8);
         if let Err(e) = encode_npdu(&mut buf, &response) {
             warn!("Failed to encode Init-Routing-Table-ACK NPDU: {e}");
             return;
@@ -601,20 +733,25 @@ pub(super) async fn handle_network_message(
             }
         }
     } else if msg_type == NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK.to_raw() {
-        // Clauses 6.4.8/6.6.3.9: same data format as Initialize-Routing-Table;
-        // learn routes from peer. An empty payload carries no entries and is
+        // Clauses 6.4.8/6.6.3.9: same data format as Initialize-Routing-Table.
+        // The listed Port IDs are the SENDER's local numbering, so only the
+        // DNETs are learned — via the ingress port and immediate source MAC,
+        // through the corroboration gate. Management reconfiguration never
+        // happens here (see the Init arm): ACK claims stay learned-only and
+        // direct routes stay safe. An empty payload carries no entries and is
         // a no-op; any other malformed envelope is dropped without learning.
         let data = &npdu.payload;
         if data.is_empty() {
             return;
         }
-        let Some(networks) = parse_routing_table_entries(data) else {
+        let Some(entries) = parse_routing_table_entries(data) else {
             return;
         };
         let mut table = table.lock().await;
         let mut replacement_networks = HashSet::new();
-        for net in &networks {
-            if *net == 0 || *net == 0xFFFF {
+        for entry in &entries {
+            let net = entry.network;
+            if net == 0 || net == 0xFFFF {
                 continue;
             }
             if table.len() >= MAX_LEARNED_ROUTES {
@@ -622,14 +759,14 @@ pub(super) async fn handle_network_message(
                 break;
             }
             if table
-                .lookup(*net)
+                .lookup(net)
                 .is_some_and(|entry| !entry.directly_connected && entry.port_index != port_idx)
-                && !replacement_networks.insert(*net)
+                && !replacement_networks.insert(net)
             {
                 continue;
             }
             if table.apply_learning_claim(
-                *net,
+                net,
                 port_idx,
                 MacAddr::from_slice(source_mac),
                 Instant::now(),
