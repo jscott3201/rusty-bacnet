@@ -11,6 +11,7 @@ use tracing::{debug, warn};
 
 use crate::router_table::RouterTable;
 
+use super::control_policy::{ControlClass, ControlGate};
 use super::forwarding::send_reject;
 use super::{IngressContext, SendRequest};
 
@@ -96,10 +97,14 @@ const _: () = assert!(
 /// the table lock (RB-03, Clauses 6.2 / 6.4 / 6.5.4 / 6.6.3.2). A truncated
 /// tail rejects the whole message: no table change, no partial forward, no
 /// rebroadcast, and — for Initialize-Routing-Table — no ACK.
+///
+/// RB-09: protected controls authorize post-validation, pre-lock, lock-free
+/// via `control`. Deny is a silent drop: no mutation, relay, ACK, or Reject.
 pub(super) async fn handle_network_message(
     table: &Arc<Mutex<RouterTable>>,
     send_txs: &[mpsc::Sender<SendRequest>],
     ctx: &IngressContext,
+    control: &ControlGate,
 ) {
     const MAX_LEARNED_ROUTES: usize = 256;
 
@@ -214,6 +219,16 @@ pub(super) async fn handle_network_message(
         if data.is_empty() || data.len() % 2 != 0 {
             return;
         }
+        // RB-09 protected: authorize lock-free; deny drops silently.
+        {
+            let targets: Vec<u16> = data
+                .chunks_exact(2)
+                .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                .collect();
+            if !control.authorize(ctx, ControlClass::IAm, &targets, false) {
+                return;
+            }
+        }
 
         let mut table = table.lock().await;
 
@@ -283,6 +298,9 @@ pub(super) async fn handle_network_message(
         }
         let reason = npdu.payload[0];
         let rejected_net = u16::from_be_bytes([npdu.payload[1], npdu.payload[2]]);
+        if !control.authorize(ctx, ControlClass::Reject, &[rejected_net], false) {
+            return;
+        }
         warn!(
             network = rejected_net,
             reason = reason,
@@ -358,6 +376,9 @@ pub(super) async fn handle_network_message(
             listed.push(u16::from_be_bytes([data[offset], data[offset + 1]]));
             offset += 2;
         }
+        if !control.authorize(ctx, ControlClass::Busy, &listed, listed.is_empty()) {
+            return;
+        }
         let peer = MacAddr::from_slice(source_mac);
         let deadline = Instant::now() + Duration::from_secs(30);
         {
@@ -415,6 +436,9 @@ pub(super) async fn handle_network_message(
         while offset + 2 <= data.len() {
             listed.push(u16::from_be_bytes([data[offset], data[offset + 1]]));
             offset += 2;
+        }
+        if !control.authorize(ctx, ControlClass::Available, &listed, listed.is_empty()) {
+            return;
         }
         let peer = MacAddr::from_slice(source_mac);
         {
@@ -539,9 +563,14 @@ pub(super) async fn handle_network_message(
         // without any routing table data to the source" (6.6.3.8). Entries
         // apply in wire order (last wins); an unknown wire Port ID names no
         // local port, so that entry is skipped while the rest still apply.
-        // No authorization policy yet (RB-09): the direct-route immunity in
-        // the apply helpers is safety scoping, not an auth decision. This arm
-        // never consults the RB-04 via-peer selector.
+        // RB-09 protected: deny drops silently with no empty ACK. Direct
+        // immunity stays safety scoping, not auth. No RB-04 via-peer check.
+        {
+            let targets: Vec<u16> = entries.iter().map(|e| e.network).collect();
+            if !control.authorize(ctx, ControlClass::InitMgmt, &targets, false) {
+                return;
+            }
+        }
         let port_count = send_txs.len();
         {
             let mut tbl = table.lock().await;
@@ -625,6 +654,9 @@ pub(super) async fn handle_network_message(
             return;
         }
         let net = u16::from_be_bytes([npdu.payload[0], npdu.payload[1]]);
+        if !control.authorize(ctx, ControlClass::ICouldBe, &[net], false) {
+            return;
+        }
         let performance_index = npdu.payload[2];
         debug!(
             network = net,
@@ -747,6 +779,12 @@ pub(super) async fn handle_network_message(
         let Some(entries) = parse_routing_table_entries(data) else {
             return;
         };
+        {
+            let targets: Vec<u16> = entries.iter().map(|e| e.network).collect();
+            if !control.authorize(ctx, ControlClass::InitAck, &targets, false) {
+                return;
+            }
+        }
         let mut table = table.lock().await;
         let mut replacement_networks = HashSet::new();
         for entry in &entries {

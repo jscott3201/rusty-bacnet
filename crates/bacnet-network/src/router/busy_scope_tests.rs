@@ -364,7 +364,13 @@ async fn queue_full_keeps_marks_bounded_and_local() {
         .unwrap();
 
     let ctx = IngressContext::test_local(1, 2000, PEER_A, control_npdu(BUSY, &[]));
-    handle_network_message(&table, &[tx0, tx1], &ctx).await;
+    handle_network_message(
+        &table,
+        &[tx0, tx1],
+        &ctx,
+        &control_policy::ControlGate::permissive(),
+    )
+    .await;
 
     // Per-route state is correct despite the propagation drop; the drop is
     // bounded (no retry queue, no new admission path): port 0 still holds

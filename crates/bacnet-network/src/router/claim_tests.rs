@@ -19,7 +19,13 @@ async fn deliver(
         ..Default::default()
     };
     let ctx = IngressContext::test_local(port, 1000, source_mac, npdu);
-    handle_network_message(table, &[tx0, tx1], &ctx).await;
+    handle_network_message(
+        table,
+        &[tx0, tx1],
+        &ctx,
+        &super::control_policy::ControlGate::permissive(),
+    )
+    .await;
     let mut output = [Vec::new(), Vec::new()];
     while let Ok(request) = rx0.try_recv() {
         output[0].push(request);
@@ -443,6 +449,7 @@ async fn dampened_table_transition_still_relays_every_reject() {
             &table,
             &send_txs,
             &IngressContext::test_local(0, 1000, &[1], npdu.clone()),
+            &super::control_policy::ControlGate::permissive(),
         )
         .await;
         let SendRequest::Unicast {

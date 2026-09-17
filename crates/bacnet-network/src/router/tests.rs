@@ -6,6 +6,15 @@ use tokio::time::Duration;
 
 mod data_attributes;
 
+// RB-09: permissive default preserves pre-policy behavior for legacy tests.
+async fn deliver(
+    table: &Arc<Mutex<RouterTable>>,
+    txs: &[mpsc::Sender<SendRequest>],
+    ctx: &IngressContext,
+) {
+    handle_network_message(table, txs, ctx, &control_policy::ControlGate::permissive()).await;
+}
+
 #[tokio::test]
 async fn router_forwards_between_networks() {
     let transport_a = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
@@ -525,7 +534,7 @@ async fn received_reject_removes_learned_route() {
     };
 
     let ctx = IngressContext::test_local(0, 1000, &[0x0A], npdu);
-    handle_network_message(&table, &send_txs, &ctx).await;
+    deliver(&table, &send_txs, &ctx).await;
 
     let tbl = table.lock().await;
     assert!(tbl.lookup(3000).is_none());
@@ -553,7 +562,7 @@ async fn received_reject_does_not_remove_direct_route() {
     };
 
     let ctx = IngressContext::test_local(0, 1000, &[0x0A], npdu);
-    handle_network_message(&table, &send_txs, &ctx).await;
+    deliver(&table, &send_txs, &ctx).await;
 
     let tbl = table.lock().await;
     assert!(tbl.lookup(1000).is_some());
@@ -582,7 +591,7 @@ async fn who_is_router_with_specific_network() {
     };
 
     let ctx = IngressContext::test_local(0, 1000, &[0x0A], npdu);
-    handle_network_message(&table, &send_txs, &ctx).await;
+    deliver(&table, &send_txs, &ctx).await;
 
     let sent = rx.try_recv().unwrap();
     match sent {
@@ -622,7 +631,7 @@ async fn who_is_router_with_unknown_network_no_response() {
     };
 
     let ctx = IngressContext::test_local(0, 1000, &[0x0A], npdu);
-    handle_network_message(&table, &send_txs, &ctx).await;
+    deliver(&table, &send_txs, &ctx).await;
 
     assert!(rx.try_recv().is_err());
 }
@@ -647,7 +656,7 @@ async fn router_busy_does_not_crash() {
     };
 
     let ctx = IngressContext::test_local(0, 1000, &[0x0A], npdu);
-    handle_network_message(&table, &send_txs, &ctx).await;
+    deliver(&table, &send_txs, &ctx).await;
 }
 
 #[tokio::test]
@@ -670,7 +679,7 @@ async fn router_available_does_not_crash() {
     };
 
     let ctx = IngressContext::test_local(0, 1000, &[0x0A], npdu);
-    handle_network_message(&table, &send_txs, &ctx).await;
+    deliver(&table, &send_txs, &ctx).await;
 }
 
 #[tokio::test]
@@ -693,7 +702,7 @@ async fn i_could_be_router_stores_potential_route() {
     };
 
     let ctx = IngressContext::test_local(0, 1000, &[0x0A, 0x0B], npdu);
-    handle_network_message(&table, &send_txs, &ctx).await;
+    deliver(&table, &send_txs, &ctx).await;
 
     let tbl = table.lock().await;
     let entry = tbl.lookup(5000).unwrap();
@@ -723,7 +732,7 @@ async fn i_could_be_router_does_not_overwrite_existing_route() {
     };
 
     let ctx = IngressContext::test_local(0, 1000, &[0x0A], npdu);
-    handle_network_message(&table, &send_txs, &ctx).await;
+    deliver(&table, &send_txs, &ctx).await;
 
     let tbl = table.lock().await;
     let entry = tbl.lookup(5000).unwrap();
@@ -751,7 +760,7 @@ async fn establish_connection_does_not_crash() {
     };
 
     let ctx = IngressContext::test_local(0, 1000, &[0x0A], npdu);
-    handle_network_message(&table, &send_txs, &ctx).await;
+    deliver(&table, &send_txs, &ctx).await;
 }
 
 #[tokio::test]
@@ -774,7 +783,7 @@ async fn disconnect_retains_learned_route() {
     };
 
     let ctx = IngressContext::test_local(0, 1000, &[0x0A], npdu);
-    handle_network_message(&table, &send_txs, &ctx).await;
+    deliver(&table, &send_txs, &ctx).await;
 
     let tbl = table.lock().await;
     assert!(tbl.lookup(7000).is_some());
@@ -801,7 +810,7 @@ async fn disconnect_does_not_remove_direct_route() {
     };
 
     let ctx = IngressContext::test_local(0, 1000, &[0x0A], npdu);
-    handle_network_message(&table, &send_txs, &ctx).await;
+    deliver(&table, &send_txs, &ctx).await;
 
     let tbl = table.lock().await;
     assert!(tbl.lookup(1000).is_some());
