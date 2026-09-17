@@ -17,8 +17,8 @@ fn hub_response_silence_has_scoped_policy_and_executable_anchors() {
             .count(),
         19
     );
-    assert_eq!(data["reviewed_at"], "2026-08-13");
-    assert_eq!(data["repo_sha"], "f485021f5cd7058ac406d57d3d317936cbe7b361");
+    assert_eq!(data["reviewed_at"], "2026-09-17");
+    assert_eq!(data["repo_sha"], "b4c845caf920db279b0aefbd2824ac1348bba1cb");
     for file in [
         "crates/bacnet-transport/src/sc_hub/handler.rs",
         "crates/bacnet-transport/src/sc_hub/response_silence_tests.rs",
@@ -113,8 +113,8 @@ fn hub_unknown_transit_evidence_keeps_family_scope_and_existing_lifecycle() {
         row["status"],
         "implementation-present-needs-state-machine-audit"
     );
-    assert_eq!(data["reviewed_at"], "2026-08-13");
-    assert_eq!(data["repo_sha"], "f485021f5cd7058ac406d57d3d317936cbe7b361");
+    assert_eq!(data["reviewed_at"], "2026-09-17");
+    assert_eq!(data["repo_sha"], "b4c845caf920db279b0aefbd2824ac1348bba1cb");
     let policy = row["hub_unknown_transit"].as_str().unwrap();
     for phrase in [
         "AB.5.1",
@@ -176,8 +176,8 @@ fn hub_resolution_transit_is_unicast_hub_only_with_executable_evidence() {
         row["status"],
         "implementation-present-needs-state-machine-audit"
     );
-    assert_eq!(data["reviewed_at"], "2026-08-13");
-    assert_eq!(data["repo_sha"], "f485021f5cd7058ac406d57d3d317936cbe7b361");
+    assert_eq!(data["reviewed_at"], "2026-09-17");
+    assert_eq!(data["repo_sha"], "b4c845caf920db279b0aefbd2824ac1348bba1cb");
     let policy = row["hub_resolution_transit"].as_str().unwrap();
     for phrase in [
         "HUB-only",

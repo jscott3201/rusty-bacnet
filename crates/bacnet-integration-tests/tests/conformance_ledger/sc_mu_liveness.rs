@@ -17,8 +17,8 @@ fn mu_liveness_evidence_preserves_scope_and_blocked_write_limitation() {
             .count(),
         19
     );
-    assert_eq!(data["reviewed_at"], "2026-08-13");
-    assert_eq!(data["repo_sha"], "f485021f5cd7058ac406d57d3d317936cbe7b361");
+    assert_eq!(data["reviewed_at"], "2026-09-17");
+    assert_eq!(data["repo_sha"], "b4c845caf920db279b0aefbd2824ac1348bba1cb");
     for (field, anchors) in [
         ("positive_tests", &[
             "crates/bacnet-transport/src/sc/mu_liveness_tests.rs::mu_liveness_valid_npdu_data_options_and_heartbeat_request_restore_activity",
@@ -181,8 +181,8 @@ fn empty_npdu_evidence_preserves_zero_only_scope_and_existing_lifecycle_owners()
             .count(),
         19
     );
-    assert_eq!(data["reviewed_at"], "2026-08-13");
-    assert_eq!(data["repo_sha"], "f485021f5cd7058ac406d57d3d317936cbe7b361");
+    assert_eq!(data["reviewed_at"], "2026-09-17");
+    assert_eq!(data["repo_sha"], "b4c845caf920db279b0aefbd2824ac1348bba1cb");
     let row = rows["BACNET-AB-SC-CONNECTION-STATE"];
     assert_eq!(
         row["status"],
