@@ -35,6 +35,7 @@ async fn busy_available_empty_valid_and_odd_payloads() {
     table.add_direct(1000, 0);
     table.add_direct(2000, 1);
     table.add_learned(3000, 0, MacAddr::from_slice(&[1]));
+    table.add_learned(3001, 1, MacAddr::from_slice(&[2]));
     let mut h = Harness::with_table(table);
 
     // Truncated tail: no marks, no rebroadcast.
@@ -48,9 +49,16 @@ async fn busy_available_empty_valid_and_odd_payloads() {
             h.table.lock().await.effective_reachability(3000),
             Some(ReachabilityStatus::Reachable)
         );
+        assert_eq!(
+            h.table.lock().await.effective_reachability(3001),
+            Some(ReachabilityStatus::Reachable)
+        );
     }
 
-    // Empty (omitted) list keeps its existing meaning: rebroadcast, no marks.
+    // RB-04 corrected omitted-list meaning (Clauses 6.6.3.6/6.6.3.7: "all the
+    // networks it normally serves"): an empty Busy from peer [2] on port 1
+    // marks only the via-peer set (3001) while 3000 — served via port 0 peer
+    // [1] — stays Reachable. Propagation still rebroadcasts verbatim.
     h.handle(h.ctx(
         1,
         &[2],
@@ -60,20 +68,59 @@ async fn busy_available_empty_valid_and_odd_payloads() {
     assert_eq!(broadcast_data(h.drain(0)).len(), 1);
     assert!(h.drain(1).is_empty());
     assert_eq!(
+        h.table.lock().await.effective_reachability(3001),
+        Some(ReachabilityStatus::Busy)
+    );
+    assert_eq!(
         h.table.lock().await.effective_reachability(3000),
         Some(ReachabilityStatus::Reachable)
     );
 
-    // Valid list: marked busy and rebroadcast verbatim.
+    // Omitted Available re-enables exactly that set.
+    h.handle(h.ctx(
+        1,
+        &[2],
+        control_npdu(NetworkMessageType::ROUTER_AVAILABLE_TO_NETWORK, &[]),
+    ))
+    .await;
+    assert_eq!(broadcast_data(h.drain(0)).len(), 1);
+    assert_eq!(
+        h.table.lock().await.effective_reachability(3001),
+        Some(ReachabilityStatus::Reachable)
+    );
+
+    // Explicit lists intersect with the announcing path: 3000 (served via
+    // port 0 peer [1]) and direct 2000 are not marked by peer [2] on port 1,
+    // but the message still propagates verbatim.
+    h.handle(h.ctx(
+        1,
+        &[2],
+        control_npdu(
+            NetworkMessageType::ROUTER_BUSY_TO_NETWORK,
+            &[0x0b, 0xb8, 0x07, 0xd0],
+        ),
+    ))
+    .await;
+    assert_eq!(broadcast_data(h.drain(0)).len(), 1);
+    assert_eq!(
+        h.table.lock().await.effective_reachability(3000),
+        Some(ReachabilityStatus::Reachable)
+    );
+    assert_eq!(
+        h.table.lock().await.effective_reachability(2000),
+        Some(ReachabilityStatus::Reachable)
+    );
+
+    // Valid list via the announcing peer: marked busy and rebroadcast verbatim.
     let mut ctx = h.ctx(
         1,
         &[2],
-        control_npdu(NetworkMessageType::ROUTER_BUSY_TO_NETWORK, &[0x0b, 0xb8]),
+        control_npdu(NetworkMessageType::ROUTER_BUSY_TO_NETWORK, &[0x0b, 0xb9]),
     );
     ctx.data_attributes = attributes();
     h.handle(ctx).await;
     assert_eq!(
-        h.table.lock().await.effective_reachability(3000),
+        h.table.lock().await.effective_reachability(3001),
         Some(ReachabilityStatus::Busy)
     );
     let rebroadcasts = broadcast_data(h.drain(0));
@@ -83,7 +130,7 @@ async fn busy_available_empty_valid_and_odd_payloads() {
             .unwrap()
             .payload
             .as_ref(),
-        &[0x0b, 0xb8]
+        &[0x0b, 0xb9]
     );
 
     // Valid Available clears the mark.
@@ -92,12 +139,12 @@ async fn busy_available_empty_valid_and_odd_payloads() {
         &[2],
         control_npdu(
             NetworkMessageType::ROUTER_AVAILABLE_TO_NETWORK,
-            &[0x0b, 0xb8],
+            &[0x0b, 0xb9],
         ),
     ))
     .await;
     assert_eq!(
-        h.table.lock().await.effective_reachability(3000),
+        h.table.lock().await.effective_reachability(3001),
         Some(ReachabilityStatus::Reachable)
     );
     assert_eq!(broadcast_data(h.drain(0)).len(), 1);

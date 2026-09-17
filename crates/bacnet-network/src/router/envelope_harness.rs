@@ -48,6 +48,22 @@ impl Harness {
         }
     }
 
+    /// RB-04 multi-peer fixture: direct 1000/0 + 2000/1, plus learned routes
+    /// across three distinct ingress peers — 3000/3001 via port 1 peer [2],
+    /// 4000 via port 1 peer [3] (same port, other peer), 5000 via port 0
+    /// peer [9] (other port). Lets omitted/single/mixed Busy/Available lists
+    /// assert per-route change AND no-change on one topology.
+    pub(super) fn busy_scope() -> Self {
+        let mut table = RouterTable::new();
+        table.add_direct(1000, 0);
+        table.add_direct(2000, 1);
+        table.add_learned(3000, 1, MacAddr::from_slice(&[2]));
+        table.add_learned(3001, 1, MacAddr::from_slice(&[2]));
+        table.add_learned(4000, 1, MacAddr::from_slice(&[3]));
+        table.add_learned(5000, 0, MacAddr::from_slice(&[9]));
+        Self::with_table(table)
+    }
+
     pub(super) fn ctx(&self, port: usize, source_mac: &[u8], npdu: Npdu) -> IngressContext {
         let _ = &self;
         IngressContext {

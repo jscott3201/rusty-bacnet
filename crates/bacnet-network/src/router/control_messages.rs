@@ -294,27 +294,53 @@ pub(super) async fn handle_network_message(
             }
         }
     } else if msg_type == NetworkMessageType::ROUTER_BUSY_TO_NETWORK.to_raw() {
-        // Clauses 6.4.5/6.6.3.6: an optional list of 2-octet networks; an
-        // omitted list is meaningful (all networks) and keeps its existing
-        // handling (RB-04 owns omitted-list semantics). A truncated tail
-        // rejects the whole message: no marks, no rebroadcast.
+        // Clauses 6.4.5/6.6.3.6: an optional list of 2-octet networks. "If the
+        // 2-octet network numbers are omitted, it means the router wishes to
+        // stop the flow of messages to all the networks it normally serves":
+        // the omitted scope is the via-peer set (learned routes egressing
+        // this ingress port toward the immediate source MAC), never every
+        // route and never none. Explicit lists intersect with that set, and
+        // directly-attached paths are never overridden (see
+        // `RouterTable::is_served_via_peer`). A truncated tail rejects the
+        // whole message: no marks, no rebroadcast. Marks apply immediately
+        // with a 30s deadline (no reject-style damping); learning freshness
+        // (`last_seen`) is untouched. Propagation rebroadcasts the payload
+        // verbatim out every other port; full queues drop locally (bounded,
+        // no retry, no admission path) while per-route marks stay correct.
         let data = &npdu.payload;
         if data.len() % 2 != 0 {
             return;
         }
-        let deadline = Instant::now() + Duration::from_secs(30);
-        let mut tbl = table.lock().await;
+        let mut listed = Vec::with_capacity(data.len() / 2);
         let mut offset = 0;
         while offset + 2 <= data.len() {
-            let net = u16::from_be_bytes([data[offset], data[offset + 1]]);
+            listed.push(u16::from_be_bytes([data[offset], data[offset + 1]]));
             offset += 2;
-            tbl.mark_busy(net, deadline);
-            debug!(
-                network = net,
-                "Router busy — marked network as congested (30s timer)"
-            );
         }
-        drop(tbl);
+        let peer = MacAddr::from_slice(source_mac);
+        let deadline = Instant::now() + Duration::from_secs(30);
+        {
+            let mut tbl = table.lock().await;
+            if listed.is_empty() {
+                for net in tbl.routes_served_via_peer(port_idx, &peer) {
+                    tbl.mark_busy(net, deadline);
+                    debug!(
+                        network = net,
+                        "Router busy — marked network as congested (30s timer)"
+                    );
+                }
+            } else {
+                for net in listed {
+                    if tbl.is_served_via_peer(net, port_idx, &peer) {
+                        tbl.mark_busy(net, deadline);
+                        debug!(
+                            network = net,
+                            "Router busy — marked network as congested (30s timer)"
+                        );
+                    }
+                }
+            }
+        }
         // Re-broadcast to all other ports (spec 6.6.3.6)
         let rebroadcast = Npdu {
             is_network_message: true,
@@ -335,20 +361,37 @@ pub(super) async fn handle_network_message(
             }
         }
     } else if msg_type == NetworkMessageType::ROUTER_AVAILABLE_TO_NETWORK.to_raw() {
-        // Clauses 6.4.6/6.6.3.7: same envelope rule as Router-Busy.
+        // Clauses 6.4.6/6.6.3.7: same scope rule as Router-Busy. "If the
+        // 2-octet network numbers are omitted, the router wishes to re-enable
+        // the flow of messages to all the networks it serves": the omitted
+        // scope is the via-peer set, and explicit lists intersect with it.
         let data = &npdu.payload;
         if data.len() % 2 != 0 {
             return;
         }
-        let mut tbl = table.lock().await;
+        let mut listed = Vec::with_capacity(data.len() / 2);
         let mut offset = 0;
         while offset + 2 <= data.len() {
-            let net = u16::from_be_bytes([data[offset], data[offset + 1]]);
+            listed.push(u16::from_be_bytes([data[offset], data[offset + 1]]));
             offset += 2;
-            tbl.mark_available(net);
-            debug!(network = net, "Router available — cleared congestion");
         }
-        drop(tbl);
+        let peer = MacAddr::from_slice(source_mac);
+        {
+            let mut tbl = table.lock().await;
+            if listed.is_empty() {
+                for net in tbl.routes_served_via_peer(port_idx, &peer) {
+                    tbl.mark_available(net);
+                    debug!(network = net, "Router available — cleared congestion");
+                }
+            } else {
+                for net in listed {
+                    if tbl.is_served_via_peer(net, port_idx, &peer) {
+                        tbl.mark_available(net);
+                        debug!(network = net, "Router available — cleared congestion");
+                    }
+                }
+            }
+        }
         // Re-broadcast to all other ports (spec 6.6.3.7)
         let rebroadcast = Npdu {
             is_network_message: true,

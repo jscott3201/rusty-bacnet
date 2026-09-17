@@ -221,8 +221,14 @@ impl RouterTable {
             match reason {
                 1 => entry.reachability != ReachabilityStatus::Unreachable,
                 2 => {
-                    entry.reachability != ReachabilityStatus::Busy
-                        || entry.busy_until.is_some_and(|deadline| now >= deadline)
+                    // A Busy (flow-control) claim never lifts permanent
+                    // Unreachable: the route is already beyond reachable, so
+                    // there is no change to apply, dampen, or record — only
+                    // Available or fresh learning exits Unreachable. An
+                    // unexpired Busy is likewise already in effect.
+                    entry.reachability != ReachabilityStatus::Unreachable
+                        && (entry.reachability != ReachabilityStatus::Busy
+                            || entry.busy_until.is_some_and(|deadline| now >= deadline))
                 }
                 _ => true,
             }
@@ -373,19 +379,61 @@ impl RouterTable {
     }
 
     /// Mark a network as busy with a deadline for auto-clear (spec 6.6.3.6).
+    /// Directly-connected paths are never overridden by Busy: they are served
+    /// locally, not via the announcing peer. A permanently Unreachable entry
+    /// is likewise left untouched: a temporary congestion claim must never
+    /// resurrect a failed route via the 30s auto-clear — only Available or
+    /// fresh learning lifts Unreachable.
     pub fn mark_busy(&mut self, network: u16, deadline: Instant) {
         if let Some(entry) = self.routes.get_mut(&network) {
-            entry.reachability = ReachabilityStatus::Busy;
-            entry.busy_until = Some(deadline);
+            if !entry.directly_connected && entry.reachability != ReachabilityStatus::Unreachable {
+                entry.reachability = ReachabilityStatus::Busy;
+                entry.busy_until = Some(deadline);
+            }
         }
     }
 
     /// Mark a network as available, clearing any busy state (spec 6.6.3.7).
+    /// Directly-connected paths are never touched: Busy/Available only covers
+    /// routes served via the announcing peer.
     pub fn mark_available(&mut self, network: u16) {
         if let Some(entry) = self.routes.get_mut(&network) {
-            entry.reachability = ReachabilityStatus::Reachable;
-            entry.busy_until = None;
+            if !entry.directly_connected {
+                entry.reachability = ReachabilityStatus::Reachable;
+                entry.busy_until = None;
+            }
         }
+    }
+
+    /// Whether `network` is served via the announcing peer on this ingress
+    /// path: a learned (never directly-connected) route whose egress port and
+    /// next-hop MAC match the immediate link peer — not the routed SNET/SADR.
+    /// RB-04 locks this predicate to 135-2020 Clauses 6.6.3.6/6.6.3.7: "If the
+    /// 2-octet network numbers are omitted, it means the router wishes to
+    /// stop the flow of messages to all the networks it normally serves"
+    /// (Busy; Available re-enables "the flow of messages to all the networks
+    /// it serves"). Explicit lists intersect with the same set: listed nets
+    /// outside the announcing path are not marked.
+    pub fn is_served_via_peer(&self, network: u16, port_index: usize, next_hop: &MacAddr) -> bool {
+        self.routes.get(&network).is_some_and(|entry| {
+            !entry.directly_connected
+                && entry.port_index == port_index
+                && entry.next_hop_mac == *next_hop
+        })
+    }
+
+    /// All networks served via the announcing peer: the omitted-list scope
+    /// for Router-Busy/Router-Available-To-Network (Clauses 6.6.3.6/6.6.3.7).
+    pub fn routes_served_via_peer(&self, port_index: usize, next_hop: &MacAddr) -> Vec<u16> {
+        self.routes
+            .iter()
+            .filter(|(_, entry)| {
+                !entry.directly_connected
+                    && entry.port_index == port_index
+                    && entry.next_hop_mac == *next_hop
+            })
+            .map(|(net, _)| *net)
+            .collect()
     }
 
     /// Mark a network as permanently unreachable (spec 6.6.3.5, reject reason 1).
