@@ -420,7 +420,8 @@ async fn full_queue_drops_acks_without_mutation_or_panic() {
 async fn ack_claims_learn_via_ingress_and_never_reconfigure() {
     // The ACK's Port IDs are the sender's local numbering: they must not
     // steer our table, and direct routes must survive ACK traffic.
-    let mut table = RouterTable::new();
+    // Hardened gate: first cross-port claim pends, repeat corroborates.
+    let mut table = RouterTable::new_hardened();
     table.add_direct(1000, 0);
     table.add_direct(2000, 1);
     table.add_learned(3000, 0, MacAddr::from_slice(&[1]));

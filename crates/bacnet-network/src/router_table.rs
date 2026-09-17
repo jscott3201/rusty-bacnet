@@ -74,6 +74,12 @@ pub enum ReachabilityStatus {
 }
 
 /// A route entry in the router table.
+///
+/// Freshness is split (RB-06): `last_seen` is control-plane confirmation
+/// (learning claims and management applies only), while `last_used` is
+/// data-plane forwarding use. Expiry keys off `last_seen` only so sustained
+/// traffic cannot manufacture fresh route evidence. Busy/Available marks
+/// touch neither timestamp.
 #[derive(Debug, Clone)]
 pub struct RouteEntry {
     /// Index of the port this network is reachable through.
@@ -84,6 +90,9 @@ pub struct RouteEntry {
     pub next_hop_mac: MacAddr,
     /// When this learned route was last confirmed. `None` for direct routes.
     pub last_seen: Option<Instant>,
+    /// When this route was last used for forwarding. `None` until first use
+    /// or after a port change installs an unused path. Never extends expiry.
+    pub last_used: Option<Instant>,
     /// Recorded reachability state of this route.
     pub reachability: ReachabilityStatus,
     /// Deadline after which a `Busy` status auto-clears (spec 6.6.3.6).
@@ -94,9 +103,30 @@ pub struct RouteEntry {
     pub last_port_change: Option<Instant>,
 }
 
+/// Convergence mode for learned cross-port moves (RB-06).
+///
+/// Standard (default) applies the 135-2020 6.6.3.2 last-wins rule immediately:
+/// each new advertisement represents a configuration modification and updates
+/// routing information. Hardened is an explicit opt-in local restriction that
+/// holds cross-port moves pending for a second same-(network, port) claim
+/// within 60s; it does not authenticate the claim and can delay legitimate
+/// convergence (alternation resets the slot, single-shot advertisers wait for
+/// the 60s reaper plus a fresh claim).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConvergenceMode {
+    /// Immediate single-claim convergence (spec default).
+    #[default]
+    Standard,
+    /// K=2/60s corroboration gate (explicit opt-in hardening).
+    Hardened,
+}
+
 /// BACnet routing table.
 ///
 /// Maps network numbers to the port through which they can be reached.
+/// Standard convergence ([`ConvergenceMode::Standard`]) is the default;
+/// hardened corroboration is an explicit opt-in via [`Self::new_hardened`]
+/// or [`Self::set_convergence`].
 #[derive(Debug, Clone)]
 pub struct RouterTable {
     /// Network number → route entry.
@@ -108,20 +138,53 @@ pub struct RouterTable {
     reject_transitions: HashMap<u16, HashMap<usize, Instant>>,
     // One challenger per live learned network, never keyed by peer identity.
     // Thus pending entries <= live learned routes. Every route replacement,
-    // removal and mutable-entry handoff clears its slot; expiry is checked lazily.
+    // removal and mutable-entry handoff clears its slot; expiry is checked
+    // lazily on the next claim for that network plus the periodic reaper
+    // (`expire_pending_at`, driven by the router aging task).
     pending_replacements: HashMap<u16, PendingReplacement>,
     claim_counters: RoutingClaimSnapshot,
+    convergence: ConvergenceMode,
 }
 
 impl RouterTable {
-    /// Create an empty routing table.
+    /// Create an empty routing table with standard single-claim convergence.
     pub fn new() -> Self {
         Self {
             routes: HashMap::new(),
             reject_transitions: HashMap::new(),
             pending_replacements: HashMap::new(),
             claim_counters: RoutingClaimSnapshot::default(),
+            convergence: ConvergenceMode::Standard,
         }
+    }
+
+    /// Create an empty routing table with the hardened K=2/60s gate enabled.
+    ///
+    /// Explicit opt-in only: cross-port learned moves wait for a second
+    /// same-(network, port) claim within 60s, with flap warnings retained.
+    /// Alternating challengers reset the slot and single-shot advertisers
+    /// need the reaper plus a fresh claim to converge.
+    pub fn new_hardened() -> Self {
+        let mut table = Self::new();
+        table.convergence = ConvergenceMode::Hardened;
+        table
+    }
+
+    /// Select the convergence mode. Switching to standard clears no routes
+    /// but leaves any hardened pending slots to lazy/reaper expiry; switching
+    /// to hardened keeps installed routes and applies the gate to later claims.
+    pub fn set_convergence(&mut self, mode: ConvergenceMode) {
+        self.convergence = mode;
+    }
+
+    /// Current convergence mode.
+    pub fn convergence(&self) -> ConvergenceMode {
+        self.convergence
+    }
+
+    /// Number of pending hardened challengers (bounded by live learned routes).
+    pub fn pending_count(&self) -> usize {
+        self.pending_replacements.len()
     }
 
     /// Read a consistent, non-resetting copy of this table's routing-claim totals.
@@ -149,10 +212,16 @@ impl RouterTable {
             .saturating_add(1);
     }
 
-    /// Gate I-Am-Router and Init-Routing-Table-ACK cross-port replacements only.
-    /// The caller holds the table lock across this synchronous gate and update.
-    /// Absent learning and current-port refreshes use the existing immediate path.
-    /// `now` makes the inclusive 60s boundary testable without sleeping.
+    /// Apply an I-Am-Router / Init-ACK learning claim.
+    ///
+    /// Standard mode applies immediately (135-2020 6.6.3.2 last-wins) with
+    /// flap warnings retained. Hardened mode gates cross-port learned moves
+    /// only: they need two claims for the same (network, new port) within
+    /// 60s inclusive. The caller holds the table lock across this synchronous
+    /// gate and update. Absent learning and current-port refreshes are
+    /// immediate in both modes. `now` makes the inclusive 60s boundary
+    /// testable without sleeping. Standard clears any stale challenger for
+    /// the network without counting it; hardened counts starts/applies/expiry.
     pub(crate) fn apply_learning_claim(
         &mut self,
         network: u16,
@@ -160,6 +229,10 @@ impl RouterTable {
         next_hop_mac: MacAddr,
         now: Instant,
     ) -> bool {
+        if self.convergence == ConvergenceMode::Standard {
+            self.pending_replacements.remove(&network);
+            return self.add_learned_with_flap_detection_at(network, port_index, next_hop_mac, now);
+        }
         let pending = self
             .pending_replacements
             .remove(&network)
@@ -199,7 +272,29 @@ impl RouterTable {
                 return false; // Keep all old route state, including forwarding and age.
             }
         }
-        self.add_learned_with_flap_detection(network, port_index, next_hop_mac)
+        self.add_learned_with_flap_detection_at(network, port_index, next_hop_mac, now)
+    }
+
+    /// Discard hardened pending slots older than 60s at `now`.
+    ///
+    /// Periodic reaper for idle routes: lazy expiry alone cannot clear a slot
+    /// with no further claims. Counts one `pending_expired` per discarded
+    /// slot; other cleanup (removal, aging, manual edits, refresh) does not
+    /// count. Returns the discarded network numbers in ascending order.
+    pub fn expire_pending_at(&mut self, now: Instant) -> Vec<u16> {
+        let mut expired: Vec<u16> = self
+            .pending_replacements
+            .iter()
+            .filter(|(_, pending)| now.duration_since(pending.first_seen) > CORROBORATION_WINDOW)
+            .map(|(net, _)| *net)
+            .collect();
+        expired.sort_unstable();
+        for net in &expired {
+            self.pending_replacements.remove(net);
+            self.claim_counters.pending_expired =
+                self.claim_counters.pending_expired.saturating_add(1);
+        }
+        expired
     }
 
     /// Apply only the reject-driven table transition, never its relay.
@@ -282,6 +377,7 @@ impl RouterTable {
                 directly_connected: true,
                 next_hop_mac: MacAddr::new(),
                 last_seen: None,
+                last_used: None,
                 reachability: ReachabilityStatus::Reachable,
                 busy_until: None,
                 flap_count: 0,
@@ -292,15 +388,39 @@ impl RouterTable {
 
     /// Add a learned route (network reachable via a next-hop router on the given port).
     /// Network 0 and 0xFFFF are reserved and will be silently ignored.
-    /// Does not overwrite direct routes.
+    /// Does not overwrite direct routes. Control-plane confirmation: sets
+    /// `last_seen`; preserves `last_used` on a same-port refresh, resets it
+    /// on a new or moved path.
     pub fn add_learned(&mut self, network: u16, port_index: usize, next_hop_mac: MacAddr) {
+        self.add_learned_at(network, port_index, next_hop_mac, Instant::now());
+    }
+
+    /// Injectable-time variant of [`Self::add_learned`] for deterministic tests.
+    pub fn add_learned_at(
+        &mut self,
+        network: u16,
+        port_index: usize,
+        next_hop_mac: MacAddr,
+        now: Instant,
+    ) {
         if network == 0 || network == 0xFFFF {
             return;
         }
-        if let Some(existing) = self.routes.get(&network) {
+        let preserved_used = self.routes.get(&network).and_then(|existing| {
             if existing.directly_connected {
-                return; // never overwrite direct routes
+                None
+            } else if existing.port_index == port_index {
+                existing.last_used
+            } else {
+                None
             }
+        });
+        if self
+            .routes
+            .get(&network)
+            .is_some_and(|existing| existing.directly_connected)
+        {
+            return; // never overwrite direct routes
         }
         self.reject_transitions.remove(&network);
         self.pending_replacements.remove(&network);
@@ -310,7 +430,8 @@ impl RouterTable {
                 port_index,
                 directly_connected: false,
                 next_hop_mac,
-                last_seen: Some(Instant::now()),
+                last_seen: Some(now),
+                last_used: preserved_used,
                 reachability: ReachabilityStatus::Reachable,
                 busy_until: None,
                 flap_count: 0,
@@ -408,6 +529,21 @@ impl RouterTable {
         port_index: usize,
         next_hop_mac: MacAddr,
     ) -> bool {
+        self.add_learned_with_flap_detection_at(network, port_index, next_hop_mac, Instant::now())
+    }
+
+    /// Injectable-time variant of [`Self::add_learned_with_flap_detection`].
+    ///
+    /// A port change installs `last_seen = now` with `last_used = None` (the
+    /// new path has not forwarded yet); a same-port refresh preserves
+    /// `last_used` via [`Self::add_learned_at`].
+    pub fn add_learned_with_flap_detection_at(
+        &mut self,
+        network: u16,
+        port_index: usize,
+        next_hop_mac: MacAddr,
+        now: Instant,
+    ) -> bool {
         if network == 0 || network == 0xFFFF {
             return false;
         }
@@ -416,7 +552,6 @@ impl RouterTable {
                 return false;
             }
             if existing.port_index != port_index {
-                let now = Instant::now();
                 let flap_count = match existing.last_port_change {
                     Some(changed) if now.duration_since(changed) < Duration::from_secs(60) => {
                         existing.flap_count.saturating_add(1)
@@ -444,6 +579,7 @@ impl RouterTable {
                         directly_connected: false,
                         next_hop_mac,
                         last_seen: Some(now),
+                        last_used: None,
                         reachability: ReachabilityStatus::Reachable,
                         busy_until: None,
                         flap_count,
@@ -453,7 +589,7 @@ impl RouterTable {
                 return true;
             }
         }
-        self.add_learned(network, port_index, next_hop_mac);
+        self.add_learned_at(network, port_index, next_hop_mac, now);
         true
     }
 
@@ -462,7 +598,8 @@ impl RouterTable {
     /// locally, not via the announcing peer. A permanently Unreachable entry
     /// is likewise left untouched: a temporary congestion claim must never
     /// resurrect a failed route via the 30s auto-clear — only Available or
-    /// fresh learning lifts Unreachable.
+    /// fresh learning lifts Unreachable. Touches neither `last_seen` nor
+    /// `last_used` (RB-06 freshness split).
     pub fn mark_busy(&mut self, network: u16, deadline: Instant) {
         if let Some(entry) = self.routes.get_mut(&network) {
             if !entry.directly_connected && entry.reachability != ReachabilityStatus::Unreachable {
@@ -474,7 +611,8 @@ impl RouterTable {
 
     /// Mark a network as available, clearing any busy state (spec 6.6.3.7).
     /// Directly-connected paths are never touched: Busy/Available only covers
-    /// routes served via the announcing peer.
+    /// routes served via the announcing peer. Touches neither `last_seen` nor
+    /// `last_used` (RB-06 freshness split).
     pub fn mark_available(&mut self, network: u16) {
         if let Some(entry) = self.routes.get_mut(&network) {
             if !entry.directly_connected {
@@ -606,22 +744,35 @@ impl RouterTable {
         self.routes.is_empty()
     }
 
-    /// Refresh the `last_seen` timestamp for a learned route.
+    /// Record data-plane forwarding use for a learned route.
     ///
-    /// Direct routes are unaffected since they never expire.
+    /// Sets `last_used` only; `last_seen` (control-plane confirmation) is
+    /// untouched so traffic cannot extend expiry. Direct routes are unaffected
+    /// since they never expire.
     pub fn touch(&mut self, network: u16) {
+        self.touch_used_at(network, Instant::now());
+    }
+
+    /// Injectable-time variant of [`Self::touch`] for deterministic tests.
+    pub fn touch_used_at(&mut self, network: u16, now: Instant) {
         if let Some(entry) = self.routes.get_mut(&network) {
             if !entry.directly_connected {
-                entry.last_seen = Some(Instant::now());
+                entry.last_used = Some(now);
             }
         }
     }
 
-    /// Remove learned routes that have not been refreshed within `max_age`.
+    /// Remove learned routes not confirmed within `max_age`.
     ///
+    /// Keys off `last_seen` only; `last_used` never extends lifetime.
+    /// Direct routes (`last_seen == None`) never expire.
     /// Returns the network numbers that were purged.
     pub fn purge_stale(&mut self, max_age: Duration) -> Vec<u16> {
-        let now = Instant::now();
+        self.purge_stale_at(Instant::now(), max_age)
+    }
+
+    /// Injectable-time variant of [`Self::purge_stale`] for deterministic tests.
+    pub fn purge_stale_at(&mut self, now: Instant, max_age: Duration) -> Vec<u16> {
         let stale: Vec<u16> = self
             .routes
             .iter()

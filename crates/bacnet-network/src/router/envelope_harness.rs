@@ -26,6 +26,7 @@ pub(super) fn attributes() -> Vec<DataAttribute> {
 
 pub(super) struct Harness {
     pub(super) table: Arc<Mutex<RouterTable>>,
+    pub(super) discovery: Arc<Mutex<super::DiscoveryTracker>>,
     pub(super) txs: Vec<mpsc::Sender<SendRequest>>,
     pub(super) rxs: Vec<mpsc::Receiver<SendRequest>>,
 }
@@ -43,6 +44,7 @@ impl Harness {
         let (tx1, rx1) = mpsc::channel(16);
         Self {
             table: Arc::new(Mutex::new(table)),
+            discovery: Arc::new(Mutex::new(super::DiscoveryTracker::default())),
             txs: vec![tx0, tx1],
             rxs: vec![rx0, rx1],
         }
@@ -81,7 +83,7 @@ impl Harness {
     }
 
     pub(super) async fn dispatch(&mut self, ctx: IngressContext) {
-        dispatch_network_message(&self.table, &self.txs, &ctx).await;
+        dispatch_network_message(&self.table, &self.discovery, &self.txs, &ctx).await;
     }
 
     pub(super) fn drain(&mut self, port: usize) -> Vec<SendRequest> {

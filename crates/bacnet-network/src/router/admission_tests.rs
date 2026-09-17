@@ -175,18 +175,33 @@ async fn drain_announcements(peers: &mut [Peer]) {
 
 // An unknown-route reject behind local arrivals is a FIFO dispatch barrier.
 // It also proves local overload did not stop the existing reject path.
+// RB-06: unknowns also emit a bounded Who-Is solicitation on the *other*
+// ports; a stale solicitation from another port's earlier unknown may sit on
+// this peer's wire ahead of our reject, so discard Who-Is broadcasts here.
+// The first unknown solicits, repeats within 5s coalesce (no new broadcast).
 async fn barrier(peer: &mut Peer) {
     peer.tx
         .send(incoming(Some(address(9000, &[9])), 0))
         .await
         .unwrap();
-    let SendRequest::Unicast {
-        npdu,
-        mac,
-        data_attributes,
-    } = wire(peer).await
-    else {
-        panic!("expected unknown-route reject")
+    let (npdu, mac, data_attributes) = loop {
+        match wire(peer).await {
+            SendRequest::Unicast {
+                npdu,
+                mac,
+                data_attributes,
+            } => break (npdu, mac, data_attributes),
+            SendRequest::Broadcast { npdu, .. } => {
+                let decoded = decode_npdu(npdu).unwrap();
+                assert_eq!(
+                    decoded.message_type,
+                    Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw()),
+                    "barrier expected reject, got unexpected broadcast"
+                );
+                assert_eq!(decoded.payload.as_ref(), 9000u16.to_be_bytes());
+                continue;
+            }
+        }
     };
     let npdu = decode_npdu(npdu).unwrap();
     assert_eq!(mac.as_slice(), &[0xA0]);
@@ -213,12 +228,25 @@ async fn branch_forward(peers: &mut [Peer], branch: LocalBranch, port: usize, id
         LocalBranch::RemoteBroadcast => port,
         _ => return,
     };
-    let SendRequest::Broadcast {
-        npdu,
-        data_attributes,
-    } = wire(&mut peers[target]).await
-    else {
-        panic!("expected broadcast for {branch:?}")
+    // RB-06: discard any stale discovery Who-Is (9000) ahead of the expected
+    // forward; the first unknown solicits, repeats coalesce.
+    let (npdu, data_attributes) = loop {
+        match wire(&mut peers[target]).await {
+            SendRequest::Broadcast {
+                npdu,
+                data_attributes,
+            } => {
+                let decoded = decode_npdu(npdu.clone()).unwrap();
+                if decoded.message_type
+                    == Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw())
+                    && decoded.payload.as_ref() == 9000u16.to_be_bytes()
+                {
+                    continue;
+                }
+                break (npdu, data_attributes);
+            }
+            SendRequest::Unicast { .. } => panic!("expected broadcast for {branch:?}"),
+        }
     };
     assert_eq!(
         decode_npdu(npdu).unwrap().payload.as_ref(),
@@ -234,8 +262,20 @@ async fn forwarding_progress(peers: &mut [Peer], port: usize) {
         .send(incoming(Some(address(network(target), &[9])), 1000))
         .await
         .unwrap();
-    let SendRequest::Unicast { npdu, mac, .. } = wire(&mut peers[target]).await else {
-        panic!("expected forwarded unicast")
+    // RB-06: discard stale discovery Who-Is broadcasts ahead of the unicast.
+    let (npdu, mac) = loop {
+        match wire(&mut peers[target]).await {
+            SendRequest::Unicast { npdu, mac, .. } => break (npdu, mac),
+            SendRequest::Broadcast { npdu, .. } => {
+                let decoded = decode_npdu(npdu).unwrap();
+                assert_eq!(
+                    decoded.message_type,
+                    Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw())
+                );
+                assert_eq!(decoded.payload.as_ref(), 9000u16.to_be_bytes());
+                continue;
+            }
+        }
     };
     assert_eq!(mac.as_slice(), &[9]);
     assert_eq!(
@@ -246,11 +286,22 @@ async fn forwarding_progress(peers: &mut [Peer], port: usize) {
 }
 
 fn assert_quiet(peers: &mut [Peer]) {
+    // RB-06: a single coalesced discovery Who-Is (9000) may remain on a wire
+    // with no later barrier to consume it; discard those, then require quiet.
     for peer in peers {
-        assert!(matches!(
-            peer.wire.try_recv(),
-            Err(mpsc::error::TryRecvError::Empty)
-        ));
+        while let Ok(req) = peer.wire.try_recv() {
+            match req {
+                SendRequest::Broadcast { npdu, .. } => {
+                    let decoded = decode_npdu(npdu).unwrap();
+                    assert_eq!(
+                        decoded.message_type,
+                        Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw())
+                    );
+                    assert_eq!(decoded.payload.as_ref(), 9000u16.to_be_bytes());
+                }
+                SendRequest::Unicast { .. } => panic!("expected quiet wire, got unicast"),
+            }
+        }
     }
 }
 

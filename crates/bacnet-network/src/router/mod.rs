@@ -14,79 +14,49 @@
 //! [receive-queue contract](crate::layer#receive-queue-admission), independently
 //! of forwarding and inline network-message handling.
 //!
-//! # Routing-claim trust model
+//! # Routing-claim trust model (RB-06)
 //!
 //! Classic BACnet routing claims are unauthenticated: an ingress port, next-hop
 //! MAC or advertised network is not proof that a peer is authorized to control
-//! that route. These local mitigations do not
-//! prevent route poisoning or authenticate a claim (Clauses 6.4 and 6.6.3):
+//! that route. These local mitigations do not prevent route poisoning or
+//! authenticate a claim (Clauses 6.4 and 6.6.3):
 //! - Direct routes cannot be overwritten by learning, changed by rejects, or
 //!   changed by Initialize-Routing-Table management updates.
-//! - I-Am-Router and Initialize-Routing-Table-Ack claims moving a learned route
-//!   to a different port need two claims for the same (network, new port), no
-//!   more than 60s apart (inclusive, aligned with the flap window). Repeats in
-//!   separate messages from one router suffice; distinct sources are not required.
-//!   Duplicate entries in one message cannot supply both votes. The old route keeps
-//!   forwarding while pending. Absent-route learning and same-port refreshes
-//!   remain immediate; I-Could-Be-Router remains absent-only and cannot
-//!   corroborate replacements.
-//! - Initialize-Routing-Table updates are management writes, not learning
-//!   claims (Clauses 6.4.7/6.6.3.8): a nonzero Port ID replaces the learned
-//!   entry for the DNET or appends one, Port ID 0 purges the learned entry,
-//!   applied immediately in wire order with no corroboration gate. They never
-//!   create or alter direct routes. No authorization policy is enforced yet
-//!   (RB-09); the direct-route immunity here is safety scoping, not an auth
-//!   decision.
-//! - A query (Number of Ports 0) never mutates the table and answers with the
-//!   complete table in ascending-DNET portions across as many bounded
-//!   acknowledgments as needed (Clause 6.6.3.9); wire Port IDs are the stable
-//!   nonzero `port_index + 1` mapping (Port ID 0 stays the purge trigger).
-//! - One pending challenger is retained per learned network: a different new
-//!   port replaces the slot and starts fresh. A slot older than 60s expires on
-//!   the next learning claim. Applying, current-port refresh, removal, aging,
-//!   direct-route installation and manual table edits clear the slot. Pending
-//!   entries are bounded by the number of live learned routes.
-//! - I-Am-Router and Initialize-Routing-Table-Ack retain their existing route-cap
-//!   checks, as does a management update naming a genuinely new network;
-//!   stale learned routes age out, and rapid port changes warn.
-//! - Disconnect-Connection-To-Network never removes routes: PTP connections are
-//!   unimplemented, matching Establish-Connection-To-Network's no-op handling.
-//!   Each well-formed ignored removal request is debug-logged and counted.
-//! - Reject-driven table transitions are dampened per (ingress port, network),
-//!   not by spoofable source MAC or routed source address. No-op rejects are
-//!   ignored, without renewing busy deadlines. A first state-changing reject
-//!   applies; further changes within 30s of the last applied reject are ignored.
-//!   Ignored claims do not extend that window. Learning refresh/replacement,
-//!   removal and aging re-arm all ingress keys for that network.
-//! - [`RouterTable::claim_snapshot`] exposes saturating count-only outcomes;
-//!   counters never influence learning or forwarding.
-//!
-//! The private 30s hold-down aligns with the existing reject-busy deadline: one
-//! busy marking buys at most one accepted reject-driven churn event per key per
-//! 30s without fresh learning; legitimate re-signals after the window can apply.
-//! **Trade-off:** a legitimate unreachable-after-busy signal can be delayed up
-//! to 30s. This is local hardening, not a protocol authentication mechanism.
-//!
-//! **Convergence requirement:** while the old learned route remains installed,
-//! a cross-port move requires two announcements for the same (network, new port)
-//! within 60s inclusive. Single-shot advertisers (including this router's startup
-//! announcements) or advertisers repeating more than 60s apart never converge to
-//! the new path through this gate. Under sustained forwarded traffic, every route
-//! lookup refreshes the stale entry's age, so the 300s aging rescue does not fire,
-//! even if the old path is dead. That path keeps being tried until traffic for the
-//! network idles for roughly 300s or longer (with no other refreshes, and subject
-//! to periodic aging), the table is edited manually, or two fresh claims arrive
-//! within 60s. Who-Is-Router-To-Network solicitations can prompt peers to
-//! re-advertise those claims; this gate does not initiate solicitation.
-//! Active cross-port alternation can delay legitimate convergence by continually
-//! replacing the pending challenger. The old route keeps forwarding; if that
-//! path is truly dead, traffic waits for attack pause/expiry and fresh learning.
-//! Learning can still re-arm reject dampening even when the refresh is malicious.
-//! Forwarding, reject relay and flap-warning thresholds are unchanged; operators
-//! still need a trusted, appropriately isolated network.
+//! - Standard convergence applies 6.6.3.2 last-wins immediately: each new
+//!   I-Am-Router / Init-ACK advertisement updates routing information, with
+//!   flap warnings retained. Same-port refreshes and absent learning stay
+//!   immediate; I-Could-Be-Router remains absent-only.
+//! - Hardened convergence (`RouterTable::new_hardened`, explicit opt-in only)
+//!   holds cross-port learned moves for a second same-(network, port) claim
+//!   within 60s inclusive. Repeats in separate messages suffice; duplicates in
+//!   one message cannot corroborate. The old route forwards while pending.
+//!   Alternation resets the slot; single-shot advertisers need the 60s reaper
+//!   plus a fresh claim. Corroboration is dampening, not identity assurance.
+//! - Initialize-Routing-Table updates are management writes (6.4.7/6.6.3.8):
+//!   nonzero Port ID replaces/appends the learned entry, Port ID 0 purges it,
+//!   immediately in wire order. They never create/alter direct routes. No
+//!   authorization policy yet (RB-09); direct immunity is safety, not auth.
+//! - A query (Number of Ports 0) never mutates and answers with the complete
+//!   table in ascending-DNET bounded portions (6.6.3.9); wire Port IDs are
+//!   `port_index + 1` (0 stays the purge trigger).
+//! - Hardened pending holds one challenger per learned network (bounded by live
+//!   learned routes). Slots expire lazily on the next claim plus the 60s aging
+//!   reaper; apply/refresh/removal/aging/direct/manual edits clear the slot.
+//! - Freshness is split: `last_seen` (control confirmation) drives 300s expiry;
+//!   `last_used` (forwarding use) never extends it. Busy/Available touch
+//!   neither. Traffic no longer pins a dead route past the rescue.
+//! - Unknown DNETs solicit once per 5s per DNET (coalesced, max 256 pending,
+//!   30s entry age, reserved never solicited) then fail the caller with
+//!   NOT_DIRECTLY_CONNECTED (6.6.3.1/6.5 retryable); packets are never buffered.
+//!   `stop` cancels pending discovery.
+//! - Disconnect never removes routes (PTP unimplemented). Reject transitions
+//!   are dampened per (ingress port, network) with a 30s hold-down; no-op
+//!   rejects never extend busy deadlines. [`RouterTable::claim_snapshot`]
+//!   stays count-only saturating and never affects decisions.
 
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
 use bacnet_transport::port::{DataAttribute, TransportPort};
@@ -152,6 +122,107 @@ impl SendRequest {
         Self::Broadcast {
             npdu,
             data_attributes: data_attributes.to_vec(),
+        }
+    }
+}
+
+/// Bounded unknown-destination discovery (RB-06, Clauses 6.5/6.6.3.1).
+///
+/// Per-DNET single inflight Who-Is solicitation: simultaneous unknowns coalesce
+/// to one broadcast, rate-limited to one per DNET per 5s, entries expire after
+/// 30s via the aging reaper, at most 256 pending DNETs, reserved never
+/// solicited. The caller still fails with NOT_DIRECTLY_CONNECTED (honest
+/// retryable); packets are never buffered and no per-packet retries occur.
+/// `cancel` (via [`BACnetRouter::stop`]) drops all pending discovery.
+const DISCOVERY_COOLDOWN: Duration = Duration::from_secs(5);
+const DISCOVERY_MAX_AGE: Duration = Duration::from_secs(30);
+const DISCOVERY_MAX_PENDING: usize = 256;
+
+#[derive(Debug, Default)]
+pub(crate) struct DiscoveryTracker {
+    last_solicited: HashMap<u16, Instant>,
+    cancelled: bool,
+}
+
+impl DiscoveryTracker {
+    /// Decide whether an unknown `dnet` should solicit now; records it if so.
+    pub(crate) fn should_solicit_at(&mut self, dnet: u16, now: Instant) -> bool {
+        if self.cancelled || dnet == 0 || dnet == 0xFFFF {
+            return false;
+        }
+        if let Some(last) = self.last_solicited.get(&dnet) {
+            if now.duration_since(*last) < DISCOVERY_COOLDOWN {
+                return false;
+            }
+        } else if self.last_solicited.len() >= DISCOVERY_MAX_PENDING {
+            return false;
+        }
+        self.last_solicited.insert(dnet, now);
+        true
+    }
+
+    /// Wall-clock wrapper for dispatch paths.
+    pub(crate) fn should_solicit(&mut self, dnet: u16) -> bool {
+        self.should_solicit_at(dnet, Instant::now())
+    }
+
+    /// Reap entries older than 30s; returns the reaped DNETs ascending.
+    pub(crate) fn expire_at(&mut self, now: Instant) -> Vec<u16> {
+        let mut out: Vec<u16> = self
+            .last_solicited
+            .iter()
+            .filter(|(_, last)| now.duration_since(**last) > DISCOVERY_MAX_AGE)
+            .map(|(net, _)| *net)
+            .collect();
+        out.sort_unstable();
+        for net in &out {
+            self.last_solicited.remove(net);
+        }
+        out
+    }
+
+    /// Cancel all pending discovery (router stop).
+    pub(crate) fn cancel(&mut self) {
+        self.cancelled = true;
+        self.last_solicited.clear();
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.last_solicited.len()
+    }
+
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.cancelled
+    }
+}
+
+/// Broadcast a link-local Who-Is-Router-To-Network for `dnet` out all ports
+/// except `ingress`, reusing the relay shape (no SNET/SADR, no DNET envelope).
+fn solicit_who_is(
+    send_txs: &[mpsc::Sender<SendRequest>],
+    ingress: usize,
+    dnet: u16,
+    data_attributes: &[DataAttribute],
+) {
+    let mut payload = BytesMut::with_capacity(2);
+    payload.put_u16(dnet);
+    let npdu = Npdu {
+        is_network_message: true,
+        message_type: Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw()),
+        payload: payload.freeze(),
+        ..Npdu::default()
+    };
+    let mut buf = BytesMut::with_capacity(8);
+    if encode_npdu(&mut buf, &npdu).is_err() {
+        return;
+    }
+    let frozen = buf.freeze();
+    for (i, tx) in send_txs.iter().enumerate() {
+        if i != ingress {
+            let _ = tx.try_send(SendRequest::broadcast_with_attributes(
+                frozen.clone(),
+                data_attributes,
+            ));
         }
     }
 }
@@ -224,6 +295,8 @@ pub struct RouterPort<T: TransportPort> {
 pub struct BACnetRouter {
     /// Shared routing table.
     table: Arc<Mutex<RouterTable>>,
+    /// Bounded unknown-destination discovery (per-DNET coalescing).
+    discovery: Arc<Mutex<DiscoveryTracker>>,
     /// Dispatch tasks (one per port).
     dispatch_tasks: Vec<JoinHandle<()>>,
     /// Sender tasks (one per port, owns the transport for outgoing messages).
@@ -318,6 +391,7 @@ impl BACnetRouter {
         }
 
         let table = Arc::new(Mutex::new(table));
+        let discovery = Arc::new(Mutex::new(DiscoveryTracker::default()));
         let (local_tx, local_rx, counters) = AdmissionReceiver::channel(track_depth);
 
         // Start each transport, set up send channels
@@ -415,6 +489,7 @@ impl BACnetRouter {
 
         for (port_idx, mut rx) in port_receivers.into_iter().enumerate() {
             let table = Arc::clone(&table);
+            let discovery = Arc::clone(&discovery);
             let local_tx = local_tx.clone();
             let send_txs = Arc::clone(&send_txs);
             let port_network = port_networks[port_idx];
@@ -441,7 +516,7 @@ impl BACnetRouter {
                                     data_attributes: received.data_attributes.clone(),
                                     npdu,
                                 };
-                                dispatch_network_message(&table, &send_txs, &ctx).await;
+                                dispatch_network_message(&table, &discovery, &send_txs, &ctx).await;
                                 continue;
                             }
 
@@ -569,7 +644,21 @@ impl BACnetRouter {
                                         );
                                     }
                                 } else {
-                                    // Unknown network: send reject
+                                    // Unknown: bounded Who-Is discovery, then honest
+                                    // retryable reject (6.6.3.1/6.5). Coalesced per
+                                    // DNET; packets never buffered, no retries.
+                                    let solicit = {
+                                        let mut disc = discovery.lock().await;
+                                        disc.should_solicit(dest_net)
+                                    };
+                                    if solicit {
+                                        solicit_who_is(
+                                            &send_txs,
+                                            port_idx,
+                                            dest_net,
+                                            &received.data_attributes,
+                                        );
+                                    }
                                     send_reject(
                                         &send_txs[port_idx],
                                         &received.source_mac,
@@ -602,19 +691,32 @@ impl BACnetRouter {
             dispatch_tasks.push(task);
         }
 
-        // Periodically purge stale learned routes.
+        // Periodically purge stale learned routes, hardened pending slots and
+        // discovery entries. `last_used` never extends `last_seen` expiry.
         let aging_table = Arc::clone(&table);
+        let aging_discovery = Arc::clone(&discovery);
         let aging_task = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
             let max_age = Duration::from_secs(300); // 5 minutes
             loop {
                 interval.tick().await;
+                let now = Instant::now();
                 let mut tbl = aging_table.lock().await;
-                let purged = tbl.purge_stale(max_age);
+                let purged = tbl.purge_stale_at(now, max_age);
                 tbl.clear_expired_busy();
+                let expired_pending = tbl.expire_pending_at(now);
                 drop(tbl);
+                let mut disc = aging_discovery.lock().await;
+                let expired_discovery = disc.expire_at(now);
+                drop(disc);
                 for net in purged {
                     debug!(network = net, "Purged stale route");
+                }
+                for net in expired_pending {
+                    debug!(network = net, "Expired hardened pending challenger");
+                }
+                for net in expired_discovery {
+                    debug!(network = net, "Expired discovery solicitation");
                 }
             }
         });
@@ -622,6 +724,7 @@ impl BACnetRouter {
         Ok((
             Self {
                 table,
+                discovery,
                 dispatch_tasks,
                 sender_tasks,
                 aging_task: Some(aging_task),
@@ -634,6 +737,12 @@ impl BACnetRouter {
     /// Get a reference to the routing table.
     pub fn table(&self) -> &Arc<Mutex<RouterTable>> {
         &self.table
+    }
+
+    /// Pending unknown-destination discoveries (for tests and observability).
+    #[cfg(test)]
+    pub(crate) fn discovery(&self) -> &Arc<Mutex<DiscoveryTracker>> {
+        &self.discovery
     }
 
     /// Stop the router.
@@ -657,6 +766,9 @@ impl BACnetRouter {
             task.abort();
             let _ = task.await;
         }
+        // Cancel pending unknown-destination discovery so no further
+        // solicitation is emitted and coalesced waiters observe shutdown.
+        self.discovery.lock().await.cancel();
     }
 }
 
@@ -679,6 +791,7 @@ impl BACnetRouter {
 /// Network messages never enter the local APDU queue here.
 async fn dispatch_network_message(
     table: &Arc<Mutex<RouterTable>>,
+    discovery: &Arc<Mutex<DiscoveryTracker>>,
     send_txs: &[mpsc::Sender<SendRequest>],
     ctx: &IngressContext,
 ) {
@@ -757,6 +870,15 @@ async fn dispatch_network_message(
             &ctx.data_attributes,
         );
     } else {
+        // Unknown directed control: same bounded discovery as APDUs, then
+        // the honest retryable reject. Never buffered, never retried inline.
+        let solicit = {
+            let mut disc = discovery.lock().await;
+            disc.should_solicit(dest_net)
+        };
+        if solicit {
+            solicit_who_is(send_txs, ctx.port_idx, dest_net, &ctx.data_attributes);
+        }
         send_reject(
             &send_txs[ctx.port_idx],
             ctx.source_mac.as_slice(),
@@ -781,5 +903,7 @@ mod envelope_discovery_tests;
 mod envelope_harness;
 #[cfg(test)]
 mod init_routing_table_tests;
+#[cfg(test)]
+mod rb06_convergence_tests;
 #[cfg(test)]
 mod tests;

@@ -107,7 +107,9 @@ async fn spoofing_mac_does_not_bypass_hold_down_but_another_ingress_is_independe
 
 #[tokio::test]
 async fn i_am_refresh_rearms_rejects_and_corroborated_learning_still_warns() {
-    let table = Arc::new(Mutex::new(RouterTable::new()));
+    // Hardened gate: cross-port moves need two claims; same-port refreshes
+    // re-arm reject hold-down immediately in both modes.
+    let table = Arc::new(Mutex::new(RouterTable::new_hardened()));
     for (index, port) in [0, 0, 1, 0, 1, 0].into_iter().enumerate() {
         if index >= 2 {
             deliver(
@@ -218,7 +220,10 @@ async fn each_learning_cap_counts_its_inspected_stop_without_changing_tail_handl
         NetworkMessageType::I_AM_ROUTER_TO_NETWORK,
         NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK,
     ] {
-        let mut table = RouterTable::new();
+        // Hardened: the existing-net cross-port move needs two claims to
+        // corroborate, preserving the two-step assertion below in both modes
+        // for I-Am (standard would converge on the first claim).
+        let mut table = RouterTable::new_hardened();
         for net in 1..=256 {
             table.add_learned(net, 0, MacAddr::from_slice(&[1]));
         }

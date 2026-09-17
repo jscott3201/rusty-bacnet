@@ -48,7 +48,7 @@ impl Fixture {
     }
 
     fn learned() -> Self {
-        let mut table = RouterTable::new();
+        let mut table = RouterTable::new_hardened();
         table.add_learned(3000, 0, MacAddr::from_slice(&[1]));
         Self::new(table)
     }

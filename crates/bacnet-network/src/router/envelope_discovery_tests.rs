@@ -405,7 +405,16 @@ async fn directed_control_to_unknown_network_rejected() {
     npdu.hop_count = 255;
     h.dispatch(h.ctx(0, &[7], npdu)).await;
 
-    assert!(h.drain(1).is_empty());
+    // RB-06: unknown first solicits (bounded Who-Is on the other port) then
+    // fails the caller with the honest retryable reject; nothing is buffered.
+    let solicited = broadcast_data(h.drain(1));
+    assert_eq!(solicited.len(), 1);
+    let who_is = decode_npdu(solicited[0].clone()).unwrap();
+    assert_eq!(
+        who_is.message_type,
+        Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw())
+    );
+    assert_eq!(who_is.payload.as_ref(), &[0x27, 0x0f]);
     let mut rejects = h.drain(0);
     assert_eq!(rejects.len(), 1);
     match rejects.pop().unwrap() {
