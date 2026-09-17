@@ -15,12 +15,11 @@ use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
-use crate::port::{DataAttribute, ReceivedNpdu, TransportPort, TransportProvenance};
+use crate::port::{DataAttribute, ReceivedNpdu, TransportPort};
 #[cfg(test)]
 use crate::sc_frame::{decode_sc_bvlc_result, ScMessage};
 use crate::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, Vmac, BROADCAST_VMAC};
 use bacnet_types::error::Error;
-use bacnet_types::MacAddr;
 
 mod address_resolution;
 mod advertisement;
@@ -38,6 +37,7 @@ mod handshake;
 mod heartbeat;
 mod lifecycle;
 mod loopback;
+pub(crate) mod npdu_admission;
 mod proprietary;
 mod random48;
 mod reconnect;
@@ -52,6 +52,7 @@ pub use errors::{ScConnectError, ScWebSocketErrorKind};
 use failover::{attempt_primary_restore, ActiveHub};
 use handshake::perform_handshake;
 pub use loopback::LoopbackWebSocket;
+pub use npdu_admission::{ScNpduAdmissionPolicy, ScNpduDropCounts};
 pub use random48::generate_random48_vmac;
 #[cfg(test)]
 pub(crate) use random48::set_test_random48_vmac_generator;
@@ -110,6 +111,8 @@ pub struct ScTransport<W: WebSocketPort> {
     primary_connector: Option<WebSocketConnector<W>>,
     failover_connector: Option<WebSocketConnector<W>>,
     reconnect_config: Option<ScReconnectConfig>,
+    npdu_admission_policy: ScNpduAdmissionPolicy,
+    npdu_admission: Option<Arc<npdu_admission::ScNpduAdmission>>,
     restore_disconnect_task: Arc<StdMutex<Option<JoinHandle<()>>>>,
     pub(super) direct: Option<Arc<direct_discovery::DirectShared<W>>>,
     #[cfg(test)]
@@ -140,6 +143,8 @@ impl<W: WebSocketPort> ScTransport<W> {
             primary_connector: None,
             failover_connector: None,
             reconnect_config: None,
+            npdu_admission_policy: ScNpduAdmissionPolicy::default(),
+            npdu_admission: None,
             restore_disconnect_task: Arc::new(StdMutex::new(None)),
             direct: None,
             #[cfg(test)]
@@ -307,6 +312,8 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
             )?;
         }
 
+        self.npdu_admission_policy.validate()?;
+
         if self.device_uuid == [0; 16] {
             return Err(Error::Encoding("SC device UUID is all-zero".into()));
         }
@@ -315,6 +322,10 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         }
 
         let (npdu_tx, npdu_rx) = mpsc::channel(NPDU_CHANNEL_CAPACITY);
+        let npdu_admission = Arc::new(npdu_admission::ScNpduAdmission::new(
+            self.npdu_admission_policy,
+        ));
+        self.npdu_admission = Some(npdu_admission.clone());
 
         let connection = ScConnection::new(self.local_vmac, self.device_uuid);
         let conn = Arc::new(Mutex::new(connection));
@@ -428,9 +439,9 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                     let recv_ws = ws_clone.clone();
                     tokio::select! {
                         Some(npdu) = direct_intake.recv() => {
-                            if npdu_tx.try_send(npdu).is_err() {
-                                warn!("SC transport: NPDU channel full, dropping direct message");
-                            }
+                            // Direct merge shares the hub queue: re-admit under
+                            // the direct-path key so neither path starves the other.
+                            npdu_admission.admit_merged_direct(&npdu_tx, npdu);
                         }
                         data = recv_ws.recv() => {
                             match data {
@@ -613,21 +624,12 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                         // originating VMAC passed source_admission (present,
                                         // non-reserved) inside handle_received. The hub peer
                                         // itself is never the leaf origin.
-                                        if npdu_tx
-                                            .try_send(ReceivedNpdu {
-                                                npdu,
-                                                source_mac: MacAddr::from_slice(&source_vmac),
-                                                link_layer_group: msg.destination_vmac
-                                                    == Some(BROADCAST_VMAC),
-                                                data_attributes: data_attributes::from_data_options(&msg),
-                                                provenance:
-                                                    TransportProvenance::verified_relayed_origin(),
-                                                reply_tx: None,
-                                            })
-                                            .is_err()
-                                        {
-                                            warn!("SC transport: NPDU channel full, dropping incoming message");
-                                        }
+                                        npdu_admission.admit_hub_relayed(
+                                            &npdu_tx,
+                                            &msg,
+                                            npdu,
+                                            source_vmac,
+                                        );
                                     }
 
                                     // After handle_received, check for pending DisconnectAck
@@ -899,6 +901,9 @@ mod rejection_deadline_tests;
 
 #[cfg(test)]
 mod reconnect_validation_tests;
+
+#[cfg(test)]
+mod rb11_npdu_fairness_tests;
 
 #[cfg(test)]
 mod tests;
