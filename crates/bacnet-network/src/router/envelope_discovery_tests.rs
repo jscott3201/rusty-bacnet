@@ -260,6 +260,7 @@ async fn initialize_routing_table_ack() {
         &table,
         &send_txs,
         &IngressContext::test_local(0, 1000, &[0x0A], npdu),
+        &control_policy::ControlGate::permissive(),
     )
     .await;
 
@@ -309,6 +310,7 @@ async fn initialize_routing_table_empty_payload_sends_no_ack() {
         &table,
         &send_txs,
         &IngressContext::test_local(0, 1000, &[0x0A], npdu),
+        &control_policy::ControlGate::permissive(),
     )
     .await;
 

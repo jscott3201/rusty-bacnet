@@ -34,8 +34,9 @@
 //!   plus a fresh claim. Corroboration is dampening, not identity assurance.
 //! - Initialize-Routing-Table updates are management writes (6.4.7/6.6.3.8):
 //!   nonzero Port ID replaces/appends the learned entry, Port ID 0 purges it,
-//!   immediately in wire order. They never create/alter direct routes. No
-//!   authorization policy yet (RB-09); direct immunity is safety, not auth.
+//!   immediately in wire order. They never create/alter direct routes. Wire
+//!   controls pass [`control_policy::ControlGate`] (RB-09); direct immunity
+//!   stays safety scoping, not auth. LOCAL table calls bypass policy.
 //! - A query (Number of Ports 0) never mutates and answers with the complete
 //!   table in ascending-DNET bounded portions (6.6.3.9); wire Port IDs are
 //!   `port_index + 1` (0 stays the purge trigger).
@@ -73,9 +74,13 @@ use crate::router_table::{ReachabilityStatus, RouterTable};
 use bacnet_transport::port::TransportProvenance;
 
 mod control_messages;
+pub mod control_policy;
 mod forwarding;
 
 use control_messages::handle_network_message;
+pub use control_policy::{ControlAuthContext, ControlAuthorizer, ControlClass};
+pub use control_policy::{ControlDecisionCounters, ControlGate, ControlPolicy};
+pub use control_policy::{ControlServiceCounters, ControlTrust};
 use forwarding::{forward_broadcast, forward_unicast, send_reject};
 
 /// A send request to be forwarded on a port.
@@ -237,14 +242,8 @@ fn solicit_who_is(
 /// hop count, message type, vendor ID). It asserts no provenance or trust —
 /// a claimed SNET/SADR is carried, never verified here.
 ///
-/// RB-07 (verified provenance) and RB-09 (traffic caps / authorization
-/// policy) consume this context at the same admission point. This change
-/// only threads the facts through; it adds no caps, no authorization
-/// decisions, and no trust assertions.
-///
-/// RB-07 threads [`TransportProvenance`] here alongside the RB-03 facts so
-/// the same admission point can consume provenance later. Compat mode: no
-/// caps, no authorization decisions, no trust assertions from this context.
+/// RB-07 threads [`TransportProvenance`] here; RB-09 [`control_policy`]
+/// consumes it at the same admission point for protected-control decisions.
 #[derive(Debug, Clone)]
 pub(super) struct IngressContext {
     /// Dispatch index of the ingress port.
@@ -326,6 +325,8 @@ pub struct BACnetRouter {
     table: Arc<Mutex<RouterTable>>,
     /// Bounded unknown-destination discovery (per-DNET coalescing).
     discovery: Arc<Mutex<DiscoveryTracker>>,
+    /// RB-09 wire-control gate (permissive default, hardened opt-in).
+    control: Arc<control_policy::ControlGate>,
     /// Dispatch tasks (one per port).
     dispatch_tasks: Vec<JoinHandle<()>>,
     /// Sender tasks (one per port, owns the transport for outgoing messages).
@@ -395,9 +396,41 @@ impl BACnetRouter {
         Ok((router, AdmissionReceiver::from_apdu_parts(rx, counters)))
     }
 
+    /// RB-09 hardened opt-in: wire-control gate for state-changing routing
+    /// controls. Permissive default preserves behavior; hardened denies unknown
+    /// authority for protected controls (callback-only, silent drop).
+    pub async fn start_with_control<T: TransportPort + 'static>(
+        ports: Vec<RouterPort<T>>,
+        policy: control_policy::ControlPolicy,
+        authorizer: Option<control_policy::ControlAuthorizer>,
+    ) -> Result<(Self, mpsc::Receiver<ReceivedApdu>), Error> {
+        let gate = Arc::new(control_policy::ControlGate::new(policy, authorizer));
+        Self::start_dispatch_with_control(ports, false, gate)
+            .await
+            .map(|(router, rx, _)| (router, rx))
+    }
+
+    /// Count-only RB-09 decision totals (allow/deny/policy-deny per class).
+    pub fn control_snapshot(&self) -> control_policy::ControlDecisionCounters {
+        self.control.snapshot()
+    }
+
     async fn start_dispatch<T: TransportPort + 'static>(
         mut ports: Vec<RouterPort<T>>,
         track_depth: bool,
+    ) -> Result<(Self, mpsc::Receiver<ReceivedApdu>, QueueAdmissionCounters), Error> {
+        Self::start_dispatch_with_control(
+            ports,
+            track_depth,
+            Arc::new(control_policy::ControlGate::permissive()),
+        )
+        .await
+    }
+
+    async fn start_dispatch_with_control<T: TransportPort + 'static>(
+        mut ports: Vec<RouterPort<T>>,
+        track_depth: bool,
+        control: Arc<control_policy::ControlGate>,
     ) -> Result<(Self, mpsc::Receiver<ReceivedApdu>, QueueAdmissionCounters), Error> {
         let mut table = RouterTable::new();
 
@@ -519,6 +552,7 @@ impl BACnetRouter {
         for (port_idx, mut rx) in port_receivers.into_iter().enumerate() {
             let table = Arc::clone(&table);
             let discovery = Arc::clone(&discovery);
+            let control = Arc::clone(&control);
             let local_tx = local_tx.clone();
             let send_txs = Arc::clone(&send_txs);
             let port_network = port_networks[port_idx];
@@ -529,14 +563,9 @@ impl BACnetRouter {
                     match decode_npdu(received.npdu.clone()) {
                         Ok(npdu) => {
                             if npdu.is_network_message {
-                                // RB-03 admission point: immutable ingress
-                                // facts (link peer, group flag, attributes,
-                                // NPDU envelope) travel together for later
-                                // RB-07 provenance / RB-09 policy work. The
-                                // one-use reply sender is retained by
-                                // `received` and released unsent here, as
-                                // before: controls never take the APDU reply
-                                // path.
+                                // RB-03 admission point: immutable ingress facts travel
+                                // together; RB-09 policy consumes them lock-free.
+                                // Controls never take the APDU reply path.
                                 let ctx = IngressContext {
                                     port_idx,
                                     port_network,
@@ -546,7 +575,10 @@ impl BACnetRouter {
                                     provenance: received.provenance,
                                     npdu,
                                 };
-                                dispatch_network_message(&table, &discovery, &send_txs, &ctx).await;
+                                dispatch_network_message(
+                                    &table, &discovery, &send_txs, &ctx, &control,
+                                )
+                                .await;
                                 continue;
                             }
 
@@ -759,6 +791,7 @@ impl BACnetRouter {
             Self {
                 table,
                 discovery,
+                control,
                 dispatch_tasks,
                 sender_tasks,
                 aging_task: Some(aging_task),
@@ -822,15 +855,15 @@ impl BACnetRouter {
 /// table and relays toward the origin, and must never be re-routed or
 /// answered with another reject.
 ///
-/// Network messages never enter the local APDU queue here.
+/// Network messages never enter the local APDU queue here. Directed-forward
+/// paths mutate nothing and take no policy decision; APDUs never arrive here.
 async fn dispatch_network_message(
     table: &Arc<Mutex<RouterTable>>,
     discovery: &Arc<Mutex<DiscoveryTracker>>,
     send_txs: &[mpsc::Sender<SendRequest>],
     ctx: &IngressContext,
+    control: &control_policy::ControlGate,
 ) {
-    // RB-07 compat mode: provenance threaded here for RB-09, no decision.
-    let _ = ctx.provenance;
     let msg_type = match ctx.npdu.message_type {
         Some(t) => t,
         None => return,
@@ -840,7 +873,7 @@ async fn dispatch_network_message(
         || msg_type == NetworkMessageType::NETWORK_NUMBER_IS.to_raw()
         || msg_type == NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw()
     {
-        handle_network_message(table, send_txs, ctx).await;
+        handle_network_message(table, send_txs, ctx, control).await;
         return;
     }
 
@@ -849,7 +882,7 @@ async fn dispatch_network_message(
         None => false,
     };
     if !directed_elsewhere {
-        handle_network_message(table, send_txs, ctx).await;
+        handle_network_message(table, send_txs, ctx, control).await;
         return;
     }
 
@@ -941,5 +974,7 @@ mod envelope_harness;
 mod init_routing_table_tests;
 #[cfg(test)]
 mod rb06_convergence_tests;
+#[cfg(test)]
+mod rb09_control_policy_tests;
 #[cfg(test)]
 mod tests;

@@ -61,7 +61,13 @@ impl Fixture {
             ..Default::default()
         };
         let ctx = IngressContext::test_local(port, 1000, mac, npdu.clone());
-        handle_network_message(&self.table, &self.txs, &ctx).await;
+        handle_network_message(
+            &self.table,
+            &self.txs,
+            &ctx,
+            &crate::router::control_policy::ControlGate::permissive(),
+        )
+        .await;
         for (index, rx) in self.rxs.iter_mut().enumerate() {
             if kind == I_AM && index != port {
                 let SendRequest::Broadcast { npdu: data, .. } = rx.try_recv().unwrap() else {

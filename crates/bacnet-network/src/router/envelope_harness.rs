@@ -30,6 +30,7 @@ pub(super) struct Harness {
     pub(super) discovery: Arc<Mutex<super::DiscoveryTracker>>,
     pub(super) txs: Vec<mpsc::Sender<SendRequest>>,
     pub(super) rxs: Vec<mpsc::Receiver<SendRequest>>,
+    pub(super) gate: Arc<super::control_policy::ControlGate>,
 }
 
 impl Harness {
@@ -41,6 +42,16 @@ impl Harness {
     }
 
     pub(super) fn with_table(table: RouterTable) -> Self {
+        Self::with_gate(
+            table,
+            Arc::new(super::control_policy::ControlGate::permissive()),
+        )
+    }
+
+    pub(super) fn with_gate(
+        table: RouterTable,
+        gate: Arc<super::control_policy::ControlGate>,
+    ) -> Self {
         let (tx0, rx0) = mpsc::channel(16);
         let (tx1, rx1) = mpsc::channel(16);
         Self {
@@ -48,6 +59,7 @@ impl Harness {
             discovery: Arc::new(Mutex::new(super::DiscoveryTracker::default())),
             txs: vec![tx0, tx1],
             rxs: vec![rx0, rx1],
+            gate,
         }
     }
 
@@ -68,6 +80,16 @@ impl Harness {
     }
 
     pub(super) fn ctx(&self, port: usize, source_mac: &[u8], npdu: Npdu) -> IngressContext {
+        self.ctx_with_provenance(port, source_mac, npdu, TransportProvenance::unverified())
+    }
+
+    pub(super) fn ctx_with_provenance(
+        &self,
+        port: usize,
+        source_mac: &[u8],
+        npdu: Npdu,
+        provenance: TransportProvenance,
+    ) -> IngressContext {
         let _ = &self;
         IngressContext {
             port_idx: port,
@@ -75,17 +97,17 @@ impl Harness {
             source_mac: MacAddr::from_slice(source_mac),
             link_layer_group: true,
             data_attributes: Vec::new(),
-            provenance: TransportProvenance::unverified(),
+            provenance,
             npdu,
         }
     }
 
     pub(super) async fn handle(&mut self, ctx: IngressContext) {
-        handle_network_message(&self.table, &self.txs, &ctx).await;
+        handle_network_message(&self.table, &self.txs, &ctx, &self.gate).await;
     }
 
     pub(super) async fn dispatch(&mut self, ctx: IngressContext) {
-        dispatch_network_message(&self.table, &self.discovery, &self.txs, &ctx).await;
+        dispatch_network_message(&self.table, &self.discovery, &self.txs, &ctx, &self.gate).await;
     }
 
     pub(super) fn drain(&mut self, port: usize) -> Vec<SendRequest> {
