@@ -35,7 +35,6 @@ use std::sync::{
 use std::time::Duration;
 
 use bacnet_types::error::Error;
-use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
@@ -43,7 +42,8 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
-use crate::port::{DataAttribute, ReceivedNpdu, TransportProvenance};
+use crate::port::ReceivedNpdu;
+use crate::sc::npdu_admission::{ScNpduAdmission, ScNpduAdmissionPolicy, ScNpduDropCounts};
 use crate::sc_frame::{
     decode_sc_message, encode_sc_message, first_must_understand_destination_option_marker,
     validate_connect_request, ScFunction, ScMessage, Vmac, BACNET_SC_DIRECT_SUBPROTOCOL,
@@ -89,6 +89,7 @@ pub struct DirectAcceptConfig {
     connect_timeout: Duration,
     idle_timeout: Duration,
     max_connections: usize,
+    npdu_admission_policy: ScNpduAdmissionPolicy,
     max_bvlc_length: u16,
     max_apdu_length: u16,
 }
@@ -120,6 +121,7 @@ impl DirectAcceptConfig {
             connect_timeout: Duration::from_millis(DIRECT_ACCEPT_DEFAULT_CONNECT_TIMEOUT_MS),
             idle_timeout: DIRECT_ACCEPT_IDLE_TIMEOUT,
             max_connections: DIRECT_ACCEPT_MAX_CONNECTIONS,
+            npdu_admission_policy: ScNpduAdmissionPolicy::default(),
             max_bvlc_length: crate::sc_limits::DEFAULT_MAX_BVLC_LENGTH,
             max_apdu_length: 1476,
         }
@@ -145,6 +147,20 @@ impl DirectAcceptConfig {
         self.max_connections = max.max(1);
         self
     }
+
+    /// Set the per-origin queued-NPDU quota (builder-style).
+    ///
+    /// Defaults to the network-layer 16/256 ratio scaled to the 64-item
+    /// listener queue (4 per peer VMAC). [`DirectListener::start`] validates
+    /// the limit before binding and rejects zero or above-capacity values;
+    /// the aggregate cap stays the fixed channel capacity. The peer VMAC is
+    /// a scheduling key, never identity.
+    pub fn with_npdu_per_origin_limit(mut self, limit: usize) -> Self {
+        self.npdu_admission_policy = ScNpduAdmissionPolicy {
+            per_origin_limit: limit,
+        };
+        self
+    }
 }
 
 /// Opt-in direct-connection listener.
@@ -160,6 +176,7 @@ pub struct DirectListener {
     accept_task: Option<JoinHandle<()>>,
     shutdown: watch::Sender<bool>,
     active: Arc<AtomicUsize>,
+    npdu_admission: Arc<ScNpduAdmission>,
 }
 
 /// Invalidate registrations even if the accept task is cancelled before its
@@ -197,6 +214,8 @@ impl DirectListener {
                 "direct accept VMAC is zero or broadcast".into(),
             ));
         }
+        config.npdu_admission_policy.validate()?;
+        let npdu_admission = Arc::new(ScNpduAdmission::new(config.npdu_admission_policy));
         let listener = TcpListener::bind(config.bind_addr)
             .await
             .map_err(|e| Error::Encoding(format!("direct accept bind failed: {e}")))?;
@@ -213,6 +232,7 @@ impl DirectListener {
             shutdown_rx,
             Arc::clone(&active),
             ListenerStopped(shutdown.clone()),
+            Arc::clone(&npdu_admission),
         ));
         debug!("BACnet/SC direct listener on {local_addr}");
         Ok((
@@ -221,6 +241,7 @@ impl DirectListener {
                 accept_task: Some(task),
                 shutdown,
                 active,
+                npdu_admission,
             },
             npdu_rx,
         ))
@@ -234,6 +255,15 @@ impl DirectListener {
     /// Number of currently active accepted connections (for tests).
     pub fn active_connections(&self) -> usize {
         self.active.load(Ordering::Relaxed)
+    }
+
+    /// Read this listener's NPDU drop counts, including after [`Self::stop`].
+    ///
+    /// Count-only and saturating: per-origin fairness drops, aggregate-full
+    /// drops, and closed-receiver drops in Closed > fairness > Full order.
+    /// No per-VMAC statistics or wire response is created.
+    pub fn npdu_drop_counts(&self) -> ScNpduDropCounts {
+        self.npdu_admission.drop_counts()
     }
 
     /// Stop admission and await accept-loop cleanup.
@@ -334,6 +364,7 @@ async fn accept_loop(
     mut shutdown: watch::Receiver<bool>,
     active: Arc<AtomicUsize>,
     _stopped: ListenerStopped,
+    npdu_admission: Arc<ScNpduAdmission>,
 ) {
     loop {
         let accepted = tokio::select! {
@@ -358,12 +389,13 @@ async fn accept_loop(
         let peer_tx = npdu_tx.clone();
         let mut peer_shutdown = shutdown.clone();
         let peer_active = Arc::clone(&active);
+        let peer_admission = Arc::clone(&npdu_admission);
         tokio::spawn(async move {
             let _guard = guard;
             let _active = peer_active;
             tokio::select! {
                 _ = peer_shutdown.changed() => {},
-                _ = serve_connection(tcp, peer_addr, peer_config, peer_tx) => {},
+                _ = serve_connection(tcp, peer_addr, peer_config, peer_tx, peer_admission) => {},
             }
         });
     }
@@ -375,6 +407,7 @@ async fn serve_connection(
     peer_addr: SocketAddr,
     config: DirectAcceptConfig,
     npdu_tx: mpsc::Sender<ReceivedNpdu>,
+    npdu_admission: Arc<ScNpduAdmission>,
 ) {
     let tls_stream =
         match tokio::time::timeout(config.connect_timeout, config.tls.acceptor().accept(tcp)).await
@@ -415,7 +448,13 @@ async fn serve_connection(
         None => return,
     };
     serve_npdu_loop(
-        &mut write, &mut read, &config, peer_addr, peer_vmac, &npdu_tx,
+        &mut write,
+        &mut read,
+        &config,
+        peer_addr,
+        peer_vmac,
+        &npdu_tx,
+        &npdu_admission,
     )
     .await;
 }
@@ -530,6 +569,7 @@ async fn serve_npdu_loop<W>(
     peer_addr: SocketAddr,
     peer_vmac: Vmac,
     npdu_tx: &mpsc::Sender<ReceivedNpdu>,
+    npdu_admission: &Arc<ScNpduAdmission>,
 ) where
     W: DirectWs,
 {
@@ -578,25 +618,7 @@ async fn serve_npdu_loop<W>(
                     // verified + Connect-Request/Accept completed on this
                     // connection; source_mac is that peer's VMAC. Post-handshake
                     // only; direct connections carry unicast only.
-                    let received = ReceivedNpdu {
-                        npdu,
-                        source_mac: MacAddr::from_slice(&peer_vmac),
-                        link_layer_group: false,
-                        data_attributes: msg
-                            .data_options
-                            .iter()
-                            .map(|option| DataAttribute {
-                                option_type: option.option_type,
-                                must_understand: option.must_understand,
-                                data: option.data.clone(),
-                            })
-                            .collect(),
-                        provenance: TransportProvenance::verified_direct_peer(),
-                        reply_tx: None,
-                    };
-                    if npdu_tx.try_send(received).is_err() {
-                        warn!("direct NPDU channel full, dropping from {peer_addr}");
-                    }
+                    npdu_admission.admit_direct_peer(npdu_tx, &msg, npdu, peer_vmac, peer_addr);
                 }
             }
             ScFunction::DisconnectRequest => {
@@ -777,3 +799,7 @@ mod direct_accept_tests;
 #[cfg(test)]
 #[path = "rb08_direct_accept_provenance_tests.rs"]
 mod rb08_direct_accept_provenance_tests;
+
+#[cfg(test)]
+#[path = "rb11_direct_accept_fairness_tests.rs"]
+mod rb11_direct_accept_fairness_tests;
