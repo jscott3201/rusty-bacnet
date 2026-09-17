@@ -202,7 +202,9 @@ async fn barrier(peer: &mut Peer) {
             0x28
         ]
     );
-    assert!(data_attributes.is_empty());
+    // RB-03: locally-generated rejects are ingress-triggered, so the ingress
+    // data attributes travel with the reject instead of being dropped.
+    assert_eq!(data_attributes, incoming(None, 0).data_attributes);
 }
 
 async fn branch_forward(peers: &mut [Peer], branch: LocalBranch, port: usize, id: u16) {

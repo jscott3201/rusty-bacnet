@@ -110,17 +110,85 @@ enum SendRequest {
 
 impl SendRequest {
     fn unicast(npdu: Bytes, mac: MacAddr) -> Self {
-        Self::Unicast {
-            npdu,
-            mac,
-            data_attributes: Vec::new(),
-        }
+        Self::unicast_with_attributes(npdu, mac, &[])
     }
 
     fn broadcast(npdu: Bytes) -> Self {
+        Self::broadcast_with_attributes(npdu, &[])
+    }
+
+    /// Ingress-triggered unicast: carries the ingress data attributes instead
+    /// of silently dropping them (RB-03). Locally-originated messages with no
+    /// ingress attributes use [`Self::unicast`].
+    fn unicast_with_attributes(
+        npdu: Bytes,
+        mac: MacAddr,
+        data_attributes: &[DataAttribute],
+    ) -> Self {
+        Self::Unicast {
+            npdu,
+            mac,
+            data_attributes: data_attributes.to_vec(),
+        }
+    }
+
+    /// Ingress-triggered broadcast: carries the ingress data attributes
+    /// instead of silently dropping them (RB-03). Locally-originated
+    /// messages with no ingress attributes use [`Self::broadcast`].
+    fn broadcast_with_attributes(npdu: Bytes, data_attributes: &[DataAttribute]) -> Self {
         Self::Broadcast {
             npdu,
+            data_attributes: data_attributes.to_vec(),
+        }
+    }
+}
+
+/// Immutable ingress facts carried to the network-message admission point
+/// ([`dispatch_network_message`] / `handle_network_message`).
+///
+/// This is a plain record of what arrived, free of trust assertions: ingress port
+/// identity, the immediate link peer (`source_mac`), link-layer group flag,
+/// data-link attributes, and the decoded NPDU envelope (source/destination,
+/// hop count, message type, vendor ID). It asserts no provenance or trust —
+/// a claimed SNET/SADR is carried, never verified here.
+///
+/// RB-07 (verified provenance) and RB-09 (traffic caps / authorization
+/// policy) consume this context at the same admission point. This change
+/// only threads the facts through; it adds no caps, no authorization
+/// decisions, and no trust assertions.
+#[derive(Debug, Clone)]
+pub(super) struct IngressContext {
+    /// Dispatch index of the ingress port.
+    pub port_idx: usize,
+    /// BACnet network number assigned to the ingress port.
+    pub port_network: u16,
+    /// Immediate link peer that sent the frame (SA), not the routed origin.
+    pub source_mac: MacAddr,
+    /// Whether the frame arrived via a data-link multicast/broadcast.
+    pub link_layer_group: bool,
+    /// Data-link attributes supplied with the frame, if any.
+    pub data_attributes: Vec<DataAttribute>,
+    /// Decoded NPDU, including envelope (source/destination, hop count,
+    /// message type, vendor ID) and control payload.
+    pub npdu: Npdu,
+}
+
+#[cfg(test)]
+impl IngressContext {
+    /// In-memory test ingress: link-broadcast delivery with no attributes.
+    pub(super) fn test_local(
+        port_idx: usize,
+        port_network: u16,
+        source_mac: &[u8],
+        npdu: Npdu,
+    ) -> Self {
+        Self {
+            port_idx,
+            port_network,
+            source_mac: MacAddr::from_slice(source_mac),
+            link_layer_group: true,
             data_attributes: Vec::new(),
+            npdu,
         }
     }
 }
@@ -344,28 +412,24 @@ impl BACnetRouter {
                     match decode_npdu(received.npdu.clone()) {
                         Ok(npdu) => {
                             if npdu.is_network_message {
-                                // Proprietary network messages (type >= 0x80) with DNET
-                                // should be forwarded, not processed locally.
-                                let is_proprietary =
-                                    npdu.message_type.map(|t| t >= 0x80).unwrap_or(false);
-                                let has_remote_dest = npdu
-                                    .destination
-                                    .as_ref()
-                                    .is_some_and(|d| d.network != 0xFFFF);
-                                if is_proprietary && has_remote_dest {
-                                    // Fall through to normal DNET routing below
-                                } else {
-                                    handle_network_message(
-                                        &table,
-                                        &send_txs,
-                                        port_idx,
-                                        port_network,
-                                        &received.source_mac,
-                                        &npdu,
-                                    )
-                                    .await;
-                                    continue;
-                                }
+                                // RB-03 admission point: immutable ingress
+                                // facts (link peer, group flag, attributes,
+                                // NPDU envelope) travel together for later
+                                // RB-07 provenance / RB-09 policy work. The
+                                // one-use reply sender is retained by
+                                // `received` and released unsent here, as
+                                // before: controls never take the APDU reply
+                                // path.
+                                let ctx = IngressContext {
+                                    port_idx,
+                                    port_network,
+                                    source_mac: received.source_mac.clone(),
+                                    link_layer_group: received.link_layer_group,
+                                    data_attributes: received.data_attributes.clone(),
+                                    npdu,
+                                };
+                                dispatch_network_message(&table, &send_txs, &ctx).await;
+                                continue;
                             }
 
                             if let Some(ref dest) = npdu.destination {
@@ -417,6 +481,7 @@ impl BACnetRouter {
                                                 &received.source_mac,
                                                 dest_net,
                                                 RejectMessageReason::ROUTER_BUSY,
+                                                &received.data_attributes,
                                             );
                                             continue;
                                         }
@@ -426,6 +491,7 @@ impl BACnetRouter {
                                                 &received.source_mac,
                                                 dest_net,
                                                 RejectMessageReason::NOT_DIRECTLY_CONNECTED,
+                                                &received.data_attributes,
                                             );
                                             continue;
                                         }
@@ -496,6 +562,7 @@ impl BACnetRouter {
                                         &received.source_mac,
                                         dest_net,
                                         RejectMessageReason::NOT_DIRECTLY_CONNECTED,
+                                        &received.data_attributes,
                                     );
                                 }
                             } else {
@@ -580,9 +647,122 @@ impl BACnetRouter {
     }
 }
 
+/// RB-03 admission point for ingress network-layer messages.
+///
+/// Directed (DNET-addressed, non-global) controls are routed by their actual
+/// destination first (Clauses 6.5.4 / 6.6.3.1) — uniformly for proprietary
+/// and non-proprietary types — and only messages for our own ingress network
+/// (or without a directed destination) fall through to local control
+/// treatment. This keeps directed discovery, table, and congestion controls
+/// off the local handler unless this router is their destination.
+///
+/// Never-routed controls (What-Is-Network-Number / Network-Number-Is,
+/// Clauses 6.4.14–6.4.15) always take local treatment, where their
+/// non-routed address restrictions are enforced. Reject-Message-To-Network
+/// (Clause 6.6.3.5) also always takes local treatment: it updates the local
+/// table and relays toward the origin, and must never be re-routed or
+/// answered with another reject.
+///
+/// Network messages never enter the local APDU queue here.
+async fn dispatch_network_message(
+    table: &Arc<Mutex<RouterTable>>,
+    send_txs: &[mpsc::Sender<SendRequest>],
+    ctx: &IngressContext,
+) {
+    let msg_type = match ctx.npdu.message_type {
+        Some(t) => t,
+        None => return,
+    };
+
+    if msg_type == NetworkMessageType::WHAT_IS_NETWORK_NUMBER.to_raw()
+        || msg_type == NetworkMessageType::NETWORK_NUMBER_IS.to_raw()
+        || msg_type == NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw()
+    {
+        handle_network_message(table, send_txs, ctx).await;
+        return;
+    }
+
+    let directed_elsewhere = match ctx.npdu.destination.as_ref() {
+        Some(dest) => dest.network != 0xFFFF && dest.network != ctx.port_network,
+        None => false,
+    };
+    if !directed_elsewhere {
+        handle_network_message(table, send_txs, ctx).await;
+        return;
+    }
+
+    // Directed at another network: mirror the APDU destination logic
+    // (lookup + touch, reachability, forward or reject). Controls are never
+    // delivered to the local application queue.
+    let dest_net = ctx
+        .npdu
+        .destination
+        .as_ref()
+        .map(|dest| dest.network)
+        .unwrap_or(0);
+    let (route, reachability) = {
+        let mut tbl = table.lock().await;
+        let route = tbl.lookup(dest_net).cloned();
+        let reachability = tbl.effective_reachability(dest_net);
+        if route.is_some() {
+            tbl.touch(dest_net);
+        }
+        (route, reachability)
+    };
+
+    if let Some(route) = route {
+        match reachability.unwrap_or(ReachabilityStatus::Reachable) {
+            ReachabilityStatus::Busy => {
+                send_reject(
+                    &send_txs[ctx.port_idx],
+                    ctx.source_mac.as_slice(),
+                    dest_net,
+                    RejectMessageReason::ROUTER_BUSY,
+                    &ctx.data_attributes,
+                );
+                return;
+            }
+            ReachabilityStatus::Unreachable => {
+                send_reject(
+                    &send_txs[ctx.port_idx],
+                    ctx.source_mac.as_slice(),
+                    dest_net,
+                    RejectMessageReason::NOT_DIRECTLY_CONNECTED,
+                    &ctx.data_attributes,
+                );
+                return;
+            }
+            ReachabilityStatus::Reachable => {}
+        }
+        forward_unicast(
+            send_txs,
+            &route,
+            ctx.port_network,
+            ctx.source_mac.as_slice(),
+            ctx.npdu.clone(),
+            ctx.port_idx,
+            &ctx.data_attributes,
+        );
+    } else {
+        send_reject(
+            &send_txs[ctx.port_idx],
+            ctx.source_mac.as_slice(),
+            dest_net,
+            RejectMessageReason::NOT_DIRECTLY_CONNECTED,
+            &ctx.data_attributes,
+        );
+    }
+}
+
 #[cfg(test)]
 mod admission_tests;
 #[cfg(test)]
 mod claim_tests;
+#[cfg(test)]
+mod envelope_control_tests;
+#[cfg(test)]
+mod envelope_discovery_tests;
+#[cfg(test)]
+mod envelope_harness;
 #[cfg(test)]
 mod tests;
