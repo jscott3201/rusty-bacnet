@@ -1,5 +1,8 @@
 //! Hub message dispatch; its registration lease is owned by the outer runner.
 
+use super::admission::{
+    channel_provenance, connect_denied_nak, ScHubAdmissionDecision, ScHubAdmissionInput,
+};
 use super::*;
 use crate::sc::diagnostic_throttle::DiagnosticThrottle;
 
@@ -11,6 +14,8 @@ pub(super) async fn run(
     clients: (Clients, &mut super::retirement::Lease),
     deadline: &super::deadlines::ConnectDeadline,
     on_heartbeat_ack: impl Fn() + Send,
+    admission: Arc<super::admission::AdmissionRuntime>,
+    tls_client_verified: bool,
 ) {
     let (hub_vmac, hub_uuid) = hub;
     let (clients, lease) = clients;
@@ -382,16 +387,39 @@ pub(super) async fn run(
 
                 // Check for VMAC collision / Device UUID replacement and
                 // register atomically under a single lock to prevent TOCTOU races.
-                const MAX_SC_CLIENTS: usize = 256;
                 {
                     #[cfg(test)]
                     deadline.admission_started.store(true, Ordering::Release);
                     let mut map = clients.lock().await;
+                    // Bounded admin admission runs under the registry lock,
+                    // before the deadline commit, so a deny cannot race
+                    // replacement or insertion. A deny mutates nothing and
+                    // wakes nobody: any incumbent stays exactly as it was.
+                    let input = ScHubAdmissionInput {
+                        peer: peer_addr,
+                        claimed_vmac: vmac,
+                        claimed_uuid: client_uuid,
+                        claimed_max_bvlc: client_max_bvlc,
+                        claimed_max_npdu: client_max_npdu,
+                        tls_client_verified,
+                        provenance: channel_provenance(tls_client_verified),
+                    };
+                    if admission.evaluate(&input) == ScHubAdmissionDecision::Deny {
+                        admission.note_denied();
+                        warn!("Hub: admin admission denied ConnectRequest from {peer_addr}");
+                        drop(map); // release lock before sending
+                        let error_result = connect_denied_nak(sc_msg.message_id);
+                        let mut buf = BytesMut::new();
+                        encode_sc_message(&mut buf, &error_result);
+                        let mut w = write.lock().await;
+                        let _ = w.send(Message::Binary(buf.to_vec().into())).await;
+                        break;
+                    }
                     let decision = hub_client_registration_decision(
                         vmac,
                         client_uuid,
                         map.iter().map(|(vmac, client)| (*vmac, client.device_uuid)),
-                        MAX_SC_CLIENTS,
+                        admission.limits.max_clients,
                     );
                     // The clock is checked under the registry lock, immediately
                     // before the first irreversible replacement/insertion. No await

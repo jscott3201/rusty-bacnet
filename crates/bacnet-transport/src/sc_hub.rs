@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use bacnet_types::enums::{ErrorClass, ErrorCode};
@@ -30,6 +30,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 use tracing::{debug, warn};
 
+pub(super) mod admission;
 mod advertisement_transit;
 mod broadcast_rate;
 mod client;
@@ -50,6 +51,10 @@ mod timeouts;
 mod tls_config;
 mod unknown_transit;
 
+pub use admission::{
+    ScHubAdmissionDecision, ScHubAdmissionInput, ScHubAdmissionLimits, ScHubAdmissionPolicy,
+    ScHubStatus, DEFAULT_MAX_CLIENTS, DEFAULT_MAX_HANDSHAKES,
+};
 pub use broadcast_rate::{ScHubBroadcastDropCounts, ScHubBroadcastRatePolicy};
 pub use timeouts::ScHubHandshakeTimeouts;
 pub use tls_config::ScHubTlsConfig;
@@ -128,6 +133,9 @@ pub struct ScHub {
     listener_task: Option<JoinHandle<()>>,
     tasks: tasks::Tasks,
     local_addr: Option<SocketAddr>,
+    admission: Arc<admission::AdmissionRuntime>,
+    clients: Clients,
+    active: Arc<AtomicUsize>,
 }
 
 impl ScHub {
@@ -247,6 +255,14 @@ impl ScHub {
                 "hub VMAC must not be UNKNOWN or BROADCAST".into(),
             ));
         }
+        // Admission bounds are validated before binding, like the broadcast
+        // policy: every public startup API funnels through here.
+        let admission_limits = tls_config.admission_limits();
+        admission_limits.validate()?;
+        let admission = Arc::new(admission::AdmissionRuntime::new(
+            admission_limits,
+            tls_config.admission_policy(),
+        ));
         let broadcast = Arc::new(broadcast_rate::HubBudget::new(
             tls_config.broadcast_rate_policy(),
         )?);
@@ -262,6 +278,7 @@ impl ScHub {
         debug!("BACnet/SC hub listening on {local_addr}");
 
         let clients: Clients = Arc::new(Mutex::new(HashMap::new()));
+        let active = Arc::new(AtomicUsize::new(0));
 
         let tasks = tasks::Tasks::new();
         let tasks = tasks.with_broadcast_budget(broadcast);
@@ -269,10 +286,11 @@ impl ScHub {
             listener,
             tls_acceptor,
             (hub_vmac, hub_uuid),
-            clients,
+            clients.clone(),
             timeouts,
-            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            active.clone(),
             tasks.clone(),
+            admission.clone(),
         ));
 
         Ok(Self {
@@ -281,6 +299,9 @@ impl ScHub {
             listener_task: Some(task),
             tasks,
             local_addr: Some(local_addr),
+            admission,
+            clients,
+            active,
         })
     }
 
@@ -292,6 +313,66 @@ impl ScHub {
     /// The hub's own VMAC.
     pub fn hub_vmac(&self) -> Vmac {
         self.hub_vmac
+    }
+
+    /// Bounded hub snapshot: listener state, handshake/client counts, and
+    /// deny/drop counters (see [`ScHubStatus`]).
+    ///
+    /// Counts and kind labels only — no certificates, keys, VMAC maps, or
+    /// payloads. Each counter is atomic; the snapshot is not transactional
+    /// while workers are active, and the handshake count is approximate
+    /// under replacement churn. Usable after [`Self::stop`].
+    ///
+    /// ```
+    /// use bacnet_transport::sc_hub::{ScHub, ScHubHandshakeTimeouts, ScHubTlsConfig};
+    /// use rcgen::{CertificateParams, Issuer, KeyPair};
+    /// use rustls::pki_types::PrivatePkcs8KeyDer;
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut ca_params = CertificateParams::new(Vec::<String>::new())?;
+    /// ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    /// let ca_key = KeyPair::generate()?;
+    /// let ca = ca_params.self_signed(&ca_key)?;
+    /// let issuer = Issuer::from_params(&ca_params, &ca_key);
+    /// let key = KeyPair::generate()?;
+    /// let cert = CertificateParams::new(vec!["localhost".into()])?.signed_by(&key, &issuer)?;
+    /// let tls = ScHubTlsConfig::from_der(
+    ///     vec![ca.der().clone()], vec![cert.der().clone()],
+    ///     PrivatePkcs8KeyDer::from(key.serialize_der()).into(),
+    /// )?;
+    /// tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(async {
+    ///     let mut hub = ScHub::start(
+    ///         "127.0.0.1:0", tls, [0x12; 6], [0x34; 16],
+    ///     ).await?;
+    ///     let status = hub.status().await;
+    ///     assert!(status.listening);
+    ///     assert_eq!(status.client_count, 0);
+    ///     assert_eq!(status.handshake_count, 0);
+    ///     assert_eq!(status.admin_denied, 0);
+    ///     assert_eq!((status.limits.max_clients, status.limits.max_handshakes), (256, 256));
+    ///     hub.stop().await;
+    ///     assert!(!hub.status().await.listening);
+    ///     Ok::<_, bacnet_types::error::Error>(())
+    /// })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn status(&self) -> ScHubStatus {
+        let client_count = self.clients.lock().await.len();
+        let handshake_count = self
+            .active
+            .load(Ordering::Relaxed)
+            .saturating_sub(client_count);
+        ScHubStatus {
+            listening: self
+                .listener_task
+                .as_ref()
+                .is_some_and(|task| !task.is_finished()),
+            limits: self.admission.limits,
+            client_count,
+            handshake_count,
+            admin_denied: self.admission.denied(),
+            broadcast_drops: self.tasks.broadcast.drop_counts(),
+        }
     }
 
     /// Stop admission, cancel all hub workers, and await their resource cleanup.
@@ -323,6 +404,8 @@ async fn handle_client(
     write: Arc<Mutex<WsSink>>,
     clients: Clients,
     expires: tokio::time::Instant,
+    admission: Arc<admission::AdmissionRuntime>,
+    tls_client_verified: bool,
 ) {
     let deadline = Arc::new(deadlines::ConnectDeadline::new(expires));
     deadlines::serve(
@@ -333,6 +416,8 @@ async fn handle_client(
         clients,
         deadline,
         || {},
+        admission,
+        tls_client_verified,
     )
     .await;
 }
@@ -351,6 +436,8 @@ async fn handle_client_observed(
     let deadline = Arc::new(deadlines::ConnectDeadline::new(
         tokio::time::Instant::now() + ScHubHandshakeTimeouts::default().connect_request(),
     ));
+    // The observed test seam bypasses TLS with no client authentication.
+    let admission = Arc::new(admission::AdmissionRuntime::default());
     deadlines::serve(
         peer_addr,
         (hub_vmac, hub_uuid),
@@ -359,12 +446,17 @@ async fn handle_client_observed(
         clients,
         deadline,
         on_heartbeat_ack,
+        admission,
+        false,
     )
     .await;
 }
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod admission_tests;
 
 #[cfg(test)]
 mod connect_validation_tests;

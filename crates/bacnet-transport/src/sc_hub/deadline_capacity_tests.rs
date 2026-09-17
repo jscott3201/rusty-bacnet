@@ -25,6 +25,7 @@ async fn hub_admission_abort_before_first_poll_reclaims_slot() {
         clients(),
         ScHubHandshakeTimeouts::default(),
         admission,
+        Arc::new(super::admission::AdmissionRuntime::default()),
     ));
     // Current-thread runtime: no await occurs between spawn and abort.
     task.abort();
@@ -54,6 +55,7 @@ async fn hub_admission_abort_during_tls_reclaims_slot() {
         clients(),
         ScHubHandshakeTimeouts::default(),
         admission,
+        Arc::new(super::admission::AdmissionRuntime::default()),
     ));
     assert!(futures_util::poll!(&mut operation).is_pending()); // actual TLS wait has started
     assert_eq!(active.load(Ordering::Acquire), 1);
@@ -67,15 +69,25 @@ pub(super) struct CountedHub {
     pub address: SocketAddr,
     pub active: Arc<AtomicUsize>,
     pub clients: Clients,
+    pub admission: Arc<super::admission::AdmissionRuntime>,
     pub hub: ScHub,
 }
 
 impl CountedHub {
     pub async fn start(tls: &TestTls, timeouts: ScHubHandshakeTimeouts) -> Self {
+        Self::start_with_limits(tls, timeouts, ScHubAdmissionLimits::default()).await
+    }
+
+    pub async fn start_with_limits(
+        tls: &TestTls,
+        timeouts: ScHubHandshakeTimeouts,
+        limits: ScHubAdmissionLimits,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let active = Arc::new(AtomicUsize::new(0));
         let clients = clients();
+        let admission = Arc::new(super::admission::AdmissionRuntime::new(limits, None));
         let tasks = super::tasks::Tasks::new();
         let task = tokio::spawn(super::connection::accept_loop_with_counter(
             listener,
@@ -85,17 +97,22 @@ impl CountedHub {
             timeouts,
             active.clone(),
             tasks.clone(),
+            admission.clone(),
         ));
         Self {
             address,
-            active,
-            clients,
+            active: active.clone(),
+            clients: clients.clone(),
+            admission: admission.clone(),
             hub: ScHub {
                 hub_vmac: [0x10; 6],
                 hub_uuid: [0x10; 16],
                 listener_task: Some(task),
                 tasks,
                 local_addr: Some(address),
+                admission,
+                clients,
+                active,
             },
         }
     }
@@ -110,7 +127,17 @@ async fn hub_actual_512_stalled_slots_expire_and_legitimate_mtls_recovers() {
         Duration::from_secs(5),
     )
     .unwrap();
-    let hub = CountedHub::start(&tls, timeouts).await;
+    let hub = CountedHub::start_with_limits(
+        &tls,
+        timeouts,
+        // Split-capacity accounting: 512 stalled handshakes stay under the
+        // 512-handshake bound and the 256 + 512 = 768 total.
+        ScHubAdmissionLimits {
+            max_clients: 256,
+            max_handshakes: 512,
+        },
+    )
+    .await;
     let mut stalled = Vec::new();
     for admitted in 1..=512 {
         let mut tcp = TcpStream::connect(hub.address).await.unwrap();

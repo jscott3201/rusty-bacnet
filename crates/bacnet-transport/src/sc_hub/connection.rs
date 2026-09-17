@@ -28,12 +28,16 @@ pub(super) async fn accept_loop_with_counter(
     timeouts: super::ScHubHandshakeTimeouts,
     active_connections: Arc<AtomicUsize>,
     tasks: super::tasks::Tasks,
+    admission: Arc<super::admission::AdmissionRuntime>,
 ) {
     let _abort_on_exit = tasks.abort_on_exit();
     let (hub_vmac, hub_uuid) = hub;
     let mut shutdown = tasks.subscribe();
     // All active accepted connections count, including established clients.
-    const MAX_ACTIVE_CONNECTIONS: usize = 512;
+    // The total is the configured sum (defaults 256 + 256 = 512); the
+    // handshake bound below counts unregistered connections only.
+    let limits = admission.limits;
+    let total_active = limits.total_active();
 
     // Heartbeat sweep: periodically check for idle clients and send HeartbeatRequest.
     // Existing hub-originated liveness probe is a local extension. It does not
@@ -70,17 +74,31 @@ pub(super) async fn accept_loop_with_counter(
 
         // Reject when the total active accepted-connection cap is reached
         let current = active_connections.load(std::sync::atomic::Ordering::Relaxed);
-        if current >= MAX_ACTIVE_CONNECTIONS {
-            warn!("Hub: rejecting connection from {peer_addr} — max active connections ({MAX_ACTIVE_CONNECTIONS}) reached");
+        if current >= total_active {
+            warn!("Hub: rejecting connection from {peer_addr} — max active connections ({total_active}) reached");
             drop(tcp_stream);
             continue;
         }
-        let admission = Admission::new(active_connections.clone(), timeouts.tls());
+        // Reject when the unregistered-handshake cap is reached. Established
+        // clients keep their slots, so only handshake pressure is counted
+        // here. Both caps are approximate local resource policy under
+        // concurrent accepts, not transactional guarantees.
+        let registered = clients.lock().await.len();
+        if current.saturating_sub(registered) >= limits.max_handshakes {
+            warn!(
+                "Hub: rejecting connection from {peer_addr} — max handshakes ({}) reached",
+                limits.max_handshakes
+            );
+            drop(tcp_stream);
+            continue;
+        }
+        let admission_permit = Admission::new(active_connections.clone(), timeouts.tls());
 
         debug!("Hub: new TCP connection from {peer_addr}");
 
         let acceptor = tls_acceptor.clone();
         let clients = clients.clone();
+        let admission_runtime = admission.clone();
 
         // Task locals are not inherited by spawn. Explicitly scope every
         // connection to this hub's one aggregate budget; no new worker/lifetime.
@@ -95,7 +113,8 @@ pub(super) async fn accept_loop_with_counter(
                     (hub_vmac, hub_uuid),
                     clients,
                     timeouts,
-                    admission,
+                    admission_permit,
+                    admission_runtime,
                 ),
             ));
     }
@@ -138,6 +157,7 @@ pub(super) async fn serve_connection(
     clients: Clients,
     timeouts: super::ScHubHandshakeTimeouts,
     admission: Admission,
+    runtime: Arc<super::admission::AdmissionRuntime>,
 ) {
     let (hub_vmac, hub_uuid) = hub;
     let tls_deadline = admission.tls_deadline;
@@ -154,6 +174,15 @@ pub(super) async fn serve_connection(
             return;
         }
     };
+    // Boolean channel only: the acceptor already required a CA-verified
+    // client certificate for this handshake to succeed. Presence is
+    // rechecked here (no subject/fingerprint extraction) so the admission
+    // input stays honest if verifier policy ever changes.
+    let tls_client_verified = tls_stream
+        .get_ref()
+        .1
+        .peer_certificates()
+        .is_some_and(|certs| !certs.is_empty());
 
     // WebSocket upgrade — require and echo the BACnet/SC hub subprotocol.
     let upgrade_deadline = tokio::time::Instant::now() + timeouts.websocket_upgrade();
@@ -206,6 +235,8 @@ pub(super) async fn serve_connection(
         write,
         clients,
         connect_deadline,
+        runtime,
+        tls_client_verified,
     )
     .await;
 }

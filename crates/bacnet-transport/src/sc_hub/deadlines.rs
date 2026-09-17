@@ -72,6 +72,8 @@ pub(super) async fn serve(
     clients: Clients,
     deadline: Arc<ConnectDeadline>,
     on_heartbeat_ack: impl Fn() + Send,
+    admission: Arc<super::admission::AdmissionRuntime>,
+    tls_client_verified: bool,
 ) {
     let mut lease = super::retirement::Lease::new();
     let closed = lease.closed.clone();
@@ -85,6 +87,8 @@ pub(super) async fn serve(
             (clients.clone(), &mut lease),
             &deadline,
             on_heartbeat_ack,
+            admission,
+            tls_client_verified,
         );
         let handler = async {
             tokio::select! {
