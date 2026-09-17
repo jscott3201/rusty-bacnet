@@ -53,6 +53,9 @@ impl DeadlinePeer {
         let deadline = Arc::new(super::deadlines::ConnectDeadline::new(accepted + duration));
         let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let admission = super::connection::Admission::new(active.clone(), Duration::from_secs(10));
+        // Direct-harness pair performs real mutual TLS with a CA-verified
+        // client certificate; only the accept-loop path is bypassed.
+        let runtime = Arc::new(super::admission::AdmissionRuntime::default());
         let operation = super::deadlines::serve(
             address,
             ([0x10; 6], [0x10; 16]),
@@ -61,6 +64,8 @@ impl DeadlinePeer {
             clients,
             deadline.clone(),
             || {},
+            runtime,
+            true,
         );
         let task = tokio::spawn(async move {
             let _admission = admission;

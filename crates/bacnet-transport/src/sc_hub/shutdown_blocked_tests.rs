@@ -21,6 +21,7 @@ impl ControlledPeer {
             accepted + Duration::from_secs(5),
         ));
         let admission = connection::Admission::new(hub.active.clone(), Duration::from_secs(10));
+        // Real mutual-TLS pair: the client certificate is CA-verified.
         let operation = deadlines::serve(
             address,
             ([0x10; 6], [0x10; 16]),
@@ -29,6 +30,8 @@ impl ControlledPeer {
             hub.clients.clone(),
             deadline.clone(),
             || {},
+            hub.admission.clone(),
+            true,
         );
         assert!(hub.hub.tasks.spawner().spawn(async move {
             let _admission = admission;

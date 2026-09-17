@@ -78,6 +78,8 @@ async fn connect_commit_survives_ready_expiry_and_blocked_accept_then_cleans_up(
         clients.clone(),
         deadline.clone(),
         || {},
+        Arc::new(super::admission::AdmissionRuntime::default()),
+        true,
     ));
     ws.send(request([0x42; 6], [0x42; 16])).await.unwrap();
     tokio::time::advance(Duration::from_millis(999)).await;

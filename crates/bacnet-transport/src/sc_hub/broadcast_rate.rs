@@ -163,7 +163,7 @@ impl HubBudget {
         })
     }
 
-    fn drop_counts(&self) -> ScHubBroadcastDropCounts {
+    pub(super) fn drop_counts(&self) -> ScHubBroadcastDropCounts {
         ScHubBroadcastDropCounts {
             sender_exhausted: self.sender_drops.load(Ordering::Relaxed),
             global_exhausted: self.global_drops.load(Ordering::Relaxed),

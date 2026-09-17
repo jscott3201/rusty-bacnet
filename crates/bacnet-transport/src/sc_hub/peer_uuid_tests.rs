@@ -25,6 +25,9 @@ impl Peer {
         ));
         let active = Arc::new(AtomicUsize::new(0));
         let admission = super::connection::Admission::new(active.clone(), Duration::from_secs(10));
+        // Direct-harness pair performs real mutual TLS with a CA-verified
+        // client certificate; only the accept-loop path is bypassed.
+        let runtime = Arc::new(super::admission::AdmissionRuntime::default());
         // Do not retain a test-owned sink: worker completion must release TLS.
         let operation = super::deadlines::serve(
             address,
@@ -34,6 +37,8 @@ impl Peer {
             clients,
             deadline.clone(),
             || {},
+            runtime,
+            true,
         );
         let task = tokio::spawn(async move {
             let _admission = admission;

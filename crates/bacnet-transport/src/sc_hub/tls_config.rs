@@ -90,6 +90,8 @@ use tokio_rustls::TlsAcceptor;
 pub struct ScHubTlsConfig {
     inner: Arc<rustls::ServerConfig>,
     broadcast_rate: super::ScHubBroadcastRatePolicy,
+    admission_limits: super::ScHubAdmissionLimits,
+    admission_policy: Option<super::ScHubAdmissionPolicy>,
 }
 
 impl ScHubTlsConfig {
@@ -138,6 +140,8 @@ impl ScHubTlsConfig {
         Ok(Self {
             inner: Arc::new(config),
             broadcast_rate: super::ScHubBroadcastRatePolicy::default(),
+            admission_limits: super::ScHubAdmissionLimits::default(),
+            admission_policy: None,
         })
     }
 
@@ -155,6 +159,55 @@ impl ScHubTlsConfig {
     /// The broadcast policy that will be validated at startup.
     pub fn broadcast_rate_policy(&self) -> super::ScHubBroadcastRatePolicy {
         self.broadcast_rate
+    }
+
+    /// Tune hub admission bounds without changing TLS policy.
+    ///
+    /// Every startup validates these bounds before binding. Zero or
+    /// overflowing bounds are configuration errors, not a way to disable
+    /// limiting. Each hub started from a clone gets independent admission
+    /// and deny counters. See [`super::ScHubAdmissionLimits`] for defaults
+    /// (256 established clients + 256 handshakes, preserving the previous
+    /// 512-connection total) and the split between the two caps.
+    pub fn with_admission_limits(mut self, limits: super::ScHubAdmissionLimits) -> Self {
+        self.admission_limits = limits;
+        self
+    }
+
+    /// The admission bounds that will be validated at startup.
+    pub fn admission_limits(&self) -> super::ScHubAdmissionLimits {
+        self.admission_limits
+    }
+
+    /// Install an admin admission policy without changing TLS policy.
+    ///
+    /// The policy sees the bounded [`super::ScHubAdmissionInput`] (claimed
+    /// VMAC/UUID/limits inside the TLS channel plus the verified-client
+    /// boolean and RB-07 peer context) and returns
+    /// [`super::ScHubAdmissionDecision::Allow`] or
+    /// [`super::ScHubAdmissionDecision::Deny`]. It runs synchronously under
+    /// the registry lock before the registration commit, so it must not
+    /// block, perform I/O, or await; a panicking policy fails closed to
+    /// Deny. A deny answers with the existing `RESOURCES`/`OTHER` NAK
+    /// family, closes without map mutation, leaves any incumbent untouched,
+    /// and bumps the hub's saturating deny counter. Absent policy means
+    /// allow-all; configured limits still apply either way. Clones share
+    /// the policy but never the deny counters. Device UUID shape and
+    /// equality are registry keys, not certificate authentication: no
+    /// certificate subject or fingerprint is extracted or exposed.
+    pub fn with_admission_policy(
+        mut self,
+        policy: impl Fn(&super::ScHubAdmissionInput) -> super::ScHubAdmissionDecision
+            + Send
+            + Sync
+            + 'static,
+    ) -> Self {
+        self.admission_policy = Some(Arc::new(policy));
+        self
+    }
+
+    pub(super) fn admission_policy(&self) -> Option<super::ScHubAdmissionPolicy> {
+        self.admission_policy.clone()
     }
 
     pub(super) fn into_acceptor(self) -> TlsAcceptor {
