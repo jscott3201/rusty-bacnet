@@ -7,7 +7,7 @@ use bacnet_services::audit::{
 use bacnet_services::common::MAX_DECODED_ITEMS;
 use bacnet_types::bitstring::AuditOperationFlags;
 use bacnet_types::constructed::{BACnetAddress, BACnetRecipient};
-use bacnet_types::enums::AuditOperation;
+use bacnet_types::enums::{AuditOperation, BACnetSuccessFilter};
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
 use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -127,13 +127,6 @@ fn ranged_integer(
         )));
     }
     Ok(value as u64)
-}
-
-fn boolean(value: &Bound<'_, PyAny>, name: &str) -> PyResult<bool> {
-    if !value.is_instance_of::<PyBool>() {
-        return Err(PyTypeError::new_err(format!("{name} must be a bool")));
-    }
-    value.extract::<bool>()
 }
 
 fn string(value: &Bound<'_, PyAny>, name: &str) -> PyResult<String> {
@@ -384,6 +377,19 @@ fn operation_flags(value: &Bound<'_, PyAny>, name: &str) -> PyResult<AuditOperat
         .map_err(|error| PyValueError::new_err(format!("{name}: {error}")))
 }
 
+/// Parse the corrected-baseline three-state success filter (RB-02).
+///
+/// The mapping accepts the raw `BACnetSuccessFilter` values 0 (all), 1
+/// (successes-only), and 2 (failures-only) as an integer. The old Boolean
+/// `successful_actions_only` meaning is not accepted here: `true` used to
+/// mean successes-only and `false` meant all (see
+/// `BACnetSuccessFilter::from_legacy_bool`). Full Python range
+/// validation, wrapper ergonomics, and docs are RB-20 work.
+fn success_filter(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACnetSuccessFilter> {
+    let raw = ranged_integer(value, name, 0, 2)?;
+    Ok(BACnetSuccessFilter::from_raw(raw as u32))
+}
+
 fn query_parameters(
     value: &Bound<'_, PyAny>,
     name: &str,
@@ -446,7 +452,7 @@ fn query_parameters(
                 operations: optional_item(value, "operations")?
                     .map(|item| operation_flags(&item, &format!("{name}.operations")))
                     .transpose()?,
-                successful_actions_only: boolean(
+                successful_actions_only: success_filter(
                     &required_item(value, name, "successful_actions_only")?,
                     &format!("{name}.successful_actions_only"),
                 )?,
@@ -484,7 +490,7 @@ fn query_parameters(
                 operations: optional_item(value, "operations")?
                     .map(|item| operation_flags(&item, &format!("{name}.operations")))
                     .transpose()?,
-                successful_actions_only: boolean(
+                successful_actions_only: success_filter(
                     &required_item(value, name, "successful_actions_only")?,
                     &format!("{name}.successful_actions_only"),
                 )?,
@@ -517,16 +523,8 @@ pub(crate) fn audit_log_query_request_from_py(
             "request.query_parameters",
         )?,
         start_at_sequence_number: optional_item(value, "start_at_sequence_number")?
-            .map(|item| {
-                ranged_integer(
-                    &item,
-                    "request.start_at_sequence_number",
-                    0,
-                    u32::MAX.into(),
-                )
-            })
-            .transpose()?
-            .map(|value| value as u32),
+            .map(|item| ranged_integer(&item, "request.start_at_sequence_number", 0, u64::MAX))
+            .transpose()?,
         requested_count: ranged_integer(
             &required_item(value, "request", "requested_count")?,
             "request.requested_count",

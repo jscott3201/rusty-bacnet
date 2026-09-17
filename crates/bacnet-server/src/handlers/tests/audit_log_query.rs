@@ -9,7 +9,7 @@ use bacnet_services::audit::{AuditLogQueryRequest, BACnetAuditLogQueryParameters
 use bacnet_types::constructed::{
     BACnetAuditLogDatum, BACnetAuditLogRecord, BACnetAuditNotification, BACnetRecipient,
 };
-use bacnet_types::enums::{AuditOperation, ErrorClass, ErrorCode};
+use bacnet_types::enums::{AuditOperation, BACnetSuccessFilter, ErrorClass, ErrorCode};
 use bacnet_types::primitives::{Date, Time};
 
 use super::*;
@@ -79,7 +79,7 @@ fn request(audit_log: ObjectIdentifier) -> AuditLogQueryRequest {
             source_device_address: None,
             source_object_identifier: None,
             operations: None,
-            successful_actions_only: false,
+            successful_actions_only: BACnetSuccessFilter::ALL,
         },
         start_at_sequence_number: None,
         requested_count: 10,
@@ -195,7 +195,7 @@ impl AuditLogStorage for SpyAuditStorage {
     fn query(
         &self,
         _parameters: &BACnetAuditLogQueryParameters,
-        _start_at_sequence_number: Option<u32>,
+        _start_at_sequence_number: Option<u64>,
         _requested_count: u16,
     ) -> AuditLogQueryPage {
         self.query_count.fetch_add(1, Ordering::SeqCst);

@@ -4,7 +4,9 @@ use bacnet_services::audit::{
     AuditLogQueryAck, BACnetAuditLogDatum, BACnetAuditLogRecord, BACnetAuditLogRecordResult,
 };
 use bacnet_types::constructed::BACnetRecipient;
-use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    BACnetSuccessFilter, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier,
+};
 use bacnet_types::primitives::{BACnetTimeStamp, Date, Time};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::types::{PyDict, PyList};
@@ -245,7 +247,7 @@ fn base_query<'py>(py: Python<'py>, parameters: &Bound<'py, PyDict>) -> Bound<'p
     query.set_item("query_parameters", parameters).unwrap();
     query.set_item("requested_count", u16::MAX).unwrap();
     query
-        .set_item("start_at_sequence_number", u32::MAX)
+        .set_item("start_at_sequence_number", u64::MAX)
         .unwrap();
     query
 }
@@ -281,14 +283,15 @@ fn query_mapping_preserves_both_choices_and_rejects_invalid_flags() {
         by_target
             .set_item("operations", (1u64 << 15) | (1u64 << 63))
             .unwrap();
-        by_target.set_item("successful_actions_only", true).unwrap();
+        by_target.set_item("successful_actions_only", 1).unwrap();
         let parsed = audit_log_query_request_from_py(base_query(py, &by_target).as_any()).unwrap();
-        assert_eq!(parsed.start_at_sequence_number, Some(u32::MAX));
+        assert_eq!(parsed.start_at_sequence_number, Some(u64::MAX));
         assert_eq!(parsed.requested_count, u16::MAX);
         let BACnetAuditLogQueryParameters::ByTarget {
             target_array_index,
             target_priority,
             operations,
+            successful_actions_only,
             ..
         } = parsed.query_parameters
         else {
@@ -297,20 +300,35 @@ fn query_mapping_preserves_both_choices_and_rejects_invalid_flags() {
         assert_eq!(target_array_index, Some(u64::MAX));
         assert_eq!(target_priority, Some(16));
         assert_eq!(operations.unwrap().bits(), (1u64 << 15) | (1u64 << 63));
+        assert_eq!(successful_actions_only, BACnetSuccessFilter::SUCCESSES_ONLY);
 
         let by_source = PyDict::new(py);
         by_source.set_item("kind", "by_source").unwrap();
         by_source
             .set_item("source_device_identifier", py_oid(ObjectType::DEVICE, 13))
             .unwrap();
-        by_source
-            .set_item("successful_actions_only", false)
-            .unwrap();
+        by_source.set_item("successful_actions_only", 0).unwrap();
         let parsed = audit_log_query_request_from_py(base_query(py, &by_source).as_any()).unwrap();
-        assert!(matches!(
-            parsed.query_parameters,
-            BACnetAuditLogQueryParameters::BySource { .. }
-        ));
+        let BACnetAuditLogQueryParameters::BySource {
+            successful_actions_only,
+            ..
+        } = parsed.query_parameters
+        else {
+            panic!("expected by-source query");
+        };
+        assert_eq!(successful_actions_only, BACnetSuccessFilter::ALL);
+
+        by_source.set_item("successful_actions_only", 3).unwrap();
+        assert_error_type::<PyValueError>(
+            py,
+            audit_log_query_request_from_py(base_query(py, &by_source).as_any()).unwrap_err(),
+        );
+        by_source.set_item("successful_actions_only", true).unwrap();
+        assert_error_type::<PyTypeError>(
+            py,
+            audit_log_query_request_from_py(base_query(py, &by_source).as_any()).unwrap_err(),
+        );
+        by_source.set_item("successful_actions_only", 0).unwrap();
 
         for invalid in [1u64 << 16, 1u64 << 31] {
             by_source.set_item("operations", invalid).unwrap();

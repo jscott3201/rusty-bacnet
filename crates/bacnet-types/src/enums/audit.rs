@@ -42,3 +42,34 @@ bacnet_enum! {
     const SUCCESSES_ONLY = 1;
     const FAILURES_ONLY = 2;
 }
+
+impl BACnetSuccessFilter {
+    /// Map the pre-RB-02 Boolean query meaning to the corrected filter.
+    ///
+    /// The uncorrected contract encoded a BOOLEAN `successful-actions-only`:
+    /// `true` selected successes-only and `false` selected all. This helper
+    /// preserves that source-level meaning while moving callers to the
+    /// corrected `BACnetSuccessFilter` type. It accepts exactly one meaning
+    /// per call, touches no wire bytes, and performs no encoding or decoding.
+    ///
+    /// RB-20 migration inventory (not done here): 3-state runtime filtering
+    /// including `FAILURES_ONLY` behavior plus storage-predicate
+    /// re-verification (`crates/bacnet-objects/src/audit.rs`
+    /// `operation_matches`/`query_matches`, which still treat
+    /// `FAILURES_ONLY` as all); the Python boundary
+    /// (`crates/rusty-bacnet/src/types/audit.rs`, `rusty_bacnet.pyi`, and
+    /// `crates/rusty-bacnet/tests/test_audit_api.py`, which still pins the
+    /// old Boolean/`u32` expectations); and user-facing docs
+    /// (`rust-api.md`, `python-api.md`, `CHANGELOG`, PICS). Issue #345 stays
+    /// open until that migration lands.
+    #[deprecated(
+        note = "RB-02 migration aid only: maps the old Boolean meaning (true = successes-only, false = all) to BACnetSuccessFilter; prefer the named ALL / SUCCESSES_ONLY / FAILURES_ONLY constants for new code"
+    )]
+    pub fn from_legacy_bool(successful_actions_only: bool) -> Self {
+        if successful_actions_only {
+            Self::SUCCESSES_ONLY
+        } else {
+            Self::ALL
+        }
+    }
+}

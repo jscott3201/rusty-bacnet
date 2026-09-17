@@ -10,7 +10,8 @@ use bacnet_types::constructed::{
     BACnetAuditLogRecordResult, BACnetAuditNotification, BACnetRecipient,
 };
 use bacnet_types::enums::{
-    AuditLevel, ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier, Reliability,
+    AuditLevel, BACnetSuccessFilter, ErrorClass, ErrorCode, EventState, ObjectType,
+    PropertyIdentifier, Reliability,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
@@ -52,13 +53,14 @@ pub struct AuditLogQueryPage {
 pub trait AuditLogStorage: Send + Sync {
     /// Filter and page the currently retained in-memory records.
     ///
-    /// A present start is the existing Clause-21 `Unsigned32` model and admits
-    /// only literal sequence identities below it. This intentionally does not
-    /// add a modular cursor across `u64::MAX -> 1`.
+    /// A present start is the corrected-baseline `Unsigned64` cursor
+    /// (Errata 2024-04-29 item 8) and admits only literal sequence identities
+    /// below it. This intentionally does not add a modular cursor across
+    /// `u64::MAX -> 1`.
     fn query(
         &self,
         parameters: &BACnetAuditLogQueryParameters,
-        start_at_sequence_number: Option<u32>,
+        start_at_sequence_number: Option<u64>,
         requested_count: u16,
     ) -> AuditLogQueryPage;
 }
@@ -294,10 +296,15 @@ fn recipient_matches(
 fn operation_matches(
     notification: &BACnetAuditNotification,
     operations: Option<bacnet_types::bitstring::AuditOperationFlags>,
-    successful_actions_only: bool,
+    success_filter: BACnetSuccessFilter,
 ) -> bool {
     operations.is_none_or(|flags| flags.contains(notification.operation))
-        && (!successful_actions_only || notification.result.is_none())
+        // Corrected-contract compile adaptation only: SUCCESSES_ONLY keeps the
+        // previous `true` behavior and every other filter keeps the previous
+        // `false` behavior. Three-state runtime filtering for FAILURES_ONLY is
+        // RB-20 work (see `BACnetSuccessFilter::from_legacy_bool`).
+        && (success_filter != BACnetSuccessFilter::SUCCESSES_ONLY
+            || notification.result.is_none())
 }
 
 fn query_matches(
@@ -362,7 +369,7 @@ impl AuditLogStorage for AuditLogObject {
     fn query(
         &self,
         parameters: &BACnetAuditLogQueryParameters,
-        start_at_sequence_number: Option<u32>,
+        start_at_sequence_number: Option<u64>,
         requested_count: u16,
     ) -> AuditLogQueryPage {
         let limit = usize::from(requested_count).min(MAX_AUDIT_RECORDS as usize);
@@ -373,9 +380,7 @@ impl AuditLogStorage for AuditLogObject {
         // query order even across sequence wrap; numeric sorting would turn
         // retained [MAX, 1] into the wrong chronology.
         for result in self.buffer.iter().rev() {
-            if start_at_sequence_number
-                .is_some_and(|start| result.sequence_number >= u64::from(start))
-            {
+            if start_at_sequence_number.is_some_and(|start| result.sequence_number >= start) {
                 continue;
             }
             let BACnetAuditLogDatum::AuditNotification(notification) = &result.record.datum else {

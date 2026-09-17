@@ -6,6 +6,7 @@ use bacnet_objects::audit::{AuditLogObject, AuditLogPersistence, AuditLogSnapsho
 use bacnet_services::audit::{
     AuditLogQueryAck, AuditLogQueryRequest, BACnetAuditLogQueryParameters,
 };
+use bacnet_types::enums::BACnetSuccessFilter;
 use bacnet_types::primitives::ObjectIdentifier;
 
 use super::*;
@@ -46,7 +47,7 @@ async fn audit_log_query_dispatch_returns_a_typed_complex_ack() {
             target_array_index: None,
             target_priority: None,
             operations: None,
-            successful_actions_only: false,
+            successful_actions_only: BACnetSuccessFilter::ALL,
         },
         start_at_sequence_number: None,
         requested_count: 10,
