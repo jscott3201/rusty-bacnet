@@ -230,6 +230,7 @@ fn send_reject_generates_reject_message() {
         &source_mac,
         unknown_network,
         RejectMessageReason::NOT_DIRECTLY_CONNECTED,
+        &[],
     );
 
     let sent = rx.try_recv().unwrap();
@@ -520,7 +521,12 @@ async fn received_reject_removes_learned_route() {
         ..Npdu::default()
     };
 
-    handle_network_message(&table, &send_txs, 0, 1000, &[0x0A], &npdu).await;
+    handle_network_message(
+        &table,
+        &send_txs,
+        &IngressContext::test_local(0, 1000, &[0x0A], npdu),
+    )
+    .await;
 
     let tbl = table.lock().await;
     assert!(tbl.lookup(3000).is_none());
@@ -547,7 +553,12 @@ async fn received_reject_does_not_remove_direct_route() {
         ..Npdu::default()
     };
 
-    handle_network_message(&table, &send_txs, 0, 1000, &[0x0A], &npdu).await;
+    handle_network_message(
+        &table,
+        &send_txs,
+        &IngressContext::test_local(0, 1000, &[0x0A], npdu),
+    )
+    .await;
 
     let tbl = table.lock().await;
     assert!(tbl.lookup(1000).is_some());
@@ -575,7 +586,12 @@ async fn who_is_router_with_specific_network() {
         ..Npdu::default()
     };
 
-    handle_network_message(&table, &send_txs, 0, 1000, &[0x0A], &npdu).await;
+    handle_network_message(
+        &table,
+        &send_txs,
+        &IngressContext::test_local(0, 1000, &[0x0A], npdu),
+    )
+    .await;
 
     let sent = rx.try_recv().unwrap();
     match sent {
@@ -614,7 +630,12 @@ async fn who_is_router_with_unknown_network_no_response() {
         ..Npdu::default()
     };
 
-    handle_network_message(&table, &send_txs, 0, 1000, &[0x0A], &npdu).await;
+    handle_network_message(
+        &table,
+        &send_txs,
+        &IngressContext::test_local(0, 1000, &[0x0A], npdu),
+    )
+    .await;
 
     assert!(rx.try_recv().is_err());
 }
@@ -630,14 +651,21 @@ async fn initialize_routing_table_ack() {
     let (tx, mut rx) = mpsc::channel::<SendRequest>(256);
     let send_txs = vec![tx];
 
+    // RB-03: a table query is Number of Ports == 0 (one octet), not a
+    // missing field. An empty payload is a truncated envelope: no ACK.
     let npdu = Npdu {
         is_network_message: true,
         message_type: Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE.to_raw()),
-        payload: Bytes::new(),
+        payload: Bytes::from_static(&[0]),
         ..Npdu::default()
     };
 
-    handle_network_message(&table, &send_txs, 0, 1000, &[0x0A], &npdu).await;
+    handle_network_message(
+        &table,
+        &send_txs,
+        &IngressContext::test_local(0, 1000, &[0x0A], npdu),
+    )
+    .await;
 
     let sent = rx.try_recv().unwrap();
     match sent {
@@ -659,6 +687,35 @@ async fn initialize_routing_table_ack() {
 }
 
 #[tokio::test]
+async fn initialize_routing_table_empty_payload_sends_no_ack() {
+    // RB-03: the Number of Ports octet is absent, so this is a truncated
+    // envelope, not a query. No table change, no ACK.
+    let mut table = RouterTable::new();
+    table.add_direct(1000, 0);
+    let table = Arc::new(Mutex::new(table));
+
+    let (tx, mut rx) = mpsc::channel::<SendRequest>(256);
+    let send_txs = vec![tx];
+
+    let npdu = Npdu {
+        is_network_message: true,
+        message_type: Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE.to_raw()),
+        payload: Bytes::new(),
+        ..Npdu::default()
+    };
+
+    handle_network_message(
+        &table,
+        &send_txs,
+        &IngressContext::test_local(0, 1000, &[0x0A], npdu),
+    )
+    .await;
+
+    assert!(rx.try_recv().is_err());
+    assert_eq!(table.lock().await.len(), 1);
+}
+
+#[tokio::test]
 async fn router_busy_does_not_crash() {
     let table = RouterTable::new();
     let table = Arc::new(Mutex::new(table));
@@ -677,7 +734,12 @@ async fn router_busy_does_not_crash() {
         ..Npdu::default()
     };
 
-    handle_network_message(&table, &send_txs, 0, 1000, &[0x0A], &npdu).await;
+    handle_network_message(
+        &table,
+        &send_txs,
+        &IngressContext::test_local(0, 1000, &[0x0A], npdu),
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -699,7 +761,12 @@ async fn router_available_does_not_crash() {
         ..Npdu::default()
     };
 
-    handle_network_message(&table, &send_txs, 0, 1000, &[0x0A], &npdu).await;
+    handle_network_message(
+        &table,
+        &send_txs,
+        &IngressContext::test_local(0, 1000, &[0x0A], npdu),
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -721,7 +788,12 @@ async fn i_could_be_router_stores_potential_route() {
         ..Npdu::default()
     };
 
-    handle_network_message(&table, &send_txs, 0, 1000, &[0x0A, 0x0B], &npdu).await;
+    handle_network_message(
+        &table,
+        &send_txs,
+        &IngressContext::test_local(0, 1000, &[0x0A, 0x0B], npdu),
+    )
+    .await;
 
     let tbl = table.lock().await;
     let entry = tbl.lookup(5000).unwrap();
@@ -750,7 +822,12 @@ async fn i_could_be_router_does_not_overwrite_existing_route() {
         ..Npdu::default()
     };
 
-    handle_network_message(&table, &send_txs, 0, 1000, &[0x0A], &npdu).await;
+    handle_network_message(
+        &table,
+        &send_txs,
+        &IngressContext::test_local(0, 1000, &[0x0A], npdu),
+    )
+    .await;
 
     let tbl = table.lock().await;
     let entry = tbl.lookup(5000).unwrap();
@@ -777,7 +854,12 @@ async fn establish_connection_does_not_crash() {
         ..Npdu::default()
     };
 
-    handle_network_message(&table, &send_txs, 0, 1000, &[0x0A], &npdu).await;
+    handle_network_message(
+        &table,
+        &send_txs,
+        &IngressContext::test_local(0, 1000, &[0x0A], npdu),
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -799,7 +881,12 @@ async fn disconnect_retains_learned_route() {
         ..Npdu::default()
     };
 
-    handle_network_message(&table, &send_txs, 0, 1000, &[0x0A], &npdu).await;
+    handle_network_message(
+        &table,
+        &send_txs,
+        &IngressContext::test_local(0, 1000, &[0x0A], npdu),
+    )
+    .await;
 
     let tbl = table.lock().await;
     assert!(tbl.lookup(7000).is_some());
@@ -825,7 +912,12 @@ async fn disconnect_does_not_remove_direct_route() {
         ..Npdu::default()
     };
 
-    handle_network_message(&table, &send_txs, 0, 1000, &[0x0A], &npdu).await;
+    handle_network_message(
+        &table,
+        &send_txs,
+        &IngressContext::test_local(0, 1000, &[0x0A], npdu),
+    )
+    .await;
 
     let tbl = table.lock().await;
     assert!(tbl.lookup(1000).is_some());

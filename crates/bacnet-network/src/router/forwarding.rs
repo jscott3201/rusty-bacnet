@@ -59,8 +59,12 @@ pub(super) fn forward_unicast(
         destination: forwarded_dest,
         source: Some(source),
         hop_count: forwarded_hop_count,
-        message_type: None,
-        vendor_id: None,
+        // RB-03: routed network-layer messages (including proprietary and
+        // other directed controls) keep their identity opaquely. Clearing
+        // these corrupted unicast-routed controls while broadcast preserved
+        // them; APDUs carry None here, so this is a no-op for APDU traffic.
+        message_type: npdu.message_type,
+        vendor_id: npdu.vendor_id,
         payload: npdu.payload,
     };
 
@@ -140,11 +144,15 @@ pub(super) fn forward_broadcast(
 }
 
 /// Send a Reject-Message-To-Network.
+///
+/// Locally generated, but ingress-triggered: the caller's data attributes
+/// travel with the reject instead of being silently dropped (RB-03).
 pub(super) fn send_reject(
     send_tx: &mpsc::Sender<SendRequest>,
     source_mac: &[u8],
     rejected_network: u16,
     reason: RejectMessageReason,
+    data_attributes: &[DataAttribute],
 ) {
     let mut payload = BytesMut::with_capacity(3);
     payload.put_u8(reason.to_raw());
@@ -163,9 +171,10 @@ pub(super) fn send_reject(
         return;
     }
 
-    if let Err(e) = send_tx.try_send(SendRequest::unicast(
+    if let Err(e) = send_tx.try_send(SendRequest::unicast_with_attributes(
         buf.freeze(),
         MacAddr::from_slice(source_mac),
+        data_attributes,
     )) {
         warn!(%e, "Router dropped reject message: output channel full");
     }

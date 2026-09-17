@@ -60,7 +60,8 @@ impl Fixture {
             payload: Bytes::copy_from_slice(payload),
             ..Default::default()
         };
-        handle_network_message(&self.table, &self.txs, port, 1000, mac, &npdu).await;
+        let ctx = IngressContext::test_local(port, 1000, mac, npdu.clone());
+        handle_network_message(&self.table, &self.txs, &ctx).await;
         for (index, rx) in self.rxs.iter_mut().enumerate() {
             if kind == I_AM && index != port {
                 let SendRequest::Broadcast { npdu: data, .. } = rx.try_recv().unwrap() else {

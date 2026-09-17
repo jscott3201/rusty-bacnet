@@ -18,7 +18,8 @@ async fn deliver(
         payload: Bytes::copy_from_slice(payload),
         ..Default::default()
     };
-    handle_network_message(table, &[tx0, tx1], port, 1000, source_mac, &npdu).await;
+    let ctx = IngressContext::test_local(port, 1000, source_mac, npdu);
+    handle_network_message(table, &[tx0, tx1], &ctx).await;
     let mut output = [Vec::new(), Vec::new()];
     while let Ok(request) = rx0.try_recv() {
         output[0].push(request);
@@ -157,11 +158,18 @@ async fn i_am_refresh_rearms_rejects_and_corroborated_learning_still_warns() {
 }
 
 #[tokio::test]
-async fn learning_outcomes_exclude_direct_reserved_and_truncated_entries() {
+async fn truncated_tails_change_nothing_and_send_no_ack() {
+    // RB-03 correction (Clauses 6.2/6.4/6.6.3.2): complete-payload validation
+    // precedes every table-mutation path. Previously a trailing octet was
+    // silently ignored — prefix entries were applied and the rebroadcast
+    // (I-Am) or ACK (Init) was still emitted. Now the whole message is
+    // dropped: no table change, no forward, no rebroadcast, no ACK.
     let mut table = RouterTable::new();
     table.add_direct(1000, 0);
     let table = Arc::new(Mutex::new(table));
-    deliver(
+
+    // I-Am with a 1-octet tail: 3000 must not be learned, nothing rebroadcast.
+    let output = deliver(
         &table,
         0,
         &[1],
@@ -169,6 +177,9 @@ async fn learning_outcomes_exclude_direct_reserved_and_truncated_entries() {
         &[0, 0, 0xff, 0xff, 0x03, 0xe8, 0x0b, 0xb8, 0],
     )
     .await;
+    assert!(output.iter().all(Vec::is_empty));
+    assert_eq!(table.lock().await.len(), 1);
+
     // Init preserves existing routes; only 4000 is new, the trailing entry is truncated.
     let init = [
         6, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 0x03, 0xe8, 0, 0, 0x0b, 0xb8, 0, 0, 0x0f, 0xa0, 0, 0, 0x13,
@@ -181,9 +192,10 @@ async fn learning_outcomes_exclude_direct_reserved_and_truncated_entries() {
         &init,
     )
     .await;
-    assert_eq!(output[1].len(), 1); // ACK still generated.
-    assert_eq!(table.lock().await.lookup(3000).unwrap().port_index, 0);
-    // ACK refreshes same-port routes, holds cross-port claims, and cannot overwrite direct.
+    assert!(output.iter().all(Vec::is_empty)); // No ACK for an invalid envelope.
+    assert_eq!(table.lock().await.len(), 1);
+
+    // The same truncation in an ACK still learns nothing.
     deliver(
         &table,
         1,
@@ -193,17 +205,11 @@ async fn learning_outcomes_exclude_direct_reserved_and_truncated_entries() {
     )
     .await;
     let table = table.lock().await;
-    assert_eq!(table.len(), 3);
+    assert_eq!(table.len(), 1);
     assert!(table.lookup(1000).unwrap().directly_connected);
-    assert_eq!(table.lookup(3000).unwrap().port_index, 0);
-    assert_eq!(
-        table.claim_snapshot(),
-        RoutingClaimSnapshot {
-            learned_ok: 3,
-            pending_started: 1,
-            ..Default::default()
-        }
-    );
+    assert!(table.lookup(3000).is_none());
+    assert!(table.lookup(4000).is_none());
+    assert_eq!(table.claim_snapshot(), RoutingClaimSnapshot::default());
 }
 
 #[tokio::test]
@@ -371,7 +377,12 @@ async fn dampened_table_transition_still_relays_every_reject() {
             payload: Bytes::from(vec![reason, 0x0b, 0xb8]),
             ..Default::default()
         };
-        handle_network_message(&table, &send_txs, 0, 1000, &[1], &npdu).await;
+        handle_network_message(
+            &table,
+            &send_txs,
+            &IngressContext::test_local(0, 1000, &[1], npdu.clone()),
+        )
+        .await;
         let SendRequest::Unicast {
             npdu: data, mac, ..
         } = rx1.try_recv().unwrap()
