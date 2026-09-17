@@ -162,7 +162,9 @@ async fn init_update_query_and_garbage_envelopes() {
     .await;
     h.assert_quiet();
 
-    // Valid update: learns 3000, ACK without table data routed to the origin.
+    // Valid update: Port ID 1 names local port 0 (the wire mapping, not the
+    // ingress port 1). Learns 3000 there; the ACK carries no table data and
+    // is routed to the origin.
     h.handle(h.ctx(
         1,
         &[2],
@@ -183,13 +185,17 @@ async fn init_update_query_and_garbage_envelopes() {
                 decoded.message_type,
                 Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK.to_raw())
             );
-            assert_eq!(decoded.payload.as_ref(), &[0]);
+            assert!(decoded.payload.is_empty());
         }
         SendRequest::Broadcast { .. } => panic!("expected unicast ACK"),
     }
-    assert_eq!(h.table.lock().await.lookup(3000).unwrap().port_index, 1);
+    let route = h.table.lock().await.lookup(3000).unwrap().clone();
+    assert_eq!(route.port_index, 0);
+    assert!(!route.directly_connected);
+    assert_eq!(route.next_hop_mac.as_slice(), &[2]);
 
-    // Valid query: ACK carries the full table, now including 3000.
+    // Valid query: one ACK carries the full table — ascending DNETs with
+    // stable nonzero wire Port IDs (1000->1, 2000->2, 3000->1).
     h.handle(h.ctx(
         1,
         &[2],
@@ -201,8 +207,10 @@ async fn init_update_query_and_garbage_envelopes() {
     match acks.pop().unwrap() {
         SendRequest::Unicast { npdu, .. } => {
             let decoded = decode_npdu(npdu).unwrap();
-            assert_eq!(decoded.payload[0], 3);
-            assert_eq!(decoded.payload.len(), 13);
+            assert_eq!(
+                decoded.payload.as_ref(),
+                &[3, 0x03, 0xe8, 1, 0, 0x07, 0xd0, 2, 0, 0x0b, 0xb8, 1, 0]
+            );
         }
         SendRequest::Broadcast { .. } => panic!("expected unicast ACK"),
     }
@@ -269,6 +277,11 @@ async fn initialize_routing_table_ack() {
             );
             assert_eq!(decoded.payload.len(), 9);
             assert_eq!(decoded.payload[0], 2);
+            // Stable nonzero wire Port IDs in ascending-DNET order.
+            assert_eq!(
+                decoded.payload.as_ref(),
+                &[2, 0x03, 0xe8, 1, 0, 0x07, 0xd0, 2, 0]
+            );
         }
         _ => panic!("Expected Unicast response for Init-Routing-Table"),
     }
