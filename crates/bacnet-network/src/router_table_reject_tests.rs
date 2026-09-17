@@ -61,18 +61,35 @@ fn alternating_rejects_hold_until_exact_boundary_without_sliding() {
             );
         }
         table.apply_reject(3000, 0, 3 - first, now + HOLD_DOWN);
-        assert_ne!(table.lookup(3000).unwrap().reachability, status);
-        assert_eq!(table.reject_transitions[&3000][&0], now + HOLD_DOWN);
-        assert_eq!(
-            table.claim_snapshot(),
-            RoutingClaimSnapshot {
-                reject_applied: 2,
-                reject_dampened: 10,
-                reject_dampened_same_state: 4,
-                reject_dampened_hold_down: 6,
-                ..Default::default()
-            }
-        );
+        // A Busy claim never lifts permanent Unreachable, even at the
+        // hold-down boundary: only Available or fresh learning exits it, so
+        // the window never slides on that claim.
+        if first == 2 {
+            assert_ne!(table.lookup(3000).unwrap().reachability, status);
+            assert_eq!(table.reject_transitions[&3000][&0], now + HOLD_DOWN);
+            assert_eq!(
+                table.claim_snapshot(),
+                RoutingClaimSnapshot {
+                    reject_applied: 2,
+                    reject_dampened: 10,
+                    reject_dampened_same_state: 4,
+                    reject_dampened_hold_down: 6,
+                    ..Default::default()
+                }
+            );
+        } else {
+            assert_eq!(table.lookup(3000).unwrap().reachability, status);
+            assert_eq!(table.reject_transitions[&3000][&0], now);
+            assert_eq!(
+                table.claim_snapshot(),
+                RoutingClaimSnapshot {
+                    reject_applied: 1,
+                    reject_dampened: 11,
+                    reject_dampened_same_state: 11,
+                    ..Default::default()
+                }
+            );
+        }
     }
 }
 
@@ -143,8 +160,11 @@ fn learning_refresh_replacement_removal_and_aging_rearm_all_ingress_keys() {
     ] {
         let mut table = learned_table();
         let now = Instant::now();
-        table.apply_reject(3000, 0, 1, now);
-        table.apply_reject(3000, 1, 2, now);
+        // Busy first, then Unreachable: both transitions apply and record
+        // their ingress key (the reverse order would swallow the Busy claim —
+        // Busy never lifts Unreachable).
+        table.apply_reject(3000, 0, 2, now);
+        table.apply_reject(3000, 1, 1, now);
         assert_eq!(table.reject_transitions[&3000].len(), 2);
         match rearm {
             "same_peer" => {
@@ -176,7 +196,11 @@ fn learning_refresh_replacement_removal_and_aging_rearm_all_ingress_keys() {
         assert_eq!(
             table.claim_snapshot(),
             RoutingClaimSnapshot {
-                reject_applied: 4,
+                reject_applied: 3,
+                // The second claim finds a permanently Unreachable route, so
+                // it dampens as same-state instead of applying.
+                reject_dampened: 1,
+                reject_dampened_same_state: 1,
                 ..Default::default()
             },
             "{rearm}"
@@ -189,14 +213,14 @@ fn reject_keys_are_independent_by_ingress_port_and_network() {
     let mut table = learned_table();
     table.add_learned(4000, 0, MacAddr::from_slice(&[1]));
     let now = Instant::now();
-    for (network, ingress, reason) in [(3000, 0, 1), (4000, 0, 2), (3000, 1, 2), (4000, 1, 1)] {
+    for (network, ingress, reason) in [(3000, 0, 2), (4000, 0, 2), (3000, 1, 1), (4000, 1, 1)] {
         table.apply_reject(network, ingress, reason, now);
     }
     table.apply_reject(3000, 0, 1, now);
     table.apply_reject(4000, 0, 2, now);
     assert_eq!(
         table.lookup(3000).unwrap().reachability,
-        ReachabilityStatus::Busy
+        ReachabilityStatus::Unreachable
     );
     assert_eq!(
         table.lookup(4000).unwrap().reachability,
@@ -207,7 +231,7 @@ fn reject_keys_are_independent_by_ingress_port_and_network() {
         RoutingClaimSnapshot {
             reject_applied: 4,
             reject_dampened: 2,
-            reject_dampened_hold_down: 2,
+            reject_dampened_same_state: 2,
             ..Default::default()
         }
     );
@@ -303,7 +327,9 @@ fn counters_saturate_without_affecting_decisions_and_snapshots_are_owned() {
             reject_applied: u64::MAX,
             reject_dampened: u64::MAX,
             reject_dampened_same_state: u64::MAX,
-            reject_dampened_hold_down: u64::MAX,
+            // Each Busy claim lands on a permanently Unreachable route, so it
+            // dampens as same-state and never touches the hold-down count.
+            reject_dampened_hold_down: u64::MAX - 1,
             learned_ok: u64::MAX,
             learned_cap_ignored: u64::MAX,
             flap_warned: u64::MAX,

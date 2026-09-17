@@ -404,8 +404,10 @@ async fn dampened_table_transition_still_relays_every_reject() {
         RoutingClaimSnapshot {
             reject_applied: 1,
             reject_dampened: 2,
-            reject_dampened_same_state: 1,
-            reject_dampened_hold_down: 1,
+            // The trailing Busy claim on a permanently Unreachable route is
+            // a same-state no-op (it can never resurrect via auto-clear), not
+            // a held-down change — while every reject still relays above.
+            reject_dampened_same_state: 2,
             ..Default::default()
         }
     );

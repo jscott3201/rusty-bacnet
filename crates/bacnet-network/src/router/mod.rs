@@ -757,6 +757,8 @@ async fn dispatch_network_message(
 #[cfg(test)]
 mod admission_tests;
 #[cfg(test)]
+mod busy_scope_tests;
+#[cfg(test)]
 mod claim_tests;
 #[cfg(test)]
 mod envelope_control_tests;
