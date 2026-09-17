@@ -15,8 +15,45 @@ use bacnet_services::list_manipulation::ListElementRequest;
 use bacnet_services::object_mgmt::{CreateObjectRequest, DeleteObjectRequest};
 use bacnet_services::wpm::WritePropertyAttempt;
 use bacnet_services::write_property::WritePropertyRequest;
+use bacnet_transport::port::TransportProvenance;
 use bacnet_types::enums::ConfirmedServiceChoice;
 use bacnet_types::MacAddr;
+
+/// Channel/relay scope derived from ingress provenance, mirroring RB-09
+/// `ControlTrust`. Scope only, never leaf identity: a verified SC ingress
+/// asserts the channel/relay validation, not that a claimed SNET/SADR leaf
+/// is the authenticated peer. Provenance alone never authorizes; only the
+/// callback does (callback-only, no static allowlist).
+///
+/// Baseline-only profile (RB-08): there is no cert-bound leaf identity at
+/// this layer — the SC VMAC is payload-claimed inside the TLS channel, not
+/// bound to the operational certificate. An unknown origin (including a
+/// hub-mediated unknown leaf, which arrives [`TransportProvenance::unverified`])
+/// never satisfies a baseline-only allow rule; receive-permission (e.g. an
+/// accepted COV subscription or audit receipt) is never write-permission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MutationTrust {
+    /// Unverified legacy origin, including hub-mediated unknown leaves.
+    Unverified,
+    /// Authenticated immediate direct SC-TLS peer (post-handshake VMAC only).
+    VerifiedChannel,
+    /// Independently validated SC-hub relayed origin (post source admission;
+    /// the hub peer is not the leaf).
+    VerifiedRelay,
+}
+
+impl MutationTrust {
+    /// Derive the channel/relay scope from one reassembled ingress snapshot.
+    pub fn from_provenance(provenance: TransportProvenance) -> Self {
+        if provenance.is_direct_peer() {
+            Self::VerifiedChannel
+        } else if provenance.is_relayed_origin() {
+            Self::VerifiedRelay
+        } else {
+            Self::Unverified
+        }
+    }
+}
 
 /// Local authorization mode for the ten services represented by [`MutationTarget`].
 ///
@@ -60,19 +97,50 @@ pub enum MutationTarget {
     SubscribeCovPropertyMultiple(SubscribeCOVPropertyMultipleRequest),
 }
 
-/// Claimed source identity and decoded target supplied to mutation policy.
+impl MutationTarget {
+    /// Stable service-kind label for redacted diagnostics (no parameters).
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::WriteProperty(_) => "write-property",
+            Self::WritePropertyMultiple(_) => "write-property-multiple",
+            Self::CreateObject(_) => "create-object",
+            Self::DeleteObject(_) => "delete-object",
+            Self::AddListElement(_) => "add-list-element",
+            Self::RemoveListElement(_) => "remove-list-element",
+            Self::AtomicWriteFile(_) => "atomic-write-file",
+            Self::SubscribeCov(_) => "subscribe-cov",
+            Self::SubscribeCovProperty(_) => "subscribe-cov-property",
+            Self::SubscribeCovPropertyMultiple(_) => "subscribe-cov-property-multiple",
+        }
+    }
+}
+
+/// Claimed source identity, verified ingress scope, and decoded target
+/// supplied to mutation policy.
 ///
 /// Neither address nor a subscription's process ID authenticates an operator.
 /// `source_mac` identifies the immediate peer (often a router); `source_network`
 /// is the peer-claimed routed origin, not a verified identity.
 /// SC mTLS authenticates the channel/peer, not service authorization; neither
 /// address is a certificate principal.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// `provenance` is the reassembled ingress snapshot threaded from dispatch
+/// (segmentation mismatches already fail closed at reassembly, so every
+/// element of one request — including each WPM element — observes the same
+/// snapshot). `trust` is the channel/relay scope derived from it, never leaf
+/// identity. Debug is redacted by construction: address lengths and the
+/// target kind only, never MAC bytes, property values, file payloads, or
+/// other decoded inputs.
+#[derive(Clone, PartialEq)]
 pub struct MutationAuthorizationContext {
     /// Immediate data-link peer address.
     pub source_mac: MacAddr,
     /// Claimed originating NPDU address, when present.
     pub source_network: Option<NpduAddress>,
+    /// Honest transport + origin provenance for this ingress snapshot.
+    pub provenance: TransportProvenance,
+    /// Channel/relay scope derived from `provenance`; never leaf identity.
+    pub trust: MutationTrust,
     /// Confirmed-request invoke identifier.
     pub invoke_id: u8,
     /// Outer confirmed service identity.
@@ -81,7 +149,33 @@ pub struct MutationAuthorizationContext {
     pub target: MutationTarget,
 }
 
+impl std::fmt::Debug for MutationAuthorizationContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MutationAuthorizationContext")
+            .field("source_mac_len", &self.source_mac.len())
+            .field(
+                "source_network",
+                &self
+                    .source_network
+                    .as_ref()
+                    .map(|source| (source.network, source.mac_address.len())),
+            )
+            .field("provenance", &self.provenance)
+            .field("trust", &self.trust)
+            .field("invoke_id", &self.invoke_id)
+            .field("service_choice", &self.service_choice)
+            .field("target_kind", &self.target.kind())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Fast, nonblocking, side-effect-free mutation authorization callback.
+///
+/// Timing: invoked after DCC prechecks, request admission, service decoding,
+/// and per-element validation, and before any database mutation, COV/event
+/// fan-out, or audit-log write. A denial performs no audit-log write (that
+/// would itself be a mutation); it is recorded in the saturating per-service
+/// counters and bounded tracing diagnostics only.
 ///
 /// Under [`MutationPolicy::Permissive`], **default-allow:** `None` preserves existing
 /// behavior, deliberately unlike

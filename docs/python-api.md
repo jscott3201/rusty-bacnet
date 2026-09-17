@@ -1398,6 +1398,14 @@ await server.write_property_local(
 )
 ```
 
+Local writes are trusted-local by design, the same contract as the Rust
+`write_local`: they bypass network mutation authorization. The Python surface
+exposes no mutation policy knobs (`mutation_policy` / `mutation_authorizer`
+exist only on the Rust server builders), so a Python-hosted server runs the
+default permissive behavior for inbound network mutations. See
+[Local mutation authorization](mutation-policy.md) for the Rust-side gate,
+its baseline-only provenance profile, and its exclusions.
+
 #### `comm_state() -> int`
 
 Get the server's current DeviceCommunicationControl state.
