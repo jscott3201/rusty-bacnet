@@ -1,7 +1,9 @@
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::bitstring::AuditOperationFlags;
 use bacnet_types::constructed::{BACnetAddress, BACnetRecipient};
-use bacnet_types::enums::{AuditOperation, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    AuditOperation, BACnetSuccessFilter, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier,
+};
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 use bacnet_types::MacAddr;
 use bytes::BytesMut;
@@ -16,7 +18,7 @@ fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(object_type, instance).unwrap()
 }
 
-fn minimal_by_target() -> AuditLogQueryRequest {
+fn minimal_by_target(success_filter: BACnetSuccessFilter) -> AuditLogQueryRequest {
     AuditLogQueryRequest {
         audit_log: oid(ObjectType::AUDIT_LOG, 1),
         query_parameters: BACnetAuditLogQueryParameters::ByTarget {
@@ -27,14 +29,17 @@ fn minimal_by_target() -> AuditLogQueryRequest {
             target_array_index: None,
             target_priority: None,
             operations: None,
-            successful_actions_only: true,
+            successful_actions_only: success_filter,
         },
         start_at_sequence_number: None,
         requested_count: 5,
     }
 }
 
-fn minimal_by_source() -> AuditLogQueryRequest {
+fn minimal_by_source(
+    success_filter: BACnetSuccessFilter,
+    cursor: Option<u64>,
+) -> AuditLogQueryRequest {
     AuditLogQueryRequest {
         audit_log: oid(ObjectType::AUDIT_LOG, 1),
         query_parameters: BACnetAuditLogQueryParameters::BySource {
@@ -42,9 +47,9 @@ fn minimal_by_source() -> AuditLogQueryRequest {
             source_device_address: None,
             source_object_identifier: None,
             operations: None,
-            successful_actions_only: false,
+            successful_actions_only: success_filter,
         },
-        start_at_sequence_number: Some(0x0102_0304),
+        start_at_sequence_number: cursor,
         requested_count: 513,
     }
 }
@@ -88,53 +93,60 @@ fn audit_notification_minimum_matches_clause_21_golden() {
     assert_eq!(AuditNotificationRequest::decode(&encoded).unwrap(), request);
 }
 
+/// Corrected-baseline known-answer vectors (Errata 2024-04-29 items 7/8):
+/// both query choices with every `BACnetSuccessFilter` value, compared as
+/// hand-written expected bytes against the selected production — not a
+/// round-trip agreement check. The filter is a context-tagged ENUMERATED at
+/// [7] (by-target) / [4] (by-source); the cursor is an Unsigned64 at [2].
 #[test]
-fn by_target_minimum_matches_clause_21_golden() {
-    let request = minimal_by_target();
-    let mut encoded = BytesMut::new();
-    request.try_encode(&mut encoded).unwrap();
+fn success_filter_goldens_cover_both_choices_and_all_three_values() {
+    let filters = [
+        (BACnetSuccessFilter::ALL, 0x00),
+        (BACnetSuccessFilter::SUCCESSES_ONLY, 0x01),
+        (BACnetSuccessFilter::FAILURES_ONLY, 0x02),
+    ];
+    for (filter, raw) in filters {
+        let request = minimal_by_target(filter);
+        let mut encoded = BytesMut::new();
+        request.try_encode(&mut encoded).unwrap();
+        assert_eq!(
+            encoded.as_ref(),
+            &[
+                0x0c, 0x0f, 0x40, 0x00, 0x01, // audit-log [0]
+                0x1e, // query-parameters [1]
+                0x0e, // by-target [0]
+                0x0c, 0x02, 0x00, 0x00, 0x02, // target-device-identifier [0]
+                0x79, raw,  // success-filter [7] ENUMERATED
+                0x0f, // end by-target
+                0x1f, // end query-parameters
+                0x39, 0x05, // requested-count [3]
+            ]
+        );
+        assert_eq!(AuditLogQueryRequest::decode(&encoded).unwrap(), request);
 
-    assert_eq!(
-        encoded.as_ref(),
-        &[
-            0x0c, 0x0f, 0x40, 0x00, 0x01, // audit-log [0]
-            0x1e, // query-parameters [1]
-            0x0e, // by-target [0]
-            0x0c, 0x02, 0x00, 0x00, 0x02, // target-device-identifier [0]
-            0x79, 0x01, // successful-actions-only [7]
-            0x0f, // end by-target
-            0x1f, // end query-parameters
-            0x39, 0x05, // requested-count [3]
-        ]
-    );
-    assert_eq!(AuditLogQueryRequest::decode(&encoded).unwrap(), request);
+        let request = minimal_by_source(filter, Some(0x0102_0304));
+        let mut encoded = BytesMut::new();
+        request.try_encode(&mut encoded).unwrap();
+        assert_eq!(
+            encoded.as_ref(),
+            &[
+                0x0c, 0x0f, 0x40, 0x00, 0x01, // audit-log [0]
+                0x1e, // query-parameters [1]
+                0x1e, // by-source [1]
+                0x0c, 0x02, 0x00, 0x00, 0x02, // source-device-identifier [0]
+                0x49, raw,  // success-filter [4] ENUMERATED
+                0x1f, // end by-source
+                0x1f, // end query-parameters
+                0x2c, 0x01, 0x02, 0x03, 0x04, // start-at-sequence-number [2]
+                0x3a, 0x02, 0x01, // requested-count [3]
+            ]
+        );
+        assert_eq!(AuditLogQueryRequest::decode(&encoded).unwrap(), request);
+    }
 }
 
 #[test]
-fn by_source_minimum_and_sequence_number_match_clause_21_golden() {
-    let request = minimal_by_source();
-    let mut encoded = BytesMut::new();
-    request.try_encode(&mut encoded).unwrap();
-
-    assert_eq!(
-        encoded.as_ref(),
-        &[
-            0x0c, 0x0f, 0x40, 0x00, 0x01, // audit-log [0]
-            0x1e, // query-parameters [1]
-            0x1e, // by-source [1]
-            0x0c, 0x02, 0x00, 0x00, 0x02, // source-device-identifier [0]
-            0x49, 0x00, // successful-actions-only [4]
-            0x1f, // end by-source
-            0x1f, // end query-parameters
-            0x2c, 0x01, 0x02, 0x03, 0x04, // start-at-sequence-number [2]
-            0x3a, 0x02, 0x01, // requested-count [3]
-        ]
-    );
-    assert_eq!(AuditLogQueryRequest::decode(&encoded).unwrap(), request);
-}
-
-#[test]
-fn by_target_all_optional_fields_round_trip() {
+fn by_target_all_optional_fields_match_corrected_golden() {
     let flags = AuditOperationFlags::from_bits((1 << 0) | (1 << 8) | (1u64 << 63)).unwrap();
     let request = AuditLogQueryRequest {
         audit_log: oid(ObjectType::AUDIT_LOG, 44),
@@ -149,9 +161,9 @@ fn by_target_all_optional_fields_round_trip() {
             target_array_index: Some(u64::MAX),
             target_priority: Some(16),
             operations: Some(flags),
-            successful_actions_only: false,
+            successful_actions_only: BACnetSuccessFilter::FAILURES_ONLY,
         },
-        start_at_sequence_number: Some(u32::MAX),
+        start_at_sequence_number: Some(u64::MAX),
         requested_count: u16::MAX,
     };
 
@@ -159,6 +171,16 @@ fn by_target_all_optional_fields_round_trip() {
     request.try_encode(&mut encoded).unwrap();
     assert_eq!(AuditLogQueryRequest::decode(&encoded).unwrap(), request);
 
+    // Corrected filter form: failures-only is ENUMERATED 2 at [7].
+    assert!(encoded.windows(2).any(|window| window == [0x79, 0x02]));
+    // Corrected Unsigned64 cursor: u64::MAX is the 8-octet extended form.
+    assert!(encoded
+        .windows(10)
+        .any(|window| window == [0x2d, 0x08, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]));
+    // Requested-count stays Unsigned16.
+    assert!(encoded
+        .windows(3)
+        .any(|window| window == [0x3a, 0xff, 0xff]));
     // Operations [6] holds unused-bits octet followed by the complete
     // bit-position-preserving 64-bit representation.
     assert!(encoded
@@ -167,7 +189,7 @@ fn by_target_all_optional_fields_round_trip() {
 }
 
 #[test]
-fn by_source_address_object_and_flags_round_trip() {
+fn by_source_address_object_and_flags_match_corrected_golden() {
     let request = AuditLogQueryRequest {
         audit_log: oid(ObjectType::AUDIT_LOG, 2),
         query_parameters: BACnetAuditLogQueryParameters::BySource {
@@ -178,7 +200,7 @@ fn by_source_address_object_and_flags_round_trip() {
             }),
             source_object_identifier: Some(oid(ObjectType::BINARY_INPUT, 4)),
             operations: Some(AuditOperationFlags::from_bits((1 << 0) | (1 << 8)).unwrap()),
-            successful_actions_only: true,
+            successful_actions_only: BACnetSuccessFilter::ALL,
         },
         start_at_sequence_number: None,
         requested_count: 1,
@@ -187,6 +209,8 @@ fn by_source_address_object_and_flags_round_trip() {
     let mut encoded = BytesMut::new();
     request.try_encode(&mut encoded).unwrap();
     assert_eq!(AuditLogQueryRequest::decode(&encoded).unwrap(), request);
+    // Corrected filter form: all is ENUMERATED 0 at [4] with no cursor [2].
+    assert!(encoded.windows(2).any(|window| window == [0x49, 0x00]));
     assert!(encoded
         .windows(4)
         .any(|window| window == [0x3b, 0x07, 0x80, 0x80]));
@@ -213,41 +237,136 @@ fn audit_property_reference_shared_conversion_is_checked() {
 }
 
 #[test]
-fn mandatory_boolean_is_strict_and_cannot_be_omitted() {
+fn success_filter_is_strict_enumerated_and_cannot_be_omitted() {
+    // The corrected ENUMERATED 0..=2 range: value 2 was rejected as a
+    // non-boolean by the uncorrected decoder and must now decode.
+    for (filter, raw) in [
+        (BACnetSuccessFilter::ALL, 0),
+        (BACnetSuccessFilter::SUCCESSES_ONLY, 1),
+        (BACnetSuccessFilter::FAILURES_ONLY, 2),
+    ] {
+        let mut encoded = BytesMut::new();
+        minimal_by_target(filter).try_encode(&mut encoded).unwrap();
+        let at = encoded
+            .windows(2)
+            .position(|bytes| bytes == [0x79, raw])
+            .unwrap();
+        assert_eq!(encoded[at], 0x79);
+        let mut missing = encoded.to_vec();
+        missing.drain(at..at + 2);
+        assert!(AuditLogQueryRequest::decode(&missing).is_err());
+
+        let mut encoded = BytesMut::new();
+        minimal_by_source(filter, None)
+            .try_encode(&mut encoded)
+            .unwrap();
+        let at = encoded
+            .windows(2)
+            .position(|bytes| bytes == [0x49, raw])
+            .unwrap();
+        let mut missing = encoded.to_vec();
+        missing.drain(at..at + 2);
+        assert!(AuditLogQueryRequest::decode(&missing).is_err());
+    }
+
+    // Out-of-range enumerated values fail on both choices.
     let mut encoded = BytesMut::new();
-    minimal_by_target().try_encode(&mut encoded).unwrap();
-
-    let bool_pos = encoded
-        .windows(2)
-        .position(|bytes| bytes == [0x79, 0x01])
+    minimal_by_target(BACnetSuccessFilter::ALL)
+        .try_encode(&mut encoded)
         .unwrap();
-    let mut missing = encoded.to_vec();
-    missing.drain(bool_pos..bool_pos + 2);
-    assert!(AuditLogQueryRequest::decode(&missing).is_err());
+    let filter_pos = encoded
+        .windows(2)
+        .position(|bytes| bytes == [0x79, 0x00])
+        .unwrap();
+    for raw in [3, 16, 255] {
+        let mut out_of_range = encoded.to_vec();
+        out_of_range[filter_pos + 1] = raw;
+        assert!(AuditLogQueryRequest::decode(&out_of_range).is_err());
+    }
 
-    let mut non_boolean = encoded.to_vec();
-    non_boolean[bool_pos + 1] = 2;
-    assert!(AuditLogQueryRequest::decode(&non_boolean).is_err());
-
+    // Zero-length, non-canonical leading-zero, and over-wide (>8 octet)
+    // filter encodings fail.
     let mut zero_length = encoded.to_vec();
-    zero_length[bool_pos] = 0x78;
-    zero_length.remove(bool_pos + 1);
+    zero_length[filter_pos] = 0x78;
+    zero_length.remove(filter_pos + 1);
     assert!(AuditLogQueryRequest::decode(&zero_length).is_err());
+
+    let mut noncanonical = encoded.to_vec();
+    noncanonical.splice(filter_pos..filter_pos + 2, [0x7a, 0x00, 0x01]);
+    assert!(AuditLogQueryRequest::decode(&noncanonical).is_err());
+
+    let mut over_wide = encoded.to_vec();
+    let mut wide_field = vec![0x7d, 0x09];
+    wide_field.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 1]);
+    over_wide.splice(filter_pos..filter_pos + 2, wide_field);
+    assert!(AuditLogQueryRequest::decode(&over_wide).is_err());
+
+    // By-source [4] rejects an out-of-range enumerated value as well.
+    let mut encoded = BytesMut::new();
+    minimal_by_source(BACnetSuccessFilter::ALL, None)
+        .try_encode(&mut encoded)
+        .unwrap();
+    let filter_pos = encoded
+        .windows(2)
+        .position(|bytes| bytes == [0x49, 0x00])
+        .unwrap();
+    let mut out_of_range = encoded.to_vec();
+    out_of_range[filter_pos + 1] = 3;
+    assert!(AuditLogQueryRequest::decode(&out_of_range).is_err());
+}
+
+/// Corrected Unsigned64 cursor boundaries (Errata 2024-04-29 item 8):
+/// hand-written field bytes against the selected production plus decode
+/// round-trips. The 5-octet `u32::MAX + 1` cursor was rejected by the
+/// uncorrected Unsigned32 decoder and must now encode and decode.
+#[test]
+fn corrected_cursor_boundaries_encode_as_unsigned64() {
+    let boundaries: [(u64, &[u8]); 4] = [
+        (0, &[0x29, 0x00]),
+        (u64::from(u32::MAX), &[0x2c, 0xff, 0xff, 0xff, 0xff]),
+        (
+            u64::from(u32::MAX) + 1,
+            &[0x2d, 0x05, 0x01, 0x00, 0x00, 0x00, 0x00],
+        ),
+        (
+            u64::MAX,
+            &[0x2d, 0x08, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+        ),
+    ];
+    for (cursor, field) in boundaries {
+        let request = minimal_by_source(BACnetSuccessFilter::ALL, Some(cursor));
+        let mut encoded = BytesMut::new();
+        request.try_encode(&mut encoded).unwrap();
+        assert!(
+            encoded.windows(field.len()).any(|window| window == field),
+            "cursor {cursor} missing field bytes {field:02x?}"
+        );
+        assert_eq!(AuditLogQueryRequest::decode(&encoded).unwrap(), request);
+    }
+
+    // Absent versus present cursor: the minimal by-target request carries no
+    // [2] field, while Some(0) encodes the one-octet zero form.
+    let mut absent = BytesMut::new();
+    minimal_by_target(BACnetSuccessFilter::ALL)
+        .try_encode(&mut absent)
+        .unwrap();
+    assert!(!absent.windows(1).any(|window| window == [0x29]));
+    let mut present = BytesMut::new();
+    minimal_by_source(BACnetSuccessFilter::ALL, Some(0))
+        .try_encode(&mut present)
+        .unwrap();
+    assert!(present.windows(2).any(|window| window == [0x29, 0x00]));
 }
 
 #[test]
-fn clause_21_integer_widths_are_enforced() {
-    let mut too_wide_start = BytesMut::new();
-    encode_request_prefix(&mut too_wide_start);
-    tags::encode_tag(&mut too_wide_start, 2, tags::TagClass::Context, 5);
-    too_wide_start.extend_from_slice(&[1, 0, 0, 0, 0]);
-    primitives::encode_ctx_unsigned(&mut too_wide_start, 3, 1);
-    assert!(AuditLogQueryRequest::decode(&too_wide_start).is_err());
-
-    let mut too_wide_count = BytesMut::new();
-    encode_request_prefix(&mut too_wide_count);
-    primitives::encode_ctx_unsigned(&mut too_wide_count, 3, 0x1_0000);
-    assert!(AuditLogQueryRequest::decode(&too_wide_count).is_err());
+fn corrected_cursor_rejects_noncanonical_overwide_and_count_overflow() {
+    // Over-wide (>8 octet) and non-canonical leading-zero cursors fail.
+    let mut over_wide = BytesMut::new();
+    encode_request_prefix(&mut over_wide);
+    tags::encode_tag(&mut over_wide, 2, tags::TagClass::Context, 9);
+    over_wide.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 1]);
+    primitives::encode_ctx_unsigned(&mut over_wide, 3, 1);
+    assert!(AuditLogQueryRequest::decode(&over_wide).is_err());
 
     let mut noncanonical_start = BytesMut::new();
     encode_request_prefix(&mut noncanonical_start);
@@ -255,6 +374,12 @@ fn clause_21_integer_widths_are_enforced() {
     noncanonical_start.extend_from_slice(&[0, 1]);
     primitives::encode_ctx_unsigned(&mut noncanonical_start, 3, 1);
     assert!(AuditLogQueryRequest::decode(&noncanonical_start).is_err());
+
+    // Requested-count stays Unsigned16: over-wide and non-canonical fail.
+    let mut too_wide_count = BytesMut::new();
+    encode_request_prefix(&mut too_wide_count);
+    primitives::encode_ctx_unsigned(&mut too_wide_count, 3, 0x1_0000);
+    assert!(AuditLogQueryRequest::decode(&too_wide_count).is_err());
 
     let mut noncanonical_count = BytesMut::new();
     encode_request_prefix(&mut noncanonical_count);
@@ -272,7 +397,7 @@ fn nested_field_widths_and_priority_range_are_enforced() {
     primitives::encode_app_unsigned(&mut too_wide_address, 0x1_0000);
     primitives::encode_app_octet_string(&mut too_wide_address, &[]);
     tags::encode_closing_tag(&mut too_wide_address, 1);
-    primitives::encode_ctx_boolean(&mut too_wide_address, 7, false);
+    primitives::encode_ctx_enumerated(&mut too_wide_address, 7, 0);
     encode_outer_suffix(&mut too_wide_address, 0);
     assert!(AuditLogQueryRequest::decode(&too_wide_address).is_err());
 
@@ -281,7 +406,7 @@ fn nested_field_widths_and_priority_range_are_enforced() {
     primitives::encode_ctx_object_id(&mut too_wide_array, 0, &oid(ObjectType::DEVICE, 2));
     tags::encode_tag(&mut too_wide_array, 4, tags::TagClass::Context, 9);
     too_wide_array.extend_from_slice(&[1, 0, 0, 0, 0, 0, 0, 0, 0]);
-    primitives::encode_ctx_boolean(&mut too_wide_array, 7, false);
+    primitives::encode_ctx_enumerated(&mut too_wide_array, 7, 0);
     encode_outer_suffix(&mut too_wide_array, 0);
     assert!(AuditLogQueryRequest::decode(&too_wide_array).is_err());
 
@@ -289,7 +414,7 @@ fn nested_field_widths_and_priority_range_are_enforced() {
     encode_outer_prefix(&mut bad_priority, 0);
     primitives::encode_ctx_object_id(&mut bad_priority, 0, &oid(ObjectType::DEVICE, 2));
     primitives::encode_ctx_unsigned(&mut bad_priority, 5, 17);
-    primitives::encode_ctx_boolean(&mut bad_priority, 7, false);
+    primitives::encode_ctx_enumerated(&mut bad_priority, 7, 0);
     encode_outer_suffix(&mut bad_priority, 0);
     assert!(AuditLogQueryRequest::decode(&bad_priority).is_err());
 
@@ -300,7 +425,7 @@ fn nested_field_widths_and_priority_range_are_enforced() {
     noncanonical_address.extend_from_slice(&[0x22, 0, 1]);
     primitives::encode_app_octet_string(&mut noncanonical_address, &[]);
     tags::encode_closing_tag(&mut noncanonical_address, 1);
-    primitives::encode_ctx_boolean(&mut noncanonical_address, 7, false);
+    primitives::encode_ctx_enumerated(&mut noncanonical_address, 7, 0);
     encode_outer_suffix(&mut noncanonical_address, 0);
     assert!(AuditLogQueryRequest::decode(&noncanonical_address).is_err());
 
@@ -310,7 +435,7 @@ fn nested_field_widths_and_priority_range_are_enforced() {
         primitives::encode_ctx_object_id(&mut malformed, 0, &oid(ObjectType::DEVICE, 2));
         tags::encode_tag(&mut malformed, tag, tags::TagClass::Context, 2);
         malformed.extend_from_slice(&field);
-        primitives::encode_ctx_boolean(&mut malformed, 7, false);
+        primitives::encode_ctx_enumerated(&mut malformed, 7, 0);
         encode_outer_suffix(&mut malformed, 0);
         assert!(AuditLogQueryRequest::decode(&malformed).is_err());
     }
@@ -322,7 +447,7 @@ fn operation_flags_reject_more_than_64_bits_and_nonzero_padding() {
     encode_outer_prefix(&mut too_wide, 1);
     primitives::encode_ctx_object_id(&mut too_wide, 0, &oid(ObjectType::DEVICE, 2));
     primitives::encode_ctx_bit_string(&mut too_wide, 3, 7, &[0; 9]);
-    primitives::encode_ctx_boolean(&mut too_wide, 4, false);
+    primitives::encode_ctx_enumerated(&mut too_wide, 4, 0);
     encode_outer_suffix(&mut too_wide, 1);
     assert!(AuditLogQueryRequest::decode(&too_wide).is_err());
 
@@ -330,7 +455,7 @@ fn operation_flags_reject_more_than_64_bits_and_nonzero_padding() {
     encode_outer_prefix(&mut bad_padding, 1);
     primitives::encode_ctx_object_id(&mut bad_padding, 0, &oid(ObjectType::DEVICE, 2));
     primitives::encode_ctx_bit_string(&mut bad_padding, 3, 1, &[0x01]);
-    primitives::encode_ctx_boolean(&mut bad_padding, 4, false);
+    primitives::encode_ctx_enumerated(&mut bad_padding, 4, 0);
     encode_outer_suffix(&mut bad_padding, 1);
     assert!(AuditLogQueryRequest::decode(&bad_padding).is_err());
 }
@@ -338,7 +463,9 @@ fn operation_flags_reject_more_than_64_bits_and_nonzero_padding() {
 #[test]
 fn every_constructed_level_requires_full_consumption() {
     let mut top_level = BytesMut::new();
-    minimal_by_target().try_encode(&mut top_level).unwrap();
+    minimal_by_target(BACnetSuccessFilter::ALL)
+        .try_encode(&mut top_level)
+        .unwrap();
     top_level.extend_from_slice(&[0x39, 0x01]);
     assert!(AuditLogQueryRequest::decode(&top_level).is_err());
 
@@ -347,17 +474,70 @@ fn every_constructed_level_requires_full_consumption() {
     tags::encode_opening_tag(&mut trailing_choice, 1);
     tags::encode_opening_tag(&mut trailing_choice, 0);
     primitives::encode_ctx_object_id(&mut trailing_choice, 0, &oid(ObjectType::DEVICE, 2));
-    primitives::encode_ctx_boolean(&mut trailing_choice, 7, false);
+    primitives::encode_ctx_enumerated(&mut trailing_choice, 7, 0);
     tags::encode_closing_tag(&mut trailing_choice, 0);
     primitives::encode_ctx_unsigned(&mut trailing_choice, 9, 1);
     tags::encode_closing_tag(&mut trailing_choice, 1);
     primitives::encode_ctx_unsigned(&mut trailing_choice, 3, 1);
     assert!(AuditLogQueryRequest::decode(&trailing_choice).is_err());
+
+    // Trailing field inside by-target after the required [7] filter.
+    let mut trailing_by_target = BytesMut::new();
+    encode_outer_prefix(&mut trailing_by_target, 0);
+    primitives::encode_ctx_object_id(&mut trailing_by_target, 0, &oid(ObjectType::DEVICE, 2));
+    primitives::encode_ctx_enumerated(&mut trailing_by_target, 7, 1);
+    primitives::encode_ctx_unsigned(&mut trailing_by_target, 9, 1);
+    encode_outer_suffix(&mut trailing_by_target, 0);
+    assert!(AuditLogQueryRequest::decode(&trailing_by_target).is_err());
+
+    // Trailing field inside by-source after the required [4] filter.
+    let mut trailing_by_source = BytesMut::new();
+    encode_outer_prefix(&mut trailing_by_source, 1);
+    primitives::encode_ctx_object_id(&mut trailing_by_source, 0, &oid(ObjectType::DEVICE, 2));
+    primitives::encode_ctx_enumerated(&mut trailing_by_source, 4, 2);
+    primitives::encode_ctx_unsigned(&mut trailing_by_source, 9, 1);
+    encode_outer_suffix(&mut trailing_by_source, 1);
+    assert!(AuditLogQueryRequest::decode(&trailing_by_source).is_err());
+
+    // Trailing application value inside the by-target device address.
+    let mut trailing_address = BytesMut::new();
+    encode_outer_prefix(&mut trailing_address, 0);
+    primitives::encode_ctx_object_id(&mut trailing_address, 0, &oid(ObjectType::DEVICE, 2));
+    tags::encode_opening_tag(&mut trailing_address, 1);
+    primitives::encode_app_unsigned(&mut trailing_address, 1);
+    primitives::encode_app_octet_string(&mut trailing_address, &[]);
+    primitives::encode_app_unsigned(&mut trailing_address, 2);
+    tags::encode_closing_tag(&mut trailing_address, 1);
+    primitives::encode_ctx_enumerated(&mut trailing_address, 7, 0);
+    encode_outer_suffix(&mut trailing_address, 0);
+    assert!(AuditLogQueryRequest::decode(&trailing_address).is_err());
+}
+
+#[test]
+fn invalid_choice_discriminator_is_rejected() {
+    let mut wrong_choice = BytesMut::new();
+    primitives::encode_ctx_object_id(&mut wrong_choice, 0, &oid(ObjectType::AUDIT_LOG, 1));
+    tags::encode_opening_tag(&mut wrong_choice, 1);
+    tags::encode_opening_tag(&mut wrong_choice, 2);
+    primitives::encode_ctx_object_id(&mut wrong_choice, 0, &oid(ObjectType::DEVICE, 2));
+    primitives::encode_ctx_enumerated(&mut wrong_choice, 7, 0);
+    tags::encode_closing_tag(&mut wrong_choice, 2);
+    tags::encode_closing_tag(&mut wrong_choice, 1);
+    primitives::encode_ctx_unsigned(&mut wrong_choice, 3, 1);
+    assert!(AuditLogQueryRequest::decode(&wrong_choice).is_err());
+
+    // Wrong audit-log tag ([1] instead of [0]) is rejected.
+    let mut wrong_audit_log = BytesMut::new();
+    minimal_by_target(BACnetSuccessFilter::ALL)
+        .try_encode(&mut wrong_audit_log)
+        .unwrap();
+    wrong_audit_log[0] = 0x1c;
+    assert!(AuditLogQueryRequest::decode(&wrong_audit_log).is_err());
 }
 
 #[test]
 fn invalid_priority_encode_is_atomic() {
-    let mut request = minimal_by_target();
+    let mut request = minimal_by_target(BACnetSuccessFilter::SUCCESSES_ONLY);
     let BACnetAuditLogQueryParameters::ByTarget {
         target_priority, ..
     } = &mut request.query_parameters
@@ -371,10 +551,61 @@ fn invalid_priority_encode_is_atomic() {
     assert_eq!(output.as_ref(), b"prefix");
 }
 
+#[test]
+fn invalid_filter_encode_is_atomic() {
+    // Every u64 cursor value encodes, so cursor rejection is decode-side
+    // (see corrected_cursor_rejects_noncanonical_overwide_and_count_overflow);
+    // the atomic-encode failures are bad priority and bad filter.
+    for raw in [3, 16, u32::MAX] {
+        let mut request = minimal_by_source(BACnetSuccessFilter::ALL, None);
+        let BACnetAuditLogQueryParameters::BySource {
+            successful_actions_only,
+            ..
+        } = &mut request.query_parameters
+        else {
+            unreachable!();
+        };
+        *successful_actions_only = BACnetSuccessFilter::from_raw(raw);
+
+        let mut output = BytesMut::from(&b"prefix"[..]);
+        assert!(request.try_encode(&mut output).is_err());
+        assert_eq!(output.as_ref(), b"prefix");
+    }
+}
+
+#[test]
+fn wide_cursor_pairs_with_wide_ack_sequence() {
+    // The ACK sequence was already Unsigned64; the corrected query cursor
+    // now pairs with it above 32 bits.
+    let cursor = u64::from(u32::MAX) + 1;
+    let request = minimal_by_source(BACnetSuccessFilter::FAILURES_ONLY, Some(cursor));
+    let mut encoded = BytesMut::new();
+    request.try_encode(&mut encoded).unwrap();
+    assert!(encoded
+        .windows(7)
+        .any(|window| window == [0x2d, 0x05, 0x01, 0x00, 0x00, 0x00, 0x00]));
+    assert_eq!(AuditLogQueryRequest::decode(&encoded).unwrap(), request);
+
+    let ack = AuditLogQueryAck {
+        audit_log: oid(ObjectType::AUDIT_LOG, 1),
+        records: vec![BACnetAuditLogRecordResult {
+            sequence_number: cursor,
+            record: audit_record(BACnetAuditLogDatum::LogStatus(0b010)),
+        }],
+        no_more_items: false,
+    };
+    let mut encoded = BytesMut::new();
+    ack.try_encode(&mut encoded).unwrap();
+    assert!(encoded
+        .windows(7)
+        .any(|window| window == [0x0d, 0x05, 0x01, 0x00, 0x00, 0x00, 0x00]));
+    assert_eq!(AuditLogQueryAck::decode(&encoded).unwrap(), ack);
+}
+
 fn encode_request_prefix(buf: &mut BytesMut) {
     encode_outer_prefix(buf, 0);
     primitives::encode_ctx_object_id(buf, 0, &oid(ObjectType::DEVICE, 2));
-    primitives::encode_ctx_boolean(buf, 7, false);
+    primitives::encode_ctx_enumerated(buf, 7, 0);
     tags::encode_closing_tag(buf, 0);
     tags::encode_closing_tag(buf, 1);
 }

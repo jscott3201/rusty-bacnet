@@ -5,7 +5,9 @@ use bacnet_types::constructed::{
     AuditPropertyReference, BACnetAddress, BACnetAuditLogDatum, BACnetAuditLogQueryParameters,
     BACnetAuditLogRecord, BACnetAuditLogRecordResult, BACnetAuditNotification, BACnetRecipient,
 };
-use bacnet_types::enums::{AuditOperation, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    AuditOperation, BACnetSuccessFilter, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 use bacnet_types::MacAddr;
@@ -118,7 +120,7 @@ fn log_with_records(records: Vec<BACnetAuditLogRecordResult>) -> AuditLogObject 
 fn query(
     log: &AuditLogObject,
     parameters: &BACnetAuditLogQueryParameters,
-    start: Option<u32>,
+    start: Option<u64>,
     count: u16,
 ) -> super::AuditLogQueryPage {
     BACnetObject::audit_log_storage_internal(log)
@@ -137,7 +139,7 @@ fn target_query() -> BACnetAuditLogQueryParameters {
         target_array_index: Some(3),
         target_priority: Some(8),
         operations: Some(operations),
-        successful_actions_only: true,
+        successful_actions_only: BACnetSuccessFilter::SUCCESSES_ONLY,
     }
 }
 
@@ -179,7 +181,7 @@ fn target_filter_matches_every_field_and_device_identifier_or_address() {
         target_array_index: Some(3),
         target_priority: None,
         operations: None,
-        successful_actions_only: false,
+        successful_actions_only: BACnetSuccessFilter::ALL,
     };
     assert_eq!(
         query(&log, &index_without_property, None, 10).records.len(),
@@ -289,13 +291,13 @@ fn target_optional_values_are_wildcards_and_absent_record_priority_matches() {
         target_array_index: None,
         target_priority: Some(16),
         operations: None,
-        successful_actions_only: true,
+        successful_actions_only: BACnetSuccessFilter::SUCCESSES_ONLY,
     };
     assert_eq!(query(&log, &wildcard, None, 1).records.len(), 1);
 }
 
 #[test]
-fn source_filter_and_success_boolean_follow_the_wire_contract() {
+fn source_filter_and_success_filter_follow_the_wire_contract() {
     let source_address = address(5, &[0x11]);
     let success = notification(
         BACnetRecipient::Address(source_address.clone()),
@@ -310,23 +312,28 @@ fn source_filter_and_success_boolean_follow_the_wire_contract() {
     let mut operations = AuditOperationFlags::empty();
     assert!(operations.insert(AuditOperation::WRITE));
 
-    let query_parameters = |successful_actions_only| BACnetAuditLogQueryParameters::BySource {
+    let query_parameters = |success_filter| BACnetAuditLogQueryParameters::BySource {
         source_device_identifier: device(99),
         source_device_address: Some(source_address.clone()),
         source_object_identifier: Some(object(ObjectType::ANALOG_INPUT, 10)),
         operations: Some(operations),
-        successful_actions_only,
+        successful_actions_only: success_filter,
     };
     assert_eq!(
-        query(&log, &query_parameters(true), None, 10)
-            .records
-            .iter()
-            .map(|entry| entry.sequence_number)
-            .collect::<Vec<_>>(),
+        query(
+            &log,
+            &query_parameters(BACnetSuccessFilter::SUCCESSES_ONLY),
+            None,
+            10
+        )
+        .records
+        .iter()
+        .map(|entry| entry.sequence_number)
+        .collect::<Vec<_>>(),
         vec![1]
     );
     assert_eq!(
-        query(&log, &query_parameters(false), None, 10)
+        query(&log, &query_parameters(BACnetSuccessFilter::ALL), None, 10)
             .records
             .iter()
             .map(|entry| entry.sequence_number)
@@ -339,7 +346,7 @@ fn source_filter_and_success_boolean_follow_the_wire_contract() {
         source_device_address: Some(address(6, &[0x66])),
         source_object_identifier: None,
         operations: None,
-        successful_actions_only: false,
+        successful_actions_only: BACnetSuccessFilter::ALL,
     };
     assert!(query(&log, &wrong_source, None, 10).records.is_empty());
 
@@ -348,7 +355,7 @@ fn source_filter_and_success_boolean_follow_the_wire_contract() {
         source_device_address: Some(source_address),
         source_object_identifier: Some(object(ObjectType::ANALOG_INPUT, 99)),
         operations: Some(operations),
-        successful_actions_only: false,
+        successful_actions_only: BACnetSuccessFilter::ALL,
     };
     assert!(query(&log, &wrong_source_object, None, 10)
         .records
@@ -376,7 +383,7 @@ fn query_uses_insertion_order_literal_start_and_complete_scan_for_no_more_items(
         target_array_index: None,
         target_priority: None,
         operations: None,
-        successful_actions_only: false,
+        successful_actions_only: BACnetSuccessFilter::ALL,
     };
 
     let all = query(&log, &query_parameters, None, 10);
@@ -434,7 +441,7 @@ fn query_observes_retained_ring_eviction_and_newest_first_order() {
         source_device_address: None,
         source_object_identifier: None,
         operations: None,
-        successful_actions_only: false,
+        successful_actions_only: BACnetSuccessFilter::ALL,
     };
     let page = query(&log, &query_parameters, None, 10);
 
@@ -468,7 +475,7 @@ fn query_never_returns_more_than_the_retained_storage_cap() {
         source_device_address: None,
         source_object_identifier: None,
         operations: None,
-        successful_actions_only: false,
+        successful_actions_only: BACnetSuccessFilter::ALL,
     };
 
     let page = query(&log, &query_parameters, None, u16::MAX);

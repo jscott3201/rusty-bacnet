@@ -1,10 +1,14 @@
 //! Audit notification and query wire models.
 //!
-//! These codecs follow the formal Clause 21 field and tag productions in
-//! ASHRAE 135-2020 within the library's `u64` Unsigned implementation limit.
-//! Clause 13.19 conflicts with them by describing an `Unsigned64` start
-//! sequence and a three-state success filter. This model intentionally uses
-//! Clause 21's `Unsigned32` and strict mandatory Boolean forms.
+//! These codecs follow the corrected 2020 baseline: ANSI/ASHRAE 135-2020 plus
+//! the Errata Summary 2024-04-29 (v1), visually verified from the rendered
+//! errata page 3 under its page-1 convention (strikeout = removed, italics =
+//! added) and recorded by RB-01. Item 7 (Clause 21.6, printed p. 886)
+//! corrects the by-target/by-source `successful-actions-only` fields from
+//! BOOLEAN to `BACnetSuccessFilter` at unchanged tags [7]/[4]; item 8
+//! (Clause 21.2.3, printed p. 865) corrects `start-at-sequence-number` from
+//! Unsigned32 to Unsigned64 at unchanged optional tag [2]. Unsigned values
+//! use the library's `u64` implementation limit (1-8 octet canonical forms).
 
 pub use bacnet_types::constructed::{
     AuditPropertyReference, BACnetAuditLogDatum, BACnetAuditLogQueryParameters,
@@ -81,8 +85,8 @@ impl TryFrom<AuditPropertyReference> for PropertyReference {
 pub struct AuditLogQueryRequest {
     pub audit_log: ObjectIdentifier,
     pub query_parameters: BACnetAuditLogQueryParameters,
-    /// Clause 21 constrains this field to `Unsigned32`.
-    pub start_at_sequence_number: Option<u32>,
+    /// Corrected-baseline `Unsigned64` cursor (Errata 2024-04-29 item 8).
+    pub start_at_sequence_number: Option<u64>,
     pub requested_count: u16,
 }
 

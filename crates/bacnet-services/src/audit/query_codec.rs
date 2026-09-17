@@ -1,15 +1,28 @@
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::bitstring::AuditOperationFlags;
 use bacnet_types::constructed::BACnetAddress;
-use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::enums::{BACnetSuccessFilter, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
 use bytes::BytesMut;
 
-use crate::common::{decode_context, decode_context_bool};
+use crate::common::decode_context;
 
 use super::{decode_canonical_unsigned, AuditLogQueryRequest, BACnetAuditLogQueryParameters};
+
+fn validate_filter(filter: BACnetSuccessFilter) -> Result<(), Error> {
+    if filter != BACnetSuccessFilter::ALL
+        && filter != BACnetSuccessFilter::SUCCESSES_ONLY
+        && filter != BACnetSuccessFilter::FAILURES_ONLY
+    {
+        return Err(Error::Encoding(format!(
+            "AuditLogQuery success-filter {} is outside 0..=2",
+            filter.to_raw()
+        )));
+    }
+    Ok(())
+}
 
 fn validate(request: &AuditLogQueryRequest) -> Result<(), Error> {
     if let BACnetAuditLogQueryParameters::ByTarget {
@@ -23,7 +36,17 @@ fn validate(request: &AuditLogQueryRequest) -> Result<(), Error> {
             ));
         }
     }
-    Ok(())
+    let filter = match &request.query_parameters {
+        BACnetAuditLogQueryParameters::ByTarget {
+            successful_actions_only,
+            ..
+        }
+        | BACnetAuditLogQueryParameters::BySource {
+            successful_actions_only,
+            ..
+        } => *successful_actions_only,
+    };
+    validate_filter(filter)
 }
 
 pub(super) fn encode(request: &AuditLogQueryRequest, buf: &mut BytesMut) -> Result<(), Error> {
@@ -67,7 +90,7 @@ pub(super) fn encode(request: &AuditLogQueryRequest, buf: &mut BytesMut) -> Resu
                 let (unused_bits, data) = flags.to_bacnet();
                 primitives::encode_ctx_bit_string(&mut encoded, 6, unused_bits, &data);
             }
-            primitives::encode_ctx_boolean(&mut encoded, 7, *successful_actions_only);
+            primitives::encode_ctx_enumerated(&mut encoded, 7, successful_actions_only.to_raw());
             tags::encode_closing_tag(&mut encoded, 0);
         }
         BACnetAuditLogQueryParameters::BySource {
@@ -89,14 +112,14 @@ pub(super) fn encode(request: &AuditLogQueryRequest, buf: &mut BytesMut) -> Resu
                 let (unused_bits, data) = flags.to_bacnet();
                 primitives::encode_ctx_bit_string(&mut encoded, 3, unused_bits, &data);
             }
-            primitives::encode_ctx_boolean(&mut encoded, 4, *successful_actions_only);
+            primitives::encode_ctx_enumerated(&mut encoded, 4, successful_actions_only.to_raw());
             tags::encode_closing_tag(&mut encoded, 1);
         }
     }
     tags::encode_closing_tag(&mut encoded, 1);
 
     if let Some(sequence) = request.start_at_sequence_number {
-        primitives::encode_ctx_unsigned(&mut encoded, 2, u64::from(sequence));
+        primitives::encode_ctx_unsigned(&mut encoded, 2, sequence);
     }
     primitives::encode_ctx_unsigned(&mut encoded, 3, u64::from(request.requested_count));
 
@@ -128,7 +151,7 @@ pub(super) fn decode(data: &[u8]) -> Result<AuditLogQueryRequest, Error> {
     let mut start_at_sequence_number = None;
     if next_is_context(data, offset, 2)? {
         let (sequence, end) =
-            decode_context_u32(data, offset, 2, "AuditLogQuery start-at-sequence-number")?;
+            decode_context_u64(data, offset, 2, "AuditLogQuery start-at-sequence-number")?;
         start_at_sequence_number = Some(sequence);
         offset = end;
     }
@@ -244,7 +267,7 @@ fn decode_by_target(data: &[u8]) -> Result<BACnetAuditLogQueryParameters, Error>
         offset = end;
     }
 
-    let (successful_actions_only, offset) = decode_context_bool(
+    let (successful_actions_only, offset) = decode_success_filter(
         data,
         offset,
         7,
@@ -304,7 +327,7 @@ fn decode_by_source(data: &[u8]) -> Result<BACnetAuditLogQueryParameters, Error>
         offset = end;
     }
 
-    let (successful_actions_only, offset) = decode_context_bool(
+    let (successful_actions_only, offset) = decode_success_filter(
         data,
         offset,
         4,
@@ -383,6 +406,35 @@ fn decode_operation_flags(
     let (unused_bits, bits) = primitives::decode_bit_string(content)?;
     let flags = AuditOperationFlags::from_bacnet(unused_bits, &bits)?;
     Ok((flags, end))
+}
+
+fn decode_success_filter(
+    data: &[u8],
+    offset: usize,
+    expected_tag: u8,
+    field: &str,
+) -> Result<(BACnetSuccessFilter, usize), Error> {
+    // Strict corrected-baseline enumerated form (Errata 2024-04-29 item 7):
+    // only 0 (all), 1 (successes-only), and 2 (failures-only) are accepted,
+    // in shortest canonical form. The omitted field still fails via the
+    // required-tag check in `decode_context`. Note the 0/1 octet contents are
+    // byte-identical to the old BOOLEAN encoding, so strictness here means
+    // the enumerated 0..=2 range plus canonical form — not a distinct tag —
+    // while the previously rejected value 2 is now required to decode.
+    let (content, end) = decode_context(data, offset, expected_tag, field)?;
+    let value = decode_canonical_unsigned(content, offset, field)?;
+    let filter = match value {
+        0 => BACnetSuccessFilter::ALL,
+        1 => BACnetSuccessFilter::SUCCESSES_ONLY,
+        2 => BACnetSuccessFilter::FAILURES_ONLY,
+        _ => {
+            return Err(Error::decoding(
+                offset,
+                format!("{field} must be a BACnetSuccessFilter 0..=2, got {value}"),
+            ));
+        }
+    };
+    Ok((filter, end))
 }
 
 fn decode_object_id(

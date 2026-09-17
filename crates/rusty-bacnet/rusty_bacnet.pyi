@@ -1081,7 +1081,7 @@ class AuditNotificationRequestInput(TypedDict):
 class AuditLogQueryByTargetInput(TypedDict):
     kind: Literal["by_target"]
     target_device_identifier: ObjectIdentifier
-    successful_actions_only: bool
+    successful_actions_only: int
     target_device_address: NotRequired[AuditRecipientAddress | None]
     target_object_identifier: NotRequired[ObjectIdentifier | None]
     target_property_identifier: NotRequired[PropertyIdentifier | None]
@@ -1093,7 +1093,7 @@ class AuditLogQueryByTargetInput(TypedDict):
 class AuditLogQueryBySourceInput(TypedDict):
     kind: Literal["by_source"]
     source_device_identifier: ObjectIdentifier
-    successful_actions_only: bool
+    successful_actions_only: int
     source_device_address: NotRequired[AuditRecipientAddress | None]
     source_object_identifier: NotRequired[ObjectIdentifier | None]
     operations: NotRequired[int | None]

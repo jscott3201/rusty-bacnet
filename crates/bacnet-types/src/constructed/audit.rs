@@ -4,7 +4,9 @@
 use alloc::{string::String, vec::Vec};
 
 use crate::bitstring::AuditOperationFlags;
-use crate::enums::{AuditOperation, ErrorClass, ErrorCode, PropertyIdentifier};
+use crate::enums::{
+    AuditOperation, BACnetSuccessFilter, ErrorClass, ErrorCode, PropertyIdentifier,
+};
 use crate::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, Time};
 
 use super::{BACnetAddress, BACnetRecipient};
@@ -97,8 +99,9 @@ pub enum BACnetAuditLogQueryParameters {
         target_priority: Option<u8>,
         /// Optional operation bit filter.
         operations: Option<AuditOperationFlags>,
-        /// Whether only successful operations match.
-        successful_actions_only: bool,
+        /// Which operation outcomes match: all, successes-only, or
+        /// failures-only (`BACnetSuccessFilter`, Clause 21.6 tags [7]/[4]).
+        successful_actions_only: BACnetSuccessFilter,
     },
     /// Match operations by source attributes.
     BySource {
@@ -110,8 +113,9 @@ pub enum BACnetAuditLogQueryParameters {
         source_object_identifier: Option<ObjectIdentifier>,
         /// Optional operation bit filter.
         operations: Option<AuditOperationFlags>,
-        /// Whether only successful operations match.
-        successful_actions_only: bool,
+        /// Which operation outcomes match: all, successes-only, or
+        /// failures-only (`BACnetSuccessFilter`, Clause 21.6 tags [7]/[4]).
+        successful_actions_only: BACnetSuccessFilter,
     },
 }
 
@@ -151,5 +155,18 @@ mod tests {
             },
         };
         assert_eq!(record.clone(), record);
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn legacy_bool_helper_maps_old_meaning_to_named_filter() {
+        assert_eq!(
+            BACnetSuccessFilter::from_legacy_bool(true),
+            BACnetSuccessFilter::SUCCESSES_ONLY
+        );
+        assert_eq!(
+            BACnetSuccessFilter::from_legacy_bool(false),
+            BACnetSuccessFilter::ALL
+        );
     }
 }
