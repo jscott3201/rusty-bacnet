@@ -759,6 +759,10 @@ mod admission_tests;
 #[cfg(test)]
 mod claim_tests;
 #[cfg(test)]
-mod envelope_tests;
+mod envelope_control_tests;
+#[cfg(test)]
+mod envelope_discovery_tests;
+#[cfg(test)]
+mod envelope_harness;
 #[cfg(test)]
 mod tests;
