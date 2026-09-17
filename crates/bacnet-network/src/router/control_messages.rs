@@ -546,6 +546,11 @@ pub(super) async fn handle_network_message(
         {
             let mut tbl = table.lock().await;
             for entry in &entries {
+                // Reserved DNETs name no routable network: skip before the
+                // route-cap check so they consume neither cap nor suffix.
+                if entry.network == 0 || entry.network == 0xFFFF {
+                    continue;
+                }
                 // Port ID 0 purges: "all table entries for the specified DNET
                 // shall be purged from the table" (6.4.7), scoped to learned
                 // entries by direct-route safety (see the apply helper).

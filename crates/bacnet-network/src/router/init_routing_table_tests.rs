@@ -277,6 +277,38 @@ async fn unknown_port_and_reserved_networks_skip_rest_applies() {
 }
 
 #[tokio::test]
+async fn reserved_entry_does_not_consume_cap_or_hide_suffix() {
+    // Full table (256 learned): a leading reserved-DNET entry with a valid
+    // Port ID must skip before the route-cap check, so the replacement
+    // behind it still applies and the cap counter stays truthful.
+    let mut table = RouterTable::new();
+    for net in 1..=256u16 {
+        table.add_learned(net, 0, MacAddr::from_slice(&[1]));
+    }
+    let mut h = Harness::with_table(table);
+    h.handle(h.ctx(
+        0,
+        &[9],
+        control_npdu(
+            NetworkMessageType::INITIALIZE_ROUTING_TABLE,
+            &[2, 0x00, 0x00, 2, 0, 0x00, 0x01, 2, 0],
+        ),
+    ))
+    .await;
+    // Well-formed update: the empty success ACK still goes out.
+    let replies = unicast_payloads(h.drain(0));
+    assert_eq!(replies.len(), 1);
+    assert!(decode_npdu(replies[0].clone()).unwrap().payload.is_empty());
+    let table = h.table.lock().await;
+    assert_eq!(table.len(), 256);
+    let route = table.lookup(1).unwrap();
+    assert_eq!(route.port_index, 1);
+    assert!(!route.directly_connected);
+    assert_eq!(route.next_hop_mac.as_slice(), &[9]);
+    assert_eq!(table.claim_snapshot(), RoutingClaimSnapshot::default());
+}
+
+#[tokio::test]
 async fn large_table_query_splits_into_bounded_acks() {
     let mut table = RouterTable::new();
     table.add_direct(1000, 0);
