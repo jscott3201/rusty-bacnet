@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use bacnet_encoding::apdu::{self, encode_apdu, Apdu, SegmentAck, SimpleAck};
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
-use bacnet_transport::port::{ReceivedNpdu, TransportPort};
+use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
 use bacnet_types::enums::{ConfirmedServiceChoice, NetworkMessageType, RejectMessageReason};
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
@@ -138,6 +138,7 @@ async fn inject_apdu(
             source_mac: MacAddr::from_slice(immediate_source),
             link_layer_group: false,
             data_attributes: Vec::new(),
+            provenance: TransportProvenance::unverified(),
             reply_tx: None,
         })
         .await
@@ -167,6 +168,7 @@ async fn inject_control(
             source_mac: MacAddr::from_slice(immediate_source),
             link_layer_group: false,
             data_attributes: Vec::new(),
+            provenance: TransportProvenance::unverified(),
             reply_tx: None,
         })
         .await

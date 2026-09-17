@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use bacnet_encoding::apdu::{self, encode_apdu, AbortPdu, Apdu, SegmentAck, SimpleAck};
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
-use bacnet_transport::port::{ReceivedNpdu, TransportPort};
+use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
 use bacnet_types::enums::{AbortReason, ConfirmedServiceChoice};
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
@@ -43,6 +43,7 @@ impl EarlyReadyResponseTransport {
             source_mac: MacAddr::from_slice(SERVER_MAC),
             link_layer_group: false,
             data_attributes: Vec::new(),
+            provenance: TransportProvenance::unverified(),
             reply_tx: None,
         }
     }

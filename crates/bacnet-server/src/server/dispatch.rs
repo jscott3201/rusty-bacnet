@@ -104,6 +104,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         apdu: Apdu,
         mut received: bacnet_network::layer::ReceivedApdu,
     ) {
+        // RB-07 compat mode: provenance threaded via `received` to all
+        // diagnostic views (SourceKey, DiscoveryLimiter, TimeSyncSource,
+        // DccSource, MutationDecisions, NotificationTransactions/ServerTsm,
+        // DccOutcomes, audit contexts); decisions unchanged, RB-09 consumes.
+        let _ = received.provenance;
         match apdu {
             Apdu::ConfirmedRequest(req) => {
                 // LSO-only replay path (server level, separate budget).
@@ -162,6 +167,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     let config = Arc::clone(config);
                     let source_mac = MacAddr::from_slice(source_mac);
                     let source_network = received.source_network.clone();
+                    let provenance = received.provenance;
                     let descendants = request_tasks.spawner();
                     let peer = super::request_peer::canonical_requester(
                         &source_mac,
@@ -192,6 +198,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 &descendants,
                                 &source_mac,
                                 source_network,
+                                provenance,
                                 req,
                                 reply_tx,
                                 Some(lso_pending),
@@ -263,6 +270,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let config = Arc::clone(config);
                 let source_mac = MacAddr::from_slice(source_mac);
                 let source_network = received.source_network.clone();
+                let provenance = received.provenance;
                 let descendants = request_tasks.spawner();
                 let peer =
                     super::request_peer::canonical_requester(&source_mac, source_network.as_ref());
@@ -291,6 +299,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             &descendants,
                             &source_mac,
                             source_network,
+                            provenance,
                             req,
                             reply_tx,
                         )

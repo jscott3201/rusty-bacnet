@@ -242,7 +242,7 @@ mod transport {
     use tokio::task::JoinHandle;
     use tracing::{debug, warn};
 
-    use crate::port::{ReceivedNpdu, TransportPort};
+    use crate::port::{ReceivedNpdu, TransportPort, TransportProvenance};
 
     /// Max NPDU size for Ethernet: 1518 (max frame) - 14 (eth header) - 3 (LLC) - 4 (FCS by NIC) = 1497.
     pub const MAX_ETHERNET_NPDU: usize = 1497;
@@ -701,6 +701,7 @@ mod transport {
                                             source_mac: MacAddr::from(frame.source),
                                             link_layer_group: is_ethernet_group(&frame.destination),
                                             data_attributes: Vec::new(),
+                                            provenance: TransportProvenance::unverified(),
                                             reply_tx: None,
                                         })
                                         .is_err()

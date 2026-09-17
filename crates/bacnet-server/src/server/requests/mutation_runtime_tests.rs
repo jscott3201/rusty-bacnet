@@ -1,6 +1,7 @@
 use super::*;
 use bacnet_encoding::npdu::{encode_npdu, Npdu};
 use bacnet_transport::port::ReceivedNpdu;
+use bacnet_transport::port::TransportProvenance;
 
 struct IngressTransport(Option<mpsc::Receiver<ReceivedNpdu>>);
 
@@ -64,6 +65,7 @@ async fn mutation_runtime_ingress_and_reassembly_share_retained_server_counters(
             source_mac: MacAddr::from_slice(SOURCE),
             link_layer_group: false,
             data_attributes: vec![],
+            provenance: TransportProvenance::unverified(),
             reply_tx: Some(reply_tx),
         })
         .await

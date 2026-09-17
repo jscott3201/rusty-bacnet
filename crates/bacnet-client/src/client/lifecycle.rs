@@ -70,7 +70,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let (device_collision_tx, _) =
             broadcast::channel::<DeviceCollisionEvent>(DEVICE_EVENT_CHANNEL_CAPACITY);
         let device_collision_tx_dispatch = device_collision_tx.clone();
-        let seg_ack_senders: Arc<Mutex<HashMap<SegKey, SegmentAckRoute>>> =
+        let seg_ack_senders: Arc<Mutex<HashMap<SegAckKey, SegmentAckRoute>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let seg_ack_senders_dispatch = Arc::clone(&seg_ack_senders);
         let (cleanup_tx, mut cleanup_rx) = mpsc::unbounded_channel::<TransactionCleanup>();
@@ -115,14 +115,31 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 &cleanup.owner,
                             );
                         }
-                        let key = (cleanup.mac, cleanup.invoke_id);
-                        let removed = seg_state
-                            .get(&key)
-                            .is_some_and(|state| state.owner.same_as(&cleanup.owner));
-                        if removed {
-                            seg_state.remove(&key);
-                        }
+                        // Cleanup is provenance-agnostic: drop any reassembly
+                        // snapshot for this (mac, invoke) with a matching
+                        // owner, regardless of trust context (fail-closed).
+                        let removed = {
+                            let found = seg_state
+                                .keys()
+                                .find(|key| {
+                                    key.0 == cleanup.mac
+                                        && key.1 == cleanup.invoke_id
+                                        && seg_state
+                                            .get(*key)
+                                            .is_some_and(|state| {
+                                                state.owner.same_as(&cleanup.owner)
+                                            })
+                                })
+                                .cloned();
+                            if let Some(found) = found {
+                                seg_state.remove(&found);
+                                true
+                            } else {
+                                false
+                            }
+                        };
                         if let Some(expected_sender) = cleanup.seg_ack_sender {
+                            let key = (cleanup.mac, cleanup.invoke_id);
                             let mut senders = seg_ack_senders_dispatch.lock().await;
                             if senders
                                 .get(&key)
@@ -168,6 +185,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                     &seg_ack_senders_dispatch,
                                     &received.source_mac,
                                     &received.source_network,
+                                    received.provenance,
                                     received.is_group,
                                     received.reply_tx,
                                     decoded,

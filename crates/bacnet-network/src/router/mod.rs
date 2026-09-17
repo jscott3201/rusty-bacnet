@@ -70,6 +70,7 @@ use tracing::{debug, warn};
 
 use crate::layer::{is_group_delivery, AdmissionReceiver, QueueAdmissionCounters, ReceivedApdu};
 use crate::router_table::{ReachabilityStatus, RouterTable};
+use bacnet_transport::port::TransportProvenance;
 
 mod control_messages;
 mod forwarding;
@@ -240,6 +241,10 @@ fn solicit_who_is(
 /// policy) consume this context at the same admission point. This change
 /// only threads the facts through; it adds no caps, no authorization
 /// decisions, and no trust assertions.
+///
+/// RB-07 threads [`TransportProvenance`] here alongside the RB-03 facts so
+/// the same admission point can consume provenance later. Compat mode: no
+/// caps, no authorization decisions, no trust assertions from this context.
 #[derive(Debug, Clone)]
 pub(super) struct IngressContext {
     /// Dispatch index of the ingress port.
@@ -252,6 +257,9 @@ pub(super) struct IngressContext {
     pub link_layer_group: bool,
     /// Data-link attributes supplied with the frame, if any.
     pub data_attributes: Vec<DataAttribute>,
+    /// Honest transport + origin provenance, immutable by value (RB-07).
+    /// Threaded, never decided on here.
+    pub provenance: TransportProvenance,
     /// Decoded NPDU, including envelope (source/destination, hop count,
     /// message type, vendor ID) and control payload.
     pub npdu: Npdu,
@@ -272,6 +280,27 @@ impl IngressContext {
             source_mac: MacAddr::from_slice(source_mac),
             link_layer_group: true,
             data_attributes: Vec::new(),
+            provenance: TransportProvenance::unverified(),
+            npdu,
+        }
+    }
+
+    /// In-memory test ingress with explicit provenance (RB-07).
+    #[cfg(test)]
+    pub(super) fn test_local_with_provenance(
+        port_idx: usize,
+        port_network: u16,
+        source_mac: &[u8],
+        npdu: Npdu,
+        provenance: TransportProvenance,
+    ) -> Self {
+        Self {
+            port_idx,
+            port_network,
+            source_mac: MacAddr::from_slice(source_mac),
+            link_layer_group: true,
+            data_attributes: Vec::new(),
+            provenance,
             npdu,
         }
     }
@@ -514,6 +543,7 @@ impl BACnetRouter {
                                     source_mac: received.source_mac.clone(),
                                     link_layer_group: received.link_layer_group,
                                     data_attributes: received.data_attributes.clone(),
+                                    provenance: received.provenance,
                                     npdu,
                                 };
                                 dispatch_network_message(&table, &discovery, &send_txs, &ctx).await;
@@ -543,6 +573,7 @@ impl BACnetRouter {
                                         link_layer_group: received.link_layer_group,
                                         is_group: true,
                                         data_attributes: received.data_attributes,
+                                        provenance: received.provenance,
                                         reply_tx: received.reply_tx,
                                     };
                                     let _ = local_tx.try_send_apdu(apdu);
@@ -601,6 +632,7 @@ impl BACnetRouter {
                                                 link_layer_group: received.link_layer_group,
                                                 is_group: false,
                                                 data_attributes: received.data_attributes,
+                                                provenance: received.provenance,
                                                 reply_tx: received.reply_tx,
                                             };
                                             let _ = local_tx.try_send_apdu(apdu);
@@ -618,6 +650,7 @@ impl BACnetRouter {
                                                     data_attributes: received
                                                         .data_attributes
                                                         .clone(),
+                                                    provenance: received.provenance,
                                                     reply_tx: None,
                                                 };
                                                 let _ = local_tx.try_send_apdu(apdu);
@@ -676,6 +709,7 @@ impl BACnetRouter {
                                     link_layer_group: received.link_layer_group,
                                     is_group: is_group_delivery(received.link_layer_group, None),
                                     data_attributes: received.data_attributes,
+                                    provenance: received.provenance,
                                     reply_tx: received.reply_tx,
                                 };
                                 let _ = local_tx.try_send_apdu(apdu);
@@ -795,6 +829,8 @@ async fn dispatch_network_message(
     send_txs: &[mpsc::Sender<SendRequest>],
     ctx: &IngressContext,
 ) {
+    // RB-07 compat mode: provenance threaded here for RB-09, no decision.
+    let _ = ctx.provenance;
     let msg_type = match ctx.npdu.message_type {
         Some(t) => t,
         None => return,

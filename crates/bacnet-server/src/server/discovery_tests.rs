@@ -17,7 +17,7 @@ use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_services::read_property::ReadPropertyRequest;
 use bacnet_services::who_has::{WhoHasObject, WhoHasRequest};
 use bacnet_services::who_is::WhoIsRequest;
-use bacnet_transport::port::{ReceivedNpdu, TransportPort};
+use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
 use bacnet_types::enums::{
     ConfirmedServiceChoice, NetworkPriority, ObjectType, PropertyIdentifier,
     UnconfirmedServiceChoice,
@@ -111,6 +111,7 @@ fn wrap_apdu(apdu: Bytes, source_mac: &[u8], routed: Option<(u16, &[u8])>) -> Re
         source_mac: MacAddr::from_slice(source_mac),
         link_layer_group: false,
         data_attributes: Vec::new(),
+        provenance: TransportProvenance::unverified(),
         reply_tx: None,
     }
 }
@@ -444,6 +445,7 @@ async fn test_confirmed_traffic_latency_bounded_during_discovery_flood() {
         source_mac: MacAddr::from_slice(client_mac),
         link_layer_group: false,
         data_attributes: Vec::new(),
+        provenance: TransportProvenance::unverified(),
         reply_tx: None,
     })
     .await
@@ -646,6 +648,7 @@ fn mock_received(
         link_layer_group: false,
         is_group: false,
         data_attributes: Vec::new(),
+        provenance: TransportProvenance::unverified(),
         reply_tx: None,
     }
 }

@@ -272,6 +272,9 @@ pub struct TimeSyncData {
     pub source_mac: MacAddr,
     /// Claimed routed NPDU source, if present; takes precedence for policy matching.
     pub source_network: Option<NpduAddress>,
+    /// Honest transport + origin provenance, threaded for diagnostics only
+    /// (RB-07 compat mode: decisions unchanged; RB-09 consumes it later).
+    pub provenance: bacnet_transport::port::TransportProvenance,
 }
 
 mod config;
@@ -773,6 +776,8 @@ mod life_safety_operation_replay_tests;
 mod life_safety_operation_tests;
 #[cfg(test)]
 mod notification_transactions_tests;
+#[cfg(test)]
+mod rb07_provenance_tests;
 #[cfg(test)]
 mod segmentation_tests;
 #[cfg(test)]

@@ -39,68 +39,6 @@ impl ResponseLimits {
 }
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
-    /// Transmit an Abort this client originates.
-    ///
-    /// Every Abort a requesting BACnet-user sends carries `'server' = FALSE` —
-    /// Clauses 5.4.4.1, 5.4.4.3 and 5.4.4.4 each spell it out — because the
-    /// flag names the sender's role, not the error.
-    pub(super) async fn send_client_abort(
-        network: &Arc<NetworkLayer<T>>,
-        reply_mac: &[u8],
-        reply_network: &Option<NpduAddress>,
-        invoke_id: u8,
-        abort_reason: bacnet_types::enums::AbortReason,
-    ) {
-        let abort = Apdu::Abort(AbortPdu {
-            sent_by_server: false,
-            invoke_id,
-            abort_reason,
-        });
-        let mut buf = BytesMut::with_capacity(4);
-        if let Err(e) = encode_apdu(&mut buf, &abort) {
-            warn!(error = %e, reason = abort_reason.to_raw(), "Failed to encode Abort");
-            return;
-        }
-        if let Err(e) = Self::send_reply_apdu(network, &buf, reply_mac, reply_network).await {
-            warn!(error = %e, reason = abort_reason.to_raw(), "Failed to send Abort");
-        }
-    }
-
-    /// Abort a reassembly in progress, telling both the peer and the caller.
-    ///
-    /// Clause 5.4.4.4 gives this same shape to every way SEGMENTED_CONF can
-    /// end badly — `NewSegmentReceived_NoSpace` when local storage cannot
-    /// retain a segment and `UnexpectedPDU_Received` for an inappropriate
-    /// PDU. Both send a client-side BACnet-Abort-PDU (`server` = FALSE),
-    /// deliver ABORT.indication locally, and return to IDLE; only `abort-reason`
-    /// differs. The local ABORT.indication is the waiting caller, so the
-    /// transaction is completed rather than left to time out.
-    ///
-    /// The caller is responsible for having removed the `seg_state` entry —
-    /// that removal implements the return to IDLE.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) async fn abort_reassembly(
-        tsm: &Arc<Mutex<Tsm>>,
-        network: &Arc<NetworkLayer<T>>,
-        tsm_mac: &MacAddr,
-        owner: &TransactionOwner,
-        reply_mac: &MacAddr,
-        reply_network: &Option<NpduAddress>,
-        invoke_id: u8,
-        reason: bacnet_types::enums::AbortReason,
-    ) {
-        Self::send_client_abort(network, reply_mac, reply_network, invoke_id, reason).await;
-        tsm.lock().await.complete_transaction_for_owner(
-            tsm_mac,
-            invoke_id,
-            owner,
-            None,
-            TsmResponse::Abort {
-                reason: reason.to_raw(),
-            },
-        );
-    }
-
     /// Handle a segmented ComplexAck: accumulate segments, send SegmentAcks,
     /// and reassemble when all segments are received.
     pub(super) async fn handle_segmented_complex_ack(
@@ -109,6 +47,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         seg_state: &mut HashMap<SegKey, SegmentedReceiveState>,
         source_mac: &[u8],
         source_network: &Option<NpduAddress>,
+        provenance: TransportProvenance,
         ack: bacnet_encoding::apdu::ComplexAck,
         limits: ResponseLimits,
     ) {
@@ -117,7 +56,32 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let tsm_mac = transaction_peer.tsm_mac;
         let canonical_peer = transaction_peer.canonical;
         let coordinator_apdu = Apdu::ComplexAck(ack.clone());
-        let key = (tsm_mac.clone(), ack.invoke_id);
+        let key = (tsm_mac.clone(), ack.invoke_id, provenance);
+        if let Some(conflict) = super::response_admission::find_provenance_conflict(
+            seg_state,
+            &tsm_mac,
+            ack.invoke_id,
+            provenance,
+        ) {
+            if let Some(state) = seg_state.remove(&conflict) {
+                warn!(
+                    invoke_id = ack.invoke_id,
+                    "Aborting segmented reassembly on provenance mismatch (fail-closed)"
+                );
+                Self::abort_reassembly(
+                    tsm,
+                    network,
+                    &tsm_mac,
+                    &state.owner,
+                    &state.reply_mac,
+                    &state.reply_network,
+                    ack.invoke_id,
+                    bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
+                )
+                .await;
+            }
+            return;
+        }
 
         let mut deferred_owner = None;
         let owner = loop {
@@ -223,6 +187,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .or_insert_with(|| SegmentedReceiveState {
                 receiver: SegmentReceiver::new(),
                 owner: owner.clone(),
+                provenance,
                 reply_mac: MacAddr::from_slice(source_mac),
                 reply_network: source_network.clone(),
                 expected_next_seq: 0,
@@ -233,6 +198,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 actual_window_size: proposed_ws,
                 accepted_segments: 0,
             });
+        // Compat-mode live read: the key already isolates contexts; the
+        // snapshot must match the key or the session fails closed elsewhere.
+        debug_assert_eq!(state.provenance, provenance);
 
         if state.accepted_segments > 0
             && tsm

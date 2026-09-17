@@ -4,7 +4,7 @@ use super::*;
 use bacnet_encoding::apdu::{decode_apdu, ConfirmedRequest};
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
 use bacnet_transport::loopback::LoopbackTransport;
-use bacnet_transport::port::{ReceivedNpdu, TransportPort};
+use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
 use bacnet_types::enums::AbortReason;
 
 struct ImmediateReplyTransport {
@@ -449,6 +449,7 @@ async fn unsupported_confirmed_request_uses_immediate_reply_channel() {
             source_mac: router_mac,
             link_layer_group: false,
             data_attributes: Vec::new(),
+            provenance: TransportProvenance::unverified(),
             reply_tx: Some(reply_tx),
         })
         .await

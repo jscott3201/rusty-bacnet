@@ -15,7 +15,7 @@ use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
-use crate::port::{DataAttribute, ReceivedNpdu, TransportPort};
+use crate::port::{DataAttribute, ReceivedNpdu, TransportPort, TransportProvenance};
 #[cfg(test)]
 use crate::sc_frame::{decode_sc_bvlc_result, ScMessage};
 use crate::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, Vmac, BROADCAST_VMAC};
@@ -609,6 +609,10 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                     }
 
                                     if let Some((npdu, source_vmac)) = npdu_result {
+                                        // Verified relayed origin: hub TLS authenticated AND
+                                        // originating VMAC passed source_admission (present,
+                                        // non-reserved) inside handle_received. The hub peer
+                                        // itself is never the leaf origin.
                                         if npdu_tx
                                             .try_send(ReceivedNpdu {
                                                 npdu,
@@ -616,6 +620,8 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                                 link_layer_group: msg.destination_vmac
                                                     == Some(BROADCAST_VMAC),
                                                 data_attributes: data_attributes::from_data_options(&msg),
+                                                provenance:
+                                                    TransportProvenance::verified_relayed_origin(),
                                                 reply_tx: None,
                                             })
                                             .is_err()

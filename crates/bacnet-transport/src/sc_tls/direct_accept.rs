@@ -43,7 +43,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
-use crate::port::{DataAttribute, ReceivedNpdu};
+use crate::port::{DataAttribute, ReceivedNpdu, TransportProvenance};
 use crate::sc_frame::{
     decode_sc_message, encode_sc_message, first_must_understand_destination_option_marker,
     validate_connect_request, ScFunction, ScMessage, Vmac, BACNET_SC_DIRECT_SUBPROTOCOL,
@@ -574,6 +574,10 @@ async fn serve_npdu_loop<W>(
                     }
                 }
                 if let Some(npdu) = direct_npdu(&msg, config) {
+                    // Verified direct peer: TLS handshake with operational cert
+                    // verified + Connect-Request/Accept completed on this
+                    // connection; source_mac is that peer's VMAC. Post-handshake
+                    // only; direct connections carry unicast only.
                     let received = ReceivedNpdu {
                         npdu,
                         source_mac: MacAddr::from_slice(&peer_vmac),
@@ -587,6 +591,7 @@ async fn serve_npdu_loop<W>(
                                 data: option.data.clone(),
                             })
                             .collect(),
+                        provenance: TransportProvenance::verified_direct_peer(),
                         reply_tx: None,
                     };
                     if npdu_tx.try_send(received).is_err() {

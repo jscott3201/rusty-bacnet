@@ -3,7 +3,7 @@ use std::sync::Arc;
 use bacnet_encoding::apdu::{self, encode_apdu, Apdu, ComplexAck, ErrorPdu, SegmentAck, SimpleAck};
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
 use bacnet_transport::loopback::LoopbackTransport;
-use bacnet_transport::port::{ReceivedNpdu, TransportPort};
+use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
 use bacnet_types::enums::{
     AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, RejectReason,
 };
@@ -318,6 +318,7 @@ impl ImmediateFinalResponseTransport {
             source_mac: MacAddr::from_slice(SERVER_MAC),
             link_layer_group: false,
             data_attributes: Vec::new(),
+            provenance: TransportProvenance::unverified(),
             reply_tx: None,
         }
     }

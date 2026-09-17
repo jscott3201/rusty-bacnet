@@ -17,6 +17,7 @@ use bacnet_objects::value_types::CharacterStringValueObject;
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::ReceivedNpdu;
+use bacnet_transport::port::TransportProvenance;
 use bacnet_types::enums::Segmentation;
 use bacnet_types::primitives::PropertyValue;
 use bytes::BytesMut;
@@ -115,6 +116,7 @@ async fn inject_routed_apdu(
             source_mac: router_mac.clone(),
             link_layer_group: false,
             data_attributes: Vec::new(),
+            provenance: TransportProvenance::unverified(),
             reply_tx: None,
         })
         .await

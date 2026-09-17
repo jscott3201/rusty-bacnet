@@ -33,3 +33,7 @@ mod sc_limits;
 #[cfg(feature = "sc-tls")]
 pub mod sc_tls;
 mod udp_metadata;
+
+#[cfg(test)]
+#[path = "rb07_provenance_tests.rs"]
+mod rb07_provenance_tests;

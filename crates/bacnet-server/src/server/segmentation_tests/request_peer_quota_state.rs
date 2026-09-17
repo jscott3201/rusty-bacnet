@@ -4,6 +4,7 @@ use super::*;
 use crate::server::segmented_receive::{
     expire_segmented_requests, segmented_request_admission_error, RequestPayload,
 };
+use bacnet_transport::port::TransportProvenance;
 
 fn saved_state(invoke_id: u8, now: Instant) -> SegmentedRequestState {
     let first_req = ConfirmedRequestPdu {
@@ -24,6 +25,7 @@ fn saved_state(invoke_id: u8, now: Instant) -> SegmentedRequestState {
         .unwrap();
     SegmentedRequestState {
         payload,
+        provenance: TransportProvenance::unverified(),
         last_activity: now,
         last_progress: now,
         expected_seq: 1,
@@ -78,18 +80,37 @@ fn request_peer_quota_exact_segkey_projection_identity_matrix() {
     for (group, mac, route, drops_router) in &sources {
         let mut receivers = HashMap::new();
         for invoke_id in 0..16 {
-            let key = segmented_transaction_key(mac, route.as_ref(), invoke_id);
+            let key = segmented_receive_key(
+                mac,
+                route.as_ref(),
+                invoke_id,
+                TransportProvenance::unverified(),
+            );
             let expected_mac = if *drops_router {
                 MacAddr::new()
             } else {
                 (*mac).clone()
             };
-            assert_eq!(key, (expected_mac, route.clone(), invoke_id), "{group}");
+            assert_eq!(
+                key,
+                (
+                    expected_mac,
+                    route.clone(),
+                    invoke_id,
+                    TransportProvenance::unverified()
+                ),
+                "{group}"
+            );
             assert_eq!(segmented_request_admission_error(&receivers, &key), None);
             receivers.insert(key, saved_state(invoke_id, now));
         }
         for (query_group, query_mac, query_route, _) in &sources {
-            let query = segmented_transaction_key(query_mac, query_route.as_ref(), 200);
+            let query = segmented_receive_key(
+                query_mac,
+                query_route.as_ref(),
+                200,
+                TransportProvenance::unverified(),
+            );
             assert_eq!(
                 segmented_request_admission_error(&receivers, &query),
                 if group == query_group {
@@ -110,12 +131,12 @@ fn request_peer_quota_repeated_denial_never_touches_live_state() {
     let mut receivers = HashMap::new();
     for invoke_id in 0..16 {
         receivers.insert(
-            segmented_transaction_key(&mac, None, invoke_id),
+            segmented_receive_key(&mac, None, invoke_id, TransportProvenance::unverified()),
             saved_state(invoke_id, now),
         );
     }
     for invoke_id in 16..=255 {
-        let key = segmented_transaction_key(&mac, None, invoke_id);
+        let key = segmented_receive_key(&mac, None, invoke_id, TransportProvenance::unverified());
         assert_eq!(
             segmented_request_admission_error(&receivers, &key),
             Some(AbortReason::OUT_OF_RESOURCES)
@@ -150,18 +171,18 @@ fn request_peer_quota_expiry_releases_slot_at_idle_and_progress_boundaries() {
         let mut receivers = HashMap::new();
         for invoke_id in 0..16 {
             receivers.insert(
-                segmented_transaction_key(&mac, None, invoke_id),
+                segmented_receive_key(&mac, None, invoke_id, TransportProvenance::unverified()),
                 saved_state(invoke_id, recent),
             );
         }
-        let stale_key = segmented_transaction_key(&mac, None, 0);
+        let stale_key = segmented_receive_key(&mac, None, 0, TransportProvenance::unverified());
         let stale = receivers.get_mut(&stale_key).unwrap();
         if progress_expiry {
             stale.last_progress = start;
         } else {
             stale.last_activity = start;
         }
-        let query = segmented_transaction_key(&mac, None, 200);
+        let query = segmented_receive_key(&mac, None, 200, TransportProvenance::unverified());
         expire_segmented_requests(&mut receivers, now - Duration::from_nanos(1));
         assert_eq!(
             segmented_request_admission_error(&receivers, &query),
@@ -177,7 +198,7 @@ fn request_peer_quota_expiry_releases_slot_at_idle_and_progress_boundaries() {
         assert_eq!(
             segmented_request_admission_error(
                 &receivers,
-                &segmented_transaction_key(&mac, None, 201)
+                &segmented_receive_key(&mac, None, 201, TransportProvenance::unverified())
             ),
             Some(AbortReason::OUT_OF_RESOURCES)
         );

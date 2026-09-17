@@ -22,6 +22,7 @@ use bytes::{Bytes, BytesMut};
 use tokio::time::{timeout, Duration};
 
 use super::*;
+use bacnet_transport::port::TransportProvenance;
 
 const WAIT: Duration = Duration::from_secs(1);
 
@@ -72,6 +73,7 @@ fn received(apdu: Bytes, source: &[u8]) -> ReceivedApdu {
         link_layer_group: false,
         is_group: false,
         data_attributes: Vec::new(),
+        provenance: TransportProvenance::unverified(),
         reply_tx: None,
     }
 }

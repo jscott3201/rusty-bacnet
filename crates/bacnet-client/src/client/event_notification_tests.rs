@@ -4,6 +4,7 @@ use bacnet_encoding::npdu::decode_npdu;
 use bacnet_encoding::tags::{encode_tag, TagClass};
 use bacnet_services::alarm_event::{EventNotificationRequest, NotificationParameters};
 use bacnet_transport::port::ReceivedNpdu;
+use bacnet_transport::port::TransportProvenance;
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier};
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
@@ -78,6 +79,7 @@ fn inbound(apdu: Apdu, source: Option<NpduAddress>) -> ReceivedNpdu {
         source_mac: MacAddr::from_slice(PEER),
         link_layer_group: false,
         data_attributes: Vec::new(),
+        provenance: TransportProvenance::unverified(),
         reply_tx: None,
     }
 }

@@ -11,7 +11,7 @@ use bacnet_types::MacAddr;
 
 use crate::bbmd::BbmdState;
 use crate::bvll::{self, encode_bip_mac, encode_bvll, encode_bvll_forwarded};
-use crate::port::ReceivedNpdu;
+use crate::port::{ReceivedNpdu, TransportProvenance};
 
 use super::fanout::FanoutDispatcher;
 use super::rate_limit::{is_covered_management_request, ManagementRateLimiter};
@@ -141,6 +141,7 @@ pub(super) async fn handle_bvll_message(
                     source_mac,
                     link_layer_group: false,
                     data_attributes: Vec::new(),
+                    provenance: TransportProvenance::unverified(),
                     reply_tx: None,
                 })
                 .is_err()
@@ -162,6 +163,7 @@ pub(super) async fn handle_bvll_message(
                     source_mac,
                     link_layer_group: true,
                     data_attributes: Vec::new(),
+                    provenance: TransportProvenance::unverified(),
                     reply_tx: None,
                 })
                 .is_err()
@@ -235,6 +237,7 @@ pub(super) async fn handle_bvll_message(
                         source_mac,
                         link_layer_group: true,
                         data_attributes: Vec::new(),
+                        provenance: TransportProvenance::unverified(),
                         reply_tx: None,
                     })
                     .is_err()
@@ -290,6 +293,7 @@ pub(super) async fn handle_bvll_message(
                         source_mac,
                         link_layer_group: true,
                         data_attributes: Vec::new(),
+                        provenance: TransportProvenance::unverified(),
                         reply_tx: None,
                     })
                     .is_err()
@@ -330,6 +334,7 @@ pub(super) async fn handle_bvll_message(
                         source_mac,
                         link_layer_group: true,
                         data_attributes: Vec::new(),
+                        provenance: TransportProvenance::unverified(),
                         reply_tx: None,
                     })
                     .is_err()

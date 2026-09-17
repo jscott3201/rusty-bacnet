@@ -328,6 +328,8 @@ impl TimeSyncLimiter {
         now: Instant,
         apply: impl FnOnce() -> Result<(), Error>,
     ) -> Result<(), Error> {
+        // RB-07 compat mode: provenance threaded here for RB-09, no decision.
+        let _ = received.provenance;
         let policy = &self.policy;
         let track_source = policy.per_source_rate.is_some() || !policy.coalesce_window.is_zero();
         let key = track_source

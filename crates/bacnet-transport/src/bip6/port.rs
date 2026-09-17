@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
-use crate::port::{ReceivedNpdu, TransportPort};
+use crate::port::{ReceivedNpdu, TransportPort, TransportProvenance};
 use crate::udp_metadata::{DestinationReceiver, IpVersion};
 
 use super::frame::destination_vmac_matches;
@@ -534,6 +534,7 @@ impl TransportPort for Bip6Transport {
                                                 link_layer_group: frame.function
                                                     == Bvlc6Function::OriginalBroadcast,
                                                 data_attributes: Vec::new(),
+                                                provenance: TransportProvenance::unverified(),
                                                 reply_tx: None,
                                             })
                                             .is_err()
@@ -583,6 +584,8 @@ impl TransportPort for Bip6Transport {
                                                         ),
                                                         link_layer_group: true,
                                                         data_attributes: Vec::new(),
+                                                        provenance: TransportProvenance::unverified(
+                                                        ),
                                                         reply_tx: None,
                                                     })
                                                     .is_err()

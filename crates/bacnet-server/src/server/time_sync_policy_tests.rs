@@ -1,6 +1,7 @@
 use super::*;
 use crate::server::{BACnetServer, ServerConfig};
 use bacnet_objects::database::ObjectDatabase;
+use bacnet_transport::port::TransportProvenance;
 use bacnet_types::{
     primitives::{Date, Time},
     MacAddr,
@@ -23,6 +24,7 @@ fn received(mac: &[u8], routed: Option<(u16, &[u8])>) -> ReceivedApdu {
         link_layer_group: false,
         is_group: false,
         data_attributes: Vec::new(),
+        provenance: TransportProvenance::unverified(),
         reply_tx: None,
     }
 }

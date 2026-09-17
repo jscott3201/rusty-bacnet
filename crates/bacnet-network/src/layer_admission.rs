@@ -547,6 +547,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
                                     source_mac: received.source_mac,
                                     link_layer_group: received.link_layer_group,
                                     data_attributes: received.data_attributes,
+                                    provenance: received.provenance,
                                     ingress_sequence,
                                 };
                                 match tx.try_send(control) {
@@ -587,6 +588,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
                             link_layer_group: received.link_layer_group,
                             is_group,
                             data_attributes: received.data_attributes,
+                            provenance: received.provenance,
                             reply_tx: received.reply_tx,
                         };
 

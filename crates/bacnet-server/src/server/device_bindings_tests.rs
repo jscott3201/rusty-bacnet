@@ -3,7 +3,7 @@ use super::device_bindings::{
     MAX_DEVICE_BINDINGS, OBSERVED_BINDING_TTL,
 };
 use super::*;
-use bacnet_transport::port::{ReceivedNpdu, TransportPort};
+use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
 use bytes::Bytes;
 use tokio::sync::mpsc;
 
@@ -310,6 +310,7 @@ fn received(
         link_layer_group: false,
         is_group: false,
         data_attributes: Vec::new(),
+        provenance: TransportProvenance::unverified(),
         reply_tx: None,
     }
 }

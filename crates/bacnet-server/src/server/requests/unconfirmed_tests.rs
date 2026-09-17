@@ -3,6 +3,7 @@ use super::unconfirmed::apply_time_sync_request;
 use crate::server::TimeSyncData;
 use bacnet_objects::clock::ClockReader;
 use bacnet_services::device_mgmt::TimeSynchronizationRequest;
+use bacnet_transport::port::TransportProvenance;
 use bacnet_types::primitives::{Date, Time};
 use bytes::{Bytes, BytesMut};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -50,6 +51,7 @@ fn received() -> bacnet_network::layer::ReceivedApdu {
         link_layer_group: false,
         is_group: false,
         data_attributes: Vec::new(),
+        provenance: TransportProvenance::unverified(),
         reply_tx: None,
     }
 }

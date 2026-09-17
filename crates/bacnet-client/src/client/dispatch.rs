@@ -18,9 +18,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         device_tx: &broadcast::Sender<DeviceEvent>,
         device_collision_tx: &broadcast::Sender<DeviceCollisionEvent>,
         seg_state: &mut HashMap<SegKey, SegmentedReceiveState>,
-        seg_ack_senders: &Arc<Mutex<HashMap<SegKey, SegmentAckRoute>>>,
+        seg_ack_senders: &Arc<Mutex<HashMap<SegAckKey, SegmentAckRoute>>>,
         source_mac: &[u8],
         source_network: &Option<NpduAddress>,
+        provenance: TransportProvenance,
         is_group: bool,
         reply_tx: Option<oneshot::Sender<Bytes>>,
         apdu: Apdu,
@@ -37,7 +38,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // reassembly IS this transaction's acknowledgment, so a
                 // second one is not answering it. Checked before the TSM
                 // lock: `abort_reassembly` takes that lock itself (#367).
-                let key = (tsm_mac.clone(), ack.invoke_id);
+                let key = (tsm_mac.clone(), ack.invoke_id, provenance);
                 let coordinator_apdu = Apdu::SimpleAck(ack.clone());
                 admit_terminal_during_reassembly(
                     tsm,
@@ -101,6 +102,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         seg_state,
                         source_mac,
                         source_network,
+                        provenance,
                         ack,
                         limits,
                     )
@@ -110,7 +112,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     // Clause 5.4.4.4
                     // UnexpectedPDU_Received list: the transaction's answer
                     // is the segmented ComplexACK already under reassembly.
-                    let key = (tsm_mac.clone(), ack.invoke_id);
+                    let key = (tsm_mac.clone(), ack.invoke_id, provenance);
                     let coordinator_apdu = Apdu::ComplexAck(ack.clone());
                     admit_terminal_during_reassembly(
                         tsm,
@@ -176,7 +178,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // INVALID_APDU_IN_THIS_STATE, not the error content (#367).
                 // Checked before the TSM lock below: `abort_reassembly` takes
                 // that lock itself, and tokio's Mutex is not reentrant.
-                let key = (tsm_mac.clone(), err.invoke_id);
+                let key = (tsm_mac.clone(), err.invoke_id, provenance);
                 let coordinator_apdu = Apdu::Error(err.clone());
                 admit_terminal_during_reassembly(
                     tsm,
@@ -244,7 +246,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // Same Clause 5.4.4.4 UnexpectedPDU_Received diversion as the
                 // Error arm above ("BACnet-Reject-PDU" is in the same list),
                 // with the same lock-ordering constraint (#367).
-                let key = (tsm_mac.clone(), rej.invoke_id);
+                let key = (tsm_mac.clone(), rej.invoke_id, provenance);
                 let coordinator_apdu = Apdu::Reject(rej.clone());
                 admit_terminal_during_reassembly(
                     tsm,
@@ -313,7 +315,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // segment would find no transaction and clear the session
                 // anyway — so no test can pin this line alone; it is kept so
                 // the slot frees at the Abort, not at the peer's next move.
-                let key = (tsm_mac.clone(), abt.invoke_id);
+                let key = (tsm_mac.clone(), abt.invoke_id, provenance);
                 let reassembly_owner = current_reassembly_owner(tsm, seg_state, &key).await;
                 debug!(invoke_id = abt.invoke_id, "Received Abort PDU");
                 // Carries no service choice (Clause 20.1.9).
@@ -551,7 +553,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     return;
                 }
                 let invoke_id = sa.invoke_id;
-                let key = (tsm_mac.clone(), invoke_id);
+                let key = (tsm_mac.clone(), invoke_id, provenance);
 
                 // SEGMENTED_CONF (5.4.4.4) `UnexpectedPDU_Received` lists
                 // a server-side BACnet-SegmentACK-PDU among the inappropriate
@@ -597,10 +599,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 ) {
                     SegmentAckPhase::SegmentedRequest(owner) => {
                         // Lock order is TSM then SegmentACK routes. Setup and
-                        // cleanup never hold both locks.
+                        // cleanup never hold both locks. Compat mode: SegmentACK
+                        // delivery stays provenance-agnostic (RB-09 later).
+                        let send_key = (tsm_mac.clone(), invoke_id);
                         let senders = seg_ack_senders.lock().await;
                         if let Some(route) = senders
-                            .get(&key)
+                            .get(&send_key)
                             .filter(|route| route.owner.same_as(&owner))
                         {
                             let _ = route.sender.try_send(sa);

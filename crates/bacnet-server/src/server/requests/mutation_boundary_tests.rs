@@ -9,6 +9,7 @@ use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_services::device_mgmt::DeviceCommunicationControlRequest;
 use bacnet_services::file::{AtomicWriteFileRequest, FileWriteAccessMethod};
 use bacnet_services::read_property::ReadPropertyRequest;
+use bacnet_transport::port::TransportProvenance;
 use bacnet_types::enums::EnableDisable;
 use std::sync::atomic::AtomicUsize;
 
@@ -62,6 +63,7 @@ async fn deny_all_leaves_read_discovery_and_password_authorized_dcc_working() {
             link_layer_group: false,
             is_group: false,
             data_attributes: vec![],
+            provenance: TransportProvenance::unverified(),
             reply_tx: None,
         },
     )

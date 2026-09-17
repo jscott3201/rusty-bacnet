@@ -9,6 +9,7 @@ pub(super) async fn receive_confirmed_audit_notification(
     config: &ServerConfig,
     source_mac: &[u8],
     source_network: Option<&NpduAddress>,
+    provenance: bacnet_transport::port::TransportProvenance,
     confirmed: &bacnet_encoding::apdu::ConfirmedRequest,
 ) -> Result<bacnet_objects::audit::ConfirmedAuditNotificationOutcome, Error> {
     validate_payload_size("ConfirmedAuditNotification", &confirmed.service_request)?;
@@ -32,6 +33,7 @@ pub(super) async fn receive_confirmed_audit_notification(
     let context = AuditNotificationAuthorizationContext {
         source_mac: MacAddr::from_slice(source_mac),
         source_network: source_network.cloned(),
+        provenance,
         invoke_id: confirmed.invoke_id,
         audit_log_sink: sink,
         request: request.clone(),
@@ -61,6 +63,7 @@ pub(super) async fn receive_unconfirmed_audit_notification(
     config: &ServerConfig,
     source_mac: &[u8],
     source_network: Option<&NpduAddress>,
+    provenance: bacnet_transport::port::TransportProvenance,
     service_request: &Bytes,
 ) -> Result<(), Error> {
     validate_payload_size("UnconfirmedAuditNotification", service_request)?;
@@ -73,6 +76,7 @@ pub(super) async fn receive_unconfirmed_audit_notification(
             let context = UnconfirmedAuditNotificationAuthorizationContext {
                 source_mac: MacAddr::from_slice(source_mac),
                 source_network: source_network.cloned(),
+                provenance,
                 audit_log_sink: sink,
                 request: request.clone(),
             };
