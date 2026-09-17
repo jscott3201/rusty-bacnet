@@ -1,7 +1,7 @@
 use super::*;
 
 fn learned_table() -> RouterTable {
-    let mut table = RouterTable::new();
+    let mut table = RouterTable::new_hardened();
     table.add_learned(3000, 0, MacAddr::from_slice(&[1]));
     table
 }
@@ -109,7 +109,7 @@ fn alternating_challengers_replace_slot_and_reset_first_seen() {
 
 #[test]
 fn absent_current_port_direct_and_reserved_claims_remain_immediate() {
-    let mut table = RouterTable::new();
+    let mut table = RouterTable::new_hardened();
     let now = Instant::now();
     assert!(claim(&mut table, 0, now));
     assert!(table.pending_replacements.is_empty());
@@ -205,7 +205,7 @@ fn cleanup_never_leaves_pending_without_a_learned_route() {
 
 #[test]
 fn pending_store_is_bounded_and_networks_are_independent() {
-    let mut table = RouterTable::new();
+    let mut table = RouterTable::new_hardened();
     let now = Instant::now();
     for net in 1..=256 {
         table.add_learned(net, 0, MacAddr::new());

@@ -42,6 +42,7 @@ fn forward_unicast_preserves_data_attributes() {
         directly_connected: true,
         next_hop_mac: MacAddr::new(),
         last_seen: None,
+        last_used: None,
         reachability: crate::router_table::ReachabilityStatus::Reachable,
         busy_until: None,
         flap_count: 0,
