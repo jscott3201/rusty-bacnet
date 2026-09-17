@@ -67,6 +67,7 @@ async fn dispatch(
             link_layer_group: false,
             is_group: false,
             data_attributes: Vec::new(),
+            provenance: bacnet_transport::port::TransportProvenance::unverified(),
             reply_tx,
         },
     )

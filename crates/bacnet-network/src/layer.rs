@@ -82,7 +82,7 @@
 //! identities or per-source totals. Its three drop totals saturate at `u64::MAX`.
 
 use bacnet_encoding::npdu::{encode_npdu, Npdu, NpduAddress};
-use bacnet_transport::port::{DataAttribute, TransportPort};
+use bacnet_transport::port::{DataAttribute, TransportPort, TransportProvenance};
 use bacnet_types::enums::NetworkPriority;
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
@@ -101,7 +101,9 @@ pub use admission::{AdmissionReceiver, QueueAdmissionCounters, QueueAdmissionSna
 pub struct ReceivedApdu {
     /// Raw APDU bytes.
     pub apdu: Bytes,
-    /// Source MAC address in transport-native format.
+    /// Source MAC address in transport-native format (claimed identity; see
+    /// [`TransportProvenance`]. On SC this is the source VMAC, not a
+    /// certificate principal).
     pub source_mac: MacAddr,
     /// BACnet network number of the router ingress port at admission time.
     ///
@@ -115,6 +117,8 @@ pub struct ReceivedApdu {
     /// of that key. See the [receive-queue contract](self#receive-queue-admission).
     pub ingress_network: Option<u16>,
     /// Source network address if the APDU was routed (NPDU had source field).
+    /// Claimed SNET/SADR, never a credential (RB-07 compat mode: decisions
+    /// unchanged; RB-09 consumes provenance later).
     pub source_network: Option<NpduAddress>,
     /// Whether the NPDU arrived through a data-link multicast or broadcast.
     ///
@@ -127,6 +131,11 @@ pub struct ReceivedApdu {
     pub is_group: bool,
     /// Data-link attributes associated with the NPDU, if the transport supplied any.
     pub data_attributes: Vec<DataAttribute>,
+    /// Honest transport + origin provenance, immutable by value (RB-07).
+    /// Threaded from [`bacnet_transport::port::ReceivedNpdu`]; cloning
+    /// preserves the meaning and never duplicates reply authority. Compat
+    /// mode: forwarding/learning/admission decisions ignore it.
+    pub provenance: TransportProvenance,
     /// Optional reply channel for MS/TP DataExpectingReply flows.
     /// The application layer can send NPDU-wrapped reply bytes through this channel.
     /// An APDU dropped at queue admission releases this sender without sending
@@ -140,22 +149,68 @@ pub struct ReceivedApdu {
 /// Non-router users opt in to this stream before [`NetworkLayer::start`].
 /// Without that opt-in, network messages retain their historical discard/log
 /// behavior.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ReceivedNetworkControl {
     /// Decoded NPDU, including network-message type and typed-address fields.
     pub npdu: Npdu,
-    /// Immediate transport peer that sent the message.
+    /// Immediate transport peer that sent the message (claimed identity; see
+    /// [`TransportProvenance`]).
     pub source_mac: MacAddr,
     /// Whether the data-link delivery was multicast or broadcast.
     pub link_layer_group: bool,
     /// Data-link attributes supplied by the transport.
     pub data_attributes: Vec<DataAttribute>,
+    /// Honest transport + origin provenance, immutable by value (RB-07).
+    /// Compat mode: decisions unchanged.
+    pub provenance: TransportProvenance,
     /// Monotonic decoded-ingress sequence assigned before channel delivery.
     ///
     /// A consumer can compare this with [`NetworkLayer::network_control_ingress_sequence`]
     /// when activating state so controls already queued at that point cannot
     /// be mistaken for feedback about the new state.
     pub ingress_sequence: u64,
+}
+
+impl std::fmt::Debug for ReceivedNetworkControl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Redacted like ReceivedApdu: lengths only, no key material.
+        f.debug_struct("ReceivedNetworkControl")
+            .field("npdu", &self.npdu)
+            .field("source_mac_len", &self.source_mac.len())
+            .field("link_layer_group", &self.link_layer_group)
+            .field("data_attributes", &self.data_attributes)
+            .field("provenance", &self.provenance)
+            .field("ingress_sequence", &self.ingress_sequence)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ReceivedApdu {
+    /// Build an explicitly unverified test/compat envelope (mechanical helper
+    /// for the ~55 in-memory literals; production paths thread the transport
+    /// value instead of synthesizing one).
+    pub fn unverified(
+        apdu: Bytes,
+        source_mac: MacAddr,
+        ingress_network: Option<u16>,
+        source_network: Option<NpduAddress>,
+        link_layer_group: bool,
+        is_group: bool,
+        data_attributes: Vec<DataAttribute>,
+        reply_tx: Option<oneshot::Sender<Bytes>>,
+    ) -> Self {
+        Self {
+            apdu,
+            source_mac,
+            ingress_network,
+            source_network,
+            link_layer_group,
+            is_group,
+            data_attributes,
+            provenance: TransportProvenance::unverified(),
+            reply_tx,
+        }
+    }
 }
 
 impl Clone for ReceivedApdu {
@@ -168,6 +223,7 @@ impl Clone for ReceivedApdu {
             link_layer_group: self.link_layer_group,
             is_group: self.is_group,
             data_attributes: self.data_attributes.clone(),
+            provenance: self.provenance,
             reply_tx: None,
         }
     }
@@ -175,16 +231,24 @@ impl Clone for ReceivedApdu {
 
 impl std::fmt::Debug for ReceivedApdu {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Redacted: MAC bytes, routed source bytes, and payload lengths only;
+        // no key material. Follows the TimeSyncSourceRestriction
+        // finish_non_exhaustive pattern.
+        let source_network_len = self
+            .source_network
+            .as_ref()
+            .map(|source| (source.network, source.mac_address.len()));
         f.debug_struct("ReceivedApdu")
-            .field("apdu", &self.apdu)
-            .field("source_mac", &self.source_mac)
+            .field("apdu_len", &self.apdu.len())
+            .field("source_mac_len", &self.source_mac.len())
             .field("ingress_network", &self.ingress_network)
-            .field("source_network", &self.source_network)
+            .field("source_network", &source_network_len)
             .field("link_layer_group", &self.link_layer_group)
             .field("is_group", &self.is_group)
             .field("data_attributes", &self.data_attributes)
+            .field("provenance", &self.provenance)
             .field("reply_tx", &self.reply_tx.as_ref().map(|_| "Some(...)"))
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

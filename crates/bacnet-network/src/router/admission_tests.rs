@@ -140,6 +140,7 @@ fn incoming(destination: Option<NpduAddress>, id: u16) -> ReceivedNpdu {
             must_understand: false,
             data: vec![0x12, 0x34],
         }],
+        provenance: TransportProvenance::unverified(),
         reply_tx: None,
     }
 }

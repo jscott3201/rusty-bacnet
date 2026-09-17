@@ -1,5 +1,34 @@
 use super::*;
 
+impl<T: TransportPort + 'static> BACnetServer<T> {
+    /// Send a `'server' = TRUE` Abort back along the request's path.
+    ///
+    /// Split from `lifecycle.rs` to keep the 700-LOC file cap; no behavior
+    /// change. Every Abort this dispatch loop originates answers a client's
+    /// request, so the flag is always TRUE (Clause 20.1.9.1).
+    pub(super) async fn send_server_abort(
+        network: &Arc<NetworkLayer<T>>,
+        source_mac: &MacAddr,
+        source_network: Option<&NpduAddress>,
+        invoke_id: u8,
+        abort_reason: AbortReason,
+    ) {
+        let abort_pdu = Apdu::Abort(AbortPdu {
+            sent_by_server: true,
+            invoke_id,
+            abort_reason,
+        });
+        let mut abort_buf = BytesMut::new();
+        encode_apdu(&mut abort_buf, &abort_pdu).expect("valid APDU encoding");
+        if let Err(e) =
+            Self::send_confirmed_response_apdu(network, &abort_buf, source_mac, source_network)
+                .await
+        {
+            warn!(error = %e, reason = abort_reason.to_raw(), "Failed to send Abort");
+        }
+    }
+}
+
 /// Private defensive limit, not a normative SegmentTimer or total-request age.
 const SEG_RECEIVER_PROGRESS_TIMEOUT: Duration = Duration::from_secs(16);
 
@@ -13,7 +42,7 @@ const MAX_SEG_RECEIVERS_PER_PEER: usize = 16;
 const MAX_SAVED_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 
 pub(super) fn saved_request_payload_bytes(
-    receivers: &HashMap<SegKey, SegmentedRequestState>,
+    receivers: &HashMap<SegRecvKey, SegmentedRequestState>,
 ) -> Option<usize> {
     receivers.values().try_fold(0usize, |sum, state| {
         sum.checked_add(state.payload.saved_payload_bytes())
@@ -101,8 +130,8 @@ pub(super) mod tests;
 /// Only for a new, supported sequence-zero request with a valid window.
 /// Global capacity takes precedence; the bounded key scan ignores invoke ID.
 pub(super) fn segmented_request_admission_error(
-    receivers: &HashMap<SegKey, SegmentedRequestState>,
-    key: &SegKey,
+    receivers: &HashMap<SegRecvKey, SegmentedRequestState>,
+    key: &SegRecvKey,
 ) -> Option<AbortReason> {
     if receivers.len() >= MAX_SEG_RECEIVERS {
         return Some(AbortReason::BUFFER_OVERFLOW);
@@ -118,10 +147,44 @@ pub(super) fn segmented_request_admission_error(
     None
 }
 
+/// Fail-closed conflict for segmented request reassembly (RB-07).
+/// Returns the conflicting key when the same (peer, invoke) exists under a
+/// different provenance snapshot; the caller aborts that session rather than
+/// merging. Snapshots compare by value; the assertion expires with its
+/// session.
+pub(super) fn find_receive_provenance_conflict(
+    receivers: &HashMap<SegRecvKey, SegmentedRequestState>,
+    key: &SegRecvKey,
+) -> Option<SegRecvKey> {
+    receivers
+        .keys()
+        .find(|existing| {
+            existing.0 == key.0 && existing.1 == key.1 && existing.2 == key.2 && existing.3 != key.3
+        })
+        .cloned()
+}
+
+/// Remove every reassembly session for this (peer, invoke), any provenance.
+/// Clause 5.4.5.2 AbortPDU_Received ends the session regardless of which
+/// trust context opened it (fail-closed).
+pub(super) fn remove_matching_reassemblies(
+    receivers: &mut HashMap<SegRecvKey, SegmentedRequestState>,
+    key: &SegRecvKey,
+) {
+    let doomed: Vec<SegRecvKey> = receivers
+        .keys()
+        .filter(|existing| existing.0 == key.0 && existing.1 == key.1 && existing.2 == key.2)
+        .cloned()
+        .collect();
+    for doomed in doomed {
+        receivers.remove(&doomed);
+    }
+}
+
 /// Drop stale incarnations and all their retained payload ownership before input.
 /// Cleanup is silent and synchronous; idle or blocked dispatch is not reclaimed.
 pub(super) fn expire_segmented_requests(
-    receivers: &mut HashMap<SegKey, SegmentedRequestState>,
+    receivers: &mut HashMap<SegRecvKey, SegmentedRequestState>,
     now: Instant,
 ) {
     receivers.retain(|_key, state| {

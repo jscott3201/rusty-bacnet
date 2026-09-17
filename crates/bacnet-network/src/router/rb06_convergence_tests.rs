@@ -11,6 +11,7 @@ use super::*;
 use crate::router_table::ConvergenceMode;
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_transport::port::ReceivedNpdu;
+use bacnet_transport::port::TransportProvenance;
 use std::time::Instant;
 
 fn learned_at(port: usize, now: Instant) -> RouterTable {
@@ -362,6 +363,7 @@ fn ingress(npdu: Bytes) -> ReceivedNpdu {
         source_mac: MacAddr::from_slice(&[7]),
         link_layer_group: true,
         data_attributes: Vec::new(),
+        provenance: TransportProvenance::unverified(),
         reply_tx: None,
     }
 }

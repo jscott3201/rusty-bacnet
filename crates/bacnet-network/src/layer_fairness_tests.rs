@@ -1,5 +1,6 @@
 use super::*;
 use bacnet_transport::port::ReceivedNpdu;
+use bacnet_transport::port::TransportProvenance;
 use tokio::time::{timeout, Duration};
 
 // Same owned-NPDU fake-transport pattern as layer_admission_tests: the real
@@ -56,6 +57,7 @@ fn incoming(source: &[u8], id: u16) -> ReceivedNpdu {
             must_understand: false,
             data: vec![0x12, 0x34],
         }],
+        provenance: TransportProvenance::unverified(),
         reply_tx: None,
     }
 }
@@ -481,6 +483,7 @@ fn router_apdu(ingress_network: u16, source: &[u8], id: u16) -> ReceivedApdu {
         link_layer_group: false,
         is_group: false,
         data_attributes: Vec::new(),
+        provenance: TransportProvenance::unverified(),
         reply_tx: None,
     }
 }

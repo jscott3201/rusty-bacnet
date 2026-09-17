@@ -1,5 +1,6 @@
 use super::event_notifications::ResolvedIntrinsicTransition;
 use super::*;
+use bacnet_transport::port::TransportProvenance;
 
 #[path = "lifecycle_period.rs"]
 mod period;
@@ -95,7 +96,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         let requests = Arc::clone(&request_tasks);
         let dispatch_task = tokio::spawn(async move {
-            let mut seg_receivers: HashMap<SegKey, SegmentedRequestState> = HashMap::new();
+            let mut seg_receivers: HashMap<SegRecvKey, SegmentedRequestState> = HashMap::new();
             let mut notifications_open = true;
             let mut ingress_open = true;
 
@@ -136,14 +137,20 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         // circuit — the PDU still reaches `dispatch`, whose
                         // Abort arm cancels in-flight segmented response
                         // senders and records server-TSM results (#377).
+                        // Provenance snapshot for this ingress (RB-07, by value).
+                        let provenance = received.provenance;
                         if let Apdu::Abort(ref abt) = decoded {
                             if !abt.sent_by_server {
-                                let key = segmented_transaction_key(
+                                let abort_key = segmented_receive_key(
                                     source_mac.as_slice(),
                                     source_network.as_ref(),
                                     abt.invoke_id,
+                                    provenance,
                                 );
-                                seg_receivers.remove(&key);
+                                super::segmented_receive::remove_matching_reassemblies(
+                                    &mut seg_receivers,
+                                    &abort_key,
+                                );
                             }
                         }
 
@@ -151,11 +158,33 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         let handled = if let Apdu::ConfirmedRequest(ref req) = decoded {
                             if req.segmented {
                                 let seq = req.sequence_number.unwrap_or(0);
-                                let key = segmented_transaction_key(
+                                let key = segmented_receive_key(
                                     source_mac.as_slice(),
                                     source_network.as_ref(),
                                     req.invoke_id,
+                                    provenance,
                                 );
+                                if let Some(conflict) =
+                                    super::segmented_receive::find_receive_provenance_conflict(
+                                        &seg_receivers,
+                                        &key,
+                                    )
+                                {
+                                    seg_receivers.remove(&conflict);
+                                    warn!(
+                                        invoke_id = req.invoke_id,
+                                        "Aborting segmented request on provenance mismatch (fail-closed)"
+                                    );
+                                    Self::send_server_abort(
+                                        &network_dispatch,
+                                        &source_mac,
+                                        source_network.as_ref(),
+                                        req.invoke_id,
+                                        AbortReason::INVALID_APDU_IN_THIS_STATE,
+                                    )
+                                    .await;
+                                    continue;
+                                }
 
                                 // Clause 5.4.5.1
                                 // ConfirmedSegmentedReceivedNotSupported: a
@@ -196,6 +225,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                         &seg_receivers,
                                     );
                                 if let Some(state) = seg_receivers.get_mut(&key) {
+                                    // Compat-mode live read: key isolates
+                                    // contexts; snapshot must match the key.
+                                    debug_assert_eq!(state.provenance, provenance);
                                     // Clause 5.4.5.2 restarts SegmentTimer
                                     // for accepted, duplicate and
                                     // out-of-order segments alike, so the
@@ -353,6 +385,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     let actual_window_size = proposed_window_size;
                                     let mut state = SegmentedRequestState {
                                         payload,
+                                        provenance,
                                         last_activity: Instant::now(),
                                         last_progress: Instant::now(),
                                         expected_seq: 1,
@@ -460,6 +493,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                                             link_layer_group: false,
                                                             is_group: false,
                                                             data_attributes: Vec::new(),
+                                                            provenance: bacnet_transport::port::TransportProvenance::unverified(),
                                                             reply_tx: None,
                                                         }
                                                     }),
@@ -517,6 +551,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                         link_layer_group: false,
                                         is_group: false,
                                         data_attributes: Vec::new(),
+                                        provenance:
+                                            bacnet_transport::port::TransportProvenance::unverified(
+                                            ),
                                         reply_tx: None,
                                     }
                                 }),
@@ -788,32 +825,5 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         )
         .await;
         Ok(server)
-    }
-
-    /// Send a `'server' = TRUE` Abort back along the request's path.
-    ///
-    /// Every Abort this dispatch loop originates answers a client's request,
-    /// so the flag is always TRUE — it names the sender's role, not the
-    /// error (Clause 20.1.9.1 assigns TRUE to a server-originated Abort).
-    async fn send_server_abort(
-        network: &Arc<NetworkLayer<T>>,
-        source_mac: &MacAddr,
-        source_network: Option<&NpduAddress>,
-        invoke_id: u8,
-        abort_reason: AbortReason,
-    ) {
-        let abort_pdu = Apdu::Abort(AbortPdu {
-            sent_by_server: true,
-            invoke_id,
-            abort_reason,
-        });
-        let mut abort_buf = BytesMut::new();
-        encode_apdu(&mut abort_buf, &abort_pdu).expect("valid APDU encoding");
-        if let Err(e) =
-            Self::send_confirmed_response_apdu(network, &abort_buf, source_mac, source_network)
-                .await
-        {
-            warn!(error = %e, reason = abort_reason.to_raw(), "Failed to send Abort");
-        }
     }
 }

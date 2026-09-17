@@ -30,7 +30,7 @@ use bacnet_services::cov::COVNotificationRequest;
 use bacnet_transport::bip::BipTransport;
 #[cfg(feature = "ipv6")]
 use bacnet_transport::bip6::Bip6Transport;
-use bacnet_transport::port::TransportPort;
+use bacnet_transport::port::{TransportPort, TransportProvenance};
 use bacnet_types::enums::{
     ConfirmedServiceChoice, NetworkPriority, RejectReason, UnconfirmedServiceChoice,
 };
@@ -392,6 +392,11 @@ struct ResponseLimits {
 struct SegmentedReceiveState {
     receiver: SegmentReceiver,
     owner: TransactionOwner,
+    /// Provenance snapshot at session open (RB-07). Compared by value on
+    /// every later segment; a conflicting context fails closed (abort).
+    /// Expires with the session; SC disconnect drops the transport queue so
+    /// no snapshot outlives its connection.
+    provenance: TransportProvenance,
     /// Immediate MAC used to send SegmentAck/Abort PDUs.
     reply_mac: MacAddr,
     /// The peer's SNET/SADR when the segments arrive through a router; the
@@ -419,8 +424,21 @@ struct SegmentedReceiveState {
     accepted_segments: usize,
 }
 
-/// Key for tracking in-progress segmented receives: (correlation_mac, invoke_id).
-type SegKey = (MacAddr, u8);
+/// Key for tracking in-progress segmented receives:
+/// (correlation_mac, invoke_id, provenance).
+///
+/// Including the immutable provenance snapshot gives cross-peer isolation:
+/// the same MAC via different trust contexts never shares a reassembly
+/// session. A conflicting provenance for an otherwise identical key is a
+/// fail-closed abort, not a merge (RB-07 compat mode: no policy change).
+type SegKey = (MacAddr, u8, TransportProvenance);
+
+/// Key for routing inbound SegmentACKs to in-flight segmented sends:
+/// (correlation_mac, invoke_id).
+///
+/// Compat mode: provenance is threaded to the dispatch point but does not
+/// gate SegmentACK delivery (RB-09 consumes it later).
+type SegAckKey = (MacAddr, u8);
 
 struct SegmentAckRoute {
     owner: TransactionOwner,
@@ -443,7 +461,7 @@ pub struct BACnetClient<T: TransportPort> {
     /// Dispatch may hold [`Self::tsm`] while acquiring this lock so phase
     /// validation and delivery cannot race terminal completion. No path may
     /// acquire the locks in the opposite order.
-    seg_ack_senders: Arc<Mutex<HashMap<SegKey, SegmentAckRoute>>>,
+    seg_ack_senders: Arc<Mutex<HashMap<SegAckKey, SegmentAckRoute>>>,
     cleanup_tx: mpsc::UnboundedSender<TransactionCleanup>,
     #[cfg(test)]
     segmented_post_wait_cleanup: Arc<SegmentedPostWaitCleanupHook>,
@@ -839,6 +857,7 @@ mod requests;
 mod response_admission;
 mod routed_path_limits;
 mod segmentation;
+mod segmentation_abort;
 mod segmented_request;
 mod transaction_cleanup;
 mod transaction_peer;
@@ -881,6 +900,8 @@ mod event_notification_tests;
 mod peer_max_apdu_tests;
 #[cfg(test)]
 mod peer_segmentation_tests;
+#[cfg(test)]
+mod rb07_provenance_tests;
 #[cfg(test)]
 mod request_timer_tests;
 #[cfg(test)]

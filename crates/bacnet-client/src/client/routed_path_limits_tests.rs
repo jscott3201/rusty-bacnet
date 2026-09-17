@@ -1,6 +1,7 @@
 use super::*;
 use bacnet_encoding::npdu::Npdu;
 use bacnet_network::layer::ReceivedNetworkControl;
+use bacnet_transport::port::TransportProvenance;
 use bacnet_types::enums::ConfirmedServiceChoice;
 use bytes::Bytes;
 
@@ -178,6 +179,7 @@ fn reason_4_control(router: &[u8], dnet: u16, ingress_sequence: u64) -> Received
         source_mac: MacAddr::from_slice(router),
         link_layer_group: false,
         data_attributes: Vec::new(),
+        provenance: TransportProvenance::unverified(),
         ingress_sequence,
     }
 }

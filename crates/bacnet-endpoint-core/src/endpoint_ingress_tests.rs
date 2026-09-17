@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
 use bacnet_transport::loopback::LoopbackTransport;
-use bacnet_transport::port::{DataAttribute, ReceivedNpdu, TransportPort};
+use bacnet_transport::port::{DataAttribute, ReceivedNpdu, TransportPort, TransportProvenance};
 use bacnet_types::enums::NetworkPriority;
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
@@ -159,6 +159,7 @@ fn received_npdu(apdu: &[u8]) -> ReceivedNpdu {
         source_mac: MacAddr::from_slice(&[0x11]),
         link_layer_group: false,
         data_attributes: Vec::new(),
+        provenance: TransportProvenance::unverified(),
         reply_tx: None,
     }
 }
@@ -381,6 +382,7 @@ async fn request_route_preserves_the_complete_envelope_and_reply_sender() {
             source_mac: MacAddr::from_slice(&[0xde, 0xad]),
             link_layer_group: true,
             data_attributes: attributes.clone(),
+            provenance: TransportProvenance::unverified(),
             reply_tx: Some(reply_tx),
         })
         .await

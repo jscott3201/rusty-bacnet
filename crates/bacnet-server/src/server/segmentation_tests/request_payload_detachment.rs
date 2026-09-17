@@ -3,6 +3,7 @@
 use super::*;
 use bacnet_encoding::npdu::{encode_npdu, Npdu};
 use bacnet_transport::port::ReceivedNpdu;
+use bacnet_transport::port::TransportProvenance;
 use request_peer_quota::{assert_positive_ack, next_routed_apdu};
 use request_reassembly::{
     inject_routed_segment, present_value, split_into, start_routed_reassembly_server,
@@ -95,6 +96,7 @@ async fn request_payload_detachment_first_and_later_real_inputs_release_while_in
                 source_mac: router.clone(),
                 link_layer_group: false,
                 data_attributes: Vec::new(),
+                provenance: TransportProvenance::unverified(),
                 reply_tx: None,
             })
             .await

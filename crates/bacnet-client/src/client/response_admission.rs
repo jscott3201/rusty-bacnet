@@ -31,20 +31,60 @@ pub(super) fn log_coordinated_mismatch(outcome: &CoordinatedCompletion, invoke_i
     }
 }
 
+/// Find any reassembly key for this (mac, invoke), preferring the exact
+/// provenance match. Terminal UnexpectedPDU handling stays provenance-agnostic
+/// (fail-closed): any in-progress session for the transaction aborts,
+/// regardless of which trust context it opened under.
+fn find_reassembly_key(
+    seg_state: &HashMap<SegKey, SegmentedReceiveState>,
+    key: &SegKey,
+) -> Option<SegKey> {
+    if seg_state.contains_key(key) {
+        return Some(key.clone());
+    }
+    seg_state
+        .keys()
+        .find(|existing| existing.0 == key.0 && existing.1 == key.1)
+        .cloned()
+}
+
+/// Fail-closed conflict for segmented ComplexAck reassembly (RB-07).
+/// Returns the conflicting key when the same (mac, invoke) exists under a
+/// different provenance snapshot; the caller aborts that session rather than
+/// merging. Snapshots compare by value; the assertion expires with its
+/// session.
+pub(super) fn find_provenance_conflict(
+    seg_state: &HashMap<SegKey, SegmentedReceiveState>,
+    tsm_mac: &MacAddr,
+    invoke_id: u8,
+    provenance: TransportProvenance,
+) -> Option<SegKey> {
+    seg_state
+        .keys()
+        .find(|existing| {
+            existing.0 == *tsm_mac && existing.1 == invoke_id && existing.2 != provenance
+        })
+        .cloned()
+}
+
 pub(super) async fn take_current_reassembly(
     tsm: &Arc<Mutex<Tsm>>,
     seg_state: &mut HashMap<SegKey, SegmentedReceiveState>,
     key: &SegKey,
 ) -> Option<SegmentedReceiveState> {
-    let state = seg_state.remove(key)?;
+    let found = find_reassembly_key(seg_state, key)?;
+    let state = seg_state.remove(&found)?;
     if tsm
         .lock()
         .await
-        .owner_is_current(&key.0, key.1, &state.owner)
+        .owner_is_current(&found.0, found.1, &state.owner)
     {
         Some(state)
     } else {
-        debug!(invoke_id = key.1, "Reclaimed stale segmented receive state");
+        debug!(
+            invoke_id = found.1,
+            "Reclaimed stale segmented receive state"
+        );
         None
     }
 }
@@ -54,12 +94,16 @@ pub(super) async fn current_reassembly_owner(
     seg_state: &mut HashMap<SegKey, SegmentedReceiveState>,
     key: &SegKey,
 ) -> Option<TransactionOwner> {
-    let owner = seg_state.get(key)?.owner.clone();
-    if tsm.lock().await.owner_is_current(&key.0, key.1, &owner) {
+    let found = find_reassembly_key(seg_state, key)?;
+    let owner = seg_state.get(&found)?.owner.clone();
+    if tsm.lock().await.owner_is_current(&found.0, found.1, &owner) {
         Some(owner)
     } else {
-        seg_state.remove(key);
-        debug!(invoke_id = key.1, "Reclaimed stale segmented receive state");
+        seg_state.remove(&found);
+        debug!(
+            invoke_id = found.1,
+            "Reclaimed stale segmented receive state"
+        );
         None
     }
 }

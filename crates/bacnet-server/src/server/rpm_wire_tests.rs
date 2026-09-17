@@ -3,6 +3,7 @@ use bacnet_services::{
     common::PropertyReference,
     rpm::{ReadAccessSpecification, ReadPropertyMultipleRequest},
 };
+use bacnet_transport::port::TransportProvenance;
 
 #[tokio::test]
 async fn rpm_whole_abort_direct_routed_reply_and_segmentation_matrix() {
@@ -75,6 +76,7 @@ async fn rpm_whole_abort_direct_routed_reply_and_segmentation_matrix() {
                         source_mac: MacAddr::from_slice(&[1]),
                         link_layer_group: false,
                         data_attributes: Vec::new(),
+                        provenance: TransportProvenance::unverified(),
                         reply_tx: reply.then_some(reply_tx),
                     })
                     .await

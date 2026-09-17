@@ -16,7 +16,7 @@ use crate::mstp_frame::{
     FrameType, MstpFrame, BROADCAST_MAC, MAX_MASTER, MAX_STANDARD_FRAME_LENGTH,
     MAX_STANDARD_MPDU_DATA,
 };
-use crate::port::ReceivedNpdu;
+use crate::port::{ReceivedNpdu, TransportProvenance};
 
 // ---------------------------------------------------------------------------
 // Serial port abstraction
@@ -348,6 +348,7 @@ impl MasterNode {
                             source_mac: MacAddr::from_slice(&[frame.source]),
                             link_layer_group: false,
                             data_attributes: Vec::new(),
+                            provenance: TransportProvenance::unverified(),
                             reply_tx: None,
                         });
                     }
@@ -362,6 +363,7 @@ impl MasterNode {
                         source_mac: MacAddr::from_slice(&[frame.source]),
                         link_layer_group: frame.destination == BROADCAST_MAC,
                         data_attributes: Vec::new(),
+                        provenance: TransportProvenance::unverified(),
                         reply_tx: None,
                     });
                 }
@@ -381,6 +383,7 @@ impl MasterNode {
                         source_mac: MacAddr::from_slice(&[frame.source]),
                         link_layer_group: false,
                         data_attributes: Vec::new(),
+                        provenance: TransportProvenance::unverified(),
                         reply_tx: Some(tx),
                     });
                 }

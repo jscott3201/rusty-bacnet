@@ -6,6 +6,7 @@ use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_transport::loopback::LoopbackTransport;
 
 use super::*;
+use bacnet_transport::port::TransportProvenance;
 
 fn read_property_request(invoke_id: u8) -> Bytes {
     let mut service_request = BytesMut::new();
@@ -56,6 +57,7 @@ async fn responder_moves_reply_sender_once_and_preserves_routed_destination() {
         link_layer_group: false,
         is_group: false,
         data_attributes: Vec::new(),
+        provenance: TransportProvenance::unverified(),
         reply_tx: Some(reply_tx),
     };
 
@@ -90,6 +92,7 @@ async fn responder_moves_reply_sender_once_and_preserves_routed_destination() {
                 link_layer_group: false,
                 is_group: false,
                 data_attributes: Vec::new(),
+                provenance: TransportProvenance::unverified(),
                 reply_tx: None,
             })
             .await,
@@ -125,6 +128,7 @@ async fn responder_routes_reply_to_original_source_via_immediate_router() {
             link_layer_group: false,
             is_group: false,
             data_attributes: Vec::new(),
+            provenance: TransportProvenance::unverified(),
             reply_tx: None,
         })
         .await

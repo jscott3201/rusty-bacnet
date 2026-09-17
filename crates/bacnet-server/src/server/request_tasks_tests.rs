@@ -2,6 +2,7 @@ use super::*;
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
 use bacnet_objects::device::DeviceObject;
 use bacnet_transport::port::ReceivedNpdu;
+use bacnet_transport::port::TransportProvenance;
 use bytes::Bytes;
 use tokio::sync::{mpsc, oneshot, Notify};
 
@@ -167,6 +168,7 @@ async fn inject(tx: &mpsc::Sender<ReceivedNpdu>, apdu: Apdu) {
         source_mac: MacAddr::from_slice(&[1]),
         link_layer_group: false,
         data_attributes: Vec::new(),
+        provenance: TransportProvenance::unverified(),
         reply_tx: None,
     })
     .await

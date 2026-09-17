@@ -6,6 +6,7 @@
 //! and control-envelope coverage stays in lockstep.
 
 use super::*;
+use bacnet_transport::port::TransportProvenance;
 
 pub(super) fn control_npdu(message_type: NetworkMessageType, payload: &[u8]) -> Npdu {
     Npdu {
@@ -74,6 +75,7 @@ impl Harness {
             source_mac: MacAddr::from_slice(source_mac),
             link_layer_group: true,
             data_attributes: Vec::new(),
+            provenance: TransportProvenance::unverified(),
             npdu,
         }
     }

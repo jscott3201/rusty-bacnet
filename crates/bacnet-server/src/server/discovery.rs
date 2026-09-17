@@ -473,6 +473,8 @@ impl DiscoveryLimiter {
         received: &ReceivedApdu,
         now: Instant,
     ) -> PreCheckDecision {
+        // RB-07 compat mode: provenance threaded here for RB-09, no decision.
+        let _ = received.provenance;
         let who_is = match WhoIsRequest::decode(req_bytes) {
             Ok(w) => w,
             Err(_) => return PreCheckDecision::DecodeError,
@@ -566,6 +568,8 @@ impl DiscoveryLimiter {
         received: &ReceivedApdu,
         now: Instant,
     ) -> PreCheckDecision {
+        // RB-07 compat mode: provenance threaded here for RB-09, no decision.
+        let _ = received.provenance;
         let who_has = match WhoHasRequest::decode(req_bytes) {
             Ok(w) => w,
             Err(_) => return PreCheckDecision::DecodeError,

@@ -8,6 +8,7 @@ use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_services::device_mgmt::DeviceCommunicationControlRequest;
 use bacnet_services::read_property::ReadPropertyRequest;
 use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleError};
+use bacnet_transport::port::TransportProvenance;
 use bacnet_types::enums::EnableDisable;
 use std::sync::atomic::AtomicUsize;
 
@@ -81,6 +82,7 @@ async fn dispatch(
             link_layer_group: false,
             is_group: false,
             data_attributes: vec![],
+            provenance: TransportProvenance::unverified(),
             reply_tx: Some(tx),
         },
     )
@@ -469,6 +471,7 @@ async fn mutation_deny_all_does_not_gate_reads_discovery_or_dcc() {
             link_layer_group: false,
             is_group: false,
             data_attributes: vec![],
+            provenance: TransportProvenance::unverified(),
             reply_tx: None,
         },
     )

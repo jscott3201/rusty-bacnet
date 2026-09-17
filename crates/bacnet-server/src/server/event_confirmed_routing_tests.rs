@@ -22,6 +22,7 @@ use bacnet_objects::event::EventStateChange;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_transport::port::TransportPort;
+use bacnet_transport::port::TransportProvenance;
 use bacnet_types::constructed::{BACnetDestination, BACnetRecipient};
 use bacnet_types::enums::{EventState, EventType};
 use bytes::Bytes;
@@ -272,6 +273,7 @@ impl Harness {
                 link_layer_group: false,
                 is_group: false,
                 data_attributes: Vec::new(),
+                provenance: TransportProvenance::unverified(),
                 reply_tx: None,
             },
         )

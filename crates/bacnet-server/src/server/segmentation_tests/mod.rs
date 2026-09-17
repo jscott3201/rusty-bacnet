@@ -1,6 +1,7 @@
 use super::*;
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::decode_npdu;
+use bacnet_transport::port::TransportProvenance;
 use bytes::Bytes;
 use std::sync::{Arc as StdArc, Mutex as StdMutex};
 use tokio::sync::{mpsc, watch, Notify};
@@ -308,6 +309,7 @@ async fn dispatch_test_apdu_from_network<T: TransportPort + 'static>(
             link_layer_group: false,
             is_group: false,
             data_attributes: Vec::new(),
+            provenance: TransportProvenance::unverified(),
             reply_tx: None,
         },
     )

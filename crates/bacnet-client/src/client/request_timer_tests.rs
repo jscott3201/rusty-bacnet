@@ -5,7 +5,7 @@ use std::sync::Arc;
 use bacnet_encoding::apdu::{self, encode_apdu, Apdu, ComplexAck};
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
 use bacnet_transport::loopback::LoopbackTransport;
-use bacnet_transport::port::{ReceivedNpdu, TransportPort};
+use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
 use bacnet_types::enums::{AbortReason, ConfirmedServiceChoice};
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
@@ -40,6 +40,7 @@ fn encode_inbound(apdu: &Apdu) -> ReceivedNpdu {
         source_mac: MacAddr::from_slice(SERVER_MAC),
         link_layer_group: false,
         data_attributes: Vec::new(),
+        provenance: TransportProvenance::unverified(),
         reply_tx: None,
     }
 }

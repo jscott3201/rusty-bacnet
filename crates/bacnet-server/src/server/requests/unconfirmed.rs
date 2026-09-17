@@ -307,6 +307,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 config,
                 &received.source_mac,
                 received.source_network.as_ref(),
+                received.provenance,
                 &req.service_request,
             )
             .await
@@ -368,6 +369,7 @@ pub(super) fn apply_time_sync_request(
             is_utc,
             source_mac: received.source_mac.clone(),
             source_network: received.source_network.clone(),
+            provenance: received.provenance,
         };
         if catch_unwind(AssertUnwindSafe(|| callback(data))).is_err() {
             debug!(
@@ -384,6 +386,7 @@ mod time_sync_tests {
     use super::*;
     use bacnet_network::layer::ReceivedApdu;
     use bacnet_transport::port::ReceivedNpdu;
+    use bacnet_transport::port::TransportProvenance;
     use bacnet_types::primitives::{Date, Time};
     use std::sync::atomic::AtomicUsize;
 
@@ -443,6 +446,7 @@ mod time_sync_tests {
             link_layer_group: false,
             is_group: false,
             data_attributes: Vec::new(),
+            provenance: TransportProvenance::unverified(),
             reply_tx: None,
         }
     }
@@ -678,6 +682,7 @@ mod time_sync_tests {
                 source_mac: MacAddr::from_slice(&[2, 3, 4, 5, 6, 7]),
                 link_layer_group: false,
                 data_attributes: Vec::new(),
+                provenance: TransportProvenance::unverified(),
                 reply_tx: None,
             })
             .await

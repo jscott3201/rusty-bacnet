@@ -7,6 +7,7 @@ use tokio::sync::{mpsc, watch};
 
 use bacnet_encoding::apdu::{AbortPdu, SegmentAck as SegmentAckPdu};
 use bacnet_encoding::npdu::NpduAddress;
+use bacnet_transport::port::TransportProvenance;
 use bacnet_types::MacAddr;
 
 use super::segmented_receive::RequestPayload;
@@ -14,6 +15,15 @@ use super::{DEFAULT_APDU_SEGMENT_RETRIES, DEFAULT_APDU_SEGMENT_TIMEOUT};
 
 /// Key for tracking segmented transactions by peer and invoke ID.
 pub(crate) type SegKey = (MacAddr, Option<NpduAddress>, u8);
+
+/// Key for tracking in-progress segmented request reassembly:
+/// (peer, routed identity, invoke ID, provenance snapshot).
+///
+/// Including the immutable provenance snapshot gives cross-peer isolation;
+/// a conflicting provenance for an otherwise identical key fails closed
+/// (abort) rather than merging. Compat mode: no policy change beyond the
+/// fail-closed abort (RB-07; RB-09 consumes provenance later).
+pub(crate) type SegRecvKey = (MacAddr, Option<NpduAddress>, u8, TransportProvenance);
 
 /// Short, synchronous registry sections permit cleanup during future drop.
 #[derive(Default)]
@@ -66,6 +76,19 @@ pub(crate) fn segmented_transaction_key(
             invoke_id,
         ),
     }
+}
+
+/// Provenance-aware receive key for segmented request reassembly (RB-07).
+/// The first three elements match [`segmented_transaction_key`]; the fourth
+/// is the immutable snapshot compared by value on every later segment.
+pub(crate) fn segmented_receive_key(
+    source_mac: &[u8],
+    source_network: Option<&NpduAddress>,
+    invoke_id: u8,
+    provenance: TransportProvenance,
+) -> SegRecvKey {
+    let (mac, network, id) = segmented_transaction_key(source_mac, source_network, invoke_id);
+    (mac, network, id, provenance)
 }
 
 #[derive(Debug)]
@@ -175,6 +198,9 @@ impl Default for SegmentedSendOptions {
 
 pub(crate) struct SegmentedRequestState {
     pub(crate) payload: RequestPayload,
+    /// Provenance snapshot at session open (RB-07). Compared by value on
+    /// every later segment; conflicting contexts fail closed.
+    pub(crate) provenance: TransportProvenance,
     pub(crate) last_activity: Instant,
     /// Last successfully saved new in-order segment, independent of SegmentTimer.
     pub(crate) last_progress: Instant,

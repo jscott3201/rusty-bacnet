@@ -11,6 +11,7 @@ use tokio::sync::{mpsc, Notify};
 
 use super::notification_transactions::NotificationReserveError;
 use super::*;
+use bacnet_transport::port::TransportProvenance;
 
 const COV_SERVICE: ConfirmedServiceChoice = ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION;
 const EVENT_SERVICE: ConfirmedServiceChoice = ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION;
@@ -419,6 +420,7 @@ async fn dispatch_keeps_segment_and_complex_acks_out_of_notification_completion(
                 link_layer_group: false,
                 is_group: false,
                 data_attributes: Vec::new(),
+                provenance: TransportProvenance::unverified(),
                 reply_tx: None,
             },
         )

@@ -11,7 +11,7 @@ use bacnet_types::MacAddr;
 use bytes::Bytes;
 use tokio::sync::mpsc;
 
-use crate::port::{ReceivedNpdu, TransportPort};
+use crate::port::{ReceivedNpdu, TransportPort, TransportProvenance};
 
 /// In-process loopback transport backed by mpsc channels.
 pub struct LoopbackTransport {
@@ -68,6 +68,7 @@ impl TransportPort for LoopbackTransport {
             source_mac: self.local_mac.clone(),
             link_layer_group: false,
             data_attributes: Vec::new(),
+            provenance: TransportProvenance::unverified(),
             reply_tx: None,
         };
         self.peer_tx
@@ -82,6 +83,7 @@ impl TransportPort for LoopbackTransport {
             source_mac: self.local_mac.clone(),
             link_layer_group: true,
             data_attributes: Vec::new(),
+            provenance: TransportProvenance::unverified(),
             reply_tx: None,
         };
         self.peer_tx

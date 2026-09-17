@@ -56,6 +56,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         request_tasks: &super::request_tasks::RequestTaskSpawner,
         source_mac: &[u8],
         source_network: Option<NpduAddress>,
+        provenance: bacnet_transport::port::TransportProvenance,
         req: bacnet_encoding::apdu::ConfirmedRequest,
         reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
     ) {
@@ -77,6 +78,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             request_tasks,
             source_mac,
             source_network,
+            provenance,
             req,
             reply_tx,
             None,
@@ -110,6 +112,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         request_tasks: &super::request_tasks::RequestTaskSpawner,
         source_mac: &[u8],
         source_network: Option<NpduAddress>,
+        provenance: bacnet_transport::port::TransportProvenance,
         req: bacnet_encoding::apdu::ConfirmedRequest,
         reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
         lso_pending: Option<PendingLsoReplay>,
@@ -337,6 +340,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     config,
                     source_mac,
                     source_network.as_ref(),
+                    provenance,
                     &req,
                 )
                 .await

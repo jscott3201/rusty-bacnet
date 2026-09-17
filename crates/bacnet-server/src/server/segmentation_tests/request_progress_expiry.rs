@@ -4,6 +4,7 @@ use super::*;
 use crate::server::segmented_receive::{
     expire_segmented_requests, tests::observe_payload_drops, RequestPayload,
 };
+use bacnet_transport::port::TransportProvenance;
 use std::sync::atomic::AtomicUsize;
 
 fn saved_state(last_progress: Instant, last_activity: Instant) -> SegmentedRequestState {
@@ -25,6 +26,7 @@ fn saved_state(last_progress: Instant, last_activity: Instant) -> SegmentedReque
         .unwrap();
     SegmentedRequestState {
         payload,
+        provenance: TransportProvenance::unverified(),
         last_activity,
         last_progress,
         expected_seq: 1,
@@ -40,7 +42,7 @@ fn saved_state(last_progress: Instant, last_activity: Instant) -> SegmentedReque
 #[test]
 fn request_progress_expiry_before_exact_and_after_16_seconds() {
     let start = Instant::now();
-    let key = (test_mac(1), None, 0);
+    let key = (test_mac(1), None, 0, TransportProvenance::unverified());
     for (elapsed, survives) in [
         (Duration::from_nanos(15_999_999_999), true),
         (Duration::from_secs(16), false),
@@ -61,7 +63,7 @@ fn request_progress_expiry_before_exact_and_after_16_seconds() {
 #[test]
 fn request_progress_expiry_preserves_exact_4_second_inactivity_boundary() {
     let now = Instant::now();
-    let key = (test_mac(1), None, 0);
+    let key = (test_mac(1), None, 0, TransportProvenance::unverified());
     for (idle, survives) in [
         (Duration::from_nanos(3_999_999_999), true),
         (Duration::from_secs(4), false),
@@ -88,9 +90,9 @@ fn request_progress_expiry_keeps_mixed_fresh_survivors_and_releases_all_payload_
     stale.accepted_segments = 2;
     stale.expected_seq = 2;
     drop(probe);
-    let stale_key = (test_mac(1), None, 0);
-    let fresh_key = (test_mac(2), None, 0);
-    let idle_key = (test_mac(3), None, 0);
+    let stale_key = (test_mac(1), None, 0, TransportProvenance::unverified());
+    let fresh_key = (test_mac(2), None, 0, TransportProvenance::unverified());
+    let idle_key = (test_mac(3), None, 0, TransportProvenance::unverified());
     let mut receivers = HashMap::from([
         (stale_key.clone(), stale),
         (

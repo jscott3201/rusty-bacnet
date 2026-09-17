@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_services::audit::AuditNotificationRequest;
+use bacnet_transport::port::TransportProvenance;
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
 
@@ -23,6 +24,9 @@ pub struct AuditNotificationAuthorizationContext {
     pub source_mac: MacAddr,
     /// Originating NPDU source when one was present.
     pub source_network: Option<NpduAddress>,
+    /// Honest transport + origin provenance, threaded for diagnostics only
+    /// (RB-07 compat mode: authorization decisions unchanged).
+    pub provenance: TransportProvenance,
     /// Outer Confirmed-Request invoke identifier.
     pub invoke_id: u8,
     /// Explicitly configured local Audit Log sink.
@@ -49,6 +53,9 @@ pub struct UnconfirmedAuditNotificationAuthorizationContext {
     pub source_mac: MacAddr,
     /// Originating NPDU source when one was present.
     pub source_network: Option<NpduAddress>,
+    /// Honest transport + origin provenance, threaded for diagnostics only
+    /// (RB-07 compat mode: authorization decisions unchanged).
+    pub provenance: TransportProvenance,
     /// Explicitly configured local Audit Log sink.
     pub audit_log_sink: ObjectIdentifier,
     /// Decoded peer-reported notification list, preserved verbatim.
