@@ -388,6 +388,8 @@ async fn denial_case(index: usize) {
         vec![MutationAuthorizationContext {
             source_mac: MacAddr::from_slice(SOURCE),
             source_network: route(),
+            provenance: bacnet_transport::port::TransportProvenance::unverified(),
+            trust: crate::mutation::MutationTrust::Unverified,
             invoke_id: 51,
             service_choice: service,
             target,

@@ -1289,6 +1289,22 @@ Callbacks must be fast, nonblocking, and side-effect-free. Context addresses and
 process IDs are claimed, not authenticated identities. DCC/Reinit, Audit/LifeSafety,
 reads, discovery, unconfirmed services, and trusted local writes are unchanged.
 
+Each decision context also carries the reassembled ingress snapshot
+(`provenance: TransportProvenance`) and the derived channel/relay scope
+(`trust: MutationTrust`, mirroring RB-09 `ControlTrust`): `Unverified`,
+`VerifiedChannel` (direct SC-TLS peer), or `VerifiedRelay` (SC-hub relayed
+origin). Scope only, never leaf identity. Baseline-only profile: an unknown
+origin — including a hub-mediated unknown leaf, which arrives unverified —
+never satisfies a baseline-only allow rule, and receive-permission is never
+write-permission; the callback owns the rule. Context `Debug` is redacted
+(address lengths and target kind only, no MAC bytes or decoded inputs), and
+decision counters retain no per-source state. The callback runs after
+validation and before mutation; denials perform no database mutation, no
+COV/event fan-out, and no audit-log write (counters and bounded diagnostics
+only). Direct handler calls, trusted local writes, and the read-only shared
+endpoint stay outside this gate by design. The Python surface exposes no
+mutation policy knobs. See [Local mutation authorization](mutation-policy.md).
+
 Inbound LifeSafetyOperation is fail-closed unless an authorizer is configured.
 The built-in Life Safety Point and Zone objects execute the six silence and
 unsilence operations. `RESET`, `RESET_ALARM`, and `RESET_FAULT` execute only
@@ -1333,10 +1349,10 @@ writability, or intrinsic `CHANGE_OF_LIFE_SAFETY` event-algorithm conformance
 The server automatically dispatches:
 
 **Confirmed:**
-- ReadProperty, WriteProperty
-- ReadPropertyMultiple, WritePropertyMultiple
-- SubscribeCOV, SubscribeCOVProperty, SubscribeCOVPropertyMultiple
-- CreateObject, DeleteObject
+- ReadProperty, WriteProperty (mutation-gated)
+- ReadPropertyMultiple, WritePropertyMultiple (mutation-gated)
+- SubscribeCOV, SubscribeCOVProperty, SubscribeCOVPropertyMultiple (mutation-gated)
+- CreateObject, DeleteObject (mutation-gated)
 - DeviceCommunicationControl
 - ReinitializeDevice (decoded and password-validated, then refused with
   `SERVICES / SERVICE_REQUEST_DENIED` for every requested state until an action
@@ -1349,8 +1365,8 @@ The server automatically dispatches:
 - ConfirmedAuditNotification (explicit sink and fail-closed authorizer; process-local duplicate detection)
 - AuditLogQuery (retained records; no query authorization or failures-only mode)
 - ReadRange
-- AtomicReadFile, AtomicWriteFile
-- AddListElement, RemoveListElement
+- AtomicReadFile, AtomicWriteFile (writes are mutation-gated)
+- AddListElement, RemoveListElement (mutation-gated)
 
 **Unconfirmed:**
 - WhoIs / IAm

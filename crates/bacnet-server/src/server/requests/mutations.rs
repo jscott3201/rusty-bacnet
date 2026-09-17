@@ -2,7 +2,7 @@ use super::*;
 use crate::life_safety_cov::LifeSafetyCovChange;
 use crate::mutation::{
     MutationAuthorizationContext, MutationDecision, MutationDecisions, MutationPolicy,
-    MutationTarget,
+    MutationTarget, MutationTrust,
 };
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_services::cov::{SubscribeCOVPropertyRequest, SubscribeCOVRequest};
@@ -18,11 +18,15 @@ pub(super) enum InitialCovNotification {
 }
 
 /// Borrowed dispatch inputs; constructed only after the DCC precheck.
+/// `provenance` is the reassembled ingress snapshot (fail-closed at
+/// reassembly on cross-segment mismatch), threaded unchanged into every
+/// authorization context built from this request.
 pub(super) struct Request<'a> {
     pub config: &'a ServerConfig,
     pub decisions: &'a MutationDecisions,
     pub source_mac: &'a [u8],
     pub source_network: Option<&'a NpduAddress>,
+    pub provenance: bacnet_transport::port::TransportProvenance,
     pub req: &'a ConfirmedRequestPdu,
 }
 
@@ -50,6 +54,8 @@ impl Request<'_> {
         let context = MutationAuthorizationContext {
             source_mac: MacAddr::from_slice(self.source_mac),
             source_network: self.source_network.cloned(),
+            provenance: self.provenance,
+            trust: MutationTrust::from_provenance(self.provenance),
             invoke_id: self.req.invoke_id,
             service_choice: self.req.service_choice,
             target,

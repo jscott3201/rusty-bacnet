@@ -21,6 +21,10 @@ mod executed;
 #[cfg(test)]
 mod mutation_boundary_tests;
 #[cfg(test)]
+mod mutation_entry_tests;
+#[cfg(test)]
+mod mutation_provenance_tests;
+#[cfg(test)]
 mod mutation_tests;
 #[cfg(test)]
 mod mutation_wpm_tests;
@@ -168,6 +172,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             decisions: mutation_decisions,
             source_mac,
             source_network: source_network.as_ref(),
+            provenance,
             req: &req,
         };
         let response = match service_choice {

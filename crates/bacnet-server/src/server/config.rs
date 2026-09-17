@@ -48,7 +48,11 @@ pub struct ServerConfig {
     pub on_time_sync: Option<Arc<dyn Fn(TimeSyncData) + Send + Sync>>,
     /// Local mutation authorization mode (default: permissive). SC mTLS channel/peer
     /// authentication is not service authorization; addresses here are claimed,
-    /// never certificate principals. See [`MutationPolicy`].
+    /// never certificate principals. See [`MutationPolicy`]. Each decision also
+    /// carries the reassembled ingress [`TransportProvenance`](bacnet_transport::port::TransportProvenance)
+    /// snapshot and the derived channel/relay [`MutationTrust`](crate::mutation::MutationTrust)
+    /// scope (never leaf identity); unknown origin never satisfies a
+    /// baseline-only allow rule. Denials mutate nothing and write no audit log.
     pub mutation_policy: MutationPolicy,
     /// Opt-in mutation authorizer; `None` allows only in permissive mode.
     /// See [`MutationAuthorizer`].
