@@ -71,6 +71,15 @@ fn audit_record(target: ObjectIdentifier) -> BACnetAuditLogRecord {
     }
 }
 
+fn failure_record(target: ObjectIdentifier) -> BACnetAuditLogRecord {
+    let mut record = audit_record(target);
+    let BACnetAuditLogDatum::AuditNotification(notification) = &mut record.datum else {
+        unreachable!("audit helper must build a notification");
+    };
+    notification.result = Some((ErrorClass::SERVICES, ErrorCode::SERVICE_REQUEST_DENIED));
+    record
+}
+
 fn request(audit_log: ObjectIdentifier) -> AuditLogQueryRequest {
     AuditLogQueryRequest {
         audit_log,
@@ -116,6 +125,51 @@ fn handler_decodes_then_returns_an_owned_page_from_real_audit_storage() {
     assert_eq!(page.records.len(), 1);
     assert_eq!(page.records[0].sequence_number, 1);
     assert!(page.no_more_items);
+}
+
+#[test]
+fn handler_applies_three_state_filter_and_u64_cursor_over_real_storage() {
+    let audit_oid = oid(ObjectType::AUDIT_LOG, 7);
+    let target = oid(ObjectType::DEVICE, 2);
+    let mut log =
+        AuditLogObject::new(7, "Audit-7", 4, Arc::new(MemoryPersistence::default())).unwrap();
+    log.add_record(audit_record(target)).unwrap();
+    log.add_record(failure_record(target)).unwrap();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(log)).unwrap();
+
+    let filtered = |filter, start| {
+        let mut request = request(audit_oid);
+        request.query_parameters = BACnetAuditLogQueryParameters::BySource {
+            source_device_identifier: oid(ObjectType::DEVICE, 1),
+            source_device_address: None,
+            source_object_identifier: None,
+            operations: None,
+            successful_actions_only: filter,
+        };
+        request.start_at_sequence_number = start;
+        let (_, page) = handle_audit_log_query(&db, &encode_request(&request)).unwrap();
+        page.records
+            .iter()
+            .map(|entry| entry.sequence_number)
+            .collect::<Vec<_>>()
+    };
+
+    // RB-20 corrected contract end to end through decode + storage: each
+    // filter selects its outcome on the same success+failure log.
+    assert_eq!(filtered(BACnetSuccessFilter::SUCCESSES_ONLY, None), vec![1]);
+    assert_eq!(filtered(BACnetSuccessFilter::FAILURES_ONLY, None), vec![2]);
+    assert_eq!(filtered(BACnetSuccessFilter::ALL, None), vec![2, 1]);
+    assert_eq!(
+        filtered(BACnetSuccessFilter::ALL, Some(2)),
+        vec![1],
+        "literal cursor admits only identities below it"
+    );
+    assert_eq!(
+        filtered(BACnetSuccessFilter::ALL, Some(u64::from(u32::MAX) + 1)),
+        vec![2, 1],
+        "u64 cursor above u32::MAX must pass through untruncated"
+    );
 }
 
 #[test]

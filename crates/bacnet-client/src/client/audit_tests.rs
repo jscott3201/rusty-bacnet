@@ -258,6 +258,39 @@ async fn audit_log_query_sends_exact_typed_payload_and_decodes_complex_ack() {
 }
 
 #[tokio::test]
+async fn audit_log_query_encodes_failures_only_with_u64_cursor() {
+    // RB-20: the corrected contract's third filter value and Unsigned64
+    // cursor (incl. identities above u32::MAX) round-trip exactly, keeping the
+    // RB-02 codec vectors in `bacnet-services` as the regression anchors.
+    let request = AuditLogQueryRequest {
+        audit_log: object_identifier(ObjectType::AUDIT_LOG, 11),
+        query_parameters: BACnetAuditLogQueryParameters::ByTarget {
+            target_device_identifier: object_identifier(ObjectType::DEVICE, 12),
+            target_device_address: None,
+            target_object_identifier: None,
+            target_property_identifier: None,
+            target_array_index: None,
+            target_priority: None,
+            operations: None,
+            successful_actions_only: BACnetSuccessFilter::FAILURES_ONLY,
+        },
+        start_at_sequence_number: Some(u64::from(u32::MAX) + 1),
+        requested_count: 1,
+    };
+    let mut encoded = BytesMut::new();
+    request.try_encode(&mut encoded).unwrap();
+    assert_eq!(AuditLogQueryRequest::decode(&encoded).unwrap(), request);
+
+    let wrap = AuditLogQueryRequest {
+        start_at_sequence_number: Some(u64::MAX - 1),
+        ..request.clone()
+    };
+    let mut wrapped = BytesMut::new();
+    wrap.try_encode(&mut wrapped).unwrap();
+    assert_eq!(AuditLogQueryRequest::decode(&wrapped).unwrap(), wrap);
+}
+
+#[tokio::test]
 async fn audit_log_query_rejects_malformed_trailing_and_missing_ack_service_data() {
     let client_mac = vec![0x01];
     let remote_mac = vec![0x02];

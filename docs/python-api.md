@@ -1018,12 +1018,16 @@ Send the same mapping contract without waiting for a response.
 #### `audit_log_query_typed(address, request) -> AuditLogQueryAck`
 
 The request requires `audit_log`, discriminated `query_parameters`, and an
-Unsigned16 `requested_count`; `start_at_sequence_number` is an optional
-Unsigned32. Query parameters use `kind: "by_target"` with required
-`target_device_identifier`, or `kind: "by_source"` with required
-`source_device_identifier`. Both require `successful_actions_only`. Optional
-fields follow the installed `AuditLogQueryByTargetInput` and
-`AuditLogQueryBySourceInput` definitions. `operations` is an integer bit mask:
+Unsigned16 `requested_count` (0..=65535); `start_at_sequence_number` is an
+optional corrected Unsigned64 cursor (0..=2**64-1). Query parameters use
+`kind: "by_target"` with required `target_device_identifier`, or
+`kind: "by_source"` with required `source_device_identifier`. Both require
+`successful_actions_only` as the corrected `BACnetSuccessFilter` integer:
+0 = all, 1 = successes-only, 2 = failures-only. The pre-RB-02 Boolean is
+rejected with `TypeError` (use 1 for the old `True`, 0 for the old `False`);
+an out-of-range integer raises `ValueError`. Optional fields follow the
+installed `AuditLogQueryByTargetInput` and `AuditLogQueryBySourceInput`
+definitions. `operations` is an integer bit mask:
 bits 0..15 and 32..63 are permitted, while reserved bits 16..31, negative
 values, and masks wider than 64 bits are rejected.
 
@@ -1036,7 +1040,7 @@ ack = await client.audit_log_query_typed(
             "kind": "by_target",
             "target_device_identifier": ObjectIdentifier(ObjectType.DEVICE, 100),
             "operations": 1 << AuditOperation.WRITE.to_raw(),
-            "successful_actions_only": True,
+            "successful_actions_only": 1,  # successes-only (was True pre-RB-02)
         },
         "requested_count": 100,
     },
@@ -1061,11 +1065,12 @@ keys, bad discriminators, reserved values, and out-of-range integers raise
 existing `BacnetError` hierarchy. Validation and native encoding complete
 before an APDU can be sent.
 
-This boundary follows the Standard 135-2020 Audit query, notification, actor,
-and formal type productions. It preserves the qualified Clause 21 model's
-Unsigned32 start sequence and mandatory Boolean success filter despite the
-known conflicting service-clause description; it does not add notification
-generation policy, authorization, persistence, or conformance claims.
+This boundary follows the corrected 2020 baseline (ANSI/ASHRAE 135-2020 plus
+Errata Summary 2024-04-29 items 7-8): Unsigned64 start sequence and the
+three-state `BACnetSuccessFilter`, enforced end to end by retained-storage
+filtering with a literal newest-first continuation cursor. It does not add
+notification generation policy, authorization, persistence, or conformance
+claims.
 
 #### Raw Audit escape hatches
 
@@ -1110,7 +1115,9 @@ raw = await client.audit_log_query(
 ```
 
 These three methods remain signature- and byte-compatible generic outbound
-paths. They do not validate the caller-provided payload. A bundled server with an
+paths. They do not validate the caller-provided payload, so corrected-contract
+bytes pass through unchanged and no validation implication attaches to the raw
+path. A bundled server with an
 explicitly persisted Audit Log object can execute the raw AuditLogQuery payload
 against its retained in-memory records and return a raw typed ACK payload. The
 Rust server API can also receive ConfirmedAuditNotification when an application

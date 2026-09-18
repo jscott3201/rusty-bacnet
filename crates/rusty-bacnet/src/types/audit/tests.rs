@@ -318,17 +318,51 @@ fn query_mapping_preserves_both_choices_and_rejects_invalid_flags() {
         };
         assert_eq!(successful_actions_only, BACnetSuccessFilter::ALL);
 
+        // RB-20: the third corrected-baseline value is accepted, while the
+        // deprecated Boolean meaning stays a TypeError either way.
+        by_source.set_item("successful_actions_only", 2).unwrap();
+        let parsed = audit_log_query_request_from_py(base_query(py, &by_source).as_any()).unwrap();
+        let BACnetAuditLogQueryParameters::BySource {
+            successful_actions_only,
+            ..
+        } = parsed.query_parameters
+        else {
+            panic!("expected by-source query");
+        };
+        assert_eq!(successful_actions_only, BACnetSuccessFilter::FAILURES_ONLY);
+
         by_source.set_item("successful_actions_only", 3).unwrap();
         assert_error_type::<PyValueError>(
             py,
             audit_log_query_request_from_py(base_query(py, &by_source).as_any()).unwrap_err(),
         );
-        by_source.set_item("successful_actions_only", true).unwrap();
+        for legacy in [true, false] {
+            by_source
+                .set_item("successful_actions_only", legacy)
+                .unwrap();
+            assert_error_type::<PyTypeError>(
+                py,
+                audit_log_query_request_from_py(base_query(py, &by_source).as_any()).unwrap_err(),
+            );
+        }
+        by_source.set_item("successful_actions_only", 0).unwrap();
+
+        // A bool is never an arbitrary enum/count/cursor integer, even where
+        // the range would admit 0/1.
+        let count_query = base_query(py, &by_source);
+        count_query.set_item("requested_count", true).unwrap();
         assert_error_type::<PyTypeError>(
             py,
-            audit_log_query_request_from_py(base_query(py, &by_source).as_any()).unwrap_err(),
+            audit_log_query_request_from_py(count_query.as_any()).unwrap_err(),
         );
-        by_source.set_item("successful_actions_only", 0).unwrap();
+        let cursor_query = base_query(py, &by_source);
+        cursor_query
+            .set_item("start_at_sequence_number", false)
+            .unwrap();
+        assert_error_type::<PyTypeError>(
+            py,
+            audit_log_query_request_from_py(cursor_query.as_any()).unwrap_err(),
+        );
 
         for invalid in [1u64 << 16, 1u64 << 31] {
             by_source.set_item("operations", invalid).unwrap();

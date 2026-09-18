@@ -247,13 +247,17 @@ use bacnet_services::audit::{
 };
 ```
 
-These models encode the Clause 21 field and tag productions within the
-library's `u64` Unsigned implementation limit. In particular,
-`AuditLogQueryRequest::start_at_sequence_number` is `Option<u32>`, and each
-query alternative contains `successful_actions_only: bool`. Clause 13.19
-instead describes `Unsigned64` and `BACnetSuccessFilter`; that internal
-Standard conflict remains unresolved pending authoritative addendum or errata
-research, so these codecs are not an unqualified Clause 13.19 support claim.
+These models encode the corrected 2020 baseline: ANSI/ASHRAE 135-2020 plus
+the Errata Summary 2024-04-29 (v1) items 7-8 for the Audit query contract.
+In particular, `AuditLogQueryRequest::start_at_sequence_number` is the
+corrected `Option<u64>` cursor at unchanged tag [2], and each query
+alternative contains `successful_actions_only: BACnetSuccessFilter`
+(`ALL`/`SUCCESSES_ONLY`/`FAILURES_ONLY`) at unchanged tags [7]/[4]. Unsigned
+values use the library's `u64` implementation limit (1-8 octet canonical
+forms). Storage filtering enforces all three states, and the continuation
+cursor is literal (only identities below the cursor match, newest-first
+insertion order even across `u64::MAX`-to-1 wrap). These codecs are not an
+unqualified Clause 13.19 support claim; see the conformance ledger.
 
 ---
 
@@ -1217,8 +1221,10 @@ requires restoring a compatible backup and loses changes made after that backup.
 Unconfirmed receipt never emits a response and never writes the confirmed ledger.
 Synchronous persistence under the database writer is an intentional availability
 limitation. Query authorization, sustained rate limiting, producer/report
-generation, forwarding, multi-log routing policy, failures-only filtering, and
-a wrap-safe 64-bit continuation are not provided. Executed-service bit 46
+generation, forwarding, and multi-log routing policy are not provided.
+Query input changes never rewrite stored notifications or receipt identities,
+and the requested-count, ACK-cap, and segmentation limits stay independent.
+Executed-service bit 46
 represents receipt only; no Audit Reporting BIBB, including AR-L-A, is claimed.
 
 ---
@@ -1363,7 +1369,7 @@ The server automatically dispatches:
 - ConfirmedTextMessage
 - LifeSafetyOperation (authorized silence/unsilence; reset via configured application executor)
 - ConfirmedAuditNotification (explicit sink and fail-closed authorizer; process-local duplicate detection)
-- AuditLogQuery (retained records; no query authorization or failures-only mode)
+- AuditLogQuery (retained records; three-state success filter; no query authorization)
 - ReadRange
 - AtomicReadFile, AtomicWriteFile (writes are mutation-gated)
 - AddListElement, RemoveListElement (mutation-gated)
