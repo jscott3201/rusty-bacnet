@@ -5,12 +5,14 @@ use std::time::Duration;
 use bacnet_encoding::apdu::{
     encode_apdu, validate_max_apdu_length, AbortPdu, Apdu, ConfirmedRequest as ConfirmedRequestPdu,
 };
+use bacnet_encoding::npdu::NpduAddress;
 use bacnet_endpoint_core::coordinator::{
     Admission, AdmissionKind, CanonicalPeer, OutboundTransactionCoordinator, TerminalPolicy,
 };
-use bacnet_endpoint_core::endpoint_ingress::EndpointEgress;
+use bacnet_endpoint_core::endpoint_ingress::{EndpointApduDestination, EndpointEgress};
 use bacnet_network::layer::ReceivedApdu;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
+use bacnet_transport::port::{DataAttribute, TransportProvenance};
 use bacnet_types::enums::{
     AbortReason, ConfirmedServiceChoice, NetworkPriority, PropertyIdentifier,
 };
@@ -24,6 +26,101 @@ use crate::tsm::{CompletionOutcome, CoordinatedCompletion, TransactionOwner, Tsm
 
 fn shutdown_error() -> Error {
     Error::Encoding("endpoint shutdown".into())
+}
+
+/// Derives the TSM key MAC for an outbound endpoint destination.
+///
+/// Direct destinations use the link MAC; routed destinations use the
+/// `FF 52` synthetic key (`network || len || address`) so a routed peer
+/// never collides with a direct peer that happens to share trailing bytes.
+/// Mirrors `transaction_peer` without importing client internals.
+fn outbound_tsm_peer(destination: &EndpointApduDestination) -> (MacAddr, CanonicalPeer) {
+    match destination {
+        EndpointApduDestination::Direct { destination_mac } => (
+            destination_mac.clone(),
+            CanonicalPeer::from_source(destination_mac.as_slice(), None),
+        ),
+        EndpointApduDestination::Routed {
+            destination_network,
+            destination_mac,
+            ..
+        } => (
+            routed_tsm_mac(*destination_network, destination_mac.as_slice()),
+            CanonicalPeer::routed(*destination_network, destination_mac.as_slice()),
+        ),
+        EndpointApduDestination::RoutedViaLocalBroadcast {
+            destination_network,
+            destination_mac,
+        } => (
+            routed_tsm_mac(*destination_network, destination_mac.as_slice()),
+            CanonicalPeer::routed(*destination_network, destination_mac.as_slice()),
+        ),
+        EndpointApduDestination::LocalBroadcast
+        | EndpointApduDestination::RemoteBroadcast { .. }
+        | EndpointApduDestination::GlobalBroadcast => {
+            (MacAddr::new(), CanonicalPeer::direct(&[] as &[u8]))
+        }
+    }
+}
+
+fn routed_tsm_mac(network: u16, mac: &[u8]) -> MacAddr {
+    let mut key = MacAddr::new();
+    key.extend_from_slice(&[0xFF, b'R']);
+    key.extend_from_slice(&network.to_be_bytes());
+    key.push(mac.len() as u8);
+    key.extend_from_slice(mac);
+    key
+}
+
+/// Derives the inbound TSM key + canonical peer for an admitted response.
+///
+/// RB-07 compat mode: provenance is preserved structurally by the caller
+/// (threaded through `ReceivedApdu`) and never gates admission here.
+fn inbound_tsm_peer(received: &ReceivedApdu) -> (MacAddr, CanonicalPeer) {
+    match received.source_network.as_ref() {
+        Some(address) if !address.mac_address.is_empty() => (
+            routed_tsm_mac(address.network, address.mac_address.as_slice()),
+            CanonicalPeer::from_source(received.source_mac.as_slice(), Some(address)),
+        ),
+        _ => (
+            received.source_mac.clone(),
+            CanonicalPeer::from_source(received.source_mac.as_slice(), None),
+        ),
+    }
+}
+
+fn reply_destination_for(received: &ReceivedApdu) -> EndpointApduDestination {
+    match received.source_network.clone() {
+        Some(address) if !address.mac_address.is_empty() => EndpointApduDestination::Routed {
+            destination_network: address.network,
+            destination_mac: address.mac_address,
+            router_mac: received.source_mac.clone(),
+        },
+        _ => EndpointApduDestination::Direct {
+            destination_mac: received.source_mac.clone(),
+        },
+    }
+}
+
+#[allow(dead_code)]
+fn preserve_inbound_context(
+    received: &ReceivedApdu,
+) -> (
+    bool,
+    bool,
+    Vec<DataAttribute>,
+    TransportProvenance,
+    Option<NpduAddress>,
+    Option<u16>,
+) {
+    (
+        received.link_layer_group,
+        received.is_group,
+        received.data_attributes.clone(),
+        received.provenance,
+        received.source_network.clone(),
+        received.ingress_network,
+    )
 }
 
 struct EndpointRequesterInner {
@@ -77,6 +174,10 @@ impl EndpointRequester {
     }
 
     /// Performs one direct ReadProperty transaction.
+    ///
+    /// Compat entry: direct unicast with no data attributes. Routed and
+    /// attribute-preserving sends use
+    /// [`Self::read_property_with_destination`].
     #[doc(hidden)]
     pub async fn read_property(
         &self,
@@ -85,8 +186,46 @@ impl EndpointRequester {
         property_identifier: PropertyIdentifier,
         property_array_index: Option<u32>,
     ) -> Result<ReadPropertyACK, Error> {
+        self.read_property_with_destination(
+            EndpointApduDestination::Direct {
+                destination_mac: MacAddr::from_slice(destination_mac),
+            },
+            Vec::new(),
+            object_identifier,
+            property_identifier,
+            property_array_index,
+        )
+        .await
+    }
+
+    /// Performs one ReadProperty transaction to an explicit endpoint destination.
+    ///
+    /// RB-07 compat mode: `data_attributes` are passed through to
+    /// [`EndpointEgress`] unchanged; no new policy decisions are made.
+    #[doc(hidden)]
+    pub async fn read_property_with_destination(
+        &self,
+        destination: EndpointApduDestination,
+        data_attributes: Vec<DataAttribute>,
+        object_identifier: ObjectIdentifier,
+        property_identifier: PropertyIdentifier,
+        property_array_index: Option<u32>,
+    ) -> Result<ReadPropertyACK, Error> {
         if !self.inner.open.load(Ordering::Acquire) {
             return Err(shutdown_error());
+        }
+        // Broadcast destinations never carry a confirmed request (§6.3 guard
+        // lives in the egress path; fail fast here without allocating a lease).
+        if matches!(
+            destination,
+            EndpointApduDestination::LocalBroadcast
+                | EndpointApduDestination::RemoteBroadcast { .. }
+                | EndpointApduDestination::GlobalBroadcast
+        ) {
+            return Err(Error::Encoding(
+                "endpoint requester cannot send confirmed requests to a broadcast destination"
+                    .into(),
+            ));
         }
 
         let request = ReadPropertyRequest {
@@ -102,7 +241,7 @@ impl EndpointRequester {
             ));
         }
 
-        let destination = MacAddr::from_slice(destination_mac);
+        let (tsm_mac, peer) = outbound_tsm_peer(&destination);
         let (invoke_id, registration) = {
             let mut tsm = self
                 .inner
@@ -113,8 +252,8 @@ impl EndpointRequester {
                 return Err(shutdown_error());
             }
             tsm.register_coordinated_transaction_with_policy(
-                destination.clone(),
-                CanonicalPeer::direct(destination_mac),
+                tsm_mac.clone(),
+                peer,
                 ConfirmedServiceChoice::READ_PROPERTY,
                 false,
                 TerminalPolicy::ComplexAck,
@@ -125,7 +264,7 @@ impl EndpointRequester {
         let owner = registration.owner.clone();
         let mut guard = EndpointRequestGuard {
             inner: Arc::clone(&self.inner),
-            destination: destination.clone(),
+            destination: tsm_mac.clone(),
             invoke_id,
             owner,
             active: true,
@@ -153,11 +292,12 @@ impl EndpointRequester {
             }
             self.inner
                 .egress
-                .send_direct(
+                .send_apdu(
                     encoded.clone(),
                     destination.clone(),
                     true,
                     NetworkPriority::NORMAL,
+                    data_attributes.clone(),
                 )
                 .await?;
 
@@ -181,7 +321,43 @@ impl EndpointRequester {
         unreachable!("the inclusive retry loop always returns")
     }
 
+    /// Performs one routed ReadProperty transaction via a known router.
+    ///
+    /// RB-07 compat mode: `data_attributes` pass through unchanged.
+    #[doc(hidden)]
+    pub async fn read_property_routed(
+        &self,
+        router_mac: &[u8],
+        destination_network: u16,
+        destination_mac: &[u8],
+        data_attributes: Vec<DataAttribute>,
+        object_identifier: ObjectIdentifier,
+        property_identifier: PropertyIdentifier,
+        property_array_index: Option<u32>,
+    ) -> Result<ReadPropertyACK, Error> {
+        self.read_property_with_destination(
+            EndpointApduDestination::Routed {
+                destination_network,
+                destination_mac: MacAddr::from_slice(destination_mac),
+                router_mac: MacAddr::from_slice(router_mac),
+            },
+            data_attributes,
+            object_identifier,
+            property_identifier,
+            property_array_index,
+        )
+        .await
+    }
+
     /// Handles a response already admitted by the shared coordinator.
+    ///
+    /// Direct and routed responses are both accepted: the TSM key and
+    /// canonical peer are derived from the received envelope
+    /// (`source_mac` + `source_network`), so equal inbound/outbound numeric
+    /// invoke IDs stay unambiguous via the classifier + coordinator admission.
+    /// RB-07 compat mode: link-group, attributes, ingress-network and
+    /// provenance are preserved structurally (threaded, never used for a new
+    /// decision).
     #[doc(hidden)]
     pub async fn complete_pre_admitted(
         &self,
@@ -189,9 +365,15 @@ impl EndpointRequester {
         apdu: Apdu,
         received: ReceivedApdu,
     ) -> bool {
-        if !self.inner.open.load(Ordering::Acquire) || received.source_network.is_some() {
+        if !self.inner.open.load(Ordering::Acquire) {
             return false;
         }
+        // Structural preservation: bind every provenance/context field so a
+        // future drop is a compile-visible change, not a silent regression.
+        // No new decisions are made from these values here.
+        let (_link_group, _is_group, _attributes, _provenance, _source_network, _ingress) =
+            preserve_inbound_context(&received);
+        let (tsm_mac, peer) = inbound_tsm_peer(&received);
         match admission.kind() {
             AdmissionKind::Terminal => {
                 let response = match &apdu {
@@ -215,11 +397,8 @@ impl EndpointRequester {
                     | Apdu::ComplexAck(_) => return false,
                 };
                 let completion = self.inner.tsm.lock().ok().map(|mut tsm| {
-                    tsm.complete_pre_admitted_terminal_response(
-                        &received.source_mac,
-                        &admission,
-                        &apdu,
-                        response,
+                    tsm.complete_pre_admitted_terminal_response_for_peer(
+                        &tsm_mac, &peer, &admission, &apdu, response,
                     )
                 });
                 matches!(
@@ -231,10 +410,8 @@ impl EndpointRequester {
             }
             AdmissionKind::NonTerminal => {
                 let rejected = self.inner.tsm.lock().is_ok_and(|mut tsm| {
-                    tsm.reject_pre_admitted_segmented_response(
-                        &received.source_mac,
-                        &admission,
-                        &apdu,
+                    tsm.reject_pre_admitted_segmented_response_for_peer(
+                        &tsm_mac, &peer, &admission, &apdu,
                     )
                 });
                 if !rejected {
@@ -250,13 +427,19 @@ impl EndpointRequester {
                 if encode_apdu(&mut encoded, &abort).is_err() {
                     return false;
                 }
+                // Preserve the inbound envelope's routing + data attributes on
+                // the abort (pass-through, no new decisions). Provenance and
+                // link-group are already bound above for structural preservation.
+                let destination = reply_destination_for(&received);
+                let attributes = received.data_attributes.clone();
                 self.inner
                     .egress
-                    .send_direct(
+                    .send_apdu(
                         encoded.to_vec(),
-                        received.source_mac,
+                        destination,
                         false,
                         NetworkPriority::NORMAL,
+                        attributes,
                     )
                     .await
                     .is_ok()

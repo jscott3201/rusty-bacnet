@@ -1,0 +1,29 @@
+[package]
+name = "bacnet-endpoint"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Private single-owner BACnet endpoint session above client/server roles (RB-15, no public facade)"
+publish = false
+
+[dependencies]
+bacnet-types.workspace = true
+bacnet-encoding.workspace = true
+bacnet-services.workspace = true
+bacnet-transport.workspace = true
+bacnet-network.workspace = true
+bacnet-endpoint-core.workspace = true
+bacnet-client.workspace = true
+bacnet-objects.workspace = true
+bacnet-server.workspace = true
+bytes.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "macros", "time", "net"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "test-util", "net"] }
+
+[lints]
+workspace = true

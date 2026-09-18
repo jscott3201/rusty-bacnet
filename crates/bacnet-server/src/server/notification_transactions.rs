@@ -22,7 +22,8 @@ use super::CovAckResult;
 mod notification_worker_owner_tests;
 
 #[derive(Debug)]
-pub(super) enum NotificationReserveError {
+#[doc(hidden)]
+pub enum NotificationReserveError {
     Closed,
     Coordinator(ReserveError),
     StatePoisoned,
@@ -41,7 +42,8 @@ impl fmt::Display for NotificationReserveError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum NotificationWorkerResult {
+#[doc(hidden)]
+pub enum NotificationWorkerResult {
     Ack,
     Error,
     Exhausted,
@@ -53,7 +55,8 @@ struct NotificationState {
     pending: HashMap<LeaseToken, oneshot::Sender<CovAckResult>>,
 }
 
-pub(super) struct NotificationTransactions {
+#[doc(hidden)]
+pub struct NotificationTransactions {
     core: Arc<NotificationCore>,
     workers: Mutex<NotificationWorkers>,
 }
@@ -72,11 +75,13 @@ struct NotificationCore {
 }
 
 impl NotificationTransactions {
-    pub(super) fn new() -> Arc<Self> {
+    #[doc(hidden)]
+    pub fn new() -> Arc<Self> {
         Self::with_coordinator(Arc::new(OutboundTransactionCoordinator::new()))
     }
 
-    pub(super) fn with_coordinator(coordinator: Arc<OutboundTransactionCoordinator>) -> Arc<Self> {
+    #[doc(hidden)]
+    pub fn with_coordinator(coordinator: Arc<OutboundTransactionCoordinator>) -> Arc<Self> {
         Arc::new(Self {
             core: Arc::new(NotificationCore {
                 coordinator,
@@ -89,7 +94,8 @@ impl NotificationTransactions {
         })
     }
 
-    pub(super) fn spawn(&self, task: impl Future<Output = ()> + Send + 'static) {
+    #[doc(hidden)]
+    pub fn spawn(&self, task: impl Future<Output = ()> + Send + 'static) {
         let mut workers = self.workers.lock().unwrap();
         if workers.closed {
             // A rejected future may own an operation and resource guards.
@@ -105,7 +111,8 @@ impl NotificationTransactions {
         }
     }
 
-    pub(super) fn close(&self) {
+    #[doc(hidden)]
+    pub fn close(&self) {
         let mut workers = self.workers.lock().unwrap();
         // Serialize worker registration with transaction sealing. Reservation
         // uses only the core; no future can bypass closed worker admission.
@@ -122,7 +129,8 @@ impl NotificationTransactions {
     /// Dispatch is the sole consumer until joined by stop. An empty open set
     /// waits for producer admission, including when ingress is idle. Cancelling
     /// this future retains every outstanding join in the owner.
-    pub(super) async fn join_next(&self) -> Option<Result<(), JoinError>> {
+    #[doc(hidden)]
+    pub async fn join_next(&self) -> Option<Result<(), JoinError>> {
         poll_fn(|cx| {
             let mut workers = self.workers.lock().unwrap();
             match workers.tasks.poll_join_next(cx) {
@@ -136,7 +144,8 @@ impl NotificationTransactions {
         .await
     }
 
-    pub(super) fn observe(result: Option<Result<(), JoinError>>) {
+    #[doc(hidden)]
+    pub fn observe(result: Option<Result<(), JoinError>>) {
         if let Some(Err(error)) = result {
             if !error.is_cancelled() {
                 tracing::warn!(%error, "Confirmed notification worker failed");
@@ -144,7 +153,8 @@ impl NotificationTransactions {
         }
     }
 
-    pub(super) fn reserve(
+    #[doc(hidden)]
+    pub fn reserve(
         &self,
         peer: CanonicalPeer,
         service_choice: ConfirmedServiceChoice,
@@ -153,7 +163,8 @@ impl NotificationTransactions {
         self.core.reserve(peer, service_choice)
     }
 
-    pub(super) fn admit_terminal(
+    #[doc(hidden)]
+    pub fn admit_terminal(
         &self,
         immediate_source: &[u8],
         routed_source: Option<&NpduAddress>,
@@ -163,8 +174,12 @@ impl NotificationTransactions {
             .admit_terminal(immediate_source, routed_source, apdu)
     }
 
-    #[cfg(test)]
-    pub(super) fn complete_pre_admitted(&self, admission: Admission, apdu: &Apdu) -> bool {
+    /// Completes one already-admitted terminal (session dispatch only).
+    ///
+    /// The shared-coordinator `admit` owns exact-once claim; this releases
+    /// the exact lease without re-admitting.
+    #[doc(hidden)]
+    pub fn complete_pre_admitted(&self, admission: Admission, apdu: &Apdu) -> bool {
         self.core.complete_pre_admitted(admission, apdu)
     }
 
@@ -340,14 +355,16 @@ impl Drop for NotificationTransactions {
     }
 }
 
-pub(super) struct NotificationOperation {
+#[doc(hidden)]
+pub struct NotificationOperation {
     transactions: Arc<NotificationCore>,
     token: LeaseToken,
     active: bool,
 }
 
 impl NotificationOperation {
-    pub(super) fn invoke_id(&self) -> u8 {
+    #[doc(hidden)]
+    pub fn invoke_id(&self) -> u8 {
         self.token.invoke_id()
     }
 
@@ -385,7 +402,8 @@ impl Drop for NotificationOperation {
     }
 }
 
-pub(super) async fn run_notification_worker<F, Fut, E>(
+#[doc(hidden)]
+pub async fn run_notification_worker<F, Fut, E>(
     mut operation: NotificationOperation,
     mut receiver: oneshot::Receiver<CovAckResult>,
     timeout: Duration,
@@ -433,11 +451,13 @@ where
     NotificationWorkerResult::Exhausted
 }
 
-pub(super) fn canonical_direct_peer(mac: &[u8]) -> CanonicalPeer {
+#[doc(hidden)]
+pub fn canonical_direct_peer(mac: &[u8]) -> CanonicalPeer {
     CanonicalPeer::direct(mac)
 }
 
-pub(super) fn canonical_routed_peer(network: u16, address: &[u8]) -> CanonicalPeer {
+#[doc(hidden)]
+pub fn canonical_routed_peer(network: u16, address: &[u8]) -> CanonicalPeer {
     CanonicalPeer::routed(network, address)
 }
 

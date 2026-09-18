@@ -308,6 +308,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "bacnet-endpoint"
+version = "0.11.0"
+dependencies = [
+ "bacnet-client",
+ "bacnet-encoding",
+ "bacnet-endpoint-core",
+ "bacnet-network",
+ "bacnet-objects",
+ "bacnet-server",
+ "bacnet-services",
+ "bacnet-transport",
+ "bacnet-types",
+ "bytes",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "bacnet-endpoint-core"
 version = "0.11.0"
 dependencies = [

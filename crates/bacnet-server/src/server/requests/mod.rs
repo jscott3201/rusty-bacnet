@@ -8,7 +8,8 @@ mod audit_notification;
 mod confirmed;
 pub(super) mod confirmed_response;
 mod dcc;
-mod endpoint_responder;
+#[doc(hidden)]
+pub mod endpoint_responder;
 #[cfg(test)]
 #[path = "endpoint_shared_runtime_tests.rs"]
 mod endpoint_shared_runtime_tests;

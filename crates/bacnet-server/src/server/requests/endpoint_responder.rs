@@ -14,16 +14,23 @@ fn shutdown_error() -> Error {
     Error::Encoding("endpoint shutdown".into())
 }
 
-#[allow(dead_code)]
-pub(super) struct EndpointResponder {
+/// Composition-visible inbound responder (narrow service scope).
+///
+/// Handles `ReadProperty` + `Reject`/`Abort` + segmentation-`Abort` only;
+/// full service parity is a later packet. Inbound transactions reuse the
+/// wire invoke ID directly and NEVER allocate from the shared outbound
+/// client ID pool, so equal inbound/outbound numeric IDs stay unambiguous
+/// via the ingress classifier + coordinator admission.
+#[doc(hidden)]
+pub struct EndpointResponder {
     db: Arc<RwLock<ObjectDatabase>>,
     egress: EndpointEgress,
     open: AtomicBool,
 }
 
-#[allow(dead_code)]
 impl EndpointResponder {
-    pub(super) fn new(db: Arc<RwLock<ObjectDatabase>>, egress: EndpointEgress) -> Self {
+    #[doc(hidden)]
+    pub fn new(db: Arc<RwLock<ObjectDatabase>>, egress: EndpointEgress) -> Self {
         Self {
             db,
             egress,
@@ -31,10 +38,23 @@ impl EndpointResponder {
         }
     }
 
-    pub(super) async fn handle(&self, mut received: ReceivedApdu) -> Result<bool, Error> {
+    /// Handles one inbound request, preserving provenance structurally.
+    ///
+    /// RB-07 compat mode: `link_layer_group` (raw), `is_group` (effective),
+    /// `data_attributes`, `ingress_network` and `provenance` are threaded
+    /// through without new policy decisions; `data_attributes` are forwarded
+    /// on the reply send instead of being dropped.
+    #[doc(hidden)]
+    pub async fn handle(&self, mut received: ReceivedApdu) -> Result<bool, Error> {
         if !self.open.load(Ordering::Acquire) {
             return Err(shutdown_error());
         }
+        // Structural preservation: bind raw + effective group, attributes,
+        // ingress identity and provenance so a future drop is compile-visible.
+        let _link_layer_group = received.link_layer_group;
+        let _ingress_network = received.ingress_network;
+        let _provenance = received.provenance;
+        let preserved_attributes = received.data_attributes.clone();
         if received.is_group {
             return Ok(false);
         }
@@ -100,23 +120,31 @@ impl EndpointResponder {
                     },
                     false,
                     NetworkPriority::NORMAL,
-                    Vec::new(),
+                    preserved_attributes,
                 )
                 .await?;
             return Ok(true);
         }
         self.egress
-            .send_direct(
+            .send_apdu(
                 encoded.to_vec(),
-                received.source_mac,
+                EndpointApduDestination::Direct {
+                    destination_mac: received.source_mac,
+                },
                 false,
                 NetworkPriority::NORMAL,
+                preserved_attributes,
             )
             .await?;
         Ok(true)
     }
 
-    pub(super) fn close(&self) {
+    /// Internal close for the endpoint session owner only.
+    ///
+    /// Lifecycle control lives on the session owner; role handles expose no
+    /// public lifecycle methods.
+    #[doc(hidden)]
+    pub fn close(&self) {
         self.open.store(false, Ordering::Release);
     }
 }
