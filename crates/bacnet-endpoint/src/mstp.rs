@@ -1,4 +1,4 @@
-//! Concrete MS/TP controls at endpoint level (no generic-trait erasure).
+//! Concrete MS/TP endpoint builder over one serial owner.
 //!
 //! Composes ONE [`MstpTransport`] (one serial owner, one MAC state machine)
 //! into an [`EndpointSession`] above the sibling roles, mirroring the
@@ -17,8 +17,8 @@
 //! token opportunity. The two stay distinct by construction: the responder
 //! observes `reply_tx` present (prompt) or absent (token-owned), never both
 //! for one request. Deferred correlation is session-side (one-shot
-//! suspension on [`SessionToken`](crate::roles::SessionToken), resolved via
-//! egress); the MAC keeps no extra state and no second serial owner exists.
+//! suspension on the session token, resolved via egress); the MAC keeps no
+//! extra state and no second serial owner exists.
 //!
 //! # Bounds and evidence level
 //!
@@ -28,9 +28,13 @@
 //! - Standard frames only (no extended/COBS, no router capability — RB-25
 //!   owns routing); non-routing endpoint behavior (the network layer
 //!   discards DNET-addressed traffic).
-//! - Simulator evidence level: proofs run over [`LoopbackSerial`] (ownership
-//!   + frame sequencing). This is NOT a physical-bench or on-wire
-//!   conformance claim; timing qualification is RB-26.
+//! - **Simulator evidence only**: proofs run over [`LoopbackSerial`] with a
+//!   raw-frame peer harness (ownership + frame sequencing). This is NOT a
+//!   physical-bench or on-wire conformance claim; timing qualification is
+//!   RB-26. Do not present MS/TP mode as bench-qualified.
+//!
+//! [`LoopbackSerial`]: bacnet_transport::mstp::LoopbackSerial
+//! [`MstpTransport`]: bacnet_transport::mstp::MstpTransport
 
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_transport::mstp::{MstpConfig, MstpExecutionMode, MstpTransport, SerialPort};
@@ -51,7 +55,18 @@ const MSTP_MAX_APDU: u16 = 480;
 /// build) so exactly one [`MstpTransport`] — one serial owner, one MAC state
 /// machine — enters the session. No second hidden transport is created here
 /// or in [`EndpointSession`].
-#[doc(hidden)]
+///
+/// Simulator evidence only (see module docs): no bench or conformance claim,
+/// RB-26 owns timing.
+///
+/// ```
+/// use bacnet_endpoint::mstp::MstpEndpointBuilder;
+/// use bacnet_transport::mstp::LoopbackSerial;
+///
+/// let (session_end, _peer_end) = LoopbackSerial::pair();
+/// let builder = MstpEndpointBuilder::new(session_end, 3);
+/// assert!(builder.validate_only().is_ok());
+/// ```
 pub struct MstpEndpointBuilder<S: SerialPort> {
     serial: Option<S>,
     this_station: u8,
@@ -71,7 +86,6 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
     /// Addressing defaults mirror [`MstpConfig::default`] except the station,
     /// which has no meaningful default: `max_master` 127, `max_info_frames`
     /// 1, `baud_rate` 9600. Execution defaults to Tokio.
-    #[doc(hidden)]
     pub fn new(serial: S, this_station: u8) -> Self {
         Self {
             serial: Some(serial),
@@ -87,22 +101,19 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
         }
     }
 
-    /// Sets the maximum master address on the link.
-    #[doc(hidden)]
+    /// Sets the maximum master address on the link (0..=127).
     pub fn max_master(mut self, max_master: u8) -> Self {
         self.max_master = max_master;
         self
     }
 
     /// Sets the maximum information frames per token use.
-    #[doc(hidden)]
     pub fn max_info_frames(mut self, max_info_frames: u8) -> Self {
         self.max_info_frames = max_info_frames;
         self
     }
 
     /// Sets the baud rate used for MAC timing derivation.
-    #[doc(hidden)]
     pub fn baud_rate(mut self, baud_rate: u32) -> Self {
         self.baud_rate = baud_rate;
         self
@@ -113,29 +124,25 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
     /// Tokio (default) polls the MAC loop on the caller's runtime;
     /// DedicatedThread isolates MAC polling on its own OS thread + runtime.
     /// Same logical behavior in both; the RB-17 proof runs every wire
-    /// scenario in each mode.
-    #[doc(hidden)]
+    /// scenario in each mode. Never migrates a running loop.
     pub fn execution_mode(mut self, mode: MstpExecutionMode) -> Self {
         self.execution_mode = mode;
         self
     }
 
-    /// Selects the composed roles.
-    #[doc(hidden)]
+    /// Selects the composed roles (default [`Both`](SessionRole::Both)).
     pub fn role(mut self, role: SessionRole) -> Self {
         self.role = role;
         self
     }
 
     /// Sets the bounded queue capacity for every ingress/egress queue.
-    #[doc(hidden)]
     pub fn queue_capacity(mut self, capacity: usize) -> Self {
         self.session.queue_capacity = capacity;
         self
     }
 
     /// Sets client APDU timeout/retries (session-owned timers).
-    #[doc(hidden)]
     pub fn client_timers(mut self, timeout_ms: u64, retries: u8) -> Self {
         self.session.apdu_timeout_ms = timeout_ms;
         self.session.apdu_retries = retries;
@@ -143,7 +150,9 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
     }
 
     /// Attaches the object database for the server responder.
-    #[doc(hidden)]
+    ///
+    /// Build it from the same identity passed to
+    /// [`identity`](Self::identity) so Device readback agrees with I-Am.
     pub fn database(mut self, db: ObjectDatabase) -> Self {
         self.database = Some(db);
         self
@@ -155,14 +164,16 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
     /// the database should already be built from the same identity; this
     /// only wires I-Am + role limits. The identity max-APDU must fit the
     /// MS/TP 480 transport bound (checked at [`build_session`](Self::build_session)).
-    #[doc(hidden)]
     pub fn identity(mut self, identity: crate::identity::DeviceIdentity) -> Self {
         self.identity = Some(identity);
         self
     }
 
     /// Validates addressing without consuming the serial owner.
-    #[doc(hidden)]
+    ///
+    /// Mirrors `MasterNode` addressing (`max_master <= 127`,
+    /// `this_station <= max_master`); returns a typed
+    /// [`Error::Encoding`](bacnet_types::error::Error::Encoding) otherwise.
     pub fn validate_only(&self) -> Result<(), Error> {
         Self::validate_addressing(self.this_station, self.max_master)
     }
@@ -184,7 +195,9 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
     }
 
     /// Builds the concrete MS/TP transport, taking the serial owner once.
-    #[doc(hidden)]
+    ///
+    /// Validates addressing first, then takes the serial port by value: a
+    /// second call returns `"MS/TP endpoint serial owner is missing"`.
     pub fn build_transport(mut self) -> Result<MstpTransport<S>, Error> {
         Self::validate_addressing(self.this_station, self.max_master)?;
         let serial = self
@@ -207,7 +220,6 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
     /// machine is created here or in [`EndpointSession`]. The composed
     /// identity must fit the 480 APDU bound; the standalone
     /// [`SessionConfig`] 480 default is kept untouched otherwise.
-    #[doc(hidden)]
     pub fn build_session(mut self) -> Result<EndpointSession<MstpTransport<S>>, Error> {
         Self::validate_addressing(self.this_station, self.max_master)?;
         if let Some(identity) = self.identity.as_ref() {

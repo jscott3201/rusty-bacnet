@@ -6,6 +6,23 @@
 //! local constrained-TLS [`ScHub`](bacnet_transport::sc_hub::ScHub) via
 //! [`TlsWebSocket`](bacnet_transport::sc_tls::TlsWebSocket) for RB-16 proofs.
 //! MS/TP/Ethernet/IPv6 surfaces are out of scope.
+//!
+//! # Evidence level
+//!
+//! Real hub-relayed traffic over constrained TLS 1.3 with mutual auth is
+//! proven (RB-16): hub relay preserves the originating VMAC with
+//! verified-relayed-origin provenance, VMAC+UUID survive reconnect via
+//! caller-owned config, and I-Am matches Device ReadProperty. Loopback
+//! composition is unit validation only, never instead of the hub proof. There
+//! is deliberately no BIPv6/Ethernet builder here: those data links are
+//! explicitly unsupported at endpoint level (see the crate root matrix).
+//!
+//! # UUID ownership
+//!
+//! The builder neither generates nor stores the device UUID beyond the
+//! caller-supplied bytes. Provision 16 bytes durably (Annex AB.1.5.3) and
+//! reuse them for the device lifetime; all-zero is rejected before any hub
+//! I/O.
 
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_transport::sc::{ScReconnectConfig, ScTransport};
@@ -22,7 +39,13 @@ use crate::session::{EndpointSession, SessionConfig, SessionRole};
 /// endpoint composition owns the same concrete validation (VMAC reservation,
 /// UUID presence, heartbeat timing, reconnect) without hiding behind
 /// `impl TransportPort`.
-#[doc(hidden)]
+///
+/// ```
+/// use bacnet_endpoint::sc::ScEndpointBuilder;
+///
+/// assert!(ScEndpointBuilder::new([0x02; 6], [0x11; 16]).validate_only().is_ok());
+/// assert!(ScEndpointBuilder::new([0; 6], [0x11; 16]).validate_only().is_err());
+/// ```
 pub struct ScEndpointBuilder {
     role: SessionRole,
     session: SessionConfig,
@@ -37,7 +60,10 @@ pub struct ScEndpointBuilder {
 
 impl ScEndpointBuilder {
     /// Creates an SC endpoint builder with identity + timing.
-    #[doc(hidden)]
+    ///
+    /// Defaults: [`Both`](SessionRole::Both) roles, 30 s heartbeat interval,
+    /// 60 s timeout, no reconnect. `vmac` must not be zero/broadcast and
+    /// `device_uuid` must not be all-zero (checked at every build).
     pub fn new(vmac: Vmac, device_uuid: [u8; 16]) -> Self {
         Self {
             role: SessionRole::Both,
@@ -52,22 +78,22 @@ impl ScEndpointBuilder {
         }
     }
 
-    /// Selects the composed roles.
-    #[doc(hidden)]
+    /// Selects the composed roles (default [`Both`](SessionRole::Both)).
     pub fn role(mut self, role: SessionRole) -> Self {
         self.role = role;
         self
     }
 
-    /// Sets the bounded queue capacity.
-    #[doc(hidden)]
+    /// Sets the bounded queue capacity for every ingress/egress queue.
     pub fn queue_capacity(mut self, capacity: usize) -> Self {
         self.session.queue_capacity = capacity;
         self
     }
 
     /// Attaches the object database for the server responder.
-    #[doc(hidden)]
+    ///
+    /// Build it from the same identity passed to
+    /// [`identity`](Self::identity) so I-Am vs ReadProperty agree.
     pub fn database(mut self, db: ObjectDatabase) -> Self {
         self.database = Some(db);
         self
@@ -80,14 +106,16 @@ impl ScEndpointBuilder {
     /// already be built from the same identity so I-Am vs ReadProperty vs
     /// role limits agree. The builder neither generates nor stores the UUID
     /// beyond the caller-supplied bytes (mirror `sc_builder` docs).
-    #[doc(hidden)]
     pub fn identity(mut self, identity: crate::identity::DeviceIdentity) -> Self {
         self.identity = Some(identity);
         self
     }
 
     /// Sets heartbeat interval/timeout (ms).
-    #[doc(hidden)]
+    ///
+    /// Validated without hub I/O: interval must be 3_000..=300_000 and the
+    /// timeout must exceed it (Annex AB.6.3 range, mirrored from
+    /// `ScTransport` startup validation).
     pub fn heartbeat(mut self, interval_ms: u64, timeout_ms: u64) -> Self {
         self.heartbeat_interval_ms = interval_ms;
         self.heartbeat_timeout_ms = timeout_ms;
@@ -95,7 +123,9 @@ impl ScEndpointBuilder {
     }
 
     /// Enables reconnect with the given concrete config.
-    #[doc(hidden)]
+    ///
+    /// Validated without hub I/O; VMAC+UUID survive reconnect via this
+    /// caller-owned config.
     pub fn reconnect(mut self, config: ScReconnectConfig) -> Self {
         self.reconnect = Some(config);
         self
@@ -135,7 +165,11 @@ impl ScEndpointBuilder {
     }
 
     /// Validates concrete SC configuration without hub I/O.
-    #[doc(hidden)]
+    ///
+    /// Checks VMAC reservation, UUID presence, heartbeat range, and reconnect
+    /// config. Returns a typed
+    /// [`Error::Encoding`](bacnet_types::error::Error::Encoding) on the first
+    /// violation, before any dial.
     pub fn validate_only(&self) -> Result<(), Error> {
         self.validate()
     }
@@ -146,7 +180,6 @@ impl ScEndpointBuilder {
     /// no TLS, no hub dial; the caller drives the hub side for handshake in
     /// unit proofs. RB-15 tests prefer [`LoopbackTransport`](bacnet_transport::loopback::LoopbackTransport)
     /// for full session I/O and use this builder for config validation only.
-    #[doc(hidden)]
     pub fn build_loopback_session(
         mut self,
         ws: bacnet_transport::sc::LoopbackWebSocket,
@@ -190,7 +223,6 @@ impl ScEndpointBuilder {
     /// kill/reconnect preserves VMAC+UUID via the caller-owned reconnect
     /// config (vs transient connections that renegotiate).
     #[cfg(feature = "sc-tls")]
-    #[doc(hidden)]
     pub fn build_hub_session(
         mut self,
         ws: bacnet_transport::sc_tls::TlsWebSocket,

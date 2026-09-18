@@ -1,10 +1,23 @@
-//! Private role adapters above the sibling client/server roles.
+//! Session-bound role handles above the sibling client/server roles.
 //!
-//! Composition-visible only: everything is `#[doc(hidden)]`, no public
-//! facade promise. Inbound server transactions reuse the wire invoke ID
-//! directly and NEVER allocate from the shared outbound client ID pool, so
-//! equal inbound/outbound numeric IDs stay unambiguous via the ingress
-//! classifier + coordinator admission.
+//! [`ClientRoleHandle`] exposes the proven `read_property*` trio only;
+//! [`ServerRoleHandle`] exposes inbound handling, session liveness, the
+//! one-shot deferred-reply arm, and notification admit-complete. Neither
+//! handle exposes lifecycle: `start`/`stop` exist only on
+//! [`EndpointSession`](crate::session::EndpointSession), and the owner-only
+//! shutdown helpers are `pub(crate)`.
+//!
+//! Both handles are `Send + Sync` (statically asserted below), so a handle
+//! cloned out of the session may move across tasks and survive the session
+//! drop as a value — every call then fails closed via the [`Weak`] token.
+//!
+//! ```compile_fail,E0599
+//! // No lifecycle on roles: `start` exists only on `EndpointSession`.
+//! # use bacnet_endpoint::roles::ServerRoleHandle;
+//! # async fn forbidden(handle: ServerRoleHandle) {
+//! handle.start().await;
+//! # }
+//! ```
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
@@ -86,10 +99,18 @@ impl SessionToken {
     }
 }
 
-/// Private client role: routed + attribute-preserving sends over the shared
-/// egress/coordinator. No lifecycle methods; the session owner drives
-/// `close()` on the inner requester.
-#[doc(hidden)]
+/// Client role: the proven `ReadProperty` trio over shared egress/coordinator.
+///
+/// Borrowed from a running [`EndpointSession`](crate::session::EndpointSession)
+/// via `client()` / `cloned_client_handle()`. No lifecycle methods: after the
+/// owning session stops or drops, every call returns
+/// [`Error::Encoding`](bacnet_types::error::Error::Encoding) (`"endpoint
+/// shutdown"`). `Send + Sync`, so clones may outlive the session borrow and
+/// move across tasks.
+///
+/// Service scope is deliberately narrow: `ReadProperty` only. All three
+/// variants preserve routing, data attributes, and RB-07 provenance via the
+/// inner requester (pass-through, no new decisions).
 #[derive(Clone)]
 pub struct ClientRoleHandle {
     token: Weak<SessionToken>,
@@ -117,8 +138,11 @@ impl ClientRoleHandle {
         Ok(session)
     }
 
-    /// Direct ReadProperty (compat: no attributes).
-    #[doc(hidden)]
+    /// Direct ReadProperty (no routing attributes).
+    ///
+    /// Fails closed with `"endpoint shutdown"` once the owning session stops
+    /// or drops. Timeouts/retries come from the session config (or the
+    /// composed identity's max-APDU override for the length clamp).
     pub async fn read_property(
         &self,
         destination_mac: &[u8],
@@ -140,7 +164,11 @@ impl ClientRoleHandle {
     }
 
     /// Routed ReadProperty with pass-through data attributes.
-    #[doc(hidden)]
+    ///
+    /// `router_mac` is the immediate neighbor; `destination_network` +
+    /// `destination_mac` address the routed target. Attributes ride along
+    /// unchanged. Same fail-closed shutdown semantics as
+    /// [`read_property`](Self::read_property).
     pub async fn read_property_routed(
         &self,
         router_mac: &[u8],
@@ -166,7 +194,10 @@ impl ClientRoleHandle {
     }
 
     /// Explicit-destination ReadProperty with pass-through attributes.
-    #[doc(hidden)]
+    ///
+    /// Covers local-broadcast and addressed destinations the direct/routed
+    /// shorthands cannot spell. Same fail-closed shutdown semantics as
+    /// [`read_property`](Self::read_property).
     pub async fn read_property_with_destination(
         &self,
         destination: EndpointApduDestination,
@@ -207,18 +238,22 @@ impl ClientRoleHandle {
     }
 
     /// Internal close for the session owner only.
-    #[doc(hidden)]
-    pub fn close_for_owner(&self) {
+    ///
+    /// Owner-only seam (`pub(crate)`): the session [`Drop`](std::ops::Drop)
+    /// path currently closes the inner requester directly; this stays for
+    /// owner-driven shutdown without exposing lifecycle on the handle.
+    #[allow(dead_code)]
+    pub(crate) fn close_for_owner(&self) {
         self.requester.close();
     }
 }
 
-/// Private server role: narrow responder + shared notification pool.
+/// Server role: narrow responder + shared notification pool.
 ///
 /// Service scope stays narrow (`ReadProperty` + `Reject`/`Abort` +
-/// segmentation-`Abort`); full parity is a later packet. No lifecycle
-/// methods on this handle; the session owner drives dispatch + `close()`.
-#[doc(hidden)]
+/// segmentation-`Abort`); full `bacnet-server` parity is a later packet. No
+/// lifecycle methods on this handle; the session owner drives dispatch +
+/// `close()`. `Send + Sync`; every method fails closed after shutdown.
 #[derive(Clone)]
 pub struct ServerRoleHandle {
     token: Weak<SessionToken>,
@@ -252,7 +287,7 @@ impl ServerRoleHandle {
     ///
     /// Test seam proving no detached role outlives the endpoint: after the
     /// session drops, [`Weak::upgrade`] fails and this returns `false`.
-    #[doc(hidden)]
+    /// Cloned handles survive as values but report `false` and fail closed.
     pub fn is_session_alive(&self) -> bool {
         self.token.upgrade().is_some_and(|s| s.is_open())
     }
@@ -264,7 +299,6 @@ impl ServerRoleHandle {
     /// `ReplyPostponed`) instead of promptly via `reply_tx`. Fails closed
     /// once the owning session shuts down. Broadcasts (no `reply_tx`) never
     /// consume the arm.
-    #[doc(hidden)]
     pub fn suspend_next_reply(&self) -> Result<(), Error> {
         let session = self.token.upgrade().ok_or_else(shutdown_error)?;
         if !session.is_open() {
@@ -281,7 +315,6 @@ impl ServerRoleHandle {
     /// inner responder (pass-through, no new decisions). Honors a pending
     /// RB-17 suspension arm identically to session dispatch (strips
     /// `reply_tx` so the responder answers token-owned via egress).
-    #[doc(hidden)]
     pub async fn handle_inbound(&self, mut received: ReceivedApdu) -> Result<bool, Error> {
         self.check_open()?;
         if received.reply_tx.is_some() && self.token.upgrade().is_some_and(|s| s.take_suspend()) {
@@ -294,8 +327,8 @@ impl ServerRoleHandle {
     ///
     /// Standalone admit path (tries the shared coordinator once). Session
     /// dispatch prefers [`Self::complete_notification_pre_admitted`] after
-    /// its single [`admit_once`] to avoid double-admit.
-    #[doc(hidden)]
+    /// its single [`admit_once`] to avoid double-admit. Returns `false` after
+    /// shutdown or when no lease is available.
     pub fn admit_notification_terminal(
         &self,
         immediate_source: &[u8],
@@ -312,8 +345,8 @@ impl ServerRoleHandle {
     /// Completes one already-admitted notification lease (dispatch only).
     ///
     /// The session's single [`admit_once`] owns exact-once claim; this
-    /// releases the exact lease without re-admitting.
-    #[doc(hidden)]
+    /// releases the exact lease without re-admitting. Returns `false` after
+    /// shutdown.
     pub fn complete_notification_pre_admitted(
         &self,
         admission: bacnet_endpoint_core::coordinator::Admission,
@@ -326,12 +359,22 @@ impl ServerRoleHandle {
     }
 
     /// Internal close for the session owner only.
-    #[doc(hidden)]
-    pub fn close_for_owner(&self) {
+    ///
+    /// Owner-only seam (`pub(crate)`): retained for owner-driven shutdown
+    /// without exposing lifecycle on the handle.
+    #[allow(dead_code)]
+    pub(crate) fn close_for_owner(&self) {
         self.responder.close();
         self.notifications.close();
     }
 }
+
+fn assert_send_sync<T: Send + Sync>() {}
+
+const _: fn() = || {
+    assert_send_sync::<ClientRoleHandle>();
+    assert_send_sync::<ServerRoleHandle>();
+};
 
 /// Derives the canonical peer for one received envelope (direct vs routed).
 ///

@@ -1,6 +1,6 @@
-//! Single Device identity source (RB-16, private/doc-hidden).
+//! Single Device identity source (RB-16, proven narrow scope).
 //!
-//! # Truth direction (owner-locked)
+//! # Truth direction
 //!
 //! [`DeviceIdentity`] is the single source for one device:
 //!
@@ -20,8 +20,17 @@
 //!
 //! `SessionConfig::max_apdu_length` (480) stays the default for standalone
 //! sessions without an identity; [`EndpointSession::with_identity`](crate::session::EndpointSession::with_identity)
-//! overrides it when an identity is composed. No existing-test churn: the
-//! default path is untouched.
+//! overrides it when an identity is composed.
+//!
+//! # Evidence level (honest)
+//!
+//! I-Am identical to Device `ReadProperty` for the composed identity, with
+//! role traffic both directions, is corroborated on **real B/IP loopback UDP
+//! and the real constrained-TLS SC hub** (RB-16 proofs). Port/UUID/capability
+//! corners beyond that matrix — Network-Port population details, SC UUID
+//! sync into `DEVICE_UUID`, service-profile alignment — are **Loopback-only**
+//! (deterministic `LoopbackTransport` / `LoopbackWebSocket` coverage), not
+//! on-wire claims.
 //!
 //! # Services profile (no superset flags)
 //!
@@ -36,7 +45,7 @@
 //! not the narrow endpoint responder — or the I-Am vs ReadProperty vs behavior
 //! matrix fails.
 //!
-//! # Network-Port population rule (documented choice)
+//! # Network-Port population rule
 //!
 //! One port entry per bound transport, with the actual bound IP/port +
 //! network number observed at bind:
@@ -65,7 +74,7 @@
 //! (SC transport start, SC endpoint hub-dial); B/IP-only identities may keep
 //! zeros and still build.
 //!
-//! # Transport-dependent behavior (recorded precisely)
+//! # Transport-dependent behavior
 //!
 //! - B/IP real loopback UDP (`127.0.0.1`, ephemeral port): one socket per
 //!   endpoint; broadcast reaches the bound socket via `INADDR_ANY`; I-Am via
@@ -91,7 +100,10 @@ use bytes::BytesMut;
 use std::net::Ipv4Addr;
 
 /// One Network-Port entry per bound transport (see module docs for the rule).
-#[doc(hidden)]
+///
+/// Provenance: population-rule coverage is Loopback-only except the B/IP +
+/// SC entries exercised in the RB-16 real-transport proofs. Field layout
+/// follows Clause 12.56; see the module docs for per-transport semantics.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NetworkPortEntry {
     /// Network-Port object instance (caller-stable; B/IP=1, SC=2 by convention).
@@ -110,7 +122,19 @@ pub struct NetworkPortEntry {
 
 impl NetworkPortEntry {
     /// B/IP entry with the actual bound IP/port.
-    #[doc(hidden)]
+    ///
+    /// Derives the 6-byte B/IP MAC (IP octets + big-endian UDP port) from the
+    /// bound socket address. Ephemeral-port tests refresh via
+    /// [`DeviceIdentity::sync_bip_bind`] after `start()`.
+    ///
+    /// ```
+    /// use std::net::Ipv4Addr;
+    /// use bacnet_endpoint::identity::NetworkPortEntry;
+    ///
+    /// let entry = NetworkPortEntry::bip(1, 0, Ipv4Addr::LOCALHOST, 47808);
+    /// assert_eq!(entry.instance, 1);
+    /// assert_eq!(entry.udp_port, 47808);
+    /// ```
     pub fn bip(instance: u32, network_number: u32, ip: Ipv4Addr, udp_port: u16) -> Self {
         let o = ip.octets();
         let mut mac = MacAddr::new();
@@ -127,7 +151,9 @@ impl NetworkPortEntry {
     }
 
     /// SC entry keyed by VMAC (no B/IP socket fields).
-    #[doc(hidden)]
+    ///
+    /// IP octets stay zero and the UDP port stays 0: SC has no B/IP socket.
+    /// The VMAC must equal the SC builder's VMAC at hub-dial build time.
     pub fn sc(instance: u32, network_number: u32, vmac: [u8; 6]) -> Self {
         Self {
             instance,
@@ -140,13 +166,22 @@ impl NetworkPortEntry {
     }
 }
 
-/// Single Device identity source (private/doc-hidden, no public stability).
+/// Single Device identity source.
 ///
 /// Owns instance, vendor, max-APDU, segmentation, services profile,
 /// Network-Port set, and SC UUID. Constructs the database AND derives
-/// role/transport limits. No Device-identity design beyond this struct
-/// (owner deferred full design).
-#[doc(hidden)]
+/// role/transport limits. I-Am identical to Device ReadProperty is proven on
+/// real B/IP + SC; finer port/UUID/capability corners are Loopback-only (see
+/// module docs).
+///
+/// ```
+/// use bacnet_endpoint::identity::DeviceIdentity;
+///
+/// let identity = DeviceIdentity::new(1001, 42)?;
+/// assert_eq!(identity.instance(), 1001);
+/// assert_eq!(identity.vendor_id(), 42);
+/// # Ok::<(), bacnet_types::error::Error>(())
+/// ```
 #[derive(Clone, Debug)]
 pub struct DeviceIdentity {
     instance: u32,
@@ -165,8 +200,9 @@ impl DeviceIdentity {
     /// Defaults: `max_apdu = 1476`, `segmentation = NONE`,
     /// `services = [READ_PROPERTY]` (narrow endpoint reality, no superset),
     /// no ports, zero UUID (B/IP-only may keep zeros; SC dial requires
-    /// [`with_device_uuid`](Self::with_device_uuid)).
-    #[doc(hidden)]
+    /// [`with_device_uuid`](Self::with_device_uuid)). Returns
+    /// [`Error::Encoding`](bacnet_types::error::Error::Encoding) for an
+    /// out-of-range Device instance.
     pub fn new(instance: u32, vendor_id: u16) -> Result<Self, Error> {
         ObjectIdentifier::new(ObjectType::DEVICE, instance)?;
         Ok(Self {
@@ -182,43 +218,58 @@ impl DeviceIdentity {
     }
 
     /// Overrides the max-APDU accepted/advertised (must be a wire-legal value).
-    #[doc(hidden)]
+    ///
+    /// Validated by the codec's APDU-length table; illegal values return
+    /// [`Error::Encoding`](bacnet_types::error::Error::Encoding). Note the
+    /// MS/TP builder additionally rejects values above its 480 transport
+    /// bound at build time.
     pub fn with_max_apdu(mut self, max_apdu: u16) -> Result<Self, Error> {
         validate_max_apdu_length(max_apdu)?;
         self.max_apdu_length = max_apdu;
         Ok(self)
     }
 
-    /// Overrides segmentation support (endpoint proof uses NONE; see docs).
-    #[doc(hidden)]
+    /// Overrides segmentation support (endpoint proofs use NONE).
+    ///
+    /// The endpoint roles answer segmentation-`Abort`; advertising support
+    /// beyond what the composed roles honor breaks the I-Am vs behavior
+    /// matrix.
     pub fn with_segmentation(mut self, segmentation: Segmentation) -> Self {
         self.segmentation_supported = segmentation;
         self
     }
 
     /// Overrides the services profile (must equal what roles can do; no superset).
-    #[doc(hidden)]
+    ///
+    /// Default `[READ_PROPERTY]` matches the narrow endpoint responder.
+    /// Deployments needing more must compose the full server, not this crate.
     pub fn with_services(mut self, services: &[ServiceSupported]) -> Self {
         self.services = services.to_vec();
         self
     }
 
     /// Stores the durable caller-owned SC device UUID (no generation/storage).
-    #[doc(hidden)]
+    ///
+    /// The caller provisions 16 bytes durably and reuses them for the device
+    /// lifetime. SC hub-dial rejects all-zero; B/IP-only identities may keep
+    /// zeros.
     pub fn with_device_uuid(mut self, uuid: [u8; 16]) -> Self {
         self.device_uuid = uuid;
         self
     }
 
     /// Overrides the Device object name (defaults to `device-{instance}`).
-    #[doc(hidden)]
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = name.into();
         self
     }
 
     /// Adds one Network-Port entry (one per bound transport).
-    #[doc(hidden)]
+    ///
+    /// Rejects duplicate instances and out-of-range Network-Port instances
+    /// with [`Error::Encoding`](bacnet_types::error::Error::Encoding).
+    /// Prefer [`with_bip_port`](Self::with_bip_port) /
+    /// [`with_sc_port`](Self::with_sc_port), which encode the population rule.
     pub fn with_network_port(mut self, entry: NetworkPortEntry) -> Result<Self, Error> {
         ObjectIdentifier::new(ObjectType::NETWORK_PORT, entry.instance)?;
         if self
@@ -236,7 +287,6 @@ impl DeviceIdentity {
     }
 
     /// Adds a B/IP port entry with the actual bound IP/port.
-    #[doc(hidden)]
     pub fn with_bip_port(
         self,
         instance: u32,
@@ -253,7 +303,6 @@ impl DeviceIdentity {
     }
 
     /// Adds an SC port entry keyed by VMAC.
-    #[doc(hidden)]
     pub fn with_sc_port(
         self,
         instance: u32,
@@ -268,7 +317,6 @@ impl DeviceIdentity {
     /// Call after `start()` when the port was 0 (ephemeral): replaces the
     /// matching instance entry, or pushes instance 1 when no B/IP entry
     /// exists yet. SC/loopback entries are untouched.
-    #[doc(hidden)]
     pub fn sync_bip_bind(&mut self, instance: u32, network_number: u32, ip: Ipv4Addr, port: u16) {
         let entry = NetworkPortEntry::bip(instance, network_number, ip, port);
         if let Some(slot) = self
@@ -283,61 +331,51 @@ impl DeviceIdentity {
     }
 
     /// Device instance number.
-    #[doc(hidden)]
     pub fn instance(&self) -> u32 {
         self.instance
     }
 
     /// Vendor identifier (I-Am + Device VENDOR_IDENTIFIER).
-    #[doc(hidden)]
     pub fn vendor_id(&self) -> u16 {
         self.vendor_id
     }
 
     /// Composed max-APDU (I-Am + Device + client/server limits).
-    #[doc(hidden)]
     pub fn max_apdu_length(&self) -> u16 {
         self.max_apdu_length
     }
 
     /// Client role max-APDU (same composed value; overrides SessionConfig 480).
-    #[doc(hidden)]
     pub fn client_max_apdu(&self) -> u16 {
         self.max_apdu_length
     }
 
     /// Server role max-APDU clamp (same composed value).
-    #[doc(hidden)]
     pub fn server_max_apdu(&self) -> u16 {
         self.max_apdu_length
     }
 
     /// Segmentation support (I-Am + Device SEGMENTATION_SUPPORTED).
-    #[doc(hidden)]
     pub fn segmentation(&self) -> Segmentation {
         self.segmentation_supported
     }
 
     /// Services profile (Device PROTOCOL_SERVICES_SUPPORTED; no superset).
-    #[doc(hidden)]
     pub fn services(&self) -> &[ServiceSupported] {
         &self.services
     }
 
     /// Network-Port entries (one per bound transport).
-    #[doc(hidden)]
     pub fn network_ports(&self) -> &[NetworkPortEntry] {
         &self.network_ports
     }
 
     /// Durable caller-owned SC device UUID.
-    #[doc(hidden)]
     pub fn device_uuid(&self) -> [u8; 16] {
         self.device_uuid
     }
 
     /// Device object identifier derived from the instance.
-    #[doc(hidden)]
     pub fn device_oid(&self) -> ObjectIdentifier {
         ObjectIdentifier::new(ObjectType::DEVICE, self.instance)
             .expect("identity instance was validated at construction")
@@ -349,7 +387,6 @@ impl DeviceIdentity {
     /// a [`ServerConfig`](bacnet_server::server::ServerConfig) derived via
     /// [`Self::apply_to_server_config`]: object id + max-apdu + segmentation
     /// + vendor. Assert on wire bytes where practical (see proof tests).
-    #[doc(hidden)]
     pub fn iam_request(&self) -> IAmRequest {
         IAmRequest {
             object_identifier: self.device_oid(),
@@ -360,7 +397,6 @@ impl DeviceIdentity {
     }
 
     /// Encodes the I-Am Unconfirmed-Request APDU bytes for this identity.
-    #[doc(hidden)]
     pub fn encode_iam_apdu(&self) -> Result<Vec<u8>, Error> {
         let mut service = BytesMut::new();
         self.iam_request().encode(&mut service);
@@ -380,7 +416,6 @@ impl DeviceIdentity {
     /// Truth direction: identity -> database. For extra application objects
     /// use [`build_database_with_extra`]: it seeds `Object_List` with
     /// Device + ports + extras upfront so no post-add mutation is needed.
-    #[doc(hidden)]
     pub fn build_database(&self) -> Result<ObjectDatabase, Error> {
         let mut device = DeviceObject::new(DeviceConfig {
             instance: self.instance,
@@ -428,13 +463,11 @@ impl DeviceIdentity {
     }
 
     /// Applies identity limits to a standalone SessionConfig (overrides 480).
-    #[doc(hidden)]
     pub fn apply_to_session_config(&self, config: &mut crate::session::SessionConfig) {
         config.max_apdu_length = self.max_apdu_length;
     }
 
     /// Applies identity to a client config (max-APDU only; timers stay caller-owned).
-    #[doc(hidden)]
     pub fn apply_to_client_config(&self, config: &mut bacnet_client::client::ClientConfig) {
         config.max_apdu_length = self.max_apdu_length;
     }
@@ -444,7 +477,6 @@ impl DeviceIdentity {
     /// This is the discovery-alignment bridge: a `ServerConfig` derived here
     /// makes `broadcast_i_am_from` emit bytes identical to
     /// [`Self::encode_iam_apdu`].
-    #[doc(hidden)]
     pub fn apply_to_server_config(&self, config: &mut bacnet_server::server::ServerConfig) {
         config.max_apdu_length = u32::from(self.max_apdu_length);
         config.segmentation_supported = self.segmentation_supported;
@@ -452,7 +484,6 @@ impl DeviceIdentity {
     }
 
     /// Derives a server config from this identity (discovery-alignment helper).
-    #[doc(hidden)]
     pub fn server_config(&self) -> bacnet_server::server::ServerConfig {
         let mut config = bacnet_server::server::ServerConfig::default();
         self.apply_to_server_config(&mut config);
@@ -460,7 +491,6 @@ impl DeviceIdentity {
     }
 
     /// Derives a client config from this identity (timers stay default).
-    #[doc(hidden)]
     pub fn client_config(&self) -> bacnet_client::client::ClientConfig {
         let mut config = bacnet_client::client::ClientConfig::default();
         self.apply_to_client_config(&mut config);
@@ -474,7 +504,18 @@ impl DeviceIdentity {
 /// with Device + ports + every extra OID upfront, so no post-add mutation
 /// (and no device/network-port fork) is needed. Extra objects are boxed
 /// `BACnetObject`s (e.g. Analog Input for proofs).
-#[doc(hidden)]
+///
+/// ```
+/// use bacnet_endpoint::identity::{build_database_with_extra, DeviceIdentity};
+/// use bacnet_objects::analog::AnalogInputObject;
+///
+/// let identity = DeviceIdentity::new(1001, 42)?;
+/// let mut point = AnalogInputObject::new(1, "ai-1", 0)?;
+/// point.set_present_value(21.5);
+/// let db = build_database_with_extra(&identity, vec![Box::new(point)])?;
+/// assert!(db.get(&identity.device_oid()).is_some());
+/// # Ok::<(), bacnet_types::error::Error>(())
+/// ```
 pub fn build_database_with_extra(
     identity: &DeviceIdentity,
     extra: Vec<Box<dyn bacnet_objects::traits::BACnetObject>>,

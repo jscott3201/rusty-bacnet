@@ -1,6 +1,43 @@
 //! Single-owner endpoint session: one ingress + shared coordinator.
 //!
 //! Lifecycle lives here ONLY. Role handles expose no lifecycle methods.
+//!
+//! # Lifecycle
+//!
+//! [`EndpointSession::new`] owns `transport` without starting it. The owner
+//! drives [`start`](EndpointSession::start) once, then
+//! [`stop`](EndpointSession::stop) once; both take `&mut self` so only the
+//! owner can drive them. `Drop` aborts dispatch/ingress/role work without
+//! orphaning, but `stop()` remains the graceful path that joins termination
+//! and reports the [`SessionExit`].
+//!
+//! # Cancellation and drop
+//!
+//! Every dispatch await is cancellation-safe: outbound leases are held by
+//! RAII guards, so aborting a pending `read_property*` future releases its
+//! exact coordinator lease instead of stranding it. `stop()` seals admission,
+//! closes roles, signals dispatch, joins the task, then stops ingress.
+//! Cloned role handles keep working until shutdown, then fail closed; after
+//! the session drops, [`Weak`](std::sync::Weak) upgrade fails and every role
+//! call reports shutdown.
+//!
+//! ```compile_fail,E0596
+//! // Lifecycle is owner-exclusive: `stop` takes `&mut self`, so a shared
+//! // borrow cannot drive shutdown.
+//! # use bacnet_transport::loopback::LoopbackTransport;
+//! # use bacnet_endpoint::session::EndpointSession;
+//! # fn forbidden(session: &EndpointSession<LoopbackTransport>) {
+//! session.stop();
+//! # }
+//! ```
+//!
+//! # Thread safety
+//!
+//! [`EndpointSession`] is `Send` when its transport is `Send`: the dispatch
+//! task, channels, and shared counters are all `Send`-owned. Shared `&self`
+//! borrows (`client`, `server`, counters, `broadcast_i_am`) are safe because
+//! lifecycle mutation is owner-exclusive (`&mut`) or via atomics/async
+//! mutexes; role handles synchronize through the shared session token.
 
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
@@ -38,7 +75,19 @@ enum Lifecycle {
 }
 
 /// Which roles the session composes.
-#[doc(hidden)]
+///
+/// Chosen at [`EndpointSession::new`] time (or via the endpoint builders'
+/// `role()` setter) and fixed for the session lifetime. Determines which
+/// role handles exist after [`start`](EndpointSession::start):
+///
+/// - [`ClientOnly`](SessionRole::ClientOnly): `client()` is `Some`, `server()`
+///   is `None`. Inbound requests are counted (`no_server_role`) and their
+///   one-use reply sender released without sending.
+/// - [`ServerOnly`](SessionRole::ServerOnly): `server()` is `Some`,
+///   `client()` is `None`. Terminal responses with no consumer release their
+///   exact lease and count `no_client_role`.
+/// - [`Both`](SessionRole::Both): both handles are present above the one
+///   shared coordinator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionRole {
     /// Client requester only.
@@ -50,16 +99,36 @@ pub enum SessionRole {
 }
 
 /// Session tuning (bounded queues + client timers).
-#[doc(hidden)]
+///
+/// Typed at the public boundary: every field is validated where it matters
+/// (`queue_capacity == 0` fails [`EndpointSession::new`]; APDU/timer values
+/// flow into the client role config unchanged).
+///
+/// ```
+/// use bacnet_endpoint::session::SessionConfig;
+///
+/// let config = SessionConfig::default();
+/// assert!(config.queue_capacity > 0);
+/// assert_eq!(config.max_apdu_length, 480);
+/// ```
 #[derive(Clone, Debug)]
 pub struct SessionConfig {
     /// Bounded capacity for each ingress queue + egress channel.
+    ///
+    /// Must be greater than zero; [`EndpointSession::new`] returns
+    /// [`Error::Encoding`](bacnet_types::error::Error::Encoding) otherwise.
     pub queue_capacity: usize,
     /// Client APDU timeout (ms).
     pub apdu_timeout_ms: u64,
     /// Client APDU retries.
     pub apdu_retries: u8,
     /// Client max APDU length.
+    ///
+    /// Standalone default is 480. Composing a
+    /// [`DeviceIdentity`](crate::identity::DeviceIdentity) via
+    /// [`with_identity`](EndpointSession::with_identity) overrides this with
+    /// the identity value; the MS/TP builder additionally rejects identities
+    /// above its 480 transport bound at build time.
     pub max_apdu_length: u16,
 }
 
@@ -75,7 +144,9 @@ impl Default for SessionConfig {
 }
 
 /// Snapshot of policy-outcome ownership (session-owned, bounded).
-#[doc(hidden)]
+///
+/// The session counts every classifier/policy outcome instead of dropping it
+/// silently. Sampled via [`policy_counters`](EndpointSession::policy_counters).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PolicyCountersSnapshot {
     /// Ingress classifier outcomes owned by the session.
@@ -103,17 +174,32 @@ struct SessionShared {
     counters: Mutex<PolicyCounters>,
 }
 
-/// One owned private endpoint session.
+/// One owned single-device endpoint session.
 ///
 /// Owns ONE [`EndpointIngress`], the shared [`OutboundTransactionCoordinator`],
 /// role registration, policy-outcome ownership, timers, egress and
 /// termination. Start-once/stop-once; `Drop` aborts without orphaning.
 ///
-/// RB-16 identity: an optional [`DeviceIdentity`](crate::identity::DeviceIdentity)
-/// is the single source for I-Am + Device readback + role limits when
-/// composed via [`with_identity`](Self::with_identity). Standalone sessions
-/// without an identity keep the `SessionConfig` 480 default untouched.
-#[doc(hidden)]
+/// An optional [`DeviceIdentity`](crate::identity::DeviceIdentity) is the
+/// single source for I-Am + Device readback + role limits when composed via
+/// [`with_identity`](Self::with_identity). Standalone sessions without an
+/// identity keep the `SessionConfig` 480 default untouched.
+///
+/// ```no_run
+/// use bacnet_endpoint::session::{EndpointSession, SessionConfig, SessionRole};
+/// use bacnet_transport::loopback::LoopbackTransport;
+///
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), bacnet_types::error::Error> {
+/// let (transport, _peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+/// let mut session =
+///     EndpointSession::new(transport, SessionRole::Both, SessionConfig::default())?;
+/// session.start().await?;
+/// assert!(session.is_running());
+/// session.stop().await?;
+/// # Ok(())
+/// # }
+/// ```
 pub struct EndpointSession<T: TransportPort + 'static> {
     shared: Arc<SessionShared>,
     coordinator: Arc<OutboundTransactionCoordinator>,
@@ -136,7 +222,9 @@ pub struct EndpointSession<T: TransportPort + 'static> {
 }
 
 /// Terminal state of the session dispatch task.
-#[doc(hidden)]
+///
+/// Returned by [`stop`](EndpointSession::stop): either an explicit stop won
+/// the race, the ingress classifier exited, or all dispatch receivers closed.
 #[derive(Debug)]
 pub enum SessionExit {
     /// Explicit `stop()` won the race.
@@ -149,7 +237,25 @@ pub enum SessionExit {
 
 impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Creates a session owning `transport` (not yet started).
-    #[doc(hidden)]
+    ///
+    /// Returns [`Error::Encoding`](bacnet_types::error::Error::Encoding) when
+    /// `config.queue_capacity == 0`. Normally built via
+    /// [`BipEndpointBuilder`](crate::bip::BipEndpointBuilder),
+    /// [`ScEndpointBuilder`](crate::sc::ScEndpointBuilder), or
+    /// [`MstpEndpointBuilder`](crate::mstp::MstpEndpointBuilder) instead of
+    /// directly.
+    ///
+    /// ```
+    /// use bacnet_endpoint::session::{EndpointSession, SessionConfig, SessionRole};
+    /// use bacnet_transport::loopback::LoopbackTransport;
+    ///
+    /// let (transport, _peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+    /// let bad = SessionConfig {
+    ///     queue_capacity: 0,
+    ///     ..SessionConfig::default()
+    /// };
+    /// assert!(EndpointSession::new(transport, SessionRole::Both, bad).is_err());
+    /// ```
     pub fn new(transport: T, role: SessionRole, config: SessionConfig) -> Result<Self, Error> {
         if config.queue_capacity == 0 {
             return Err(Error::Encoding(
@@ -195,7 +301,13 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     }
 
     /// Attaches the object database for the server responder (before start).
-    #[doc(hidden)]
+    ///
+    /// Must be called before [`start`](Self::start); when the server role is
+    /// composed without a database, an empty one is used. When a
+    /// [`DeviceIdentity`](crate::identity::DeviceIdentity) is also composed,
+    /// build the database from that same identity (see
+    /// [`DeviceIdentity::build_database`](crate::identity::DeviceIdentity::build_database))
+    /// so Device readback agrees with I-Am.
     pub fn with_database(mut self, db: ObjectDatabase) -> Self {
         self.database = Some(db);
         self
@@ -209,7 +321,6 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// identity (see `DeviceIdentity::build_database`) so I-Am vs
     /// ReadProperty vs role limits agree. No existing-test churn: sessions
     /// without an identity keep the 480 default.
-    #[doc(hidden)]
     pub fn with_identity(mut self, identity: crate::identity::DeviceIdentity) -> Self {
         identity.apply_to_client_config(&mut self.client_config);
         self.config.max_apdu_length = identity.max_apdu_length();
@@ -218,7 +329,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     }
 
     /// Starts ingress, roles and the single dispatch consumer once.
-    #[doc(hidden)]
+    ///
+    /// Start-once: a second call returns
+    /// [`Error::Encoding`](bacnet_types::error::Error::Encoding) without
+    /// binding again. Takes `&mut self` so only the owner can start.
     pub async fn start(&mut self) -> Result<(), Error> {
         if self.lifecycle.compare_exchange(
             Lifecycle::Ready as u8,
@@ -301,7 +415,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     }
 
     /// Stops dispatch, roles and ingress once; joins termination.
-    #[doc(hidden)]
+    ///
+    /// Stop-once: returns the dispatch [`SessionExit`]. Calling before
+    /// `start()` or twice returns
+    /// [`Error::Encoding`](bacnet_types::error::Error::Encoding). Takes
+    /// `&mut self` so only the owner can stop; cloned role handles observe
+    /// shutdown and fail closed.
     pub async fn stop(&mut self) -> Result<SessionExit, Error> {
         if self.lifecycle.compare_exchange(
             Lifecycle::Running as u8,
@@ -344,32 +463,43 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         Ok(exit)
     }
 
-    /// Borrows the client role (fails when not composed).
-    #[doc(hidden)]
+    /// Borrows the client role (`None` when not composed).
+    ///
+    /// Returns `None` for [`ServerOnly`](SessionRole::ServerOnly) sessions,
+    /// and after [`stop`](Self::stop) (handles are released at termination).
     pub fn client(&self) -> Option<&ClientRoleHandle> {
         self.client_handle.as_ref()
     }
 
-    /// Borrows the server role (fails when not composed).
-    #[doc(hidden)]
+    /// Borrows the server role (`None` when not composed).
+    ///
+    /// Returns `None` for [`ClientOnly`](SessionRole::ClientOnly) sessions,
+    /// and after [`stop`](Self::stop).
     pub fn server(&self) -> Option<&ServerRoleHandle> {
         self.server_handle.as_ref()
     }
 
-    /// Cloned client handle proving session binding (for drop tests).
-    #[doc(hidden)]
+    /// Clones the client role handle with its session binding.
+    ///
+    /// The clone holds only a [`Weak`](std::sync::Weak) session token: it
+    /// works while the session runs and fails closed after `stop()`/drop.
+    /// Used to hand the client role to tasks that outlive the borrow.
     pub fn cloned_client_handle(&self) -> Option<ClientRoleHandle> {
         self.client_handle.clone()
     }
 
-    /// Cloned server handle proving session binding (for drop tests).
-    #[doc(hidden)]
+    /// Clones the server role handle with its session binding.
+    ///
+    /// Same [`Weak`](std::sync::Weak)-token semantics as
+    /// [`cloned_client_handle`](Self::cloned_client_handle); see
+    /// [`is_session_alive`](crate::roles::ServerRoleHandle::is_session_alive).
     pub fn cloned_server_handle(&self) -> Option<ServerRoleHandle> {
         self.server_handle.clone()
     }
 
     /// Samples policy-outcome ownership counters.
-    #[doc(hidden)]
+    ///
+    /// Every classifier/policy outcome is counted, never silently dropped.
     pub async fn policy_counters(&self) -> PolicyCountersSnapshot {
         let counters = self.shared.counters.lock().await;
         PolicyCountersSnapshot {
@@ -382,7 +512,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     }
 
     /// Samples the shared outbound lease count.
-    #[doc(hidden)]
+    ///
+    /// Returns `usize::MAX` only when the coordinator lock is poisoned
+    /// (internal invariant violation surfaced honestly, never hidden).
     pub fn active_leases(&self) -> usize {
         self.coordinator.active_count().unwrap_or(usize::MAX)
     }
@@ -399,19 +531,16 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// only the session owner exposes identity + counters + coordinator.
     /// A role handle attempting `stop`/transport access fails at compile
     /// time (no such method) and at runtime its post-stop calls fail closed.
-    #[doc(hidden)]
     pub fn identity(&self) -> Option<&crate::identity::DeviceIdentity> {
         self.identity.as_ref()
     }
 
     /// Returns the composed session role (narrow admin).
-    #[doc(hidden)]
     pub fn session_role(&self) -> SessionRole {
         self.role
     }
 
     /// Returns true while the session dispatch is running (narrow admin).
-    #[doc(hidden)]
     pub fn is_running(&self) -> bool {
         self.lifecycle.load(Ordering::Acquire) == Lifecycle::Running as u8
     }
@@ -424,8 +553,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// egress. Field-for-field identical to the server discovery I-Am built
     /// from [`DeviceIdentity::server_config`](crate::identity::DeviceIdentity::server_config).
     /// Transport-dependent: B/IP reaches the local subnet broadcast; SC
-    /// relays via the hub as a broadcast NPDU.
-    #[doc(hidden)]
+    /// relays via the hub as a broadcast NPDU. Fails when the session is not
+    /// running.
     pub async fn broadcast_i_am(&self) -> Result<(), Error> {
         let identity = self
             .identity

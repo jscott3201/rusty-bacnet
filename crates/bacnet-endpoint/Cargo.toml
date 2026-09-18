@@ -5,8 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Private single-owner BACnet endpoint session above client/server roles (RB-15, no public facade)"
-publish = false
+description = "Single-owner BACnet endpoint session above client/server roles (RB-18 public API)"
 
 [dependencies]
 bacnet-types.workspace = true
