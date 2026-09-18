@@ -121,6 +121,16 @@ impl NetworkPortObject {
     pub fn set_udp_port(&mut self, port: u16) {
         self.ip_udp_port = port;
     }
+
+    /// Sync the maximum APDU accepted on this port (RB-16 endpoint sync).
+    ///
+    /// Not a fork: stores the composed identity max-APDU so the
+    /// Network-Port `Max_APDU_Length_Accepted` readback agrees with the
+    /// Device `Max_APDU_Length_Accepted`, the I-Am `max-apdu-length`, and
+    /// the client/server role limits derived from the same identity.
+    pub fn set_max_apdu_length_accepted(&mut self, max_apdu: u32) {
+        self.max_apdu_length_accepted = max_apdu;
+    }
 }
 
 impl BACnetObject for NetworkPortObject {

@@ -21,9 +21,17 @@ bacnet-server.workspace = true
 bytes.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "macros", "time", "net"] }
+tokio-rustls = { workspace = true, optional = true }
+
+[features]
+sc-tls = ["bacnet-transport/sc-tls", "bacnet-client/sc-tls", "bacnet-server/sc-tls", "tokio-rustls"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "test-util", "net"] }
+rcgen.workspace = true
+futures-util.workspace = true
+tokio-rustls.workspace = true
+rustls.workspace = true
 
 [lints]
 workspace = true

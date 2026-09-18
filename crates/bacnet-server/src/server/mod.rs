@@ -681,6 +681,8 @@ pub use dcc_outcomes::DccOutcomeCounters;
 pub use dcc_policy::{DccPolicy, DccSource, DccSourceRestriction};
 mod device_bindings;
 mod discovery;
+#[doc(hidden)]
+pub use discovery::iam_request_for as discovery_iam_for_test;
 pub use discovery::{DiscoveryCounters, DiscoveryPolicy};
 pub(crate) use discovery::{DiscoveryLimiter, PreCheckDecision, WhoHasTarget};
 mod dispatch;
