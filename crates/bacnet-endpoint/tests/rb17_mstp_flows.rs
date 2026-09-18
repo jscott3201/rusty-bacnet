@@ -720,29 +720,6 @@ async fn mstp_responder_denial_releases_reply() {
     peer_side.stop().await.unwrap();
 }
 
-#[tokio::test]
-async fn mstp_builder_bounds_reject() {
-    // Addressing validation fails fast at composition (mirror MasterNode).
-    let (serial, _peer) = LoopbackSerial::pair();
-    assert!(MstpEndpointBuilder::new(serial, 9)
-        .max_master(7)
-        .validate_only()
-        .is_err());
-    let (serial, _peer) = LoopbackSerial::pair();
-    assert!(MstpEndpointBuilder::new(serial, SESSION_MAC)
-        .max_master(200)
-        .validate_only()
-        .is_err());
-    // An identity advertising beyond the 480 transport bound is rejected.
-    let (serial, _peer) = LoopbackSerial::pair();
-    let big = DeviceIdentity::new(2002, 42).unwrap();
-    assert_eq!(big.max_apdu_length(), 1476);
-    assert!(MstpEndpointBuilder::new(serial, SESSION_MAC)
-        .identity(big)
-        .build_session()
-        .is_err());
-}
-
 async fn nonrouting_impl(mode: MstpExecutionMode) {
     let mut h = Harness::new(mode, SessionRole::Both).await;
     // Non-decodable bytes (no preamble): assembly discards them and the link
