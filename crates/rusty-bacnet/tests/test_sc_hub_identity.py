@@ -45,16 +45,51 @@ class HubIdentityTests(unittest.TestCase):
         init = next(node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == "__init__")
         self.assertEqual([arg.arg for arg in init.args.args],
                          ["self", "listen", "cert", "key", "vmac", "ca_cert"])
-        self.assertEqual([arg.arg for arg in init.args.kwonlyargs], ["device_uuid"])
-        default = init.args.kw_defaults[0]
-        assert default is not None
-        self.assertIsNone(ast.literal_eval(default))
+        kwonly = ["device_uuid", "max_clients", "max_handshakes", "admission_policy",
+                  "graceful_disconnect_ack_ms", "graceful_ws_close_ms", "graceful_overall_ms",
+                  "handshake_tls_ms", "handshake_websocket_upgrade_ms",
+                  "handshake_connect_request_ms"]
+        self.assertEqual([arg.arg for arg in init.args.kwonlyargs], kwonly)
+        defaults = {arg.arg: default for arg, default in
+                    zip(init.args.kwonlyargs, init.args.kw_defaults)}
+        for name in kwonly:
+            assert defaults[name] is not None, f"stub default missing for {name}"
+        self.assertIsNone(ast.literal_eval(defaults["device_uuid"]))  # type: ignore[arg-type]
+        self.assertEqual(
+            {name: ast.literal_eval(defaults[name]) for name in kwonly[1:]},  # type: ignore[arg-type]
+            {"max_clients": 256, "max_handshakes": 256, "admission_policy": "allow_all",
+             "graceful_disconnect_ack_ms": 5000, "graceful_ws_close_ms": 5000,
+             "graceful_overall_ms": 15000, "handshake_tls_ms": 10000,
+             "handshake_websocket_upgrade_ms": 10000, "handshake_connect_request_ms": 10000})
         uuid_type = init.args.kwonlyargs[0].annotation
         assert uuid_type is not None
         annotation = ast.unparse(uuid_type)
         self.assertIn("bytes", annotation)
         self.assertIn("bytearray", annotation)
         params = inspect.signature(ScHub).parameters
-        self.assertEqual(list(params), [arg.arg for arg in init.args.args[1:]] + ["device_uuid"])
-        self.assertEqual(params["device_uuid"].kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertEqual(list(params), [arg.arg for arg in init.args.args[1:]] + kwonly)
+        for name in kwonly:
+            self.assertEqual(params[name].kind, inspect.Parameter.KEYWORD_ONLY)
         self.assertIsNone(params["device_uuid"].default)
+        self.assertEqual(params["admission_policy"].default, "allow_all")
+        # Lifecycle methods exist in both the stub and the runtime.
+        # (async def parses as AsyncFunctionDef, not FunctionDef.)
+        funcs = (ast.FunctionDef, ast.AsyncFunctionDef)
+        stub_methods = {node.name for node in cls.body if isinstance(node, funcs)}
+        for name in ("start", "stop", "shutdown_gracefully", "status",
+                     "__aenter__", "__aexit__", "address", "url"):
+            with self.subTest(method=name):
+                self.assertIn(name, stub_methods)
+                self.assertTrue(callable(getattr(ScHub, name, None)))
+        # address()/url() return None before start: the stub must say Optional.
+        for name in ("address", "url"):
+            node = next(node for node in cls.body
+                        if isinstance(node, funcs) and node.name == name)
+            assert node.returns is not None
+            self.assertIn("Optional", ast.unparse(node.returns))
+        shutdown = next(node for node in cls.body
+                        if isinstance(node, funcs) and node.name == "shutdown_gracefully")
+        assert shutdown.returns is not None
+        outcome = ast.unparse(shutdown.returns)
+        self.assertIn("graceful", outcome)
+        self.assertIn("forced", outcome)

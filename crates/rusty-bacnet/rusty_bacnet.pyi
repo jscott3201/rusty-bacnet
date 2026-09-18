@@ -2406,6 +2406,17 @@ class BACnetServer:
 # SC Hub
 # ---------------------------------------------------------------------------
 
+class ScHubStatus(TypedDict):
+    """Bounded hub snapshot: counts and kind labels only (no keys/VMAC maps)."""
+    listening: bool
+    max_clients: int
+    max_handshakes: int
+    client_count: int
+    handshake_count: int
+    admin_denied: int
+    broadcast_sender_exhausted: int
+    broadcast_global_exhausted: int
+
 class ScHub:
     """BACnet/SC Hub for relaying messages between SC nodes.
 
@@ -2415,7 +2426,14 @@ class ScHub:
                     ca_cert="ca.pem", device_uuid=provisioned_hub_uuid)
         await hub.start()
         print(await hub.url())
-        await hub.stop()
+        print(await hub.status())
+        print(await hub.shutdown_gracefully())  # "graceful" or "forced"
+
+    The hub also works as an async context manager (starts on entry,
+    forcefully stops on exit)::
+
+        async with ScHub(..., device_uuid=provisioned_hub_uuid) as hub:
+            ...
 
     ``ca_cert`` must name trusted issuer CA PEM certificates for mutual TLS.
     Omitted, None, or empty values raise ValueError at construction. The None
@@ -2431,6 +2449,18 @@ class ScHub:
     provided. The hosting port's ``vmac`` must be six bytes (RuntimeError for wrong
     length), neither all zero nor all ff (ValueError). CA presence remains first,
     then VMAC validation, then UUID. No certificate-to-identity binding is implied.
+
+    Admission and timeout policy is constructor-validated, before bind:
+    ``max_clients``/``max_handshakes`` caps (zero/overflowing raise ValueError,
+    negative values raise OverflowError); ``admission_policy`` is the static
+    string ``"allow_all"`` (default) or ``"deny_all"`` (unknown strings raise
+    ValueError, non-strings including callables raise TypeError — no Python
+    callback can run under the native registry lock); graceful per-peer ack /
+    close / overall millisecond bounds and handshake TLS / WebSocket-upgrade /
+    Connect-Request millisecond bounds (out-of-range values raise ValueError).
+    ``stop()`` is forceful and idempotent; ``shutdown_gracefully()`` runs the
+    Disconnect/Ack/close exchange and consumes the hub; dropping the hub
+    without awaiting close only seals admission and cannot guarantee cleanup.
     """
 
     def __init__(
@@ -2442,6 +2472,15 @@ class ScHub:
         ca_cert: Optional[str] = None,
         *,
         device_uuid: Optional[Union[bytes, bytearray]] = None,
+        max_clients: int = 256,
+        max_handshakes: int = 256,
+        admission_policy: str = "allow_all",
+        graceful_disconnect_ack_ms: int = 5000,
+        graceful_ws_close_ms: int = 5000,
+        graceful_overall_ms: int = 15000,
+        handshake_tls_ms: int = 10000,
+        handshake_websocket_upgrade_ms: int = 10000,
+        handshake_connect_request_ms: int = 10000,
     ) -> None: ...
 
     async def start(self) -> None:
@@ -2449,13 +2488,29 @@ class ScHub:
         ...
 
     async def stop(self) -> None:
-        """Stop the SC hub."""
+        """Stop the SC hub (forceful, idempotent)."""
         ...
 
-    async def address(self) -> str:
-        """Get the address the hub is listening on."""
+    async def shutdown_gracefully(self) -> Literal["graceful", "forced"]:
+        """Graceful shutdown; consumes the hub (RuntimeError if not started)."""
         ...
 
-    async def url(self) -> str:
-        """Get the WebSocket URL of the hub."""
+    async def status(self) -> ScHubStatus:
+        """Bounded redacted snapshot (RuntimeError before start/after stop)."""
+        ...
+
+    async def __aenter__(self) -> ScHub: ...
+    async def __aexit__(
+        self,
+        _exc_type: Any = None,
+        _exc_val: Any = None,
+        _exc_tb: Any = None,
+    ) -> None: ...
+
+    async def address(self) -> Optional[str]:
+        """Get the address the hub is listening on (None before start)."""
+        ...
+
+    async def url(self) -> Optional[str]:
+        """Get the WebSocket URL of the hub (None before start)."""
         ...

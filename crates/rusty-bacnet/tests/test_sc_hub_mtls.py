@@ -211,11 +211,26 @@ class HubMtlsTests(MtlsFixture):
 
     async def test_constructor_signature_and_required_ca(self):
         parameters = inspect.signature(ScHub).parameters
-        self.assertEqual(list(parameters), ["listen", "cert", "key", "vmac", "ca_cert", "device_uuid"])
+        self.assertEqual(list(parameters), ["listen", "cert", "key", "vmac", "ca_cert", "device_uuid",
+                                            "max_clients", "max_handshakes", "admission_policy",
+                                            "graceful_disconnect_ack_ms", "graceful_ws_close_ms",
+                                            "graceful_overall_ms", "handshake_tls_ms",
+                                            "handshake_websocket_upgrade_ms",
+                                            "handshake_connect_request_ms"])
         self.assertIsNone(parameters["ca_cert"].default)
         self.assertEqual(parameters["ca_cert"].kind, inspect.Parameter.POSITIONAL_OR_KEYWORD)
         self.assertIsNone(parameters["device_uuid"].default)
         self.assertEqual(parameters["device_uuid"].kind, inspect.Parameter.KEYWORD_ONLY)
+        for name, default in [("max_clients", 256), ("max_handshakes", 256),
+                              ("admission_policy", "allow_all"),
+                              ("graceful_disconnect_ack_ms", 5000),
+                              ("graceful_ws_close_ms", 5000), ("graceful_overall_ms", 15000),
+                              ("handshake_tls_ms", 10000),
+                              ("handshake_websocket_upgrade_ms", 10000),
+                              ("handshake_connect_request_ms", 10000)]:
+            with self.subTest(name=name):
+                self.assertEqual(parameters[name].default, default)
+                self.assertEqual(parameters[name].kind, inspect.Parameter.KEYWORD_ONLY)
         args = ("127.0.0.1:0", self.path("hub.pem"), self.path("hub.key"), b"\x02\0\0\0\0\1")
         for extra in [(), (None,), ("",)]:
             with self.subTest(extra=extra), self.assertRaisesRegex(ValueError, "ca_cert"):
