@@ -10,15 +10,15 @@ use std::sync::Arc;
 use bacnet_endpoint::identity::DeviceIdentity;
 use bacnet_endpoint::sc::ScEndpointBuilder;
 use bacnet_endpoint::session::{EndpointSession, SessionRole};
-use bacnet_objects::traits::BACnetObject;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use tokio::sync::Mutex;
 
 use crate::endpoint::common::{
-    build_database, build_identity, make_analog_input, make_analog_value, make_binary_input,
-    make_binary_value, parse_device_uuid, parse_segmentation, parse_services, with_sc_port,
+    build_database, build_identity, build_pending_boxes, make_analog_input, make_analog_value,
+    make_binary_input, make_binary_value, parse_device_uuid, parse_segmentation, parse_services,
+    with_sc_port, PendingObject, PendingRestoreGuard,
 };
 use crate::endpoint::roles::{PyEndpointClient, PyEndpointServer};
 use crate::errors::to_py_err;
@@ -54,18 +54,18 @@ struct ScEndpointConfig {
 pub struct PyScEndpoint {
     inner: Arc<Mutex<Option<ScSession>>>,
     config: ScEndpointConfig,
-    pending: std::sync::Mutex<Vec<Box<dyn BACnetObject>>>,
+    pending: Arc<std::sync::Mutex<Vec<PendingObject>>>,
     started: Arc<AtomicBool>,
 }
 
 impl PyScEndpoint {
-    fn lock_pending(&self) -> PyResult<std::sync::MutexGuard<'_, Vec<Box<dyn BACnetObject>>>> {
+    fn lock_pending(&self) -> PyResult<std::sync::MutexGuard<'_, Vec<PendingObject>>> {
         self.pending
             .lock()
             .map_err(|_| PyRuntimeError::new_err("internal lock poisoned"))
     }
 
-    fn push_pending(&self, obj: Box<dyn BACnetObject>) -> PyResult<()> {
+    fn push_pending(&self, obj: PendingObject) -> PyResult<()> {
         let mut guard = self.lock_pending()?;
         if self.started.load(Ordering::Acquire) {
             return Err(PyRuntimeError::new_err(
@@ -210,12 +210,13 @@ impl PyScEndpoint {
                 identity,
                 queue_capacity,
             },
-            pending: std::sync::Mutex::new(Vec::new()),
+            pending: Arc::new(std::sync::Mutex::new(Vec::new())),
             started: Arc::new(AtomicBool::new(false)),
         })
     }
 
-    /// Test seam: pending registration count.
+    /// Test seam: pending registration count (drained by successful start;
+    /// restored on failed/cancelled start).
     #[doc(hidden)]
     fn _pending_registration_count(&self) -> PyResult<usize> {
         Ok(self.lock_pending()?.len())
@@ -230,25 +231,44 @@ impl PyScEndpoint {
         units: u32,
         present_value: f32,
     ) -> PyResult<()> {
-        self.push_pending(make_analog_input(instance, name, units, present_value)?)
+        make_analog_input(instance, name, units, present_value)?;
+        self.push_pending(PendingObject::AnalogInput {
+            instance,
+            name: name.to_string(),
+            units,
+            present_value,
+        })
     }
 
     /// Add an Analog Value object (before start).
     #[pyo3(signature = (instance, name, units=62))]
     fn add_analog_value(&self, instance: u32, name: &str, units: u32) -> PyResult<()> {
-        self.push_pending(make_analog_value(instance, name, units)?)
+        make_analog_value(instance, name, units)?;
+        self.push_pending(PendingObject::AnalogValue {
+            instance,
+            name: name.to_string(),
+            units,
+        })
     }
 
     /// Add a Binary Input object (before start).
     #[pyo3(signature = (instance, name))]
     fn add_binary_input(&self, instance: u32, name: &str) -> PyResult<()> {
-        self.push_pending(make_binary_input(instance, name)?)
+        make_binary_input(instance, name)?;
+        self.push_pending(PendingObject::BinaryInput {
+            instance,
+            name: name.to_string(),
+        })
     }
 
     /// Add a Binary Value object (before start).
     #[pyo3(signature = (instance, name))]
     fn add_binary_value(&self, instance: u32, name: &str) -> PyResult<()> {
-        self.push_pending(make_binary_value(instance, name)?)
+        make_binary_value(instance, name)?;
+        self.push_pending(PendingObject::BinaryValue {
+            instance,
+            name: name.to_string(),
+        })
     }
 
     /// Start the endpoint: dial hub, compose one SC session. Start-once.
@@ -261,10 +281,9 @@ impl PyScEndpoint {
             Some(self.config.client_key.as_str()),
         )
         .map_err(|e| PyRuntimeError::new_err(format!("TLS config error: {e}")))?;
-        let objects: Vec<Box<dyn BACnetObject>> = {
-            let mut guard = self.lock_pending()?;
-            guard.drain(..).collect()
-        };
+        // Dial before draining (RUN-1): dial failures and cancellation while
+        // dialing leave pending untouched, so retry needs no re-registration.
+        let pending = self.pending.clone();
         let inner = self.inner.clone();
         let started = self.started.clone();
         let config = self.config.clone();
@@ -277,10 +296,17 @@ impl PyScEndpoint {
                     )));
                 }
             }
-            let db = build_database(&config.identity, objects)?;
             let ws = bacnet_transport::sc_tls::TlsWebSocket::connect(&config.hub_url, tls_config)
                 .await
                 .map_err(to_py_err)?;
+            let mut restore = PendingRestoreGuard::new(pending.clone(), {
+                let mut guard = pending
+                    .lock()
+                    .map_err(|_| PyRuntimeError::new_err("internal lock poisoned"))?;
+                guard.drain(..).collect()
+            });
+            let boxes = build_pending_boxes(restore.objects())?;
+            let db = build_database(&config.identity, boxes)?;
             let mut session = ScEndpointBuilder::new(config.vmac, config.device_uuid)
                 .role(SessionRole::Both)
                 .queue_capacity(config.queue_capacity)
@@ -291,6 +317,7 @@ impl PyScEndpoint {
                 .map_err(to_py_err)?;
             session.start().await.map_err(to_py_err)?;
             *inner.lock().await = Some(session);
+            restore.take();
             started.store(true, Ordering::Release);
             Ok(())
         })
@@ -313,7 +340,7 @@ impl PyScEndpoint {
     /// Start on context entry (idempotent when already running).
     fn __aenter__<'py>(slf: Bound<'py, Self>, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let self_ref = slf.clone().unbind();
-        let (tls_config, inner, started, config, objects) = {
+        let (tls_config, pending, inner, started, config) = {
             let borrowed = slf.borrow();
             let tls_config = crate::tls::build_client_tls_config(
                 Some(borrowed.config.ca_cert.as_str()),
@@ -321,14 +348,12 @@ impl PyScEndpoint {
                 Some(borrowed.config.client_key.as_str()),
             )
             .map_err(|e| PyRuntimeError::new_err(format!("TLS config error: {e}")))?;
-            let mut guard = borrowed.lock_pending()?;
-            let objects: Vec<Box<dyn BACnetObject>> = guard.drain(..).collect();
             (
                 tls_config,
+                borrowed.pending.clone(),
                 borrowed.inner.clone(),
                 borrowed.started.clone(),
                 borrowed.config.clone(),
-                objects,
             )
         };
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -338,10 +363,17 @@ impl PyScEndpoint {
                     return Ok(self_ref);
                 }
             }
-            let db = build_database(&config.identity, objects)?;
             let ws = bacnet_transport::sc_tls::TlsWebSocket::connect(&config.hub_url, tls_config)
                 .await
                 .map_err(to_py_err)?;
+            let mut restore = PendingRestoreGuard::new(pending.clone(), {
+                let mut guard = pending
+                    .lock()
+                    .map_err(|_| PyRuntimeError::new_err("internal lock poisoned"))?;
+                guard.drain(..).collect()
+            });
+            let boxes = build_pending_boxes(restore.objects())?;
+            let db = build_database(&config.identity, boxes)?;
             let mut session = ScEndpointBuilder::new(config.vmac, config.device_uuid)
                 .role(SessionRole::Both)
                 .queue_capacity(config.queue_capacity)
@@ -352,6 +384,7 @@ impl PyScEndpoint {
                 .map_err(to_py_err)?;
             session.start().await.map_err(to_py_err)?;
             *inner.lock().await = Some(session);
+            restore.take();
             started.store(true, Ordering::Release);
             Ok(self_ref)
         })

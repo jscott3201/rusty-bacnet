@@ -535,6 +535,121 @@ class BipFunctionalTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIsInstance(ctx.exception.error_code, int)
 
 
+class FailedStartPreservationTests(unittest.IsolatedAsyncioTestCase):
+    """RUN-1: failed/cancelled starts restore pending for retry.
+
+    DATA-1: duplicate object names fail with ValueError (server parity),
+    never BacnetProtocolError.
+    """
+
+    async def test_bind_conflict_preserves_pending_and_retry_serves(self):
+        port = free_port()
+        holder = BipEndpoint(**bip_kwargs(port=port, device_instance=9101))
+        await asyncio.wait_for(holder.start(), 10)
+        try:
+            endpoint = BipEndpoint(**bip_kwargs(port=port, device_instance=9102))
+            endpoint.add_analog_input(
+                instance=1, name="Retry", units=62, present_value=7.5
+            )
+            pending = getattr(endpoint, "_pending_registration_count")
+            self.assertEqual(pending(), 1)
+            with self.assertRaises(BacnetError):
+                await asyncio.wait_for(endpoint.start(), 10)
+            # Failed start drops nothing: retry after the fix serves the object.
+            self.assertEqual(pending(), 1)
+            await asyncio.wait_for(holder.close(), 5)
+            await asyncio.wait_for(endpoint.start(), 10)
+            try:
+                self.assertEqual(pending(), 0)
+                reader = BipEndpoint(
+                    **bip_kwargs(port=free_port(), device_instance=9103)
+                )
+                await asyncio.wait_for(reader.start(), 10)
+                try:
+                    rc = await reader.client()
+                    oid = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)
+                    value = await asyncio.wait_for(
+                        rc.read_property(
+                            f"127.0.0.1:{port}",
+                            oid,
+                            PropertyIdentifier.PRESENT_VALUE,
+                        ),
+                        10,
+                    )
+                    self.assertEqual(value.value, 7.5)
+                finally:
+                    await asyncio.wait_for(reader.close(), 5)
+            finally:
+                await asyncio.wait_for(endpoint.close(), 5)
+        finally:
+            await asyncio.wait_for(holder.close(), 5)
+
+    async def test_duplicate_name_raises_value_error_and_preserves_pending(self):
+        endpoint = BipEndpoint(**bip_kwargs(port=free_port(), device_instance=9201))
+        endpoint.add_analog_input(instance=1, name="Dupe", present_value=1.0)
+        endpoint.add_analog_value(instance=2, name="Dupe")
+        pending = getattr(endpoint, "_pending_registration_count")
+        self.assertEqual(pending(), 2)
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            await asyncio.wait_for(endpoint.start(), 10)
+        self.assertEqual(pending(), 2)
+        await asyncio.wait_for(endpoint.close(), 5)
+
+    async def test_cancelled_start_preserves_pending_and_retry_works(self):
+        # The bridge may park a cancelled future instead of dropping it
+        # promptly, so a lone cancel is timing-dependent. Anchor the cancel
+        # on a held port: the start fails at the pre-drain bind pre-check
+        # (or the cancel lands first) — either outcome must preserve pending
+        # without depending on future-drop timing.
+        port = free_port()
+        holder = BipEndpoint(**bip_kwargs(port=port, device_instance=9300))
+        await asyncio.wait_for(holder.start(), 10)
+        try:
+            endpoint = BipEndpoint(**bip_kwargs(port=port, device_instance=9301))
+            endpoint.add_analog_input(
+                instance=1, name="Cancel", units=62, present_value=3.25
+            )
+            pending = getattr(endpoint, "_pending_registration_count")
+            self.assertEqual(pending(), 1)
+            # Cancel immediately: either the cancel lands first (parked
+            # future, never drained) or the bind pre-check fails first —
+            # both must preserve pending.
+            task = asyncio.ensure_future(endpoint.start())
+            task.cancel()
+            try:
+                await asyncio.wait_for(task, 10)
+                self.fail("held-port start must fail or cancel")
+            except (asyncio.CancelledError, BacnetError):
+                pass
+            self.assertEqual(pending(), 1)
+            await asyncio.wait_for(holder.close(), 5)
+            await asyncio.wait_for(endpoint.start(), 10)
+            try:
+                self.assertEqual(pending(), 0)
+                reader = BipEndpoint(
+                    **bip_kwargs(port=free_port(), device_instance=9302)
+                )
+                await asyncio.wait_for(reader.start(), 10)
+                try:
+                    rc = await reader.client()
+                    oid = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)
+                    value = await asyncio.wait_for(
+                        rc.read_property(
+                            f"127.0.0.1:{port}",
+                            oid,
+                            PropertyIdentifier.PRESENT_VALUE,
+                        ),
+                        10,
+                    )
+                    self.assertEqual(value.value, 3.25)
+                finally:
+                    await asyncio.wait_for(reader.close(), 5)
+            finally:
+                await asyncio.wait_for(endpoint.close(), 5)
+        finally:
+            await asyncio.wait_for(holder.close(), 5)
+
+
 class MstpStartupTests(unittest.IsolatedAsyncioTestCase):
     async def test_nonexistent_serial_fails_as_setup_not_protocol(self):
         endpoint = MstpEndpoint(

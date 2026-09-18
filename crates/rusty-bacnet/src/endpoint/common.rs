@@ -4,13 +4,14 @@
 //! async start path only reuses owned values. No post-start owner mutation.
 
 use std::net::Ipv4Addr;
+use std::sync::Arc;
 
 use bacnet_endpoint::identity::{build_database_with_extra, DeviceIdentity};
 use bacnet_objects::analog::{AnalogInputObject, AnalogValueObject};
 use bacnet_objects::binary::{BinaryInputObject, BinaryValueObject};
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::traits::BACnetObject;
-use bacnet_types::enums::{Segmentation, ServiceSupported};
+use bacnet_types::enums::{ErrorClass, ErrorCode, Segmentation, ServiceSupported};
 use pyo3::exceptions::PyValueError;
 use pyo3::PyResult;
 
@@ -127,12 +128,20 @@ pub(crate) fn with_sc_port(
 /// Build the database from the single identity plus pending objects.
 ///
 /// Truth direction stays identity-first: Device Object_List is seeded with
-/// Device + ports + extras upfront. Duplicate names map to ValueError.
+/// Device + ports + extras upfront. Duplicate names map to ValueError (server
+/// parity: `ObjectDatabase::add` reports `Error::Protocol { OBJECT,
+/// DUPLICATE_NAME }`, never an Encoding string).
 pub(crate) fn build_database(
     identity: &DeviceIdentity,
     extra: Vec<Box<dyn BACnetObject>>,
 ) -> PyResult<ObjectDatabase> {
     build_database_with_extra(identity, extra).map_err(|e| match &e {
+        bacnet_types::error::Error::Protocol { class, code }
+            if *class == u32::from(ErrorClass::OBJECT.to_raw())
+                && *code == u32::from(ErrorCode::DUPLICATE_NAME.to_raw()) =>
+        {
+            PyValueError::new_err(format!("duplicate object name: {e}"))
+        }
         bacnet_types::error::Error::Encoding(message)
             if message.contains("duplicate object name") =>
         {
@@ -145,6 +154,115 @@ pub(crate) fn build_database(
 // ---------------------------------------------------------------------------
 // Pending-registration seam (mirrors BACnetServer: std Mutex + started flag)
 // ---------------------------------------------------------------------------
+// RUN-1: registrations are stored as rebuildable params (not built boxes) so
+// a failed/cancelled start can restore them and retry. Boxes are built fresh
+// from these params on every start attempt; the params survive any drop of
+// the start future, while built boxes are dropped with it.
+
+/// Pending object parameters: one entry per pre-start `add_*` call.
+///
+/// `Clone` so a failed/cancelled start restores the exact registration set
+/// for retry. Built into boxes at start time (after add-time validation).
+#[derive(Clone, Debug)]
+pub(crate) enum PendingObject {
+    AnalogInput {
+        instance: u32,
+        name: String,
+        units: u32,
+        present_value: f32,
+    },
+    AnalogValue {
+        instance: u32,
+        name: String,
+        units: u32,
+    },
+    BinaryInput {
+        instance: u32,
+        name: String,
+    },
+    BinaryValue {
+        instance: u32,
+        name: String,
+    },
+}
+
+impl PendingObject {
+    /// Builds the object (same constructors as the add-time validation).
+    pub(crate) fn build(&self) -> PyResult<Box<dyn BACnetObject>> {
+        match self {
+            Self::AnalogInput {
+                instance,
+                name,
+                units,
+                present_value,
+            } => make_analog_input(*instance, name, *units, *present_value),
+            Self::AnalogValue {
+                instance,
+                name,
+                units,
+            } => make_analog_value(*instance, name, *units),
+            Self::BinaryInput { instance, name } => make_binary_input(*instance, name),
+            Self::BinaryValue { instance, name } => make_binary_value(*instance, name),
+        }
+    }
+}
+
+/// Builds boxes from borrowed params (params retained on error).
+pub(crate) fn build_pending_boxes(
+    params: &[PendingObject],
+) -> PyResult<Vec<Box<dyn BACnetObject>>> {
+    params.iter().map(PendingObject::build).collect()
+}
+
+/// Drop-guard restoring drained params on every Err/cancel path.
+///
+/// Moved into the start future; callers borrow until success, then disarm
+/// via `take()`. Any Err return — and future cancellation (drop) — puts the
+/// drained vector back at the front, ahead of concurrent adds.
+pub(crate) struct PendingRestoreGuard {
+    pending: Arc<std::sync::Mutex<Vec<PendingObject>>>,
+    objects: Option<Vec<PendingObject>>,
+}
+
+impl PendingRestoreGuard {
+    pub(crate) fn new(
+        pending: Arc<std::sync::Mutex<Vec<PendingObject>>>,
+        objects: Vec<PendingObject>,
+    ) -> Self {
+        Self {
+            pending,
+            objects: Some(objects),
+        }
+    }
+
+    /// Borrows the drained params (retained on error).
+    pub(crate) fn objects(&self) -> &[PendingObject] {
+        self.objects.as_deref().unwrap_or(&[])
+    }
+
+    /// Disarms after success (params consumed into the running session).
+    pub(crate) fn take(&mut self) -> Option<Vec<PendingObject>> {
+        self.objects.take()
+    }
+}
+
+impl Drop for PendingRestoreGuard {
+    fn drop(&mut self) {
+        if let Some(objs) = self.objects.take() {
+            if objs.is_empty() {
+                return;
+            }
+            let mut guard = match self.pending.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            // Drained registrations predate concurrent adds: front-insert.
+            let mut restored = objs;
+            restored.extend(guard.drain(..));
+            *guard = restored;
+        }
+    }
+}
 
 /// Create a pending Analog Input object (validation before start).
 pub(crate) fn make_analog_input(
