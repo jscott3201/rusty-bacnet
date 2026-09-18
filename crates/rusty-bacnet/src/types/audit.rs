@@ -377,16 +377,35 @@ fn operation_flags(value: &Bound<'_, PyAny>, name: &str) -> PyResult<AuditOperat
         .map_err(|error| PyValueError::new_err(format!("{name}: {error}")))
 }
 
-/// Parse the corrected-baseline three-state success filter (RB-02).
+/// Parse the corrected-baseline three-state success filter (RB-02, RB-20).
 ///
 /// The mapping accepts the raw `BACnetSuccessFilter` values 0 (all), 1
-/// (successes-only), and 2 (failures-only) as an integer. The old Boolean
-/// `successful_actions_only` meaning is not accepted here: `true` used to
-/// mean successes-only and `false` meant all (see
-/// `BACnetSuccessFilter::from_legacy_bool`). Full Python range
-/// validation, wrapper ergonomics, and docs are RB-20 work.
+/// (successes-only), and 2 (failures-only) as an integer. The pre-RB-02
+/// Boolean `successful-actions-only` meaning is not accepted here: `True`
+/// used to mean successes-only and `False` meant all (see
+/// `BACnetSuccessFilter::from_legacy_bool`). Pass 1 for the old `True` and 0
+/// for the old `False`. In particular a `bool` is never accepted as an
+/// arbitrary enum integer: it raises `TypeError`, while an out-of-range
+/// integer raises `ValueError`.
 fn success_filter(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACnetSuccessFilter> {
-    let raw = ranged_integer(value, name, 0, 2)?;
+    if value.is_instance_of::<PyBool>() {
+        return Err(PyTypeError::new_err(format!(
+            "{name} must be 0 (all), 1 (successes-only), or 2 (failures-only) as an integer; the deprecated Boolean successful-actions-only field is not accepted (use 1 for True, 0 for False)"
+        )));
+    }
+    let raw = ranged_integer(value, name, 0, 2).map_err(|error| {
+        if error.is_instance_of::<PyValueError>(value.py()) {
+            PyValueError::new_err(format!(
+                "{name} must be 0 (all), 1 (successes-only), or 2 (failures-only), got {}",
+                value
+                    .extract::<i128>()
+                    .map(|raw| raw.to_string())
+                    .unwrap_or_else(|_| "<non-integer>".into())
+            ))
+        } else {
+            error
+        }
+    })?;
     Ok(BACnetSuccessFilter::from_raw(raw as u32))
 }
 

@@ -112,7 +112,9 @@ def target_query() -> dict[str, Any]:
         "query_parameters": {
             "kind": "by_target",
             "target_device_identifier": ObjectIdentifier(ObjectType.DEVICE, 2),
-            "successful_actions_only": True,
+            # Corrected contract (RB-02/RB-20): 0 = all, 1 = successes-only,
+            # 2 = failures-only. The pre-RB-02 Boolean is rejected (TypeError).
+            "successful_actions_only": 1,
         },
         "requested_count": 10,
     }
@@ -391,7 +393,14 @@ class AuditContractArtifactTests(unittest.TestCase):
                 **target_query(),
                 "query_parameters": {
                     **target_query()["query_parameters"],
-                    "successful_actions_only": 1,
+                    "successful_actions_only": True,
+                },
+            },
+            {
+                **target_query(),
+                "query_parameters": {
+                    **target_query()["query_parameters"],
+                    "successful_actions_only": False,
                 },
             },
             {
@@ -401,10 +410,26 @@ class AuditContractArtifactTests(unittest.TestCase):
                     "operations": True,
                 },
             },
+            {
+                **target_query(),
+                "start_at_sequence_number": True,
+            },
         ]
         for request in type_errors:
             with self.subTest(type_error=request), self.assertRaises(TypeError):
                 _unused = method(ADDRESS, request)
+
+        # The deprecated Boolean meaning stays a TypeError with guidance toward
+        # the integer contract (1 for True, 0 for False).
+        legacy_bool: Any = {
+            **target_query(),
+            "query_parameters": {
+                **target_query()["query_parameters"],
+                "successful_actions_only": True,
+            },
+        }
+        with self.assertRaisesRegex(TypeError, "deprecated Boolean"):
+            _unused = method(ADDRESS, legacy_bool)
 
         value_errors = [
             {},
@@ -412,7 +437,9 @@ class AuditContractArtifactTests(unittest.TestCase):
             {**target_query(), "requested_count": -1},
             {**target_query(), "requested_count": 65_536},
             {**target_query(), "start_at_sequence_number": -1},
-            {**target_query(), "start_at_sequence_number": 2**32},
+            # Corrected Unsigned64 cursor (RB-20): u32-range values are valid;
+            # only the u64 domain edges are rejected.
+            {**target_query(), "start_at_sequence_number": 2**64},
             {**target_query(), "query_parameters": {"kind": "by_target"}},
             {
                 **target_query(),
@@ -422,6 +449,16 @@ class AuditContractArtifactTests(unittest.TestCase):
                 },
             },
         ]
+        for invalid_filter in (-1, 3, 2**32):
+            value_errors.append(
+                {
+                    **target_query(),
+                    "query_parameters": {
+                        **target_query()["query_parameters"],
+                        "successful_actions_only": invalid_filter,
+                    },
+                }
+            )
         for operations in (-1, 2**64, 1 << 16, 1 << 31):
             value_errors.append(
                 {
@@ -445,7 +482,7 @@ class AuditContractArtifactTests(unittest.TestCase):
                     "source_device_address": MappingProxyType(address_recipient()),
                     "source_object_identifier": None,
                     "operations": (1 << 0) | (1 << 15) | (1 << 32) | (1 << 63),
-                    "successful_actions_only": False,
+                    "successful_actions_only": 0,
                 },
                 "start_at_sequence_number": None,
                 "requested_count": 65_535,
@@ -515,6 +552,93 @@ class AuditContractArtifactTests(unittest.TestCase):
                             request["requested_count"],
                             dict(parameters),
                         ),
+                    )
+
+                    # RB-20 Python end-to-end on an empty log: both choices ×
+                    # all three filters return an honest empty page, and the
+                    # widened ranges (u64 cursor, u16 count edges) are accepted.
+                    for filter_value in (0, 1, 2):
+                        for choice in (
+                            {
+                                "kind": "by_target",
+                                "target_device_identifier": ObjectIdentifier(
+                                    ObjectType.DEVICE, 2
+                                ),
+                                "successful_actions_only": filter_value,
+                            },
+                            {
+                                "kind": "by_source",
+                                "source_device_identifier": ObjectIdentifier(
+                                    ObjectType.DEVICE, 1
+                                ),
+                                "successful_actions_only": filter_value,
+                            },
+                        ):
+                            with self.subTest(filter=filter_value, kind=choice["kind"]):
+                                choice_query = {
+                                    "audit_log": ObjectIdentifier(ObjectType.AUDIT_LOG, 1),
+                                    "query_parameters": choice,
+                                    "requested_count": 10,
+                                }
+                                empty = await typed_query(address, choice_query)
+                                self.assertEqual(empty["records"], [])
+                                self.assertIs(empty["no_more_items"], True)
+                    for count in (0, 1, 65_535):
+                        with self.subTest(requested_count=count):
+                            counted = await typed_query(
+                                address, {**request, "requested_count": count}
+                            )
+                            self.assertEqual(counted["records"], [])
+                            # No retained record can match, so even count=0 is
+                            # exhaustion here (cf. the Rust count=0/later-match
+                            # case, which reports more items).
+                            self.assertIs(counted["no_more_items"], True)
+                    for cursor in (0, 2**32, 2**64 - 1):
+                        with self.subTest(cursor=cursor):
+                            paged = await typed_query(
+                                address,
+                                {**request, "start_at_sequence_number": cursor},
+                            )
+                            self.assertEqual(paged["records"], [])
+                            self.assertIs(paged["no_more_items"], True)
+
+                    # Local conversion failure (no frame sent) versus a valid
+                    # empty result: the former raises before transport, the
+                    # latter returns an honest page.
+                    with self.assertRaises(TypeError):
+                        _unused = typed_query(
+                            address, {**request, "requested_count": True}
+                        )
+                    with self.assertRaisesRegex(TypeError, "deprecated Boolean"):
+                        _unused = typed_query(
+                            address,
+                            {
+                                **request,
+                                "query_parameters": {
+                                    **parameters,
+                                    "successful_actions_only": False,
+                                },
+                            },
+                        )
+
+                    # An unknown Audit Log instance is a protocol error, unlike
+                    # an unknown filter value which is an honest empty page.
+                    with self.assertRaises(BacnetProtocolError) as raised:
+                        await typed_query(
+                            address,
+                            {
+                                **request,
+                                "audit_log": ObjectIdentifier(
+                                    ObjectType.AUDIT_LOG, 99
+                                ),
+                            },
+                        )
+                    self.assertEqual(
+                        raised.exception.error_class, ErrorClass.OBJECT.to_raw()
+                    )
+                    self.assertEqual(
+                        raised.exception.error_code,
+                        ErrorCode.UNKNOWN_OBJECT.to_raw(),
                     )
 
                     invalid = notification_request(

@@ -1081,7 +1081,9 @@ class AuditNotificationRequestInput(TypedDict):
 class AuditLogQueryByTargetInput(TypedDict):
     kind: Literal["by_target"]
     target_device_identifier: ObjectIdentifier
-    successful_actions_only: int
+    # Corrected BACnetSuccessFilter (RB-02/RB-20): 0 = all, 1 = successes-only,
+    # 2 = failures-only. The pre-RB-02 Boolean is rejected with TypeError.
+    successful_actions_only: Literal[0, 1, 2]
     target_device_address: NotRequired[AuditRecipientAddress | None]
     target_object_identifier: NotRequired[ObjectIdentifier | None]
     target_property_identifier: NotRequired[PropertyIdentifier | None]
@@ -1093,7 +1095,9 @@ class AuditLogQueryByTargetInput(TypedDict):
 class AuditLogQueryBySourceInput(TypedDict):
     kind: Literal["by_source"]
     source_device_identifier: ObjectIdentifier
-    successful_actions_only: int
+    # Corrected BACnetSuccessFilter (RB-02/RB-20): 0 = all, 1 = successes-only,
+    # 2 = failures-only. The pre-RB-02 Boolean is rejected with TypeError.
+    successful_actions_only: Literal[0, 1, 2]
     source_device_address: NotRequired[AuditRecipientAddress | None]
     source_object_identifier: NotRequired[ObjectIdentifier | None]
     operations: NotRequired[int | None]
@@ -1105,7 +1109,9 @@ AuditLogQueryParametersInput = AuditLogQueryByTargetInput | AuditLogQueryBySourc
 class AuditLogQueryRequestInput(TypedDict):
     audit_log: ObjectIdentifier
     query_parameters: AuditLogQueryParametersInput
+    # Unsigned16 requested count (0..=65535).
     requested_count: int
+    # Optional corrected Unsigned64 cursor (0..=2**64-1; RB-20).
     start_at_sequence_number: NotRequired[int | None]
 
 

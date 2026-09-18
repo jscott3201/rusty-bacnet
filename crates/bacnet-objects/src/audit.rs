@@ -299,12 +299,16 @@ fn operation_matches(
     success_filter: BACnetSuccessFilter,
 ) -> bool {
     operations.is_none_or(|flags| flags.contains(notification.operation))
-        // Corrected-contract compile adaptation only: SUCCESSES_ONLY keeps the
-        // previous `true` behavior and every other filter keeps the previous
-        // `false` behavior. Three-state runtime filtering for FAILURES_ONLY is
-        // RB-20 work (see `BACnetSuccessFilter::from_legacy_bool`).
-        && (success_filter != BACnetSuccessFilter::SUCCESSES_ONLY
-            || notification.result.is_none())
+        // Corrected-baseline three-state filtering (RB-20, Errata 2024-04-29
+        // item 7): ALL matches every outcome, SUCCESSES_ONLY matches records
+        // without a result, and FAILURES_ONLY matches records with one. A
+        // reserved raw value matches nothing rather than widening the query.
+        && match success_filter.to_raw() {
+            0 => true,
+            1 => notification.result.is_none(),
+            2 => notification.result.is_some(),
+            _ => false,
+        }
 }
 
 fn query_matches(
