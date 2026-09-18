@@ -29,6 +29,7 @@ pub struct BipEndpointBuilder {
     role: SessionRole,
     session: SessionConfig,
     database: Option<ObjectDatabase>,
+    identity: Option<crate::identity::DeviceIdentity>,
     bbmd_bdt: Option<Vec<BdtEntry>>,
     foreign_policy: Option<ForeignDevicePolicy>,
     management_acl: Option<Vec<[u8; 4]>>,
@@ -48,6 +49,7 @@ impl BipEndpointBuilder {
             role: SessionRole::Both,
             session: SessionConfig::default(),
             database: None,
+            identity: None,
             bbmd_bdt: None,
             foreign_policy: None,
             management_acl: None,
@@ -83,6 +85,17 @@ impl BipEndpointBuilder {
     #[doc(hidden)]
     pub fn database(mut self, db: ObjectDatabase) -> Self {
         self.database = Some(db);
+        self
+    }
+
+    /// Composes the single Device identity (overrides SessionConfig 480).
+    ///
+    /// Truth direction: the database should already be built from the same
+    /// identity (`DeviceIdentity::build_database`); this only wires I-Am +
+    /// role limits. No generation, no extra socket.
+    #[doc(hidden)]
+    pub fn identity(mut self, identity: crate::identity::DeviceIdentity) -> Self {
+        self.identity = Some(identity);
         self
     }
 
@@ -170,15 +183,24 @@ impl BipEndpointBuilder {
     }
 
     /// Builds an unstarted session (caller drives `start()`/`stop()` once).
+    ///
+    /// One-socket proof: this builds exactly one [`BipTransport`] (one UDP
+    /// socket after `start()`); no second hidden socket is created here or
+    /// in [`EndpointSession`]. Bind-count proofs use a counting test double
+    /// plus real-socket corroboration (single nonzero local MAC/port).
     #[doc(hidden)]
     pub fn build_session(mut self) -> Result<EndpointSession<BipTransport>, Error> {
         let role = self.role;
         let session = self.session.clone();
         let database = self.database.take();
+        let identity = self.identity.take();
         let transport = self.build_transport()?;
         let mut endpoint = EndpointSession::new(transport, role, session)?;
         if let Some(db) = database {
             endpoint = endpoint.with_database(db);
+        }
+        if let Some(id) = identity {
+            endpoint = endpoint.with_identity(id);
         }
         Ok(endpoint)
     }

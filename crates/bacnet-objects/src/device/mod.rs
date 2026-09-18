@@ -373,6 +373,20 @@ impl DeviceObject {
         );
     }
 
+    /// Sync the durable Device UUID (Clause 12.11 DEVICE_UUID).
+    ///
+    /// RB-16 endpoint sync (not a fork): the caller owns the 16-byte UUID
+    /// durably (Annex AB.1.5.3); this setter only stores the supplied bytes
+    /// as an OctetString. No generation, no persistence, no version/variant
+    /// checks — startup validation elsewhere rejects only all-zero where a
+    /// real SC identity is required.
+    pub fn set_device_uuid(&mut self, uuid: [u8; 16]) {
+        self.properties.insert(
+            PropertyIdentifier::DEVICE_UUID,
+            PropertyValue::OctetString(uuid.to_vec()),
+        );
+    }
+
     /// Replace the entire active COV subscriptions list.
     pub fn set_active_cov_subscriptions(&mut self, subs: Vec<BACnetCOVSubscription>) {
         self.active_cov_subscriptions = subs;

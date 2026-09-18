@@ -108,6 +108,11 @@ struct SessionShared {
 /// Owns ONE [`EndpointIngress`], the shared [`OutboundTransactionCoordinator`],
 /// role registration, policy-outcome ownership, timers, egress and
 /// termination. Start-once/stop-once; `Drop` aborts without orphaning.
+///
+/// RB-16 identity: an optional [`DeviceIdentity`](crate::identity::DeviceIdentity)
+/// is the single source for I-Am + Device readback + role limits when
+/// composed via [`with_identity`](Self::with_identity). Standalone sessions
+/// without an identity keep the `SessionConfig` 480 default untouched.
 #[doc(hidden)]
 pub struct EndpointSession<T: TransportPort + 'static> {
     shared: Arc<SessionShared>,
@@ -126,6 +131,8 @@ pub struct EndpointSession<T: TransportPort + 'static> {
     config: SessionConfig,
     client_config: ClientConfig,
     database: Option<ObjectDatabase>,
+    identity: Option<crate::identity::DeviceIdentity>,
+    egress: Option<bacnet_endpoint_core::endpoint_ingress::EndpointEgress>,
 }
 
 /// Terminal state of the session dispatch task.
@@ -182,6 +189,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             config,
             client_config,
             database: None,
+            identity: None,
+            egress: None,
         })
     }
 
@@ -189,6 +198,22 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     #[doc(hidden)]
     pub fn with_database(mut self, db: ObjectDatabase) -> Self {
         self.database = Some(db);
+        self
+    }
+
+    /// Composes the single Device identity (before start).
+    ///
+    /// Truth direction: identity overrides the standalone `SessionConfig`
+    /// 480 default for the client role max-APDU; timers/retries stay from
+    /// `SessionConfig`. The database should already be built from the same
+    /// identity (see `DeviceIdentity::build_database`) so I-Am vs
+    /// ReadProperty vs role limits agree. No existing-test churn: sessions
+    /// without an identity keep the 480 default.
+    #[doc(hidden)]
+    pub fn with_identity(mut self, identity: crate::identity::DeviceIdentity) -> Self {
+        identity.apply_to_client_config(&mut self.client_config);
+        self.config.max_apdu_length = identity.max_apdu_length();
+        self.identity = Some(identity);
         self
     }
 
@@ -262,9 +287,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         let task = tokio::spawn(dispatch_loop(dispatch, cancel_rx));
 
         // Dispatch owns the three ingress receivers (single consumer); the
-        // session retains no second handle. `receivers.egress` was cloned
-        // above for role registration; the receiver halves move into dispatch.
-        let _ = receivers.egress;
+        // session retains one egress clone for the identity I-Am path while
+        // the receiver halves move into dispatch. No second demultiplexer.
+        self.egress = Some(egress);
         self.requester = requester;
         self.responder = responder;
         self.notifications = notifications;
@@ -366,6 +391,63 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     #[doc(hidden)]
     pub fn coordinator(&self) -> Arc<OutboundTransactionCoordinator> {
         Arc::clone(&self.coordinator)
+    }
+
+    /// Borrows the composed identity (narrow admin; no lifecycle).
+    ///
+    /// RB-15 narrow admin borrow: roles hold no transport/session lifecycle;
+    /// only the session owner exposes identity + counters + coordinator.
+    /// A role handle attempting `stop`/transport access fails at compile
+    /// time (no such method) and at runtime its post-stop calls fail closed.
+    #[doc(hidden)]
+    pub fn identity(&self) -> Option<&crate::identity::DeviceIdentity> {
+        self.identity.as_ref()
+    }
+
+    /// Returns the composed session role (narrow admin).
+    #[doc(hidden)]
+    pub fn session_role(&self) -> SessionRole {
+        self.role
+    }
+
+    /// Returns true while the session dispatch is running (narrow admin).
+    #[doc(hidden)]
+    pub fn is_running(&self) -> bool {
+        self.lifecycle.load(Ordering::Acquire) == Lifecycle::Running as u8
+    }
+
+    /// Broadcasts an I-Am consistent with the composed identity.
+    ///
+    /// Missing-identity path: errors without sending (no invented device).
+    /// Present-identity path: encodes [`DeviceIdentity::encode_iam_apdu`](crate::identity::DeviceIdentity::encode_iam_apdu)
+    /// and sends one local-broadcast Unconfirmed-Request via the session
+    /// egress. Field-for-field identical to the server discovery I-Am built
+    /// from [`DeviceIdentity::server_config`](crate::identity::DeviceIdentity::server_config).
+    /// Transport-dependent: B/IP reaches the local subnet broadcast; SC
+    /// relays via the hub as a broadcast NPDU.
+    #[doc(hidden)]
+    pub async fn broadcast_i_am(&self) -> Result<(), Error> {
+        let identity = self
+            .identity
+            .as_ref()
+            .ok_or_else(|| Error::Encoding("endpoint I-Am requires a composed identity".into()))?;
+        let egress = self
+            .egress
+            .as_ref()
+            .ok_or_else(|| Error::Encoding("endpoint session is not running".into()))?;
+        if !self.is_running() {
+            return Err(Error::Encoding("endpoint session is not running".into()));
+        }
+        let apdu = identity.encode_iam_apdu()?;
+        egress
+            .send_apdu(
+                apdu,
+                bacnet_endpoint_core::endpoint_ingress::EndpointApduDestination::LocalBroadcast,
+                false,
+                bacnet_types::enums::NetworkPriority::NORMAL,
+                Vec::new(),
+            )
+            .await
     }
 }
 
