@@ -126,7 +126,8 @@ async def main():
                     print(f"  {prop['property_id']}: {prop['value'].value}")
 
     await server.stop()
-    await hub.stop()
+    print(await hub.status())
+    print(await hub.shutdown_gracefully())  # "graceful" (no peers left) or "forced"
     print("\nAll stopped.")
 
 

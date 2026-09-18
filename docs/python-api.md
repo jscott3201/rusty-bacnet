@@ -1573,6 +1573,39 @@ After CA presence, the constructor checks VMAC length (the existing `RuntimeErro
 reserved all-zero/all-ff VMACs (`ValueError`), then UUID, all before file I/O/bind.
 No additional VMAC bit-shape or UUID version/variant policy is imposed.
 
+Admission and timeout policy is also constructor-validated, before bind, via
+keyword-only options (positional layout unchanged):
+
+```python
+hub = ScHub(
+    listen="127.0.0.1:0",
+    cert="hub-cert.pem", key="hub-key.pem",
+    ca_cert="ca-cert.pem",
+    vmac=b"\xff\x00\x00\x00\x00\x01",
+    device_uuid=hub_uuid,
+    max_clients=256,              # registered-client cap (zero/overflow: ValueError)
+    max_handshakes=256,           # pre-handshake cap (same error mapping)
+    admission_policy="allow_all", # or "deny_all"; unknown strings: ValueError
+    graceful_disconnect_ack_ms=5000,   # per-peer Disconnect-Ack budget
+    graceful_ws_close_ms=5000,         # per-peer AB.7.5.5 close budget
+    graceful_overall_ms=15000,         # whole-drain bound (must cover ack + close)
+    handshake_tls_ms=10000,            # TCP-admission to TLS handshake budget
+    handshake_websocket_upgrade_ms=10000,
+    handshake_connect_request_ms=10000,  # 5s minimum per Annex AB.6.2.3
+)
+```
+
+Out-of-range durations raise `ValueError` mirroring the native
+`ScHubGracefulTimeouts::new` / `ScHubHandshakeTimeouts::new` errors;
+negative integers raise `OverflowError`. `admission_policy` is a static string
+only: `"allow_all"` (default) or `"deny_all"`, which answers Connect-Requests
+with the existing `RESOURCES`/`OTHER` NAK family and counts them in
+`admin_denied`. Non-string values — including Python callables — raise
+`TypeError`: the native policy runs synchronously under the registry lock,
+where attaching the GIL could deadlock, so no Python callback can be
+installed. There are no deny-lists, issuance/rotation orchestration, or
+distributed-admin features.
+
 The UUID identifies the hosting **device**, while VMAC identifies its hosting
 **port**; Connect-Accept carries their exact configured bytes (base 2020 AB.2.11,
 AB.6). The caller must provision the UUID before deployment and durably reuse it
@@ -1615,11 +1648,55 @@ await hub.start()
 
 #### `stop()`
 
-Stop the hub. Disconnects all clients.
+Forcefully stop the hub: seals admission and aborts workers without the
+Disconnect exchange. Idempotent — stopping a stopped or never-started hub is
+a safe no-op.
 
 ```python
 await hub.stop()
 ```
+
+#### `shutdown_gracefully() -> "graceful" | "forced"`
+
+Bounded graceful shutdown: seals admission first, then drives the
+hub-initiated Disconnect-Request, awaited Disconnect-Ack, and AB.7.5.5
+WebSocket close handshake per established peer within the configured graceful
+bounds, with a forceful fallback on expiry. Returns `"graceful"` only when
+every peer completed the exchange, `"forced"` otherwise. Consumes the running
+hub: a second call raises `RuntimeError` (use `stop()` for an idempotent
+close). Cancelling the future leaves shutdown running; `stop()` stays safe
+to call afterwards.
+
+```python
+outcome = await hub.shutdown_gracefully()  # "graceful" or "forced"
+```
+
+#### `status() -> ScHubStatus`
+
+Bounded redacted snapshot: listener state, handshake/client counts, and
+deny/drop counters. Counts and kind labels only — no certificates, keys,
+VMAC maps, or payloads. Raises `RuntimeError` before start and after stop.
+
+```python
+status = await hub.status()
+# {"listening": True, "max_clients": 256, "max_handshakes": 256,
+#  "client_count": 1, "handshake_count": 0, "admin_denied": 0,
+#  "broadcast_sender_exhausted": 0, "broadcast_global_exhausted": 0}
+```
+
+#### Context manager
+
+`async with` starts the hub on entry and forcefully stops it on exit, even
+if the body raised. Exiting twice, or after an explicit `stop()`, is safe.
+
+```python
+async with ScHub(..., device_uuid=hub_uuid) as hub:
+    ...
+```
+
+Dropping the hub without awaiting `stop()`, `shutdown_gracefully()`, or
+context-manager exit only requests forceful-seal cleanup on a running
+runtime and cannot guarantee awaited close.
 
 #### `address() -> str | None`
 
@@ -1701,7 +1778,8 @@ async def main():
         print(f"SC read: {value.value}")  # 72.5
 
     await server.stop()
-    await hub.stop()
+    print(await hub.status())
+    print(await hub.shutdown_gracefully())  # "graceful" (no peers left) or "forced"
 
 asyncio.run(main())
 ```
