@@ -1536,6 +1536,51 @@ asyncio.run(client_example())
 
 ---
 
+## Endpoint (one transport, both roles)
+
+`BipEndpoint`, `ScEndpoint`, and `MstpEndpoint` own one transport above both
+sibling roles. Each exposes `await endpoint.client()` (`EndpointClient`) and
+`await endpoint.server()` (`EndpointServer`); roles hold no lifecycle and fail
+closed with `BacnetError` after the owner closes. Builder-time config only:
+`DeviceIdentity` (instance/vendor/APDU/segmentation/services/ports/UUID) is
+validated in the constructor; there is no post-start owner mutation.
+
+```python
+endpoint = BipEndpoint(device_instance=1001, vendor_id=42, port=47808)
+endpoint.add_analog_input(instance=1, name="Zone Temp", present_value=21.5)
+async with endpoint:
+    client = await endpoint.client()
+    value = await client.read_property("127.0.0.1:47808", oid, pid)
+```
+
+`await endpoint.status()` returns a redacted snapshot (`is_running`,
+`device_instance`, `vendor_id`, `max_apdu`, `transport`, `local_address`,
+`active_leases`, plus policy counters). `local_address()` is `"ip:port"`
+(BIP), VMAC hex (SC), or station string (MS/TP). Roles expose no callbacks;
+concurrent use is `asyncio.gather` over `read_property` plus
+`is_session_alive()` polling — never Rust-calls-Python. Interpreter
+finalization only seals forcefully; always await `close()` or context exit.
+BIPv6/Ethernet have no endpoint owner; use the standalone path there.
+
+### Migration: separately-constructed client/server to endpoint
+
+Two separately constructed objects (`BACnetClient(...)` + `BACnetServer(...)`
+used together) are documented as two connections: two sockets/ports (BIP),
+two hub sessions (SC), or two serial opens (MS/TP, which cannot share one
+port). The endpoint is the one-transport path.
+
+| Old standalone | Endpoint equivalent |
+|----------------|---------------------|
+| `BACnetClient()` + `BACnetServer(device_instance=..., ...)` on different ports | `BipEndpoint(device_instance=..., vendor_id=..., port=...)` with `add_*` registrations, one `start()` |
+| SC client + SC server with separate `sc_device_uuid` values | `ScEndpoint(..., sc_device_uuid=...)` — one UUID for dial + DEVICE_UUID |
+| MS/TP client + server with separate `serial_port` opens | `MstpEndpoint(..., serial_port=...)` — one serial owner |
+
+Old constructors are unchanged (zero behavior change). New code uses the
+endpoint builders; see `examples/python/endpoint_bip.py` for a runnable
+receive + initiate flow through one endpoint.
+
+---
+
 ## ScHub
 
 BACnet/SC Hub — a TLS WebSocket relay for BACnet Secure Connect. Both `BACnetClient` and `BACnetServer` with `transport="sc"` connect to a hub as clients. The hub relays messages between connected nodes using VMAC addresses.

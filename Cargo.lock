@@ -2223,6 +2223,7 @@ version = "0.11.0"
 dependencies = [
  "bacnet-client",
  "bacnet-encoding",
+ "bacnet-endpoint",
  "bacnet-objects",
  "bacnet-server",
  "bacnet-services",

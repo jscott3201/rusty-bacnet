@@ -2514,3 +2514,289 @@ class ScHub:
     async def url(self) -> Optional[str]:
         """Get the WebSocket URL of the hub (None before start)."""
         ...
+
+
+# ---------------------------------------------------------------------------
+# Endpoint (RB-19): one transport above both roles
+# ---------------------------------------------------------------------------
+
+class EndpointStatus(TypedDict):
+    """Bounded endpoint snapshot: liveness, identity, transport, leases, policy counts."""
+    is_running: bool
+    device_instance: int
+    vendor_id: int
+    max_apdu: int
+    transport: str
+    local_address: str
+    active_leases: int
+    ingress_policy: int
+    no_server_role: int
+    no_client_role: int
+    unclaimed_terminal: int
+    responder_declined: int
+
+class EndpointClient:
+    """Client role cloned from a running endpoint (no lifecycle).
+
+    Initiates ``read_property`` through the owner's single transport.
+    After the owner closes, calls fail closed with ``BacnetError``.
+    """
+
+    async def read_property(
+        self,
+        address: str,
+        object_id: ObjectIdentifier,
+        property_id: PropertyIdentifier,
+        array_index: Optional[int] = None,
+    ) -> PropertyValue:
+        """Read a property through the shared transport."""
+        ...
+
+    def service_scope(self) -> dict[str, Any]:
+        """Narrow scope: initiates ``read_property`` only."""
+        ...
+
+class EndpointServer:
+    """Server role cloned from a running endpoint (no lifecycle).
+
+    The responder executes ``read_property`` automatically; this handle
+    exposes liveness plus the MS/TP deferred-reply seam. No Python
+    callbacks run under native locks.
+    """
+
+    def is_session_alive(self) -> bool:
+        """True while the owning endpoint is alive and open."""
+        ...
+
+    def suspend_next_reply(self) -> None:
+        """Arm one-shot deferred-reply suspension (MS/TP wiring)."""
+        ...
+
+    def service_scope(self) -> dict[str, Any]:
+        """Narrow scope: executes ``read_property`` only."""
+        ...
+
+class BipEndpoint:
+    """B/IP endpoint: one UDP socket that both initiates and executes.
+
+    Two separately constructed objects (``BACnetClient`` + ``BACnetServer``)
+    are two connections (two sockets/ports). The endpoint is the
+    one-transport path: one socket serves both roles.
+
+    Lifecycle: ``start()`` builds one transport; ``close()`` is idempotent;
+    async context entry starts (idempotent when running) and exit closes.
+    Dropping without awaiting close only seals forcefully and cannot
+    guarantee awaited close. BIPv6/Ethernet have no endpoint owner.
+    """
+
+    def __init__(
+        self,
+        device_instance: int,
+        device_name: str = "BACnet Device",
+        vendor_id: int = 555,
+        interface: str = "0.0.0.0",
+        port: int = 0xBAC0,
+        broadcast_address: str = "255.255.255.255",
+        network_number: int = 0,
+        network_port_instance: int = 1,
+        max_apdu: int = 1476,
+        segmentation: Optional[Segmentation] = None,
+        services: Optional[list[int]] = None,
+        device_uuid: Optional[Union[bytes, bytearray]] = None,
+        queue_capacity: int = 16,
+        apdu_timeout_ms: int = 6000,
+        apdu_retries: int = 0,
+    ) -> None: ...
+
+    def add_analog_input(self, instance: int, name: str, units: int = 62, present_value: float = 0.0) -> None: ...
+    def add_analog_value(self, instance: int, name: str, units: int = 62) -> None: ...
+    def add_binary_input(self, instance: int, name: str) -> None: ...
+    def add_binary_value(self, instance: int, name: str) -> None: ...
+
+    async def start(self) -> None:
+        """Start the endpoint (start-once; second start raises BacnetError)."""
+        ...
+
+    async def close(self) -> None:
+        """Close the endpoint (idempotent)."""
+        ...
+
+    async def __aenter__(self) -> BipEndpoint: ...
+    async def __aexit__(
+        self,
+        _exc_type: Any = None,
+        _exc_val: Any = None,
+        _exc_tb: Any = None,
+    ) -> None: ...
+
+    async def client(self) -> EndpointClient:
+        """Clone the client role (RuntimeError before start/after close)."""
+        ...
+
+    async def server(self) -> EndpointServer:
+        """Clone the server role (RuntimeError before start/after close)."""
+        ...
+
+    async def local_address(self) -> str:
+        """Bound address as "ip:port" from the validated startup config."""
+        ...
+
+    async def status(self) -> EndpointStatus:
+        """Bounded snapshot (RuntimeError before start/after close)."""
+        ...
+
+    async def broadcast_i_am(self) -> None:
+        """Broadcast one I-Am consistent with the composed identity."""
+        ...
+
+    @property
+    def device_instance(self) -> int: ...
+    @property
+    def vendor_id(self) -> int: ...
+
+class ScEndpoint:
+    """SC endpoint: one hub connection that both initiates and executes.
+
+    ``sc_device_uuid`` is the single durable lifetime identity for both the
+    hub dial and DEVICE_UUID. Lifecycle mirrors ``BipEndpoint``.
+    """
+
+    def __init__(
+        self,
+        device_instance: int,
+        sc_hub: str,
+        sc_vmac: Union[bytes, bytearray],
+        sc_ca_cert: str,
+        sc_client_cert: str,
+        sc_client_key: str,
+        *,
+        sc_device_uuid: Union[bytes, bytearray],
+        device_name: str = "BACnet Device",
+        vendor_id: int = 555,
+        sc_heartbeat_interval_ms: int = 30000,
+        sc_heartbeat_timeout_ms: int = 60000,
+        network_number: int = 0,
+        network_port_instance: int = 2,
+        max_apdu: int = 1476,
+        segmentation: Optional[Segmentation] = None,
+        services: Optional[list[int]] = None,
+        queue_capacity: int = 16,
+    ) -> None: ...
+
+    def add_analog_input(self, instance: int, name: str, units: int = 62, present_value: float = 0.0) -> None: ...
+    def add_analog_value(self, instance: int, name: str, units: int = 62) -> None: ...
+    def add_binary_input(self, instance: int, name: str) -> None: ...
+    def add_binary_value(self, instance: int, name: str) -> None: ...
+
+    async def start(self) -> None:
+        """Dial the hub and start (start-once)."""
+        ...
+
+    async def close(self) -> None:
+        """Close the endpoint (idempotent)."""
+        ...
+
+    async def __aenter__(self) -> ScEndpoint: ...
+    async def __aexit__(
+        self,
+        _exc_type: Any = None,
+        _exc_val: Any = None,
+        _exc_tb: Any = None,
+    ) -> None: ...
+
+    async def client(self) -> EndpointClient:
+        """Clone the client role."""
+        ...
+
+    async def server(self) -> EndpointServer:
+        """Clone the server role."""
+        ...
+
+    async def local_address(self) -> str:
+        """VMAC hex for this SC node."""
+        ...
+
+    async def status(self) -> EndpointStatus:
+        """Bounded snapshot (RuntimeError before start/after close)."""
+        ...
+
+    async def broadcast_i_am(self) -> None:
+        """Broadcast one I-Am via the hub relay."""
+        ...
+
+    @property
+    def device_instance(self) -> int: ...
+    @property
+    def vendor_id(self) -> int: ...
+
+class MstpEndpoint:
+    """MS/TP endpoint: one serial owner that both initiates and executes.
+
+    Opens a real serial device via ``TokioSerialPort`` like the current
+    wrappers. Lifecycle mirrors ``BipEndpoint``.
+    """
+
+    def __init__(
+        self,
+        device_instance: int,
+        serial_port: str,
+        device_name: str = "BACnet Device",
+        vendor_id: int = 555,
+        mstp_baud: int = 38400,
+        mstp_mac: int = 1,
+        mstp_max_master: int = 127,
+        mstp_max_info_frames: int = 1,
+        max_apdu: int = 480,
+        segmentation: Optional[Segmentation] = None,
+        services: Optional[list[int]] = None,
+        device_uuid: Optional[Union[bytes, bytearray]] = None,
+        queue_capacity: int = 16,
+        apdu_timeout_ms: int = 6000,
+        apdu_retries: int = 0,
+    ) -> None: ...
+
+    def add_analog_input(self, instance: int, name: str, units: int = 62, present_value: float = 0.0) -> None: ...
+    def add_analog_value(self, instance: int, name: str, units: int = 62) -> None: ...
+    def add_binary_input(self, instance: int, name: str) -> None: ...
+    def add_binary_value(self, instance: int, name: str) -> None: ...
+
+    async def start(self) -> None:
+        """Open serial once and start (start-once)."""
+        ...
+
+    async def close(self) -> None:
+        """Close the endpoint (idempotent)."""
+        ...
+
+    async def __aenter__(self) -> MstpEndpoint: ...
+    async def __aexit__(
+        self,
+        _exc_type: Any = None,
+        _exc_val: Any = None,
+        _exc_tb: Any = None,
+    ) -> None: ...
+
+    async def client(self) -> EndpointClient:
+        """Clone the client role."""
+        ...
+
+    async def server(self) -> EndpointServer:
+        """Clone the server role."""
+        ...
+
+    async def local_address(self) -> str:
+        """Station MAC as a decimal string."""
+        ...
+
+    async def status(self) -> EndpointStatus:
+        """Bounded snapshot (RuntimeError before start/after close)."""
+        ...
+
+    async def broadcast_i_am(self) -> None:
+        """Broadcast one I-Am (MS/TP local broadcast)."""
+        ...
+
+    @property
+    def device_instance(self) -> int: ...
+    @property
+    def vendor_id(self) -> int: ...

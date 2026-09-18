@@ -3,6 +3,7 @@
 use pyo3::prelude::*;
 
 mod client;
+mod endpoint;
 mod errors;
 mod hub;
 mod mstp_py;
@@ -24,6 +25,7 @@ fn rusty_bacnet(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<client::BACnetClient>()?;
     m.add_class::<server::BACnetServer>()?;
     m.add_class::<hub::PyScHub>()?;
+    endpoint::register(m)?;
 
     Ok(())
 }
