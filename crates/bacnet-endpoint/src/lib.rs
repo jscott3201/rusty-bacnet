@@ -53,6 +53,8 @@ pub mod bip;
 #[doc(hidden)]
 pub mod identity;
 #[doc(hidden)]
+pub mod mstp;
+#[doc(hidden)]
 pub mod roles;
 #[doc(hidden)]
 pub mod sc;
