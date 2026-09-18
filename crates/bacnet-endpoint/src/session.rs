@@ -548,6 +548,21 @@ async fn handle_inbound(parts: &mut DispatchParts, received: ReceivedApdu) {
         }
         return;
     };
+    // RB-17 deferred-reply wiring (minimal correlation, session-side): when
+    // the one-shot suspension arm is set and this request carries the MS/TP
+    // one-use prompt reply sender, drop the sender BEFORE the responder sees
+    // it. Dropping releases the MAC to send ReplyPostponed; the responder
+    // then observes `reply_tx: None` and answers through the single
+    // EndpointEgress → queue_npdu path, which the MAC transmits as
+    // DataNotExpectingReply at the next token opportunity with the identical
+    // wire invoke ID + destination. Prompt (sender present, unarmed) and
+    // token-owned (sender absent) stay distinct by construction: the
+    // responder never sees both for one request. No second serial owner, no
+    // MAC state duplication, no transport change.
+    let mut received = received;
+    if received.reply_tx.is_some() && parts.shared.token.take_suspend() {
+        let _ = received.reply_tx.take();
+    }
     match responder.handle(received).await {
         Ok(true) | Ok(false) => {}
         Err(_) => {

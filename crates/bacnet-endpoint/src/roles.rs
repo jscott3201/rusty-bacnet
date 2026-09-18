@@ -39,6 +39,14 @@ pub struct SessionToken {
     open: AtomicBool,
     /// Shared device-wide outbound lease pool (client + server notifications).
     pub coordinator: Arc<OutboundTransactionCoordinator>,
+    /// RB-17 one-shot deferred-reply arm (MS/TP `ReplyPostponed` wiring).
+    ///
+    /// When set, the session dispatch strips the one-use prompt reply sender
+    /// from the next `reply_tx`-bearing inbound request before the responder
+    /// sees it, forcing the token-owned egress path with identical
+    /// addressing/invoke ID. Consumed exactly once via [`take_suspend`](Self::take_suspend);
+    /// broadcasts (no `reply_tx`) never consume the arm.
+    suspend_next: AtomicBool,
 }
 
 impl SessionToken {
@@ -47,6 +55,7 @@ impl SessionToken {
         Arc::new(Self {
             open: AtomicBool::new(true),
             coordinator,
+            suspend_next: AtomicBool::new(false),
         })
     }
 
@@ -58,6 +67,22 @@ impl SessionToken {
     #[doc(hidden)]
     pub fn is_open(&self) -> bool {
         self.open.load(Ordering::Acquire)
+    }
+
+    /// Arms one-shot deferred-reply suspension (RB-17 MS/TP wiring).
+    ///
+    /// Test + slow-application seam: the next `reply_tx`-bearing inbound
+    /// request is answered token-owned via egress (after the MAC releases
+    /// `ReplyPostponed`) instead of promptly via `reply_tx`.
+    #[doc(hidden)]
+    pub fn suspend_next_reply(&self) {
+        self.suspend_next.store(true, Ordering::Release);
+    }
+
+    /// Consumes the suspension arm exactly once (single dispatch consumer).
+    #[doc(hidden)]
+    pub fn take_suspend(&self) -> bool {
+        self.suspend_next.swap(false, Ordering::AcqRel)
     }
 }
 
@@ -232,14 +257,36 @@ impl ServerRoleHandle {
         self.token.upgrade().is_some_and(|s| s.is_open())
     }
 
+    /// Arms one-shot deferred-reply suspension (RB-17 MS/TP wiring).
+    ///
+    /// The next `reply_tx`-bearing inbound request handled while this arm is
+    /// set answers token-owned via egress (after the MAC releases
+    /// `ReplyPostponed`) instead of promptly via `reply_tx`. Fails closed
+    /// once the owning session shuts down. Broadcasts (no `reply_tx`) never
+    /// consume the arm.
+    #[doc(hidden)]
+    pub fn suspend_next_reply(&self) -> Result<(), Error> {
+        let session = self.token.upgrade().ok_or_else(shutdown_error)?;
+        if !session.is_open() {
+            return Err(shutdown_error());
+        }
+        session.suspend_next_reply();
+        Ok(())
+    }
+
     /// Handles one inbound request via the wire invoke ID directly.
     ///
     /// Session dispatch only. Never touches the outbound coordinator pool.
     /// Preserves link-group/attributes/provenance structurally through the
-    /// inner responder (pass-through, no new decisions).
+    /// inner responder (pass-through, no new decisions). Honors a pending
+    /// RB-17 suspension arm identically to session dispatch (strips
+    /// `reply_tx` so the responder answers token-owned via egress).
     #[doc(hidden)]
-    pub async fn handle_inbound(&self, received: ReceivedApdu) -> Result<bool, Error> {
+    pub async fn handle_inbound(&self, mut received: ReceivedApdu) -> Result<bool, Error> {
         self.check_open()?;
+        if received.reply_tx.is_some() && self.token.upgrade().is_some_and(|s| s.take_suspend()) {
+            let _ = received.reply_tx.take();
+        }
         self.responder.handle(received).await
     }
 
