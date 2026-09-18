@@ -1,10 +1,42 @@
-//! Concrete B/IP controls at endpoint level (no generic-trait erasure).
+//! Concrete B/IP endpoint builder (no generic-trait erasure).
 //!
 //! Closes the server-BIP-builder gap: `BipServerBuilder` lacks BDT/FDT
 //! controls while [`BipTransport`] + [`bbmd`](bacnet_transport::bbmd) own
 //! them. This builder exposes them first-class on the endpoint composition
 //! above the sibling roles (concrete `BipTransport`, never `impl
 //! TransportPort`).
+//!
+//! # Evidence level
+//!
+//! Plain B/IP (unicast + local broadcast over one real UDP socket) is proven
+//! on real loopback UDP (RB-16): one socket per session, bidirectional
+//! confirmed traffic, I-Am identical to Device ReadProperty. **BBMD /
+//! foreign-device mode is experimental and unproven**: `enable_bbmd`,
+//! `foreign_device_policy`, `bbmd_management_acl`, `bdt_persist_path`,
+//! `fanout_policy`, and `register_as_foreign_device` have construction-only
+//! coverage (transport builds pre-start); there is no wire BBMD proof in this
+//! crate. Live BVLC queries (`read_bdt` / `write_bdt` / `read_fdt` / …) stay
+//! on [`BipTransport`](bacnet_transport::bip::BipTransport). Do not present
+//! BBMD mode as proven.
+//!
+//! ```no_run
+//! use std::net::Ipv4Addr;
+//!
+//! use bacnet_endpoint::bip::BipEndpointBuilder;
+//! use bacnet_endpoint::session::SessionRole;
+//!
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), bacnet_types::error::Error> {
+//! let mut session = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
+//!     .role(SessionRole::Both)
+//!     .queue_capacity(16)
+//!     .client_timers(2_000, 0)
+//!     .build_session()?;
+//! session.start().await?;
+//! session.stop().await?;
+//! # Ok(())
+//! # }
+//! ```
 
 use std::net::Ipv4Addr;
 
@@ -21,7 +53,9 @@ use crate::session::{EndpointSession, SessionConfig, SessionRole};
 /// Pre-start BBMD/FDT controls mirror `transport/bip` + `bbmd.rs`; live
 /// BVLC queries (`read_bdt`/`write_bdt`/`read_fdt`/…) stay on
 /// [`BipTransport`] for real-transport proofs (RB-16/17).
-#[doc(hidden)]
+///
+/// Plain mode is proven on real loopback UDP; BBMD/foreign-device setters are
+/// experimental (construction-only, no wire proof) — see the module docs.
 pub struct BipEndpointBuilder {
     interface: Ipv4Addr,
     port: u16,
@@ -40,7 +74,10 @@ pub struct BipEndpointBuilder {
 
 impl BipEndpointBuilder {
     /// Creates a B/IP endpoint builder with interface/port/broadcast.
-    #[doc(hidden)]
+    ///
+    /// `port = 0` selects an ephemeral port (tests); production uses 47808.
+    /// `interface` is the announced MAC IP; the socket binds `INADDR_ANY` so
+    /// subnet/limited broadcast reaches it.
     pub fn new(interface: Ipv4Addr, port: u16, broadcast_address: Ipv4Addr) -> Self {
         Self {
             interface,
@@ -59,22 +96,22 @@ impl BipEndpointBuilder {
         }
     }
 
-    /// Selects the composed roles.
-    #[doc(hidden)]
+    /// Selects the composed roles (default [`Both`](SessionRole::Both)).
     pub fn role(mut self, role: SessionRole) -> Self {
         self.role = role;
         self
     }
 
     /// Sets the bounded queue capacity for every ingress/egress queue.
-    #[doc(hidden)]
+    ///
+    /// Must be greater than zero; [`build_session`](Self::build_session)
+    /// fails otherwise via [`EndpointSession::new`].
     pub fn queue_capacity(mut self, capacity: usize) -> Self {
         self.session.queue_capacity = capacity;
         self
     }
 
     /// Sets client APDU timeout/retries (session-owned timers).
-    #[doc(hidden)]
     pub fn client_timers(mut self, timeout_ms: u64, retries: u8) -> Self {
         self.session.apdu_timeout_ms = timeout_ms;
         self.session.apdu_retries = retries;
@@ -82,7 +119,9 @@ impl BipEndpointBuilder {
     }
 
     /// Attaches the object database for the server responder.
-    #[doc(hidden)]
+    ///
+    /// Build it from the same identity passed to
+    /// [`identity`](Self::identity) so Device readback agrees with I-Am.
     pub fn database(mut self, db: ObjectDatabase) -> Self {
         self.database = Some(db);
         self
@@ -93,56 +132,69 @@ impl BipEndpointBuilder {
     /// Truth direction: the database should already be built from the same
     /// identity (`DeviceIdentity::build_database`); this only wires I-Am +
     /// role limits. No generation, no extra socket.
-    #[doc(hidden)]
     pub fn identity(mut self, identity: crate::identity::DeviceIdentity) -> Self {
         self.identity = Some(identity);
         self
     }
 
     /// Enables BBMD mode with the initial BDT (before start).
-    #[doc(hidden)]
+    ///
+    /// **Experimental / unproven**: staged pre-start only, construction
+    /// coverage, no wire BBMD proof. BBMD controls require this first:
+    /// [`foreign_device_policy`](Self::foreign_device_policy) /
+    /// [`bbmd_management_acl`](Self::bbmd_management_acl) without it fail
+    /// [`build_transport`](Self::build_transport) with a typed
+    /// [`Error::Encoding`](bacnet_types::error::Error::Encoding).
     pub fn enable_bbmd(mut self, bdt: Vec<BdtEntry>) -> Self {
         self.bbmd_bdt = Some(bdt);
         self
     }
 
     /// Enables foreign-device registration policy (after `enable_bbmd`).
-    #[doc(hidden)]
+    ///
+    /// **Experimental / unproven**: see [`enable_bbmd`](Self::enable_bbmd).
     pub fn foreign_device_policy(mut self, policy: ForeignDevicePolicy) -> Self {
         self.foreign_policy = Some(policy);
         self
     }
 
     /// Sets the BBMD Delete-FDT-Entry management ACL (fail-closed when empty).
-    #[doc(hidden)]
+    ///
+    /// **Experimental / unproven**: see [`enable_bbmd`](Self::enable_bbmd).
     pub fn bbmd_management_acl(mut self, acl: Vec<[u8; 4]>) -> Self {
         self.management_acl = Some(acl);
         self
     }
 
     /// Sets the externally provisioned persisted-BDT path (wire format).
-    #[doc(hidden)]
+    ///
+    /// **Experimental / unproven**: see [`enable_bbmd`](Self::enable_bbmd).
     pub fn bdt_persist_path(mut self, path: std::path::PathBuf) -> Self {
         self.bdt_persist_path = Some(path);
         self
     }
 
     /// Sets the broadcast fanout policy.
-    #[doc(hidden)]
+    ///
+    /// **Experimental / unproven**: staged pre-start only, no wire proof.
     pub fn fanout_policy(mut self, policy: FanoutPolicy) -> Self {
         self.fanout_policy = Some(policy);
         self
     }
 
     /// Registers this endpoint as a foreign device (before start).
-    #[doc(hidden)]
+    ///
+    /// **Experimental / unproven**: staged pre-start only, no wire proof.
     pub fn register_as_foreign_device(mut self, config: ForeignDeviceConfig) -> Self {
         self.foreign_device = Some(config);
         self
     }
 
     /// Builds the concrete B/IP transport with all pre-start controls applied.
-    #[doc(hidden)]
+    ///
+    /// Returns a typed [`Error::Encoding`](bacnet_types::error::Error::Encoding)
+    /// when BBMD-dependent controls are set without
+    /// [`enable_bbmd`](Self::enable_bbmd).
     pub fn build_transport(self) -> Result<BipTransport, Error> {
         let Self {
             interface,
@@ -188,7 +240,6 @@ impl BipEndpointBuilder {
     /// socket after `start()`); no second hidden socket is created here or
     /// in [`EndpointSession`]. Bind-count proofs use a counting test double
     /// plus real-socket corroboration (single nonzero local MAC/port).
-    #[doc(hidden)]
     pub fn build_session(mut self) -> Result<EndpointSession<BipTransport>, Error> {
         let role = self.role;
         let session = self.session.clone();

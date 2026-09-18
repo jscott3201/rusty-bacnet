@@ -1579,3 +1579,62 @@ let client = BACnetClient::generic_builder()
     .build()
     .await?;
 ```
+
+---
+
+## bacnet-endpoint (forward path, RB-18)
+
+`bacnet-endpoint` is the smallest proven public Rust endpoint API: one
+`EndpointSession` owns one transport + one ingress + one shared outbound
+coordinator above the sibling client/server roles. Endpoint builders are the
+forward path for new code; `BACnetClient` / `BACnetServer` stay as untouched
+compat surfaces (deprecation pointers + docs only — no facade, no parts API,
+no second hidden owner).
+
+### Builders
+
+```rust
+use std::net::Ipv4Addr;
+use bacnet_endpoint::bip::BipEndpointBuilder;
+use bacnet_endpoint::identity::DeviceIdentity;
+use bacnet_endpoint::session::SessionRole;
+
+// One device, both roles, B/IP.
+let identity = DeviceIdentity::new(1001, 42)?
+    .with_bip_port(1, 0, Ipv4Addr::LOCALHOST, 0)?;
+let db = identity.build_database()?;
+let mut session = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
+    .role(SessionRole::Both)
+    .database(db)
+    .identity(identity)
+    .build_session()?;
+session.start().await?;
+session.broadcast_i_am().await?;
+session.stop().await?;
+# Ok::<(), bacnet_types::error::Error>(())
+```
+
+`ScEndpointBuilder` composes SC (`build_loopback_session` for unit
+validation; `build_hub_session` over a caller-dialed `TlsWebSocket`,
+`sc-tls` only, proven against the local constrained-TLS hub).
+`MstpEndpointBuilder` composes one serial owner (simulator evidence only —
+no bench or on-wire conformance; timing is RB-26).
+
+### Migration from standalone client/server (docs only)
+
+| Old standalone call | Endpoint equivalent |
+|---------------------|---------------------|
+| `BACnetClient::bip_builder()...build().await` | `BipEndpointBuilder::new(iface, port, bcast).role(ClientOnly).build_session()?` then `start()` |
+| `BACnetServer::bip_builder()...build().await` | `BipEndpointBuilder::new(iface, port, bcast).role(ServerOnly).database(db).identity(id).build_session()?` then `start()` |
+| Client + server on one device | One `...role(Both).database(db).identity(id).build_session()?` (B/IP, SC, or MS/TP builder) |
+| `BACnetClient::sc_builder()...build().await` | `ScEndpointBuilder::new(vmac, uuid)...build_hub_session(ws)?` (dial first, then compose) |
+| `BACnetServer::sc_builder()...build().await` | Same `ScEndpointBuilder` with `ServerOnly` + `database` + `identity` |
+| `generic_builder().transport(mstp)...` | `MstpEndpointBuilder::new(serial, station)...build_session()?` (one serial owner) |
+
+Notes: the endpoint server role executes `ReadProperty` (+ `Reject`/`Abort`
++ segmentation-`Abort`) only — full `bacnet-server` parity is out of scope.
+Standalone BBMD helpers (`read_bdt` / `write_bdt` / `read_fdt` / foreign
+registration) stay on `BipTransport`; the endpoint BBMD setters only stage
+pre-start state and are experimental (construction-only, no wire proof).
+BIPv6/Ethernet have no endpoint builder — keep the standalone path there and
+do not expect identical administration across data links.
