@@ -694,7 +694,19 @@ mod handles;
 mod lifecycle;
 mod local_writes;
 mod notification_transactions;
+#[doc(hidden)]
+pub use notification_transactions::{
+    canonical_direct_peer as __endpoint_canonical_direct_peer,
+    canonical_routed_peer as __endpoint_canonical_routed_peer,
+    run_notification_worker as __endpoint_run_notification_worker,
+    NotificationOperation as __endpoint_NotificationOperation,
+    NotificationReserveError as __endpoint_NotificationReserveError,
+    NotificationTransactions as __endpoint_NotificationTransactions,
+    NotificationWorkerResult as __endpoint_NotificationWorkerResult,
+};
 mod requests;
+#[doc(hidden)]
+pub use requests::endpoint_responder::EndpointResponder as __endpoint_EndpointResponder;
 #[cfg(feature = "sc-tls")]
 mod sc_builder;
 #[cfg(test)]

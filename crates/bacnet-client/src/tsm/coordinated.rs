@@ -162,15 +162,32 @@ impl Tsm {
         apdu: &Apdu,
         response: TsmResponse,
     ) -> CoordinatedCompletion {
+        self.complete_pre_admitted_terminal_response_for_peer(
+            &MacAddr::from_slice(source_mac),
+            &CanonicalPeer::direct(source_mac),
+            admission,
+            apdu,
+            response,
+        )
+    }
+
+    pub(crate) fn complete_pre_admitted_terminal_response_for_peer(
+        &mut self,
+        tsm_mac: &MacAddr,
+        peer: &CanonicalPeer,
+        admission: &Admission,
+        apdu: &Apdu,
+        response: TsmResponse,
+    ) -> CoordinatedCompletion {
         if admission.kind() != AdmissionKind::Terminal
             || admission.metadata().owner() != LeaseOwner::Requester
-            || admission.metadata().peer() != &CanonicalPeer::direct(source_mac)
+            || admission.metadata().peer() != peer
         {
             return CoordinatedCompletion::Rejected;
         }
 
         let invoke_id = admission.token().invoke_id();
-        let key = (MacAddr::from_slice(source_mac), invoke_id);
+        let key = (tsm_mac.clone(), invoke_id);
         let Some(pending) = self.pending.get(&key) else {
             return CoordinatedCompletion::Rejected;
         };
@@ -206,7 +223,7 @@ impl Tsm {
         }
 
         CoordinatedCompletion::Completed(self.complete_transaction_inner(
-            source_mac,
+            tsm_mac.as_slice(),
             invoke_id,
             Some(&owner),
             observed_service_choice,
@@ -221,9 +238,24 @@ impl Tsm {
         admission: &Admission,
         apdu: &Apdu,
     ) -> bool {
+        self.reject_pre_admitted_segmented_response_for_peer(
+            &MacAddr::from_slice(source_mac),
+            &CanonicalPeer::direct(source_mac),
+            admission,
+            apdu,
+        )
+    }
+
+    pub(crate) fn reject_pre_admitted_segmented_response_for_peer(
+        &mut self,
+        tsm_mac: &MacAddr,
+        peer: &CanonicalPeer,
+        admission: &Admission,
+        apdu: &Apdu,
+    ) -> bool {
         if admission.kind() != AdmissionKind::NonTerminal
             || admission.metadata().owner() != LeaseOwner::Requester
-            || admission.metadata().peer() != &CanonicalPeer::direct(source_mac)
+            || admission.metadata().peer() != peer
         {
             return false;
         }
@@ -240,7 +272,7 @@ impl Tsm {
             return false;
         }
 
-        let key = (MacAddr::from_slice(source_mac), invoke_id);
+        let key = (tsm_mac.clone(), invoke_id);
         let Some(pending) = self.pending.get(&key) else {
             return false;
         };
@@ -251,7 +283,7 @@ impl Tsm {
             return false;
         }
         let owner = pending.owner.clone();
-        self.abort_invalid_apdu_in_current_state(source_mac, invoke_id, &owner);
+        self.abort_invalid_apdu_in_current_state(tsm_mac.as_slice(), invoke_id, &owner);
         true
     }
 
