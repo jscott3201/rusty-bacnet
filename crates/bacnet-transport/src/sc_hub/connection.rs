@@ -42,17 +42,27 @@ pub(super) async fn accept_loop_with_counter(
     // Heartbeat sweep: periodically check for idle clients and send HeartbeatRequest.
     // Existing hub-originated liveness probe is a local extension. It does not
     // implement or replace the initiating node's Annex AB.6.3 keepalive duty.
+    // Exits cooperatively on shutdown so a graceful drain can complete without
+    // aborting this sleep; forceful drain still aborts if needed.
     const HEARTBEAT_CHECK_INTERVAL_SECS: u64 = 30;
     {
         let clients_for_hb = clients.clone();
+        let mut hb_shutdown = tasks.subscribe();
         let next_msg_id = std::sync::atomic::AtomicU16::new(0x8000); // hub message IDs start high
         tasks.spawner().spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(
                 HEARTBEAT_CHECK_INTERVAL_SECS,
             ));
             loop {
-                interval.tick().await;
-                heartbeat::sweep(&clients_for_hb, &next_msg_id, &heartbeat::SocketIo).await;
+                if *hb_shutdown.borrow() {
+                    break;
+                }
+                tokio::select! {
+                    _ = hb_shutdown.changed() => {}
+                    _ = interval.tick() => {
+                        heartbeat::sweep(&clients_for_hb, &next_msg_id, &heartbeat::SocketIo).await;
+                    }
+                }
             }
         });
     }
@@ -99,6 +109,7 @@ pub(super) async fn accept_loop_with_counter(
         let acceptor = tls_acceptor.clone();
         let clients = clients.clone();
         let admission_runtime = admission.clone();
+        let graceful = tasks.graceful_ctx();
 
         // Task locals are not inherited by spawn. Explicitly scope every
         // connection to this hub's one aggregate budget; no new worker/lifetime.
@@ -115,11 +126,24 @@ pub(super) async fn accept_loop_with_counter(
                     timeouts,
                     admission_permit,
                     admission_runtime,
+                    graceful,
                 ),
             ));
     }
     drop(listener);
-    tasks.drain().await;
+    if tasks.graceful_kind() {
+        let overall = tasks.graceful_ctx().timeouts().overall();
+        let completed = tasks.drain_gracefully(overall).await;
+        let outcome = if completed && !tasks.graceful_failed() {
+            super::graceful::ScHubShutdownOutcome::Graceful
+        } else {
+            super::graceful::ScHubShutdownOutcome::Forced
+        };
+        tasks.set_outcome(outcome);
+    } else {
+        tasks.drain().await;
+        tasks.set_outcome(super::graceful::ScHubShutdownOutcome::Forced);
+    }
     // Cancellation skips per-client tail cleanup. No owned mutator remains.
     clients.lock().await.clear();
 }
@@ -158,6 +182,7 @@ pub(super) async fn serve_connection(
     timeouts: super::ScHubHandshakeTimeouts,
     admission: Admission,
     runtime: Arc<super::admission::AdmissionRuntime>,
+    graceful: super::graceful::GracefulCtx,
 ) {
     let (hub_vmac, hub_uuid) = hub;
     let tls_deadline = admission.tls_deadline;
@@ -237,6 +262,7 @@ pub(super) async fn serve_connection(
         connect_deadline,
         runtime,
         tls_client_verified,
+        graceful,
     )
     .await;
 }

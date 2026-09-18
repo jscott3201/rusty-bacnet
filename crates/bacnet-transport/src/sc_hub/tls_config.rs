@@ -92,6 +92,7 @@ pub struct ScHubTlsConfig {
     broadcast_rate: super::ScHubBroadcastRatePolicy,
     admission_limits: super::ScHubAdmissionLimits,
     admission_policy: Option<super::ScHubAdmissionPolicy>,
+    graceful_timeouts: super::ScHubGracefulTimeouts,
 }
 
 impl ScHubTlsConfig {
@@ -142,6 +143,7 @@ impl ScHubTlsConfig {
             broadcast_rate: super::ScHubBroadcastRatePolicy::default(),
             admission_limits: super::ScHubAdmissionLimits::default(),
             admission_policy: None,
+            graceful_timeouts: super::ScHubGracefulTimeouts::default(),
         })
     }
 
@@ -208,6 +210,24 @@ impl ScHubTlsConfig {
 
     pub(super) fn admission_policy(&self) -> Option<super::ScHubAdmissionPolicy> {
         self.admission_policy.clone()
+    }
+
+    /// Tune graceful-shutdown bounds without changing TLS policy.
+    ///
+    /// Every startup validates these bounds before binding (per-peer
+    /// Disconnect-Ack, per-peer AB.7.5.5 close, and overall drain; overall
+    /// must cover ack + close). Each hub started from a clone uses the same
+    /// bound values. See [`super::ScHubGracefulTimeouts`] for defaults
+    /// (5s ack + 5s close within 15s overall) and
+    /// [`super::ScHub::shutdown_gracefully`] for the exchange order.
+    pub fn with_graceful_timeouts(mut self, timeouts: super::ScHubGracefulTimeouts) -> Self {
+        self.graceful_timeouts = timeouts;
+        self
+    }
+
+    /// The graceful bounds that will be validated at startup.
+    pub fn graceful_timeouts(&self) -> super::ScHubGracefulTimeouts {
+        self.graceful_timeouts
     }
 
     pub(super) fn into_acceptor(self) -> TlsAcceptor {

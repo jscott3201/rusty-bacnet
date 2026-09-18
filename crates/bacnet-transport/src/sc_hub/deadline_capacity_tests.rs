@@ -26,6 +26,7 @@ async fn hub_admission_abort_before_first_poll_reclaims_slot() {
         ScHubHandshakeTimeouts::default(),
         admission,
         Arc::new(super::admission::AdmissionRuntime::default()),
+        super::tasks::Tasks::new().graceful_ctx(),
     ));
     // Current-thread runtime: no await occurs between spawn and abort.
     task.abort();
@@ -56,6 +57,7 @@ async fn hub_admission_abort_during_tls_reclaims_slot() {
         ScHubHandshakeTimeouts::default(),
         admission,
         Arc::new(super::admission::AdmissionRuntime::default()),
+        super::tasks::Tasks::new().graceful_ctx(),
     ));
     assert!(futures_util::poll!(&mut operation).is_pending()); // actual TLS wait has started
     assert_eq!(active.load(Ordering::Acquire), 1);

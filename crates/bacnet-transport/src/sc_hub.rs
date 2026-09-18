@@ -36,6 +36,7 @@ mod broadcast_rate;
 mod client;
 mod connection;
 mod deadlines;
+mod graceful;
 mod handler;
 mod heartbeat;
 mod helpers;
@@ -56,6 +57,7 @@ pub use admission::{
     ScHubStatus, DEFAULT_MAX_CLIENTS, DEFAULT_MAX_HANDSHAKES,
 };
 pub use broadcast_rate::{ScHubBroadcastDropCounts, ScHubBroadcastRatePolicy};
+pub use graceful::{ScHubGracefulTimeouts, ScHubShutdownOutcome};
 pub use timeouts::ScHubHandshakeTimeouts;
 pub use tls_config::ScHubTlsConfig;
 
@@ -259,6 +261,8 @@ impl ScHub {
         // policy: every public startup API funnels through here.
         let admission_limits = tls_config.admission_limits();
         admission_limits.validate()?;
+        let graceful_timeouts = tls_config.graceful_timeouts();
+        graceful_timeouts.validate()?;
         let admission = Arc::new(admission::AdmissionRuntime::new(
             admission_limits,
             tls_config.admission_policy(),
@@ -282,6 +286,7 @@ impl ScHub {
 
         let tasks = tasks::Tasks::new();
         let tasks = tasks.with_broadcast_budget(broadcast);
+        let tasks = tasks.with_graceful_timeouts(graceful_timeouts);
         let task = tokio::spawn(connection::accept_loop_with_counter(
             listener,
             tls_acceptor,
@@ -387,11 +392,54 @@ impl ScHub {
             self.listener_task = None;
         }
     }
+
+    /// Bounded graceful shutdown alongside the preserved forceful path.
+    ///
+    /// Seals admission first (same seal as [`Self::stop`], first seal wins
+    /// the drain kind), then drives the accepting-peer disconnect exchange
+    /// per established peer: hub-initiated Disconnect-Request, awaited
+    /// Disconnect-Ack within the configured per-peer ack bound, then the
+    /// AB.7.5.5 WebSocket close handshake within the per-close bound.
+    /// Half-handshakes get a silent Close, never a Disconnect-Request. The
+    /// configured overall bound caps the whole drain with a forceful
+    /// fallback; uncooperative peers cannot hang shutdown.
+    ///
+    /// Corrected role wording follows the official 2024-04-29 errata summary
+    /// item 13 (Annex AB.6.2.3 p. 1405): in DISCONNECTING the accepting peer
+    /// (this hub) awaits the Disconnect-Ack from the initiating peer (the
+    /// node); the redline inserts "initiating" and strikes "accepting".
+    /// Adopted close order per peer: Disconnect-Request, awaited
+    /// Disconnect-Ack, then the AB.7.5.5 WebSocket close handshake.
+    ///
+    /// Shutdown ownership stays with the hub: cancelling this future leaves
+    /// shutdown running and a later call observes completion (same
+    /// cancel-safety pattern as [`Self::stop`]). Closing-but-registered peers
+    /// still read as `client_count` in [`Self::status`] until lease cleanup
+    /// removes them. Returns [`ScHubShutdownOutcome::Graceful`] only when
+    /// every peer Ack was observed and the close handshake completed without
+    /// timeout or abort; otherwise [`ScHubShutdownOutcome::Forced`]. A prior
+    /// forceful [`Self::stop`] keeps the run forced.
+    ///
+    /// Bounds come from [`ScHubTlsConfig::with_graceful_timeouts`] at
+    /// startup (defaults 5s ack + 5s close within 15s overall).
+    pub async fn shutdown_gracefully(&mut self) -> ScHubShutdownOutcome {
+        self.tasks.request_graceful();
+        if let Some(task) = self.listener_task.as_mut() {
+            let _ = task.await;
+            self.listener_task = None;
+        }
+        self.tasks
+            .get_outcome()
+            .unwrap_or(ScHubShutdownOutcome::Forced)
+    }
 }
 
 impl Drop for ScHub {
     fn drop(&mut self) {
         // The detached supervisor retains cleanup ownership on a live runtime.
+        // Drop requests forceful-seal cleanup only; it never awaits the
+        // graceful Disconnect/Ack/Close exchange. Use shutdown_gracefully()
+        // (or stop() for forceful await) before drop when the exchange matters.
         self.tasks.request_shutdown();
     }
 }
@@ -406,6 +454,7 @@ async fn handle_client(
     expires: tokio::time::Instant,
     admission: Arc<admission::AdmissionRuntime>,
     tls_client_verified: bool,
+    graceful: graceful::GracefulCtx,
 ) {
     let deadline = Arc::new(deadlines::ConnectDeadline::new(expires));
     deadlines::serve(
@@ -418,6 +467,7 @@ async fn handle_client(
         || {},
         admission,
         tls_client_verified,
+        graceful,
     )
     .await;
 }
@@ -437,7 +487,10 @@ async fn handle_client_observed(
         tokio::time::Instant::now() + ScHubHandshakeTimeouts::default().connect_request(),
     ));
     // The observed test seam bypasses TLS with no client authentication.
+    // Never graceful: a fresh supervisor never fires, preserving the
+    // forceful/discard-Ack behavior for heartbeat tests.
     let admission = Arc::new(admission::AdmissionRuntime::default());
+    let graceful = tasks::Tasks::new().graceful_ctx();
     deadlines::serve(
         peer_addr,
         (hub_vmac, hub_uuid),
@@ -448,6 +501,7 @@ async fn handle_client_observed(
         on_heartbeat_ack,
         admission,
         false,
+        graceful,
     )
     .await;
 }
@@ -501,6 +555,9 @@ mod ws_limits_test_support;
 
 #[cfg(test)]
 mod shutdown_tests;
+
+#[cfg(test)]
+mod graceful_tests;
 
 #[cfg(test)]
 mod task_tests;

@@ -32,6 +32,7 @@ impl ControlledPeer {
             || {},
             hub.admission.clone(),
             true,
+            super::tasks::Tasks::new().graceful_ctx(),
         );
         assert!(hub.hub.tasks.spawner().spawn(async move {
             let _admission = admission;

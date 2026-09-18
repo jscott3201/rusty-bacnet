@@ -39,6 +39,7 @@ impl Peer {
             || {},
             runtime,
             true,
+            super::tasks::Tasks::new().graceful_ctx(),
         );
         let task = tokio::spawn(async move {
             let _admission = admission;
