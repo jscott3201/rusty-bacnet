@@ -1,4 +1,5 @@
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
+use bacnet_types::constructed::BACnetObjectSelector as Selector;
 use bacnet_types::enums::{
     AuditLevel, AuditOperation, ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier,
     Reliability,
@@ -22,6 +23,118 @@ fn assert_write_access_denied(error: Error) {
             if class == ErrorClass::PROPERTY.to_raw() as u32
                 && code == ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32
     ));
+}
+
+#[test]
+fn audit_reporter_monitored_objects_is_an_optional_array_even_when_absent() {
+    let reporter = AuditReporterObject::new(1, "AR").unwrap();
+    assert!(reporter.is_array_property(PropertyIdentifier::MONITORED_OBJECTS));
+    for index in [None, Some(0), Some(1)] {
+        assert!(matches!(
+            reporter.read_property(PropertyIdentifier::MONITORED_OBJECTS, index),
+            Err(Error::Protocol { class, code })
+                if class == ErrorClass::PROPERTY.to_raw() as u32
+                    && code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32
+        ));
+    }
+    assert!(!reporter
+        .property_list()
+        .contains(&PropertyIdentifier::MONITORED_OBJECTS));
+}
+
+#[test]
+fn audit_reporter_monitored_objects_local_configuration_and_removal_are_truthful() {
+    let mut reporter = AuditReporterObject::new(1, "AR").unwrap();
+    let required = reporter.required_properties().into_owned();
+    let original = reporter.property_metadata().into_owned();
+    let selected = ObjectIdentifier::new(ObjectType::BINARY_VALUE, 42).unwrap();
+    let other = ObjectIdentifier::new(ObjectType::BINARY_VALUE, 43).unwrap();
+    let input = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    let selectors = vec![
+        Selector::None,
+        Selector::Object(selected),
+        Selector::ObjectType(ObjectType::ANALOG_INPUT),
+    ];
+    let expected = vec![
+        PropertyValue::Null,
+        PropertyValue::ObjectIdentifier(selected),
+        PropertyValue::Enumerated(0),
+    ];
+    reporter.set_monitored_objects(Some(selectors.clone()));
+    assert_eq!(
+        read(&reporter, PropertyIdentifier::MONITORED_OBJECTS),
+        PropertyValue::List(expected.clone())
+    );
+    assert_eq!(
+        reporter
+            .read_property(PropertyIdentifier::MONITORED_OBJECTS, Some(0))
+            .unwrap(),
+        PropertyValue::Unsigned(3)
+    );
+    for (i, value) in expected.iter().enumerate() {
+        assert_eq!(
+            reporter
+                .read_property(PropertyIdentifier::MONITORED_OBJECTS, Some(i as u32 + 1))
+                .unwrap(),
+            *value
+        );
+    }
+    for index in [4, u32::MAX] {
+        assert!(
+            matches!(reporter.read_property(PropertyIdentifier::MONITORED_OBJECTS, Some(index)),
+            Err(Error::Protocol { class, code }) if class == ErrorClass::PROPERTY.to_raw() as u32 && code == ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32)
+        );
+    }
+    assert_eq!(reporter.required_properties().as_ref(), required);
+    assert!(reporter
+        .property_metadata()
+        .iter()
+        .any(
+            |row| row.property_identifier == PropertyIdentifier::MONITORED_OBJECTS
+                && row.conformance == PropertyConformance::Optional
+                && row.write_capability == PropertyWriteCapability::ReadOnly
+                && row.presence_condition.is_none()
+        ));
+    assert!(reporter.monitors_object_internal(selected));
+    assert!(!reporter.monitors_object_internal(other));
+    assert!(reporter.monitors_object_internal(input));
+    // Independent Clause 21 application-tag vector. The existing primitive
+    // codec owns wire framing, including the concatenated BACnetARRAY.
+    let vector = [0x00, 0xc4, 0x01, 0x40, 0x00, 0x2a, 0x91, 0x00];
+    let mut encoded = bytes::BytesMut::new();
+    bacnet_encoding::primitives::encode_property_value(
+        &mut encoded,
+        &read(&reporter, PropertyIdentifier::MONITORED_OBJECTS),
+    )
+    .unwrap();
+    assert_eq!(&encoded[..], vector);
+    let mut offset = 0;
+    for selector in selectors {
+        let (value, next) =
+            bacnet_encoding::primitives::decode_application_value(&vector, offset).unwrap();
+        assert!(next > offset);
+        assert_eq!(Selector::decode_property_value(&value).unwrap(), selector);
+        offset = next;
+    }
+    assert_eq!(offset, vector.len());
+    for selection in [vec![], vec![Selector::None, Selector::None]] {
+        reporter.set_monitored_objects(Some(selection));
+        assert!(!reporter.monitors_object_internal(selected));
+        assert!(!reporter.monitors_object_internal(input));
+        assert!(reporter
+            .property_list()
+            .contains(&PropertyIdentifier::MONITORED_OBJECTS));
+        assert!(reporter.monitors_object_internal(reporter.object_identifier()));
+    }
+    reporter.set_monitored_objects(None);
+    assert_eq!(reporter.property_metadata().as_ref(), original);
+    assert!(reporter.monitors_object_internal(selected));
+    assert!(reporter.monitors_object_internal(other));
+    assert!(reporter.monitors_object_internal(input));
+    assert!(
+        matches!(reporter.read_property(PropertyIdentifier::MONITORED_OBJECTS, None),
+        Err(Error::Protocol { code, .. }) if code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32)
+    );
 }
 
 #[test]

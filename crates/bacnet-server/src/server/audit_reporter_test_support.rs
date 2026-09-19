@@ -147,6 +147,8 @@ pub(super) async fn server(reporter: AuditReporterObject) -> Fixture {
     .unwrap();
     db.add(Box::new(AnalogInputObject::new(1, "input", 0).unwrap()))
         .unwrap();
+    db.add(Box::new(BinaryValueObject::new(2, "other-value").unwrap()))
+        .unwrap();
     db.add(Box::new(reporter)).unwrap();
     let transport = CaptureTransport::default();
     let captured = transport.clone();

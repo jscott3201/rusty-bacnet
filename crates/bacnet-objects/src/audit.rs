@@ -7,7 +7,7 @@ use std::sync::Arc;
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::constructed::{
     BACnetAuditLogDatum, BACnetAuditLogQueryParameters, BACnetAuditLogRecord,
-    BACnetAuditLogRecordResult, BACnetAuditNotification, BACnetRecipient,
+    BACnetAuditLogRecordResult, BACnetAuditNotification, BACnetObjectSelector, BACnetRecipient,
 };
 use bacnet_types::enums::{
     AuditLevel, BACnetSuccessFilter, ErrorClass, ErrorCode, EventState, ObjectType,
@@ -26,6 +26,7 @@ mod notification;
 mod persistence;
 mod receipt;
 mod reporter_metadata;
+mod reporter_object;
 mod reporter_status;
 pub use notification::AuditLogNotificationSink;
 use persistence::{validate_record, validate_snapshot};
@@ -591,6 +592,7 @@ pub struct AuditReporterObject {
     auditable_operations: AuditOperationFlags,
     audit_priority_filter: BACnetPriorityFilter,
     issue_confirmed_notifications: bool,
+    monitored_objects: Option<Vec<BACnetObjectSelector>>,
 }
 
 impl AuditReporterObject {
@@ -606,6 +608,7 @@ impl AuditReporterObject {
             auditable_operations: AuditOperationFlags::empty(),
             audit_priority_filter: BACnetPriorityFilter::all(),
             issue_confirmed_notifications: false,
+            monitored_objects: None,
         })
     }
 
@@ -638,6 +641,30 @@ impl AuditReporterObject {
     /// Select confirmed or unconfirmed target audit notifications.
     pub fn set_issue_confirmed_notifications(&mut self, confirmed: bool) {
         self.issue_confirmed_notifications = confirmed;
+    }
+
+    /// Configure the optional Monitored_Objects array locally (never over BACnet).
+    ///
+    /// `None` removes the property and preserves catch-all target-WRITE behavior.
+    /// `Some(vec![])` or all NULL entries selects no ordinary targets. Object
+    /// identifiers match exactly; object types match every instance of that type.
+    /// Duplicates do not cause duplicate reports. Enabled external Reporter writes
+    /// bypass this selection. This does not enable multi-Reporter arbitration.
+    pub fn set_monitored_objects(&mut self, selectors: Option<Vec<BACnetObjectSelector>>) {
+        self.monitored_objects = selectors;
+    }
+
+    /// Target selection for the single-Reporter profile, before record creation.
+    #[doc(hidden)]
+    pub fn monitors_object_internal(&self, target: ObjectIdentifier) -> bool {
+        target.object_type() == ObjectType::AUDIT_REPORTER
+            || self.monitored_objects.as_ref().is_none_or(|selectors| {
+                selectors.iter().any(|selector| match selector {
+                    BACnetObjectSelector::None => false,
+                    BACnetObjectSelector::Object(object) => *object == target,
+                    BACnetObjectSelector::ObjectType(kind) => *kind == target.object_type(),
+                })
+            })
     }
 
     /// Reporter-level filter for the immediate target-WRITE profile.
@@ -686,111 +713,6 @@ impl AuditReporterObject {
         } else {
             self.status.reliability()
         }
-    }
-}
-
-impl BACnetObject for AuditReporterObject {
-    fn audit_reporter_internal(&self) -> Option<&AuditReporterObject> {
-        Some(self)
-    }
-    fn object_identifier(&self) -> ObjectIdentifier {
-        self.oid
-    }
-
-    fn object_name(&self) -> &str {
-        &self.name
-    }
-
-    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
-        Cow::Borrowed(reporter_metadata::AUDIT_REPORTER_PROPERTIES)
-    }
-
-    fn read_property(
-        &self,
-        property: PropertyIdentifier,
-        array_index: Option<u32>,
-    ) -> Result<PropertyValue, Error> {
-        match property {
-            p if p == PropertyIdentifier::OBJECT_IDENTIFIER => {
-                Ok(PropertyValue::ObjectIdentifier(self.oid))
-            }
-            p if p == PropertyIdentifier::OBJECT_NAME => {
-                Ok(PropertyValue::CharacterString(self.name.clone()))
-            }
-            p if p == PropertyIdentifier::DESCRIPTION => {
-                Ok(PropertyValue::CharacterString(self.description.clone()))
-            }
-            p if p == PropertyIdentifier::OBJECT_TYPE => Ok(PropertyValue::Enumerated(
-                ObjectType::AUDIT_REPORTER.to_raw(),
-            )),
-            p if p == PropertyIdentifier::STATUS_FLAGS => Ok(PropertyValue::BitString {
-                unused_bits: 4,
-                data: vec![if self.reliability() == Reliability::NO_FAULT_DETECTED {
-                    0
-                } else {
-                    0x40
-                }],
-            }),
-            p if p == PropertyIdentifier::RELIABILITY => {
-                Ok(PropertyValue::Enumerated(self.reliability().to_raw()))
-            }
-            p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(EventState::NORMAL.to_raw()))
-            }
-            p if p == PropertyIdentifier::AUDIT_LEVEL => {
-                Ok(PropertyValue::Enumerated(self.audit_level.to_raw()))
-            }
-            p if p == PropertyIdentifier::AUDIT_SOURCE_REPORTER => {
-                Ok(PropertyValue::Boolean(false))
-            }
-            p if p == PropertyIdentifier::AUDITABLE_OPERATIONS => {
-                let (unused_bits, data) = self.auditable_operations.to_bacnet();
-                Ok(PropertyValue::BitString { unused_bits, data })
-            }
-            p if p == PropertyIdentifier::AUDIT_PRIORITY_FILTER => {
-                let (unused_bits, data) = self.audit_priority_filter.to_bacnet();
-                Ok(PropertyValue::BitString { unused_bits, data })
-            }
-            p if p == PropertyIdentifier::ISSUE_CONFIRMED_NOTIFICATIONS => {
-                Ok(PropertyValue::Boolean(self.issue_confirmed_notifications))
-            }
-            p if p == PropertyIdentifier::PROPERTY_LIST => {
-                read_property_list_property(&self.property_list(), array_index)
-            }
-            _ => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
-            }),
-        }
-    }
-
-    fn write_property(
-        &mut self,
-        property: PropertyIdentifier,
-        _array_index: Option<u32>,
-        value: PropertyValue,
-        _priority: Option<u8>,
-    ) -> Result<(), Error> {
-        if property == PropertyIdentifier::DESCRIPTION {
-            if let PropertyValue::CharacterString(s) = value {
-                self.description = s;
-                return Ok(());
-            }
-            return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
-            });
-        }
-        Err(Error::Protocol {
-            class: ErrorClass::PROPERTY.to_raw() as u32,
-            code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
-        })
-    }
-
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::property_list_from_metadata(
-            reporter_metadata::AUDIT_REPORTER_PROPERTIES,
-        )
     }
 }
 

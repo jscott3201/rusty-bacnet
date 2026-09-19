@@ -1,4 +1,4 @@
-//! RB-21a/b: real WP outcomes -> target Reporter -> authorized Audit Log over UDP.
+//! RB-21a/b/c: real WP outcomes -> selected target Reporter -> Audit Log over UDP.
 
 use std::net::Ipv4Addr;
 use std::sync::{
@@ -18,7 +18,9 @@ use bacnet_server::server::{AuditReporterConfig, BACnetServer, DeviceBinding};
 use bacnet_services::audit::AuditLogQueryRequest;
 use bacnet_types::{
     bitstring::AuditOperationFlags,
-    constructed::{BACnetAuditLogDatum, BACnetAuditLogQueryParameters, BACnetRecipient},
+    constructed::{
+        BACnetAuditLogDatum, BACnetAuditLogQueryParameters, BACnetObjectSelector, BACnetRecipient,
+    },
     enums::{
         AuditLevel, AuditOperation, BACnetSuccessFilter, ErrorClass, ErrorCode, ObjectType,
         PropertyIdentifier, Reliability,
@@ -58,7 +60,7 @@ fn database(instance: u32) -> ObjectDatabase {
     db
 }
 
-async fn exercise(confirmed: bool) {
+async fn exercise(confirmed: bool, selected: bool) {
     let allowed = Arc::new(AtomicBool::new(!confirmed));
     let policy = Arc::clone(&allowed);
     let persistence = Arc::new(MemoryPersistence::default());
@@ -83,12 +85,24 @@ async fn exercise(confirmed: bool) {
     target_db
         .add(Box::new(BinaryValueObject::new(1, "value").unwrap()))
         .unwrap();
+    target_db
+        .add(Box::new(
+            BinaryValueObject::new(2, "unselected-value").unwrap(),
+        ))
+        .unwrap();
     let mut reporter = AuditReporterObject::new(1, "reporter").unwrap();
     reporter.set_audit_level(AuditLevel::AUDIT_ALL).unwrap();
     let mut operations = AuditOperationFlags::empty();
     operations.insert(AuditOperation::WRITE);
     reporter.set_auditable_operations(operations);
     reporter.set_issue_confirmed_notifications(confirmed);
+    if selected {
+        reporter.set_monitored_objects(Some(vec![
+            BACnetObjectSelector::None,
+            BACnetObjectSelector::Object(oid(ObjectType::BINARY_VALUE, 1)),
+            BACnetObjectSelector::Object(oid(ObjectType::BINARY_VALUE, 1)),
+        ]));
+    }
     target_db.add(Box::new(reporter)).unwrap();
     let mut target = BACnetServer::builder()
         .interface(Ipv4Addr::LOCALHOST)
@@ -111,6 +125,47 @@ async fn exercise(confirmed: bool) {
         .build()
         .await
         .unwrap();
+
+    if selected {
+        // Both an unmatched commit and an unmatched execution failure remain
+        // silent; the matching outcomes below still reach the real recipient.
+        client
+            .write_property(
+                target.local_mac(),
+                oid(ObjectType::BINARY_VALUE, 2),
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+                vec![0x91, 1],
+                None,
+            )
+            .await
+            .unwrap();
+        let error = client
+            .write_property(
+                target.local_mac(),
+                oid(ObjectType::BINARY_VALUE, 2),
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+                vec![0x91, 9],
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, Error::Protocol { class, code }
+            if class == ErrorClass::PROPERTY.to_raw() as u32
+                && code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32));
+        assert_eq!(
+            target
+                .database()
+                .read()
+                .await
+                .get(&oid(ObjectType::BINARY_VALUE, 2))
+                .unwrap()
+                .read_property(PropertyIdentifier::PRESENT_VALUE, None)
+                .unwrap(),
+            bacnet_types::primitives::PropertyValue::Enumerated(1)
+        );
+    }
 
     if confirmed {
         // A real recipient's Error response must reach the shared coordinator,
@@ -315,10 +370,16 @@ async fn exercise(confirmed: bool) {
 
 #[tokio::test]
 async fn audit_reporter_unconfirmed_write_reaches_real_log() {
-    exercise(false).await;
+    exercise(false, false).await;
 }
 
 #[tokio::test]
 async fn audit_reporter_confirmed_error_then_ack_updates_health_over_udp() {
-    exercise(true).await;
+    exercise(true, false).await;
+}
+
+#[tokio::test]
+async fn audit_reporter_selected_writes_and_failures_reach_real_log_once_over_udp() {
+    exercise(false, true).await;
+    exercise(true, true).await;
 }

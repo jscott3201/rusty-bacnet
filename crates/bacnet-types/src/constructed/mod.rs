@@ -15,6 +15,7 @@ mod audit;
 pub use audit::{
     AuditPropertyReference, BACnetAuditLogDatum, BACnetAuditLogQueryParameters,
     BACnetAuditLogRecord, BACnetAuditLogRecordResult, BACnetAuditNotification,
+    BACnetObjectSelector,
 };
 mod staging;
 pub use staging::BACnetStageLimitValue;

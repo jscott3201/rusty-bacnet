@@ -33,10 +33,14 @@ const DELIVERY_TIMEOUT: Duration = Duration::from_secs(3);
 /// transport acceptance, not storage by the recipient.
 ///
 /// Audit_Source_Reporter remains false. No Device.Audit_Notification_Recipient,
-/// Monitored_Objects, per-object overrides, source reporting, direct local-write
+/// per-object overrides, source reporting, direct local-write
 /// reporting, batching, AUDITING_FAILURE records, or Python parity is claimed.
 /// Ordinary sensor samples and internal reliability updates never enter this
 /// producer. An enabled external write to a Reporter produces one record.
+/// Locally configured Monitored_Objects selects ordinary targets by exact object
+/// or object type. Omitted selection preserves catch-all behavior; an empty or
+/// all-NULL selection reports no ordinary targets. Reporter writes bypass it.
+/// Network selection writes and multi-Reporter arbitration are not supported.
 ///
 /// ```no_run
 /// use bacnet_objects::{audit::AuditReporterObject, database::ObjectDatabase,
@@ -228,11 +232,13 @@ impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
                 .property_list()
                 .contains(&PropertyIdentifier::PRIORITY_ARRAY))
         .then_some(write.priority.unwrap_or(16));
-        if !reporter.reports_write_internal(
-            write.property,
-            command_priority,
-            write.oid.object_type() == ObjectType::AUDIT_REPORTER,
-        ) {
+        if !reporter.monitors_object_internal(write.oid)
+            || !reporter.reports_write_internal(
+                write.property,
+                command_priority,
+                write.oid.object_type() == ObjectType::AUDIT_REPORTER,
+            )
+        {
             return;
         }
         let current_value = object

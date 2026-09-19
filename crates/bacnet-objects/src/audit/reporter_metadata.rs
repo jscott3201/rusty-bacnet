@@ -1,4 +1,5 @@
 use bacnet_types::enums::PropertyIdentifier;
+use std::borrow::Cow;
 
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead},
@@ -81,3 +82,21 @@ pub(super) static AUDIT_REPORTER_PROPERTIES: &[PropertyMetadata] = &[
         ReadOnly,
     ),
 ];
+
+pub(super) fn effective_properties(monitored_objects: bool) -> Cow<'static, [PropertyMetadata]> {
+    if !monitored_objects {
+        return Cow::Borrowed(AUDIT_REPORTER_PROPERTIES);
+    }
+    let mut rows = AUDIT_REPORTER_PROPERTIES.to_vec();
+    // Only effective rows belong in metadata: absent is not an empty array.
+    rows.insert(
+        rows.len() - 1,
+        PropertyMetadata::new(
+            PropertyIdentifier::MONITORED_OBJECTS,
+            Optional,
+            None,
+            ReadOnly,
+        ),
+    );
+    Cow::Owned(rows)
+}

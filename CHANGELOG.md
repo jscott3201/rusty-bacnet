@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Bounded target-WRITE Audit Reporter (RB-21a/b, Refs #345):** Rust servers can
+- **Bounded target-WRITE Audit Reporter (RB-21a/b/c, Refs #345):** Rust servers can
   select one locally configured Reporter and explicitly bound unicast Device
   recipient. Successful inbound WriteProperty and each committed WPM prefix
   element produce separate immediate-send notifications after authorization and
@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   elements, unknown/timeout outcomes, disabled reporting, and sensor samples
   remain silent. Failure reporting uses the same filters and never changes the
   protocol response or rolls back writes.
+  RB-21c adds optional, local-only `Monitored_Objects` configuration through
+  `AuditReporterObject::set_monitored_objects`: omitted selection preserves
+  catch-all behavior; an explicit empty/all-NULL array selects no ordinary targets;
+  exact object and object-type selectors admit matching successes and execution
+  failures without duplicate notifications. Enabled Reporter-target writes bypass
+  selection. The optional read-only property, RP/RPM array indexing, Property_List,
+  and runtime PICS reflect local presence; network WP/WPM cannot mutate it.
   Confirmed delivery uses the existing invoke/transaction owner;
   unconfirmed delivery ends at transport send. An absent or invalid selected
   Reporter rejects server startup. For an existing Reporter, Reliability and its
@@ -29,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   64 active delivery slots, a three-second total deadline, no retries or waiting outbox,
   and omits values above 32 encoded octets; overload never rolls back a write.
   This is not full Audit Reporter support: source reporting, other operations,
-  per-object overrides, Monitored_Objects/multi-Reporter selection, batching,
+  per-object overrides, multi-Reporter overlap/lowest-instance selection, batching,
   AUDITING_FAILURE records, forwarding/durable delivery, the public Device
   Audit_Notification_Recipient model, and Python parity remain deferred. #345
   stays open; no Audit Reporting BIBB or BTL qualification is claimed.
