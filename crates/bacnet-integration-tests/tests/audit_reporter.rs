@@ -1,4 +1,4 @@
-//! RB-21a: real client WP -> target Reporter -> authorized Audit Log over UDP.
+//! RB-21a/b: real WP outcomes -> target Reporter -> authorized Audit Log over UDP.
 
 use std::net::Ipv4Addr;
 use std::sync::{
@@ -20,8 +20,8 @@ use bacnet_types::{
     bitstring::AuditOperationFlags,
     constructed::{BACnetAuditLogDatum, BACnetAuditLogQueryParameters, BACnetRecipient},
     enums::{
-        AuditLevel, AuditOperation, BACnetSuccessFilter, ObjectType, PropertyIdentifier,
-        Reliability,
+        AuditLevel, AuditOperation, BACnetSuccessFilter, ErrorClass, ErrorCode, ObjectType,
+        PropertyIdentifier, Reliability,
     },
     error::Error,
     primitives::ObjectIdentifier,
@@ -188,25 +188,70 @@ async fn exercise(confirmed: bool) {
     .await
     .unwrap();
 
-    let ack = client
-        .audit_log_query(
-            logger.local_mac(),
-            &AuditLogQueryRequest {
-                audit_log: oid(ObjectType::AUDIT_LOG, 1),
-                query_parameters: BACnetAuditLogQueryParameters::ByTarget {
-                    target_device_identifier: oid(ObjectType::DEVICE, 10),
-                    target_device_address: None,
-                    target_object_identifier: None,
-                    target_property_identifier: None,
-                    target_array_index: None,
-                    target_priority: None,
-                    operations: None,
-                    successful_actions_only: BACnetSuccessFilter::SUCCESSES_ONLY,
-                },
-                start_at_sequence_number: None,
-                requested_count: 10,
-            },
+    // A decoded, authorized semantic execution error is returned unchanged to
+    // the client and separately delivered to the real Audit Log with Result.
+    let error = client
+        .write_property(
+            target.local_mac(),
+            oid(ObjectType::BINARY_VALUE, 1),
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            vec![0x91, 9],
+            None,
         )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::Protocol { class, code }
+        if class == ErrorClass::PROPERTY.to_raw() as u32
+            && code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32));
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if persistence
+                .0
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .records
+                .len()
+                == 2
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        target
+            .database()
+            .read()
+            .await
+            .get(&oid(ObjectType::BINARY_VALUE, 1))
+            .unwrap()
+            .read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .unwrap(),
+        bacnet_types::primitives::PropertyValue::Enumerated(u32::from(new_value))
+    );
+
+    let mut query = AuditLogQueryRequest {
+        audit_log: oid(ObjectType::AUDIT_LOG, 1),
+        query_parameters: BACnetAuditLogQueryParameters::ByTarget {
+            target_device_identifier: oid(ObjectType::DEVICE, 10),
+            target_device_address: None,
+            target_object_identifier: None,
+            target_property_identifier: None,
+            target_array_index: None,
+            target_priority: None,
+            operations: None,
+            successful_actions_only: BACnetSuccessFilter::SUCCESSES_ONLY,
+        },
+        start_at_sequence_number: None,
+        requested_count: 10,
+    };
+    let ack = client
+        .audit_log_query(logger.local_mac(), &query)
         .await
         .unwrap();
     assert_eq!(ack.records.len(), 1);
@@ -226,6 +271,43 @@ async fn exercise(confirmed: bool) {
     assert!(record.target_timestamp.is_some());
     assert!(record.invoke_id.is_some());
     assert!(record.result.is_none());
+
+    let BACnetAuditLogQueryParameters::ByTarget {
+        successful_actions_only,
+        ..
+    } = &mut query.query_parameters
+    else {
+        unreachable!()
+    };
+    *successful_actions_only = BACnetSuccessFilter::FAILURES_ONLY;
+    let ack = client
+        .audit_log_query(logger.local_mac(), &query)
+        .await
+        .unwrap();
+    assert_eq!(ack.records.len(), 1);
+    let BACnetAuditLogDatum::AuditNotification(record) = &ack.records[0].record.datum else {
+        panic!("expected failed operation");
+    };
+    assert_eq!(record.operation, AuditOperation::WRITE);
+    assert_eq!(
+        record.target_device,
+        BACnetRecipient::Device(oid(ObjectType::DEVICE, 10))
+    );
+    assert_eq!(record.target_object, Some(oid(ObjectType::BINARY_VALUE, 1)));
+    assert_eq!(
+        record.target_property.as_ref().unwrap().property_identifier,
+        PropertyIdentifier::PRESENT_VALUE
+    );
+    assert_eq!(record.target_priority, Some(16));
+    assert_eq!(record.target_value, Some(vec![0x91, 9]));
+    assert_eq!(record.current_value, Some(vec![0x91, new_value]));
+    assert_eq!(
+        record.result,
+        Some((ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE))
+    );
+    assert!(record.source_timestamp.is_none());
+    assert!(record.target_timestamp.is_some());
+    assert!(record.invoke_id.is_some());
     client.stop().await.unwrap();
     target.stop().await.unwrap();
     logger.stop().await.unwrap();

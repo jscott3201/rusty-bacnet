@@ -78,6 +78,8 @@ pub(super) fn reporter() -> AuditReporterObject {
 struct CountingValue {
     value: BinaryValueObject,
     writes: Arc<AtomicUsize>,
+    attempts: Arc<AtomicUsize>,
+    execution_error: Arc<StdMutex<Option<Error>>>,
 }
 
 impl BACnetObject for CountingValue {
@@ -101,6 +103,10 @@ impl BACnetObject for CountingValue {
         value: PropertyValue,
         priority: Option<u8>,
     ) -> Result<(), Error> {
+        self.attempts.fetch_add(1, Ordering::AcqRel);
+        if let Some(error) = self.execution_error.lock().unwrap().take() {
+            return Err(error);
+        }
         self.value
             .write_property(property, index, value, priority)?;
         self.writes.fetch_add(1, Ordering::AcqRel);
@@ -115,11 +121,15 @@ pub(super) struct Fixture {
     pub(super) server: BACnetServer<CaptureTransport>,
     pub(super) transport: CaptureTransport,
     pub(super) writes: Arc<AtomicUsize>,
+    pub(super) attempts: Arc<AtomicUsize>,
+    pub(super) execution_error: Arc<StdMutex<Option<Error>>>,
 }
 
 pub(super) async fn server(reporter: AuditReporterObject) -> Fixture {
     let mut db = ObjectDatabase::new();
     let writes = Arc::new(AtomicUsize::new(0));
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let execution_error = Arc::new(StdMutex::new(None));
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
             instance: 10,
@@ -131,6 +141,8 @@ pub(super) async fn server(reporter: AuditReporterObject) -> Fixture {
     db.add(Box::new(CountingValue {
         value: BinaryValueObject::new(1, "value").unwrap(),
         writes: Arc::clone(&writes),
+        attempts: Arc::clone(&attempts),
+        execution_error: Arc::clone(&execution_error),
     }))
     .unwrap();
     db.add(Box::new(AnalogInputObject::new(1, "input", 0).unwrap()))
@@ -157,6 +169,8 @@ pub(super) async fn server(reporter: AuditReporterObject) -> Fixture {
         server,
         transport: captured,
         writes,
+        attempts,
+        execution_error,
     }
 }
 

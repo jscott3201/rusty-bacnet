@@ -41,7 +41,7 @@ pub(super) fn error_apdu_from_error(
     })
 }
 
-pub(super) fn error_fields(error: &Error) -> (ErrorClass, ErrorCode) {
+pub(in crate::server) fn error_fields(error: &Error) -> (ErrorClass, ErrorCode) {
     match error {
         Error::Protocol { class, code } => (
             ErrorClass::from_raw(*class as u16),

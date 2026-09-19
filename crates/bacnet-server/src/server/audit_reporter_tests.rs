@@ -19,6 +19,9 @@ use support::*;
 #[path = "audit_reporter_startup_tests.rs"]
 mod startup;
 
+#[path = "audit_reporter_failure_tests.rs"]
+mod failures;
+
 #[tokio::test]
 async fn audit_reporter_wp_emits_one_success_after_commit() {
     let mut fixture = server(reporter()).await;
@@ -182,47 +185,6 @@ fn element(property: PropertyIdentifier, value: Vec<u8>) -> BACnetPropertyValue 
 }
 
 #[tokio::test]
-async fn audit_reporter_wpm_reports_each_committed_element_not_failed_or_later_elements() {
-    let mut fixture = server(reporter()).await;
-    let response = dispatch(
-        &fixture.server,
-        ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
-        wpm(vec![
-            element(PropertyIdentifier::PRESENT_VALUE, vec![0x91, 1]),
-            element(PropertyIdentifier::PRESENT_VALUE, vec![0x91, 0]),
-            element(PropertyIdentifier::PRESENT_VALUE, vec![0x91, 9]),
-            element(PropertyIdentifier::DESCRIPTION, vec![0x72, 0, b'x']),
-        ]),
-    )
-    .await;
-    assert!(matches!(response, Apdu::Error(_)));
-    settle().await;
-    let records = notifications(&fixture.transport.sent);
-    assert_eq!(records.len(), 2);
-    assert_eq!(
-        records[0].notifications[0].target_value,
-        Some(vec![0x91, 1])
-    );
-    assert_eq!(
-        records[0].notifications[0].current_value,
-        Some(vec![0x91, 0])
-    );
-    assert_eq!(
-        records[1].notifications[0].target_value,
-        Some(vec![0x91, 0])
-    );
-    assert_eq!(
-        records[1].notifications[0].current_value,
-        Some(vec![0x91, 1])
-    );
-    assert!(records.iter().all(
-        |request| request.notifications.len() == 1 && request.notifications[0].result.is_none()
-    ));
-    assert_eq!(fixture.writes.load(Ordering::Acquire), 2);
-    fixture.server.stop().await.unwrap();
-}
-
-#[tokio::test]
 async fn audit_reporter_denied_wp_and_wpm_suffix_have_no_audit_side_effects() {
     let mut fixture = server(reporter()).await;
     fixture.server.config.mutation_policy = crate::mutation::MutationPolicy::DenyAll;
@@ -233,6 +195,7 @@ async fn audit_reporter_denied_wp_and_wpm_suffix_have_no_audit_side_effects() {
     settle().await;
     assert!(fixture.transport.sent.lock().unwrap().is_empty());
     assert_eq!(fixture.writes.load(Ordering::Acquire), 0);
+    assert_eq!(fixture.attempts.load(Ordering::Acquire), 0);
     fixture.server.config.mutation_policy = crate::mutation::MutationPolicy::Permissive;
     fixture.server.config.mutation_authorizer = Some(Arc::new(|context| match &context.target {
         crate::mutation::MutationTarget::WritePropertyMultiple(attempt) => {
@@ -254,8 +217,16 @@ async fn audit_reporter_denied_wp_and_wpm_suffix_have_no_audit_side_effects() {
         Apdu::Error(_)
     ));
     settle().await;
-    assert_eq!(notifications(&fixture.transport.sent).len(), 1);
+    let records = notifications(&fixture.transport.sent);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].notifications.len(), 1);
+    assert_eq!(records[0].notifications[0].result, None);
+    assert_eq!(
+        records[0].notifications[0].target_value,
+        Some(vec![0x91, 1])
+    );
     assert_eq!(fixture.writes.load(Ordering::Acquire), 1);
+    assert_eq!(fixture.attempts.load(Ordering::Acquire), 1);
     fixture.server.stop().await.unwrap();
 }
 

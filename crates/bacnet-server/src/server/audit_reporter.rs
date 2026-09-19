@@ -13,8 +13,10 @@ const DELIVERY_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// One locally configured target-WRITE Reporter and unicast Device recipient.
 ///
-/// Only successful inbound WP/WPM elements are reported. There is no source-side
-/// reporting, per-object override, batching, forwarding, or durable outbox.
+/// Reports successful inbound WP/WPM elements and authorized execution errors.
+/// Policy denials and undecoded/unattempted elements remain silent. Successes
+/// omit Result; execution failures include the mapped BACnet Error. There is no
+/// source-side reporting, per-object override, batching, forwarding, or durable outbox.
 /// Configure the recipient with the builder's `device_binding` method. Server
 /// startup returns [`Error::Encoding`] if the selected Reporter is absent or
 /// lacks the Audit Reporter capability. A missing or unresolvable recipient
@@ -266,14 +268,37 @@ impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
     }
 
     fn committed(&mut self, db: &mut ObjectDatabase) {
+        self.complete(db, None);
+    }
+
+    fn failed(&mut self, db: &mut ObjectDatabase, error: &Error) {
+        // An unknown transaction outcome is not an execution failure. In
+        // particular, never manufacture an Error for a timeout/Reject/Abort.
+        if matches!(
+            error,
+            Error::Timeout(_) | Error::Reject { .. } | Error::Abort { .. }
+        ) {
+            self.pending = None;
+            return;
+        }
+        self.complete(
+            db,
+            Some(super::requests::confirmed_response::error_fields(error)),
+        );
+    }
+}
+
+impl<T: TransportPort + 'static> WriteAudit<'_, T> {
+    fn complete(&mut self, db: &mut ObjectDatabase, result: Option<(ErrorClass, ErrorCode)>) {
         let Some(mut pending) = self.pending.take() else {
             return;
         };
         let Some(route) = self.route.clone() else {
             return;
         };
-        // No await separates successful mutation from notification admission.
-        // A later response-send timeout cannot turn an uncommitted write into success.
+        // No await separates execution completion from notification admission.
+        // A later response-send timeout cannot change the recorded outcome.
+        pending.notification.result = result;
         pending.notification.target_timestamp =
             Some(super::event_timestamp::sample_event_timestamp(db).timestamp);
         let completion = DeliveryCompletion::new(pending.status);
