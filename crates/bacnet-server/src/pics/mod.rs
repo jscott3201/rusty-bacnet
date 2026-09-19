@@ -278,37 +278,12 @@ impl<'a> PicsGenerator<'a> {
         for (raw_type, objects) in &by_type {
             let object_type = ObjectType::from_raw(*raw_type);
             let representative = objects[0];
-            let metadata = representative.property_metadata();
-            let supported_properties = if metadata.is_empty() {
-                let all_props = representative.property_list();
-                let required = representative.required_properties();
-                all_props
-                    .iter()
-                    .map(|&property_id| {
-                        let is_required = required.contains(&property_id);
-                        PropertySupport {
-                            property_id,
-                            access: PropertyAccess {
-                                readable: true,
-                                writable: representative.is_writable_property(property_id),
-                                optional: !is_required,
-                            },
-                        }
-                    })
-                    .collect()
-            } else {
-                metadata
-                    .iter()
-                    .map(|row| PropertySupport {
-                        property_id: row.property_identifier,
-                        access: PropertyAccess {
-                            readable: true,
-                            writable: row.write_capability.is_writable(),
-                            optional: row.conformance == PropertyConformance::Optional,
-                        },
-                    })
-                    .collect()
-            };
+            let supported_properties =
+                if object_type == ObjectType::AUDIT_REPORTER && objects.len() > 1 {
+                    Self::audit_reporter_property_support(objects)
+                } else {
+                    Self::object_property_support(representative)
+                };
 
             let createable = representative.is_createable();
             let deleteable = representative.is_deleteable();
@@ -321,6 +296,64 @@ impl<'a> PicsGenerator<'a> {
             });
         }
         result
+    }
+
+    fn object_property_support(
+        object: &dyn bacnet_objects::traits::BACnetObject,
+    ) -> Vec<PropertySupport> {
+        let metadata = object.property_metadata();
+        if metadata.is_empty() {
+            let all_props = object.property_list();
+            let required = object.required_properties();
+            all_props
+                .iter()
+                .map(|&property_id| PropertySupport {
+                    property_id,
+                    access: PropertyAccess {
+                        readable: true,
+                        writable: object.is_writable_property(property_id),
+                        optional: !required.contains(&property_id),
+                    },
+                })
+                .collect()
+        } else {
+            metadata
+                .iter()
+                .map(|row| PropertySupport {
+                    property_id: row.property_identifier,
+                    access: PropertyAccess {
+                        readable: true,
+                        writable: row.write_capability.is_writable(),
+                        optional: row.conformance == PropertyConformance::Optional,
+                    },
+                })
+                .collect()
+        }
+    }
+
+    fn audit_reporter_property_support(
+        objects: &[&dyn bacnet_objects::traits::BACnetObject],
+    ) -> Vec<PropertySupport> {
+        // PICS describes object-type capabilities, not just the selected audit
+        // producer. Union effective rows so another instance's optional property
+        // is neither hidden nor advertised when absent from every instance.
+        // Property-ID ordering is independent of database iteration order.
+        let mut properties: BTreeMap<u32, PropertySupport> = BTreeMap::new();
+        for object in objects {
+            for row in Self::object_property_support(*object) {
+                properties
+                    .entry(row.property_id.to_raw())
+                    .and_modify(|existing| {
+                        existing.access.readable |= row.access.readable;
+                        existing.access.writable |= row.access.writable;
+                        // Keep the base conformance classification: a required
+                        // row is not made optional by another instance's absence.
+                        existing.access.optional &= row.access.optional;
+                    })
+                    .or_insert(row);
+            }
+        }
+        properties.into_values().collect()
     }
 
     /// Build the service support list based on what the server actually handles.
