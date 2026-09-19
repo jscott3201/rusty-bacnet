@@ -12,9 +12,28 @@ struct State {
     configured: bool,
     communication_failure: bool,
     failure_epoch: u64,
+    auditing_failure_enabled: bool,
+    auditing_failure_epoch: u64,
 }
 
 impl AuditReporterStatus {
+    pub(super) fn set_auditing_failure_enabled(&self, enabled: bool) {
+        let mut state = self.0.lock().unwrap();
+        if state.auditing_failure_enabled && !enabled {
+            state.auditing_failure_epoch = state.auditing_failure_epoch.saturating_add(1);
+        }
+        state.auditing_failure_enabled = enabled;
+    }
+
+    /// Instance-owned filter identity for memory-only resource-drop summaries.
+    /// Disabling invalidates pending counts even if re-enabled before admission.
+    #[doc(hidden)]
+    pub fn auditing_failure_epoch(&self) -> Option<u64> {
+        let state = self.0.lock().unwrap();
+        (state.auditing_failure_enabled && state.auditing_failure_epoch != u64::MAX)
+            .then_some(state.auditing_failure_epoch)
+    }
+
     /// Update destination/configuration availability without hiding send failures.
     pub fn set_configured(&self, configured: bool) {
         self.0.lock().unwrap().configured = configured;

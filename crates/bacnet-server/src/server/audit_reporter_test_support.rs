@@ -27,6 +27,7 @@ pub(super) struct CaptureTransport {
     pub(super) sent: Arc<StdMutex<Vec<Bytes>>>,
     pub(super) fail: Arc<AtomicBool>,
     pub(super) block: Arc<AtomicBool>,
+    pub(super) unblock: Arc<tokio::sync::Notify>,
     requests: Arc<AtomicU8>,
 }
 
@@ -47,7 +48,7 @@ impl TransportPort for CaptureTransport {
             .unwrap()
             .push(Bytes::copy_from_slice(bytes));
         if self.block.load(Ordering::Acquire) {
-            std::future::pending::<()>().await;
+            self.unblock.notified().await;
         }
         if self.fail.load(Ordering::Acquire) {
             return Err(Error::Encoding("injected send failure".into()));

@@ -26,6 +26,30 @@ fn assert_write_access_denied(error: Error) {
 }
 
 #[test]
+fn audit_reporter_auditing_failure_filter_invalidates_pending_epoch() {
+    let mut reporter = AuditReporterObject::new(1, "AR").unwrap();
+    let status = reporter.status_internal();
+    let mut flags = AuditOperationFlags::empty();
+    flags.insert(AuditOperation::AUDITING_FAILURE);
+    reporter.set_auditable_operations(flags);
+    assert_eq!(status.auditing_failure_epoch(), None);
+    reporter.set_audit_level(AuditLevel::AUDIT_CONFIG).unwrap();
+    let first = status.auditing_failure_epoch().unwrap();
+    reporter.set_monitored_objects(Some(vec![]));
+    reporter.set_audit_priority_filter(BACnetPriorityFilter::empty());
+    assert_eq!(status.auditing_failure_epoch(), Some(first));
+    reporter.set_audit_level(AuditLevel::NONE).unwrap();
+    assert_eq!(status.auditing_failure_epoch(), None);
+    reporter.set_audit_level(AuditLevel::AUDIT_ALL).unwrap();
+    let second = status.auditing_failure_epoch().unwrap();
+    assert_ne!(first, second);
+    reporter.set_auditable_operations(AuditOperationFlags::empty());
+    assert_eq!(status.auditing_failure_epoch(), None);
+    reporter.set_auditable_operations(flags);
+    assert_ne!(status.auditing_failure_epoch().unwrap(), second);
+}
+
+#[test]
 fn audit_reporter_monitored_objects_is_an_optional_array_even_when_absent() {
     let reporter = AuditReporterObject::new(1, "AR").unwrap();
     assert!(reporter.is_array_property(PropertyIdentifier::MONITORED_OBJECTS));

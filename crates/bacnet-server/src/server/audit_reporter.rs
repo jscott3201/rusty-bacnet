@@ -1,5 +1,8 @@
 use super::device_bindings::BindingFreshness;
 use super::event_recipient_route::{ConfirmedRecipientRoute, RecipientRoute};
+use super::notification_transactions::{
+    AuditFailureBatch, NotificationReservation, NotificationReserveError,
+};
 use super::*;
 use crate::handlers::{WriteCommitObserver, WriteTarget};
 use bacnet_objects::audit::AuditReporterStatus;
@@ -25,10 +28,13 @@ const DELIVERY_TIMEOUT: Duration = Duration::from_secs(3);
 /// lacks the Audit Reporter capability. A missing or unresolvable recipient
 /// still permits startup and exposes CONFIGURATION_ERROR through the existing
 /// enabled Reporter's Reliability.
-/// At most 64 deliveries are active per server, with no waiting queue. Each
+/// At most 64 deliveries are active per server, with no ordinary-record queue. Each
 /// send/ACK has one total three-second deadline and no retries. Overflow or
 /// delivery failure sets COMMUNICATION_FAILURE, never changes the write result,
-/// and retains no record. Values larger than 32 encoded octets are omitted.
+/// and retains no ordinary record. Resource-admission drops can be summarized
+/// by one memory-only, saturating AUDITING_FAILURE count when its operation bit
+/// and Audit_Level are enabled. One owned worker waits for capacity and coalesces
+/// further drops; summary failure never counts itself. Values over 32 octets are omitted.
 /// The complete APDU must fit the server's limit; outbound segmentation is not
 /// implemented by this profile. Encoding/size failures are delivery failures.
 /// A subsequent successful delivery clears communication failure unless a newer
@@ -37,7 +43,7 @@ const DELIVERY_TIMEOUT: Duration = Duration::from_secs(3);
 ///
 /// Audit_Source_Reporter remains false. No Device.Audit_Notification_Recipient,
 /// per-object overrides, source reporting, direct local-write
-/// reporting, batching, AUDITING_FAILURE records, or Python parity is claimed.
+/// reporting, ordinary batching, or Python parity is claimed.
 /// Ordinary sensor samples and internal reliability updates never enter this
 /// producer. An enabled external write to a Reporter produces one record.
 /// Locally configured Monitored_Objects selects ordinary targets by exact object
@@ -539,22 +545,24 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         pending.notification.result = result;
         pending.notification.target_timestamp =
             Some(super::event_timestamp::sample_event_timestamp(db).timestamp);
-        let completion = DeliveryCompletion::new(pending.status);
+        let completion = DeliveryCompletion::new(Arc::clone(&pending.status));
         if self.comm_state.load(Ordering::Acquire) != 0 {
             return;
         }
-        let Some(permit) = self.transactions.try_admit_audit() else {
+        // Validate encoding and APDU fit before resource admission: those
+        // failures must not become resource-drop counts even under overload.
+        let Some(mut bytes) = encode_notification(
+            &pending.notification,
+            pending.confirmed,
+            self.config.max_apdu_length,
+            0,
+        ) else {
             return;
         };
-        let mut service = BytesMut::new();
-        if (AuditNotificationRequest {
-            notifications: vec![pending.notification],
-        })
-        .try_encode(&mut service)
-        .is_err()
-        {
+        let Some(permit) = self.transactions.try_admit_audit() else {
+            self.resource_drop(&pending, route);
             return;
-        }
+        };
         let confirmed = pending.confirmed;
         let reserved = if confirmed {
             match self.transactions.reserve(
@@ -562,35 +570,27 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
                 ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION,
             ) {
                 Ok(reserved) => Some(reserved),
+                Err(NotificationReserveError::Coordinator(
+                    bacnet_endpoint_core::coordinator::ReserveError::Exhausted,
+                )) => {
+                    self.resource_drop(&pending, route);
+                    return;
+                }
                 Err(_) => return,
             }
         } else {
             None
         };
-        let pdu = if let Some((operation, _)) = &reserved {
-            Apdu::ConfirmedRequest(ConfirmedRequestPdu {
-                segmented: false,
-                more_follows: false,
-                segmented_response_accepted: false,
-                max_segments: None,
-                max_apdu_length: self.config.max_apdu_length as u16,
-                invoke_id: operation.invoke_id(),
-                sequence_number: None,
-                proposed_window_size: None,
-                service_choice: ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION,
-                service_request: service.freeze(),
-            })
-        } else {
-            Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
-                service_choice: UnconfirmedServiceChoice::UNCONFIRMED_AUDIT_NOTIFICATION,
-                service_request: service.freeze(),
-            })
-        };
-        let mut bytes = BytesMut::new();
-        if encode_apdu(&mut bytes, &pdu).is_err()
-            || bytes.len() > self.config.max_apdu_length as usize
-        {
-            return;
+        if let Some((operation, _)) = &reserved {
+            let Some(encoded) = encode_notification(
+                &pending.notification,
+                confirmed,
+                self.config.max_apdu_length,
+                operation.invoke_id(),
+            ) else {
+                return;
+            };
+            bytes = encoded;
         }
         let network = Arc::clone(self.network);
         let comm_state = Arc::clone(self.comm_state);
@@ -598,45 +598,140 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         let deadline = tokio::time::Instant::now() + DELIVERY_TIMEOUT;
         self.transactions.spawn(async move {
             let _permit = permit;
-            let send = || async {
-                if comm_state.load(Ordering::Acquire) != 0 {
-                    return Err(Error::Encoding("audit initiation disabled".into()));
-                }
-                match (&route.local_target, &route.remote) {
-                    (Some(mac), None) => {
-                        network
-                            .send_apdu(&bytes, mac, confirmed, NetworkPriority::NORMAL)
-                            .await
-                    }
-                    (None, Some((net, mac, Some(router)))) => {
-                        network
-                            .send_apdu_routed(
-                                &bytes,
-                                *net,
-                                mac,
-                                router,
-                                confirmed,
-                                NetworkPriority::NORMAL,
-                            )
-                            .await
-                    }
-                    _ => Err(Error::Encoding("audit destination is unavailable".into())),
-                }
-            };
-            let delivered = tokio::time::timeout_at(deadline, async {
-                if let Some((operation, receiver)) = reserved {
-                    run_notification_worker(operation, receiver, DELIVERY_TIMEOUT, 0, |_| send())
-                        .await
-                        == NotificationWorkerResult::Ack
-                } else {
-                    send().await.is_ok()
-                }
-            })
-            .await
-            .unwrap_or(false);
+            let delivered =
+                deliver(&network, &comm_state, &route, &bytes, reserved, deadline).await;
             completion.finish(delivered);
         });
     }
+
+    fn resource_drop(&self, pending: &PendingWrite, route: Arc<ConfirmedRecipientRoute>) {
+        let Some(epoch) = pending.status.auditing_failure_epoch() else {
+            return;
+        };
+        let BACnetRecipient::Device(device) = pending.notification.target_device else {
+            return;
+        };
+        let Some(mut worker) = self.transactions.record_audit_drop(AuditFailureBatch {
+            count: 1,
+            earliest: pending
+                .notification
+                .target_timestamp
+                .clone()
+                .expect("completed record"),
+            device,
+            status: Arc::clone(&pending.status),
+            epoch,
+            confirmed: pending.confirmed,
+            route,
+            max_apdu: self.config.max_apdu_length,
+        }) else {
+            return;
+        };
+        let network = Arc::clone(self.network);
+        let comm_state = Arc::clone(self.comm_state);
+        self.transactions.spawn(async move {
+            while let Some((batch, _permit, reserved)) = worker.next().await {
+                let completion = DeliveryCompletion::new(Arc::clone(&batch.status));
+                let deadline = tokio::time::Instant::now() + DELIVERY_TIMEOUT;
+                let invoke = reserved
+                    .as_ref()
+                    .map_or(0, |(operation, _)| operation.invoke_id());
+                let Some(bytes) = encode_notification(
+                    &batch.notification(),
+                    batch.confirmed,
+                    batch.max_apdu,
+                    invoke,
+                ) else {
+                    continue;
+                };
+                let delivered = deliver(
+                    &network,
+                    &comm_state,
+                    &batch.route,
+                    &bytes,
+                    reserved,
+                    deadline,
+                )
+                .await;
+                completion.finish(delivered);
+            }
+        });
+    }
+}
+
+fn encode_notification(
+    notification: &BACnetAuditNotification,
+    confirmed: bool,
+    max_apdu: u32,
+    invoke_id: u8,
+) -> Option<BytesMut> {
+    let mut service = BytesMut::new();
+    AuditNotificationRequest {
+        notifications: vec![notification.clone()],
+    }
+    .try_encode(&mut service)
+    .ok()?;
+    let pdu = if confirmed {
+        Apdu::ConfirmedRequest(ConfirmedRequestPdu {
+            segmented: false,
+            more_follows: false,
+            segmented_response_accepted: false,
+            max_segments: None,
+            max_apdu_length: max_apdu as u16,
+            invoke_id,
+            sequence_number: None,
+            proposed_window_size: None,
+            service_choice: ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION,
+            service_request: service.freeze(),
+        })
+    } else {
+        Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
+            service_choice: UnconfirmedServiceChoice::UNCONFIRMED_AUDIT_NOTIFICATION,
+            service_request: service.freeze(),
+        })
+    };
+    let mut bytes = BytesMut::new();
+    encode_apdu(&mut bytes, &pdu).ok()?;
+    (bytes.len() <= max_apdu as usize).then_some(bytes)
+}
+
+async fn deliver<T: TransportPort + 'static>(
+    network: &NetworkLayer<T>,
+    comm_state: &AtomicU8,
+    route: &ConfirmedRecipientRoute,
+    bytes: &[u8],
+    reserved: Option<NotificationReservation>,
+    deadline: tokio::time::Instant,
+) -> bool {
+    let confirmed = reserved.is_some();
+    let send = || async {
+        if comm_state.load(Ordering::Acquire) != 0 {
+            return Err(Error::Encoding("audit initiation disabled".into()));
+        }
+        match (&route.local_target, &route.remote) {
+            (Some(mac), None) => {
+                network
+                    .send_apdu(bytes, mac, confirmed, NetworkPriority::NORMAL)
+                    .await
+            }
+            (None, Some((net, mac, Some(router)))) => {
+                network
+                    .send_apdu_routed(bytes, *net, mac, router, confirmed, NetworkPriority::NORMAL)
+                    .await
+            }
+            _ => Err(Error::Encoding("audit destination is unavailable".into())),
+        }
+    };
+    tokio::time::timeout_at(deadline, async {
+        if let Some((operation, receiver)) = reserved {
+            run_notification_worker(operation, receiver, DELIVERY_TIMEOUT, 0, |_| send()).await
+                == NotificationWorkerResult::Ack
+        } else {
+            send().await.is_ok()
+        }
+    })
+    .await
+    .unwrap_or(false)
 }
 
 /// Cancellation, rejected worker admission and panic also leave visible failure.
