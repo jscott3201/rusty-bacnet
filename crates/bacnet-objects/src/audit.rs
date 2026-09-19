@@ -26,6 +26,7 @@ mod notification;
 mod persistence;
 mod receipt;
 mod reporter_metadata;
+mod reporter_status;
 pub use notification::AuditLogNotificationSink;
 use persistence::{validate_record, validate_snapshot};
 pub use persistence::{
@@ -35,6 +36,7 @@ pub use receipt::{
     CompletedAuditReceipt, ConfirmedAuditNotificationOutcome, MAX_AUDIT_RECEIPT_KEY_BYTES,
     MAX_COMPLETED_AUDIT_RECEIPTS,
 };
+pub use reporter_status::AuditReporterStatus;
 
 /// One owned page returned by an object-level AuditLogQuery capability.
 #[derive(Debug, Clone, PartialEq)]
@@ -584,7 +586,7 @@ pub struct AuditReporterObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    status_flags: StatusFlags,
+    status: Arc<AuditReporterStatus>,
     audit_level: AuditLevel,
     auditable_operations: AuditOperationFlags,
     audit_priority_filter: BACnetPriorityFilter,
@@ -592,13 +594,14 @@ pub struct AuditReporterObject {
 }
 
 impl AuditReporterObject {
+    /// Construct a disabled target Reporter, not yet bound to a server destination.
     pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::AUDIT_REPORTER, instance)?;
         Ok(Self {
             oid,
             name: name.into(),
             description: String::new(),
-            status_flags: StatusFlags::empty(),
+            status: Arc::new(AuditReporterStatus::default()),
             audit_level: AuditLevel::NONE,
             auditable_operations: AuditOperationFlags::empty(),
             audit_priority_filter: BACnetPriorityFilter::all(),
@@ -632,13 +635,64 @@ impl AuditReporterObject {
         self.audit_priority_filter = filter;
     }
 
-    /// Select confirmed or unconfirmed audit notifications for future producers.
+    /// Select confirmed or unconfirmed target audit notifications.
     pub fn set_issue_confirmed_notifications(&mut self, confirmed: bool) {
         self.issue_confirmed_notifications = confirmed;
+    }
+
+    /// Reporter-level filter for the immediate target-WRITE profile.
+    ///
+    /// `command_priority` is present only for a commandable property (use 16
+    /// for an omitted command priority). AUDIT_CONFIG treats Present_Value as
+    /// operational and all other properties as configuration. Proprietary levels
+    /// use AUDIT_ALL behavior. External writes to Reporters bypass the operation
+    /// filter as required by Clause 19.6.2; internal status changes are not writes.
+    #[doc(hidden)]
+    pub fn reports_write_internal(
+        &self,
+        property: PropertyIdentifier,
+        command_priority: Option<u8>,
+        reporter_target: bool,
+    ) -> bool {
+        if self.audit_level == AuditLevel::NONE {
+            return false;
+        }
+        if reporter_target {
+            return true;
+        }
+        self.auditable_operations
+            .contains(bacnet_types::enums::AuditOperation::WRITE)
+            && !(self.audit_level == AuditLevel::AUDIT_CONFIG
+                && property == PropertyIdentifier::PRESENT_VALUE)
+            && command_priority.is_none_or(|priority| self.audit_priority_filter.contains(priority))
+    }
+
+    /// Object-instance-owned status handle; replacement objects cannot receive
+    /// stale delivery results from an earlier object at the same identifier.
+    #[doc(hidden)]
+    pub fn status_internal(&self) -> Arc<AuditReporterStatus> {
+        Arc::clone(&self.status)
+    }
+
+    /// Delivery mode sampled at the successful write boundary.
+    #[doc(hidden)]
+    pub fn confirmed_internal(&self) -> bool {
+        self.issue_confirmed_notifications
+    }
+
+    fn reliability(&self) -> Reliability {
+        if self.audit_level == AuditLevel::NONE {
+            Reliability::NO_FAULT_DETECTED
+        } else {
+            self.status.reliability()
+        }
     }
 }
 
 impl BACnetObject for AuditReporterObject {
+    fn audit_reporter_internal(&self) -> Option<&AuditReporterObject> {
+        Some(self)
+    }
     fn object_identifier(&self) -> ObjectIdentifier {
         self.oid
     }
@@ -671,11 +725,15 @@ impl BACnetObject for AuditReporterObject {
             )),
             p if p == PropertyIdentifier::STATUS_FLAGS => Ok(PropertyValue::BitString {
                 unused_bits: 4,
-                data: vec![self.status_flags.bits() << 4],
+                data: vec![if self.reliability() == Reliability::NO_FAULT_DETECTED {
+                    0
+                } else {
+                    0x40
+                }],
             }),
-            p if p == PropertyIdentifier::RELIABILITY => Ok(PropertyValue::Enumerated(
-                Reliability::NO_FAULT_DETECTED.to_raw(),
-            )),
+            p if p == PropertyIdentifier::RELIABILITY => {
+                Ok(PropertyValue::Enumerated(self.reliability().to_raw()))
+            }
             p if p == PropertyIdentifier::EVENT_STATE => {
                 Ok(PropertyValue::Enumerated(EventState::NORMAL.to_raw()))
             }

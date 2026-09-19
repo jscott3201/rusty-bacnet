@@ -4,6 +4,9 @@ use crate::mutation::{MutationAuthorizationContext, MutationAuthorizer, Mutation
 /// Server configuration.
 #[derive(Clone)]
 pub struct ServerConfig {
+    /// Optional single target-WRITE, immediate-send Audit Reporter profile.
+    /// This is local configuration, not Device.Audit_Notification_Recipient.
+    pub audit_reporter: Option<AuditReporterConfig>,
     /// Per-service GetAlarmSummary database scan and encoded response limits.
     pub get_alarm_summary_budget: GetAlarmSummaryBudget,
     /// Local complete-response limits for GetEnrollmentSummary.
@@ -141,6 +144,7 @@ pub struct ServerConfig {
 impl std::fmt::Debug for ServerConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ServerConfig")
+            .field("audit_reporter", &self.audit_reporter)
             .field("get_alarm_summary_budget", &self.get_alarm_summary_budget)
             .field(
                 "get_enrollment_summary_budget",
@@ -220,6 +224,7 @@ impl std::fmt::Debug for ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
+            audit_reporter: None,
             interface: Ipv4Addr::UNSPECIFIED,
             read_property_multiple_budget: ReadPropertyMultipleBudget::default(),
             get_alarm_summary_budget: GetAlarmSummaryBudget::default(),

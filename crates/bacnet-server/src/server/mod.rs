@@ -279,6 +279,10 @@ pub struct TimeSyncData {
 
 mod config;
 pub use config::ServerConfig;
+mod audit_reporter;
+pub use audit_reporter::AuditReporterConfig;
+#[cfg(test)]
+mod audit_reporter_tests;
 
 /// Generic builder for BACnetServer with a pre-built transport.
 pub struct ServerBuilder<T: TransportPort> {

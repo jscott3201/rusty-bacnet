@@ -1,5 +1,19 @@
 use super::*;
 
+/// Borrowed write coordinates; never retained across the synchronous commit.
+pub(crate) struct WriteTarget<'a> {
+    pub oid: ObjectIdentifier,
+    pub property: PropertyIdentifier,
+    pub array_index: Option<u32>,
+    pub priority: Option<u8>,
+    pub value: &'a [u8],
+}
+
+pub(crate) trait WriteCommitObserver: Send {
+    fn before(&mut self, db: &ObjectDatabase, write: WriteTarget<'_>);
+    fn committed(&mut self, db: &mut ObjectDatabase);
+}
+
 /// Validate database-owned Object_Name uniqueness before mutation.
 fn check_and_prepare_name_write(
     db: &ObjectDatabase,
@@ -62,6 +76,16 @@ pub(crate) fn handle_write_property_multiple_authorized(
     service_data: &[u8],
     snapshots: &mut crate::life_safety_cov::LifeSafetyCovSnapshots,
     authorize: Option<WritePropertyMultipleGate<'_>>,
+) -> WritePropertyMultipleOutcome {
+    handle_write_property_multiple_observed(db, service_data, snapshots, authorize, None)
+}
+
+pub(crate) fn handle_write_property_multiple_observed(
+    db: &mut ObjectDatabase,
+    service_data: &[u8],
+    snapshots: &mut crate::life_safety_cov::LifeSafetyCovSnapshots,
+    authorize: Option<WritePropertyMultipleGate<'_>>,
+    mut observer: Option<&mut dyn WriteCommitObserver>,
 ) -> WritePropertyMultipleOutcome {
     let mut cursor = WritePropertyMultipleCursor::new(service_data);
     let mut committed_oids = Vec::new();
@@ -128,6 +152,18 @@ pub(crate) fn handle_write_property_multiple_authorized(
             }
         }
         snapshots.capture_before_write(db, oid);
+        if let Some(observer) = observer.as_deref_mut() {
+            observer.before(
+                db,
+                WriteTarget {
+                    oid,
+                    property,
+                    array_index: reference.property_array_index,
+                    priority: attempt.priority,
+                    value: &attempt.value,
+                },
+            );
+        }
         let write = db
             .get_mut(&oid)
             .expect("existence checked above")
@@ -142,6 +178,9 @@ pub(crate) fn handle_write_property_multiple_authorized(
         }
         if property == PropertyIdentifier::OBJECT_NAME {
             db.update_name_index(&oid);
+        }
+        if let Some(observer) = observer.as_deref_mut() {
+            observer.committed(db);
         }
         if !committed_oids.contains(&oid) {
             committed_oids.push(oid);
@@ -273,6 +312,14 @@ pub fn handle_write_property(
     db: &mut ObjectDatabase,
     service_data: &[u8],
 ) -> Result<ObjectIdentifier, Error> {
+    handle_write_property_observed(db, service_data, None)
+}
+
+pub(crate) fn handle_write_property_observed(
+    db: &mut ObjectDatabase,
+    service_data: &[u8],
+    mut observer: Option<&mut dyn WriteCommitObserver>,
+) -> Result<ObjectIdentifier, Error> {
     let request = WritePropertyRequest::decode(service_data)?;
     let oid = request.object_identifier;
 
@@ -301,6 +348,18 @@ pub fn handle_write_property(
     if request.property_identifier == PropertyIdentifier::OBJECT_NAME {
         check_and_prepare_name_write(db, &oid, &value)?;
     }
+    if let Some(observer) = observer.as_deref_mut() {
+        observer.before(
+            db,
+            WriteTarget {
+                oid,
+                property: request.property_identifier,
+                array_index: request.property_array_index,
+                priority: request.priority,
+                value: &request.property_value,
+            },
+        );
+    }
     db.get_mut(&oid)
         .expect("existence checked above")
         .write_property(
@@ -311,6 +370,9 @@ pub fn handle_write_property(
         )?;
     if request.property_identifier == PropertyIdentifier::OBJECT_NAME {
         db.update_name_index(&oid);
+    }
+    if let Some(observer) = observer {
+        observer.committed(db);
     }
     Ok(oid)
 }

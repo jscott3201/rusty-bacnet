@@ -176,6 +176,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             provenance,
             req: &req,
         };
+        let mut audit = super::audit_reporter::WriteAudit::new(
+            config,
+            network,
+            notification_transactions,
+            device_bindings,
+            comm_state,
+            source_mac,
+            source_network.as_ref(),
+            invoke_id,
+        )
+        .await;
         let response = match service_choice {
             s if s == ConfirmedServiceChoice::READ_PROPERTY => {
                 confirmed_response::read_property_response(db, &req).await
@@ -188,6 +199,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         &mut coarse_cov_oids,
                         &mut life_safety_cov_changes,
                         &mut staging_plans,
+                        &mut audit,
                     )
                     .await
             }
@@ -222,6 +234,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         &mut coarse_cov_oids,
                         &mut life_safety_cov_changes,
                         &mut staging_plans,
+                        &mut audit,
                     )
                     .await
             }

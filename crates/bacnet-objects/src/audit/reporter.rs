@@ -285,6 +285,28 @@ fn audit_reporter_rejects_default_level_before_mutation() {
 }
 
 #[test]
+fn audit_reporter_enabled_without_destination_exposes_configuration_fault() {
+    let mut reporter = AuditReporterObject::new(1, "AR-1").unwrap();
+    reporter.set_audit_level(AuditLevel::AUDIT_ALL).unwrap();
+    assert_eq!(
+        read(&reporter, PropertyIdentifier::RELIABILITY),
+        PropertyValue::Enumerated(Reliability::CONFIGURATION_ERROR.to_raw())
+    );
+    assert_eq!(
+        read(&reporter, PropertyIdentifier::STATUS_FLAGS),
+        PropertyValue::BitString {
+            unused_bits: 4,
+            data: vec![0x40]
+        }
+    );
+    reporter.set_audit_level(AuditLevel::NONE).unwrap();
+    assert_eq!(
+        read(&reporter, PropertyIdentifier::RELIABILITY),
+        PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw())
+    );
+}
+
+#[test]
 fn audit_reporter_network_writes_to_new_properties_are_denied_without_mutation() {
     let mut reporter = AuditReporterObject::new(1, "AR-1").unwrap();
     reporter.set_audit_level(AuditLevel::AUDIT_ALL).unwrap();
@@ -332,6 +354,51 @@ fn audit_reporter_network_writes_to_new_properties_are_denied_without_mutation()
         assert_eq!(read(&reporter, property), before);
         assert!(!reporter.is_writable_property(property));
     }
+}
+
+#[test]
+fn audit_reporter_write_filter_and_delivery_health() {
+    let mut reporter = AuditReporterObject::new(1, "AR").unwrap();
+    let pv = PropertyIdentifier::PRESENT_VALUE;
+    assert!(!reporter.reports_write_internal(pv, None, false));
+    reporter.set_audit_level(AuditLevel::AUDIT_ALL).unwrap();
+    assert!(!reporter.reports_write_internal(pv, None, false));
+    let mut operations = AuditOperationFlags::empty();
+    operations.insert(AuditOperation::WRITE);
+    reporter.set_auditable_operations(operations);
+    reporter.set_audit_priority_filter(BACnetPriorityFilter::from_bits(0x8001));
+    for priority in 0..=17 {
+        assert_eq!(
+            reporter.reports_write_internal(pv, Some(priority), false),
+            matches!(priority, 1 | 16)
+        );
+    }
+    assert!(reporter.reports_write_internal(pv, None, false));
+    reporter.set_audit_level(AuditLevel::AUDIT_CONFIG).unwrap();
+    assert!(!reporter.reports_write_internal(pv, None, false));
+    assert!(reporter.reports_write_internal(PropertyIdentifier::DESCRIPTION, None, false));
+    reporter.set_auditable_operations(AuditOperationFlags::empty());
+    assert!(reporter.reports_write_internal(PropertyIdentifier::DESCRIPTION, None, true));
+
+    let status = reporter.status_internal();
+    status.set_configured(true);
+    let earlier = status.begin_delivery();
+    status.complete_delivery(earlier, false);
+    status.complete_delivery(earlier, true);
+    assert_eq!(
+        read(&reporter, PropertyIdentifier::RELIABILITY),
+        PropertyValue::Enumerated(Reliability::COMMUNICATION_FAILURE.to_raw())
+    );
+    status.complete_delivery(status.begin_delivery(), true);
+    assert_eq!(
+        read(&reporter, PropertyIdentifier::RELIABILITY),
+        PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw())
+    );
+    status.set_configured(false);
+    assert_eq!(
+        read(&reporter, PropertyIdentifier::RELIABILITY),
+        PropertyValue::Enumerated(Reliability::CONFIGURATION_ERROR.to_raw())
+    );
 }
 
 #[test]
