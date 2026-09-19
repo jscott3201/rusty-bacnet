@@ -11,9 +11,10 @@ use bacnet_types::enums::AuditOperation;
 
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// One locally configured target-WRITE Reporter and unicast Device recipient.
+/// One locally configured target WRITE/CREATE/DELETE Reporter and unicast recipient.
 ///
-/// Reports successful inbound WP/WPM elements and authorized execution errors.
+/// Reports successful inbound WP/WPM elements, CreateObject/DeleteObject operations,
+/// and authorized execution errors.
 /// Policy denials and undecoded/unattempted elements remain silent. Successes
 /// omit Result; execution failures include the mapped BACnet Error. There is no
 /// source-side reporting, per-object override, batching, forwarding, or durable outbox.
@@ -41,6 +42,13 @@ const DELIVERY_TIMEOUT: Duration = Duration::from_secs(3);
 /// or object type. Omitted selection preserves catch-all behavior; an empty or
 /// all-NULL selection reports no ordinary targets. Reporter writes bypass it.
 /// Network selection writes and multi-Reporter arbitration are not supported.
+/// CREATE/DELETE require their operation bit, count as configuration operations,
+/// and ignore the priority filter. Records use the final/candidate created OID or
+/// captured deleted OID, with no property, priority, or values; initial values do
+/// not generate WRITE records. A failed by-type creation without an assigned,
+/// representable OID omits the target; only catch-all or type selection can match.
+/// Deleting the selected Reporter is allowed: its last record owns the removed
+/// instance's delivery health, then the unavailable profile remains silent.
 ///
 /// ```no_run
 /// use bacnet_objects::{audit::AuditReporterObject, database::ObjectDatabase,
@@ -79,7 +87,7 @@ pub struct AuditReporterConfig {
 }
 
 impl<T: TransportPort + 'static> ServerBuilder<T> {
-    /// Enable the narrow target-WRITE profile; see [`AuditReporterConfig`].
+    /// Enable the narrow target WRITE/CREATE/DELETE profile; see [`AuditReporterConfig`].
     pub fn audit_reporter(mut self, profile: AuditReporterConfig) -> Self {
         self.config.audit_reporter = Some(profile);
         self
@@ -87,7 +95,7 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
 }
 
 impl BipServerBuilder {
-    /// Enable the narrow target-WRITE profile; see [`AuditReporterConfig`].
+    /// Enable the narrow target WRITE/CREATE/DELETE profile; see [`AuditReporterConfig`].
     pub fn audit_reporter(mut self, profile: AuditReporterConfig) -> Self {
         self.config.audit_reporter = Some(profile);
         self
@@ -295,6 +303,72 @@ impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
 }
 
 impl<T: TransportPort + 'static> WriteAudit<'_, T> {
+    /// Called under the execution database guard: after CREATE's final/candidate
+    /// identity is known, or before DELETE removes the selected Reporter itself.
+    pub(super) fn before_lifecycle(
+        &mut self,
+        db: &ObjectDatabase,
+        operation: AuditOperation,
+        target: Option<ObjectIdentifier>,
+        kind: ObjectType,
+    ) {
+        self.pending = None;
+        let Some(profile) = &self.config.audit_reporter else {
+            return;
+        };
+        let Some(reporter) = db
+            .get(&profile.reporter)
+            .and_then(|object| object.audit_reporter_internal())
+        else {
+            return;
+        };
+        let device = local_device(db);
+        let status = reporter.status_internal();
+        status.set_configured(device.is_some() && self.route.is_some());
+        let Some(device) = device else { return };
+        let selected = target.map_or_else(
+            || reporter.monitors_unassigned_create_internal(kind),
+            |oid| reporter.monitors_object_internal(oid),
+        );
+        if !selected || !reporter.reports_lifecycle_internal(operation) {
+            return;
+        }
+        self.pending = Some(PendingWrite {
+            status,
+            confirmed: reporter.confirmed_internal(),
+            notification: BACnetAuditNotification {
+                source_timestamp: None,
+                target_timestamp: None,
+                source_device: self.source.clone(),
+                source_object: None,
+                operation,
+                source_comment: None,
+                target_comment: None,
+                invoke_id: Some(self.invoke_id),
+                source_user_id: None,
+                source_user_role: None,
+                target_device: BACnetRecipient::Device(device),
+                target_object: target,
+                target_property: None,
+                target_priority: None,
+                target_value: None,
+                current_value: None,
+                result: None,
+            },
+        });
+    }
+
+    pub(super) fn lifecycle_completed(
+        &mut self,
+        db: &mut ObjectDatabase,
+        result: &Result<(), Error>,
+    ) {
+        match result {
+            Ok(()) => self.committed(db),
+            Err(error) => self.failed(db, error),
+        }
+    }
+
     fn complete(&mut self, db: &mut ObjectDatabase, result: Option<(ErrorClass, ErrorCode)>) {
         let Some(mut pending) = self.pending.take() else {
             return;

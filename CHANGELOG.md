@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Bounded target-WRITE Audit Reporter (RB-21a/b/c, Refs #345):** Rust servers can
+- **Bounded target WRITE/CREATE/DELETE Audit Reporter (RB-21a/b/c/d, Refs #345):** Rust servers can
   select one locally configured Reporter and explicitly bound unicast Device
   recipient. Successful inbound WriteProperty and each committed WPM prefix
   element produce separate immediate-send notifications after authorization and
@@ -29,13 +29,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failures without duplicate notifications. Enabled Reporter-target writes bypass
   selection. The optional read-only property, RP/RPM array indexing, Property_List,
   and runtime PICS reflect local presence; network WP/WPM cannot mutate it.
+  RB-21d adds immediate target CreateObject/DeleteObject successes and authorized
+  execution failures, preserving responses, initial-value rollback, and deletion
+  COV cleanup. CREATE uses the final/candidate OID, including assigned instances;
+  DELETE retains the removed OID. These configuration operations require their
+  respective operation bits, ignore the priority filter, and use the existing
+  object selection (Reporter targets bypass selection, not NONE or operation bits).
+  Records omit property, priority, and values; initial values do not generate
+  separate WRITE records. By-type failures before a representable OID is assigned
+  omit it rather than inventing one; only catch-all/type selection can match.
+  Deleting the selected Reporter remains permitted and reports the committed
+  removal through the captured instance-owned delivery state; later operations
+  are silent while that configured Reporter is absent. No createability or
+  deletability expansion is included.
   Confirmed delivery uses the existing invoke/transaction owner;
   unconfirmed delivery ends at transport send. An absent or invalid selected
   Reporter rejects server startup. For an existing Reporter, Reliability and its
   FAULT flag expose missing configuration and delivery failures. The profile has
   64 active delivery slots, a three-second total deadline, no retries or waiting outbox,
   and omits values above 32 encoded octets; overload never rolls back a write.
-  This is not full Audit Reporter support: source reporting, other operations,
+  This is not full Audit Reporter support: source reporting, remaining operations,
   per-object overrides, multi-Reporter overlap/lowest-instance selection, batching,
   AUDITING_FAILURE records, forwarding/durable delivery, the public Device
   Audit_Notification_Recipient model, and Python parity remain deferred. #345

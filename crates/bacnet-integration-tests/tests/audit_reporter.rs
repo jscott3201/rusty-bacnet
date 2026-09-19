@@ -1,4 +1,4 @@
-//! RB-21a/b/c: real WP outcomes -> selected target Reporter -> Audit Log over UDP.
+//! RB-21a/b/c/d: mutation outcomes -> selected target Reporter -> Audit Log over UDP.
 
 use std::net::Ipv4Addr;
 use std::sync::{
@@ -382,4 +382,209 @@ async fn audit_reporter_confirmed_error_then_ack_updates_health_over_udp() {
 async fn audit_reporter_selected_writes_and_failures_reach_real_log_once_over_udp() {
     exercise(false, true).await;
     exercise(true, true).await;
+}
+
+#[tokio::test]
+async fn audit_reporter_create_delete_reach_real_log_over_udp() {
+    use bacnet_services::{common::BACnetPropertyValue, object_mgmt::ObjectSpecifier};
+    use bacnet_types::primitives::PropertyValue;
+
+    let persistence = Arc::new(MemoryPersistence::default());
+    let mut logger_db = database(20);
+    logger_db
+        .add(Box::new(
+            AuditLogObject::new(1, "log", 16, persistence.clone()).unwrap(),
+        ))
+        .unwrap();
+    let mut logger = BACnetServer::builder()
+        .interface(Ipv4Addr::LOCALHOST)
+        .port(0)
+        .database(logger_db)
+        .audit_notification_sink(oid(ObjectType::AUDIT_LOG, 1))
+        .audit_notification_authorizer(|_| true)
+        .build()
+        .await
+        .unwrap();
+
+    let mut target_db = database(10);
+    let mut reporter = AuditReporterObject::new(1, "reporter").unwrap();
+    reporter.set_audit_level(AuditLevel::AUDIT_CONFIG).unwrap();
+    let mut operations = AuditOperationFlags::empty();
+    for operation in [
+        AuditOperation::CREATE,
+        AuditOperation::DELETE,
+        AuditOperation::WRITE,
+    ] {
+        operations.insert(operation);
+    }
+    reporter.set_auditable_operations(operations);
+    reporter.set_issue_confirmed_notifications(true);
+    reporter.set_monitored_objects(Some(vec![BACnetObjectSelector::ObjectType(
+        ObjectType::BINARY_VALUE,
+    )]));
+    target_db.add(Box::new(reporter)).unwrap();
+    let mut target = BACnetServer::builder()
+        .interface(Ipv4Addr::LOCALHOST)
+        .port(0)
+        .database(target_db)
+        .audit_reporter(AuditReporterConfig {
+            reporter: oid(ObjectType::AUDIT_REPORTER, 1),
+            recipient: Some(oid(ObjectType::DEVICE, 20)),
+        })
+        .device_binding(
+            DeviceBinding::local(oid(ObjectType::DEVICE, 20), logger.local_mac()).unwrap(),
+        )
+        .unwrap()
+        .build()
+        .await
+        .unwrap();
+    let mut client = BACnetClient::bip_builder()
+        .interface(Ipv4Addr::LOCALHOST)
+        .port(0)
+        .build()
+        .await
+        .unwrap();
+    let created = oid(ObjectType::BINARY_VALUE, 1);
+    for step in 0..4 {
+        match step {
+            0 => {
+                let ack = client
+                    .create_object(
+                        target.local_mac(),
+                        ObjectSpecifier::Type(ObjectType::BINARY_VALUE),
+                        vec![BACnetPropertyValue {
+                            property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                            property_array_index: None,
+                            value: vec![0x91, 1],
+                            priority: Some(8),
+                        }],
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    bacnet_encoding::primitives::decode_application_value(&ack, 0)
+                        .unwrap()
+                        .0,
+                    PropertyValue::ObjectIdentifier(created)
+                );
+                assert_eq!(
+                    target
+                        .database()
+                        .read()
+                        .await
+                        .get(&created)
+                        .unwrap()
+                        .read_property(PropertyIdentifier::PRESENT_VALUE, None)
+                        .unwrap(),
+                    PropertyValue::Enumerated(1)
+                );
+            }
+            1 => {
+                let error = client
+                    .create_object(
+                        target.local_mac(),
+                        ObjectSpecifier::Identifier(created),
+                        vec![],
+                    )
+                    .await
+                    .unwrap_err();
+                assert!(matches!(error, Error::Protocol { class, code }
+                    if class == ErrorClass::OBJECT.to_raw() as u32 && code == ErrorCode::OBJECT_IDENTIFIER_ALREADY_EXISTS.to_raw() as u32));
+            }
+            2 => {
+                client
+                    .delete_object(target.local_mac(), created)
+                    .await
+                    .unwrap();
+                assert!(target.database().read().await.get(&created).is_none());
+            }
+            _ => {
+                let error = client
+                    .delete_object(target.local_mac(), created)
+                    .await
+                    .unwrap_err();
+                assert!(matches!(error, Error::Protocol { class, code }
+                    if class == ErrorClass::OBJECT.to_raw() as u32 && code == ErrorCode::UNKNOWN_OBJECT.to_raw() as u32));
+            }
+        }
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if persistence
+                    .0
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .records
+                    .len()
+                    == step + 1
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    let snapshot = persistence.0.lock().unwrap().clone().unwrap();
+    assert_eq!(snapshot.records.len(), 4);
+    let mut invokes = std::collections::HashSet::new();
+    for (index, stored) in snapshot.records.iter().enumerate() {
+        let BACnetAuditLogDatum::AuditNotification(record) = &stored.record.datum else {
+            panic!("expected lifecycle")
+        };
+        assert_eq!(
+            record.operation,
+            if index < 2 {
+                AuditOperation::CREATE
+            } else {
+                AuditOperation::DELETE
+            }
+        );
+        assert_eq!(record.target_object, Some(created));
+        assert_eq!(
+            record.target_device,
+            BACnetRecipient::Device(oid(ObjectType::DEVICE, 10))
+        );
+        assert_eq!(
+            record.source_device,
+            BACnetRecipient::Address(bacnet_types::constructed::BACnetAddress {
+                network_number: 0,
+                mac_address: bacnet_types::MacAddr::from_slice(client.local_mac()),
+            })
+        );
+        assert!(invokes.insert(record.invoke_id.unwrap()));
+        assert!(record.source_timestamp.is_none());
+        assert!(record.target_timestamp.is_some());
+        assert!(record.target_property.is_none());
+        assert!(record.target_priority.is_none());
+        assert!(record.target_value.is_none());
+        assert!(record.current_value.is_none());
+        assert_eq!(
+            record.result,
+            match index {
+                1 => Some((
+                    ErrorClass::OBJECT,
+                    ErrorCode::OBJECT_IDENTIFIER_ALREADY_EXISTS
+                )),
+                3 => Some((ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT)),
+                _ => None,
+            }
+        );
+    }
+    client.stop().await.unwrap();
+    target.stop().await.unwrap();
+    logger.stop().await.unwrap();
+    assert_eq!(
+        persistence
+            .0
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .records
+            .len(),
+        4
+    );
 }

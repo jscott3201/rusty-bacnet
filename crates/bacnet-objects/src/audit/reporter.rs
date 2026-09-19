@@ -564,3 +564,58 @@ fn audit_reporter_description_write_and_metadata_remain_compatible() {
         PropertyValue::CharacterString("local description".into())
     );
 }
+
+#[test]
+fn audit_reporter_lifecycle_configuration_filters_do_not_use_priority() {
+    let mut reporter = AuditReporterObject::new(1, "AR").unwrap();
+    reporter.set_audit_priority_filter(BACnetPriorityFilter::from_bits(0));
+    for level in [
+        AuditLevel::NONE,
+        AuditLevel::AUDIT_CONFIG,
+        AuditLevel::AUDIT_ALL,
+        AuditLevel::from_raw(64),
+    ] {
+        reporter.set_audit_level(level).unwrap();
+        for selected in [
+            AuditOperation::CREATE,
+            AuditOperation::DELETE,
+            AuditOperation::WRITE,
+        ] {
+            let mut flags = AuditOperationFlags::empty();
+            flags.insert(selected);
+            reporter.set_auditable_operations(flags);
+            for operation in [AuditOperation::CREATE, AuditOperation::DELETE] {
+                assert_eq!(
+                    reporter.reports_lifecycle_internal(operation),
+                    level != AuditLevel::NONE && selected == operation
+                );
+            }
+            assert!(!reporter.reports_lifecycle_internal(AuditOperation::WRITE));
+        }
+    }
+}
+
+#[test]
+fn audit_reporter_unassigned_creation_selection_needs_type_or_catch_all() {
+    let mut reporter = AuditReporterObject::new(1, "AR").unwrap();
+    let kind = ObjectType::BINARY_VALUE;
+    for (selectors, expected) in [
+        (None, true),
+        (Some(vec![]), false),
+        (Some(vec![Selector::None]), false),
+        (
+            Some(vec![Selector::Object(
+                ObjectIdentifier::new(kind, 1).unwrap(),
+            )]),
+            false,
+        ),
+        (
+            Some(vec![Selector::ObjectType(ObjectType::ANALOG_INPUT)]),
+            false,
+        ),
+        (Some(vec![Selector::None, Selector::ObjectType(kind)]), true),
+    ] {
+        reporter.set_monitored_objects(selectors);
+        assert_eq!(reporter.monitors_unassigned_create_internal(kind), expected);
+    }
+}
