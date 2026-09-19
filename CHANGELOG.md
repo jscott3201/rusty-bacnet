@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Bounded target WRITE/CREATE/DELETE Audit Reporter (RB-21a/b/c/d/e, Refs #345):** Rust servers can
+- **Bounded target WRITE/CREATE/DELETE Audit Reporter (RB-21a/b/c/d/e/f, Refs #345):** Rust servers can
   select one locally configured Reporter and explicitly bound unicast Device
   recipient. Successful inbound WriteProperty and each committed WPM prefix
   element produce separate immediate-send notifications after authorization and
@@ -49,9 +49,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   valid values up to 32 encoded octets only; no wrapping or truncation). Successful
   no-op removals still report once; duplicate additions and existing responses,
   mutation atomicity, framing, caps, and event behavior are unchanged. Non-Present_Value
-  lists pass AUDIT_CONFIG; priority filtering does not apply. AtomicWriteFile remains
-  unreported and inbound WriteGroup remains unsupported by design, so complete
-  WRITE coverage is not claimed.
+  lists pass AUDIT_CONFIG; priority filtering does not apply.
+  RB-21f adds inbound AtomicWriteFile successes and authorized execution failures
+  as at most one immediate WRITE record per operation. Records carry the known
+  target OID and omit property, priority, target/current values, and synthetic file
+  fields. Success omits Result; failures carry the unchanged response-mapped Error.
+  AUDIT_CONFIG and AUDIT_ALL admit file writes when WRITE is enabled; NONE and
+  unmatched object selection suppress ordinary targets, and priority filtering
+  is irrelevant. Admission follows the existing service decoder acceptance
+  boundary, including tolerated trailing bytes; this is not decoder hardening.
+  Decoder rejections, policy/authorization denials, configured stream/record
+  payload/count budget Aborts, and unknown Timeout/Reject/Abort outcomes stay
+  silent. Existing ACK positions, error precedence, access gates, storage
+  atomicity and delivery ownership are unchanged. Inbound WriteGroup remains
+  unsupported by design, so complete WRITE coverage is not claimed.
   Confirmed delivery uses the existing invoke/transaction owner;
   unconfirmed delivery ends at transport send. An absent or invalid selected
   Reporter rejects server startup. For an existing Reporter, Reliability and its

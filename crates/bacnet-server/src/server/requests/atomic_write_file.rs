@@ -6,10 +6,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         invoke_id: u8,
         request: &[u8],
         budget: AtomicWriteFileBudget,
+        audit: &mut super::super::audit_reporter::WriteAudit<'_, T>,
     ) -> Apdu {
         let service_choice = ConfirmedServiceChoice::ATOMIC_WRITE_FILE;
         let mut buf = BytesMut::new();
-        match handlers::handle_atomic_write_file_budgeted(db, request, &mut buf, budget) {
+        match handlers::handle_atomic_write_file_observed(
+            db,
+            request,
+            &mut buf,
+            budget,
+            |db, target, result| audit.file_completed(db, target, result),
+        ) {
             Ok(()) => Apdu::ComplexAck(ComplexAck {
                 segmented: false,
                 more_follows: false,

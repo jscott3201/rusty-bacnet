@@ -3,18 +3,20 @@ use super::event_recipient_route::{ConfirmedRecipientRoute, RecipientRoute};
 use super::*;
 use crate::handlers::{WriteCommitObserver, WriteTarget};
 use bacnet_objects::audit::AuditReporterStatus;
+use bacnet_objects::traits::BACnetObject;
 use bacnet_services::audit::AuditNotificationRequest;
+use bacnet_types::bitstring::AuditOperationFlags;
 use bacnet_types::constructed::{
     AuditPropertyReference, BACnetAddress, BACnetAuditNotification, BACnetRecipient,
 };
-use bacnet_types::enums::AuditOperation;
+use bacnet_types::enums::{AuditLevel, AuditOperation};
 
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// One locally configured target WRITE/CREATE/DELETE Reporter and unicast recipient.
 ///
 /// Reports successful inbound WP/WPM elements, AddListElement/RemoveListElement,
-/// CreateObject/DeleteObject operations, and authorized execution errors.
+/// AtomicWriteFile, CreateObject/DeleteObject operations, and authorized execution errors.
 /// Policy denials and undecoded/unattempted elements remain silent. Successes
 /// omit Result; execution failures include the mapped BACnet Error. There is no
 /// source-side reporting, per-object override, batching, forwarding, or durable outbox.
@@ -57,8 +59,13 @@ const DELIVERY_TIMEOUT: Duration = Duration::from_secs(3);
 /// execution failures retain the response-mapped Result. Successful no-op removals
 /// still report once. AUDIT_CONFIG admits implemented non-Present_Value lists;
 /// list services ignore priority filtering and reuse ordinary target selection.
-/// This is not complete WRITE coverage: AtomicWriteFile is not reported and
-/// inbound WriteGroup remains unsupported by design.
+/// AtomicWriteFile uses WRITE and the known target OID, with no property,
+/// priority, or values (Table 19-5). AUDIT_CONFIG and AUDIT_ALL admit file writes;
+/// priority filtering is irrelevant. Admission follows the existing service
+/// decoder acceptance boundary, including tolerated trailing bytes, not strict
+/// input consumption. Decoder rejections and configured payload/count budget
+/// Aborts remain silent. Inbound WriteGroup remains unsupported by design, so
+/// complete WRITE coverage is not claimed.
 ///
 /// ```no_run
 /// use bacnet_objects::{audit::AuditReporterObject, database::ObjectDatabase,
@@ -313,6 +320,77 @@ impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
 }
 
 impl<T: TransportPort + 'static> WriteAudit<'_, T> {
+    /// The file handler calls once after execution, while still holding the DB
+    /// guard, and never for decoder rejections or configured budget overload.
+    pub(super) fn file_completed(
+        &mut self,
+        db: &mut ObjectDatabase,
+        target: ObjectIdentifier,
+        result: &Result<(), Error>,
+    ) {
+        self.pending = None;
+        let Some(profile) = &self.config.audit_reporter else {
+            return;
+        };
+        let Some(reporter) = db
+            .get(&profile.reporter)
+            .and_then(|object| object.audit_reporter_internal())
+        else {
+            return;
+        };
+        let device = local_device(db);
+        let status = reporter.status_internal();
+        status.set_configured(device.is_some() && self.route.is_some());
+        let Some(device) = device else { return };
+        // Read actual Reporter configuration, not a synthetic property-write
+        // target. File writes are locally designated configuration operations.
+        let enabled = matches!(
+            reporter.read_property(PropertyIdentifier::AUDIT_LEVEL, None),
+            Ok(PropertyValue::Enumerated(level)) if level != AuditLevel::NONE.to_raw()
+        );
+        let write_enabled =
+            match reporter.read_property(PropertyIdentifier::AUDITABLE_OPERATIONS, None) {
+                Ok(PropertyValue::BitString { unused_bits, data }) => {
+                    AuditOperationFlags::from_bacnet(unused_bits, &data)
+                        .is_ok_and(|operations| operations.contains(AuditOperation::WRITE))
+                }
+                _ => false,
+            };
+        if !enabled
+            || !reporter.monitors_object_internal(target)
+            || (!write_enabled && target.object_type() != ObjectType::AUDIT_REPORTER)
+        {
+            return;
+        }
+        self.pending = Some(PendingWrite {
+            status,
+            confirmed: reporter.confirmed_internal(),
+            notification: BACnetAuditNotification {
+                source_timestamp: None,
+                target_timestamp: None,
+                source_device: self.source.clone(),
+                source_object: None,
+                operation: AuditOperation::WRITE,
+                source_comment: None,
+                target_comment: None,
+                invoke_id: Some(self.invoke_id),
+                source_user_id: None,
+                source_user_role: None,
+                target_device: BACnetRecipient::Device(device),
+                target_object: Some(target),
+                target_property: None,
+                target_priority: None,
+                target_value: None,
+                current_value: None,
+                result: None,
+            },
+        });
+        match result {
+            Ok(()) => self.committed(db),
+            Err(error) => self.failed(db, error),
+        }
+    }
+
     /// List services have no priority. The handler supplies its existing pre-image
     /// only after all element/framed decoding; an absent object is still a known
     /// target for a decoded execution failure.

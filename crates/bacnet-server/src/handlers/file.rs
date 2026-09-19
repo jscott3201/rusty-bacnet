@@ -272,7 +272,7 @@ pub fn handle_atomic_write_file(
     service_data: &[u8],
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
-    write_file(db, service_data, buf, None).map_err(|failure| match failure {
+    write_file(db, service_data, buf, None, |_, _, _| {}).map_err(|failure| match failure {
         AtomicWriteFileFailure::Service(error) => error,
         AtomicWriteFileFailure::Budget => unreachable!("unconfigured write has no budget"),
     })
@@ -291,13 +291,28 @@ impl From<Error> for AtomicWriteFileFailure {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn handle_atomic_write_file_budgeted(
     db: &mut ObjectDatabase,
     service_data: &[u8],
     buf: &mut BytesMut,
     budget: crate::server::AtomicWriteFileBudget,
 ) -> Result<(), AtomicWriteFileFailure> {
-    write_file(db, service_data, buf, Some(budget))
+    handle_atomic_write_file_observed(db, service_data, buf, budget, |_, _, _| {})
+}
+
+/// Observe non-budget outcomes accepted by the existing service decoder, under
+/// the caller's database guard. This does not impose strict input consumption:
+/// tolerated trailing bytes retain their existing execution and response behavior.
+/// Decoder rejections and configured pre-execution overload never reach the hook.
+pub(crate) fn handle_atomic_write_file_observed(
+    db: &mut ObjectDatabase,
+    service_data: &[u8],
+    buf: &mut BytesMut,
+    budget: crate::server::AtomicWriteFileBudget,
+    completed: impl FnOnce(&mut ObjectDatabase, ObjectIdentifier, &Result<(), Error>),
+) -> Result<(), AtomicWriteFileFailure> {
+    write_file(db, service_data, buf, Some(budget), completed)
 }
 
 fn write_file(
@@ -305,10 +320,9 @@ fn write_file(
     service_data: &[u8],
     buf: &mut BytesMut,
     budget: Option<crate::server::AtomicWriteFileBudget>,
+    completed: impl FnOnce(&mut ObjectDatabase, ObjectIdentifier, &Result<(), Error>),
 ) -> Result<(), AtomicWriteFileFailure> {
-    use bacnet_services::file::{
-        AtomicWriteFileAck, AtomicWriteFileRequest, FileWriteAccessMethod, FileWriteAckMethod,
-    };
+    use bacnet_services::file::{AtomicWriteFileRequest, FileWriteAccessMethod};
 
     let request = AtomicWriteFileRequest::decode(service_data)?;
 
@@ -328,6 +342,24 @@ fn write_file(
             .into());
         }
     }
+
+    let target = request.file_identifier;
+    let result = match execute_write_file(db, request, buf, budget) {
+        Ok(()) => Ok(()),
+        Err(AtomicWriteFileFailure::Service(error)) => Err(error),
+        Err(AtomicWriteFileFailure::Budget) => return Err(AtomicWriteFileFailure::Budget),
+    };
+    completed(db, target, &result);
+    result.map_err(AtomicWriteFileFailure::Service)
+}
+
+fn execute_write_file(
+    db: &mut ObjectDatabase,
+    request: bacnet_services::file::AtomicWriteFileRequest,
+    buf: &mut BytesMut,
+    budget: Option<crate::server::AtomicWriteFileBudget>,
+) -> Result<(), AtomicWriteFileFailure> {
+    use bacnet_services::file::{AtomicWriteFileAck, FileWriteAccessMethod, FileWriteAckMethod};
 
     if request.file_identifier.object_type() != ObjectType::FILE {
         return Err(inconsistent_object_type().into());
