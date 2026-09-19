@@ -9,13 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Bounded target-WRITE Audit Reporter (RB-21a, Refs #345):** Rust servers can
+- **Bounded target-WRITE Audit Reporter (RB-21a/b, Refs #345):** Rust servers can
   select one locally configured Reporter and explicitly bound unicast Device
   recipient. Successful inbound WriteProperty and each committed WPM prefix
   element produce separate immediate-send notifications after authorization and
   commit, subject to Reporter-level Audit_Level, WRITE, and command-priority
-  filters. Disabled reporting, denied/failed writes, and sensor samples produce
-  no records. Confirmed delivery uses the existing invoke/transaction owner;
+  filters. RB-21b adds execution-error completion after the existing decode,
+  semantic prechecks, and authorization boundary: WP emits at most one failure
+  record with the actual mapped BACnet Error in Result; WPM preserves each
+  committed-prefix success, emits one failed-element record, and stops. Successes
+  still omit Result. Policy/authorization denials, undecoded or unattempted
+  elements, unknown/timeout outcomes, disabled reporting, and sensor samples
+  remain silent. Failure reporting uses the same filters and never changes the
+  protocol response or rolls back writes.
+  Confirmed delivery uses the existing invoke/transaction owner;
   unconfirmed delivery ends at transport send. An absent or invalid selected
   Reporter rejects server startup. For an existing Reporter, Reliability and its
   FAULT flag expose missing configuration and delivery failures. The profile has

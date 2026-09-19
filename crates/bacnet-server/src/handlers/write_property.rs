@@ -12,6 +12,8 @@ pub(crate) struct WriteTarget<'a> {
 pub(crate) trait WriteCommitObserver: Send {
     fn before(&mut self, db: &ObjectDatabase, write: WriteTarget<'_>);
     fn committed(&mut self, db: &mut ObjectDatabase);
+    /// Execution returned an error after `before`; never called for policy denial.
+    fn failed(&mut self, db: &mut ObjectDatabase, error: &Error);
 }
 
 /// Validate database-owned Object_Name uniqueness before mutation.
@@ -174,6 +176,9 @@ pub(crate) fn handle_write_property_multiple_observed(
                 attempt.priority,
             );
         if let Err(error) = write {
+            if let Some(observer) = observer.as_deref_mut() {
+                observer.failed(db, &error);
+            }
             return semantic_failure(error, reference, committed_oids);
         }
         if property == PropertyIdentifier::OBJECT_NAME {
@@ -360,14 +365,21 @@ pub(crate) fn handle_write_property_observed(
             },
         );
     }
-    db.get_mut(&oid)
+    let result = db
+        .get_mut(&oid)
         .expect("existence checked above")
         .write_property(
             request.property_identifier,
             request.property_array_index,
             value,
             request.priority,
-        )?;
+        );
+    if let Err(error) = result {
+        if let Some(observer) = observer {
+            observer.failed(db, &error);
+        }
+        return Err(error);
+    }
     if request.property_identifier == PropertyIdentifier::OBJECT_NAME {
         db.update_name_index(&oid);
     }
