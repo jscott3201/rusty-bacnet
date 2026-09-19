@@ -31,6 +31,79 @@ mod selection_properties;
 #[path = "audit_reporter_lifecycle_tests.rs"]
 mod lifecycle;
 
+#[path = "audit_reporter_list_tests.rs"]
+mod list;
+
+#[tokio::test]
+async fn audit_reporter_list_optional_values_are_validated_independently() {
+    use bacnet_services::list_manipulation::ListElementRequest;
+
+    // Exercise the representation boundary directly: malformed wire requests
+    // are separately tested through dispatch and must never reach this hook.
+    // Application NULL is one encoded octet, so these cover exactly 32 and 33.
+    let mut fixture = server(reporter()).await;
+    let mut audit = audit_reporter::WriteAudit::new(
+        &fixture.server.config,
+        &fixture.server.network,
+        &fixture.server.notification_transactions,
+        &fixture.server.device_bindings,
+        &fixture.server.comm_state,
+        SOURCE,
+        None,
+        77,
+    )
+    .await;
+    let accepted = vec![0; 32];
+    let mut count = 0;
+    for omitted in [vec![], vec![0; 33], vec![0x0e, 0xd1, 0, 0x0f]] {
+        for omit_target in [false, true] {
+            let (delta, current) = if omit_target {
+                (omitted.clone(), accepted.clone())
+            } else {
+                (accepted.clone(), omitted.clone())
+            };
+            let request = ListElementRequest {
+                object_identifier: oid(ObjectType::BINARY_VALUE, 1),
+                property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                property_array_index: Some(7),
+                list_of_elements: delta,
+            };
+            {
+                let mut db = fixture.server.db.write().await;
+                audit.before_list(
+                    &db,
+                    &request,
+                    Some(&PropertyValue::ApplicationData(current)),
+                );
+                audit.lifecycle_completed(&mut db, &Ok(()));
+            }
+            settle().await;
+            count += 1;
+            let records = notifications(&fixture.transport.sent);
+            assert_eq!(records.len(), count, "omission must not drop the record");
+            assert_eq!(records[count - 1].notifications.len(), 1);
+            let record = &records[count - 1].notifications[0];
+            assert_eq!(
+                record.target_value,
+                (!omit_target).then(|| accepted.clone())
+            );
+            assert_eq!(record.current_value, omit_target.then(|| accepted.clone()));
+            assert_eq!(
+                record
+                    .target_property
+                    .as_ref()
+                    .unwrap()
+                    .property_array_index,
+                Some(7)
+            );
+            assert_eq!(record.target_priority, None);
+            assert_eq!(record.result, None);
+        }
+    }
+    drop(audit);
+    fixture.server.stop().await.unwrap();
+}
+
 #[tokio::test]
 async fn audit_reporter_wp_emits_one_success_after_commit() {
     let mut fixture = server(reporter()).await;

@@ -1,4 +1,4 @@
-//! RB-21a/b/c/d: mutation outcomes -> selected target Reporter -> Audit Log over UDP.
+//! RB-21a/b/c/d/e: mutation outcomes -> selected target Reporter -> Audit Log over UDP.
 
 use std::net::Ipv4Addr;
 use std::sync::{
@@ -60,7 +60,7 @@ fn database(instance: u32) -> ObjectDatabase {
     db
 }
 
-async fn exercise(confirmed: bool, selected: bool) {
+async fn exercise(confirmed: bool, selected: bool, lists: bool) {
     let allowed = Arc::new(AtomicBool::new(!confirmed));
     let policy = Arc::clone(&allowed);
     let persistence = Arc::new(MemoryPersistence::default());
@@ -82,6 +82,12 @@ async fn exercise(confirmed: bool, selected: bool) {
         .unwrap();
 
     let mut target_db = database(10);
+    if lists {
+        let mut list =
+            bacnet_objects::multistate::MultiStateInputObject::new(1, "list", 3).unwrap();
+        list.set_alarm_values(vec![1]);
+        target_db.add(Box::new(list)).unwrap();
+    }
     target_db
         .add(Box::new(BinaryValueObject::new(1, "value").unwrap()))
         .unwrap();
@@ -363,6 +369,97 @@ async fn exercise(confirmed: bool, selected: bool) {
     assert!(record.source_timestamp.is_none());
     assert!(record.target_timestamp.is_some());
     assert!(record.invoke_id.is_some());
+    if lists {
+        let object = oid(ObjectType::MULTI_STATE_INPUT, 1);
+        for step in 0..3 {
+            if step == 0 {
+                client
+                    .add_list_element(
+                        target.local_mac(),
+                        object,
+                        PropertyIdentifier::ALARM_VALUES,
+                        None,
+                        vec![0x21, 2, 0x21, 3],
+                    )
+                    .await
+                    .unwrap();
+            } else {
+                client
+                    .remove_list_element(
+                        target.local_mac(),
+                        object,
+                        PropertyIdentifier::ALARM_VALUES,
+                        None,
+                        vec![0x21, 2, 0x21, 3],
+                    )
+                    .await
+                    .unwrap();
+            }
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    if persistence
+                        .0
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .unwrap()
+                        .records
+                        .len()
+                        == 3 + step
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let snapshot = persistence.0.lock().unwrap().clone().unwrap();
+            let BACnetAuditLogDatum::AuditNotification(record) =
+                &snapshot.records[2 + step].record.datum
+            else {
+                panic!("expected list operation")
+            };
+            assert_eq!(record.operation, AuditOperation::WRITE);
+            assert_eq!(record.target_object, Some(object));
+            assert_eq!(
+                record.target_property,
+                Some(bacnet_types::constructed::AuditPropertyReference {
+                    property_identifier: PropertyIdentifier::ALARM_VALUES,
+                    property_array_index: None,
+                })
+            );
+            assert_eq!(record.target_priority, None);
+            assert_eq!(record.target_value, Some(vec![0x21, 2, 0x21, 3]));
+            assert_eq!(
+                record.current_value,
+                Some(if step == 1 {
+                    vec![0x21, 1, 0x21, 2, 0x21, 3]
+                } else {
+                    vec![0x21, 1]
+                })
+            );
+            assert_eq!(record.result, None);
+            assert!(record.source_timestamp.is_none());
+            assert!(record.target_timestamp.is_some());
+            assert_eq!(
+                target
+                    .database()
+                    .read()
+                    .await
+                    .get(&object)
+                    .unwrap()
+                    .read_property(PropertyIdentifier::ALARM_VALUES, None)
+                    .unwrap(),
+                bacnet_types::primitives::PropertyValue::List(
+                    if step == 0 { vec![1, 2, 3] } else { vec![1] }
+                        .into_iter()
+                        .map(bacnet_types::primitives::PropertyValue::Unsigned)
+                        .collect()
+                )
+            );
+        }
+    }
     client.stop().await.unwrap();
     target.stop().await.unwrap();
     logger.stop().await.unwrap();
@@ -370,18 +467,24 @@ async fn exercise(confirmed: bool, selected: bool) {
 
 #[tokio::test]
 async fn audit_reporter_unconfirmed_write_reaches_real_log() {
-    exercise(false, false).await;
+    exercise(false, false, false).await;
 }
 
 #[tokio::test]
 async fn audit_reporter_confirmed_error_then_ack_updates_health_over_udp() {
-    exercise(true, false).await;
+    exercise(true, false, false).await;
 }
 
 #[tokio::test]
 async fn audit_reporter_selected_writes_and_failures_reach_real_log_once_over_udp() {
-    exercise(false, true).await;
-    exercise(true, true).await;
+    exercise(false, true, false).await;
+    exercise(true, true, false).await;
+}
+
+#[tokio::test]
+async fn audit_reporter_list_add_remove_and_noop_reach_real_log_over_udp() {
+    exercise(false, false, true).await;
+    exercise(true, false, true).await;
 }
 
 #[tokio::test]

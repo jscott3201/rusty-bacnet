@@ -13,8 +13,8 @@ const DELIVERY_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// One locally configured target WRITE/CREATE/DELETE Reporter and unicast recipient.
 ///
-/// Reports successful inbound WP/WPM elements, CreateObject/DeleteObject operations,
-/// and authorized execution errors.
+/// Reports successful inbound WP/WPM elements, AddListElement/RemoveListElement,
+/// CreateObject/DeleteObject operations, and authorized execution errors.
 /// Policy denials and undecoded/unattempted elements remain silent. Successes
 /// omit Result; execution failures include the mapped BACnet Error. There is no
 /// source-side reporting, per-object override, batching, forwarding, or durable outbox.
@@ -49,6 +49,16 @@ const DELIVERY_TIMEOUT: Duration = Duration::from_secs(3);
 /// representable OID omits the target; only catch-all or type selection can match.
 /// Deleting the selected Reporter is allowed: its last record owns the removed
 /// instance's delivery health, then the unavailable profile remains silent.
+///
+/// List edits use WRITE, object/property/requested-index identity, no priority,
+/// the requested delta as raw Target_Value, and the known pre-image as Current_Value.
+/// Empty, structurally invalid, or over-32-octet values are omitted, never wrapped
+/// or truncated. Element and framed-list decoding precedes observation; valid
+/// execution failures retain the response-mapped Result. Successful no-op removals
+/// still report once. AUDIT_CONFIG admits implemented non-Present_Value lists;
+/// list services ignore priority filtering and reuse ordinary target selection.
+/// This is not complete WRITE coverage: AtomicWriteFile is not reported and
+/// inbound WriteGroup remains unsupported by design.
 ///
 /// ```no_run
 /// use bacnet_objects::{audit::AuditReporterObject, database::ObjectDatabase,
@@ -303,6 +313,76 @@ impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
 }
 
 impl<T: TransportPort + 'static> WriteAudit<'_, T> {
+    /// List services have no priority. The handler supplies its existing pre-image
+    /// only after all element/framed decoding; an absent object is still a known
+    /// target for a decoded execution failure.
+    pub(super) fn before_list(
+        &mut self,
+        db: &ObjectDatabase,
+        request: &bacnet_services::list_manipulation::ListElementRequest,
+        current: Option<&PropertyValue>,
+    ) {
+        self.pending = None;
+        let Some(profile) = &self.config.audit_reporter else {
+            return;
+        };
+        let Some(reporter) = db
+            .get(&profile.reporter)
+            .and_then(|object| object.audit_reporter_internal())
+        else {
+            return;
+        };
+        let device = local_device(db);
+        let status = reporter.status_internal();
+        status.set_configured(device.is_some() && self.route.is_some());
+        let Some(device) = device else { return };
+        if !reporter.monitors_object_internal(request.object_identifier)
+            || !reporter.reports_write_internal(
+                request.property_identifier,
+                None,
+                request.object_identifier.object_type() == ObjectType::AUDIT_REPORTER,
+            )
+        {
+            return;
+        }
+        self.pending = Some(PendingWrite {
+            status,
+            confirmed: reporter.confirmed_internal(),
+            notification: BACnetAuditNotification {
+                source_timestamp: None,
+                target_timestamp: None,
+                source_device: self.source.clone(),
+                source_object: None,
+                operation: AuditOperation::WRITE,
+                source_comment: None,
+                target_comment: None,
+                invoke_id: Some(self.invoke_id),
+                source_user_id: None,
+                source_user_role: None,
+                target_device: BACnetRecipient::Device(device),
+                target_object: Some(request.object_identifier),
+                target_property: Some(AuditPropertyReference {
+                    property_identifier: request.property_identifier,
+                    property_array_index: request.property_array_index.map(u64::from),
+                }),
+                target_priority: None,
+                target_value: (!request.list_of_elements.is_empty()
+                    && request.list_of_elements.len() <= 32
+                    && bacnet_encoding::constructed::validate_tlv_sequence(
+                        &request.list_of_elements,
+                        "list delta",
+                    )
+                    .is_ok())
+                .then(|| request.list_of_elements.clone()),
+                current_value: current.and_then(small_value).filter(|bytes| {
+                    bacnet_encoding::constructed::validate_tlv_sequence(bytes, "list pre-image")
+                        .is_ok()
+                }),
+                result: None,
+            },
+        });
+    }
+
     /// Called under the execution database guard: after CREATE's final/candidate
     /// identity is known, or before DELETE removes the selected Reporter itself.
     pub(super) fn before_lifecycle(
