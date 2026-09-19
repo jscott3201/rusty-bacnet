@@ -1,4 +1,4 @@
-//! RB-21a/b/c/d/e: mutation outcomes -> selected target Reporter -> Audit Log over UDP.
+//! RB-21a/b/c/d/e/f: mutation outcomes -> selected target Reporter -> Audit Log over UDP.
 
 use std::net::Ipv4Addr;
 use std::sync::{
@@ -13,9 +13,11 @@ use bacnet_objects::{
     binary::BinaryValueObject,
     database::ObjectDatabase,
     device::{DeviceConfig, DeviceObject},
+    file::FileObject,
 };
 use bacnet_server::server::{AuditReporterConfig, BACnetServer, DeviceBinding};
 use bacnet_services::audit::AuditLogQueryRequest;
+use bacnet_services::file::FileWriteAccessMethod;
 use bacnet_types::{
     bitstring::AuditOperationFlags,
     constructed::{
@@ -31,6 +33,16 @@ use bacnet_types::{
 
 #[derive(Default)]
 struct MemoryPersistence(Mutex<Option<AuditLogSnapshot>>);
+
+impl MemoryPersistence {
+    fn record_count(&self) -> usize {
+        self.0
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map_or(0, |s| s.records.len())
+    }
+}
 
 impl AuditLogPersistence for MemoryPersistence {
     fn load(&self, _: ObjectIdentifier) -> Result<Option<AuditLogSnapshot>, Error> {
@@ -60,17 +72,30 @@ fn database(instance: u32) -> ObjectDatabase {
     db
 }
 
-async fn exercise(confirmed: bool, selected: bool, lists: bool) {
-    let allowed = Arc::new(AtomicBool::new(!confirmed));
-    let policy = Arc::clone(&allowed);
-    let persistence = Arc::new(MemoryPersistence::default());
+async fn wait_for_records(persistence: &MemoryPersistence, count: usize) {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if persistence.record_count() == count {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+async fn start_logger(
+    persistence: Arc<MemoryPersistence>,
+    policy: Arc<AtomicBool>,
+) -> BACnetServer<bacnet_transport::bip::BipTransport> {
     let mut logger_db = database(20);
     logger_db
         .add(Box::new(
             AuditLogObject::new(1, "log", 16, persistence.clone()).unwrap(),
         ))
         .unwrap();
-    let mut logger = BACnetServer::builder()
+    BACnetServer::builder()
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .database(logger_db)
@@ -79,9 +104,29 @@ async fn exercise(confirmed: bool, selected: bool, lists: bool) {
         .unconfirmed_audit_notification_authorizer(|_| true)
         .build()
         .await
-        .unwrap();
+        .unwrap()
+}
+
+async fn exercise(confirmed: bool, selected: bool, lists: bool, files: bool) {
+    let allowed = Arc::new(AtomicBool::new(!confirmed));
+    let persistence = Arc::new(MemoryPersistence::default());
+    let mut logger = start_logger(persistence.clone(), allowed.clone()).await;
 
     let mut target_db = database(10);
+    if files {
+        for instance in 1..=2 {
+            let mut file = FileObject::new(instance, format!("file-{instance}"), "binary").unwrap();
+            if instance == 2 {
+                file.set_file_access_method(
+                    bacnet_types::enums::FileAccessMethod::RECORD_ACCESS.to_raw(),
+                );
+                file.set_records(vec![vec![1]]);
+            } else {
+                file.set_data(vec![1]);
+            }
+            target_db.add(Box::new(file)).unwrap();
+        }
+    }
     if lists {
         let mut list =
             bacnet_objects::multistate::MultiStateInputObject::new(1, "list", 3).unwrap();
@@ -224,12 +269,7 @@ async fn exercise(confirmed: bool, selected: bool, lists: bool) {
         .unwrap();
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            let count = persistence
-                .0
-                .lock()
-                .unwrap()
-                .as_ref()
-                .map_or(0, |snapshot| snapshot.records.len());
+            let count = persistence.record_count();
             let db = target.database().read().await;
             let healthy = db
                 .get(&oid(ObjectType::AUDIT_REPORTER, 1))
@@ -265,25 +305,7 @@ async fn exercise(confirmed: bool, selected: bool, lists: bool) {
     assert!(matches!(error, Error::Protocol { class, code }
         if class == ErrorClass::PROPERTY.to_raw() as u32
             && code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32));
-    tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            if persistence
-                .0
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .records
-                .len()
-                == 2
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-    })
-    .await
-    .unwrap();
+    wait_for_records(&persistence, 2).await;
     assert_eq!(
         target
             .database()
@@ -395,25 +417,7 @@ async fn exercise(confirmed: bool, selected: bool, lists: bool) {
                     .await
                     .unwrap();
             }
-            tokio::time::timeout(Duration::from_secs(2), async {
-                loop {
-                    if persistence
-                        .0
-                        .lock()
-                        .unwrap()
-                        .as_ref()
-                        .unwrap()
-                        .records
-                        .len()
-                        == 3 + step
-                    {
-                        break;
-                    }
-                    tokio::time::sleep(Duration::from_millis(5)).await;
-                }
-            })
-            .await
-            .unwrap();
+            wait_for_records(&persistence, 3 + step).await;
             let snapshot = persistence.0.lock().unwrap().clone().unwrap();
             let BACnetAuditLogDatum::AuditNotification(record) =
                 &snapshot.records[2 + step].record.datum
@@ -460,31 +464,107 @@ async fn exercise(confirmed: bool, selected: bool, lists: bool) {
             );
         }
     }
+    if files {
+        for step in 0..4 {
+            let record_access = step >= 2;
+            let object = oid(ObjectType::FILE, if record_access { 2 } else { 1 });
+            let failure = step % 2 == 1;
+            let start = if failure { -2 } else { -1 };
+            let access = if record_access {
+                FileWriteAccessMethod::Record {
+                    file_start_record: start,
+                    record_count: 1,
+                    file_record_data: vec![vec![42]],
+                }
+            } else {
+                FileWriteAccessMethod::Stream {
+                    file_start_position: start,
+                    file_data: vec![42],
+                }
+            };
+            let result = client
+                .atomic_write_file(target.local_mac(), object, access)
+                .await;
+            if failure {
+                assert!(
+                    matches!(result, Err(Error::Protocol { class, code }) if class == ErrorClass::SERVICES.to_raw() as u32 && code == ErrorCode::INVALID_FILE_START_POSITION.to_raw() as u32)
+                );
+            } else {
+                assert_eq!(
+                    result.unwrap().as_ref(),
+                    &[if record_access { 0x19 } else { 0x09 }, 1]
+                );
+            }
+            wait_for_records(&persistence, 3 + step).await;
+            let snapshot = persistence.0.lock().unwrap().clone().unwrap();
+            let BACnetAuditLogDatum::AuditNotification(record) =
+                &snapshot.records[2 + step].record.datum
+            else {
+                panic!("expected file WRITE")
+            };
+            assert_eq!(record.operation, AuditOperation::WRITE);
+            assert_eq!(record.target_object, Some(object));
+            assert_eq!(
+                record.target_device,
+                BACnetRecipient::Device(oid(ObjectType::DEVICE, 10))
+            );
+            assert!(record.invoke_id.is_some());
+            assert!(record.source_timestamp.is_none());
+            assert!(record.target_timestamp.is_some());
+            assert!(record.target_property.is_none());
+            assert!(record.target_priority.is_none());
+            assert!(record.target_value.is_none());
+            assert!(record.current_value.is_none());
+            assert_eq!(
+                record.result,
+                failure.then_some((ErrorClass::SERVICES, ErrorCode::INVALID_FILE_START_POSITION))
+            );
+            let db = target.database().read().await;
+            let storage = db.get(&object).unwrap().file_storage_internal().unwrap();
+            if record_access {
+                assert_eq!(
+                    storage.read_records(0, 10).unwrap().records,
+                    vec![vec![1], vec![42]]
+                );
+            } else {
+                assert_eq!(storage.read_stream(0, 10).unwrap().data, vec![1, 42]);
+            }
+        }
+    }
     client.stop().await.unwrap();
     target.stop().await.unwrap();
     logger.stop().await.unwrap();
+    if files {
+        assert_eq!(persistence.record_count(), 6, "no duplicates or recursion");
+    }
 }
 
 #[tokio::test]
 async fn audit_reporter_unconfirmed_write_reaches_real_log() {
-    exercise(false, false, false).await;
+    exercise(false, false, false, false).await;
 }
 
 #[tokio::test]
 async fn audit_reporter_confirmed_error_then_ack_updates_health_over_udp() {
-    exercise(true, false, false).await;
+    exercise(true, false, false, false).await;
 }
 
 #[tokio::test]
 async fn audit_reporter_selected_writes_and_failures_reach_real_log_once_over_udp() {
-    exercise(false, true, false).await;
-    exercise(true, true, false).await;
+    exercise(false, true, false, false).await;
+    exercise(true, true, false, false).await;
 }
 
 #[tokio::test]
 async fn audit_reporter_list_add_remove_and_noop_reach_real_log_over_udp() {
-    exercise(false, false, true).await;
-    exercise(true, false, true).await;
+    exercise(false, false, true, false).await;
+    exercise(true, false, true, false).await;
+}
+
+#[tokio::test]
+async fn audit_reporter_atomic_write_file_confirmed_and_unconfirmed_reach_real_log() {
+    exercise(false, false, false, true).await;
+    exercise(true, false, false, true).await;
 }
 
 #[tokio::test]
@@ -493,21 +573,7 @@ async fn audit_reporter_create_delete_reach_real_log_over_udp() {
     use bacnet_types::primitives::PropertyValue;
 
     let persistence = Arc::new(MemoryPersistence::default());
-    let mut logger_db = database(20);
-    logger_db
-        .add(Box::new(
-            AuditLogObject::new(1, "log", 16, persistence.clone()).unwrap(),
-        ))
-        .unwrap();
-    let mut logger = BACnetServer::builder()
-        .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
-        .database(logger_db)
-        .audit_notification_sink(oid(ObjectType::AUDIT_LOG, 1))
-        .audit_notification_authorizer(|_| true)
-        .build()
-        .await
-        .unwrap();
+    let mut logger = start_logger(persistence.clone(), Arc::new(AtomicBool::new(true))).await;
 
     let mut target_db = database(10);
     let mut reporter = AuditReporterObject::new(1, "reporter").unwrap();
@@ -610,25 +676,7 @@ async fn audit_reporter_create_delete_reach_real_log_over_udp() {
                     if class == ErrorClass::OBJECT.to_raw() as u32 && code == ErrorCode::UNKNOWN_OBJECT.to_raw() as u32));
             }
         }
-        tokio::time::timeout(Duration::from_secs(2), async {
-            loop {
-                if persistence
-                    .0
-                    .lock()
-                    .unwrap()
-                    .as_ref()
-                    .unwrap()
-                    .records
-                    .len()
-                    == step + 1
-                {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .unwrap();
+        wait_for_records(&persistence, step + 1).await;
     }
     let snapshot = persistence.0.lock().unwrap().clone().unwrap();
     assert_eq!(snapshot.records.len(), 4);
@@ -679,15 +727,5 @@ async fn audit_reporter_create_delete_reach_real_log_over_udp() {
     client.stop().await.unwrap();
     target.stop().await.unwrap();
     logger.stop().await.unwrap();
-    assert_eq!(
-        persistence
-            .0
-            .lock()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .records
-            .len(),
-        4
-    );
+    assert_eq!(persistence.record_count(), 4);
 }

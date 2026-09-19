@@ -310,7 +310,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 )
             }
             s if s == ConfirmedServiceChoice::ATOMIC_WRITE_FILE => {
-                mutation.atomic_write_file::<T>(db).await
+                mutation.atomic_write_file::<T>(db, &mut audit).await
             }
             s if s == ConfirmedServiceChoice::ADD_LIST_ELEMENT => {
                 mutation.add_list_element::<T>(db, &mut audit).await

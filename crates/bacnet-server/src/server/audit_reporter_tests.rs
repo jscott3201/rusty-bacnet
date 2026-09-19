@@ -34,6 +34,58 @@ mod lifecycle;
 #[path = "audit_reporter_list_tests.rs"]
 mod list;
 
+#[path = "audit_reporter_file_tests.rs"]
+mod file;
+
+#[tokio::test(start_paused = true)]
+async fn audit_reporter_atomic_write_file_delivery_saturation_deadline_and_no_recursion() {
+    use file::{access, file_server, request, SERVICE};
+    let mut fixture = file_server(false).await;
+    fixture.transport.block.store(true, Ordering::Release);
+    for _ in 0..65 {
+        assert!(matches!(
+            dispatch(
+                &fixture.server,
+                SERVICE,
+                request(oid(ObjectType::FILE, 1), access(false, 0))
+            )
+            .await,
+            Apdu::ComplexAck(_)
+        ));
+    }
+    settle().await;
+    assert_eq!(notifications(&fixture.transport.sent).len(), 64);
+    assert_eq!(
+        health(&fixture.server).await,
+        Reliability::COMMUNICATION_FAILURE
+    );
+    tokio::time::advance(Duration::from_secs(3)).await;
+    settle().await;
+    assert_eq!(
+        notifications(&fixture.transport.sent).len(),
+        64,
+        "no queue or retries"
+    );
+    fixture.transport.block.store(false, Ordering::Release);
+    assert!(matches!(
+        dispatch(
+            &fixture.server,
+            SERVICE,
+            request(oid(ObjectType::FILE, 1), access(false, 0))
+        )
+        .await,
+        Apdu::ComplexAck(_)
+    ));
+    settle().await;
+    assert_eq!(notifications(&fixture.transport.sent).len(), 65);
+    assert_eq!(
+        health(&fixture.server).await,
+        Reliability::NO_FAULT_DETECTED
+    );
+    fixture.server.stop().await.unwrap();
+    assert_eq!(notifications(&fixture.transport.sent).len(), 65);
+}
+
 #[tokio::test]
 async fn audit_reporter_list_optional_values_are_validated_independently() {
     use bacnet_services::list_manipulation::ListElementRequest;

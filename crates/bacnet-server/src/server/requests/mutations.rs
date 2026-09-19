@@ -385,6 +385,7 @@ impl Request<'_> {
     pub(super) async fn atomic_write_file<T: TransportPort + 'static>(
         &self,
         db: &Arc<RwLock<ObjectDatabase>>,
+        audit: &mut super::super::audit_reporter::WriteAudit<'_, T>,
     ) -> Apdu {
         if let Err(error) = self.authorize(|| {
             AtomicWriteFileRequest::decode(&self.req.service_request)
@@ -398,6 +399,7 @@ impl Request<'_> {
             self.req.invoke_id,
             &self.req.service_request,
             self.config.atomic_write_file_budget,
+            audit,
         )
     }
 
