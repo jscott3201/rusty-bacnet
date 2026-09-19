@@ -15,8 +15,11 @@ const DELIVERY_TIMEOUT: Duration = Duration::from_secs(3);
 ///
 /// Only successful inbound WP/WPM elements are reported. There is no source-side
 /// reporting, per-object override, batching, forwarding, or durable outbox.
-/// Configure the recipient with the builder's `device_binding` method. Missing
-/// configuration is exposed through the enabled Reporter's Reliability.
+/// Configure the recipient with the builder's `device_binding` method. Server
+/// startup returns [`Error::Encoding`] if the selected Reporter is absent or
+/// lacks the Audit Reporter capability. A missing or unresolvable recipient
+/// still permits startup and exposes CONFIGURATION_ERROR through the existing
+/// enabled Reporter's Reliability.
 /// At most 64 deliveries are active per server, with no waiting queue. Each
 /// send/ACK has one total three-second deadline and no retries. Overflow or
 /// delivery failure sets COMMUNICATION_FAILURE, never changes the write result,
@@ -115,17 +118,20 @@ pub(super) fn initialize(
     config: &ServerConfig,
     bindings: &DeviceBindingTable,
     is_broadcast: impl Fn(&[u8]) -> bool,
-) {
+) -> Result<(), Error> {
     if let Some(profile) = &config.audit_reporter {
-        if let Some(reporter) = db
+        let reporter = db
             .get(&profile.reporter)
             .and_then(|object| object.audit_reporter_internal())
-        {
-            reporter.status_internal().set_configured(
-                local_device(db).is_some() && resolve(profile, bindings, is_broadcast).is_some(),
-            );
-        }
+            .ok_or_else(|| Error::Encoding(format!(
+                "invalid audit reporter: selected object {:?} is absent or lacks the Audit Reporter capability",
+                profile.reporter,
+            )))?;
+        reporter.status_internal().set_configured(
+            local_device(db).is_some() && resolve(profile, bindings, is_broadcast).is_some(),
+        );
     }
+    Ok(())
 }
 
 pub(super) struct WriteAudit<'a, T: TransportPort> {

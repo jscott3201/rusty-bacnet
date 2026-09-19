@@ -16,6 +16,9 @@ use std::sync::Mutex as StdMutex;
 mod support;
 use support::*;
 
+#[path = "audit_reporter_startup_tests.rs"]
+mod startup;
+
 #[tokio::test]
 async fn audit_reporter_wp_emits_one_success_after_commit() {
     let mut fixture = server(reporter()).await;

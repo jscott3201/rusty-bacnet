@@ -16,9 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   commit, subject to Reporter-level Audit_Level, WRITE, and command-priority
   filters. Disabled reporting, denied/failed writes, and sensor samples produce
   no records. Confirmed delivery uses the existing invoke/transaction owner;
-  unconfirmed delivery ends at transport send. Reliability and its FAULT flag
-  expose missing configuration and delivery failures. The profile has 64 active
-  delivery slots, a three-second total deadline, no retries or waiting outbox,
+  unconfirmed delivery ends at transport send. An absent or invalid selected
+  Reporter rejects server startup. For an existing Reporter, Reliability and its
+  FAULT flag expose missing configuration and delivery failures. The profile has
+  64 active delivery slots, a three-second total deadline, no retries or waiting outbox,
   and omits values above 32 encoded octets; overload never rolls back a write.
   This is not full Audit Reporter support: source reporting, other operations,
   per-object overrides, Monitored_Objects/multi-Reporter selection, batching,

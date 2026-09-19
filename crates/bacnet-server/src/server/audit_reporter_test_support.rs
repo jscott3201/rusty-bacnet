@@ -23,6 +23,7 @@ pub(super) const SOURCE: &[u8] = &[3];
 
 #[derive(Clone, Default)]
 pub(super) struct CaptureTransport {
+    pub(super) started: Arc<AtomicBool>,
     pub(super) sent: Arc<StdMutex<Vec<Bytes>>>,
     pub(super) fail: Arc<AtomicBool>,
     pub(super) block: Arc<AtomicBool>,
@@ -33,6 +34,7 @@ impl TransportPort for CaptureTransport {
     async fn start(
         &mut self,
     ) -> Result<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
+        self.started.store(true, Ordering::Release);
         Ok(mpsc::channel(1).1)
     }
     async fn stop(&mut self) -> Result<(), Error> {
