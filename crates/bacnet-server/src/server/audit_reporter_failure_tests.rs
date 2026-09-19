@@ -2,7 +2,7 @@
 
 use super::*;
 
-fn expected_value_write(
+pub(super) fn expected_value_write(
     value: u8,
     current: u8,
     sequence: u16,

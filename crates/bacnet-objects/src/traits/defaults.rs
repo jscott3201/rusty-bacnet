@@ -13,7 +13,8 @@ use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 ///   SUBORDINATE_LIST / SUBORDINATE_ANNOTATIONS (Table 12-34),
 ///   GROUP_MEMBERS / GROUP_MEMBER_NAMES (Table 12-57; Elevator/Lift also type
 ///   GROUP_MEMBERS BACnetARRAY), ACTION (Table 12-12), and STAGES /
-///   STAGE_NAMES / TARGET_REFERENCES (Table 12-80).
+///   STAGE_NAMES / TARGET_REFERENCES (Table 12-80), and MONITORED_OBJECTS
+///   (Table 12-82).
 /// - **Type-dependent** identifiers classify by `object_type`: ALARM_VALUES /
 ///   FAULT_VALUES are BACnetARRAY[N] on CharacterString Value (Table 12-44)
 ///   and BitString Value (Table 12-47) but BACnetLIST on the multi-state,
@@ -59,6 +60,7 @@ pub(super) fn array_property_default(
         | PropertyIdentifier::ACTION
         | PropertyIdentifier::STAGES
         | PropertyIdentifier::STAGE_NAMES
+        | PropertyIdentifier::MONITORED_OBJECTS
         | PropertyIdentifier::TARGET_REFERENCES => true,
         PropertyIdentifier::ALARM_VALUES | PropertyIdentifier::FAULT_VALUES => matches!(
             object_type,
