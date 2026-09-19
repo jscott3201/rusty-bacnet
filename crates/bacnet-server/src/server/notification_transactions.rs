@@ -59,6 +59,7 @@ struct NotificationState {
 pub struct NotificationTransactions {
     core: Arc<NotificationCore>,
     workers: Mutex<NotificationWorkers>,
+    audit_permits: Arc<tokio::sync::Semaphore>,
 }
 
 #[derive(Default)]
@@ -75,6 +76,10 @@ struct NotificationCore {
 }
 
 impl NotificationTransactions {
+    pub(super) fn try_admit_audit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        Arc::clone(&self.audit_permits).try_acquire_owned().ok()
+    }
+
     #[doc(hidden)]
     pub fn new() -> Arc<Self> {
         Self::with_coordinator(Arc::new(OutboundTransactionCoordinator::new()))
@@ -91,6 +96,7 @@ impl NotificationTransactions {
                 }),
             }),
             workers: Mutex::new(NotificationWorkers::default()),
+            audit_permits: Arc::new(tokio::sync::Semaphore::new(64)),
         })
     }
 
@@ -113,6 +119,7 @@ impl NotificationTransactions {
 
     #[doc(hidden)]
     pub fn close(&self) {
+        self.audit_permits.close();
         let mut workers = self.workers.lock().unwrap();
         // Serialize worker registration with transaction sealing. Reservation
         // uses only the core; no future can bypass closed worker admission.

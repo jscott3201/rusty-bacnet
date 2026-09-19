@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Bounded target-WRITE Audit Reporter (RB-21a, Refs #345):** Rust servers can
+  select one locally configured Reporter and explicitly bound unicast Device
+  recipient. Successful inbound WriteProperty and each committed WPM prefix
+  element produce separate immediate-send notifications after authorization and
+  commit, subject to Reporter-level Audit_Level, WRITE, and command-priority
+  filters. Disabled reporting, denied/failed writes, and sensor samples produce
+  no records. Confirmed delivery uses the existing invoke/transaction owner;
+  unconfirmed delivery ends at transport send. Reliability and its FAULT flag
+  expose missing configuration and delivery failures. The profile has 64 active
+  delivery slots, a three-second total deadline, no retries or waiting outbox,
+  and omits values above 32 encoded octets; overload never rolls back a write.
+  This is not full Audit Reporter support: source reporting, other operations,
+  per-object overrides, Monitored_Objects/multi-Reporter selection, batching,
+  AUDITING_FAILURE records, forwarding/durable delivery, the public Device
+  Audit_Notification_Recipient model, and Python parity remain deferred. #345
+  stays open; no Audit Reporting BIBB or BTL qualification is claimed.
+- Remove the tracked repository-local `.codex/` configuration and agent profiles
+  as owner-requested maintenance; user-level configuration is untouched.
+
 - **Breaking Audit query contract migration (RB-20, Refs #345):** AuditLogQuery
   clients, the retained-storage query runtime, and the typed Python boundary
   now enforce the corrected 2020 baseline end to end (Errata Summary

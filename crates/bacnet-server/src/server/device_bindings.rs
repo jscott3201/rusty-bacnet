@@ -156,6 +156,39 @@ pub(super) struct DeviceBindingTable {
 }
 
 impl DeviceBindingTable {
+    /// Prefer a known, unambiguous Device identity in target Audit records.
+    /// This is address correlation, never authentication of a principal.
+    pub(super) fn source_device(
+        &self,
+        immediate: &[u8],
+        routed: Option<&NpduAddress>,
+        is_broadcast: impl Fn(&[u8]) -> bool,
+    ) -> Option<ObjectIdentifier> {
+        let now = Instant::now();
+        let mut matched = None;
+        for device in self.entries.keys() {
+            let matches = match (self.resolve_at(device, now, &is_broadcast), routed) {
+                (DeviceResolution::ResolvedLocal { peer_mac, .. }, None) => {
+                    peer_mac.as_slice() == immediate
+                }
+                (
+                    DeviceResolution::ResolvedRouted {
+                        network, final_mac, ..
+                    },
+                    Some(source),
+                ) => network == source.network && final_mac == source.mac_address,
+                _ => false,
+            };
+            if matches {
+                if matched.is_some() {
+                    return None;
+                }
+                matched = Some(*device);
+            }
+        }
+        matched
+    }
+
     pub(super) fn new() -> Self {
         Self::default()
     }
