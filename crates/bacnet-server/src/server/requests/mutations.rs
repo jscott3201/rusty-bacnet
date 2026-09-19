@@ -404,6 +404,7 @@ impl Request<'_> {
     pub(super) async fn add_list_element<T: TransportPort + 'static>(
         &self,
         db: &Arc<RwLock<ObjectDatabase>>,
+        audit: &mut super::super::audit_reporter::WriteAudit<'_, T>,
     ) -> Apdu {
         if let Err(error) = self.authorize(|| {
             ListElementRequest::decode(&self.req.service_request)
@@ -412,7 +413,14 @@ impl Request<'_> {
             return self.error::<T>(&error);
         }
         let mut db = db.write().await;
-        match handlers::handle_add_list_element(&mut db, &self.req.service_request) {
+        let result = handlers::handle_list_element_observed(
+            &mut db,
+            &self.req.service_request,
+            false,
+            |db, request, current| audit.before_list(db, request, current),
+        );
+        audit.lifecycle_completed(&mut db, &result);
+        match result {
             Ok(()) => self.simple_ack(),
             Err(e) => self.error::<T>(&e),
         }
@@ -421,6 +429,7 @@ impl Request<'_> {
     pub(super) async fn remove_list_element<T: TransportPort + 'static>(
         &self,
         db: &Arc<RwLock<ObjectDatabase>>,
+        audit: &mut super::super::audit_reporter::WriteAudit<'_, T>,
     ) -> Apdu {
         if let Err(error) = self.authorize(|| {
             ListElementRequest::decode(&self.req.service_request)
@@ -429,7 +438,14 @@ impl Request<'_> {
             return self.error::<T>(&error);
         }
         let mut db = db.write().await;
-        match handlers::handle_remove_list_element(&mut db, &self.req.service_request) {
+        let result = handlers::handle_list_element_observed(
+            &mut db,
+            &self.req.service_request,
+            true,
+            |db, request, current| audit.before_list(db, request, current),
+        );
+        audit.lifecycle_completed(&mut db, &result);
+        match result {
             Ok(()) => self.simple_ack(),
             Err(e) => self.error::<T>(&e),
         }

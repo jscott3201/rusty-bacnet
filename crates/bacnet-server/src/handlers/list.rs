@@ -1,5 +1,7 @@
 use super::*;
-use bacnet_objects::traits::BACnetObject;
+use bacnet_encoding::{constructed::decode_destination_list, primitives::decode_application_value};
+use bacnet_services::list_manipulation::ListElementRequest;
+use bacnet_types::constructed::BACnetDestination;
 
 fn invalid_data_type() -> Error {
     Error::Protocol {
@@ -8,123 +10,11 @@ fn invalid_data_type() -> Error {
     }
 }
 
-/// Apply an AddListElement/RemoveListElement edit to a property whose wire
-/// form is a framed `BACnetLIST of BACnetDestination` (NotificationClass
-/// `Recipient_List`): it reads back as [`PropertyValue::ApplicationData`]
-/// (raw concatenated destination frames), NOT `PropertyValue::List`.
-///
-/// Both the stored list and the service's `listOfElements` are decoded with
-/// the strict framed codec; element matching then works on decoded
-/// destinations and the merged list is re-framed on write-back. A malformed
-/// payload is a determinate `INVALID_DATA_TYPE` — falling back to an empty
-/// list here would turn a malformed RemoveListElement into a silent
-/// full-list wipe.
-fn framed_destination_list_edit(
-    object: &mut Box<dyn BACnetObject>,
-    property: PropertyIdentifier,
-    array_index: Option<u32>,
-    current_bytes: &[u8],
-    edit_bytes: &[u8],
-    remove: bool,
-) -> Result<(), Error> {
-    let mut destinations = bacnet_encoding::constructed::decode_destination_list(current_bytes)
-        .map_err(|_| invalid_data_type())?;
-    let edits = bacnet_encoding::constructed::decode_destination_list(edit_bytes)
-        .map_err(|_| invalid_data_type())?;
-    if remove {
-        destinations.retain(|d| !edits.contains(d));
-    } else {
-        destinations.extend(edits);
-    }
-    let mut framed = BytesMut::new();
-    bacnet_encoding::constructed::encode_destination_list(&mut framed, &destinations);
-    object.write_property(
-        property,
-        array_index,
-        PropertyValue::ApplicationData(framed.to_vec()),
-        None,
-    )
-}
-
 /// Handle an AddListElement request.
 ///
 /// Reads the target property, appends the new elements, and writes back.
 pub fn handle_add_list_element(db: &mut ObjectDatabase, service_data: &[u8]) -> Result<(), Error> {
-    use bacnet_encoding::primitives::decode_application_value;
-    use bacnet_services::list_manipulation::ListElementRequest;
-
-    let request = ListElementRequest::decode(service_data)?;
-
-    let object = db
-        .get_mut(&request.object_identifier)
-        .ok_or(Error::Protocol {
-            class: ErrorClass::OBJECT.to_raw() as u32,
-            code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
-        })?;
-
-    let current =
-        object.read_property(request.property_identifier, request.property_array_index)?;
-    if let PropertyValue::ApplicationData(bytes) = &current {
-        return framed_destination_list_edit(
-            object,
-            request.property_identifier,
-            request.property_array_index,
-            bytes,
-            &request.list_of_elements,
-            false,
-        )
-        .map_err(|err| match err {
-            // Clause 15.1 gives AddListElement its own resource error; the
-            // object arm only knows WriteProperty's.
-            Error::Protocol { class, code }
-                if class == ErrorClass::RESOURCES.to_raw() as u32
-                    && code == ErrorCode::NO_SPACE_TO_WRITE_PROPERTY.to_raw() as u32 =>
-            {
-                Error::Protocol {
-                    class,
-                    code: ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32,
-                }
-            }
-            other => other,
-        });
-    }
-    let mut items = match current {
-        PropertyValue::List(items) => items,
-        _ => Vec::new(),
-    };
-
-    let mut offset = 0;
-    let data = &request.list_of_elements;
-    while offset < data.len() {
-        let (val, new_offset) =
-            decode_application_value(data, offset).map_err(|_| invalid_data_type())?;
-        items.push(val);
-        offset = new_offset;
-    }
-
-    object
-        .write_property(
-            request.property_identifier,
-            request.property_array_index,
-            PropertyValue::List(items),
-            None,
-        )
-        .map_err(|err| match err {
-            // Clause 15.1 gives AddListElement its own resource error; the
-            // object arm only knows WriteProperty's.
-            Error::Protocol { class, code }
-                if class == ErrorClass::RESOURCES.to_raw() as u32
-                    && code == ErrorCode::NO_SPACE_TO_WRITE_PROPERTY.to_raw() as u32 =>
-            {
-                Error::Protocol {
-                    class,
-                    code: ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32,
-                }
-            }
-            other => other,
-        })?;
-
-    Ok(())
+    handle_list_element_observed(db, service_data, false, |_, _, _| {})
 }
 
 /// Handle a RemoveListElement request.
@@ -134,62 +24,130 @@ pub fn handle_remove_list_element(
     db: &mut ObjectDatabase,
     service_data: &[u8],
 ) -> Result<(), Error> {
-    use bacnet_encoding::primitives::decode_application_value;
-    use bacnet_services::list_manipulation::ListElementRequest;
+    handle_list_element_observed(db, service_data, true, |_, _, _| {})
+}
 
+enum ListEdits {
+    Values(Vec<PropertyValue>),
+    Destinations(Vec<BACnetDestination>),
+}
+
+/// Decode once and observe only executable requests. The callback borrows the
+/// pre-image already needed by execution; it never causes a second property read.
+/// Lookup/read errors keep their original precedence over element decode errors.
+pub(crate) fn handle_list_element_observed(
+    db: &mut ObjectDatabase,
+    service_data: &[u8],
+    remove: bool,
+    mut before: impl FnMut(&ObjectDatabase, &ListElementRequest, Option<&PropertyValue>),
+) -> Result<(), Error> {
     let request = ListElementRequest::decode(service_data)?;
 
-    let object = db
-        .get_mut(&request.object_identifier)
+    let current = db
+        .get(&request.object_identifier)
         .ok_or(Error::Protocol {
             class: ErrorClass::OBJECT.to_raw() as u32,
             code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
-        })?;
-
-    let current =
-        object.read_property(request.property_identifier, request.property_array_index)?;
-    if let PropertyValue::ApplicationData(bytes) = &current {
-        return framed_destination_list_edit(
-            object,
+        })
+        .and_then(|object| {
+            object.read_property(request.property_identifier, request.property_array_index)
+        });
+    // A missing/unreadable NotificationClass Recipient_List still has a known
+    // framed datatype. For readable properties, retain the existing shape-based
+    // execution choice, including the strict handling of ApplicationData.
+    let framed = matches!(&current, Ok(PropertyValue::ApplicationData(_)))
+        || (current.is_err()
+            && request.object_identifier.object_type() == ObjectType::NOTIFICATION_CLASS
+            && request.property_identifier == PropertyIdentifier::RECIPIENT_LIST);
+    let edits = if framed {
+        decode_destination_list(&request.list_of_elements).map(ListEdits::Destinations)
+    } else {
+        let mut values = Vec::new();
+        let mut offset = 0;
+        let decode = || -> Result<Vec<PropertyValue>, Error> {
+            while offset < request.list_of_elements.len() {
+                let (value, next) = decode_application_value(&request.list_of_elements, offset)?;
+                if current.is_ok() {
+                    values.push(value);
+                }
+                offset = next;
+            }
+            Ok(values)
+        };
+        decode().map(ListEdits::Values)
+    };
+    let current = match current {
+        Ok(current) => current,
+        Err(error) => {
+            if edits.is_ok() {
+                before(db, &request, None);
+            }
+            return Err(error);
+        }
+    };
+    let edits = edits.map_err(|_| invalid_data_type())?;
+    let value = match edits {
+        ListEdits::Destinations(edits) => {
+            let PropertyValue::ApplicationData(bytes) = &current else {
+                unreachable!()
+            };
+            // Decode BOTH lists before observation or mutation. A malformed
+            // stored frame must not be treated as an empty list on removal.
+            let mut destinations =
+                decode_destination_list(bytes).map_err(|_| invalid_data_type())?;
+            before(db, &request, Some(&current));
+            if remove {
+                destinations.retain(|d| !edits.contains(d));
+            } else {
+                destinations.extend(edits);
+            }
+            let mut bytes = BytesMut::new();
+            bacnet_encoding::constructed::encode_destination_list(&mut bytes, &destinations);
+            PropertyValue::ApplicationData(bytes.to_vec())
+        }
+        ListEdits::Values(edits) => {
+            before(db, &request, Some(&current));
+            let mut items = match current {
+                PropertyValue::List(items) => items,
+                _ => Vec::new(),
+            };
+            if remove {
+                items.retain(|item| !edits.contains(item));
+            } else {
+                items.extend(edits);
+            }
+            PropertyValue::List(items)
+        }
+    };
+    db.get_mut(&request.object_identifier)
+        .expect("readable object")
+        .write_property(
             request.property_identifier,
             request.property_array_index,
-            bytes,
-            &request.list_of_elements,
-            true,
-        );
-    }
-    let mut items = match current {
-        PropertyValue::List(items) => items,
-        _ => Vec::new(),
-    };
-
-    let mut to_remove = Vec::new();
-    let mut offset = 0;
-    let data = &request.list_of_elements;
-    while offset < data.len() {
-        let (val, new_offset) =
-            decode_application_value(data, offset).map_err(|_| invalid_data_type())?;
-        to_remove.push(val);
-        offset = new_offset;
-    }
-
-    // Remove matching elements
-    items.retain(|item| !to_remove.contains(item));
-
-    object.write_property(
-        request.property_identifier,
-        request.property_array_index,
-        PropertyValue::List(items),
-        None,
-    )?;
-
-    Ok(())
+            value,
+            None,
+        )
+        .map_err(|error| match error {
+            // Preserve AddListElement's existing Clause 15.1 resource mapping.
+            Error::Protocol { class, code }
+                if !remove
+                    && class == ErrorClass::RESOURCES.to_raw() as u32
+                    && code == ErrorCode::NO_SPACE_TO_WRITE_PROPERTY.to_raw() as u32 =>
+            {
+                Error::Protocol {
+                    class,
+                    code: ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32,
+                }
+            }
+            other => other,
+        })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use bacnet_objects::multistate::MultiStateInputObject;
+    use bacnet_objects::traits::BACnetObject;
     use bacnet_services::list_manipulation::ListElementRequest;
     use bacnet_types::enums::ObjectType;
     use bytes::BytesMut;

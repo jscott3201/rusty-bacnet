@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Bounded target WRITE/CREATE/DELETE Audit Reporter (RB-21a/b/c/d, Refs #345):** Rust servers can
+- **Bounded target WRITE/CREATE/DELETE Audit Reporter (RB-21a/b/c/d/e, Refs #345):** Rust servers can
   select one locally configured Reporter and explicitly bound unicast Device
   recipient. Successful inbound WriteProperty and each committed WPM prefix
   element produce separate immediate-send notifications after authorization and
@@ -42,6 +42,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removal through the captured instance-owned delivery state; later operations
   are silent while that configured Reporter is absent. No createability or
   deletability expansion is included.
+  RB-21e adds AddListElement/RemoveListElement successes and authorized execution
+  failures as WRITE records after complete element/framed decoding. Records carry
+  object/property/requested index, no priority, the raw requested delta as
+  Target_Value and the known pre-mutation Current_Value (non-empty, structurally
+  valid values up to 32 encoded octets only; no wrapping or truncation). Successful
+  no-op removals still report once; duplicate additions and existing responses,
+  mutation atomicity, framing, caps, and event behavior are unchanged. Non-Present_Value
+  lists pass AUDIT_CONFIG; priority filtering does not apply. AtomicWriteFile remains
+  unreported and inbound WriteGroup remains unsupported by design, so complete
+  WRITE coverage is not claimed.
   Confirmed delivery uses the existing invoke/transaction owner;
   unconfirmed delivery ends at transport send. An absent or invalid selected
   Reporter rejects server startup. For an existing Reporter, Reliability and its

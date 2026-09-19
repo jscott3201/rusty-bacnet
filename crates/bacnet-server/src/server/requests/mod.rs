@@ -313,10 +313,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 mutation.atomic_write_file::<T>(db).await
             }
             s if s == ConfirmedServiceChoice::ADD_LIST_ELEMENT => {
-                mutation.add_list_element::<T>(db).await
+                mutation.add_list_element::<T>(db, &mut audit).await
             }
             s if s == ConfirmedServiceChoice::REMOVE_LIST_ELEMENT => {
-                mutation.remove_list_element::<T>(db).await
+                mutation.remove_list_element::<T>(db, &mut audit).await
             }
             s if s == ConfirmedServiceChoice::GET_ALARM_SUMMARY => {
                 let db = db.read().await;
