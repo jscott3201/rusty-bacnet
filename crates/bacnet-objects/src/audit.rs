@@ -645,7 +645,7 @@ impl AuditReporterObject {
 
     /// Configure the optional Monitored_Objects array locally (never over BACnet).
     ///
-    /// `None` removes the property and preserves catch-all target-WRITE behavior.
+    /// `None` removes the property and preserves catch-all target reporting.
     /// `Some(vec![])` or all NULL entries selects no ordinary targets. Object
     /// identifiers match exactly; object types match every instance of that type.
     /// Duplicates do not cause duplicate reports. Enabled external Reporter writes
@@ -665,6 +665,33 @@ impl AuditReporterObject {
                     BACnetObjectSelector::ObjectType(kind) => *kind == target.object_type(),
                 })
             })
+    }
+
+    /// Select a failed by-type CREATE before a representable OID was assigned.
+    /// Exact identifiers cannot match an unknown identity; no sentinel is used.
+    #[doc(hidden)]
+    pub fn monitors_unassigned_create_internal(&self, kind: ObjectType) -> bool {
+        self.monitored_objects.as_ref().is_none_or(|selectors| {
+            selectors.iter().any(|selector| {
+                matches!(selector, BACnetObjectSelector::ObjectType(selected) if *selected == kind)
+            })
+        })
+    }
+
+    /// Lifecycle operations are configuration operations, never priority filtered.
+    /// Unlike Reporter property writes, they require their own operation bit.
+    #[doc(hidden)]
+    pub fn reports_lifecycle_internal(
+        &self,
+        operation: bacnet_types::enums::AuditOperation,
+    ) -> bool {
+        self.audit_level != AuditLevel::NONE
+            && matches!(
+                operation,
+                bacnet_types::enums::AuditOperation::CREATE
+                    | bacnet_types::enums::AuditOperation::DELETE
+            )
+            && self.auditable_operations.contains(operation)
     }
 
     /// Reporter-level filter for the immediate target-WRITE profile.
@@ -701,7 +728,7 @@ impl AuditReporterObject {
         Arc::clone(&self.status)
     }
 
-    /// Delivery mode sampled at the successful write boundary.
+    /// Delivery mode sampled at the observed mutation boundary.
     #[doc(hidden)]
     pub fn confirmed_internal(&self) -> bool {
         self.issue_confirmed_notifications

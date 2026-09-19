@@ -284,6 +284,7 @@ impl Request<'_> {
         &self,
         db: &Arc<RwLock<ObjectDatabase>>,
         mut ack_buf: BytesMut,
+        audit: &mut super::super::audit_reporter::WriteAudit<'_, T>,
     ) -> Apdu {
         if let Err(error) = self.authorize(|| {
             CreateObjectRequest::decode(&self.req.service_request).map(MutationTarget::CreateObject)
@@ -292,7 +293,31 @@ impl Request<'_> {
         }
         let result = {
             let mut db = db.write().await;
-            handlers::handle_create_object(&mut db, &self.req.service_request, &mut ack_buf)
+            let mut target = None;
+            let result = handlers::handle_create_object_observed(
+                &mut db,
+                &self.req.service_request,
+                &mut ack_buf,
+                &mut target,
+            );
+            // Decode failures are not execution outcomes. No await separates the
+            // completed mutation (including rollback) from audit admission.
+            if let Ok(request) = CreateObjectRequest::decode(&self.req.service_request) {
+                let kind = match request.object_specifier {
+                    bacnet_services::object_mgmt::ObjectSpecifier::Type(kind) => kind,
+                    bacnet_services::object_mgmt::ObjectSpecifier::Identifier(oid) => {
+                        oid.object_type()
+                    }
+                };
+                audit.before_lifecycle(
+                    &db,
+                    bacnet_types::enums::AuditOperation::CREATE,
+                    target,
+                    kind,
+                );
+                audit.lifecycle_completed(&mut db, &result);
+            }
+            result
         };
         match result {
             Ok(()) => self.complex_ack(ack_buf),
@@ -304,6 +329,7 @@ impl Request<'_> {
         &self,
         db: &Arc<RwLock<ObjectDatabase>>,
         cov_table: &Arc<RwLock<CovSubscriptionTable>>,
+        audit: &mut super::super::audit_reporter::WriteAudit<'_, T>,
     ) -> Apdu {
         if let Err(error) = self.authorize(|| {
             DeleteObjectRequest::decode(&self.req.service_request).map(MutationTarget::DeleteObject)
@@ -315,7 +341,27 @@ impl Request<'_> {
             .map(|r| r.object_identifier);
         let result = {
             let mut db = db.write().await;
-            handlers::handle_delete_object(&mut db, &self.req.service_request)
+            let removed_status = deleted_oid.and_then(|oid| {
+                db.get(&oid)
+                    .and_then(|object| object.audit_reporter_internal())
+                    .map(|reporter| reporter.status_internal())
+            });
+            if let Some(oid) = deleted_oid {
+                audit.before_lifecycle(
+                    &db,
+                    bacnet_types::enums::AuditOperation::DELETE,
+                    Some(oid),
+                    oid.object_type(),
+                );
+            }
+            let result = handlers::handle_delete_object(&mut db, &self.req.service_request);
+            if result.is_ok() {
+                if let Some(status) = removed_status {
+                    status.set_configured(false);
+                }
+            }
+            audit.lifecycle_completed(&mut db, &result);
+            result
         };
         match result {
             Ok(()) => {

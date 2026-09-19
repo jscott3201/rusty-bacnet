@@ -249,10 +249,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     .await
             }
             s if s == ConfirmedServiceChoice::CREATE_OBJECT => {
-                mutation.create_object::<T>(db, ack_buf).await
+                mutation.create_object::<T>(db, ack_buf, &mut audit).await
             }
             s if s == ConfirmedServiceChoice::DELETE_OBJECT => {
-                mutation.delete_object::<T>(db, cov_table).await
+                mutation.delete_object::<T>(db, cov_table, &mut audit).await
             }
             s if s == ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL => {
                 dcc::response::<T>(

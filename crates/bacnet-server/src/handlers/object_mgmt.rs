@@ -52,7 +52,22 @@ pub fn handle_create_object(
     service_data: &[u8],
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
+    handle_create_object_observed(db, service_data, buf, &mut None)
+}
+
+/// Preserve the public handler's result while exposing only the actual requested,
+/// allocated candidate, or final identity. Before by-type allocation it is absent.
+pub(crate) fn handle_create_object_observed(
+    db: &mut ObjectDatabase,
+    service_data: &[u8],
+    buf: &mut BytesMut,
+    target: &mut Option<ObjectIdentifier>,
+) -> Result<(), Error> {
+    *target = None;
     let request = CreateObjectRequest::decode(service_data)?;
+    if let ObjectSpecifier::Identifier(oid) = request.object_specifier {
+        *target = Some(oid);
+    }
 
     const MAX_OBJECTS: usize = 10_000;
     if db.len() >= MAX_OBJECTS {
@@ -88,6 +103,11 @@ pub fn handle_create_object(
         }
     };
 
+    // Unsupported extensible types need not fit an ObjectIdentifier. Do not
+    // truncate them or manufacture an instance when allocation did not occur.
+    *target = (object_type.to_raw() <= 1023)
+        .then(|| ObjectIdentifier::new(object_type, instance).ok())
+        .flatten();
     let name = format!("{:?}-{}", object_type, instance);
 
     let object: Box<dyn bacnet_objects::traits::BACnetObject> =
@@ -131,6 +151,7 @@ pub fn handle_create_object(
         };
 
     let created_oid = object.object_identifier();
+    *target = Some(created_oid);
     db.add(object)?;
 
     // Apply initial values; on failure, remove the created object.

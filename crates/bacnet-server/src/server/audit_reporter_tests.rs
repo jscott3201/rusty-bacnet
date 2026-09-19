@@ -28,6 +28,9 @@ mod selection;
 #[path = "audit_reporter_property_tests.rs"]
 mod selection_properties;
 
+#[path = "audit_reporter_lifecycle_tests.rs"]
+mod lifecycle;
+
 #[tokio::test]
 async fn audit_reporter_wp_emits_one_success_after_commit() {
     let mut fixture = server(reporter()).await;
