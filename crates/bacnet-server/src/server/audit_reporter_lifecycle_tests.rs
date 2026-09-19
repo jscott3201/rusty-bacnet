@@ -175,6 +175,75 @@ async fn audit_reporter_create_delete_success_uses_final_identity_without_initia
 }
 
 #[tokio::test]
+async fn audit_reporter_create_late_initial_value_decode_failure_is_silent_and_rolls_back() {
+    let candidate = oid(ObjectType::BINARY_VALUE, 3);
+    for specifier in [
+        ObjectSpecifier::Type(ObjectType::BINARY_VALUE),
+        ObjectSpecifier::Identifier(candidate),
+    ] {
+        let mut fixture = server(lifecycle_reporter()).await;
+        let initial_count = fixture.server.db.read().await.len();
+        let data = create(
+            specifier,
+            vec![
+                BACnetPropertyValue {
+                    property_identifier: PropertyIdentifier::OBJECT_NAME,
+                    property_array_index: None,
+                    value: vec![0x72, 0, b'x'],
+                    priority: None,
+                },
+                BACnetPropertyValue {
+                    property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                    property_array_index: None,
+                    value: vec![0xd1, 0x00], // Framed, but not a supported application tag.
+                    priority: None,
+                },
+            ],
+        );
+        // The service parser retains these bytes; application-value decoding is
+        // deferred until after creation and the preceding Object_Name write.
+        let decoded = CreateObjectRequest::decode(&data).unwrap();
+        assert!(matches!(
+            bacnet_encoding::primitives::decode_application_value(
+                &decoded.list_of_initial_values[1].value,
+                0
+            ),
+            Err(Error::Decoding { .. })
+        ));
+        let response = dispatch(&fixture.server, ConfirmedServiceChoice::CREATE_OBJECT, data).await;
+        let Apdu::Error(error) = response else {
+            panic!("{response:?}")
+        };
+        assert_eq!(error.invoke_id, 77);
+        assert_eq!(error.service_choice, ConfirmedServiceChoice::CREATE_OBJECT);
+        assert_eq!(
+            (error.error_class, error.error_code),
+            (ErrorClass::SERVICES, ErrorCode::OTHER)
+        );
+        assert!(error.error_data.is_empty());
+        {
+            let db = fixture.server.db.read().await;
+            assert_eq!(db.len(), initial_count);
+            assert!(db.get(&candidate).is_none());
+            assert!(!db
+                .find_by_type(ObjectType::BINARY_VALUE)
+                .contains(&candidate));
+            // Use a different OID: a stale name-index entry for the rolled-back
+            // candidate must not look like a successful same-owner name check.
+            let other = oid(ObjectType::BINARY_VALUE, 4);
+            assert!(db.check_name_available(&other, "x").is_ok());
+            assert!(db
+                .check_name_available(&other, &format!("{:?}-3", ObjectType::BINARY_VALUE))
+                .is_ok());
+        }
+        settle().await;
+        assert!(notifications(&fixture.transport.sent).is_empty());
+        fixture.server.stop().await.unwrap();
+        assert!(notifications(&fixture.transport.sent).is_empty());
+    }
+}
+
+#[tokio::test]
 async fn audit_reporter_lifecycle_execution_errors_preserve_results_and_create_rollback() {
     let mut fixture = server(lifecycle_reporter()).await;
     let candidate = oid(ObjectType::BINARY_VALUE, 3);
