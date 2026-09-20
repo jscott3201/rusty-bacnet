@@ -11,12 +11,19 @@ impl BACnetServer {
         if let Some(sink) = audit_notification_sink {
             sink.validate(&pending)?;
         }
+        let audit_reporter = self.audit_reporter.clone();
+        if let Some(profile) = &audit_reporter {
+            audit_configuration::pending_audit_reporter_index(&pending, profile.reporter)?;
+        }
         for object in pending.iter() {
             if object.audit_log_forwarding_internal().is_some() {
                 audit_configuration::pending_audit_log_index(&pending, object.object_identifier())?;
             }
         }
         let mut builder = server::BACnetServer::generic_builder();
+        if let Some(profile) = audit_reporter {
+            builder = builder.audit_reporter(profile);
+        }
         for binding in self.device_bindings.values() {
             builder = builder
                 .device_binding(binding.clone())

@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Standalone Python static target Audit Reporter (RB-23c, Refs #345):**
+  Add pre-start `configure_audit_reporter(instance, *, recipient_device_instance,
+  audit_level, auditable_operations, issue_confirmed_notifications)`; unchanged
+  `add_audit_reporter()` alone stays inert. The first valid call fixes the Reporter
+  identity; repeated calls replace that instance's settings and recipient only.
+  Strict identifiers, level literals, full-u64 operation masks and actual booleans
+  validate before mutation. Configuration freezes at startup ownership transfer,
+  including startup in flight and after stop. Existing direct B/IP bindings resolve
+  the recipient; an unresolved recipient permits startup and exposes
+  CONFIGURATION_ERROR on an enabled Reporter.
+  Catch-all/all-priority defaults and existing Rust target sources, bounded delivery,
+  health and joined shutdown are reused unchanged. Installed-extension loopback
+  tests cover actual public writes, confirmed/unconfirmed receipt/query, suppression,
+  invalid-call atomicity and lifecycle behavior. See
+  [Python static Reporter](docs/python-api.md#static-target-audit-reporter).
+  This supersedes prior active-Python-Reporter exclusions only for this static
+  target-side subset: no other destinations, source-side/local-write production,
+  dynamic/monitored-object/priority API, retries/durable outbox, full Reporter parity,
+  Audit/BIBB/BTL/certification, independent interop or #345 closure is claimed.
+
 - **Standalone Python direct B/IP Audit Log parent forwarding (RB-23b, Refs #345):**
   `BACnetServer.add_device_binding(device_instance, address)` reuses the existing
   address parser but accepts only `transport="bip"` servers and six-byte B/IP

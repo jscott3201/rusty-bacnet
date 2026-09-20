@@ -1,8 +1,9 @@
 use super::*;
 
-use bacnet_types::enums::ObjectType;
+use bacnet_types::bitstring::AuditOperationFlags;
+use bacnet_types::enums::{AuditLevel, ObjectType};
 use bacnet_types::primitives::ObjectIdentifier;
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::types::{PyBool, PyInt};
 
 fn instance_identifier(
@@ -50,6 +51,34 @@ pub(super) fn pending_audit_log_index(
     Ok(index)
 }
 
+pub(super) fn pending_audit_reporter_index(
+    objects: &[Box<dyn BACnetObject + Send>],
+    object_id: ObjectIdentifier,
+) -> PyResult<usize> {
+    let mut matches = objects
+        .iter()
+        .enumerate()
+        .filter(|(_, object)| object.object_identifier() == object_id);
+    let (index, object) = matches.next().ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "no pending Audit Reporter object with instance {}",
+            object_id.instance_number()
+        ))
+    })?;
+    if matches.next().is_some() {
+        return Err(PyValueError::new_err(format!(
+            "duplicate pending Audit Reporter instance {}",
+            object_id.instance_number()
+        )));
+    }
+    if object.audit_reporter_internal().is_none() {
+        return Err(PyValueError::new_err(
+            "selected object does not support the Audit Reporter capability",
+        ));
+    }
+    Ok(index)
+}
+
 /// Owned pre-start configuration; request authorization never enters Python.
 #[derive(Clone, Copy)]
 pub(super) struct AuditNotificationSink {
@@ -80,6 +109,80 @@ impl BACnetServer {
 
 #[pymethods]
 impl BACnetServer {
+    /// Configure one registered target Reporter before start(). The first valid
+    /// call fixes its identity; later calls replace settings and recipient only.
+    /// All validation precedes mutation. Monitored objects remain catch-all and
+    /// priorities remain all. A missing binding is a runtime configuration fault.
+    #[pyo3(signature = (instance, *, recipient_device_instance, audit_level, auditable_operations, issue_confirmed_notifications))]
+    fn configure_audit_reporter(
+        &mut self,
+        instance: &Bound<'_, PyAny>,
+        recipient_device_instance: &Bound<'_, PyAny>,
+        audit_level: &Bound<'_, PyAny>,
+        auditable_operations: &Bound<'_, PyAny>,
+        issue_confirmed_notifications: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let reporter = instance_identifier(instance, "instance", ObjectType::AUDIT_REPORTER)?;
+        let device = instance_identifier(
+            recipient_device_instance,
+            "recipient_device_instance",
+            ObjectType::DEVICE,
+        )?;
+        let level = match audit_level.extract::<&str>()? {
+            "none" => AuditLevel::NONE,
+            "audit_config" => AuditLevel::AUDIT_CONFIG,
+            "audit_all" => AuditLevel::AUDIT_ALL,
+            _ => {
+                return Err(PyValueError::new_err(
+                    "audit_level must be 'none', 'audit_config', or 'audit_all'",
+                ))
+            }
+        };
+        if auditable_operations.is_instance_of::<PyBool>()
+            || !auditable_operations.is_instance_of::<PyInt>()
+        {
+            return Err(PyTypeError::new_err(
+                "auditable_operations must be an integer (not bool)",
+            ));
+        }
+        let bits = auditable_operations.extract::<u64>().map_err(|_| {
+            PyValueError::new_err("auditable_operations must be in 0..=18446744073709551615")
+        })?;
+        let operations = AuditOperationFlags::from_bits(bits)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        if !issue_confirmed_notifications.is_instance_of::<PyBool>() {
+            return Err(PyTypeError::new_err(
+                "issue_confirmed_notifications must be bool",
+            ));
+        }
+        let confirmed = issue_confirmed_notifications.extract::<bool>()?;
+        if device.instance_number() == self.device_instance {
+            return Err(PyValueError::new_err("recipient Device must be remote"));
+        }
+        {
+            let mut pending = self.lock_pending()?;
+            self.check_forwarding_configuration()?;
+            let index = pending_audit_reporter_index(&pending, reporter)?;
+            if self
+                .audit_reporter
+                .as_ref()
+                .is_some_and(|selected| selected.reporter != reporter)
+            {
+                return Err(PyValueError::new_err(
+                    "cannot select a different Audit Reporter after configuration",
+                ));
+            }
+            pending[index]
+                .configure_audit_reporter_internal(level, operations, confirmed)
+                .map_err(to_py_err)?;
+        }
+        self.audit_reporter = Some(server::AuditReporterConfig {
+            reporter,
+            recipient: Some(device),
+        });
+        Ok(())
+    }
+
     /// Add one direct B/IP (IPv4) Device binding before start(), using IPv4:port or six hex bytes.
     /// Duplicate Device identifiers are rejected, never overwritten. No routed bindings.
     #[pyo3(signature = (device_instance, address))]

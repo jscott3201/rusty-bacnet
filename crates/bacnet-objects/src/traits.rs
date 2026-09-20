@@ -107,6 +107,24 @@ pub trait BACnetObject: Send + Sync {
         None
     }
 
+    /// Configure trusted local Reporter filters without a network write or downcast.
+    ///
+    /// The default opts out. Implementations must reject invalid settings before
+    /// mutation. This does not change monitored objects or command priorities;
+    /// callers own lifecycle admission and recipient selection.
+    #[doc(hidden)]
+    fn configure_audit_reporter_internal(
+        &mut self,
+        _level: bacnet_types::enums::AuditLevel,
+        _operations: bacnet_types::bitstring::AuditOperationFlags,
+        _confirmed: bool,
+    ) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
     /// The object's identifier (type + instance).
     fn object_identifier(&self) -> ObjectIdentifier;
 
