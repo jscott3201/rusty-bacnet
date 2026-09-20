@@ -17,6 +17,11 @@ use std::sync::Mutex as StdMutex;
 #[path = "audit_forwarder_edge_tests.rs"]
 mod edges;
 
+#[path = "audit_forwarder_boundary_tests.rs"]
+mod boundaries;
+#[path = "audit_forwarder_recovery_tests.rs"]
+mod recovery;
+
 #[derive(Clone, Default)]
 struct Capture {
     sent: Arc<StdMutex<Vec<Bytes>>>,
@@ -76,6 +81,31 @@ async fn fixture_with(
     binding: Option<DeviceBinding>,
     store: Arc<MemoryPersistence>,
 ) -> Fixture {
+    fixture_with_capacity(local, parent, binding, store, 16).await
+}
+
+async fn fixture_with_capacity(
+    local: u32,
+    parent: Option<BACnetDeviceObjectReference>,
+    binding: Option<DeviceBinding>,
+    store: Arc<MemoryPersistence>,
+    capacity: u32,
+) -> Fixture {
+    let mut log = AuditLogObject::new(7, "forwarder", capacity, store.clone()).unwrap();
+    log.set_member_of(parent);
+    let (server, wire) = start(local, log, binding).await;
+    Fixture {
+        server,
+        store,
+        wire,
+    }
+}
+
+async fn start(
+    local: u32,
+    log: AuditLogObject,
+    binding: Option<DeviceBinding>,
+) -> (BACnetServer<Capture>, Capture) {
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
@@ -85,8 +115,6 @@ async fn fixture_with(
         .unwrap(),
     ))
     .unwrap();
-    let mut log = AuditLogObject::new(7, "forwarder", 16, store.clone()).unwrap();
-    log.set_member_of(parent);
     db.add(Box::new(log)).unwrap();
     let wire = Capture::default();
     let server = BACnetServer::start_with_clock_mode_and_bindings(
@@ -104,11 +132,7 @@ async fn fixture_with(
     )
     .await
     .unwrap();
-    Fixture {
-        server,
-        store,
-        wire,
-    }
+    (server, wire)
 }
 
 async fn ready() -> Fixture {

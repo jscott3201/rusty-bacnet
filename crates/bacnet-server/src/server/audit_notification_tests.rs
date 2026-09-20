@@ -17,6 +17,7 @@ use super::*;
 pub(super) struct MemoryPersistence {
     pub(super) snapshot: StdMutex<Option<AuditLogSnapshot>>,
     pub(super) fail: AtomicBool,
+    pub(super) commits: std::sync::atomic::AtomicUsize,
 }
 
 impl AuditLogPersistence for MemoryPersistence {
@@ -31,6 +32,7 @@ impl AuditLogPersistence for MemoryPersistence {
             )));
         }
         *self.snapshot.lock().unwrap() = Some(snapshot.clone());
+        self.commits.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
 }

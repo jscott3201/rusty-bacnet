@@ -1,4 +1,4 @@
-# Immediate Audit Log forwarding (RB-22a)
+# Immediate Audit Log forwarding (RB-22a / RB-22b evidence)
 
 The standalone Rust server can forward accepted notification batches from its
 one explicit `ServerConfig::audit_notification_sink`. Configure that
@@ -28,6 +28,10 @@ the actual log. Configure both ends consistently.
 - Parent delivery failure never rolls back the local commit or changes the
   inbound response. Records remain queryable; successful forwarding never
   deletes them.
+- A full nonzero-capacity ring is not a storage error: normal oldest-record
+  eviction and stable sequence/Total_Record_Count advancement commit with the
+  whole accepted batch. A backend commit failure instead leaves records,
+  counter, and receipts unchanged and admits no forward.
 
 This is **best effort after commit**, not durable delivery or at-least-once
 forwarding. There is no outbox, retry queue, pending-send snapshot, backlog
@@ -35,6 +39,11 @@ replay, or catch-up when a parent recovers. Shutdown, cancellation, or restart
 can lose forwarding progress even when local receipt succeeded. Reapply the
 local parent configuration after reopening storage. Schema v2, v1 migration,
 the two-slot checksummed backend, and receipt recovery are unchanged.
+Schema v1 has **no receipt ledger**: after reopening it, a later exact historical
+request is fresh for receipt purposes. It receives an ACK and a v2 receipt on
+successful commit. If its complete record already matches, it still does not
+forward; an exact retransmission of that newly receipted request is silent,
+including after another reopen. No historical receipt is inferred from records.
 
 ## Configuration, health, and resource bounds
 
@@ -51,6 +60,12 @@ non-Audit-Log identifiers, and a direct binding to the local MAC are unusable:
 Reliability reports CONFIGURATION_ERROR and no forward is sent. No discovery
 traffic is initiated. Direct and explicitly routed unicast bindings are
 supported. A configured binding does not authenticate the peer.
+Each changed accepted batch resolves the route anew. If a valid configured route
+is present at that attempt, delivery can resume and a successful ACK can clear
+the earlier failure. Merely making a route available does not replay work or
+poll for health recovery. The recovery test uses the existing internal validated
+binding-table construction; it does not add a public dynamic-binding API or
+upgrade observed I-Am information into configured authority.
 
 Admission shares the existing server-wide 64-active Audit delivery permits.
 There is no waiting queue or per-peer forwarding history. Saturation, binding
@@ -82,6 +97,28 @@ not forward locally appended LogStatus/time-change/purge records, add
 Maximum_Send_Delay/Send_Now, delete records after forwarding, send unconfirmed
 outbound requests, support multiple parents, or expand Reporter/Python APIs.
 It is not full Audit, AR-L-A, BIBB, BTL, or issue #345 completion.
+
+## RB-22b boundary evidence
+
+These tests harden the existing policy, not a new delivery or durability profile:
+
+| Evidence | Boundary proved |
+| --- | --- |
+| `audit_forwarder_boundary_tests.rs::audit_forwarding_full_ring_evicts_atomically_without_delivery_rollback` | Capacities 1 and 2; one commit/forward at full capacity; byte preservation, survivors and counters after ACK, send failure, or ACK timeout; backend failure retains no receipt. |
+| `audit_forwarder_boundary_tests.rs::audit_forwarding_partial_batch_is_one_commit_and_one_complete_wire_request` | One item merges and another creates; one atomic commit and original whole-batch forward; all-or-nothing failure, silent exact retry after success, and different-peer receipt-only acceptance. |
+| `audit_forwarder_boundary_tests.rs::audit_forwarding_window_boundary_changes_once_and_complete_match_is_silent` and `audit/notification_tests.rs::forwarding_window_is_inclusive_at_wire_tick_and_timeout_edges` | Inclusive `2 * APDU_Timeout` matching: Time/DateTime at the boundary and ±1 hundredth (the wire resolution), plus APDU_Timeout ±1 ms at the object layer. Each changed batch attempts once; complete matches do not. |
+| `audit_forwarder_boundary_tests.rs::audit_forwarding_mixed_timestamp_variants_create_distinct_records_and_attempts` and `audit/notification_tests.rs::forwarding_mixed_timestamp_variants_never_complement_in_either_direction` | Every mixed Time/DateTime/SequenceNumber pair stays distinct in both directions. |
+| `audit_forwarder_boundary_tests.rs::audit_forwarding_zero_capacity_commits_receipt_without_forward` | Confirmed ACK and durable receipt with no retained record/forward; exact duplicate stays silent. |
+| `audit_forwarder_recovery_tests.rs::audit_forwarding_configuration_recovers_only_on_next_changed_batch` | Unresolved/observed-only configuration, no replay on route availability, next-attempt resolution and ACK-driven recovery. |
+| `audit_forwarder_recovery_tests.rs::audit_forwarding_file_v1_reopen_has_no_replay_or_historical_receipt` | Real file-backed v1 reopen, local Member_Of reapplication, no replay, fresh receipt-only acceptance, and v2 receipt recovery. The server fixture removes the empty v2 receipt ledger from an encoded file; `audit/persistence_receipt_tests.rs::forwarding_v1_reopen_reapplies_member_of_without_rewriting_snapshot` also exercises the existing v1 encoder seam directly. |
+| `audit_forwarder_recovery_tests.rs::audit_forwarding_old_instance_completion_and_cancellation_cannot_update_replacement` | Old-instance success, rejection, deadline and joined shutdown cannot update replacement health; no durable mutation or detached work. |
+
+Server test paths are under `crates/bacnet-server/src/server/`; object test paths
+are under `crates/bacnet-objects/src/`. Existing `audit_forwarder_edge_tests.rs`
+retains the isolated complete-record A→B→A proof, and `audit_forwarder_tests.rs`
+retains shared-capacity, absolute-deadline, joined-shutdown and no-DB-lock-during-I/O
+evidence. These are controlled transport and file-reopen tests, not an independent
+peer interoperability, distributed-cycle, or power-loss certification.
 
 Source: licensed ANSI/ASHRAE 135-2020, Clause 12.64 (PDF pp. 626-630, printed
 624-628) and Clauses 19.6.7.2-.3 (PDF pp. 827-828, printed 825-826), inspected

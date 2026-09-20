@@ -15,6 +15,35 @@ use super::{
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+#[test]
+fn forwarding_v1_reopen_reapplies_member_of_without_rewriting_snapshot() {
+    use crate::traits::BACnetObject;
+    use std::sync::Arc;
+
+    let base = temp_base("forwarding");
+    let storage = Arc::new(FileAuditLogPersistence::new(&base).unwrap());
+    let expected = snapshot_with_record();
+    let bytes = encode_snapshot_v1(&expected).unwrap();
+    std::fs::write(&storage.slot_paths()[1], &bytes).unwrap();
+    let mut log = super::AuditLogObject::new(1, "v1", 1, storage.clone()).unwrap();
+    assert!(log.audit_log_forwarding_internal().is_none());
+    let parent = bacnet_types::constructed::BACnetDeviceObjectReference {
+        device_identifier: Some(ObjectIdentifier::new(ObjectType::DEVICE, 20).unwrap()),
+        object_identifier: ObjectIdentifier::new(ObjectType::AUDIT_LOG, 7).unwrap(),
+    };
+    log.set_member_of(Some(parent.clone()));
+    assert_eq!(
+        log.audit_log_forwarding_internal().unwrap().parent(),
+        &parent
+    );
+    assert_eq!(log.current_snapshot(), expected);
+    assert!(log.current_snapshot().completed_receipts.is_empty());
+    assert_eq!(storage.load(oid()).unwrap().unwrap(), expected);
+    assert_eq!(std::fs::read(&storage.slot_paths()[1]).unwrap(), bytes);
+    assert!(!storage.slot_paths()[0].exists());
+    cleanup(&base);
+}
+
 fn temp_base(label: &str) -> PathBuf {
     let serial = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!(
