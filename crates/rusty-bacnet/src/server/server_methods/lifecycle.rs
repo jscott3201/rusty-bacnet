@@ -11,6 +11,17 @@ impl BACnetServer {
         if let Some(sink) = audit_notification_sink {
             sink.validate(&pending)?;
         }
+        for object in pending.iter() {
+            if object.audit_log_forwarding_internal().is_some() {
+                audit_configuration::pending_audit_log_index(&pending, object.object_identifier())?;
+            }
+        }
+        let mut builder = server::BACnetServer::generic_builder();
+        for binding in self.device_bindings.values() {
+            builder = builder
+                .device_binding(binding.clone())
+                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        }
         // Local TLS failures must leave pending registrations available for retry.
         // Load on each start, not in the constructor, so repaired files are used.
         let sc_tls_config = if self.transport_type == "sc" {
@@ -69,6 +80,8 @@ impl BACnetServer {
         let get_event_information_budget = self.get_event_information_budget;
 
         let objects: Vec<Box<dyn BACnetObject + Send>> = pending.drain(..).collect();
+        self.forwarding_configuration_started
+            .store(true, Ordering::Release);
         drop(pending);
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -163,7 +176,7 @@ impl BACnetServer {
                 }
             };
 
-            let mut builder = server::BACnetServer::generic_builder()
+            let mut builder = builder
                 .database(db)
                 .request_admission_policy(request_admission_policy)
                 .read_property_multiple_budget(read_property_multiple_budget)

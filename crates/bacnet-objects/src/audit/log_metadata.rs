@@ -199,6 +199,38 @@ mod tests {
     }
 
     #[test]
+    fn forwarding_parent_configuration_through_object_capability_is_opt_in() {
+        use bacnet_types::constructed::BACnetDeviceObjectReference;
+        let parent = BACnetDeviceObjectReference {
+            device_identifier: Some(ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap()),
+            object_identifier: ObjectIdentifier::new(ObjectType::AUDIT_LOG, 2).unwrap(),
+        };
+        let mut object: Box<dyn BACnetObject> = Box::new(log());
+        object
+            .set_audit_log_parent_internal(parent.clone())
+            .unwrap();
+        assert_eq!(
+            object.audit_log_forwarding_internal().unwrap().parent(),
+            &parent
+        );
+        assert_eq!(
+            object.read_property(P::MEMBER_OF, None).unwrap(),
+            PropertyValue::ApplicationData(vec![0x0c, 0x02, 0, 0, 9, 0x1c, 0x0f, 0x40, 0, 2])
+        );
+        assert!(!object.is_writable_property(P::MEMBER_OF));
+
+        let mut other: Box<dyn BACnetObject> =
+            Box::new(crate::binary::BinaryValueObject::new(1, "Other").unwrap());
+        assert!(matches!(
+            other.set_audit_log_parent_internal(parent),
+            Err(Error::Protocol { class, code })
+                if class == ErrorClass::OBJECT.to_raw() as u32
+                    && code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32
+        ));
+        assert!(other.audit_log_forwarding_internal().is_none());
+    }
+
+    #[test]
     fn property_metadata_log_exact_sets_and_indexed_list() {
         let object = log();
         let all = [

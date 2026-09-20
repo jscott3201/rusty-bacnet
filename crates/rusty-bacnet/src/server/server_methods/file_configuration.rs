@@ -215,6 +215,8 @@ mod tests {
             read_range_budget: server::ReadRangeBudget::default(),
             get_event_information_budget: server::GetEventInformationBudget::default(),
             audit_notification_sink: None,
+            device_bindings: std::collections::BTreeMap::new(),
+            forwarding_configuration_started: AtomicBool::new(false),
             started: Arc::new(AtomicBool::new(false)),
             pending_objects: std::sync::Mutex::new(Vec::new()),
         }

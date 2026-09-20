@@ -806,6 +806,21 @@ pub trait BACnetObject: Send + Sync {
         None
     }
 
+    /// Set a trusted local Audit Log parent without downcasting or a second object store.
+    ///
+    /// The default opts out. This is not a network property-write capability;
+    /// callers own configuration admission, and the server still validates the route.
+    #[doc(hidden)]
+    fn set_audit_log_parent_internal(
+        &mut self,
+        _parent: bacnet_types::constructed::BACnetDeviceObjectReference,
+    ) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
     /// Mutably borrow this object's Audit notification receiver capability.
     ///
     /// The default opts out. Implementations own their persistence transaction
