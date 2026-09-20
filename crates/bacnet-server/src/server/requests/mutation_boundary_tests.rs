@@ -51,6 +51,7 @@ async fn deny_all_leaves_read_discovery_and_password_authorized_dcc_working() {
         &Arc::new(RwLock::new(DeviceBindingTable::new())),
         &Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), Some(1))),
         &Arc::new(TimeSyncLimiter::new(TimeSyncPolicy::default())),
+        &NotificationTransactions::new(),
         UnconfirmedRequestPdu {
             service_choice: UnconfirmedServiceChoice::WHO_IS,
             service_request: Bytes::new(),

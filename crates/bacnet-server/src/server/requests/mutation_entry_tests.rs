@@ -489,6 +489,7 @@ async fn read_only_controls_unaffected_under_deny_all() {
             &Arc::new(RwLock::new(DeviceBindingTable::new())),
             &Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), Some(1))),
             &Arc::new(TimeSyncLimiter::new(TimeSyncPolicy::default())),
+            &NotificationTransactions::new(),
             UnconfirmedRequestPdu {
                 service_choice: service,
                 service_request: Bytes::new(),

@@ -63,3 +63,27 @@ fn pics_audit_log_property_metadata_is_exact() {
         required.as_ref()
     );
 }
+
+#[test]
+fn pics_audit_log_forwarding_metadata_is_optional_and_read_only() {
+    let mut object =
+        AuditLogObject::new(7, "AL-7", 4, Arc::new(MemoryPersistence::default())).unwrap();
+    object.set_member_of(Some(
+        bacnet_types::constructed::BACnetDeviceObjectReference {
+            device_identifier: Some(ObjectIdentifier::new(ObjectType::DEVICE, 20).unwrap()),
+            object_identifier: ObjectIdentifier::new(ObjectType::AUDIT_LOG, 8).unwrap(),
+        },
+    ));
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(object)).unwrap();
+    let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+    for p in [
+        P::MEMBER_OF,
+        P::DELETE_ON_FORWARD,
+        P::ISSUE_CONFIRMED_NOTIFICATIONS,
+        P::RELIABILITY,
+    ] {
+        let row = property_support(&pics, ObjectType::AUDIT_LOG, p);
+        assert!(row.access.readable && row.access.optional && !row.access.writable);
+    }
+}

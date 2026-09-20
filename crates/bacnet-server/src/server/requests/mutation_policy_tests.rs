@@ -459,6 +459,7 @@ async fn mutation_deny_all_does_not_gate_reads_discovery_or_dcc() {
         &server.device_bindings,
         &server.discovery_limiter,
         &server.time_sync_limiter,
+        &server.notification_transactions,
         UnconfirmedRequestPdu {
             service_choice: UnconfirmedServiceChoice::WHO_IS,
             service_request: Bytes::new(),

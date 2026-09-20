@@ -25,6 +25,42 @@ fn audit_log_object() -> AuditLogObject {
 }
 
 #[test]
+fn rpm_audit_log_forwarding_optional_metadata_and_member_of_wire() {
+    let mut object = audit_log_object();
+    object.set_member_of(Some(
+        bacnet_types::constructed::BACnetDeviceObjectReference {
+            device_identifier: Some(ObjectIdentifier::new(ObjectType::DEVICE, 20).unwrap()),
+            object_identifier: ObjectIdentifier::new(ObjectType::AUDIT_LOG, 8).unwrap(),
+        },
+    ));
+    let oid = object.object_identifier();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(object)).unwrap();
+    assert_rpm_selector_bytes(
+        &db,
+        oid,
+        P::OPTIONAL,
+        &[
+            P::DESCRIPTION,
+            P::MEMBER_OF,
+            P::DELETE_ON_FORWARD,
+            P::ISSUE_CONFIRMED_NOTIFICATIONS,
+            P::RELIABILITY,
+        ],
+    );
+    let mut value = BytesMut::new();
+    bacnet_encoding::primitives::encode_property_value(
+        &mut value,
+        &db.get(&oid)
+            .unwrap()
+            .read_property(P::MEMBER_OF, None)
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(&value[..], &[0x0c, 0x02, 0, 0, 20, 0x1c, 0x0f, 0x40, 0, 8]);
+}
+
+#[test]
 fn rpm_audit_log_metadata_selectors_preserve_bytes_and_budgets() {
     // Independent fixtures preserve the legacy projection order; the REQUIRED
     // set replaces the universal four with the Clause 12.64 R/W rows.

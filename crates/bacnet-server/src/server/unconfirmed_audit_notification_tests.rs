@@ -79,6 +79,7 @@ async fn dispatch_unconfirmed(
         &bindings,
         &discovery_limiter,
         &Arc::new(TimeSyncLimiter::new(TimeSyncPolicy::default())),
+        &NotificationTransactions::new(),
         UnconfirmedRequestPdu {
             service_choice: UnconfirmedServiceChoice::UNCONFIRMED_AUDIT_NOTIFICATION,
             service_request,

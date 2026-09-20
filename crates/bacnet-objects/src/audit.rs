@@ -21,7 +21,9 @@ use crate::common::read_property_list_property;
 use crate::property_metadata::PropertyMetadata;
 use crate::traits::{BACnetObject, WritePropertyRollback};
 
+mod forwarding;
 mod log_metadata;
+pub use forwarding::AuditLogForwarding;
 mod notification;
 mod persistence;
 mod receipt;
@@ -83,6 +85,7 @@ pub struct AuditLogObject {
     completed_receipts: Vec<CompletedAuditReceipt>,
     total_record_count: u64,
     status_flags: StatusFlags,
+    forwarding: Option<Arc<AuditLogForwarding>>,
     generation: u64,
     persistence: Arc<dyn AuditLogPersistence>,
     clock: Option<Arc<dyn ClockReader>>,
@@ -145,6 +148,7 @@ impl AuditLogObject {
             completed_receipts: snapshot.completed_receipts,
             total_record_count: snapshot.total_record_count,
             status_flags: StatusFlags::empty(),
+            forwarding: None,
             generation: snapshot.generation,
             persistence,
             clock: None,
@@ -450,10 +454,45 @@ impl BACnetObject for AuditLogObject {
             p if p == PropertyIdentifier::TOTAL_RECORD_COUNT => {
                 Ok(PropertyValue::Unsigned(self.total_record_count))
             }
-            p if p == PropertyIdentifier::STATUS_FLAGS => Ok(PropertyValue::BitString {
-                unused_bits: 4,
-                data: vec![self.status_flags.bits() << 4],
-            }),
+            p if p == PropertyIdentifier::STATUS_FLAGS => {
+                let mut flags = self.status_flags;
+                flags.set(
+                    StatusFlags::FAULT,
+                    self.forwarding.as_ref().is_some_and(|forwarding| {
+                        forwarding.status().reliability() != Reliability::NO_FAULT_DETECTED
+                    }),
+                );
+                Ok(PropertyValue::BitString {
+                    unused_bits: 4,
+                    data: vec![flags.bits() << 4],
+                })
+            }
+            p if self.forwarding.is_some() && p == PropertyIdentifier::MEMBER_OF => {
+                let mut encoded = bytes::BytesMut::new();
+                bacnet_encoding::constructed::encode_device_object_reference(
+                    &mut encoded,
+                    self.forwarding.as_ref().unwrap().parent(),
+                );
+                Ok(PropertyValue::ApplicationData(encoded.to_vec()))
+            }
+            p if self.forwarding.is_some() && p == PropertyIdentifier::DELETE_ON_FORWARD => {
+                Ok(PropertyValue::Boolean(false))
+            }
+            p if self.forwarding.is_some()
+                && p == PropertyIdentifier::ISSUE_CONFIRMED_NOTIFICATIONS =>
+            {
+                Ok(PropertyValue::Boolean(true))
+            }
+            p if self.forwarding.is_some() && p == PropertyIdentifier::RELIABILITY => {
+                Ok(PropertyValue::Enumerated(
+                    self.forwarding
+                        .as_ref()
+                        .unwrap()
+                        .status()
+                        .reliability()
+                        .to_raw(),
+                ))
+            }
             p if p == PropertyIdentifier::EVENT_STATE => Ok(PropertyValue::Enumerated(0)),
             p if p == PropertyIdentifier::PROPERTY_LIST => {
                 read_property_list_property(&self.property_list(), array_index)
@@ -537,6 +576,10 @@ impl BACnetObject for AuditLogObject {
 
     fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {
         Some(self)
+    }
+
+    fn audit_log_forwarding_internal(&self) -> Option<Arc<AuditLogForwarding>> {
+        self.forwarding.clone()
     }
 
     fn audit_log_notification_sink_internal(

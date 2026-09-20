@@ -20,6 +20,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let device_bindings =
             DeviceBindingTable::from_configured(configured_device_bindings, is_broadcast)?;
         super::audit_reporter::initialize(&db, &config, &device_bindings, is_broadcast)?;
+        super::audit_forwarder::initialize(&db, &config, &device_bindings, &transport);
         let transport_max = transport.max_apdu_length() as u32;
         config.max_apdu_length = config.max_apdu_length.min(transport_max);
         let max_apdu = u16::try_from(config.max_apdu_length).map_err(|_| {

@@ -1,3 +1,4 @@
+use super::super::audit_forwarder::ForwardBatch;
 use super::*;
 
 mod durable_receipt;
@@ -11,7 +12,13 @@ pub(super) async fn receive_confirmed_audit_notification(
     source_network: Option<&NpduAddress>,
     provenance: bacnet_transport::port::TransportProvenance,
     confirmed: &bacnet_encoding::apdu::ConfirmedRequest,
-) -> Result<bacnet_objects::audit::ConfirmedAuditNotificationOutcome, Error> {
+) -> Result<
+    (
+        bacnet_objects::audit::ConfirmedAuditNotificationOutcome,
+        Option<ForwardBatch>,
+    ),
+    Error,
+> {
     validate_payload_size("ConfirmedAuditNotification", &confirmed.service_request)?;
     let request = decode_request("ConfirmedAuditNotification", &confirmed.service_request)?;
     let sink = config.audit_notification_sink.ok_or_else(request_denied)?;
@@ -26,7 +33,7 @@ pub(super) async fn receive_confirmed_audit_notification(
             receipt_identity.key(),
             precheck_at,
         )? {
-            return Ok(bacnet_objects::audit::ConfirmedAuditNotificationOutcome::Duplicate);
+            return Ok((Duplicate, None));
         }
     }
 
@@ -51,13 +58,17 @@ pub(super) async fn receive_confirmed_audit_notification(
         receipt_identity.key().to_vec(),
         current_unix_millis()?,
     )?;
-    handlers::handle_confirmed_audit_notification_with_receipt(&mut db, sink, &request, receipt)
+    let (outcome, changed) = handlers::handle_confirmed_audit_notification_with_receipt(
+        &mut db, sink, &request, receipt,
+    )?;
+    let forward = ForwardBatch::after_commit(&db, sink, changed, confirmed.service_request.clone());
+    Ok((outcome, forward))
 }
 
 /// Decode, authorize, and durably store one unconfirmed Audit request.
 ///
-/// The caller intentionally discards the result because an unconfirmed service
-/// never emits a response APDU.
+/// The caller may start post-commit forwarding, but this unconfirmed service
+/// never emits a response APDU, including when storage or forwarding fails.
 pub(super) async fn receive_unconfirmed_audit_notification(
     db: &Arc<RwLock<ObjectDatabase>>,
     config: &ServerConfig,
@@ -65,7 +76,7 @@ pub(super) async fn receive_unconfirmed_audit_notification(
     source_network: Option<&NpduAddress>,
     provenance: bacnet_transport::port::TransportProvenance,
     service_request: &Bytes,
-) -> Result<(), Error> {
+) -> Result<Option<ForwardBatch>, Error> {
     validate_payload_size("UnconfirmedAuditNotification", service_request)?;
     decode_authorize_and_store(
         db,
@@ -104,7 +115,7 @@ async fn decode_authorize_and_store<F>(
     service: &str,
     service_request: &Bytes,
     authorize: F,
-) -> Result<(), Error>
+) -> Result<Option<ForwardBatch>, Error>
 where
     F: FnOnce(ObjectIdentifier, &bacnet_services::audit::AuditNotificationRequest) -> bool,
 {
@@ -115,7 +126,13 @@ where
     }
 
     let mut db = db.write().await;
-    handlers::handle_audit_notification(&mut db, sink, &request)
+    let changed = handlers::handle_audit_notification_with_change(&mut db, sink, &request)?;
+    Ok(ForwardBatch::after_commit(
+        &db,
+        sink,
+        changed,
+        service_request.clone(),
+    ))
 }
 
 fn decode_request(
