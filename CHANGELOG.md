@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Bounded target WRITE/CREATE/DELETE Audit Reporter (RB-21a/b/c/d/e/f, Refs #345):** Rust servers can
+- **Bounded target WRITE/CREATE/DELETE Audit Reporter (RB-21a/b/c/d/e/f/g, Refs #345):** Rust servers can
   select one locally configured Reporter and explicitly bound unicast Device
   recipient. Successful inbound WriteProperty and each committed WPM prefix
   element produce separate immediate-send notifications after authorization and
@@ -63,6 +63,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   silent. Existing ACK positions, error precedence, access gates, storage
   atomicity and delivery ownership are unchanged. Inbound WriteGroup remains
   unsupported by design, so complete WRITE coverage is not claimed.
+  RB-21g summarizes already-selected, execution-completed records dropped by the
+  64-active delivery limit or confirmed coordinator exhaustion. When Audit_Level
+  and the AUDITING_FAILURE operation bit permit it, one owned worker coalesces a
+  memory-only saturating Unsigned count, keeps the earliest dropped timestamp,
+  and waits for admission capacity without polling or delivery retries. The
+  summary references the local Device as both source and target and omits other
+  optional fields except Current_Value (the count) and Target_Timestamp. It
+  bypasses object/priority filtering, uses the existing route and delivery mode,
+  shares the 64-active bound, and retains instance-owned health and stop cleanup.
+  Disabling the level/bit invalidates pending counts. Encoding/APDU-fit, DCC,
+  policy/decode/budget failures, send/ACK failures, unknown operation outcomes,
+  and summary failures are not counted. No ordinary-record queue, persistence,
+  restart guarantee, or shared-endpoint audit producer is added.
   Confirmed delivery uses the existing invoke/transaction owner;
   unconfirmed delivery ends at transport send. An absent or invalid selected
   Reporter rejects server startup. For an existing Reporter, Reliability and its
@@ -71,7 +84,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and omits values above 32 encoded octets; overload never rolls back a write.
   This is not full Audit Reporter support: source reporting, remaining operations,
   per-object overrides, multi-Reporter overlap/lowest-instance selection, batching,
-  AUDITING_FAILURE records, forwarding/durable delivery, the public Device
+  forwarding/durable delivery, the public Device
   Audit_Notification_Recipient model, and Python parity remain deferred. #345
   stays open; no Audit Reporting BIBB or BTL qualification is claimed.
 - Remove the tracked repository-local `.codex/` configuration and agent profiles

@@ -10,11 +10,14 @@ use bacnet_endpoint_core::coordinator::{
     Admission, AdmissionKind, AdmissionOutcome, CanonicalPeer, LeaseMetadata, LeaseOwner,
     LeaseToken, OutboundTransactionCoordinator, ReserveError,
 };
+use bacnet_objects::audit::AuditReporterStatus;
 use bacnet_types::enums::ConfirmedServiceChoice;
+use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier};
 use tokio::sync::oneshot;
 use tokio::task::{JoinError, JoinSet};
 use tokio::time::Duration;
 
+use super::event_recipient_route::ConfirmedRecipientRoute;
 use super::CovAckResult;
 
 #[cfg(test)]
@@ -60,6 +63,7 @@ pub struct NotificationTransactions {
     core: Arc<NotificationCore>,
     workers: Mutex<NotificationWorkers>,
     audit_permits: Arc<tokio::sync::Semaphore>,
+    audit_failures: Arc<Mutex<AuditFailures>>,
 }
 
 #[derive(Default)]
@@ -73,9 +77,193 @@ struct NotificationWorkers {
 struct NotificationCore {
     coordinator: Arc<OutboundTransactionCoordinator>,
     state: Mutex<NotificationState>,
+    // RB-21 producers run only in BACnetServer, which creates a private pool
+    // via new(): every capacity release passes through this adapter. The
+    // shared endpoint has no audit producer; extending it requires a
+    // coordinator-wide release signal, not this adapter-local notification.
+    released: tokio::sync::Notify,
+}
+
+pub(super) type NotificationReservation = (NotificationOperation, oneshot::Receiver<CovAckResult>);
+
+/// One server-wide coalesced batch, never an ordinary-record queue.
+pub(super) struct AuditFailureBatch {
+    pub(super) count: u64,
+    pub(super) earliest: BACnetTimeStamp,
+    pub(super) device: ObjectIdentifier,
+    pub(super) status: Arc<AuditReporterStatus>,
+    pub(super) epoch: u64,
+    pub(super) confirmed: bool,
+    pub(super) route: Arc<ConfirmedRecipientRoute>,
+    pub(super) max_apdu: u32,
+}
+
+impl AuditFailureBatch {
+    pub(super) fn notification(&self) -> bacnet_types::constructed::BACnetAuditNotification {
+        use bacnet_types::constructed::{BACnetAuditNotification, BACnetRecipient};
+        let mut value = bytes::BytesMut::new();
+        bacnet_encoding::primitives::encode_app_unsigned(&mut value, self.count);
+        BACnetAuditNotification {
+            source_timestamp: None,
+            target_timestamp: Some(self.earliest.clone()),
+            source_device: BACnetRecipient::Device(self.device),
+            source_object: None,
+            operation: bacnet_types::enums::AuditOperation::AUDITING_FAILURE,
+            source_comment: None,
+            target_comment: None,
+            invoke_id: None,
+            source_user_id: None,
+            source_user_role: None,
+            target_device: BACnetRecipient::Device(self.device),
+            target_object: None,
+            target_property: None,
+            target_priority: None,
+            target_value: None,
+            current_value: Some(value.to_vec()),
+            result: None,
+        }
+    }
+
+    fn enabled(&self) -> bool {
+        self.status.auditing_failure_epoch() == Some(self.epoch)
+    }
+}
+
+#[derive(Default)]
+struct AuditFailures {
+    owned: bool,
+    pending: Option<AuditFailureBatch>,
+}
+
+/// Retains core/permit/state handles, never the JoinSet owner. Drop also covers
+/// rejected spawn, cancellation and panic; only this owner may drain batches.
+pub(super) struct AuditFailureWorker {
+    core: Arc<NotificationCore>,
+    permits: Arc<tokio::sync::Semaphore>,
+    failures: Arc<Mutex<AuditFailures>>,
+    active: bool,
+}
+
+impl AuditFailureWorker {
+    fn finish_if_empty(&mut self) -> bool {
+        let mut state = self.failures.lock().unwrap();
+        if state.pending.as_ref().is_some_and(|batch| !batch.enabled()) {
+            state.pending = None;
+        }
+        if state.pending.is_none() {
+            state.owned = false;
+            self.active = false;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(super) async fn next(
+        &mut self,
+    ) -> Option<(
+        AuditFailureBatch,
+        tokio::sync::OwnedSemaphorePermit,
+        Option<NotificationReservation>,
+    )> {
+        if self.finish_if_empty() {
+            return None;
+        }
+        let permit = Arc::clone(&self.permits).acquire_owned().await.ok()?;
+        let core = Arc::clone(&self.core);
+        loop {
+            // Register before checking capacity: releases between the failed
+            // reservation and await cannot be lost. No polling or timed retries.
+            let released = core.released.notified();
+            tokio::pin!(released);
+            released.as_mut().enable();
+            let ready = {
+                let mut state = self.failures.lock().unwrap();
+                let batch = state.pending.as_ref()?;
+                if !batch.enabled() {
+                    state.pending = None;
+                    None
+                } else {
+                    let reserved = if batch.confirmed {
+                        self.core
+                            .reserve(
+                                batch.route.canonical_peer.clone(),
+                                ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION,
+                            )
+                            .map(Some)
+                    } else {
+                        Ok(None)
+                    };
+                    match reserved {
+                        Ok(reserved) => Some((state.pending.take().unwrap(), reserved)),
+                        Err(NotificationReserveError::Coordinator(ReserveError::Exhausted)) => None,
+                        Err(_) => {
+                            let batch = state.pending.take().unwrap();
+                            batch
+                                .status
+                                .complete_delivery(batch.status.begin_delivery(), false);
+                            None
+                        }
+                    }
+                }
+            };
+            if let Some((batch, reserved)) = ready {
+                return Some((batch, permit, reserved));
+            }
+            if self.finish_if_empty() {
+                return None;
+            }
+            released.await;
+        }
+    }
+}
+
+impl Drop for AuditFailureWorker {
+    fn drop(&mut self) {
+        if self.active {
+            let mut state = self.failures.lock().unwrap();
+            state.pending = None;
+            state.owned = false;
+        }
+    }
 }
 
 impl NotificationTransactions {
+    pub(super) fn record_audit_drop(
+        &self,
+        mut batch: AuditFailureBatch,
+    ) -> Option<AuditFailureWorker> {
+        if !batch.enabled() || self.audit_permits.is_closed() {
+            return None;
+        }
+        let mut state = self.audit_failures.lock().unwrap();
+        let changed =
+            if let Some(mut previous) = state.pending.take().filter(AuditFailureBatch::enabled) {
+                previous.count = previous.count.saturating_add(batch.count);
+                batch = previous;
+                false
+            } else {
+                true
+            };
+        // Keep the earliest record's delivery context, including its instance.
+        // Aggregation must not transfer an older pending summary's completion
+        // authority to a replacement Reporter at the same object identifier.
+        state.pending = Some(batch);
+        if state.owned {
+            if changed {
+                self.core.released.notify_waiters();
+            }
+            return None;
+        }
+        state.owned = true;
+        Some(AuditFailureWorker {
+            core: Arc::clone(&self.core),
+            permits: Arc::clone(&self.audit_permits),
+            failures: Arc::clone(&self.audit_failures),
+            active: true,
+        })
+    }
+
     pub(super) fn try_admit_audit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
         Arc::clone(&self.audit_permits).try_acquire_owned().ok()
     }
@@ -94,9 +282,11 @@ impl NotificationTransactions {
                     closed: false,
                     pending: HashMap::new(),
                 }),
+                released: tokio::sync::Notify::new(),
             }),
             workers: Mutex::new(NotificationWorkers::default()),
             audit_permits: Arc::new(tokio::sync::Semaphore::new(64)),
+            audit_failures: Arc::new(Mutex::new(AuditFailures::default())),
         })
     }
 
@@ -196,6 +386,16 @@ impl NotificationTransactions {
     }
 
     #[cfg(test)]
+    pub(super) fn audit_resources(&self) -> (bool, u64, usize) {
+        let state = self.audit_failures.lock().unwrap();
+        (
+            state.owned,
+            state.pending.as_ref().map_or(0, |batch| batch.count),
+            self.audit_permits.available_permits(),
+        )
+    }
+
+    #[cfg(test)]
     pub(super) fn active_count(&self) -> usize {
         self.core.coordinator.active_count().unwrap_or(usize::MAX)
     }
@@ -232,12 +432,14 @@ impl NotificationCore {
             Ok(state) => state,
             Err(_) => {
                 let _ = self.coordinator.cancel(token);
+                self.released.notify_waiters();
                 return Err(NotificationReserveError::StatePoisoned);
             }
         };
         if state.closed {
             drop(state);
             let _ = self.coordinator.cancel(token);
+            self.released.notify_waiters();
             return Err(NotificationReserveError::Closed);
         }
         state.pending.insert(token, sender);
@@ -300,6 +502,7 @@ impl NotificationCore {
         };
 
         let _ = self.coordinator.complete(token);
+        self.released.notify_waiters();
         let _ = sender.send(result);
         true
     }
@@ -320,6 +523,7 @@ impl NotificationCore {
             drop(sender);
             let _ = self.coordinator.cancel(token);
         }
+        self.released.notify_waiters();
     }
 
     fn rearm(
@@ -346,6 +550,7 @@ impl NotificationCore {
             state.pending.remove(&token);
         }
         let _ = self.coordinator.release(token);
+        self.released.notify_waiters();
     }
 
     fn cancel(&self, token: LeaseToken) {
@@ -353,6 +558,7 @@ impl NotificationCore {
             state.pending.remove(&token);
         }
         let _ = self.coordinator.cancel(token);
+        self.released.notify_waiters();
     }
 }
 

@@ -625,12 +625,23 @@ impl AuditReporterObject {
             ));
         }
         self.audit_level = level;
+        self.update_auditing_failure_filter();
         Ok(())
     }
 
     /// Set the locally managed operation filter.
     pub fn set_auditable_operations(&mut self, operations: AuditOperationFlags) {
         self.auditable_operations = operations;
+        self.update_auditing_failure_filter();
+    }
+
+    fn update_auditing_failure_filter(&self) {
+        self.status.set_auditing_failure_enabled(
+            self.audit_level != AuditLevel::NONE
+                && self
+                    .auditable_operations
+                    .contains(bacnet_types::enums::AuditOperation::AUDITING_FAILURE),
+        );
     }
 
     /// Set the locally managed command-priority filter.
