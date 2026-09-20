@@ -2267,6 +2267,27 @@ class BACnetServer:
         """
         ...
     def add_audit_reporter(self, instance: int, name: str) -> None: ...
+    def configure_audit_reporter(
+        self, instance: int, *, recipient_device_instance: int,
+        audit_level: Literal["none", "audit_config", "audit_all"],
+        auditable_operations: int, issue_confirmed_notifications: bool,
+    ) -> None:
+        """Configure one static target Reporter; add_audit_reporter alone stays inert.
+
+        The first valid call fixes the Reporter identity. Later pre-start calls
+        replace its settings/recipient; another Reporter raises ValueError.
+        Instances are non-bool integers in 0..=4194303; recipient must be remote.
+        Operations is a non-bool u64 mask: bits 0..15 and 32..63 only. Wrong mask,
+        level or confirmation types raise TypeError; invalid values/identities
+        raise ValueError. Failures preserve prior settings and registrations.
+        Configuration freezes at startup ownership transfer, including in-flight
+        start and after stop (RuntimeError). Configure a direct B/IP recipient
+        with add_device_binding, in either order; an unresolved recipient permits
+        startup but exposes CONFIGURATION_ERROR on an enabled Reporter's RELIABILITY.
+        Monitored objects remain catch-all; priorities remain all. No runtime
+        changes, source reporting, Python callbacks, retries or durable outbox.
+        """
+        ...
 
     # --- Control/PID ---
     def add_loop(self, instance: int, name: str, output_units: int = 62) -> None: ...

@@ -1,4 +1,4 @@
-"""Installed-artifact tests for the typed Python Audit client, receiver and parent forwarding."""
+"""Installed-artifact tests for Python Audit clients, receivers, forwarding and Reporters."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import inspect
 import socket
 import tempfile
 import unittest
+from collections.abc import Awaitable
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Callable, Literal, cast
@@ -24,6 +25,7 @@ from rusty_bacnet import (
     ObjectIdentifier,
     ObjectType,
     PropertyIdentifier,
+    PropertyValue,
 )
 
 if TYPE_CHECKING:
@@ -131,6 +133,12 @@ def audit_snapshot(storage: str) -> dict[str, bytes]:
         for suffix in (".slot0", ".slot1")
         if (path := Path(storage + suffix)).exists()
     }
+
+
+async def bounded_reporter_test(exercise: Awaitable[None]) -> None:
+    # Includes startup, client calls and joined shutdown, not only delivery polling.
+    async with asyncio.timeout(15):
+        await exercise
 
 
 class AuditContractArtifactTests(unittest.TestCase):
@@ -301,8 +309,14 @@ class AuditContractArtifactTests(unittest.TestCase):
 
         for name, positional, keyword_only in (
             ("add_device_binding", {"device_instance": "int", "address": "str"}, {}),
+            ("add_audit_reporter", {"instance": "int", "name": "str"}, {}),
             ("configure_audit_log_parent", {"instance": "int"}, {
                 "parent_device_instance": "int", "parent_audit_log_instance": "int",
+            }),
+            ("configure_audit_reporter", {"instance": "int"}, {
+                "recipient_device_instance": "int",
+                "audit_level": "Literal['none', 'audit_config', 'audit_all']",
+                "auditable_operations": "int", "issue_confirmed_notifications": "bool",
             }),
         ):
             with self.subTest(server_method=name):
@@ -324,6 +338,8 @@ class AuditContractArtifactTests(unittest.TestCase):
                     {a.arg: annotation_text(a.annotation) for a in method.args.kwonlyargs}, keyword_only,
                 )
                 self.assertEqual(annotation_text(method.returns), "None")
+                self.assertEqual(method.args.defaults, [])
+                self.assertEqual(method.args.kw_defaults, [None] * len(keyword_only))
 
         raw_methods = {
             "confirmed_audit_notification": "None",
@@ -632,6 +648,239 @@ class AuditContractArtifactTests(unittest.TestCase):
                 add(99, address)
         # Failed calls must not reserve the Device identifier.
         add(99, ADDRESS)
+
+    def test_reporter_strict_validation_is_atomic_and_identity_is_fixed(self) -> None:
+        async def exercise() -> None:
+            server = BACnetServer(device_instance=8, interface="127.0.0.1", port=0)
+            configure = cast(Callable[..., None], server.configure_audit_reporter)
+            settings = dict(recipient_device_instance=9, audit_level="audit_all",
+                            auditable_operations=2, issue_confirmed_notifications=False)
+            with self.assertRaisesRegex(ValueError, "no pending Audit Reporter"):
+                configure(1, **settings)
+            server.add_analog_value(1, "Not a Reporter")
+            with self.assertRaisesRegex(ValueError, "no pending Audit Reporter"):
+                configure(1, **settings)
+            server.add_audit_reporter(1, "Selected")
+            server.add_audit_reporter(2, "Inert")
+            configure(1, **settings)
+            # All allowed u64 positions survive, including bit 63, without narrowing.
+            valid_mask = 0xffff_ffff_0000_ffff
+            configure(1, recipient_device_instance=0, audit_level="none",
+                      auditable_operations=0, issue_confirmed_notifications=False)
+            with self.assertRaisesRegex(ValueError, "different Audit Reporter"):
+                configure(2, **settings)  # NONE does not release the fixed selection.
+            configure(1, recipient_device_instance=2**22 - 1, audit_level="audit_config",
+                      auditable_operations=valid_mask, issue_confirmed_notifications=True)
+
+            for field in ("instance", "recipient_device_instance"):
+                for invalid in (-1, 2**22, 2**100, True, False, 1.0, "1", None):
+                    with self.subTest(field=field, invalid=invalid), self.assertRaises(ValueError):
+                        configure(**{**settings, "instance": 1, field: invalid})
+            cases = {
+                "audit_level": [(ValueError, v) for v in ("", "NONE", "default", "audit_all ", "4")]
+                    + [(TypeError, v) for v in (None, 1, True, b"audit_all")],
+                "auditable_operations": [(ValueError, v) for v in (-1, 2**64, 2**100, 1 << 16, 1 << 31, 2**64 - 1)]
+                    + [(TypeError, v) for v in (True, False, 2.0, "2", None)],
+                "issue_confirmed_notifications": [(TypeError, v) for v in (0, 1, "true", None, [], object())],
+            }
+            for field, invalids in cases.items():
+                for error, invalid in invalids:
+                    with self.subTest(field=field, invalid=invalid), self.assertRaises(error):
+                        configure(1, **{**settings, field: invalid})
+            with self.assertRaisesRegex(ValueError, "must be remote"):
+                configure(1, **{**settings, "recipient_device_instance": 8})
+            with self.assertRaisesRegex(ValueError, "different Audit Reporter"):
+                configure(2, **settings)
+            with self.assertRaisesRegex(ValueError, "no pending Audit Reporter"):
+                configure(99, **settings)
+            with self.assertRaises(TypeError):
+                configure(1, 9, "audit_all", 2, False)
+            for field in settings:
+                with self.subTest(missing=field), self.assertRaises(TypeError):
+                    configure(1, **{k: v for k, v in settings.items() if k != field})
+            self.assertEqual(getattr(server, "_pending_registration_count")(), 3)
+            await server.start()
+            try:
+                for instance, level, mask, confirmed in (
+                    (1, 2, PropertyValue.bit_string(0, bytes.fromhex("ffff0000ffffffff")), True),
+                    (2, 0, PropertyValue.bit_string(0, b""), False),
+                ):
+                    oid = ObjectIdentifier(ObjectType.AUDIT_REPORTER, instance)
+                    self.assertEqual((await server.read_property(oid, PropertyIdentifier.AUDIT_LEVEL)).value, level)
+                    self.assertEqual(await server.read_property(oid, PropertyIdentifier.AUDITABLE_OPERATIONS), mask)
+                    self.assertIs((await server.read_property(oid, PropertyIdentifier.ISSUE_CONFIRMED_NOTIFICATIONS)).value, confirmed)
+                    self.assertEqual(await server.read_property(oid, PropertyIdentifier.AUDIT_PRIORITY_FILTER),
+                                     PropertyValue.bit_string(0, b"\xff\xff"))
+                    with self.assertRaises(BacnetProtocolError) as raised:
+                        await server.read_property(oid, PropertyIdentifier.MONITORED_OBJECTS)
+                    self.assertEqual(raised.exception.error_code, ErrorCode.UNKNOWN_PROPERTY.to_raw())
+            finally:
+                await server.stop()
+        asyncio.run(bounded_reporter_test(exercise()))
+
+    def test_reporter_start_revalidates_duplicates_without_draining(self) -> None:
+        server = BACnetServer(device_instance=8)
+        server.add_audit_reporter(1, "Selected")
+        settings = dict(recipient_device_instance=9, audit_level="audit_all",
+                        auditable_operations=2, issue_confirmed_notifications=False)
+        configure = cast(Callable[..., None], server.configure_audit_reporter)
+        configure(1, **settings)
+        server.add_audit_reporter(1, "Duplicate")
+        with self.assertRaisesRegex(ValueError, "duplicate pending Audit Reporter"):
+            configure(1, **{**settings, "audit_level": "none"})
+        for _ in range(2):
+            with self.assertRaisesRegex(ValueError, "duplicate pending Audit Reporter"):
+                _unused = server.start()
+            self.assertEqual(getattr(server, "_pending_registration_count")(), 2)
+
+    def test_reporter_configuration_freezes_at_transfer_but_not_preparation_failure(self) -> None:
+        async def exercise() -> None:
+            # No live SC destination claim: missing local TLS files fail before transfer.
+            with tempfile.TemporaryDirectory() as directory:
+                missing = str(Path(directory) / "missing.pem")
+                server = BACnetServer(device_instance=8, transport="sc", sc_device_uuid=b"\x01" * 16,
+                                      sc_ca_cert=missing, sc_client_cert=missing, sc_client_key=missing)
+                server.add_audit_reporter(1, "Retryable")
+                for level in ("audit_all", "none"):
+                    server.configure_audit_reporter(1, recipient_device_instance=9,
+                        audit_level=cast(Any, level), auditable_operations=2, issue_confirmed_notifications=False)
+                    with self.assertRaisesRegex(RuntimeError, "TLS config error"):
+                        _unused = server.start()
+                    self.assertEqual(getattr(server, "_pending_registration_count")(), 1)
+
+            for configure_before_start in (False, True):
+                with self.subTest(configure_before_start=configure_before_start):
+                    server = BACnetServer(device_instance=8, interface="127.0.0.1", port=0)
+                    server.add_audit_reporter(2**22 - 1, "Frozen")
+                    def configure() -> None:
+                        server.configure_audit_reporter(2**22 - 1, recipient_device_instance=0,
+                            audit_level="audit_all", auditable_operations=2, issue_confirmed_notifications=True)
+                    if configure_before_start:
+                        configure()
+                    starting = server.start()
+                    with self.assertRaises(RuntimeError):
+                        configure()  # Before await: ownership already transferred.
+                    await starting
+                    try:
+                        with self.assertRaises(RuntimeError):
+                            configure()
+                    finally:
+                        await server.stop()
+                    with self.assertRaises(RuntimeError):
+                        configure()
+        asyncio.run(bounded_reporter_test(exercise()))
+
+    def test_reporter_loopback_production_filters_replacement_and_unresolved_recipient(self) -> None:
+        # A public network write is the source, not a constructed AuditNotification.
+        for level, operations, confirmed, bound, expected in (
+            ("audit_all", 2, False, True, 1),
+            ("audit_all", 2, True, True, 1),
+            ("none", 2, False, True, 0),
+            ("audit_all", 0, True, True, 0),
+            ("audit_all", 1, False, True, 0),  # READ does not select WRITE.
+            ("audit_config", 2, False, True, 0),  # Present_Value is operational.
+            ("audit_all", 2, True, False, 0),
+            (None, 0, False, True, 0),  # add_audit_reporter alone remains inert.
+        ):
+            with self.subTest(level=level, operations=operations, confirmed=confirmed, bound=bound):
+                asyncio.run(bounded_reporter_test(
+                    self._exercise_reporter(level, operations, confirmed, bound, expected)))
+
+    async def _exercise_reporter(self, level: str | None, operations: int, confirmed: bool,
+                                 bound: bool, expected: int) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = BACnetServer(device_instance=9, interface="127.0.0.1", port=0,
+                                  broadcast_address="127.0.0.1")
+            storage = str(Path(directory) / "parent")
+            parent.add_audit_log(7, "Receiver", storage, buffer_size=10)
+            parent.configure_audit_notification_sink(7, policy="allow_all")
+            child = BACnetServer(device_instance=8, interface="127.0.0.1", port=0,
+                                 broadcast_address="127.0.0.1")
+            child.add_audit_reporter(0, "Selected")
+            child.add_audit_reporter(1, "Unselected")
+            child.add_analog_value(1, "Writable")
+            await parent.start()
+            try:
+                parent_address = await parent.local_address()
+                # Both configuration orders are supported.
+                if bound and confirmed:
+                    child.add_device_binding(9, parent_address)
+                if level is not None:
+                    child.configure_audit_reporter(0, recipient_device_instance=99,
+                        audit_level="none", auditable_operations=0, issue_confirmed_notifications=not confirmed)
+                    child.configure_audit_reporter(0, recipient_device_instance=9,
+                        audit_level=cast(Any, level), auditable_operations=operations,
+                        issue_confirmed_notifications=confirmed)
+                    with self.assertRaises(ValueError):
+                        child.configure_audit_reporter(1, recipient_device_instance=99,
+                            audit_level="audit_all", auditable_operations=2, issue_confirmed_notifications=True)
+                    with self.assertRaises(ValueError):
+                        child.configure_audit_reporter(0, recipient_device_instance=99,
+                            audit_level="none", auditable_operations=1 << 16, issue_confirmed_notifications=True)
+                if bound and not confirmed:
+                    child.add_device_binding(9, parent_address)
+                await child.start()
+                try:
+                    reporter = ObjectIdentifier(ObjectType.AUDIT_REPORTER, 0)
+                    reliability = 10 if not bound else 0
+                    self.assertEqual((await child.read_property(reporter, PropertyIdentifier.RELIABILITY)).value, reliability)
+                    self.assertEqual(await child.read_property(reporter, PropertyIdentifier.STATUS_FLAGS),
+                                     PropertyValue.bit_string(4, b"\x40" if not bound else b"\x00"))
+                    self.assertIs((await child.read_property(reporter, PropertyIdentifier.ISSUE_CONFIRMED_NOTIFICATIONS)).value, confirmed)
+                    target = ObjectIdentifier(ObjectType.ANALOG_VALUE, 1)
+                    query = cast("AuditLogQueryRequestInput", {
+                        "audit_log": ObjectIdentifier(ObjectType.AUDIT_LOG, 7),
+                        "query_parameters": {"kind": "by_target", "target_device_identifier":
+                            ObjectIdentifier(ObjectType.DEVICE, 8), "successful_actions_only": 0},
+                        "requested_count": 10,
+                    })
+                    async with BACnetClient(interface="127.0.0.1", port=0,
+                                           broadcast_address="127.0.0.1", apdu_timeout_ms=2_000) as client:
+                        before = audit_snapshot(storage)
+                        child_address = await child.local_address()
+                        # Exercise repeated unresolved operations beyond the delivery permit count.
+                        for _ in range(1 if bound else 65):
+                            await client.write_property(child_address, target, PropertyIdentifier.PRESENT_VALUE,
+                                                        PropertyValue.real(42.5))
+                        self.assertEqual((await child.read_property(target, PropertyIdentifier.PRESENT_VALUE)).value, 42.5)
+                        if expected:
+                            async with asyncio.timeout(5):
+                                while True:
+                                    ack = await client.audit_log_query_typed(parent_address, query)
+                                    if ack["records"]:
+                                        break
+                                    await asyncio.sleep(0.01)
+                            self.assertEqual(len(ack["records"]), 1)
+                            datum = ack["records"][0]["record"]["datum"]
+                            assert datum["kind"] == "audit_notification"
+                            notification = datum["audit_notification"]
+                            self.assertEqual(notification["operation"], AuditOperation.WRITE)
+                            self.assertEqual(notification["target_device"], device_recipient(8))
+                            self.assertEqual(notification["target_object"], target)
+                            self.assertEqual(notification["target_property"], {
+                                "property_identifier": PropertyIdentifier.PRESENT_VALUE, "property_array_index": None})
+                            self.assertIsNone(notification["result"])
+                            self.assertEqual(notification["target_priority"], 16)
+                            self.assertEqual(notification["target_value"], bytes.fromhex("44 422a0000"))
+                            self.assertIsNotNone(notification["target_timestamp"])
+                        # Observe counts throughout a bounded negative window. Pace polls
+                        # to avoid exhausting transaction IDs; elapsed time alone is not
+                        # evidence of delivery/suppression. Core tests prove queue bounds.
+                        until = asyncio.get_running_loop().time() + 0.15
+                        while True:
+                            ack = await client.audit_log_query_typed(parent_address, query)
+                            self.assertEqual(len(ack["records"]), expected)
+                            self.assertEqual((await parent.read_property(query["audit_log"], PropertyIdentifier.RECORD_COUNT)).value, expected)
+                            if asyncio.get_running_loop().time() >= until:
+                                break
+                            await asyncio.sleep(0.01)
+                        if not expected:
+                            self.assertEqual(audit_snapshot(storage), before)
+                        self.assertEqual((await child.read_property(reporter, PropertyIdentifier.RELIABILITY)).value, reliability)
+                finally:
+                    await child.stop()
+            finally:
+                await parent.stop()
 
     def test_direct_binding_rejects_incompatible_shapes_without_reserving_device(self) -> None:
         server = BACnetServer(device_instance=8)

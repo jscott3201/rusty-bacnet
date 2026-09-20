@@ -26,6 +26,59 @@ fn assert_write_access_denied(error: Error) {
 }
 
 #[test]
+fn audit_reporter_configuration_hook_is_opt_in_and_atomic() {
+    let operations = AuditOperationFlags::from_bits((1 << 1) | (1 << 63)).unwrap();
+    let mut other = crate::binary::BinaryValueObject::new(1, "Other").unwrap();
+    assert!(other.audit_reporter_internal().is_none());
+    assert!(matches!(
+        other.configure_audit_reporter_internal(AuditLevel::AUDIT_ALL, operations, true),
+        Err(Error::Protocol { class, code })
+            if class == ErrorClass::OBJECT.to_raw() as u32
+                && code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32
+    ));
+
+    let mut object: Box<dyn BACnetObject> = Box::new(AuditReporterObject::new(1, "AR").unwrap());
+    object
+        .configure_audit_reporter_internal(AuditLevel::AUDIT_ALL, operations, true)
+        .unwrap();
+    let properties = [
+        PropertyIdentifier::AUDIT_LEVEL,
+        PropertyIdentifier::AUDITABLE_OPERATIONS,
+        PropertyIdentifier::ISSUE_CONFIRMED_NOTIFICATIONS,
+        PropertyIdentifier::AUDIT_PRIORITY_FILTER,
+        PropertyIdentifier::RELIABILITY,
+    ];
+    let before: Vec<_> = properties
+        .iter()
+        .map(|&p| object.read_property(p, None).unwrap())
+        .collect();
+    assert!(
+        object
+            .configure_audit_reporter_internal(
+                AuditLevel::DEFAULT,
+                AuditOperationFlags::empty(),
+                false,
+            )
+            .is_err()
+    );
+    for (&property, expected) in properties.iter().zip(before) {
+        assert_eq!(object.read_property(property, None).unwrap(), expected);
+    }
+    let reporter = object.audit_reporter_internal().unwrap();
+    assert_eq!(reporter.auditable_operations, operations);
+    assert!(reporter.confirmed_internal());
+    assert!(reporter.monitored_objects.is_none());
+    assert_eq!(reporter.audit_priority_filter, BACnetPriorityFilter::all());
+    object
+        .configure_audit_reporter_internal(AuditLevel::NONE, AuditOperationFlags::empty(), false)
+        .unwrap();
+    let reporter = object.audit_reporter_internal().unwrap();
+    assert_eq!(reporter.audit_level, AuditLevel::NONE);
+    assert!(reporter.auditable_operations.is_empty());
+    assert!(!reporter.confirmed_internal());
+}
+
+#[test]
 fn audit_reporter_auditing_failure_filter_invalidates_pending_epoch() {
     let mut reporter = AuditReporterObject::new(1, "AR").unwrap();
     let status = reporter.status_internal();

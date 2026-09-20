@@ -1282,10 +1282,10 @@ rollback for unrelated later startup failures.
 **Migration:** existing constructors and `add_audit_log()` calls need no change and
 continue to deny inbound notifications. To opt in, register the log, call the new
 method with explicit `allow_all`, then start. Reopen with the same application-owned
-storage path to query committed records. `add_audit_reporter()` remains inert
-registration, not active Reporter configuration. The separately configured direct
-parent-forwarding subset is described below. Reporter production/filters/destinations/status,
-shared-endpoint Audit producers, full Audit/BIBB/BTL support and #345 closure are not claimed.
+storage path to query committed records. `add_audit_reporter()` alone remains inert
+registration. The separately configured direct parent-forwarding and static target
+Reporter subsets are described below. Full Reporter parity, shared-endpoint Audit
+producers, full Audit/BIBB/BTL support and #345 closure are not claimed.
 
 Local producer → durable logger → typed query example (loopback only, ten-record
 buffer, one notification, one-record query; run inside an async function):
@@ -1422,6 +1422,90 @@ IPv6/SC/MS/TP forwarding is not exposed by this Python slice; no VMAC discovery,
 SC mapping, MS/TP hardware support or independent interop is claimed here.
 This is not active Reporter configuration, full Audit/BIBB, BTL/certification
 or issue #345 closure.
+
+#### Static target Audit Reporter
+
+`BACnetServer.configure_audit_reporter(instance, *, recipient_device_instance,
+audit_level, auditable_operations, issue_confirmed_notifications) -> None` connects
+one pending Reporter to the existing Rust target-side producer. It is synchronous,
+opt-in and pre-start only; `add_audit_reporter(instance, name)` is unchanged.
+
+```python
+# parent: running Device 9, file-backed Audit Log 7, explicit allow_all sink.
+# child: a distinct, not-yet-started transport="bip" server (Device 8).
+child.add_audit_reporter(1, "Target Reporter")
+child.add_analog_value(1, "Writable target")
+child.configure_audit_reporter(
+    1, recipient_device_instance=9, audit_level="audit_all",
+    auditable_operations=1 << AuditOperation.WRITE.to_raw(),
+    issue_confirmed_notifications=True,
+)
+child.add_device_binding(9, await parent.local_address())
+# After child.start(), a public BACnetClient.write_property() to the child's
+# target can produce a notification. Query the parent's Audit Log 7 under a
+# deadline to observe receipt; the original write ACK alone is not that evidence.
+```
+
+- Both identifiers must be non-Boolean integers in `0..=4194303`; the recipient
+  must differ from the local server Device. Missing/wrong-type/duplicate pending
+  Reporters, invalid identifiers or a local recipient raise `ValueError`.
+- `audit_level` is required and exactly `"none"`, `"audit_config"` or `"audit_all"`.
+  Other strings raise `ValueError`; non-strings raise `TypeError`. DEFAULT and
+  proprietary levels are not exposed. NONE suppresses reporting; AUDIT_CONFIG
+  treats Present_Value writes as operational (suppressed), other property writes,
+  implemented list/file writes and CREATE/DELETE as configuration operations.
+- `auditable_operations` is a required non-Boolean integer mask, not a list or
+  an operation ordinal: WRITE is `1 << AuditOperation.WRITE.to_raw()` (`2`).
+  Bits 0–15 are standard operations; bits 32–63 are preserved proprietary positions.
+  Reserved bits 16–31, negatives and u64 overflow raise `ValueError`; wrong types,
+  including bool, raise `TypeError`. Accepting a bit does not implement its source.
+- `issue_confirmed_notifications` requires actual `True` or `False`; integers
+  and truthy objects raise `TypeError`. All arguments after `instance` are required
+  keyword-only. Validation finishes before object settings or selection change.
+- **The first valid call fixes the Reporter identity.** Further valid pre-start
+  calls on that same instance replace all three settings and the recipient.
+  Selecting another Reporter raises `ValueError`, even after selecting level NONE;
+  other registered Reporters remain inert. Failed calls preserve settings and registrations.
+- Binding and Reporter configuration may occur in either order. Destinations use
+  only existing configured direct B/IP IPv4 bindings: no discovery, routed, IPv6,
+  SC or MS/TP destinations. An unresolved recipient does not fail configuration or
+  startup: an enabled Reporter exposes `RELIABILITY=CONFIGURATION_ERROR` (`10`)
+  and the fault bit in `STATUS_FLAGS`, without emitting or queuing ordinary records.
+  Use existing `read_property()` on these properties; there is no separate status API.
+- Startup revalidates the selected pending identity before draining registrations.
+  Configuration freezes at ownership transfer: valid calls during startup, while
+  running or after stop raise `RuntimeError`. Input validation precedes that check.
+  Validation and TLS/serial preparation failures before transfer leave it retryable;
+  later failures retain the existing lack of general rollback. Recreate and reapply
+  static settings/bindings on a new server; they are not persisted.
+
+`Monitored_Objects` remains absent (`None`, catch-all), `Audit_Priority_Filter`
+remains all priorities, and `Audit_Source_Reporter` remains false. The unchanged
+Rust producer covers inbound WP/WPM elements, AddListElement/RemoveListElement,
+AtomicWriteFile and CREATE/DELETE successes and authorized execution errors at
+their existing operation boundaries. Normal operations require their operation
+bit; enabled external Reporter property writes retain the core filter bypass.
+Success omits Result; known execution errors include the response-mapped Error.
+The existing optional AUDITING_FAILURE resource-admission summary remains bounded
+and memory-only when its bit is enabled. No new producer source is introduced.
+
+Delivery retains 64 shared immediate Audit permits, one total three-second deadline,
+no ordinary-record queue/retry or outbound segmentation, object-owned health and
+joined shutdown. Delivery failure does not change the original operation result.
+Unconfirmed send success proves only transport acceptance, not recipient storage.
+No durable outbox, replay or restart-delivery guarantee is provided; the receiver's
+file-backed storage is a separate contract. Installed-extension loopback tests in
+`test_audit_api.py` prove one queryable target WRITE for both confirmation modes,
+strict atomic validation, replacement, suppression, unresolved-recipient no growth
+and lifecycle freezing. Broader source/bounds evidence remains the existing Rust
+Reporter suites, not independent interoperability qualification.
+
+No monitored-object/priority API, per-object overrides, dynamic/network-writable
+configuration, multi-Reporter arbitration, Python callbacks, payload-origin
+verification, source-side or local direct-write reporting, ordinary sample/event
+production, WriteGroup expansion, Device.Audit_Notification_Recipient, batching,
+Maximum_Send_Delay/Send_Now, durability, full Reporter/Audit/BIBB/BTL/certification,
+independent interop or #345 closure is claimed.
 
 #### Building Control
 

@@ -6,6 +6,21 @@ impl BACnetObject for AuditReporterObject {
     fn audit_reporter_internal(&self) -> Option<&AuditReporterObject> {
         Some(self)
     }
+
+    fn configure_audit_reporter_internal(
+        &mut self,
+        level: AuditLevel,
+        operations: AuditOperationFlags,
+        confirmed: bool,
+    ) -> Result<(), Error> {
+        // The only fallible setter validates before mutation; the remaining
+        // settings are already typed and cannot fail.
+        self.set_audit_level(level)?;
+        self.set_auditable_operations(operations);
+        self.set_issue_confirmed_notifications(confirmed);
+        Ok(())
+    }
+
     fn object_identifier(&self) -> ObjectIdentifier {
         self.oid
     }
