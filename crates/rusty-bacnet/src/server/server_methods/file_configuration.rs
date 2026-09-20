@@ -214,6 +214,7 @@ mod tests {
             atomic_write_file_budget: server::AtomicWriteFileBudget::default(),
             read_range_budget: server::ReadRangeBudget::default(),
             get_event_information_budget: server::GetEventInformationBudget::default(),
+            audit_notification_sink: None,
             started: Arc::new(AtomicBool::new(false)),
             pending_objects: std::sync::Mutex::new(Vec::new()),
         }

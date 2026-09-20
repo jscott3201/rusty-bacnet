@@ -1120,11 +1120,10 @@ bytes pass through unchanged and no validation implication attaches to the raw
 path. A bundled server with an
 explicitly persisted Audit Log object can execute the raw AuditLogQuery payload
 against its retained in-memory records and return a raw typed ACK payload. The
-Rust server API can also receive ConfirmedAuditNotification when an application
-explicitly configures one sink and a fail-closed authorizer. The Python server
-does not expose that receiver configuration. The typed client boundary does not
-weaken that authorization or add query authorization, producer behavior,
-forwarding, or durable idempotency.
+standalone Python server can receive confirmed and unconfirmed notifications
+when an application [explicitly selects one sink and static admission policy](#inbound-audit-notification-sink).
+The typed client boundary does not weaken that authorization or add query
+authorization, producer behavior, forwarding, or new durable idempotency semantics.
 
 ---
 
@@ -1236,6 +1235,105 @@ server.add_audit_reporter(instance=1, name="Reporter")
 `storage_path` is application-owned and produces two sibling snapshot files
 with `.slot0` and `.slot1` suffixes. Reuse the same path when reopening that
 Audit Log; the server does not infer a global or working-directory location.
+
+#### Inbound Audit notification sink
+
+```python
+server.configure_audit_notification_sink(instance=1, policy="allow_all")
+```
+
+This synchronous, pre-`start()` method selects exactly one **already registered**
+Audit Log. `policy` is a required keyword-only `Literal["deny_all", "allow_all"]`.
+It replaces the previous selection only after validation succeeds; there is no
+implicit first-log selection, even when only one Audit Log exists. Multiple logs
+may be registered, but only the selected instance receives inbound notifications.
+
+- **Default/unconfigured or `deny_all`:** fresh confirmed notifications receive
+  `BacnetProtocolError` with `SERVICES/SERVICE_REQUEST_DENIED`; unconfirmed
+  notifications are silently dropped. Denial creates no record, receipt, or forward.
+- **Explicit `allow_all`:** both services use the existing Rust receiver, its
+  64 KiB service-payload / 256-notification bounds, and atomic durable storage.
+  Fresh confirmed success is acknowledged only after the record batch and exact
+  request receipt commit together. Retained exact confirmed duplicates are silently
+  discarded, including after file reopen, **before authorization** (so an already
+  completed duplicate remains silent even after reopening with `deny_all`). Existing
+  receipt retention/capacity limits still apply; this is not permanent deduplication.
+  Unconfirmed receipt creates no request receipt and never sends a response, even
+  on error. Successful unconfirmed client completion means *sent*, not *stored*.
+
+The policy is **transport admission only**, not identity verification or query
+authorization. `allow_all` admits any otherwise valid sender reaching this server;
+deploy only on an appropriately isolated/trusted network. Payload `Source_Device`
+and `Target_Device` remain **peer-reported content**, never verified origin. Static
+Rust authorizers do not call Python or acquire the GIL; there are no callbacks or
+allowlists. The existing runtime, database locks, error mapping and joined shutdown
+remain in use.
+
+Malformed policy or instance (including booleans, non-integers and values outside
+`0..=4194303`) raises `ValueError`. Missing/wrong-type registrations and duplicate
+registrations of the selected Audit Log instance also raise `ValueError`. An object
+of another type with the same instance number is not an Audit Log. Selection is
+revalidated at `start()` before transport preparation or registration transfer, so
+a duplicate registered after selection cannot silently replace the sink. These
+validation failures preserve pending registrations and the previous configuration.
+Configuration while running raises `RuntimeError`. This does not add general
+rollback for unrelated later startup failures.
+
+**Migration:** existing constructors and `add_audit_log()` calls need no change and
+continue to deny inbound notifications. To opt in, register the log, call the new
+method with explicit `allow_all`, then start. Reopen with the same application-owned
+storage path to query committed records. This is **standalone Python receiver/query
+parity only**: `add_audit_reporter()` remains inert registration, not active Reporter
+configuration. Reporter production/filters/destinations/status, parent forwarding,
+shared-endpoint Audit producers, full Audit/BIBB/BTL support and #345 closure are not
+claimed.
+
+Local producer → durable logger → typed query example (loopback only, ten-record
+buffer, one notification, one-record query; run inside an async function):
+
+```python
+import tempfile
+from pathlib import Path
+from rusty_bacnet import (
+    AuditOperation, BACnetClient, BACnetServer, ObjectIdentifier, ObjectType,
+)
+
+with tempfile.TemporaryDirectory() as directory:
+    server = BACnetServer(
+        device_instance=503_512, interface="127.0.0.1", port=0,
+        broadcast_address="127.0.0.1",
+    )
+    server.add_audit_log(1, "Audit Sink", str(Path(directory) / "audit"), buffer_size=10)
+    server.configure_audit_notification_sink(1, policy="allow_all")
+    await server.start()
+    try:
+        address = await server.local_address()
+        async with BACnetClient(
+            interface="127.0.0.1", port=0, broadcast_address="127.0.0.1",
+            apdu_timeout_ms=2_000,
+        ) as client:
+            await client.confirmed_audit_notification_typed(address, {
+                "notifications": [{
+                    "source_device": {"kind": "device", "object_identifier":
+                                      ObjectIdentifier(ObjectType.DEVICE, 1)},
+                    "operation": AuditOperation.READ,
+                    "target_device": {"kind": "device", "object_identifier":
+                                      ObjectIdentifier(ObjectType.DEVICE, 2)},
+                }],
+            })
+            page = await client.audit_log_query_typed(address, {
+                "audit_log": ObjectIdentifier(ObjectType.AUDIT_LOG, 1),
+                "query_parameters": {
+                    "kind": "by_target",
+                    "target_device_identifier": ObjectIdentifier(ObjectType.DEVICE, 2),
+                    "successful_actions_only": 0,
+                },
+                "requested_count": 1,
+            })
+            assert len(page["records"]) == 1
+    finally:
+        await server.stop()
+```
 
 #### Building Control
 

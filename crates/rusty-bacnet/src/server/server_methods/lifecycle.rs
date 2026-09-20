@@ -4,6 +4,13 @@ use super::super::*;
 impl BACnetServer {
     /// Start the server. It will begin responding to BACnet requests.
     fn start<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        // Validate the selected sink before TLS/serial/network preparation or
+        // ownership transfer. Keep registration stable until it is drained.
+        let mut pending = self.lock_pending()?;
+        let audit_notification_sink = self.audit_notification_sink;
+        if let Some(sink) = audit_notification_sink {
+            sink.validate(&pending)?;
+        }
         // Local TLS failures must leave pending registrations available for retry.
         // Load on each start, not in the constructor, so repaired files are used.
         let sc_tls_config = if self.transport_type == "sc" {
@@ -61,10 +68,8 @@ impl BACnetServer {
         let read_range_budget = self.read_range_budget;
         let get_event_information_budget = self.get_event_information_budget;
 
-        let objects: Vec<Box<dyn BACnetObject + Send>> = {
-            let mut guard = self.lock_pending()?;
-            guard.drain(..).collect()
-        };
+        let objects: Vec<Box<dyn BACnetObject + Send>> = pending.drain(..).collect();
+        drop(pending);
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let mut db = ObjectDatabase::new();
@@ -169,6 +174,15 @@ impl BACnetServer {
                 .read_range_budget(read_range_budget)
                 .get_event_information_budget(get_event_information_budget)
                 .transport(transport);
+            if let Some(sink) = audit_notification_sink {
+                builder = builder.audit_notification_sink(sink.object_id);
+                if sink.allow_all {
+                    builder = builder
+                        .audit_notification_authorizer(|_| true)
+                        .unconfirmed_audit_notification_authorizer(|_| true);
+                }
+                // deny_all deliberately retains the Rust fail-closed defaults.
+            }
             if let Some(pw) = dcc_password {
                 builder = builder.dcc_password(pw);
             }
