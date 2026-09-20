@@ -461,6 +461,20 @@ configuration gap is closed, not the full Annex AB profile or issue #513.
 
 MS/TP is a token-passing protocol over RS-485 serial, commonly used for field-level BACnet devices. The serial I/O is abstracted behind the `SerialPort` trait, with three RS-485 direction control modes.
 
+#### Host Diagnostics and Qualification
+
+Call `MstpTransport::diagnostics()` before moving the transport into its owner.
+The cloneable `mstp::MstpDiagnostics` handle returns owned
+`MstpDiagnosticsSnapshot` counts during operation and after stop/drop, without
+retaining serial ownership. Counts start at zero, saturate at `u64::MAX`, and have
+no reset. Relaxed loads are individually atomic, not a globally coherent snapshot.
+These are redacted host events, not wire timestamps or proof of peer delivery.
+See the [qualification method](mstp-qualification.md) and
+[unrun result template](mstp-qualification-result.json) for before/after deltas,
+the #707 rerun matrix, independent capture requirements and explicit non-claims.
+No hardware qualification, timer change, Python/generic status API, or expanded
+MS/TP routing/conformance claim is included.
+
 #### Optional Dedicated Execution
 
 Execution placement is configured separately from `MstpConfig`, preserving

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **MS/TP host diagnostics and qualification method (Refs #707, #502 / RB-26):**
+  Rust `MstpTransport::diagnostics()` exposes a cloneable, redacted, saturating
+  counts-only handle that remains readable after stop/drop. Counts distinguish
+  direct and token-queued DNER, DER, ReplyPostponed, host timeout/decode/assembly,
+  queue/delivery and serial-error events without changing wire behavior or timers.
+  [Bench method](docs/mstp-qualification.md) and an unrun JSON result template
+  separate host evidence from independent wire measurements. This is not a
+  19200/9600 fix, hardware qualification, routing-profile expansion or issue closure.
+
 - **Bounded target WRITE/CREATE/DELETE Audit Reporter (RB-21a/b/c/d/e/f/g, Refs #345):** Rust servers can
   select one locally configured Reporter and explicitly bound unicast Device
   recipient. Successful inbound WriteProperty and each committed WPM prefix
