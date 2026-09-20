@@ -582,6 +582,14 @@ impl BACnetObject for AuditLogObject {
         self.forwarding.clone()
     }
 
+    fn set_audit_log_parent_internal(
+        &mut self,
+        parent: bacnet_types::constructed::BACnetDeviceObjectReference,
+    ) -> Result<(), Error> {
+        self.set_member_of(Some(parent));
+        Ok(())
+    }
+
     fn audit_log_notification_sink_internal(
         &mut self,
     ) -> Option<&mut dyn AuditLogNotificationSink> {

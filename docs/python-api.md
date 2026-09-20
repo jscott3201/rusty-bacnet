@@ -1282,11 +1282,10 @@ rollback for unrelated later startup failures.
 **Migration:** existing constructors and `add_audit_log()` calls need no change and
 continue to deny inbound notifications. To opt in, register the log, call the new
 method with explicit `allow_all`, then start. Reopen with the same application-owned
-storage path to query committed records. This is **standalone Python receiver/query
-parity only**: `add_audit_reporter()` remains inert registration, not active Reporter
-configuration. Reporter production/filters/destinations/status, parent forwarding,
-shared-endpoint Audit producers, full Audit/BIBB/BTL support and #345 closure are not
-claimed.
+storage path to query committed records. `add_audit_reporter()` remains inert
+registration, not active Reporter configuration. The separately configured direct
+parent-forwarding subset is described below. Reporter production/filters/destinations/status,
+shared-endpoint Audit producers, full Audit/BIBB/BTL support and #345 closure are not claimed.
 
 Local producer → durable logger → typed query example (loopback only, ten-record
 buffer, one notification, one-record query; run inside an async function):
@@ -1334,6 +1333,85 @@ with tempfile.TemporaryDirectory() as directory:
     finally:
         await server.stop()
 ```
+
+#### Direct Audit Log parent forwarding
+
+Two synchronous methods connect the standalone Python receiver to the existing
+[immediate Rust forwarding path](audit-log-forwarding.md). Configure both servers'
+Audit Logs and explicit sink policies before their respective `start()` calls:
+
+```python
+# parent has Device instance 9 and registered Audit Log instance 7.
+parent.configure_audit_notification_sink(7, policy="allow_all")
+await parent.start()
+try:
+    # child has a different Device instance and registered Audit Log instance 1.
+    child.configure_audit_notification_sink(1, policy="allow_all")
+    child.add_device_binding(device_instance=9, address=await parent.local_address())
+    child.configure_audit_log_parent(
+        instance=1, parent_device_instance=9, parent_audit_log_instance=7,
+    )
+    await child.start()
+    try:
+        # Send confirmed_audit_notification_typed() to the child as in the example above.
+        # A changed, durably accepted batch is eligible for one confirmed parent attempt.
+        # Query Audit Log 7 on the parent to observe its independent commit.
+        ...
+    finally:
+        await child.stop()
+finally:
+    await parent.stop()
+```
+
+- `add_device_binding(device_instance: int, address: str) -> None` registers a
+  **direct configured** Device binding. It reuses the client address grammar:
+  IPv4 `"127.0.0.1:47808"`, IPv6 `"[::1]:47808"`, colon-separated hex MAC
+  `"01:02:03:04:05:06"`, or MS/TP `"7"` / `"mstp:7"` (peers 0–254).
+  The address must match the chosen transport; parsing is not reachability or
+  authentication. Duplicate Device identifiers raise `ValueError`, even for the
+  same address, without changing the first binding. There is no update/removal,
+  routed-binding or discovery API. The Rust builder's 4096-binding capacity check
+  runs at `start()` before registrations transfer (`ValueError`); concrete
+  transport broadcast checks remain in the subsequent Rust build step.
+- `configure_audit_log_parent(instance: int, *, parent_device_instance: int,
+  parent_audit_log_instance: int) -> None` sets the registered local log's
+  `Member_Of` reference. All identifiers must be integers in `0..=4194303`, not
+  booleans. A local parent Device, invalid identifiers, missing/wrong-type local
+  registrations or duplicate local Audit Log identities raise `ValueError`.
+  A valid repeated call **replaces** that log's parent; an invalid call leaves it
+  unchanged. Startup revalidates every parent-configured local log, including
+  nonselected logs, before transfer so later duplicate registration cannot silently
+  discard its configuration. The parent log is not remotely discovered or validated.
+- Malformed address strings raise `ValueError`; non-string addresses raise
+  `TypeError`. Valid configuration calls after `start()` consumes registrations
+  raise `RuntimeError`, including while startup is in flight and after stop.
+  Validation/TLS/serial preparation failures before transfer do not freeze these
+  settings. Later startup failures retain the existing lack of general rollback.
+  Recreate the server, register the same storage paths and reapply settings on
+  reopen: parent references and bindings are not durable snapshot data.
+
+Only the **selected inbound sink** forwards accepted batches that change retained
+record content. Parent configuration alone does not enable receipt or Reporter
+production. `Member_Of` identifies the intended parent; AuditNotification has no
+target-log parameter, so the receiving Device's sink selection decides which log
+actually receives it. Configure that sink consistently and use an **acyclic hierarchy**.
+
+With a parent configured, local/property reads expose `Member_Of` as the existing
+context-tagged `PropertyValue.application_data` bytes, `Delete_On_Forward` as false,
+`Issue_Confirmed_Notifications` as true, and `Reliability`; these properties remain
+read-only over BACnet. An unresolved binding or local-address alias retains the
+Rust `CONFIGURATION_ERROR` / no-forward behavior. Delivery failure never rolls back
+the child commit or its ACK; a child ACK does **not** prove parent delivery. Query
+the parent under an application deadline rather than assuming task ordering.
+
+The RB-22 semantics are unchanged: at most one immediate confirmed attempt,
+64 shared active Audit permits, one total three-second deadline, no waiting queue,
+retry, deletion, bulk/backlog replay, durable outbox or restart-delivery guarantee.
+Payload identities remain peer-reported; bindings do not authenticate a peer.
+Installed-extension evidence covers loopback BACnet/IP child-to-parent receipt,
+typed queries and file reopen, not IPv6/SC/MS/TP hardware forwarding or independent
+interop. This is not active Reporter configuration, full Audit/BIBB, BTL/certification
+or issue #345 closure.
 
 #### Building Control
 

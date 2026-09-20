@@ -123,6 +123,9 @@ pub struct BACnetServer {
     read_range_budget: server::ReadRangeBudget,
     get_event_information_budget: server::GetEventInformationBudget,
     audit_notification_sink: Option<AuditNotificationSink>,
+    device_bindings: std::collections::BTreeMap<u32, server::DeviceBinding>,
+    /// Freeze new forwarding settings at ownership transfer, including startup in flight.
+    forwarding_configuration_started: AtomicBool,
     /// Whether the server has been started.
     started: Arc<AtomicBool>,
     /// Objects to add before starting. Cleared after start.

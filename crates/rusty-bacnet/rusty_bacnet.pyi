@@ -2230,6 +2230,26 @@ class BACnetServer:
     def add_trend_log_multiple(self, instance: int, name: str, buffer_size: int = 100) -> None: ...
     def add_event_log(self, instance: int, name: str, buffer_size: int = 100) -> None: ...
     def add_audit_log(self, instance: int, name: str, storage_path: str, buffer_size: int = 100) -> None: ...
+    def add_device_binding(self, device_instance: int, address: str) -> None:
+        """Register a direct Device binding using IPv4/IPv6, hex MAC or MS/TP syntax.
+
+        Invalid instance/address or duplicate Device raises ValueError. No overwrite,
+        routing or discovery. Frozen when start() consumes configuration (RuntimeError
+        thereafter, including after stop). Transport broadcast validation stays in start().
+        """
+        ...
+    def configure_audit_log_parent(
+        self, instance: int, *, parent_device_instance: int, parent_audit_log_instance: int
+    ) -> None:
+        """Set a registered Audit Log's remote parent; valid pre-start calls replace it.
+
+        Identifiers are integers in 0..=4194303, not bool. Invalid/missing/duplicate
+        local logs or a local parent Device raise ValueError without mutation.
+        Startup revalidates local identity; settings freeze at ownership transfer.
+        Reapply on a new server after reopen. Only the selected inbound sink forwards,
+        with the existing one-attempt confirmed policy, never deletion or a durable queue.
+        """
+        ...
     def configure_audit_notification_sink(
         self, instance: int, *, policy: Literal["deny_all", "allow_all"]
     ) -> None:

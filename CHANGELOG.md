@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Standalone Python direct Audit Log parent forwarding (RB-23b, Refs #345):**
+  `BACnetServer.add_device_binding(device_instance, address)` reuses the existing
+  address grammar and rejects duplicate Device bindings. Pre-start
+  `configure_audit_log_parent(instance, *, parent_device_instance, parent_audit_log_instance)`
+  sets the registered log's `Member_Of`; valid calls replace the prior parent,
+  invalid/missing/duplicate local identities do not mutate it. Both settings freeze
+  at startup ownership transfer. Installed-extension loopback tests prove child
+  receipt, parent forwarding/query and durable reopen without deleting child records.
+  The existing confirmed one-attempt Rust forwarding and RB-23a sink policies are
+  unchanged. Reapply configuration on a new server after reopen. See
+  [Python parent forwarding](docs/python-api.md#direct-audit-log-parent-forwarding).
+  No routed binding API, active Python Reporter, retry/outbox/queue, full Audit/BIBB,
+  BTL/certification or #345 closure is claimed. This supersedes the RB-23a forwarding
+  exclusion only for the documented direct-parent subset.
+
 - **Standalone Python Audit receiver/query parity (RB-23a, Refs #345):**
   `BACnetServer.configure_audit_notification_sink(instance, *, policy)` selects
   one registered file-backed Audit Log before startup. Explicit `allow_all` admits

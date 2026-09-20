@@ -1,4 +1,4 @@
-"""Installed-artifact tests for the typed Python Audit client and receiver."""
+"""Installed-artifact tests for the typed Python Audit client, receiver and parent forwarding."""
 
 from __future__ import annotations
 
@@ -299,6 +299,32 @@ class AuditContractArtifactTests(unittest.TestCase):
         )
         self.assertEqual(annotation_text(method.returns), "None")
 
+        for name, positional, keyword_only in (
+            ("add_device_binding", {"device_instance": "int", "address": "str"}, {}),
+            ("configure_audit_log_parent", {"instance": "int"}, {
+                "parent_device_instance": "int", "parent_audit_log_instance": "int",
+            }),
+        ):
+            with self.subTest(server_method=name):
+                parameters = list(inspect.signature(getattr(BACnetServer, name)).parameters.values())
+                self.assertEqual([p.name for p in parameters], ["self", *positional, *keyword_only])
+                for parameter in parameters[1:]:
+                    self.assertIs(parameter.default, inspect.Parameter.empty)
+                    self.assertEqual(parameter.kind, inspect.Parameter.KEYWORD_ONLY
+                                     if parameter.name in keyword_only
+                                     else inspect.Parameter.POSITIONAL_OR_KEYWORD)
+                method = next(
+                    node for node in classes["BACnetServer"].body
+                    if isinstance(node, ast.FunctionDef) and node.name == name
+                )
+                self.assertEqual(
+                    {a.arg: annotation_text(a.annotation) for a in method.args.args[1:]}, positional,
+                )
+                self.assertEqual(
+                    {a.arg: annotation_text(a.annotation) for a in method.args.kwonlyargs}, keyword_only,
+                )
+                self.assertEqual(annotation_text(method.returns), "None")
+
         raw_methods = {
             "confirmed_audit_notification": "None",
             "unconfirmed_audit_notification": "None",
@@ -581,6 +607,232 @@ class AuditContractArtifactTests(unittest.TestCase):
 
     def test_static_receiver_commits_confirmed_and_unconfirmed_batches(self) -> None:
         asyncio.run(self._exercise_static_receiver())
+
+    def test_direct_binding_address_and_identity_validation(self) -> None:
+        server = BACnetServer(device_instance=8)
+        add = cast(Callable[..., None], server.add_device_binding)
+        for device, address in enumerate((
+            "127.0.0.1:47808", "[::1]:47808", "01:02:03:04:05:06", "7", "mstp:254",
+        )):
+            with self.subTest(address=address):
+                self.assertIsNone(add(device, address))
+                with self.assertRaisesRegex(ValueError, "duplicate configured Device"):
+                    add(device, "127.0.0.1:47809")
+        add(2**22 - 1, "mstp:0")
+        for value in (-1, 2**22, 2**100, True, 1.0, "1", None):
+            with self.subTest(instance=value), self.assertRaises(ValueError):
+                add(value, ADDRESS)
+        for address in ("", "not-an-address", "127.0.0.1", "127.0.0.1:65536",
+                        "[::1:47808", "[invalid]:47808", "01:zz:03:04:05:06",
+                        "mstp:255", "255", "mstp:-1", "mstp:256"):
+            with self.subTest(invalid_address=address), self.assertRaises(ValueError):
+                add(99, address)
+        for address in (None, b"127.0.0.1:47808", 7):
+            with self.subTest(address_type=address), self.assertRaises(TypeError):
+                add(99, address)
+        # Failed calls must not reserve the Device identifier.
+        add(99, ADDRESS)
+
+    def test_parent_validation_preserves_pending_identity_and_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            server = BACnetServer(device_instance=8, interface="127.0.0.1", port=0)
+            configure = cast(Callable[..., None], server.configure_audit_log_parent)
+            parent = {"parent_device_instance": 9, "parent_audit_log_instance": 7}
+            with self.assertRaisesRegex(ValueError, "no pending Audit Log"):
+                configure(1, **parent)
+            server.add_analog_value(1, "Not a log")
+            with self.assertRaisesRegex(ValueError, "no pending Audit Log"):
+                configure(1, **parent)
+            server.add_audit_log(1, "Child", str(Path(directory) / "child"))
+            server.configure_audit_notification_sink(1, policy="allow_all")
+            configure(1, parent_device_instance=0, parent_audit_log_instance=2**22 - 1)
+            configure(1, parent_device_instance=2**22 - 1, parent_audit_log_instance=0)
+            configure(1, **parent)
+            for name in ("instance", *parent):
+                for invalid in (-1, 2**22, 2**100, True, 1.0, "1", None):
+                    with self.subTest(field=name, value=invalid), self.assertRaises(ValueError):
+                        configure(**{**{"instance": 1, **parent}, name: invalid})
+            with self.assertRaisesRegex(ValueError, "must be remote"):
+                configure(1, parent_device_instance=8, parent_audit_log_instance=7)
+            with self.assertRaises(TypeError):
+                configure(1, 9, 7)
+            with self.assertRaises(TypeError):
+                configure(1, parent_device_instance=9)
+            self.assertEqual(getattr(server, "_pending_registration_count")(), 2)
+
+            async def inspect_parent() -> None:
+                await server.start()
+                try:
+                    value = await server.read_property(
+                        ObjectIdentifier(ObjectType.AUDIT_LOG, 1), PropertyIdentifier.MEMBER_OF,
+                    )
+                    self.assertEqual(value.tag, "application_data")
+                    # Independent context [0] Device:9, context [1] AuditLog:7.
+                    self.assertEqual(value.value, bytes.fromhex("0c 02000009 1c 0f400007"))
+                    # No binding is inferred: the existing Rust health behavior remains visible.
+                    reliability = await server.read_property(
+                        ObjectIdentifier(ObjectType.AUDIT_LOG, 1), PropertyIdentifier.RELIABILITY,
+                    )
+                    # The selected sink has no binding: startup must not invent one.
+                    self.assertEqual(reliability.value, 10)  # CONFIGURATION_ERROR
+                finally:
+                    await server.stop()
+
+            asyncio.run(inspect_parent())
+
+    def test_parent_start_revalidates_duplicates_without_draining(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            server = BACnetServer(device_instance=8)
+            server.add_audit_log(1, "Child", str(Path(directory) / "child"))
+            server.configure_audit_log_parent(1, parent_device_instance=9, parent_audit_log_instance=7)
+            # Even a nonselected log with a parent must not be silently replaced at start.
+            server.add_audit_log(1, "Duplicate", str(Path(directory) / "duplicate"))
+            with self.assertRaisesRegex(ValueError, "duplicate pending Audit Log"):
+                server.configure_audit_log_parent(1, parent_device_instance=10, parent_audit_log_instance=2)
+            for _ in range(2):
+                with self.assertRaisesRegex(ValueError, "duplicate pending Audit Log"):
+                    _unused = server.start()
+                self.assertEqual(getattr(server, "_pending_registration_count")(), 2)
+
+    def test_forwarding_configuration_freezes_at_start_ownership_transfer(self) -> None:
+        async def exercise() -> None:
+            with tempfile.TemporaryDirectory() as directory:
+                server = BACnetServer(device_instance=8, interface="127.0.0.1", port=0)
+                server.add_audit_log(1, "Child", str(Path(directory) / "child"))
+
+                def rejected() -> None:
+                    with self.assertRaises(RuntimeError):
+                        server.add_device_binding(9, ADDRESS)
+                    with self.assertRaises(RuntimeError):
+                        server.configure_audit_log_parent(
+                            1, parent_device_instance=9, parent_audit_log_instance=7,
+                        )
+
+                starting = server.start()
+                rejected()  # No await: covers the startup-in-flight gap.
+                await starting
+                try:
+                    rejected()
+                finally:
+                    await server.stop()
+                rejected()  # Static settings do not become mutable after stop.
+
+        asyncio.run(exercise())
+
+    def test_direct_binding_capacity_rejected_before_registration_transfer(self) -> None:
+        server = BACnetServer(device_instance=8)
+        server.add_analog_value(1, "Preserved")
+        for device in range(4097):
+            server.add_device_binding(device, ADDRESS)
+        for _ in range(2):
+            with self.assertRaisesRegex(ValueError, "configured binding capacity exceeded"):
+                _unused = server.start()
+            self.assertEqual(getattr(server, "_pending_registration_count")(), 1)
+
+    def test_direct_parent_forwarding_is_queryable_and_durable(self) -> None:
+        asyncio.run(self._exercise_parent_forwarding())
+
+    async def _exercise_parent_forwarding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            def logger(device: int, instance: int, name: str) -> BACnetServer:
+                server = BACnetServer(
+                    device_instance=device, interface="127.0.0.1", port=0,
+                    broadcast_address="127.0.0.1",
+                )
+                server.add_audit_log(instance, name, str(Path(directory) / name), buffer_size=10)
+                server.configure_audit_notification_sink(instance, policy="allow_all")
+                return server
+
+            parent = logger(9, 7, "parent")
+            child = logger(8, 1, "child")
+            child.add_audit_log(2, "Nonselected", str(Path(directory) / "nonselected"))
+            await parent.start()
+            try:
+                parent_address = await parent.local_address()
+                child.add_device_binding(9, parent_address)
+                with self.assertRaisesRegex(ValueError, "duplicate configured Device"):
+                    child.add_device_binding(9, "127.0.0.1:1")
+                child.configure_audit_log_parent(1, parent_device_instance=99, parent_audit_log_instance=3)
+                child.configure_audit_log_parent(1, parent_device_instance=9, parent_audit_log_instance=7)
+                with self.assertRaises(ValueError):
+                    child.configure_audit_log_parent(99, parent_device_instance=99, parent_audit_log_instance=3)
+                await child.start()
+                try:
+                    oid = ObjectIdentifier(ObjectType.AUDIT_LOG, 1)
+                    member = await child.read_property(oid, PropertyIdentifier.MEMBER_OF)
+                    self.assertEqual(member.value, bytes.fromhex("0c 02000009 1c 0f400007"))
+                    for property_id, expected in (
+                        (PropertyIdentifier.DELETE_ON_FORWARD, False),
+                        (PropertyIdentifier.ISSUE_CONFIRMED_NOTIFICATIONS, True),
+                        (PropertyIdentifier.RELIABILITY, 0),  # NO_FAULT_DETECTED
+                    ):
+                        self.assertEqual((await child.read_property(oid, property_id)).value, expected)
+                    async with BACnetClient(
+                        interface="127.0.0.1", port=0, broadcast_address="127.0.0.1",
+                        apdu_timeout_ms=2_000,
+                    ) as client:
+                        child_address = await child.local_address()
+                        child_query = cast("AuditLogQueryRequestInput", target_query())
+                        parent_query = cast("AuditLogQueryRequestInput", {
+                            **child_query, "audit_log": ObjectIdentifier(ObjectType.AUDIT_LOG, 7),
+                        })
+                        self.assertEqual((await client.audit_log_query_typed(parent_address, parent_query))["records"], [])
+                        notification = cast("AuditNotificationInput", {
+                            **minimal_notification(AuditOperation.WRITE),
+                            "source_comment": "child to parent",
+                            "target_value": b"\x21\x2a",
+                        })
+                        # Existing public producer operation; no private append or mocked transport.
+                        await client.confirmed_audit_notification_typed(
+                            child_address, {"notifications": [notification]},
+                        )
+                        self.assertEqual(len((await client.audit_log_query_typed(child_address, child_query))["records"]), 1)
+                        # Child ACK proves only child commit, not parent delivery. Observe parent
+                        # commit with a bounded query loop, not a fixed dispatch-order sleep.
+                        async with asyncio.timeout(5):
+                            while True:
+                                forwarded = await client.audit_log_query_typed(parent_address, parent_query)
+                                if forwarded["records"]:
+                                    break
+                                await asyncio.sleep(0.01)
+                        self.assertEqual(len(forwarded["records"]), 1)
+                        datum = forwarded["records"][0]["record"]["datum"]
+                        assert datum["kind"] == "audit_notification"
+                        saved = datum["audit_notification"]
+                        for key in ("source_device", "target_device", "operation", "source_comment", "target_value"):
+                            self.assertEqual(saved[key], notification.get(key))
+                        self.assertIsNone(saved["result"])
+                        self.assertEqual((await client.audit_log_query_typed(child_address, {
+                            **child_query, "audit_log": ObjectIdentifier(ObjectType.AUDIT_LOG, 2),
+                        }))["records"], [])
+                finally:
+                    await child.stop()
+            finally:
+                await parent.stop()
+
+            # Reconstruct both real file-backed objects. Success never deletes the child record;
+            # parent configuration is local-only, not recovered from the durable snapshots.
+            for device, instance, name in ((8, 1, "child"), (9, 7, "parent")):
+                reopened = logger(device, instance, name)
+                await reopened.start()
+                try:
+                    with self.assertRaises(BacnetProtocolError) as raised:
+                        await reopened.read_property(
+                            ObjectIdentifier(ObjectType.AUDIT_LOG, instance), PropertyIdentifier.MEMBER_OF,
+                        )
+                    self.assertEqual(raised.exception.error_code, ErrorCode.UNKNOWN_PROPERTY.to_raw())
+                    async with BACnetClient(
+                        interface="127.0.0.1", port=0, broadcast_address="127.0.0.1",
+                    ) as client:
+                        ack = await client.audit_log_query_typed(await reopened.local_address(), {
+                            **child_query, "audit_log": ObjectIdentifier(ObjectType.AUDIT_LOG, instance),
+                        })
+                        self.assertEqual(len(ack["records"]), 1)
+                        datum = ack["records"][0]["record"]["datum"]
+                        assert datum["kind"] == "audit_notification"
+                        self.assertEqual(datum["audit_notification"]["source_comment"], "child to parent")
+                finally:
+                    await reopened.stop()
 
     async def _exercise_static_receiver(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
