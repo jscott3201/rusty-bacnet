@@ -252,6 +252,7 @@ impl BACnetServer {
             atomic_write_file_budget,
             read_range_budget,
             get_event_information_budget,
+            audit_notification_sink: None,
             started: Arc::new(AtomicBool::new(false)),
             pending_objects: std::sync::Mutex::new(Vec::new()),
         })

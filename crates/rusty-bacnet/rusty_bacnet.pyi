@@ -2230,6 +2230,17 @@ class BACnetServer:
     def add_trend_log_multiple(self, instance: int, name: str, buffer_size: int = 100) -> None: ...
     def add_event_log(self, instance: int, name: str, buffer_size: int = 100) -> None: ...
     def add_audit_log(self, instance: int, name: str, storage_path: str, buffer_size: int = 100) -> None: ...
+    def configure_audit_notification_sink(
+        self, instance: int, *, policy: Literal["deny_all", "allow_all"]
+    ) -> None:
+        """Select one registered Audit Log before start(); omission denies receipt.
+
+        Invalid policy/instance, missing or duplicate log raises ValueError without
+        mutation. Startup revalidates before transport preparation/registration
+        transfer. A running server raises RuntimeError. Payload Source_Device and
+        Target_Device remain peer-reported, not verified origin. No Python callbacks.
+        """
+        ...
     def add_audit_reporter(self, instance: int, name: str) -> None: ...
 
     # --- Control/PID ---

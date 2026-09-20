@@ -56,6 +56,9 @@ use bacnet_types::primitives::PropertyValue;
 use crate::errors::to_py_err;
 use crate::types::{PyObjectIdentifier, PyPropertyIdentifier, PyPropertyValue};
 
+mod audit_configuration;
+use audit_configuration::AuditNotificationSink;
+
 /// Async BACnet server that hosts objects and responds to requests.
 ///
 /// Usage:
@@ -119,6 +122,7 @@ pub struct BACnetServer {
     atomic_write_file_budget: server::AtomicWriteFileBudget,
     read_range_budget: server::ReadRangeBudget,
     get_event_information_budget: server::GetEventInformationBudget,
+    audit_notification_sink: Option<AuditNotificationSink>,
     /// Whether the server has been started.
     started: Arc<AtomicBool>,
     /// Objects to add before starting. Cleared after start.
