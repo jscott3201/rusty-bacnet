@@ -18,6 +18,10 @@ use crate::mstp_frame::{
 };
 use crate::port::{ReceivedNpdu, TransportProvenance};
 
+mod diagnostics;
+use diagnostics::{increment, Counters};
+pub use diagnostics::{MstpDiagnostics, MstpDiagnosticsSnapshot};
+
 // ---------------------------------------------------------------------------
 // Serial port abstraction
 // ---------------------------------------------------------------------------
@@ -283,6 +287,15 @@ impl MasterNode {
         frame: &MstpFrame,
         npdu_tx: &mpsc::Sender<ReceivedNpdu>,
     ) -> Option<MstpFrame> {
+        self.handle_received_frame_observed(frame, npdu_tx, None)
+    }
+
+    fn handle_received_frame_observed(
+        &mut self,
+        frame: &MstpFrame,
+        npdu_tx: &mpsc::Sender<ReceivedNpdu>,
+        diagnostics: Option<&Counters>,
+    ) -> Option<MstpFrame> {
         self.event_count = self.event_count.saturating_add(1);
 
         // SawTokenUser: NS has started using the token.
@@ -343,7 +356,7 @@ impl MasterNode {
                 {
                     // ReceivedReply or ReceivedUnexpectedFrame — validate source
                     if self.expected_reply_source == Some(frame.source) {
-                        let _ = npdu_tx.try_send(ReceivedNpdu {
+                        let result = npdu_tx.try_send(ReceivedNpdu {
                             npdu: frame.data.clone(),
                             source_mac: MacAddr::from_slice(&[frame.source]),
                             link_layer_group: false,
@@ -351,6 +364,9 @@ impl MasterNode {
                             provenance: TransportProvenance::unverified(),
                             reply_tx: None,
                         });
+                        if let Some(counts) = diagnostics {
+                            counts.delivery(&result);
+                        }
                     }
                     // Both cases → DoneWithToken per spec Clause 9.5.6
                     self.expected_reply_source = None;
@@ -358,7 +374,7 @@ impl MasterNode {
                 } else if frame.destination == self.config.this_station
                     || frame.destination == BROADCAST_MAC
                 {
-                    let _ = npdu_tx.try_send(ReceivedNpdu {
+                    let result = npdu_tx.try_send(ReceivedNpdu {
                         npdu: frame.data.clone(),
                         source_mac: MacAddr::from_slice(&[frame.source]),
                         link_layer_group: frame.destination == BROADCAST_MAC,
@@ -366,6 +382,9 @@ impl MasterNode {
                         provenance: TransportProvenance::unverified(),
                         reply_tx: None,
                     });
+                    if let Some(counts) = diagnostics {
+                        counts.delivery(&result);
+                    }
                 }
                 None
             }
@@ -378,7 +397,7 @@ impl MasterNode {
                     self.pending_reply_source = Some(frame.source);
                     let (tx, rx) = oneshot::channel();
                     self.reply_rx = Some(rx);
-                    let _ = npdu_tx.try_send(ReceivedNpdu {
+                    let result = npdu_tx.try_send(ReceivedNpdu {
                         npdu: frame.data.clone(),
                         source_mac: MacAddr::from_slice(&[frame.source]),
                         link_layer_group: false,
@@ -386,6 +405,9 @@ impl MasterNode {
                         provenance: TransportProvenance::unverified(),
                         reply_tx: Some(tx),
                     });
+                    if let Some(counts) = diagnostics {
+                        counts.delivery(&result);
+                    }
                 }
                 None
             }
@@ -691,7 +713,19 @@ impl MasterNode {
     /// Returns an error if the NPDU exceeds the supported standard-frame limit
     /// or the TX queue has reached [`MAX_TX_QUEUE_DEPTH`].
     pub fn queue_npdu(&mut self, dest: u8, npdu: Bytes) -> Result<(), Error> {
+        self.queue_npdu_observed(dest, npdu, None)
+    }
+
+    fn queue_npdu_observed(
+        &mut self,
+        dest: u8,
+        npdu: Bytes,
+        diagnostics: Option<&Counters>,
+    ) -> Result<(), Error> {
         if npdu.len() > MAX_STANDARD_MPDU_DATA {
+            if let Some(counts) = diagnostics {
+                increment(&counts.outbound_oversize);
+            }
             return Err(Error::Encoding(format!(
                 "MS/TP NPDU length {} exceeds standard-frame maximum {}",
                 npdu.len(),
@@ -699,6 +733,9 @@ impl MasterNode {
             )));
         }
         if self.tx_queue.len() >= MAX_TX_QUEUE_DEPTH {
+            if let Some(counts) = diagnostics {
+                increment(&counts.outbound_queue_full);
+            }
             return Err(Error::Transport(std::io::Error::new(
                 std::io::ErrorKind::WouldBlock,
                 "MS/TP TX queue full",
@@ -736,6 +773,8 @@ pub use port::{LoopbackSerial, MstpTransport, NoSerial};
 
 #[cfg(test)]
 mod clause956_tests;
+#[cfg(test)]
+mod diagnostics_tests;
 #[cfg(test)]
 pub(crate) mod port_timing_tests;
 #[cfg(test)]

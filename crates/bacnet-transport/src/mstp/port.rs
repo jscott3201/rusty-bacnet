@@ -12,10 +12,10 @@ use crate::mstp_frame::{
 use crate::port::{ReceivedNpdu, TransportPort};
 
 use super::{
-    calculate_host_stale_partial_timeout_us, calculate_t_turnaround_us, next_addr,
-    DedicatedRuntime, MasterNode, MasterState, MstpConfig, MstpExecutionMode, SerialPort,
-    MSTP_MAX_FRAME_BUF, T_NO_TOKEN_MS, T_REPLY_DELAY_MS, T_REPLY_TIMEOUT_MS,
-    T_REPLY_TRANSMIT_MARGIN_MS, T_USAGE_TIMEOUT_MS,
+    calculate_host_stale_partial_timeout_us, calculate_t_turnaround_us, increment, next_addr,
+    Counters, DedicatedRuntime, MasterNode, MasterState, MstpConfig, MstpDiagnostics,
+    MstpExecutionMode, SerialPort, MSTP_MAX_FRAME_BUF, T_NO_TOKEN_MS, T_REPLY_DELAY_MS,
+    T_REPLY_TIMEOUT_MS, T_REPLY_TRANSMIT_MARGIN_MS, T_USAGE_TIMEOUT_MS,
 };
 
 /// Add one host read to the persistent receive buffer and drain all complete frames.
@@ -23,7 +23,7 @@ use super::{
 /// The persistent buffer never exceeds one maximum standard frame. A host read may
 /// contain any number of coalesced frames; complete frames are drained before more
 /// bytes from that same read are appended.
-fn assemble_host_chunk(frame_buf: &mut Vec<u8>, chunk: &[u8]) -> Vec<MstpFrame> {
+fn assemble_host_chunk(frame_buf: &mut Vec<u8>, chunk: &[u8], counts: &Counters) -> Vec<MstpFrame> {
     let mut frames = Vec::new();
     let mut remaining = chunk;
 
@@ -33,6 +33,7 @@ fn assemble_host_chunk(frame_buf: &mut Vec<u8>, chunk: &[u8]) -> Vec<MstpFrame> 
             // A valid standard frame is decidable at this size. This fallback
             // guarantees progress if malformed input somehow remains NeedMore.
             warn!("MS/TP: full incomplete host assembly, discarding one byte");
+            increment(&counts.invalid_frame_discards);
             frame_buf.drain(..1);
             continue;
         }
@@ -45,22 +46,29 @@ fn assemble_host_chunk(frame_buf: &mut Vec<u8>, chunk: &[u8]) -> Vec<MstpFrame> 
             let preamble_pos = match find_preamble(frame_buf) {
                 Some(pos) => pos,
                 None => {
+                    let before = frame_buf.len();
                     retain_lone_preamble_byte(frame_buf);
+                    if frame_buf.len() < before {
+                        increment(&counts.invalid_frame_discards);
+                    }
                     break;
                 }
             };
 
             if preamble_pos > 0 {
+                increment(&counts.invalid_frame_discards);
                 frame_buf.drain(..preamble_pos);
             }
 
             match decode_frame_stream(frame_buf) {
                 StreamDecode::Complete { frame, consumed } => {
+                    counts.received(frame.frame_type);
                     frame_buf.drain(..consumed);
                     frames.push(frame);
                 }
                 StreamDecode::NeedMore => break,
                 StreamDecode::Invalid { discard } => {
+                    increment(&counts.invalid_frame_discards);
                     let discard = discard.min(frame_buf.len()).max(1);
                     frame_buf.drain(..discard);
                 }
@@ -75,7 +83,14 @@ fn assemble_host_chunk(frame_buf: &mut Vec<u8>, chunk: &[u8]) -> Vec<MstpFrame> 
 fn finish_data_request_at_transport_boundary(
     node: &mut MasterNode,
     reply_data: Option<Bytes>,
+    counts: &Counters,
 ) -> Option<MstpFrame> {
+    if reply_data
+        .as_ref()
+        .is_some_and(|data| data.len() > super::MAX_STANDARD_MPDU_DATA)
+    {
+        increment(&counts.outbound_oversize);
+    }
     match node.finish_data_request(reply_data) {
         Ok(frame) => Some(frame),
         Err(error) => {
@@ -106,6 +121,7 @@ pub struct MstpTransport<S: SerialPort> {
     recv_task: Option<tokio::task::JoinHandle<()>>,
     execution_mode: MstpExecutionMode,
     dedicated_runtime: Option<DedicatedRuntime>,
+    diagnostics: MstpDiagnostics,
 }
 
 impl<S: SerialPort> MstpTransport<S> {
@@ -119,6 +135,7 @@ impl<S: SerialPort> MstpTransport<S> {
             recv_task: None,
             execution_mode: MstpExecutionMode::default(),
             dedicated_runtime: None,
+            diagnostics: MstpDiagnostics::new(),
         }
     }
 
@@ -139,6 +156,29 @@ impl<S: SerialPort> MstpTransport<S> {
     /// Get the master node state (for testing/inspection).
     pub fn node_state(&self) -> Option<&Arc<Mutex<MasterNode>>> {
         self.node.as_ref()
+    }
+
+    /// Obtain a cloneable, counts-only handle before transferring transport ownership.
+    /// Cloning retains no serial or runtime ownership; snapshots remain readable
+    /// after stop/drop. See [`MstpDiagnostics`] for lifecycle and coherence limits.
+    /// Direct manipulations through [`Self::node_state`] are outside the transport
+    /// admission/delivery counters; use the normal transport API during measurement.
+    ///
+    /// ```
+    /// use bacnet_transport::mstp::{LoopbackSerial, MstpConfig, MstpTransport};
+    /// let (serial, _peer) = LoopbackSerial::pair();
+    /// let transport = MstpTransport::new(serial, MstpConfig::default());
+    /// let diagnostics = transport.diagnostics();
+    /// let observer = diagnostics.clone();
+    /// let before = diagnostics.snapshot();
+    /// // Move `transport` into your BACnetRouter/endpoint here. The observer
+    /// // remains independent; no second serial open or TransportPort API needed.
+    /// let owned_transport = transport;
+    /// drop(owned_transport);
+    /// assert_eq!(observer.snapshot(), before);
+    /// ```
+    pub fn diagnostics(&self) -> MstpDiagnostics {
+        self.diagnostics.clone()
     }
 
     fn abort_receive_task_and_release_state(&mut self) {
@@ -173,6 +213,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
 
         let serial = Arc::new(serial);
         let serial_clone = serial.clone();
+        let counts = self.diagnostics.counters.clone();
         let t_turnaround_us = calculate_t_turnaround_us(self.config.baud_rate);
         // Host reassembly policy: tolerate USB read chunk gaps, not wire T_frame_abort.
         let host_stale_partial_timeout_us =
@@ -215,6 +256,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                         let response = finish_data_request_at_transport_boundary(
                             &mut node_guard,
                             reply.ok(),
+                            &counts,
                         );
                         drop(node_guard);
 
@@ -223,7 +265,10 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                             if encode_frame(&mut encode_buf, &response).is_ok() {
                                 wait_for_turnaround(earliest_tx).await;
                                 if let Err(e) = serial_clone.write(&encode_buf).await {
+                                    increment(&counts.serial_write_errors);
                                     warn!("MS/TP write error: {}", e);
+                                } else {
+                                    counts.transmitted(&encode_buf, true);
                                 }
                             }
                         }
@@ -252,6 +297,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                             "MS/TP: host stale partial frame timeout ({gap:?}), discarding partial assembly"
                                         );
                                         frame_buf.clear();
+                                        increment(&counts.stale_partial_resets);
                                     }
                                 }
                                 last_byte_time = now;
@@ -260,9 +306,10 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                 // without estimating backwards through USB batching.
                                 earliest_tx = now
                                     + tokio::time::Duration::from_micros(t_turnaround_us);
-                                assemble_host_chunk(&mut frame_buf, &recv_buf[..n])
+                                assemble_host_chunk(&mut frame_buf, &recv_buf[..n], &counts)
                             }
                             Err(e) => {
+                                increment(&counts.serial_read_errors);
                                 warn!("MS/TP serial read error: {}", e);
                                 break;
                             }
@@ -273,7 +320,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                     // frames under lock, drop before writing.
                                     let mut node_guard = node.lock().await;
                                     let response =
-                                        node_guard.handle_received_frame(&frame, &npdu_tx);
+                                        node_guard.handle_received_frame_observed(&frame, &npdu_tx, Some(&counts));
                                     let mut started_reply = false;
                                     if pending_reply_rx.is_none()
                                         && node_guard.state == MasterState::AnswerDataRequest
@@ -360,9 +407,11 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                     let mut start = 0;
                                     for &end in &pending_write_ends {
                                         if let Err(e) = serial_clone.write(&encode_buf[start..end]).await {
+                                            increment(&counts.serial_write_errors);
                                             warn!("MS/TP write error: {}", e);
                                             break;
                                         }
+                                        counts.transmitted(&encode_buf[start..end], false);
                                         start = end;
                                     }
 
@@ -414,6 +463,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                 }
                             }
                             MasterState::WaitForReply => {
+                                increment(&counts.wait_for_reply_timeouts);
                                 // ReplyTimeout: enter DoneWithToken then run transitions.
                                 node_guard.expected_reply_source = None;
                                 node_guard.frame_count = node_guard.config.max_info_frames;
@@ -438,6 +488,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                                 if let Some(reply_frame) = finish_data_request_at_transport_boundary(
                                     &mut node_guard,
                                     reply_data,
+                                    &counts,
                                 ) {
                                     let _ = encode_frame(&mut encode_buf, &reply_frame);
                                 }
@@ -481,7 +532,10 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
                         if !encode_buf.is_empty() {
                             wait_for_turnaround(earliest_tx).await;
                             if let Err(e) = serial_clone.write(&encode_buf).await {
+                                increment(&counts.serial_write_errors);
                                 warn!("MS/TP write error: {}", e);
+                            } else {
+                                counts.transmitted(&encode_buf, was_answering_data_request);
                             }
                         }
 
@@ -535,7 +589,11 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
         let dest = mac[0];
         if let Some(ref node) = self.node {
             let mut node = node.lock().await;
-            node.queue_npdu(dest, Bytes::copy_from_slice(npdu))?;
+            node.queue_npdu_observed(
+                dest,
+                Bytes::copy_from_slice(npdu),
+                Some(&self.diagnostics.counters),
+            )?;
             Ok(())
         } else {
             Err(Error::Transport(std::io::Error::new(
@@ -548,7 +606,11 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
     async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
         if let Some(ref node) = self.node {
             let mut node = node.lock().await;
-            node.queue_npdu(BROADCAST_MAC, Bytes::copy_from_slice(npdu))?;
+            node.queue_npdu_observed(
+                BROADCAST_MAC,
+                Bytes::copy_from_slice(npdu),
+                Some(&self.diagnostics.counters),
+            )?;
             Ok(())
         } else {
             Err(Error::Transport(std::io::Error::new(
@@ -671,74 +733,8 @@ impl SerialPort for NoSerial {
 }
 
 #[cfg(test)]
-mod assembly_tests {
-    use super::*;
-    use crate::mstp_frame::{MAX_STANDARD_MPDU_DATA, PREAMBLE};
-
-    fn encode_host_data_frame(source: u8, fill: u8, data_len: usize) -> Vec<u8> {
-        let frame = MstpFrame {
-            frame_type: FrameType::BACnetDataNotExpectingReply,
-            destination: 3,
-            source,
-            data: Bytes::from(vec![fill; data_len]),
-        };
-        let mut wire = BytesMut::new();
-        encode_frame(&mut wire, &frame).unwrap();
-        wire.to_vec()
-    }
-
-    #[test]
-    fn drains_coalesced_frames_larger_than_one_frame() {
-        let first = encode_host_data_frame(1, 0xA1, 300);
-        let second = encode_host_data_frame(2, 0xB2, 300);
-        let mut chunk = first;
-        chunk.extend_from_slice(&second);
-        assert!(chunk.len() > MSTP_MAX_FRAME_BUF);
-
-        let mut frame_buf = Vec::new();
-        let frames = assemble_host_chunk(&mut frame_buf, &chunk);
-
-        assert_eq!(frames.len(), 2);
-        assert_eq!(frames[0].source, 1);
-        assert_eq!(frames[0].data, Bytes::from(vec![0xA1; 300]));
-        assert_eq!(frames[1].source, 2);
-        assert_eq!(frames[1].data, Bytes::from(vec![0xB2; 300]));
-        assert!(frame_buf.is_empty());
-    }
-
-    #[test]
-    fn bounds_malformed_input_and_retains_max_partial() {
-        let malformed = vec![0xAA; MSTP_MAX_FRAME_BUF * 4 + 17];
-        let mut frame_buf = Vec::new();
-        assert!(assemble_host_chunk(&mut frame_buf, &malformed).is_empty());
-        assert!(frame_buf.len() <= MSTP_MAX_FRAME_BUF);
-
-        let wire = encode_host_data_frame(1, 0xCC, MAX_STANDARD_MPDU_DATA);
-        assert_eq!(wire.len(), MSTP_MAX_FRAME_BUF);
-        let split = wire.len() - 1;
-        assert!(assemble_host_chunk(&mut frame_buf, &wire[..split]).is_empty());
-        assert_eq!(frame_buf.len(), split);
-
-        let frames = assemble_host_chunk(&mut frame_buf, &wire[split..]);
-        assert_eq!(frames.len(), 1);
-        assert_eq!(frames[0].data.len(), MAX_STANDARD_MPDU_DATA);
-        assert!(frame_buf.is_empty());
-
-        let token = MstpFrame {
-            frame_type: FrameType::Token,
-            destination: 3,
-            source: 1,
-            data: Bytes::new(),
-        };
-        let mut token_wire = BytesMut::new();
-        encode_frame(&mut token_wire, &token).unwrap();
-        assert!(assemble_host_chunk(&mut frame_buf, &[0xAA, PREAMBLE[0]]).is_empty());
-        assert_eq!(frame_buf, PREAMBLE[..1]);
-        let frames = assemble_host_chunk(&mut frame_buf, &token_wire[1..]);
-        assert_eq!(frames, vec![token]);
-        assert!(frame_buf.is_empty());
-    }
-}
+#[path = "assembly_tests.rs"]
+mod assembly_tests;
 
 #[cfg(test)]
 mod abort_tests {
