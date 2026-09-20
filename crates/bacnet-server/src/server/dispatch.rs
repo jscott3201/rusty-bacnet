@@ -398,6 +398,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let device_bindings = Arc::clone(device_bindings);
                 let discovery_limiter = Arc::clone(discovery_limiter);
                 let time_sync_limiter = Arc::clone(time_sync_limiter);
+                let notification_transactions = Arc::clone(notification_transactions);
                 let peer = super::request_peer::canonical_requester(
                     source_mac,
                     received.source_network.as_ref(),
@@ -412,6 +413,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         &device_bindings,
                         &discovery_limiter,
                         &time_sync_limiter,
+                        &notification_transactions,
                         req,
                         &received,
                     )

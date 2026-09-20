@@ -69,6 +69,9 @@ pub struct ServerConfig {
     ///
     /// Absence is fail-closed; the server never selects a sink by database
     /// iteration order.
+    /// A built-in AuditLogObject configured with `set_member_of` also forwards
+    /// record-changing accepted batches once, after commit, to that parent using
+    /// a configured DeviceBinding. No backlog, retries, or durable send progress.
     pub audit_notification_sink: Option<ObjectIdentifier>,
     /// Optional fast, nonblocking ConfirmedAuditNotification authorizer.
     ///

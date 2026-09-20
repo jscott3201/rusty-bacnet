@@ -35,6 +35,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         device_bindings: &Arc<RwLock<DeviceBindingTable>>,
         discovery_limiter: &Arc<DiscoveryLimiter>,
         time_sync_limiter: &Arc<TimeSyncLimiter>,
+        notification_transactions: &Arc<NotificationTransactions>,
         req: UnconfirmedRequestPdu,
         received: &bacnet_network::layer::ReceivedApdu,
     ) {
@@ -302,7 +303,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
         } else if req.service_choice == UnconfirmedServiceChoice::UNCONFIRMED_AUDIT_NOTIFICATION {
-            if let Err(error) = super::audit_notification::receive_unconfirmed_audit_notification(
+            match super::audit_notification::receive_unconfirmed_audit_notification(
                 db,
                 config,
                 &received.source_mac,
@@ -312,7 +313,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             )
             .await
             {
-                debug!(%error, "Ignoring UnconfirmedAuditNotification request");
+                Ok(Some(forward)) => forward.start(
+                    network,
+                    notification_transactions,
+                    device_bindings,
+                    comm_state,
+                    config.max_apdu_length,
+                ),
+                Ok(None) => {}
+                Err(error) => debug!(%error, "Ignoring UnconfirmedAuditNotification request"),
             }
         } else {
             debug!(
@@ -482,6 +491,7 @@ mod time_sync_tests {
             &Arc::new(RwLock::new(DeviceBindingTable::new())),
             &Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), None)),
             limiter,
+            &NotificationTransactions::new(),
             UnconfirmedRequestPdu {
                 service_choice: if is_utc {
                     UnconfirmedServiceChoice::UTC_TIME_SYNCHRONIZATION

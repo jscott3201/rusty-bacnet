@@ -14,7 +14,7 @@ use super::AuditLogObject;
 // Order preserves the legacy property_list projection; PROPERTY_LIST is
 // appended so the projection helper omits it while required_properties keeps
 // it. Only implemented rows are described: table rows the object does not
-// serve (Log_Buffer, Member_Of, forwarding, intrinsic-reporting, Reliability,
+// serve (Log_Buffer, intrinsic-reporting,
 // Audit_Level, Tags, Profile_*) stay absent until dispatch exists. Enable
 // carries the table W code; Description carries the table O code and the only
 // other network write route.
@@ -32,8 +32,20 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
-pub(super) fn for_object(_object: &AuditLogObject) -> Cow<'_, [PropertyMetadata]> {
-    Cow::Borrowed(BASE)
+pub(super) fn for_object(object: &AuditLogObject) -> Cow<'_, [PropertyMetadata]> {
+    if object.forwarding.is_none() {
+        return Cow::Borrowed(BASE);
+    }
+    let mut rows = BASE.to_vec();
+    for p in [
+        P::MEMBER_OF,
+        P::DELETE_ON_FORWARD,
+        P::ISSUE_CONFIRMED_NOTIFICATIONS,
+        P::RELIABILITY,
+    ] {
+        rows.push(PropertyMetadata::new(p, Optional, None, ReadOnly));
+    }
+    Cow::Owned(rows)
 }
 
 #[cfg(test)]
@@ -100,6 +112,81 @@ mod tests {
 
     fn log() -> AuditLogObject {
         AuditLogObject::new(1, "AL-1", 4, Arc::new(MemoryPersistence::default())).unwrap()
+    }
+
+    #[test]
+    fn forwarding_properties_are_conditional_read_only_and_instance_owned() {
+        use bacnet_types::constructed::BACnetDeviceObjectReference;
+        use bacnet_types::enums::Reliability;
+        let mut object = log();
+        let parent = BACnetDeviceObjectReference {
+            device_identifier: Some(ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap()),
+            object_identifier: ObjectIdentifier::new(ObjectType::AUDIT_LOG, 2).unwrap(),
+        };
+        let properties = [
+            P::MEMBER_OF,
+            P::DELETE_ON_FORWARD,
+            P::ISSUE_CONFIRMED_NOTIFICATIONS,
+            P::RELIABILITY,
+        ];
+        for p in properties {
+            assert!(!object.property_list().contains(&p));
+            assert_error(
+                object.read_property(p, None).unwrap_err(),
+                ErrorCode::UNKNOWN_PROPERTY,
+            );
+        }
+        object.set_member_of(Some(parent.clone()));
+        for p in properties {
+            assert!(object.property_list().contains(&p));
+            assert!(!object.is_writable_property(p));
+            assert_error(
+                object
+                    .write_property(p, None, PropertyValue::Null, None)
+                    .unwrap_err(),
+                ErrorCode::WRITE_ACCESS_DENIED,
+            );
+        }
+        // Independent context-tagged DeviceObjectReference: [0] Device:9, [1] AuditLog:2.
+        assert_eq!(
+            object.read_property(P::MEMBER_OF, None).unwrap(),
+            PropertyValue::ApplicationData(vec![0x0c, 0x02, 0, 0, 9, 0x1c, 0x0f, 0x40, 0, 2])
+        );
+        assert_eq!(
+            object.read_property(P::DELETE_ON_FORWARD, None).unwrap(),
+            PropertyValue::Boolean(false)
+        );
+        assert_eq!(
+            object
+                .read_property(P::ISSUE_CONFIRMED_NOTIFICATIONS, None)
+                .unwrap(),
+            PropertyValue::Boolean(true)
+        );
+        let old = object.audit_log_forwarding_internal().unwrap();
+        assert_eq!(
+            object.read_property(P::RELIABILITY, None).unwrap(),
+            PropertyValue::Enumerated(Reliability::CONFIGURATION_ERROR.to_raw())
+        );
+        old.status().set_configured(true);
+        let epoch = old.status().begin_delivery();
+        old.status().complete_delivery(epoch, false);
+        assert_eq!(
+            object.read_property(P::STATUS_FLAGS, None).unwrap(),
+            PropertyValue::BitString {
+                unused_bits: 4,
+                data: vec![0x40]
+            }
+        );
+        object.set_member_of(Some(parent));
+        let new = object.audit_log_forwarding_internal().unwrap();
+        new.status().set_configured(true);
+        old.status().complete_delivery(epoch, false);
+        assert_eq!(
+            object.read_property(P::RELIABILITY, None).unwrap(),
+            PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw())
+        );
+        object.set_member_of(None);
+        assert!(!object.property_list().contains(&P::MEMBER_OF));
     }
 
     fn assert_error(error: Error, expected: ErrorCode) {

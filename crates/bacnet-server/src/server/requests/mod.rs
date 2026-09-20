@@ -364,8 +364,19 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 )
                 .await
                 {
-                    Ok(audit_notification::Stored) => simple_ack(),
-                    Ok(audit_notification::Duplicate) => return,
+                    Ok((audit_notification::Stored, forward)) => {
+                        if let Some(forward) = forward {
+                            forward.start(
+                                network,
+                                notification_transactions,
+                                device_bindings,
+                                comm_state,
+                                config.max_apdu_length,
+                            );
+                        }
+                        simple_ack()
+                    }
+                    Ok((audit_notification::Duplicate, _)) => return,
                     Err(error) => Self::error_apdu_from_error(invoke_id, service_choice, &error),
                 }
             }

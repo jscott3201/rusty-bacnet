@@ -15,6 +15,14 @@ pub fn handle_audit_notification(
     sink: ObjectIdentifier,
     request: &AuditNotificationRequest,
 ) -> Result<(), Error> {
+    handle_audit_notification_with_change(db, sink, request).map(|_| ())
+}
+
+pub(crate) fn handle_audit_notification_with_change(
+    db: &mut ObjectDatabase,
+    sink: ObjectIdentifier,
+    request: &AuditNotificationRequest,
+) -> Result<bool, Error> {
     if sink.object_type() != ObjectType::AUDIT_LOG {
         return Err(service_request_denied());
     }
@@ -34,7 +42,7 @@ pub fn handle_audit_notification(
     let storage = object
         .audit_log_notification_sink_internal()
         .expect("sink capability was checked before Device timeout lookup");
-    storage.store_notifications(&request.notifications, apdu_timeout_ms)
+    storage.store_notifications_with_change(&request.notifications, apdu_timeout_ms)
 }
 
 /// Store one decoded and authorized confirmed notification batch.
@@ -72,7 +80,7 @@ pub(crate) fn handle_confirmed_audit_notification_with_receipt(
     sink: ObjectIdentifier,
     request: &AuditNotificationRequest,
     receipt: CompletedAuditReceipt,
-) -> Result<ConfirmedAuditNotificationOutcome, Error> {
+) -> Result<(ConfirmedAuditNotificationOutcome, bool), Error> {
     if sink.object_type() != ObjectType::AUDIT_LOG {
         return Err(service_request_denied());
     }
@@ -92,7 +100,11 @@ pub(crate) fn handle_confirmed_audit_notification_with_receipt(
     let storage = object
         .audit_log_notification_sink_internal()
         .expect("sink capability was checked before Device timeout lookup");
-    storage.store_confirmed_notifications(&request.notifications, apdu_timeout_ms, receipt)
+    storage.store_confirmed_notifications_with_change(
+        &request.notifications,
+        apdu_timeout_ms,
+        receipt,
+    )
 }
 
 fn configured_apdu_timeout(db: &ObjectDatabase) -> Result<u32, Error> {

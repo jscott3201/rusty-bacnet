@@ -800,6 +800,12 @@ pub trait BACnetObject: Send + Sync {
         None
     }
 
+    /// Instance-owned optional Audit Log forwarding profile, never durable pending work.
+    #[doc(hidden)]
+    fn audit_log_forwarding_internal(&self) -> Option<Arc<crate::audit::AuditLogForwarding>> {
+        None
+    }
+
     /// Mutably borrow this object's Audit notification receiver capability.
     ///
     /// The default opts out. Implementations own their persistence transaction

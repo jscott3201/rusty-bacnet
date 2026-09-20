@@ -279,6 +279,9 @@ pub struct TimeSyncData {
 
 mod config;
 pub use config::ServerConfig;
+mod audit_forwarder;
+#[cfg(test)]
+mod audit_forwarder_tests;
 mod audit_reporter;
 pub use audit_reporter::AuditReporterConfig;
 #[cfg(test)]

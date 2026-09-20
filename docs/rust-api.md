@@ -1234,8 +1234,13 @@ requires restoring a compatible backup and loses changes made after that backup.
 
 Unconfirmed receipt never emits a response and never writes the confirmed ledger.
 Synchronous persistence under the database writer is an intentional availability
-limitation. Query authorization, sustained rate limiting, producer/report
-generation, forwarding, and multi-log routing policy are not provided.
+limitation. Query authorization, sustained rate limiting, and multi-log routing
+policy are not provided. The standalone server optionally forwards changed
+accepted batches from its selected log after local commit: configure
+`AuditLogObject::set_member_of` and a remote configured `DeviceBinding`.
+This is one best-effort confirmed attempt, not durable forwarding; restart can
+lose send progress. See [Audit Log forwarding](audit-log-forwarding.md) for
+properties, failure behavior, resource bounds, and exclusions.
 Query input changes never rewrite stored notifications or receipt identities,
 and the requested-count, ACK-cap, and segmentation limits stay independent.
 Executed-service bit 46

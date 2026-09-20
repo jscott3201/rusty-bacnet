@@ -336,6 +336,7 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
         &bindings,
         &discovery_limiter,
         &time_sync_limiter,
+        &NotificationTransactions::new(),
         i_am_request(local_device),
         &received(LOCAL_PEER, None),
     )
@@ -349,6 +350,7 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
         &bindings,
         &discovery_limiter,
         &time_sync_limiter,
+        &NotificationTransactions::new(),
         i_am_request(routed_device),
         &received(
             ROUTER,
@@ -389,6 +391,7 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
         &bindings,
         &discovery_limiter,
         &time_sync_limiter,
+        &NotificationTransactions::new(),
         i_am_request(ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap()),
         &received(LOCAL_PEER, None),
     )
@@ -402,6 +405,7 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
         &bindings,
         &discovery_limiter,
         &time_sync_limiter,
+        &NotificationTransactions::new(),
         UnconfirmedRequestPdu {
             service_choice: UnconfirmedServiceChoice::I_AM,
             service_request: Bytes::from_static(&[0xFF]),
@@ -421,6 +425,7 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
         &bindings,
         &discovery_limiter,
         &time_sync_limiter,
+        &NotificationTransactions::new(),
         i_am_request(local_device),
         &received(UPDATED_PEER, None),
     )
@@ -434,6 +439,7 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
         &bindings,
         &discovery_limiter,
         &time_sync_limiter,
+        &NotificationTransactions::new(),
         i_am_request(device(102)),
         &received(LOCAL_PEER, None),
     )

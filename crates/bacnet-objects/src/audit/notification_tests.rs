@@ -133,6 +133,47 @@ fn receipt(key: &[u8], completed_at: u64) -> CompletedAuditReceipt {
 }
 
 #[test]
+fn forwarding_change_outcome_requires_record_change_and_durable_commit() {
+    let (mut log, persistence) = log(10);
+    let notification = notification(
+        Some(BACnetTimeStamp::Time(time(0))),
+        Some(BACnetTimeStamp::Time(time(0))),
+    );
+    assert!(log
+        .store_notifications_with_change(std::slice::from_ref(&notification), 2_000)
+        .unwrap());
+    assert!(!log
+        .store_notifications_with_change(std::slice::from_ref(&notification), 2_000)
+        .unwrap());
+    assert_eq!(
+        log.store_confirmed_notifications_with_change(
+            std::slice::from_ref(&notification),
+            2_000,
+            receipt(b"first", 1),
+        )
+        .unwrap(),
+        (ConfirmedAuditNotificationOutcome::Stored, false),
+    );
+    assert_eq!(
+        log.store_confirmed_notifications_with_change(
+            std::slice::from_ref(&notification),
+            2_000,
+            receipt(b"first", 2),
+        )
+        .unwrap(),
+        (ConfirmedAuditNotificationOutcome::Duplicate, false),
+    );
+    let before = log.current_snapshot();
+    let mut different = notification.clone();
+    different.invoke_id = Some(8);
+    persistence.fail.store(true, Ordering::Release);
+    assert!(log
+        .store_confirmed_notifications_with_change(&[different], 2_000, receipt(b"second", 3),)
+        .is_err());
+    assert_eq!(log.current_snapshot(), before);
+}
+
+#[test]
 fn complementary_batch_merges_once_and_target_current_value_wins() {
     let (mut log, persistence) = log(10);
     let mut source = notification(Some(BACnetTimeStamp::Time(time(0))), None);
