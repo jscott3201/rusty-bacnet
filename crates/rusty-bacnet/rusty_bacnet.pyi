@@ -2231,11 +2231,15 @@ class BACnetServer:
     def add_event_log(self, instance: int, name: str, buffer_size: int = 100) -> None: ...
     def add_audit_log(self, instance: int, name: str, storage_path: str, buffer_size: int = 100) -> None: ...
     def add_device_binding(self, device_instance: int, address: str) -> None:
-        """Register a direct Device binding using IPv4/IPv6, hex MAC or MS/TP syntax.
+        """Register a direct B/IP (IPv4) Device binding on a transport="bip" server.
 
+        Accept IPv4:port or exactly six hex bytes (four IPv4 octets and two port octets).
+        Other transports or parsed address lengths raise ValueError without retention.
+        The shared parser's broader grammar remains available to other APIs, not bindings.
         Invalid instance/address or duplicate Device raises ValueError. No overwrite,
-        routing or discovery. Frozen when start() consumes configuration (RuntimeError
-        thereafter, including after stop). Transport broadcast validation stays in start().
+        routing or discovery. Syntax validation precedes the frozen-state check; after
+        start() consumes configuration, parseable calls raise RuntimeError before the
+        transport/shape checks, including after stop. Broadcast validation stays in start().
         """
         ...
     def configure_audit_log_parent(
@@ -2247,7 +2251,8 @@ class BACnetServer:
         local logs or a local parent Device raise ValueError without mutation.
         Startup revalidates local identity; settings freeze at ownership transfer.
         Reapply on a new server after reopen. Only the selected inbound sink forwards,
-        with the existing one-attempt confirmed policy, never deletion or a durable queue.
+        using a configured direct B/IP binding with the existing one-attempt confirmed
+        policy, never deletion or a durable queue. IPv6/SC/MS/TP forwarding is not exposed.
         """
         ...
     def configure_audit_notification_sink(

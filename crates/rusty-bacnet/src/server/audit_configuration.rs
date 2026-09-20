@@ -80,7 +80,7 @@ impl BACnetServer {
 
 #[pymethods]
 impl BACnetServer {
-    /// Add one direct configured Device binding before start(), using the client address grammar.
+    /// Add one direct B/IP (IPv4) Device binding before start(), using IPv4:port or six hex bytes.
     /// Duplicate Device identifiers are rejected, never overwritten. No routed bindings.
     #[pyo3(signature = (device_instance, address))]
     fn add_device_binding(
@@ -90,12 +90,22 @@ impl BACnetServer {
     ) -> PyResult<()> {
         let device = instance_identifier(device_instance, "device_instance", ObjectType::DEVICE)?;
         let mac = crate::types::parse_address(address)?;
-        let binding = server::DeviceBinding::local(device, mac)
-            .map_err(|error| PyValueError::new_err(error.to_string()))?;
         {
             let _pending = self.lock_pending()?;
             self.check_forwarding_configuration()?;
         }
+        if self.transport_type != "bip" {
+            return Err(PyValueError::new_err(
+                "device bindings require BACnetServer transport='bip' (IPv4)",
+            ));
+        }
+        if mac.len() != 6 {
+            return Err(PyValueError::new_err(
+                "B/IP device binding address must encode exactly 6 bytes (IPv4 and port)",
+            ));
+        }
+        let binding = server::DeviceBinding::local(device, mac)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
         if self.device_bindings.contains_key(&device.instance_number()) {
             return Err(PyValueError::new_err(
                 "duplicate configured Device identifier",

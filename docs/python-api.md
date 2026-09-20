@@ -1337,8 +1337,9 @@ with tempfile.TemporaryDirectory() as directory:
 #### Direct Audit Log parent forwarding
 
 Two synchronous methods connect the standalone Python receiver to the existing
-[immediate Rust forwarding path](audit-log-forwarding.md). Configure both servers'
-Audit Logs and explicit sink policies before their respective `start()` calls:
+[immediate Rust forwarding path](audit-log-forwarding.md), **for direct BACnet/IP
+(IPv4) only**. Both servers in this example use `transport="bip"` (the default).
+Configure their Audit Logs and explicit sink policies before their respective `start()` calls:
 
 ```python
 # parent has Device instance 9 and registered Audit Log instance 7.
@@ -1364,12 +1365,16 @@ finally:
 ```
 
 - `add_device_binding(device_instance: int, address: str) -> None` registers a
-  **direct configured** Device binding. It reuses the client address grammar:
-  IPv4 `"127.0.0.1:47808"`, IPv6 `"[::1]:47808"`, colon-separated hex MAC
-  `"01:02:03:04:05:06"`, or MS/TP `"7"` / `"mstp:7"` (peers 0–254).
-  The address must match the chosen transport; parsing is not reachability or
-  authentication. Duplicate Device identifiers raise `ValueError`, even for the
-  same address, without changing the first binding. There is no update/removal,
+  **direct configured B/IP** Device binding, only on a `transport="bip"` server.
+  It reuses the client address parser but requires exactly six bytes: four IPv4
+  octets followed by two big-endian UDP port octets. IPv4 `"127.0.0.1:47808"` and
+  its equivalent colon-separated hex `"7f:00:00:01:ba:c0"` are accepted. IPv6
+  (18 bytes), MS/TP (one byte), and other incompatible lengths raise `ValueError`
+  before retaining a binding. Non-B/IP servers also raise `ValueError`, even for
+  six-byte input. The shared parser's broader IPv6/hex/MS/TP grammar remains used
+  by other APIs; it does not imply forwarding support here. Parsing is not
+  reachability or authentication. Duplicate Device identifiers raise `ValueError`,
+  even for the same address, without changing the first binding. There is no update/removal,
   routed-binding or discovery API. The Rust builder's 4096-binding capacity check
   runs at `start()` before registrations transfer (`ValueError`); concrete
   transport broadcast checks remain in the subsequent Rust build step.
@@ -1383,8 +1388,11 @@ finally:
   nonselected logs, before transfer so later duplicate registration cannot silently
   discard its configuration. The parent log is not remotely discovered or validated.
 - Malformed address strings raise `ValueError`; non-string addresses raise
-  `TypeError`. Valid configuration calls after `start()` consumes registrations
-  raise `RuntimeError`, including while startup is in flight and after stop.
+  `TypeError`. Instance and address syntax validation precede the frozen-state
+  check. For parsed bindings, frozen-state rejection precedes the new transport
+  and six-byte shape checks. Configuration calls with otherwise valid inputs after
+  `start()` consumes registrations raise `RuntimeError`, including while startup
+  is in flight and after stop.
   Validation/TLS/serial preparation failures before transfer do not freeze these
   settings. Later startup failures retain the existing lack of general rollback.
   Recreate the server, register the same storage paths and reapply settings on
@@ -1409,8 +1417,10 @@ The RB-22 semantics are unchanged: at most one immediate confirmed attempt,
 retry, deletion, bulk/backlog replay, durable outbox or restart-delivery guarantee.
 Payload identities remain peer-reported; bindings do not authenticate a peer.
 Installed-extension evidence covers loopback BACnet/IP child-to-parent receipt,
-typed queries and file reopen, not IPv6/SC/MS/TP hardware forwarding or independent
-interop. This is not active Reporter configuration, full Audit/BIBB, BTL/certification
+using IPv4:port and equivalent six-byte hex bindings, typed queries and file reopen.
+IPv6/SC/MS/TP forwarding is not exposed by this Python slice; no VMAC discovery,
+SC mapping, MS/TP hardware support or independent interop is claimed here.
+This is not active Reporter configuration, full Audit/BIBB, BTL/certification
 or issue #345 closure.
 
 #### Building Control

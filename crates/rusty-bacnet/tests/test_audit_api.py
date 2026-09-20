@@ -612,13 +612,13 @@ class AuditContractArtifactTests(unittest.TestCase):
         server = BACnetServer(device_instance=8)
         add = cast(Callable[..., None], server.add_device_binding)
         for device, address in enumerate((
-            "127.0.0.1:47808", "[::1]:47808", "01:02:03:04:05:06", "7", "mstp:254",
+            "127.0.0.1:47808", "7f:00:00:01:ba:c0",
         )):
             with self.subTest(address=address):
                 self.assertIsNone(add(device, address))
                 with self.assertRaisesRegex(ValueError, "duplicate configured Device"):
                     add(device, "127.0.0.1:47809")
-        add(2**22 - 1, "mstp:0")
+        add(2**22 - 1, ADDRESS)
         for value in (-1, 2**22, 2**100, True, 1.0, "1", None):
             with self.subTest(instance=value), self.assertRaises(ValueError):
                 add(value, ADDRESS)
@@ -632,6 +632,48 @@ class AuditContractArtifactTests(unittest.TestCase):
                 add(99, address)
         # Failed calls must not reserve the Device identifier.
         add(99, ADDRESS)
+
+    def test_direct_binding_rejects_incompatible_shapes_without_reserving_device(self) -> None:
+        server = BACnetServer(device_instance=8)
+        for device, address in enumerate((
+            "[::1]:47808", "[::ffff:127.0.0.1]:47808", "0", "254", "mstp:7",
+            "01:02", "01:02:03:04:05", "01:02:03:04:05:06:07",
+            "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:01:ba:c0",
+        )):
+            with self.subTest(address=address):
+                with self.assertRaisesRegex(ValueError, "exactly 6 bytes"):
+                    server.add_device_binding(device, address)
+                # The rejected attempt cannot reserve this identifier.
+                server.add_device_binding(device, ADDRESS)
+                with self.assertRaisesRegex(ValueError, "duplicate configured Device"):
+                    server.add_device_binding(device, "7f:00:00:01:ba:c0")
+
+    def test_direct_binding_rejects_non_bip_transports_before_retention(self) -> None:
+        async def exercise() -> None:
+            with tempfile.TemporaryDirectory() as directory:
+                missing = str(Path(directory) / "missing.pem")
+                cases: list[tuple[dict[str, Any], str, type[Exception], str]] = [
+                    ({"transport": "ipv6", "ipv6_interface": "invalid"},
+                     "[::1]:47808", RuntimeError, "invalid IPv6 interface"),
+                    ({"transport": "mstp"}, "mstp:7", ValueError, "serial_port is required"),
+                    ({"transport": "sc", "sc_device_uuid": b"\x01" * 16,
+                      "sc_ca_cert": missing, "sc_client_cert": missing, "sc_client_key": missing},
+                     "01:02:03:04:05:06", RuntimeError, "TLS config error"),
+                ]
+                for kwargs, address, startup_error, message in cases:
+                    with self.subTest(transport=kwargs["transport"]):
+                        server = BACnetServer(device_instance=8, **kwargs)
+                        # Both the transport's own syntax and a six-byte B/IP shape fail.
+                        # Exceed core binding capacity with rejected calls: if retained,
+                        # startup would fail capacity validation instead of local setup.
+                        for device in range(4097):
+                            with self.assertRaisesRegex(ValueError, "require BACnetServer transport='bip'"):
+                                server.add_device_binding(device, address if device % 2 else ADDRESS)
+                        # Deliberately invalid setup stops before sockets, TLS dialing or serial I/O.
+                        with self.assertRaisesRegex(startup_error, message):
+                            await server.start()
+
+        asyncio.run(exercise())
 
     def test_parent_validation_preserves_pending_identity_and_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -701,8 +743,12 @@ class AuditContractArtifactTests(unittest.TestCase):
                 server.add_audit_log(1, "Child", str(Path(directory) / "child"))
 
                 def rejected() -> None:
-                    with self.assertRaises(RuntimeError):
-                        server.add_device_binding(9, ADDRESS)
+                    for address in (ADDRESS, "[::1]:47808", "mstp:7", "01:02"):
+                        with self.subTest(frozen_address=address), self.assertRaises(RuntimeError):
+                            server.add_device_binding(9, address)
+                    # Existing malformed-input precedence still applies before lifecycle checks.
+                    with self.assertRaises(ValueError):
+                        server.add_device_binding(9, "not-an-address")
                     with self.assertRaises(RuntimeError):
                         server.configure_audit_log_parent(
                             1, parent_device_instance=9, parent_audit_log_instance=7,
@@ -730,9 +776,11 @@ class AuditContractArtifactTests(unittest.TestCase):
             self.assertEqual(getattr(server, "_pending_registration_count")(), 1)
 
     def test_direct_parent_forwarding_is_queryable_and_durable(self) -> None:
-        asyncio.run(self._exercise_parent_forwarding())
+        for hex_address in (False, True):
+            with self.subTest(hex_address=hex_address):
+                asyncio.run(self._exercise_parent_forwarding(hex_address))
 
-    async def _exercise_parent_forwarding(self) -> None:
+    async def _exercise_parent_forwarding(self, hex_address: bool) -> None:
         with tempfile.TemporaryDirectory() as directory:
             def logger(device: int, instance: int, name: str) -> BACnetServer:
                 server = BACnetServer(
@@ -749,7 +797,11 @@ class AuditContractArtifactTests(unittest.TestCase):
             await parent.start()
             try:
                 parent_address = await parent.local_address()
-                child.add_device_binding(9, parent_address)
+                binding_address = parent_address
+                if hex_address:
+                    ip, port = parent_address.split(":")
+                    binding_address = (socket.inet_aton(ip) + int(port).to_bytes(2, "big")).hex(":")
+                child.add_device_binding(9, binding_address)
                 with self.assertRaisesRegex(ValueError, "duplicate configured Device"):
                     child.add_device_binding(9, "127.0.0.1:1")
                 child.configure_audit_log_parent(1, parent_device_instance=99, parent_audit_log_instance=3)
