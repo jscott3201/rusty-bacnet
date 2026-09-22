@@ -1426,7 +1426,8 @@ or issue #345 closure.
 #### Static target Audit Reporter
 
 `BACnetServer.configure_audit_reporter(instance, *, recipient_device_instance,
-audit_level, auditable_operations, issue_confirmed_notifications) -> None` connects
+audit_level, auditable_operations, issue_confirmed_notifications,
+monitored_objects=None, audit_priority_filter=None) -> None` connects
 one pending Reporter to the existing Rust target-side producer. It is synchronous,
 opt-in and pre-start only; `add_audit_reporter(instance, name)` is unchanged.
 
@@ -1439,11 +1440,13 @@ child.configure_audit_reporter(
     1, recipient_device_instance=9, audit_level="audit_all",
     auditable_operations=1 << AuditOperation.WRITE.to_raw(),
     issue_confirmed_notifications=True,
+    monitored_objects=[ObjectIdentifier(ObjectType.ANALOG_VALUE, 1)],
+    audit_priority_filter=1 << 7,  # priority 8 only; omit for all priorities
 )
 child.add_device_binding(9, await parent.local_address())
 # After child.start(), a public BACnetClient.write_property() to the child's
-# target can produce a notification. Query the parent's Audit Log 7 under a
-# deadline to observe receipt; the original write ACK alone is not that evidence.
+# target at priority=8 can produce a notification. Query the parent's Audit Log 7
+# under a deadline to observe receipt; the write ACK alone is not that evidence.
 ```
 
 - Both identifiers must be non-Boolean integers in `0..=4194303`; the recipient
@@ -1460,10 +1463,28 @@ child.add_device_binding(9, await parent.local_address())
   Reserved bits 16–31, negatives and u64 overflow raise `ValueError`; wrong types,
   including bool, raise `TypeError`. Accepting a bit does not implement its source.
 - `issue_confirmed_notifications` requires actual `True` or `False`; integers
-  and truthy objects raise `TypeError`. All arguments after `instance` are required
-  keyword-only. Validation finishes before object settings or selection change.
+  and truthy objects raise `TypeError`. All arguments after `instance` are
+  keyword-only; only `monitored_objects` and `audit_priority_filter` are optional.
+  Validation finishes before object settings or selection change.
+- `monitored_objects=None` (or omission) removes the optional `Monitored_Objects`
+  property (`UNKNOWN_PROPERTY` on read) and selects all ordinary targets. An exact
+  `list` selects exact `ObjectIdentifier`s or all instances of each `ObjectType`,
+  including supported proprietary/extensible values from `ObjectType.from_raw()`.
+  `None` entries are retained as ignored NULL selectors, not wildcards: `[]` and
+  `[None]` select no ordinary targets. Duplicates/overlaps never duplicate records.
+  Other containers (including list subclasses), raw integers/bools, strings,
+  mappings or other element types raise `TypeError`, with an index for bad elements.
+- `audit_priority_filter=None` (or omission) selects all priorities (`0xFFFF`).
+  Otherwise it is a strict non-Boolean integer mask in `0..=65535`; `0x0000` is
+  valid. Wrong types/bool raise `TypeError`, negatives/overflow raise `ValueError`.
+  Bit 0 selects priority 1 through bit 15 selecting priority 16. For example,
+  `1 << 7` selects priority 8; `1 << 15` selects priority 16, also used by a write
+  with omitted priority. Filtering applies to commandable-property writes, not
+  non-commandable writes or non-write operations. Existing list/file/lifecycle
+  behavior is unchanged; enabled Reporter-target writes retain their bypass.
 - **The first valid call fixes the Reporter identity.** Further valid pre-start
-  calls on that same instance replace all three settings and the recipient.
+  calls on that same instance replace all settings and the recipient; omitted
+  options reset to catch-all/all priorities rather than retaining previous filters.
   Selecting another Reporter raises `ValueError`, even after selecting level NONE;
   other registered Reporters remain inert. Failed calls preserve settings and registrations.
 - Binding and Reporter configuration may occur in either order. Destinations use
@@ -1479,8 +1500,8 @@ child.add_device_binding(9, await parent.local_address())
   later failures retain the existing lack of general rollback. Recreate and reapply
   static settings/bindings on a new server; they are not persisted.
 
-`Monitored_Objects` remains absent (`None`, catch-all), `Audit_Priority_Filter`
-remains all priorities, and `Audit_Source_Reporter` remains false. The unchanged
+By default `Monitored_Objects` remains absent (catch-all) and `Audit_Priority_Filter`
+selects all priorities; `Audit_Source_Reporter` remains false. The unchanged
 Rust producer covers inbound WP/WPM elements, AddListElement/RemoveListElement,
 AtomicWriteFile and CREATE/DELETE successes and authorized execution errors at
 their existing operation boundaries. Normal operations require their operation
@@ -1496,11 +1517,12 @@ Unconfirmed send success proves only transport acceptance, not recipient storage
 No durable outbox, replay or restart-delivery guarantee is provided; the receiver's
 file-backed storage is a separate contract. Installed-extension loopback tests in
 `test_audit_api.py` prove one queryable target WRITE for both confirmation modes,
-strict atomic validation, replacement, suppression, unresolved-recipient no growth
-and lifecycle freezing. Broader source/bounds evidence remains the existing Rust
+strict atomic validation, replacement, selector/priority filtering and Reporter-write
+bypass, suppression, unresolved-recipient no growth and lifecycle freezing.
+Broader source/bounds evidence remains the existing Rust
 Reporter suites, not independent interoperability qualification.
 
-No monitored-object/priority API, per-object overrides, dynamic/network-writable
+No per-object overrides, dynamic/network-writable
 configuration, multi-Reporter arbitration, Python callbacks, payload-origin
 verification, source-side or local direct-write reporting, ordinary sample/event
 production, WriteGroup expansion, Device.Audit_Notification_Recipient, batching,

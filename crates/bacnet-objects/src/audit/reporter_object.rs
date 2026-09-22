@@ -21,6 +21,21 @@ impl BACnetObject for AuditReporterObject {
         Ok(())
     }
 
+    fn configure_audit_reporter_with_filters_internal(
+        &mut self,
+        level: AuditLevel,
+        operations: AuditOperationFlags,
+        confirmed: bool,
+        selectors: Option<Vec<BACnetObjectSelector>>,
+        priorities: BACnetPriorityFilter,
+    ) -> Result<(), Error> {
+        // The legacy hook validates before mutation; typed filters cannot fail.
+        self.configure_audit_reporter_internal(level, operations, confirmed)?;
+        self.set_monitored_objects(selectors);
+        self.set_audit_priority_filter(priorities);
+        Ok(())
+    }
+
     fn object_identifier(&self) -> ObjectIdentifier {
         self.oid
     }

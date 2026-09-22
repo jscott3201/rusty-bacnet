@@ -125,6 +125,35 @@ pub trait BACnetObject: Send + Sync {
         })
     }
 
+    /// Configure trusted local Reporter settings including selection and priorities.
+    ///
+    /// Implementations must reject invalid settings before any mutation. Supporting
+    /// implementations treat `None` selectors as property removal (catch-all), and
+    /// an empty array as selecting no ordinary targets. Callers own lifecycle
+    /// admission and recipient selection.
+    ///
+    /// For legacy implementations, the default rejects non-default filters before
+    /// calling any override. With `None` selectors and all priorities, it delegates
+    /// to the original three-argument hook, preserving that override's behavior.
+    #[doc(hidden)]
+    fn configure_audit_reporter_with_filters_internal(
+        &mut self,
+        level: bacnet_types::enums::AuditLevel,
+        operations: bacnet_types::bitstring::AuditOperationFlags,
+        confirmed: bool,
+        selectors: Option<Vec<bacnet_types::constructed::BACnetObjectSelector>>,
+        priorities: bacnet_types::bitstring::BACnetPriorityFilter,
+    ) -> Result<(), Error> {
+        if selectors.is_some() || priorities != bacnet_types::bitstring::BACnetPriorityFilter::all()
+        {
+            return Err(Error::Protocol {
+                class: ErrorClass::OBJECT.to_raw() as u32,
+                code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+            });
+        }
+        self.configure_audit_reporter_internal(level, operations, confirmed)
+    }
+
     /// The object's identifier (type + instance).
     fn object_identifier(&self) -> ObjectIdentifier;
 

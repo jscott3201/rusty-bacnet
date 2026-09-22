@@ -31,15 +31,33 @@ fn audit_reporter_configuration_hook_is_opt_in_and_atomic() {
     let mut other = crate::binary::BinaryValueObject::new(1, "Other").unwrap();
     assert!(other.audit_reporter_internal().is_none());
     assert!(matches!(
-        other.configure_audit_reporter_internal(AuditLevel::AUDIT_ALL, operations, true),
+        other.configure_audit_reporter_with_filters_internal(
+            AuditLevel::AUDIT_ALL, operations, true, None, BACnetPriorityFilter::all(),
+        ),
         Err(Error::Protocol { class, code })
             if class == ErrorClass::OBJECT.to_raw() as u32
                 && code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32
     ));
 
     let mut object: Box<dyn BACnetObject> = Box::new(AuditReporterObject::new(1, "AR").unwrap());
+    let reporter = object.audit_reporter_internal().unwrap();
+    assert!(reporter.monitored_objects.is_none());
+    assert_eq!(reporter.audit_priority_filter, BACnetPriorityFilter::all());
+    let target = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap();
+    let selectors = vec![
+        Selector::None,
+        Selector::Object(target),
+        Selector::ObjectType(ObjectType::from_raw(512)),
+    ];
+    let priorities = BACnetPriorityFilter::from_bits(1 << 7);
     object
-        .configure_audit_reporter_internal(AuditLevel::AUDIT_ALL, operations, true)
+        .configure_audit_reporter_with_filters_internal(
+            AuditLevel::AUDIT_ALL,
+            operations,
+            true,
+            Some(selectors.clone()),
+            priorities,
+        )
         .unwrap();
     let properties = [
         PropertyIdentifier::AUDIT_LEVEL,
@@ -47,35 +65,47 @@ fn audit_reporter_configuration_hook_is_opt_in_and_atomic() {
         PropertyIdentifier::ISSUE_CONFIRMED_NOTIFICATIONS,
         PropertyIdentifier::AUDIT_PRIORITY_FILTER,
         PropertyIdentifier::RELIABILITY,
+        PropertyIdentifier::MONITORED_OBJECTS,
     ];
     let before: Vec<_> = properties
         .iter()
         .map(|&p| object.read_property(p, None).unwrap())
         .collect();
-    assert!(
-        object
-            .configure_audit_reporter_internal(
-                AuditLevel::DEFAULT,
-                AuditOperationFlags::empty(),
-                false,
-            )
-            .is_err()
-    );
+    assert!(object
+        .configure_audit_reporter_with_filters_internal(
+            AuditLevel::DEFAULT,
+            AuditOperationFlags::empty(),
+            false,
+            None,
+            BACnetPriorityFilter::empty(),
+        )
+        .is_err());
     for (&property, expected) in properties.iter().zip(before) {
         assert_eq!(object.read_property(property, None).unwrap(), expected);
     }
     let reporter = object.audit_reporter_internal().unwrap();
     assert_eq!(reporter.auditable_operations, operations);
     assert!(reporter.confirmed_internal());
-    assert!(reporter.monitored_objects.is_none());
-    assert_eq!(reporter.audit_priority_filter, BACnetPriorityFilter::all());
+    assert_eq!(reporter.monitored_objects, Some(selectors));
+    assert_eq!(reporter.audit_priority_filter, priorities);
+    assert!(reporter.monitors_object_internal(target));
+    assert!(reporter.reports_write_internal(PropertyIdentifier::PRESENT_VALUE, Some(8), false));
+    assert!(!reporter.reports_write_internal(PropertyIdentifier::PRESENT_VALUE, Some(16), false));
     object
-        .configure_audit_reporter_internal(AuditLevel::NONE, AuditOperationFlags::empty(), false)
+        .configure_audit_reporter_with_filters_internal(
+            AuditLevel::NONE,
+            AuditOperationFlags::empty(),
+            false,
+            None,
+            BACnetPriorityFilter::all(),
+        )
         .unwrap();
     let reporter = object.audit_reporter_internal().unwrap();
     assert_eq!(reporter.audit_level, AuditLevel::NONE);
     assert!(reporter.auditable_operations.is_empty());
     assert!(!reporter.confirmed_internal());
+    assert!(reporter.monitored_objects.is_none());
+    assert_eq!(reporter.audit_priority_filter, BACnetPriorityFilter::all());
 }
 
 #[test]
