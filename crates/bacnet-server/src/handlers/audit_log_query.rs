@@ -30,8 +30,24 @@ pub fn handle_audit_log_query(
     db: &ObjectDatabase,
     service_data: &[u8],
 ) -> Result<(ObjectIdentifier, AuditLogQueryPage), Error> {
-    let request = AuditLogQueryRequest::decode(service_data)?;
+    handle_audit_log_query_observed(db, service_data, |_, _| {})
+}
 
+/// Observe decoded execution once, without exposing criteria or rereading the
+/// log. The caller must discard the provisional observation if ACK construction
+/// fails or the response takes the outbound segmentation path.
+pub(crate) fn handle_audit_log_query_observed(
+    db: &ObjectDatabase,
+    service_data: &[u8],
+    completed: impl FnOnce(ObjectIdentifier, &Result<AuditLogQueryPage, Error>),
+) -> Result<(ObjectIdentifier, AuditLogQueryPage), Error> {
+    let request = AuditLogQueryRequest::decode(service_data)?;
+    let result = query(db, &request);
+    completed(request.audit_log, &result);
+    result.map(|page| (request.audit_log, page))
+}
+
+fn query(db: &ObjectDatabase, request: &AuditLogQueryRequest) -> Result<AuditLogQueryPage, Error> {
     // Clause 13.19 specifies OBJECT / UNKNOWN_OBJECT for an Audit Log that
     // does not exist. A non-Audit identifier cannot designate the requested
     // Audit Log and follows the same public result instead of exposing an
@@ -48,5 +64,5 @@ pub fn handle_audit_log_query(
         request.start_at_sequence_number,
         request.requested_count,
     );
-    Ok((request.audit_log, page))
+    Ok(page)
 }

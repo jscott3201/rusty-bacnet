@@ -14,6 +14,9 @@ mod boundary;
 #[path = "audit_reporter_range_file_tests.rs"]
 mod range_file;
 
+#[path = "audit_reporter_query_tests.rs"]
+mod query;
+
 fn read_reporter() -> AuditReporterObject {
     let mut reporter = reporter();
     let mut operations = AuditOperationFlags::empty();
