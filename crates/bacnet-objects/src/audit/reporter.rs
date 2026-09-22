@@ -31,7 +31,7 @@ fn audit_reporter_configuration_hook_is_opt_in_and_atomic() {
     let mut other = crate::binary::BinaryValueObject::new(1, "Other").unwrap();
     assert!(other.audit_reporter_internal().is_none());
     assert!(matches!(
-        other.configure_audit_reporter_internal(
+        other.configure_audit_reporter_with_filters_internal(
             AuditLevel::AUDIT_ALL, operations, true, None, BACnetPriorityFilter::all(),
         ),
         Err(Error::Protocol { class, code })
@@ -51,7 +51,7 @@ fn audit_reporter_configuration_hook_is_opt_in_and_atomic() {
     ];
     let priorities = BACnetPriorityFilter::from_bits(1 << 7);
     object
-        .configure_audit_reporter_internal(
+        .configure_audit_reporter_with_filters_internal(
             AuditLevel::AUDIT_ALL,
             operations,
             true,
@@ -72,7 +72,7 @@ fn audit_reporter_configuration_hook_is_opt_in_and_atomic() {
         .map(|&p| object.read_property(p, None).unwrap())
         .collect();
     assert!(object
-        .configure_audit_reporter_internal(
+        .configure_audit_reporter_with_filters_internal(
             AuditLevel::DEFAULT,
             AuditOperationFlags::empty(),
             false,
@@ -92,7 +92,7 @@ fn audit_reporter_configuration_hook_is_opt_in_and_atomic() {
     assert!(reporter.reports_write_internal(PropertyIdentifier::PRESENT_VALUE, Some(8), false));
     assert!(!reporter.reports_write_internal(PropertyIdentifier::PRESENT_VALUE, Some(16), false));
     object
-        .configure_audit_reporter_internal(
+        .configure_audit_reporter_with_filters_internal(
             AuditLevel::NONE,
             AuditOperationFlags::empty(),
             false,

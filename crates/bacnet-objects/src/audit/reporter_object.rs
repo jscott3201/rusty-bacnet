@@ -12,14 +12,25 @@ impl BACnetObject for AuditReporterObject {
         level: AuditLevel,
         operations: AuditOperationFlags,
         confirmed: bool,
-        selectors: Option<Vec<BACnetObjectSelector>>,
-        priorities: BACnetPriorityFilter,
     ) -> Result<(), Error> {
         // The only fallible setter validates before mutation; the remaining
         // settings are already typed and cannot fail.
         self.set_audit_level(level)?;
         self.set_auditable_operations(operations);
         self.set_issue_confirmed_notifications(confirmed);
+        Ok(())
+    }
+
+    fn configure_audit_reporter_with_filters_internal(
+        &mut self,
+        level: AuditLevel,
+        operations: AuditOperationFlags,
+        confirmed: bool,
+        selectors: Option<Vec<BACnetObjectSelector>>,
+        priorities: BACnetPriorityFilter,
+    ) -> Result<(), Error> {
+        // The legacy hook validates before mutation; typed filters cannot fail.
+        self.configure_audit_reporter_internal(level, operations, confirmed)?;
         self.set_monitored_objects(selectors);
         self.set_audit_priority_filter(priorities);
         Ok(())

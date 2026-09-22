@@ -224,7 +224,7 @@ impl BACnetServer {
                 ));
             }
             pending[index]
-                .configure_audit_reporter_internal(
+                .configure_audit_reporter_with_filters_internal(
                     level, operations, confirmed, selectors, priorities,
                 )
                 .map_err(to_py_err)?;
