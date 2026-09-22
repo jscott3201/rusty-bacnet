@@ -40,6 +40,9 @@ mod file;
 #[path = "audit_reporter_resource_tests.rs"]
 mod resources;
 
+#[path = "audit_reporter_read_tests.rs"]
+mod read;
+
 #[tokio::test(start_paused = true)]
 async fn audit_reporter_atomic_write_file_delivery_saturation_deadline_and_no_recursion() {
     use file::{access, file_server, request, SERVICE};

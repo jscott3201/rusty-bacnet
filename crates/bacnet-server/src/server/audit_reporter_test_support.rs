@@ -25,6 +25,7 @@ pub(super) const SOURCE: &[u8] = &[3];
 pub(super) struct CaptureTransport {
     pub(super) started: Arc<AtomicBool>,
     pub(super) sent: Arc<StdMutex<Vec<Bytes>>>,
+    pub(super) responses: Arc<StdMutex<Vec<Bytes>>>,
     pub(super) fail: Arc<AtomicBool>,
     pub(super) block: Arc<AtomicBool>,
     pub(super) unblock: Arc<tokio::sync::Notify>,
@@ -42,6 +43,13 @@ impl TransportPort for CaptureTransport {
         Ok(())
     }
     async fn send_unicast(&self, bytes: &[u8], mac: &[u8]) -> Result<(), Error> {
+        if mac == SOURCE {
+            self.responses
+                .lock()
+                .unwrap()
+                .push(Bytes::copy_from_slice(bytes));
+            return Ok(());
+        }
         assert_eq!(mac, LOGGER);
         self.sent
             .lock()
@@ -182,6 +190,16 @@ pub(super) async fn dispatch(
     service: ConfirmedServiceChoice,
     data: Bytes,
 ) -> Apdu {
+    dispatch_optional(server, service, data)
+        .await
+        .expect("response")
+}
+
+pub(super) async fn dispatch_optional(
+    server: &BACnetServer<CaptureTransport>,
+    service: ConfirmedServiceChoice,
+    data: Bytes,
+) -> Option<Apdu> {
     let (tx, rx) = oneshot::channel();
     let invoke_id = 77u8.wrapping_add(
         server
@@ -222,7 +240,9 @@ pub(super) async fn dispatch(
         Some(tx),
     )
     .await;
-    decode_apdu(decode_npdu(rx.await.unwrap()).unwrap().payload).unwrap()
+    rx.await
+        .ok()
+        .map(|bytes| decode_apdu(decode_npdu(bytes).unwrap().payload).unwrap())
 }
 
 pub(super) fn wp(

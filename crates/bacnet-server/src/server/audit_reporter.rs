@@ -16,7 +16,10 @@ use bacnet_types::enums::{AuditLevel, AuditOperation};
 
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// One locally configured target WRITE/CREATE/DELETE Reporter and unicast recipient.
+#[path = "audit_reporter_read.rs"]
+mod read;
+
+/// One locally configured target READ/WRITE/CREATE/DELETE Reporter and unicast recipient.
 ///
 /// Reports successful inbound WP/WPM elements, AddListElement/RemoveListElement,
 /// AtomicWriteFile, CreateObject/DeleteObject operations, and authorized execution errors.
@@ -73,6 +76,14 @@ const DELIVERY_TIMEOUT: Duration = Duration::from_secs(3);
 /// Aborts remain silent. Inbound WriteGroup remains unsupported by design, so
 /// complete WRITE coverage is not claimed.
 ///
+/// READ covers completed, unsegmented RP/RPM responses, one record per
+/// returned property outcome in result order, including inline RPM errors.
+/// Read values, comments, and priorities are always omitted. READ requires its
+/// operation bit; AUDIT_CONFIG excludes Present_Value. RPM's existing result
+/// budget bounds provisional intents, which are discarded on whole-request
+/// failure. Admission follows release of the read guard and uses the same
+/// immediate drop/summary policy, without an additional cap or queue.
+///
 /// ```no_run
 /// use bacnet_objects::{audit::AuditReporterObject, database::ObjectDatabase,
 ///     device::{DeviceConfig, DeviceObject}};
@@ -110,7 +121,7 @@ pub struct AuditReporterConfig {
 }
 
 impl<T: TransportPort + 'static> ServerBuilder<T> {
-    /// Enable the narrow target WRITE/CREATE/DELETE profile; see [`AuditReporterConfig`].
+    /// Enable the narrow target audit profile; see [`AuditReporterConfig`].
     pub fn audit_reporter(mut self, profile: AuditReporterConfig) -> Self {
         self.config.audit_reporter = Some(profile);
         self
@@ -118,7 +129,7 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
 }
 
 impl BipServerBuilder {
-    /// Enable the narrow target WRITE/CREATE/DELETE profile; see [`AuditReporterConfig`].
+    /// Enable the narrow target audit profile; see [`AuditReporterConfig`].
     pub fn audit_reporter(mut self, profile: AuditReporterConfig) -> Self {
         self.config.audit_reporter = Some(profile);
         self
@@ -537,14 +548,21 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         let Some(mut pending) = self.pending.take() else {
             return;
         };
-        let Some(route) = self.route.clone() else {
+        if self.route.is_none() {
             return;
-        };
+        }
         // No await separates execution completion from notification admission.
         // A later response-send timeout cannot change the recorded outcome.
         pending.notification.result = result;
         pending.notification.target_timestamp =
             Some(super::event_timestamp::sample_event_timestamp(db).timestamp);
+        self.admit(pending);
+    }
+
+    fn admit(&self, pending: PendingWrite) {
+        let Some(route) = self.route.clone() else {
+            return;
+        };
         let completion = DeliveryCompletion::new(Arc::clone(&pending.status));
         if self.comm_state.load(Ordering::Acquire) != 0 {
             return;

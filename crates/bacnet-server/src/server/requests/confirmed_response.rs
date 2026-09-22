@@ -4,9 +4,27 @@ pub(super) async fn read_property_response(
     db: &RwLock<ObjectDatabase>,
     request: &ConfirmedRequestPdu,
 ) -> Apdu {
+    read_property_response_observed(db, request, |_, _, _, _| {}).await
+}
+
+pub(super) async fn read_property_response_observed(
+    db: &RwLock<ObjectDatabase>,
+    request: &ConfirmedRequestPdu,
+    mut completed: impl FnMut(
+        &ObjectDatabase,
+        ObjectIdentifier,
+        &bacnet_services::read_property::ReadPropertyRequest,
+        &Result<(), Error>,
+    ),
+) -> Apdu {
     let mut service_ack = BytesMut::with_capacity(512);
     let db = db.read().await;
-    match handlers::handle_read_property(&db, &request.service_request, &mut service_ack) {
+    match handlers::handle_read_property_observed(
+        &db,
+        &request.service_request,
+        &mut service_ack,
+        |oid, request, result| completed(&db, oid, request, result),
+    ) {
         Ok(()) => Apdu::ComplexAck(ComplexAck {
             segmented: false,
             more_follows: false,

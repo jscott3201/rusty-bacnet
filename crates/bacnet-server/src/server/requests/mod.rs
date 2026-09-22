@@ -187,9 +187,30 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             invoke_id,
         )
         .await;
+        let mut read_audits = Vec::new();
         let response = match service_choice {
             s if s == ConfirmedServiceChoice::READ_PROPERTY => {
-                confirmed_response::read_property_response(db, &req).await
+                confirmed_response::read_property_response_observed(
+                    db,
+                    &req,
+                    |db, oid, req, result| {
+                        let result = match result {
+                            Ok(()) => None,
+                            Err(Error::Timeout(_) | Error::Reject { .. } | Error::Abort { .. }) => {
+                                return
+                            }
+                            Err(error) => Some(confirmed_response::error_fields(error)),
+                        };
+                        read_audits.extend(audit.read_intent(
+                            db,
+                            oid,
+                            req.property_identifier,
+                            req.property_array_index,
+                            result,
+                        ));
+                    },
+                )
+                .await
             }
             s if s == ConfirmedServiceChoice::WRITE_PROPERTY => {
                 mutation
@@ -205,12 +226,20 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
             s if s == ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE => {
                 let db = db.read().await;
-                match handlers::handle_rpm_budgeted(
+                let result = handlers::handle_rpm_budgeted_observed(
                     &db,
                     &req.service_request,
                     &mut ack_buf,
                     config.read_property_multiple_budget,
-                ) {
+                    |oid, property, index, result| {
+                        read_audits.extend(audit.read_intent(&db, oid, property, index, result));
+                    },
+                );
+                if result.is_err() {
+                    // No audited prefix for decode/work/response-buffer failure.
+                    read_audits.clear();
+                }
+                match result {
                     Ok(()) => complex_ack(ack_buf),
                     Err(handlers::RpmFailure::Service(e)) => {
                         Self::error_apdu_from_error(invoke_id, service_choice, &e)
@@ -605,6 +634,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
         }
 
+        // Read execution is observed under the DB read guard, but admission is
+        // deferred until the complete response exists and that guard is gone.
+        // Segmentation/post-execution transport divergence does not add records.
+        audit.admit_reads(db, read_audits).await;
         confirmed_response::send_unsegmented_response(
             network,
             &response,
