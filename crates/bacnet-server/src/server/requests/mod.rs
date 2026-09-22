@@ -376,7 +376,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 // construction/encoding and the generic segmentation path.
                 let query_result = {
                     let db = db.read().await;
-                    handlers::handle_audit_log_query(&db, &req.service_request)
+                    handlers::handle_audit_log_query_observed(
+                        &db,
+                        &req.service_request,
+                        |target, result| {
+                            read_audits
+                                .extend(audit.completed_read_intent(&db, target, None, result));
+                        },
+                    )
                 };
                 match query_result {
                     Ok((audit_log, page)) => {
@@ -387,7 +394,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         };
                         match ack.try_encode(&mut ack_buf) {
                             Ok(()) => complex_ack(ack_buf),
-                            Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
+                            Err(e) => {
+                                // Execution alone is not a completed query response.
+                                read_audits.clear();
+                                Self::error_apdu_from_error(invoke_id, service_choice, &e)
+                            }
                         }
                     }
                     Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),

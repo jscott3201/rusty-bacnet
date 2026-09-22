@@ -16,16 +16,16 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
     }
 
     /// Single-target service completion, using the same silence/error policy as
-    /// RP. File reads deliberately have no property, position, or payload.
-    pub(in crate::server) fn completed_read_intent(
+    /// RP. File reads and AuditLogQuery deliberately have no property or payload.
+    pub(in crate::server) fn completed_read_intent<R>(
         &self,
         db: &ObjectDatabase,
         target: ObjectIdentifier,
         property: Option<(PropertyIdentifier, Option<u32>)>,
-        result: &Result<(), Error>,
+        result: &Result<R, Error>,
     ) -> Option<ReadAuditIntent> {
         let result = match result {
-            Ok(()) => None,
+            Ok(_) => None,
             Err(Error::Timeout(_) | Error::Reject { .. } | Error::Abort { .. }) => return None,
             Err(error) => Some(super::super::requests::confirmed_response::error_fields(
                 error,
@@ -99,8 +99,8 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
     }
 
     /// Only completed, unsegmented response paths may submit these intents.
-    /// RPM's result budget bounds the batch; RP/ReadRange/AtomicReadFile have one.
-    /// Target READ remains partial: AuditLogQuery and segmented paths are excluded.
+    /// RPM's result budget bounds the batch; the other READ services have one.
+    /// Outbound segmented response paths remain excluded.
     pub(in crate::server) async fn admit_reads(
         &self,
         db: &RwLock<ObjectDatabase>,
