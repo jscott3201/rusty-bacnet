@@ -317,13 +317,17 @@ class AuditContractArtifactTests(unittest.TestCase):
                 "recipient_device_instance": "int",
                 "audit_level": "Literal['none', 'audit_config', 'audit_all']",
                 "auditable_operations": "int", "issue_confirmed_notifications": "bool",
+                "monitored_objects": "list[ObjectIdentifier | ObjectType | None] | None",
+                "audit_priority_filter": "int | None",
             }),
         ):
             with self.subTest(server_method=name):
                 parameters = list(inspect.signature(getattr(BACnetServer, name)).parameters.values())
                 self.assertEqual([p.name for p in parameters], ["self", *positional, *keyword_only])
+                optional = {"monitored_objects", "audit_priority_filter"}
                 for parameter in parameters[1:]:
-                    self.assertIs(parameter.default, inspect.Parameter.empty)
+                    self.assertIs(parameter.default, None if parameter.name in optional
+                                  else inspect.Parameter.empty)
                     self.assertEqual(parameter.kind, inspect.Parameter.KEYWORD_ONLY
                                      if parameter.name in keyword_only
                                      else inspect.Parameter.POSITIONAL_OR_KEYWORD)
@@ -339,7 +343,12 @@ class AuditContractArtifactTests(unittest.TestCase):
                 )
                 self.assertEqual(annotation_text(method.returns), "None")
                 self.assertEqual(method.args.defaults, [])
-                self.assertEqual(method.args.kw_defaults, [None] * len(keyword_only))
+                for argument, default in zip(method.args.kwonlyargs, method.args.kw_defaults):
+                    if argument.arg in optional:
+                        self.assertIsInstance(default, ast.Constant)
+                        self.assertEqual(ast.literal_eval(cast(ast.Constant, default)), None)
+                    else:
+                        self.assertIsNone(default)
 
         raw_methods = {
             "confirmed_audit_notification": "None",
@@ -662,6 +671,10 @@ class AuditContractArtifactTests(unittest.TestCase):
                 configure(1, **settings)
             server.add_audit_reporter(1, "Selected")
             server.add_audit_reporter(2, "Inert")
+            with self.assertRaisesRegex(TypeError, r"monitored_objects\[1\]"):
+                configure(2, **settings, monitored_objects=[ObjectType.ANALOG_VALUE, True])
+            with self.assertRaisesRegex(ValueError, "audit_priority_filter"):
+                configure(2, **settings, audit_priority_filter=65536)
             configure(1, **settings)
             # All allowed u64 positions survive, including bit 63, without narrowing.
             valid_mask = 0xffff_ffff_0000_ffff
@@ -682,6 +695,14 @@ class AuditContractArtifactTests(unittest.TestCase):
                 "auditable_operations": [(ValueError, v) for v in (-1, 2**64, 2**100, 1 << 16, 1 << 31, 2**64 - 1)]
                     + [(TypeError, v) for v in (True, False, 2.0, "2", None)],
                 "issue_confirmed_notifications": [(TypeError, v) for v in (0, 1, "true", None, [], object())],
+                "monitored_objects": [(TypeError, v) for v in (
+                    (), {}, MappingProxyType({}), b"", "", iter([]), ObjectType.ANALOG_VALUE,
+                    type("ListSubclass", (list,), {})(),
+                    *([None, item] for item in (True, False, 1, 1.0, "1", b"1", {}, [],
+                                               PropertyIdentifier.PRESENT_VALUE, object())),
+                )],
+                "audit_priority_filter": [(ValueError, v) for v in (-1, 65536, 2**100)]
+                    + [(TypeError, v) for v in (True, False, 1.0, "128", b"128", [], {})],
             }
             for field, invalids in cases.items():
                 for error, invalid in invalids:
@@ -718,6 +739,65 @@ class AuditContractArtifactTests(unittest.TestCase):
                 await server.stop()
         asyncio.run(bounded_reporter_test(exercise()))
 
+    def test_reporter_selector_properties_and_replacement(self) -> None:
+        target = ObjectIdentifier(ObjectType.ANALOG_VALUE, 1)
+        selectors = [None, target, ObjectType.ANALOG_VALUE, ObjectType.from_raw(512),
+                     ObjectType.from_raw(2**32 - 1), target]
+        settings = dict(recipient_device_instance=9, audit_level="audit_all",
+                        auditable_operations=2, issue_confirmed_notifications=True)
+
+        async def exercise(options: dict[str, Any], expected: list[Any] | None,
+                           priority_bytes: bytes) -> None:
+            server = BACnetServer(device_instance=8, interface="127.0.0.1", port=0)
+            server.add_audit_reporter(1, "Selected")
+            configure = cast(Callable[..., None], server.configure_audit_reporter)
+            # Every case replaces a non-default configuration, including removal
+            # by explicit None and omission. Inputs are copied, not retained.
+            configure(1, **settings, monitored_objects=[target], audit_priority_filter=0)
+            configure(1, **settings, **options)
+            for invalid in (
+                {"monitored_objects": [None, True], "audit_priority_filter": 0},
+                {"monitored_objects": [], "audit_priority_filter": 65536},
+                {"monitored_objects": [], "audit_priority_filter": 0, "auditable_operations": 1 << 16},
+            ):
+                with self.assertRaises((TypeError, ValueError)):
+                    configure(1, **{**settings, "recipient_device_instance": 99, **invalid})
+            if isinstance(options.get("monitored_objects"), list):
+                options["monitored_objects"].clear()
+            self.assertEqual(getattr(server, "_pending_registration_count")(), 1)
+            await server.start()
+            try:
+                reporter = ObjectIdentifier(ObjectType.AUDIT_REPORTER, 1)
+                self.assertEqual(await server.read_property(reporter, PropertyIdentifier.AUDIT_PRIORITY_FILTER),
+                                 PropertyValue.bit_string(0, priority_bytes))
+                if expected is None:
+                    with self.assertRaises(BacnetProtocolError) as raised:
+                        await server.read_property(reporter, PropertyIdentifier.MONITORED_OBJECTS)
+                    self.assertEqual(raised.exception.error_code, ErrorCode.UNKNOWN_PROPERTY.to_raw())
+                else:
+                    self.assertEqual((await server.read_property(reporter, PropertyIdentifier.MONITORED_OBJECTS)).value,
+                                     expected)
+                    self.assertEqual((await server.read_property(reporter, PropertyIdentifier.MONITORED_OBJECTS, 0)).value,
+                                     len(expected))
+                    for index, value in enumerate(expected, 1):
+                        self.assertEqual((await server.read_property(reporter, PropertyIdentifier.MONITORED_OBJECTS, index)).value,
+                                         value)
+            finally:
+                await server.stop()
+
+        for options, expected, priority_bytes in (
+            ({}, None, b"\xff\xff"),
+            ({"monitored_objects": None, "audit_priority_filter": None}, None, b"\xff\xff"),
+            ({"monitored_objects": [], "audit_priority_filter": 0}, [], b"\x00\x00"),
+            ({"monitored_objects": [None, None], "audit_priority_filter": 65535}, [None, None], b"\xff\xff"),
+            ({"monitored_objects": selectors, "audit_priority_filter": 1 << 7},
+             [None, target, ObjectType.ANALOG_VALUE.to_raw(), 512, 2**32 - 1, target], b"\x01\x00"),
+            ({"monitored_objects": [ObjectType.from_raw(1023)], "audit_priority_filter": 1 << 15},
+             [1023], b"\x00\x01"),
+        ):
+            with self.subTest(options=options):
+                asyncio.run(bounded_reporter_test(exercise(options, expected, priority_bytes)))
+
     def test_reporter_start_revalidates_duplicates_without_draining(self) -> None:
         server = BACnetServer(device_instance=8)
         server.add_audit_reporter(1, "Selected")
@@ -743,7 +823,8 @@ class AuditContractArtifactTests(unittest.TestCase):
                 server.add_audit_reporter(1, "Retryable")
                 for level in ("audit_all", "none"):
                     server.configure_audit_reporter(1, recipient_device_instance=9,
-                        audit_level=cast(Any, level), auditable_operations=2, issue_confirmed_notifications=False)
+                        audit_level=cast(Any, level), auditable_operations=2, issue_confirmed_notifications=False,
+                        monitored_objects=[None], audit_priority_filter=0)
                     with self.assertRaisesRegex(RuntimeError, "TLS config error"):
                         _unused = server.start()
                     self.assertEqual(getattr(server, "_pending_registration_count")(), 1)
@@ -754,7 +835,8 @@ class AuditContractArtifactTests(unittest.TestCase):
                     server.add_audit_reporter(2**22 - 1, "Frozen")
                     def configure() -> None:
                         server.configure_audit_reporter(2**22 - 1, recipient_device_instance=0,
-                            audit_level="audit_all", auditable_operations=2, issue_confirmed_notifications=True)
+                            audit_level="audit_all", auditable_operations=2, issue_confirmed_notifications=True,
+                            monitored_objects=[ObjectType.ANALOG_VALUE], audit_priority_filter=1 << 7)
                     if configure_before_start:
                         configure()
                     starting = server.start()
@@ -786,8 +868,40 @@ class AuditContractArtifactTests(unittest.TestCase):
                 asyncio.run(bounded_reporter_test(
                     self._exercise_reporter(level, operations, confirmed, bound, expected)))
 
+    def test_reporter_loopback_selectors_and_priority_masks(self) -> None:
+        target = ObjectIdentifier(ObjectType.ANALOG_VALUE, 1)
+        other = ObjectIdentifier(ObjectType.ANALOG_VALUE, 2)
+        # Each case makes a real commandable Present_Value write, even when its
+        # record is suppressed. Both matching and nonmatching priorities matter.
+        for selectors, mask, priority, expected in (
+            (None, None, None, 1),
+            ([], None, None, 0),
+            ([None, None], None, None, 0),
+            ([target], 65535, 8, 1),
+            ([other], 65535, 8, 0),
+            ([ObjectType.ANALOG_VALUE], 65535, None, 1),
+            ([ObjectType.BINARY_VALUE], 65535, None, 0),
+            ([None, target, target, ObjectType.ANALOG_VALUE, None], 65535, None, 1),
+            (None, 0, 8, 0),
+            (None, 0, None, 0),
+            ([target], 1 << 7, 8, 1),
+            ([target], 1 << 7, None, 0),
+            ([target], 1 << 15, None, 1),
+            ([target], 1 << 15, 8, 0),
+        ):
+            with self.subTest(selectors=selectors, mask=mask, priority=priority):
+                asyncio.run(bounded_reporter_test(self._exercise_reporter(
+                    "audit_all", 2, True, True, expected,
+                    filters={"monitored_objects": selectors, "audit_priority_filter": mask},
+                    priority=priority)))
+        # Enabled Reporter-target writes bypass selection, WRITE and priorities.
+        asyncio.run(bounded_reporter_test(self._exercise_reporter(
+            "audit_config", 0, True, True, 1,
+            filters={"monitored_objects": [], "audit_priority_filter": 0}, reporter_target=True)))
+
     async def _exercise_reporter(self, level: str | None, operations: int, confirmed: bool,
-                                 bound: bool, expected: int) -> None:
+                                 bound: bool, expected: int, *, filters: dict[str, Any] | None = None,
+                                 priority: int | None = None, reporter_target: bool = False) -> None:
         with tempfile.TemporaryDirectory() as directory:
             parent = BACnetServer(device_instance=9, interface="127.0.0.1", port=0,
                                   broadcast_address="127.0.0.1")
@@ -807,16 +921,25 @@ class AuditContractArtifactTests(unittest.TestCase):
                     child.add_device_binding(9, parent_address)
                 if level is not None:
                     child.configure_audit_reporter(0, recipient_device_instance=99,
-                        audit_level="none", auditable_operations=0, issue_confirmed_notifications=not confirmed)
+                        audit_level="none", auditable_operations=0, issue_confirmed_notifications=not confirmed,
+                        monitored_objects=[], audit_priority_filter=0)
                     child.configure_audit_reporter(0, recipient_device_instance=9,
                         audit_level=cast(Any, level), auditable_operations=operations,
-                        issue_confirmed_notifications=confirmed)
+                        issue_confirmed_notifications=confirmed, **(filters or {}))
                     with self.assertRaises(ValueError):
                         child.configure_audit_reporter(1, recipient_device_instance=99,
                             audit_level="audit_all", auditable_operations=2, issue_confirmed_notifications=True)
                     with self.assertRaises(ValueError):
                         child.configure_audit_reporter(0, recipient_device_instance=99,
                             audit_level="none", auditable_operations=1 << 16, issue_confirmed_notifications=True)
+                    invalid_filters: list[dict[str, Any]] = [
+                        {"monitored_objects": [True]}, {"audit_priority_filter": 65536},
+                    ]
+                    for invalid in invalid_filters:
+                        with self.assertRaises((TypeError, ValueError)):
+                            child.configure_audit_reporter(0, recipient_device_instance=99,
+                                audit_level="none", auditable_operations=0,
+                                issue_confirmed_notifications=not confirmed, **invalid)
                 if bound and not confirmed:
                     child.add_device_binding(9, parent_address)
                 await child.start()
@@ -827,7 +950,9 @@ class AuditContractArtifactTests(unittest.TestCase):
                     self.assertEqual(await child.read_property(reporter, PropertyIdentifier.STATUS_FLAGS),
                                      PropertyValue.bit_string(4, b"\x40" if not bound else b"\x00"))
                     self.assertIs((await child.read_property(reporter, PropertyIdentifier.ISSUE_CONFIRMED_NOTIFICATIONS)).value, confirmed)
-                    target = ObjectIdentifier(ObjectType.ANALOG_VALUE, 1)
+                    target = reporter if reporter_target else ObjectIdentifier(ObjectType.ANALOG_VALUE, 1)
+                    prop = PropertyIdentifier.DESCRIPTION if reporter_target else PropertyIdentifier.PRESENT_VALUE
+                    value = PropertyValue.character_string("AR") if reporter_target else PropertyValue.real(42.5)
                     query = cast("AuditLogQueryRequestInput", {
                         "audit_log": ObjectIdentifier(ObjectType.AUDIT_LOG, 7),
                         "query_parameters": {"kind": "by_target", "target_device_identifier":
@@ -840,9 +965,8 @@ class AuditContractArtifactTests(unittest.TestCase):
                         child_address = await child.local_address()
                         # Exercise repeated unresolved operations beyond the delivery permit count.
                         for _ in range(1 if bound else 65):
-                            await client.write_property(child_address, target, PropertyIdentifier.PRESENT_VALUE,
-                                                        PropertyValue.real(42.5))
-                        self.assertEqual((await child.read_property(target, PropertyIdentifier.PRESENT_VALUE)).value, 42.5)
+                            await client.write_property(child_address, target, prop, value, priority=priority)
+                        self.assertEqual(await child.read_property(target, prop), value)
                         if expected:
                             async with asyncio.timeout(5):
                                 while True:
@@ -858,10 +982,11 @@ class AuditContractArtifactTests(unittest.TestCase):
                             self.assertEqual(notification["target_device"], device_recipient(8))
                             self.assertEqual(notification["target_object"], target)
                             self.assertEqual(notification["target_property"], {
-                                "property_identifier": PropertyIdentifier.PRESENT_VALUE, "property_array_index": None})
+                                "property_identifier": prop, "property_array_index": None})
                             self.assertIsNone(notification["result"])
-                            self.assertEqual(notification["target_priority"], 16)
-                            self.assertEqual(notification["target_value"], bytes.fromhex("44 422a0000"))
+                            self.assertEqual(notification["target_priority"], None if reporter_target else priority or 16)
+                            self.assertEqual(notification["target_value"], b"\x73\x00AR" if reporter_target
+                                             else bytes.fromhex("44 422a0000"))
                             self.assertIsNotNone(notification["target_timestamp"])
                         # Observe counts throughout a bounded negative window. Pace polls
                         # to avoid exhausting transaction IDs; elapsed time alone is not

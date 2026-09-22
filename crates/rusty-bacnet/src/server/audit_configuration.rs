@@ -1,10 +1,57 @@
 use super::*;
 
-use bacnet_types::bitstring::AuditOperationFlags;
+use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
+use bacnet_types::constructed::BACnetObjectSelector;
 use bacnet_types::enums::{AuditLevel, ObjectType};
 use bacnet_types::primitives::ObjectIdentifier;
 use pyo3::exceptions::{PyTypeError, PyValueError};
-use pyo3::types::{PyBool, PyInt};
+use pyo3::types::{PyBool, PyInt, PyList};
+
+use crate::types::PyObjectType;
+
+fn monitored_object_selectors(
+    value: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Option<Vec<BACnetObjectSelector>>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let selectors = value
+        .cast_exact::<PyList>()
+        .map_err(|_| PyTypeError::new_err("monitored_objects must be a list or None"))?;
+    selectors
+        .iter()
+        .enumerate()
+        .map(|(index, selector)| {
+            if selector.is_none() {
+                Ok(BACnetObjectSelector::None)
+            } else if let Ok(object) = selector.extract::<PyObjectIdentifier>() {
+                Ok(BACnetObjectSelector::Object(object.to_rust()))
+            } else if let Ok(kind) = selector.extract::<PyObjectType>() {
+                Ok(BACnetObjectSelector::ObjectType(kind.to_rust()))
+            } else {
+                Err(PyTypeError::new_err(format!(
+                    "monitored_objects[{index}] must be ObjectIdentifier, ObjectType, or None"
+                )))
+            }
+        })
+        .collect::<PyResult<Vec<_>>>()
+        .map(Some)
+}
+
+fn priority_filter(value: Option<&Bound<'_, PyAny>>) -> PyResult<BACnetPriorityFilter> {
+    let Some(value) = value else {
+        return Ok(BACnetPriorityFilter::all());
+    };
+    if value.is_instance_of::<PyBool>() || !value.is_instance_of::<PyInt>() {
+        return Err(PyTypeError::new_err(
+            "audit_priority_filter must be an integer (not bool) or None",
+        ));
+    }
+    let bits = value
+        .extract::<u16>()
+        .map_err(|_| PyValueError::new_err("audit_priority_filter must be in 0..=65535"))?;
+    Ok(BACnetPriorityFilter::from_bits(bits))
+}
 
 fn instance_identifier(
     instance: &Bound<'_, PyAny>,
@@ -111,9 +158,9 @@ impl BACnetServer {
 impl BACnetServer {
     /// Configure one registered target Reporter before start(). The first valid
     /// call fixes its identity; later calls replace settings and recipient only.
-    /// All validation precedes mutation. Monitored objects remain catch-all and
-    /// priorities remain all. A missing binding is a runtime configuration fault.
-    #[pyo3(signature = (instance, *, recipient_device_instance, audit_level, auditable_operations, issue_confirmed_notifications))]
+    /// All validation precedes mutation. None selects catch-all objects/all priorities;
+    /// an empty list selects no ordinary targets. A missing binding is a runtime fault.
+    #[pyo3(signature = (instance, *, recipient_device_instance, audit_level, auditable_operations, issue_confirmed_notifications, monitored_objects=None, audit_priority_filter=None))]
     fn configure_audit_reporter(
         &mut self,
         instance: &Bound<'_, PyAny>,
@@ -121,6 +168,8 @@ impl BACnetServer {
         audit_level: &Bound<'_, PyAny>,
         auditable_operations: &Bound<'_, PyAny>,
         issue_confirmed_notifications: &Bound<'_, PyAny>,
+        monitored_objects: Option<&Bound<'_, PyAny>>,
+        audit_priority_filter: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
         let reporter = instance_identifier(instance, "instance", ObjectType::AUDIT_REPORTER)?;
         let device = instance_identifier(
@@ -156,6 +205,8 @@ impl BACnetServer {
             ));
         }
         let confirmed = issue_confirmed_notifications.extract::<bool>()?;
+        let selectors = monitored_object_selectors(monitored_objects)?;
+        let priorities = priority_filter(audit_priority_filter)?;
         if device.instance_number() == self.device_instance {
             return Err(PyValueError::new_err("recipient Device must be remote"));
         }
@@ -173,7 +224,9 @@ impl BACnetServer {
                 ));
             }
             pending[index]
-                .configure_audit_reporter_internal(level, operations, confirmed)
+                .configure_audit_reporter_internal(
+                    level, operations, confirmed, selectors, priorities,
+                )
                 .map_err(to_py_err)?;
         }
         self.audit_reporter = Some(server::AuditReporterConfig {

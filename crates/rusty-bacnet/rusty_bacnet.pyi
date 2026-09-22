@@ -2271,6 +2271,8 @@ class BACnetServer:
         self, instance: int, *, recipient_device_instance: int,
         audit_level: Literal["none", "audit_config", "audit_all"],
         auditable_operations: int, issue_confirmed_notifications: bool,
+        monitored_objects: list[ObjectIdentifier | ObjectType | None] | None = None,
+        audit_priority_filter: int | None = None,
     ) -> None:
         """Configure one static target Reporter; add_audit_reporter alone stays inert.
 
@@ -2284,8 +2286,18 @@ class BACnetServer:
         start and after stop (RuntimeError). Configure a direct B/IP recipient
         with add_device_binding, in either order; an unresolved recipient permits
         startup but exposes CONFIGURATION_ERROR on an enabled Reporter's RELIABILITY.
-        Monitored objects remain catch-all; priorities remain all. No runtime
-        changes, source reporting, Python callbacks, retries or durable outbox.
+        Monitored objects: None/omission removes the property (catch-all); an exact
+        list selects exact ObjectIdentifiers or all instances of each ObjectType
+        (including extensible values). None entries are ignored, empty/all-None
+        selects no ordinary targets, and duplicates never duplicate records.
+        Wrong container/element types raise TypeError. Priority filter is a non-bool
+        u16 mask (0..65535): bit 0 selects priority 1, bit 15 priority 16 (also the
+        default for omitted write priority). None/omission selects all priorities;
+        zero is valid. Wrong types raise TypeError; out-of-range values ValueError.
+        Priority filtering applies only to commandable-property writes; enabled
+        Reporter-target writes retain their filter bypass. Replacement resets
+        omitted options to their defaults. No runtime changes, source reporting,
+        Python callbacks, retries or durable outbox.
         """
         ...
 
