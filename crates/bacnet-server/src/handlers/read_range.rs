@@ -179,7 +179,7 @@ pub fn handle_read_range(
     service_data: &[u8],
     response: &mut BytesMut,
 ) -> Result<(), Error> {
-    let selected = prepare_read_range(db, service_data)?;
+    let selected = prepare_read_range(db, ReadRangeRequest::decode(service_data)?)?;
     append_read_range_ack_with(
         &selected.request,
         &selected.items,
@@ -190,14 +190,41 @@ pub fn handle_read_range(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn handle_read_range_budgeted(
     db: &ObjectDatabase,
     service_data: &[u8],
     response: &mut BytesMut,
     budget: crate::server::ReadRangeBudget,
 ) -> Result<(), ReadRangeFailure> {
-    let selected = prepare_read_range(db, service_data).map_err(ReadRangeFailure::Service)?;
-    page::append_page_with(&selected, response, budget, encode_property_value)
+    handle_read_range_observed(db, service_data, response, budget, |_, _, _, _| {})
+}
+
+/// Observe one decoded request outcome, never a decode or page-budget failure.
+/// The hook captures identity/result only; delivery must follow guard release.
+pub(crate) fn handle_read_range_observed(
+    db: &ObjectDatabase,
+    service_data: &[u8],
+    response: &mut BytesMut,
+    budget: crate::server::ReadRangeBudget,
+    completed: impl FnOnce(ObjectIdentifier, PropertyIdentifier, Option<u32>, &Result<(), Error>),
+) -> Result<(), ReadRangeFailure> {
+    let request = ReadRangeRequest::decode(service_data).map_err(ReadRangeFailure::Service)?;
+    let target = request.object_identifier;
+    let property = request.property_identifier;
+    let index = request.property_array_index;
+    let result = prepare_read_range(db, request)
+        .map_err(ReadRangeFailure::Service)
+        .and_then(|selected| {
+            page::append_page_with(&selected, response, budget, encode_property_value)
+        });
+    let result = match result {
+        Ok(()) => Ok(()),
+        Err(ReadRangeFailure::Service(error)) => Err(error),
+        Err(ReadRangeFailure::Bytes) => return Err(ReadRangeFailure::Bytes),
+    };
+    completed(target, property, index, &result);
+    result.map_err(ReadRangeFailure::Service)
 }
 
 struct PreparedReadRange {
@@ -210,9 +237,8 @@ struct PreparedReadRange {
 
 fn prepare_read_range(
     db: &ObjectDatabase,
-    service_data: &[u8],
+    request: ReadRangeRequest,
 ) -> Result<PreparedReadRange, Error> {
-    let request = ReadRangeRequest::decode(service_data)?;
     let object = db.get(&request.object_identifier).ok_or(Error::Protocol {
         class: ErrorClass::OBJECT.to_raw() as u32,
         code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,

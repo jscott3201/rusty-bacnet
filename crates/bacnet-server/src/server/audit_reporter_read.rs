@@ -12,6 +12,35 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         index: Option<u32>,
         result: Option<(ErrorClass, ErrorCode)>,
     ) -> Option<ReadAuditIntent> {
+        self.read_target_intent(db, target, Some((property, index)), result)
+    }
+
+    /// Single-target service completion, using the same silence/error policy as
+    /// RP. File reads deliberately have no property, position, or payload.
+    pub(in crate::server) fn completed_read_intent(
+        &self,
+        db: &ObjectDatabase,
+        target: ObjectIdentifier,
+        property: Option<(PropertyIdentifier, Option<u32>)>,
+        result: &Result<(), Error>,
+    ) -> Option<ReadAuditIntent> {
+        let result = match result {
+            Ok(()) => None,
+            Err(Error::Timeout(_) | Error::Reject { .. } | Error::Abort { .. }) => return None,
+            Err(error) => Some(super::super::requests::confirmed_response::error_fields(
+                error,
+            )),
+        };
+        self.read_target_intent(db, target, property, result)
+    }
+
+    fn read_target_intent(
+        &self,
+        db: &ObjectDatabase,
+        target: ObjectIdentifier,
+        property: Option<(PropertyIdentifier, Option<u32>)>,
+        result: Option<(ErrorClass, ErrorCode)>,
+    ) -> Option<ReadAuditIntent> {
         let profile = self.config.audit_reporter.as_ref()?;
         let reporter = db.get(&profile.reporter)?.audit_reporter_internal()?;
         let device = local_device(db);
@@ -34,7 +63,8 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
                 _ => return None,
             };
         if level == AuditLevel::NONE
-            || (level == AuditLevel::AUDIT_CONFIG && property == PropertyIdentifier::PRESENT_VALUE)
+            || (level == AuditLevel::AUDIT_CONFIG
+                && property.is_some_and(|(id, _)| id == PropertyIdentifier::PRESENT_VALUE))
             || !operations.contains(AuditOperation::READ)
             || !reporter.monitors_object_internal(target)
         {
@@ -56,7 +86,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
                 source_user_role: None,
                 target_device: BACnetRecipient::Device(device),
                 target_object: Some(target),
-                target_property: Some(AuditPropertyReference {
+                target_property: property.map(|(property, index)| AuditPropertyReference {
                     property_identifier: property,
                     property_array_index: index.map(u64::from),
                 }),
@@ -69,7 +99,8 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
     }
 
     /// Only completed, unsegmented response paths may submit these intents.
-    /// The batch is bounded by RPM's result budget (one intent for RP).
+    /// RPM's result budget bounds the batch; RP/ReadRange/AtomicReadFile have one.
+    /// Target READ remains partial: AuditLogQuery and segmented paths are excluded.
     pub(in crate::server) async fn admit_reads(
         &self,
         db: &RwLock<ObjectDatabase>,

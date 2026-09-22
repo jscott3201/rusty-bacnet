@@ -6,10 +6,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         invoke_id: u8,
         request: &[u8],
         budget: AtomicReadFileBudget,
+        completed: impl FnOnce(ObjectIdentifier, &Result<(), Error>),
     ) -> Apdu {
         let service_choice = ConfirmedServiceChoice::ATOMIC_READ_FILE;
         let mut buf = BytesMut::new();
-        match handlers::handle_atomic_read_file_budgeted(db, request, &mut buf, budget) {
+        match handlers::handle_atomic_read_file_observed(db, request, &mut buf, budget, completed) {
             Ok(()) => Apdu::ComplexAck(ComplexAck {
                 segmented: false,
                 more_follows: false,
