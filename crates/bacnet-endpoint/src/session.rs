@@ -52,10 +52,13 @@ use bacnet_endpoint_core::endpoint_ingress::{
     ClassifierExit, EndpointIngress, PolicyOutcome, PolicyReason,
 };
 use bacnet_network::layer::ReceivedApdu;
+use bacnet_objects::audit::AuditReporterObject;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_transport::port::TransportPort;
+use bacnet_types::enums::ObjectType;
 use bacnet_types::error::Error;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use bacnet_types::primitives::ObjectIdentifier;
+use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 use tokio::task::JoinHandle;
 
 use crate::roles::{
@@ -216,7 +219,8 @@ pub struct EndpointSession<T: TransportPort + 'static> {
     #[allow(dead_code)]
     config: SessionConfig,
     client_config: ClientConfig,
-    database: Option<ObjectDatabase>,
+    database: Option<Arc<RwLock<ObjectDatabase>>>,
+    source_audit_reporter: Option<ObjectIdentifier>,
     identity: Option<crate::identity::DeviceIdentity>,
     egress: Option<bacnet_endpoint_core::endpoint_ingress::EndpointEgress>,
 }
@@ -295,12 +299,13 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             config,
             client_config,
             database: None,
+            source_audit_reporter: None,
             identity: None,
             egress: None,
         })
     }
 
-    /// Attaches the object database for the server responder (before start).
+    /// Attaches the local object database (before start).
     ///
     /// Must be called before [`start`](Self::start); when the server role is
     /// composed without a database, an empty one is used. When a
@@ -308,8 +313,55 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// build the database from that same identity (see
     /// [`DeviceIdentity::build_database`](crate::identity::DeviceIdentity::build_database))
     /// so Device readback agrees with I-Am.
+    /// The session retains ownership even in `ClientOnly` mode and shares this
+    /// same database with the responder in `Both` mode.
+    ///
+    /// # Panics
+    /// Panics if startup has already consumed the session configuration.
     pub fn with_database(mut self, db: ObjectDatabase) -> Self {
-        self.database = Some(db);
+        self.assert_configurable();
+        self.database = Some(Arc::new(RwLock::new(db)));
+        self
+    }
+
+    /// Select the sole source Audit Reporter in the attached local database.
+    ///
+    /// This is **ownership/invariant only**: no source audit records or
+    /// notifications are generated. Standalone `BACnetClient` source ownership
+    /// and source emission remain unsupported. Target Reporter behavior is
+    /// unchanged. Repeated calls before start replace the selection.
+    ///
+    /// [`start`](Self::start) requires a client role, an attached database with
+    /// exactly one local Device (matching the composed identity, if present),
+    /// and the selected Audit Reporter capability with no other source Reporter.
+    /// Validation failure changes no flags and leaves configuration retryable.
+    /// Success makes the selected Reporter's source property true and prevents
+    /// its deletion; other Reporters remain targets.
+    ///
+    /// ```no_run
+    /// use bacnet_endpoint::{identity::DeviceIdentity, session::{EndpointSession, SessionConfig, SessionRole}};
+    /// use bacnet_objects::{audit::AuditReporterObject, traits::BACnetObject};
+    /// use bacnet_transport::loopback::LoopbackTransport;
+    /// # async fn example() -> Result<(), bacnet_types::error::Error> {
+    /// let identity = DeviceIdentity::new(123, 42)?;
+    /// let mut db = identity.build_database()?;
+    /// let reporter = AuditReporterObject::new(1, "Source configuration")?;
+    /// let reporter_oid = reporter.object_identifier();
+    /// db.add(Box::new(reporter))?;
+    /// let (transport, _peer) = LoopbackTransport::pair(vec![1], vec![2]);
+    /// let mut session = EndpointSession::new(transport, SessionRole::ClientOnly, SessionConfig::default())?
+    ///     .with_database(db).with_identity(identity).with_source_audit_reporter(reporter_oid);
+    /// session.start().await?; // Establishes ownership only; emits no audit traffic.
+    /// session.stop().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Panics
+    /// Panics if startup has already consumed the session configuration.
+    pub fn with_source_audit_reporter(mut self, reporter: ObjectIdentifier) -> Self {
+        self.assert_configurable();
+        self.source_audit_reporter = Some(reporter);
         self
     }
 
@@ -321,11 +373,58 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// identity (see `DeviceIdentity::build_database`) so I-Am vs
     /// ReadProperty vs role limits agree. No existing-test churn: sessions
     /// without an identity keep the 480 default.
+    ///
+    /// # Panics
+    /// Panics if startup has already consumed the session configuration.
     pub fn with_identity(mut self, identity: crate::identity::DeviceIdentity) -> Self {
+        self.assert_configurable();
         identity.apply_to_client_config(&mut self.client_config);
         self.config.max_apdu_length = identity.max_apdu_length();
         self.identity = Some(identity);
         self
+    }
+
+    fn assert_configurable(&self) {
+        assert_eq!(
+            self.lifecycle.load(Ordering::Acquire),
+            Lifecycle::Ready as u8,
+            "endpoint configuration must precede startup"
+        );
+    }
+
+    fn prepare_source_audit_reporter(&mut self) -> Result<(), Error> {
+        let Some(selected) = self.source_audit_reporter else {
+            return Ok(());
+        };
+        if self.role == SessionRole::ServerOnly {
+            return Err(Error::Encoding(
+                "source Audit Reporter requires a client role".into(),
+            ));
+        }
+        let db = self.database.as_mut().ok_or_else(|| {
+            Error::Encoding("source Audit Reporter requires an attached local database".into())
+        })?;
+        // Ready sessions have not shared the Arc with a responder. Synchronous,
+        // exclusive validation has no await/cancellation or concurrent mutation.
+        let db = Arc::get_mut(db)
+            .expect("database is unshared before startup")
+            .get_mut();
+        let devices = db.find_by_type(ObjectType::DEVICE);
+        if devices.len() != 1 {
+            return Err(Error::Encoding(
+                "source Audit Reporter requires exactly one local Device".into(),
+            ));
+        }
+        if self
+            .identity
+            .as_ref()
+            .is_some_and(|identity| devices[0].instance_number() != identity.instance())
+        {
+            return Err(Error::Encoding(
+                "source Audit Reporter local Device does not match session identity".into(),
+            ));
+        }
+        AuditReporterObject::designate_source_internal(db, selected)
     }
 
     /// Starts ingress, roles and the single dispatch consumer once.
@@ -333,7 +432,15 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Start-once: a second call returns
     /// [`Error::Encoding`](bacnet_types::error::Error::Encoding) without
     /// binding again. Takes `&mut self` so only the owner can start.
+    /// Source-profile validation runs before lifecycle consumption or ingress
+    /// startup; its errors leave the session ready for correction and retry.
     pub async fn start(&mut self) -> Result<(), Error> {
+        if self.lifecycle.load(Ordering::Acquire) != Lifecycle::Ready as u8 {
+            return Err(Error::Encoding(
+                "endpoint session cannot be started more than once".into(),
+            ));
+        }
+        self.prepare_source_audit_reporter()?;
         if self.lifecycle.compare_exchange(
             Lifecycle::Ready as u8,
             Lifecycle::Running as u8,
@@ -370,11 +477,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             };
         let (responder, notifications, server_handle) =
             if matches!(self.role, SessionRole::ServerOnly | SessionRole::Both) {
-                let db = self.database.take().unwrap_or_else(ObjectDatabase::new);
-                let responder = Arc::new(EndpointResponder::new(
-                    Arc::new(tokio::sync::RwLock::new(db)),
-                    egress.clone(),
-                ));
+                let db = self
+                    .database
+                    .get_or_insert_with(|| Arc::new(RwLock::new(ObjectDatabase::new())));
+                let responder = Arc::new(EndpointResponder::new(Arc::clone(db), egress.clone()));
                 let notifications =
                     NotificationTransactions::with_coordinator(Arc::clone(&self.coordinator));
                 let handle = ServerRoleHandle::new(
@@ -579,6 +685,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             .await
     }
 }
+
+#[cfg(test)]
+#[path = "source_reporter_tests.rs"]
+mod source_reporter_tests;
 
 impl<T: TransportPort + 'static> Drop for EndpointSession<T> {
     fn drop(&mut self) {

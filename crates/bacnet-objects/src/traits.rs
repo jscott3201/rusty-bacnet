@@ -107,6 +107,22 @@ pub trait BACnetObject: Send + Sync {
         None
     }
 
+    /// Consume a database-validated source ownership binding before endpoint start.
+    ///
+    /// The default opts out. An override must leave the object unchanged on error;
+    /// on success it must project source=true and deny deletion, just like the
+    /// Reporter returned by `audit_reporter_internal`. This is not a flag setter:
+    /// only the database-wide validation can construct the binding.
+    #[doc(hidden)]
+    fn bind_audit_source_internal(
+        &mut self,
+        _binding: crate::audit::SourceReporterBinding,
+    ) -> Result<(), Error> {
+        Err(Error::Encoding(
+            "selected Audit Reporter does not support source ownership".into(),
+        ))
+    }
+
     /// Configure trusted local Reporter filters without a network write or downcast.
     ///
     /// The default opts out. Implementations must reject invalid settings before

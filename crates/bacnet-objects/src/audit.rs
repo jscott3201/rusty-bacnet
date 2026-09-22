@@ -29,6 +29,8 @@ mod persistence;
 mod receipt;
 mod reporter_metadata;
 mod reporter_object;
+#[doc(hidden)]
+pub use reporter_object::SourceReporterBinding;
 mod reporter_status;
 pub use notification::AuditLogNotificationSink;
 use persistence::{validate_record, validate_snapshot};
@@ -644,6 +646,7 @@ pub struct AuditReporterObject {
     audit_priority_filter: BACnetPriorityFilter,
     issue_confirmed_notifications: bool,
     monitored_objects: Option<Vec<BACnetObjectSelector>>,
+    source_reporter: bool,
 }
 
 impl AuditReporterObject {
@@ -660,6 +663,7 @@ impl AuditReporterObject {
             audit_priority_filter: BACnetPriorityFilter::all(),
             issue_confirmed_notifications: false,
             monitored_objects: None,
+            source_reporter: false,
         })
     }
 
