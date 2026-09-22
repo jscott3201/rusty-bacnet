@@ -9,10 +9,29 @@ pub fn handle_read_property(
     service_data: &[u8],
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
+    handle_read_property_observed(db, service_data, buf, |_, _, _| {})
+}
+
+/// Observe only decoded execution outcomes, without retaining the read value.
+pub(crate) fn handle_read_property_observed(
+    db: &ObjectDatabase,
+    service_data: &[u8],
+    buf: &mut BytesMut,
+    mut completed: impl FnMut(ObjectIdentifier, &ReadPropertyRequest, &Result<(), Error>),
+) -> Result<(), Error> {
     let request = ReadPropertyRequest::decode(service_data)?;
-
     let lookup_oid = resolve_device_wildcard(db, &request.object_identifier);
+    let result = read_property_decoded(db, &request, lookup_oid, buf);
+    completed(lookup_oid, &request, &result);
+    result
+}
 
+fn read_property_decoded(
+    db: &ObjectDatabase,
+    request: &ReadPropertyRequest,
+    lookup_oid: ObjectIdentifier,
+    buf: &mut BytesMut,
+) -> Result<(), Error> {
     let object = db.get(&lookup_oid).ok_or(Error::Protocol {
         class: ErrorClass::OBJECT.to_raw() as u32,
         code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,

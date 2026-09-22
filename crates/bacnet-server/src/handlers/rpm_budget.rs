@@ -173,11 +173,30 @@ impl Scratch {
 }
 
 /// Atomic with respect to the caller's buffer, not object read side effects.
+#[cfg(test)]
 pub(crate) fn handle_rpm_budgeted(
     db: &ObjectDatabase,
     data: &[u8],
     buf: &mut BytesMut,
     budget: ReadPropertyMultipleBudget,
+) -> Result<(), RpmFailure> {
+    handle_rpm_budgeted_observed(db, data, buf, budget, |_, _, _, _| {})
+}
+
+/// Atomic with respect to the caller's buffer, not object read side effects.
+/// Observations are provisional until this entire call succeeds. The caller
+/// must discard them on failure; callbacks carry no property values.
+pub(crate) fn handle_rpm_budgeted_observed(
+    db: &ObjectDatabase,
+    data: &[u8],
+    buf: &mut BytesMut,
+    budget: ReadPropertyMultipleBudget,
+    mut completed: impl FnMut(
+        ObjectIdentifier,
+        PropertyIdentifier,
+        Option<u32>,
+        Option<(ErrorClass, ErrorCode)>,
+    ),
 ) -> Result<(), RpmFailure> {
     let request = ReadPropertyMultipleRequest::decode(data).map_err(RpmFailure::Service)?;
     let plan = plan(db, &request, budget.max_result_elements)?;
@@ -196,6 +215,12 @@ pub(crate) fn handle_rpm_budgeted(
             let mut encoded = BytesMut::new();
             result.encode(&mut encoded);
             scratch.append(&encoded, footer.len())?;
+            completed(
+                spec.lookup_oid,
+                result.property_identifier,
+                result.property_array_index,
+                result.error,
+            );
         }
         scratch.append(&footer, 0)?;
     }

@@ -47,7 +47,7 @@ mod object_mgmt;
 mod read_property;
 mod read_range;
 mod rpm_budget;
-pub(crate) use rpm_budget::{handle_rpm_budgeted, RpmFailure};
+pub(crate) use rpm_budget::{handle_rpm_budgeted_observed, RpmFailure};
 mod write_property;
 
 pub use alarm_event::*;
