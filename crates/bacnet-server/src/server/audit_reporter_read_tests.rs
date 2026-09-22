@@ -11,6 +11,9 @@ use std::{borrow::Cow, sync::atomic::AtomicUsize};
 #[path = "audit_reporter_read_boundary_tests.rs"]
 mod boundary;
 
+#[path = "audit_reporter_range_file_tests.rs"]
+mod range_file;
+
 fn read_reporter() -> AuditReporterObject {
     let mut reporter = reporter();
     let mut operations = AuditOperationFlags::empty();

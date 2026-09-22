@@ -6,6 +6,13 @@ pub(super) async fn response(
     mut budget: ReadRangeBudget,
     effective_max_apdu: u16,
     segmented_response_available: bool,
+    completed: impl FnOnce(
+        &ObjectDatabase,
+        ObjectIdentifier,
+        PropertyIdentifier,
+        Option<u32>,
+        &Result<(), Error>,
+    ),
 ) -> Apdu {
     if !segmented_response_available {
         budget.max_service_ack_bytes = budget.max_service_ack_bytes.min(
@@ -18,11 +25,12 @@ pub(super) async fn response(
     }
     let mut service_ack = BytesMut::new();
     let db = db.read().await;
-    match handlers::handle_read_range_budgeted(
+    match handlers::handle_read_range_observed(
         &db,
         &request.service_request,
         &mut service_ack,
         budget,
+        |target, property, index, result| completed(&db, target, property, index, result),
     ) {
         Ok(()) => Apdu::ComplexAck(ComplexAck {
             segmented: false,

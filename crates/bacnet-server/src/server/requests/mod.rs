@@ -326,6 +326,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     config.read_range_budget,
                     effective_max_apdu,
                     segmented_response_available,
+                    |db, target, property, index, result| {
+                        read_audits.extend(audit.completed_read_intent(
+                            db,
+                            target,
+                            Some((property, index)),
+                            result,
+                        ));
+                    },
                 )
                 .await
             }
@@ -336,6 +344,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     invoke_id,
                     &req.service_request,
                     config.atomic_read_file_budget,
+                    |target, result| {
+                        read_audits.extend(audit.completed_read_intent(&db, target, None, result));
+                    },
                 )
             }
             s if s == ConfirmedServiceChoice::ATOMIC_WRITE_FILE => {

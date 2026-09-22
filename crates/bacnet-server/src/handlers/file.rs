@@ -109,7 +109,7 @@ pub fn handle_atomic_read_file(
     service_data: &[u8],
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
-    read_file(db, service_data, buf, None).map_err(|failure| match failure {
+    read_file(db, service_data, buf, None, |_, _| {}).map_err(|failure| match failure {
         AtomicReadFileFailure::Service(error) => error,
         AtomicReadFileFailure::Budget(_) => unreachable!("unconfigured read has no budget"),
     })
@@ -130,13 +130,26 @@ impl From<Error> for AtomicReadFileFailure {
 
 /// Apply local request-count and complete service-ACK budgets, preserving the
 /// legacy handler's validation and storage-error precedence for admitted reads.
+#[cfg(test)]
 pub(crate) fn handle_atomic_read_file_budgeted(
     db: &ObjectDatabase,
     service_data: &[u8],
     buf: &mut BytesMut,
     budget: crate::server::AtomicReadFileBudget,
 ) -> Result<(), AtomicReadFileFailure> {
-    read_file(db, service_data, buf, Some(budget))
+    handle_atomic_read_file_observed(db, service_data, buf, budget, |_, _| {})
+}
+
+/// Observe one decoded file outcome without rereading storage. Configured
+/// budget failures are not service outcomes; no provisional intent escapes them.
+pub(crate) fn handle_atomic_read_file_observed(
+    db: &ObjectDatabase,
+    service_data: &[u8],
+    buf: &mut BytesMut,
+    budget: crate::server::AtomicReadFileBudget,
+    completed: impl FnOnce(ObjectIdentifier, &Result<(), Error>),
+) -> Result<(), AtomicReadFileFailure> {
+    read_file(db, service_data, buf, Some(budget), completed)
 }
 
 fn read_file(
@@ -144,13 +157,27 @@ fn read_file(
     service_data: &[u8],
     buf: &mut BytesMut,
     budget: Option<crate::server::AtomicReadFileBudget>,
+    completed: impl FnOnce(ObjectIdentifier, &Result<(), Error>),
+) -> Result<(), AtomicReadFileFailure> {
+    let request = bacnet_services::file::AtomicReadFileRequest::decode(service_data)?;
+    let target = request.file_identifier;
+    let result = match execute_read_file(db, request, buf, budget) {
+        Ok(()) => Ok(()),
+        Err(AtomicReadFileFailure::Service(error)) => Err(error),
+        Err(failure @ AtomicReadFileFailure::Budget(_)) => return Err(failure),
+    };
+    completed(target, &result);
+    result.map_err(AtomicReadFileFailure::Service)
+}
+
+fn execute_read_file(
+    db: &ObjectDatabase,
+    request: bacnet_services::file::AtomicReadFileRequest,
+    buf: &mut BytesMut,
+    budget: Option<crate::server::AtomicReadFileBudget>,
 ) -> Result<(), AtomicReadFileFailure> {
     use bacnet_services::common::MAX_DECODED_ITEMS;
-    use bacnet_services::file::{
-        AtomicReadFileAck, AtomicReadFileRequest, FileAccessMethod, FileReadAckMethod,
-    };
-
-    let request = AtomicReadFileRequest::decode(service_data)?;
+    use bacnet_services::file::{AtomicReadFileAck, FileAccessMethod, FileReadAckMethod};
 
     if request.file_identifier.object_type() != ObjectType::FILE {
         return Err(inconsistent_object_type().into());
