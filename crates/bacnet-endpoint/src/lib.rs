@@ -1,8 +1,8 @@
 //! Proven single-owner BACnet endpoint API (RB-18).
 //!
-//! The forward path for new Rust applications. One [`EndpointSession`] owns
-//! one transport + one ingress + one shared outbound coordinator above the
-//! sibling client/server roles. Endpoint builders are the only constructors:
+//! Compose client and server roles for one BACnet device under one transport
+//! owner. One [`EndpointSession`] owns the transport, ingress, and shared
+//! outbound coordinator. Construct sessions with the endpoint builders:
 //! [`bip::BipEndpointBuilder`], [`sc::ScEndpointBuilder`],
 //! [`mstp::MstpEndpointBuilder`].
 //!
@@ -105,8 +105,8 @@
 //! # Trust: verified-origin getters (no new API)
 //!
 //! Provenance stays on [`bacnet_transport::port::TransportProvenance`];
-//! the endpoint preserves it structurally and never gates on it. Read it with
-//! the existing getters — no endpoint wrapper is added:
+//! the endpoint preserves it structurally. Configured authorizers decide whether
+//! that provenance permits an operation. Read it with the existing getters:
 //!
 //! - `is_unverified()` — legacy origin, no assertion (B/IP, MS/TP, loopback).
 //! - `is_direct_peer()` — authenticated immediate SC-TLS peer.
@@ -117,13 +117,14 @@
 //! Only trusted SC validation code constructs verified values; every other
 //! transport (including caller-supplied doubles) reports unverified.
 //!
-//! # Migration from standalone client/server (docs only, no facade)
+//! # Choosing standalone or shared client/server roles
 //!
-//! `BACnetClient` / `BACnetServer` stay as untouched compat surfaces. New code
-//! uses the three endpoint builders; there is no facade, parts API, or second
-//! hidden owner.
+//! Standalone `BACnetClient` and `BACnetServer` remain public APIs with their own
+//! service and data-link capabilities; they are not deprecated. Use the endpoint
+//! builders when both roles need one transport and lifecycle owner, accounting
+//! for the narrower endpoint responder scope above.
 //!
-//! | Old standalone call | Endpoint equivalent |
+//! | Standalone construction | Shared endpoint composition |
 //! |---------------------|---------------------|
 //! | `BACnetClient::bip_builder()...build().await` | `BipEndpointBuilder::new(iface, port, bcast).role(ClientOnly).build_session()?` then `start()` |
 //! | `BACnetServer::bip_builder()...build().await` | `BipEndpointBuilder::new(iface, port, bcast).role(ServerOnly).database(db).identity(id).build_session()?` then `start()` |

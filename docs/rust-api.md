@@ -1417,9 +1417,13 @@ write-permission; the callback owns the rule. Context `Debug` is redacted
 decision counters retain no per-source state. The callback runs after
 validation and before mutation; denials perform no database mutation, no
 COV/event fan-out, and no audit-log write (counters and bounded diagnostics
-only). Direct handler calls, trusted local writes, and the read-only shared
-endpoint stay outside this gate by design. The Python surface exposes no
-mutation policy knobs. See [Local mutation authorization](mutation-policy.md).
+only). This policy governs standalone-server mutations; direct handler calls
+and trusted local writes stay outside it. The shared endpoint's narrow
+[Device-write authorizer](#authorized-endpoint-device-writes) is configured
+separately. The Python surface exposes no mutation policy knobs. See
+[Local mutation authorization](mutation-policy.md).
+
+### Life Safety execution and COV
 
 Inbound LifeSafetyOperation is fail-closed unless an authorizer is configured.
 The built-in Life Safety Point and Zone objects execute the six silence and
@@ -1712,12 +1716,12 @@ let client = BACnetClient::generic_builder()
 
 ## bacnet-endpoint (forward path, RB-18)
 
-`bacnet-endpoint` is the smallest proven public Rust endpoint API: one
-`EndpointSession` owns one transport + one ingress + one shared outbound
-coordinator above the sibling client/server roles. Endpoint builders are the
-forward path for new code; `BACnetClient` / `BACnetServer` stay as untouched
-compat surfaces (deprecation pointers + docs only — no facade, no parts API,
-no second hidden owner).
+`bacnet-endpoint` composes client and server roles for one BACnet device under
+one transport owner. One `EndpointSession` owns the transport, ingress, and
+shared outbound coordinator. Use its builders when both roles need that shared
+lifecycle. Standalone `BACnetClient` and `BACnetServer` remain public APIs with
+their own service and data-link capabilities; they are not deprecated. The
+endpoint responder's narrower service scope is described below.
 
 ### Builders
 
@@ -1748,9 +1752,9 @@ validation; `build_hub_session` over a caller-dialed `TlsWebSocket`,
 `MstpEndpointBuilder` composes one serial owner (simulator evidence only —
 no bench or on-wire conformance; timing is RB-26).
 
-### Migration from standalone client/server (docs only)
+### Choosing standalone or shared client/server roles
 
-| Old standalone call | Endpoint equivalent |
+| Standalone construction | Shared endpoint composition |
 |---------------------|---------------------|
 | `BACnetClient::bip_builder()...build().await` | `BipEndpointBuilder::new(iface, port, bcast).role(ClientOnly).build_session()?` then `start()` |
 | `BACnetServer::bip_builder()...build().await` | `BipEndpointBuilder::new(iface, port, bcast).role(ServerOnly).database(db).identity(id).build_session()?` then `start()` |
