@@ -139,18 +139,25 @@ pub(super) struct Fixture {
 }
 
 pub(super) async fn server(reporter: AuditReporterObject) -> Fixture {
+    server_with_devices(reporter, &[10]).await
+}
+
+pub(super) async fn server_with_devices(reporter: AuditReporterObject, devices: &[u32]) -> Fixture {
     let mut db = ObjectDatabase::new();
     let writes = Arc::new(AtomicUsize::new(0));
     let attempts = Arc::new(AtomicUsize::new(0));
     let execution_error = Arc::new(StdMutex::new(None));
-    db.add(Box::new(
-        DeviceObject::new(DeviceConfig {
-            instance: 10,
-            ..Default::default()
-        })
-        .unwrap(),
-    ))
-    .unwrap();
+    for &instance in devices {
+        db.add(Box::new(
+            DeviceObject::new(DeviceConfig {
+                instance,
+                name: format!("Device {instance}"),
+                ..Default::default()
+            })
+            .unwrap(),
+        ))
+        .unwrap();
+    }
     db.add(Box::new(CountingValue {
         value: BinaryValueObject::new(1, "value").unwrap(),
         writes: Arc::clone(&writes),

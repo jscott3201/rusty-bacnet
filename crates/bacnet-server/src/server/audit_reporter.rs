@@ -30,7 +30,12 @@ mod read;
 /// startup returns [`Error::Encoding`] if the selected Reporter is absent or
 /// lacks the Audit Reporter capability. A missing or unresolvable recipient
 /// still permits startup and exposes CONFIGURATION_ERROR through the existing
-/// enabled Reporter's Reliability.
+/// enabled Reporter's Reliability. Exactly one local Device is also required for
+/// target attribution. Zero or multiple Devices expose CONFIGURATION_ERROR and
+/// suppress target records before sequence consumption or resource admission,
+/// without changing the service result or mutation. Membership is checked at
+/// startup and on each producer attempt; the next attempt recovers when exactly
+/// one Device remains.
 /// At most 64 deliveries are active per server, with no ordinary-record queue. Each
 /// send/ACK has one total three-second deadline and no retries. Overflow or
 /// delivery failure sets COMMUNICATION_FAILURE, never changes the write result,
@@ -137,9 +142,12 @@ impl BipServerBuilder {
 }
 
 fn local_device(db: &ObjectDatabase) -> Option<ObjectIdentifier> {
-    db.list_objects()
+    let mut devices = db
+        .list_objects()
         .into_iter()
-        .find(|oid| oid.object_type() == ObjectType::DEVICE)
+        .filter(|oid| oid.object_type() == ObjectType::DEVICE);
+    let device = devices.next()?;
+    devices.next().is_none().then_some(device)
 }
 
 fn resolve(

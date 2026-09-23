@@ -16,6 +16,9 @@ use std::sync::Mutex as StdMutex;
 mod support;
 use support::*;
 
+#[path = "audit_reporter_identity_tests.rs"]
+mod identity;
+
 #[path = "audit_reporter_startup_tests.rs"]
 mod startup;
 
