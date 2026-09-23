@@ -765,6 +765,17 @@ properties.
 | `AuditLogObject` | `::new(instance, name, buffer_size, persistence)` |
 | `AuditReporterObject` | `::new(instance, name)` |
 
+Trusted local configuration through `dyn BACnetObject` uses one atomic
+`configure_audit_reporter_internal(level, operations, confirmed, selectors, priorities)`
+contract. Custom Reporter objects override that full method; objects that do not
+opt in reject configuration. This pre-1.0 API replaces the three-argument method
+and the separate `configure_audit_reporter_with_filters_internal` name. Every call
+replaces all five settings, and an invalid call must leave the object unchanged.
+`None` selectors remove `Monitored_Objects` and select all ordinary targets;
+`Some(vec![])` retains an empty property and selects none. Lifecycle admission
+and recipient selection remain the caller's responsibility. The private endpoint
+source adapter forwards this contract without changing source-role ownership.
+
 #### Building Control (7)
 
 | Type | Constructor |

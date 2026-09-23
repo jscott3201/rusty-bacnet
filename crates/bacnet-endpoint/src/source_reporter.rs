@@ -66,22 +66,11 @@ impl BACnetObject for SourceReporter {
         level: AuditLevel,
         operations: AuditOperationFlags,
         confirmed: bool,
-    ) -> Result<(), Error> {
-        self.wrapped
-            .configure_audit_reporter_internal(level, operations, confirmed)
-    }
-
-    fn configure_audit_reporter_with_filters_internal(
-        &mut self,
-        level: AuditLevel,
-        operations: AuditOperationFlags,
-        confirmed: bool,
         selectors: Option<Vec<BACnetObjectSelector>>,
         priorities: BACnetPriorityFilter,
     ) -> Result<(), Error> {
-        self.wrapped.configure_audit_reporter_with_filters_internal(
-            level, operations, confirmed, selectors, priorities,
-        )
+        self.wrapped
+            .configure_audit_reporter_internal(level, operations, confirmed, selectors, priorities)
     }
 
     fn object_identifier(&self) -> ObjectIdentifier {
